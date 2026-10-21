@@ -154,11 +154,11 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
   type ReactElement,
-  type ReactNode,
 } from "react";
 import { CalendarClock, Check, Repeat, Zap } from "lucide-react";
 
@@ -213,6 +213,12 @@ import {
   useReportScheduleReading,
   type LifecycleCardAuth,
 } from "./lifecycle-card-runtime";
+import {
+  ReadOnlyValue,
+  RecurrenceFrequencySelectors,
+} from "./schedule-recurrence-selectors";
+import { TimezoneField } from "./timezone-field";
+import { readSupportedTimezones, resolveTimezoneField } from "./trigger-timezone";
 import {
   WEEKDAY_LABELS,
   applyArmedScheduleFill,
@@ -1531,6 +1537,20 @@ function ScheduleOptionRows({
     schedule.kind === "immediate" ? browserTimezone() : schedule.timezone;
   const updateRecurring = (patch: Partial<RecurringSelection>) =>
     pick({ kind: "recurring", selection: { ...recurring, ...patch }, timezone });
+  // ITS OWN TIMEZONE SELECT (cinatra#3189): the in-flow step's control and its
+  // one resolution, so the value drawn is always a member of the list beneath
+  // it. The ids are this card's own — a thread can hold several cards.
+  const timezoneControlId = useId();
+  const supportedTimezones = useMemo(() => readSupportedTimezones(), []);
+  const timezoneField = useMemo(
+    () =>
+      resolveTimezoneField({
+        bound: timezone,
+        browserTimezone: browserTimezone(),
+        supported: supportedTimezones,
+      }),
+    [timezone, supportedTimezones],
+  );
 
   return (
     <div
@@ -1595,17 +1615,16 @@ function ScheduleOptionRows({
             {readOnly ? (
               <ReadOnlyValue field="schedule-timezone">{timezone}</ReadOnlyValue>
             ) : (
-              <Input
-                type="text"
-                data-field="schedule-timezone"
-                className="w-56"
+              <TimezoneField
+                id={`${timezoneControlId}-scheduled`}
+                dataField="schedule-timezone"
                 disabled={!editable}
-                value={timezone}
-                onChange={(e) =>
+                field={timezoneField}
+                onValueChange={(v) =>
                   pick({
                     kind: "scheduled",
                     runAt: schedule.kind === "scheduled" ? schedule.runAt : defaultRunAt(),
-                    timezone: e.target.value,
+                    timezone: v,
                   })
                 }
               />
@@ -1736,6 +1755,15 @@ function ScheduleOptionRows({
             </div>
           ) : null}
 
+          {/* Quarter anchor, month, and Day / Weekday for the month-style
+              frequencies — the in-flow step's own controls (cinatra#3189). */}
+          <RecurrenceFrequencySelectors
+            selection={recurring}
+            onChange={updateRecurring}
+            disabled={!editable}
+            readOnly={readOnly}
+          />
+
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm text-muted-foreground">At</span>
             {readOnly ? (
@@ -1799,17 +1827,16 @@ function ScheduleOptionRows({
             {readOnly ? (
               <ReadOnlyValue field="recurring-timezone">{timezone}</ReadOnlyValue>
             ) : (
-              <Input
-                type="text"
-                data-field="recurring-timezone"
-                className="w-56"
+              <TimezoneField
+                id={`${timezoneControlId}-recurring`}
+                dataField="recurring-timezone"
                 disabled={!editable}
-                value={timezone}
-                onChange={(e) =>
+                field={timezoneField}
+                onValueChange={(v) =>
                   pick({
                     kind: "recurring",
                     selection: recurring,
-                    timezone: e.target.value,
+                    timezone: v,
                   })
                 }
               />
@@ -1913,59 +1940,6 @@ const FREQUENCY_LABELS: Readonly<Record<RecurringSelection["frequency"], string>
   quarterly: "quarter",
   yearly: "year",
 };
-
-/**
- * A FIELD OF A SPENT SCHEDULE — "the values still legible, the pickers gone"
- * (cinatra#2934, the fifth graded proof set).
- *
- * The ratified drawing draws a schedule that is over with its value in a plain
- * box of the field's own size and NOTHING to press: same edge, same ground,
- * the value in the muted secondary colour. It is deliberately NOT a disabled
- * input — a disabled input is the drawing's OTHER reading, the one a reader who
- * "may see but not act on" the card is owed, and drawing both the same way
- * would erase the difference between a schedule that is over and a reader who
- * is refused. See `readOnly` on `ScheduleOptionRows`.
- */
-function ReadOnlyValue({
-  field,
-  width,
-  label,
-  labelAfter,
-  children,
-}: {
-  field: string;
-  width?: string;
-  /**
-   * The name the LIVE control carried (convergence round). Four of these boxes
-   * replace a picker whose only name was its `aria-label` — *Repeat every*,
-   * *Frequency*, *Hour*, *Minute* — and a bare box of digits says nothing about
-   * which of them it is. The two that sit in a `Field` carry its visible label
-   * already and pass none.
-   */
-  label?: string;
-  /**
-   * Draw that name AFTER the value instead of before it. The hour and the
-   * minute are two boxes with a literal colon between them, and they have to
-   * READ as one clock value: with both names in front, the text of the pair
-   * runs "Hour: 05:Minute: 12" and the stored 05:12 is nowhere in it. The
-   * minute box therefore carries its name behind its digits, so the pair reads
-   * "Hour: 05:12 Minute" — one time of day, both boxes still named.
-   */
-  labelAfter?: boolean;
-  children: ReactNode;
-}): ReactElement {
-  return (
-    <div
-      data-readonly-field={field}
-      data-schedule-value
-      className={`flex h-9 items-center rounded-control border border-border bg-background px-3 text-sm text-muted-foreground ${width ?? "w-56"}`}
-    >
-      {label && !labelAfter ? <span className="sr-only">{label}: </span> : null}
-      {children}
-      {label && labelAfter ? <span className="sr-only"> {label}</span> : null}
-    </div>
-  );
-}
 
 /** A weekday of a spent recurring schedule. The chip KEEPS its fill — in this
  *  state it is the schedule being shown, not a control being offered — so the

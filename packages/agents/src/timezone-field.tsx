@@ -43,6 +43,8 @@ export function TimezoneField({
   field,
   onValueChange,
   className = "w-56",
+  dataField,
+  disabled,
 }: {
   /** The control's id, which its Label points at. */
   id: string;
@@ -50,6 +52,11 @@ export function TimezoneField({
   field: TimezoneFieldResolution;
   onValueChange: (value: string) => void;
   className?: string;
+  /** Stamped as `data-field` on the control element — the Combobox trigger or
+   *  the SelectTrigger, whichever carries `disabled` (cinatra#3189). */
+  dataField?: string;
+  /** The reader who may see but not act: the control stays drawn and refuses. */
+  disabled?: boolean;
 }) {
   return (
     <>
@@ -59,14 +66,16 @@ export function TimezoneField({
           value={field.value}
           onValueChange={onValueChange}
           options={field.options.map((tz) => ({ value: tz }))}
+          data-field={dataField}
+          disabled={disabled}
           placeholder={TIMEZONE_PLACEHOLDER}
           searchPlaceholder="Search time zones…"
           emptyText="No time zone matches that search."
           className={className}
         />
       ) : (
-        <Select value={field.value} onValueChange={onValueChange}>
-          <SelectTrigger id={id} className={className}>
+        <Select value={field.value} onValueChange={onValueChange} disabled={disabled}>
+          <SelectTrigger id={id} data-field={dataField} className={className}>
             <SelectValue placeholder={TIMEZONE_PLACEHOLDER} />
           </SelectTrigger>
           <SelectContent>
