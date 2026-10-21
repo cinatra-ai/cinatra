@@ -11,7 +11,11 @@
 //   3. the error shape — stable code, ratified message, retryable:false,
 //      details.attemptedType, and the install hint only when a definer is known;
 //   4. classifier-unavailable, dynamic/tombstoned id, new-type, generic-id, and
-//      low-confidence outcomes ALL refuse — no warning-store / queue / dead-letter.
+//      low-confidence outcomes ALL refuse — no warning-store / queue / dead-letter;
+//   5. a save whose typeHint names an id in the reserved dynamic-type namespace
+//      refuses with the named reason "dynamic-namespace" and the reserved-namespace
+//      message, whether the classifier echoes the id or throws, while a typeHint
+//      naming an installed, registered type persists.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { PrimitiveInvocationError } from "@cinatra-ai/mcp-client";
@@ -277,5 +281,67 @@ describe("all non-matching outcomes refuse", () => {
     mockClassify.mockResolvedValue(matched({ confidence: 0.2 }));
     await saveExpectingRefusal({ rawData: { name: "Test" } });
     expect(mockUpsert).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5. A typeHint in the reserved dynamic-type namespace → refused, named reason.
+// ---------------------------------------------------------------------------
+describe("a typeHint in the reserved dynamic-type namespace refuses with its named reason", () => {
+  const SELECTED_IDEA = "@dynamic/types:blog-pipeline-selected-idea";
+
+  /** The refusal sentence the ownership classifier derives from the
+   *  "dynamic-namespace" reason for `typeId`. */
+  function reservedNamespaceMessage(typeId: string) {
+    return `"${typeId}" is in the reserved dynamic-type namespace, which resolves to no extension by design — a save must name a type an installed artifact extension declares`;
+  }
+
+  /** The refusal carries the stable code, the named reason, the attempted id,
+   *  the reserved-namespace sentence and no install hint; nothing is stored. */
+  function expectDynamicNamespaceRefusal(err: PrimitiveInvocationError, typeId: string) {
+    expect(err).toBeInstanceOf(PrimitiveInvocationError);
+    expect(err.code).toBe("OBJECTS_TYPE_NOT_REGISTERED");
+    expect(err.retryable).toBe(false);
+    expect(err.details?.reason).toBe("dynamic-namespace");
+    expect(err.details?.attemptedType).toBe(typeId);
+    expect(err.details?.suggestedExtension).toBeUndefined();
+    expect(err.message).toBe(reservedNamespaceMessage(typeId));
+    expect(mockUpsert).not.toHaveBeenCalled();
+  }
+
+  it("refuses the selected-idea typeHint when the classifier returns that id", async () => {
+    mockClassify.mockResolvedValue(matched({ type: SELECTED_IDEA }));
+    const rawData = { title: "Selected idea" };
+    const err = await saveExpectingRefusal({ rawData, typeHint: SELECTED_IDEA });
+    // The typeHint reaches the classifier unchanged.
+    expect(mockClassify).toHaveBeenCalledWith(rawData, SELECTED_IDEA);
+    expectDynamicNamespaceRefusal(err, SELECTED_IDEA);
+  });
+
+  it("refuses the selected-idea typeHint when the classifier throws", async () => {
+    // With no classification, the refusal names the caller's typeHint.
+    mockClassify.mockRejectedValue(new Error("No LLM provider configured."));
+    const err = await saveExpectingRefusal({
+      rawData: { title: "Selected idea" },
+      typeHint: SELECTED_IDEA,
+    });
+    expectDynamicNamespaceRefusal(err, SELECTED_IDEA);
+  });
+
+  it("refuses any other id in the reserved dynamic-type namespace the same way", async () => {
+    const other = "@dynamic/types:campaign-brief";
+    mockClassify.mockResolvedValue(matched({ type: other }));
+    const err = await saveExpectingRefusal({ rawData: { title: "Brief" }, typeHint: other });
+    expectDynamicNamespaceRefusal(err, other);
+  });
+
+  it("stores a save whose typeHint names an installed, registered type", async () => {
+    mockClassify.mockResolvedValue(matched());
+    const rawData = { name: "Test" };
+    const res = await save({ rawData, typeHint: INSTALLED_TYPE });
+    expect(mockClassify).toHaveBeenCalledWith(rawData, INSTALLED_TYPE);
+    expect(res.type).toBe(INSTALLED_TYPE);
+    expect(mockUpsert).toHaveBeenCalledOnce();
+    expect(mockUpsert.mock.calls[0][0].upsertInput.type).toBe(INSTALLED_TYPE);
   });
 });

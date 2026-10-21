@@ -40,7 +40,8 @@ defect of a step, with a test, fixed once for every run.
 | `signInThroughWindow` | One sign-in through the window a control opens, as an embedded product signs in: the window that returns by itself, or its form typed into key by key and the window closed again. |
 | `holdResponse` | Every request of a page that a pattern matches, held unsent from the arming until the release, so the short-lived state their answers would end stays on the page; a pattern that matches nothing within its bound is refused. |
 | `releaseResponse` | The held requests sent on unchanged, in the order they came, with how many there were and how long the first was held, or the refusal of a hold that caught nothing. |
-<!-- The rows from uploadFile on: uploadFile, fillForm, switchTheme and decideGate; then typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress; then frameOf, pressWithoutName, openPageOfOrigin and signInThroughWindow; then holdResponse and releaseResponse. -->
+| `pressKey` | One key of a closed list — the arrows, Home, End, Tab, Enter or Space — pressed on the control that has the focus, or on a control first focused by its role and name without a press; the focused control read by its role, name and state before and after, and the page's next settled state. |
+<!-- The rows from uploadFile on: uploadFile, fillForm, switchTheme and decideGate; then typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress; then frameOf, pressWithoutName, openPageOfOrigin and signInThroughWindow; then holdResponse and releaseResponse; then pressKey. -->
 
 `index.mjs` exports every step, the once-only budget (`createSignInBudget`), the
 refusal (`StepRefusal`) and every bound. It is plain ESM with JSDoc types that
@@ -79,7 +80,7 @@ imports only Node's builtins and its own files, so both of these work:
   `openPageInOwnContext`, `signInThroughPage`, `armPageTape`, `readPageTape`,
   `selectFrom`, `readOptions`, `uploadFile`, `switchTheme`, `decideGate`,
   `watchRun`, `readStandingRequests`, `readTitle`, `waitForIsland`,
-  `holdResponse` and `releaseResponse` refuse a
+  `holdResponse`, `releaseResponse` and `pressKey` refuse a
   scope (`input`) before they read, load, press or record anything else: a
   frame is never reloaded, typed into or photographed; the page is. A scope
   whose frame was replaced (the page reloaded, the frame mounted anew) is
@@ -142,8 +143,11 @@ frame when the state is `loaded`, or when the bound runs out. The card's own
 it. Either way it writes exactly one line (settled or ran out, the elapsed time and
 the state) and answers `{ state, settled, elapsedMs, path }`.
 
-The island is the first on the page whose frame shows `frameSrcPath`
-(`/lifecycle/review-island` by default). Other readings: `absent`, `unmarked`,
+Every island on the page whose frame shows `frameSrcPath`
+(`/lifecycle/review-island` by default), or that frames nothing yet, is read: a
+pending gate that pins several targets draws one island per target, so the wait
+settles only when all of them have loaded, and the state it answers is the first
+one's, in page order, that has not. Other readings: `absent`, `unmarked`,
 `unreadable`. A frame the browser loads lazily does not start loading off screen,
 so bring the card into view before waiting.
 
@@ -1218,6 +1222,50 @@ the y flag, a method not in `HOLD_METHODS`, an unknown or non-positive bound),
 `no-match`, written when the match bound runs out. Refusal kinds of
 `releaseResponse`: `input`, `no-hold` (no hold is armed on the page), `no-match`,
 `closed` and `driver-failure` (a held request could not go on).
+
+## `pressKey(page, { key, record, focus?, bounds? })`
+
+A picture round proves what a key does (the arrows moving the choice between
+the entries of a group, Tab moving the focus, Enter or Space taking a control)
+through this step: a round presses no key of its own.
+
+`key` is one of `PRESS_KEYS`: `ArrowUp`, `ArrowDown`, `ArrowLeft`,
+`ArrowRight`, `Home`, `End`, `Tab`, `Enter` or `Space`, as Playwright names
+them. Any other key, a chord included, is refused (`input`) before anything is
+pressed: the step never types text (`typeInWindow` does).
+
+The key goes to the control that has the focus. With `focus: { name, role?,
+within? }`, the step first finds the one shown control of `role` (a button by
+default, or any role `press` takes) named `name`, within the one shown part of
+the page named `within` when given, exactly as `press` finds one and with its
+refusals, and gives it the focus without pressing it; a control that does not
+take the focus is refused (`not-focused`).
+
+Before the key, the step reads the element that has the focus (through open
+shadow roots): its role, its accessible name and its state (`checked`,
+`unchecked` or `mixed` for a checkbox, a radio or a switch; `selected` or
+`unselected` for a tab, an option, a row, a grid cell or a tree item that
+carries it). Nothing focused, a focus inside a frame of the page, a page that
+does not have the focus, and a focused element that is not shown are refused
+(`no-focus`) before the key. The key is then read as `press` reads a press
+(no start signal within `PRESS_START_BOUND_MS`, and the page stayed; or a
+navigation that must land within `PRESS_SETTLE_BOUND_MS`), and the focus is
+read again once the page has settled.
+
+The step answers `{ key, from, path, navigated, elapsedMs, before, after,
+moved }`: `before` and `after` are `{ on, role, name, state }`, where `on` is
+`control`, `none`, `frame` or `outside`, and `moved` is false when the same
+control has the focus after the key. A key that moved nothing is no refusal:
+the answer and the line say so. It writes one line, such as `pressKey: pressed
+ArrowDown on the radio "Idea one" (checked) on /ideas, focused by its name
+first — the focus moved to the radio "Idea two" (checked); no navigation
+started within 2000 ms, and the page stayed on /ideas`.
+
+The bounds are those of `press` (`PRESS_BOUNDS`). Refusal kinds: `input` (no
+record, a frame scope, a key outside the list, a `focus` it cannot use, an
+unknown or non-positive bound), `unreadable`, `no-scope`, `no-control`,
+`ambiguous`, `disabled`, `not-focused` and `no-focus` (nothing was pressed),
+`driver-failure` and `unsettled`.
 
 ## Shared bounds
 

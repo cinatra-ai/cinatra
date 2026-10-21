@@ -134,7 +134,17 @@
 // is the CAS, never the route the decision came in on.
 // ---------------------------------------------------------------------------
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+} from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowRight,
@@ -147,10 +157,25 @@ import {
 
 import {
   LIFECYCLE_VIEW_SCHEMA_VERSION,
+  REVIEW_TARGET_ISLAND_PATH,
+  composeReviewIslandAddress,
+  reviewGateTargetDrawing,
+  reviewGateTargetPairKeys,
+  reviewIslandAddressCredential,
+  reviewIslandAddressIdentity,
+  reviewIslandComposedCredential,
+  reviewIslandFrameKey,
+  reviewTargetHeaderKey,
+  reviewTargetIslandAddressOf,
+  reviewTargetPairKey,
+  reviewTargetRevisionMarker,
+  sameReviewTargetIslandAddresses,
   type LifecycleCardHost,
   type LifecycleCardState,
   type LifecycleSuggestion,
   type LifecycleTargetHeader,
+  type ReviewTargetIslandAddresses,
+  type ReviewTargetKey,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { Button } from "@/components/ui/button";
 import type {
@@ -166,6 +191,7 @@ import type {
 
 import {
   useComposerFocusBinding,
+  useCookieSessionSurface,
   useLifecycleCardAuth,
   useLifecycleCardColorScheme,
   useLifecycleCardFrame,
@@ -180,6 +206,8 @@ import {
   type LifecycleCardFrame,
   type LifecycleColorScheme,
 } from "./lifecycle-card-runtime";
+// The request-time credential check of a lifecycle request (#3051).
+import { lifecycleRequestCredential } from "./lifecycle-card-runtime";
 import { ReviewDecisionBar, type SubmitReviewDecisionAction } from "./review-decision-bar";
 import {
   ReviewGateBlocked,
@@ -196,8 +224,11 @@ import { useRunWindowConversation } from "./use-run-window-conversation";
 // widely-reachable surface (the run panel) would only widen that surface's graph.
 export { LIFECYCLE_VIEW_SCHEMA_VERSION };
 
-/** The authenticated, display-only island that server-renders §III's ladder. */
-export const REVIEW_TARGET_ISLAND_PATH = "/lifecycle/review-island";
+/** The authenticated, display-only island that server-renders §III's ladder.
+ *  Its address is composed ONLY by the review target's projection module
+ *  (`review-target-projection` in the protocol's lifecycle cards), and is
+ *  re-exported here for the hosts and suites that name it. */
+export { REVIEW_TARGET_ISLAND_PATH };
 
 /**
  * The island URL for one gate ref, on one host (cinatra#2577).
@@ -230,62 +261,30 @@ export const REVIEW_TARGET_ISLAND_PATH = "/lifecycle/review-island";
  * read, so no host is a special case and the widget is not a patch. A host whose
  * document declares no palette names none, and the island keeps the resolution
  * it always had.
+ *
+ * THE FINAL ADDRESS IS BOUNDED HERE, where it is composed (cinatra#4129). The
+ * server proves only the address it mints; the card adds its own frame
+ * selectors and palette, so the address the `<iframe src>` receives is checked
+ * against the island address bound (`LIFECYCLE_ISLAND_SRC_MAX_LENGTH`) by the
+ * projection module that composes it. An address that no longer fits is a
+ * NAMED refusal there and `null` here, which the card draws as the island's
+ * failed state, never a frame on a longer URL.
  */
 export function reviewTargetIslandSrc(
   ref: string,
   frame: LifecycleCardFrame | null,
   serverIslandSrc?: string | null,
   colorScheme?: LifecycleColorScheme | null,
-): string {
-  const params = new URLSearchParams({ ref });
-  const credential = islandCredentialFrom(serverIslandSrc, ref);
-  if (credential) params.set(REVIEW_ISLAND_CREDENTIAL_PARAM, credential);
-  if (frame) {
-    params.set("assistant", frame.assistant);
-    params.set("instanceId", frame.instanceId);
-  }
-  if (colorScheme) params.set(REVIEW_ISLAND_COLOR_SCHEME_PARAM, colorScheme);
-  return `${REVIEW_TARGET_ISLAND_PATH}?${params.toString()}`;
-}
-
-/** The query parameter the island reads its credential from — the client half
- *  of `src/lib/lifecycle/review-island-credential.ts`. */
-const REVIEW_ISLAND_CREDENTIAL_PARAM = "ic";
-
-/** The query parameter the island reads the HOST's palette from — the client
- *  half of `src/app/lifecycle/review-island/island-color-scheme.ts`, mirrored
- *  here for the same reason the credential's key is. The literal is pinned on
- *  this side by `__tests__/review-island-host-color-scheme.test.tsx` and on the
- *  server side by the island page's own suite. */
-const REVIEW_ISLAND_COLOR_SCHEME_PARAM = "scheme";
-
-/**
- * The credential OUT of a server-issued island URL — never the URL itself.
- *
- * The answer is read over the network, so the card takes the one opaque value
- * it needs and recomposes the address from its own constants. Adopting the
- * string wholesale would make an `<iframe src>` out of something a response
- * body chose; taking only `ic` means a hostile answer can at most supply a
- * credential the island will refuse. The URL must also name THIS card's ref, or
- * it is an answer to another question and the credential is dropped with it.
- */
-function islandCredentialFrom(
-  src: string | null | undefined,
-  ref: string,
 ): string | null {
-  if (typeof src !== "string" || src.length === 0) return null;
-  try {
-    // The base is a placeholder: only the path and the query are read, and the
-    // address below is built from `REVIEW_TARGET_ISLAND_PATH` either way.
-    const url = new URL(src, "https://island.invalid");
-    if (url.pathname !== REVIEW_TARGET_ISLAND_PATH) return null;
-    if (url.searchParams.get("ref") !== ref) return null;
-    const credential = url.searchParams.get(REVIEW_ISLAND_CREDENTIAL_PARAM);
-    return credential !== null && credential.length > 0 ? credential : null;
-  } catch {
-    return null;
-  }
+  const address = composeReviewIslandAddress({
+    ref,
+    credential: reviewIslandAddressCredential(serverIslandSrc, ref),
+    frame,
+    colorScheme,
+  });
+  return address.ok ? address.value : null;
 }
+
 /** The gate-scoped decision entry — decodes the ref, calls the SAME core. */
 export const LIFECYCLE_VIEW_DECIDE_PATH = "/api/lifecycle-views/decide";
 
@@ -379,11 +378,134 @@ function islandReportedHeight(raw: unknown): number | null {
  * missing thing's place, never a blank plate".
  */
 function islandTargetIdentity(src: string): string {
-  const query = src.indexOf("?");
-  if (query < 0) return src;
-  const params = new URLSearchParams(src.slice(query + 1));
-  params.delete(REVIEW_ISLAND_COLOR_SCHEME_PARAM);
-  return `${src.slice(0, query)}?${params.toString()}`;
+  return reviewIslandAddressIdentity(src);
+}
+
+/** One pinned target's island as a pair frames it: its address, and whether
+ *  that address carries a single-use credential. */
+export type ReviewTargetIslandAddress = { src: string; credentialed: boolean };
+
+/** ONE pair of a gate drawn as pairs: its pinned target's key, and that
+ *  target's own island, or `null` for a refused pair. */
+export type ReviewTargetPair = {
+  target: ReviewTargetKey;
+  island: ReviewTargetIslandAddress | null;
+};
+
+/**
+ * EVERY PAIR'S ISLAND ADDRESS, COMPOSED IN ONE PLACE FOR EVERY HOST
+ * (cinatra#4129). A gate that pins several targets draws each target's header
+ * directly above its own island frame on every host alike, and this is the one
+ * function that addresses those frames. It reads no host: the TRANSPORT of each
+ * frame is read from the answer.
+ *
+ *   • PER-TARGET ADDRESSES (`islandSrcByRevision`): each pair takes the
+ *     credential of its OWN entry only, and only when that entry is an island
+ *     address for this card's ref that names this pair's own revision. A
+ *     missing, failed or mis-bound entry is a REFUSAL for that pair.
+ *   • NO CREDENTIAL AT ALL: the reader's own cookie is the transport, and each
+ *     pair is the gate's address naming its target — exactly what a cookie host
+ *     composed before.
+ *   • ONE GATE-WIDE CREDENTIAL and no per-target addresses: the card draws
+ *     the gate as its ONE aggregate island on that grant
+ *     (`reviewGateTargetDrawing`) and never asks for pairs. Asked anyway, every
+ *     pair is a REFUSAL: a single-use grant paints one document, so it is never
+ *     shared between frames.
+ *
+ * Every address is composed, and every entry looked up, by the projection
+ * section, from the pair's KEY, which that section alone mints; it also refuses
+ * an address past its bound. A refusal is a `null` island, and its pair draws
+ * the preview-failed state under its own header and frames nothing. No
+ * credential is ever framed twice.
+ */
+function reviewTargetIslandSrcsForPairs(input: {
+  ref: string;
+  frame: LifecycleCardFrame | null;
+  colorScheme: LifecycleColorScheme | null;
+  islandSrc: string | null;
+  islandSrcByRevision: ReviewTargetIslandAddresses | null;
+  targets: readonly ReviewTargetKey[];
+  /** True for a credential this card has framed whose frame no longer holds
+   *  it: a pair whose entry carries one is refused. */
+  spent: (credential: string) => boolean;
+}): ReviewTargetPair[] {
+  const { ref, frame, colorScheme, islandSrc, islandSrcByRevision, targets } = input;
+  if (islandSrcByRevision === null) {
+    // A gate-wide grant with no per-target addresses is drawn as the ONE
+    // aggregate island (`reviewGateTargetDrawing`), so the card never asks for
+    // pairs over it; every pair is still refused here if it is ever asked.
+    if (reviewIslandAddressCredential(islandSrc, ref) !== null) {
+      return targets.map((target) => ({ target, island: null }));
+    }
+    return targets.map((target) => {
+      const address = composeReviewIslandAddress({ ref, frame, colorScheme, target });
+      return { target, island: address.ok ? { src: address.value, credentialed: false } : null };
+    });
+  }
+  const framed = new Set<string>();
+  return targets.map((target) => {
+    const entry = reviewTargetIslandAddressOf(islandSrcByRevision, target);
+    const credential = reviewIslandAddressCredential(entry, ref, target);
+    if (credential === null || framed.has(credential) || input.spent(credential)) {
+      return { target, island: null };
+    }
+    // The FINAL address (the grant, the card's frame selectors, its palette and
+    // the target) is composed and bounded by the projection section; a refusal
+    // refuses this pair and its grant is not framed.
+    const address = composeReviewIslandAddress({ ref, credential, frame, colorScheme, target });
+    if (!address.ok) return { target, island: null };
+    framed.add(credential);
+    return { target, island: { src: address.value, credentialed: true } };
+  });
+}
+
+/** The island address the card holds, and the gate it was taken for: the
+ *  gate-wide address, the per-target set, the palette they were composed in
+ *  and the palette last asked for. The card reads it only under `ref`. */
+type HeldIslandAddress = {
+  ref: string;
+  scheme: LifecycleColorScheme | null;
+  islandSrc: string | null;
+  islandSrcByRevision: ReviewTargetIslandAddresses | null;
+  askedFor: LifecycleColorScheme | null | undefined;
+};
+
+/** The island credentials ONE mounted card has framed, on every gate, and the
+ *  mounted island that holds each one now: `framed` grows when a frame mounts
+ *  on a credential and never shrinks while the card is mounted; `holders` maps
+ *  a credential to the instance token of the one island whose frame holds it,
+ *  and loses it when that island unmounts or moves to another address. */
+type IslandFramings = {
+  framed: ReadonlySet<string>;
+  holders: ReadonlyMap<string, object>;
+};
+
+/** Records, in its card's framings, that the island whose instance token is
+ *  `frame` has mounted a frame on a credential; the function it returns
+ *  releases that holding. */
+type RecordIslandFrame = (credential: string, frame: object) => () => void;
+
+/** The card's recorder and its framings, read by every island the card draws.
+ *  An island drawn outside a card reads `null`: it records nothing and is
+ *  refused nothing. */
+const IslandFramingContext = createContext<{
+  record: RecordIslandFrame;
+  framings: IslandFramings;
+} | null>(null);
+
+/** Every credential an answer's island addresses carry for this card's ref —
+ *  the gate-wide one and each per-target one — the set the card holds. */
+function islandCredentialsOf(
+  islandSrc: string | null,
+  islandSrcByRevision: ReviewTargetIslandAddresses | null,
+  ref: string,
+): string[] {
+  const credentials: string[] = [];
+  for (const src of [islandSrc, ...(islandSrcByRevision?.values() ?? [])]) {
+    const credential = reviewIslandAddressCredential(src, ref);
+    if (credential !== null) credentials.push(credential);
+  }
+  return credentials;
 }
 
 // ---------------------------------------------------------------------------
@@ -687,6 +809,11 @@ export function ReviewGateCard({
   // (cinatra#3141 item 7). The CARD draws them, in every island state, because
   // the island only exists in one of its three.
   const targetHeaders: LifecycleTargetHeader[] | null = resolved?.targetHeaders ?? null;
+  // Whether those headers are complete: every target this reader may read, each
+  // by its exact pinned revision, and none cut by their bound. Only the answer
+  // can say it, and it decides the pairs alone. An answer that did not say it
+  // is read as not complete.
+  const targetHeadersComplete = resolved?.targetHeadersComplete === true;
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
 
@@ -712,16 +839,194 @@ export function ReviewGateCard({
   //     for a fresh one. An answer that fails, or that carries no grant, leaves
   //     the island painted as it is rather than blanking it, and the next
   //     palette the reader chooses asks again.
+  //
+  // THE SAME THREE RULES, READ OVER THE ANSWER'S WHOLE SET (cinatra#4129). A
+  // gate drawn as pairs frames one island per pinned target, each at its own
+  // address, so what the card holds is the answer's SET of addresses — the
+  // gate-wide one and every per-target one. A set carrying any grant the card
+  // has not held is adopted WHOLE at once; a set with no grant repaints in
+  // place; otherwise the held set stands and a repaint asks once per palette,
+  // and the fresh answer brings one fresh grant per target.
   const liveIslandSrc = resolved?.islandSrc ?? null;
-  const liveCredential = islandCredentialFrom(liveIslandSrc, view.ref);
-  const [islandAddress, setIslandAddress] = useState<{
-    scheme: LifecycleColorScheme | null;
-    islandSrc: string | null;
-    askedFor: LifecycleColorScheme | null | undefined;
-  }>({ scheme: cardColorScheme, islandSrc: liveIslandSrc, askedFor: undefined });
-  const heldCredential = islandCredentialFrom(islandAddress.islandSrc, view.ref);
-  if (liveCredential !== null && liveCredential !== heldCredential) {
-    setIslandAddress({ scheme: cardColorScheme, islandSrc: liveIslandSrc, askedFor: undefined });
+  const liveIslandSrcByRevision = resolved?.islandSrcByRevision ?? null;
+  const liveCredentials = islandCredentialsOf(liveIslandSrc, liveIslandSrcByRevision, view.ref);
+  const liveIslandAddress: HeldIslandAddress = {
+    ref: view.ref,
+    scheme: cardColorScheme,
+    islandSrc: liveIslandSrc,
+    islandSrcByRevision: liveIslandSrcByRevision,
+    askedFor: undefined,
+  };
+  // The credentials this card has framed. Each island records its own in a
+  // layout effect when its frame mounts on it, under the island's own instance
+  // token, and releases it in that effect's cleanup; nothing is written while
+  // the card renders, so a render that never commits records nothing, and a
+  // StrictMode re-run of the effect releases and records the same holding
+  // again.
+  const [islandFramings, setIslandFramings] = useState<IslandFramings>(() => ({
+    framed: new Set<string>(),
+    holders: new Map<string, object>(),
+  }));
+  const recordIslandFrame = useCallback<RecordIslandFrame>((credential, frame) => {
+    setIslandFramings((current) =>
+      current.framed.has(credential) && current.holders.get(credential) === frame
+        ? current
+        : {
+            framed: new Set(current.framed).add(credential),
+            holders: new Map(current.holders).set(credential, frame),
+          },
+    );
+    return () =>
+      setIslandFramings((current) => {
+        if (current.holders.get(credential) !== frame) return current;
+        const holders = new Map(current.holders);
+        holders.delete(credential);
+        return { framed: current.framed, holders };
+      });
+  }, []);
+  const islandFraming = useMemo(
+    () => ({ record: recordIslandFrame, framings: islandFramings }),
+    [recordIslandFrame, islandFramings],
+  );
+  // A credential this card has framed whose frame no longer holds it: no
+  // island of this card frames it again. One that a mounted frame holds is
+  // refused, by the island itself, to every island but that one.
+  const spent = (credential: string): boolean =>
+    islandFramings.framed.has(credential) && !islandFramings.holders.has(credential);
+  // ONE HELD OBJECT, BOUND TO ITS GATE. Everything the card holds about the
+  // island's address (the gate-wide address, the per-target set, the palette
+  // they were composed in and the palette last asked for) is ONE object that
+  // carries the ref it was taken for. The card reads it only under that ref.
+  // When the card is drawn for another ref, the object is replaced, in that
+  // same render, by the live answer for the new ref, the way the decision
+  // binding above rebinds on the ref. Nothing held for one gate is therefore
+  // read for another: no grant, no set and no palette request. A card drawn for
+  // another gate reads that gate's answers, as the resolve gives them, over an
+  // object that holds nothing of the gate before.
+  //
+  // NO CREDENTIAL IS FRAMED TWICE. A credential joins the card's framed set
+  // when a frame of this card mounts on it, and the set stays with the card on
+  // every gate for as long as the card is mounted. The frame that holds a
+  // credential keeps drawing it; every other reading treats it as framed,
+  // whatever offers it (a live answer, the held object, or the resolve's
+  // earlier answer for a gate the card returns to): a pair over it is refused,
+  // the one island over it awaits a fresh grant, and an answer whose grants are
+  // all framed is not adopted. So an answer that unmounts the frames and a later
+  // answer without a fresh grant never frame those credentials again. A framed
+  // credential is held by the mounted island whose frame framed it (its
+  // instance, never its position or its target): an island mounted in its
+  // place, in the same commit or later, frames nothing on it. Each pair is
+  // keyed by its revision, so a pair keeps its island across a header lost or
+  // added before it. A retry of a frame that still holds its credential is the
+  // island's own retry. A cookie host's answers carry no credential, so the set
+  // stays empty and nothing below changes for it.
+  //
+  // WHAT THE HELD OBJECT FRAMES. "The one island" is the reading of a gate that
+  // pins one target and of a settled gate; "the pairs" is the reading of a
+  // pending or restricted gate that pins several.
+  //   a gate-wide grant     the one island at that grant, in every reading:
+  //                         a gate whose headers would draw pairs is drawn
+  //                         as the ONE aggregate island on it
+  //                         (`reviewGateTargetDrawing`), because one grant
+  //                         paints one document.
+  //   a per-target set      each pair at its own entry's grant; a pair whose
+  //                         entry is null or bound to another target is
+  //                         refused. The one island frames nothing: it awaits
+  //                         the gate's own grant.
+  //   neither               the cookie address: the one island at the gate's
+  //                         own, each pair at it naming its own target.
+  //
+  // WHAT IS HELD AFTER AN ANSWER, per host. A cookie host's answers bring
+  // neither a grant nor a set.
+  //   THE SAME GATE, an answer that brings
+  //   a grant not held      widget: the answer, adopted whole, in the palette
+  //   (gate-wide or in a    in force. Cookie host: never sent.
+  //   set)
+  //   a set of nulls only   widget: the held object while it holds a grant,
+  //                         otherwise the answer. Cookie host: never sent.
+  //   neither a grant nor   widget: the held object while it holds a grant or
+  //   a set                 a set, so a held set with no grant keeps the one
+  //                         island awaiting and never frames the cookie
+  //                         address; otherwise the answer, at once. Cookie
+  //                         host: the answer, at once.
+  //   nothing (it failed)   every host: the held object; nothing changes.
+  //   one that draws no     every host: the held object. Nothing is drawn, so
+  //   frame (absent,        every frame unmounts and releases its slot; a
+  //   advisory, loading)    later answer without a fresh grant draws each pair
+  //                         over a framed grant refused and the one island over
+  //                         it awaiting. Cookie host: nothing to frame.
+  //   another number of     every host: the held object, drawn as that number
+  //   headers               draws it (the pairs, or the one island awaiting a
+  //                         held set). A pair whose target stays keeps its
+  //                         island and its frame, whichever header is lost or
+  //                         added (first, middle or last); a frame that
+  //                         unmounts releases its credential, and its grant is
+  //                         not framed again: a target that returns without a
+  //                         fresh grant draws its pair refused.
+  //   the same targets in   every host: the held object. A pair that keeps its
+  //   another order         order among the pairs that stay keeps its frame; a
+  //                         pair that would move is a new island (a moved frame
+  //                         reloads its address): widget, refused over a framed
+  //                         grant until a fresh one; cookie host, the cookie
+  //                         address at once.
+  //   A DECISION REFUSED    every host: nothing changes; the frames stand.
+  //   (blocked)
+  //   A REPAINT             every host: holding no grant, and no set the answer
+  //                         lacks, the answer in the new palette, at once;
+  //                         otherwise the held object, and the card asks once
+  //                         per palette for a fresh answer.
+  //   ANOTHER GATE (the ref changed)
+  //   until it answers      every host: the live answer for the new ref, which
+  //                         the resolve holds only once that gate has answered
+  //                         on this card; holding none, the card draws nothing.
+  //   any answer            every host: that gate's answer read by the rows
+  //                         above over an object holding nothing of the gate
+  //                         before: a grant is framed, a set frames its pairs,
+  //                         a set of nulls refuses them, and neither frames the
+  //                         cookie address.
+  //   nothing (it failed)   every host: nothing is drawn.
+  //   BACK TO A GATE drawn before, whose earlier answer the resolve still holds
+  //   until it answers,     widget: that earlier answer, every grant in it
+  //   or it fails, or an    framed: each pair refused, the one island awaiting.
+  //   answer without a      Cookie host: that answer, at once.
+  //   fresh grant
+  //   a fresh grant         widget: adopted whole, each grant framed once.
+  const [heldIslandAddress, setIslandAddress] = useState<HeldIslandAddress>(liveIslandAddress);
+  let islandAddress = heldIslandAddress;
+  if (islandAddress.ref !== view.ref) {
+    islandAddress = liveIslandAddress;
+    setIslandAddress(islandAddress);
+  }
+  const heldCredential = reviewIslandAddressCredential(islandAddress.islandSrc, view.ref);
+  const heldCredentials = islandCredentialsOf(
+    islandAddress.islandSrc,
+    islandAddress.islandSrcByRevision,
+    view.ref,
+  );
+  const adoptLiveIslandSet = () => setIslandAddress(liveIslandAddress);
+  // A held per-target set that carries no grant is still not the gate's own
+  // address: an answer that brings neither a grant nor a per-target set leaves
+  // it held, so the one island over it goes on awaiting the gate's own grant and
+  // never composes the cookie address. A host whose answers carry no per-target
+  // set never holds one, so this changes nothing there.
+  const heldSetAwaitsGrant =
+    islandAddress.islandSrcByRevision !== null && liveIslandSrcByRevision === null;
+  if (
+    liveCredentials.some(
+      (credential) => !heldCredentials.includes(credential) && !islandFramings.framed.has(credential),
+    )
+  ) {
+    adoptLiveIslandSet();
+  } else if (heldCredentials.length === 0 && liveCredentials.length === 0 && !heldSetAwaitsGrant) {
+    // Nothing to spend on either side: a repaint lands at once, and so does an
+    // answer whose set changed shape (a target whose address could not be made).
+    if (
+      islandAddress.scheme !== cardColorScheme ||
+      islandAddress.islandSrc !== liveIslandSrc ||
+      !sameReviewTargetIslandAddresses(islandAddress.islandSrcByRevision, liveIslandSrcByRevision)
+    ) {
+      adoptLiveIslandSet();
+    }
   } else if (islandAddress.scheme === cardColorScheme) {
     // Nothing is outstanding — the frame is already in the host's palette. Drop
     // any standing request, so a reader who returns to a palette whose ask went
@@ -729,8 +1034,6 @@ export function ReviewGateCard({
     if (islandAddress.askedFor !== undefined) {
       setIslandAddress({ ...islandAddress, askedFor: undefined });
     }
-  } else if (heldCredential === null && liveCredential === null) {
-    setIslandAddress({ scheme: cardColorScheme, islandSrc: liveIslandSrc, askedFor: undefined });
   } else if (islandAddress.askedFor !== cardColorScheme) {
     setIslandAddress({ ...islandAddress, askedFor: cardColorScheme });
     refresh();
@@ -745,13 +1048,23 @@ export function ReviewGateCard({
       suggestionDecisions?: SuggestionDecisionPartition | null;
     }): Promise<ReviewSubmitOutcome> => {
       try {
+        // A broker declaration with no widget user token now sends nothing,
+        // and the refusal reads as any other (#3051).
+        const credential = lifecycleRequestCredential(auth);
+        if (credential === null) {
+          return {
+            kind: "not-permitted",
+            message:
+              "This decision could not be recorded on this surface. Open the review to continue.",
+          };
+        }
         const response = await fetch(LIFECYCLE_VIEW_DECIDE_PATH, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            ...(auth?.headers() ?? {}),
+            ...credential.headers,
           },
-          credentials: auth?.credentials ?? "same-origin",
+          credentials: credential.credentials,
           body: JSON.stringify({
             ref: view.ref,
             disposition: input.disposition,
@@ -959,10 +1272,62 @@ export function ReviewGateCard({
   // host the two are the same `null` and this composes byte-for-byte what it
   // composed before.
   const serverIslandSrc = islandAddress.islandSrc;
+  // ONE ISLAND OVER A SET THAT ADDRESSES EACH TARGET ON ITS OWN (cinatra#4129).
+  // A held set with per-target addresses and no gate-wide one is the answer a
+  // widget reader gets for a gate drawn as pairs: each of its grants is bound to
+  // one pinned target, and no cookie authenticates a frame on a third-party
+  // page. A reading that draws such a gate as ONE island — the settled reading,
+  // when a decision taken on this card settles it before the settled answer
+  // arrives — therefore has no address of its own. The island composes none
+  // and frames nothing; it draws its loading state until an answer brings the
+  // gate's own grant, which the card adopts by the rules above, and its own
+  // bound turns a wait that never ends into the failed state, whose retry
+  // re-resolves. Every answer without per-target addresses composes exactly
+  // what it composed before.
+  // A held grant that this card has framed and that no frame holds now is no
+  // address either: the island awaits a fresh grant the same way.
+  const islandAwaitsAddress =
+    (islandAddress.islandSrcByRevision !== null && heldCredential === null) ||
+    (heldCredential !== null && spent(heldCredential));
+  // EACH PAIR'S OWN ADDRESS (cinatra#4129), composed from the HELD set by the
+  // one host-neutral function above, for a gate whose answer names several
+  // targets, says its headers are complete, and carries a transport
+  // that can address each of them: per-target addresses, or none at all (the
+  // reader's cookie). A gate-wide grant with no per-target addresses is drawn
+  // as the ONE aggregate island on that grant (`reviewGateTargetDrawing`).
+  const pairTargets =
+    targetHeaders !== null &&
+    reviewGateTargetDrawing({
+      targetHeaders,
+      targetHeadersComplete,
+      islandSrcByRevision: islandAddress.islandSrcByRevision,
+      gateWideCredential: heldCredential !== null,
+    }) === "pairs"
+      ? reviewGateTargetPairKeys(targetHeaders, targetHeadersComplete)
+      : null;
+  const targetIslands =
+    pairTargets !== null
+      ? reviewTargetIslandSrcsForPairs({
+          ref: view.ref,
+          frame: cardFrame,
+          colorScheme: islandAddress.scheme,
+          islandSrc: islandAddress.islandSrc,
+          islandSrcByRevision: islandAddress.islandSrcByRevision,
+          targets: pairTargets,
+          spent,
+        })
+      : null;
+  // The one aggregate island's address, or `null` when the projection module
+  // refuses it (its final address is past the bound): a NAMED refusal the
+  // island draws as its failed state.
+  const aggregateIslandSrc = islandAwaitsAddress
+    ? ""
+    : reviewTargetIslandSrc(view.ref, cardFrame, serverIslandSrc, islandAddress.scheme);
   const body = renderState({
     state,
     decisionGeneration: decisionReading.generation,
     targetHeaders,
+    targetIslands,
     recordedPrompt: resolved?.recordedPrompt ?? null,
     // NO PROMPT WINDOW INSIDE A CONVERSATION (cinatra#3481). The drawing
     // (`app-lifecycle-cards.html` §II): "A change request is typed into that
@@ -1008,8 +1373,10 @@ export function ReviewGateCard({
       runId != null && runId !== "" && !insideConversation ? (
         <ReviewGateSettledExchange runId={runId} boundCardRef={view.ref} />
       ) : null,
-    islandSrc: reviewTargetIslandSrc(view.ref, cardFrame, serverIslandSrc, islandAddress.scheme),
+    islandSrc: aggregateIslandSrc ?? "",
+    islandRefused: aggregateIslandSrc === null,
     islandCredentialed: heldCredential !== null,
+    islandAwaitsAddress,
     submit: submitAndRefresh,
     onRefresh: refresh,
     dismissed,
@@ -1042,7 +1409,7 @@ export function ReviewGateCard({
       data-lifecycle-card-host={host}
       data-conformance-id="review-gate-card"
     >
-      {body}
+      <IslandFramingContext.Provider value={islandFraming}>{body}</IslandFramingContext.Provider>
     </div>
   );
 }
@@ -1057,6 +1424,10 @@ function renderState(args: {
   /** §IV's header(s) for the pinned target(s), or `null` when the answer
    * carried none — see `ReviewTargetHeaders`. */
   targetHeaders: LifecycleTargetHeader[] | null;
+  /** Each pinned target's key and own island when the gate is drawn as
+   * pairs, in `targetHeaders` order (a `null` island for a refused pair), or
+   * `null` when it is not. */
+  targetIslands: ReadonlyArray<ReviewTargetPair> | null;
   recordedPrompt: string | null;
   /** §VI's prompt window, bound to the run, or `null` on a host that named no
    * run and anywhere inside a conversation, where the thread's own composer is
@@ -1067,7 +1438,13 @@ function renderState(args: {
    * requested, or `null` where the window itself would be `null`. */
   settledExchange: ReactElement | null;
   islandSrc: string;
+  /** The projection module refused the one island's address (cinatra#4129):
+   *  the island draws its failed state and frames nothing. */
+  islandRefused: boolean;
   islandCredentialed: boolean;
+  /** The one island has no address yet: the held set addresses each pinned
+   * target on its own and carries none for the gate (see the card above). */
+  islandAwaitsAddress: boolean;
   submit: SubmitReviewDecisionAction;
   onRefresh: () => void;
   dismissed: Readonly<Record<string, true>>;
@@ -1080,11 +1457,14 @@ function renderState(args: {
     state,
     decisionGeneration,
     targetHeaders,
+    targetIslands,
     recordedPrompt,
     promptWindow,
     settledExchange,
     islandSrc,
+    islandRefused,
     islandCredentialed,
+    islandAwaitsAddress,
     submit,
     onRefresh,
     dismissed,
@@ -1152,15 +1532,21 @@ function renderState(args: {
           {/* MERGE: the settled header keeps the recorded outcome it names, and
               keeps the target header over the reviewed work: a settled gate
               names what was reviewed whether or not its read-only preview has
-              painted. */}
-          <ReviewTargetHeaders headers={targetHeaders} />
-          {/* §III — the reviewed target(s), read-only, exactly as the pending
-              reading drew them: one island, every pinned target, the renderer
+              painted.
+              §III — the reviewed target(s), read-only, exactly as the pending
+              reading drew them: the header over one island, inside ONE bordered
+              panel when the gate pins one target (cinatra#3441), the renderer
               resolved from the artifact's own type. The island carries no
-              decision chrome on either reading. */}
-          <ReviewTargetIsland
-            src={islandSrc}
-            credentialed={islandCredentialed}
+              decision chrome on either reading. A gate that pins several,
+              settled on this card while the widget holds only its per-target
+              addresses, draws this island without a frame until the settled
+              answer's own grant arrives (`awaiting`). */}
+          <ReviewTargetFrame
+            headers={targetHeaders}
+            islandSrc={islandSrc}
+            islandCredentialed={islandCredentialed}
+            refused={islandRefused}
+            awaiting={islandAwaitsAddress}
             onRetryResolve={onRefresh}
           />
           {/* §VIII — the RECORDED partition, in the place it annotated: between
@@ -1197,6 +1583,13 @@ function renderState(args: {
         canComment: state.canComment,
       };
       const suggestions = state.suggestions ?? [];
+      // PAIRS ONLY OVER COMPLETE HEADERS AND A TRANSPORT THAT ADDRESSES EACH
+      // TARGET (cinatra#4129): the card composed `targetIslands` exactly when
+      // the projection module drew this gate as pairs. Headers that stop at
+      // their bound or do not carry a pin's id exactly, and a gate-wide grant
+      // with no per-target addresses, keep the gate's one aggregate island,
+      // which renders every pinned target.
+      const pairTargets = targetIslands !== null;
       return (
         <>
           <ReviewGateHeader pending />
@@ -1205,16 +1598,37 @@ function renderState(args: {
               Drawn HERE, by the card, so it survives every state of the island
               below it — the skeleton while the preview is still arriving and the
               recovery panel when it never did. Inert: no control, no revision
-              picker, because the target is versioned and frozen. */}
-          <ReviewTargetHeaders headers={targetHeaders} />
-          {/* §III — the target(s). ONE island renders every pinned target as
-              sibling panels, exactly as the page stacks them, because the
-              decision below is all-or-nothing across the whole gate. */}
-          <ReviewTargetIsland
-            src={islandSrc}
-            credentialed={islandCredentialed}
-            onRetryResolve={onRefresh}
-          />
+              picker, because the target is versioned and frozen.
+              §III — the target(s). A gate that pins ONE target draws its header
+              and the island inside ONE bordered panel (cinatra#3441) — see
+              `ReviewTargetFrame`. A gate opened before one review per artifact
+              can pin several: it draws that same panel once per pinned target,
+              one target after another in pinned order, each header directly
+              above the island that draws its own target alone (cinatra#4129,
+              `PairedReviewTargets`). Each frame's transport — the reader's
+              cookie or that target's own single-use credential — is read from
+              the answer, never from the host. The decision below stays ONE,
+              all-or-nothing across the whole gate. The two readings fill two
+              sibling slots, the frame FIRST, so the frame of every other reading
+              stands in the very place the settled reading draws it in and a gate
+              that settles keeps its painted island. */}
+          {pairTargets ? null : (
+            <ReviewTargetFrame
+              headers={targetHeaders}
+              islandSrc={islandSrc}
+              islandCredentialed={islandCredentialed}
+              refused={islandRefused}
+              awaiting={islandAwaitsAddress}
+              onRetryResolve={onRefresh}
+            />
+          )}
+          {pairTargets && targetHeaders !== null ? (
+            <PairedReviewTargets
+              headers={targetHeaders}
+              pairs={targetIslands ?? []}
+              onRetryResolve={onRefresh}
+            />
+          ) : null}
           {/* §VIII — the per-item chips, between the target they annotate and
               the floor that decides them. Marks are LIVE only for a reader who
               may take the terminal decision they would ride on: a reader with
@@ -1796,13 +2210,27 @@ function ReviewGateHeader({
 function ReviewTargetIsland({
   src,
   credentialed,
+  refused = false,
+  awaiting = false,
   onRetryResolve,
+  inPanel = false,
 }: {
   src: string;
   /** True when this `src` carries a server-minted, expiring credential. */
   credentialed: boolean;
+  /** True for a pair whose own address is missing, failed or bound to another
+   * target (cinatra#4129): the island draws its failed state at once and mounts
+   * no frame, and its retry re-resolves for fresh addresses. */
+  refused?: boolean;
+  /** True while the island has no address it may frame (cinatra#4129): it
+   * draws its loading state and mounts no frame, its bound turns that into the
+   * failed state, and its retry re-resolves for the address. */
+  awaiting?: boolean;
   /** Re-resolve the card, so a retry gets a FRESH island URL (cinatra#2754). */
   onRetryResolve: () => void;
+  /** Drawn inside the target's one panel (cinatra#3441), whose border is the
+   *  frame: the island then draws no border and no rounding of its own. */
+  inPanel?: boolean;
 }): ReactElement {
   // One state bag KEYED BY `src`, reset IN-RENDER rather than in an effect —
   // the same shape `useLifecycleCardState` uses above for the identical
@@ -1814,6 +2242,22 @@ function ReviewTargetIsland({
   // cinatra#3334, without throwing away the protocol state the frame that is
   // already up has reported.
   const identity = islandTargetIdentity(src);
+  // THE FRAME INSTANCE. A credential the card has framed is held by the one
+  // mounted island whose frame framed it, named by this token, never by a
+  // position or a target. An island mounted in its place, in the same commit
+  // or later, reads the credential as framed by another island and frames
+  // nothing: it waits, as an island without an address does, until the card
+  // reads the credential as spent (its holder unmounted) or brings a fresh one.
+  const [frameInstance] = useState<object>(() => ({}));
+  const islandFraming = useContext(IslandFramingContext);
+  const frameCredential =
+    credentialed && !refused && !awaiting ? reviewIslandComposedCredential(src) : null;
+  const heldByAnotherIsland =
+    frameCredential !== null &&
+    islandFraming !== null &&
+    islandFraming.framings.framed.has(frameCredential) &&
+    islandFraming.framings.holders.get(frameCredential) !== frameInstance;
+  const waits = awaiting || heldByAnotherIsland;
   const [load, setLoad] = useState({
     identity,
     attempt: 0,
@@ -1891,11 +2335,17 @@ function ReviewTargetIsland({
   // the known residual above. `island-ready` cancels it and starts the
   // IDLE-PROGRESS bound in its place, and every `panel-mounted` restarts that
   // one. The plate is painted ONLY when a bound expires, and the frame's own
-  // `load` still cancels whichever is running and heals the plate.
+  // `load` still cancels whichever is running and heals the plate. An island
+  // that awaits its address has no frame to start the clock, so its bound runs
+  // from the moment it began to wait, and again from each retry.
   const bound = load.ready ? ISLAND_IDLE_PROGRESS_TIMEOUT_MS : ISLAND_LOAD_TIMEOUT_MS;
   useEffect(() => {
-    if (load.loaded) return;
-    const started = load.ready ? protocolClock.current.progress : protocolClock.current.navigation;
+    if (load.loaded || refused) return;
+    const started = waits
+      ? Date.now()
+      : load.ready
+        ? protocolClock.current.progress
+        : protocolClock.current.navigation;
     const remaining = Math.max(0, bound - (Date.now() - started));
     const timer = setTimeout(() => {
       setLoad((current) =>
@@ -1903,7 +2353,7 @@ function ReviewTargetIsland({
       );
     }, remaining);
     return () => clearTimeout(timer);
-  }, [load.identity, load.attempt, load.loaded, load.ready, load.progress, bound]);
+  }, [load.identity, load.attempt, load.loaded, load.ready, load.progress, bound, refused, waits]);
 
   // THE HEIGHT THE ISLAND REPORTED, KEYED BY THE TARGET — the same identity the
   // load bag is keyed on, and for the same reason: a palette repaint is the SAME
@@ -1954,78 +2404,134 @@ function ReviewTargetIsland({
     return () => window.removeEventListener("message", onMessage);
   }, [identity]);
 
-  const state: IslandLoadState = load.loaded ? "loaded" : load.timedOut ? "timed-out" : "loading";
+  const state: IslandLoadState = refused
+    ? "timed-out"
+    : load.loaded
+      ? "loaded"
+      : load.timedOut
+        ? "timed-out"
+        : "loading";
   const height = Math.max(ISLAND_MIN_HEIGHT, measured.height ?? ISLAND_MIN_HEIGHT);
+  // A refused island and one that awaits its address mount no frame at all.
+  const framed = !refused && !waits;
+  // A frame that mounts on a credential records it in its card's framings under
+  // this island's instance token, and releases it when the island unmounts or
+  // moves to another address.
+  const recordFrame = islandFraming?.record ?? null;
+  const recordedCredential = framed ? frameCredential : null;
+  useLayoutEffect(() => {
+    if (recordFrame === null || recordedCredential === null) return;
+    return recordFrame(recordedCredential, frameInstance);
+  }, [recordFrame, recordedCredential, frameInstance]);
+
+  // THE ISLAND'S SINGLE-USE GRANT IN EVERY FRAME OFF A COOKIE SESSION. On a
+  // first-party host the island document is authenticated by the page's own
+  // session, which is the reader's. On every other host (the site widget,
+  // whose reader is proven by a broker token, never by a cookie) the
+  // server-minted credential is the only proof of the reader the island
+  // receives, so an address without one is not framed at all. The region keeps
+  // its place in the host's palette and draws nothing: no target content and
+  // no explanation. An answer that brings a credential frames the island from
+  // the card's held address, and an answer that brings none never moves a
+  // frame that already holds one (the held address above). Inside the
+  // one-target panel the region, like the island, draws no frame of its own.
+  // A refused target and one that awaits its address are not this region:
+  // neither mounts a frame, and each keeps its own state below, the failed
+  // state with its retry or the loading state.
+  // Read after every hook of this component, so the hook order is the same
+  // on every render.
+  const cookieSession = useCookieSessionSurface();
+  if (!credentialed && !cookieSession && !refused && !awaiting) {
+    return (
+      <div
+        data-conformance-id="review-target-island"
+        data-island-load-state="empty"
+        className={
+          inPanel
+            ? "relative overflow-hidden bg-surface-strong"
+            : "relative overflow-hidden rounded-control border border-line bg-surface-strong"
+        }
+        style={{ height: ISLAND_MIN_HEIGHT }}
+      />
+    );
+  }
 
   return (
     <div
       data-conformance-id="review-target-island"
       data-island-load-state={state}
-      className="relative overflow-hidden rounded-control border border-line bg-surface-strong"
+      className={
+        inPanel
+          ? "relative overflow-hidden bg-surface-strong"
+          : "relative overflow-hidden rounded-control border border-line bg-surface-strong"
+      }
     >
-      <iframe
-        // Keyed by src+attempt so a retry (or a genuinely new target) forces a
-        // real remount — a re-render alone would leave the SAME iframe element
-        // sitting on whatever connection already stalled or failed.
-        key={`${load.identity}:${load.attempt}`}
-        ref={attachFrame}
-        src={src}
-        // THE ATTEMPT STAMP (cinatra#3334). A frame's `name` is readable as
-        // `window.name` inside the document it holds, so the island can name
-        // this attempt back to the card without anything being added to the
-        // island's ADDRESS — which stays the ref and, where there is one, the
-        // server's credential, and nothing else.
-        name={reviewIslandFrameName(load.attempt)}
-        title="Review target"
-        // NOT an isolation boundary — see the module header. These tokens
-        // withhold top-navigation, form submission and popups from a document
-        // that needs none of them; the authorization is the island's own.
-        sandbox="allow-scripts allow-same-origin"
-        referrerPolicy="same-origin"
-        // A CREDENTIALED src is a perishable bearer: it is minted by the resolve
-        // this render came from and dies shortly after, so it cannot wait for a
-        // scroll — a lazily-fetched frame below the fold would present an
-        // expired credential and paint the refusal. A cookie-authenticated src
-        // has no such clock and keeps `lazy`, which is what lets a thread mount
-        // several of these off screen without fetching them all.
-        loading={credentialed ? "eager" : "lazy"}
-        className={`w-full border-0 bg-surface-strong transition-opacity duration-200 ${
-          load.loaded ? "opacity-100" : "pointer-events-none opacity-0"
-        }`}
-        style={{ height }}
-        onLoad={(event) => {
-          announcePalette();
-          setLoad((current) =>
-            current.identity === identity
-              ? // LOADED IS NOT THE SAME AS DREW (cinatra#2853, the picture
-                // leg). Every denial this island serves is an EMPTY painted
-                // rectangle — that is the shape §IV requires, so that a reader
-                // who may not see the item is indistinguishable from one looking
-                // at an item that is not there. But `onLoad` fires for that
-                // document exactly as it does for a drawn target, so the
-                // skeleton came down and the reader was left looking at a flat
-                // panel: no content, no skeleton and no reason. Plan (A) §4.1:
-                // the card "always shows you something; it is never blank".
-                //
-                // ONLY THE DENIAL TURNS IT, and nothing else: a document this
-                // card cannot read is left exactly where it always was, so the
-                // one thing that changes is the one case that produced a blank
-                // panel. A preview that is not there is drawn as a preview that
-                // is not there, which is a state that HAS a drawing.
-                islandFrameServedTheDenial(event.currentTarget)
-                ? { ...current, loaded: false, timedOut: true }
-                : { ...current, loaded: true }
-              : current,
-          );
-        }}
-      />
+      {!framed ? null : (
+        <iframe
+          // Keyed by src+attempt so a retry (or a genuinely new target) forces a
+          // real remount — a re-render alone would leave the SAME iframe element
+          // sitting on whatever connection already stalled or failed.
+          key={reviewIslandFrameKey(load.identity, load.attempt)}
+          ref={attachFrame}
+          src={src}
+          // THE ATTEMPT STAMP (cinatra#3334). A frame's `name` is readable as
+          // `window.name` inside the document it holds, so the island can name
+          // this attempt back to the card without anything being added to the
+          // island's ADDRESS — which stays the ref and, where there is one, the
+          // server's credential, and nothing else.
+          name={reviewIslandFrameName(load.attempt)}
+          title="Review target"
+          // NOT an isolation boundary — see the module header. These tokens
+          // withhold top-navigation, form submission and popups from a document
+          // that needs none of them; the authorization is the island's own.
+          sandbox="allow-scripts allow-same-origin"
+          referrerPolicy="same-origin"
+          // A CREDENTIALED src is a perishable bearer: it is minted by the resolve
+          // this render came from and dies shortly after, so it cannot wait for a
+          // scroll — a lazily-fetched frame below the fold would present an
+          // expired credential and paint the refusal. A cookie-authenticated src
+          // has no such clock and keeps `lazy`, which is what lets a thread mount
+          // several of these off screen without fetching them all.
+          loading={credentialed ? "eager" : "lazy"}
+          className={`w-full border-0 bg-surface-strong transition-opacity duration-200 ${
+            load.loaded ? "opacity-100" : "pointer-events-none opacity-0"
+          }`}
+          style={{ height }}
+          onLoad={(event) => {
+            announcePalette();
+            setLoad((current) =>
+              current.identity === identity
+                ? // LOADED IS NOT THE SAME AS DREW (cinatra#2853, the picture
+                  // leg). Every denial this island serves is an EMPTY painted
+                  // rectangle — that is the shape §IV requires, so that a reader
+                  // who may not see the item is indistinguishable from one looking
+                  // at an item that is not there. But `onLoad` fires for that
+                  // document exactly as it does for a drawn target, so the
+                  // skeleton came down and the reader was left looking at a flat
+                  // panel: no content, no skeleton and no reason. Plan (A) §4.1:
+                  // the card "always shows you something; it is never blank".
+                  //
+                  // ONLY THE DENIAL TURNS IT, and nothing else: a document this
+                  // card cannot read is left exactly where it always was, so the
+                  // one thing that changes is the one case that produced a blank
+                  // panel. A preview that is not there is drawn as a preview that
+                  // is not there, which is a state that HAS a drawing.
+                  islandFrameServedTheDenial(event.currentTarget)
+                  ? { ...current, loaded: false, timedOut: true }
+                  : { ...current, loaded: true }
+                : current,
+            );
+          }}
+        />
+      )}
       {/* Overlays the iframe's own box exactly (same height) — never the
           footer below, so neither state changes the card's footprint. The
           iframe stays mounted underneath while timed out: a late `onLoad`
           self-heals the display instead of leaving a reviewer stuck on a
           retry panel for content that did, eventually, arrive. */}
       {state !== "loaded" ? (
-        <div className="absolute inset-x-0 top-0" style={{ height }}>
+        // An island with no frame has nothing to overlay, so its panel holds the box.
+        <div className={framed ? "absolute inset-x-0 top-0" : undefined} style={{ height }}>
           {state === "loading" ? (
             <IslandLoadingSkeleton />
           ) : (
@@ -2192,23 +2698,29 @@ function IslandLoadTimedOut({ onRetry }: { onRetry: () => void }): ReactElement 
 // composed for this reader and words none of them itself.
 // ---------------------------------------------------------------------------
 
-/** The mono revision id, truncated for display, with the exact id preserved. */
-function revisionMarker(revisionId: string): { short: string; full: string } {
-  return {
-    full: revisionId,
-    short: revisionId.length > 14 ? `${revisionId.slice(0, 12)}…` : revisionId,
-  };
-}
-
 /**
  * The header for ONE target. Drawn above the island, inside the gate's frame.
+ *
+ * `inPanel` (cinatra#3441): drawn as the first child of the target's one panel
+ * (`ReviewTargetFrame`), whose border is the frame — the header then draws only
+ * the rule that separates it from the work beneath it, as §IV's markup does.
  */
-export function ReviewTargetHeader({ header }: { header: LifecycleTargetHeader }): ReactElement {
-  const revision = revisionMarker(header.revisionId);
+export function ReviewTargetHeader({
+  header,
+  inPanel = false,
+}: {
+  header: LifecycleTargetHeader;
+  inPanel?: boolean;
+}): ReactElement {
+  const revision = reviewTargetRevisionMarker(header.revisionId);
   return (
     <div
       data-conformance-id="review-target-header"
-      className="rounded-control border border-line bg-surface-strong px-4 py-3"
+      className={
+        inPanel
+          ? "border-b border-line px-4 py-3"
+          : "rounded-control border border-line bg-surface-strong px-4 py-3"
+      }
     >
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-sans text-sm font-bold text-foreground">{header.title}</span>
@@ -2245,11 +2757,215 @@ export function ReviewTargetHeaders({
   headers: readonly LifecycleTargetHeader[] | null;
 }): ReactElement | null {
   if (!headers || headers.length === 0) return null;
+  // Keyed by POSITION as well as by target (cinatra#4129): two pins of
+  // different artifacts may share one revision id and one object type, and
+  // that answer is drawn here, as the one aggregate island's headers. A key of
+  // the revision and the type alone would give both the same identity.
   return (
     <>
-      {headers.map((header) => (
-        <ReviewTargetHeader key={`${header.revisionId}:${header.objectType}`} header={header} />
+      {headers.map((header, index) => (
+        <ReviewTargetHeader
+          key={reviewTargetHeaderKey(index, header)}
+          header={header}
+        />
       ))}
+    </>
+  );
+}
+
+/**
+ * ONE BORDERED PANEL PER TARGET (cinatra#3441).
+ *
+ * §IV of the ratified review drawing (`specs/app-artifact-review.html`) draws a
+ * target as ONE container: "Every target opens with a header that names what is
+ * under review … Beneath the header sits the representation slot", in markup
+ * that is one bordered, rounded box whose first child is the header (carrying
+ * the rule that separates it from the work) and whose second is the slot.
+ *
+ * The card drew the header as its own bordered card and the island as a second
+ * bordered card beneath it, and the island's document drew a third border round
+ * the representation inside that — measured on a real run as concentric boxes.
+ * A gate that pins ONE target (every gate minted under one review per artifact)
+ * now draws its header and the island inside ONE border, and neither half draws
+ * a frame of its own; the island's document draws no panel frame for a
+ * document that draws one target (`framed` on the review route's
+ * `ReviewTargetPanel`).
+ *
+ * THE HEADER STAYS THE CARD'S (#3141 item 7): it is the island's sibling inside
+ * the panel, never inside the frame that can fail, so it survives the skeleton
+ * and the recovery panel exactly as before.
+ *
+ * A pending gate opened before one review per artifact that still pins several
+ * targets draws THIS panel once per target (cinatra#4129, `PairedReviewTargets`):
+ * `pair` names the pinned revision the panel draws, and `refused` marks a pair
+ * whose own address is missing, failed or bound to another target. Every other
+ * reading is drawn as before. An answer that carried no header draws the island
+ * alone in its own frame (a header the card cannot source is one it would have
+ * to invent), and the settled reading of a gate that pins several keeps its
+ * headers over its one framed island. `awaiting` marks an island that has no
+ * address it may frame yet (a gate that pins several, settled on the card while
+ * the widget holds only its per-target addresses): it draws its loading state
+ * with no frame until the settled answer's own grant arrives.
+ *
+ * ONE ELEMENT HOLDS THE ISLAND ON EVERY READING. The island is a live frame: its
+ * load state, its bound, the height its document reported, the focus inside it
+ * and, on the widget, an address that is spent the moment it paints. A later
+ * answer for the SAME gate may carry another number of headers (a header read
+ * that failed answers none), so a panel drawn round the one-header reading
+ * alone would move the island to another parent whenever a refresh moved the
+ * count across one, and React would mount the island, and its document, again.
+ * So the same element always stands round the header slot and the island, in
+ * the same place, and only its classes change: the one panel for an answer that
+ * carried exactly one header, and for every other answer a box that draws
+ * nothing (`contents`), so the header(s) and the island sit in the card's own
+ * column exactly as before.
+ */
+export function ReviewTargetFrame({
+  headers,
+  islandSrc,
+  islandCredentialed,
+  onRetryResolve,
+  refused = false,
+  awaiting = false,
+  paired = false,
+}: {
+  headers: readonly LifecycleTargetHeader[] | null;
+  islandSrc: string;
+  islandCredentialed: boolean;
+  onRetryResolve: () => void;
+  /** This pair's own address is missing, failed or bound to another target
+   *  (cinatra#4129): its island draws the failed state and frames nothing. */
+  refused?: boolean;
+  /** The island has no address it may frame yet (cinatra#4129): it draws its
+   *  loading state and frames nothing until an answer brings one. */
+  awaiting?: boolean;
+  /** This panel is one pair of a gate drawn as pairs. The marker names no
+   *  target: the pair's header names it. */
+  paired?: boolean;
+}): ReactElement {
+  const only = headers && headers.length === 1 ? headers[0] : null;
+  // NO CONFORMANCE ID OF ITS OWN: the review surfaces render only the drawing's
+  // closed anchor set (`review-surface-conformance`), and the drawing's
+  // `review-target` anchor stays where the island's document draws it. The frame
+  // is marked for its own suites by a plain data attribute, on the one-header
+  // reading only.
+  //
+  // THE SAME ELEMENT IN THE SAME PLACE (see above): its first child is the header
+  // slot and its second is ALWAYS the island, so a change in the header count
+  // draws the header slot again and never moves the island.
+  return (
+    <div
+      data-review-target-frame={only ? "" : undefined}
+      data-review-target-pair={paired ? "" : undefined}
+      className={
+        only
+          ? "overflow-hidden rounded-control border border-line bg-surface-strong"
+          : "contents"
+      }
+    >
+      {only ? (
+        <ReviewTargetHeader header={only} inPanel />
+      ) : (
+        <ReviewTargetHeaders headers={headers} />
+      )}
+      <ReviewTargetIsland
+        src={islandSrc}
+        credentialed={islandCredentialed}
+        refused={refused}
+        awaiting={awaiting}
+        onRetryResolve={onRetryResolve}
+        inPanel={Boolean(only)}
+      />
+    </div>
+  );
+}
+
+/** The React key of each pair, in the headers' order, and the targets they
+ *  were placed for. */
+type PairPlacement = {
+  targets: readonly ReviewTargetKey[];
+  keys: readonly string[];
+  minted: number;
+};
+
+/**
+ * EACH PAIR'S KEY, STABLE AS LONG AS ITS FRAME NEED NOT MOVE. A pair's frame
+ * may hold a single-use credential, and a frame that is moved in the document
+ * reloads its address, so a pair keeps its key, and its mounted frame, for as
+ * long as its target stays among the headers in the order it had: a header
+ * lost or added before it, or after it, moves no frame that stays. A pair whose
+ * target would now come before one it followed (the same targets in another
+ * order) gets a new key: it is a new island, which frames no credential the
+ * island it replaces framed. The key names the target, never a position.
+ */
+function placePairs(previous: PairPlacement | null, targets: readonly ReviewTargetKey[]): PairPlacement {
+  let minted = previous?.minted ?? 0;
+  let reached = -1;
+  const keys = targets.map((target) => {
+    const at = previous === null ? -1 : previous.targets.indexOf(target, reached + 1);
+    if (previous !== null && at >= 0) {
+      reached = at;
+      return previous.keys[at];
+    }
+    minted += 1;
+    return reviewTargetPairKey(target, minted);
+  });
+  return { targets, keys, minted };
+}
+
+/**
+ * EACH HEADER ABOVE ITS OWN BODY (cinatra#4129). A gate opened before reviews
+ * became one per artifact, and still pending, can pin several targets; the
+ * drawing pairs every target's header with its own representation slot, so
+ * such a gate draws one target after another, in the answer's order, each as
+ * the ONE bordered panel a gate that pins one target draws (`ReviewTargetFrame`,
+ * cinatra#3441): its header, then ONE island frame that names that header's
+ * pinned revision. The one decision floor stays below them all. The header
+ * stays the card's, outside the frame that can fail, so it is drawn while its
+ * body loads and when the body cannot be shown. This is the one reading on
+ * EVERY host: each frame's address comes from `pairs` — the reader's cookie,
+ * or that target's own single-use credential, as the answer gave it — and a
+ * pair whose own address is missing, failed or bound to another target draws
+ * its preview-failed state under its own header and frames nothing, never
+ * another target's address.
+ */
+export function PairedReviewTargets({
+  headers,
+  pairs,
+  onRetryResolve,
+}: {
+  headers: readonly LifecycleTargetHeader[];
+  /** Each pair's target and own island, in `headers` order; a `null` island
+   *  refuses that pair. */
+  pairs: ReadonlyArray<ReviewTargetPair>;
+  onRetryResolve: () => void;
+}): ReactElement {
+  const targets = pairs.map((pair) => pair.target);
+  const [placedPairs, setPlacedPairs] = useState<PairPlacement>(() => placePairs(null, targets));
+  let placement = placedPairs;
+  if (
+    placement.targets.length !== targets.length ||
+    placement.targets.some((target, index) => target !== targets[index])
+  ) {
+    placement = placePairs(placement, targets);
+    setPlacedPairs(placement);
+  }
+  return (
+    <>
+      {headers.map((header, index) => {
+        const island = pairs[index]?.island ?? null;
+        return (
+          <ReviewTargetFrame
+            key={placement.keys[index]}
+            headers={[header]}
+            islandSrc={island?.src ?? ""}
+            islandCredentialed={island?.credentialed ?? false}
+            refused={island === null}
+            paired
+            onRetryResolve={onRetryResolve}
+          />
+        );
+      })}
     </>
   );
 }

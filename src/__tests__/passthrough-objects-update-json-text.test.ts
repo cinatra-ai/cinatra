@@ -28,9 +28,15 @@
  * REAL `objectsUpdateSchema`, so a `data` the route hands on as a string fails
  * exactly as the real handler's parse fails.
  *
+ * The same seam carries objects_save: W1 pins that a typeHint in the reserved
+ * dynamic-type namespace reaches the handler unchanged and that the handler's
+ * refusal comes back in the route's answer to a thrown error.
+ *
  *   npx vitest run src/__tests__/passthrough-objects-update-json-text.test.ts
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { PrimitiveInvocationError } from "@cinatra-ai/mcp-client";
 
 import { objectsUpdateSchema } from "../../packages/objects/src/mcp/schemas";
 
@@ -264,5 +270,39 @@ describe("G0 — what the seam must not change", () => {
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: expected.error?.message });
     expect(parsedInputs).toHaveLength(0);
+  });
+});
+
+describe("W1 — objects_save with a reserved dynamic-type typeHint", () => {
+  const SELECTED_IDEA = "@dynamic/types:blog-pipeline-selected-idea";
+  const REFUSAL = `"${SELECTED_IDEA}" is in the reserved dynamic-type namespace, which resolves to no extension by design — a save must name a type an installed artifact extension declares`;
+
+  it("hands the typeHint to the handler unchanged and answers its refusal with 500 and the message", async () => {
+    // The handler refuses as the real objects_save does for this id: it names
+    // the typeHint it received.
+    const objectsSaveHandlerMock = vi.fn(async (request: { input: Record<string, unknown> }) => {
+      const typeHint = String(request.input.typeHint);
+      throw new PrimitiveInvocationError({
+        code: "OBJECTS_TYPE_NOT_REGISTERED",
+        message: `"${typeHint}" is in the reserved dynamic-type namespace, which resolves to no extension by design — a save must name a type an installed artifact extension declares`,
+        retryable: false,
+        details: { attemptedType: typeHint, reason: "dynamic-namespace" },
+      });
+    });
+    collectAllPrimitiveHandlersMock.mockResolvedValue({ objects_save: objectsSaveHandlerMock });
+
+    const input = { rawData: { title: "Selected idea" }, typeHint: SELECTED_IDEA };
+    const res = await POST(post({ tool: "objects_save", input, agent_run_id: "run-1" }));
+
+    expect(objectsSaveHandlerMock).toHaveBeenCalledTimes(1);
+    const request = objectsSaveHandlerMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(request.primitiveName).toBe("objects_save");
+    expect(request.mode).toBe("agentic");
+    expect(request.input).toEqual(input);
+    expect((request.input as Record<string, unknown>).typeHint).toBe(SELECTED_IDEA);
+    // A thrown refusal is answered with HTTP 500 and its message only; the
+    // code and details stay with the handler.
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: REFUSAL });
   });
 });
