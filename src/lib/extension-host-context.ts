@@ -1653,6 +1653,7 @@ import { createHash } from "node:crypto";
 import type { ActionJson, ArtifactActionIdentity, ArtifactActionCheckInput, ArtifactActionCheckProvider } from "@cinatra-ai/sdk-extensions";
 import { ARTIFACT_ACTION_CHECK_CAPABILITY } from "@cinatra-ai/sdk-extensions/internal";
 import { isLoadedExtensionIdentityCurrent, capabilityProviderLoadedIdentity } from "@/lib/extension-capabilities-registry";
+import { inTreeArtifactActionChecker, inTreeActionCheckAdmits, recordBoundToolDeclaration } from "@/lib/artifact-action-check-in-tree";
 
 export class ArtifactActionCheckRefusal extends Error {
   constructor(readonly code: string) { super(code); this.name = "ArtifactActionCheckRefusal"; }
@@ -1709,6 +1710,9 @@ export function resolveArtifactActionChecker(identity: ArtifactActionIdentity): 
     return i && i.packageName === identity.packageName && i.version === identity.version &&
       i.installId === identity.installId && i.digest === identity.digest && i.generation === identity.generation;
   });
+  // The host's in-tree provider answers only when no extension provider does,
+  // and only for a digest-pinned primitive whose bound registration reads read-only.
+  if (matches.length === 0 && inTreeActionCheckAdmits(identity)) return inTreeArtifactActionChecker();
   if (matches.length !== 1) throw new ArtifactActionCheckRefusal("action_checker_missing_or_ambiguous");
   const provider = matches[0]!.impl;
   if (!provider || typeof provider !== "object" || typeof (provider as Partial<ArtifactActionCheckProvider>).check !== "function") {
@@ -1991,6 +1995,8 @@ export function bindArtifactGuardedMcpHandler<T>(toolName: string,
   // The leaf is the version that executes, so its own declaration holds the call
   // whatever planned entry a dispatch bridge served it under.
   const declaresOutward = registrationDeclaresOutward(registration);
+  // The same registration's read class, for the host's in-tree CHECK provider.
+  recordBoundToolDeclaration(identity, toolName, registration);
   const wrapped = markGuardedRunDispatch(async (input: unknown) => {
     const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
     if (!mcpRequestContextStorage.getStore()?.runId) return handler(input);
