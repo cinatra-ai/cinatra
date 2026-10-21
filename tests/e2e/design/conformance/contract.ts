@@ -117,6 +117,13 @@ import {
   type LifecycleScheduleCardFixture,
 } from "../../../../src/app/design-fixtures/conformance/lifecycle-schedule-card-fixture-data";
 import {
+  RECURRENCE_FIELD_CONTROL,
+  RECURRENCE_FIELD_SOURCE,
+  schedulingRecurrenceReading,
+  type RecurrenceFieldName,
+  type SchedulingRecurrenceSurfaceId,
+} from "../../../../src/app/design-fixtures/conformance/scheduling-recurrence-fixture-data";
+import {
   RUN_STEP_RAIL_ROWS,
   SHIPPED_RAIL_ACTION,
   type RunStepKind,
@@ -2435,6 +2442,63 @@ const SCHEDULING_STEP_CONFIGURED_DRIVER: SurfaceDriver = {
     },
   },
 };
+
+/**
+ * The scheduling step's recurrence selectors (design#212): four surfaces that
+ * declare fields only, over the shipped `RecurrenceFrequencySelectors` in the
+ * drawing's four readings (scheduling-recurrence-fixtures.tsx).
+ *
+ * BINDING FORM. The shipped component writes the bare field name
+ * (`data-field="recurring-day-of-month"`), not the `name=source` pair the
+ * harness-drawn mounts carry. The driver binds to what ships; the source is
+ * reconciled with the manifest by the driver's `source`, which the suite
+ * compares with the pinned binding. A field the component no longer draws, or
+ * draws under another name, is found zero times and is RED.
+ *
+ * A segment (Start / End, Day / Weekday) carries the name on both halves; the
+ * pressed half is the value. A select carries it on its one trigger, which
+ * reads the value. The surface also draws no recurrence field it does not
+ * declare.
+ */
+function recurrenceSelectorsDriver(surfaceId: SchedulingRecurrenceSurfaceId): SurfaceDriver {
+  const reading = schedulingRecurrenceReading(surfaceId);
+  const declared = Object.keys(reading.drawn) as RecurrenceFieldName[];
+  const fields: SurfaceDriver["fields"] = {};
+  for (const name of declared) {
+    const drawn = reading.drawn[name]!;
+    fields[name] = {
+      source: RECURRENCE_FIELD_SOURCE[name],
+      assert: async (_page, root) => {
+        const controls = root.locator(`[data-field="${name}"]`);
+        const value =
+          RECURRENCE_FIELD_CONTROL[name] === "segment"
+            ? root.locator(`[data-field="${name}"][aria-pressed="true"]`)
+            : controls;
+        await expect(controls, `${surfaceId}: "${name}" must be drawn`).toHaveCount(
+          RECURRENCE_FIELD_CONTROL[name] === "segment" ? 2 : 1,
+        );
+        await expect(value, `${surfaceId}: "${name}" must read one value`).toHaveCount(1);
+        await expect(value).toBeVisible();
+        await expect(value).toHaveText(drawn, { timeout: HYDRATION_TIMEOUT_MS });
+      },
+    };
+  }
+  return {
+    path: HARNESS_PATH,
+    root: harnessRoot(surfaceId),
+    present: async (_page, root) => {
+      await expect(root).toBeVisible();
+      await expect(root.locator(`[data-field="${declared[0]}"]`).first()).toBeVisible();
+      for (const name of Object.keys(RECURRENCE_FIELD_SOURCE) as RecurrenceFieldName[]) {
+        if (declared.includes(name)) continue;
+        await expect(root.locator(`[data-field="${name}"]`), `${surfaceId} draws "${name}"`).toHaveCount(0);
+      }
+    },
+    fields,
+    actions: {},
+    states: {},
+  };
+}
 
 // ---------------------------------------------------------------------------
 // App-shell drivers adopted with the cinatra#3057 pin reconciliation:
@@ -8003,6 +8067,10 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "approvals-marketplace-states": APPROVALS_MARKETPLACE_STATES_DRIVER,
   "scheduling-step": SCHEDULING_STEP_DRIVER,
   "scheduling-step-configured": SCHEDULING_STEP_CONFIGURED_DRIVER,
+  "scheduling-step-quarterly": recurrenceSelectorsDriver("scheduling-step-quarterly"),
+  "scheduling-step-yearly": recurrenceSelectorsDriver("scheduling-step-yearly"),
+  "scheduling-step-configured-monthly": recurrenceSelectorsDriver("scheduling-step-configured-monthly"),
+  "scheduling-step-configured-quarterly": recurrenceSelectorsDriver("scheduling-step-configured-quarterly"),
   "sidebar-assistants-entry": SIDEBAR_ASSISTANTS_ENTRY_DRIVER,
   "breadcrumb-entity-resolution": BREADCRUMB_ENTITY_RESOLUTION_DRIVER,
   "button": BUTTON_SURFACE_DRIVER, // The components drawing's shared primitives, one mount each (cinatra#3189).

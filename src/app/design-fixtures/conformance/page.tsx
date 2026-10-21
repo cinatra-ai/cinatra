@@ -22,6 +22,7 @@ import {
 import { ConnectorSharingFixture } from "./connector-sharing-fixture";
 import { InstallConfigNeedsConformanceFixture } from "./install-config-needs-fixture";
 import { ApprovalsSchedulingConformanceFixtures } from "./approvals-scheduling-fixtures";
+import { SchedulingRecurrenceConformanceFixtures } from "./scheduling-recurrence-fixtures";
 import { SidebarAssistantsConformanceFixture } from "./sidebar-assistants-fixture";
 import { BreadcrumbEntityResolutionFixture } from "./breadcrumb-conformance-fixtures";
 import { NotificationsConformanceFixtures } from "./notifications-conformance-fixtures";
@@ -245,6 +246,10 @@ export default function ConformanceHarnessPage() {
             scheduling-step-configured in place of the retired
             scheduling-trigger-tab. */}
         <ApprovalsSchedulingConformanceFixtures />
+
+        {/* The scheduling step's recurrence selectors (design#212): the shipped
+            RecurrenceFrequencySelectors in the drawing's four readings. */}
+        <SchedulingRecurrenceConformanceFixtures />
 
         {/* App-shell surfaces adopted with the cinatra#3057 pin reconciliation:
             sidebar-assistants-entry (conformance/app.json) and

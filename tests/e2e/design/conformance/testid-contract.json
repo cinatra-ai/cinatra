@@ -680,6 +680,10 @@
         }
       ]
     },
+    "scheduling-step-quarterly": { "$ref": "scheduling-step-recurrence" },
+    "scheduling-step-yearly": { "$ref": "scheduling-step-recurrence" },
+    "scheduling-step-configured-monthly": { "$ref": "scheduling-step-recurrence" },
+    "scheduling-step-configured-quarterly": { "$ref": "scheduling-step-recurrence" },
     "sidebar-assistants-entry": {
       "manifest": "app",
       "selector": "harness [data-surface-id=\"sidebar-assistants-entry\"][data-variant=\"populated\"] (the entry → data-outcome=\"assistants\"). The REAL entry is app-sidebar.tsx's AssistantsNavItem, whose literals below are the §IX conformance contract and are additionally asserted at the source by src/components/__tests__/sidebar-assistants-conformance.test.ts.",
@@ -1521,6 +1525,36 @@
         {
           "file": "packages/extensions/src/screens/marketplace-install-form.tsx",
           "literals": ["data-testid=\"extension-card-cta-submit\"", "data-pending={pending ? \"\" : undefined}"]
+        }
+      ]
+    },
+    "scheduling-step-recurrence": {
+      "manifest": "app-components",
+      "selector": "harness [data-surface-id={surface}][data-variant=\"populated\"] mounts the REAL RecurrenceFrequencySelectors, the component the in-flow scheduling step and the schedule card both draw, in the drawing's four readings (quarterly, yearly, configured monthly, configured quarterly). Each field is addressed by the bare data-field name the component writes: a segment (recurring-quarter-anchor, recurring-monthly-mode) carries it on both halves and the aria-pressed half is the value; a select carries it on its one trigger, which reads the value. The harness holds only the selection and applies the patch the component hands back. Fields only: the surfaces declare no action and no state variant.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/scheduling-recurrence-fixtures.tsx",
+          "literals": [
+            "data-surface-id=\"scheduling-step-quarterly\"",
+            "data-surface-id=\"scheduling-step-yearly\"",
+            "data-surface-id=\"scheduling-step-configured-monthly\"",
+            "data-surface-id=\"scheduling-step-configured-quarterly\"",
+            "<RecurrenceFrequencySelectors"
+          ]
+        },
+        {
+          "file": "packages/agents/src/schedule-proposal-card.tsx",
+          "literals": [
+            "export function RecurrenceFrequencySelectors",
+            "data-field=\"recurring-quarter-anchor\"",
+            "data-field=\"recurring-yearly-month\"",
+            "data-field=\"recurring-monthly-mode\"",
+            "data-field=\"recurring-day-of-month\"",
+            "data-field=\"recurring-nth-week\"",
+            "data-field=\"recurring-monthly-weekday\"",
+            "aria-pressed={selection.quarterAnchor === anchor}",
+            "aria-pressed={selection.monthlyMode === mode}"
+          ]
         }
       ]
     }

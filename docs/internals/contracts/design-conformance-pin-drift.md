@@ -272,6 +272,15 @@ input (see `superseded-pins-2026-08-28/`, `superseded-pins-2026-09-12/`,
 frozen published ones, and every row a later frozen fetch superseded), because
 a gate whose drift path has no input is a gate whose drift path is untested.
 
+**Then one more, adopted on 2026-10-21 in a second round — NOT hashes-only.**
+`app-components` republished with the selectors of a monthly, quarterly or
+yearly schedule drawn on the scheduling step, and the `push`-to-`main` arm was
+red on that pin: four pins read `match` and that one read `drift`. The body
+declares thirty-seven surfaces where the pin declared thirty-three; the
+thirty-three are field-for-field identical and four are new. The second
+2026-10-21 reconciliation below adopted it with the drivers and harness mounts
+of the four surfaces, and all five pins read `match` again, on both arms.
+
 ## Reconciliation record
 
 Measured 2026-08-28 and adopted on 2026-08-30, after re-fetching each published
@@ -801,6 +810,50 @@ the adopted body's own `contentHash` field — never typed. No other pin moved.
 | `app-extensions` | `match` | nothing — the published body is still the pinned artifact | none |
 | `app-connectors` | `match` | nothing — the published body is still the pinned artifact | none |
 | `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
+
+## Reconciliation record — 2026-10-21, second round
+
+Measured 2026-10-21 against the manifests published under `publishedBaseUrl`,
+after the docs mirror cinatra-ai/docs#237 published the `app-components` body
+of cinatra-ai/design#212, which draws the quarter, month and day selectors of
+the scheduling step. All five bodies were fetched with one anonymous `curl -sS`
+each into a scratch directory outside every repository tree, and their hashes
+were compared with the five pins as this change leaves them: every published
+body is byte-identical to the artifact its pin names. `app`, `app-extensions`,
+`app-connectors` and `app-notifications` came back byte-identical to the
+artifacts their pins already named. The adopted `app-components` body was
+compared, as parsed JSON, with the committed copy under
+`tests/e2e/design/conformance/manifests/` that it replaces: `schemaVersion`,
+`spec` and the thirty-three surfaces the copy already declared are
+field-for-field identical, four surfaces are added after
+`scheduling-step-configured`, none is retired, and `contentHash` moved. This is
+the first case "Why a hash-only re-pin is refused" names, so the pin moves
+together with the drivers, the harness mounts and the stable-id contract that
+answer the four surfaces. The committed artifact is now the verbatim published
+body, and both hashes of the entry in `conformance-pins.json` were re-derived
+from the adopted bytes on the branch — the manifest hash over the file's bytes,
+the spec-content hash read back out of the adopted body's own `contentHash`
+field — never typed. No other pin moved.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-components` | `drift` | 4 new surfaces, fields only: `scheduling-step-quarterly`, `scheduling-step-yearly`, `scheduling-step-configured-monthly`, `scheduling-step-configured-quarterly` | 4 drivers, 4 harness mounts, 4 test-id contract rows |
+| `app-extensions` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-connectors` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
+
+The product side is cinatra#4280: the shared `RecurrenceFrequencySelectors`
+(`packages/agents/src/schedule-proposal-card.tsx`), which the in-flow
+scheduling step and the schedule card both render, writes the six `data-field`
+names the four surfaces bind. Each harness mount renders that component in one
+of the drawing's four readings, and each driver reads the field under the bare
+name the component writes; a field the component stops drawing, or draws under
+another name, is red. The existing `scheduling-step` and
+`scheduling-step-configured` drivers and mounts are unchanged. Every new
+surface is driven by a literal entry of the driver table, so
+`tests/e2e/design/conformance/allowlist.json` is untouched, and no body is
+frozen under the checker's fixtures.
 
 ## Running it locally
 
