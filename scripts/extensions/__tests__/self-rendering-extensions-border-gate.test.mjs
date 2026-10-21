@@ -451,6 +451,8 @@ describe("self-rendering-extensions border gate — floor compared with the base
 // below pins one refusal branch of the gate (class (e) of its header).
 describe("self-rendering-extensions border gate — nothing unread at an empty floor", () => {
   const CONNECTOR = { dir: "demo-connector", kind: "connector", files: { "src/index.ts": "export const x = 1;\n" } };
+  /** The manifest path a refusal names, relative to the repository root. */
+  const manifestPath = (dir) => ["extensions", "cinatra-ai", dir, "package.json"].join("/");
   const failing = (code, path) => Object.assign(new Error(`${code}: ${path}`), { code });
 
   it("the committed floor is empty", () => {
@@ -463,7 +465,7 @@ describe("self-rendering-extensions border gate — nothing unread at an empty f
     const { status, stderr } = runGate(tree);
     expect(status).toBe(1);
     expect(stderr).toContain(
-      "[self-rendering-border] REFUSED: @cinatra-ai/ghost-connector is declared but extensions/cinatra-ai/ghost-connector/package.json is missing",
+      `[self-rendering-border] REFUSED: @cinatra-ai/ghost-connector is declared but ${manifestPath("ghost-connector")} is missing`,
     );
   });
 
@@ -531,7 +533,7 @@ describe("self-rendering-extensions border gate — nothing unread at an empty f
     const { status, stderr } = runGate(tree);
     expect(status).toBe(1);
     expect(stderr).toContain(
-      'REFUSED: @cinatra-ai/demo-connector is declared but extensions/cinatra-ai/demo-connector/package.json names "@cinatra-ai/other-connector"',
+      `REFUSED: @cinatra-ai/demo-connector is declared but ${manifestPath("demo-connector")} names "@cinatra-ai/other-connector"`,
     );
   });
 
