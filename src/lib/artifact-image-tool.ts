@@ -497,12 +497,52 @@ export async function generateArtifactImage(
       deduped: filed.deduped,
     };
   } catch (err) {
-    return {
-      ok: false,
-      reason: "write_refused",
-      error: `filing the picture failed: ${err instanceof Error ? err.message : String(err)}`,
-    };
+    logFilingFailure("artifact_image_generate", input, err);
+    return { ok: false, reason: "write_refused", error: FILING_UNEXPECTED_ERROR };
   }
+}
+
+/**
+ * THE FIXED REFUSAL TEXTS OF A FAILED FILING (cinatra#4223).
+ *
+ * A filing failure reaches the calling node, and through the passthrough the
+ * flow, so its text is a fixed sentence and never the exception's own: an
+ * exception can name a schema, a table or a connection. The detail is logged on
+ * the server, against the run and the node, and nowhere else.
+ *
+ * THE WRITE FAILURE SAYS WHAT IS KEPT. The artifact write runs in two
+ * transactions: the stored bytes and their content record commit first, and
+ * the artifact itself, with its ledger finalize, second. When the second fails
+ * no artifact exists, but the bytes, their record and this node's unfinalized
+ * claim stay — by the writer's contract, so that a retry of the same node with
+ * the same bytes re-uses them instead of storing them twice. The sentence says
+ * so instead of claiming that nothing was kept.
+ */
+export const FILING_WRITE_FAILED_ERROR =
+  "filing the picture failed: the write did not complete and no artifact was filed; " +
+  "bytes it had already stored and this node's claim are kept, and a retry of this " +
+  "node with the same picture re-uses them";
+
+/** The fixed text of a tool that stopped on an error outside the write itself. */
+export const FILING_UNEXPECTED_ERROR =
+  "filing the picture failed on an unexpected error; the detail is logged on the server";
+
+/** The fixed text of a filing whose typed data the target type's schema refused. */
+export const FILING_DATA_REJECTED_ERROR =
+  "filing the picture failed: the object payload does not satisfy the declared schema " +
+  "of the target type, and no artifact was filed";
+
+/** Log a filing failure's own detail on the server — never in the refusal. */
+export function logFilingFailure(
+  tool: string,
+  input: { orgId: string; runId: string; nodeId: string; extension: string },
+  err: unknown,
+): void {
+  console.error(
+    `[${tool}] filing failed`,
+    { orgId: input.orgId, runId: input.runId, nodeId: input.nodeId, extension: input.extension },
+    err instanceof Error ? err.message : String(err),
+  );
 }
 
 /**
@@ -525,8 +565,12 @@ export type FirstArtifactFilingInput = {
   target: ResolvedArtifactTarget;
   /** The object's own fields, validated against the type's schema by the write path. */
   typedData?: Record<string, unknown>;
-  /** Further queries for the finalize transaction, given the ledger row's id. */
-  extraFinalizeQueries?: (ledgerId: string) => Array<{ text: string; values: unknown[] }>;
+  /** Further queries for the finalize transaction, given the ledger row's id
+   *  and the ids of the artifact and revision this write files. */
+  extraFinalizeQueries?: (
+    ledgerId: string,
+    ids: { artifactId: string; representationRevisionId: string },
+  ) => Array<{ text: string; values: unknown[] }>;
 };
 
 export type FirstArtifactFilingResult =
@@ -610,7 +654,7 @@ export async function fileFirstArtifactWrite(
           artifactId: ids.artifactId,
           representationRevisionId: ids.representationRevisionId,
         }),
-        ...(input.extraFinalizeQueries?.(claim.ledgerId) ?? []),
+        ...(input.extraFinalizeQueries?.(claim.ledgerId, ids) ?? []),
       ],
     });
   } catch (err) {
@@ -630,16 +674,13 @@ export async function fileFirstArtifactWrite(
       }
     }
     const message = err instanceof Error ? err.message : String(err);
-    return {
-      ok: false,
-      // A payload the type's schema rejects is a DIFFERENT answer from a
-      // write that failed: the caller sent data the picture's type does not
-      // declare, and restating it correctly is the fix.
-      reason: /does not satisfy the declared schema/.test(message)
-        ? "data_rejected"
-        : "write_refused",
-      error: `filing the picture failed: ${message}`,
-    };
+    logFilingFailure("artifact_filing", input, err);
+    // A payload the type's schema rejects is a DIFFERENT answer from a write
+    // that failed: the caller sent data the picture's type does not declare,
+    // and restating it correctly is the fix. Both answers are fixed texts.
+    return /does not satisfy the declared schema/.test(message)
+      ? { ok: false, reason: "data_rejected", error: FILING_DATA_REJECTED_ERROR }
+      : { ok: false, reason: "write_refused", error: FILING_WRITE_FAILED_ERROR };
   }
 
   // The meaning matcher, post-commit and best-effort — the same enqueue the

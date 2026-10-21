@@ -301,9 +301,18 @@ describe("cinatra#4223 — a capture files the renderer's viewport and the time 
       capturedAt: "2026-10-17T16:30:00.000Z",
     });
     expect(w.bytes.equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))).toBe(true);
-    // Only the finalize query: no image provenance, so the image cap never counts it.
-    expect(w.tx2).toHaveLength(1);
+    // The finalize query and the revision's own facts record: no image
+    // provenance, so the image cap never counts it.
+    expect(w.tx2).toHaveLength(2);
     expect(w.tx2.some((q) => q.text.includes("image_provider"))).toBe(false);
+    const record = w.tx2[1]!;
+    expect(record.text).toMatch(/INSERT INTO "[^"]+"\."artifact_audit"/);
+    expect(record.values.slice(0, 4)).toEqual(["org-1", "art-1", "rev-1", "page_capture_facts"]);
+    expect(JSON.parse(record.values[4] as string)).toEqual({
+      capturedUrl: PAGE_URL,
+      viewport: { width: 1280, height: 900 },
+      capturedAt: "2026-10-17T16:30:00.000Z",
+    });
   });
 
   it("files to the single type the extension declares, whatever its id (no core type id)", async () => {
@@ -330,5 +339,172 @@ describe("cinatra#4223 — a capture files the renderer's viewport and the time 
       viewport: { width: 1280, height: 900 },
       capturedAt: "2026-10-17T16:30:00.000Z",
     });
+  });
+});
+
+/** A capture seam that answers at once with `png`, counting its calls. */
+function stubCapture(png: Buffer = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) {
+  const calls: string[] = [];
+  return {
+    calls,
+    capturePage: async (i: { orgId: string; url: string }) => {
+      calls.push(i.url);
+      return {
+        ok: true as const,
+        png,
+        viewport: { width: 1280, height: 900 },
+        capturedAt: "2026-10-17T16:30:00.000Z",
+      };
+    },
+  };
+}
+
+function toolDepsWith(capturePage: ArtifactPageCaptureToolDeps["capturePage"]) {
+  return { ...toolDeps(captureDeps([]).deps), capturePage };
+}
+
+describe("cinatra#4223 — a failed filing answers a fixed refusal; the detail stays on the server", () => {
+  it("a write failure never returns the exception's own text, and logs it", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    h.createSemanticArtifact.mockRejectedValueOnce(
+      new Error('relation "tenant_secret_schema"."resource" does not exist'),
+    );
+    const outcome = await captureArtifactPage(
+      { ...call, runId: "run-mf3-write" },
+      toolDepsWith(stubCapture().capturePage),
+    );
+    expect(outcome).toMatchObject({ ok: false, reason: "write_refused" });
+    if (outcome.ok) throw new Error("unreachable");
+    expect(outcome.error).not.toContain("tenant_secret_schema");
+    expect(outcome.error).toMatch(/^filing the picture failed/);
+    expect(JSON.stringify(logged.mock.calls)).toContain("tenant_secret_schema");
+    logged.mockRestore();
+  });
+
+  it("a schema refusal answers data_rejected with a fixed text, not the validator's detail", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    h.createSemanticArtifact.mockRejectedValueOnce(
+      new Error("the object payload does not satisfy the declared schema: /viewport secret-field-detail"),
+    );
+    const outcome = await captureArtifactPage(
+      { ...call, runId: "run-mf3-schema" },
+      toolDepsWith(stubCapture().capturePage),
+    );
+    expect(outcome).toMatchObject({ ok: false, reason: "data_rejected" });
+    if (outcome.ok) throw new Error("unreachable");
+    expect(outcome.error).toMatch(/does not satisfy the declared schema/);
+    expect(outcome.error).not.toContain("secret-field-detail");
+    logged.mockRestore();
+  });
+
+  it("an error outside the write never returns its own text either", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const deps = {
+      ...toolDepsWith(stubCapture().capturePage),
+      loadProducesRefs: async () => {
+        throw new Error("connect ECONNREFUSED registry-secret-host:5432");
+      },
+    };
+    const outcome = await captureArtifactPage({ ...call, runId: "run-mf3-outer" }, deps);
+    expect(outcome).toMatchObject({ ok: false, reason: "write_refused" });
+    if (outcome.ok) throw new Error("unreachable");
+    expect(outcome.error).not.toContain("registry-secret-host");
+    expect(outcome.error).toMatch(/^filing the page capture failed/);
+    expect(JSON.stringify(logged.mock.calls)).toContain("registry-secret-host");
+    logged.mockRestore();
+  });
+});
+
+describe("cinatra#4223 — a write that fails after storing the bytes says what it kept", () => {
+  it("says no artifact was filed, that the stored bytes and the claim are kept, and that a retry re-uses them", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    // The writer stores the bytes and their record first; the transaction that
+    // files the artifact and finalizes the claim is the one that fails here.
+    h.createSemanticArtifact.mockRejectedValueOnce(new Error("could not serialize access"));
+    const outcome = await captureArtifactPage(
+      { ...call, runId: "run-mf4" },
+      toolDepsWith(stubCapture().capturePage),
+    );
+    expect(outcome).toMatchObject({ ok: false, reason: "write_refused" });
+    if (outcome.ok) throw new Error("unreachable");
+    expect(outcome.error).toMatch(/no artifact was filed/);
+    expect(outcome.error).toMatch(/already stored and this node's claim are kept/);
+    expect(outcome.error).toMatch(/a retry of this node with the same picture re-uses them/);
+    expect(h.claimMaterialization).toHaveBeenCalledTimes(1);
+    logged.mockRestore();
+  });
+});
+
+describe("cinatra#4223 — the page capture budgets: 20 per run, 2 at once, 10 MB per PNG", () => {
+  it("refuses the 21st capture of one run as run_cap_exceeded, before it renders", async () => {
+    const stub = stubCapture();
+    const deps = toolDepsWith(stub.capturePage);
+    for (let n = 1; n <= 20; n += 1) {
+      const ok = await captureArtifactPage(
+        { ...call, runId: "run-mf5-cap", nodeId: `capture_${n}` },
+        deps,
+      );
+      expect(ok.ok, `capture ${n}`).toBe(true);
+    }
+    const outcome = await captureArtifactPage(
+      { ...call, runId: "run-mf5-cap", nodeId: "capture_21" },
+      deps,
+    );
+    expect(outcome).toMatchObject({ ok: false, reason: "run_cap_exceeded" });
+    expect(stub.calls).toHaveLength(20);
+    // Another run keeps its own budget.
+    const other = await captureArtifactPage(
+      { ...call, runId: "run-mf5-cap-other", nodeId: "capture_1" },
+      deps,
+    );
+    expect(other.ok).toBe(true);
+  });
+
+  it("refuses a third capture of one run while two are in flight, as concurrency_exceeded", async () => {
+    // The first two renders hold until released; any later one answers at once.
+    const pending: Array<() => void> = [];
+    const stub = stubCapture();
+    let rendered = 0;
+    const capturePage: ArtifactPageCaptureToolDeps["capturePage"] = (i) => {
+      rendered += 1;
+      if (rendered > 2) return stub.capturePage(i);
+      return new Promise((resolve) => {
+        pending.push(() => resolve(stub.capturePage(i)));
+      });
+    };
+    const deps = toolDepsWith(capturePage);
+    const run = { ...call, runId: "run-mf5-concurrent" };
+    const first = captureArtifactPage({ ...run, nodeId: "capture_a" }, deps);
+    const second = captureArtifactPage({ ...run, nodeId: "capture_b" }, deps);
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+
+    const third = await captureArtifactPage({ ...run, nodeId: "capture_c" }, deps);
+    expect(third).toMatchObject({ ok: false, reason: "concurrency_exceeded" });
+    expect(rendered).toBe(2);
+
+    for (const release of pending) release();
+    expect((await first).ok).toBe(true);
+    expect((await second).ok).toBe(true);
+    // A slot frees when its capture ends.
+    const fourth = await captureArtifactPage({ ...run, nodeId: "capture_d" }, deps);
+    expect(fourth.ok).toBe(true);
+  });
+
+  it("refuses a PNG over 10 MB as capture_too_large, and files nothing", async () => {
+    const outcome = await captureArtifactPage(
+      { ...call, runId: "run-mf5-size" },
+      toolDepsWith(stubCapture(Buffer.alloc(10 * 1024 * 1024 + 1)).capturePage),
+    );
+    expect(outcome).toMatchObject({ ok: false, reason: "capture_too_large" });
+    expect(h.claimMaterialization).not.toHaveBeenCalled();
+    expect(h.createSemanticArtifact).not.toHaveBeenCalled();
+  });
+
+  it("files a PNG of exactly 10 MB", async () => {
+    const outcome = await captureArtifactPage(
+      { ...call, runId: "run-mf5-size-edge" },
+      toolDepsWith(stubCapture(Buffer.alloc(10 * 1024 * 1024)).capturePage),
+    );
+    expect(outcome.ok).toBe(true);
   });
 });

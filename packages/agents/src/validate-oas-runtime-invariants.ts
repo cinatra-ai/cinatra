@@ -111,6 +111,7 @@ import {
   collectArtifactImageNodesFromOasDocument,
   collectArtifactMaterializeNodesFromOasDocument,
   ARTIFACT_MATERIALIZE_TOOL,
+  ARTIFACT_PAGE_CAPTURE_TOOL,
   AGENTS_PASSTHROUGH_URL_MARKER,
 } from "./artifact-binding";
 import { SIDE_EFFECT_PATTERNS } from "./trigger-infer-side-effects";
@@ -1722,6 +1723,8 @@ const ARTIFACT_PARITY_WRITE_TOOLS: ReadonlySet<string> = new Set([
   "objects_save",
   "objects_update",
   ARTIFACT_MATERIALIZE_TOOL,
+  // cinatra#4223: the page capture files an artifact — a write.
+  ARTIFACT_PAGE_CAPTURE_TOOL,
 ]);
 
 /**

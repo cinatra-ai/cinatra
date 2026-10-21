@@ -38,6 +38,7 @@ import {
   type ArtifactSummary,
 } from "@/lib/artifacts/artifact-service";
 import {
+  readPageCaptureFactsForRevision,
   resolveArtifactVersionForServe,
   resolveNonFileArtifactRevision,
 } from "@/lib/artifacts/artifact-read";
@@ -61,7 +62,7 @@ import type { ArtifactContentProjection } from "@cinatra-ai/sdk-extensions/artif
 // that costs the four locked routes.
 import {
   buildArtifactContentProjection,
-  resolveFileObjectContentProjection,
+  resolvePinnedFileObjectContentProjection,
   type ArtifactContentChannelPorts,
   type ArtifactRepresentationForm,
 } from "@/lib/artifacts/artifact-content-channel";
@@ -126,6 +127,17 @@ export function bindArtifactReviewPorts(ctx: {
    * the browser fetch that dies inside a third-party application.
    */
   buildContent?: ArtifactContentBuilder;
+  /**
+   * THE FACTS RECORDED FOR ONE PINNED REVISION (cinatra#4223). Absent and the
+   * binder reads the page capture's per-revision record from the store; a
+   * suite may supply its own. Never the row's live object data: a card pins a
+   * revision, and the facts beside its bytes must be that revision's own.
+   */
+  readRevisionFacts?: (input: {
+    orgId: string;
+    artifactId: string;
+    representationRevisionId: string;
+  }) => unknown;
 }): Pick<
   PrepareReviewPorts,
   | "readArtifact"
@@ -139,16 +151,17 @@ export function bindArtifactReviewPorts(ctx: {
   const byteMinter = ctx.byteMinter ?? null;
   const buildContent = ctx.buildContent ?? null;
 
-  // THE ROW'S OWN OBJECT DATA, by artifact (cinatra#4223), recorded by the read
-  // that authorized it and consulted only by `buildProps` below. A props build
-  // for an artifact this binder never read finds nothing here, and its content
-  // stays the file channel's own answer.
-  const objectDataById = new Map<string, unknown>();
+  // Resolved at the call, never at bind time: a binder whose reads never reach
+  // an unsupported file form never touches the store's record read.
+  const readRevisionFacts = (i: {
+    orgId: string;
+    artifactId: string;
+    representationRevisionId: string;
+  }): unknown => (ctx.readRevisionFacts ?? readPageCaptureFactsForRevision)(i);
 
   const toOutcome = (access: ReturnType<typeof readArtifactForDetail>): ArtifactReadOutcome => {
     if (access.kind === "not-found") return { kind: "not-found" };
     if (access.kind === "denied") return { kind: "denied" };
-    objectDataById.set(access.artifact.artifactId, access.objectData);
     return { kind: "ok", artifact: access.artifact };
   };
 
@@ -447,11 +460,31 @@ export function bindArtifactReviewPorts(ctx: {
             carriedConfiguration: contentInput.carriedConfiguration,
           }),
         );
-    // A FILE ROW'S OWN FIELDS (cinatra#4223): the same projection the artifact
-    // page applies, over the object data the authorizing read recorded.
-    const content = resolveFileObjectContentProjection({
+    // A PAGE CAPTURE'S FACTS (cinatra#4223), as the SNAPSHOT of the pinned
+    // revision: the record the capture tool filed with THIS revision, never the
+    // row's live data. Read only when the file channel has no class for the
+    // form, and a store fault is logged and leaves the channel's own answer.
+    let revisionFacts: unknown = null;
+    if (fileContent.kind === "none" && fileContent.reason === "unsupported-form") {
+      try {
+        revisionFacts = readRevisionFacts({
+          orgId,
+          artifactId: artifact.artifactId,
+          representationRevisionId,
+        });
+      } catch (error) {
+        console.error(
+          "[artifacts] review card revision facts read failed",
+          artifact.artifactId,
+          representationRevisionId,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
+    const content = resolvePinnedFileObjectContentProjection({
       objectType: artifact.objectType,
-      objectData: objectDataById.get(artifact.artifactId),
+      representationRevisionId,
+      revisionFacts,
       fileProjection: fileContent,
     });
 

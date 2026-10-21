@@ -5,10 +5,11 @@
  * A screenshot is a file-form artifact whose mime the file channel projects no
  * class for, so the channel answers `unsupported-form`. The row itself carries
  * the three facts its type declares beyond the host envelope — where it was
- * taken, at what viewport, when — and `resolveFileObjectContentProjection` is
- * the one place both display builders (the artifact page and the review card)
- * turn those into `kind: "object"`. The helper names no type; this suite does,
- * because the screenshot is the case the issue is about.
+ * taken, at what viewport, when. `resolveFileObjectContentProjection` turns
+ * them into the artifact page's live `kind: "object"`, and
+ * `resolvePinnedFileObjectContentProjection` turns ONE revision's recorded
+ * facts into the review card's snapshot. Only a page capture's three facts are
+ * projected: every other unsupported file row keeps the file channel's answer.
  *
  * PURE: no mocks, no ports.
  *
@@ -16,7 +17,10 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { resolveFileObjectContentProjection } from "@/lib/artifacts/artifact-content-channel";
+import {
+  resolveFileObjectContentProjection,
+  resolvePinnedFileObjectContentProjection,
+} from "@/lib/artifacts/artifact-content-channel";
 import {
   ARTIFACT_CONTENT_CHANNEL_VERSION,
   artifactContentCapFor,
@@ -143,9 +147,90 @@ describe("cinatra#4223 resolveFileObjectContentProjection", () => {
     const cap = artifactContentCapFor("object");
     const out = resolveFileObjectContentProjection({
       objectType: SCREENSHOT_TYPE,
-      objectData: { ...ENVELOPE, ...FACTS, notes: "x".repeat(cap + 1) },
+      objectData: { ...ENVELOPE, ...FACTS, capturedUrl: `https://a.example/${"x".repeat(cap)}` },
       fileProjection: UNSUPPORTED,
     });
     expect(out).toMatchObject({ kind: "none", reason: "over-cap" });
+  });
+
+  it("(f) any other unsupported file row keeps the file channel's answer, whatever own fields it carries", () => {
+    // A generated picture whose type declares fields of its own: it is not a
+    // page capture, and its display receives exactly what it received before.
+    const out = resolveFileObjectContentProjection({
+      objectType: "@cinatra-ai/featured-image-artifact:featured-image",
+      objectData: { ...ENVELOPE, post: "art-9", placement: "featured" },
+      fileProjection: UNSUPPORTED,
+    });
+    expect(out).toBe(UNSUPPORTED);
+  });
+
+  it.each([
+    ["capturedUrl is not a string", { ...FACTS, capturedUrl: 42 }],
+    ["viewport is missing", { capturedUrl: FACTS.capturedUrl, capturedAt: FACTS.capturedAt }],
+    ["viewport has no height", { ...FACTS, viewport: { width: 1280 } }],
+    ["capturedAt is missing", { capturedUrl: FACTS.capturedUrl, viewport: FACTS.viewport }],
+  ])("(g) a row whose facts are not a page capture's (%s) keeps the file channel's answer", (_l, facts) => {
+    const out = resolveFileObjectContentProjection({
+      objectType: SCREENSHOT_TYPE,
+      objectData: { ...ENVELOPE, ...facts },
+      fileProjection: UNSUPPORTED,
+    });
+    expect(out).toBe(UNSUPPORTED);
+  });
+
+  it("(h) carries exactly the three facts, never another own field beside them", () => {
+    const out = resolveFileObjectContentProjection({
+      objectType: SCREENSHOT_TYPE,
+      objectData: { ...ENVELOPE, ...FACTS, notes: "beside" },
+      fileProjection: UNSUPPORTED,
+    });
+    expect(out.kind).toBe("object");
+    if (out.kind !== "object") return;
+    expect(out.data).toEqual(FACTS);
+  });
+});
+
+describe("cinatra#4223 resolvePinnedFileObjectContentProjection", () => {
+  it("(p1) projects the pinned revision's own recorded facts as a snapshot naming that revision", () => {
+    const out = resolvePinnedFileObjectContentProjection({
+      objectType: SCREENSHOT_TYPE,
+      representationRevisionId: REVISION,
+      revisionFacts: FACTS,
+      fileProjection: UNSUPPORTED,
+    });
+    expect(out.kind).toBe("object");
+    if (out.kind !== "object") return;
+    expect(out.data).toEqual(FACTS);
+    expect(out.source).toBe("snapshot");
+    expect(out.representationRevisionId).toBe(REVISION);
+  });
+
+  it.each([
+    ["no record", null],
+    ["a record that is not a capture's", { post: "art-9" }],
+  ])("(p2) %s keeps the file channel's answer", (_l, revisionFacts) => {
+    const out = resolvePinnedFileObjectContentProjection({
+      objectType: SCREENSHOT_TYPE,
+      representationRevisionId: REVISION,
+      revisionFacts,
+      fileProjection: UNSUPPORTED,
+    });
+    expect(out).toBe(UNSUPPORTED);
+  });
+
+  it("(p3) a projection other than unsupported-form passes through by identity", () => {
+    const overCap: ArtifactContentProjection = {
+      kind: "none",
+      channelVersion: ARTIFACT_CONTENT_CHANNEL_VERSION,
+      representationRevisionId: REVISION,
+      reason: "over-cap",
+    };
+    const out = resolvePinnedFileObjectContentProjection({
+      objectType: SCREENSHOT_TYPE,
+      representationRevisionId: REVISION,
+      revisionFacts: FACTS,
+      fileProjection: overCap,
+    });
+    expect(out).toBe(overCap);
   });
 });

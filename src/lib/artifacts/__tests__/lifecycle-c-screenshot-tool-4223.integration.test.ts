@@ -16,7 +16,10 @@
  *         schema as `data_rejected`, and nothing is filed;
  *   (iv)  both production display builders — the artifact page and the review
  *         card — hand the filed screenshot's display `content.kind === "object"`
- *         carrying the screenshot type and the three facts.
+ *         carrying the screenshot type and the three facts: the page as the
+ *         live data, the review card as the snapshot of the revision it pins;
+ *   (v)   when the artifact's live object data moves afterwards, the review
+ *         card still shows the facts its pinned revision was filed with.
  *
  * WHAT IS REAL. The site registry read (`createPreviewCaptureDeps()
  * .listRegisteredSites` over a connect site minted by
@@ -371,17 +374,32 @@ function propsHandedTo(node: unknown, component: unknown): ArtifactRendererProps
 function expectScreenshotObject(
   props: ArtifactRendererProps | null | undefined,
   surface: string,
+  pinned: { representationRevisionId: string } | null = null,
+  facts: { capturedUrl: string; capturedAt: string } = {
+    capturedUrl: PAGE_URL,
+    capturedAt: CLOCK.toISOString(),
+  },
 ) {
   expect(props, `${surface}: no renderer-props snapshot was built`).toBeTruthy();
   const content = props!.content;
   expect(content.kind, `${surface}: content kind`).toBe("object");
   if (content.kind !== "object") return;
   expect(content.objectType, `${surface}: objectType`).toBe(SHOT_TYPE);
-  expect(content.source, `${surface}: source`).toBe("live");
+  // The page draws the artifact as it is now; a review card draws ONE pinned
+  // revision, so its facts are that revision's own snapshot.
+  expect(content.source, `${surface}: source`).toBe(pinned ? "snapshot" : "live");
+  expect(content.representationRevisionId, `${surface}: revision`).toBe(
+    pinned ? pinned.representationRevisionId : null,
+  );
   const data = content.data as Record<string, unknown>;
-  expect(data.capturedUrl, `${surface}: capturedUrl`).toBe(PAGE_URL);
+  expect(Object.keys(data).sort(), `${surface}: keys`).toEqual([
+    "capturedAt",
+    "capturedUrl",
+    "viewport",
+  ]);
+  expect(data.capturedUrl, `${surface}: capturedUrl`).toBe(facts.capturedUrl);
   expect(data.viewport, `${surface}: viewport`).toEqual({ width: 1280, height: 900 });
-  expect(data.capturedAt, `${surface}: capturedAt`).toBe(CLOCK.toISOString());
+  expect(data.capturedAt, `${surface}: capturedAt`).toBe(facts.capturedAt);
 }
 
 beforeAll(async () => {
@@ -574,7 +592,7 @@ describe.skipIf(!HAS_REAL_DB)(
       );
     });
 
-    it("(iv) the review card hands its display the same object content", async () => {
+    async function reviewCardProps() {
       const target = { artifactId, representationRevisionId };
       const result = await prepareMod.prepareArtifactReviewTargets({
         input: {
@@ -590,9 +608,36 @@ describe.skipIf(!HAS_REAL_DB)(
         },
       });
       expect(result.ok).toBe(true);
-      if (!result.ok) return;
+      if (!result.ok) return null;
       expect(result.prepared).toHaveLength(1);
-      expectScreenshotObject(result.prepared[0]!.props, "review card");
+      return result.prepared[0]!.props;
+    }
+
+    it("(iv) the review card hands its display the pinned revision's facts as a snapshot", async () => {
+      expectScreenshotObject(await reviewCardProps(), "review card", { representationRevisionId });
+    });
+
+    // LAST in this block: it moves the artifact's live object data.
+    it("(v) after the live object data moves, the review card keeps the pinned revision's facts and the page shows the live ones", async () => {
+      const MOVED = {
+        capturedUrl: `${SITE_ORIGIN}/moved/`,
+        capturedAt: "2026-10-18T09:00:00.000Z",
+      };
+      await sql(
+        `UPDATE "${S()}"."objects" SET data = data || $3::jsonb WHERE id=$1 AND org_id=$2`,
+        [artifactId, ORG, JSON.stringify(MOVED)],
+      );
+      expect((await objectRow(artifactId))?.data.capturedUrl).toBe(MOVED.capturedUrl);
+
+      expectScreenshotObject(await reviewCardProps(), "review card", { representationRevisionId });
+
+      const tree = await pageMod.default({ params: Promise.resolve({ id: artifactId }) });
+      expectScreenshotObject(
+        propsHandedTo(tree, mountMod.ArtifactDisplayMountPoint),
+        "artifact page",
+        null,
+        MOVED,
+      );
     });
   },
 );

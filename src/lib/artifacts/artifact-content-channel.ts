@@ -21,7 +21,6 @@
 // froze. That is the difference between a card that shows what was approved and
 // a card that shows whatever the artifact became afterwards.
 
-import type { ArtifactObjectData } from "@cinatra-ai/artifacts";
 import {
   ARTIFACT_CONTENT_CHANNEL_VERSION,
   artifactContentCapFor,
@@ -395,75 +394,114 @@ export function buildObjectContentProjection(input: {
 }
 
 // ---------------------------------------------------------------------------
-// THE FILE ROW'S OWN FIELDS (cinatra#4223).
+// THE PAGE CAPTURE'S FACTS (cinatra#4223).
 //
-// A file-form artifact whose mime has no content class — a picture — answers
-// `unsupported-form` from the file channel, and its display used to receive
-// nothing else. But the row itself can carry facts its type declares beyond the
-// host's metadata mirror: where a page was captured, at what viewport, when.
-// Those facts are object data, and the object-backed projection above is the
-// one that carries object data to a display.
+// A page capture is a file-form artifact whose mime has no content class — a
+// PNG — so the file channel answers `unsupported-form`, and its display used to
+// receive nothing else. The page capture tool files three facts with the
+// picture: where the page was captured (`capturedUrl`), at what viewport
+// (`viewport`) and when (`capturedAt`). Those facts are what make the picture
+// readable a week later, and the object projection is the one that carries
+// object data to a display.
 //
-// THE HOST ENVELOPE IS NOT THE ROW'S OWN DATA. `ArtifactObjectData` is what the
-// host writes into every artifact row (the type, the latest revision, the mime,
-// the size, the title and the rest). Projecting it would hand every display a
-// copy of what it already has, so the projection carries only the keys outside
-// it. The record below names every envelope key, so a key added to the envelope
-// fails to compile here until it is named.
+// ONLY THE CAPTURE'S FACTS, ONLY FOR A CAPTURE. The projection is keyed on the
+// three facts the core capture tool writes, in the shapes it writes them, and
+// it carries exactly those three keys. Any other file row — a generated
+// picture with its own `post` and `placement`, say — keeps the file channel's
+// own answer, unchanged. Core still names no extension's type: the facts are
+// the core tool's, and the display chooses what to draw.
 //
-// TYPE-AGNOSTIC ON PURPOSE. Core names no extension's type: any file row whose
-// file channel has no class and whose data carries its own fields is projected
-// the same way, and the display chooses what to draw.
+// LIVE ON THE PAGE, PINNED ON THE REVIEW CARD. The artifact page draws the
+// artifact's latest bytes, and the row's facts beside them, as `live`. A review
+// card draws ONE pinned revision, and the facts beside those bytes must be that
+// revision's own: the tool records them per revision, in the same transaction
+// that files the revision, and the card projects that record as the `snapshot`
+// of the revision it pins. The row's live data, which an update can move, never
+// reaches a pinned card.
 // ---------------------------------------------------------------------------
 
-const FILE_ENVELOPE_FIELDS: Record<keyof ArtifactObjectData, true> = {
-  artifactType: true,
-  latestRepresentationRevisionId: true,
-  latestDigest: true,
-  mime: true,
-  size: true,
-  originKind: true,
-  viewerHint: true,
-  title: true,
-  excerpt: true,
-  connectorRef: true,
+/** The three facts a page capture files with its picture. */
+export type PageCaptureFacts = {
+  capturedUrl: string;
+  viewport: { width: number; height: number };
+  capturedAt: string;
 };
 
+/** The keys of {@link PageCaptureFacts}, in the order a projection carries them. */
+export const PAGE_CAPTURE_FACT_KEYS = ["capturedUrl", "viewport", "capturedAt"] as const;
+
 /**
- * Resolve the content a file row's display receives: the file channel's own
- * projection, or — only when that is `unsupported-form` and the row carries
- * fields of its own beyond the host envelope — the live object projection of
- * those fields.
+ * Read the page capture's three facts out of a record, or `null` when the
+ * record is not one: each fact must be present in the shape the tool writes it.
+ * The result carries exactly the three keys, whatever else the record holds.
+ */
+export function readPageCaptureFacts(record: unknown): PageCaptureFacts | null {
+  if (record === null || typeof record !== "object" || Array.isArray(record)) return null;
+  const r = record as Record<string, unknown>;
+  const { capturedUrl, viewport, capturedAt } = r;
+  if (typeof capturedUrl !== "string" || typeof capturedAt !== "string") return null;
+  if (viewport === null || typeof viewport !== "object" || Array.isArray(viewport)) return null;
+  const { width, height } = viewport as Record<string, unknown>;
+  if (typeof width !== "number" || typeof height !== "number") return null;
+  return { capturedUrl, viewport: { width, height }, capturedAt };
+}
+
+/**
+ * Resolve the content the ARTIFACT PAGE's display receives for a file row: the
+ * file channel's own projection, or — only when that is `unsupported-form` and
+ * the row carries a page capture's three facts — the live object projection of
+ * exactly those facts.
  *
  * Every other projection passes through by identity, whatever the row carries:
  * a text projection is the file's content, and an `absent` or `over-cap` answer
- * is the file channel's own honest reason.
+ * is the file channel's own honest reason. A row without the three facts keeps
+ * the file channel's answer too.
  */
 export function resolveFileObjectContentProjection(input: {
   objectType: string;
   objectData: unknown;
   fileProjection: ArtifactContentProjection;
 }): ArtifactContentProjection {
-  const { fileProjection, objectData } = input;
+  const { fileProjection } = input;
   if (fileProjection.kind !== "none" || fileProjection.reason !== "unsupported-form") {
     return fileProjection;
   }
-  if (
-    objectData === null ||
-    typeof objectData !== "object" ||
-    Array.isArray(objectData)
-  ) {
-    return fileProjection;
-  }
-  const own: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(objectData as Record<string, unknown>)) {
-    if (Object.prototype.hasOwnProperty.call(FILE_ENVELOPE_FIELDS, key)) continue;
-    own[key] = value;
-  }
-  if (Object.keys(own).length === 0) return fileProjection;
+  const facts = readPageCaptureFacts(input.objectData);
+  if (!facts) return fileProjection;
   return buildObjectContentProjection({
     objectType: input.objectType,
-    data: own,
+    data: facts,
     source: "live",
+  });
+}
+
+/**
+ * Resolve the content a REVIEW CARD's display receives for one pinned file
+ * revision: the file channel's own projection, or — only when that is
+ * `unsupported-form` and the facts recorded for THAT revision are a page
+ * capture's — the snapshot projection of those facts, naming the pinned
+ * revision.
+ *
+ * `revisionFacts` is the per-revision record the capture tool filed with the
+ * revision, never the row's live data; `null` (no record) keeps the file
+ * channel's answer.
+ */
+export function resolvePinnedFileObjectContentProjection(input: {
+  objectType: string;
+  representationRevisionId: string;
+  revisionFacts: unknown;
+  fileProjection: ArtifactContentProjection;
+}): ArtifactContentProjection {
+  const { fileProjection } = input;
+  if (fileProjection.kind !== "none" || fileProjection.reason !== "unsupported-form") {
+    return fileProjection;
+  }
+  const facts = readPageCaptureFacts(input.revisionFacts);
+  if (!facts) return fileProjection;
+  return buildObjectContentProjection({
+    objectType: input.objectType,
+    data: facts,
+    source: "snapshot",
+    representationRevisionId: input.representationRevisionId,
   });
 }
