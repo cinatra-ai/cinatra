@@ -57,6 +57,11 @@ import {
   WEEKDAY_LABELS,
   type RecurringConfig,
   type RecurringFrequency,
+  // THE ONE RULE FOR A SCHEDULE'S TIME (cinatra#3189), shared with the
+  // schedule card: judged at Continue, the server's own check still last.
+  SCHEDULE_TIME_MESSAGES,
+  validateScheduleTime,
+  type ScheduleTimeInput,
 } from "./trigger-recurrence";
 
 /**
@@ -94,7 +99,8 @@ const formSchema = z.discriminatedUnion("triggerType", [
   }),
   z.object({
     triggerType: z.literal("scheduled"),
-    scheduledAt: z.string().min(1, "Pick a date/time"),
+    // The same no-time reading the shared rule gives, in its own sentence.
+    scheduledAt: z.string().min(1, SCHEDULE_TIME_MESSAGES.no_time),
     timezone: z.string().min(1),
   }),
   z.object({
@@ -377,6 +383,28 @@ export function scheduleContinueLanding(triggerType: string): ContinueLanding {
     : "run-page";
 }
 
+/**
+ * THE FORM'S VALUES AS THE SCHEDULE THEY ARM (cinatra#3189), for the shared
+ * time rule. A one-off is its naive Run at in the zone the field holds; a
+ * recurring schedule is the builder's selections; anything else is handed on
+ * as the kind it is, which the rule refuses.
+ */
+function scheduleOfFormValues(
+  values: FormValues,
+  recurring: RecurringConfig,
+): ScheduleTimeInput {
+  switch (values.triggerType) {
+    case "immediate":
+      return { kind: "immediate" };
+    case "scheduled":
+      return { kind: "scheduled", runAt: values.scheduledAt, timezone: values.timezone };
+    case "recurring":
+      return { kind: "recurring", selection: recurring, timezone: values.timezone };
+    default:
+      return { kind: (values as { triggerType: unknown }).triggerType } as unknown as ScheduleTimeInput;
+  }
+}
+
 export function TriggerScreenClient(props: TriggerScreenClientProps) {
   const readOnly = props.readOnly === true;
   const router = useRouter();
@@ -418,6 +446,8 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
     handleSubmit,
     watch,
     setValue,
+    setError,
+    clearErrors,
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -472,6 +502,8 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
       onValueChange={(v) => {
         setValue("timezone", v);
         setValue("triggerType", selects);
+        // The zone is half of a one-off's instant: a new one clears its error.
+        if (selects === "scheduled") clearErrors("scheduledAt" as never);
       }}
     />
   );
@@ -491,6 +523,8 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
   const scheduledMinute = scheduledTimeOfDay.slice(3, 5);
 
   function setScheduledAt(day: string, timeOfDay: string) {
+    // A change to the field clears its error (cinatra#3189).
+    clearErrors("scheduledAt" as never);
     setTimeOfDayDraft(timeOfDay);
     setValue("triggerType", "scheduled");
     (setValue as (field: string, value: string) => void)(
@@ -631,6 +665,17 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
     // asks.
     if (readOnly) return;
     setServerError(null);
+    // A PAST OR MISSING TIME IS REFUSED ON THE FIELD, BEFORE EITHER ROAD
+    // (cinatra#3189), in the zone the field holds; the server still answers a
+    // press that passes here, on `serverError`.
+    const verdict = validateScheduleTime(scheduleOfFormValues(values, recurring), Date.now());
+    if (!verdict.ok) {
+      setError((verdict.field === "run-at" ? "scheduledAt" : "cronExpression") as never, {
+        type: "validate",
+        message: SCHEDULE_TIME_MESSAGES[verdict.reason],
+      });
+      return;
+    }
     // HITL renderer path: defer to the parent's onChange via props.onSubmit.
     // The WayFlow persist node owns storage via trigger_config_set, so we
     // skip the standalone setRunTrigger + redirect side-effects here. This
@@ -770,6 +815,10 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                       <DatePicker
                         id="scheduledAt"
                         className="w-44"
+                        aria-invalid={errorBag.scheduledAt?.message ? true : undefined}
+                        aria-describedby={
+                          errorBag.scheduledAt?.message ? "scheduledAt-error" : undefined
+                        }
                         value={scheduledDay}
                         onValueChange={(day) => setScheduledAt(day, scheduledTimeOfDay)}
                       />
@@ -804,7 +853,9 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                       } catch { return null; }
                     })()}
                     {errorBag.scheduledAt?.message && (
-                      <p className="text-sm text-destructive">{errorBag.scheduledAt.message}</p>
+                      <p id="scheduledAt-error" className="text-sm text-destructive">
+                        {errorBag.scheduledAt.message}
+                      </p>
                     )}
                   </div>
                   <div className="flex flex-col gap-1">
