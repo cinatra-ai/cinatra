@@ -831,7 +831,7 @@ async function assertServerEntryIsBuiltArtifact(
  */
 async function resolveRelativeImport(rootDir: string, fromAbs: string, rel: string): Promise<string | null> {
   const baseRel = path.relative(rootDir, path.dirname(fromAbs));
-  const joined = safeJoinInside(rootDir, path.join(baseRel || ".", rel));
+  const joined = safeJoinInside(rootDir, path.join(/* turbopackIgnore: true */ baseRel || ".", rel));
   if (!joined) return null;
   const candidates: string[] = [joined];
   for (const ext of TRACEABLE_SOURCE_EXTENSIONS) candidates.push(joined + ext);

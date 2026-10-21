@@ -417,7 +417,7 @@ async function canonicalizeForContainment(candidatePath: string): Promise<string
   } catch {
     const parent = path.dirname(candidatePath);
     if (parent === candidatePath) return candidatePath;
-    return path.join(await canonicalizeForContainment(parent), path.basename(candidatePath));
+    return path.join(/* turbopackIgnore: true */ await canonicalizeForContainment(parent), path.basename(candidatePath));
   }
 }
 

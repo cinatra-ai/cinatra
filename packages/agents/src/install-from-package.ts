@@ -854,7 +854,7 @@ async function readInstalledClaimManifest(row: InstalledExtension): Promise<Reco
           image.sourceDir !== `extensions/${row.packageName.slice(1)}` ||
           image.sourceDir.includes("\\") || image.sourceDir.split("/").some((part) => part === "." || part === "..") ||
           !image.version || row.version !== image.version) return null;
-      sourceDir = resolve(process.cwd(), image.sourceDir);
+      sourceDir = resolve(/* turbopackIgnore: true */ process.cwd(), image.sourceDir);
       if (row.source.path !== sourceDir ||
           await realpath(sourceDir) !== resolve(await realpath(process.cwd()), image.sourceDir) ||
           await realpath(join(sourceDir, "package.json")) !== join(await realpath(sourceDir), "package.json")) return null;
