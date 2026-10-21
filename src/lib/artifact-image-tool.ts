@@ -24,7 +24,10 @@ import {
   readFinalizedMaterialization,
   type ImageGenerationProvenance,
 } from "@/lib/artifacts/materialization-ledger";
-import { resolveBoundArtifactTarget } from "@/lib/artifacts/resolve-bound-artifact-type";
+import {
+  resolveBoundArtifactTarget,
+  type ResolvedArtifactTarget,
+} from "@/lib/artifacts/resolve-bound-artifact-type";
 import { mimeAcceptedByAccepts } from "@/lib/artifacts/upload-artifact-type-map";
 import {
   loadRunDerivationContext,
@@ -458,140 +461,40 @@ export async function generateArtifactImage(
     // THE FIRST GENERATION: the same ledger claim the text road takes, over
     // bytes, with the picture's own data on the object.
     // ------------------------------------------------------------------
-    const title = input.title.trim();
-    if (title.length === 0) {
-      return { ok: false, reason: "write_refused", error: "title must be a non-empty string" };
-    }
-    const contentHash = createHash("sha256").update(bytes).digest("hex");
-    const claim = await claimMaterialization({
-      orgId: input.orgId,
-      runId: input.runId,
-      outputId: input.nodeId,
-      nodeId: input.nodeId,
-      path: "materialize_tool",
-      extension: input.extension,
-      contentHash,
-    });
-    if (claim.path !== undefined && claim.path !== "materialize_tool") {
-      return {
-        ok: false,
-        reason: "write_refused",
-        error:
-          `the materialization ledger identity collided with a different path ("${claim.path}") ` +
-          `for run ${input.runId} node "${input.nodeId}" extension "${input.extension}" — ` +
-          "refusing to alias",
-      };
-    }
-    if (claim.kind === "finalized") {
-      return {
-        ok: true,
-        artifactId: claim.artifactId,
-        representationRevisionId: claim.representationRevisionId,
-        revision: 1,
-        provider: provenance.provider,
-        model: provenance.model,
-        mime,
-        deduped: true,
-      };
-    }
-
-    const ownership = await deps.resolveOwnership({
-      templateId: input.templateId,
-      runId: input.runId,
-      orgId: input.orgId,
-    });
-
-    let created: { artifactId: string; representationRevisionId: string };
-    try {
-      created = await createSemanticArtifact({
+    const filed = await fileFirstArtifactWrite(
+      {
         orgId: input.orgId,
-        objectType: resolvedTarget.target.objectTypeId,
-        expectedAcceptMimes: resolvedTarget.target.acceptedFileMimeTypes,
+        runId: input.runId,
+        templateId: input.templateId,
+        nodeId: input.nodeId,
+        extension: input.extension,
         createdBy: input.createdBy,
-        ownerLevel: ownership.ownerLevel,
-        ownerId: ownership.ownerId,
-        visibility: ownership.visibility,
-        title,
-        declaredMime: mime,
-        originKind: "agent_generated",
-        stream: asImageStream(bytes),
-        createdByRunId: input.runId,
-        producerAssertionExtension: input.extension,
-        skipFallbackClassification: true,
-        // The picture's own data, validated against the type's schema by the
-        // write path itself (item 0.28).
+        title: input.title,
+        bytes,
+        mime,
+        target: resolvedTarget.target,
         ...(input.data ? { typedData: input.data } : {}),
-        additionalTx2Queries: (ids) => [
-          buildFinalizeMaterializationQuery({
-            ledgerId: claim.ledgerId,
-            orgId: input.orgId,
-            artifactId: ids.artifactId,
-            representationRevisionId: ids.representationRevisionId,
-          }),
+        extraFinalizeQueries: (ledgerId) => [
           buildImageGenerationProvenanceQuery({
             schema: schemaId(),
-            ledgerId: claim.ledgerId,
+            ledgerId,
             orgId: input.orgId,
             provenance,
           }),
         ],
-      });
-    } catch (err) {
-      // The concurrent-double-drive loser, exactly as the text road recovers it.
-      if (isMaterializationFinalizeConflict(err)) {
-        const winner = await readFinalizedMaterialization({
-          orgId: input.orgId,
-          ledgerId: claim.ledgerId,
-        });
-        if (winner) {
-          return {
-            ok: true,
-            artifactId: winner.artifactId,
-            representationRevisionId: winner.representationRevisionId,
-            revision: 1,
-            provider: provenance.provider,
-            model: provenance.model,
-            mime,
-            deduped: true,
-          };
-        }
-      }
-      const message = err instanceof Error ? err.message : String(err);
-      return {
-        ok: false,
-        // A payload the type's schema rejects is a DIFFERENT answer from a
-        // write that failed: the caller sent data the picture's type does not
-        // declare, and restating it correctly is the fix.
-        reason: /does not satisfy the declared schema/.test(message)
-          ? "data_rejected"
-          : "write_refused",
-        error: `filing the picture failed: ${message}`,
-      };
-    }
-
-    // The meaning matcher, post-commit and best-effort — the same enqueue the
-    // text road makes after an agent-emitted write.
-    try {
-      const { enqueueArtifactMatchRun } = await import("@/lib/artifacts/matcher-enqueue");
-      await enqueueArtifactMatchRun({
-        orgId: input.orgId,
-        artifactId: created.artifactId,
-        representationRevisionId: created.representationRevisionId,
-        createdByRunId: input.runId,
-      });
-    } catch {
-      /* best-effort — never fails a filed picture. */
-    }
-
+      },
+      deps,
+    );
+    if (!filed.ok) return filed;
     return {
       ok: true,
-      artifactId: created.artifactId,
-      representationRevisionId: created.representationRevisionId,
+      artifactId: filed.artifactId,
+      representationRevisionId: filed.representationRevisionId,
       revision: 1,
       provider: provenance.provider,
       model: provenance.model,
       mime,
-      deduped: false,
+      deduped: filed.deduped,
     };
   } catch (err) {
     return {
@@ -600,4 +503,163 @@ export async function generateArtifactImage(
       error: `filing the picture failed: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
+}
+
+/**
+ * The facts a first write files (cinatra#4223): the bytes, the resolved target
+ * type, and the run identity the ledger claims under. The image tool and the
+ * page capture tool both file their first artifact through this road.
+ */
+export type FirstArtifactFilingInput = {
+  orgId: string;
+  runId: string;
+  templateId: string;
+  /** The calling node's id — the ledger's output identity. */
+  nodeId: string;
+  extension: string;
+  /** The run's runBy principal — persisted as the artifact's createdBy. */
+  createdBy: string | null;
+  title: string;
+  bytes: Buffer;
+  mime: string;
+  target: ResolvedArtifactTarget;
+  /** The object's own fields, validated against the type's schema by the write path. */
+  typedData?: Record<string, unknown>;
+  /** Further queries for the finalize transaction, given the ledger row's id. */
+  extraFinalizeQueries?: (ledgerId: string) => Array<{ text: string; values: unknown[] }>;
+};
+
+export type FirstArtifactFilingResult =
+  | { ok: true; artifactId: string; representationRevisionId: string; deduped: boolean }
+  | { ok: false; reason: "write_refused" | "data_rejected"; error: string };
+
+/**
+ * THE FIRST WRITE (cinatra#4223, factored out of the image tool): claim the
+ * ledger row by the run's own identity, write the artifact and finalize the row
+ * in one transaction, and return the finalized refs on a re-drive of the same
+ * node with the same bytes. The caller asks the write-authorization questions
+ * first; this road only files.
+ */
+export async function fileFirstArtifactWrite(
+  input: FirstArtifactFilingInput,
+  deps: Pick<ArtifactImageToolDeps, "resolveOwnership">,
+): Promise<FirstArtifactFilingResult> {
+  const title = input.title.trim();
+  if (title.length === 0) {
+    return { ok: false, reason: "write_refused", error: "title must be a non-empty string" };
+  }
+  const contentHash = createHash("sha256").update(input.bytes).digest("hex");
+  const claim = await claimMaterialization({
+    orgId: input.orgId,
+    runId: input.runId,
+    outputId: input.nodeId,
+    nodeId: input.nodeId,
+    path: "materialize_tool",
+    extension: input.extension,
+    contentHash,
+  });
+  if (claim.path !== undefined && claim.path !== "materialize_tool") {
+    return {
+      ok: false,
+      reason: "write_refused",
+      error:
+        `the materialization ledger identity collided with a different path ("${claim.path}") ` +
+        `for run ${input.runId} node "${input.nodeId}" extension "${input.extension}" — ` +
+        "refusing to alias",
+    };
+  }
+  if (claim.kind === "finalized") {
+    return {
+      ok: true,
+      artifactId: claim.artifactId,
+      representationRevisionId: claim.representationRevisionId,
+      deduped: true,
+    };
+  }
+
+  const ownership = await deps.resolveOwnership({
+    templateId: input.templateId,
+    runId: input.runId,
+    orgId: input.orgId,
+  });
+
+  let created: { artifactId: string; representationRevisionId: string };
+  try {
+    created = await createSemanticArtifact({
+      orgId: input.orgId,
+      objectType: input.target.objectTypeId,
+      expectedAcceptMimes: input.target.acceptedFileMimeTypes,
+      createdBy: input.createdBy,
+      ownerLevel: ownership.ownerLevel,
+      ownerId: ownership.ownerId,
+      visibility: ownership.visibility,
+      title,
+      declaredMime: input.mime,
+      originKind: "agent_generated",
+      stream: asImageStream(input.bytes),
+      createdByRunId: input.runId,
+      producerAssertionExtension: input.extension,
+      skipFallbackClassification: true,
+      // The picture's own data, validated against the type's schema by the
+      // write path itself (item 0.28).
+      ...(input.typedData ? { typedData: input.typedData } : {}),
+      additionalTx2Queries: (ids) => [
+        buildFinalizeMaterializationQuery({
+          ledgerId: claim.ledgerId,
+          orgId: input.orgId,
+          artifactId: ids.artifactId,
+          representationRevisionId: ids.representationRevisionId,
+        }),
+        ...(input.extraFinalizeQueries?.(claim.ledgerId) ?? []),
+      ],
+    });
+  } catch (err) {
+    // The concurrent-double-drive loser, exactly as the text road recovers it.
+    if (isMaterializationFinalizeConflict(err)) {
+      const winner = await readFinalizedMaterialization({
+        orgId: input.orgId,
+        ledgerId: claim.ledgerId,
+      });
+      if (winner) {
+        return {
+          ok: true,
+          artifactId: winner.artifactId,
+          representationRevisionId: winner.representationRevisionId,
+          deduped: true,
+        };
+      }
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      ok: false,
+      // A payload the type's schema rejects is a DIFFERENT answer from a
+      // write that failed: the caller sent data the picture's type does not
+      // declare, and restating it correctly is the fix.
+      reason: /does not satisfy the declared schema/.test(message)
+        ? "data_rejected"
+        : "write_refused",
+      error: `filing the picture failed: ${message}`,
+    };
+  }
+
+  // The meaning matcher, post-commit and best-effort — the same enqueue the
+  // text road makes after an agent-emitted write.
+  try {
+    const { enqueueArtifactMatchRun } = await import("@/lib/artifacts/matcher-enqueue");
+    await enqueueArtifactMatchRun({
+      orgId: input.orgId,
+      artifactId: created.artifactId,
+      representationRevisionId: created.representationRevisionId,
+      createdByRunId: input.runId,
+    });
+  } catch {
+    /* best-effort — never fails a filed picture. */
+  }
+
+  return {
+    ok: true,
+    artifactId: created.artifactId,
+    representationRevisionId: created.representationRevisionId,
+    deduped: false,
+  };
 }

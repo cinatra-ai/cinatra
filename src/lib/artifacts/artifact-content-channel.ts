@@ -21,6 +21,7 @@
 // froze. That is the difference between a card that shows what was approved and
 // a card that shows whatever the artifact became afterwards.
 
+import type { ArtifactObjectData } from "@cinatra-ai/artifacts";
 import {
   ARTIFACT_CONTENT_CHANNEL_VERSION,
   artifactContentCapFor,
@@ -391,4 +392,78 @@ export function buildObjectContentProjection(input: {
   return input.source === "snapshot"
     ? { ...common, source: "snapshot", representationRevisionId: revisionId! }
     : { ...common, source: "live", representationRevisionId: null };
+}
+
+// ---------------------------------------------------------------------------
+// THE FILE ROW'S OWN FIELDS (cinatra#4223).
+//
+// A file-form artifact whose mime has no content class — a picture — answers
+// `unsupported-form` from the file channel, and its display used to receive
+// nothing else. But the row itself can carry facts its type declares beyond the
+// host's metadata mirror: where a page was captured, at what viewport, when.
+// Those facts are object data, and the object-backed projection above is the
+// one that carries object data to a display.
+//
+// THE HOST ENVELOPE IS NOT THE ROW'S OWN DATA. `ArtifactObjectData` is what the
+// host writes into every artifact row (the type, the latest revision, the mime,
+// the size, the title and the rest). Projecting it would hand every display a
+// copy of what it already has, so the projection carries only the keys outside
+// it. The record below names every envelope key, so a key added to the envelope
+// fails to compile here until it is named.
+//
+// TYPE-AGNOSTIC ON PURPOSE. Core names no extension's type: any file row whose
+// file channel has no class and whose data carries its own fields is projected
+// the same way, and the display chooses what to draw.
+// ---------------------------------------------------------------------------
+
+const FILE_ENVELOPE_FIELDS: Record<keyof ArtifactObjectData, true> = {
+  artifactType: true,
+  latestRepresentationRevisionId: true,
+  latestDigest: true,
+  mime: true,
+  size: true,
+  originKind: true,
+  viewerHint: true,
+  title: true,
+  excerpt: true,
+  connectorRef: true,
+};
+
+/**
+ * Resolve the content a file row's display receives: the file channel's own
+ * projection, or — only when that is `unsupported-form` and the row carries
+ * fields of its own beyond the host envelope — the live object projection of
+ * those fields.
+ *
+ * Every other projection passes through by identity, whatever the row carries:
+ * a text projection is the file's content, and an `absent` or `over-cap` answer
+ * is the file channel's own honest reason.
+ */
+export function resolveFileObjectContentProjection(input: {
+  objectType: string;
+  objectData: unknown;
+  fileProjection: ArtifactContentProjection;
+}): ArtifactContentProjection {
+  const { fileProjection, objectData } = input;
+  if (fileProjection.kind !== "none" || fileProjection.reason !== "unsupported-form") {
+    return fileProjection;
+  }
+  if (
+    objectData === null ||
+    typeof objectData !== "object" ||
+    Array.isArray(objectData)
+  ) {
+    return fileProjection;
+  }
+  const own: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(objectData as Record<string, unknown>)) {
+    if (Object.prototype.hasOwnProperty.call(FILE_ENVELOPE_FIELDS, key)) continue;
+    own[key] = value;
+  }
+  if (Object.keys(own).length === 0) return fileProjection;
+  return buildObjectContentProjection({
+    objectType: input.objectType,
+    data: own,
+    source: "live",
+  });
 }

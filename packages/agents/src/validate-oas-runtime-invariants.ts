@@ -1813,7 +1813,8 @@ export function scanOasForArtifactParityFindings(
           `package.json cinatra.produces declares "${ext}" but the OAS has no runnable ` +
           `materialization edge for it. Add an EndNode output binding ` +
           `(outputs[].cinatra.artifact with extension "${ext}"), an artifact_materialize ` +
-          `passthrough ApiNode targeting "${ext}", or an artifact_image_generate passthrough ` +
+          `passthrough ApiNode targeting "${ext}", or an artifact_image_generate or ` +
+          `artifact_page_capture passthrough ` +
           `step filing "${ext}". Until migrated, the declared artifact is ` +
           `never persisted at run completion. (Advisory now; the publish contract flips this ` +
           `to a republish BLOCK once the fleet migration completes — cinatra#924.)`,

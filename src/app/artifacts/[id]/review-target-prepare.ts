@@ -61,6 +61,7 @@ import type { ArtifactContentProjection } from "@cinatra-ai/sdk-extensions/artif
 // that costs the four locked routes.
 import {
   buildArtifactContentProjection,
+  resolveFileObjectContentProjection,
   type ArtifactContentChannelPorts,
   type ArtifactRepresentationForm,
 } from "@/lib/artifacts/artifact-content-channel";
@@ -138,9 +139,16 @@ export function bindArtifactReviewPorts(ctx: {
   const byteMinter = ctx.byteMinter ?? null;
   const buildContent = ctx.buildContent ?? null;
 
+  // THE ROW'S OWN OBJECT DATA, by artifact (cinatra#4223), recorded by the read
+  // that authorized it and consulted only by `buildProps` below. A props build
+  // for an artifact this binder never read finds nothing here, and its content
+  // stays the file channel's own answer.
+  const objectDataById = new Map<string, unknown>();
+
   const toOutcome = (access: ReturnType<typeof readArtifactForDetail>): ArtifactReadOutcome => {
     if (access.kind === "not-found") return { kind: "not-found" };
     if (access.kind === "denied") return { kind: "denied" };
+    objectDataById.set(access.artifact.artifactId, access.objectData);
     return { kind: "ok", artifact: access.artifact };
   };
 
@@ -426,7 +434,7 @@ export function bindArtifactReviewPorts(ctx: {
     // form the channel projects no class for — the six media forms among them —
     // comes back as the channel's own NAMED absence, because those bytes are
     // the byte road's.
-    const content = buildContent
+    const fileContent = buildContent
       ? await buildContent(contentInput)
       : // THROUGH THE STORE-FAULT GUARD, which main added on this same arm: a
         // read that throws is logged against its revision and comes back as the
@@ -439,6 +447,13 @@ export function bindArtifactReviewPorts(ctx: {
             carriedConfiguration: contentInput.carriedConfiguration,
           }),
         );
+    // A FILE ROW'S OWN FIELDS (cinatra#4223): the same projection the artifact
+    // page applies, over the object data the authorizing read recorded.
+    const content = resolveFileObjectContentProjection({
+      objectType: artifact.objectType,
+      objectData: objectDataById.get(artifact.artifactId),
+      fileProjection: fileContent,
+    });
 
     return buildArtifactRendererProps({
       artifact,
