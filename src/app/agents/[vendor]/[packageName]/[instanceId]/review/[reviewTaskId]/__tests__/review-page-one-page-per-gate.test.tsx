@@ -44,7 +44,11 @@ const mocks = vi.hoisted(() => ({
   encodeScheduleRunRef: vi.fn(() => "sched-3047"),
   // Typed by what the page READS off them, not by the fixture that happens to
   // be first: both readers answer a row or nothing.
-  readRunTriggerByRunId: vi.fn(async (): Promise<{ id: string } | null> => null),
+  readRunTriggerByRunId: vi.fn(
+    async (): Promise<
+      { id: string; triggerType?: string; releasedAt?: Date | null } | null
+    > => null,
+  ),
   readRecommendationParkForRun: vi.fn(
     async (): Promise<{ status: string } | null> => null,
   ),
@@ -310,5 +314,81 @@ describe("convergence — a decision that raced the TTL sweeper is still a decis
     // It just does not act, so a walk selecting `open-recommendation-step` finds
     // no element it cannot actually press.
     expect(html).not.toContain('data-action="open-recommendation-step"');
+  });
+});
+
+// THE SCHEDULE ENTRY SETTLES FROM THE RUN'S OWN TRIGGER ROW (cinatra#3189,
+// clause R7). The page reads the row it already read for the step's presence and
+// asks the run page's own predicate of it. Only the READ is mocked here — the
+// stored record — never the predicate, so these cases measure the real wiring
+// from the record to the drawn row.
+describe("R7 — the schedule entry's settled reading comes from the trigger row", () => {
+  const FIRED = new Date("2026-07-14T07:00:00Z");
+
+  /** The opening tag of the drawn schedule row, or null when none is drawn. */
+  function scheduleRowTag(html: string): string | null {
+    const at = html.indexOf('data-conformance-id="schedule-rail-step"');
+    if (at < 0) return null;
+    const open = html.lastIndexOf("<", at);
+    const close = html.indexOf(">", at);
+    return html.slice(open, close + 1);
+  }
+
+  for (const triggerType of ["scheduled", "immediate"] as const) {
+    it(`settles the row for a released one-off (${triggerType})`, async () => {
+      mocks.readRunTriggerByRunId.mockResolvedValue({
+        id: "trig-1",
+        triggerType,
+        releasedAt: FIRED,
+      });
+      mocks.loadReviewGateSurface.mockResolvedValue(READY);
+
+      const tag = scheduleRowTag(await renderPage());
+
+      expect(tag).not.toBeNull();
+      expect(tag).toContain('data-run-surface-rail-settled="true"');
+      expect(tag).toContain('data-schedule-step-settled="true"');
+      expect(mocks.readRunTriggerByRunId).toHaveBeenCalledWith("run-1");
+    });
+  }
+
+  it("leaves the row unsettled for a released RECURRING trigger — it stays changeable", async () => {
+    mocks.readRunTriggerByRunId.mockResolvedValue({
+      id: "trig-1",
+      triggerType: "recurring",
+      releasedAt: FIRED,
+    });
+    mocks.loadReviewGateSurface.mockResolvedValue(READY);
+
+    const tag = scheduleRowTag(await renderPage());
+
+    expect(tag).not.toBeNull();
+    expect(tag).toContain('data-run-surface-rail-settled="false"');
+    expect(tag).toContain('data-schedule-step-settled="false"');
+  });
+
+  it("leaves the row unsettled for a one-off that has not fired", async () => {
+    mocks.readRunTriggerByRunId.mockResolvedValue({
+      id: "trig-1",
+      triggerType: "scheduled",
+      releasedAt: null,
+    });
+    mocks.loadReviewGateSurface.mockResolvedValue(READY);
+
+    const tag = scheduleRowTag(await renderPage());
+
+    expect(tag).not.toBeNull();
+    expect(tag).toContain('data-run-surface-rail-settled="false"');
+    expect(tag).toContain('data-schedule-step-settled="false"');
+  });
+
+  it("draws no schedule step, and does not throw, when the trigger read fails", async () => {
+    mocks.readRunTriggerByRunId.mockRejectedValue(new Error("db unavailable"));
+    mocks.loadReviewGateSurface.mockResolvedValue(READY);
+
+    const html = await renderPage();
+
+    expect(scheduleRowTag(html)).toBeNull();
+    expect(html).toContain('data-lifecycle-card="artifact_review_gate"');
   });
 });

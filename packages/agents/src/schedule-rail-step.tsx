@@ -125,8 +125,11 @@ export function ScheduleRailStepRow({
    * (`RunSurfaceRailRow`, `RecommendationRailStepRow`), in place of the numeral,
    * and the title left unhighlighted because the reader is not standing on it.
    *
-   * OPT-IN, and `false` by default, because the review page's own rail draws
-   * this row too and nothing about that reading changes here.
+   * Both page hosts pass the run's own reading: the run page and the review
+   * page each derive it from the run's trigger row through
+   * `shouldFreezeFiredOneOffSchedule` (`./schedule-freeze`), so the entry
+   * settles on both rails alike (cinatra#3189). The default `false` is for a
+   * caller that has no such reading.
    */
   settled?: boolean;
 }): ReactElement {

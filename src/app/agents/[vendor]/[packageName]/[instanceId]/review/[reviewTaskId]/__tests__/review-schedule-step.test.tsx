@@ -94,7 +94,7 @@ function mockResolve() {
 
 /** The page's composition: the rail on the left, the gate region on the right,
  *  and the schedule step owning both columns when the run carries a schedule. */
-function renderSurface() {
+function renderSurface(scheduleSettled = false) {
   return render(
     <div className="flex items-start gap-6" data-run-detail-contract="">
       <ReviewRunSurface
@@ -104,6 +104,7 @@ function renderSurface() {
         recommendationEntry="none"
         recommendationStepOpens={false}
         scheduleCardRef="schedule-ref-1"
+        scheduleSettled={scheduleSettled}
         rail={
           <ReviewRunSteps
             steps={[{ index: 1, label: "Review" }]}
@@ -169,5 +170,45 @@ describe("the schedule step and the review card never appear together", () => {
     );
     expect(container.querySelector('[data-action="open-review-step"]')).toBeNull();
     expect(container.querySelector('[data-conformance-id="schedule-rail-step"]')).toBeNull();
+  });
+});
+
+// THE SCHEDULE ENTRY SETTLES ON THIS RAIL TOO (cinatra#3189, clause R7). The
+// drawing, artifact review section I: "A run set to Run right after setup or
+// Schedule for later is spent when it fires: its Schedule entry settles on the
+// rail." The run page passed that reading; this page's composition passed none.
+describe("a spent one-off's schedule entry settles on the review page's rail", () => {
+  const scheduleRow = (c: HTMLElement) =>
+    c.querySelector<HTMLElement>('[data-conformance-id="schedule-rail-step"]');
+
+  it("draws the settled row when the page says the run's schedule is spent", () => {
+    mockResolve();
+    const { container } = renderSurface(true);
+
+    const row = scheduleRow(container);
+    expect(row).not.toBeNull();
+    expect(row!.getAttribute("data-run-surface-rail-settled")).toBe("true");
+    expect(row!.getAttribute("data-schedule-step-settled")).toBe("true");
+    expect(row!.getAttribute("data-run-surface-rail-reached")).toBe("true");
+  });
+
+  it("a settled entry can still be selected — it opens the read-only history", async () => {
+    mockResolve();
+    const { container } = renderSurface(true);
+
+    fireEvent.click(container.querySelector('[data-action="open-schedule-step"]')!);
+    await waitFor(() => expect(scheduleForm(container)).not.toBeNull());
+    expect(scheduleRow(container)!.getAttribute("data-schedule-step-selected")).toBe("true");
+    expect(reviewCard(container)).toBeNull();
+  });
+
+  it("leaves the row unsettled when the page says the schedule is not spent", () => {
+    mockResolve();
+    const { container } = renderSurface(false);
+
+    const row = scheduleRow(container);
+    expect(row).not.toBeNull();
+    expect(row!.getAttribute("data-run-surface-rail-settled")).toBe("false");
+    expect(row!.getAttribute("data-schedule-step-settled")).toBe("false");
   });
 });

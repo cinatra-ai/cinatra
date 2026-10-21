@@ -64,6 +64,7 @@ import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-
 import { ReviewGateCard } from "@cinatra-ai/agents/review-gate-card";
 import { AgentHitlScreenCard } from "@cinatra-ai/agents/agent-hitl-screen-card";
 import { readRunTriggerByRunId } from "@cinatra-ai/agents/trigger-store";
+import { shouldFreezeFiredOneOffSchedule } from "@cinatra-ai/agents/schedule-freeze";
 import { readRecommendationParkForRun } from "@cinatra-ai/agents/recommendation-hold";
 import { recommendationDecidedForRun } from "@cinatra-ai/agents/run-recommendation-core";
 import {
@@ -417,9 +418,13 @@ export default async function AgentRunReviewPage({
   // than an empty one. Presence of the row is all this read decides; WHAT the
   // step may show is still re-resolved against the live reader on the endpoint,
   // which answers `absent` for a run this reader did not confirm a proposal for.
-  const scheduleCardRef = (await readRunTriggerByRunId(runId).catch(() => null))
-    ? encodeScheduleRunRef({ runId })
-    : null;
+  const runTrigger = await readRunTriggerByRunId(runId).catch(() => null);
+  const scheduleCardRef = runTrigger ? encodeScheduleRunRef({ runId }) : null;
+  // THE STEP SETTLES WHERE THE RUN PAGE SETTLES IT (cinatra#3189). The drawing:
+  // a one-off "is spent when it fires: its Schedule entry settles on the rail".
+  // The reading is the run page's own predicate, asked of the same stored
+  // trigger row, so the two rails of one run cannot disagree about it.
+  const scheduleSettled = shouldFreezeFiredOneOffSchedule(runTrigger);
 
   // §V's card AS THE SKILLS STEP IN THE RAIL (cinatra#3047, the re-shoot's
   // first and second defects).
@@ -541,6 +546,7 @@ export default async function AgentRunReviewPage({
               recommendationEntry={recommendationEntry}
               recommendationStepOpens={recommendationStepOpens}
               scheduleCardRef={scheduleCardRef}
+              scheduleSettled={scheduleSettled}
               rail={railNode}
               detail={detailNode}
             />
