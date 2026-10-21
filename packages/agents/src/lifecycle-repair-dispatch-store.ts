@@ -245,6 +245,13 @@ export async function dispatchPendingProducerRepairs(opts?: {
       // row and stops (or finds stopped) the same run.
       if (row.continuationAddress !== null && row.continuationAddress === row.gateId) {
         const stop = await stopRunPausedAtDeclaredGate(row);
+        if (stop === "claim-pending") {
+          // A resume holds a claim taken after this change request committed;
+          // that claim sees the change request and gives itself back. The row
+          // stays `requested`: the next drain stops the run at its pause.
+          summary.raced += 1;
+          continue;
+        }
         if (stop === "not-paused") {
           const escalated = await escalateRepair(
             row.id,
@@ -477,7 +484,7 @@ function declaredPauseOf(reviewTaskId: string): string {
 export async function stopRunPausedAtDeclaredGate(row: {
   gateId: string;
   orgId: string;
-}): Promise<"not-declared" | "stopped" | "not-paused"> {
+}): Promise<"not-declared" | "stopped" | "not-paused" | "claim-pending"> {
   const [gate] = await db
     .select({
       runId: artifactReviewGates.runId,
@@ -509,10 +516,16 @@ export async function stopRunPausedAtDeclaredGate(row: {
     const atPause = typeof run?.a2aTaskId === "string" && `${DECLARED_REVIEW_TASK_PREFIX}${run.a2aTaskId}` === pause;
     return { status: run?.status ?? null, atPause };
   };
-  const readStatus = async (): Promise<string | null> => (await readRun()).status;
+  // cinatra#4245 — A CLAIM IS NOT A MOVE. A resume claims a pause with
+  // `pending_approval -> running` before its first write and gives the claim
+  // back when the pause had a change request (`claimPauseForResume` in mcp/handlers.ts); a change
+  // request refuses once a claim committed. So a run that reads `running` at
+  // THIS pause, with this repair's change request committed, is a claim taken
+  // after it that is being given back: wait for it, never escalate on it.
+  const settledOutcome = (r: { status: string | null; atPause: boolean }): Promise<"stopped"> | "not-paused" | "claim-pending" =>
+    r.status === "stopped" ? stopped() : r.status === "running" && r.atPause ? "claim-pending" : "not-paused";
   const first = await readRun();
-  if (first.status === "stopped") return stopped();
-  if (first.status !== "pending_approval" || !first.atPause) return "not-paused";
+  if (first.status !== "pending_approval" || !first.atPause) return settledOutcome(first);
   const runGates = await db
     .select({
       id: artifactReviewGates.id,
@@ -530,8 +543,15 @@ export async function stopRunPausedAtDeclaredGate(row: {
   });
   if (waitsElsewhere) return "not-paused";
   // Re-read right before the stop, so a run that moved on meanwhile is left alone.
+  //
+  // NO ABA BETWEEN THIS READ AND THE STOP. The stop below is a status-only
+  // compare-and-set, so it is bound to this pause by the arbitration, not by its
+  // WHERE: with this repair's change request committed, no resume can send the
+  // run past this pause (its claim gives itself back; the resume worker resumes
+  // only a pause whose every gate is approved), so a run that reads
+  // `pending_approval` here is still at this pause when the stop lands.
   const now = await readRun();
-  if (now.status !== "pending_approval" || !now.atPause) return now.status === "stopped" ? stopped() : "not-paused";
+  if (now.status !== "pending_approval" || !now.atPause) return settledOutcome(now);
   try {
     await advanceAgentRun({
       run: { id: gate.runId, orgId: row.orgId, status: "pending_approval" },
@@ -552,7 +572,7 @@ export async function stopRunPausedAtDeclaredGate(row: {
     // Lost the compare-and-set: a concurrent drain stopped it (converged), or the
     // run moved on its own (escalate). Anything else is transient: rethrow.
     if ((err as { code?: string } | null)?.code !== "stale_from_status") throw err;
-    return (await readStatus()) === "stopped" ? stopped() : "not-paused";
+    return settledOutcome(await readRun());
   }
 }
 

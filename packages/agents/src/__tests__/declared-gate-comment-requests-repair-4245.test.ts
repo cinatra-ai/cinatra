@@ -363,9 +363,20 @@ describe("cinatra#4245 — the repair drain stops the paused run before the repa
   it("a run that left its review step is escalated, never repaired", async () => {
     arrangeEligible();
     ports.run!.status = "running";
+    ports.run!.a2aTaskId = "a-later-task";
     ports.repairs = [requestedRepair()];
     const summary = await dispatchPendingProducerRepairs();
     expect(summary).toMatchObject({ escalated: 1, dispatched: 0 });
+    expect(ports.launched).toHaveLength(0);
+    expect(ports.transitions).toHaveLength(0);
+  });
+
+  it("a run that reads running AT its review step is a claim being given back: the repair waits, nothing escalates", async () => {
+    arrangeEligible();
+    ports.run!.status = "running";
+    ports.repairs = [requestedRepair()];
+    const summary = await dispatchPendingProducerRepairs();
+    expect(summary).toMatchObject({ raced: 1, escalated: 0, dispatched: 0 });
     expect(ports.launched).toHaveLength(0);
     expect(ports.transitions).toHaveLength(0);
   });

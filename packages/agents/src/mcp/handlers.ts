@@ -1985,6 +1985,54 @@ async function handleAgentBuilderRunMessagesList(
 // agent_run_resume
 // ---------------------------------------------------------------------------
 
+/** The outcome of a direct resume's claim on its pause (cinatra#4245). */
+type PauseClaim =
+  /** This resume owns the pause: the run reads `running` at it, no change
+   * request was committed on it, and none can commit any more. */
+  | "claimed"
+  /** The run was not `pending_approval` (another resume won, or it stopped). */
+  | "not-pending"
+  /** The claim won, but the pause had ended (a change request on it, or the run
+   * waits at another task): the claim was given back, nothing else written. */
+  | "pause-ended";
+
+/**
+ * cinatra#4245 — the direct resume's CLAIM on its pause, the one arbitration
+ * with a change request (see `claimedPauseStillOpenAtTask`): the run's own
+ * status compare-and-set `pending_approval -> running` (the HITL Continue's
+ * claim, cinatra#3423), then a re-read of the pause in a statement that starts
+ * after the claim committed. An ended pause gives the claim back. A failed
+ * re-read gives it back and rethrows.
+ */
+async function claimPauseForResume(
+  run: { id: string; orgId: string; expectedTaskId: string },
+  authority: OrgWriteAuthority,
+): Promise<PauseClaim> {
+  try {
+    await transitionRunStatus(run.id, "pending_approval", "running", undefined, authority);
+  } catch (err) {
+    if ((err as { code?: string } | null)?.code === "stale_from_status") return "not-pending";
+    throw err;
+  }
+  const { claimedPauseStillOpenAtTask } = await import("../lifecycle-declared-review-gate");
+  let open: boolean;
+  try {
+    open = await claimedPauseStillOpenAtTask(run);
+  } catch (err) {
+    await releasePauseClaim(run.id, authority);
+    throw err;
+  }
+  if (open) return "claimed";
+  await releasePauseClaim(run.id, authority);
+  return "pause-ended";
+}
+
+/** Give a claim back: `running -> pending_approval`, for a resume whose send
+ * never started. Throws when the claim could not be given back. */
+async function releasePauseClaim(runId: string, authority: OrgWriteAuthority): Promise<void> {
+  await transitionRunStatus(runId, "running", "pending_approval", undefined, authority);
+}
+
 async function handleAgentBuilderRunResume(
   request: PrimitiveRequest<{ runId?: string; userResponse?: string; approvalNote?: string }>,
 ): Promise<unknown> {
@@ -2134,18 +2182,16 @@ async function handleAgentBuilderRunResume(
       }
       // cinatra#4245 — a change request ENDS the pause: once a reviewer asked
       // for changes on a gate of this pause, nothing resumes the run past it
-      // (the repair stops it instead). The same rule the resume worker reads,
-      // checked against the store NOW — before the first write here, again
-      // before the run credential is minted, and again right before the send —
-      // so a change request that commits while this resume is under way stops
-      // it before anything reaches the paused task.
-      const { resumeStillAllowed } = await import("../lifecycle-declared-review-gate");
+      // (the repair stops it instead). The cheap early answer here; the
+      // decision is the claim below, before the first write.
+      const declaredGate = await import("../lifecycle-declared-review-gate");
       const pausedTaskId = run.a2aTaskId;
-      const pauseFence = () => resumeStillAllowed({ id: run.id, orgId: run.orgId, expectedTaskId: pausedTaskId });
       const pauseEnded = {
         error: "Run can no longer be resumed at this pause: changes were requested on its review, or it moved on.",
       };
-      if (!(await pauseFence())) return pauseEnded;
+      if (!(await declaredGate.resumeStillAllowed({ id: run.id, orgId: run.orgId, expectedTaskId: pausedTaskId }))) {
+        return pauseEnded;
+      }
       // vendor-namespaced routing via resolveWayflowUrl. Throws on
       // malformed packageName or unset WAYFLOW_BASE_URL — surfaced as MCP error.
       let wayflowUrl: string;
@@ -2204,48 +2250,78 @@ async function handleAgentBuilderRunResume(
         }
       }
 
-      await writeHitlPrompt({
-        runId: run.id,
-        agentId: packageName,                          // existing local var; do NOT change to template.packageName
-        stepKey: run.a2aTaskId,                        // bare task.id, no `wayflow-` prefix
-        message: trimmedNote,
-        submittedValues,
-        // MCP path: schema not available at resume time — schema_snapshot stored as null
-        schemaSnapshot: null,
-        excluded: trimmedNote.length === 0,
-      }).catch((e) => {
-        console.warn(`[handleAgentBuilderRunResume] writeHitlPrompt failed run=${run.id}`, e);
-      });
-      // #1193 resume carrier: mint this leg's per-run credential and persist its
-      // hash BEFORE the blocking sendTask, then carry the RAW token in the A2A
-      // message METADATA. Kept in lockstep with the UI resume path
-      // (review-task-actions.ts) — both drive the same HITL gate, so both must
-      // carry run identity into the resumed leg. Metadata (not text) because
-      // `resumeText` reaches the gate's InputMessageNode VERBATIM.
-      const { mintResumeRunTokenMetadata } = await import("../wayflow-run-token-carrier");
-      if (!(await pauseFence())) return pauseEnded;
-      const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
-      if (!(await pauseFence())) return pauseEnded;
-      // Send into the existing context so fasta2a routes to the paused conversation.
-      const task = await client.sendTask({
-        message: {
-          role: "user",
-          kind: "message",
-          messageId: randomUUID(),
-          contextId: run.a2aContextId,
-          parts: [{ kind: "text", text: resumeText }],
-          metadata: resumeMetadata,
-        },
-        configuration: { acceptedOutputModes: ["text"] },
-      });
+      // cinatra#4245 — THE CLAIM, before the first write. The resume and a
+      // change request on this pause serialize on the run's row
+      // (`claimPauseForResume`): the claim moves the run `pending_approval ->
+      // running` and then re-reads the pause, and a change request requires the
+      // run still `pending_approval` at this pause under the same row lock. So
+      // either the change request committed first (the claim is given back and
+      // nothing is written or sent), or the claim did and the change request is
+      // refused. Past "claimed" nothing can end this pause under the resume.
+      const claim = await claimPauseForResume(
+        { id: run.id, orgId: run.orgId, expectedTaskId: pausedTaskId },
+        resumeAuthority,
+      );
+      if (claim === "not-pending") {
+        return { error: "Run is not pending approval any more; another resume or a stop decided it first." };
+      }
+      if (claim === "pause-ended") return pauseEnded;
+      // The claim is given back when the answer never leaves (the HITL
+      // Continue's rule, cinatra#3423): a failure before the send puts the run
+      // back at its pause; a failure OF the send is not released.
+      let dispatchStarted = false;
+      let task: Awaited<ReturnType<typeof client.sendTask>>;
+      try {
+        await writeHitlPrompt({
+          runId: run.id,
+          agentId: packageName,                          // existing local var; do NOT change to template.packageName
+          stepKey: run.a2aTaskId,                        // bare task.id, no `wayflow-` prefix
+          message: trimmedNote,
+          submittedValues,
+          // MCP path: schema not available at resume time — schema_snapshot stored as null
+          schemaSnapshot: null,
+          excluded: trimmedNote.length === 0,
+        }).catch((e) => {
+          console.warn(`[handleAgentBuilderRunResume] writeHitlPrompt failed run=${run.id}`, e);
+        });
+        // #1193 resume carrier: mint this leg's per-run credential and persist its
+        // hash BEFORE the blocking sendTask, then carry the RAW token in the A2A
+        // message METADATA. Kept in lockstep with the UI resume path
+        // (review-task-actions.ts) — both drive the same HITL gate, so both must
+        // carry run identity into the resumed leg. Metadata (not text) because
+        // `resumeText` reaches the gate's InputMessageNode VERBATIM.
+        const { mintResumeRunTokenMetadata } = await import("../wayflow-run-token-carrier");
+        const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
+        // Past this line the answer is on the wire.
+        dispatchStarted = true;
+        // Send into the existing context so fasta2a routes to the paused conversation.
+        task = await client.sendTask({
+          message: {
+            role: "user",
+            kind: "message",
+            messageId: randomUUID(),
+            contextId: run.a2aContextId,
+            parts: [{ kind: "text", text: resumeText }],
+            metadata: resumeMetadata,
+          },
+          configuration: { acceptedOutputModes: ["text"] },
+        });
+      } catch (err) {
+        if (!dispatchStarted) {
+          await releasePauseClaim(run.id, resumeAuthority).catch((releaseError: unknown) => {
+            console.warn("[handleAgentBuilderRunResume] could not release the pause claim", { runId: run.id }, releaseError);
+          });
+        }
+        throw err;
+      }
 
       // multi-gate handler. Lazy import (relative path
       // is "../execution" because this file lives in packages/agents/src/mcp/).
-      // fromStatus is "pending_approval" — the resume handler reached this branch
-      // because run.a2aTaskId was set, which only happens when the run paused at
-      // an A2A gate (status === "pending_approval").
+      // fromStatus is "running" — the claim above moved the run off
+      // `pending_approval` (cinatra#4245, the HITL Continue's own road,
+      // cinatra#3423); every edge the handler needs out of `running` exists.
       const { handleWayflowTaskState } = await import("../execution");
-      await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task, authority: resumeAuthority });
+      await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task, authority: resumeAuthority });
 
       const finalState = task.status?.state;
       return {

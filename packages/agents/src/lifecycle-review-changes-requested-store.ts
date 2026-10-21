@@ -82,6 +82,13 @@ const PROMPT_WINDOW_FINDING_ID = "prompt-window";
  * (execution.ts). */
 export const DECLARED_REVIEW_TASK_PREFIX = "wayflow-";
 
+/** The bare WayFlow task a declared gate's pause waits at: `wayflow-<task>`
+ * and its legs `wayflow-<task>#<n>` both name `<task>`. */
+export function declaredPauseTaskId(reviewTaskId: string): string {
+  const base = reviewTaskId.split("#", 1)[0];
+  return base.startsWith(DECLARED_REVIEW_TASK_PREFIX) ? base.slice(DECLARED_REVIEW_TASK_PREFIX.length) : "";
+}
+
 /** Is this the review-task id of a review step a flow declares itself? */
 export function isDeclaredReviewTaskId(reviewTaskId: string): boolean {
   return reviewTaskId.startsWith(DECLARED_REVIEW_TASK_PREFIX);
@@ -361,10 +368,12 @@ export async function recordReviewSurfaceChangesRequested(
       currentBaseRevisionId,
       lineageId,
       decidedBy: input.decidedBy ?? null,
-      ...(declared ? { declaredEventLink: { eventId } } : {}),
+      ...(declared
+        ? { declaredEventLink: { eventId, pause: { runId: gate.runId, taskId: declaredPauseTaskId(reviewTaskId) } } }
+        : {}),
     });
   } catch (err) {
-    if (err instanceof DeclaredGateLinkRefusedError) return notEligible("no produced event names this gate");
+    if (err instanceof DeclaredGateLinkRefusedError) return notEligible(err.message);
     // The entry point THROWS a gate CAS conflict (the gate is not pending — a
     // different decision resolved it under the reviewer). Fold it into the typed
     // failure the surface maps to its BLOCKED state; the transaction rolled back,

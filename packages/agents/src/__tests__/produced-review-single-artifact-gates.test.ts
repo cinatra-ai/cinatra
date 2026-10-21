@@ -32,6 +32,10 @@ const dbFake = {
     const rows = () => {
       const keys = Object.keys(columns);
       const values = params(where);
+      // cinatra#4245: the event's own row, read under its lock before a gate is emitted.
+      if (keys.includes("continuationAddress") && keys.includes("representationRevisionId") && !keys.includes("eventId")) {
+        return state.events.filter(e => values.includes(e.eventId));
+      }
       if (keys.includes("emitter")) return state.events.filter(e => e.status === "pending");
       if (keys.includes("destinationClass")) return state.events.filter(e => values.includes(e.eventId));
       if (keys.includes("eventId")) return state.events.filter(e => e.status === "pending" && values.includes(e.orgId) && values.includes(e.producerRunId));

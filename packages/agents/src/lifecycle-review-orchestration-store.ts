@@ -738,10 +738,14 @@ async function emitUnderEventLock<T>(
 ): Promise<EventLockDecision<T>> {
   return db.transaction(async (tx): Promise<EventLockDecision<T>> => {
     const link = await lockProducedEventLink(tx, row.eventId);
+    // cinatra#4245 — an event row that is gone has nothing to gate: a gate
+    // emitted for it would name no event and could never be linked or released
+    // (an orphan). Refused like a processed event; nothing is emitted.
+    if (link.kind === "absent") return { kind: "settled", status: "absent", continuationAddress: null };
     if (link.kind === "settled") return link;
-    if (link.kind === "unlinked" && link.declaredGateId) return { kind: "declared", gateId: link.declaredGateId };
-    // Unlinked with no declared gate (or no event row to keep a link on): the
-    // automatic gate, emitted while the lock is held.
+    if (link.declaredGateId) return { kind: "declared", gateId: link.declaredGateId };
+    // Unlinked with no declared gate: the automatic gate, emitted while the
+    // lock is held.
     return { kind: "emitted", emitted: await emit(tx) };
   });
 }
@@ -764,7 +768,11 @@ async function emitUnderMemberLocks<T>(
     for (const row of [...rows].sort((a, b) => (a.eventId < b.eventId ? -1 : a.eventId > b.eventId ? 1 : 0))) {
       const link = await lockProducedEventLink(tx, row.eventId);
       if (link.kind === "absent") {
-        states.set(row.eventId, { kind: "free" });
+        // A member whose row is gone gets no gate (the same refusal as the
+        // per-event path): the unit is withheld. A gone row is not pending, so
+        // it never holds the epoch open (`epochFullyProcessed`).
+        states.set(row.eventId, { kind: "settled", status: "absent", continuationAddress: null });
+        allFree = false;
       } else if (link.kind === "settled") {
         states.set(row.eventId, link);
         allFree = false;

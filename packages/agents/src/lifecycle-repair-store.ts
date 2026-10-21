@@ -44,6 +44,7 @@ import { and, asc, eq, isNull, sql } from "drizzle-orm";
 
 import { db } from "./db";
 import {
+  agentRuns,
   artifactReviewGates,
   artifactReviewAudit,
   artifactProducedOutbox,
@@ -142,8 +143,14 @@ export interface RecordChangesRequestedInput {
    * this gate, or still be unlinked with this gate as its declared gate and no
    * other gate pinning its revision, in which case it is linked to this gate in
    * the same commit. Anything else refuses with `DeclaredGateLinkRefusedError`
-   * and nothing is written. */
-  declaredEventLink?: { eventId: string };
+   * and nothing is written.
+   *
+   * `pause` names the WayFlow pause the gate belongs to: the run's row is locked
+   * FIRST in this transaction and must still read `pending_approval` at that
+   * task. That lock is the one a resume's claim takes (`claimPauseForResume` in mcp/handlers.ts):
+   * a claimed (`running`) or moved-on run refuses here, and a claim taken after
+   * this commit sees the change request and gives itself back. */
+  declaredEventLink?: { eventId: string; pause: { runId: string; taskId: string } };
 }
 
 /** The produced event of a declared gate's revision does not belong to that
@@ -253,6 +260,17 @@ export async function recordChangesRequested(
     // or this commit links the event to the declared gate and the sweep later
     // finds it linked. A later repair finalize re-points exactly this link.
     if (input.declaredEventLink) {
+      // The run's row first (lock order: run -> event -> gate), so a resume's
+      // claim and this change request serialize on it (cinatra#4245).
+      const { pause } = input.declaredEventLink;
+      const [paused] = await tx
+        .select({ status: agentRuns.status, a2aTaskId: agentRuns.a2aTaskId })
+        .from(agentRuns)
+        .where(and(eq(agentRuns.id, pause.runId), eq(agentRuns.orgId, input.orgId)))
+        .for("update");
+      if (!paused || paused.status !== "pending_approval" || !pause.taskId || paused.a2aTaskId !== pause.taskId) {
+        throw new DeclaredGateLinkRefusedError("the run no longer waits at this review step");
+      }
       const link = await lockProducedEventLink(tx, input.declaredEventLink.eventId);
       if (link.kind === "settled" && link.continuationAddress === request.gateId) {
         // already this gate's event

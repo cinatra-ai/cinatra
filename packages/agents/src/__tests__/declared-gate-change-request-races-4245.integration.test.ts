@@ -50,6 +50,35 @@ vi.mock("../lifecycle-declared-review-gate", async (orig) => {
   };
 });
 
+// THE OPPOSITE WINNER: hold the sweep INSIDE its locked transaction, right
+// before it emits the automatic gate (it holds the event's row lock there); or
+// make that emit fail, so the locked transaction rolls back.
+const emitCtl = vi.hoisted(() => ({
+  armed: false,
+  fail: false,
+  reached: null as null | (() => void),
+  release: null as null | Promise<void>,
+}));
+vi.mock("../artifact-review-gate-store", async (orig) => {
+  const actual = (await orig()) as typeof import("../artifact-review-gate-store");
+  return {
+    ...actual,
+    emitArtifactReviewGate: async (...args: Parameters<typeof actual.emitArtifactReviewGate>) => {
+      const underLock = args.length > 1 && args[1] !== undefined;
+      if (underLock && emitCtl.fail) {
+        emitCtl.fail = false;
+        throw new Error("injected emit failure under the event lock");
+      }
+      if (underLock && emitCtl.armed) {
+        emitCtl.armed = false;
+        emitCtl.reached?.();
+        await emitCtl.release;
+      }
+      return actual.emitArtifactReviewGate(...args);
+    },
+  };
+});
+
 const TEST_SCHEMA = "cinatra_test_declared_gate_4245";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 const HAS_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
@@ -99,7 +128,22 @@ beforeEach(() => {
   barrier.armed = false;
   barrier.reached = null;
   barrier.release = null;
+  emitCtl.armed = false;
+  emitCtl.fail = false;
+  emitCtl.reached = null;
+  emitCtl.release = null;
 });
+
+/** Arm the lookup barrier; resolves once a caller is held after its lookup. */
+function armLookup(): { atBarrier: Promise<void>; release: () => void } {
+  let reached!: () => void;
+  const atBarrier = new Promise<void>((r) => { reached = r; });
+  let release!: () => void;
+  barrier.release = new Promise<void>((r) => { release = r; });
+  barrier.reached = reached;
+  barrier.armed = true;
+  return { atBarrier, release };
+}
 
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -317,5 +361,184 @@ describe.skipIf(!HAS_DB)("cinatra#4245 — a change request and the sweep agree 
     const g = await pool(`SELECT disposition FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE id=$1`, [gateId]);
     expect((g.rows[0] as { disposition: string | null }).disposition).not.toBe("changes_requested");
     expect(await runStatus(runId)).toBe("pending_approval");
+  });
+
+  // ---------------------------------------------------------------------------
+  // The link's branches under the lock.
+  // The change request is held after its early lookup; the event changes under
+  // it; the locked re-read refuses and NOTHING is written (no link, the gate
+  // still pending, no repair row, the run still paused).
+  // ---------------------------------------------------------------------------
+  async function expectNothingWritten(runId: string, gateId: string, eventId: string, address: string | null) {
+    expect((await eventRow(eventId))?.continuation_address ?? null).toBe(address);
+    const g = await pool(`SELECT status, disposition FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE id=$1`, [gateId]);
+    expect(g.rows[0]).toEqual({ status: "pending", disposition: null });
+    const r = await pool(`SELECT count(*)::int AS n FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE gate_id=$1`, [gateId]);
+    expect((r.rows[0] as { n: number }).n).toBe(0);
+  }
+
+  for (const [label, mutate, address] of [
+    ["the event row is gone", (eventId: string) =>
+      pool(`DELETE FROM "${q(TEST_SCHEMA)}"."artifact_produced_outbox" WHERE event_id=$1`, [eventId]), undefined],
+    ["the event was processed without a link", (eventId: string) =>
+      pool(`UPDATE "${q(TEST_SCHEMA)}"."artifact_produced_outbox" SET status='processed', processed_at=now() WHERE event_id=$1`, [eventId]), null],
+  ] as const) {
+    it(`LINK BRANCH: ${label} under the held change request — refused, nothing written`, async () => {
+      const { runId, reviewTaskId } = await seedPausedRun();
+      const ev = await produce({ producerRunId: runId });
+      const gateId = await openDeclaredGate(runId, reviewTaskId, ev);
+      const b = armLookup();
+      const pending = comment(runId, reviewTaskId, ev);
+      await b.atBarrier;
+      await mutate(ev.eventId);
+      b.release();
+      const cr = await pending;
+      expect(cr.ok).toBe(false);
+      if (address === undefined) expect(await eventRow(ev.eventId)).toBeUndefined();
+      else await expectNothingWritten(runId, gateId, ev.eventId, address);
+      expect(await runStatus(runId)).toBe("pending_approval");
+    });
+  }
+
+  it("LINK BRANCH: an unlinked event whose revision a NON-declared gate pins meanwhile — refused, nothing written", async () => {
+    const { runId, reviewTaskId } = await seedPausedRun();
+    const ev = await produce({ producerRunId: runId });
+    const gateId = await openDeclaredGate(runId, reviewTaskId, ev);
+    const b = armLookup();
+    const pending = comment(runId, reviewTaskId, ev);
+    await b.atBarrier;
+    await gateStore.emitArtifactReviewGate({
+      runId, orgId: ORG, reviewTaskId: `lifecycle-review:${randomUUID()}`,
+      targets: [{ artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId }], expiresAt: null,
+    });
+    b.release();
+    expect((await pending).ok).toBe(false);
+    await expectNothingWritten(runId, gateId, ev.eventId, null);
+  });
+
+  it("LINK BRANCH: a run whose pause a resume claimed meanwhile — refused, nothing written", async () => {
+    const { runId, reviewTaskId } = await seedPausedRun();
+    const ev = await produce({ producerRunId: runId });
+    const gateId = await openDeclaredGate(runId, reviewTaskId, ev);
+    const b = armLookup();
+    const pending = comment(runId, reviewTaskId, ev);
+    await b.atBarrier;
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status='running' WHERE id=$1`, [runId]);
+    b.release();
+    const cr = await pending;
+    expect(cr.ok).toBe(false);
+    if (!cr.ok) expect(cr.code).toBe(crStore.DECLARED_GATE_NOT_ELIGIBLE);
+    await expectNothingWritten(runId, gateId, ev.eventId, null);
+  });
+
+  it("ROLLBACK: the event is linked in the transaction, then the gate's compare-and-set loses (decided meanwhile) — the link rolls back", async () => {
+    const { runId, reviewTaskId } = await seedPausedRun();
+    const ev = await produce({ producerRunId: runId });
+    const gateId = await openDeclaredGate(runId, reviewTaskId, ev);
+    const b = armLookup();
+    const pending = comment(runId, reviewTaskId, ev);
+    await b.atBarrier;
+    await approve(gateId);
+    b.release();
+    expect((await pending).ok).toBe(false);
+    expect((await eventRow(ev.eventId))?.continuation_address).toBeNull();
+    const r = await pool(`SELECT count(*)::int AS n FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE gate_id=$1`, [gateId]);
+    expect((r.rows[0] as { n: number }).n).toBe(0);
+  });
+
+  it("CONCURRENT COMMENTS: two identical comments file one repair; two different comments — one wins, one is refused", async () => {
+    {
+      const { runId, reviewTaskId } = await seedPausedRun();
+      const ev = await produce({ producerRunId: runId });
+      const gateId = await openDeclaredGate(runId, reviewTaskId, ev);
+      const [a, b] = await Promise.all([comment(runId, reviewTaskId, ev), comment(runId, reviewTaskId, ev)]);
+      expect([a.ok, b.ok]).toContain(true);
+      const r = await pool(`SELECT count(*)::int AS n FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE gate_id=$1`, [gateId]);
+      expect((r.rows[0] as { n: number }).n).toBe(1);
+      expect((await eventRow(ev.eventId))?.continuation_address).toBe(gateId);
+    }
+    {
+      const { runId, reviewTaskId } = await seedPausedRun();
+      const ev = await produce({ producerRunId: runId });
+      const gateId = await openDeclaredGate(runId, reviewTaskId, ev);
+      const other = (feedback: string) => crStore.recordReviewSurfaceChangesRequested({
+        runId, reviewTaskId,
+        baseTarget: { artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId },
+        currentBaseRevisionId: ev.representationRevisionId, feedback,
+      });
+      const outs = await Promise.all([other("Shorten the intro."), other("Add a closing line.")]);
+      expect(outs.filter((o) => o.ok)).toHaveLength(1);
+      const r = await pool(`SELECT count(*)::int AS n FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE gate_id=$1`, [gateId]);
+      expect((r.rows[0] as { n: number }).n).toBe(1);
+    }
+  });
+
+  it("OPPOSITE WINNER: the sweep holds the event lock about to emit its automatic gate; a declared gate opens and its change request waits on the lock; the sweep wins and the change request is refused", async () => {
+    const { runId, reviewTaskId } = await seedPausedRun();
+    const ev = await produce({ producerRunId: runId });
+    let reached!: () => void;
+    const atEmit = new Promise<void>((r) => { reached = r; });
+    let release!: () => void;
+    emitCtl.release = new Promise<void>((r) => { release = r; });
+    emitCtl.reached = reached;
+    emitCtl.armed = true;
+    const sweep = orch.sweepReviewOrchestration();
+    await atEmit; // the sweep holds the event's row lock.
+    const gateId = await openDeclaredGate(runId, reviewTaskId, ev);
+    const pending = comment(runId, reviewTaskId, ev);
+    // The change request is blocked on the event's lock, not decided yet.
+    const early = await Promise.race([pending.then(() => "decided"), new Promise((r) => setTimeout(() => r("waiting"), 300))]);
+    expect(early).toBe("waiting");
+    release();
+    await sweep;
+    expect((await pending).ok).toBe(false);
+    const auto = (await eventRow(ev.eventId))?.continuation_address;
+    expect(auto).toBeTruthy();
+    expect(auto).not.toBe(gateId);
+    const g = await pool(`SELECT status, disposition FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE id=$1`, [gateId]);
+    expect(g.rows[0]).toEqual({ status: "pending", disposition: null });
+  });
+
+  it("EMIT ERROR under the lock: the sweep's transaction rolls back (no gate, no link) and a later change request on the declared gate links and files", async () => {
+    const { runId, reviewTaskId } = await seedPausedRun();
+    const ev = await produce({ producerRunId: runId });
+    emitCtl.fail = true;
+    await orch.sweepReviewOrchestration().catch(() => undefined);
+    expect((await eventRow(ev.eventId))?.continuation_address).toBeNull();
+    expect(await gateTasksOfRun(runId)).toEqual([]);
+    const gateId = await openDeclaredGate(runId, reviewTaskId, ev);
+    expect((await comment(runId, reviewTaskId, ev)).ok).toBe(true);
+    expect((await eventRow(ev.eventId))?.continuation_address).toBe(gateId);
+  });
+
+  it("ABSENT under the sweep's lock: an event whose row is gone when the sweep locks it gets no automatic gate", async () => {
+    const { runId } = await seedPausedRun();
+    const ev = await produce({ producerRunId: runId });
+    const b = armLookup();
+    const sweep = orch.sweepReviewOrchestration();
+    await b.atBarrier; // the sweep looked: no declared gate.
+    await pool(`DELETE FROM "${q(TEST_SCHEMA)}"."artifact_produced_outbox" WHERE event_id=$1`, [ev.eventId]);
+    b.release();
+    await sweep;
+    expect(await gateTasksOfRun(runId)).toEqual([]);
+  });
+
+  it("the lock's states read directly: absent, settled (processed / linked), unlinked with a declared gate, unlinked with another pin", async () => {
+    const { lockProducedEventLink } = await import("../lifecycle-declared-review-gate");
+    const inTx = (eventId: string) => dbMod.db.transaction((tx) => lockProducedEventLink(tx, eventId));
+    expect(await inTx(`evt-absent-${randomUUID()}`)).toEqual({ kind: "absent" });
+
+    const { runId, reviewTaskId } = await seedPausedRun();
+    const ev = await produce({ producerRunId: runId });
+    expect(await inTx(ev.eventId)).toEqual({ kind: "unlinked", declaredGateId: null, otherGatePinsRevision: false });
+    const gateId = await openDeclaredGate(runId, reviewTaskId, ev);
+    expect(await inTx(ev.eventId)).toEqual({ kind: "unlinked", declaredGateId: gateId, otherGatePinsRevision: false });
+    await gateStore.emitArtifactReviewGate({
+      runId, orgId: ORG, reviewTaskId: `lifecycle-review:${randomUUID()}`,
+      targets: [{ artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId }], expiresAt: null,
+    });
+    expect(await inTx(ev.eventId)).toEqual({ kind: "unlinked", declaredGateId: gateId, otherGatePinsRevision: true });
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."artifact_produced_outbox" SET continuation_address=$2 WHERE event_id=$1`, [ev.eventId, gateId]);
+    expect(await inTx(ev.eventId)).toEqual({ kind: "settled", status: "pending", continuationAddress: gateId });
   });
 });

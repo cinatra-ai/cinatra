@@ -55,7 +55,12 @@ const { dbMock } = vi.hoisted(() => {
     // stable and readable discriminator.
     select(cols: Record<string, unknown>) {
       const keys = Object.keys(cols ?? {});
-      const picked: unknown[] = keys.includes("templateId")
+      // cinatra#4245: the event's own row, read under its lock before a gate is
+      // emitted — still pending and unlinked here.
+      const eventRow = keys.includes("continuationAddress") && keys.includes("representationRevisionId") && !keys.includes("eventId");
+      const picked: unknown[] = eventRow
+        ? [{ orgId: ORG, producerRunId: RUN, artifactId: "art-2929", representationRevisionId: "rev-2929", status: "pending", continuationAddress: null }]
+        : keys.includes("templateId")
         ? state.rows.agentRuns
         : keys.includes("hasArtifactBindings") || keys.includes("lifecycleConfig")
           ? state.rows.agentTemplates

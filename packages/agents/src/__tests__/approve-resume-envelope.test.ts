@@ -31,6 +31,15 @@ const sendTaskMock = vi.fn(async (_input: SendTaskInput) => ({
 // The gate's own behavior is proven in `agent-template-scope.test.ts`,
 // `agent-run-scope-guard.test.ts` and `agent-run-scope-enforcement-wiring.test.ts`
 // (which pins that THIS call site keeps its assertion).
+
+// cinatra#4245: after the Continue claim the answer re-reads the pause for a
+// change request (a database read this suite does not stand up); the pause is
+// open here. The refusal has its own suite (continue-claim-sees-change-request-4245).
+vi.mock("../lifecycle-declared-review-gate", async (orig) => ({
+  ...(await orig<typeof import("../lifecycle-declared-review-gate")>()),
+  claimedPauseStillOpen: vi.fn(async () => true),
+}));
+
 vi.mock("../agent-run-serde", async (orig) => ({
   ...(await orig<typeof import("../agent-run-serde")>()),
   assertAgentRunScopeAuthorized: vi.fn(async () => undefined),

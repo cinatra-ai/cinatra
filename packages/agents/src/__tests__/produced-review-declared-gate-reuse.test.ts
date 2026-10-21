@@ -65,6 +65,10 @@ const dbFake = {
           .filter(g => values.includes(g.runId) && values.includes(g.orgId))
           .map(g => ({ id: g.gateId, orgId: g.orgId, reviewTaskId: g.reviewTaskId, status: g.status ?? "pending", pinnedTargets: g.targets }));
       }
+      // cinatra#4245: the event's own row, read under its lock before a gate is emitted.
+      if (keys.includes("continuationAddress") && keys.includes("representationRevisionId") && !keys.includes("eventId")) {
+        return state.events.filter(e => values.includes(e.eventId));
+      }
       if (keys.includes("emitter")) return state.events.filter(e => e.status === "pending" && (e.producerRunId === null || values.includes(e.producerRunId)));
       if (keys.includes("destinationClass")) return state.events.filter(e => values.includes(e.eventId));
       if (keys.includes("eventId")) return state.events.filter(e => (values.includes("pending") ? e.status === "pending" : true) && values.includes(e.orgId) && values.includes(e.producerRunId));

@@ -159,20 +159,76 @@ export function pauseHasChangeRequest(
  * May this paused run still be resumed at the pause it waits at? Re-reads the
  * run's status and task and its gates now. False when the run no longer waits at
  * `expectedTaskId` (moved on, stopped) or when a gate of that pause has a change
- * request. Used by the direct resume right before its first write and again
- * right before it sends.
+ * request. A READ, not a decision: the direct resume decides through
+ * `claimedPauseStillOpenAtTask` below; this stays the cheap early answer.
  */
 export async function resumeStillAllowed(run: {
   id: string;
   orgId: string;
   expectedTaskId: string;
 }): Promise<boolean> {
+  return pauseOpenFor(run, "pending_approval");
+}
+
+/** The run reads `status` at `expectedTaskId` and no gate of that pause has a
+ * change request. */
+async function pauseOpenFor(
+  run: { id: string; orgId: string; expectedTaskId: string },
+  status: "pending_approval" | "running",
+  opts: { matchTask: boolean } = { matchTask: true },
+): Promise<boolean> {
   const [now] = await db
     .select({ status: agentRuns.status, a2aTaskId: agentRuns.a2aTaskId })
     .from(agentRuns)
     .where(and(eq(agentRuns.id, run.id), eq(agentRuns.orgId, run.orgId)))
     .limit(1);
-  if (!now || now.status !== "pending_approval" || now.a2aTaskId !== run.expectedTaskId) return false;
+  if (!now || now.status !== status || !run.expectedTaskId) return false;
+  if (opts.matchTask && now.a2aTaskId !== run.expectedTaskId) return false;
   const gates = await listReviewGatesForRun(run.id);
   return !pauseHasChangeRequest(gates, `${DECLARED_REVIEW_TASK_PREFIX}${run.expectedTaskId}`);
+}
+
+/** After a claim this caller took itself (`pending_approval -> running`):
+ * is the pause still open — the run still `running` and no change request on
+ * the pause of `expectedTaskId`? The HITL Continue's re-read after its own
+ * claim (the arbitration: `claimedPauseStillOpenAtTask`). */
+export async function claimedPauseStillOpen(run: {
+  id: string;
+  orgId: string;
+  expectedTaskId: string;
+}): Promise<boolean> {
+  // The Continue may hold a run whose `a2a_task_id` column lost its race with
+  // the per-gate overwrite (it falls back to the gate index). So only the
+  // change-request half is read here: a change request itself requires the
+  // column at its pause, and refuses (stays a note) when it is stale.
+  return pauseOpenFor(run, "running", { matchTask: false });
+}
+
+/**
+ * THE ONE ARBITRATION between a resume and a change request on its pause
+ * (cinatra#4245). Both serialize on the run's row:
+ *
+ *   - the resume CLAIMS the pause with the run's own status compare-and-set
+ *     `pending_approval -> running` (the claim the HITL Continue already uses,
+ *     cinatra#3423), then, in a statement that starts after that claim
+ *     committed, re-reads the pause here. A change request committed before
+ *     the claim is seen: the caller gives the claim back
+ *     (`running -> pending_approval`) and writes and sends nothing.
+ *   - the change request locks the same row (FOR UPDATE) in the transaction
+ *     that resolves the gate and requires `pending_approval` at this pause's
+ *     task (`recordChangesRequested`), so once a claim committed, a change
+ *     request is refused and stays a note.
+ *
+ * The claim and its release stay with the callers, which own the run writes
+ * (the direct resume in mcp/handlers.ts, the Continue in
+ * review-task-actions.ts); this module only reads. After its own claim: is the
+ * pause still open, the run `running` AT the paused task and no change request
+ * on it?
+ */
+export async function claimedPauseStillOpenAtTask(run: {
+  id: string;
+  orgId: string;
+  expectedTaskId: string;
+}): Promise<boolean> {
+  return pauseOpenFor(run, "running");
 }

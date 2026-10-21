@@ -141,6 +141,10 @@ vi.mock("../wayflow-run-token-carrier", () => ({
 vi.mock("../lifecycle-declared-review-gate", async (orig) => ({
   ...(await orig<typeof import("../lifecycle-declared-review-gate")>()),
   resumeStillAllowed: vi.fn(async () => true),
+  // cinatra#4245: the resume claims the pause (`pending_approval -> running`)
+  // and re-reads it before its first write; this suite is about the delivered
+  // recovery, so the pause is still open after the claim.
+  claimedPauseStillOpenAtTask: vi.fn(async () => true),
 }));
 vi.mock("../compiler", () => ({ compileWorkflow: vi.fn() }));
 vi.mock("../verdaccio/client", () => ({
@@ -292,7 +296,10 @@ describe("cinatra#3007 — an unrecordable hold inside the resume primitive", ()
       Buffer.byteLength(JSON.stringify(data.producedReviewHold) ?? "", "utf8"),
     ).toBeLessThanOrEqual(PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES);
 
-    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    // cinatra#4245: the claim on the pause is the only run write of the resume.
+    const edges = (storeMock.transitionRunStatus.mock.calls as unknown as Array<[string, string, string]>)
+      .map((call) => [call[1], call[2]]);
+    expect(edges).toEqual([["pending_approval", "running"]]);
   });
 
   it("the delivered payload lets a later convergence pass land the withheld verdict", async () => {
@@ -308,9 +315,10 @@ describe("cinatra#3007 — an unrecordable hold inside the resume primitive", ()
       park: data.producedReviewHoldPark as number,
     });
 
-    const calls = storeMock.transitionRunStatus.mock.calls as unknown as Array<
+    // cinatra#4245: past the resume's own claim on the pause.
+    const calls = (storeMock.transitionRunStatus.mock.calls as unknown as Array<
       [string, string, string, Record<string, unknown> | undefined, unknown]
-    >;
+    >).filter((call) => !(call[1] === "pending_approval" && call[2] === "running"));
     expect(calls).toHaveLength(1);
     expect([calls[0][1], calls[0][2]]).toEqual(["pending_approval", "completed"]);
     expect(calls[0][3]?.stepResults).toBeDefined();
