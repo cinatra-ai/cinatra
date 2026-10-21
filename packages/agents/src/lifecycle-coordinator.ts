@@ -1050,7 +1050,11 @@ export type ReleaseReason =
   | "continue"
   | "trigger_fired"
   | "approval_resumed"
-  | "recommendation_decided";
+  | "recommendation_decided"
+  /** A reviewer asked for changes on a review step the flow declares itself:
+   *  the paused run is stopped so its next step cannot write the content the
+   *  reviewer asked to change (the repair runs as a separate run). */
+  | "changes_requested";
 
 export type AdvanceInput = {
   run: Pick<AgentRunRecord, "id" | "orgId" | "status">;

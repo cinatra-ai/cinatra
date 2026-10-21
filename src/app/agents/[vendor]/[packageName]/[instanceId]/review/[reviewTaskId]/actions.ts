@@ -24,6 +24,14 @@ import { isAutoReviewTaskId, isBatchAutoReviewTaskId } from "@/lib/lifecycle/lif
 
 import { resolveReviewActorContext } from "./review-actor";
 
+// The declared review gate's task-id prefix and the store's not-eligible refusal
+// (`DECLARED_REVIEW_TASK_PREFIX` / `DECLARED_GATE_NOT_ELIGIBLE` of
+// packages/agents/src/lifecycle-review-changes-requested-store.ts). Spelled here
+// as values so this action loads no store module of its own; the store's unit
+// test pins the two spellings.
+const DECLARED_REVIEW_TASK_PREFIX = "wayflow-";
+const DECLARED_GATE_NOT_ELIGIBLE = "declared-gate-not-eligible";
+
 /**
  * The LIVE decision-submit binder (cinatra#1795 S12 item 4; spec design@0c484154b069c6369a33c1375056126289888997
  * §IV/§V). The client sends only the disposition + rationale (display + DECIDE
@@ -135,13 +143,22 @@ export async function submitReviewDecisionAction(
   // `respondToHitl` check above already ran for the comment op. With the fence off,
   // on a non-lifecycle / batch / multi-target gate, or with empty feedback, the
   // Comment path falls through to the byte-identical annotation below.
+  //
+  // A review step a flow declares in its own template (a `wayflow-` gate,
+  // cinatra#4245) takes the same road, but only when the store finds every
+  // condition of a change request met (one pinned target, the produced event
+  // naming this gate, an effects-gated continuation, a producer that can repair,
+  // no other pending gate of the same step). Every other declared gate returns
+  // the store's not-eligible refusal, and the comment falls through to the
+  // byte-identical annotation below — never a block or an error.
   const trimmedComment = comment?.trim() ?? "";
+  const lifecycleGate = isAutoReviewTaskId(reviewTaskId) && !isBatchAutoReviewTaskId(reviewTaskId);
+  const declaredGate = reviewTaskId.startsWith(DECLARED_REVIEW_TASK_PREFIX);
   if (
     disposition === "comment" &&
     trimmedComment.length > 0 &&
     isLifecycleReviewOrchestrationActive() &&
-    isAutoReviewTaskId(reviewTaskId) &&
-    !isBatchAutoReviewTaskId(reviewTaskId) &&
+    (lifecycleGate || declaredGate) &&
     pinnedTargets.length === 1
   ) {
     const result = await submitReviewSurfaceChangesRequested({
@@ -151,7 +168,9 @@ export async function submitReviewDecisionAction(
       feedback: trimmedComment,
       actorCtx,
     });
-    return mapChangesRequestedToOutcome(result);
+    if (!(declaredGate && !result.ok && result.code === DECLARED_GATE_NOT_ELIGIBLE)) {
+      return mapChangesRequestedToOutcome(result);
+    }
   }
 
   const decision: ArtifactReviewDecision = {

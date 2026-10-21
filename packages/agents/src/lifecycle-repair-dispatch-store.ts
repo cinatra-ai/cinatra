@@ -86,8 +86,8 @@ import "server-only";
 import { and, asc, eq, sql } from "drizzle-orm";
 
 import { db } from "./db";
-import { agentRuns, agentTemplates, lifecycleRepair } from "./schema";
-import { launchAgentRun } from "./lifecycle-coordinator";
+import { agentRuns, agentTemplates, artifactReviewGates, lifecycleRepair } from "./schema";
+import { advanceAgentRun, launchAgentRun } from "./lifecycle-coordinator";
 import { markRepairDispatched } from "./lifecycle-repair-store";
 
 import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
@@ -233,6 +233,27 @@ export async function dispatchPendingProducerRepairs(opts?: {
         if (escalated) summary.escalated += 1;
         else summary.raced += 1;
         continue;
+      }
+
+      // cinatra#4245 — a change request on a review step the flow declares itself
+      // (a `wayflow-` gate) leaves that run paused at the step; its next step would
+      // write the content the reviewer asked to change. The repair row IS the stop
+      // instruction: it was committed in the same transaction that resolved the
+      // gate. So the paused run is stopped HERE, before any repair run starts, by an
+      // idempotent compare-and-set — a crash after the gate's commit (or after the
+      // stop) is converged by the next drain, which re-reads the still-`requested`
+      // row and stops (or finds stopped) the same run.
+      if (row.continuationAddress !== null && row.continuationAddress === row.gateId) {
+        const stop = await stopRunPausedAtDeclaredGate(row);
+        if (stop === "not-paused") {
+          const escalated = await escalateRepair(
+            row.id,
+            "the run of the declared review step is no longer paused at that step, so no repair run is started",
+          );
+          if (escalated) summary.escalated += 1;
+          else summary.raced += 1;
+          continue;
+        }
       }
 
       const producer = await resolveProducingTemplate(row.producerRunId, row.orgId);
@@ -412,6 +433,69 @@ export async function dispatchPendingProducerRepairs(opts?: {
   }
 
   return summary;
+}
+
+/** The review-task prefix of a review step a flow declares in its own template. */
+const DECLARED_REVIEW_TASK_PREFIX = "wayflow-";
+
+/**
+ * Stop the run paused at the declared review gate a repair was requested on
+ * (cinatra#4245). `not-declared` — the repair's gate is not a declared review
+ * gate (nothing to stop; every lifecycle gate keeps its road); `stopped` — the
+ * run is stopped now, or already was; `not-paused` — the run left its review
+ * step some other way, so the caller escalates instead of dispatching.
+ *
+ * Idempotent: the move is a compare-and-set `pending_approval` → `stopped`
+ * through the lifecycle coordinator's `advanceAgentRun` (the one entry that
+ * moves a parked run); a second call (the next drain after a crash)
+ * reads `stopped` and changes nothing. A transient failure throws, so the row
+ * stays `requested` and the next drain tries again before any repair run starts.
+ */
+export async function stopRunPausedAtDeclaredGate(row: {
+  gateId: string;
+  orgId: string;
+}): Promise<"not-declared" | "stopped" | "not-paused"> {
+  const [gate] = await db
+    .select({ runId: artifactReviewGates.runId, reviewTaskId: artifactReviewGates.reviewTaskId })
+    .from(artifactReviewGates)
+    .where(and(eq(artifactReviewGates.id, row.gateId), eq(artifactReviewGates.orgId, row.orgId)))
+    .limit(1);
+  if (!gate || typeof gate.reviewTaskId !== "string" || !gate.reviewTaskId.startsWith(DECLARED_REVIEW_TASK_PREFIX)) {
+    return "not-declared";
+  }
+  const readStatus = async (): Promise<string | null> => {
+    const [run] = await db
+      .select({ status: agentRuns.status })
+      .from(agentRuns)
+      .where(and(eq(agentRuns.id, gate.runId), eq(agentRuns.orgId, row.orgId)))
+      .limit(1);
+    return run?.status ?? null;
+  };
+  const status = await readStatus();
+  if (status === "stopped") return "stopped";
+  if (status !== "pending_approval") return "not-paused";
+  try {
+    await advanceAgentRun({
+      run: { id: gate.runId, orgId: row.orgId, status: "pending_approval" },
+      release: {
+        reason: "changes_requested",
+        from: "pending_approval",
+        to: "stopped",
+        dispatch: {
+          kind: "caller_dispatches",
+          why: "a stopped run is never queued again; this drain starts the separate repair run itself",
+        },
+        onLostRace: "throw",
+      },
+      authority: mintLifecycleRepairDispatchAuthority(row.orgId),
+    });
+    return "stopped";
+  } catch (err) {
+    // Lost the compare-and-set: a concurrent drain stopped it (converged), or the
+    // run moved on its own (escalate). Anything else is transient: rethrow.
+    if ((err as { code?: string } | null)?.code !== "stale_from_status") throw err;
+    return (await readStatus()) === "stopped" ? "stopped" : "not-paused";
+  }
 }
 
 /** Resolve the producing run's template (the agent that must repair). */
