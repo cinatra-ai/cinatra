@@ -6,7 +6,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // Only the persistence, queue and identity ports are replaced; the real
 // changes-requested composer and the real repair drain run.
 const ports = vi.hoisted(() => ({
-  gates: [] as Array<{ id: string; runId: string; orgId: string; reviewTaskId: string; status: string }>,
+  gates: [] as Array<{ id: string; runId: string; orgId: string; reviewTaskId: string; status: string;
+    pinnedTargets?: unknown[]; createdAt?: Date }>,
   run: null as null | { id: string; orgId: string; templateId: string; runBy: string | null; status: string },
   repairs: [] as Array<Record<string, unknown>>,
   repairCapable: true,
@@ -19,6 +20,7 @@ const ports = vi.hoisted(() => ({
   releases: [] as unknown[],
   escalations: [] as Record<string, unknown>[],
   dispatched: [] as string[],
+  cleared: [] as unknown[][],
 }));
 
 vi.mock("server-only", () => ({}));
@@ -34,7 +36,10 @@ vi.mock("../db", async () => {
       if (params.includes("pending")) {
         return ports.gates.filter((g) => g.status === "pending" && params.includes(g.runId) && params.includes(g.orgId));
       }
-      return ports.gates.filter((g) => params.includes(g.id) && params.includes(g.orgId));
+      const byId = ports.gates.filter((g) => params.includes(g.id) && params.includes(g.orgId));
+      if (byId.length > 0) return byId;
+      // A read of every gate of one run (the declared-gate lookup, the pause witness).
+      return ports.gates.filter((g) => params.includes(g.runId) && params.includes(g.orgId));
     }
     if (name === "agent_runs") {
       if (!ports.run || !params.includes(ports.run.id)) return [];
@@ -123,6 +128,7 @@ vi.mock("../lifecycle-coordinator", async () => {
   const store = await import("../store");
   return {
     launchAgentRun: async (args: unknown) => { ports.launched.push(args); },
+    clearRunLifecycleMoment: async (...args: unknown[]) => { ports.cleared.push(args); },
     advanceAgentRun: async (input: {
       run: { id: string };
       release: { from: string; to: string; dispatch: { kind: string } };
@@ -184,7 +190,7 @@ function requestedRepair(over: Record<string, unknown> = {}): Record<string, unk
 beforeEach(() => {
   ports.gates = []; ports.run = null; ports.repairs = []; ports.event = null; ports.gate = null;
   ports.recorded = []; ports.transitions = []; ports.transitionFailure = null; ports.launched = []; ports.releases = [];
-  ports.escalations = []; ports.dispatched = []; ports.repairCapable = true;
+  ports.escalations = []; ports.dispatched = []; ports.repairCapable = true; ports.cleared = [];
 });
 
 describe("cinatra#4245 — a comment on a declared review gate files a change request", () => {
@@ -224,9 +230,14 @@ describe("cinatra#4245 — a comment on a declared review gate files a change re
       expect((await comment()).ok).toBe(false);
       expect(ports.recorded).toHaveLength(0);
     });
-    it("another pending gate of the same review step of that run", async () => {
+    it("a produced event not yet linked but already processed, or one the link would give another gate", async () => {
       arrangeEligible();
-      ports.gates.push({ id: "gate-declared-2", runId: RUN, orgId: ORG, reviewTaskId: `${TASK}#2`, status: "pending" });
+      ports.gates[0].pinnedTargets = [TARGET];
+      ports.event = { ...ports.event, continuationAddress: null, status: "processed" };
+      expect((await comment()).ok).toBe(false);
+      ports.gates.unshift({ id: "gate-declared-older", runId: RUN, orgId: ORG, reviewTaskId: "wayflow-older-step",
+        status: "resolved", pinnedTargets: [TARGET] });
+      ports.event = { ...ports.event, status: "pending" };
       expect((await comment()).ok).toBe(false);
       expect(ports.recorded).toHaveLength(0);
     });
@@ -253,6 +264,57 @@ describe("cinatra#4245 — a comment on a declared review gate files a change re
       expect((await comment()).ok).toBe(false);
       expect(ports.recorded).toHaveLength(0);
     });
+  });
+});
+
+describe("cinatra#4245 — review fold: race, families", () => {
+  it("a comment before the produced event is linked files the change request on the gate the link will name", async () => {
+    arrangeEligible();
+    ports.gates[0].pinnedTargets = [TARGET];
+    ports.event = { ...ports.event, continuationAddress: null, status: "pending" };
+    const result = await comment();
+    expect(result.ok).toBe(true);
+    expect(ports.recorded).toHaveLength(1);
+    expect(ports.recorded[0]).toMatchObject({ request: { gateId: GATE, continuationAddress: GATE } });
+  });
+
+  it("each gate of a per-artifact review step takes its own change request while a sibling gate is pending", async () => {
+    arrangeEligible();
+    ports.gates.push({ id: "gate-declared-2", runId: RUN, orgId: ORG, reviewTaskId: `${TASK}#2`, status: "pending" });
+    const result = await comment();
+    expect(result.ok).toBe(true);
+    expect(ports.recorded).toHaveLength(1);
+    expect(ports.recorded[0]).toMatchObject({ request: { gateId: GATE, continuationAddress: GATE } });
+  });
+});
+
+describe("cinatra#4245 — review fold: the stop is bound to the pause, and the moment is cleared", () => {
+  it("a run that went on and waits at a later declared review step is not stopped there", async () => {
+    arrangeEligible();
+    ports.gates = [
+      { id: GATE, runId: RUN, orgId: ORG, reviewTaskId: TASK, status: "resolved", createdAt: new Date("2026-10-21T06:00:00Z") },
+      { id: "gate-later", runId: RUN, orgId: ORG, reviewTaskId: "wayflow-later-step", status: "pending",
+        createdAt: new Date("2026-10-21T06:05:00Z") },
+    ];
+    ports.repairs = [requestedRepair()];
+    const summary = await dispatchPendingProducerRepairs();
+    expect(ports.transitions).toHaveLength(0);
+    expect(ports.run!.status).toBe("pending_approval");
+    expect(summary).toMatchObject({ escalated: 1, dispatched: 0 });
+    expect(ports.launched).toHaveLength(0);
+  });
+
+  it("the stopped run's lifecycle moment is cleared through the coordinator, on the stop and on a converging drain", async () => {
+    arrangeEligible();
+    ports.repairs = [requestedRepair()];
+    await dispatchPendingProducerRepairs();
+    expect(ports.cleared).toEqual([[RUN, { orgId: ORG, purpose: "agent-run-dispatch" }]]);
+
+    ports.cleared = [];
+    ports.repairs = [requestedRepair({ id: "repair-2" })];
+    await dispatchPendingProducerRepairs();
+    expect(ports.run!.status).toBe("stopped");
+    expect(ports.cleared).toEqual([[RUN, { orgId: ORG, purpose: "agent-run-dispatch" }]]);
   });
 });
 

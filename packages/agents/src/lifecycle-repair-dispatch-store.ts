@@ -87,7 +87,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 
 import { db } from "./db";
 import { agentRuns, agentTemplates, artifactReviewGates, lifecycleRepair } from "./schema";
-import { advanceAgentRun, launchAgentRun } from "./lifecycle-coordinator";
+import { advanceAgentRun, clearRunLifecycleMoment, launchAgentRun } from "./lifecycle-coordinator";
 import { markRepairDispatched } from "./lifecycle-repair-store";
 
 import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
@@ -438,6 +438,13 @@ export async function dispatchPendingProducerRepairs(opts?: {
 /** The review-task prefix of a review step a flow declares in its own template. */
 const DECLARED_REVIEW_TASK_PREFIX = "wayflow-";
 
+/** The pause a declared gate belongs to: its task id without the per-artifact
+ * `#<n>` leg suffix (`baseReviewTaskId` of the review-target model). */
+function declaredPauseOf(reviewTaskId: string): string {
+  const cut = reviewTaskId.indexOf("#");
+  return cut === -1 ? reviewTaskId : reviewTaskId.slice(0, cut);
+}
+
 /**
  * Stop the run paused at the declared review gate a repair was requested on
  * (cinatra#4245). `not-declared` — the repair's gate is not a declared review
@@ -445,24 +452,49 @@ const DECLARED_REVIEW_TASK_PREFIX = "wayflow-";
  * run is stopped now, or already was; `not-paused` — the run left its review
  * step some other way, so the caller escalates instead of dispatching.
  *
+ * BOUND TO THE PAUSE, NOT ONLY TO A STATUS. `pending_approval` alone does not
+ * say WHERE the run waits: a run that went on and paused at a later review step
+ * reads the same status, and stopping it there would end a review the change
+ * request was never made on. So the stop also requires that the run has opened
+ * no declared gate of another pause after this gate and waits at no other
+ * declared pause (the gate itself was resolved `changes_requested` in the same
+ * transaction that wrote the repair row this drain reads).
+ * The resume worker never resumes a pause one of whose gates has a change
+ * request, so once these hold, nothing the review flow does moves the run off
+ * this pause before the compare-and-set below.
+ *
  * Idempotent: the move is a compare-and-set `pending_approval` → `stopped`
  * through the lifecycle coordinator's `advanceAgentRun` (the one entry that
  * moves a parked run); a second call (the next drain after a crash)
  * reads `stopped` and changes nothing. A transient failure throws, so the row
  * stays `requested` and the next drain tries again before any repair run starts.
+ *
+ * THE MOMENT GOES WITH THE PAUSE. The release dispatches nothing (a stopped run
+ * is never queued again), so the coordinator leaves the clear to its caller;
+ * this function clears the run's lifecycle moment and card through the
+ * coordinator's own `clearRunLifecycleMoment` once the run reads `stopped`.
  */
 export async function stopRunPausedAtDeclaredGate(row: {
   gateId: string;
   orgId: string;
 }): Promise<"not-declared" | "stopped" | "not-paused"> {
   const [gate] = await db
-    .select({ runId: artifactReviewGates.runId, reviewTaskId: artifactReviewGates.reviewTaskId })
+    .select({
+      runId: artifactReviewGates.runId,
+      reviewTaskId: artifactReviewGates.reviewTaskId,
+      createdAt: artifactReviewGates.createdAt,
+    })
     .from(artifactReviewGates)
     .where(and(eq(artifactReviewGates.id, row.gateId), eq(artifactReviewGates.orgId, row.orgId)))
     .limit(1);
   if (!gate || typeof gate.reviewTaskId !== "string" || !gate.reviewTaskId.startsWith(DECLARED_REVIEW_TASK_PREFIX)) {
     return "not-declared";
   }
+  const authority = mintLifecycleRepairDispatchAuthority(row.orgId);
+  const stopped = async (): Promise<"stopped"> => {
+    await clearRunLifecycleMoment(gate.runId, authority);
+    return "stopped";
+  };
   const readStatus = async (): Promise<string | null> => {
     const [run] = await db
       .select({ status: agentRuns.status })
@@ -472,8 +504,25 @@ export async function stopRunPausedAtDeclaredGate(row: {
     return run?.status ?? null;
   };
   const status = await readStatus();
-  if (status === "stopped") return "stopped";
+  if (status === "stopped") return stopped();
   if (status !== "pending_approval") return "not-paused";
+  const pause = declaredPauseOf(gate.reviewTaskId);
+  const runGates = await db
+    .select({
+      id: artifactReviewGates.id,
+      reviewTaskId: artifactReviewGates.reviewTaskId,
+      status: artifactReviewGates.status,
+      createdAt: artifactReviewGates.createdAt,
+    })
+    .from(artifactReviewGates)
+    .where(and(eq(artifactReviewGates.runId, gate.runId), eq(artifactReviewGates.orgId, row.orgId)));
+  const waitsElsewhere = runGates.some((other) => {
+    if (typeof other.reviewTaskId !== "string" || !other.reviewTaskId.startsWith(DECLARED_REVIEW_TASK_PREFIX)) return false;
+    if (declaredPauseOf(other.reviewTaskId) === pause) return false;
+    const later = other.createdAt instanceof Date && gate.createdAt instanceof Date && other.createdAt > gate.createdAt;
+    return later || other.status === "pending";
+  });
+  if (waitsElsewhere) return "not-paused";
   try {
     await advanceAgentRun({
       run: { id: gate.runId, orgId: row.orgId, status: "pending_approval" },
@@ -487,14 +536,14 @@ export async function stopRunPausedAtDeclaredGate(row: {
         },
         onLostRace: "throw",
       },
-      authority: mintLifecycleRepairDispatchAuthority(row.orgId),
+      authority,
     });
-    return "stopped";
+    return stopped();
   } catch (err) {
     // Lost the compare-and-set: a concurrent drain stopped it (converged), or the
     // run moved on its own (escalate). Anything else is transient: rethrow.
     if ((err as { code?: string } | null)?.code !== "stale_from_status") throw err;
-    return (await readStatus()) === "stopped" ? "stopped" : "not-paused";
+    return (await readStatus()) === "stopped" ? stopped() : "not-paused";
   }
 }
 

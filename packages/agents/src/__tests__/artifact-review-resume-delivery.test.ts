@@ -64,7 +64,7 @@ vi.mock("../wayflow-url", () => ({
 
 const gateStoreMock = vi.hoisted(() => ({
   claimPendingResumeIntents: vi.fn(),
-  listReviewGatesForRun: vi.fn<(runId: string) => Promise<Array<{ runId?: string; orgId?: string; reviewTaskId: string; status: string; pinnedTargets?: unknown }>>>(async () => []),
+  listReviewGatesForRun: vi.fn<(runId: string) => Promise<Array<{ runId?: string; orgId?: string; reviewTaskId: string; status: string; disposition?: string | null; pinnedTargets?: unknown }>>>(async () => []),
   markResumeIntentDelivered: vi.fn(),
 }));
 vi.mock("../artifact-review-gate-store", () => gateStoreMock);
@@ -180,6 +180,19 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
   it("keeps the original pause parked while another artifact leg is pending", async () => {
     gateStoreMock.listReviewGatesForRun.mockResolvedValue([
       ...familyRows(["resolved", "pending"]),
+    ]);
+    const outcome = await deliverArtifactReviewResumeIntent(intent());
+    expect(outcome).toBe("already-advanced");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-1", "lease-abc");
+  });
+
+  it("cinatra#4245: an approved leg does not resume a pause whose other leg has a change request", async () => {
+    const rows = familyRows(["resolved", "resolved"]);
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue([
+      { ...rows[0], disposition: "approved" },
+      { ...rows[1], disposition: "changes_requested" },
     ]);
     const outcome = await deliverArtifactReviewResumeIntent(intent());
     expect(outcome).toBe("already-advanced");

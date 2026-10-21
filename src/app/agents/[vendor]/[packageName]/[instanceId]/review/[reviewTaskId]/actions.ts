@@ -147,20 +147,29 @@ export async function submitReviewDecisionAction(
   // A review step a flow declares in its own template (a `wayflow-` gate,
   // cinatra#4245) takes the same road, but only when the store finds every
   // condition of a change request met (one pinned target, the produced event
-  // naming this gate, an effects-gated continuation, a producer that can repair,
-  // no other pending gate of the same step). Every other declared gate returns
+  // naming this gate or about to be linked to it, an effects-gated continuation,
+  // a producer that can repair). Every other declared gate returns
   // the store's not-eligible refusal, and the comment falls through to the
   // byte-identical annotation below — never a block or an error.
+  //
+  // On a declared gate the change request is TERMINAL for the paused run: it
+  // resolves the gate and stops the run before the repair starts. So it needs
+  // the access a terminal decision needs (`approveHitl`, the same check the
+  // decision core's approve road runs above), not only the comment's
+  // `respondToHitl`. A reviewer who may only respond keeps the plain annotation.
   const trimmedComment = comment?.trim() ?? "";
   const lifecycleGate = isAutoReviewTaskId(reviewTaskId) && !isBatchAutoReviewTaskId(reviewTaskId);
   const declaredGate = reviewTaskId.startsWith(DECLARED_REVIEW_TASK_PREFIX);
-  if (
+  const changeRequestCandidate =
     disposition === "comment" &&
     trimmedComment.length > 0 &&
     isLifecycleReviewOrchestrationActive() &&
     (lifecycleGate || declaredGate) &&
-    pinnedTargets.length === 1
-  ) {
+    pinnedTargets.length === 1;
+  const mayRequestChanges =
+    changeRequestCandidate &&
+    (!declaredGate || (await enforceReviewDecisionAccess({ runId, op: "approveHitl", actorCtx })).ok);
+  if (mayRequestChanges) {
     const result = await submitReviewSurfaceChangesRequested({
       runId,
       reviewTaskId,

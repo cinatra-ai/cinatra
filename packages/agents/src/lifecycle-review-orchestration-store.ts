@@ -64,6 +64,7 @@ import {
   ArtifactReviewGateError,
 } from "./artifact-review-gate-store";
 import { markProducedEventProcessed } from "./lifecycle-produced-outbox-store";
+import { findDeclaredGateForPair } from "./lifecycle-declared-review-gate";
 import { dispatchAutoGateOpen, dispatchAutoGateResolved } from "./run-wait-notifier";
 import { resolveOrgPolicyRule } from "./lifecycle-policy-store";
 import { maybeParkCheckpoint, sweepParks } from "./lifecycle-continuation-park-store";
@@ -562,49 +563,9 @@ export type OrchestrateOutcome =
   | "not-classifiable"
   | "already-processed";
 
-/** The review-task prefix of a template-declared review gate: `wayflow-<taskId>`,
- * and `wayflow-<taskId>#<n>` for its per-artifact legs (execution.ts). */
-const DECLARED_REVIEW_TASK_PREFIX = "wayflow-";
-
-/**
- * The template-declared review gate that already reviews this event's EXACT
- * revision, or null (cinatra#4225).
- *
- * A declared gate is minted by the run's own review step and pins the revisions
- * it reviews. Opening an automatic gate over a revision such a gate pins makes
- * the person review the same revision twice: one Approve resolves the declared
- * gate and the run then waits on the automatic one. So the produced path reuses
- * the declared gate instead. The match is strict: the SAME run and org, a
- * `wayflow-` task id, and a pin on the exact artifact AND representation
- * revision. A pending or a resolved declared gate both count — either way the
- * revision has its review. Anything else returns null and the automatic gate
- * opens exactly as before.
- */
-async function findDeclaredGateForPair(row: ProducedEventRow): Promise<string | null> {
-  if (!row.producerRunId) return null;
-  const gates = await db
-    .select({
-      id: artifactReviewGates.id,
-      orgId: artifactReviewGates.orgId,
-      reviewTaskId: artifactReviewGates.reviewTaskId,
-      pinnedTargets: artifactReviewGates.pinnedTargets,
-    })
-    .from(artifactReviewGates)
-    .where(and(eq(artifactReviewGates.runId, row.producerRunId), eq(artifactReviewGates.orgId, row.orgId)))
-    .orderBy(asc(artifactReviewGates.createdAt));
-  for (const gate of gates) {
-    if (gate.orgId !== row.orgId) continue;
-    if (typeof gate.reviewTaskId !== "string" || !gate.reviewTaskId.startsWith(DECLARED_REVIEW_TASK_PREFIX)) continue;
-    const pins: unknown[] = Array.isArray(gate.pinnedTargets) ? gate.pinnedTargets : [];
-    const pinsPair = pins.some((t) => {
-      if (typeof t !== "object" || t === null) return false;
-      const pin = t as { artifactId?: unknown; representationRevisionId?: unknown };
-      return pin.artifactId === row.artifactId && pin.representationRevisionId === row.representationRevisionId;
-    });
-    if (pinsPair) return gate.id;
-  }
-  return null;
-}
+// The declared gate an event's revision already has (cinatra#4225) is read
+// through `findDeclaredGateForPair` (./lifecycle-declared-review-gate), the one
+// answer the change-request composer reads too (cinatra#4245).
 
 /**
  * Link a produced event to the declared gate that already reviews its revision,

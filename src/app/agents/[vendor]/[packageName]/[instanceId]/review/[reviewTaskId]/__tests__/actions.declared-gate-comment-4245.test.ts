@@ -42,6 +42,24 @@ describe("cinatra#4245 — a comment on a declared review gate", () => {
     expect(p.enforce).toHaveBeenCalledWith({ runId: "run", op: "respondToHitl", actorCtx: actor });
   });
 
+  it("a change request on a declared gate needs approve access: respond access alone keeps the annotation", async () => {
+    p.enforce.mockImplementation(async ({ op }: { op: string }) => ({ ok: op === "respondToHitl" }));
+    const outcome = await submitReviewDecisionAction("run", TASK, "comment", "Shorten it.");
+    expect(p.enforce).toHaveBeenCalledWith({ runId: "run", op: "approveHitl", actorCtx: actor });
+    expect(p.changes).not.toHaveBeenCalled();
+    expect(outcome).toEqual({ kind: "annotated" });
+    expect(p.decision).toHaveBeenCalledWith({ decision: expect.objectContaining({ disposition: "comment", comment: "Shorten it." }),
+      actorCtx: actor });
+  });
+
+  it("a comment on an automatic lifecycle gate keeps its respond-access road", async () => {
+    p.enforce.mockImplementation(async ({ op }: { op: string }) => ({ ok: op === "respondToHitl" }));
+    const outcome = await submitReviewDecisionAction("run", "lifecycle-review:event-1", "comment", "Shorten it.");
+    expect(p.changes).toHaveBeenCalledTimes(1);
+    expect(p.enforce).not.toHaveBeenCalledWith(expect.objectContaining({ op: "approveHitl" }));
+    expect(outcome).toEqual({ kind: "changes-requested", status: "requested", idempotent: false });
+  });
+
   it("a store refusal (not eligible) keeps the annotation road", async () => {
     p.changes.mockResolvedValue({ ok: false, code: "declared-gate-not-eligible", error: "not eligible" });
     const outcome = await submitReviewDecisionAction("run", TASK, "comment", "Shorten it.");

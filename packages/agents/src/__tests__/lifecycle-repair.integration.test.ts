@@ -821,6 +821,53 @@ describe.skipIf(!HAS_DB)("cinatra#2040 — repair loop (real store)", () => {
     expect(await runStatus(g.runId)).toBe("stopped");
   });
 
+  it("SURFACE: a comment before the sweep links the produced event is filed on the gate the link will name, and the stop clears the run's lifecycle moment", async () => {
+    const runId = `run-wf-${randomUUID()}`;
+    const artifactId = `art-${randomUUID()}`;
+    const rev = `rev-${randomUUID()}`;
+    await seedRepairCapableProducer(runId);
+    await pool(
+      `UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status='pending_approval', lifecycle_moment='review',
+         lifecycle_card_kind='review', lifecycle_card_ref='card-1' WHERE id=$1`,
+      [runId],
+    );
+    await pool(
+      `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $1, $1, now()) ON CONFLICT (id) DO NOTHING`,
+      [ORG],
+    );
+    const reviewTaskId = `wayflow-${randomUUID()}`;
+    const wf = await gateStore.emitArtifactReviewGate({
+      runId,
+      orgId: ORG,
+      reviewTaskId,
+      targets: [{ artifactId, representationRevisionId: rev }],
+      expiresAt: null,
+    });
+    // The produced event is still pending with no continuation address: the
+    // sweep has not linked it to the declared gate yet.
+    await produce("document", { artifactId, representationRevisionId: rev, producerRunId: runId });
+    const cr = await crStore.recordReviewSurfaceChangesRequested({
+      runId,
+      reviewTaskId,
+      baseTarget: { artifactId, representationRevisionId: rev },
+      currentBaseRevisionId: rev,
+      feedback: "Shorten the second paragraph.",
+    });
+    expect(cr.ok).toBe(true);
+    const rows = await pool(
+      `SELECT status, continuation_address FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE gate_id=$1`,
+      [wf.gateId],
+    );
+    expect(rows.rows).toEqual([{ status: "requested", continuation_address: wf.gateId }]);
+    const { stopRunPausedAtDeclaredGate } = await import("../lifecycle-repair-dispatch-store");
+    expect(await stopRunPausedAtDeclaredGate({ gateId: wf.gateId as string, orgId: ORG })).toBe("stopped");
+    const run = await pool(
+      `SELECT status, lifecycle_moment, lifecycle_card_kind, lifecycle_card_ref FROM "${q(TEST_SCHEMA)}"."agent_runs" WHERE id=$1`,
+      [runId],
+    );
+    expect(run.rows).toEqual([{ status: "stopped", lifecycle_moment: null, lifecycle_card_kind: null, lifecycle_card_ref: null }]);
+  });
+
   it("SURFACE: MULTI-CYCLE — a 2-round repair chain does NOT strand the held effect; approve of the final successor releases it (cinatra#2063 codex fix)", async () => {
     // Round 1: auto gate on an external-publish artifact; the surface requests
     // changes; the producer repairs into a successor gate (the ORIGINAL event

@@ -36,17 +36,18 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { createHash } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { pgSchema, text } from "drizzle-orm/pg-core";
 
 import { db } from "./db";
-import { agentRuns, agentTemplates, artifactReviewGates } from "./schema";
+import { agentRuns, agentTemplates } from "./schema";
 import {
   coreRepairsObjectType,
   type CoreRepairableProducedRole,
 } from "./lifecycle-repair-producer-registry";
 import { readReviewGate } from "./artifact-review-gate-store";
 import { readProducedEvent } from "./lifecycle-produced-outbox-store";
+import { findDeclaredGateForPair } from "./lifecycle-declared-review-gate";
 import {
   recordChangesRequested,
   readRepair,
@@ -89,31 +90,6 @@ export function isDeclaredReviewTaskId(reviewTaskId: string): boolean {
  * change request needs. The review action maps it back to the unchanged
  * annotation road, so the comment stays a plain note. */
 export const DECLARED_GATE_NOT_ELIGIBLE = "declared-gate-not-eligible";
-
-/** The review step a declared gate belongs to: its task id without the
- * per-artifact `#<n>` leg suffix. */
-function declaredReviewStep(reviewTaskId: string): string {
-  const hash = reviewTaskId.indexOf("#");
-  return hash === -1 ? reviewTaskId : reviewTaskId.slice(0, hash);
-}
-
-/** Is another gate of the same declared review step of this run still pending? */
-async function hasOtherPendingGateOfStep(gate: { id: string; runId: string; orgId: string; reviewTaskId: string }): Promise<boolean> {
-  const step = declaredReviewStep(gate.reviewTaskId);
-  const rows = await db
-    .select({ id: artifactReviewGates.id, reviewTaskId: artifactReviewGates.reviewTaskId })
-    .from(artifactReviewGates)
-    .where(
-      and(
-        eq(artifactReviewGates.runId, gate.runId),
-        eq(artifactReviewGates.orgId, gate.orgId),
-        eq(artifactReviewGates.status, "pending"),
-      ),
-    );
-  return rows.some(
-    (r) => r.id !== gate.id && typeof r.reviewTaskId === "string" && declaredReviewStep(r.reviewTaskId) === step,
-  );
-}
 
 export interface RecordReviewSurfaceChangesRequestedInput {
   /** The reviewed gate's run id (the route param — the auto-gate's producing run). */
@@ -305,20 +281,39 @@ export async function recordReviewSurfaceChangesRequested(
 
   // A declared gate needs the produced event of its target's revision to name
   // THIS gate as its continuation address, in the gate's organization, with the
-  // gate's run as the producing run, on the effects-gated continuation; and no
-  // other gate of the same review step of that run may still be pending (a
-  // change request stops the paused run, which would strand that other gate).
+  // gate's run as the producing run, on the effects-gated continuation.
+  //
+  // THE LINK MAY NOT HAVE RUN YET. The sweep links a produced event to its
+  // declared gate asynchronously, so a reviewer can comment while the event is
+  // still pending with no address. That comment is not demoted to a note: when
+  // the event is still pending and the sweep's own answer
+  // (`findDeclaredGateForPair`, the one function the link reads) is THIS gate,
+  // the change request is filed against this gate now, and the later link writes
+  // the same gate onto the event. One writer each: this composer writes the
+  // gate's resolution and the repair row in their one transaction; the sweep
+  // alone writes the event's link. A processed event with no address, or one
+  // the sweep would link elsewhere, stays a plain note.
+  //
+  // Each gate of a per-artifact review step pins exactly one target and takes
+  // its own change request; a sibling gate still pending does not demote it
+  // (the repair drain stops the paused run, and the resume worker never resumes
+  // a pause one of whose gates has a change request).
+  let linkedAddress: string | null = event?.continuationAddress ?? null;
   if (declared) {
-    if (!event || event.continuationAddress !== gate.id) return notEligible("no produced event names this gate");
+    if (!event) return notEligible("no produced event names this gate");
     if (event.orgId !== gate.orgId) return notEligible("the produced event belongs to another organization");
     if (event.producerRunId !== gate.runId) return notEligible("the produced event names another producing run");
     if (event.continuationMode !== "async_effects_gated") return notEligible("the continuation is not effects-gated");
-    if (await hasOtherPendingGateOfStep(gate)) return notEligible("another gate of the same review step is pending");
+    if (event.continuationAddress === null && event.status === "pending" &&
+        (await findDeclaredGateForPair(event)) === gate.id) {
+      linkedAddress = gate.id;
+    }
+    if (linkedAddress !== gate.id) return notEligible("no produced event names this gate");
   }
 
   const continuationMode: ContinuationMode =
     event?.continuationMode === "checkpointed" ? "checkpointed" : "async_effects_gated";
-  const continuationAddress = event?.continuationAddress ?? null;
+  const continuationAddress = linkedAddress;
   const producerRunId = event?.producerRunId ?? gate.runId;
   const producerAgentId = event?.producerAgentId ?? null;
 
