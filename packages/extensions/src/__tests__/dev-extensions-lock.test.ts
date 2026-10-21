@@ -102,7 +102,7 @@ describe("dev-extensions clone-back lock (pinned CI universe)", () => {
 const PINNED_FIXES: Record<string, string> = {
   // The Twenty connector reads the event-stream response frame that answers
   // its own request, so the list picker can read the CRM lists.
-  "@cinatra-ai/twenty-connector": "90bce5fd84953210150af6887999e1f797835bc5",
+  "@cinatra-ai/twenty-connector": "d8f3451f38b6201fd7f8e5895a8b92fb29955bcf",
 };
 
 describe("dev-extensions clone-back lock (pinned fixes)", () => {

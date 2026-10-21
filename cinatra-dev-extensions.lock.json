@@ -400,7 +400,7 @@
     {
       "packageName": "@cinatra-ai/twenty-connector",
       "repo": "cinatra-ai/twenty-connector",
-      "resolvedSha": "90bce5fd84953210150af6887999e1f797835bc5"
+      "resolvedSha": "d8f3451f38b6201fd7f8e5895a8b92fb29955bcf"
     },
     {
       "packageName": "@cinatra-ai/web-research-agent",
