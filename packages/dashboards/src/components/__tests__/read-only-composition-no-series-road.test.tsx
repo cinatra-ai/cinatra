@@ -10,7 +10,9 @@
 // Unlike read-only-composition-data-road.test.tsx, nothing of drizzle-cube is
 // substituted here: the layout is the real grid's. `fetch` is a recording stub,
 // and IntersectionObserver reports every portlet as visible, so a portlet that
-// would load does load.
+// would load does load. n1 reads the road's query client as the providers mount
+// it (a spy on QueryClient.prototype.mount that calls through), so it can run
+// every query the grid holds and read who answers it.
 //
 //   pnpm --filter @cinatra-ai/dashboards exec vitest run \
 //     src/components/__tests__/read-only-composition-no-series-road.test.tsx
@@ -19,6 +21,7 @@ import "./jsdom-shims";
 import React from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, type Query } from "@tanstack/react-query";
 
 import { ReadOnlyComposedDashboard } from "@cinatra-ai/sdk-dashboard/components";
 
@@ -91,28 +94,110 @@ function heightsOf(container: HTMLElement, selector: string): string[] {
   return Array.from(container.querySelectorAll<HTMLElement>(selector)).map((el) => el.style.height);
 }
 
+const EMPTY = "No data available";
+const UNKNOWN_QUERY = "The no-series road answers no such query.";
+
+/** The empty answer of each family the road knows, but `load` (a result set
+ *  with functions, read field by field below). */
+const EMPTY_ANSWERS: Readonly<Record<string, unknown>> = {
+  multiLoad: { data: [], resultSets: [], perQueryData: [], errors: [], firstError: null },
+  funnel: { rawData: [], executionTime: 0, cacheInfo: undefined },
+  flow: { rawData: [], executionTime: 0, cacheInfo: undefined },
+  retention: { rawData: [], executionTime: 0, cacheInfo: undefined },
+  meta: { meta: { cubes: [] }, labelMap: {} },
+};
+
+function loadingSpinners(): Element[] {
+  return Array.from(document.querySelectorAll('[role="status"][aria-label="Loading"]'));
+}
+
+/** The one query client the providers mounted: the no-series road's own (a cube
+ *  query on it is off). */
+function theRoadsClient(mounted: readonly unknown[]): QueryClient {
+  const clients = [...new Set(mounted)] as QueryClient[];
+  expect(clients).toHaveLength(1);
+  const client = clients[0] as QueryClient;
+  expect(client.defaultQueryOptions({ queryKey: ["cube", "load", "probe"] }).enabled).toBe(false);
+  return client;
+}
+
+/** A query that ran its function on the road: a family the road knows holds
+ *  that family's empty answer from a fetch that ran; any other query holds the
+ *  road's refusal. */
+function expectTheRoadsAnswer(query: Query) {
+  const [scope, family] = query.queryKey;
+  const name = JSON.stringify(query.queryKey);
+  if (scope === "cube" && family === "load") {
+    expect(query.state.status, name).toBe("success");
+    expect(query.state.dataUpdateCount, name).toBeGreaterThan(0);
+    const set = query.state.data as { loadResponse: unknown; rawData: () => unknown[] };
+    expect(set.loadResponse, name).toEqual({ data: [], annotation: {} });
+    expect(set.rawData(), name).toEqual([]);
+  } else if (scope === "cube" && typeof family === "string" && Object.hasOwn(EMPTY_ANSWERS, family)) {
+    expect(query.state.status, name).toBe("success");
+    expect(query.state.dataUpdateCount, name).toBeGreaterThan(0);
+    expect(query.state.data, name).toEqual(EMPTY_ANSWERS[family]);
+  } else {
+    expect(query.state.status, name).toBe("error");
+    expect(query.state.error?.message, name).toBe(UNKNOWN_QUERY);
+  }
+}
+
 describe("the no-series road lays the dashboard out with the real grid and fetches nothing (cinatra#3092)", () => {
   test("(n1) draws every portlet's title and makes no network call, even when each portlet is refreshed", async () => {
-    // CONFIGURED portlets each draw a refresh control, so the refresh is read:
-    // the test fails if there is none to click.
-    render(<Dashboard config={CONFIGURED} dataRoad={NONE} />);
-    await settle();
-    for (const portlet of CONFIGURED_PORTLETS) {
-      expect(screen.getByText(portlet.title)).toBeTruthy();
+    const mount = vi.spyOn(QueryClient.prototype, "mount");
+    try {
+      // CONFIGURED portlets each draw a refresh control, so the refresh is read:
+      // the test fails if there is none to click.
+      render(<Dashboard config={CONFIGURED} dataRoad={NONE} />);
+      await settle();
+      for (const portlet of CONFIGURED_PORTLETS) {
+        expect(screen.getByText(portlet.title)).toBeTruthy();
+      }
+      const refreshes = await waitFor(
+        () => {
+          const found = screen.getAllByTitle(/^Refresh portlet data/);
+          expect(found).toHaveLength(CONFIGURED_PORTLETS.length);
+          return found;
+        },
+        { timeout: 15_000 },
+      );
+      for (const refresh of refreshes) fireEvent.click(refresh);
+      await settle();
+      for (const refresh of refreshes) fireEvent.click(refresh, { shiftKey: true });
+      await settle();
+      expect(fetched).toEqual([]);
+
+      // The clicks above run no query function: every query on this road is off,
+      // and these portlets' refresh only invalidates or removes their query. A
+      // refresh through the query's observer (drizzle-cube 0.6.6's flow, funnel
+      // and retention portlets refetch so) runs the query's function even when
+      // the query is off. So each query the grid now holds is refetched that way:
+      // its function must be the road's own, which answers the family's empty
+      // answer and sends no request, never the grid's own, which fetches.
+      const queries = theRoadsClient(mount.mock.contexts).getQueryCache().getAll();
+      expect(queries.filter((query) => query.queryKey[0] === "cube" && query.queryKey[1] === "load").length).toBeGreaterThan(0);
+      await act(async () => {
+        for (const query of queries) {
+          const [observer] = query.observers;
+          if (observer) await observer.refetch();
+          else await query.fetch().catch(() => undefined);
+        }
+      });
+      expect(fetched).toEqual([]);
+      for (const query of queries) expectTheRoadsAnswer(query);
+      // What the portlets draw from those answers: each its empty state, none loads.
+      await waitFor(
+        () => {
+          expect(loadingSpinners()).toHaveLength(0);
+          expect(screen.getAllByText(EMPTY)).toHaveLength(CONFIGURED_PORTLETS.length);
+        },
+        { timeout: 15_000 },
+      );
+      expect(fetched).toEqual([]);
+    } finally {
+      mount.mockRestore();
     }
-    const refreshes = await waitFor(
-      () => {
-        const found = screen.getAllByTitle(/^Refresh portlet data/);
-        expect(found).toHaveLength(CONFIGURED_PORTLETS.length);
-        return found;
-      },
-      { timeout: 15_000 },
-    );
-    for (const refresh of refreshes) fireEvent.click(refresh);
-    await settle();
-    for (const refresh of refreshes) fireEvent.click(refresh, { shiftKey: true });
-    await settle();
-    expect(fetched).toEqual([]);
   });
 
   test("(n2) two configurations that differ only in grid.rowHeight (80 vs 160) draw different row sizing", async () => {
