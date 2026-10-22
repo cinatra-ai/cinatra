@@ -75,21 +75,16 @@ import {
   type ProducedWriteProvenance,
   type ReviewBinding,
 } from "@/lib/lifecycle/lifecycle-review-core";
-import {
-  producedEventId,
-  type ProducedEventKind,
-} from "@/lib/lifecycle/lifecycle-produced-event";
+import { producedEventId } from "@/lib/lifecycle/lifecycle-produced-event";
 import {
   autoReviewEventId,
   isAutoReviewTaskId,
   isBatchAutoReviewTaskId,
   batchPartitionReviewTaskId,
-  evaluateEffectHold,
   planReviewForEvent,
   type ProducedEventAxes,
   type ReviewOrchestrationContext,
   type ReviewOrchestrationPlan,
-  type EffectHoldVerdict,
 } from "@/lib/lifecycle/lifecycle-orchestration";
 import { partitionBatchTargets } from "@/lib/lifecycle/lifecycle-batch";
 import {
@@ -560,9 +555,81 @@ async function settleAlreadyLinkedEvent(row: ProducedEventRow): Promise<void> {
 
 export type OrchestrateOutcome =
   | "gate-created"
+  /** A template-declared gate of the same run already pins this exact revision;
+   * the event was linked to it and no automatic gate was opened (cinatra#4225). */
+  | "gate-reused"
   | "no-gate"
   | "not-classifiable"
   | "already-processed";
+
+/** The review-task prefix of a template-declared review gate: `wayflow-<taskId>`,
+ * and `wayflow-<taskId>#<n>` for its per-artifact legs (execution.ts). */
+const DECLARED_REVIEW_TASK_PREFIX = "wayflow-";
+
+/**
+ * The template-declared review gate that already reviews this event's EXACT
+ * revision, or null (cinatra#4225).
+ *
+ * A declared gate is minted by the run's own review step and pins the revisions
+ * it reviews. Opening an automatic gate over a revision such a gate pins makes
+ * the person review the same revision twice: one Approve resolves the declared
+ * gate and the run then waits on the automatic one. So the produced path reuses
+ * the declared gate instead. The match is strict: the SAME run and org, a
+ * `wayflow-` task id, and a pin on the exact artifact AND representation
+ * revision. A pending or a resolved declared gate both count — either way the
+ * revision has its review. Anything else returns null and the automatic gate
+ * opens exactly as before.
+ */
+async function findDeclaredGateForPair(row: ProducedEventRow): Promise<string | null> {
+  if (!row.producerRunId) return null;
+  const gates = await db
+    .select({
+      id: artifactReviewGates.id,
+      orgId: artifactReviewGates.orgId,
+      reviewTaskId: artifactReviewGates.reviewTaskId,
+      pinnedTargets: artifactReviewGates.pinnedTargets,
+    })
+    .from(artifactReviewGates)
+    .where(and(eq(artifactReviewGates.runId, row.producerRunId), eq(artifactReviewGates.orgId, row.orgId)))
+    .orderBy(asc(artifactReviewGates.createdAt));
+  for (const gate of gates) {
+    if (gate.orgId !== row.orgId) continue;
+    if (typeof gate.reviewTaskId !== "string" || !gate.reviewTaskId.startsWith(DECLARED_REVIEW_TASK_PREFIX)) continue;
+    const pins: unknown[] = Array.isArray(gate.pinnedTargets) ? gate.pinnedTargets : [];
+    const pinsPair = pins.some((t) => {
+      if (typeof t !== "object" || t === null) return false;
+      const pin = t as { artifactId?: unknown; representationRevisionId?: unknown };
+      return pin.artifactId === row.artifactId && pin.representationRevisionId === row.representationRevisionId;
+    });
+    if (pinsPair) return gate.id;
+  }
+  return null;
+}
+
+/**
+ * Link a produced event to the declared gate that already reviews its revision,
+ * in the automatic road's own order: park (checkpointed) -> link -> mark. No
+ * notification and no suggestions: the declared gate is not new, and its own
+ * road already announced it.
+ */
+async function reuseDeclaredGate(
+  row: ProducedEventRow,
+  plan: Extract<ReviewOrchestrationPlan, { action: "create-gate" }>,
+  gateId: string,
+): Promise<void> {
+  if (plan.continuationMode === "checkpointed" && plan.park) {
+    await maybeParkCheckpoint(plan.park, {
+      runId: row.producerRunId ?? orphanRunId(row.eventId),
+      eventId: row.eventId,
+      policyDecisionId: gateId,
+    });
+  }
+  await db
+    .update(artifactProducedOutbox)
+    .set({ continuationAddress: gateId })
+    .where(and(eq(artifactProducedOutbox.eventId, row.eventId), isNull(artifactProducedOutbox.continuationAddress)));
+  await markProducedEventProcessed(row.eventId);
+}
 
 /**
  * Orchestrate ONE produced event: resolve context, plan the REVIEW checkpoint,
@@ -739,6 +806,14 @@ export async function orchestrateProducedEvent(row: ProducedEventRow): Promise<O
     return "no-gate";
   }
 
+  // A template-declared gate of this run already reviews this exact revision:
+  // reuse it rather than open a second review of the same revision (cinatra#4225).
+  const declaredGateId = await findDeclaredGateForPair(row);
+  if (declaredGateId) {
+    await reuseDeclaredGate(row, plan, declaredGateId);
+    return "gate-reused";
+  }
+
   // create-gate. The producing run is the gate's run when known; a run-less
   // agent_produced event falls back to a synthetic, ops-visible id.
   const runId = row.producerRunId ?? orphanRunId(row.eventId);
@@ -896,7 +971,7 @@ async function produceSuggestionsForPinnedTargets(
 
 function tallyOutcome(outcome: OrchestrateOutcome, summary: ReviewOrchestrationSweepSummary): void {
   if (outcome === "gate-created") summary.gatesCreated += 1;
-  else if (outcome === "no-gate" || outcome === "already-processed") summary.noGate += 1;
+  else if (outcome === "no-gate" || outcome === "already-processed" || outcome === "gate-reused") summary.noGate += 1;
   else summary.notClassifiable += 1;
 }
 
@@ -1279,6 +1354,14 @@ async function orchestrateProducedBatch(
       summary.noGate += 1;
       continue;
     }
+    // A declared gate already reviews this revision (cinatra#4225): link it there
+    // and keep it OUT of the sealed membership, so no automatic gate pins it.
+    const declaredGateId = await findDeclaredGateForPair(row);
+    if (declaredGateId) {
+      await reuseDeclaredGate(row, plan, declaredGateId);
+      summary.noGate += 1;
+      continue;
+    }
     fired.push({ row, plan });
   }
   if (fired.length === 0) {
@@ -1490,227 +1573,12 @@ function targetKeyOf(t: { artifactId: string; representationRevisionId: string }
 }
 
 // ---------------------------------------------------------------------------
-// Effects-gating predicate (the store half of `isArtifactEffectHeld`).
+// Effects-gating predicate — lives in lifecycle-effect-hold-store (cinatra#3862
+// leg 1); re-exported here so every existing importer is unchanged.
 // ---------------------------------------------------------------------------
 
-/**
- * Decide whether an artifact revision's downstream EXTERNAL effect is held by a
- * pending review. The external-effect paths (publish / visibility promotion /
- * pipeline hand-off) call this BEFORE acting: an ungated / non-external artifact
- * flows immediately; an external one is HELD fail-closed until its review gate
- * resolves. Pure verdict via `evaluateEffectHold`; this half resolves the facts
- * (the produced-event row + its linked gate status).
- */
-export async function isArtifactEffectHeld(input: {
-  artifactId: string;
-  representationRevisionId: string;
-  eventKind?: ProducedEventKind;
-}): Promise<EffectHoldVerdict> {
-  const eventId = producedEventId(
-    input.artifactId,
-    input.representationRevisionId,
-    input.eventKind ?? "artifact_produced",
-  );
-  const [event] = await db
-    .select({
-      destinationClass: artifactProducedOutbox.destinationClass,
-      status: artifactProducedOutbox.status,
-      continuationAddress: artifactProducedOutbox.continuationAddress,
-    })
-    .from(artifactProducedOutbox)
-    .where(eq(artifactProducedOutbox.eventId, eventId))
-    .limit(1);
-
-  if (!event) return evaluateEffectHold({ event: null, gateStatus: null });
-
-  const policyUnresolvedPark = await hasPolicyUnresolvedPark(
-    eventId,
-    event.destinationClass as DestinationClass,
-  );
-
-  let gateStatus: "pending" | "resolved" | null = null;
-  let gateDisposition: "approve" | "reject" | "changes_requested" | null = null;
-  if (event.continuationAddress) {
-    const [gate] = await db
-      .select({ status: artifactReviewGates.status, disposition: artifactReviewGates.disposition })
-      .from(artifactReviewGates)
-      .where(eq(artifactReviewGates.id, event.continuationAddress))
-      .limit(1);
-    gateStatus = gate ? (gate.status === "resolved" ? "resolved" : "pending") : null;
-    // S2 (cinatra#2040): a gate resolved as `changes_requested` keeps HOLDING the
-    // effect (a repair is in flight) — thread the terminal disposition so the pure
-    // verdict can distinguish it from an approve/reject resolution.
-    gateDisposition = (gate?.disposition as "approve" | "reject" | "changes_requested" | null) ?? null;
-  }
-
-  return evaluateEffectHold({
-    event: {
-      destinationClass: event.destinationClass as DestinationClass,
-      status: event.status,
-      continuationAddress: event.continuationAddress,
-    },
-    gateStatus,
-    gateDisposition,
-    policyUnresolvedPark,
-  });
-}
-
-/**
- * D-7 (cinatra#2047): does a CHECKPOINTED continuation park protecting THIS
- * event's effect sit in the terminal `policy_unresolved` state?
- *
- * The park is keyed on `(run_id, event_id, checkpoint)`, so several runs may hold
- * a park over the same event. The effect layer is revision-scoped, not run-scoped
- * — ANY run's terminal park over this revision blocks it — so the run is
- * deliberately not part of the predicate. The PROTECTED EFFECT, however, is:
- * matching `protected_effect = <the event's own destination class>` (Codex
- * convergence) means an unrelated or malformed park guarding a DIFFERENT effect
- * class can never fail-close this revision, and a `none`-class park (which guards
- * no external effect at all) is excluded by construction.
- */
-async function hasPolicyUnresolvedPark(
-  eventId: string,
-  destinationClass: DestinationClass,
-): Promise<boolean> {
-  if (destinationClass === "none") return false;
-  const [row] = await db
-    .select({ id: lifecycleContinuationPark.id })
-    .from(lifecycleContinuationPark)
-    .where(
-      and(
-        eq(lifecycleContinuationPark.eventId, eventId),
-        eq(lifecycleContinuationPark.status, "policy_unresolved"),
-        eq(lifecycleContinuationPark.protectedEffect, destinationClass),
-      ),
-    )
-    .limit(1);
-  return row != null;
-}
-
-/** The disposition-aware verdict of a captured external effect (cinatra#2043 S5
- * — the connector CMS-review seam's apply gate). A plain held/not-held cannot
- * tell `approve` from `reject` (both are "not held", but a rejected effect must
- * NEVER be applied), so this widens `isArtifactEffectHeld` into the five states
- * the connector's `resolveDisposition` seam consumes:
- *   - `held`     — the review gate is pending (or a repair is in flight); HOLD.
- *   - `approved` — the gate resolved `approve`; the effect is released → APPLY.
- *   - `rejected` — the gate resolved `reject`; the effect is tombstoned → REFUSE.
- *   - `ungated`  — the org lattice permitted the effect without a gate → APPLY.
- *   - `policy_unresolved` — a checkpointed park TTL-expired with the policy
- *                 unresolved; the effect is TERMINALLY blocked (cinatra#2047 D-7)
- *                 until an explicit later policy decision → HOLD/REFUSE, and it is
- *                 listed on the lifecycle-operations ops surface.
- *   - `unknown`  — no capture / an incoherent resolved state → fail-closed REFUSE. */
-export type ArtifactEffectDisposition =
-  | "held"
-  | "approved"
-  | "rejected"
-  | "ungated"
-  | "policy_unresolved"
-  | "unknown";
-
-/**
- * Resolve the disposition of an artifact revision's downstream EXTERNAL effect —
- * the disposition-aware companion of `isArtifactEffectHeld`. Reads the SAME facts
- * (the produced-event outbox row + its linked review gate) and reuses the pure
- * `evaluateEffectHold` verdict for the hold decision, then distinguishes an
- * approved release from a rejected tombstone via the gate's terminal disposition.
- * The connector's `@cinatra-ai/host:cms-review` `resolveDisposition` seam binds
- * this: the effect is held while the gate is pending, applied only on an
- * `approve`, and refused (fail-closed) on a `reject` / an indeterminate state.
- */
-export async function resolveArtifactEffectDisposition(input: {
-  artifactId: string;
-  representationRevisionId: string;
-  eventKind?: ProducedEventKind;
-}): Promise<{ disposition: ArtifactEffectDisposition; gate: { gateId: string; runId: string } | null }> {
-  const eventId = producedEventId(
-    input.artifactId,
-    input.representationRevisionId,
-    input.eventKind ?? "artifact_produced",
-  );
-  const [event] = await db
-    .select({
-      destinationClass: artifactProducedOutbox.destinationClass,
-      status: artifactProducedOutbox.status,
-      continuationAddress: artifactProducedOutbox.continuationAddress,
-    })
-    .from(artifactProducedOutbox)
-    .where(eq(artifactProducedOutbox.eventId, eventId))
-    .limit(1);
-
-  // No produced event for this revision — nothing was captured. Fail-closed:
-  // the connector treats `unknown` as REFUSE (never a silent apply on a phantom).
-  if (!event) return { disposition: "unknown", gate: null };
-
-  // D-7 (cinatra#2047): join the continuation-park set. A TTL-expired park's
-  // terminal `policy_unresolved` block is the effect's disposition, ahead of every
-  // gate state — the always-resume path must never apply an effect whose policy
-  // was never resolved.
-  const policyUnresolvedPark = await hasPolicyUnresolvedPark(
-    eventId,
-    event.destinationClass as DestinationClass,
-  );
-
-  let gateStatus: "pending" | "resolved" | null = null;
-  let gateDisposition: "approve" | "reject" | "changes_requested" | null = null;
-  let gateRef: { gateId: string; runId: string } | null = null;
-  if (event.continuationAddress) {
-    const [gate] = await db
-      .select({
-        id: artifactReviewGates.id,
-        runId: artifactReviewGates.runId,
-        status: artifactReviewGates.status,
-        disposition: artifactReviewGates.disposition,
-      })
-      .from(artifactReviewGates)
-      .where(eq(artifactReviewGates.id, event.continuationAddress))
-      .limit(1);
-    if (gate) {
-      gateRef = { gateId: gate.id, runId: gate.runId };
-      gateStatus = gate.status === "resolved" ? "resolved" : "pending";
-      gateDisposition = (gate.disposition as "approve" | "reject" | "changes_requested" | null) ?? null;
-    }
-  }
-
-  const verdict = evaluateEffectHold({
-    event: {
-      destinationClass: event.destinationClass as DestinationClass,
-      status: event.status,
-      continuationAddress: event.continuationAddress,
-    },
-    gateStatus,
-    gateDisposition,
-    policyUnresolvedPark,
-  });
-
-  // TERMINAL policy block (D-7) — reported as its own disposition so a caller can
-  // tell an ops-actionable dead end from an ordinary pending-gate hold. Both refuse
-  // the apply; only this one is listed on the lifecycle-operations surface.
-  if (verdict.policyUnresolved === true) {
-    return { disposition: "policy_unresolved", gate: gateRef };
-  }
-
-  // HELD: the gate is pending (or a repair is in flight, `changes_requested`), or
-  // an external effect awaits orchestration (fail-closed) — the connector holds.
-  if (verdict.held) return { disposition: "held", gate: gateRef };
-
-  // NOT held. An event with no continuation address is either non-external or
-  // org-`forbidden` (the lattice permitted the effect without a gate) → ungated.
-  if (!event.continuationAddress) return { disposition: "ungated", gate: null };
-
-  // A continuation address that no longer resolves to a gate row is incoherent —
-  // never apply on a vanished gate.
-  if (!gateRef) return { disposition: "unknown", gate: null };
-
-  // A resolved gate: approve releases (apply), reject tombstones (refuse).
-  if (gateDisposition === "approve") return { disposition: "approved", gate: gateRef };
-  if (gateDisposition === "reject") return { disposition: "rejected", gate: gateRef };
-
-  // Resolved-but-no-terminal-disposition (or a value the effect-hold verdict did
-  // not classify as still-held) is indeterminate → fail-closed.
-  return { disposition: "unknown", gate: gateRef };
-}
+export { isArtifactEffectHeld, resolveArtifactEffectDisposition } from "./lifecycle-effect-hold-store";
+export type { ArtifactEffectDisposition } from "./lifecycle-effect-hold-store";
 
 // ---------------------------------------------------------------------------
 // The disposition + TTL/expiry + park-release maintenance drain.
@@ -1742,6 +1610,15 @@ export interface GateMaintenanceSummary {
    * — the successor gate shows an uncaptured side. Ops-visible here as well as
    * logged, so a silently one-sided repair pair can never go unnoticed again. */
   cmsRepairsUncaptured: number;
+  /**
+   * cinatra#3080 — repairs COMPLETED by the generic producer completer: the
+   * repair run did its producing work and its successor gate is now open. The
+   * CMS counters above stay the CMS completer's own; these are every other
+   * producer's, which had no completer at all before this.
+   */
+  producerRepairsCompleted: number;
+  /** A repair the generic completer would not finalize on what it found. */
+  producerRepairsUnresolved: number;
 }
 
 /**
@@ -1774,6 +1651,8 @@ export async function sweepLifecycleGateMaintenance(opts?: {
     cmsRepairsCompleted: 0,
     cmsRepairsUnresolved: 0,
     cmsRepairsUncaptured: 0,
+    producerRepairsCompleted: 0,
+    producerRepairsUnresolved: 0,
   };
   if (!isLifecycleReviewOrchestrationActive()) return summary;
   const limit = Math.max(1, Math.min(opts?.limit ?? 100, 500));
@@ -1796,6 +1675,13 @@ export async function sweepLifecycleGateMaintenance(opts?: {
   //    the repair response; a non-CMS repair (e.g. blog) is left untouched for
   //    its own producer's inline completion path.
   await completeCmsRepairs(summary);
+  // 6. cinatra#3862 leg 1 (the completer of cinatra#3080) — the SAME step for
+  //    every other producer. Before this the CMS completer was the only one, so
+  //    a Regenerate on any other type settled its gate, minted its repair run,
+  //    and then had nothing to open the successor the drawing requires. The two
+  //    completers never claim the same row: the generic one skips a repair whose
+  //    base target is a CMS snapshot.
+  await completeProducerRepairs(summary);
 
   return summary;
 }
@@ -1834,6 +1720,27 @@ async function completeCmsRepairs(summary: GateMaintenanceSummary): Promise<void
   } catch (err) {
     console.error(
       `[lifecycle-review-orchestration] CMS repair completion drain failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+}
+
+/** Run the GENERIC repair-completion drain (cinatra#3080), folding its counters
+ * into the maintenance summary. Best-effort on the same contract as its CMS
+ * sibling: a failure never aborts the pass, the repair stays `dispatched`, and
+ * the next pass retries. Dynamically imported for the same reason. */
+async function completeProducerRepairs(summary: GateMaintenanceSummary): Promise<void> {
+  try {
+    const { completeDispatchedProducerRepairs } = await import(
+      "./lifecycle-repair-producer-completion-store"
+    );
+    const completion = await completeDispatchedProducerRepairs();
+    summary.producerRepairsCompleted += completion.completed;
+    summary.producerRepairsUnresolved += completion.unresolved;
+  } catch (err) {
+    console.error(
+      `[lifecycle-review-orchestration] producer repair completion drain failed: ${
         err instanceof Error ? err.message : String(err)
       }`,
     );

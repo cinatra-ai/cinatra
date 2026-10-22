@@ -768,7 +768,7 @@ describe("credential-aware decisions", () => {
     );
     fireEvent.click(container.querySelector('[data-action="cancel-trigger-schedule"]')!);
     // Asked, not done.
-    const strip = container.querySelector('[data-conformance-id="schedule-cancel-confirm"]');
+    const strip = document.querySelector('[data-conformance-id="schedule-cancel-confirm"]');
     expect(strip).not.toBeNull();
     // cinatra#2972 rewrote these words with the act: Cancel schedule STOPS a
     // recurring schedule; it "never deletes the schedule or pauses the run".
@@ -776,7 +776,7 @@ describe("credential-aware decisions", () => {
     expect(strip?.textContent).not.toContain("paused");
     expect(decisionBodies(fetchMock)).toHaveLength(0);
 
-    fireEvent.click(strip!.querySelector('[data-action="confirm-destructive"]')!);
+    fireEvent.click(strip!.querySelector('[data-action="cancel-schedule"]')!);
     await waitFor(() => expect(lastDecision(fetchMock).op).toBe("cancel"));
   });
 
@@ -1073,7 +1073,7 @@ describe("the rework — the step is the form and nothing else", () => {
       expect(container.querySelector('[data-action="cancel-trigger-schedule"]')).not.toBeNull(),
     );
     fireEvent.click(container.querySelector('[data-action="cancel-trigger-schedule"]')!);
-    const strip = container.querySelector(
+    const strip = document.querySelector(
       '[data-conformance-id="schedule-cancel-confirm"]',
     );
     expect(strip?.textContent).toContain("Stop this recurring schedule?");
@@ -1363,7 +1363,7 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
     );
     fireEvent.click(container.querySelector('[data-action="cancel-trigger-schedule"]')!);
     expect(
-      container.querySelector('[data-conformance-id="schedule-cancel-confirm"]'),
+      document.querySelector('[data-conformance-id="schedule-cancel-confirm"]'),
     ).not.toBeNull();
 
     // The reader also starts editing the rows and never saves.
@@ -1380,7 +1380,7 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
     fireEvent.focus(window);
     await waitFor(() =>
       expect(
-        container.querySelector('[data-conformance-id="schedule-cancel-confirm"]'),
+        document.querySelector('[data-conformance-id="schedule-cancel-confirm"]'),
       ).toBeNull(),
     );
     expect(

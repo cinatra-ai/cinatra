@@ -607,7 +607,7 @@ export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, Capt
       entry.name,
       buildReplayedExtensionToolConfig(
         entry.name,
-        { delegatedChat: entry.delegatedChat },
+        { delegatedChat: entry.delegatedChat, outward: entry.outward },
         {
           ownerPackage: entry.packageName,
           resolvedVersion: entry.version,

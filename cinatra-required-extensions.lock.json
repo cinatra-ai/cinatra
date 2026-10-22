@@ -82,9 +82,9 @@
     {
       "packageName": "@cinatra-ai/document-artifact",
       "repo": "cinatra-ai/document-artifact",
-      "resolvedSha": "c07818ae3afccb0e8d50068b23f3a57ffe35e566",
+      "resolvedSha": "320c3d2d7cda2b2b953922e301ad4ef5f8ed323c",
       "packageVersion": "0.1.0",
-      "treeSha256": "f1f4acbbb1696f799e53b0f869e030d1cedadae6d635b67cccde37ad87d1af41"
+      "treeSha256": "6799d7335ac9cc10cc9a5c71509a631c8f559866854329bf92588c24f4576ed8"
     },
     {
       "packageName": "@cinatra-ai/email-connector",
@@ -117,9 +117,9 @@
     {
       "packageName": "@cinatra-ai/json-artifact",
       "repo": "cinatra-ai/json-artifact",
-      "resolvedSha": "742686607c4ccf1d35611e2aa3d523a5d7659922",
+      "resolvedSha": "eeec22a53ef2c23342e81e0b0ded16ccb0eac75a",
       "packageVersion": "0.1.1",
-      "treeSha256": "662364db55312a3b23297967a8fb8ba4de0c73004b772ff2a4bb2ce6c0fdc8a7"
+      "treeSha256": "f57d67c0e829dc1d865b8ed5fd36e2f82373cc81b6f8a603b8fc845e689d6cc5"
     },
     {
       "packageName": "@cinatra-ai/lint-policy-agent",
@@ -131,16 +131,16 @@
     {
       "packageName": "@cinatra-ai/markdown-artifact",
       "repo": "cinatra-ai/markdown-artifact",
-      "resolvedSha": "b3c08cc0e4fa21cf315385f8b614608453e508d7",
+      "resolvedSha": "6b10324644129b4559491d3cb4a24a59a84f6953",
       "packageVersion": "0.1.0",
-      "treeSha256": "9cc297c8fd40245ca70f9387d7ebdb611f2b1dfa2a24187c8b6fd6c527999003"
+      "treeSha256": "5889258efb285112c92a3a98aa5d9e6a0c50784905d47c06b3a5434ee0ea09be"
     },
     {
       "packageName": "@cinatra-ai/nango-connector",
       "repo": "cinatra-ai/nango-connector",
-      "resolvedSha": "1255c4083c78930f6086b2cb7b855461a74f8558",
-      "packageVersion": "0.1.7",
-      "treeSha256": "9510259a45c834945d1cd6eadce1c596f4b65da3bddd7d3cbe376c2463e667db"
+      "resolvedSha": "cb06457c0d28776df806fd20ea6a0b6fe20ae519",
+      "packageVersion": "0.1.8",
+      "treeSha256": "d0d778c99041a8f4d29466e922ee033ac8cb7f4c3ca17a5e054c7f14e2722455"
     },
     {
       "packageName": "@cinatra-ai/openai-connector",
@@ -180,23 +180,23 @@
     {
       "packageName": "@cinatra-ai/text-artifact",
       "repo": "cinatra-ai/text-artifact",
-      "resolvedSha": "905835b4eef2b3645b0bcfe740f3a8b5cd1a77e8",
+      "resolvedSha": "3f7d278d7f93b986fe472cefa398cb4d9ce85262",
       "packageVersion": "0.1.0",
-      "treeSha256": "2c572b64990d9aa8f28c38e49ef2c524d38ac20d9f7b3e176078c757f4b7c978"
+      "treeSha256": "0b27c9531015caa9965445295c6878ef6b0f12f243d242162c5305c95def71eb"
     },
     {
       "packageName": "@cinatra-ai/video-artifact",
       "repo": "cinatra-ai/video-artifact",
-      "resolvedSha": "f15b6b97b76af1b39a81c77d47e588e1f8b0c861",
+      "resolvedSha": "c0ac718a299881f7d4ec30f3c0582065b7de91af",
       "packageVersion": "0.1.1",
-      "treeSha256": "78864fa03f255772b1ed6540d8785f306e7466a636df0fef275e55e8aa68d20c"
+      "treeSha256": "fcf70ab364cea8673ab62d09b703b5a58dacf26998e8d28b178207a0be8d0489"
     },
     {
       "packageName": "@cinatra-ai/zip-artifact",
       "repo": "cinatra-ai/zip-artifact",
-      "resolvedSha": "3cd30b4a0b522468ad12dfedc7ed9b2636f6f3bd",
+      "resolvedSha": "c841ee4ed0d97a0e5445de78f614c5fc9cb88f92",
       "packageVersion": "0.1.0",
-      "treeSha256": "d8d032b7c0f3e6a53ef75600781e2777f33ce4e977c009e681660c858ea5a182"
+      "treeSha256": "4d80ede66e2384a91080b1db5acc423e155b8dd082bb77774e3dde0819658b54"
     }
   ]
 }

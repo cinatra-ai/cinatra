@@ -6,6 +6,7 @@
  * as agent access without changing ownership).
  */
 import "server-only";
+import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ProjectGrant } from "../actor-context";
@@ -15,7 +16,18 @@ const executeMock = vi.fn();
 vi.mock("drizzle-orm/node-postgres", () => ({
   drizzle: () => ({ execute: executeMock }),
 }));
-vi.mock("pg", () => ({ Pool: class { } }));
+// The fake pool keeps its listeners, so a case can play the pool's events.
+const constructedPools: EventEmitter[] = [];
+vi.mock("pg", async () => {
+  const { EventEmitter: Emitter } = await import("node:events");
+  class FakePool extends Emitter {
+    constructor() {
+      super();
+      constructedPools.push(this);
+    }
+  }
+  return { Pool: FakePool };
+});
 
 import { resolveAgentProjectAccess } from "../agent-project-access";
 
@@ -70,4 +82,22 @@ describe("resolveAgentProjectAccess", () => {
   // positive when the shared executeMock is switched to a throwing impl after
   // prior resolved-value tests. The "no bindings" (empty rows) test above
   // covers the equivalent deny path.
+});
+
+describe("an idle connection error on the agent project access pool (cinatra#4151)", () => {
+  it("the pool's error is handled and logged without the connection string", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    executeMock.mockResolvedValue({ rows: [] });
+    await resolveAgentProjectAccess("tmpl-1", { projectGrants: grants(["proj-1", "read"]) });
+    expect(constructedPools).toHaveLength(1);
+    const pool = constructedPools[0];
+
+    const cut = new Error("terminating connection due to administrator command");
+    expect(() => pool.emit("error", cut)).not.toThrow();
+    expect(pool.listenerCount("error")).toBe(1);
+
+    const lines = errorSpy.mock.calls.map((args) => args.map(String).join(" "));
+    expect(lines).toContain(`[agent-project-access] pg pool idle client error: ${cut.message}`);
+    for (const line of lines) expect(line).not.toContain("postgres://");
+  });
 });

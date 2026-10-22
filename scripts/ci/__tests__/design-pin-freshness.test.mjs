@@ -596,3 +596,126 @@ describe("a diff that cannot be read fails closed rather than throwing", () => {
     expect([...out, ...err].join("\n")).toContain("could not run");
   });
 });
+
+// ---------------------------------------------------------------------------
+// The pin governs the sibling review drawing too (two-path pin)
+// ---------------------------------------------------------------------------
+//
+// The acceptance manifest and the anchor contract name BOTH drawings at one
+// revision, so this required gate asks the design source about both. A sibling
+// drawing that is behind, or whose answer cannot be read, now stops the merge
+// where a one-drawing pin would not have. These cases hold that behaviour.
+
+describe("a pin that governs the sibling review drawing too", () => {
+  const CARDS = "specs/app-lifecycle-cards.html";
+  const REVIEW = "specs/app-artifact-review.html";
+  const twoPathPin = () => pin({ paths: [CARDS, REVIEW] });
+
+  /** A reader whose answer for ONE path cannot be read; the others follow head/reachable. */
+  function pathReader({ head = {}, reachable = {}, unreadablePath = null } = {}) {
+    const calls = [];
+    return {
+      calls,
+      async defaultBranch() {
+        return "main";
+      },
+      async revisionsTouching({ ref, path }) {
+        calls.push({ ref, path });
+        if (path === unreadablePath) throw new DesignSourceError("unreadable-answer");
+        return ref === "main" ? (head[path] ?? []) : (reachable[path] ?? []);
+      },
+    };
+  }
+
+  const mainPush = { GITHUB_EVENT_NAME: "push", GITHUB_REF_NAME: "main" };
+
+  it("is read from the REAL tree: the committed pin names both drawings", () => {
+    const real = readCommitBearingPins(REPO_ROOT).find((p) => p.id === "chat-hitl-lifecycle");
+    expect(real.paths).toEqual([CARDS, REVIEW]);
+  });
+
+  it("(a) is RED when the sibling drawing is behind, though the first drawing is current", async () => {
+    const reader = pathReader({
+      head: { [CARDS]: [B, A], [REVIEW]: [C, B] },
+      reachable: { [CARDS]: [B, A], [REVIEW]: [B] },
+    });
+    const r = await run({ env: mainPush, reader, pins: [twoPathPin()] });
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("chat-hitl-lifecycle");
+    expect(r.err).toContain("un-adopted ratifications");
+    // The sibling path was asked on both refs, and nothing about it is printed.
+    expect(reader.calls.filter((c) => c.path === REVIEW).map((c) => c.ref)).toEqual(["main", twoPathPin().revision]);
+    expect(r.all).not.toContain(REVIEW);
+    expect(r.all).not.toContain(C);
+  });
+
+  it("(a) is RED on a pull request that touches the pin's files when the sibling drawing is behind", async () => {
+    const reader = pathReader({
+      head: { [REVIEW]: [C] },
+      reachable: { [REVIEW]: [] },
+    });
+    const r = await run({
+      env: { GITHUB_EVENT_NAME: "pull_request" },
+      reader,
+      pins: [twoPathPin()],
+      touched: ["scripts/audit/chat-hitl-anchor-contract.json"],
+    });
+    expect(r.code).toBe(1);
+  });
+
+  it("(a) is RED against the REAL tree's pin when only the sibling drawing is behind", async () => {
+    const real = readCommitBearingPins(REPO_ROOT).find((p) => p.id === "chat-hitl-lifecycle");
+    const reader = pathReader({
+      head: { [REVIEW]: [C] },
+      reachable: { [REVIEW]: [] },
+    });
+    const out = [];
+    const err = [];
+    const code = await runCli({
+      argv: ["--event", "push-main"],
+      env: { DESIGN_PIN_DRIFT_DIFF_BASE: "base", DESIGN_SOURCE_TOKEN: "t" },
+      createReader: () => reader,
+      runGit: gitStub([]),
+      log: (l) => out.push(String(l)),
+      logError: (l) => err.push(String(l)),
+    });
+    expect(real.paths).toContain(REVIEW);
+    expect(code).toBe(1);
+  });
+
+  it("(b) exits 2 when the sibling drawing's answer cannot be read, though the first is current", async () => {
+    const reader = pathReader({
+      head: { [CARDS]: [B, A] },
+      reachable: { [CARDS]: [B, A] },
+      unreadablePath: REVIEW,
+    });
+    const r = await run({ env: mainPush, reader, pins: [twoPathPin()] });
+    expect(r.code).toBe(2);
+    expect(r.err).toContain("could not run");
+    expect(r.all).not.toContain(REVIEW);
+  });
+
+  it("(b) exits 2 on a pull request too when the sibling drawing's answer cannot be read", async () => {
+    const reader = pathReader({ unreadablePath: REVIEW });
+    const r = await run({
+      env: { GITHUB_EVENT_NAME: "pull_request" },
+      reader,
+      pins: [twoPathPin()],
+      touched: ["README.md"],
+    });
+    expect(r.code).toBe(2);
+  });
+
+  it("(c) is green when both drawings are current, and asks each of them on both refs", async () => {
+    const reader = pathReader({
+      head: { [CARDS]: [B, A], [REVIEW]: [B] },
+      reachable: { [CARDS]: [B, A], [REVIEW]: [B] },
+    });
+    const r = await run({ env: mainPush, reader, pins: [twoPathPin()] });
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("ok: every design pin this gate reads is current.");
+    expect(reader.calls.map((c) => `${c.path} ${c.ref === "main" ? "head" : "pin"}`).sort()).toEqual(
+      [`${CARDS} head`, `${CARDS} pin`, `${REVIEW} head`, `${REVIEW} pin`].sort(),
+    );
+  });
+});

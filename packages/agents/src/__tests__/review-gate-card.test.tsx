@@ -306,6 +306,12 @@ describe("one renderer, four first-party hosts", () => {
       const clonedNote = clone.querySelector('[data-testid="review-rationale"]')!;
       clonedNote.parentElement!.removeAttribute("data-conformance-id");
       clonedNote.setAttribute("class", subordinateNoteClass);
+      // The island region is compared by its place: a cookie host frames the
+      // island by its ref, and the widget frames it only with its credential,
+      // which this answer does not carry (checked per host here).
+      const island = clone.querySelector('[data-conformance-id="review-target-island"]')!;
+      expect(island.querySelector("iframe") !== null).toBe(host !== "site_widget");
+      island.replaceWith(document.createElement("review-target-island"));
       drawn[host] = clone.innerHTML;
       unmount();
       cleanup();
@@ -372,14 +378,25 @@ describe("one renderer, four first-party hosts", () => {
     );
   });
 
-  it("every host addresses the same island with the same ref", async () => {
+  it("every cookie host addresses the same island with the same ref; the widget frames none without its credential", async () => {
     for (const host of HOSTS) {
       mockResolve({ state: "pending", canDecide: true, canComment: true });
       const { container, unmount } = renderOn(host);
-      await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
-      expect(container.querySelector("iframe")?.getAttribute("src")).toBe(
-        `${REVIEW_TARGET_ISLAND_PATH}?ref=${encodeURIComponent(VIEW.ref)}`,
+      await waitFor(() =>
+        expect(container.querySelector('[data-conformance-id="review-target-island"]')).not.toBeNull(),
       );
+      if (host === "site_widget") {
+        expect(container.querySelector("iframe")).toBeNull();
+        expect(
+          container
+            .querySelector('[data-conformance-id="review-target-island"]')
+            ?.getAttribute("data-island-load-state"),
+        ).toBe("empty");
+      } else {
+        expect(container.querySelector("iframe")?.getAttribute("src")).toBe(
+          `${REVIEW_TARGET_ISLAND_PATH}?ref=${encodeURIComponent(VIEW.ref)}`,
+        );
+      }
       unmount();
       cleanup();
     }

@@ -86,6 +86,7 @@
     "./suggestion-decision-store": "./src/suggestion-decision-store.ts",
     "./suggestion-application-delivery": "./src/suggestion-application-delivery.ts",
     "./lifecycle-review-orchestration": "./src/lifecycle-review-orchestration-store.ts",
+    "./lifecycle-effect-hold": "./src/lifecycle-effect-hold-store.ts",
     "./lifecycle-continuation-park-store": "./src/lifecycle-continuation-park-store.ts",
     "./lifecycle-policy-store": "./src/lifecycle-policy-store.ts",
     "./lifecycle-review-changes-requested": "./src/lifecycle-review-changes-requested-store.ts",

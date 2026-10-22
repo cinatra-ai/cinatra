@@ -28,11 +28,19 @@
  *   - CrmList[] is mapped 1:1 to AvailableListSummary[], with `memberCount`
  *     + `lastUpdated` set to null (the provider doesn't surface them)
  *     and `memberType` derived from `CrmList.objectType`;
- *   - Capability ABSENT (connector not installed/active) degrades to `[]`;
- *   - Upstream failures (no Twenty row, no bearer, network errors) degrade
- *     to `[]` rather than 500-ing the picker UI.
+ *   - Capability ABSENT (connector not installed/active) degrades to `[]`
+ *     and logs one fixed line;
+ *   - a search that answers no list returns `[]` and logs one fixed line; a
+ *     non-empty answer logs nothing;
+ *   - a search that THROWS is rejected with the fixed words "the CRM list
+ *     search failed" and no `cause`, so the picker shows its existing load
+ *     error instead of an empty list. The one log line names only the error's
+ *     class from a fixed list (anything else is `UnknownError`) and an
+ *     in-range integer code; the message, `data` and `cause` are never logged
+ *     or carried.
  */
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { inspect } from "node:util";
+import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from "vitest";
 
 // --- mocks (must hoist BEFORE the source-under-test import) ---
 
@@ -110,11 +118,95 @@ const RUN_ID = "run-1";
 const searchMock = vi.fn();
 vi.mocked(resolveCrmListReader).mockImplementation(() => ({ searchLists: searchMock }));
 
+// Local stand-ins for the error classes a CRM connector throws. Only their
+// `name` and `code` matter to the loader, which reads them generically and
+// never imports a connector.
+class TwentyMcpError extends Error {
+  code: unknown;
+  data: unknown;
+  constructor(code: unknown, message: string, data?: unknown) {
+    super(message);
+    this.name = "TwentyMcpError";
+    this.code = code;
+    this.data = data;
+  }
+}
+class TwentyConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TwentyConfigError";
+  }
+}
+class TwentyToolContractError extends Error {
+  code: unknown;
+  constructor(code: unknown, message: string) {
+    super(message);
+    this.name = "TwentyToolContractError";
+    this.code = code;
+  }
+}
+
+// Marker words that must never reach a log line or the rejection.
+const MESSAGE_MARKER = "upstream-message-must-not-be-logged";
+const DATA_MARKER = "body-must-not-be-logged";
+const GETTER_MARKER = "getter-marker-must-not-be-logged";
+
+const FAILED_WORDS = "the CRM list search failed";
+const failedLine = (detail: string) =>
+  `[list-picker] the CRM list search failed (${detail}); the picker shows the load error`;
+const ABSENT_LINE =
+  "[list-picker] no crm-list-reader capability is registered; the picker offers no lists";
+const EMPTY_LINE = "[list-picker] the CRM list search answered no lists";
+
+let warnSpy: MockInstance<typeof console.warn>;
+
+/** Every argument the loader handed to console.warn, as one string. */
+function everythingLogged(): string {
+  return warnSpy.mock.calls.map((args) => args.map((a) => String(a)).join(" ")).join("\n");
+}
+
+/** The `[list-picker]` lines the loader wrote. */
+function listPickerLines(): unknown[] {
+  return warnSpy.mock.calls
+    .map((args) => args[0])
+    .filter((first) => typeof first === "string" && first.startsWith("[list-picker]"));
+}
+
+/** The loader's rejection; fails when the loader resolves instead. */
+async function rejectionOf(pending: Promise<unknown>): Promise<unknown> {
+  let resolved: unknown;
+  try {
+    resolved = await pending;
+  } catch (rejection) {
+    return rejection;
+  }
+  throw new Error(
+    `the loader resolved (${JSON.stringify(resolved)}) instead of rejecting with the load error`,
+  );
+}
+
+/** Asserts the fixed rejection and the one fixed line for `detail`. */
+async function expectFailedLoad(thrown: unknown, detail: string): Promise<unknown> {
+  searchMock.mockRejectedValueOnce(thrown);
+  const rejection = await rejectionOf(fetchAvailableLists(RUN_ID));
+  expect(rejection).toBeInstanceOf(Error);
+  expect((rejection as Error).message).toBe(FAILED_WORDS);
+  expect(Object.prototype.hasOwnProperty.call(rejection, "cause")).toBe(false);
+  expect(warnSpy).toHaveBeenCalledTimes(1);
+  expect(warnSpy).toHaveBeenCalledWith(failedLine(detail));
+  return rejection;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(resolveCrmListReader).mockImplementation(() => ({ searchLists: searchMock }));
   enforceRunAccessMock.mockResolvedValue(undefined);
   readAgentRunByIdMock.mockResolvedValue({ id: RUN_ID });
+  warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+});
+
+afterEach(() => {
+  warnSpy.mockRestore();
 });
 
 describe("fetchAvailableLists — run-access gate (cinatra#3050)", () => {
@@ -252,22 +344,157 @@ describe("fetchAvailableLists", () => {
     ]);
   });
 
-  it("degrades to [] when the reader throws (no CRM provider / no Twenty row / upstream unreachable)", async () => {
-    searchMock.mockRejectedValueOnce(new Error("Twenty workspace row not configured"));
-
-    expect(await fetchAvailableLists(RUN_ID)).toEqual([]);
-  });
-
-  it("returns an empty array when the reader returns no lists", async () => {
-    searchMock.mockResolvedValueOnce([]);
-
-    expect(await fetchAvailableLists(RUN_ID)).toEqual([]);
-  });
-
-  it("degrades to [] when the crm-list-reader capability is ABSENT (connector not installed/active)", async () => {
+  it("T5: returns [] when the crm-list-reader capability is ABSENT, logs the fixed absent line and never searches", async () => {
     vi.mocked(resolveCrmListReader).mockReturnValueOnce(null);
 
     expect(await fetchAvailableLists(RUN_ID)).toEqual([]);
     expect(searchMock).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(ABSENT_LINE);
+  });
+
+  it("T6: returns [] when the search answers no lists and logs the fixed empty-answer line once", async () => {
+    searchMock.mockResolvedValueOnce([]);
+
+    expect(await fetchAvailableLists(RUN_ID)).toEqual([]);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(EMPTY_LINE);
+  });
+
+  it("T7: maps a non-empty answer one to one and writes no [list-picker] line", async () => {
+    searchMock.mockResolvedValueOnce([
+      { id: "v1", slug: "leaders", name: "Leaders", objectType: "contact" },
+    ]);
+
+    expect(await fetchAvailableLists(RUN_ID)).toEqual([
+      {
+        id: "v1",
+        name: "Leaders",
+        memberCount: null,
+        lastUpdated: null,
+        memberType: "contact",
+      },
+    ]);
+    expect(listPickerLines()).toEqual([]);
+  });
+});
+
+describe("fetchAvailableLists — a failed search shows the load error", () => {
+  it("T1: rejects a refused search with the fixed words, no cause, and one line naming only its class and code", async () => {
+    await expectFailedLoad(
+      new TwentyMcpError(401, MESSAGE_MARKER, DATA_MARKER),
+      "TwentyMcpError, code 401",
+    );
+
+    const logged = everythingLogged();
+    expect(logged).not.toContain(MESSAGE_MARKER);
+    expect(logged).not.toContain(DATA_MARKER);
+  });
+
+  it("T2: the rejection carries no upstream class, message or data and no own cause", async () => {
+    const rejection = await expectFailedLoad(
+      new TwentyMcpError(401, MESSAGE_MARKER, DATA_MARKER),
+      "TwentyMcpError, code 401",
+    );
+
+    const shown = inspect(rejection, { depth: 10 });
+    expect(shown).toContain(FAILED_WORDS);
+    expect(shown).not.toContain("TwentyMcpError");
+    expect(shown).not.toContain(MESSAGE_MARKER);
+    expect(shown).not.toContain(DATA_MARKER);
+    expect(Object.prototype.hasOwnProperty.call(rejection, "cause")).toBe(false);
+  });
+
+  it.each([["name"], ["code"]])(
+    "T3: a throwing %s getter logs (UnknownError) and the getter's error escapes nowhere",
+    async (key) => {
+      const err = new TwentyMcpError(401, MESSAGE_MARKER, DATA_MARKER);
+      Object.defineProperty(err, key, {
+        get() {
+          throw new Error(GETTER_MARKER, { cause: DATA_MARKER });
+        },
+      });
+
+      const rejection = await expectFailedLoad(err, "UnknownError");
+
+      const shown = everythingLogged() + "\n" + inspect(rejection, { depth: 10 });
+      expect(shown).not.toContain(GETTER_MARKER);
+      expect(shown).not.toContain(DATA_MARKER);
+    },
+  );
+
+  it("T4: a non-string name logs exactly (UnknownError) with no code", async () => {
+    const err = new TwentyMcpError(401, MESSAGE_MARKER, DATA_MARKER);
+    Object.defineProperty(err, "name", { value: { toString: () => MESSAGE_MARKER } });
+
+    await expectFailedLoad(err, "UnknownError");
+    expect(everythingLogged()).not.toContain(MESSAGE_MARKER);
+  });
+
+  it.each([["name_must_not_be_logged"], ["tokenAbc123Secret"]])(
+    "T9: a name outside the class list (%s) logs exactly (UnknownError) and is written nowhere",
+    async (name) => {
+      const err = new TwentyMcpError(401, MESSAGE_MARKER, DATA_MARKER);
+      err.name = name;
+
+      const rejection = await expectFailedLoad(err, "UnknownError");
+
+      expect(everythingLogged()).not.toContain(name);
+      expect(inspect(rejection, { depth: 10 })).not.toContain(name);
+    },
+  );
+
+  it.each([
+    ["a rejected string", DATA_MARKER as unknown],
+    ["a plain object", { name: "TwentyMcpError", code: 401 } as unknown],
+  ])("T10: %s that is not an Error logs exactly (UnknownError)", async (_label, thrown) => {
+    const rejection = await expectFailedLoad(thrown, "UnknownError");
+
+    expect(everythingLogged()).not.toContain(DATA_MARKER);
+    expect(inspect(rejection, { depth: 10 })).not.toContain(DATA_MARKER);
+  });
+
+  it.each([["TwentyMcpError" + "X".repeat(60)], ["A".repeat(200)]])(
+    "T11: an overlong name logs exactly (UnknownError)",
+    async (name) => {
+      const err = new TwentyMcpError(401, MESSAGE_MARKER, DATA_MARKER);
+      err.name = name;
+
+      await expectFailedLoad(err, "UnknownError");
+    },
+  );
+
+  it.each([
+    ["NaN", Number.NaN as unknown],
+    ["Infinity", Number.POSITIVE_INFINITY as unknown],
+    ["-Infinity", Number.NEGATIVE_INFINITY as unknown],
+    ["401.5", 401.5 as unknown],
+    ["123456789", 123456789 as unknown],
+    ["-40000", -40000 as unknown],
+    ["the string '401'", "401" as unknown],
+  ])("T12: the code %s is not written: the line reads (TwentyMcpError)", async (_label, code) => {
+    const err = new TwentyMcpError(401, MESSAGE_MARKER, DATA_MARKER);
+    Object.defineProperty(err, "code", { value: code });
+
+    await expectFailedLoad(err, "TwentyMcpError");
+  });
+
+  it.each([
+    ["Error", new Error(MESSAGE_MARKER) as unknown, "Error"],
+    ["TwentyConfigError", new TwentyConfigError(MESSAGE_MARKER) as unknown, "TwentyConfigError"],
+    ["SyntaxError", new SyntaxError(MESSAGE_MARKER) as unknown, "SyntaxError"],
+    [
+      "TwentyToolContractError",
+      new TwentyToolContractError(-32603, MESSAGE_MARKER) as unknown,
+      "TwentyToolContractError, code -32603",
+    ],
+    [
+      "TwentyMcpError",
+      new TwentyMcpError(-32000, MESSAGE_MARKER, DATA_MARKER) as unknown,
+      "TwentyMcpError, code -32000",
+    ],
+  ])("T13: a listed class (%s) logs its own class and an in-range code", async (_label, thrown, detail) => {
+    await expectFailedLoad(thrown, detail as string);
+    expect(everythingLogged()).not.toContain(MESSAGE_MARKER);
   });
 });

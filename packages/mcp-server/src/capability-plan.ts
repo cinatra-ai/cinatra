@@ -417,6 +417,15 @@ export type PrimitiveIdentityFailure =
   | "host_owner_claimed";
 
 /**
+ * A registration's outward declaration as the plan carries it: the tool acts
+ * outward on a person's behalf, and `subject` names the two input fields that
+ * carry the stored item the call acts on and its revision, or is `null`.
+ */
+export type PlannedOutwardDeclaration = {
+  readonly subject: { readonly artifactId: string; readonly representationRevisionId: string } | null;
+};
+
+/**
  * One planned primitive: everything an admission decision needs about ONE
  * registration, resolved once, at the moment the registration happened.
  */
@@ -445,6 +454,13 @@ export type PlannedPrimitive = {
    * a primitive that will not appear.
    */
   readonly declarationMalformed: boolean;
+  /**
+   * What this registration declared with `outward` (cinatra#3745): `null` when
+   * it declared nothing, otherwise the tool acts outward on a person's behalf.
+   * Read once, with `readDeclaredOutward`, when the registration happened; the
+   * tool server's boundary reads it from this entry.
+   */
+  readonly declaredOutward: PlannedOutwardDeclaration | null;
   /** The package that owns the primitive. `null` when identity failed. */
   readonly ownerPackage: string | null;
   /** The EXACT resolved package version. `null` when identity failed. */
@@ -642,6 +658,48 @@ function readDeclarationIsMalformed(config: unknown): boolean {
   return normalizeDelegatedChatToolClass(raw) === "none" && raw !== "none";
 }
 
+/**
+ * Read a registration's `outward` declaration (cinatra#3745).
+ *
+ * TOTAL, and a declaration can only add a tool to what the host holds. A config
+ * that is not an object, or an `outward` that is `undefined` or `null`, reads
+ * as `null`. A plain object whose `subject` is a plain object naming two
+ * non-empty input fields reads as those two names, copied. Every other present
+ * value, and any accessor that throws, reads as outward without a subject.
+ * Each property is read once.
+ */
+export function readDeclaredOutward(config: unknown): PlannedOutwardDeclaration | null {
+  if (typeof config !== "object" || config === null) return null;
+  let outward: unknown;
+  try {
+    outward = (config as { outward?: unknown }).outward;
+  } catch {
+    return { subject: null };
+  }
+  if (outward === undefined || outward === null) return null;
+  try {
+    if (!isPlainObject(outward)) return { subject: null };
+    const subject: unknown = (outward as { subject?: unknown }).subject;
+    if (!isPlainObject(subject)) return { subject: null };
+    const artifactId: unknown = (subject as { artifactId?: unknown }).artifactId;
+    const representationRevisionId: unknown = (subject as { representationRevisionId?: unknown })
+      .representationRevisionId;
+    if (!nonEmptyString(artifactId) || !nonEmptyString(representationRevisionId)) {
+      return { subject: null };
+    }
+    return { subject: { artifactId, representationRevisionId } };
+  } catch {
+    return { subject: null };
+  }
+}
+
+/** An object literal: its prototype is `Object.prototype` or `null`. */
+function isPlainObject(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
 /** The host identity a stamp-less (core/bundled) registration inherits. */
 export type HostPrimitiveIdentity = {
   readonly packageName: string;
@@ -670,6 +728,7 @@ export function planPrimitiveRegistration(input: PlanPrimitiveInput): PlannedPri
   const normalized = input.name.toLowerCase();
   const registrationDeclaredClass = readDeclaredDelegatedChatClass(input.config);
   const declarationMalformed = readDeclarationIsMalformed(input.config);
+  const declaredOutward = readDeclaredOutward(input.config);
   const provenance = readPrimitiveProvenance(input.config);
 
   if (provenance.kind === "failed") {
@@ -679,6 +738,7 @@ export function planPrimitiveRegistration(input: PlanPrimitiveInput): PlannedPri
       order: input.order,
       declaredClass: registrationDeclaredClass,
       declarationMalformed,
+      declaredOutward,
       ownerPackage: null,
       resolvedVersion: null,
       capabilityKey: null,
@@ -707,6 +767,7 @@ export function planPrimitiveRegistration(input: PlanPrimitiveInput): PlannedPri
       order: input.order,
       declaredClass: registrationDeclaredClass,
       declarationMalformed,
+      declaredOutward,
       ownerPackage: null,
       resolvedVersion: null,
       capabilityKey: null,
@@ -758,6 +819,7 @@ export function planPrimitiveRegistration(input: PlanPrimitiveInput): PlannedPri
     order: input.order,
     declaredClass,
     declarationMalformed,
+    declaredOutward,
     ownerPackage,
     resolvedVersion,
     capabilityKey,

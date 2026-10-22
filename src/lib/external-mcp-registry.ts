@@ -1665,42 +1665,50 @@ export async function devAttachTwentyBearerFromMintedKey(input: {
 }
 
 /**
- * DEV-ONLY (cinatra#4112): hand the Twenty workspace connection the REFUSED
- * development fixture account owns to the owner the dev-boot shell pushed (the
- * instance's first administrator). An earlier, private boot attached Twenty for
- * the fixture account; on a boot that refuses that account the connection must
- * follow the new owner, or the hook keeps a connection nobody can own and, once
- * its key dies, mints a key per boot that `saveTwentyConnection`'s
- * foreign-owner guard refuses.
+ * DEV/PREVIEW-ONLY (cinatra#4112, cinatra#4137): hand the install-made
+ * connection of the external-MCP server row `serverId` that the REFUSED
+ * development fixture account owns to the owner the boot shell pushed (the
+ * instance's first administrator). An earlier, private boot made the
+ * connection for the fixture account; on a boot that refuses that account the
+ * connection must follow the new owner, or the connector's hook keeps a
+ * connection nobody can own and, once its key dies, mints a key per boot that
+ * the sanctioned save's foreign-owner guard refuses. Generic: the connector's
+ * own devSetup hook asks for it through the host's dev-setup helpers, naming
+ * its row and answering `checkKey` (does its service still accept the stored
+ * key?); this registry names no connector.
  *
- * NARROW BY CONSTRUCTION: it acts only when an owner is pushed AND the
- * connection's live `externalMcp` identity is owned by `refusedFixtureUserId`,
- * the fixture account the shell refused on THIS boot. Any other owner is left
- * alone, so the foreign-owner guard keeps refusing a save under somebody else's
+ * NARROW BY CONSTRUCTION: it acts only when an owner is pushed AND the row's
+ * live `externalMcp` identity is owned by `refusedFixtureUserId`, the fixture
+ * account the shell refused on THIS boot. Any other owner is left alone, so
+ * the foreign-owner guard keeps refusing a save under somebody else's
  * connection exactly as before.
  *
- * NEVER WORSE THAN BEFORE. Only Twenty itself rejecting the stored key is a
- * reason to remove anything; every other uncertainty leaves the connection as
- * it is for a later boot:
+ * NEVER WORSE THAN BEFORE. Only the connector's service rejecting the stored
+ * key is a reason to remove anything; every other uncertainty leaves the
+ * connection as it is for a later boot:
  *   - The stored key cannot be read (the gated resolver answers nothing — the
  *     connection service's reader cannot tell a missing key from a failed
- *     read), or Twenty cannot be reached to check it: nothing changes
+ *     read), or the check cannot reach the service: nothing changes
  *     ("deferred").
- *   - Twenty answers the stored key with 401/403: the connection is removed
- *     through `disconnectTwentyConnection` ("cleared"), so the Twenty hook that
- *     runs next mints ONE fresh key and attaches it for the new owner.
- *   - The stored key authenticates: the key, the Nango connection and the row
- *     stay exactly as they are and only the OWNERSHIP moves — the fixture's
+ *   - The check answers "unauthorized": the connection is removed through
+ *     `disconnectExternalMcpServerConnection` ("cleared"), so the hook mints
+ *     ONE fresh key and attaches it for the new owner.
+ *   - The check answers "ok": the key, the Nango connection and the row stay
+ *     exactly as they are and only the OWNERSHIP moves — the fixture's
  *     identity is revoked and the new owner's identity is registered through
- *     the same identity seam `saveTwentyConnection` uses, with the same
- *     workspace grant seed ("reowned"; no key is minted, nothing is probed
- *     between the two writes). If the registration fails, an identity it left
- *     behind is revoked and the fixture's ownership is restored ("deferred").
+ *     the same identity seam the sanctioned save uses, with the same workspace
+ *     grant seed ("reowned"; no key is minted, nothing is checked between the
+ *     two writes). If the registration fails, an identity it left behind is
+ *     revoked and the fixture's ownership is restored ("deferred").
+ *   - A check that throws, or any other failure before a write: "failed".
  *
- * Never throws. SECRET BOUNDARY: the key is never logged or returned.
+ * Never throws. SECRET BOUNDARY: the key is never logged or returned; it goes
+ * to `checkKey` only.
  */
-export async function devReownRefusedFixtureTwentyConnection(input: {
+export async function devReownRefusedFixtureConnection(input: {
+  serverId: string;
   refusedFixtureUserId: string;
+  checkKey: (input: { apiKey: string; serverUrl: string }) => Promise<"ok" | "unauthorized" | "unreachable">;
 }): Promise<
   "no-owner" | "no-connection" | "not-fixture-owned" | "deferred" | "reowned" | "cleared" | "failed"
 > {
@@ -1716,7 +1724,7 @@ export async function devReownRefusedFixtureTwentyConnection(input: {
   try {
     identityStore = await import("@cinatra-ai/extensions/connection-identity-store");
     identitySeam = await import("@/lib/connection-identity-seam");
-    const row = getExternalMcpServerByIdFresh(TWENTY_WORKSPACE_ROW_ID);
+    const row = getExternalMcpServerByIdFresh(input.serverId);
     if (!row?.nangoConnectionId) return "no-connection";
     connectionId = row.nangoConnectionId;
     identity = await identityStore.readNangoConnectionByNaturalKey("externalMcp", connectionId);
@@ -1727,19 +1735,18 @@ export async function devReownRefusedFixtureTwentyConnection(input: {
     // a raw credential read. No answer is not proof the key is gone.
     const apiKey = await resolveExternalMcpServerBearer(row);
     if (typeof apiKey !== "string" || apiKey.length === 0) return "deferred";
-    const { restBase } = normalizeTwentyInstanceUrl(row.serverUrl);
-    const probe = await probeTwentyKey(restBase, apiKey);
-    if (probe === "unreachable") return "deferred";
-    if (probe === "unauthorized") {
-      await disconnectTwentyConnection();
+    const verdict = await input.checkKey({ apiKey, serverUrl: row.serverUrl });
+    if (verdict === "unauthorized") {
+      await disconnectExternalMcpServerConnection(input.serverId);
       return "cleared";
     }
+    if (verdict !== "ok") return "deferred";
   } catch {
     // Nothing has been written on any path that reaches here.
     return "failed";
   }
 
-  // probe === "ok": move the ownership only.
+  // verdict === "ok": move the ownership only.
   if (!identity || !connectionId) return "failed";
   const { softDeleteNangoConnection } = identityStore;
   const { registerSavedConnectionIdentity } = identitySeam;
@@ -1780,11 +1787,20 @@ export async function devReownRefusedFixtureTwentyConnection(input: {
 
 /**
  * Disconnect the Twenty workspace: remove the row, then best-effort delete the
- * Nango connection. The row is read FRESH (bypassing the TTL cache) so a stale
- * null cache on another worker cannot leave the Nango key behind.
+ * Nango connection (`disconnectExternalMcpServerConnection` on the Twenty row).
  */
 export async function disconnectTwentyConnection(): Promise<void> {
-  const row = getExternalMcpServerByIdFresh(TWENTY_WORKSPACE_ROW_ID);
+  await disconnectExternalMcpServerConnection(TWENTY_WORKSPACE_ROW_ID);
+}
+
+/**
+ * Disconnect one external-MCP server row: revoke its connection identity,
+ * remove the row, then best-effort delete the Nango connection. The row is read
+ * FRESH (bypassing the TTL cache) so a stale null cache on another worker
+ * cannot leave the Nango key behind.
+ */
+export async function disconnectExternalMcpServerConnection(serverId: string): Promise<void> {
+  const row = getExternalMcpServerByIdFresh(serverId);
   // Revocation ordering (codex diff-round-3 finding 2): soft-delete the
   // IDENTITY row before the registry row — cross-worker row caches can keep
   // serving the row for up to the cache TTL, and the identity soft-delete is
@@ -1803,7 +1819,7 @@ export async function disconnectTwentyConnection(): Promise<void> {
       // Best-effort: identity store unavailable — the row + token deletes below still run.
     }
   }
-  deleteExternalMcpServer(TWENTY_WORKSPACE_ROW_ID);
+  deleteExternalMcpServer(serverId);
   if (row?.nangoConnectionId && isNangoConfigured()) {
     // The identity row was soft-deleted above (before the row delete); the
     // upstream token delete stays best-effort. External-MCP rows have no blob
@@ -1814,4 +1830,17 @@ export async function disconnectTwentyConnection(): Promise<void> {
       // Best-effort: the row (the resolver binding) is already deleted.
     }
   }
+}
+
+/** Call-time row-only run-start read. No schema init, cache fill, endpoint
+ * sweep, bearer retrieval, or identity creation. The existing use-gate decides
+ * access after this reader; enabled row/address alone grants nobody use. */
+export async function listExternalMcpServersForPreflight(): Promise<ExternalMcpServerRecord[]> {
+  if (process.env.NEXT_PHASE === "phase-production-build") throw new Error("Connection metadata unavailable");
+  try {
+    const { runPostgresQueriesAsync } = await import("@/lib/postgres-async");
+    const [result] = await runPostgresQueriesAsync({connectionString:getPostgresConnectionString(),transaction:false,queries:[{text:`SELECT id, label, server_url, nango_connection_id, scope, org_id, user_id, enabled, allowed_tools, allowed_catalog_tools, transport, created_at, updated_at FROM "${q(postgresSchema)}"."external_mcp_servers" ORDER BY created_at ASC`}]});
+    if (!Array.isArray(result?.rows)) throw new Error();
+    return (result.rows as RawRow[]).map(toRecord);
+  } catch { throw new Error("Connection metadata unavailable"); }
 }

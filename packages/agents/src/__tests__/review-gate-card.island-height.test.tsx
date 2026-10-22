@@ -20,12 +20,18 @@
 // again. So the frame ends exactly where the last body ends, on every route and
 // in both palettes.
 //
-//   1. the frame height equals the island document's reported height for 1, 2
-//      and 6 targets (RED at dee3991d, where it equals 380 × the count);
-//   2. no target body is clipped — the reported content height is never greater
-//      than the frame height once the report has settled;
+// ONE FRAME PER PINNED TARGET (cinatra#4129). A pending gate that pins several
+// targets draws each target's header above its own island frame, so there is a
+// frame per target and each one is sized by ITS OWN document's report: every
+// reading below reads every frame, never the first one alone, and a report from
+// one target's document never sizes a sibling's frame.
+//
+//   1. every frame's height equals its own island document's reported height
+//      for 1, 2 and 6 targets (RED at dee3991d, where it equals 380 × the count);
+//   2. no target body is clipped — each reported content height is never
+//      greater than its frame's height once the report has settled;
 //   3. a dark-palette island paints the same rows as light at the same scroll
-//      offset — the repaint keeps the reported height rather than falling back
+//      offset — the repaint keeps each reported height rather than falling back
 //      to the constant.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -55,6 +61,11 @@ const ISLAND_MIN_HEIGHT = 380;
  *  readings below can state that they are no longer it. */
 const OLD_PER_TARGET_CONSTANT = 380;
 
+/** A real content height for each pinned target's own document, in pinned
+ *  order — none a multiple of the old constant, and no two alike, so a frame
+ *  sized by a sibling's report reads wrong. */
+const REPORTED = [412, 913, 1772, 506, 644, 1031] as const;
+
 function headers(count: number): LifecycleTargetHeader[] {
   return Array.from({ length: count }, (_unused, i) => ({
     title: `Target ${i + 1}`,
@@ -74,6 +85,8 @@ function mockResolve(targetHeaders: LifecycleTargetHeader[]): void {
           state: PENDING,
           body: null,
           targetHeaders,
+          // Every target the gate pins is named: the route says so beside the headers.
+          targetHeadersComplete: true,
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
@@ -100,19 +113,21 @@ function mountCard() {
   );
 }
 
-const frameIn = (container: HTMLElement): HTMLIFrameElement => {
-  const frame = container.querySelector("iframe");
-  if (!frame) throw new Error("no island frame");
+/** Every island frame on the card, in pinned order — one per pinned target. */
+const framesIn = (container: HTMLElement): HTMLIFrameElement[] =>
+  Array.from(container.querySelectorAll("iframe"));
+
+const frameIn = (container: HTMLElement, index = 0): HTMLIFrameElement => {
+  const frame = framesIn(container)[index];
+  if (!frame) throw new Error(`no island frame ${index + 1}`);
   return frame;
 };
 
-const frameHeightIn = (container: HTMLElement): number =>
-  Number.parseFloat(frameIn(container).style.height);
+const frameHeightIn = (frame: HTMLIFrameElement): number => Number.parseFloat(frame.style.height);
 
-/** THE ISLAND SPEAKS. One number, posted by the island document at its own
+/** THE ISLAND SPEAKS. One number, posted by one island document at its own
  *  origin — exactly the shape the reporter inside the island sends. */
-async function islandReports(container: HTMLElement, height: number): Promise<void> {
-  const frame = frameIn(container);
+async function islandReports(frame: HTMLIFrameElement, height: number): Promise<void> {
   await act(async () => {
     window.dispatchEvent(
       new MessageEvent("message", {
@@ -135,42 +150,48 @@ afterEach(() => {
 // 1 — the frame is as tall as the island says it is, whatever the pinned count.
 // ---------------------------------------------------------------------------
 
-describe("the frame height is the island document's own reported height", () => {
-  // A real content height per pinned count — none of them a multiple of the
-  // old per-target constant, because content is not a multiple of anything.
-  for (const [count, reported] of [
-    [1, 412],
-    [2, 913],
-    [6, 1772],
-  ] as const) {
-    it(`sizes the frame at the ${reported}px the island reports for ${count} target(s)`, async () => {
+describe("each frame's height is its own island document's reported height", () => {
+  for (const count of [1, 2, 6]) {
+    it(`sizes each of the ${count} frame(s) at the height its own island reports`, async () => {
       paintHost("light");
       mockResolve(headers(count));
       const { container } = mountCard();
       await settle();
-      await act(async () => {
-        fireEvent.load(frameIn(container));
-      });
 
       // One header per pinned target — the card's reading of the pinned set is
-      // unchanged; only the frame's height stops being derived from it.
+      // unchanged; only the frame's height stops being derived from it. And one
+      // frame per pinned target, each under its own header (cinatra#4129).
       expect(
         container.querySelectorAll('[data-conformance-id="review-target-header"]').length,
       ).toBe(count);
+      expect(framesIn(container)).toHaveLength(count);
+      await act(async () => {
+        for (const frame of framesIn(container)) fireEvent.load(frame);
+      });
 
-      await islandReports(container, reported);
+      // Each document speaks for its own frame, the last first, so a frame that
+      // took a sibling's report would hold the wrong number.
+      for (let index = count - 1; index >= 0; index -= 1) {
+        await islandReports(frameIn(container, index), REPORTED[index]);
+      }
 
-      expect(frameIn(container).style.height).toBe(`${reported}px`);
-      expect(frameHeightIn(container)).not.toBe(OLD_PER_TARGET_CONSTANT * count);
+      const frames = framesIn(container);
+      expect(frames).toHaveLength(count);
+      frames.forEach((frame, index) => {
+        expect(frame.style.height).toBe(`${REPORTED[index]}px`);
+        expect(frameHeightIn(frame)).not.toBe(OLD_PER_TARGET_CONSTANT * count);
+      });
     });
   }
 
-  it("holds a sane floor until the island has reported anything", async () => {
+  it("holds a sane floor in every frame until its island has reported anything", async () => {
     paintHost("light");
     mockResolve(headers(6));
     const { container } = mountCard();
     await settle();
-    expect(frameIn(container).style.height).toBe(`${ISLAND_MIN_HEIGHT}px`);
+    const frames = framesIn(container);
+    expect(frames).toHaveLength(6);
+    for (const frame of frames) expect(frame.style.height).toBe(`${ISLAND_MIN_HEIGHT}px`);
   });
 
   it("keeps the floor when the island reports less than it", async () => {
@@ -178,7 +199,7 @@ describe("the frame height is the island document's own reported height", () => 
     mockResolve(headers(1));
     const { container } = mountCard();
     await settle();
-    await islandReports(container, 120);
+    await islandReports(frameIn(container), 120);
     expect(frameIn(container).style.height).toBe(`${ISLAND_MIN_HEIGHT}px`);
   });
 
@@ -187,6 +208,7 @@ describe("the frame height is the island document's own reported height", () => 
     mockResolve(headers(6));
     const { container } = mountCard();
     await settle();
+    expect(framesIn(container)).toHaveLength(6);
     await act(async () => {
       window.dispatchEvent(
         new MessageEvent("message", {
@@ -199,12 +221,23 @@ describe("the frame height is the island document's own reported height", () => 
         new MessageEvent("message", {
           data: { type: "some.other.message", height: 9999 },
           origin: window.location.origin,
-          source: frameIn(container).contentWindow,
+          source: frameIn(container, 0).contentWindow,
         }),
       );
       await Promise.resolve();
     });
-    expect(frameIn(container).style.height).toBe(`${ISLAND_MIN_HEIGHT}px`);
+    const floored = framesIn(container);
+    expect(floored).toHaveLength(6);
+    for (const frame of floored) expect(frame.style.height).toBe(`${ISLAND_MIN_HEIGHT}px`);
+
+    // A SIBLING'S DOCUMENT names its own frame's height and no other: the second
+    // target's report sizes the second frame alone.
+    await islandReports(frameIn(container, 1), REPORTED[1]);
+    const sized = framesIn(container);
+    expect(sized).toHaveLength(6);
+    sized.forEach((frame, index) => {
+      expect(frame.style.height).toBe(index === 1 ? `${REPORTED[1]}px` : `${ISLAND_MIN_HEIGHT}px`);
+    });
   });
 });
 
@@ -213,34 +246,49 @@ describe("the frame height is the island document's own reported height", () => 
 // ---------------------------------------------------------------------------
 
 describe("no target body is clipped and no empty panel is drawn", () => {
-  it("leaves the island's whole content inside the frame, with no tail beneath it", async () => {
+  it("leaves each island's whole content inside its frame, with no tail beneath it", async () => {
     paintHost("light");
     mockResolve(headers(6));
     const { container } = mountCard();
     await settle();
+    expect(framesIn(container)).toHaveLength(6);
     await act(async () => {
-      fireEvent.load(frameIn(container));
+      for (const frame of framesIn(container)) fireEvent.load(frame);
     });
 
-    // The island document's own scrollHeight, as its reporter measures it.
-    const islandScrollHeight = 1772;
-    await islandReports(container, islandScrollHeight);
+    // Each island document's own scrollHeight, as its reporter measures it.
+    for (let index = 0; index < 6; index += 1) {
+      await islandReports(frameIn(container, index), REPORTED[index]);
+    }
 
-    // NOT GREATER THAN THE FRAME — the sixth target's body ends inside it.
-    expect(islandScrollHeight).toBeLessThanOrEqual(frameHeightIn(container));
-    // AND NOT LESS — the 508px of empty panel the twelfth round measured is
-    // exactly this difference, and it is zero.
-    expect(frameHeightIn(container) - islandScrollHeight).toBe(0);
+    const reported = framesIn(container);
+    expect(reported).toHaveLength(6);
+    reported.forEach((frame, index) => {
+      const islandScrollHeight = REPORTED[index];
+      // NOT GREATER THAN ITS FRAME — this target's body ends inside it, the
+      // sixth's included.
+      expect(islandScrollHeight).toBeLessThanOrEqual(frameHeightIn(frame));
+      // AND NOT LESS — the 508px of empty panel the twelfth round measured is
+      // exactly this difference, and it is zero in every frame.
+      expect(frameHeightIn(frame) - islandScrollHeight).toBe(0);
+    });
   });
 
-  it("follows the island down when its content settles shorter", async () => {
+  it("follows each island down when its content settles shorter", async () => {
     paintHost("light");
     mockResolve(headers(6));
     const { container } = mountCard();
     await settle();
-    await islandReports(container, 2280);
-    await islandReports(container, 1772);
-    expect(frameIn(container).style.height).toBe("1772px");
+    expect(framesIn(container)).toHaveLength(6);
+    for (let index = 0; index < 6; index += 1) {
+      await islandReports(frameIn(container, index), 2280);
+      await islandReports(frameIn(container, index), REPORTED[index]);
+    }
+    const settled = framesIn(container);
+    expect(settled).toHaveLength(6);
+    settled.forEach((frame, index) => {
+      expect(frame.style.height).toBe(`${REPORTED[index]}px`);
+    });
   });
 });
 
@@ -249,34 +297,39 @@ describe("no target body is clipped and no empty panel is drawn", () => {
 // ---------------------------------------------------------------------------
 
 describe("a dark-palette island paints the same rows as light at the same scroll offset", () => {
-  it("keeps the reported height across the palette repaint", async () => {
+  it("keeps every reported height across the palette repaint", async () => {
     paintHost("light");
     mockResolve(headers(6));
     const { container } = mountCard();
     await settle();
+    expect(framesIn(container)).toHaveLength(6);
     await act(async () => {
-      fireEvent.load(frameIn(container));
+      for (const frame of framesIn(container)) fireEvent.load(frame);
     });
-    await islandReports(container, 1772);
+    for (let index = 0; index < 6; index += 1) {
+      await islandReports(frameIn(container, index), REPORTED[index]);
+    }
 
-    const light = frameIn(container).style.height;
-    expect(light).toBe("1772px");
-    expect(frameIn(container).getAttribute("src")).toContain("scheme=light");
+    const light = framesIn(container).map((frame) => frame.style.height);
+    expect(light).toEqual(REPORTED.map((height) => `${height}px`));
+    for (const frame of framesIn(container)) expect(frame.getAttribute("src")).toContain("scheme=light");
 
-    // The reader switches the surface to dark. The island follows the host, on
-    // the SAME identity — so the frame is not remounted and the height the
-    // island already reported is not thrown away.
+    // The reader switches the surface to dark. Each island follows the host, on
+    // the SAME identity — so no frame is remounted and the height each island
+    // already reported is not thrown away.
     await act(async () => {
       paintHost("dark");
       await Promise.resolve();
     });
     await settle();
 
-    expect(frameIn(container).getAttribute("src")).toContain("scheme=dark");
-    // THE SAME BOX, so the same rows sit at the same offset in both palettes:
-    // a tail that draws nothing in dark where light draws ink is a tail this
-    // frame no longer has.
-    expect(frameIn(container).style.height).toBe(light);
-    expect(frameHeightIn(container)).not.toBe(OLD_PER_TARGET_CONSTANT * 6);
+    const frames = framesIn(container);
+    expect(frames).toHaveLength(6);
+    for (const frame of frames) expect(frame.getAttribute("src")).toContain("scheme=dark");
+    // THE SAME BOXES, so the same rows sit at the same offset in both palettes:
+    // a tail that draws nothing in dark where light draws ink is a tail no
+    // frame has any longer.
+    expect(frames.map((frame) => frame.style.height)).toEqual(light);
+    for (const frame of frames) expect(frameHeightIn(frame)).not.toBe(OLD_PER_TARGET_CONSTANT * 6);
   });
 });

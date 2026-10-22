@@ -50,7 +50,7 @@ const EXT_MCP_ROW = {
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-02T00:00:00Z",
 };
-const extMcpCalls: Record<string, unknown[][]> = { resolveBearer: [] };
+const extMcpCalls: Record<string, unknown[][]> = { resolveBearer: [], devAttachTwentyBearerFromMintedKey: [] };
 vi.mock("@/lib/external-mcp-registry", () => ({
   EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY: "cinatra-external-mcp",
   upsertExternalMcpServer: async () => ({}),
@@ -60,6 +60,10 @@ vi.mock("@/lib/external-mcp-registry", () => ({
   resolveExternalMcpServerBearer: async (...args: unknown[]) => {
     extMcpCalls.resolveBearer.push(args);
     return "bearer-jwt";
+  },
+  devAttachTwentyBearerFromMintedKey: async (...args: unknown[]) => {
+    extMcpCalls.devAttachTwentyBearerFromMintedKey.push(args);
+    return { resolved: true, connectionId: "unit-connection" };
   },
 }));
 // mcp-server-connector setup-page surface (cinatra#612): the host binds the
@@ -1166,5 +1170,53 @@ describe("transport-tail connection services (cinatra#172 Stage H4)", () => {
     // check): deny -> true; a generic error -> false.
     expect(gate.isConnectionUseDenied(thrown)).toBe(true);
     expect(gate.isConnectionUseDenied(new Error("boom"))).toBe(false);
+  });
+});
+
+// cinatra#4098 — the dev-only devSetup writers answer on a preview instance
+// (the `preview` install profile on a production runtime) by the same rule
+// that admits the connector auto-setup; a production deployment is refused.
+// `isAppDevelopmentMode` is mocked false for this whole file.
+describe("dev-only devSetup writers on a preview instance (cinatra#4098)", () => {
+  const ENV_KEYS = ["CINATRA_RUNTIME_MODE", "CINATRA_INSTALL_PROFILE", "NODE_ENV"] as const;
+  const env = process.env as Record<string, string | undefined>;
+
+  async function attachUnder(values: Partial<Record<(typeof ENV_KEYS)[number], string>>): Promise<unknown> {
+    const saved = Object.fromEntries(ENV_KEYS.map((k) => [k, env[k]]));
+    for (const k of ENV_KEYS) {
+      if (values[k] === undefined) delete env[k];
+      else env[k] = values[k];
+    }
+    try {
+      const registry = resolveSingle<{
+        devAttachTwentyBearer(input: { instanceUrl: string; apiKey: string }): Promise<unknown>;
+      }>(HOST_CONNECTOR_SERVICE_CAPABILITIES.externalMcpRegistry);
+      return await registry.devAttachTwentyBearer({ instanceUrl: "http://localhost:3300", apiKey: "unit-key" });
+    } finally {
+      for (const k of ENV_KEYS) {
+        if (saved[k] === undefined) delete env[k];
+        else env[k] = saved[k];
+      }
+    }
+  }
+
+  it("a preview instance reaches the Twenty attach writer", async () => {
+    const before = extMcpCalls.devAttachTwentyBearerFromMintedKey.length;
+    await expect(
+      attachUnder({ CINATRA_RUNTIME_MODE: "production", NODE_ENV: "production", CINATRA_INSTALL_PROFILE: "preview" }),
+    ).resolves.toEqual({ resolved: true, connectionId: "unit-connection" });
+    expect(extMcpCalls.devAttachTwentyBearerFromMintedKey.length).toBe(before + 1);
+  });
+
+  it("a production deployment is still refused the Twenty attach writer", async () => {
+    const before = extMcpCalls.devAttachTwentyBearerFromMintedKey.length;
+    for (const values of [
+      { CINATRA_RUNTIME_MODE: "production", NODE_ENV: "production" },
+      { CINATRA_RUNTIME_MODE: "production", NODE_ENV: "production", CINATRA_INSTALL_PROFILE: "demo" },
+      { NODE_ENV: "production", CINATRA_INSTALL_PROFILE: "preview" },
+    ]) {
+      await expect(attachUnder(values)).rejects.toThrow(/refused outside development/);
+    }
+    expect(extMcpCalls.devAttachTwentyBearerFromMintedKey.length).toBe(before);
   });
 });

@@ -23,6 +23,11 @@ let _pool: Pool | null = null;
 function pool(): Pool {
   if (!_pool) {
     _pool = new Pool({ connectionString: process.env.SUPABASE_DB_URL ?? "postgres://localhost" });
+    // An idle connection the database drops makes the pool emit 'error'; with no
+    // listener that ends the process (cinatra#4151).
+    _pool.on("error", (err) => {
+      console.error("[agent-project-access] pg pool idle client error:", err.message);
+    });
   }
   return _pool;
 }
