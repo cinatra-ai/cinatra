@@ -5,10 +5,10 @@
 //          bytes as given, and reports whether THIS statement inserted.
 //   H-bind `updateConnectorConfigInDatabase` reads the raw row, then persists
 //          with ONE conditional statement (UPDATE ... RETURNING when present,
-//          the insert above when absent); on success the next
-//          `readConnectorConfigFromDatabase` inside the TTL is served from the
-//          process cache with the stored value; on a store failure the cache
-//          entry is evicted and the one log line carries no stored value. A
+//          the insert above when absent); on success the cache entry is
+//          evicted, so the next `readConnectorConfigFromDatabase` reads the
+//          row again (another writer's later change included); on a store
+//          failure the entry is evicted and the one log line carries no stored value. A
 //          store failure is thrown in the REAL bridge's shape (`resultsOrThrow`
 //          over `serializeWorkerError`), which keeps the message and drops the
 //          driver's `code`: the live line therefore carries no sqlstate.
@@ -24,6 +24,8 @@ const fake = vi.hoisted(() => ({
   throwAt: null as null | { n: number; error: unknown },
   // An override of the insert's rows (to pin the boolean mapping).
   insertRows: null as null | unknown[],
+  // Another writer, run right after a swap or an insert landed; null = none.
+  afterLanded: null as null | (() => void),
 }));
 
 // The two conditional statements, exactly as the binding must send them
@@ -56,12 +58,14 @@ vi.mock("@/lib/postgres-sync", () => ({
         const [next, casKey, expected] = q.values as [string, string, string];
         if (fake.meta.get(casKey) !== expected) return { rows: [], rowCount: 0 };
         fake.meta.set(casKey, next);
+        fake.afterLanded?.();
         return { rows: [{ key: casKey }], rowCount: 1 };
       }
       if (q.text === INSERT_TEXT) {
         if (fake.insertRows) return { rows: fake.insertRows, rowCount: fake.insertRows.length };
         if (fake.meta.has(key)) return { rows: [], rowCount: 0 };
         fake.meta.set(key, String(q.values?.[1]));
+        fake.afterLanded?.();
         return { rows: [{ key }], rowCount: 1 };
       }
       throw new Error(`unexpected query in this test: ${q.text}`);
@@ -86,6 +90,7 @@ beforeEach(() => {
   fake.meta.clear();
   fake.throwAt = null;
   fake.insertRows = null;
+  fake.afterLanded = null;
   fake.readMetaText = buildReadMetadataQuery("cinatra_test", "probe").text;
   globalThis.__cinatraConnectorConfigCache?.clear();
   warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -117,8 +122,10 @@ describe("H-sql: insertRawMetadataValueIfAbsentInternal", () => {
 });
 
 describe("H-bind: updateConnectorConfigInDatabase over the live port", () => {
-  it("row present: one raw read, one UPDATE ... RETURNING; the next read inside the TTL is the cached new value", () => {
+  it("row present: one raw read, one UPDATE ... RETURNING; the old cache entry is gone, the next read re-reads the row", () => {
     fake.meta.set(KEY, JSON.stringify({ accounts: [{ id: "x" }] }));
+    readConnectorConfigFromDatabase("linkedin", {}); // caches the old row
+    fake.queries.length = 0;
     updateConnectorConfigInDatabase("linkedin", (current) => ({
       ...(current as Record<string, unknown>),
       loggingEnabled: true,
@@ -130,10 +137,10 @@ describe("H-bind: updateConnectorConfigInDatabase over the live port", () => {
 
     fake.queries.length = 0;
     expect(readConnectorConfigFromDatabase("linkedin", {})).toEqual({ accounts: [{ id: "x" }], loggingEnabled: true });
-    expect(fake.queries).toEqual([]);
+    expect(fake.queries.map((q) => q.text)).toEqual([fake.readMetaText]);
   });
 
-  it("row absent: one raw read, one INSERT ... RETURNING; the cache then serves the inserted value", () => {
+  it("row absent: one raw read, one INSERT ... RETURNING; the next read re-reads the inserted row", () => {
     updateConnectorConfigInDatabase("linkedin", (current) => {
       expect(current).toBeNull();
       return { accounts: [] };
@@ -142,7 +149,20 @@ describe("H-bind: updateConnectorConfigInDatabase over the live port", () => {
     expect(fake.queries.map((q) => q.text)).toEqual([fake.readMetaText, INSERT_TEXT]);
     fake.queries.length = 0;
     expect(readConnectorConfigFromDatabase("linkedin", { fallback: true })).toEqual({ accounts: [] });
-    expect(fake.queries).toEqual([]);
+    expect(fake.queries.map((q) => q.text)).toEqual([fake.readMetaText]);
+  });
+
+  it.each([
+    ["an UPDATE ... RETURNING", true],
+    ["an INSERT ... RETURNING", false],
+  ])("another writer right after %s landed: the next read returns that writer's row, never this call's value", (_label, present) => {
+    if (present) fake.meta.set(KEY, JSON.stringify({ accounts: [] }));
+    fake.afterLanded = () => {
+      fake.meta.set(KEY, JSON.stringify({ accounts: [{ id: "other" }], clientId: "mine" }));
+    };
+    updateConnectorConfigInDatabase("linkedin", (current) => ({ ...(current as object), clientId: "mine" }));
+    fake.afterLanded = null;
+    expect(readConnectorConfigFromDatabase("linkedin", {})).toEqual({ accounts: [{ id: "other" }], clientId: "mine" });
   });
 
   it("the update derives from the stored row, never from a cached read", () => {

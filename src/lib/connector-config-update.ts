@@ -14,8 +14,8 @@
 // classes below, with a fixed message that names the key only and no `cause`.
 // The error the updater or the store threw is dropped. The only internal
 // record is one log line with the key and the code. A store failure adds an
-// allow-listed SQLSTATE only when the store's error carries one as its own
-// `code`; the Postgres bridge (postgres-sync.ts `resultsOrThrow`) does not
+// allow-listed SQLSTATE only when the store's error carries one as its own data
+// property `code`; the Postgres bridge (postgres-sync.ts `resultsOrThrow`) does not
 // carry it today, so the live line has none.
 // ---------------------------------------------------------------------------
 
@@ -34,7 +34,6 @@ export type ConnectorConfigUpdatePort = {
   compareAndSwap(key: string, nextRaw: string, expectedRaw: string): boolean;
   /** true = THIS call inserted the row. */
   insertIfAbsent(key: string, nextRaw: string): boolean;
-  cacheSet(key: string, value: unknown): void;
   cacheEvict(key: string): void;
   log(line: string): void;
 };
@@ -98,7 +97,9 @@ function sqlStateOf(error: unknown): string | undefined {
 
 const REFUSED = Symbol("refused");
 
-/** A thenable is refused; its rejection is marked handled first, so a refused async updater leaves no unhandled rejection. */
+const noop = () => {};
+
+/** A thenable is refused; its rejection, and that of a thenable its `then` returns, is marked handled first (no unhandled rejection). */
 function isThenable(value: object): boolean {
   let then: unknown;
   try {
@@ -107,7 +108,12 @@ function isThenable(value: object): boolean {
     return true;
   }
   if (typeof then !== "function") return false;
-  try { Reflect.apply(then, value, [undefined, () => {}]); } catch { /* refused anyway */ }
+  try {
+    const result: unknown = Reflect.apply(then, value, [undefined, noop]);
+    const next: unknown =
+      result !== null && (typeof result === "object" || typeof result === "function") ? (result as { then?: unknown }).then : undefined;
+    if (typeof next === "function") Reflect.apply(next, result, [undefined, noop]);
+  } catch { /* refused anyway */ }
   return true;
 }
 
@@ -169,6 +175,9 @@ function storableRaw(next: unknown, key: string): string {
  * Returns once one conditional persist landed; throws a value-free
  * {@link ConnectorConfigUpdateError} otherwise. A call that throws CONFLICT,
  * ROW_UNPARSEABLE, UPDATER_FAILED, UPDATE_INVALID or UNSUPPORTED wrote nothing.
+ * Cache (U8): success returns only after `cacheEvict(key)` returned after the
+ * landed write, so the next read re-reads the row; every error calls it once
+ * more before the throw, and stands if that call throws (an old entry may remain).
  */
 export function updateConnectorConfigVia(
   port: ConnectorConfigUpdatePort,
@@ -219,10 +228,11 @@ export function updateConnectorConfigVia(
           ? storeStep(() => port.insertIfAbsent(key, nextRaw), isBoolean)
           : storeStep(() => port.compareAndSwap(key, nextRaw, observedRaw), isBoolean);
       if (landed) {
+        // U8: never cache `nextRaw`; another writer may change the row after it landed.
         try {
-          port.cacheSet(key, JSON.parse(nextRaw)); // U8: the value as stored
+          port.cacheEvict(key);
         } catch {
-          try { port.cacheEvict(key); } catch { /* in-memory cache; nothing to undo */ }
+          throw new ConnectorConfigStoreFailedError(key); // the row changed; the cache may hold an old value
         }
         return;
       }
@@ -232,7 +242,7 @@ export function updateConnectorConfigVia(
     const error =
       caught instanceof ConnectorConfigUpdateError ? caught : new ConnectorConfigStoreFailedError(key);
     // U8/U11 hold for every thrown error, UNSUPPORTED included (U0 bars only the store calls before it).
-    try { port.cacheEvict(key); } catch { /* in-memory cache; nothing to undo */ }
+    try { port.cacheEvict(key); } catch { /* the error stands; an old entry may remain */ }
     const state = error instanceof ConnectorConfigStoreFailedError && sqlstate ? ` sqlstate=${sqlstate}` : "";
     try { port.log(`[connector-config.update] key=${key} code=${error.code}${state}`); } catch { /* record only */ }
     throw error;
@@ -263,9 +273,6 @@ const LIVE_CONNECTOR_CONFIG_UPDATE_PORT: ConnectorConfigUpdatePort = {
   readRaw: (key) => readRawMetadataStringInternal(key),
   compareAndSwap: (key, nextRaw, expectedRaw) => compareAndSwapMetadataValueInternal(key, nextRaw, expectedRaw),
   insertIfAbsent: (key, nextRaw) => insertRawMetadataValueIfAbsentInternal(key, nextRaw),
-  cacheSet: (key, value) => {
-    getConnectorConfigCache().set(key, { value: structuredClone(value), expiresAt: Date.now() + CONNECTOR_CONFIG_CACHE_TTL_MS });
-  },
   cacheEvict: (key) => {
     getConnectorConfigCache().delete(key);
   },
