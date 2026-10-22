@@ -1,11 +1,11 @@
 // ---------------------------------------------------------------------------
 // Fixed fixture data for the EMAIL GATE FIELD RENDERERS (cinatra#4319).
 //
-// cinatra-ai/design, specs/app-artifact-review.html, "The email gate fields":
-// the sender field, the drafts review and the recipients review. On a real
-// screen they need a connected send-as account or a CRM list, so the sample page
-// hands each one the snapshot the run's gate would hand it. Every value below is
-// invented: no credential, no mail account, no CRM connection.
+// The approved design spec, specs/app-artifact-review.html, "The email gate
+// fields": the sender field, the drafts review and the recipients review. On a
+// real screen they need a connected send-as account or a CRM list, so the sample
+// page hands each one the snapshot the run's gate would hand it. Every value
+// below is invented: no credential, no mail account, no CRM connection.
 //
 // A reading names the props the gate passes and nothing else. What the field
 // draws (labels, the waiting line, the count, the buttons) is the extension's.
@@ -13,11 +13,15 @@
 
 import type { GmailSendAsAliasOption } from "@cinatra-ai/sdk-ui/field-renderer-props";
 
-/** The field-renderer binding ids the app's build map keys these renderers by. */
-export const EMAIL_GATE_BINDING_IDS = {
-  sender: "@cinatra-ai/email-outreach-agent:gmail-sender",
-  drafts: "@cinatra-ai/email-drafting-agent:email-drafts-review",
-  recipients: "@cinatra-ai/email-recipient-selection-agent:campaign-recipients-review",
+/**
+ * The host's own neutral renderer KINDS (packages/agents/src/register-default-renderers.ts)
+ * these surfaces draw. The page names no extension and no binding id: it finds
+ * the binding that the build's generated bindings declare for the kind.
+ */
+export const EMAIL_GATE_RENDERER_KINDS = {
+  sender: "gmail-sender",
+  drafts: "email-drafts-review",
+  recipients: "campaign-recipients-review",
 } as const;
 
 export type EmailGateSurface =
@@ -25,10 +29,10 @@ export type EmailGateSurface =
   | "email-gate-drafts-review-field"
   | "email-gate-recipients-review-field";
 
-/** Per surface: the binding, plus the drawing's `data-state` and `data-field`. */
+/** Per surface: the renderer kind, plus the drawing's `data-state` and `data-field`. */
 export const EMAIL_GATE_SURFACES: ReadonlyArray<{
   surface: EmailGateSurface;
-  binding: string;
+  kind: string;
   fieldName: string;
   label?: string;
   dataState: string;
@@ -36,7 +40,7 @@ export const EMAIL_GATE_SURFACES: ReadonlyArray<{
 }> = [
   {
     surface: "email-gate-sender-field",
-    binding: EMAIL_GATE_BINDING_IDS.sender,
+    kind: EMAIL_GATE_RENDERER_KINDS.sender,
     fieldName: "sender",
     label: "Sender email",
     dataState: "empty error kind:artifact",
@@ -44,14 +48,14 @@ export const EMAIL_GATE_SURFACES: ReadonlyArray<{
   },
   {
     surface: "email-gate-drafts-review-field",
-    binding: EMAIL_GATE_BINDING_IDS.drafts,
+    kind: EMAIL_GATE_RENDERER_KINDS.drafts,
     fieldName: "drafts",
     dataState: "empty kind:artifact",
     dataField: "drafts=gate.draftBundle.draftedEmails",
   },
   {
     surface: "email-gate-recipients-review-field",
-    binding: EMAIL_GATE_BINDING_IDS.recipients,
+    kind: EMAIL_GATE_RENDERER_KINDS.recipients,
     fieldName: "recipients",
     dataState: "empty kind:artifact",
     dataField: "recipients=gate.confirmedRecipients",

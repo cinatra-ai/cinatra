@@ -33,7 +33,7 @@ import { LifecycleScheduleCardFixtures } from "./lifecycle-schedule-card-fixture
 import { RunStepRailConformanceFixture } from "./run-step-rail-conformance-fixtures";
 import { ToastConformanceFixture } from "./toast-fixture";
 import { ReviewGateStateConformanceFixtures } from "./review-gate-state-fixtures";
-import { EmailGateConformanceFixtures } from "./email-gate-fixtures";
+import { EmailGateConformanceFixtures } from "./gate-field-fixtures";
 import { LifecycleResolveFixtures } from "./lifecycle-resolve-fixtures";
 import { LifecycleTierFloorFixture } from "./lifecycle-tier-fixture";
 import { LifecycleOneOffFixtures } from "./lifecycle-one-off-fixtures";

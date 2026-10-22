@@ -3,16 +3,18 @@
 // ---------------------------------------------------------------------------
 // The EMAIL GATE FIELD RENDERERS on the conformance sample page (cinatra#4319).
 //
-// Mounts the REAL renderers @cinatra-ai/email-artifacts ships, loaded the way the
-// run's gate loads them: through the build's field-renderer component map, keyed
-// by binding id, checked against the props-contract version. Nothing is
-// substituted: when the map has no entry, or the module does not load, the
-// mount draws nothing of the field and says so with `data-load-state`, so a
-// missing renderer cannot pass for a drawn one.
+// Mounts the REAL renderers an extension ships, loaded the way the run's gate
+// loads them: through the build's field-renderer component map, keyed by binding
+// id, checked against the props-contract version. The page names no extension:
+// each surface names a host renderer KIND, and the binding is the one the
+// build's generated bindings declare for that kind (bindingForKind). Nothing is
+// substituted: when no binding answers, the map has no entry, or the module
+// does not load, the mount draws nothing of the field and says so with
+// `data-load-state`, so a missing renderer cannot pass for a drawn one.
 //
 // The gate hands a renderer a snapshot and takes its result back; this harness
 // hands the same snapshot and takes nothing back, so no field sends, saves or
-// fetches. Fixed data only: see email-gate-fixture-data.ts.
+// fetches. Fixed data only: see gate-field-fixture-data.ts.
 // ---------------------------------------------------------------------------
 
 import { Suspense, lazy, type ComponentType, type ReactElement } from "react";
@@ -21,6 +23,7 @@ import {
   FIELD_RENDERER_PROPS_API_VERSION,
   type FieldRendererProps,
 } from "@cinatra-ai/sdk-ui/field-renderer-props";
+import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-bindings";
 import { GENERATED_FIELD_RENDERER_COMPONENTS } from "@/lib/generated/field-renderer-components";
 
 import {
@@ -28,15 +31,34 @@ import {
   EMAIL_GATE_SURFACES,
   SENDER_ALIASES,
   type EmailGateReading,
-} from "./email-gate-fixture-data";
+} from "./gate-field-fixture-data";
 
 function Unavailable(): ReactElement {
   return <div data-load-state="unavailable" />;
 }
 
-function lazyRenderer(binding: string): ComponentType<FieldRendererProps> {
+/**
+ * The binding the build declares for a renderer `kind`, among those that ship a
+ * component. Refuses (null) when no such binding exists, and when the bindings
+ * of the kind take their components from more than one package, because the
+ * page could not tell which one the drawing means.
+ */
+export function bindingForKind(
+  kind: string,
+  bindings: ReadonlyArray<{ readonly id: string; readonly kind: string }> = GENERATED_FIELD_RENDERER_BINDINGS,
+  components: Readonly<Record<string, { readonly packageName: string }>> = GENERATED_FIELD_RENDERER_COMPONENTS,
+): string | null {
+  const ids = bindings
+    .filter((b) => b.kind === kind && Object.hasOwn(components, b.id))
+    .map((b) => b.id);
+  if (ids.length === 0) return null;
+  const packages = new Set(ids.map((id) => components[id].packageName));
+  return packages.size === 1 ? ids[0] : null;
+}
+
+function lazyRenderer(binding: string | null): ComponentType<FieldRendererProps> {
   return lazy(async () => {
-    const entry = GENERATED_FIELD_RENDERER_COMPONENTS[binding];
+    const entry = binding === null ? undefined : GENERATED_FIELD_RENDERER_COMPONENTS[binding];
     if (!entry || entry.propsApiVersion !== FIELD_RENDERER_PROPS_API_VERSION) {
       return { default: Unavailable };
     }
@@ -49,32 +71,32 @@ function lazyRenderer(binding: string): ComponentType<FieldRendererProps> {
   }) as ComponentType<FieldRendererProps>;
 }
 
-// One lazy component per binding, made once when this module loads, so the same
-// binding always yields the same component and no component is made while
-// rendering (react-hooks/static-components). Null prototype: a binding that is
+// One lazy component per kind, made once when this module loads, so the same
+// kind always yields the same component and no component is made while
+// rendering (react-hooks/static-components). Null prototype: a kind that is
 // not one of the page's surfaces finds nothing here, not an Object member.
-const RENDERER_BY_BINDING: Readonly<Record<string, ComponentType<FieldRendererProps>>> = (() => {
-  const byBinding: Record<string, ComponentType<FieldRendererProps>> = Object.create(null);
+const RENDERER_BY_KIND: Readonly<Record<string, ComponentType<FieldRendererProps>>> = (() => {
+  const byKind: Record<string, ComponentType<FieldRendererProps>> = Object.create(null);
   for (const s of EMAIL_GATE_SURFACES) {
-    byBinding[s.binding] ??= lazyRenderer(s.binding);
+    byKind[s.kind] ??= lazyRenderer(bindingForKind(s.kind));
   }
-  return byBinding;
+  return byKind;
 })();
 
 function noop(): void {}
 
 function Reading({
   reading,
-  binding,
+  kind,
   fieldName,
   label,
 }: {
   reading: EmailGateReading;
-  binding: string;
+  kind: string;
   fieldName: string;
   label?: string;
 }): ReactElement {
-  const Renderer = RENDERER_BY_BINDING[binding] ?? Unavailable;
+  const Renderer = RENDERER_BY_KIND[kind] ?? Unavailable;
   return (
     <div data-variant={reading.variant} className="max-w-[640px]">
       <Suspense fallback={<div data-load-state="loading" />}>
@@ -112,7 +134,7 @@ export function EmailGateConformanceFixtures(): ReactElement {
             <Reading
               key={reading.variant}
               reading={reading}
-              binding={s.binding}
+              kind={s.kind}
               fieldName={s.fieldName}
               label={s.label}
             />

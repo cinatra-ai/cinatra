@@ -2,7 +2,7 @@
 //
 // The conformance sample page's EMAIL GATE FIELDS (cinatra#4319): the sender
 // field, the drafts review and the recipients review, each under the conformance
-// id and the data-state / data-field the drawing in cinatra-ai/design
+// id and the data-state / data-field the approved design spec's drawing
 // (specs/app-artifact-review.html, "The email gate fields") gives it.
 //
 // The renderers are the REAL ones the email extension ships, loaded through the
@@ -13,7 +13,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, within } from "@testing-library/react";
 
-import { EmailGateConformanceFixtures } from "../email-gate-fixtures";
+import { EmailGateConformanceFixtures, bindingForKind } from "../gate-field-fixtures";
 
 afterEach(() => cleanup());
 
@@ -90,5 +90,55 @@ describe("email gate fields on the conformance sample page", () => {
     expect(await within(readOnly).findByText("3 recipients")).toBeTruthy();
     expect(within(readOnly).queryByRole("button")).toBeNull();
     expect(root.querySelector('[data-load-state="unavailable"]')).toBeNull();
+  });
+});
+
+// The page names a host renderer kind; bindingForKind picks the build's binding
+// for it. Synthetic maps only: no extension is named here either.
+describe("bindingForKind", () => {
+  const comp = (packageName: string) => ({ packageName });
+
+  it("returns the first binding of the kind that ships a component", () => {
+    const bindings = [
+      { id: "a:no-component", kind: "k" },
+      { id: "b:first", kind: "k" },
+      { id: "c:second", kind: "k" },
+      { id: "d:other", kind: "other" },
+    ];
+    const components = { "b:first": comp("p"), "c:second": comp("p"), "d:other": comp("q") };
+    expect(bindingForKind("k", bindings, components)).toBe("b:first");
+  });
+
+  it("refuses a kind no binding declares, or whose bindings ship no component", () => {
+    const bindings = [{ id: "a:x", kind: "k" }];
+    expect(bindingForKind("absent", bindings, { "a:x": comp("p") })).toBeNull();
+    expect(bindingForKind("k", bindings, {})).toBeNull();
+    expect(bindingForKind("", bindings, { "a:x": comp("p") })).toBeNull();
+  });
+
+  it("matches the kind exactly, not by case or prefix", () => {
+    const bindings = [{ id: "a:x", kind: "k-review" }];
+    const components = { "a:x": comp("p") };
+    expect(bindingForKind("K-REVIEW", bindings, components)).toBeNull();
+    expect(bindingForKind("k", bindings, components)).toBeNull();
+  });
+
+  it("refuses a kind whose bindings take components from two packages", () => {
+    const bindings = [
+      { id: "a:x", kind: "k" },
+      { id: "b:y", kind: "k" },
+    ];
+    expect(bindingForKind("k", bindings, { "a:x": comp("p"), "b:y": comp("q") })).toBeNull();
+  });
+
+  it("does not read an inherited member as a component", () => {
+    const bindings = [{ id: "toString", kind: "k" }];
+    expect(bindingForKind("k", bindings, {})).toBeNull();
+  });
+
+  it("finds a binding for each of the page's three kinds in the build", () => {
+    for (const kind of ["gmail-sender", "email-drafts-review", "campaign-recipients-review"]) {
+      expect(bindingForKind(kind), kind).not.toBeNull();
+    }
   });
 });
