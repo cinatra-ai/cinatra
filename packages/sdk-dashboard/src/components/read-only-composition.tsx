@@ -130,11 +130,47 @@ function ownValue(value: object, key: string): unknown {
   }
 }
 
+/** A stand-in origin for reading a root-relative path where no page exists. */
+const PATH_PROBE_ORIGIN = "http://read-only-composition.invalid";
+
+/**
+ * AN ADDRESS THE READER'S SESSION MAY GO TO: the session road sends the
+ * reader's credentials (`credentials: "include"`), so its address must be the
+ * page's own origin. Admitted are exactly
+ *   - a root-relative path: starts with "/" and not with "//", holds no
+ *     backslash, no whitespace and no control character, and still parses as a
+ *     path of the origin it is read against; or
+ *   - an absolute URL whose parsed origin EQUALS the page's origin, with no
+ *     user name or password in it.
+ * A parse that throws, a page without an origin ("null") and everything else —
+ * another origin or port, another scheme, "//host", "javascript:" — is refused.
+ */
+function isSameOriginAddress(apiUrl: string): boolean {
+  if (/[\\\s\u0000-\u001f\u007f]/.test(apiUrl)) return false;
+  if (apiUrl.startsWith("/")) {
+    if (apiUrl.startsWith("//")) return false;
+    try {
+      return new URL(apiUrl, PATH_PROBE_ORIGIN).origin === PATH_PROBE_ORIGIN;
+    } catch {
+      return false;
+    }
+  }
+  const pageOrigin = typeof window === "undefined" ? undefined : window.location?.origin;
+  if (typeof pageOrigin !== "string" || pageOrigin === "null" || pageOrigin.length === 0) return false;
+  try {
+    const url = new URL(apiUrl);
+    return url.origin === pageOrigin && url.username === "" && url.password === "";
+  } catch {
+    return false;
+  }
+}
+
 /**
  * THE ROAD, READ FAIL-CLOSED. A road is admitted only when it is a non-array
- * object whose own `road` equals `"none"`, or equals `"session"` with an own,
- * non-empty string `apiUrl`. Everything else is refused — the composition does
- * not guess which road a value it cannot read meant.
+ * object whose own `road` equals `"none"`, or equals `"session"` with an own
+ * string `apiUrl` of the page's own origin (`isSameOriginAddress`). Everything
+ * else is refused — the composition does not guess which road a value it cannot
+ * read meant, and never sends the reader's session to another origin.
  */
 function readDataRoad(dataRoad: unknown): ReadDataRoad {
   if (typeof dataRoad !== "object" || dataRoad === null || Array.isArray(dataRoad)) return REFUSED;
@@ -142,7 +178,7 @@ function readDataRoad(dataRoad: unknown): ReadDataRoad {
   if (road === "none") return { road: "none" };
   if (road === "session") {
     const apiUrl = ownValue(dataRoad, "apiUrl");
-    if (typeof apiUrl === "string" && apiUrl.length > 0) return { road: "session", apiUrl };
+    if (typeof apiUrl === "string" && isSameOriginAddress(apiUrl)) return { road: "session", apiUrl };
   }
   return REFUSED;
 }

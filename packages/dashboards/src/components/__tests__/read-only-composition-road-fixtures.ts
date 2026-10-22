@@ -8,6 +8,15 @@
 
 export const API = "/api/dashboards/cubejs-api/v1";
 
+/** The page's own origin under jsdom, and the same address written absolute. */
+export const PAGE_ORIGIN =
+  typeof window === "undefined" ? "http://localhost:3000" : window.location.origin;
+export const SAME_ORIGIN_API = `${PAGE_ORIGIN}${API}`;
+
+const PAGE = new URL(PAGE_ORIGIN);
+const OTHER_SCHEME = PAGE.protocol === "https:" ? "http:" : "https:";
+const OTHER_PORT = PAGE.port === "4999" ? "4998" : "4999";
+
 function accessorRoad(): object {
   const value = {};
   Object.defineProperty(value, "road", { enumerable: true, get: () => "session" });
@@ -34,6 +43,21 @@ export const REFUSED_ROADS: ReadonlyArray<readonly [string, unknown]> = [
   ["false", false],
   ["the number zero", 0],
   ["an array holding a road", [{ road: "session", apiUrl: API }]],
+  // The session road sends the reader's credentials: only the page's own origin.
+  ["a session road to another origin", { road: "session", apiUrl: "https://evil.example/cubejs-api/v1" }],
+  ["a session road to a protocol-relative address", { road: "session", apiUrl: "//evil.example/cubejs-api/v1" }],
+  ["a session road to a backslash address", { road: "session", apiUrl: "/\\evil.example/cubejs-api/v1" }],
+  ["a session road to a tab-split address", { road: "session", apiUrl: "/\t/evil.example/cubejs-api/v1" }],
+  ["a session road to a space-led address", { road: "session", apiUrl: " //evil.example/cubejs-api/v1" }],
+  ["a session road to a javascript address", { road: "session", apiUrl: "javascript:alert(1)" }],
+  ["a session road to a data address", { road: "session", apiUrl: "data:text/plain,x" }],
+  ["a session road to the page host on another scheme", { road: "session", apiUrl: `${OTHER_SCHEME}//${PAGE.host}${API}` }],
+  ["a session road to the page host on another port", { road: "session", apiUrl: `${PAGE.protocol}//${PAGE.hostname}:${OTHER_PORT}${API}` }],
+  ["a session road with a user name and password", { road: "session", apiUrl: `${PAGE.protocol}//user:pw@${PAGE.host}${API}` }],
+  ["a session road with the page origin as a user name", { road: "session", apiUrl: `${PAGE_ORIGIN}@evil.example${API}` }],
+  ["a session road to a host that starts like the page host", { road: "session", apiUrl: `${PAGE_ORIGIN}.evil.example${API}` }],
+  ["a session road to a relative path", { road: "session", apiUrl: "api/dashboards/cubejs-api/v1" }],
+  ["a session road to an address that does not parse", { road: "session", apiUrl: "http://[bad" }],
 ];
 
 export const QUERY = JSON.stringify({ measures: ["Items.count"], dimensions: ["Items.kind"] });

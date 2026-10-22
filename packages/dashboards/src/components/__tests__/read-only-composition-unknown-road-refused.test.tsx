@@ -24,6 +24,7 @@ import {
   CONFIGURED_PORTLETS,
   recordingFetch,
   REFUSED_ROADS,
+  SAME_ORIGIN_API,
   VisibleObserver,
   type FetchCall,
 } from "./read-only-composition-road-fixtures";
@@ -87,6 +88,16 @@ describe("the session road still fetches from its own address with the reader's 
     expect(document.querySelectorAll(REFUSAL)).toHaveLength(0);
     for (const call of calls) {
       expect(call.url.startsWith(`${API}/`)).toBe(true);
+      expect(call.credentials).toBe("include");
+    }
+  });
+
+  test("[guard] (f4) road session with an absolute address of the page's own origin reads the metadata there, with credentials", async () => {
+    render(<Portlet config={CONFIGURED} portletId="p1" dataRoad={{ road: "session", apiUrl: SAME_ORIGIN_API }} />);
+    await waitFor(() => expect(calls.map((call) => call.url)).toContain(`${SAME_ORIGIN_API}/meta`), { timeout: 15_000 });
+    expect(document.querySelectorAll(REFUSAL)).toHaveLength(0);
+    for (const call of calls) {
+      expect(call.url.startsWith(`${SAME_ORIGIN_API}/`)).toBe(true);
       expect(call.credentials).toBe("include");
     }
   });

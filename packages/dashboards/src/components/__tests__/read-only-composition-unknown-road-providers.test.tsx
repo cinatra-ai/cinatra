@@ -19,7 +19,7 @@ import React, { type ReactNode } from "react";
 import { afterAll, afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 
-import { API, REFUSED_ROADS } from "./read-only-composition-road-fixtures";
+import { API, REFUSED_ROADS, SAME_ORIGIN_API } from "./read-only-composition-road-fixtures";
 
 const rec = vi.hoisted(() => ({
   cube: [] as Record<string, unknown>[],
@@ -116,6 +116,14 @@ describe("the two named roads are still admitted (cinatra#3092 fold, MF2; guards
     render(<Dashboard config={CONFIG} dataRoad={{ road: "session", apiUrl: API }} />);
     expect(rec.cube).toHaveLength(1);
     expect(rec.cube[0]?.apiOptions).toEqual({ apiUrl: API, credentials: "include" });
+    expect(rec.dashboard).toHaveLength(1);
+    expect(document.querySelectorAll(REFUSAL)).toHaveLength(0);
+  });
+
+  test("[guard] (u5) road session with an absolute address of the page's own origin mounts the session provider over it", () => {
+    render(<Portlet config={CONFIG} portletId="p1" dataRoad={{ road: "session", apiUrl: SAME_ORIGIN_API }} />);
+    expect(rec.cube).toHaveLength(1);
+    expect(rec.cube[0]?.apiOptions).toEqual({ apiUrl: SAME_ORIGIN_API, credentials: "include" });
     expect(rec.dashboard).toHaveLength(1);
     expect(document.querySelectorAll(REFUSAL)).toHaveLength(0);
   });
