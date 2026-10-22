@@ -240,6 +240,19 @@ class this page's rule names: those two pins move only together with the
 drivers, harness mounts and stable-id contract that answer those surfaces, and
 until then the `push`-to-`main` arm stays red on those two.
 
+**Then two on 2026-10-23 — one reconciled hashes-only, one awaiting its
+drivers.** The design source republished the connectors manifest with the
+docs#242 merge, so `app-connectors` drifted and the `design-pin-drift` job was
+red on the default branch. Compared as parsed JSON with the pinned body,
+`schemaVersion`, `spec` and all eleven surfaces are unchanged and `contentHash`
+alone moved. The 2026-10-23 reconciliation below re-pinned it hashes-only.
+`app-components` drifts at the same time, with new surfaces
+(`scheduling-step-quarterly` and `scheduling-step-yearly` among them), which is
+the class this page's rule names: that pin moves only together with the
+drivers, harness mounts and stable-id contract that answer those surfaces, in
+its own pending change, and until then the `push`-to-`main` arm stays red on
+that one pin.
+
 Nine adoptions got them there and all nine are recorded below: the 2026-09-10
 adoption of `app-connectors`, whose published body redeclares the manifest
 (three sharing surfaces gained) and therefore moves with the drivers and harness
@@ -867,6 +880,38 @@ the stable-id contract rows land with the component. Every new surface is driven
 by a literal entry of the driver table, so
 `tests/e2e/design/conformance/allowlist.json` is untouched, and no body is
 frozen under the checker's fixtures.
+
+## Reconciliation record — 2026-10-23
+
+Measured 2026-10-23 against the manifests published under `publishedBaseUrl`,
+after the docs#242 merge republished the connectors manifest. All five bodies
+were fetched with one anonymous `curl -sS` each into a scratch directory
+outside every repository tree, and their hashes were compared with the five
+pins as this change leaves them. `app`, `app-extensions` and
+`app-notifications` came back byte-identical to the artifacts their pins
+already named. `app-connectors` had republished, and the adopted body was
+compared, as parsed JSON, with the committed copy under
+`tests/e2e/design/conformance/manifests/` that it replaces: `schemaVersion`,
+`spec` and all eleven surfaces are field-for-field identical, and only
+`contentHash` moved. This is the case "Why a hash-only re-pin is refused"
+names: the spec source changed under an unchanged surface list, so no driver,
+harness mount or allowlist entry moves with the pin. The committed artifact is
+now the verbatim published body, and both hashes of the entry in
+`conformance-pins.json` were re-derived from the adopted bytes on the branch —
+the manifest hash over the file's bytes (`2293c96c…` before, `1f0b66a9…` now),
+the spec-content hash read back out of the adopted body's own `contentHash`
+field — never typed. `app-components` still drifts: its published body adds
+surfaces, so it is not adopted here but by its own pending change, with the
+drivers, harness mounts and stable-id contract rows that answer them. No other
+pin moved.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-components` | `drift` | not adopted here — new surfaces, adopted with their drivers by its own pending change | not this diff |
+| `app-extensions` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-connectors` | `drift` | **hashes only** — byte-identical surface declarations (11 surfaces); `contentHash` moved | re-pin |
+| `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
 
 ## Running it locally
 
