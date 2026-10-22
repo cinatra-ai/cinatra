@@ -77,9 +77,10 @@ export type FieldRendererProps = {
    * this renderer's latest report with its gate: while a report for the gate on
    * screen is `false`, its Continue is unavailable and a press sends nothing.
    * The report goes when this renderer unmounts or another takes its place, and
-   * no other renderer's report goes with it. A renderer that never reports
-   * leaves the Continue as it was. Optional and additive, so the ABI generation
-   * stays 1.
+   * no other renderer's report goes with it; a report made after that holds
+   * nothing. A gate of another review task gets a new renderer, which reports
+   * for itself. A renderer that never reports leaves the Continue as it was.
+   * Optional and additive, so the ABI generation stays 1.
    */
   onValidityChange?: (valid: boolean) => void;
   /**

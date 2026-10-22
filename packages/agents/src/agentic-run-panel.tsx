@@ -495,7 +495,9 @@ function withoutLifecycleCardRef(
  * Draws a gate's renderer so that its validity reports (cinatra#3562, see
  * `GateValidityStore`) are its own: the renderer reports under an owner that
  * lives as long as it does, and the release drops only that owner's report.
- * Another renderer in its place gets a new owner.
+ * Another renderer in its place gets a new owner. The owner is attached and
+ * released in a layout effect: a renderer's own layout effects run first, so a
+ * report it makes at mount is kept and counts at the attach, in the same commit.
  */
 function GateValidityOwner({
   renderer: Renderer,
@@ -509,7 +511,10 @@ function GateValidityOwner({
 }): ReactNode {
   const [owner, setOwner] = useState(() => ({ renderer: Renderer }));
   if (owner.renderer !== Renderer) setOwner({ renderer: Renderer });
-  useEffect(() => () => store.release(owner), [store, owner]);
+  useLayoutEffect(() => {
+    store.attach(owner);
+    return () => store.release(owner);
+  }, [store, owner]);
   return <Renderer {...props} onValidityChange={(valid) => store.report(owner, gateKey, valid)} />;
 }
 
@@ -2995,8 +3000,12 @@ export function AgenticRunPanel({
                       // localValue, which a non-string next value does not clear)
                       // would pre-fill field 2 under field 2's label. fieldName is
                       // undefined for mid-run gates, so those keep their existing
-                      // xRenderer-keyed identity exactly.
-                      key={`${effectiveHitlContext.xRenderer}::${effectiveHitlContext.fieldName ?? ""}`}
+                      // xRenderer-keyed identity. The review task is in the key
+                      // too (cinatra#3562): a gate of another review task with
+                      // the same renderer and field gets a new renderer and a
+                      // new validity owner, never the one that reported on the
+                      // gate before it.
+                      key={setupGateKey}
                       // The gate's REAL field identity (cinatra#2541) — the same
                       // seam the orchestrator stepper regressed at, with the
                       // same consequence: `fieldName` is what the renderer

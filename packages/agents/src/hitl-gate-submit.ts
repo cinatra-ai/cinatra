@@ -542,42 +542,73 @@ export function applyAttachmentEnvelopeUserResponseOnly(
  * Where a run surface keeps what its field renderers reported through
  * `onValidityChange`. Each drawn renderer reports under an owner of its own and
  * keeps one report, its latest, made on the gate it is drawn for. While any
- * report on the gate on screen is `false`, the Continue drawn for that gate is
- * unavailable and a press sends nothing.
+ * report on the gate on screen is anything but `true`, the Continue drawn for
+ * that gate is unavailable and a press sends nothing.
  *
- * A report lives exactly as long as the renderer that made it. Each surface
- * releases the owner when its renderer leaves the screen or another renderer
- * takes its place, and the release drops that owner's report and no other. So a
- * renderer that never reports blocks nothing (cinatra#3532) even where an
- * earlier one reported `false`, and a report the next renderer makes before
- * that release, from any effect, stays.
+ * Only the report of an attached owner counts. Each surface attaches the owner
+ * while its renderer is on the screen and releases it when the renderer leaves
+ * or another renderer takes its place. The release drops that owner's report
+ * and no other, so a renderer that never reports blocks nothing (cinatra#3532)
+ * even where an earlier one reported `false`. A report made while the owner is
+ * not attached, before the attach or after the release, holds nothing; the
+ * owner keeps it, and it counts when the same owner is attached again (as
+ * StrictMode and a hidden subtree that is shown again do). A surface attaches a
+ * new owner for each renderer, so a report that arrives after its renderer has
+ * left the screen never holds a gate again.
  */
 export type GateValidityStore = {
+  /** The renderer drawn under `owner` is on the screen: its report counts from now on. */
+  attach: (owner: object) => void;
   /** The renderer drawn under `owner`, on gate `key`, reports whether its value may be sent. */
   report: (owner: object, key: string, valid: boolean) => void;
-  /** The renderer drawn under `owner` is gone: its report goes, and no other. */
+  /** The renderer drawn under `owner` has left the screen: its report goes, and no other. */
   release: (owner: object) => void;
-  /** True while any report on `key` is anything but `true`. */
+  /** True while any report of an attached owner on `key` is anything but `true`. */
   isHeld: (key: string | null) => boolean;
   subscribe: (listener: () => void) => () => void;
 };
 
+type GateValidityReport = { key: string; valid: boolean };
+
 export function createGateValidityStore(): GateValidityStore {
-  const reports = new Map<object, { key: string; valid: boolean }>();
+  /** The reports of the attached owners: only these hold a gate. */
+  const reports = new Map<object, GateValidityReport>();
+  const attached = new WeakSet<object>();
+  /** The latest report of an owner that is not attached; it holds nothing. */
+  const kept = new WeakMap<object, GateValidityReport>();
   const listeners = new Set<() => void>();
   const changed = () => {
     for (const listener of listeners) listener();
   };
   return {
+    attach: (owner) => {
+      if (attached.has(owner)) return;
+      attached.add(owner);
+      const last = kept.get(owner);
+      if (last === undefined) return;
+      kept.delete(owner);
+      reports.set(owner, last);
+      changed();
+    },
     report: (owner, key, valid) => {
       const next = { key, valid: valid === true };
+      if (!attached.has(owner)) {
+        kept.set(owner, next);
+        return;
+      }
       const last = reports.get(owner);
       if (last !== undefined && last.key === next.key && last.valid === next.valid) return;
       reports.set(owner, next);
       changed();
     },
     release: (owner) => {
-      if (reports.delete(owner)) changed();
+      if (!attached.has(owner)) return;
+      attached.delete(owner);
+      const last = reports.get(owner);
+      if (last === undefined) return;
+      reports.delete(owner);
+      kept.set(owner, last);
+      changed();
     },
     isHeld: (key) =>
       key !== null && [...reports.values()].some((r) => r.key === key && !r.valid),

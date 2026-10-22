@@ -152,6 +152,7 @@ function streamResultFor(
   xRenderer: string,
   fieldName: string,
   schema: Record<string, unknown>,
+  reviewTaskId = "setup-run-3532",
 ) {
   return {
     status: "pending_approval",
@@ -162,7 +163,7 @@ function streamResultFor(
       schema,
       xRenderer,
       values: { offeringCompanyWebsite: "https://example.com" },
-      reviewTaskId: "setup-run-3532",
+      reviewTaskId,
       fieldName,
     },
     streamedText: "",
@@ -188,10 +189,11 @@ async function setGate(
   xRenderer: string,
   fieldName: string,
   schema: Record<string, unknown>,
+  reviewTaskId?: string,
 ) {
   const { useAgUiRunStream } = await import("../use-ag-ui-run-stream");
   (useAgUiRunStream as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
-    streamResultFor(xRenderer, fieldName, schema),
+    streamResultFor(xRenderer, fieldName, schema, reviewTaskId),
   );
 }
 
@@ -473,13 +475,45 @@ function LayoutHeldRenderer({ onValidityChange }: FieldRendererProps) {
   return <p>Layout step</p>;
 }
 
+/**
+ * A step that keeps its own state and reports only when that state changes:
+ * nothing ticked at mount, so it reports `false` once, and again on a tick.
+ */
+const keptStep = { mounts: 0 };
+function KeptStateRenderer({ onValidityChange }: FieldRendererProps) {
+  const [ticked, setTicked] = React.useState(false);
+  React.useEffect(() => {
+    keptStep.mounts += 1;
+  }, []);
+  React.useEffect(() => {
+    onValidityChange?.(ticked);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reports on a change of its own state only
+  }, [ticked]);
+  return (
+    <Input type="checkbox" aria-label="View one" checked={ticked} onChange={() => setTicked(!ticked)} />
+  );
+}
+
 /** Mount the panel, and move it to another gate the way the stream does. */
-async function renderMovablePanel() {
+async function renderMovablePanel(options: { strict?: boolean } = {}) {
   const { AgenticRunPanel } = await import("../agentic-run-panel");
-  const view = render(<AgenticRunPanel {...PANEL_PROPS} />);
-  const moveTo = async (xRenderer: string, fieldName: string, schema: Record<string, unknown>) => {
-    await setGate(xRenderer, fieldName, schema);
-    view.rerender(<AgenticRunPanel {...PANEL_PROPS} />);
+  const draw = () =>
+    options.strict === true ? (
+      <React.StrictMode>
+        <AgenticRunPanel {...PANEL_PROPS} />
+      </React.StrictMode>
+    ) : (
+      <AgenticRunPanel {...PANEL_PROPS} />
+    );
+  const view = render(draw());
+  const moveTo = async (
+    xRenderer: string,
+    fieldName: string,
+    schema: Record<string, unknown>,
+    reviewTaskId?: string,
+  ) => {
+    await setGate(xRenderer, fieldName, schema, reviewTaskId);
+    view.rerender(draw());
   };
   return { ...view, moveTo };
 }
@@ -734,5 +768,64 @@ describe("AgenticRunPanel — a renderer that reports its value unsendable (cina
     await waitFor(() => expect(productContinue()!.disabled).toBe(true));
     fireEvent.click(productContinue()!);
     expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
+
+  it("a gate of another review task with the same renderer and field gets a new renderer, which holds it", async () => {
+    keptStep.mounts = 0;
+    replaceTickingRenderer(TICKING_RENDERER_ID, KeptStateRenderer);
+    await setGate(TICKING_RENDERER_ID, "accountScope", { type: "string" });
+    const view = await renderMovablePanel();
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinue()!.disabled).toBe(true));
+    await view.moveTo(TICKING_RENDERER_ID, "accountScope", { type: "string" }, "setup-run-3532-next");
+
+    await waitFor(() => expect(keptStep.mounts).toBe(2));
+    await waitFor(() => expect(productContinue()!.disabled).toBe(true));
+    fireEvent.click(productContinue()!);
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(productContinue()!.disabled).toBe(false));
+  });
+
+  it("a report a renderer makes after it has left the screen holds nothing", async () => {
+    replaceTickingRenderer(TICKING_RENDERER_ID, HandleRenderer);
+    await setGate(TICKING_RENDERER_ID, "accountScope", { type: "string" });
+    const view = await renderMovablePanel();
+
+    await view.findByText("Handle step");
+    act(() => stepHandle.stage(["one"]));
+    await waitFor(() => expect(productContinue()?.disabled).toBe(false));
+    const lateReport = stepHandle.report;
+    replaceTickingRenderer(TICKING_RENDERER_ID, QuietTickedRenderer);
+    await view.moveTo(TICKING_RENDERER_ID, "accountScope", { type: "string" });
+    await waitFor(() =>
+      expect((view.getByRole("checkbox", { name: "View one" }) as HTMLInputElement).checked).toBe(true),
+    );
+    await waitFor(() => expect(productContinue()!.disabled).toBe(false));
+
+    act(() => lateReport(false));
+    expect(productContinue()!.disabled).toBe(false);
+  });
+
+  it("under StrictMode a renderer's report holds its gate exactly while it is false, and leaves with it", async () => {
+    await setGate(TICKING_RENDERER_ID, "accountScope", { type: "string" });
+    const view = await renderMovablePanel({ strict: true });
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinue()!.disabled).toBe(true));
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(productContinue()!.disabled).toBe(false));
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(productContinue()!.disabled).toBe(true));
+    fireEvent.click(productContinue()!);
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    replaceTickingRenderer(TICKING_RENDERER_ID, QuietTickedRenderer);
+    await view.moveTo(TICKING_RENDERER_ID, "accountScope", { type: "string" });
+    await waitFor(() =>
+      expect((view.getByRole("checkbox", { name: "View one" }) as HTMLInputElement).checked).toBe(true),
+    );
+    await waitFor(() => expect(productContinue()!.disabled).toBe(false));
   });
 });

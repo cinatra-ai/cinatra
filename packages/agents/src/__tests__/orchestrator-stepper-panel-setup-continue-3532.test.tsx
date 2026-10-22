@@ -234,6 +234,8 @@ async function mountGate(args: {
   fieldName: string;
   schema?: Record<string, unknown>;
   reviewTaskId?: string;
+  /** Draw the panel under React.StrictMode. */
+  strict?: boolean;
 }) {
   INTERRUPT = {
     schema: args.schema ?? { type: "string" },
@@ -243,17 +245,19 @@ async function mountGate(args: {
     fieldName: args.fieldName,
   };
   const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
-  const view = render(<OrchestratorStepperPanel {...baseProps()} />);
+  const draw = (element: React.ReactElement) =>
+    args.strict === true ? <React.StrictMode>{element}</React.StrictMode> : element;
+  const view = render(draw(<OrchestratorStepperPanel {...baseProps()} />));
   /** Advance the live gate under the mounted panel, as the setup loop does. */
-  const advanceTo = (next: { xRenderer: string; fieldName: string }) => {
+  const advanceTo = (next: { xRenderer: string; fieldName: string; reviewTaskId?: string }) => {
     INTERRUPT = {
       schema: args.schema ?? { type: "string" },
       xRenderer: next.xRenderer,
       values: {},
-      reviewTaskId: args.reviewTaskId ?? "setup-run-3532",
+      reviewTaskId: next.reviewTaskId ?? args.reviewTaskId ?? "setup-run-3532",
       fieldName: next.fieldName,
     };
-    view.rerender(<OrchestratorStepperPanel {...baseProps()} />);
+    view.rerender(draw(<OrchestratorStepperPanel {...baseProps()} />));
   };
   /** The run's own status, as the stream reports it (convergence, fix leg 3). */
   const setRunStatus = (nextStatus: string) => {
@@ -825,6 +829,25 @@ function HandleRenderer({ schema, onChange, onValidityChange }: FieldRendererPro
   return <p>Handle step</p>;
 }
 
+/**
+ * A step that keeps its own state and reports only when that state changes:
+ * nothing ticked at mount, so it reports `false` once, and again on a tick.
+ */
+const keptStep = { mounts: 0 };
+function KeptStateRenderer({ onValidityChange }: FieldRendererProps) {
+  const [ticked, setTicked] = React.useState(false);
+  React.useEffect(() => {
+    keptStep.mounts += 1;
+  }, []);
+  React.useEffect(() => {
+    onValidityChange?.(ticked);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reports on a change of its own state only
+  }, [ticked]);
+  return (
+    <Input type="checkbox" aria-label="View one" checked={ticked} onChange={() => setTicked(!ticked)} />
+  );
+}
+
 describe("OrchestratorStepperPanel — a renderer that reports its value unsendable (cinatra#3562)", () => {
   beforeEach(() => {
     for (const id of [TICKING_RENDERER_ID, MID_RUN_TICKING_RENDERER_ID]) {
@@ -1101,5 +1124,46 @@ describe("OrchestratorStepperPanel — a renderer that reports its value unsenda
     await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
     fireEvent.click(productContinues()[0]!);
     expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
+
+  it("a gate of another review task with the same renderer and field gets a new renderer, which holds it", async () => {
+    keptStep.mounts = 0;
+    replaceTickingRenderer(TICKING_RENDERER_ID, KeptStateRenderer);
+    const view = await mountGate({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
+    view.advanceTo({
+      xRenderer: TICKING_RENDERER_ID,
+      fieldName: "accountScope",
+      reviewTaskId: "setup-run-3532-next",
+    });
+
+    await waitFor(() => expect(keptStep.mounts).toBe(2));
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
+    fireEvent.click(productContinues()[0]!);
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(false));
+  });
+
+  it("under StrictMode a renderer's report holds its gate exactly while it is false, and leaves with it", async () => {
+    const view = await mountGate({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope", strict: true });
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(false));
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
+    fireEvent.click(productContinues()[0]!);
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    replaceTickingRenderer(TICKING_RENDERER_ID, QuietTickedRenderer);
+    view.advanceTo({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+    await waitFor(() =>
+      expect((view.getByRole("checkbox", { name: "View one" }) as HTMLInputElement).checked).toBe(true),
+    );
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(false));
   });
 });

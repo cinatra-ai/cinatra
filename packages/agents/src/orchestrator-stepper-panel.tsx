@@ -25,6 +25,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -497,7 +498,9 @@ function ReviewGateStepCard({
  * Draws a gate's renderer so that its validity reports (cinatra#3562, see
  * `GateValidityStore`) are its own: the renderer reports under an owner that
  * lives as long as it does, and the release drops only that owner's report.
- * Another renderer in its place gets a new owner.
+ * Another renderer in its place gets a new owner. The owner is attached and
+ * released in a layout effect: a renderer's own layout effects run first, so a
+ * report it makes at mount is kept and counts at the attach, in the same commit.
  */
 function GateValidityOwner({
   renderer: Renderer,
@@ -511,7 +514,10 @@ function GateValidityOwner({
 }): ReactElement {
   const [owner, setOwner] = useState(() => ({ renderer: Renderer }));
   if (owner.renderer !== Renderer) setOwner({ renderer: Renderer });
-  useEffect(() => () => store.release(owner), [store, owner]);
+  useLayoutEffect(() => {
+    store.attach(owner);
+    return () => store.release(owner);
+  }, [store, owner]);
   return <Renderer {...props} onValidityChange={(valid) => store.report(owner, gateKey, valid)} />;
 }
 
@@ -1332,7 +1338,11 @@ function HitlApprovalCard({
             // survives the field advance and the previous field's typed text
             // pre-fills the next field. fieldName is undefined for non-setup
             // interrupts, so those keep the existing xRenderer-keyed identity.
-            key={`${interruptContext.xRenderer}::${interruptContext.fieldName ?? ""}`}
+            // The review task is in the key too (cinatra#3562): a gate of
+            // another review task with the same renderer and field gets a new
+            // renderer and a new validity owner, never the one that reported on
+            // the gate before it.
+            key={setupGateKey}
             // The gate's REAL field identity (cinatra#2541). `fieldName` is what
             // the renderer labels itself from (resolveFieldLabel) and ids its
             // input with, so the hardcoded placeholder that used to sit here

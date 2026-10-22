@@ -625,6 +625,8 @@ describe("createGateValidityStore (cinatra#3562)", () => {
     const store = createGateValidityStore();
     const a = {};
     const b = {};
+    store.attach(a);
+    store.attach(b);
     expect(store.isHeld("g1")).toBe(false);
     expect(store.isHeld(null)).toBe(false);
     store.report(a, "g1", false);
@@ -646,11 +648,13 @@ describe("createGateValidityStore (cinatra#3562)", () => {
     const store = createGateValidityStore();
     const a = {};
     const b = {};
+    store.attach(a);
+    store.attach(b);
     let calls = 0;
     const unsubscribe = store.subscribe(() => {
       calls += 1;
     });
-    store.release(a);
+    store.release({});
     expect(calls).toBe(0);
     store.report(a, "g1", false);
     store.report(a, "g1", false);
@@ -666,8 +670,11 @@ describe("createGateValidityStore (cinatra#3562)", () => {
     expect(store.isHeld("g1")).toBe(false);
     store.release(a);
     expect(calls).toBe(4);
+    const c = {};
+    store.attach(c);
+    expect(calls).toBe(4);
     unsubscribe();
-    store.report(a, "g1", false);
+    store.report(c, "g1", false);
     expect(calls).toBe(4);
     expect(store.isHeld("g1")).toBe(true);
   });
@@ -676,8 +683,12 @@ describe("createGateValidityStore (cinatra#3562)", () => {
     const store = createGateValidityStore();
     const before = {};
     const after = {};
+    store.attach(before);
     store.report(before, "g1", false);
+    // The replacing renderer reports from its own layout effect, before its
+    // owner is attached and before the old owner is released.
     store.report(after, "g1", false);
+    store.attach(after);
     store.release(before);
     expect(store.isHeld("g1")).toBe(true);
     store.release(after);
@@ -687,11 +698,56 @@ describe("createGateValidityStore (cinatra#3562)", () => {
   it("a report that is not exactly true holds the gate, as false does", () => {
     const store = createGateValidityStore();
     const a = {};
+    store.attach(a);
     for (const report of [1, "yes", undefined, null]) {
       store.report(a, "g1", report as unknown as boolean);
       expect(store.isHeld("g1")).toBe(true);
       store.report(a, "g1", true);
       expect(store.isHeld("g1")).toBe(false);
     }
+  });
+
+  it("a report through an owner that is not attached, or no longer is, holds nothing", () => {
+    const store = createGateValidityStore();
+    const live = {};
+    const gone = {};
+    store.attach(live);
+    store.attach(gone);
+    let calls = 0;
+    store.subscribe(() => {
+      calls += 1;
+    });
+    store.report(gone, "g1", true);
+    store.release(gone);
+    expect(calls).toBe(2);
+    // A renderer that has left the screen reports late: nothing is held.
+    store.report(gone, "g1", false);
+    expect(store.isHeld("g1")).toBe(false);
+    // An owner that was never attached holds nothing either.
+    store.report({}, "g1", false);
+    expect(store.isHeld("g1")).toBe(false);
+    expect(calls).toBe(2);
+    // The attached owner still holds on anything but true.
+    store.report(live, "g1", false);
+    expect(store.isHeld("g1")).toBe(true);
+    expect(calls).toBe(3);
+  });
+
+  it("an owner attached again holds with its latest report, as StrictMode and a shown subtree attach it again", () => {
+    const store = createGateValidityStore();
+    const a = {};
+    store.attach(a);
+    store.report(a, "g1", false);
+    expect(store.isHeld("g1")).toBe(true);
+    store.release(a);
+    expect(store.isHeld("g1")).toBe(false);
+    store.attach(a);
+    expect(store.isHeld("g1")).toBe(true);
+    store.release(a);
+    store.report(a, "g1", true);
+    store.attach(a);
+    expect(store.isHeld("g1")).toBe(false);
+    store.report(a, "g1", false);
+    expect(store.isHeld("g1")).toBe(true);
   });
 });
