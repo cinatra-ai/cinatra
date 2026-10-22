@@ -12,25 +12,25 @@
       "from": 1316,
       "to": 1317,
       "reason": "This pull request's one new core module, packages/sdk-ui/src/lib/user-avatar.ts (the shared user avatar helper of cinatra#4292), reached through one or more of the three call sites this pull request changes: packages/sdk-ui/src/permissions-panel.tsx, packages/sdk-ui/src/prompt-field.tsx and packages/chat/src/chat-messages-view.tsx.",
-      "pr": 0
+      "pr": 4335
     },
     "/api/llm-bridge": {
       "from": 1326,
       "to": 1327,
       "reason": "This pull request's one new core module, packages/sdk-ui/src/lib/user-avatar.ts (the shared user avatar helper of cinatra#4292), reached through one or more of the three call sites this pull request changes: packages/sdk-ui/src/permissions-panel.tsx, packages/sdk-ui/src/prompt-field.tsx and packages/chat/src/chat-messages-view.tsx.",
-      "pr": 0
+      "pr": 4335
     },
     "/api/mcp": {
       "from": 1308,
       "to": 1309,
       "reason": "This pull request's one new core module, packages/sdk-ui/src/lib/user-avatar.ts (the shared user avatar helper of cinatra#4292), reached through one or more of the three call sites this pull request changes: packages/sdk-ui/src/permissions-panel.tsx, packages/sdk-ui/src/prompt-field.tsx and packages/chat/src/chat-messages-view.tsx.",
-      "pr": 0
+      "pr": 4335
     },
     "/chat": {
       "from": 1408,
       "to": 1409,
       "reason": "This pull request's one new core module, packages/sdk-ui/src/lib/user-avatar.ts (the shared user avatar helper of cinatra#4292), reached through one or more of the three call sites this pull request changes: packages/sdk-ui/src/permissions-panel.tsx, packages/sdk-ui/src/prompt-field.tsx and packages/chat/src/chat-messages-view.tsx.",
-      "pr": 0
+      "pr": 4335
     },
     "/sign-in": {
       "from": 164,
