@@ -838,7 +838,7 @@ field — never typed. No other pin moved.
 | Pin | Was | What the adoption changed | Cost |
 | --- | --- | --- | --- |
 | `app` | `match` | nothing — the published body is still the pinned artifact | none |
-| `app-components` | `drift` | 4 new surfaces, fields only: `scheduling-step-quarterly`, `scheduling-step-yearly`, `scheduling-step-configured-monthly`, `scheduling-step-configured-quarterly` | 4 drivers, 4 harness mounts, 4 test-id contract rows |
+| `app-components` | `drift` | 4 new surfaces, fields only: `scheduling-step-quarterly`, `scheduling-step-yearly`, `scheduling-step-configured-monthly`, `scheduling-step-configured-quarterly` | 4 drivers, 4 surface harness mounts plus 2 anti-alias probe mounts, 4 test-id contract rows |
 | `app-extensions` | `match` | nothing — the published body is still the pinned artifact | none |
 | `app-connectors` | `match` | nothing — the published body is still the pinned artifact | none |
 | `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
@@ -846,8 +846,10 @@ field — never typed. No other pin moved.
 The product side is cinatra#4280: the shared `RecurrenceFrequencySelectors`
 (`packages/agents/src/schedule-proposal-card.tsx`), which the in-flow
 scheduling step and the schedule card both render, writes the six `data-field`
-names the four surfaces bind. Each harness mount renders that component in one
-of the drawing's four readings, and each driver reads the field under the bare
+names the four surfaces bind. The four surface mounts each render that component in one
+of the drawing's four readings; two further probe mounts
+(`recurrence-probe-yearly-weekday` and `recurrence-probe-quarterly-weekday`)
+render it outside every drawn surface. Each driver reads the field under the bare
 name the component writes; a field the component stops drawing, or draws under
 another name, is red. The existing `scheduling-step` and
 `scheduling-step-configured` drivers and mounts are unchanged. Every new
