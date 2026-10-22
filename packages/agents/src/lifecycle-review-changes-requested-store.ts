@@ -61,6 +61,7 @@ import {
   REPAIR_SUCCESSOR_TASK_PREFIX,
   VERIFICATION_REOPEN_TASK_PREFIX,
 } from "@/lib/lifecycle/lifecycle-orchestration";
+import { isDeclaredReviewLeg, isDeclaredReviewTaskId } from "@/lib/artifacts/artifact-review-target";
 import { producedEventId, type ContinuationMode } from "@/lib/lifecycle/lifecycle-produced-event";
 import type { ChangesRequestedRequest, RepairFinding } from "@/lib/lifecycle/lifecycle-repair";
 
@@ -210,7 +211,9 @@ async function resolveLineageId(reviewTaskId: string): Promise<string | undefine
  * failure so the surface renders its BLOCKED state.
  *
  * Guards (defence in depth — the action also checks these before calling):
- *   - the gate must exist and be a LIFECYCLE gate (auto/repair-successor task id);
+ *   - the gate must exist and be a LIFECYCLE gate (auto/repair-successor task id)
+ *     or one leg of a per-artifact DECLARED review (cinatra#3035 W11), proven by
+ *     the family witness on its pin;
  *   - the gate must pin EXACTLY the one base target (the repair path is single-base).
  * A non-lifecycle / mismatched / multi-target gate returns a typed failure rather
  * than closing the wrong gate.
@@ -220,7 +223,8 @@ export async function recordReviewSurfaceChangesRequested(
 ): Promise<RecordChangesRequestedResult> {
   const { runId, reviewTaskId, baseTarget, currentBaseRevisionId, feedback } = input;
 
-  if (!isAutoReviewTaskId(reviewTaskId)) {
+  const lifecycleGate = isAutoReviewTaskId(reviewTaskId);
+  if (!lifecycleGate && !isDeclaredReviewTaskId(reviewTaskId)) {
     return { ok: false, code: "not-a-lifecycle-gate", error: "not a lifecycle review gate" };
   }
   const trimmed = feedback.trim();
@@ -231,6 +235,11 @@ export async function recordReviewSurfaceChangesRequested(
   const gate = await readReviewGate(runId, reviewTaskId);
   if (!gate) {
     return { ok: false, code: "gate-not-pending", error: "the review gate is no longer available" };
+  }
+  // A flow-authored gate takes this road only as a leg of a declared per-artifact
+  // review; any other flow-authored gate keeps its plain Comment.
+  if (!lifecycleGate && !isDeclaredReviewLeg({ runId, orgId: gate.orgId, reviewTaskId, pinnedTargets: gate.pinnedTargets })) {
+    return { ok: false, code: "not-a-lifecycle-gate", error: "not a lifecycle review gate" };
   }
   // The repair path is single-base: the gate must pin exactly the one reviewed
   // target (a multi-target/batch gate is out of scope for this per-target repair).

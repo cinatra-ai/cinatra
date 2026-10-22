@@ -21,6 +21,7 @@ import {
 } from "@/lib/artifacts/review-surface-model";
 import { isLifecycleReviewOrchestrationActive } from "@/lib/lifecycle/lifecycle-activation";
 import { isAutoReviewTaskId, isBatchAutoReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
+import { isDeclaredReviewTaskId } from "@/lib/artifacts/artifact-review-target";
 
 import { resolveReviewActorContext } from "./review-actor";
 
@@ -135,13 +136,19 @@ export async function submitReviewDecisionAction(
   // `respondToHitl` check above already ran for the comment op. With the fence off,
   // on a non-lifecycle / batch / multi-target gate, or with empty feedback, the
   // Comment path falls through to the byte-identical annotation below.
+  //
+  // A leg of a per-artifact DECLARED review (cinatra#3035 W11) takes the same road:
+  // a produced revision a declared gate pins opens no automatic gate (cinatra#4225),
+  // so the picture's leg is the only review Regenerate can be pressed on. Only the
+  // store can read the family witness on the gate's pin; a flow-authored gate it
+  // refuses as no lifecycle gate keeps the plain annotation, exactly as before.
   const trimmedComment = comment?.trim() ?? "";
+  const declaredGate = isDeclaredReviewTaskId(reviewTaskId);
   if (
     disposition === "comment" &&
     trimmedComment.length > 0 &&
     isLifecycleReviewOrchestrationActive() &&
-    isAutoReviewTaskId(reviewTaskId) &&
-    !isBatchAutoReviewTaskId(reviewTaskId) &&
+    ((isAutoReviewTaskId(reviewTaskId) && !isBatchAutoReviewTaskId(reviewTaskId)) || declaredGate) &&
     pinnedTargets.length === 1
   ) {
     const result = await submitReviewSurfaceChangesRequested({
@@ -151,7 +158,9 @@ export async function submitReviewDecisionAction(
       feedback: trimmedComment,
       actorCtx,
     });
-    return mapChangesRequestedToOutcome(result);
+    if (!(declaredGate && !result.ok && result.code === "not-a-lifecycle-gate")) {
+      return mapChangesRequestedToOutcome(result);
+    }
   }
 
   const decision: ArtifactReviewDecision = {
