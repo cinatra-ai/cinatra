@@ -460,6 +460,19 @@ function HandleRenderer({ schema, onChange, onValidityChange }: FieldRendererPro
   return <p>Handle step</p>;
 }
 
+/**
+ * A step that reports its value unsendable once, from a layout effect: that
+ * runs in the commit that mounts it, before the renderer it replaces is
+ * cleaned up, and it never reports again.
+ */
+function LayoutHeldRenderer({ onValidityChange }: FieldRendererProps) {
+  React.useLayoutEffect(() => {
+    onValidityChange?.(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one report, at mount
+  }, []);
+  return <p>Layout step</p>;
+}
+
 /** Mount the panel, and move it to another gate the way the stream does. */
 async function renderMovablePanel() {
   const { AgenticRunPanel } = await import("../agentic-run-panel");
@@ -667,5 +680,59 @@ describe("AgenticRunPanel — a renderer that reports its value unsendable (cina
     ];
     expect(taskId).toBe("setup-run-3532");
     expect(payload).toMatchObject({ type: "list", listIds: ["two"], listNames: ["View two"], approved: true });
+  });
+
+  it("a held setup field's Continue is unavailable and carries no credential title", async () => {
+    await setGate(TICKING_RENDERER_ID, "accountScope", { type: "string" });
+    const view = await renderPanel();
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinue()!.disabled).toBe(true));
+    expect(productContinue()!.hasAttribute("title")).toBe(false);
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(productContinue()!.disabled).toBe(false));
+    expect(productContinue()!.hasAttribute("title")).toBe(false);
+  });
+
+  it("the composer sends nothing for a held gate, and sends once the gate is no longer held", async () => {
+    const onActiveGateChange = vi.fn();
+    await setGate(TICKING_RENDERER_ID, "accountScope", { type: "string" });
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    const view = render(<AgenticRunPanel {...PANEL_PROPS} onActiveGateChange={onActiveGateChange} />);
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinue()!.disabled).toBe(true));
+    const published = onActiveGateChange.mock.calls
+      .map((call) => call[1] as { submit?: (value: string) => Promise<void> } | null)
+      .filter((gate) => gate !== null);
+    const gate = published[published.length - 1]!;
+    expect(typeof gate.submit).toBe("function");
+    await act(async () => {
+      await gate.submit!("composer text");
+    });
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(productContinue()!.disabled).toBe(false));
+    await act(async () => {
+      await gate.submit!("composer text");
+    });
+    expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("a renderer that takes the gate's place and reports false from a layout effect keeps it held", async () => {
+    await setGate(TICKING_RENDERER_ID, "accountScope", { type: "string" });
+    const view = await renderMovablePanel();
+
+    await view.findByRole("checkbox", { name: "View one" });
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(productContinue()!.disabled).toBe(false));
+    replaceTickingRenderer(TICKING_RENDERER_ID, LayoutHeldRenderer);
+    await view.moveTo(TICKING_RENDERER_ID, "accountScope", { type: "string" });
+
+    await view.findByText("Layout step");
+    await waitFor(() => expect(productContinue()!.disabled).toBe(true));
+    fireEvent.click(productContinue()!);
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
   });
 });

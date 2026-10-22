@@ -867,10 +867,13 @@ export function AgentHitlScreenFields({
 function HitlContinueControl({
   submitting,
   blocked,
+  held = false,
   onPress,
 }: {
   submitting: boolean;
   blocked: boolean;
+  /** The gate's renderer reports its value unsendable: inert, with no credential title. */
+  held?: boolean;
   onPress: () => Promise<void>;
 }): ReactElement {
   return (
@@ -879,7 +882,7 @@ function HitlContinueControl({
         size="sm"
         className="gap-1.5"
         data-action="submit-hitl-screen"
-        disabled={submitting || blocked}
+        disabled={submitting || blocked || held}
         {...(blocked
           ? {
               title:
@@ -953,13 +956,17 @@ export function AgentHitlScreenContinue({
 export function AgentHitlScreenSetupContinue({
   submitting,
   blocked,
+  held,
   onContinue,
 }: {
   submitting: boolean;
   blocked: boolean;
+  held?: boolean;
   onContinue: () => Promise<void>;
 }): ReactElement {
-  return <HitlContinueControl submitting={submitting} blocked={blocked} onPress={onContinue} />;
+  return (
+    <HitlContinueControl submitting={submitting} blocked={blocked} held={held} onPress={onContinue} />
+  );
 }
 
 /**

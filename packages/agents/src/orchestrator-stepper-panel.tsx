@@ -30,6 +30,7 @@ import {
   useState,
   useSyncExternalStore,
   useTransition,
+  type ComponentType,
   type ReactElement,
   type ReactNode,
 } from "react";
@@ -138,7 +139,7 @@ import {
 import { useRunRowWatch } from "./use-run-row-watch";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { fieldRendererRegistry } from "./field-renderer-registry";
-import type { FieldRendererContext } from "./field-renderer-registry";
+import type { FieldRendererContext, FieldRendererProps } from "./field-renderer-registry";
 import {
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
@@ -493,20 +494,25 @@ function ReviewGateStepCard({
 }
 
 /**
- * Releases the gate's validity report (cinatra#3562, see `GateValidityStore`)
- * when the renderer drawn for the gate unmounts or another component takes its
- * place. Mounted beside that renderer, under the same condition and keyed by
- * the gate; it draws nothing.
+ * Draws a gate's renderer so that its validity reports (cinatra#3562, see
+ * `GateValidityStore`) are its own: the renderer reports under an owner that
+ * lives as long as it does, and the release drops only that owner's report.
+ * Another renderer in its place gets a new owner.
  */
-function GateValidityRelease({
+function GateValidityOwner({
+  renderer: Renderer,
   store,
-  renderer,
-}: {
+  gateKey,
+  ...props
+}: FieldRendererProps & {
+  renderer: ComponentType<FieldRendererProps>;
   store: GateValidityStore;
-  renderer: unknown;
-}): null {
-  useEffect(() => () => store.release(), [store, renderer]);
-  return null;
+  gateKey: string;
+}): ReactElement {
+  const [owner, setOwner] = useState(() => ({ renderer: Renderer }));
+  if (owner.renderer !== Renderer) setOwner({ renderer: Renderer });
+  useEffect(() => () => store.release(owner), [store, owner]);
+  return <Renderer {...props} onValidityChange={(valid) => store.report(owner, gateKey, valid)} />;
 }
 
 // THE IDENTITY OF ONE SETUP GATE (cinatra#3532). Sequential setup gates share
@@ -1140,20 +1146,15 @@ function HitlApprovalCard({
   const setupPressRef = useRef(false);
   // THE RENDERER'S OWN READING OF ITS VALUE (cinatra#3562). A renderer may
   // report through `onValidityChange` that what it holds may not be sent (a
-  // list step with nothing ticked); the latest report is kept per gate, by the
-  // gate's identity. While the last report for the gate on screen is `false`,
-  // the Continue drawn for it (the setup field's or the mid-run one) is
-  // unavailable and a press sends nothing. A renderer that never reports blocks
-  // nothing, so no undeclared reason ever stops a reader (cinatra#3532). A
-  // report is released with the renderer that made it (`GateValidityStore`).
+  // list step with nothing ticked); each renderer's latest report is kept with
+  // its gate, by the gate's identity. While a report for the gate on screen is
+  // `false`, the Continue drawn for it (the setup field's or the mid-run one)
+  // is unavailable and a press sends nothing. A renderer that never reports
+  // blocks nothing, so no undeclared reason ever stops a reader (cinatra#3532).
+  // A report is released with the renderer that made it (`GateValidityOwner`).
   // The drawn control subscribes to the store; the press reads it in the same
   // turn.
   const [gateValidity] = useState(createGateValidityStore);
-  // A plain function, not a useCallback: the React Compiler memoizes this
-  // card itself, and a manual memo keyed by the gate identity would make it
-  // skip the whole component. The report is idempotent, so a renderer that
-  // reports again after a re-render changes nothing.
-  const reportGateValidity = (valid: boolean) => gateValidity.report(setupGateKey, valid);
   const gateReportedInvalid = useSyncExternalStore(
     gateValidity.subscribe,
     () => gateValidity.isHeld(setupGateKey),
@@ -1317,16 +1318,12 @@ function HitlApprovalCard({
 
   const cardBody = (
     <>
-        {/* Releases this gate's validity report with the renderer below. */}
+        {/* The renderer reports this gate's validity as its own. */}
         {RendererComponent && !isGenericObjectSchema ? (
-          <GateValidityRelease
-            key={setupGateKey}
-            store={gateValidity}
+          <GateValidityOwner
             renderer={RendererComponent}
-          />
-        ) : null}
-        {RendererComponent && !isGenericObjectSchema ? (
-          <RendererComponent
+            store={gateValidity}
+            gateKey={setupGateKey}
             // Keyed by xRenderer AND fieldName (#810): per-field setup gates
             // share one xRenderer, and the setup loop advances fields without
             // any RUN_STARTED/RESUME frame in between, so the card never
@@ -1465,10 +1462,6 @@ function HitlApprovalCard({
             onApply={handleApply}
             aiSuggestions={aiSuggestions}
             onHitlContextChange={handleHitlContextChange}
-            // Any gate's renderer may report its value unsendable; the report
-            // holds the Continue drawn for this gate (see `gateValidity`), on
-            // the setup road and mid-run.
-            onValidityChange={reportGateValidity}
             // cinatra#3532 — where the product owns the send, the renderer's own
             // submit is not drawn inside the field (the shared props contract
             // says a renderer that draws its own Continue must skip it), and the

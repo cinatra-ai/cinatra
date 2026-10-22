@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type ComponentType,
   type ReactNode,
 } from "react";
 import { flushSync } from "react-dom";
@@ -40,7 +41,7 @@ import {
 import type { AgentRunMessageBody } from "./store";
 import { StatusPill } from "@/components/ui/status-pill";
 import { fieldRendererRegistry } from "./field-renderer-registry";
-import type { FieldRendererContext } from "./field-renderer-registry";
+import type { FieldRendererContext, FieldRendererProps } from "./field-renderer-registry";
 import { ArrowRight } from "lucide-react";
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
 import {
@@ -491,20 +492,25 @@ function withoutLifecycleCardRef(
 }
 
 /**
- * Releases the gate's validity report (cinatra#3562, see `GateValidityStore`)
- * when the renderer drawn for the gate unmounts or another component takes its
- * place. Mounted beside that renderer, in the same fragment and keyed by the
- * gate; it draws nothing.
+ * Draws a gate's renderer so that its validity reports (cinatra#3562, see
+ * `GateValidityStore`) are its own: the renderer reports under an owner that
+ * lives as long as it does, and the release drops only that owner's report.
+ * Another renderer in its place gets a new owner.
  */
-function GateValidityRelease({
+function GateValidityOwner({
+  renderer: Renderer,
   store,
-  renderer,
-}: {
+  gateKey,
+  ...props
+}: FieldRendererProps & {
+  renderer: ComponentType<FieldRendererProps>;
   store: GateValidityStore;
-  renderer: unknown;
-}): null {
-  useEffect(() => () => store.release(), [store, renderer]);
-  return null;
+  gateKey: string;
+}): ReactNode {
+  const [owner, setOwner] = useState(() => ({ renderer: Renderer }));
+  if (owner.renderer !== Renderer) setOwner({ renderer: Renderer });
+  useEffect(() => () => store.release(owner), [store, owner]);
+  return <Renderer {...props} onValidityChange={(valid) => store.report(owner, gateKey, valid)} />;
 }
 
 export function AgenticRunPanel({
@@ -1282,14 +1288,15 @@ export function AgenticRunPanel({
   const setupPressRef = useRef(false);
   // THE RENDERER'S OWN READING OF ITS VALUE (cinatra#3562). A renderer may
   // report through `onValidityChange` that what it holds may not be sent (a
-  // list step with nothing ticked); the latest report is kept per gate, keyed
-  // by the same three parts the setup field's staged answer is keyed by. While
-  // the last report for the gate on screen is `false`, the Continue drawn for
-  // it (the setup field's or the mid-run one) is unavailable and a press sends
-  // nothing. A renderer that never reports blocks nothing, so no undeclared
-  // reason ever stops a reader (cinatra#3532). A report is released with the
-  // renderer that made it (`GateValidityStore`). The drawn control subscribes
-  // to the store; the press reads it in the same turn.
+  // list step with nothing ticked); each renderer's latest report is kept with
+  // its gate, keyed by the same three parts the setup field's staged answer is
+  // keyed by. While a report for the gate on screen is `false`, the Continue
+  // drawn for it (the setup field's or the mid-run one) is unavailable, and
+  // neither a press nor the composer sends anything. A renderer that never
+  // reports blocks nothing, so no undeclared reason ever stops a reader
+  // (cinatra#3532). A report is released with the renderer that made it
+  // (`GateValidityOwner`). The drawn control subscribes to the store; the press
+  // reads it in the same turn.
   const [gateValidity] = useState(createGateValidityStore);
   const activeGateKey = effectiveHitlContext
     ? [
@@ -1364,6 +1371,10 @@ export function AgenticRunPanel({
     async (value: Record<string, unknown> | string | number | boolean) => {
       const ctx = latestHitlContextRef.current;
       if (!ctx) return;
+      // Reported unsendable (see `gateValidity`): the composer sends nothing,
+      // as the Continue drawn for the gate does.
+      const gateKey = [ctx.reviewTaskId, ctx.xRenderer, ctx.fieldName ?? ""].join("::");
+      if (gateValidity.isHeld(gateKey)) return;
       const { payload, payloadFieldName } = buildChatGateSubmitPayload({
         reviewTaskId: ctx.reviewTaskId,
         fieldName: ctx.fieldName,
@@ -1382,7 +1393,7 @@ export function AgenticRunPanel({
         errorMode: "rethrow",
       });
     },
-    [performGateSubmit],
+    [performGateSubmit, gateValidity],
   );
 
   // cinatra#2566 — the SERVER-MINTED opaque ref a marked review gate carries.
@@ -2968,13 +2979,11 @@ export function AgenticRunPanel({
                 // affordances are one resume path with two entrances, not two.
                 return (
                   <>
-                    {/* Releases this gate's validity report with the renderer. */}
-                    <GateValidityRelease
-                      key={setupGateKey}
-                      store={gateValidity}
+                    {/* The renderer reports this gate's validity as its own. */}
+                    <GateValidityOwner
                       renderer={RendererComponent}
-                    />
-                    <RendererComponent
+                      store={gateValidity}
+                      gateKey={setupGateKey}
                       // Keyed by xRenderer AND fieldName — the identity the
                       // orchestrator stepper already uses (#810), adopted here
                       // in cinatra#2541 because this surface now passes a
@@ -3087,12 +3096,6 @@ export function AgenticRunPanel({
                       mode="edit"
                       onApply={handleApply}
                       aiSuggestions={aiSuggestions}
-                      // Any gate's renderer may report its value unsendable;
-                      // the report holds the Continue drawn for this gate
-                      // (see `gateValidity`), on the setup road and mid-run.
-                      onValidityChange={(valid: boolean) =>
-                        gateValidity.report(setupGateKey, valid)
-                      }
                       // cinatra#3532 — where the product owns the send, the
                       // renderer's own submit is not drawn inside the field
                       // (the shared props contract says a renderer that draws
@@ -3116,7 +3119,8 @@ export function AgenticRunPanel({
                     {productOwnsSetupSend ? (
                       <AgentHitlScreenSetupContinue
                         submitting={isApproving}
-                        blocked={activeGateReportedInvalid}
+                        blocked={false}
+                        held={activeGateReportedInvalid}
                         onContinue={() =>
                           submitStagedSetupAnswer(
                             setupGateKey,

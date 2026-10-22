@@ -621,50 +621,76 @@ describe("hitlRendererFieldName (cinatra#2541)", () => {
 });
 
 describe("createGateValidityStore (cinatra#3562)", () => {
-  it("holds a gate only while its latest report is false, and only that gate", () => {
+  it("holds a gate only while a report on it is false, and only that gate", () => {
     const store = createGateValidityStore();
+    const a = {};
+    const b = {};
     expect(store.isHeld("g1")).toBe(false);
     expect(store.isHeld(null)).toBe(false);
-    store.report("g1", false);
+    store.report(a, "g1", false);
     expect(store.isHeld("g1")).toBe(true);
     expect(store.isHeld("g2")).toBe(false);
     expect(store.isHeld(null)).toBe(false);
-    store.report("g1", true);
-    expect(store.isHeld("g1")).toBe(false);
-    store.report("g1", false);
-    store.report("g2", true);
-    expect(store.isHeld("g1")).toBe(false);
+    store.report(b, "g2", true);
+    expect(store.isHeld("g1")).toBe(true);
     expect(store.isHeld("g2")).toBe(false);
+    store.report(a, "g1", true);
+    expect(store.isHeld("g1")).toBe(false);
+    // An owner keeps one report, its latest: a report on another gate replaces it.
+    store.report(a, "g2", false);
+    expect(store.isHeld("g1")).toBe(false);
+    expect(store.isHeld("g2")).toBe(true);
   });
 
-  it("a release drops the report, and tells the listeners only on a change", () => {
+  it("a release drops only its owner's report, and tells the listeners only on a change", () => {
     const store = createGateValidityStore();
+    const a = {};
+    const b = {};
     let calls = 0;
     const unsubscribe = store.subscribe(() => {
       calls += 1;
     });
-    store.release();
+    store.release(a);
     expect(calls).toBe(0);
-    store.report("g1", false);
-    store.report("g1", false);
+    store.report(a, "g1", false);
+    store.report(a, "g1", false);
     expect(calls).toBe(1);
-    store.release();
-    expect(calls).toBe(2);
-    expect(store.isHeld("g1")).toBe(false);
-    store.release();
-    expect(calls).toBe(2);
-    unsubscribe();
-    store.report("g1", false);
+    store.report(b, "g1", true);
     expect(calls).toBe(2);
     expect(store.isHeld("g1")).toBe(true);
+    store.release(b);
+    expect(calls).toBe(3);
+    expect(store.isHeld("g1")).toBe(true);
+    store.release(a);
+    expect(calls).toBe(4);
+    expect(store.isHeld("g1")).toBe(false);
+    store.release(a);
+    expect(calls).toBe(4);
+    unsubscribe();
+    store.report(a, "g1", false);
+    expect(calls).toBe(4);
+    expect(store.isHeld("g1")).toBe(true);
+  });
+
+  it("a report made under a new owner before the old owner's release stays", () => {
+    const store = createGateValidityStore();
+    const before = {};
+    const after = {};
+    store.report(before, "g1", false);
+    store.report(after, "g1", false);
+    store.release(before);
+    expect(store.isHeld("g1")).toBe(true);
+    store.release(after);
+    expect(store.isHeld("g1")).toBe(false);
   });
 
   it("a report that is not exactly true holds the gate, as false does", () => {
     const store = createGateValidityStore();
+    const a = {};
     for (const report of [1, "yes", undefined, null]) {
-      store.report("g1", report as unknown as boolean);
+      store.report(a, "g1", report as unknown as boolean);
       expect(store.isHeld("g1")).toBe(true);
-      store.report("g1", true);
+      store.report(a, "g1", true);
       expect(store.isHeld("g1")).toBe(false);
     }
   });

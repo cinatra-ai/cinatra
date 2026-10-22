@@ -793,6 +793,19 @@ function replaceTickingRenderer(id: string, renderer: (props: FieldRendererProps
 }
 
 /**
+ * A step that reports its value unsendable once, from a layout effect: that
+ * runs in the commit that mounts it, before the renderer it replaces is
+ * cleaned up, and it never reports again.
+ */
+function LayoutHeldRenderer({ onValidityChange }: FieldRendererProps) {
+  React.useLayoutEffect(() => {
+    onValidityChange?.(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one report, at mount
+  }, []);
+  return <p>Layout step</p>;
+}
+
+/**
  * A step that hands the test its report and its value, so that a report and a
  * press can run inside one act(): the press then reaches a Continue that is
  * still drawn available, and only the press-time check can stop it.
@@ -1073,5 +1086,20 @@ describe("OrchestratorStepperPanel — a renderer that reports its value unsenda
       listIds: ["two"],
       listNames: ["View two"],
     });
+  });
+
+  it("a renderer that takes the gate's place and reports false from a layout effect keeps it held", async () => {
+    const view = await mountGate({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+
+    await view.findByRole("checkbox", { name: "View one" });
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(false));
+    replaceTickingRenderer(TICKING_RENDERER_ID, LayoutHeldRenderer);
+    view.advanceTo({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+
+    await view.findByText("Layout step");
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
+    fireEvent.click(productContinues()[0]!);
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
   });
 });

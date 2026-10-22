@@ -539,48 +539,48 @@ export function applyAttachmentEnvelopeUserResponseOnly(
 // ---------------------------------------------------------------------------
 
 /**
- * Where a run surface keeps what its field renderer reported through
- * `onValidityChange`: the latest report, keyed by the gate it was made on.
- * While the last report for the gate on screen is `false`, the Continue drawn
- * for that gate is unavailable and a press sends nothing.
+ * Where a run surface keeps what its field renderers reported through
+ * `onValidityChange`. Each drawn renderer reports under an owner of its own and
+ * keeps one report, its latest, made on the gate it is drawn for. While any
+ * report on the gate on screen is `false`, the Continue drawn for that gate is
+ * unavailable and a press sends nothing.
  *
  * A report lives exactly as long as the renderer that made it. Each surface
- * releases it when that renderer leaves the screen or another renderer takes
- * its place on the same gate, so a renderer that never reports blocks nothing
- * (cinatra#3532) even where an earlier one reported `false`. The release runs
- * in a passive effect cleanup, and React runs every passive effect cleanup of
- * a commit before any passive effect of it starts. So the release comes before
- * the next renderer's first report only when that renderer reports from a
- * passive effect (`useEffect`). A report made while rendering, in a layout
- * effect or in a ref callback can come before that release, which then drops
- * it.
+ * releases the owner when its renderer leaves the screen or another renderer
+ * takes its place, and the release drops that owner's report and no other. So a
+ * renderer that never reports blocks nothing (cinatra#3532) even where an
+ * earlier one reported `false`, and a report the next renderer makes before
+ * that release, from any effect, stays.
  */
 export type GateValidityStore = {
-  /** The renderer on gate `key` reports whether its value may be sent. */
-  report: (key: string, valid: boolean) => void;
-  /** The reporting renderer is gone: nothing is held any more. */
-  release: () => void;
-  /** True only while the latest report, made on `key`, is anything but `true`. */
+  /** The renderer drawn under `owner`, on gate `key`, reports whether its value may be sent. */
+  report: (owner: object, key: string, valid: boolean) => void;
+  /** The renderer drawn under `owner` is gone: its report goes, and no other. */
+  release: (owner: object) => void;
+  /** True while any report on `key` is anything but `true`. */
   isHeld: (key: string | null) => boolean;
   subscribe: (listener: () => void) => () => void;
 };
 
 export function createGateValidityStore(): GateValidityStore {
-  let latest: { key: string; valid: boolean } | null = null;
+  const reports = new Map<object, { key: string; valid: boolean }>();
   const listeners = new Set<() => void>();
-  const write = (next: { key: string; valid: boolean } | null) => {
-    latest = next;
+  const changed = () => {
     for (const listener of listeners) listener();
   };
   return {
-    report: (key, valid) => {
-      if (latest !== null && latest.key === key && latest.valid === valid) return;
-      write({ key, valid: valid === true });
+    report: (owner, key, valid) => {
+      const next = { key, valid: valid === true };
+      const last = reports.get(owner);
+      if (last !== undefined && last.key === next.key && last.valid === next.valid) return;
+      reports.set(owner, next);
+      changed();
     },
-    release: () => {
-      if (latest !== null) write(null);
+    release: (owner) => {
+      if (reports.delete(owner)) changed();
     },
-    isHeld: (key) => key !== null && latest !== null && latest.key === key && !latest.valid,
+    isHeld: (key) =>
+      key !== null && [...reports.values()].some((r) => r.key === key && !r.valid),
     subscribe: (listener) => {
       listeners.add(listener);
       return () => {
