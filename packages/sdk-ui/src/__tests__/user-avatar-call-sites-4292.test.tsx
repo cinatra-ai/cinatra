@@ -217,4 +217,67 @@ describe("PromptField mention list (cinatra#4292)", () => {
     expect(assistant.getAttribute("data-accent")).toBeNull();
     expect(assistant.textContent).toBe("C");
   });
+
+  it("draws a person's persisted accent from the row's accentColor", async () => {
+    await render(
+      <PromptField
+        storageKey="prompt-4292-persisted"
+        onSubmit={() => {}}
+        mentionables={[
+          {
+            id: "user-grace",
+            handle: "grace_hopper",
+            displayName: "Grace Hopper",
+            type: "user",
+            image: null,
+            accentColor: "rust",
+          },
+        ]}
+      />,
+    );
+    await openMentionList();
+    const fallback = mentionFallback(0);
+    expectInitialsOnAccent(fallback, "GH");
+    expect(fallback?.getAttribute("data-accent")).toBe("rust");
+  });
+
+  it("draws the fallback mark, never a blank, for a person with no display name and no handle", async () => {
+    await render(
+      <PromptField
+        storageKey="prompt-4292-blank"
+        onSubmit={() => {}}
+        mentionables={[{ id: "user-blank", handle: "", displayName: "", type: "user", image: null }]}
+      />,
+    );
+    await openMentionList();
+    expectInitialsOnAccent(mentionFallback(0), "?");
+  });
+
+  it("keeps the old first-letter fallback, without an accent, for a row with no type or an assistant row, even when an accent is set", async () => {
+    await render(
+      <PromptField
+        storageKey="prompt-4292-nonuser"
+        onSubmit={() => {}}
+        mentionables={[
+          { id: "row-untyped", handle: "zed", displayName: "zed bot", image: null, accentColor: "rust" },
+          {
+            id: "asst-2",
+            handle: "cinatra",
+            displayName: "Cinatra",
+            type: "assistant",
+            image: null,
+            accentColor: "plum",
+          },
+        ]}
+      />,
+    );
+    await openMentionList();
+    for (const [index, letter] of [[0, "Z"], [1, "C"]] as const) {
+      const el = mentionFallback(index) as HTMLElement;
+      expect(el).toBeTruthy();
+      expect(el.getAttribute("data-accent")).toBeNull();
+      expect(el.className).toMatch(/\bbg-muted\b/);
+      expect(el.textContent).toBe(letter);
+    }
+  });
 });

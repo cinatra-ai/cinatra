@@ -68,13 +68,14 @@ const MESSAGES: UiMessage[] = [
 function props(
   isSlackMode: boolean,
   sessionUser: ChatMessagesViewProps["sessionUser"],
+  userId: string | undefined = "user-ada",
 ): ChatMessagesViewProps {
   return {
     messages: MESSAGES,
     isSlackMode,
     animating: false,
     theme: "light" as ChatMessagesViewProps["theme"],
-    userId: "user-ada",
+    userId,
     sessionUser,
     activeThreadId: "thread-4292",
     assistantHandleMap: new Map(),
@@ -153,6 +154,13 @@ for (const isSlackMode of [false, true]) {
       const el = userFallback(container, "GH");
       expectInitialsOnAccent(el);
       expect(el.getAttribute("data-accent")).toBe("olive");
+    });
+
+    it("draws the \"Me\" fallback on an accent with no user id, no name and no e-mail", () => {
+      const { container } = render(
+        <ChatMessagesView {...props(isSlackMode, { name: null, image: null }, undefined)} />,
+      );
+      expectInitialsOnAccent(userFallback(container, "Me"));
     });
 
     it("leaves the assistant's avatar without a person's accent", () => {
