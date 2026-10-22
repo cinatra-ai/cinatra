@@ -814,9 +814,13 @@ the adopted body's own `contentHash` field — never typed. No other pin moved.
 ## Reconciliation record — 2026-10-22
 
 Measured 2026-10-22 against the manifests published under `publishedBaseUrl`,
-after the docs mirror published two `app-components` bodies in a row: the
-recurrence selectors of the scheduling step (cinatra-ai/docs#237), then the
-drawing's corrected prose (cinatra-ai/docs#238), whose body this adopts. All
+after the docs mirror published several `app-components` bodies in a row: the
+recurrence selectors of the scheduling step (cinatra-ai/docs#237), the
+drawing's corrected prose (cinatra-ai/docs#238), then the drawing's legend
+sentences (cinatra-ai/docs#241). This adopts the body published at 2026-10-22
+19:50:16Z (Last-Modified), sha256 `cbb8e3ac...` and `contentHash` `3afedd76...`,
+which cinatra-ai/docs#241 produced (its merge commit's version of the file
+hashes to that value; its parent's does not). All
 five bodies were fetched with one anonymous `curl -sS` each into a scratch
 directory outside every repository tree, and their hashes were compared
 with the five pins as this change leaves them: every published body is
@@ -828,9 +832,7 @@ compared, as parsed JSON, with the committed copy under
 `spec` and the thirty-three surfaces the copy already declared are
 field-for-field identical, four surfaces are added after
 `scheduling-step-configured`, none is retired, and `contentHash` moved.
-cinatra-ai/docs#238 changed seven lines of the drawing's published page and,
-in the manifest, the `contentHash` line only, so no surface of the thirty-three
-moved, and this change edits no driver of them. This is the first case "Why a
+No surface of the thirty-three moved, and this change edits no driver of them. This is the first case "Why a
 hash-only re-pin is refused" names, so the pin moves together with
 the drivers that answer the four surfaces. The committed artifact is now the
 verbatim published body, and both hashes of the entry in `conformance-pins.json`
