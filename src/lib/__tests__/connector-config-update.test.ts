@@ -405,6 +405,12 @@ describe("connector-config update: the storable value is an allow-list of JSON k
     (row.inner as Record<string, unknown>).back = row;
     return row;
   };
+  class Rows extends Array<unknown> {}
+  const deepChain = () => {
+    let row: unknown = SENTINEL;
+    for (let i = 0; i < 100_000; i += 1) row = { row };
+    return row;
+  };
   it.each([
     ["NaN", () => ({ note: SENTINEL, n: NaN })],
     ["Infinity", () => ({ note: SENTINEL, n: Infinity })],
@@ -428,6 +434,32 @@ describe("connector-config update: the storable value is an allow-list of JSON k
     }],
     ["undefined in an array", () => [SENTINEL, undefined]],
     ["a nested cycle", nestedCycle],
+    ["an Array subclass instance", () => Rows.from([SENTINEL])],
+    ["an array with an extra key", () => Object.assign([SENTINEL], { x: SENTINEL })],
+    ["an array with a trailing hole", () => {
+      const trailing: unknown[] = [SENTINEL];
+      trailing.length = 2;
+      return trailing;
+    }],
+    ["an array with a hole and an extra key", () => {
+      const holey: unknown[] = new Array(3);
+      holey[0] = SENTINEL;
+      holey[2] = SENTINEL;
+      return Object.assign(holey, { x: SENTINEL });
+    }],
+    ["a non-enumerable property", () => Object.defineProperty({ a: 1 }, "hidden", { value: SENTINEL, enumerable: false })],
+    ["a proxy whose ownKeys trap throws", () => new Proxy({ note: SENTINEL }, {
+      ownKeys() {
+        throw new Error(SENTINEL);
+      },
+    })],
+    ["a 100000-deep chain", deepChain],
+    ["a thenable whose then throws", () => ({
+      note: SENTINEL,
+      then() {
+        throw 0;
+      },
+    })],
   ])("C1 the updater returns a value with %s: UPDATE_INVALID before any store call", (_label, updater) => {
     const h = makePort({ [KEY]: STORED_RAW });
     const error = caught(() => updateConnectorConfigVia(h.port, ID, updater as () => unknown, hasSecretFields));
@@ -503,6 +535,12 @@ describe("connector-config update: the remaining branches", () => {
     ["a thrown string", () => SENTINEL],
     ["a thrown null", () => null],
     ["a lower-case code", () => Object.assign(new Error(SENTINEL), { code: "40p01" })],
+    ["a proxy whose getOwnPropertyDescriptor trap throws", () =>
+      new Proxy(Object.assign(new Error(SENTINEL), { code: "40001" }), {
+        getOwnPropertyDescriptor() {
+          throw new Error(SENTINEL);
+        },
+      })],
   ])("a store error with %s logs no sqlstate", (_label, make) => {
     const h = makePort({ [KEY]: STORED_RAW });
     h.port.readRaw = () => {
@@ -564,6 +602,33 @@ describe("connector-config update: the remaining branches", () => {
     expect(() => updateConnectorConfigVia(h.port, ID, merging({ clientSecret: "z" }).fn, hasSecretFields)).not.toThrow();
     expect(JSON.parse(h.rows.get(KEY) as string)).toEqual({ ...STORED, clientSecret: "z" });
     expect(h.calls.cacheEvict).toBe(1);
+  });
+
+  it("a cache whose set and evict both throw after the persist landed: the landed write is still no error", () => {
+    const h = makePort({ [KEY]: STORED_RAW });
+    let evicts = 0;
+    h.port.cacheSet = () => {
+      throw new Error(SENTINEL);
+    };
+    h.port.cacheEvict = () => {
+      evicts += 1;
+      throw new Error(SENTINEL);
+    };
+    expect(() => updateConnectorConfigVia(h.port, ID, merging({ clientSecret: "z" }).fn, hasSecretFields)).not.toThrow();
+    expect(JSON.parse(h.rows.get(KEY) as string)).toEqual({ ...STORED, clientSecret: "z" });
+    expect(evicts).toBe(1);
+    expect(h.logs).toEqual([]);
+  });
+
+  it("an evict that throws on an error path does not replace the value-free error", () => {
+    const h = makePort({ [KEY]: "{not json" });
+    h.port.cacheEvict = () => {
+      throw new Error(SENTINEL);
+    };
+    const error = caught(() => updateConnectorConfigVia(h.port, ID, merging({}).fn, hasSecretFields));
+    expect(error.code).toBe("CONNECTOR_CONFIG_ROW_UNPARSEABLE");
+    expect(h.logs).toEqual([`[connector-config.update] key=${KEY} code=CONNECTOR_CONFIG_ROW_UNPARSEABLE`]);
+    expectValueFree(error, h.logs);
   });
 
   it("a log port that throws does not replace the value-free error", () => {
