@@ -171,11 +171,11 @@ function storableRaw(next: unknown, key: string): string {
 }
 
 /**
- * Apply `updater` to the stored row of `connectorId` atomically (rules U0-U11).
+ * Apply `updater` to the stored row of `connectorId` atomically.
  * Returns once one conditional persist landed; throws a value-free
  * {@link ConnectorConfigUpdateError} otherwise. A call that throws CONFLICT,
  * ROW_UNPARSEABLE, UPDATER_FAILED, UPDATE_INVALID or UNSUPPORTED wrote nothing.
- * Cache (U8): success returns only after `cacheEvict(key)` returned after the
+ * Cache: success returns only after `cacheEvict(key)` returned after the
  * landed write, so the next read re-reads the row; every error calls it once
  * more before the throw, and stands if that call throws (an old entry may remain).
  */
@@ -202,33 +202,33 @@ export function updateConnectorConfigVia(
   const isBoolean = (value: unknown) => typeof value === "boolean";
 
   try {
-    // U0: a sealed id is refused before any store or cache call.
+    // A sealed id is refused before any store or cache call.
     if (isSealed(connectorId)) throw new ConnectorConfigUpdateUnsupportedError(key);
     for (let attempt = 0; attempt < CONNECTOR_CONFIG_UPDATE_ATTEMPTS; attempt += 1) {
-      // U1/U2: the raw stored text, never the process cache; null = absent.
+      // The raw stored text, never the process cache; null = absent.
       const observedRaw = storeStep(() => port.readRaw(key), (v) => v === null || typeof v === "string");
       let current: unknown = null;
       if (observedRaw !== null) {
         try {
           current = JSON.parse(observedRaw);
         } catch {
-          throw new ConnectorConfigRowUnparseableError(key); // U3
+          throw new ConnectorConfigRowUnparseableError(key); // the stored text is not JSON
         }
       }
       let next: unknown;
       try {
-        next = updater(current); // U4
+        next = updater(current); // the caller's updater, over the parsed row
       } catch {
         throw new ConnectorConfigUpdaterFailedError(key);
       }
       const nextRaw = storableRaw(next, key);
-      // U5: one conditional statement; `true` is done at once, `false` retries.
+      // One conditional statement; `true` is done at once, `false` retries.
       const landed =
         observedRaw === null
           ? storeStep(() => port.insertIfAbsent(key, nextRaw), isBoolean)
           : storeStep(() => port.compareAndSwap(key, nextRaw, observedRaw), isBoolean);
       if (landed) {
-        // U8: never cache `nextRaw`; another writer may change the row after it landed.
+        // Never cache `nextRaw`; another writer may change the row after it landed.
         try {
           port.cacheEvict(key);
         } catch {
@@ -237,11 +237,11 @@ export function updateConnectorConfigVia(
         return;
       }
     }
-    throw new ConnectorConfigConflictError(key); // U7
+    throw new ConnectorConfigConflictError(key); // every attempt missed its persist
   } catch (caught) {
     const error =
       caught instanceof ConnectorConfigUpdateError ? caught : new ConnectorConfigStoreFailedError(key);
-    // U8/U11 hold for every thrown error, UNSUPPORTED included (U0 bars only the store calls before it).
+    // Every thrown error, UNSUPPORTED included, evicts and logs once (the sealed-id refusal bars only the store calls before it).
     try { port.cacheEvict(key); } catch { /* the error stands; an old entry may remain */ }
     const state = error instanceof ConnectorConfigStoreFailedError && sqlstate ? ` sqlstate=${sqlstate}` : "";
     try { port.log(`[connector-config.update] key=${key} code=${error.code}${state}`); } catch { /* record only */ }

@@ -555,6 +555,98 @@ describe("connector-config update: the storable value is an allow-list of JSON k
       process.off("unhandledRejection", onUnhandled);
     }
   });
+
+  it("C7 a thenable whose then returns a function-typed thenable: UPDATE_INVALID, and that thenable's rejection is handled", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const h = makePort({ [KEY]: STORED_RAW });
+      const thenable = {
+        note: SENTINEL,
+        then: () => {
+          const inner = Promise.reject(new Error(SENTINEL));
+          // A function with its own `then`: a thenable of typeof "function".
+          return Object.assign(() => SENTINEL, {
+            then: (onFulfilled?: () => unknown, onRejected?: (reason: unknown) => unknown) => inner.then(onFulfilled, onRejected),
+          });
+        },
+      };
+      const error = caught(() => updateConnectorConfigVia(h.port, ID, () => thenable, hasSecretFields));
+      expect(error.code).toBe("CONNECTOR_CONFIG_UPDATE_INVALID");
+      expect(h.calls.compareAndSwap + h.calls.insertIfAbsent).toBe(0);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+      expectValueFree(error, h.logs);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("C7 a thenable whose then returns a non-thenable object: UPDATE_INVALID, and that object's then is read exactly once", () => {
+    const h = makePort({ [KEY]: STORED_RAW });
+    let calls = 0;
+    let reads = 0;
+    const returned = {
+      note: SENTINEL,
+      get then() {
+        reads += 1;
+        return "later";
+      },
+    };
+    const thenable = {
+      note: SENTINEL,
+      then: () => {
+        calls += 1;
+        return returned;
+      },
+    };
+    const error = caught(() => updateConnectorConfigVia(h.port, ID, () => thenable, hasSecretFields));
+    expect(error.code).toBe("CONNECTOR_CONFIG_UPDATE_INVALID");
+    expect(h.calls.compareAndSwap + h.calls.insertIfAbsent).toBe(0);
+    expect(calls).toBe(1);
+    expect(reads).toBe(1);
+    expectValueFree(error, h.logs);
+  });
+
+  it("C7 a thenable whose then returns a primitive: UPDATE_INVALID, and no then of that primitive is read", () => {
+    const h = makePort({ [KEY]: STORED_RAW });
+    let calls = 0;
+    let reads = 0;
+    const thenable = {
+      note: SENTINEL,
+      then: () => {
+        calls += 1;
+        return 7;
+      },
+    };
+    // A read of `then` on the number 7 reaches Number.prototype: count it for this call only.
+    const before = Object.getOwnPropertyDescriptor(Number.prototype, "then");
+    Object.defineProperty(Number.prototype, "then", {
+      configurable: true,
+      get() {
+        reads += 1;
+        return undefined;
+      },
+    });
+    const error = (() => {
+      try {
+        return caught(() => updateConnectorConfigVia(h.port, ID, () => thenable, hasSecretFields));
+      } finally {
+        if (before) Object.defineProperty(Number.prototype, "then", before);
+        else Reflect.deleteProperty(Number.prototype, "then");
+      }
+    })();
+    expect(Object.getOwnPropertyDescriptor(Number.prototype, "then")).toEqual(before);
+    expect(error.code).toBe("CONNECTOR_CONFIG_UPDATE_INVALID");
+    expect(h.calls.compareAndSwap + h.calls.insertIfAbsent).toBe(0);
+    expect(calls).toBe(1);
+    expect(reads).toBe(0);
+    expectValueFree(error, h.logs);
+  });
 });
 
 describe("connector-config update: the remaining branches", () => {
