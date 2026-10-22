@@ -77,3 +77,40 @@ export function agentRunStartedBySchemaQueries(schemaName: string): { text: stri
     { text: `CREATE INDEX IF NOT EXISTS agent_runs_started_by_run_id_idx ON "${s}"."agent_runs" (started_by_run_id, org_id, created_at) WHERE started_by_run_id IS NOT NULL` },
   ];
 }
+
+// The PAUSE CLAIM columns (cinatra#4245): a generation-stamped lease on a paused
+// run's own row. Migration twin core__0116, which carries the same statements
+// and explains them. Inert until a later change reads them: no backfill, and
+// the two CHECKs are added only while pg_constraint lacks their names, so a
+// replay re-scans nothing.
+export function agentRunPauseClaimSchemaQueries(schemaName: string): { text: string }[] {
+  const s = schemaName.replaceAll('"', '""'); // identifier-position quote
+  const lit = schemaName.replaceAll("'", "''"); // literal-position quote
+  return [
+    { text: `ALTER TABLE "${s}"."agent_runs" ADD COLUMN IF NOT EXISTS pause_generation bigint NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS pause_claim_token text, ADD COLUMN IF NOT EXISTS pause_claim_phase text, ADD COLUMN IF NOT EXISTS pause_claim_expires_at timestamptz` },
+    { text: `DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'agent_runs_pause_claim_phase_chk'
+      AND conrelid = '"${lit}"."agent_runs"'::regclass
+  ) THEN
+    ALTER TABLE "${s}"."agent_runs"
+      ADD CONSTRAINT agent_runs_pause_claim_phase_chk
+      CHECK (pause_claim_phase IS NULL OR pause_claim_phase IN ('claimed','sending','changes_requested'));
+  END IF;
+END $$` },
+    { text: `DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'agent_runs_pause_claim_shape_chk'
+      AND conrelid = '"${lit}"."agent_runs"'::regclass
+  ) THEN
+    ALTER TABLE "${s}"."agent_runs"
+      ADD CONSTRAINT agent_runs_pause_claim_shape_chk
+      CHECK ((pause_claim_token IS NULL) = (pause_claim_phase IS NULL) AND (pause_claim_phase IS NULL OR (pause_claim_phase = 'changes_requested') = (pause_claim_expires_at IS NULL)));
+  END IF;
+END $$` },
+  ];
+}

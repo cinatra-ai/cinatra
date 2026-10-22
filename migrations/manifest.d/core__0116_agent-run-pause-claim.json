@@ -1,0 +1,10 @@
+{
+  "seq": "0116",
+  "file": "core/core__0116_agent-run-pause-claim.mjs",
+  "summary": "The pause claim columns (cinatra#4245): a generation-stamped lease on a paused run's own row, so a resume, a stop and a change request serialize on one row lock. Adds agent_runs.pause_generation (bigint NOT NULL DEFAULT 0), pause_claim_token (text), pause_claim_phase (text, CHECK in claimed/sending/changes_requested) and pause_claim_expires_at (timestamptz), the shape CHECK agent_runs_pause_claim_shape_chk (token and phase are set together; only a changes_requested mark has no expiry), and lifecycle_repair.paused_run_generation (bigint, nullable). Inert in this change: nothing reads or writes the columns yet. No backfill and no stored value changes: existing rows read generation 0 and no claim, and both CHECKs are added over columns that are NULL on every existing row. Marked destructive because the convention counts a NOT NULL column and a CHECK added to an existing table as user-land-affecting. Idempotent up (ADD COLUMN IF NOT EXISTS; each CHECK added only while pg_constraint lacks its name). Fresh-install bootstrap twin in agentRunPauseClaimSchemaQueries and lifecycleRepairSchemaQueries ships in the same change. down drops the two constraints and the five columns, discarding any live claim.",
+  "destructive": true,
+  "tables": [
+    "agent_runs",
+    "lifecycle_repair"
+  ]
+}
