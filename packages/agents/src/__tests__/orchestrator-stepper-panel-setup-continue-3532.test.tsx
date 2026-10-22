@@ -114,6 +114,27 @@ const hitlActions = vi.hoisted(() => ({
 }));
 vi.mock("../hitl-actions", () => hitlActions);
 
+/**
+ * THE CONVERSATION PANEL, PASSED THROUGH. The stepper draws it without its
+ * paperclip, so no case here can attach a file from the screen; the one case
+ * that needs the card's attachment road calls the `onSubmit` the card hands
+ * the panel, which is the road the paperclip takes. The panel itself is the
+ * real one, drawn with the same props.
+ */
+const conversation = vi.hoisted(() => ({
+  onSubmit: null as null | ((prompt: string, attachments?: unknown[]) => Promise<void>),
+}));
+vi.mock("../hitl-conversation-panel", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../hitl-conversation-panel")>();
+  function PassThroughConversationPanel(
+    props: React.ComponentProps<typeof real.HitlConversationPanel>,
+  ) {
+    conversation.onSubmit = props.onSubmit as typeof conversation.onSubmit;
+    return <real.HitlConversationPanel {...props} />;
+  }
+  return { ...real, HitlConversationPanel: PassThroughConversationPanel };
+});
+
 vi.mock("../use-runtime-field-renderer-bindings", () => ({
   useRuntimeFieldRendererBindings: () => ({ bindings: {}, loading: false }),
 }));
@@ -1165,5 +1186,99 @@ describe("OrchestratorStepperPanel — a renderer that reports its value unsenda
       expect((view.getByRole("checkbox", { name: "View one" }) as HTMLInputElement).checked).toBe(true),
     );
     await waitFor(() => expect(productContinues()[0]!.disabled).toBe(false));
+  });
+
+  // --- the stepper's gate card is NOT keyed by the review task ---------------
+  // Only the renderer below it is. The card's own per-gate state therefore
+  // outlives a change of review task, and the card clears it itself when the
+  // task changes. These two cases pin that clearing.
+  const BLOCKED = '[data-conformance-id="review-gate-blocked"]';
+  const outerContinue = () =>
+    Array.from(document.querySelectorAll("button")).find((b) =>
+      /Continue/.test(b.textContent ?? ""),
+    ) ?? null;
+
+  it("the card's blocked state goes with its review task: the next task's gate is open", async () => {
+    hitlActions.approveReviewTask.mockResolvedValueOnce({
+      ok: false,
+      blocked: "no-longer-pending",
+    } as never);
+    const view = await mountGate({
+      xRenderer: MID_RUN_RENDERER_ID,
+      fieldName: "callToAction",
+      reviewTaskId: "review-run-3562-a",
+    });
+
+    await waitFor(() => expect(outerContinue()).not.toBeNull());
+    fireEvent.click(outerContinue()!);
+    await waitFor(() => expect(document.querySelector(BLOCKED)).not.toBeNull());
+
+    view.advanceTo({
+      xRenderer: MID_RUN_RENDERER_ID,
+      fieldName: "callToAction",
+      reviewTaskId: "review-run-3562-b",
+    });
+    await waitFor(() => expect(document.querySelector(BLOCKED)).toBeNull());
+    await waitFor(() => expect(outerContinue()).not.toBeNull());
+    fireEvent.click(outerContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(2));
+    const [nextTaskId] = hitlActions.approveReviewTask.mock.calls[1] as unknown as [string];
+    expect(nextTaskId).toBe("review-run-3562-b");
+  });
+
+  it("the card's pending attachments go with their review task: the next task's Continue sends none", async () => {
+    const ATTACHMENT = {
+      artifactId: "art-3562-attached",
+      representationRevisionId: "rep-3562",
+      digest: "sha256:3562",
+      mime: "application/pdf",
+      originKind: "upload",
+      filename: "brief.pdf",
+      title: "brief.pdf",
+      size: 3,
+    };
+    conversation.onSubmit = null;
+    hitlActions.approveReviewTask.mockResolvedValueOnce({
+      ok: false,
+      blocked: "no-longer-pending",
+    } as never);
+    const view = await mountGate({
+      xRenderer: MID_RUN_RENDERER_ID,
+      fieldName: "callToAction",
+      reviewTaskId: "review-run-3562-attach-a",
+    });
+
+    await waitFor(() => expect(outerContinue()).not.toBeNull());
+    await waitFor(() => expect(conversation.onSubmit).not.toBeNull());
+    // An empty message: the card keeps the file, and the run window sends
+    // nothing for an empty message, so no turn leaves this file.
+    await act(async () => {
+      await conversation.onSubmit!("", [ATTACHMENT]);
+    });
+
+    // The road is live: the press on the task the file was attached on carries it.
+    fireEvent.click(outerContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [, firstPayload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(JSON.stringify(firstPayload)).toContain("art-3562-attached");
+    await waitFor(() => expect(document.querySelector(BLOCKED)).not.toBeNull());
+
+    view.advanceTo({
+      xRenderer: MID_RUN_RENDERER_ID,
+      fieldName: "callToAction",
+      reviewTaskId: "review-run-3562-attach-b",
+    });
+    await waitFor(() => expect(outerContinue()).not.toBeNull());
+    fireEvent.click(outerContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(2));
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[1] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("review-run-3562-attach-b");
+    expect(JSON.stringify(payload)).not.toContain("art-3562-attached");
   });
 });
