@@ -415,9 +415,8 @@ export async function POST(req: Request): Promise<Response> {
   try {
     input = shaper ? shaper(rawInput, agentRunId) : rawInput;
   } catch (err) {
-    // A shaper that fails closed (e.g. blog-pipeline `selectedIdeaJson` that
-    // is not a parseable/matching BlogIdea) surfaces a clear 400 instead of
-    // continuing into a wrong/empty downstream artifact.
+    // A shaper that fails closed (throws on input it cannot shape) surfaces a
+    // clear 400 instead of continuing into a wrong/empty downstream artifact.
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 400 });
   }
