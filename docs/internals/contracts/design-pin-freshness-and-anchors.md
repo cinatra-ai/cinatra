@@ -223,7 +223,9 @@ lets these checks land before the adoption that writes it.
 ## The re-ratification records — the checked claim of a pin move
 
 A pin move is told twice. The prose notes explain it; two **records** state it
-as data, and only the records are checked. No test reads the prose.
+as data, and only the records are checked. No test reads the prose for the
+move itself; one test reads the contract note's definition sentence for its
+input count (`chat-hitl-anchor-contract.test.mjs`).
 
 - **`reRatification`** in `scripts/audit/chat-hitl-anchor-contract.json`, a
   top-level object of exactly five keys. `previousRevision` is the revision of

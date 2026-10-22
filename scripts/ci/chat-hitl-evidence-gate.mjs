@@ -283,7 +283,7 @@ function isPlainObject(value) {
  */
 export function citedCellsOf(manifest, manifestPath = ACCEPTANCE_MANIFEST_PATH) {
   if (!isPlainObject(manifest)) throw new Error(`${manifestPath}: the manifest is not an object`);
-  if (manifest.rows === undefined) return [];
+  if (manifest.rows === undefined) throw new Error(`${manifestPath}: rows is missing`);
   if (!Array.isArray(manifest.rows)) throw new Error(`${manifestPath}: rows is not an array`);
   const cited = [];
   const seen = new Set();

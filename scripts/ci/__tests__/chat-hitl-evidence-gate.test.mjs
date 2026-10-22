@@ -354,6 +354,23 @@ describe("runGate over a fixture tree", () => {
     expect(result.findings.length).toBeGreaterThanOrEqual(2);
     expect(result.exitCode).toBe(0);
   });
+
+  it("refuses a manifest without rows, the throw the CLI exits 2 on", () => {
+    // Its own manifest file next to the shared one, so no other case of this
+    // tree reads it.
+    const manifestPath = join("scripts", "audit", "no-rows-manifest.json");
+    writeFileSync(join(fixtureRoot, manifestPath), JSON.stringify({ note: "no rows" }));
+    writeFileSync(io().captureIndexPath, JSON.stringify({ records: [] }));
+    expect(
+      () =>
+        runGate({
+          repoRoot: fixtureRoot,
+          argv: { enforce: true, branch: "feat/created-later" },
+          io: { ...io(), manifestPath, policyPath: fixturePolicyPath },
+        }),
+      "runGate on a manifest without rows",
+    ).toThrow(/rows is missing/);
+  });
 });
 
 describe("the CLI on the real tree", () => {
@@ -444,8 +461,9 @@ describe("the manifest binding reads proof fields only", () => {
     expect(() => scanCaptureEvidence(root, { captureIndexPath: join(root, "capture-index.json"), manifestPath: MANIFEST_REL })).toThrow(
       /is not a proof kind/,
     );
+    // A row with no proofs cites nothing; a manifest without rows is refused.
     expect(citedFrom({ rows: [{ criterion: "no proofs at all" }] })).toEqual([]);
-    expect(citedFrom({ note: "no rows" })).toEqual([]);
+    expect(() => citedFrom({ note: "no rows" }), "a manifest without rows").toThrow(/rows is missing/);
   });
 
   it("the real manifest cites exactly its 19 proof cells", () => {
