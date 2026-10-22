@@ -301,9 +301,9 @@ describe("connector-config update: the scenario table S1-S14", () => {
     ["a thenable object", () => ({ note: SENTINEL, then: () => undefined })],
     ["a thenable promise", () => Promise.resolve(SENTINEL)],
     ["an object whose then getter throws", () => throwingThen],
-    ["a cyclic object (stringify throws)", () => cyclic],
-    ["a bigint (stringify throws)", () => BigInt(7)],
-    ["a symbol (stringify gives no string)", () => Symbol(SENTINEL)],
+    ["a cyclic object", () => cyclic],
+    ["a bigint", () => BigInt(7)],
+    ["a symbol", () => Symbol(SENTINEL)],
   ])("S9 the updater returns %s: UPDATE_INVALID, no persist", (_label, updater) => {
     const h = makePort({ [KEY]: STORED_RAW });
     const error = caught(() => updateConnectorConfigVia(h.port, ID, updater, hasSecretFields));
@@ -393,6 +393,97 @@ describe("connector-config update: the scenario table S1-S14", () => {
     expect(h.rows.get(KEY)).toBe(JSON.stringify({ b: 2, a: 1, c: 3 }));
     expect(u.seen).toHaveLength(2);
     expect(h.calls.compareAndSwap).toBe(2);
+  });
+});
+
+describe("connector-config update: the storable value is an allow-list of JSON kinds", () => {
+  class Settings {
+    note = SENTINEL;
+  }
+  const nestedCycle = () => {
+    const row: Record<string, unknown> = { note: SENTINEL, inner: {} };
+    (row.inner as Record<string, unknown>).back = row;
+    return row;
+  };
+  it.each([
+    ["NaN", () => ({ note: SENTINEL, n: NaN })],
+    ["Infinity", () => ({ note: SENTINEL, n: Infinity })],
+    ["-Infinity", () => [SENTINEL, -Infinity]],
+    ["a top-level NaN", () => NaN],
+    ["a Map", () => ({ m: new Map([["k", SENTINEL]]) })],
+    ["a Set", () => new Set([SENTINEL])],
+    ["a Date", () => ({ note: SENTINEL, at: new Date(0) })],
+    ["a nested function", () => ({ note: SENTINEL, f: () => SENTINEL })],
+    ["a nested symbol", () => ({ note: SENTINEL, s: Symbol(SENTINEL) })],
+    ["a symbol key", () => ({ [Symbol("k")]: SENTINEL, note: SENTINEL })],
+    ["a nested bigint", () => ({ note: SENTINEL, n: BigInt(7) })],
+    ["a class instance", () => new Settings()],
+    ["a boxed number", () => ({ note: SENTINEL, n: Object(1) as unknown })],
+    ["an accessor property", () => ({ get note() { return SENTINEL; } })],
+    ["an array hole", () => {
+      const holey: unknown[] = new Array(3);
+      holey[0] = SENTINEL;
+      holey[2] = SENTINEL;
+      return holey;
+    }],
+    ["undefined in an array", () => [SENTINEL, undefined]],
+    ["a nested cycle", nestedCycle],
+  ])("C1 the updater returns a value with %s: UPDATE_INVALID before any store call", (_label, updater) => {
+    const h = makePort({ [KEY]: STORED_RAW });
+    const error = caught(() => updateConnectorConfigVia(h.port, ID, updater as () => unknown, hasSecretFields));
+    expect(h.rows.get(KEY)).toBe(STORED_RAW);
+    expect(error.code).toBe("CONNECTOR_CONFIG_UPDATE_INVALID");
+    expect(h.calls.compareAndSwap + h.calls.insertIfAbsent).toBe(0);
+    expect(h.calls.readRaw).toBe(1);
+    expect(h.calls.cacheSet).toBe(0);
+    expectValueFree(error, h.logs);
+  });
+
+  it.each([
+    ["nested objects and arrays", () => ({ b: 2, a: [1, { c: null }], s: "\u00e9", t: false, n: 1.5 })],
+    ["a null-prototype object", () => Object.assign(Object.create(null), { a: 1 })],
+    ["an own __proto__ key", () => JSON.parse('{"__proto__":{"x":1},"y":2}')],
+    ["a shared (acyclic) reference", () => {
+      const shared = { s: 1 };
+      return { a: shared, b: shared };
+    }],
+    ["an object property that is undefined (dropped, as JSON drops it)", () => ({ a: 1, gone: undefined })],
+    ["a plain object with a non-function then", () => ({ then: "later" })],
+  ])("C1 an allowed value (%s) is stored byte-equal to its JSON text", (_label, make) => {
+    const h = makePort({ [KEY]: STORED_RAW });
+    updateConnectorConfigVia(h.port, ID, make, hasSecretFields);
+    expect(h.rows.get(KEY)).toBe(JSON.stringify(make()));
+    expect(h.calls.compareAndSwap).toBe(1);
+  });
+
+  it("C7 an async updater that rejects: UPDATE_INVALID, and its rejection is handled (no unhandled rejection)", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const h = makePort({ [KEY]: STORED_RAW });
+      const error = caught(() =>
+        updateConnectorConfigVia(
+          h.port,
+          ID,
+          async () => {
+            throw new Error(SENTINEL);
+          },
+          hasSecretFields,
+        ),
+      );
+      expect(error.code).toBe("CONNECTOR_CONFIG_UPDATE_INVALID");
+      expect(h.calls.compareAndSwap + h.calls.insertIfAbsent).toBe(0);
+      // An unhandled rejection is reported after the microtask queue drains: wait two macrotasks.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+      expectValueFree(error, h.logs);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
   });
 });
 

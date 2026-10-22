@@ -13,8 +13,10 @@
 // Errors are value-free: every error thrown out of `update` is one of the
 // classes below, with a fixed message that names the key only and no `cause`.
 // The error the updater or the store threw is dropped. The only internal
-// record is one log line with the key, the code and (for a store failure) an
-// allow-listed SQLSTATE.
+// record is one log line with the key and the code. A store failure adds an
+// allow-listed SQLSTATE only when the store's error carries one as its own
+// `code`; the Postgres bridge (postgres-sync.ts `resultsOrThrow`) does not
+// carry it today, so the live line has none.
 // ---------------------------------------------------------------------------
 
 import {
@@ -94,17 +96,72 @@ function sqlStateOf(error: unknown): string | undefined {
   }
 }
 
-/** The JSON text to store, or UPDATE_INVALID when `next` cannot be stored. */
-function storableRaw(next: unknown, key: string): string {
+const REFUSED = Symbol("refused");
+
+/** A thenable is refused; its rejection is marked handled first, so a refused async updater leaves no unhandled rejection. */
+function isThenable(value: object): boolean {
+  let then: unknown;
   try {
-    if (next === undefined || typeof next === "function") throw new Error();
-    if (typeof next === "object" && next !== null && typeof (next as { then?: unknown }).then === "function") throw new Error();
-    const raw: unknown = JSON.stringify(next);
-    if (typeof raw !== "string") throw new Error();
-    return raw;
+    then = (value as { then?: unknown }).then;
   } catch {
-    throw new ConnectorConfigUpdateInvalidError(key);
+    return true;
   }
+  if (typeof then !== "function") return false;
+  try { Reflect.apply(then, value, [undefined, () => {}]); } catch { /* refused anyway */ }
+  return true;
+}
+
+/**
+ * A copy of `value` built from the JSON kinds only (an allow-list): null, booleans,
+ * strings, finite numbers, arrays without holes and plain objects (prototype
+ * Object.prototype or null) of own enumerable data properties with string keys.
+ * `undefined` is allowed only as an object property value and is dropped, as
+ * JSON drops it. Anything else is REFUSED: NaN, Infinity, bigint, symbol,
+ * function, thenable, Map, Set, Date, boxed primitive, class instance, accessor,
+ * symbol key, hole, cycle.
+ */
+function jsonCopy(value: unknown, ancestors: Set<object>): unknown {
+  if (value === null || typeof value === "boolean" || typeof value === "string") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : REFUSED;
+  if (typeof value === "function") {
+    isThenable(value);
+    return REFUSED;
+  }
+  if (typeof value !== "object" || ancestors.has(value) || isThenable(value)) return REFUSED;
+  const isArray = Array.isArray(value);
+  const proto: unknown = Object.getPrototypeOf(value);
+  if (isArray ? proto !== Array.prototype : proto !== Object.prototype && proto !== null) return REFUSED;
+  const ownKeys = Reflect.ownKeys(value);
+  // An array holds its indices and `length` only: a hole or an extra key refuses.
+  if (isArray && ownKeys.length !== (value as unknown[]).length + 1) return REFUSED;
+  const keys = isArray ? ownKeys.filter((name) => name !== "length") : ownKeys;
+  if (isArray && !keys.every((name, i) => name === String(i))) return REFUSED;
+  const out = (isArray ? [] : Object.create(null)) as Record<string, unknown>;
+  ancestors.add(value);
+  for (const name of keys) {
+    if (typeof name !== "string") return REFUSED;
+    const d = Object.getOwnPropertyDescriptor(value, name);
+    if (!d || !d.enumerable || !("value" in d)) return REFUSED;
+    if (d.value === undefined && !isArray) continue;
+    const copy = jsonCopy(d.value, ancestors);
+    if (copy === REFUSED) return REFUSED;
+    out[name] = copy;
+  }
+  ancestors.delete(value);
+  return out;
+}
+
+/** The JSON text to store, or UPDATE_INVALID when `next` is not made of JSON kinds only. */
+function storableRaw(next: unknown, key: string): string {
+  let raw: unknown;
+  try {
+    const copy = jsonCopy(next, new Set());
+    raw = copy === REFUSED ? undefined : JSON.stringify(copy);
+  } catch {
+    raw = undefined; // a proxy trap or a too-deep value
+  }
+  if (typeof raw !== "string") throw new ConnectorConfigUpdateInvalidError(key);
+  return raw;
 }
 
 /**

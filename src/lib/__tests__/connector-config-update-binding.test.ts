@@ -8,7 +8,10 @@
 //          the insert above when absent); on success the next
 //          `readConnectorConfigFromDatabase` inside the TTL is served from the
 //          process cache with the stored value; on a store failure the cache
-//          entry is evicted and the one log line carries no stored value.
+//          entry is evicted and the one log line carries no stored value. A
+//          store failure is thrown in the REAL bridge's shape (`resultsOrThrow`
+//          over `serializeWorkerError`), which keeps the message and drops the
+//          driver's `code`: the live line therefore carries no sqlstate.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type Query = { text: string; values?: unknown[] };
@@ -158,11 +161,22 @@ describe("H-bind: updateConnectorConfigInDatabase over the live port", () => {
     });
   });
 
-  it("a store failure evicts the cache entry and logs one value-free line with the SQLSTATE", () => {
+  it("a store failure in the real bridge's error shape evicts the cache entry and logs one value-free line without a sqlstate", async () => {
+    const bridge = await vi.importActual<typeof import("@/lib/postgres-sync")>("@/lib/postgres-sync");
+    // What the driver throws inside the worker, and what the bridge then throws in the caller.
+    const driverError = Object.assign(new Error(SENTINEL), { code: "40001" });
+    let bridged: unknown;
+    try {
+      bridge.resultsOrThrow({ error: bridge.serializeWorkerError(driverError) });
+    } catch (e) {
+      bridged = e;
+    }
+    expect(String((bridged as Error).message)).toContain(SENTINEL);
+    expect(Object.getOwnPropertyDescriptor(bridged, "code")).toBeUndefined();
     fake.meta.set(KEY, JSON.stringify({ note: SENTINEL }));
     readConnectorConfigFromDatabase("linkedin", {}); // caches the row
     fake.queries.length = 0;
-    fake.throwAt = { n: 2, error: Object.assign(new Error(SENTINEL), { code: "40001" }) };
+    fake.throwAt = { n: 2, error: bridged };
     let error: unknown;
     try {
       updateConnectorConfigInDatabase("linkedin", (current) => ({ ...(current as object), x: 1 }));
@@ -171,7 +185,7 @@ describe("H-bind: updateConnectorConfigInDatabase over the live port", () => {
     }
     expect((error as { code?: string }).code).toBe("CONNECTOR_CONFIG_STORE_FAILED");
     expect(String(error)).not.toContain(SENTINEL);
-    expect(warn.mock.calls).toEqual([[`[connector-config.update] key=${KEY} code=CONNECTOR_CONFIG_STORE_FAILED sqlstate=40001`]]);
+    expect(warn.mock.calls).toEqual([[`[connector-config.update] key=${KEY} code=CONNECTOR_CONFIG_STORE_FAILED`]]);
     expect(globalThis.__cinatraConnectorConfigCache?.has(KEY)).toBe(false);
   });
 
