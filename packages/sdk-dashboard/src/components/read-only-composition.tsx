@@ -52,8 +52,16 @@
 // case-varied or future name, a session road without an address, a non-object —
 // draws a settled refusal and mounts no provider: it never falls through to the
 // session road, which sends the reader's credentials.
+//
+// THE SERVER WAITS FOR THE PAGE'S ORIGIN (#4118). The session road's address is
+// resolved against the page's own origin, which only the browser knows. A server
+// render therefore draws the session road as a neutral pending placeholder (no
+// provider, no address, no refusal), and so does the first client render while
+// it hydrates that markup; the road is resolved right after. A client without a
+// usable origin then draws the refusal. The `none` road and a value that cannot
+// be an address at all read the same on both sides and are drawn at once.
 
-import { useState, type ComponentProps, type ReactNode } from "react";
+import { useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
 import {
   QueryClient,
   QueryClientProvider,
@@ -105,19 +113,54 @@ function DataRoadProviders({
   dataRoad: ReadOnlyCompositionDataRoad | undefined;
   children: ReactNode;
 }) {
+  // Read on every render, road or not (a hook): the server's snapshot is
+  // "pending", the client's is the page's origin or "absent".
+  const pageOrigin = useSyncExternalStore(subscribeToNothing, readPageOrigin, pendingPageOrigin);
   if (dataRoad === undefined) return <>{children}</>;
-  const road = readDataRoad(dataRoad);
+  const road = readDataRoad(dataRoad, pageOrigin);
   if (road.road === "none") return <MountedNoSeriesRoad>{children}</MountedNoSeriesRoad>;
   if (road.road === "session") return <MountedDataRoad apiUrl={road.apiUrl}>{children}</MountedDataRoad>;
+  if (road.road === "pending") return <PendingDataRoad />;
   return <RefusedDataRoad />;
 }
 
 type ReadDataRoad =
   | { readonly road: "none" }
   | { readonly road: "session"; /** the resolved href */ readonly apiUrl: string }
+  | { readonly road: "pending" }
   | { readonly road: "refused" };
 
 const REFUSED: ReadDataRoad = { road: "refused" };
+const PENDING: ReadDataRoad = { road: "pending" };
+
+/**
+ * THE PAGE'S ORIGIN, AS EACH SIDE READS IT. The client reads
+ * `window.location.origin` once per render: a usable origin is a non-empty
+ * string other than the opaque "null"; no window, no location, a read that
+ * throws and every other value are `null` (absent, so the session road is
+ * refused). The server, and the client while it hydrates the server's markup,
+ * read `undefined` (pending), so both draw the same placeholder. A page's
+ * origin does not change while the page lives, so there is nothing to
+ * subscribe to.
+ */
+type PageOrigin = string | null | undefined;
+
+function readPageOrigin(): string | null {
+  try {
+    const origin: unknown = typeof window === "undefined" ? undefined : window.location?.origin;
+    return typeof origin === "string" && origin.length > 0 && origin !== "null" ? origin : null;
+  } catch {
+    return null;
+  }
+}
+
+function pendingPageOrigin(): undefined {
+  return undefined;
+}
+
+function subscribeToNothing(): () => void {
+  return () => {};
+}
 
 /** An own DATA property of a plain object, read once; an accessor, an inherited
  *  property or a read that throws reads as absent. */
@@ -134,27 +177,36 @@ function ownValue(value: object, key: string): unknown {
 const UNSAFE_CHARACTER = /[\\\s\u0000-\u001f\u007f]/;
 /** A root-relative path ("/x", never "//x") or an absolute URL with a scheme. */
 const ADDRESS_SHAPE = /^(?:\/(?!\/)|[a-z][a-z0-9+.-]*:)/i;
+/** The only schemes the reader's session goes to, read from the parsed URL. */
+const SESSION_PROTOCOLS: ReadonlySet<string> = new Set(["http:", "https:"]);
+
+/** A value that may be an address at all, before any origin is read. */
+function isAddressShaped(apiUrl: string): boolean {
+  return !UNSAFE_CHARACTER.test(apiUrl) && ADDRESS_SHAPE.test(apiUrl);
+}
 
 /**
  * THE ADDRESS THE READER'S SESSION GOES TO, RESOLVED ONCE. The session road
  * sends the reader's credentials (`credentials: "include"`), so its address
  * must be the page's own origin. The value is resolved exactly once, against
- * `window.location.origin` (never `document.baseURI`, so a `<base>` element
- * cannot move it), and the RESOLVED href is the one handed on: the provider
- * never receives a path a browser would resolve again. Admitted is a value of
- * the address shape whose resolved origin EQUALS the page's origin, with no
- * user name and no password. Refused (`undefined`) is everything else: no
- * window, a missing, empty or opaque ("null") page origin, a value that does
- * not parse, a backslash, whitespace or control character, "//host", a bare
- * relative path, another origin, port or scheme, "javascript:", and any user
- * name or password (an empty user name with a password included).
+ * the page's origin as `readPageOrigin` reads it from `window.location.origin`
+ * (never `document.baseURI`, so a `<base>` element cannot move it), and the
+ * RESOLVED href is the one handed on: the provider never receives a path a
+ * browser would resolve again. Admitted is a value of the address shape whose
+ * parsed scheme is http or https and whose resolved origin EQUALS the page's
+ * origin, with no user name and no password. Refused (`undefined`) is
+ * everything else: no usable page origin (`null`), a value that does not
+ * parse, a backslash, whitespace or control character, "//host", a bare
+ * relative path, another origin, port or scheme, every scheme but http and
+ * https ("blob:" of the page's own origin, "data:", "javascript:", "file:"
+ * included), and any user name or password (an empty user name with a
+ * password included).
  */
-function sameOriginHref(apiUrl: string): string | undefined {
-  if (UNSAFE_CHARACTER.test(apiUrl) || !ADDRESS_SHAPE.test(apiUrl)) return undefined;
+function sameOriginHref(apiUrl: string, pageOrigin: string | null): string | undefined {
+  if (!isAddressShaped(apiUrl) || pageOrigin === null) return undefined;
   try {
-    const pageOrigin = typeof window === "undefined" ? undefined : window.location?.origin;
-    if (typeof pageOrigin !== "string" || pageOrigin.length === 0 || pageOrigin === "null") return undefined;
     const url = new URL(apiUrl, pageOrigin);
+    if (!SESSION_PROTOCOLS.has(url.protocol)) return undefined;
     if (url.origin !== pageOrigin || url.username !== "" || url.password !== "") return undefined;
     return url.href;
   } catch {
@@ -167,20 +219,31 @@ function sameOriginHref(apiUrl: string): string | undefined {
  * object whose own `road` equals `"none"`, or equals `"session"` with an own
  * string `apiUrl` that resolves to the page's own origin (`sameOriginHref`);
  * the session road then carries that resolved href, never the value as given.
+ * While the page's origin is pending (the server, and the client's hydrating
+ * render), a session road whose address is shaped like one reads as pending.
  * Everything else is refused — the composition does not guess which road a
  * value it cannot read meant, and never sends the reader's session to another
  * origin.
  */
-function readDataRoad(dataRoad: unknown): ReadDataRoad {
+function readDataRoad(dataRoad: unknown, pageOrigin: PageOrigin): ReadDataRoad {
   if (typeof dataRoad !== "object" || dataRoad === null || Array.isArray(dataRoad)) return REFUSED;
   const road = ownValue(dataRoad, "road");
   if (road === "none") return { road: "none" };
   if (road === "session") {
     const apiUrl = ownValue(dataRoad, "apiUrl");
-    const href = typeof apiUrl === "string" ? sameOriginHref(apiUrl) : undefined;
-    if (href !== undefined) return { road: "session", apiUrl: href };
+    if (typeof apiUrl === "string" && isAddressShaped(apiUrl)) {
+      if (pageOrigin === undefined) return PENDING;
+      const href = sameOriginHref(apiUrl, pageOrigin);
+      if (href !== undefined) return { road: "session", apiUrl: href };
+    }
   }
   return REFUSED;
+}
+
+/** The pending placeholder: no provider, no address, no refusal, no text. The
+ *  server and the hydrating client draw the same one. */
+function PendingDataRoad() {
+  return <div aria-busy="true" data-cinatra-read-only-composition-pending="data-road" />;
 }
 
 /** The settled refusal: no provider, no grid, no request — a visible notice. */

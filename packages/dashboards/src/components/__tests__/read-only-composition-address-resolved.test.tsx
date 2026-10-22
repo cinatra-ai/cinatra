@@ -176,6 +176,20 @@ describe("the session road hands the provider the address resolved against the p
     render(<Dashboard config={CONFIG} dataRoad={session("api/dashboards/cubejs-api/v1")} />);
     expectRefused();
   });
+
+  test("(r12) a blob address whose origin reads as the page's own origin is refused: only http and https carry the session", () => {
+    const blob = `blob:${PAGE_ORIGIN}/0b1c2d3e`;
+    // The origin check alone would admit it: its parsed origin IS the page's.
+    expect(new URL(blob).origin).toBe(PAGE_ORIGIN);
+    expect(new URL(blob).protocol).toBe("blob:");
+    render(<Portlet config={CONFIG} portletId="p1" dataRoad={session(blob)} />);
+    expectRefused();
+  });
+
+  test("[guard] (r13) a file address is refused", () => {
+    render(<Dashboard config={CONFIG} dataRoad={session("file:///etc/passwd")} />);
+    expectRefused();
+  });
 });
 
 /** A road whose own-property read throws for each key in `throwing`. */

@@ -2,10 +2,10 @@
 //
 // The composition admits exactly two roads, read by equality: `{ road: "none" }`
 // and `{ road: "session", apiUrl }` where `apiUrl` is a root-relative path or an
-// absolute URL that resolves, against the page's own origin, to that origin
-// with no user name or password. Every value below is one it must REFUSE: it
-// mounts no provider, draws a settled refusal, and never falls through to the
-// session road, which sends the reader's credentials.
+// absolute http or https URL that resolves, against the page's own origin, to
+// that origin with no user name or password. Every value below is one it must
+// REFUSE: it mounts no provider, draws a settled refusal, and never falls
+// through to the session road, which sends the reader's credentials.
 // Not a test file: the suites that read it import it.
 
 export const API = "/api/dashboards/cubejs-api/v1";
@@ -53,6 +53,12 @@ export const REFUSED_ROADS: ReadonlyArray<readonly [string, unknown]> = [
   ["a session road to a space-led address", { road: "session", apiUrl: " //evil.example/cubejs-api/v1" }],
   ["a session road to a javascript address", { road: "session", apiUrl: "javascript:alert(1)" }],
   ["a session road to a data address", { road: "session", apiUrl: "data:text/plain,x" }],
+  // Only http and https, read from the parsed URL: a blob address names the page's
+  // own origin as its origin, and is still refused.
+  ["a session road to a blob address of the page origin", { road: "session", apiUrl: `blob:${PAGE_ORIGIN}/0b1c2d3e` }],
+  ["a session road to a data address naming the page origin", { road: "session", apiUrl: `data:text/plain,${PAGE_ORIGIN}${API}` }],
+  ["a session road to a case-varied javascript address", { road: "session", apiUrl: "JavaScript:alert(1)" }],
+  ["a session road to a file address", { road: "session", apiUrl: "file:///etc/passwd" }],
   ["a session road to the page host on another scheme", { road: "session", apiUrl: `${OTHER_SCHEME}//${PAGE.host}${API}` }],
   ["a session road to the page host on another port", { road: "session", apiUrl: `${PAGE.protocol}//${PAGE.hostname}:${OTHER_PORT}${API}` }],
   ["a session road with a user name and password", { road: "session", apiUrl: `${PAGE.protocol}//user:pw@${PAGE.host}${API}` }],
