@@ -190,7 +190,7 @@
     {
       "packageName": "@cinatra-ai/email-artifacts",
       "repo": "cinatra-ai/email-artifacts",
-      "resolvedSha": "fe936a27b6aae6e4e985a1baf6e4747d7ea0a6d8"
+      "resolvedSha": "1f8fb36bd2fc121f982186678971acc7592c71bd"
     },
     {
       "packageName": "@cinatra-ai/email-body-matcher-skill",
@@ -265,12 +265,12 @@
     {
       "packageName": "@cinatra-ai/linkedin-connector",
       "repo": "cinatra-ai/linkedin-connector",
-      "resolvedSha": "a623f40269f08438753b55706b208de1d42f5593"
+      "resolvedSha": "43469ef082b3548e6b58285cbcfef3841d6244ff"
     },
     {
       "packageName": "@cinatra-ai/linkedin-oauth-connector",
       "repo": "cinatra-ai/linkedin-oauth-connector",
-      "resolvedSha": "107a8359d0b24abe1a9a429d634e80ef2b1a6dfe"
+      "resolvedSha": "f0db670f829aad61d44a3da411e51ed6f1f2ceba"
     },
     {
       "packageName": "@cinatra-ai/list-curation-skill",
@@ -400,7 +400,7 @@
     {
       "packageName": "@cinatra-ai/twenty-connector",
       "repo": "cinatra-ai/twenty-connector",
-      "resolvedSha": "c96d773ae2b4fac1d9cb32e1133e4b374f2d2e15"
+      "resolvedSha": "d8f3451f38b6201fd7f8e5895a8b92fb29955bcf"
     },
     {
       "packageName": "@cinatra-ai/web-research-agent",
