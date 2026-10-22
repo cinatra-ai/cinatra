@@ -541,6 +541,11 @@ describe("connector-config update: the remaining branches", () => {
     ["a thrown string", () => SENTINEL],
     ["a thrown null", () => null],
     ["a lower-case code", () => Object.assign(new Error(SENTINEL), { code: "40p01" })],
+    ["an own code of six characters", () => Object.assign(new Error(SENTINEL), { code: "400011" })],
+    ["an own code of four characters", () => Object.assign(new Error(SENTINEL), { code: "4000" })],
+    ["an own code with a SQLSTATE at its end", () => Object.assign(new Error(SENTINEL), { code: "XX40001" })],
+    ["an own code with a SQLSTATE at its start", () =>
+      Object.assign(new Error(SENTINEL), { code: `40001-${SENTINEL.toUpperCase()}` })],
     ["a proxy whose getOwnPropertyDescriptor trap throws", () =>
       new Proxy(Object.assign(new Error(SENTINEL), { code: "40001" }), {
         getOwnPropertyDescriptor() {
@@ -555,6 +560,17 @@ describe("connector-config update: the remaining branches", () => {
     const error = caught(() => updateConnectorConfigVia(h.port, ID, merging({}).fn, hasSecretFields));
     expect(error.code).toBe("CONNECTOR_CONFIG_STORE_FAILED");
     expect(h.logs).toEqual([`[connector-config.update] key=${KEY} code=CONNECTOR_CONFIG_STORE_FAILED`]);
+    expectValueFree(error, h.logs);
+  });
+
+  it("a store error that is a thrown function with an own code 40001 logs sqlstate=40001", () => {
+    const h = makePort({ [KEY]: STORED_RAW });
+    h.port.readRaw = () => {
+      throw Object.assign(function storeFailure() {}, { code: "40001" });
+    };
+    const error = caught(() => updateConnectorConfigVia(h.port, ID, merging({}).fn, hasSecretFields));
+    expect(error.code).toBe("CONNECTOR_CONFIG_STORE_FAILED");
+    expect(h.logs).toEqual([`[connector-config.update] key=${KEY} code=CONNECTOR_CONFIG_STORE_FAILED sqlstate=40001`]);
     expectValueFree(error, h.logs);
   });
 
