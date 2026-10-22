@@ -41,9 +41,17 @@
 //
 // THE NO-SERIES ROAD (cinatra#3092). A reading that holds no series still draws
 // the dashboard's chrome, titles and layout, with no numbers. Road `none` mounts
-// the same providers over a query client on which no query ever runs, so the
-// grid lays the portlets out by the configuration's own `grid`, `layoutMode` and
-// `rows`, and nothing is fetched and no address is read.
+// the same providers over a query client on which no query reaches the cube
+// client: every query is born settled with an EMPTY answer, so the grid lays the
+// portlets out by the configuration's own `grid`, `layoutMode` and `rows`, each
+// portlet settles to its empty state, and nothing is fetched and no address is
+// read.
+//
+// ONLY THE TWO NAMED ROADS. The road is read by equality against `"none"` and
+// `"session"` and nothing else. Any other value — a missing or malformed road, a
+// case-varied or future name, a session road without an address, a non-object —
+// draws a settled refusal and mounts no provider: it never falls through to the
+// session road, which sends the reader's credentials.
 
 import { useState, type ComponentProps, type ReactNode } from "react";
 import {
@@ -97,9 +105,55 @@ function DataRoadProviders({
   dataRoad: ReadOnlyCompositionDataRoad | undefined;
   children: ReactNode;
 }) {
-  if (!dataRoad) return <>{children}</>;
-  if (dataRoad.road === "none") return <MountedNoSeriesRoad>{children}</MountedNoSeriesRoad>;
-  return <MountedDataRoad dataRoad={dataRoad}>{children}</MountedDataRoad>;
+  if (dataRoad === undefined) return <>{children}</>;
+  const road = readDataRoad(dataRoad);
+  if (road.road === "none") return <MountedNoSeriesRoad>{children}</MountedNoSeriesRoad>;
+  if (road.road === "session") return <MountedDataRoad apiUrl={road.apiUrl}>{children}</MountedDataRoad>;
+  return <RefusedDataRoad />;
+}
+
+type ReadDataRoad =
+  | { readonly road: "none" }
+  | { readonly road: "session"; readonly apiUrl: string }
+  | { readonly road: "refused" };
+
+const REFUSED: ReadDataRoad = { road: "refused" };
+
+/** An own DATA property of a plain object, read once; an accessor, an inherited
+ *  property or a read that throws reads as absent. */
+function ownValue(value: object, key: string): unknown {
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor && "value" in descriptor ? descriptor.value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * THE ROAD, READ FAIL-CLOSED. A road is admitted only when it is a non-array
+ * object whose own `road` equals `"none"`, or equals `"session"` with an own,
+ * non-empty string `apiUrl`. Everything else is refused — the composition does
+ * not guess which road a value it cannot read meant.
+ */
+function readDataRoad(dataRoad: unknown): ReadDataRoad {
+  if (typeof dataRoad !== "object" || dataRoad === null || Array.isArray(dataRoad)) return REFUSED;
+  const road = ownValue(dataRoad, "road");
+  if (road === "none") return { road: "none" };
+  if (road === "session") {
+    const apiUrl = ownValue(dataRoad, "apiUrl");
+    if (typeof apiUrl === "string" && apiUrl.length > 0) return { road: "session", apiUrl };
+  }
+  return REFUSED;
+}
+
+/** The settled refusal: no provider, no grid, no request — a visible notice. */
+function RefusedDataRoad() {
+  return (
+    <div role="alert" data-cinatra-read-only-composition-refused="data-road">
+      This view cannot be drawn: its data road is not one this composition knows.
+    </div>
+  );
 }
 
 /** The shell's own query settings, shared by both roads. */
@@ -107,17 +161,65 @@ const ROAD_QUERY_DEFAULTS = {
   defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false } },
 };
 
-/** A query function that never settles and never calls the cube client. */
-const neverAnswers = () => new Promise<never>(() => {});
+/** An empty reading in drizzle-cube 0.6.6's own result-set shape
+ *  (`CubeResultSet`, src/client/types.ts:523-530; the client's `ResultSet`,
+ *  src/client/client/CubeClient.ts:249-295): no rows, no annotation. */
+function emptyResultSet() {
+  return {
+    loadResponse: { data: [], annotation: {} },
+    rawData: () => [],
+    tablePivot: () => [],
+    series: () => [],
+    annotation: () => ({}),
+    cacheInfo: () => undefined,
+  };
+}
+
+/**
+ * THE SETTLED, EMPTY ANSWER FOR A QUERY OF THE GRID, by the query family
+ * drizzle-cube 0.6.6 names in the key's second place — each in the shape that
+ * family's own query function returns when the server answers with no rows:
+ *   `load`       → a result set (hooks/queries/useCubeLoadQuery.ts:32-36, 198-224)
+ *   `multiLoad`  → the merged reading (hooks/queries/useMultiCubeLoadQuery.ts:26-31, 203-209)
+ *   `funnel`, `flow`, `retention` → `{ rawData, executionTime, cacheInfo }`
+ *                  (useFunnelQuery.ts:207-211, 262-266; useFlowQuery.ts:187-190,
+ *                  243-251; useRetentionQuery.ts:256-259, 304-308)
+ *   `meta`       → `{ meta, labelMap }` (hooks/queries/useCubeMetaQuery.ts:19, 93-98)
+ * A portlet with a result set and no error is done (components/analyticsPortlet/
+ * portletRenderState.ts:74, 78), and its chart draws its own "No data available".
+ * A key this road does not know has no answer: its query stays off and, if it is
+ * ever fetched, settles with an error.
+ */
+function emptyAnswerFor(queryKey: readonly unknown[] | undefined): unknown {
+  if (!Array.isArray(queryKey) || queryKey[0] !== "cube") return undefined;
+  const family = queryKey[1];
+  if (family === "load") return emptyResultSet();
+  if (family === "multiLoad") {
+    return { data: [], resultSets: [], perQueryData: [], errors: [], firstError: null };
+  }
+  if (family === "funnel" || family === "flow" || family === "retention") {
+    return { rawData: [], executionTime: 0, cacheInfo: undefined };
+  }
+  if (family === "meta") return { meta: { cubes: [] }, labelMap: {} };
+  return undefined;
+}
+
+/** The answer to a query this road does not know: settled, never a request. */
+function refuseUnknownQuery(): Promise<never> {
+  return Promise.reject(new Error("The no-series road answers no such query."));
+}
 
 /**
  * THE NO-SERIES ROAD'S QUERY CLIENT. drizzle-cube 0.6.6 builds its cube client
  * from `apiOptions` inside its provider and does not read a `cubeApi` it is
- * given, so the one seam that every query of the grid passes through is the
- * query client the provider is given (`queryClient`): each portlet's series, the
- * cube metadata and a portlet's refresh. On this client every query is off and
- * its function is `neverAnswers`, so no query reaches the cube client: the road
- * fetches nothing, and the portlets show no numbers.
+ * given (providers/CubeApiProvider.tsx:69-73), so the one seam that every query
+ * of the grid passes through is the query client the provider is given
+ * (`queryClient`): each portlet's series, the cube metadata and a portlet's
+ * refresh, including the `fetchQuery` a cache-busting refresh calls. On this
+ * client every query is off, is born holding its family's empty answer
+ * (`initialData`), and its function answers that same empty answer at once — so
+ * no query reaches the cube client, the road fetches nothing, and every portlet
+ * settles to its empty state instead of loading forever.
  */
 class NoSeriesQueryClient extends QueryClient {
   override defaultQueryOptions<
@@ -132,7 +234,15 @@ class NoSeriesQueryClient extends QueryClient {
       | QueryObserverOptions<TQueryFnData, TError, TData, TQueryData, TQueryKey, TPageParam>
       | DefaultedQueryObserverOptions<TQueryFnData, TError, TData, TQueryData, TQueryKey>,
   ): DefaultedQueryObserverOptions<TQueryFnData, TError, TData, TQueryData, TQueryKey> {
-    return { ...super.defaultQueryOptions(options), enabled: false, queryFn: neverAnswers };
+    const defaulted = super.defaultQueryOptions(options);
+    const answer = emptyAnswerFor(defaulted.queryKey);
+    return {
+      ...defaulted,
+      enabled: false,
+      retry: false,
+      initialData: answer as TQueryData | undefined,
+      queryFn: answer === undefined ? refuseUnknownQuery : () => Promise.resolve(answer as TQueryFnData),
+    };
   }
 }
 
@@ -157,19 +267,13 @@ function MountedNoSeriesRoad({ children }: { children: ReactNode }) {
 
 /** The query client and the cube provider over the road's address — the
  *  dashboards shell's own settings. */
-function MountedDataRoad({
-  dataRoad,
-  children,
-}: {
-  dataRoad: Extract<ReadOnlyCompositionDataRoad, { road: "session" }>;
-  children: ReactNode;
-}) {
+function MountedDataRoad({ apiUrl, children }: { apiUrl: string; children: ReactNode }) {
   // One query client per mount, created once — the shell's own lifetime rule.
   const [queryClient] = useState(() => new QueryClient(ROAD_QUERY_DEFAULTS));
   return (
     <QueryClientProvider client={queryClient}>
       <CubeProvider
-        apiOptions={{ apiUrl: dataRoad.apiUrl, credentials: "include" }}
+        apiOptions={{ apiUrl, credentials: "include" }}
         features={{ enableAI: false }}
         enableBatching={false}
       >
