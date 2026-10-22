@@ -14,7 +14,7 @@
 //     src/__tests__/chat-user-avatar-accent-4292.test.tsx
 
 import React from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 
 vi.mock("../../../agents/src/run-recommendation-actions", () => ({
@@ -54,6 +54,7 @@ vi.mock("../inline-agent-run-card", () => ({
 }));
 
 import { ChatMessagesView, type ChatMessagesViewProps } from "../chat-messages-view";
+import type { ConversationColumnProps } from "../conversation-column";
 import { createChatWidgetRuntime } from "../widget-runtime";
 import type { UiMessage } from "../types";
 import { ACCENT_PALETTE, EXTENSION_ACCENTS, type ExtensionAccent } from "@/lib/extension-accent";
@@ -68,14 +69,15 @@ const MESSAGES: UiMessage[] = [
 function props(
   isSlackMode: boolean,
   sessionUser: ChatMessagesViewProps["sessionUser"],
-  userId: string | undefined = "user-ada",
+  // `null` passes no user id (a default parameter would replace `undefined`).
+  userId: string | null = "user-ada",
 ): ChatMessagesViewProps {
   return {
     messages: MESSAGES,
     isSlackMode,
     animating: false,
     theme: "light" as ChatMessagesViewProps["theme"],
-    userId,
+    userId: userId ?? undefined,
     sessionUser,
     activeThreadId: "thread-4292",
     assistantHandleMap: new Map(),
@@ -158,9 +160,18 @@ for (const isSlackMode of [false, true]) {
 
     it("draws the \"Me\" fallback on an accent with no user id, no name and no e-mail", () => {
       const { container } = render(
-        <ChatMessagesView {...props(isSlackMode, { name: null, image: null }, undefined)} />,
+        <ChatMessagesView {...props(isSlackMode, { name: null, image: null }, null)} />,
       );
       expectInitialsOnAccent(userFallback(container, "Me"));
+    });
+
+    // The embed widget mounts the column with neither `userId` nor
+    // `sessionUser`, so the accent's seed is the empty string ("red").
+    it("draws \"Me\" on the empty seed's accent with no user id and no session user", () => {
+      const { container } = render(<ChatMessagesView {...props(isSlackMode, null, null)} />);
+      const el = userFallback(container, "Me");
+      expectInitialsOnAccent(el);
+      expect(el.getAttribute("data-accent")).toBe("red");
     });
 
     it("leaves the assistant's avatar without a person's accent", () => {
@@ -173,3 +184,21 @@ for (const isSlackMode of [false, true]) {
     });
   });
 }
+
+// The production wrapper takes the same session-user fields the list draws, so
+// a caller of `ConversationColumn` can pass the e-mail and the persisted accent
+// in an object literal. The package typecheck reads these lines.
+describe("ConversationColumn's session user (cinatra#4292)", () => {
+  it("takes the e-mail and the persisted accent the list draws", () => {
+    expectTypeOf<ConversationColumnProps["sessionUser"]>().toEqualTypeOf<
+      ChatMessagesViewProps["sessionUser"]
+    >();
+    const sessionUser: ConversationColumnProps["sessionUser"] = {
+      name: "Grace Hopper",
+      image: null,
+      email: "grace@example.com",
+      accentColor: "plum",
+    };
+    expect(sessionUser).toMatchObject({ email: "grace@example.com", accentColor: "plum" });
+  });
+});

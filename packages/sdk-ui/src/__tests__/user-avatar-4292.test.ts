@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { ACCENT_PALETTE, EXTENSION_ACCENTS } from "../lib/extension-accent";
+import { ACCENT_PALETTE, EXTENSION_ACCENTS, deriveExtensionAccent } from "../lib/extension-accent";
 import { userAvatarAccent, userInitials } from "../lib/user-avatar";
 
 const PKG_DIR = join(__dirname, "..", "..");
@@ -27,7 +27,7 @@ describe("userAvatarAccent", () => {
 
   it("derives the accent from the stable id when none is persisted or the stored one is not a palette name", () => {
     const derived = userAvatarAccent({ id: "user-1" });
-    expect(EXTENSION_ACCENTS).toContain(derived);
+    expect(derived).toBe(deriveExtensionAccent("user-1"));
     expect(userAvatarAccent({ id: "user-1", accentColor: null })).toBe(derived);
     expect(userAvatarAccent({ id: "user-1", accentColor: "indigo" })).toBe(derived);
     expect(userAvatarAccent({ id: "user-1", accentColor: "navy" })).toBe(derived);
@@ -46,9 +46,37 @@ describe("userAvatarAccent", () => {
     expect(seen.size).toBeGreaterThan(1);
   });
 
-  it("returns an accent even with no id at all", () => {
-    expect(EXTENSION_ACCENTS).toContain(userAvatarAccent({}));
-    expect(EXTENSION_ACCENTS).toContain(userAvatarAccent({ email: "ada@example.com" }));
+  // The seed is `id || email || name || ""` (user-avatar.ts). The four seeds
+  // below derive four different accents, so each assertion fails when the
+  // helper reads the wrong seed.
+  describe("the seed of a derived accent, one branch each", () => {
+    const ID = "user-1"; // derives "green"
+    const EMAIL = "ada@example.com"; // derives "burgundy"
+    const NAME = "Ada Lovelace"; // derives "clay"
+
+    it("the four seeds derive four different accents", () => {
+      const accents = [ID, EMAIL, NAME, ""].map(deriveExtensionAccent);
+      expect(accents).toEqual(["green", "burgundy", "clay", "red"]);
+    });
+
+    it("seeds from the id when there is one", () => {
+      expect(userAvatarAccent({ id: ID, email: EMAIL, name: NAME })).toBe("green");
+    });
+
+    it("seeds from the e-mail when there is no id", () => {
+      expect(userAvatarAccent({ email: EMAIL })).toBe("burgundy");
+      expect(userAvatarAccent({ id: "", email: EMAIL, name: NAME })).toBe("burgundy");
+    });
+
+    it("seeds from the name when there is neither id nor e-mail", () => {
+      expect(userAvatarAccent({ name: NAME })).toBe("clay");
+      expect(userAvatarAccent({ id: null, email: "", name: NAME })).toBe("clay");
+    });
+
+    it("seeds from the empty string when there is no id, e-mail or name", () => {
+      expect(userAvatarAccent({})).toBe("red");
+      expect(userAvatarAccent({ id: "", email: null, name: "" })).toBe("red");
+    });
   });
 
   it("never yields indigo or navy", () => {
@@ -88,6 +116,33 @@ describe("userInitials", () => {
     expect(userInitials({ name: "", email: "" })).toBe("?");
     expect(userInitials({ name: null, email: "@example.com" })).toBe("?");
     expect(userInitials({}, "Me")).toBe("Me");
+  });
+
+  // Initials come only from letters (Unicode \p{L}). A name that gives no
+  // letter falls through to the e-mail, and an e-mail that gives none to the
+  // fallback, so the avatar never draws a blank or a non-letter initial.
+  it("falls through to the e-mail when the name gives no letter", () => {
+    const email = "grace_hopper@example.com";
+    expect(userInitials({ name: "-", email })).toBe("GH");
+    expect(userInitials({ name: "\u200B", email })).toBe("GH");
+    expect(userInitials({ name: "?! ...", email })).toBe("GH");
+    expect(userInitials({ name: "42", email })).toBe("GH");
+    expect(userInitials({ name: "\u{1F600}", email })).toBe("GH");
+  });
+
+  it("falls back when neither the name nor the e-mail gives a letter", () => {
+    expect(userInitials({ name: "-" })).toBe("?");
+    expect(userInitials({ name: "\u200B", email: "\u200B@example.com" })).toBe("?");
+    expect(userInitials({ name: "--", email: "123@example.com" })).toBe("?");
+    expect(userInitials({ name: "\u200B" }, "Me")).toBe("Me");
+  });
+
+  it("takes each word's first letter and skips a word without one", () => {
+    expect(userInitials({ name: "(Ada) Lovelace" })).toBe("AL");
+    expect(userInitials({ name: "Ada - Lovelace" })).toBe("AL");
+    expect(userInitials({ name: "Ada Lovelace -" })).toBe("AL");
+    expect(userInitials({ name: "\u200BAda" })).toBe("A");
+    expect(userInitials({ email: "-ada.42@example.com" })).toBe("A");
   });
 
   it("keeps a letter outside the basic plane whole", () => {

@@ -59,6 +59,12 @@ export type Mentionable = {
   image?: string | null;
   /** A person's persisted avatar accent (`user.accent_color`), when the host has it. */
   accentColor?: string | null;
+  /**
+   * A person's display name from the directory, when the host has it. It gives
+   * a user row's avatar initials ("Grace Hopper" draws "GH"); the chat sets
+   * `displayName` to the handle, so the row's label is unchanged.
+   */
+  name?: string | null;
 };
 
 export type PromptFieldProps = {
@@ -780,7 +786,7 @@ export const PromptField = forwardRef<PromptFieldHandle, PromptFieldProps>(funct
                     <AvatarFallback accent={userAvatarAccent({ id: m.id, accentColor: m.accentColor })}>
                       {/* A row carries no e-mail; its handle ("ada_lovelace") reads
                           like an e-mail's local part, so it stands in for one. */}
-                      {userInitials({ name: m.displayName, email: m.handle })}
+                      {userInitials({ name: m.name || m.displayName, email: m.handle })}
                     </AvatarFallback>
                   ) : (
                     <AvatarFallback>{m.displayName.charAt(0).toUpperCase()}</AvatarFallback>
