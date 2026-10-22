@@ -309,11 +309,15 @@ describe("the REAL manifest", () => {
     // The approved revision governs both drawings; the canonical parser keeps
     // the immutable revision and exact sibling set strict.
     expect(parseSpecCommit(m.specCommit)).toEqual({
+      revision: "46b2d8bc642cfcebc20477872fb47132e1bcd795",
+      paths: ["specs/app-lifecycle-cards.html", "specs/app-artifact-review.html"],
+    });
+    // The displaced pin governed both drawings, so it is recorded with both:
+    // the canonical parser reads it exactly as it read the pin when it stood.
+    expect(parseSpecCommit(m.specCommitDrift.previousPin)).toEqual({
       revision: "bc0c04e4ee4cea4ae177355ee438896ca8ce9e0f",
       paths: ["specs/app-lifecycle-cards.html", "specs/app-artifact-review.html"],
     });
-    expect(m.specCommitDrift.previousPin).toContain("8a5d5013fdcb92af5508d61e997cd43564000de3");
-    expect(m.specCommitDrift.previousPin).toMatch(/^design@[0-9a-f]{40}\s\S+$/);
     for (const prior of [
       "6c20871b4108176c1d0193f19ecd2947f6c6355f",
       "92c1be7c6f864dec6382a9ef01e7b2e1c38aa871",
@@ -326,6 +330,7 @@ describe("the REAL manifest", () => {
       "99e6977ca1443c5ec8a92b90f9a64a04c84364c7",
       "b3665f8f308f32138f47f59ca490684c526c1e89",
       "831df38088ec969c7392018e79b297a49ee935a2",
+      "8a5d5013fdcb92af5508d61e997cd43564000de3",
     ]) {
       expect(m.specCommitDrift.priorPins.join("\n"), prior).toContain(prior);
     }
@@ -347,7 +352,7 @@ describe("the REAL manifest", () => {
     expect(untilDates, m.specCommitDrift.priorPins.join("\n")).toStrictEqual([...untilDates].sort());
     // The pin this move displaced is the one that stood LAST, so it is the tail
     // of the trail and not an insertion into the middle of it.
-    expect(m.specCommitDrift.priorPins.at(-1)).toContain("831df38088ec969c7392018e79b297a49ee935a2");
+    expect(m.specCommitDrift.priorPins.at(-1)).toContain("8a5d5013fdcb92af5508d61e997cd43564000de3");
     // No pin is ever its own predecessor: a "move" that recorded the same commit
     // on both sides would satisfy every check above and record nothing.
     expect(m.specCommitDrift.previousPin).not.toBe(m.specCommit);
@@ -355,7 +360,25 @@ describe("the REAL manifest", () => {
     // The move says what CHANGED between the two documents, not merely that one
     // happened, and it does not claim an approval it cannot see.
     expect(m.specCommitDrift.differs.length).toBeGreaterThan(120);
-    expect(m.specCommitDrift.whoRatified).toMatch(/ratified on 2026-10-20/);
+    expect(m.specCommitDrift.whoRatified).toMatch(/ratified on 2026-10-21/);
+    // The added section's five surfaces are named, in the drift record and in
+    // the contract's re-ratification entry, and both say that no recorded
+    // anchor changed rather than leaving a reader to infer it.
+    const contractNote = JSON.parse(
+      readFileSync(join(REPO_ROOT, "scripts", "audit", "chat-hitl-anchor-contract.json"), "utf8"),
+    ).note;
+    for (const surface of [
+      "email-gate-sender-field",
+      "email-gate-follow-up-cadence-field",
+      "email-gate-drafts-review-field",
+      "email-gate-recipients-review-field",
+      "email-gate-test-delivery-field",
+    ]) {
+      expect(m.specCommitDrift.differs, surface).toContain(surface);
+      expect(contractNote, surface).toContain(surface);
+    }
+    expect(m.specCommitDrift.differs).toMatch(/No recorded anchor changed/);
+    expect(contractNote).toMatch(/RE-RATIFIED 2026-10-22 \(cinatra#4308[^]*NO RECORDED ANCHOR CHANGED/);
   });
 
   it("row 15 keeps the proofs it had — a flip withdraws a claim, not evidence", () => {
