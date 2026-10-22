@@ -65,6 +65,8 @@ import {
   writeMetadataValueInternal,
   systemGlobalSkillIdsFromCatalog,
 } from "@/lib/database-metadata";
+// The connector-config process cache and its 10 s TTL (shared with the atomic `update`).
+import { CONNECTOR_CONFIG_CACHE_TTL_MS, getConnectorConfigCache } from "@/lib/connector-config-update";
 
 // Connection/schema primitives + schema init moved to SYNC LEAF modules
 // (cinatra#104): under Turbopack dev this module is an ASYNC module (its
@@ -145,14 +147,6 @@ function clonePersistedValue<T>(value: T): T {
   } catch {
     return safeParseJson(JSON.stringify(value), value);
   }
-}
-
-function getConnectorConfigCache() {
-  if (!globalThis.__cinatraConnectorConfigCache) {
-    globalThis.__cinatraConnectorConfigCache = new Map<string, ConnectorConfigCacheEntry>();
-  }
-
-  return globalThis.__cinatraConnectorConfigCache;
 }
 
 function readJsonRows(tableName: string) {
@@ -749,12 +743,6 @@ export function writeAgentConfigToDatabase(agentId: string, value: unknown) {
   getAgentConfigCache().delete(cacheKey); // Invalidate on write.
   writeMetadataValueInternal(cacheKey, value);
 }
-
-// Connector config TTL: 10 s. Short enough that tunnel URL rotation is picked
-// up quickly by BullMQ worker threads (which have a separate globalThis from
-// the web process and cannot receive cache-invalidation writes from the tunnel
-// manager). Without a TTL the stale URL is cached forever per-process.
-const CONNECTOR_CONFIG_CACHE_TTL_MS = 10_000;
 
 export function readConnectorConfigFromDatabase<T>(connectorId: string, fallback: T): T {
   const cacheKey = `connector_config:${connectorId}`;

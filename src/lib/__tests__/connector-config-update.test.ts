@@ -1,0 +1,522 @@
+// The host `update` member of `@cinatra-ai/host:connector-config`: the atomic
+// read-derive-persist loop, over an in-memory port that models the metadata
+// row as RAW TEXT (byte compare-and-swap, an insert-if-absent that reports its
+// result). Every interleaving is forced by a synchronous hook of the port,
+// never by a sleep:
+//   - beforePersist(n) runs right before the n-th persist statement (swap or
+//     insert) of the call, i.e. inside the window between the attempt's read
+//     and its persist;
+//   - afterInsert() runs right after an insert landed.
+// The ids S1-S14 are the update scenario table shared with the connectors'
+// fake-store conformance tests; each case asserts the stored row FIRST.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import {
+  CONNECTOR_CONFIG_UPDATE_ATTEMPTS,
+  ConnectorConfigUpdateError,
+  updateConnectorConfigVia,
+  type ConnectorConfigUpdatePort,
+} from "@/lib/connector-config-update";
+import { hasSecretFields } from "@/lib/connector-config-secret-fields";
+
+// The live Postgres binding is never reached here: every case runs over the
+// in-memory port below (the binding has its own test).
+vi.mock("@/lib/database-metadata", () => ({}));
+
+const SENTINEL = "sentinel-7f3a-row-value";
+const ID = "linkedin";
+const KEY = `connector_config:${ID}`;
+const ALLOWED_OWN_PROPERTIES = ["stack", "message", "name", "code", "key"];
+
+type Fail = { readRaw?: unknown; compareAndSwap?: unknown; insertIfAbsent?: unknown };
+
+function makePort(initial: Record<string, string> = {}) {
+  const rows = new Map<string, string>(Object.entries(initial));
+  const cache = new Map<string, unknown>();
+  const logs: string[] = [];
+  const calls = { readRaw: 0, compareAndSwap: 0, insertIfAbsent: 0, cacheSet: 0, cacheEvict: 0, log: 0 };
+  const hooks: { beforePersist?: (n: number) => void; afterInsert?: () => void } = {};
+  const fail: Fail = {};
+  const results: { readRaw?: () => unknown; compareAndSwap?: () => unknown; insertIfAbsent?: () => unknown } = {};
+  let persists = 0;
+  const port: ConnectorConfigUpdatePort = {
+    readRaw(key) {
+      calls.readRaw += 1;
+      if (fail.readRaw) throw fail.readRaw;
+      if (results.readRaw) return results.readRaw() as string | null;
+      return rows.has(key) ? (rows.get(key) as string) : null;
+    },
+    compareAndSwap(key, nextRaw, expectedRaw) {
+      calls.compareAndSwap += 1;
+      persists += 1;
+      hooks.beforePersist?.(persists);
+      if (fail.compareAndSwap) throw fail.compareAndSwap;
+      if (results.compareAndSwap) return results.compareAndSwap() as boolean;
+      if (!rows.has(key) || rows.get(key) !== expectedRaw) return false;
+      rows.set(key, nextRaw);
+      return true;
+    },
+    insertIfAbsent(key, nextRaw) {
+      calls.insertIfAbsent += 1;
+      persists += 1;
+      hooks.beforePersist?.(persists);
+      if (fail.insertIfAbsent) throw fail.insertIfAbsent;
+      if (results.insertIfAbsent) return results.insertIfAbsent() as boolean;
+      if (rows.has(key)) return false;
+      rows.set(key, nextRaw);
+      hooks.afterInsert?.();
+      return true;
+    },
+    cacheSet(key, value) {
+      calls.cacheSet += 1;
+      cache.set(key, value);
+    },
+    cacheEvict(key) {
+      calls.cacheEvict += 1;
+      cache.delete(key);
+    },
+    log(line) {
+      calls.log += 1;
+      logs.push(line);
+    },
+  };
+  return { port, rows, cache, logs, calls, hooks, fail, results };
+}
+
+/** A counting updater that merges `patch` into the current row. */
+function merging(patch: Record<string, unknown>) {
+  const seen: unknown[] = [];
+  const fn = (current: unknown) => {
+    seen.push(current === null ? null : structuredClone(current));
+    return { ...((current as Record<string, unknown> | null) ?? {}), ...patch };
+  };
+  return { fn, seen };
+}
+
+function caught(run: () => void): ConnectorConfigUpdateError {
+  try {
+    run();
+  } catch (error) {
+    return error as ConnectorConfigUpdateError;
+  }
+  throw new Error("expected the update to throw");
+}
+
+const consoleSpies: Array<ReturnType<typeof vi.spyOn>> = [];
+beforeEach(() => {
+  for (const method of ["log", "info", "warn", "error", "debug"] as const) {
+    consoleSpies.push(vi.spyOn(console, method).mockImplementation(() => {}));
+  }
+});
+afterEach(() => {
+  for (const spy of consoleSpies.splice(0)) spy.mockRestore();
+});
+
+/** The sentinel check of the scenario table (S6, S8, S9, S13). */
+function expectValueFree(error: unknown, logs: string[]) {
+  const e = error as Record<string, unknown>;
+  for (const text of [e.message, e.name, e.code, e.stack, String(error), JSON.stringify(error)]) {
+    expect(String(text)).not.toContain(SENTINEL);
+  }
+  expect(e.cause).toBeUndefined();
+  expect(Object.prototype.hasOwnProperty.call(error, "cause")).toBe(false);
+  for (const name of Object.getOwnPropertyNames(error)) expect(ALLOWED_OWN_PROPERTIES).toContain(name);
+  for (const line of logs) expect(line).not.toContain(SENTINEL);
+  for (const spy of consoleSpies) {
+    for (const args of spy.mock.calls) expect(JSON.stringify(args.map(String))).not.toContain(SENTINEL);
+  }
+}
+
+const STORED = { clientId: "a", accounts: [{ id: "x" }], note: SENTINEL };
+const STORED_RAW = JSON.stringify(STORED);
+
+describe("connector-config update: the scenario table S1-S14", () => {
+  it("S1 row present: the updater gets the parsed row, one swap, the cache holds the stored value", () => {
+    const h = makePort({ [KEY]: STORED_RAW });
+    const u = merging({ clientSecret: "z" });
+    updateConnectorConfigVia(h.port, ID, u.fn, hasSecretFields);
+    expect(JSON.parse(h.rows.get(KEY) as string)).toEqual({ ...STORED, clientSecret: "z" });
+    expect(u.seen).toEqual([STORED]);
+    expect(h.calls.compareAndSwap).toBe(1);
+    expect(h.calls.insertIfAbsent).toBe(0);
+    expect(h.cache.get(KEY)).toEqual(JSON.parse(h.rows.get(KEY) as string));
+    expect(h.logs).toEqual([]);
+  });
+
+  it("S2 row absent: the updater gets null, the insert lands, exactly one readRaw", () => {
+    const h = makePort();
+    const u = merging({ clientId: "new" });
+    updateConnectorConfigVia(h.port, ID, u.fn, hasSecretFields);
+    expect(h.rows.get(KEY)).toBe(JSON.stringify({ clientId: "new" }));
+    expect(u.seen).toEqual([null]);
+    expect(h.calls.readRaw).toBe(1);
+    expect(h.calls.insertIfAbsent).toBe(1);
+    expect(h.calls.compareAndSwap).toBe(0);
+    expect(h.cache.get(KEY)).toEqual({ clientId: "new" });
+  });
+
+  it("S3 a change inside the window: swap 1 misses, attempt 2 merges the change", () => {
+    const h = makePort({ [KEY]: STORED_RAW });
+    h.hooks.beforePersist = (n) => {
+      if (n === 1) h.rows.set(KEY, JSON.stringify({ ...STORED, accounts: [{ id: "x" }, { id: "y" }] }));
+    };
+    const u = merging({ clientSecret: "z" });
+    updateConnectorConfigVia(h.port, ID, u.fn, hasSecretFields);
+    expect(JSON.parse(h.rows.get(KEY) as string)).toEqual({
+      ...STORED,
+      accounts: [{ id: "x" }, { id: "y" }],
+      clientSecret: "z",
+    });
+    expect(u.seen).toHaveLength(2);
+    expect(h.calls.compareAndSwap).toBe(2);
+  });
+
+  it("S4a row absent, another writer creates it inside the window: the insert misses, attempt 2 swaps over the other row", () => {
+    const h = makePort();
+    h.hooks.beforePersist = (n) => {
+      if (n === 1) h.rows.set(KEY, JSON.stringify({ accounts: [{ id: "other" }] }));
+    };
+    const u = merging({ clientId: "mine" });
+    updateConnectorConfigVia(h.port, ID, u.fn, hasSecretFields);
+    expect(JSON.parse(h.rows.get(KEY) as string)).toEqual({ accounts: [{ id: "other" }], clientId: "mine" });
+    expect(u.seen).toEqual([null, { accounts: [{ id: "other" }] }]);
+    expect(h.calls.insertIfAbsent).toBe(1);
+    expect(h.calls.compareAndSwap).toBe(1);
+  });
+
+  it("S4b an insert that lands is done at once: another merge right after it is kept, and nothing throws", () => {
+    const h = makePort();
+    h.hooks.afterInsert = () => {
+      // Another writer's merge over the row this call just inserted.
+      const row = JSON.parse(h.rows.get(KEY) as string) as Record<string, unknown>;
+      h.rows.set(KEY, JSON.stringify({ ...row, accounts: [{ id: "other" }] }));
+    };
+    const u = merging({ clientId: "mine" });
+    expect(() => updateConnectorConfigVia(h.port, ID, u.fn, hasSecretFields)).not.toThrow();
+    expect(JSON.parse(h.rows.get(KEY) as string)).toEqual({ clientId: "mine", accounts: [{ id: "other" }] });
+    expect(u.seen).toHaveLength(1);
+    expect(h.calls.readRaw).toBe(1);
+    expect(h.calls.compareAndSwap).toBe(0);
+    expect(h.logs).toEqual([]);
+  });
+
+  it("S4c another writer inserts bytes EQUAL to this call's next row: the missed insert is not success, attempt 2 runs", () => {
+    const h = makePort();
+    const nextRaw = JSON.stringify({ clientId: "mine" });
+    h.hooks.beforePersist = (n) => {
+      if (n === 1) h.rows.set(KEY, nextRaw);
+    };
+    const u = merging({ clientId: "mine" });
+    updateConnectorConfigVia(h.port, ID, u.fn, hasSecretFields);
+    expect(h.rows.get(KEY)).toBe(nextRaw);
+    expect(u.seen).toEqual([null, { clientId: "mine" }]);
+    expect(h.calls.readRaw).toBe(2);
+    expect(h.calls.insertIfAbsent).toBe(1);
+    expect(h.calls.compareAndSwap).toBe(1);
+  });
+
+  it("S5 a stale cache entry and a newer stored row: the updater sees the stored row", () => {
+    const h = makePort({ [KEY]: JSON.stringify({ accounts: [{ id: "x" }, { id: "y" }] }) });
+    h.cache.set(KEY, { accounts: [{ id: "x" }] });
+    const u = merging({ loggingEnabled: false });
+    updateConnectorConfigVia(h.port, ID, u.fn, hasSecretFields);
+    expect(u.seen).toEqual([{ accounts: [{ id: "x" }, { id: "y" }] }]);
+    expect(JSON.parse(h.rows.get(KEY) as string)).toEqual({
+      accounts: [{ id: "x" }, { id: "y" }],
+      loggingEnabled: false,
+    });
+    expect(h.cache.get(KEY)).toEqual(JSON.parse(h.rows.get(KEY) as string));
+  });
+
+  it("S6 a change before every persist: CONFLICT after 5 attempts, the competitor's last row stays, the cache is evicted", () => {
+    const h = makePort({ [KEY]: STORED_RAW });
+    h.cache.set(KEY, STORED);
+    const competitor = (n: number) => JSON.stringify({ ...STORED, round: n, secret: SENTINEL });
+    h.hooks.beforePersist = (n) => h.rows.set(KEY, competitor(n));
+    const u = merging({ clientSecret: SENTINEL });
+    const error = caught(() => updateConnectorConfigVia(h.port, ID, u.fn, hasSecretFields));
+    expect(h.rows.get(KEY)).toBe(competitor(CONNECTOR_CONFIG_UPDATE_ATTEMPTS));
+    expect(error).toBeInstanceOf(ConnectorConfigUpdateError);
+    expect(error.code).toBe("CONNECTOR_CONFIG_CONFLICT");
+    expect(error.name).toBe("ConnectorConfigConflictError");
+    expect(error.key).toBe(KEY);
+    expect(error.message).toBe(`Connector config ${KEY} changed under every update attempt; nothing was written.`);
+    expect(u.seen).toHaveLength(5);
+    expect(h.calls.readRaw).toBe(5);
+    expect(h.calls.compareAndSwap).toBe(5);
+    expect(h.cache.has(KEY)).toBe(false);
+    expect(h.logs).toEqual([`[connector-config.update] key=${KEY} code=CONNECTOR_CONFIG_CONFLICT`]);
+    expectValueFree(error, h.logs);
+  });
+
+  it.each([
+    ["{not json", "S7 text that is not JSON"],
+    ["", "S7 an empty text"],
+  ])("%j (%s): ROW_UNPARSEABLE, the updater is never called, nothing is persisted", (raw) => {
+    const h = makePort({ [KEY]: raw });
+    const u = merging({ clientId: "z" });
+    const error = caught(() => updateConnectorConfigVia(h.port, ID, u.fn, hasSecretFields));
+    expect(h.rows.get(KEY)).toBe(raw);
+    expect(error.code).toBe("CONNECTOR_CONFIG_ROW_UNPARSEABLE");
+    expect(error.message).toBe(`Connector config ${KEY} holds text that is not JSON; nothing was written.`);
+    expect(u.seen).toHaveLength(0);
+    expect(h.calls.compareAndSwap + h.calls.insertIfAbsent).toBe(0);
+    expect(h.logs).toEqual([`[connector-config.update] key=${KEY} code=CONNECTOR_CONFIG_ROW_UNPARSEABLE`]);
+  });
+
+  it("S8 the updater throws: UPDATER_FAILED, no persist, no further attempt, the thrown error is dropped", () => {
+    const h = makePort({ [KEY]: STORED_RAW });
+    let calls = 0;
+    const error = caught(() =>
+      updateConnectorConfigVia(
+        h.port,
+        ID,
+        () => {
+          calls += 1;
+          throw Object.assign(new Error(SENTINEL), { code: SENTINEL, cause: SENTINEL });
+        },
+        hasSecretFields,
+      ),
+    );
+    expect(h.rows.get(KEY)).toBe(STORED_RAW);
+    expect(error.code).toBe("CONNECTOR_CONFIG_UPDATER_FAILED");
+    expect(error.message).toBe(`Connector config ${KEY}: the updater failed; nothing was written.`);
+    expect(calls).toBe(1);
+    expect(h.calls.readRaw).toBe(1);
+    expect(h.calls.compareAndSwap + h.calls.insertIfAbsent).toBe(0);
+    expectValueFree(error, h.logs);
+  });
+
+  const cyclic: Record<string, unknown> = { note: SENTINEL };
+  cyclic.self = cyclic;
+  const throwingThen = {
+    note: SENTINEL,
+    get then() {
+      throw new Error(SENTINEL);
+    },
+  };
+  it.each([
+    ["undefined", () => undefined],
+    ["a function", () => () => SENTINEL],
+    ["a thenable object", () => ({ note: SENTINEL, then: () => undefined })],
+    ["a thenable promise", () => Promise.resolve(SENTINEL)],
+    ["an object whose then getter throws", () => throwingThen],
+    ["a cyclic object (stringify throws)", () => cyclic],
+    ["a bigint (stringify throws)", () => BigInt(7)],
+    ["a symbol (stringify gives no string)", () => Symbol(SENTINEL)],
+  ])("S9 the updater returns %s: UPDATE_INVALID, no persist", (_label, updater) => {
+    const h = makePort({ [KEY]: STORED_RAW });
+    const error = caught(() => updateConnectorConfigVia(h.port, ID, updater, hasSecretFields));
+    expect(h.rows.get(KEY)).toBe(STORED_RAW);
+    expect(error.code).toBe("CONNECTOR_CONFIG_UPDATE_INVALID");
+    expect(error.message).toBe(`Connector config ${KEY}: the updater returned no storable value; nothing was written.`);
+    expect(h.calls.compareAndSwap + h.calls.insertIfAbsent).toBe(0);
+    expect(h.calls.readRaw).toBe(1);
+    expectValueFree(error, h.logs);
+  });
+
+  it("S10 ABA: the row goes to B and back to A inside the window; swap 1 lands with f(A)", () => {
+    const h = makePort({ [KEY]: STORED_RAW });
+    h.hooks.beforePersist = (n) => {
+      if (n !== 1) return;
+      h.rows.set(KEY, JSON.stringify({ other: "B" }));
+      h.rows.set(KEY, STORED_RAW);
+    };
+    const u = merging({ clientSecret: "z" });
+    updateConnectorConfigVia(h.port, ID, u.fn, hasSecretFields);
+    expect(JSON.parse(h.rows.get(KEY) as string)).toEqual({ ...STORED, clientSecret: "z" });
+    expect(u.seen).toHaveLength(1);
+    expect(h.calls.compareAndSwap).toBe(1);
+  });
+
+  it("S11 a delete inside the window: swap 1 misses, attempt 2 gets null and inserts", () => {
+    const h = makePort({ [KEY]: STORED_RAW });
+    h.hooks.beforePersist = (n) => {
+      if (n === 1) h.rows.delete(KEY);
+    };
+    const u = merging({ clientSecret: "z" });
+    updateConnectorConfigVia(h.port, ID, u.fn, hasSecretFields);
+    expect(JSON.parse(h.rows.get(KEY) as string)).toEqual({ clientSecret: "z" });
+    expect(u.seen).toEqual([STORED, null]);
+    expect(h.calls.compareAndSwap).toBe(1);
+    expect(h.calls.insertIfAbsent).toBe(1);
+  });
+
+  it("S12 a sealed id (nango): UNSUPPORTED before any store call; the cache entry is evicted and one line logged", () => {
+    const h = makePort({ "connector_config:nango": JSON.stringify({ secretKey: SENTINEL }) });
+    const u = merging({ serverUrl: "https://n" });
+    const error = caught(() => updateConnectorConfigVia(h.port, "nango", u.fn, hasSecretFields));
+    expect(h.rows.get("connector_config:nango")).toBe(JSON.stringify({ secretKey: SENTINEL }));
+    expect(error.code).toBe("CONNECTOR_CONFIG_UPDATE_UNSUPPORTED");
+    expect(error.message).toBe(
+      "Connector config connector_config:nango has sealed fields; update is not supported for it; nothing was written.",
+    );
+    expect(u.seen).toHaveLength(0);
+    expect(h.calls.readRaw + h.calls.compareAndSwap + h.calls.insertIfAbsent).toBe(0);
+    expect(h.calls.cacheSet).toBe(0);
+    expect(h.calls.cacheEvict).toBe(1);
+    expect(h.logs).toEqual(["[connector-config.update] key=connector_config:nango code=CONNECTOR_CONFIG_UPDATE_UNSUPPORTED"]);
+    expectValueFree(error, h.logs);
+  });
+
+  const storeError = () => Object.assign(new Error(SENTINEL), { code: "40001" });
+  it.each([
+    ["readRaw", { [KEY]: STORED_RAW }],
+    ["readRaw", {}],
+    ["compareAndSwap", { [KEY]: STORED_RAW }],
+    ["insertIfAbsent", {}],
+  ] as const)("S13 %s throws (initial rows %j): STORE_FAILED, no retry, one log line with the SQLSTATE", (step, initial) => {
+    const h = makePort({ ...initial });
+    h.cache.set(KEY, STORED);
+    h.fail[step] = storeError();
+    const u = merging({ clientSecret: "z" });
+    const error = caught(() => updateConnectorConfigVia(h.port, ID, u.fn, hasSecretFields));
+    expect(h.rows.get(KEY)).toBe((initial as Record<string, string>)[KEY]);
+    expect(error.code).toBe("CONNECTOR_CONFIG_STORE_FAILED");
+    expect(error.message).toBe(`Connector config ${KEY}: the store failed; the row may or may not have changed.`);
+    expect(h.calls.readRaw).toBe(1);
+    expect(h.calls.compareAndSwap + h.calls.insertIfAbsent).toBe(step === "readRaw" ? 0 : 1);
+    expect(h.cache.has(KEY)).toBe(false);
+    expect(h.logs).toEqual([
+      `[connector-config.update] key=${KEY} code=CONNECTOR_CONFIG_STORE_FAILED sqlstate=40001`,
+    ]);
+    expectValueFree(error, h.logs);
+  });
+
+  it("S14 a key-reordered rewrite inside the window changes the bytes: swap 1 misses, attempt 2 lands", () => {
+    const h = makePort({ [KEY]: JSON.stringify({ a: 1, b: 2 }) });
+    h.hooks.beforePersist = (n) => {
+      if (n === 1) h.rows.set(KEY, JSON.stringify({ b: 2, a: 1 }));
+    };
+    const u = merging({ c: 3 });
+    updateConnectorConfigVia(h.port, ID, u.fn, hasSecretFields);
+    expect(h.rows.get(KEY)).toBe(JSON.stringify({ b: 2, a: 1, c: 3 }));
+    expect(u.seen).toHaveLength(2);
+    expect(h.calls.compareAndSwap).toBe(2);
+  });
+});
+
+describe("connector-config update: the remaining branches", () => {
+  it("a store error whose code is not a SQLSTATE logs no sqlstate", () => {
+    const h = makePort({ [KEY]: STORED_RAW });
+    h.fail.compareAndSwap = Object.assign(new Error(SENTINEL), { code: SENTINEL });
+    const error = caught(() => updateConnectorConfigVia(h.port, ID, merging({}).fn, hasSecretFields));
+    expect(error.code).toBe("CONNECTOR_CONFIG_STORE_FAILED");
+    expect(h.logs).toEqual([`[connector-config.update] key=${KEY} code=CONNECTOR_CONFIG_STORE_FAILED`]);
+    expectValueFree(error, h.logs);
+  });
+
+  it.each([
+    ["an own code GETTER", () => Object.defineProperty(new Error(SENTINEL), "code", { get: () => "40001" })],
+    ["an inherited code", () => Object.create(Object.assign(new Error(SENTINEL), { code: "40001" }))],
+    ["a thrown string", () => SENTINEL],
+    ["a thrown null", () => null],
+    ["a lower-case code", () => Object.assign(new Error(SENTINEL), { code: "40p01" })],
+  ])("a store error with %s logs no sqlstate", (_label, make) => {
+    const h = makePort({ [KEY]: STORED_RAW });
+    h.port.readRaw = () => {
+      throw make();
+    };
+    const error = caught(() => updateConnectorConfigVia(h.port, ID, merging({}).fn, hasSecretFields));
+    expect(error.code).toBe("CONNECTOR_CONFIG_STORE_FAILED");
+    expect(h.logs).toEqual([`[connector-config.update] key=${KEY} code=CONNECTOR_CONFIG_STORE_FAILED`]);
+    expectValueFree(error, h.logs);
+  });
+
+  it.each([
+    ["readRaw returns undefined", "readRaw", () => undefined],
+    ["readRaw returns a number", "readRaw", () => 7],
+    ["compareAndSwap returns a truthy non-boolean", "compareAndSwap", () => 1],
+    ["insertIfAbsent returns undefined", "insertIfAbsent", () => undefined],
+  ] as const)("a port result outside its contract (%s) refuses with STORE_FAILED, never success or a retry", (_l, step, result) => {
+    const h = makePort(step === "insertIfAbsent" ? {} : { [KEY]: STORED_RAW });
+    h.results[step] = result;
+    const u = merging({ clientSecret: "z" });
+    const error = caught(() => updateConnectorConfigVia(h.port, ID, u.fn, hasSecretFields));
+    expect(error.code).toBe("CONNECTOR_CONFIG_STORE_FAILED");
+    expect(h.calls.readRaw).toBe(1);
+    expect(h.calls.cacheSet).toBe(0);
+    expect(h.logs).toEqual([`[connector-config.update] key=${KEY} code=CONNECTOR_CONFIG_STORE_FAILED`]);
+  });
+
+  it("an updater that returns null stores the JSON text null", () => {
+    const h = makePort({ [KEY]: STORED_RAW });
+    updateConnectorConfigVia(h.port, ID, () => null, hasSecretFields);
+    expect(h.rows.get(KEY)).toBe("null");
+    expect(h.cache.get(KEY)).toBeNull();
+  });
+
+  it("a stored row that is valid JSON but not an object reaches the updater as parsed (the caller's rule decides)", () => {
+    const h = makePort({ [KEY]: "true" });
+    const seen: unknown[] = [];
+    const error = caught(() =>
+      updateConnectorConfigVia(
+        h.port,
+        ID,
+        (current) => {
+          seen.push(current);
+          throw new Error("not a plain object");
+        },
+        hasSecretFields,
+      ),
+    );
+    expect(error.code).toBe("CONNECTOR_CONFIG_UPDATER_FAILED");
+    expect(seen).toEqual([true]);
+    expect(h.rows.get(KEY)).toBe("true");
+  });
+
+  it("a cache that throws after the persist landed does not turn the landed write into an error", () => {
+    const h = makePort({ [KEY]: STORED_RAW });
+    h.port.cacheSet = () => {
+      throw new Error(SENTINEL);
+    };
+    expect(() => updateConnectorConfigVia(h.port, ID, merging({ clientSecret: "z" }).fn, hasSecretFields)).not.toThrow();
+    expect(JSON.parse(h.rows.get(KEY) as string)).toEqual({ ...STORED, clientSecret: "z" });
+    expect(h.calls.cacheEvict).toBe(1);
+  });
+
+  it("a log port that throws does not replace the value-free error", () => {
+    const h = makePort({ [KEY]: "{not json" });
+    h.port.log = () => {
+      throw new Error(SENTINEL);
+    };
+    const error = caught(() => updateConnectorConfigVia(h.port, ID, merging({}).fn, hasSecretFields));
+    expect(error.code).toBe("CONNECTOR_CONFIG_ROW_UNPARSEABLE");
+    expectValueFree(error, []);
+  });
+
+  it("an unexpected internal throw (the sealed-id check) maps to STORE_FAILED and touches no store", () => {
+    const h = makePort({ [KEY]: STORED_RAW });
+    const error = caught(() =>
+      updateConnectorConfigVia(h.port, ID, merging({}).fn, () => {
+        throw new Error(SENTINEL);
+      }),
+    );
+    expect(error.code).toBe("CONNECTOR_CONFIG_STORE_FAILED");
+    expect(h.calls.readRaw + h.calls.compareAndSwap + h.calls.insertIfAbsent).toBe(0);
+    expect(h.rows.get(KEY)).toBe(STORED_RAW);
+    expectValueFree(error, h.logs);
+  });
+
+  it("the bound: never more than 5 reads, 5 updater calls and 5 persists per call", () => {
+    const h = makePort();
+    h.hooks.beforePersist = (n) => h.rows.set(KEY, JSON.stringify({ n }));
+    h.rows.delete(KEY);
+    const u = merging({});
+    const error = caught(() => updateConnectorConfigVia(h.port, ID, u.fn, hasSecretFields));
+    expect(error.code).toBe("CONNECTOR_CONFIG_CONFLICT");
+    expect(h.rows.get(KEY)).toBe(JSON.stringify({ n: 5 }));
+    expect(h.calls.readRaw).toBe(5);
+    expect(u.seen).toHaveLength(5);
+    expect(h.calls.compareAndSwap + h.calls.insertIfAbsent).toBe(5);
+  });
+
+  it("every error class carries code and key as own strings, readable without instanceof", () => {
+    const h = makePort({ [KEY]: "{not json" });
+    const error = caught(() => updateConnectorConfigVia(h.port, ID, merging({}).fn, hasSecretFields));
+    expect(Object.getOwnPropertyDescriptor(error, "code")?.value).toBe("CONNECTOR_CONFIG_ROW_UNPARSEABLE");
+    expect(Object.getOwnPropertyDescriptor(error, "key")?.value).toBe(KEY);
+    expect(error.name).toBe("ConnectorConfigRowUnparseableError");
+    expect(error).toBeInstanceOf(Error);
+  });
+});
