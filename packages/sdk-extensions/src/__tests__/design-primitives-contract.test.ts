@@ -23,7 +23,7 @@ import {
   missingDesignPrimitiveExports,
 } from "../design-primitives-contract";
 
-/** The seventeen product components the border floor records as byte copies, each
+/** PRIMITIVE_ANCHORS: the seventeen product components of the frozen list, each
  * anchored by an export only that component provides. */
 const PRIMITIVE_ANCHORS: ReadonlyArray<[string, string]> = [
   ["alert", "Alert"],
@@ -76,7 +76,7 @@ describe("the FROZEN export list", () => {
     );
   });
 
-  it("names an export of every primitive the border floor records", () => {
+  it("names an export of every frozen primitive anchor", () => {
     for (const [primitive, anchor] of PRIMITIVE_ANCHORS) {
       expect(
         (HOST_DESIGN_PRIMITIVES_EXPORTS as readonly string[]).includes(anchor),
@@ -102,7 +102,7 @@ describe("the FROZEN export list", () => {
   });
 
   it("names no export of a component the host does not own", () => {
-    // external-link / link / text-link appear in the border floor but are the
+    // external-link / link / text-link are not in PRIMITIVE_ANCHORS: they are the
     // extensions' OWN components — there is no src/components/ui file for them,
     // so the host cannot serve them.
     for (const absent of ["Link", "TextLink", "ExternalLink"]) {

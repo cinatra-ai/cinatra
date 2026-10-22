@@ -160,3 +160,10 @@ export { FRAME_SCOPE_BOUNDS, FRAME_SCOPE_BOUND_MS, frameOf } from "./frame-scope
 export { PRESS_WITHOUT_NAME_BOUNDS, pressWithoutName } from "./press-without-name.mjs";
 export { OTHER_ORIGIN_BOUNDS, OTHER_ORIGIN_BOUND_MS, openPageOfOrigin } from "./open-page-of-origin.mjs";
 export { SIGN_IN_WINDOW_BOUNDS, WINDOW_OPEN_BOUND_MS, WINDOW_RETURN_BOUND_MS, signInThroughWindow } from "./sign-in-through-window.mjs";
+// holdResponse and releaseResponse: the requests of a page that a pattern
+// matches, held unsent until they are released, so the short-lived state their
+// answers would end stays on the page.
+export { HOLD_BOUNDS, HOLD_BOUND_MS, HOLD_MATCH_BOUND_MS, HOLD_METHODS, holdResponse, releaseResponse } from "./hold-response.mjs";
+// pressKey: one key of a closed list pressed on the control that has the focus,
+// with the focused control read before and after.
+export { PRESS_KEYS, pressKey } from "./press-key.mjs";

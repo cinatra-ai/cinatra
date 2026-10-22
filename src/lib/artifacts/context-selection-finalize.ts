@@ -33,7 +33,10 @@ import { bindingIsCurrentWinnerSql } from "@/lib/objects/binding-write-path";
 //      content snapshot, or a host-authored representation carrying the
 //      writer-provenance witness);
 //   2. appends the `run_context_selections` audit row (append-only);
-//   3. writes a REAL `artifact_refs` retention pin.
+//   3. writes a REAL `artifact_refs` retention pin;
+//   4. (the atomic multi-ref form, given the slot's answer — cinatra#3080)
+//      appends ONE `run_context_answers` row: the WHOLE ordered answer of
+//      this finalize of the slot, an empty answer included.
 //
 // GROUNDED RACE it closes (AC-2): the resource GC serializes destructive
 // reclaim on `pg_advisory_xact_lock(hashtext(resource.id))` and rechecks
@@ -51,8 +54,9 @@ import { bindingIsCurrentWinnerSql } from "@/lib/objects/binding-write-path";
 //     never a pin at reclaimed bytes; the caller re-resolves (a fresh
 //     snapshot remints).
 //
-// Writes ONLY `run_context_selections` + `artifact_refs`; `objects` is read
-// (SELECT) for the coherence gate, never mutated.
+// Writes ONLY `run_context_selections`, `artifact_refs` and (step 4)
+// `run_context_answers`; `objects` is read (SELECT) for the coherence gate,
+// never mutated.
 // ---------------------------------------------------------------------------
 
 const conn = (): string => getPostgresConnectionString();
@@ -86,6 +90,28 @@ export interface FinalizeContextSelectionInput {
   mime?: string;
   originKind?: string;
   createdBy?: string | null;
+}
+
+/**
+ * The WHOLE answer one finalize gives a slot (cinatra#3080).
+ *
+ * The audit rows cannot carry it: each ref's row is content-addressed and
+ * inserted ON CONFLICT DO NOTHING, so a slot's rows are the set of refs the run
+ * EVER picked there — a ref removed by a correction stays, a cleared slot
+ * leaves no trace, and an answer of nothing writes no row at all. Given this,
+ * the atomic finalize also appends ONE `run_context_answers` row holding the
+ * complete ORDERED ref set of THIS finalize (the inputs, in order; none for an
+ * empty answer), in the SAME transaction as the audit rows and the pins, so a
+ * committed answer always has both and an aborted one has neither.
+ */
+export interface ContextSelectionAnswer {
+  orgId: string;
+  parentRunId: string;
+  parentPackageName: string;
+  slotId: string;
+  /** Who gave this answer — the same value every audit row of it carries. */
+  selectedBy: RunContextSelectionRow["selectedBy"];
+  selectionMode: RunContextSelectionRow["selectionMode"];
 }
 
 export interface FinalizeContextSelectionResult {
@@ -530,17 +556,36 @@ export function finalizeContextSelectionPin(
  */
 export function finalizeContextSelectionPinsAtomic(
   inputs: ReadonlyArray<FinalizeContextSelectionInput>,
+  /** The slot's WHOLE answer (cinatra#3080): when given, ONE
+   *  `run_context_answers` row recording `inputs` — in order, an empty list
+   *  included — is appended in the same transaction. */
+  answer?: ContextSelectionAnswer,
 ): FinalizeContextSelectionResult[] {
-  if (inputs.length === 0) return [];
+  if (inputs.length === 0 && !answer) return [];
+  if (answer) assertInputsAreTheAnswer(inputs, answer);
   ensurePostgresSchema();
   const schema = q();
   const args = inputs.map((i) => prepareFinalizeArgs(i));
   const lockIds = [...new Set(args.map((a) => a.resourceId))].sort();
-  const queries: Array<{ text: string; values: unknown[] }> = lockIds.map((rid) => ({
-    text: `SELECT pg_advisory_xact_lock(hashtext($1))`,
-    values: [rid],
-  }));
+  const queries: Array<{ text: string; values: unknown[] }> = [];
+  // The answer's own lock comes FIRST, in the two-key advisory space: it
+  // serializes finalizes of the SAME (org, run, slot), so each one's
+  // `answer_seq` is the previous one's plus one in commit order, and it can
+  // never contend with the GC's one-key resource locks below.
+  if (answer) {
+    queries.push({
+      text: `SELECT pg_advisory_xact_lock(${ANSWER_LOCK_CLASS}, hashtext($1))`,
+      values: [answerLockKey(answer)],
+    });
+  }
+  for (const rid of lockIds) {
+    queries.push({ text: `SELECT pg_advisory_xact_lock(hashtext($1))`, values: [rid] });
+  }
+  const firstRef = queries.length;
   for (const a of args) queries.push(buildFinalizeQuery(schema, a, true));
+  // LAST, after every ref's abort guard: an incoherent ref aborts the whole
+  // transaction, so no answer is ever recorded for a finalize that wrote none.
+  if (answer) queries.push(buildAnswerQuery(schema, answer, inputs));
   let results: Array<{ rows?: unknown[] } | undefined>;
   try {
     results = runPostgresQueriesSync({
@@ -569,8 +614,82 @@ export function finalizeContextSelectionPinsAtomic(
     throw err;
   }
   return args.map((a, i) =>
-    toResult(a, results[lockIds.length + i]?.rows?.[0] as FinalizeRow | undefined),
+    toResult(a, results[firstRef + i]?.rows?.[0] as FinalizeRow | undefined),
   );
+}
+
+/** The class key of the answer lock's two-key advisory space. */
+const ANSWER_LOCK_CLASS = 3080;
+
+/** The (org, run, slot) the answer lock serializes on. A text key for
+ *  `hashtext` (PostgreSQL text holds no NUL, so the parts are joined by "|"; a
+ *  hash collision only serializes two unrelated finalizes, never orders one
+ *  slot's answers wrongly — the UNIQUE (org, run, slot, seq) index does that). */
+function answerLockKey(answer: ContextSelectionAnswer): string {
+  return ["run_context_answers", answer.orgId, answer.parentRunId, answer.slotId].join("|");
+}
+
+/** Every ref finalized with an answer IS that answer's: the same org, run,
+ *  package and slot, and the same provenance. A mismatch is a caller's bug,
+ *  refused before any transaction opens. */
+function assertInputsAreTheAnswer(
+  inputs: ReadonlyArray<FinalizeContextSelectionInput>,
+  answer: ContextSelectionAnswer,
+): void {
+  for (const { selection: s } of inputs) {
+    if (
+      s.orgId !== answer.orgId ||
+      s.parentRunId !== answer.parentRunId ||
+      s.parentPackageName !== answer.parentPackageName ||
+      s.slotId !== answer.slotId ||
+      s.selectedBy !== answer.selectedBy ||
+      s.selectionMode !== answer.selectionMode
+    ) {
+      throw new Error(
+        `[context-selection-finalize] a ref of slot '${s.slotId}' does not belong to the answer of slot '${answer.slotId}' being recorded`,
+      );
+    }
+  }
+}
+
+/** Append the slot's WHOLE answer: the inputs' refs in order (none for an
+ *  empty answer), with the next `answer_seq` of (org, run, slot). The answer
+ *  lock is already held, so the max read here is the last committed answer. */
+function buildAnswerQuery(
+  schema: string,
+  answer: ContextSelectionAnswer,
+  inputs: ReadonlyArray<FinalizeContextSelectionInput>,
+) {
+  const refs = inputs.map(({ selection: s }) => ({
+    artifactId: s.artifactId,
+    representationRevisionId: s.representationRevisionId,
+    semanticAssertionId: s.semanticAssertionId,
+    extension: s.extension,
+    sourceScope: s.sourceScope,
+  }));
+  return {
+    text: `INSERT INTO "${schema}"."run_context_answers" (
+  id, org_id, parent_run_id, parent_package_name, slot_id,
+  answer_seq, refs, selected_by, selection_mode
+)
+SELECT $1, $2, $3, $4, $5,
+  COALESCE((
+    SELECT max(answer_seq) FROM "${schema}"."run_context_answers"
+    WHERE org_id = $2 AND parent_run_id = $3 AND slot_id = $5
+  ), 0) + 1,
+  $6::jsonb, $7, $8
+RETURNING answer_seq`,
+    values: [
+      `ans:${randomUUID()}`, // $1
+      answer.orgId, // $2
+      answer.parentRunId, // $3
+      answer.parentPackageName, // $4
+      answer.slotId, // $5
+      JSON.stringify(refs), // $6
+      answer.selectedBy, // $7
+      answer.selectionMode, // $8
+    ],
+  };
 }
 
 /** Read-only coherence probe (the batch error path's readable diagnosis). */

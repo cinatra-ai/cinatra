@@ -31,6 +31,16 @@ export function isScriptedTestProviderEnabled(env: EnvLike = process.env): boole
 }
 
 /**
+ * The one runtime the scripted provider may serve in: an EXPLICIT development
+ * runtime, `CINATRA_RUNTIME_MODE === "development"` AND `NODE_ENV !==
+ * "production"`. The assertion below and the scripted image provider's
+ * resolution both read this check.
+ */
+function isScriptedProviderDevelopmentRuntime(env: EnvLike): boolean {
+  return env.CINATRA_RUNTIME_MODE === "development" && env.NODE_ENV !== "production";
+}
+
+/**
  * Fail-loud unless the scripted provider is enabled under an EXPLICIT
  * development runtime. Allow-list (not deny-list) so an unset / misspelled /
  * production runtime mode can never serve scripted output: enabled requires
@@ -40,7 +50,7 @@ export function isScriptedTestProviderEnabled(env: EnvLike = process.env): boole
  */
 export function assertScriptedProviderNotProduction(env: EnvLike = process.env): void {
   if (!isScriptedTestProviderEnabled(env)) return;
-  if (env.CINATRA_RUNTIME_MODE !== "development" || env.NODE_ENV === "production") {
+  if (!isScriptedProviderDevelopmentRuntime(env)) {
     throw new Error(
       `${SCRIPTED_TEST_PROVIDER_ENV}=${SCRIPTED_TEST_PROVIDER_VALUE} is set but the ` +
         `runtime is not an explicit development runtime ` +
@@ -363,12 +373,24 @@ const AGENT_START_INTENT = /\b(use|run|invoke|call|dispatch|execute|launch)\b/i;
 /**
  * The canonical package form, `@cinatra-ai/<slug>`.
  *
- * Read from the LOWERCASED sentence: npm scope and package names are lowercase
- * by definition, and the chat client's own mention tokenizer folds case when it
- * lexes a scoped reference, so `@Cinatra-AI/Some-Agent` and
- * `@cinatra-ai/some-agent` are one identifier and must resolve to one package.
+ * ONE GRAMMAR WITH THE CHAT CLIENT (cinatra#2942). This is the scoped arm of
+ * the client's mention tokenizer (`packages/chat/src/mention-tokenizer.ts`,
+ * MENTION_RE) with its vendor fixed, character for character: a slug starts
+ * with a letter OR a digit; the lookbehind skips an `@` that follows a URL
+ * path or query character (`/ . : =`), an email local-part character (a word
+ * character, `+`, `%`) or a second `@`; the right boundary refuses a slug that
+ * runs on into a word character, `/` or `-`, so `@cinatra-ai/foo_bar` and
+ * `@cinatra-ai/foo/bar` name no package at all instead of a truncated
+ * `@cinatra-ai/foo`; and the match is case-insensitive on the RAW sentence with
+ * the slug folded to lower case afterwards, exactly as the tokenizer folds it,
+ * so `@Cinatra-AI/Some-Agent` and `@cinatra-ai/some-agent` resolve to one
+ * package. This package cannot import the chat package (the chat package
+ * depends on this one), so the grammar is restated here and the parity table
+ * in `packages/chat/src/__tests__/scoped-agent-dispatch-streams.test.ts` drives
+ * both readers over the same sentences: a change to either one alone is red.
  */
-const CANONICAL_AGENT_PACKAGE_PATTERN = /@cinatra-ai\/([a-z][a-z0-9-]*)/;
+const CANONICAL_AGENT_PACKAGE_PATTERN =
+  /(?<![\w/.:@+%=])@cinatra-ai\/([a-z0-9][a-z0-9-]*)(?![\w/-])/i;
 
 /**
  * The legacy `cinatra_<slug>` wording, which is what a person writes when they
@@ -394,8 +416,8 @@ const LEGACY_AGENT_PACKAGE_PATTERN = /\bcinatra_([a-z][a-z0-9-]+)(?:[-_ ]tool|\b
  */
 export function scriptedTurnStartsAgent(instructions: string): string | null {
   if (!AGENT_START_INTENT.test(instructions)) return null;
-  const canonical = instructions.toLowerCase().match(CANONICAL_AGENT_PACKAGE_PATTERN);
-  if (canonical) return `@cinatra-ai/${canonical[1]}`;
+  const canonical = instructions.match(CANONICAL_AGENT_PACKAGE_PATTERN);
+  if (canonical) return `@cinatra-ai/${canonical[1].toLowerCase()}`;
   const legacy = instructions.match(LEGACY_AGENT_PACKAGE_PATTERN);
   if (legacy) return `@cinatra-ai/${legacy[1]}`;
   return null;
@@ -1258,5 +1280,95 @@ export function runScriptedBridgeCompletion(
     }),
     model: input.model ?? SCRIPTED_TEST_MODEL,
     // No `usage`: nothing was spent, so nothing is metered.
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The IMAGE path.
+//
+// The image tool (`artifact_image_generate`, src/lib/artifact-image-tool.ts)
+// asks `resolveDefaultImageProvider` for the deployment's image provider, and
+// that walk reads only the keyed providers, so on a credential-free
+// development stack it finds none and the tool refuses the picture as
+// `no_provider`. The provider below is that tool's scripted stand-in, built
+// the way the bridge path above is: the tool consults it only after the keyed
+// walk found nothing, and it answers ONE constant placeholder picture. It
+// calls no network and no model, and it does not read the prompt.
+//
+// THE PLACEHOLDER IS MARKED wherever it lands. The tool records the provider
+// name (`scripted`) and the model (`SCRIPTED_PLACEHOLDER_IMAGE_MODEL`) on the
+// picture's ledger row and returns both to the calling node, and the PNG bytes
+// carry a tEXt comment that names them a development placeholder.
+//
+// FENCE. Resolution reads the same check as `assertScriptedProviderNotProduction`
+// but answers `null` instead of throwing, because the image tool returns a
+// stated refusal for every failure: with the flag off, and in every runtime
+// that is not an explicit development one (a production build included), the
+// tool's existing `no_provider` answer stands. The picture call asserts again
+// before it answers, so no placeholder bytes come out of a provider whose
+// runtime stopped being an explicit development one after it was resolved.
+// ---------------------------------------------------------------------------
+
+/** The model a placeholder picture is recorded under. No image model has this name. */
+export const SCRIPTED_PLACEHOLDER_IMAGE_MODEL = "scripted-development-placeholder";
+
+/** The placeholder's form: PNG, one of the forms the image tool files. */
+export const SCRIPTED_PLACEHOLDER_IMAGE_MIME = "image/png";
+
+/**
+ * The placeholder picture, base64: an 8x8 light grey 8-bit greyscale PNG of
+ * 181 bytes whose tEXt `Comment` reads "Cinatra development placeholder: made
+ * by the scripted test provider, not by an image model".
+ */
+export const SCRIPTED_PLACEHOLDER_IMAGE_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAAAAADhZOFXAAAAYnRFWHRDb21tZW50AENpbmF0" +
+  "cmEgZGV2ZWxvcG1lbnQgcGxhY2Vob2xkZXI6IG1hZGUgYnkgdGhlIHNjcmlwdGVkIHRlc3Qg" +
+  "cHJvdmlkZXIsIG5vdCBieSBhbiBpbWFnZSBtb2RlbIY1DFIAAAAOSURBVHjaYzgABQyUMQDA" +
+  "ojABxa15GQAAAABJRU5ErkJggg==";
+
+/** The scripted image provider, in the shape the image tool consumes. */
+export type ScriptedImageProvider = {
+  provider: typeof SCRIPTED_TEST_PROVIDER_VALUE;
+  generateImage: (input: { prompt: string; model?: string }) => Promise<{
+    imageData: string;
+    mimeType: string;
+    model: string;
+  }>;
+};
+
+/**
+ * The scripted image provider, or `null`.
+ *
+ * `null` with the flag off and in every runtime that is not an explicit
+ * development one: the caller's existing "nothing resolved" answer, unchanged.
+ *
+ * LAST RESORT, never a preference: the caller consults this only after the
+ * keyed image providers found nothing, so an install that HAS an image
+ * provider keeps using it with the flag set.
+ *
+ * Every call answers the same constant bytes, recorded under the placeholder
+ * model whatever model the caller named.
+ */
+export function resolveScriptedImageProvider(
+  env: EnvLike = process.env,
+): ScriptedImageProvider | null {
+  if (!isScriptedTestProviderEnabled(env)) return null;
+  if (!isScriptedProviderDevelopmentRuntime(env)) return null;
+  return {
+    provider: SCRIPTED_TEST_PROVIDER_VALUE,
+    generateImage: async () => {
+      assertScriptedProviderNotProduction(env);
+      if (!isScriptedTestProviderEnabled(env)) {
+        throw new Error(
+          `The scripted image provider was asked for a picture while ` +
+            `${SCRIPTED_TEST_PROVIDER_ENV} is not set to "${SCRIPTED_TEST_PROVIDER_VALUE}".`,
+        );
+      }
+      return {
+        imageData: SCRIPTED_PLACEHOLDER_IMAGE_PNG_BASE64,
+        mimeType: SCRIPTED_PLACEHOLDER_IMAGE_MIME,
+        model: SCRIPTED_PLACEHOLDER_IMAGE_MODEL,
+      };
+    },
   };
 }

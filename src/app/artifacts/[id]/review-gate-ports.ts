@@ -69,9 +69,11 @@ import {
   buildPinnedCaptureViews,
   buildPinnedCapturePair,
   buildPinnedRepairPair,
+  type PinnedCaptureImageUrlMinter,
   type PinnedCapturePairKind,
   type PinnedCapturePairView,
 } from "@/lib/artifacts/cms-preview-capture-view";
+import { reviewTargetVersionPath } from "@cinatra-ai/agent-ui-protocol/renderable-views/lifecycle-cards";
 import { isRepairSuccessorTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
 import {
   submitReviewDecisionCore,
@@ -706,6 +708,22 @@ function resolveDecisionPermissions(
 // ---------------------------------------------------------------------------
 
 /**
+ * The address of a pinned capture's bytes, composed by the review target's
+ * projection module: each id is ONE path segment that the version route
+ * reads back as the very id that was pinned. An id the module refuses
+ * (empty, `.` or `..`, which URL resolution would remove, or ill-formed
+ * text) gets no address (`null`): that side shows no picture, never
+ * another path.
+ */
+const versionPinnedCaptureImageUrl: PinnedCaptureImageUrlMinter = ({
+  captureArtifactId,
+  representationRevisionId,
+}) => {
+  const path = reviewTargetVersionPath(captureArtifactId, representationRevisionId, "preview");
+  return path.ok ? path.value : null;
+};
+
+/**
  * Read one pinned target's captures and project ONE comparison out of them.
  * Shared by the gate surface (`review` — live page vs proposal) and the S4
  * verification view (`verification` — reviewed vs applied), so both pairs are
@@ -724,7 +742,11 @@ export function loadPinnedCapturePair(
       boundSnapshotRevisionId: target.representationRevisionId,
     });
     if (stored.length === 0) return null;
-    return buildPinnedCapturePair(buildPinnedCaptureViews(stored), kind, driftedRegions);
+    return buildPinnedCapturePair(
+      buildPinnedCaptureViews(stored, versionPinnedCaptureImageUrl),
+      kind,
+      driftedRegions,
+    );
   } catch (err) {
     console.warn(
       "[review-gate-ports] pinned capture lookup failed (the review is unaffected):",
@@ -787,8 +809,8 @@ export async function loadPinnedRepairPair(
     if (baseCaptures.length === 0 && successorCaptures.length === 0) return null;
 
     return buildPinnedRepairPair(
-      buildPinnedCaptureViews(baseCaptures),
-      buildPinnedCaptureViews(successorCaptures),
+      buildPinnedCaptureViews(baseCaptures, versionPinnedCaptureImageUrl),
+      buildPinnedCaptureViews(successorCaptures, versionPinnedCaptureImageUrl),
       driftedRegions,
     );
   } catch (err) {

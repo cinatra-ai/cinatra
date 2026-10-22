@@ -1159,6 +1159,728 @@ export const LIFECYCLE_TARGET_HEADER_FACTS_MAX = 8;
 
 const boundedText = z.string().min(1).max(LIFECYCLE_TARGET_HEADER_MAX_TEXT);
 
+/** Ceiling on one key of the per-target island map: a pinned revision id. The
+ *  island page reads its `target` selector under the same ceiling. */
+export const LIFECYCLE_ISLAND_TARGET_KEY_MAX_LENGTH = 128;
+
+// ===========================================================================
+// BEGIN review-target-projection — THE REVIEW TARGET'S PROJECTIONS, IN ONE
+// PLACE (cinatra#4129).
+//
+// A review gate pins its targets by identity: an artifact id and the
+// representation revision id the gate froze. Every surface that shows a target
+// PROJECTS that identity into another form: a path segment of the
+// version-pinned byte routes, the island's `target` selector, the island
+// address the card frames, the identity the card keys that frame on, the
+// revision a target header carries, and the choice between the gate's one
+// aggregate island and one island per target. Each form can lose the identity
+// on its own way. An empty id addresses no path segment. `.` and `..` are dot
+// segments that every URL resolver removes, so a link carrying one addresses
+// another path. A lone surrogate is not well-formed text, and every encoder
+// either throws on it or rewrites it to U+FFFD. And an address longer than
+// {@link LIFECYCLE_ISLAND_SRC_MAX_LENGTH} is refused by the card.
+//
+// While each consumer composed its own form, each one carried its own subset
+// of these cuts, and a reading of one consumer said nothing of the next. So
+// every projection of a review target is made by this section and by no other
+// code. Each returns the projected form or a NAMED REFUSAL, and the consumer
+// draws the refusal as its own fail-closed reading (no link, no pair, the one
+// aggregate island, the failed island state); it never composes a form of its
+// own.
+//
+// THE KEY IS A COMPILE-TIME LABEL, NOT A RUNTIME GUARD. A pinned target's
+// identity leaves this section as a {@link ReviewTargetKey}. Its runtime value
+// is the revision id itself; only its TYPE is a symbol. That type turns the
+// common slips into type errors: a template over a key, `+` on a key, a
+// comparison of a key with a string, a key as a URL parameter, and text passed
+// where a key is asked. It does NOT stop a deliberate string operation: a
+// cast, `String(key)`, a join, `Object.keys`, or a widening to `unknown` and
+// back all compile and reach the plain id. Every key, address, selector reading
+// and per-target set a consumer needs is made here WHOLE, from keys; the
+// consumer is meant to pass keys back in, compare two keys and key a `Map` or
+// `Set` by them. A per-target set is a `Map`, so a consumer that reads it as a
+// plain object finds nothing. What holds the drawing is this section's
+// projections and the rendering tests over them;
+// `scripts/review-target-projection-census.mjs` lists, as warnings only, some
+// lines the type does not see.
+// ===========================================================================
+
+/** The island's query parameter that names the ONE pinned target a frame
+ *  draws (cinatra#4129). {@link readReviewIslandTargetSelector} reads the
+ *  same literal back. */
+export const REVIEW_ISLAND_TARGET_QUERY_PARAM = "target";
+/** The island's query parameter that carries its single-use credential —
+ *  the client half of `src/lib/lifecycle/review-island-credential.ts`. */
+export const REVIEW_ISLAND_CREDENTIAL_QUERY_PARAM = "ic";
+/** The island's query parameter that names the HOST's palette — the client
+ *  half of `src/app/lifecycle/review-island/island-color-scheme.ts`. */
+export const REVIEW_ISLAND_COLOR_SCHEME_QUERY_PARAM = "scheme";
+/** The authenticated, display-only island document a card frames. */
+export const REVIEW_TARGET_ISLAND_PATH = "/lifecycle/review-island";
+
+/** Why a target id has no projection of the asked form. */
+export type ReviewTargetProjectionRefusal =
+  /** The id is the empty string: it addresses no path segment and names no
+   *  target. */
+  | "empty-id"
+  /** The id is `.` or `..`: a URL resolver removes it as a dot segment. */
+  | "dot-segment-id"
+  /** The id is not well-formed UTF-16 (a lone surrogate): every encoder
+   *  throws on it or rewrites it. */
+  | "ill-formed-id"
+  /** The encoded selector is longer than
+   *  {@link LIFECYCLE_ISLAND_TARGET_KEY_MAX_LENGTH}. */
+  | "selector-over-bound"
+  /** The composed island address is longer than
+   *  {@link LIFECYCLE_ISLAND_SRC_MAX_LENGTH}. */
+  | "address-over-bound"
+  /** The projected form does not read back as the very id it was made
+   *  from. */
+  | "not-read-back"
+  /** The island's `target` parameter is given more than once. */
+  | "repeated-selector"
+  /** No pinned target answers to the selector. */
+  | "unmatched-selector"
+  /** More than one pinned target answers to the selector, so it names no
+   *  one target. */
+  | "ambiguous-selector";
+
+/** A projection: the form, or the named refusal. */
+export type ReviewTargetProjected<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly refusal: ReviewTargetProjectionRefusal };
+
+function refused<T>(refusal: ReviewTargetProjectionRefusal): ReviewTargetProjected<T> {
+  return { ok: false, refusal };
+}
+
+function isWellFormedText(id: string): boolean {
+  for (let index = 0; index < id.length; index += 1) {
+    const unit = id.charCodeAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = id.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      index += 1;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * The refusal EVERY projection of a target id shares, or `null` for an id
+ * that every form can carry: the empty id, the two dot segments and an id
+ * that is not well-formed text are refused by each form alike, so no surface
+ * can draw a target that another surface cannot address.
+ */
+export function reviewTargetIdRefusal(id: string): ReviewTargetProjectionRefusal | null {
+  if (id.length === 0) return "empty-id";
+  if (id === "." || id === "..") return "dot-segment-id";
+  if (!isWellFormedText(id)) return "ill-formed-id";
+  return null;
+}
+
+/**
+ * ONE target id as ONE path segment: percent-encoded, so an id carrying `/`,
+ * `?`, `#` or `%` stays in its own segment, and PROVEN by reading it back
+ * through URL resolution: the resolved path must keep the segment and decode
+ * to the very id.
+ */
+export function projectReviewTargetPathSegment(id: string): ReviewTargetProjected<string> {
+  const refusal = reviewTargetIdRefusal(id);
+  if (refusal !== null) return refused(refusal);
+  const segment = encodeURIComponent(id);
+  const resolved = new URL(`/s/${segment}/e`, "https://projection.invalid").pathname;
+  if (resolved !== `/s/${segment}/e` || decodeURIComponent(segment) !== id) {
+    return refused("not-read-back");
+  }
+  return { ok: true, value: segment };
+}
+
+/**
+ * The host's version-pinned byte route of ONE pinned revision: the artifact
+ * id and the revision id, each as one exact path segment. Refused when either
+ * id has no exact segment; a refusal is NO address, never a rewritten one.
+ */
+export function reviewTargetVersionPath(
+  artifactId: string,
+  revisionId: string,
+  leaf: "preview" | "content",
+): ReviewTargetProjected<string> {
+  const artifact = projectReviewTargetPathSegment(artifactId);
+  if (!artifact.ok) return artifact;
+  const revision = projectReviewTargetPathSegment(revisionId);
+  if (!revision.ok) return revision;
+  const path = `/api/artifacts/${artifact.value}/versions/${revision.value}/${leaf}`;
+  if (new URL(path, "https://projection.invalid").pathname !== path) {
+    return refused("not-read-back");
+  }
+  return { ok: true, value: path };
+}
+
+/**
+ * A pinned revision id AS AN ISLAND ADDRESS CARRIES IT: the form-encoded value
+ * of the `target` query parameter.
+ *
+ * The route and the card put the id into an address through
+ * `URLSearchParams`, and the island reads it back out of that address. Every
+ * byte past ASCII is percent-encoded on the way, so a 128-character id can grow
+ * nine times over. So an id travels only when the shared refusal passes, its
+ * encoded value reads back as the very same id, and that encoded value fits
+ * {@link LIFECYCLE_ISLAND_TARGET_KEY_MAX_LENGTH}; the raw id then fits it too,
+ * because encoding never shortens a string.
+ */
+export function projectReviewIslandTargetSelector(revisionId: string): ReviewTargetProjected<string> {
+  const refusal = reviewTargetIdRefusal(revisionId);
+  if (refusal !== null) return refused(refusal);
+  if (revisionId.length > LIFECYCLE_ISLAND_TARGET_KEY_MAX_LENGTH) return refused("selector-over-bound");
+  const query = new URLSearchParams([[REVIEW_ISLAND_TARGET_QUERY_PARAM, revisionId]]).toString();
+  if (new URLSearchParams(query).get(REVIEW_ISLAND_TARGET_QUERY_PARAM) !== revisionId) {
+    return refused("not-read-back");
+  }
+  const value = query.slice(REVIEW_ISLAND_TARGET_QUERY_PARAM.length + 1);
+  if (value.length > LIFECYCLE_ISLAND_TARGET_KEY_MAX_LENGTH) return refused("selector-over-bound");
+  return { ok: true, value };
+}
+
+/** {@link projectReviewIslandTargetSelector}'s value, or `null` for any
+ *  refusal. */
+export function reviewIslandTargetSelector(revisionId: string): string | null {
+  const projected = projectReviewIslandTargetSelector(revisionId);
+  return projected.ok ? projected.value : null;
+}
+
+declare const reviewTargetKeyBrand: unique symbol;
+
+/**
+ * ONE PINNED TARGET'S IDENTITY, AS EVERY SURFACE KEYS IT: its pinned revision
+ * id, once {@link projectReviewIslandTargetSelector} has accepted it as one
+ * exact selector.
+ *
+ * A COMPILE-TIME LABEL. The value at run time is the revision id itself; only
+ * the TYPE is a symbol. So a template, `+`, a comparison with a string and a
+ * URL parameter over a key are type errors, and so is text passed where a key
+ * is asked. A deliberate string operation is not: a cast, `String(key)`, a
+ * join, `Object.keys` or a widening to `unknown` compiles and yields the plain
+ * id. A key is meant only to be passed back into this section, compared with
+ * another key, or used to key a `Map` or `Set`.
+ */
+export type ReviewTargetKey = symbol & { readonly [reviewTargetKeyBrand]: "review-target-key" };
+
+function mintReviewTargetKey(revisionId: string): ReviewTargetKey {
+  return revisionId as unknown as ReviewTargetKey;
+}
+
+function reviewTargetKeyText(target: ReviewTargetKey): string {
+  return target as unknown as string;
+}
+
+/** A pinned revision id as its {@link ReviewTargetKey}, or the selector's
+ *  named refusal. */
+export function projectReviewTargetKey(revisionId: string): ReviewTargetProjected<ReviewTargetKey> {
+  const selector = projectReviewIslandTargetSelector(revisionId);
+  if (!selector.ok) return selector;
+  return { ok: true, value: mintReviewTargetKey(revisionId) };
+}
+
+/** What the island's `target` parameter names: no target (`null`, the
+ *  parameter is absent), one target's key, or the named refusal. */
+export type ReviewIslandTargetSelection =
+  | { readonly ok: true; readonly target: ReviewTargetKey | null }
+  | { readonly ok: false; readonly refusal: ReviewTargetProjectionRefusal };
+
+/**
+ * THE ISLAND'S `target` PARAMETER, READ BACK. The island is addressable on its
+ * own (a direct, a stale or an older client's URL), so the parameter is read
+ * here, under the very rule every address is composed under: an absent
+ * parameter names no target, a repeated one is refused, and one value is a
+ * target only when {@link projectReviewTargetKey} accepts it.
+ */
+export function readReviewIslandTargetSelector(searchParams: {
+  readonly [name: string]: unknown;
+}): ReviewIslandTargetSelection {
+  const raw = searchParams[REVIEW_ISLAND_TARGET_QUERY_PARAM];
+  if (raw === undefined) return { ok: true, target: null };
+  if (typeof raw !== "string") return { ok: false, refusal: "repeated-selector" };
+  const key = projectReviewTargetKey(raw);
+  if (!key.ok) return key;
+  return { ok: true, target: key.value };
+}
+
+/**
+ * THE TARGETS ONE ISLAND DRAWS: every pinned target when the selection names
+ * none, and otherwise the ONE pinned target whose revision the key names. Two
+ * pins of different artifacts may share one revision id, and a key that
+ * answers to both names no one target, so it is refused like a key that
+ * answers to none.
+ */
+export function selectReviewIslandTargets<
+  T extends { readonly target: { readonly representationRevisionId: string } },
+>(target: ReviewTargetKey | null, streams: readonly T[]): ReviewTargetProjected<readonly T[]> {
+  if (target === null) return { ok: true, value: streams };
+  const revisionId = reviewTargetKeyText(target);
+  const named = streams.filter((stream) => stream.target.representationRevisionId === revisionId);
+  if (named.length === 0) return refused("unmatched-selector");
+  if (named.length > 1) return refused("ambiguous-selector");
+  return { ok: true, value: named };
+}
+
+/**
+ * The island address a card FRAMES, composed whole: the gate's ref, the
+ * credential, the frame selectors, the palette and, for one pair, the one
+ * pinned target, in that order. The bound is read on the FINAL address, the
+ * string the `<iframe src>` receives: a server-issued address that fit
+ * {@link LIFECYCLE_ISLAND_SRC_MAX_LENGTH} is recomposed here with the client's
+ * own fields, and the recomposed address is refused when it no longer fits.
+ */
+export function composeReviewIslandAddress(input: {
+  ref: string;
+  credential?: string | null;
+  frame?: { assistant: string; instanceId: string } | null;
+  colorScheme?: string | null;
+  target?: ReviewTargetKey;
+}): ReviewTargetProjected<string> {
+  const params = new URLSearchParams({ ref: input.ref });
+  if (input.credential) params.set(REVIEW_ISLAND_CREDENTIAL_QUERY_PARAM, input.credential);
+  if (input.frame) {
+    params.set("assistant", input.frame.assistant);
+    params.set("instanceId", input.frame.instanceId);
+  }
+  if (input.colorScheme) params.set(REVIEW_ISLAND_COLOR_SCHEME_QUERY_PARAM, input.colorScheme);
+  if (input.target !== undefined) {
+    const revisionId = reviewTargetKeyText(input.target);
+    const selector = projectReviewIslandTargetSelector(revisionId);
+    if (!selector.ok) return selector;
+    params.set(REVIEW_ISLAND_TARGET_QUERY_PARAM, revisionId);
+  }
+  const src = `${REVIEW_TARGET_ISLAND_PATH}?${params.toString()}`;
+  if (src.length > LIFECYCLE_ISLAND_SRC_MAX_LENGTH) return refused("address-over-bound");
+  return { ok: true, value: src };
+}
+
+/**
+ * A server-minted island address with the ONE pinned target it frames added
+ * (the route's per-target addresses). PROVEN, not presumed: the address is read
+ * back the way the island reads it and its `target` must be the very revision
+ * id, and the whole address must fit {@link LIFECYCLE_ISLAND_SRC_MAX_LENGTH}.
+ */
+export function withReviewIslandTarget(src: string, target: ReviewTargetKey): ReviewTargetProjected<string> {
+  const revisionId = reviewTargetKeyText(target);
+  const selector = projectReviewIslandTargetSelector(revisionId);
+  if (!selector.ok) return selector;
+  const query = src.indexOf("?");
+  const params = new URLSearchParams(query < 0 ? "" : src.slice(query + 1));
+  params.set(REVIEW_ISLAND_TARGET_QUERY_PARAM, revisionId);
+  const addressed = `${query < 0 ? src : src.slice(0, query)}?${params.toString()}`;
+  const readBack = new URLSearchParams(addressed.slice(addressed.indexOf("?") + 1));
+  if (readBack.get(REVIEW_ISLAND_TARGET_QUERY_PARAM) !== revisionId) return refused("not-read-back");
+  if (addressed.length > LIFECYCLE_ISLAND_SRC_MAX_LENGTH) return refused("address-over-bound");
+  return { ok: true, value: addressed };
+}
+
+/**
+ * The credential OUT of an island address — never the address itself. The
+ * address must be the island's own path, name this card's `ref` and, for a
+ * per-target address, the very `target` it was minted for; any other address
+ * answers another question and carries no credential here.
+ */
+export function reviewIslandAddressCredential(
+  src: string | null | undefined,
+  ref: string,
+  target?: ReviewTargetKey,
+): string | null {
+  if (typeof src !== "string" || src.length === 0) return null;
+  try {
+    const url = new URL(src, "https://island.invalid");
+    if (url.pathname !== REVIEW_TARGET_ISLAND_PATH) return null;
+    if (url.searchParams.get("ref") !== ref) return null;
+    if (
+      target !== undefined &&
+      url.searchParams.get(REVIEW_ISLAND_TARGET_QUERY_PARAM) !== reviewTargetKeyText(target)
+    ) {
+      return null;
+    }
+    const credential = url.searchParams.get(REVIEW_ISLAND_CREDENTIAL_QUERY_PARAM);
+    return credential !== null && credential.length > 0 ? credential : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The identity of the DOCUMENT an island address shows: the address without
+ * the palette it is painted in. A palette change repaints the same target; a
+ * different target, ref or credential is another document. Read only from an
+ * address {@link composeReviewIslandAddress} composed, so the target it
+ * carries is an exact selector and two pairs never share an identity.
+ */
+export function reviewIslandAddressIdentity(src: string): string {
+  const query = src.indexOf("?");
+  if (query < 0) return src;
+  const params = new URLSearchParams(src.slice(query + 1));
+  params.delete(REVIEW_ISLAND_COLOR_SCHEME_QUERY_PARAM);
+  return `${src.slice(0, query)}?${params.toString()}`;
+}
+
+/** The credential an island address {@link composeReviewIslandAddress}
+ *  composed carries, or `null` when it carries none. */
+export function reviewIslandComposedCredential(src: string): string | null {
+  const query = src.indexOf("?");
+  const params = new URLSearchParams(query < 0 ? "" : src.slice(query + 1));
+  const credential = params.get(REVIEW_ISLAND_CREDENTIAL_QUERY_PARAM);
+  return credential !== null && credential.length > 0 ? credential : null;
+}
+
+/**
+ * THE KEYS A CARD GIVES ITS TARGETS' ELEMENTS, made here like every other form
+ * of a target id. A frame is keyed by its document's identity
+ * ({@link reviewIslandAddressIdentity}) and the attempt, so a retry remounts
+ * it. A pair is keyed by its target and the mint count of its placement:
+ * pairs are drawn only over keys that are distinct
+ * ({@link reviewGateTargetPairKeys}), so two pairs never share a key. A
+ * header of the aggregate reading is keyed by its POSITION as well as by its
+ * target, because two pins of different artifacts may share one revision id
+ * and one object type there.
+ */
+export function reviewIslandFrameKey(identity: string, attempt: number): string {
+  return `${identity}:${attempt}`;
+}
+
+export function reviewTargetPairKey(target: ReviewTargetKey, minted: number): string {
+  return `${reviewTargetKeyText(target)}:${minted}`;
+}
+
+export function reviewTargetHeaderKey(
+  index: number,
+  header: Pick<LifecycleTargetHeader, "revisionId" | "objectType">,
+): string {
+  return `${index}:${header.revisionId}:${header.objectType}`;
+}
+
+/**
+ * The React key of ONE target the island draws, at its POSITION among the
+ * targets drawn, whole. The position leads, so the same target pinned twice
+ * draws two panels. The artifact id's LENGTH comes next, so the key reads back
+ * to exactly one pair of ids whatever characters either id carries; joining
+ * the two with a separator alone would let two different targets share a key.
+ */
+export function reviewTargetStreamKey(
+  index: number,
+  target: { readonly artifactId: string; readonly representationRevisionId: string },
+): string {
+  return `${index}:${target.artifactId.length}:${target.artifactId}:${target.representationRevisionId}`;
+}
+
+/** Past this many characters the shown revision id is cut. */
+const REVIEW_TARGET_REVISION_MARKER_MAX = 14;
+/** The characters a cut revision id keeps before its ellipsis. */
+const REVIEW_TARGET_REVISION_MARKER_KEPT = 12;
+
+/**
+ * A header's revision id AS THE HEADER SHOWS IT: the exact id kept for its
+ * title, and a short form for the line, cut by whole characters so a cut never
+ * splits one.
+ */
+export function reviewTargetRevisionMarker(revisionId: string): { short: string; full: string } {
+  const characters = Array.from(revisionId);
+  return {
+    full: revisionId,
+    short:
+      characters.length > REVIEW_TARGET_REVISION_MARKER_MAX
+        ? `${characters.slice(0, REVIEW_TARGET_REVISION_MARKER_KEPT).join("")}…`
+        : revisionId,
+  };
+}
+
+/** Why the revision a target header shows is not the pinned id exactly. */
+export type ReviewTargetHeaderRevisionRefusal =
+  /** The id is empty: the header shows a dash in its place. */
+  | "header-empty"
+  /** The id is longer than {@link LIFECYCLE_TARGET_HEADER_MAX_TEXT} UTF-16
+   *  units: the header shows its longest prefix of WHOLE characters within
+   *  the bound. */
+  | "header-cut"
+  /** The id is not well-formed text: the header shows U+FFFD in place of
+   *  each lone surrogate. */
+  | "header-substituted"
+  /** The id is `.` or `..`: the header shows it as it is, and no form of a
+   *  target carries it. */
+  | "dot-segment-id";
+
+/** The revision ONE target header shows: the pinned id exactly, or the text
+ *  shown in its place and the named refusal. */
+export type ReviewTargetHeaderRevision =
+  | { readonly revisionId: string; readonly exact: true }
+  | {
+      readonly revisionId: string;
+      readonly exact: false;
+      readonly refusal: ReviewTargetHeaderRevisionRefusal;
+    };
+
+/** `text` cut to at most `maxUnits` UTF-16 units on a CHARACTER boundary: a
+ *  cut that would fall between the two halves of a surrogate pair falls
+ *  before the pair. */
+function cutToWholeCharacters(text: string, maxUnits: number): string {
+  if (text.length <= maxUnits) return text;
+  let end = maxUnits;
+  const last = text.charCodeAt(end - 1);
+  const next = text.charCodeAt(end);
+  if (last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) end -= 1;
+  return text.slice(0, end);
+}
+
+/** `text` with U+FFFD in place of each lone surrogate. Same length in UTF-16
+ *  units, so a bound that held still holds. */
+function substituteLoneSurrogates(text: string): string {
+  let shown = "";
+  for (let index = 0; index < text.length; index += 1) {
+    const unit = text.charCodeAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = text.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        shown += text.slice(index, index + 2);
+        index += 1;
+      } else {
+        shown += "�";
+      }
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      shown += "�";
+    } else {
+      shown += text.charAt(index);
+    }
+  }
+  return shown;
+}
+
+/**
+ * The revision ONE target header carries, and whether it is the pinned id
+ * EXACTLY. The header is display text inside the wire's bounds, and it is
+ * always well-formed text: an empty id shows a dash, a long one is cut on a
+ * character boundary at {@link LIFECYCLE_TARGET_HEADER_MAX_TEXT} units, and a
+ * lone surrogate shows as U+FFFD. A header whose revision is not the exact id
+ * names the reason, still names its target, and makes the reading INCOMPLETE,
+ * so no pair, key or address is ever composed from it.
+ */
+export function projectReviewTargetHeaderRevision(revisionId: string): ReviewTargetHeaderRevision {
+  if (revisionId.length === 0) return { revisionId: "—", exact: false, refusal: "header-empty" };
+  const cut = cutToWholeCharacters(revisionId, LIFECYCLE_TARGET_HEADER_MAX_TEXT);
+  const shown = substituteLoneSurrogates(cut);
+  if (cut !== revisionId) return { revisionId: shown, exact: false, refusal: "header-cut" };
+  if (shown !== revisionId) return { revisionId: shown, exact: false, refusal: "header-substituted" };
+  if (reviewTargetIdRefusal(revisionId) === "dot-segment-id") {
+    return { revisionId, exact: false, refusal: "dot-segment-id" };
+  }
+  return { revisionId, exact: true };
+}
+
+/**
+ * WHETHER A REVIEW GATE IS DRAWN AS PAIRS (cinatra#4129): one island per
+ * pinned target, each under its own header, each at its own address. ONE rule,
+ * read by the route that mints the per-target addresses and by the card that
+ * frames them, so the two cannot disagree about which reading an answer is.
+ *
+ * THE HEADERS ARE NOT THE PINNED SET BY THEMSELVES. The server skips a target
+ * this reader cannot read, so that target has no header, and pairs drawn over
+ * the other headers would drop it from under the gate's one decision; such a
+ * reading is not complete. The headers also stop at
+ * {@link LIFECYCLE_TARGET_HEADERS_MAX}, so twelve headers can stand for a gate
+ * that pins fifty, and a header can show a revision that is not its pin's id
+ * exactly. Pairs drawn over such a list would drop a target the reader may
+ * read, or name one it does not pin, and the gate's one decision covers them
+ * all. So the gate is drawn as pairs only when the answer says its headers are
+ * COMPLETE (every pinned target read and named, each by its exact id, and
+ * none cut by the bound) and there are several of them; every other answer
+ * keeps the gate's one aggregate island, which renders every pinned target the
+ * reader may read, at the gate's own address.
+ *
+ * EACH PAIR'S SELECTOR MUST NAME ITS OWN TARGET AND NO OTHER. A pair's address,
+ * its key in the per-target map and the island's own filter all name the target
+ * by its pinned revision id alone. Two pins of different artifacts may carry the
+ * same revision id, and a header's revision id is cut at
+ * {@link LIFECYCLE_TARGET_HEADER_MAX_TEXT} characters while a key of the map is
+ * refused past {@link LIFECYCLE_ISLAND_TARGET_KEY_MAX_LENGTH}. And the id
+ * reaches the island through an address, which rewrites an ill-formed id and
+ * percent-encodes the rest ({@link reviewIslandTargetSelector}). Over any of
+ * these, one selector would stand for two targets, or for none, and a pair
+ * would draw a body that is not its own or spend another pair's grant. So
+ * pairs are drawn only when every header's revision id is distinct within the
+ * answer and travels as one exact selector within the key bound; any other
+ * answer keeps the one aggregate island, which is the reading every gate had
+ * before pairs and loses nothing.
+ *
+ * The pairs' keys, one per header in the headers' order, or `null` for every
+ * answer that keeps the one aggregate island.
+ */
+export function reviewGateTargetPairKeys(
+  targetHeaders: readonly LifecycleTargetHeader[] | null,
+  targetHeadersComplete: boolean | undefined,
+): readonly ReviewTargetKey[] | null {
+  if (targetHeadersComplete !== true || targetHeaders === null || targetHeaders.length <= 1) {
+    return null;
+  }
+  const keys: ReviewTargetKey[] = [];
+  const seen = new Set<ReviewTargetKey>();
+  for (const header of targetHeaders) {
+    const key = projectReviewTargetKey(header.revisionId);
+    if (!key.ok || seen.has(key.value)) return null;
+    seen.add(key.value);
+    keys.push(key.value);
+  }
+  return keys;
+}
+
+/** Whether {@link reviewGateTargetPairKeys} draws the gate as pairs. */
+export function reviewGateTargetsDrawnAsPairs(
+  targetHeaders: readonly LifecycleTargetHeader[] | null,
+  targetHeadersComplete: boolean | undefined,
+): boolean {
+  return reviewGateTargetPairKeys(targetHeaders, targetHeadersComplete) !== null;
+}
+
+/**
+ * THE PER-TARGET ISLAND ADDRESSES OF ONE ANSWER: each pinned target's own
+ * address, or `null` where that target's mint failed, keyed by
+ * the target. Built by {@link mintReviewTargetIslandAddresses}, carried on the
+ * wire as {@link reviewTargetIslandAddressesWire}, read back by
+ * {@link readReviewTargetIslandAddresses}, and looked up by
+ * {@link reviewTargetIslandAddressOf}: no other code is meant to build, read
+ * or index one.
+ */
+export type ReviewTargetIslandAddresses = ReadonlyMap<ReviewTargetKey, string | null>;
+
+/**
+ * ONE ADDRESS PER PAIR, each from its own call of `mint` (one grant paints one
+ * document, so one address never serves two frames), with that pair's target
+ * added and PROVEN by {@link withReviewIslandTarget}. A failed mint, and an
+ * address that cannot carry its target exactly or within the bound, are `null`
+ * for that target alone: the other targets keep their own addresses, and an
+ * address that failed its proof never leaves this function. A target named
+ * twice answers `null` for the whole set, and the addresses already minted
+ * never leave this function.
+ */
+export function mintReviewTargetIslandAddresses(
+  targets: readonly ReviewTargetKey[],
+  mint: () => string | null,
+): ReviewTargetIslandAddresses | null {
+  const addresses = new Map<ReviewTargetKey, string | null>();
+  for (const target of targets) {
+    if (addresses.has(target)) return null;
+    const minted = mint();
+    if (minted === null) {
+      addresses.set(target, null);
+      continue;
+    }
+    const addressed = withReviewIslandTarget(minted, target);
+    addresses.set(target, addressed.ok ? addressed.value : null);
+  }
+  return addresses;
+}
+
+/** The addresses as the answer's wire carries them: a plain object from each
+ *  pinned revision id to its address or `null`. The wire carries NO order: a
+ *  plain object lists integer-like keys first, in numeric order (pins `"10"`
+ *  then `"2"` read back as `"2"`, `"10"`). A card finds each pair's address
+ *  by its key, and the two sets it compares are both read back off this same
+ *  shape. */
+export function reviewTargetIslandAddressesWire(
+  addresses: ReviewTargetIslandAddresses,
+): Record<string, string | null> {
+  return Object.fromEntries(
+    [...addresses].map(([target, src]) => [reviewTargetKeyText(target), src] as const),
+  );
+}
+
+/**
+ * The per-target addresses read back off the wire as ONE bounded shape: a
+ * plain object of at most {@link LIFECYCLE_TARGET_HEADERS_MAX} entries, each
+ * key a revision id {@link projectReviewTargetKey} accepts, each value `null`
+ * (that target's address could not be made) or an address `readAddress`
+ * accepts. `null` means the answer carried none; `undefined` REFUSES the
+ * answer.
+ */
+export function readReviewTargetIslandAddresses(
+  raw: unknown,
+  readAddress: (raw: unknown) => string | null | undefined,
+): ReviewTargetIslandAddresses | null | undefined {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const prototype = Object.getPrototypeOf(raw);
+  if (prototype !== Object.prototype && prototype !== null) return undefined;
+  const entries = Object.entries(raw as Record<string, unknown>);
+  if (entries.length > LIFECYCLE_TARGET_HEADERS_MAX) return undefined;
+  const addresses = new Map<ReviewTargetKey, string | null>();
+  for (const [revisionId, value] of entries) {
+    const key = projectReviewTargetKey(revisionId);
+    if (!key.ok) return undefined;
+    if (value === null) {
+      addresses.set(key.value, null);
+      continue;
+    }
+    const src = readAddress(value);
+    if (src === undefined || src === null) return undefined;
+    addresses.set(key.value, src);
+  }
+  return addresses;
+}
+
+/** ONE target's own address in the set, or `null` when the set has none for
+ *  it or its mint failed. */
+export function reviewTargetIslandAddressOf(
+  addresses: ReviewTargetIslandAddresses,
+  target: ReviewTargetKey,
+): string | null {
+  return addresses.get(target) ?? null;
+}
+
+/** Whether two sets name the same targets, in the same order, at the same
+ *  addresses; two absent sets are the same. */
+export function sameReviewTargetIslandAddresses(
+  left: ReviewTargetIslandAddresses | null,
+  right: ReviewTargetIslandAddresses | null,
+): boolean {
+  if (left === null || right === null) return left === right;
+  if (left.size !== right.size) return false;
+  const rightEntries = [...right];
+  return [...left].every(
+    ([target, src], index) =>
+      rightEntries[index]?.[0] === target && rightEntries[index]?.[1] === src,
+  );
+}
+
+/**
+ * HOW A CARD DRAWS A GATE'S TARGETS, read from the answer's TRANSPORT as well
+ * as from its headers (cinatra#4129): one island per pinned target (`pairs`) or
+ * the gate's one aggregate island (`aggregate`).
+ *
+ * Pairs need {@link reviewGateTargetsDrawnAsPairs} AND an address for each
+ * pair. The answer can carry three transport shapes, and each decides alone:
+ *
+ *   • PER-TARGET ADDRESSES (`islandSrcByRevision`): pairs; each pair frames
+ *     its own entry, and a missing or failed entry refuses that pair alone.
+ *   • NO CREDENTIAL AT ALL: the reader's own cookie is the transport, so each
+ *     pair composes the gate's address naming its target: pairs.
+ *   • ONE GATE-WIDE CREDENTIAL and no per-target addresses: the server minted
+ *     no per-target address, and a single-use grant paints ONE document. The gate is drawn as its
+ *     one AGGREGATE island on that grant, which renders every pinned target;
+ *     it is never drawn as pairs that all fail.
+ */
+export function reviewGateTargetDrawing(input: {
+  targetHeaders: readonly LifecycleTargetHeader[] | null;
+  targetHeadersComplete: boolean | undefined;
+  islandSrcByRevision: ReviewTargetIslandAddresses | null;
+  gateWideCredential: boolean;
+}): "pairs" | "aggregate" {
+  if (!reviewGateTargetsDrawnAsPairs(input.targetHeaders, input.targetHeadersComplete)) {
+    return "aggregate";
+  }
+  if (input.islandSrcByRevision !== null) return "pairs";
+  return input.gateWideCredential ? "aggregate" : "pairs";
+}
+
+// END review-target-projection
+// ===========================================================================
+
 export const lifecycleTargetHeaderSchema: z.ZodType<LifecycleTargetHeader> = z
   .object({
     title: boundedText,
@@ -1180,11 +1902,38 @@ export const lifecycleTargetHeadersSchema = z
  * the same thing, and the card then draws no header rather than an invented one.
  * `undefined` means the answer carried something that is not ours, and REFUSES
  * the envelope — the same fail-closed posture the island URL takes.
+ *
+ * EACH REVISION IS READ THROUGH {@link projectReviewTargetHeaderRevision}, the
+ * one rule this build's server composes it under. An older server cut a long id
+ * by UTF-16 units and could leave a lone surrogate at the cut; the header then
+ * shows U+FFFD there, as this build's own header would. A header that rule does
+ * not keep EXACTLY is not its pin's id, so `inexact` is then `true` and the
+ * reading is never complete.
  */
-function readTargetHeaders(raw: unknown): LifecycleTargetHeader[] | null | undefined {
+function readTargetHeaders(
+  raw: unknown,
+): { readonly headers: LifecycleTargetHeader[]; readonly inexact: boolean } | null | undefined {
   if (raw === undefined || raw === null) return null;
   const parsed = lifecycleTargetHeadersSchema.safeParse(raw);
-  return parsed.success ? parsed.data : undefined;
+  if (!parsed.success) return undefined;
+  let inexact = false;
+  const headers = parsed.data.map((header) => {
+    const revision = projectReviewTargetHeaderRevision(header.revisionId);
+    if (!revision.exact) inexact = true;
+    return { ...header, revisionId: revision.revisionId };
+  });
+  return { headers, inexact };
+}
+
+
+/**
+ * The completeness of the headers, read as ONE shape: `undefined` when the
+ * answer did not carry it, a boolean when it did, and `null` for anything else,
+ * which REFUSES the envelope.
+ */
+function readTargetHeadersComplete(raw: unknown): boolean | undefined | null {
+  if (raw === undefined) return undefined;
+  return typeof raw === "boolean" ? raw : null;
 }
 
 /** The discriminated answer one lifecycle resolve returns. */
@@ -1218,14 +1967,36 @@ export type LifecycleResolveEnvelopeFor<K extends LifecycleDataPartViewType> =
  * model-visible DATA_PART still carries a ref and nothing else.
  *
  * A same-site host receives `null` here and keeps composing its own cookie URL.
+ *
+ * ONE ADDRESS PER PINNED TARGET, WHERE THE CARD PAIRS (cinatra#4129). A pending
+ * or restricted gate that pins several targets, whose headers the answer says
+ * are complete (`targetHeadersComplete`), is drawn as pairs on every host: each
+ * target's header directly above its own island frame. A credentialed address
+ * is worth ONE paint, so one address cannot serve several frames; the answer
+ * then carries `islandSrcByRevision` instead of `islandSrc` — a map from each
+ * pinned revision to its own address, or to `null` where that target's address
+ * could not be made. The key is OPTIONAL and present only when the wire carried it,
+ * so an answer that never carried it reads exactly as it did before it existed.
  */
 export type LifecycleResolveAnswerFor<K extends LifecycleDataPartViewType> =
   LifecycleResolveEnvelopeFor<K> & {
     islandSrc: string | null;
+    /** One island address per pinned target of a paired gate (cinatra#4129),
+     * keyed by the pinned revision; `null` for a target whose address could not
+     * be made. Absent on every answer that did not carry it. See
+     * {@link ReviewTargetIslandAddresses}. */
+    islandSrcByRevision?: ReviewTargetIslandAddresses | null;
     aside: LifecycleCardAsideByKind[K] | null;
     /** The reviewed target(s)' headers (cinatra#3141 item 7), or `null` when the
      * answer carried none. See {@link LifecycleTargetHeader}. */
     targetHeaders: LifecycleTargetHeader[] | null;
+    /** `true` only when `targetHeaders` names every pinned target this reader
+     * may read, each by its pinned revision id exactly, and none was cut by
+     * {@link LIFECYCLE_TARGET_HEADERS_MAX}; a target this reader cannot read
+     * has no header and makes the reading not complete. Absent on every answer
+     * that did not carry it, and read as not complete there. See
+     * {@link reviewGateTargetsDrawnAsPairs}. */
+    targetHeadersComplete?: boolean;
     /** §VI producer prefill; envelope-only, absent on older readers/answers. */
     recordedPrompt?: string | null;
   };
@@ -1372,8 +2143,25 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
     const bodyPresent = rawBody !== undefined && rawBody !== null;
     const islandSrc = readIslandSrc(record.islandSrc);
     if (islandSrc === undefined) return null;
-    const targetHeaders = readTargetHeaders(record.targetHeaders);
-    if (targetHeaders === undefined) return null;
+    // The per-target addresses are read back by the review target's
+    // projection section, each value as one island address.
+    const islandSrcByRevision = readReviewTargetIslandAddresses(
+      record.islandSrcByRevision,
+      readIslandSrc,
+    );
+    if (islandSrcByRevision === undefined) return null;
+    const carriedHeaders = readTargetHeaders(record.targetHeaders);
+    if (carriedHeaders === undefined) return null;
+    const targetHeaders = carriedHeaders === null ? null : carriedHeaders.headers;
+    const carriedComplete = readTargetHeadersComplete(record.targetHeadersComplete);
+    if (carriedComplete === null) return null;
+    // A COMPLETE SET OF NO HEADERS is not an answer this build composes: the
+    // claim is about the headers the answer carries.
+    if (carriedComplete === true && targetHeaders === null) return null;
+    // A header whose revision is not its pin's id exactly never stands in a
+    // complete reading, whatever the answer claims.
+    const targetHeadersComplete =
+      carriedComplete === true && carriedHeaders?.inexact === true ? false : carriedComplete;
     const recordedPrompt = record.recordedPrompt;
     if (recordedPrompt !== undefined && recordedPrompt !== null && typeof recordedPrompt !== "string") return null;
     if (recordedPrompt !== undefined && recordedPrompt !== null &&
@@ -1384,12 +2172,29 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
     // to a question that kind never asks — a shape this build cannot have
     // composed, and therefore one it will not read.
     if (expectedKind !== "artifact_review_gate" && targetHeaders !== null) return null;
+    // The per-target island addresses belong to the same one kind, for the same
+    // reason: only the review gate frames an island per pinned target.
+    if (expectedKind !== "artifact_review_gate" && islandSrcByRevision !== null) return null;
+    // The completeness of the headers belongs to the same one kind.
+    if (expectedKind !== "artifact_review_gate" && targetHeadersComplete !== undefined) return null;
+    // PLACED ONLY WHEN THE WIRE CARRIED IT, so an answer composed without it
+    // parses to exactly the shape it parsed to before the key existed.
+    const carriedIslandSrcByRevision =
+      expectedKind === "artifact_review_gate" && record.islandSrcByRevision !== undefined;
 
     if (state.data.state === "absent") {
       // `absent` CARRIES NOTHING BESIDE ITSELF. An island URL is addressed to a
       // gate, so one arriving next to the collapse of every denial would be the
       // oracle the collapse exists to close — refused exactly like a body.
-      if (bodyPresent || islandSrc !== null || targetHeaders !== null) return null;
+      if (
+        bodyPresent ||
+        islandSrc !== null ||
+        islandSrcByRevision !== null ||
+        targetHeaders !== null ||
+        targetHeadersComplete !== undefined
+      ) {
+        return null;
+      }
       return {
         kind: expectedKind,
         state: state.data,
@@ -1414,7 +2219,9 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
         state: state.data,
         body: null,
         islandSrc,
+        ...(carriedIslandSrcByRevision ? { islandSrcByRevision } : {}),
         targetHeaders,
+        ...(targetHeadersComplete === undefined ? {} : { targetHeadersComplete }),
         ...(recordedPrompt === undefined ? {} : { recordedPrompt }),
         aside,
       } as LifecycleResolveAnswerFor<K>;
@@ -1428,7 +2235,9 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
       state: state.data,
       body: body.data,
       islandSrc,
+      ...(carriedIslandSrcByRevision ? { islandSrcByRevision } : {}),
       targetHeaders,
+      ...(targetHeadersComplete === undefined ? {} : { targetHeadersComplete }),
       ...(recordedPrompt === undefined ? {} : { recordedPrompt }),
       aside,
     } as LifecycleResolveAnswerFor<K>;

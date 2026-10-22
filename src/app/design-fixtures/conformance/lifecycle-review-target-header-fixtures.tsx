@@ -28,11 +28,12 @@
 // needs none.
 //
 // THE HARNESS COMPOSES NOTHING THE PRODUCT COMPOSES. A fixture row carries the
-// stored artifact's own values and stops there; the two readings the header
-// draws over them — the type TAG's label and the meta line's row FACTS — are
-// composed HERE by the product's own `artifactKindLabelFor` and
-// `reviewTargetRowFacts`, which are the same two calls the server-side composer
-// makes (src/lib/lifecycle/lifecycle-target-headers.ts:154). So this mount is
+// stored artifact's own values and stops there; the three readings the header
+// draws over them — the type TAG's label, the meta line's row FACTS and the
+// REVISION the header shows — are composed HERE by the product's own
+// `artifactKindLabelFor`, `reviewTargetRowFacts` and
+// `projectReviewTargetHeaderRevision`, which are the same calls the server-side
+// composer makes (src/lib/lifecycle/lifecycle-target-headers.ts). So this mount is
 // the shipped chain composer → component with the transport left out, and a
 // driver over it cannot be satisfied by a reading the shipped composer would
 // never produce. Handing the component a finished `facts` array instead would
@@ -49,17 +50,40 @@
 
 import type { ReactElement } from "react";
 
+import {
+  projectReviewTargetHeaderRevision,
+  type LifecycleTargetHeader,
+} from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
 import { ReviewTargetHeaders } from "@cinatra-ai/agents/review-gate-card";
 
 import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
-import { reviewTargetRowFacts } from "@/lib/artifacts/review-surface-model";
+import { reviewTargetRowFacts } from "@/lib/artifacts/review-target-row-facts";
 
 import {
   LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES,
   LIFECYCLE_REVIEW_TARGET_HEADER_NOW,
   type LifecycleReviewTargetHeaderFixture,
+  type LifecycleReviewTargetHeaderSeed,
 } from "./lifecycle-review-target-header-fixture-data";
+
+/** ONE fixture row's header, composed by the product's own calls. */
+export function reviewTargetFixtureHeader(
+  seed: LifecycleReviewTargetHeaderSeed,
+  now: Date,
+): LifecycleTargetHeader {
+  return {
+    title: seed.title,
+    objectType: seed.objectType,
+    // The revision the header shows is the section's header projection of the
+    // stored id, exactly as the server-side composer takes it.
+    revisionId: projectReviewTargetHeaderRevision(seed.revisionId).revisionId,
+    // Both readings are worded by the SURFACE MODEL, never by the harness —
+    // the same calls the server-side composer makes.
+    typeLabel: artifactKindLabelFor(seed.objectType),
+    facts: reviewTargetRowFacts(seed.row, now),
+  };
+}
 
 function ReviewTargetHeaderFixture({
   fixture,
@@ -67,15 +91,7 @@ function ReviewTargetHeaderFixture({
   fixture: LifecycleReviewTargetHeaderFixture;
 }): ReactElement {
   const now = new Date(LIFECYCLE_REVIEW_TARGET_HEADER_NOW);
-  const headers = fixture.headers.map((seed) => ({
-    title: seed.title,
-    objectType: seed.objectType,
-    revisionId: seed.revisionId,
-    // Both readings are worded by the SURFACE MODEL, never by the harness —
-    // the same two calls the server-side composer makes.
-    typeLabel: artifactKindLabelFor(seed.objectType),
-    facts: reviewTargetRowFacts(seed.row, now),
-  }));
+  const headers = fixture.headers.map((seed) => reviewTargetFixtureHeader(seed, now));
 
   return (
     <div data-surface-id={fixture.surfaceId} className="flex flex-col gap-2">

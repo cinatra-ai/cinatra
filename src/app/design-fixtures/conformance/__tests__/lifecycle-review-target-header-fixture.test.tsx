@@ -14,10 +14,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 
-import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
-import { reviewTargetRowFacts } from "@/lib/artifacts/review-surface-model";
+import {
+  LIFECYCLE_TARGET_HEADER_MAX_TEXT,
+  reviewTargetRevisionMarker,
+} from "@cinatra-ai/agent-ui-protocol/renderable-views";
+import { ReviewTargetHeaders } from "@cinatra-ai/agents/review-gate-card";
 
-import { LifecycleReviewTargetHeaderFixtures } from "../lifecycle-review-target-header-fixtures";
+import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
+import { reviewTargetRowFacts } from "@/lib/artifacts/review-target-row-facts";
+
+import {
+  LifecycleReviewTargetHeaderFixtures,
+  reviewTargetFixtureHeader,
+} from "../lifecycle-review-target-header-fixtures";
 import {
   LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES,
   LIFECYCLE_REVIEW_TARGET_HEADER_NOW,
@@ -97,13 +106,43 @@ describe("the conformance harness mount for the artifact-kind cards", () => {
         // The meta line reads exactly what the shipped composer composes from
         // the row — owner level, visibility, MIME and the relative updated time,
         // in the drawing's order. A fixture that ever carried a finished fact
-        // instead (a platform, an address, a capitalized scope) is red here,
+        // instead (a platform, an address, a preworded scope) is red here,
         // because the product has no reading that produces one.
         const facts = reviewTargetRowFacts(seed.row, now);
         expect(facts.length, `${fixture.surfaceId} fact count`).toBe(4);
         const text = headers[index]!.textContent ?? "";
         expect(text).toContain(facts.join(" · "));
       });
+    }
+  });
+
+  it("shows the revision through the section's header projection: at the bound, past it, and across an astral character", () => {
+    const now = new Date(LIFECYCLE_REVIEW_TARGET_HEADER_NOW);
+    const seed = LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES[0]!.headers[0]!;
+    const shownFor = (revisionId: string) => reviewTargetFixtureHeader({ ...seed, revisionId }, now).revisionId;
+    // The boundary: an id of exactly the header's bound is shown whole, and
+    // one unit past it is cut at the bound.
+    const atBound = "r".repeat(LIFECYCLE_TARGET_HEADER_MAX_TEXT);
+    expect(shownFor(atBound)).toBe(atBound);
+    expect(shownFor(`${atBound}r`)).toBe(atBound);
+    // An astral character across the bound is dropped whole, never split.
+    const astral = `${"r".repeat(LIFECYCLE_TARGET_HEADER_MAX_TEXT - 1)}\uD83D\uDE00`;
+    const shown = "r".repeat(LIFECYCLE_TARGET_HEADER_MAX_TEXT - 1);
+    expect(shownFor(astral)).toBe(shown);
+    // And the shipped header draws the projected text, not the stored id, in
+    // all three readings: its attribute and its visible marker.
+    for (const [stored, expected] of [
+      [atBound, atBound],
+      [`${atBound}r`, atBound],
+      [astral, shown],
+    ] as const) {
+      const { container, unmount } = render(
+        <ReviewTargetHeaders headers={[reviewTargetFixtureHeader({ ...seed, revisionId: stored }, now)]} />,
+      );
+      const revision = container.querySelector("[data-review-target-revision]");
+      expect(revision?.getAttribute("data-review-target-revision")).toBe(expected);
+      expect(revision?.textContent).toBe(`revision ${reviewTargetRevisionMarker(expected).short}`);
+      unmount();
     }
   });
 
@@ -123,5 +162,25 @@ describe("the conformance harness mount for the artifact-kind cards", () => {
     for (const fixture of LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES) {
       expect(fixture.headers.length, `${fixture.surfaceId} pins one target`).toBe(1);
     }
+  });
+});
+
+
+describe("the shipped header names the owner's scope by its type and its name (cinatra#3443)", () => {
+  it("renders the team's row as the drawing's Team: Growth · Private", () => {
+    const { container } = render(<LifecycleReviewTargetHeaderFixtures />);
+    let matched = 0;
+    for (const fixture of LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES) {
+      const headers = container.querySelector(`[data-surface-id="${fixture.surfaceId}"]`)!
+        .querySelectorAll('[data-conformance-id="review-target-header"]');
+      fixture.headers.forEach((seed, index) => {
+        if (seed.row.ownerLevel === "team" && seed.row.visibility === "private") {
+          matched++;
+          expect(headers[index]!.textContent).toContain("Team: Growth · Private · " + seed.row.mime);
+          expect(headers[index]!.textContent).not.toContain("Team · Private");
+        }
+      });
+    }
+    expect(matched).toBeGreaterThan(0);
   });
 });

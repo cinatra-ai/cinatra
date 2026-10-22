@@ -72,6 +72,37 @@ export type ExtensionDevSetupHelpers = {
   isLocalhostUrl(url: string): boolean;
   /** Linear trailing-slash trim (ReDoS-safe; the shared host normaliser). */
   trimTrailingSlashes(input: string): string;
+  /**
+   * Hand the install-made connection of one external-MCP server row from the
+   * development fixture account this boot REFUSED to the first administrator
+   * this boot adopted as the owner of the install's connections. OPTIONAL: an
+   * older host does not offer it, so a hook feature-detects it
+   * (`typeof helpers.reownRefusedFixtureConnection === "function"`).
+   *
+   * The HOST resolves the refused fixture account and the new owner itself; a
+   * hook never sees a user id. The hook names the row it wires (`serverId`) and
+   * answers `checkKey` — does the connector's service still accept the stored
+   * key (handed to it with the row's `serverUrl`)? — with "ok",
+   * "unauthorized" or "unreachable". The host acts only when this boot refused
+   * the fixture account and adopted a first administrator, and only on a row
+   * whose live connection the refused fixture account owns:
+   *   - "reowned": the key works; the key, the connection and the row stay as
+   *     they are and only the ownership moves (same key);
+   *   - "cleared": the key no longer works ("unauthorized"); the connection is
+   *     removed so the hook attaches one fresh key for the new owner;
+   *   - "deferred": kept as it is (the key could not be read or checked, or the
+   *     hand-over did not complete and was undone); a later boot retries;
+   *   - "failed": not handed over on this boot (a throwing check included);
+   *   - "no-owner", "no-connection", "not-fixture-owned": nothing changed.
+   * Never throws. SECRET BOUNDARY: the key goes to `checkKey` only; the host
+   * never logs it.
+   */
+  reownRefusedFixtureConnection?(input: {
+    serverId: string;
+    checkKey: (input: { apiKey: string; serverUrl: string }) => Promise<"ok" | "unauthorized" | "unreachable">;
+  }): Promise<
+    "no-owner" | "no-connection" | "not-fixture-owned" | "deferred" | "reowned" | "cleared" | "failed"
+  >;
 };
 
 /**

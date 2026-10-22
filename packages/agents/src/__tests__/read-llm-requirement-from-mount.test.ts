@@ -36,7 +36,7 @@ describe("readLlmRequirementFromMount (cinatra#1062)", () => {
           type: "flow",
           llm: {
             preferredProvider: "gemini",
-            preferredModel: "gemini-2.5-flash",
+            preferredModel: "gemini-3.5-flash",
             capabilityRequired: "media_input",
           },
         },
@@ -46,7 +46,7 @@ describe("readLlmRequirementFromMount (cinatra#1062)", () => {
       readLlmRequirementFromMount("@cinatra-ai/media-transcript-agent", "0.1.3"),
     ).resolves.toEqual({
       preferredProvider: "gemini",
-      preferredModel: "gemini-2.5-flash",
+      preferredModel: "gemini-3.5-flash",
       capabilityRequired: "media_input",
     });
   });
