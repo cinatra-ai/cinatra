@@ -15,7 +15,7 @@
 // fetches. Fixed data only: see email-gate-fixture-data.ts.
 // ---------------------------------------------------------------------------
 
-import { Suspense, lazy, useMemo, type ComponentType, type ReactElement } from "react";
+import { Suspense, lazy, type ComponentType, type ReactElement } from "react";
 
 import {
   FIELD_RENDERER_PROPS_API_VERSION,
@@ -49,6 +49,18 @@ function lazyRenderer(binding: string): ComponentType<FieldRendererProps> {
   }) as ComponentType<FieldRendererProps>;
 }
 
+// One lazy component per binding, made once when this module loads, so the same
+// binding always yields the same component and no component is made while
+// rendering (react-hooks/static-components). Null prototype: a binding that is
+// not one of the page's surfaces finds nothing here, not an Object member.
+const RENDERER_BY_BINDING: Readonly<Record<string, ComponentType<FieldRendererProps>>> = (() => {
+  const byBinding: Record<string, ComponentType<FieldRendererProps>> = Object.create(null);
+  for (const s of EMAIL_GATE_SURFACES) {
+    byBinding[s.binding] ??= lazyRenderer(s.binding);
+  }
+  return byBinding;
+})();
+
 function noop(): void {}
 
 function Reading({
@@ -62,7 +74,7 @@ function Reading({
   fieldName: string;
   label?: string;
 }): ReactElement {
-  const Renderer = useMemo(() => lazyRenderer(binding), [binding]);
+  const Renderer = RENDERER_BY_BINDING[binding] ?? Unavailable;
   return (
     <div data-variant={reading.variant} className="max-w-[640px]">
       <Suspense fallback={<div data-load-state="loading" />}>
