@@ -208,7 +208,8 @@ export function ListPickerRenderer({
         {/*
           No road out of the step (cinatra#3562): the "Create new list"
           affordance and the "Build a list with AI" link to a list-building
-          run are gone. Lists are created in the CRM itself.
+          run are gone. The step picks from the lists that fetchAvailableLists
+          returns and creates none.
         */}
       </div>
 

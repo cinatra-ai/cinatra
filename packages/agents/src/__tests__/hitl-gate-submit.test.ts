@@ -14,6 +14,7 @@ import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
   buildChatGateSubmitPayload,
+  createGateValidityStore,
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
@@ -316,6 +317,37 @@ describe("liftRendererApprovalNote", () => {
     });
   });
 
+  it(":list-picker whose picks are all unusable keeps the one-pick snapshot (cinatra#3562)", () => {
+    for (const listIds of [[7, ""], "v1"]) {
+      const lift = liftRendererApprovalNote(
+        "@cinatra-ai/x:list-picker",
+        { listIds, listId: "l1", listName: "My list", memberCount: 5 },
+        NOW,
+      );
+      expect(JSON.parse(lift!.approvalNote)).toEqual({
+        type: "list",
+        listId: "l1",
+        listName: "My list",
+        memberCount: 5,
+        snapshotAt: NOW,
+      });
+    }
+  });
+
+  it(":list-picker gives a pick an empty name where its name is missing or not a string (cinatra#3562)", () => {
+    const lift = liftRendererApprovalNote(
+      "@cinatra-ai/x:list-picker",
+      { listIds: ["v1", "v2", "v3"], listNames: ["First", 5] },
+      NOW,
+    );
+    expect(JSON.parse(lift!.approvalNote)).toEqual({
+      type: "list",
+      listIds: ["v1", "v2", "v3"],
+      listNames: ["First", "", ""],
+      snapshotAt: NOW,
+    });
+  });
+
   it(":setup-form lifts the three sender fields (undefined keys dropped by JSON)", () => {
     const lift = liftRendererApprovalNote(
       "@cinatra-ai/x:setup-form",
@@ -585,5 +617,45 @@ describe("hitlRendererFieldName (cinatra#2541)", () => {
     expect(resolveFieldLabel(hitlRendererFieldName(undefined))).toBe(
       GENERIC_FIELD_LABEL,
     );
+  });
+});
+
+describe("createGateValidityStore (cinatra#3562)", () => {
+  it("holds a gate only while its latest report is false, and only that gate", () => {
+    const store = createGateValidityStore();
+    expect(store.isHeld("g1")).toBe(false);
+    expect(store.isHeld(null)).toBe(false);
+    store.report("g1", false);
+    expect(store.isHeld("g1")).toBe(true);
+    expect(store.isHeld("g2")).toBe(false);
+    expect(store.isHeld(null)).toBe(false);
+    store.report("g1", true);
+    expect(store.isHeld("g1")).toBe(false);
+    store.report("g1", false);
+    store.report("g2", true);
+    expect(store.isHeld("g1")).toBe(false);
+    expect(store.isHeld("g2")).toBe(false);
+  });
+
+  it("a release drops the report, and tells the listeners only on a change", () => {
+    const store = createGateValidityStore();
+    let calls = 0;
+    const unsubscribe = store.subscribe(() => {
+      calls += 1;
+    });
+    store.release();
+    expect(calls).toBe(0);
+    store.report("g1", false);
+    store.report("g1", false);
+    expect(calls).toBe(1);
+    store.release();
+    expect(calls).toBe(2);
+    expect(store.isHeld("g1")).toBe(false);
+    store.release();
+    expect(calls).toBe(2);
+    unsubscribe();
+    store.report("g1", false);
+    expect(calls).toBe(2);
+    expect(store.isHeld("g1")).toBe(true);
   });
 });

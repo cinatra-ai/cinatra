@@ -777,6 +777,21 @@ function TickingRenderer({ schema, onChange, onValidityChange }: FieldRendererPr
   );
 }
 
+/** The same step drawn already ticked, by a renderer that never reports. */
+function QuietTickedRenderer() {
+  return <Input type="checkbox" aria-label="View one" checked readOnly />;
+}
+
+/** Puts `renderer` in place of the ticking one under its id. */
+function replaceTickingRenderer(id: string, renderer: (props: FieldRendererProps) => React.ReactNode) {
+  fieldRendererRegistry.register({
+    id,
+    priority: 100,
+    condition: (_fieldName, schema) => (schema as { "x-renderer"?: unknown })["x-renderer"] === id,
+    renderer,
+  });
+}
+
 describe("OrchestratorStepperPanel — a renderer that reports its value unsendable (cinatra#3562)", () => {
   beforeEach(() => {
     for (const id of [TICKING_RENDERER_ID, MID_RUN_TICKING_RENDERER_ID]) {
@@ -921,5 +936,55 @@ describe("OrchestratorStepperPanel — a renderer that reports its value unsenda
     await waitFor(() => expect(ctaBox()).not.toBeNull());
     await waitFor(() => expect(productContinues()).toHaveLength(1));
     expect(productContinues()[0]!.disabled).toBe(false);
+  });
+
+  it("a report leaves with its renderer: one that takes its place on the same gate and reports nothing is not held", async () => {
+    const view = await mountGate({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
+    replaceTickingRenderer(TICKING_RENDERER_ID, QuietTickedRenderer);
+    view.advanceTo({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+
+    await waitFor(() =>
+      expect((view.getByRole("checkbox", { name: "View one" }) as HTMLInputElement).checked).toBe(true),
+    );
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(false));
+  });
+
+  it("a gate drawn again, ticked, by a renderer that reports nothing is not held by the report made before", async () => {
+    const view = await mountGate({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
+    view.advanceTo({ xRenderer: CONTROL_LESS_RENDERER_ID, fieldName: "callToAction" });
+    await waitFor(() => expect(ctaBox()).not.toBeNull());
+    replaceTickingRenderer(TICKING_RENDERER_ID, QuietTickedRenderer);
+    view.advanceTo({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+
+    await waitFor(() =>
+      expect((view.getByRole("checkbox", { name: "View one" }) as HTMLInputElement).checked).toBe(true),
+    );
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(false));
+  });
+
+  it("a generic confirmation draws no renderer, so its Continue is never held", async () => {
+    const view = await mountGate({
+      xRenderer: SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+      fieldName: "accountScope",
+      schema: { type: "object" },
+      reviewTaskId: "review-run-3562-confirm",
+    });
+
+    const outer = await view.findByRole("button", { name: /Continue/ });
+    expect((outer as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(outer);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("review-run-3562-confirm");
+    expect(payload).toMatchObject({ approved: true });
   });
 });

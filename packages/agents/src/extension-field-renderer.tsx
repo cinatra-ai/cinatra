@@ -29,7 +29,7 @@ import { loadFieldRendererComponent } from "./field-renderer-components";
  * caught and replaced by the floor (the pre-render degrade classes are handled
  * by the loader; this covers the throw-during-render half). */
 class FieldRendererErrorBoundary extends ReactComponent<
-  { fallback: ReactNode; children?: ReactNode },
+  { fallback: ReactNode; onCrash?: () => void; children?: ReactNode },
   { crashed: boolean }
 > {
   state = { crashed: false };
@@ -44,6 +44,7 @@ class FieldRendererErrorBoundary extends ReactComponent<
       "[field-renderer] extension renderer threw during render; showing SchemaFieldRenderer floor",
       error,
     );
+    this.props.onCrash?.();
   }
 
   render(): ReactNode {
@@ -112,9 +113,12 @@ export function makeExtensionFieldRenderer(
     };
     const floor = createElement(SchemaOnlyFloorRenderer, floorProps);
     if (degraded || resolved === null) return floor;
+    // The floor never reports through `onValidityChange` (cinatra#3562). When
+    // it replaces a crashed component, that component's last report goes with
+    // it: `true` leaves the gate as for a renderer that never reports.
     return createElement(
       FieldRendererErrorBoundary,
-      { fallback: floor },
+      { fallback: floor, onCrash: () => props.onValidityChange?.(true) },
       createElement(resolved, props),
     );
   }

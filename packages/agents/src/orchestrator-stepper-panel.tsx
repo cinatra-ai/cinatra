@@ -28,6 +28,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   useTransition,
   type ReactElement,
   type ReactNode,
@@ -107,6 +108,7 @@ import { applyAttachmentEnvelope } from "./attachment-envelope-payload";
 // #817 context-selector envelope synthesis are shared with
 // agentic-run-panel so both surfaces submit byte-identical payloads.
 import {
+  createGateValidityStore,
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
@@ -115,6 +117,7 @@ import {
   setupFieldRendererValue,
   withContextSelectorEnvelope,
   wrapPrimitiveSetupPayload,
+  type GateValidityStore,
 } from "./hitl-gate-submit";
 // `resolveFieldLabel` joins it for cinatra#3532 fix leg 3: the answered step
 // reads back under the SAME label the field was asked under, and it comes from
@@ -487,6 +490,23 @@ function ReviewGateStepCard({
       </CardContent>
     </Card>
   );
+}
+
+/**
+ * Releases the gate's validity report (cinatra#3562, see `GateValidityStore`)
+ * when the renderer drawn for the gate unmounts or another component takes its
+ * place. Mounted beside that renderer, under the same condition and keyed by
+ * the gate; it draws nothing.
+ */
+function GateValidityRelease({
+  store,
+  renderer,
+}: {
+  store: GateValidityStore;
+  renderer: unknown;
+}): null {
+  useEffect(() => () => store.release(), [store, renderer]);
+  return null;
 }
 
 // THE IDENTITY OF ONE SETUP GATE (cinatra#3532). Sequential setup gates share
@@ -945,8 +965,7 @@ function HitlApprovalCard({
   const handleContinue = async () => {
     // Reported unsendable (see `gateValidity`): the press sends nothing, before
     // the run-name check and the optimistic spinner below.
-    const validity = gateValidityRef.current;
-    if (validity !== null && validity.key === setupGateKey && !validity.valid) return;
+    if (gateValidity.isHeld(setupGateKey)) return;
     if (!(await checkRunName())) return;
     // Optimistically switch to SpinnerCard right away — before the API call starts.
     // onApproveRejected rolls back if the call fails.
@@ -1125,21 +1144,21 @@ function HitlApprovalCard({
   // gate's identity. While the last report for the gate on screen is `false`,
   // the Continue drawn for it (the setup field's or the mid-run one) is
   // unavailable and a press sends nothing. A renderer that never reports blocks
-  // nothing, so no undeclared reason ever stops a reader (cinatra#3532). State
-  // for the drawn control, a ref for the press, which reads it in the same turn.
-  const [gateValidity, setGateValidity] = useState<{ key: string; valid: boolean } | null>(null);
-  const gateValidityRef = useRef<{ key: string; valid: boolean } | null>(null);
+  // nothing, so no undeclared reason ever stops a reader (cinatra#3532). A
+  // report is released with the renderer that made it (`GateValidityStore`).
+  // The drawn control subscribes to the store; the press reads it in the same
+  // turn.
+  const [gateValidity] = useState(createGateValidityStore);
   // A plain function, not a useCallback: the React Compiler memoizes this
   // card itself, and a manual memo keyed by the gate identity would make it
   // skip the whole component. The report is idempotent, so a renderer that
   // reports again after a re-render changes nothing.
-  const reportGateValidity = (valid: boolean) => {
-    gateValidityRef.current = { key: setupGateKey, valid };
-    setGateValidity((previous) => previous?.key === setupGateKey && previous.valid === valid
-      ? previous : { key: setupGateKey, valid });
-  };
-  const gateReportedInvalid =
-    gateValidity !== null && gateValidity.key === setupGateKey && !gateValidity.valid;
+  const reportGateValidity = (valid: boolean) => gateValidity.report(setupGateKey, valid);
+  const gateReportedInvalid = useSyncExternalStore(
+    gateValidity.subscribe,
+    () => gateValidity.isHeld(setupGateKey),
+    () => false,
+  );
   // cinatra#3532 (convergence) — THE GATE WHOSE ANSWER WAS ALREADY ACCEPTED.
   // The submit core returns without throwing for an accepted answer, for the
   // blocked outcome and for an already-resolved gate; in every one of those the
@@ -1208,8 +1227,7 @@ function HitlApprovalCard({
   // road staged — nothing more.
   const submitStagedSetupAnswer = async (key: string): Promise<void> => {
     // Reported unsendable (see `gateValidity`): the press sends nothing.
-    const validity = gateValidityRef.current;
-    if (validity !== null && validity.key === key && !validity.valid) return;
+    if (gateValidity.isHeld(key)) return;
     // ONE PRESS AT A TIME, on a ref rather than the rendered `disabled` alone:
     // the flush is asynchronous and `isApproving` is React state, so two presses
     // in one tick would both reach the submit core.
@@ -1299,6 +1317,14 @@ function HitlApprovalCard({
 
   const cardBody = (
     <>
+        {/* Releases this gate's validity report with the renderer below. */}
+        {RendererComponent && !isGenericObjectSchema ? (
+          <GateValidityRelease
+            key={setupGateKey}
+            store={gateValidity}
+            renderer={RendererComponent}
+          />
+        ) : null}
         {RendererComponent && !isGenericObjectSchema ? (
           <RendererComponent
             // Keyed by xRenderer AND fieldName (#810): per-field setup gates

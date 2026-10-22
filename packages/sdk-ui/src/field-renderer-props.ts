@@ -75,7 +75,8 @@ export type FieldRendererProps = {
   /**
    * Report whether the value the renderer holds may be sent. The host keeps
    * the latest report per gate: while the last report for the gate on screen
-   * is `false`, its Continue is unavailable and a press sends nothing. A
+   * is `false`, its Continue is unavailable and a press sends nothing. The
+   * report goes when this renderer unmounts or another takes its place. A
    * renderer that never reports leaves the Continue as it was. Optional and
    * additive, so the ABI generation stays 1.
    */

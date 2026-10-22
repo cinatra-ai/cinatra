@@ -86,7 +86,7 @@ describe("ListPickerRenderer", () => {
     );
 
     // The "Create new list" affordance was retired with the lists_* MCP
-    // family; lists are created in the CRM itself (cinatra#3562).
+    // family; the step creates no list (cinatra#3562).
     expect(
       screen.queryByRole("link", { name: /create new list/i }),
     ).toBeNull();

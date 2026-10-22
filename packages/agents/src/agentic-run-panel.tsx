@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import { flushSync } from "react-dom";
@@ -75,6 +76,7 @@ import { approveReviewTask } from "./hitl-actions";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
   buildChatGateSubmitPayload,
+  createGateValidityStore,
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
@@ -82,6 +84,7 @@ import {
   setupFieldRendererValue,
   withContextSelectorEnvelope,
   wrapPrimitiveSetupPayload,
+  type GateValidityStore,
 } from "./hitl-gate-submit";
 import {
   applyJustSubmittedSuppression,
@@ -485,6 +488,23 @@ function withoutLifecycleCardRef(
   const { lifecycleCardRef: _ref, ...rest } = values;
   void _ref;
   return rest;
+}
+
+/**
+ * Releases the gate's validity report (cinatra#3562, see `GateValidityStore`)
+ * when the renderer drawn for the gate unmounts or another component takes its
+ * place. Mounted beside that renderer, in the same fragment and keyed by the
+ * gate; it draws nothing.
+ */
+function GateValidityRelease({
+  store,
+  renderer,
+}: {
+  store: GateValidityStore;
+  renderer: unknown;
+}): null {
+  useEffect(() => () => store.release(), [store, renderer]);
+  return null;
 }
 
 export function AgenticRunPanel({
@@ -1267,10 +1287,10 @@ export function AgenticRunPanel({
   // the last report for the gate on screen is `false`, the Continue drawn for
   // it (the setup field's or the mid-run one) is unavailable and a press sends
   // nothing. A renderer that never reports blocks nothing, so no undeclared
-  // reason ever stops a reader (cinatra#3532). State for the drawn control, a
-  // ref for the press, which reads it in the same turn.
-  const [gateValidity, setGateValidity] = useState<{ key: string; valid: boolean } | null>(null);
-  const gateValidityRef = useRef<{ key: string; valid: boolean } | null>(null);
+  // reason ever stops a reader (cinatra#3532). A report is released with the
+  // renderer that made it (`GateValidityStore`). The drawn control subscribes
+  // to the store; the press reads it in the same turn.
+  const [gateValidity] = useState(createGateValidityStore);
   const activeGateKey = effectiveHitlContext
     ? [
         effectiveHitlContext.reviewTaskId,
@@ -1278,25 +1298,18 @@ export function AgenticRunPanel({
         effectiveHitlContext.fieldName ?? "",
       ].join("::")
     : null;
-  const reportGateValidity = useCallback((valid: boolean) => {
-    if (activeGateKey === null) return;
-    gateValidityRef.current = { key: activeGateKey, valid };
-    setGateValidity((previous) => previous?.key === activeGateKey && previous.valid === valid
-      ? previous : { key: activeGateKey, valid });
-  }, [activeGateKey]);
-  const activeGateReportedInvalid =
-    activeGateKey !== null &&
-    gateValidity !== null &&
-    gateValidity.key === activeGateKey &&
-    !gateValidity.valid;
+  const activeGateReportedInvalid = useSyncExternalStore(
+    gateValidity.subscribe,
+    () => gateValidity.isHeld(activeGateKey),
+    () => false,
+  );
   const registerSetupFlush = useCallback((key: string, fn: () => Promise<void>) => {
     setupFlushRef.current = { key, fn };
   }, []);
   const submitStagedSetupAnswer = useCallback(
     async (key: string, reviewTaskId: string, xRenderer: string) => {
       // Reported unsendable (see `gateValidity`): the press sends nothing.
-      const validity = gateValidityRef.current;
-      if (validity !== null && validity.key === key && !validity.valid) return;
+      if (gateValidity.isHeld(key)) return;
       // ONE PRESS AT A TIME, on a ref rather than the rendered `disabled` alone:
       // the flush is asynchronous and `isApproving` is React state, so two
       // presses in one tick would both reach the submit core.
@@ -1341,7 +1354,7 @@ export function AgenticRunPanel({
         setupPressRef.current = false;
       }
     },
-    [performGateSubmit],
+    [performGateSubmit, gateValidity],
   );
 
   // Stable submit — empty deps, reads refs. The payload discrimination
@@ -2018,9 +2031,8 @@ export function AgenticRunPanel({
         {...(opts?.withReject ? {} : { "data-action": "submit-hitl-screen" })}
         onClick={async () => {
           // Reported unsendable: the press sends nothing (the drawn state can
-          // lag the report by one frame; the ref cannot).
-          const validity = gateValidityRef.current;
-          if (validity !== null && validity.key === activeGateKey && !validity.valid) return;
+          // lag the report by one frame; the store cannot).
+          if (gateValidity.isHeld(activeGateKey)) return;
           // The visible Continue may need to wrap the WayFlow `userResponse`
           // with the envelope when paperclip attachments are pending, but must
           // preserve any renderer-authored `userResponse` already on
@@ -2956,6 +2968,12 @@ export function AgenticRunPanel({
                 // affordances are one resume path with two entrances, not two.
                 return (
                   <>
+                    {/* Releases this gate's validity report with the renderer. */}
+                    <GateValidityRelease
+                      key={setupGateKey}
+                      store={gateValidity}
+                      renderer={RendererComponent}
+                    />
                     <RendererComponent
                       // Keyed by xRenderer AND fieldName — the identity the
                       // orchestrator stepper already uses (#810), adopted here
@@ -3072,7 +3090,9 @@ export function AgenticRunPanel({
                       // Any gate's renderer may report its value unsendable;
                       // the report holds the Continue drawn for this gate
                       // (see `gateValidity`), on the setup road and mid-run.
-                      onValidityChange={reportGateValidity}
+                      onValidityChange={(valid: boolean) =>
+                        gateValidity.report(setupGateKey, valid)
+                      }
                       // cinatra#3532 — where the product owns the send, the
                       // renderer's own submit is not drawn inside the field
                       // (the shared props contract says a renderer that draws

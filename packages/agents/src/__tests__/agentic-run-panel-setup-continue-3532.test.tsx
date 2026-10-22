@@ -425,6 +425,32 @@ function TickingRenderer({ schema, onChange, onValidityChange }: FieldRendererPr
   );
 }
 
+/** The same step drawn already ticked, by a renderer that never reports. */
+function QuietTickedRenderer() {
+  return <Input type="checkbox" aria-label="View one" checked readOnly />;
+}
+
+/** Puts `renderer` in place of the ticking one under its id. */
+function replaceTickingRenderer(id: string, renderer: (props: FieldRendererProps) => React.ReactNode) {
+  fieldRendererRegistry.register({
+    id,
+    priority: 100,
+    condition: (_fieldName, schema) => (schema as { "x-renderer"?: unknown })["x-renderer"] === id,
+    renderer,
+  });
+}
+
+/** Mount the panel, and move it to another gate the way the stream does. */
+async function renderMovablePanel() {
+  const { AgenticRunPanel } = await import("../agentic-run-panel");
+  const view = render(<AgenticRunPanel {...PANEL_PROPS} />);
+  const moveTo = async (xRenderer: string, fieldName: string, schema: Record<string, unknown>) => {
+    await setGate(xRenderer, fieldName, schema);
+    view.rerender(<AgenticRunPanel {...PANEL_PROPS} />);
+  };
+  return { ...view, moveTo };
+}
+
 describe("AgenticRunPanel — a renderer that reports its value unsendable (cinatra#3562)", () => {
   beforeEach(() => {
     for (const id of [TICKING_RENDERER_ID, MID_RUN_TICKING_RENDERER_ID]) {
@@ -497,5 +523,71 @@ describe("AgenticRunPanel — a renderer that reports its value unsendable (cina
       listNames: ["View two", "View one"],
       approved: true,
     });
+  });
+
+  it("a mid-run gate held again after a tick is taken back sends nothing until one is ticked", async () => {
+    await setGate(MID_RUN_TICKING_RENDERER_ID, "accountScope", { type: "object" });
+    const view = await renderPanel();
+
+    await view.findByRole("checkbox", { name: "View one" });
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(productContinue()!.disabled).toBe(false));
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(productContinue()!.disabled).toBe(true));
+    fireEvent.click(productContinue()!);
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    fireEvent.click(view.getByRole("checkbox", { name: "View two" }));
+    await waitFor(() => expect(productContinue()!.disabled).toBe(false));
+    fireEvent.click(productContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(payload).toMatchObject({ type: "list", listIds: ["two"], listNames: ["View two"] });
+  });
+
+  it("a report belongs to its own gate: the next gate, whose renderer reports nothing, is not held", async () => {
+    await setGate(TICKING_RENDERER_ID, "accountScope", { type: "string" });
+    const view = await renderMovablePanel();
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinue()!.disabled).toBe(true));
+    await view.moveTo(CONTROL_LESS_RENDERER_ID, "callToAction", { type: "string" });
+    await waitFor(() => expect(document.querySelector("#field-callToAction")).not.toBeNull());
+    expect(productContinue()!.disabled).toBe(false);
+  });
+
+  it("a report leaves with its renderer: one that takes its place on the same gate and reports nothing is not held", async () => {
+    await setGate(TICKING_RENDERER_ID, "accountScope", { type: "string" });
+    const view = await renderMovablePanel();
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinue()!.disabled).toBe(true));
+    replaceTickingRenderer(TICKING_RENDERER_ID, QuietTickedRenderer);
+    await view.moveTo(TICKING_RENDERER_ID, "accountScope", { type: "string" });
+
+    await waitFor(() =>
+      expect((view.getByRole("checkbox", { name: "View one" }) as HTMLInputElement).checked).toBe(true),
+    );
+    await waitFor(() => expect(productContinue()!.disabled).toBe(false));
+  });
+
+  it("a gate drawn again, ticked, by a renderer that reports nothing is not held by the report made before", async () => {
+    await setGate(TICKING_RENDERER_ID, "accountScope", { type: "string" });
+    const view = await renderMovablePanel();
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinue()!.disabled).toBe(true));
+    await view.moveTo(CONTROL_LESS_RENDERER_ID, "callToAction", { type: "string" });
+    await waitFor(() => expect(document.querySelector("#field-callToAction")).not.toBeNull());
+    replaceTickingRenderer(TICKING_RENDERER_ID, QuietTickedRenderer);
+    await view.moveTo(TICKING_RENDERER_ID, "accountScope", { type: "string" });
+
+    await waitFor(() =>
+      expect((view.getByRole("checkbox", { name: "View one" }) as HTMLInputElement).checked).toBe(true),
+    );
+    await waitFor(() => expect(productContinue()!.disabled).toBe(false));
   });
 });

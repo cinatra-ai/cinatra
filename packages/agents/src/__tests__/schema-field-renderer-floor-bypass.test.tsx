@@ -20,8 +20,8 @@
  * (empty) + overridden per-test, so the suite runs in a partial worktree and CI.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { ComponentType } from "react";
-import { render, cleanup, waitFor } from "@testing-library/react";
+import { useEffect, useState, type ComponentType } from "react";
+import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import {
   fieldRendererRegistry,
   type FieldRendererProps,
@@ -144,5 +144,53 @@ describe("SchemaOnlyFloorRenderer — true registry-bypass floor (no heuristic r
     // The bypass floor never consulted the registry, so it could not re-resolve
     // the gmail-sender heuristic and recurse into the wrapper.
     expect(resolveSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("ExtensionFieldRenderer — a crashed component's validity report goes with it (cinatra#3562)", () => {
+  const BINDING_ID = "@cinatra-test/pack-agent:ticking";
+
+  /** Reports nothing ticked, and throws while rendering once "Break" is pressed. */
+  function ReportsThenThrows({ onValidityChange }: FieldRendererProps) {
+    const [broken, setBroken] = useState(false);
+    useEffect(() => {
+      onValidityChange?.(false);
+    }, [onValidityChange]);
+    if (broken) throw new Error("render crash");
+    return (
+      <button type="button" onClick={() => setBroken(true)}>
+        Break
+      </button>
+    );
+  }
+
+  it("reports true when the floor replaces the crashed component, which reported false", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    __setFieldRendererComponentMapForTests({
+      [BINDING_ID]: {
+        resolution: "guardedOptional",
+        packageName: "@cinatra-test/pack-agent",
+        propsApiVersion: 1,
+        load: async () => ({ default: ReportsThenThrows }),
+      },
+    });
+    const Wrapper = makeExtensionFieldRenderer(BINDING_ID);
+    const onValidityChange = vi.fn();
+    const view = render(
+      <Wrapper
+        {...senderProps()}
+        fieldName="accountScope"
+        context={{ connectedApps: [] } as unknown as FieldRendererProps["context"]}
+        onValidityChange={onValidityChange}
+      />,
+    );
+
+    await view.findByRole("button", { name: "Break" });
+    await waitFor(() => expect(onValidityChange).toHaveBeenLastCalledWith(false));
+    fireEvent.click(view.getByRole("button", { name: "Break" }));
+
+    await waitFor(() => expect(view.container.querySelector("#field-accountScope")).toBeTruthy());
+    expect(view.queryByRole("button", { name: "Break" })).toBeNull();
+    expect(onValidityChange).toHaveBeenLastCalledWith(true);
   });
 });

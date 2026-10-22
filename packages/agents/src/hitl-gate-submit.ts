@@ -533,3 +533,55 @@ export function applyAttachmentEnvelopeUserResponseOnly(
   const wrapped = wrapUserResponseWithAttachments(existing, attachments);
   return { ...payload, userResponse: wrapped.userResponse };
 }
+
+// ---------------------------------------------------------------------------
+// The renderer's own reading of its value (cinatra#3562)
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a run surface keeps what its field renderer reported through
+ * `onValidityChange`: the latest report, keyed by the gate it was made on.
+ * While the last report for the gate on screen is `false`, the Continue drawn
+ * for that gate is unavailable and a press sends nothing.
+ *
+ * A report lives exactly as long as the renderer that made it. Each surface
+ * releases it when that renderer leaves the screen or another renderer takes
+ * its place on the same gate, so a renderer that never reports blocks nothing
+ * (cinatra#3532) even where an earlier one reported `false`. React runs every
+ * effect cleanup of a commit before any effect of it starts, so the release
+ * comes before the next renderer's first report.
+ */
+export type GateValidityStore = {
+  /** The renderer on gate `key` reports whether its value may be sent. */
+  report: (key: string, valid: boolean) => void;
+  /** The reporting renderer is gone: nothing is held any more. */
+  release: () => void;
+  /** True only while the latest report is `false` and was made on `key`. */
+  isHeld: (key: string | null) => boolean;
+  subscribe: (listener: () => void) => () => void;
+};
+
+export function createGateValidityStore(): GateValidityStore {
+  let latest: { key: string; valid: boolean } | null = null;
+  const listeners = new Set<() => void>();
+  const write = (next: { key: string; valid: boolean } | null) => {
+    latest = next;
+    for (const listener of listeners) listener();
+  };
+  return {
+    report: (key, valid) => {
+      if (latest !== null && latest.key === key && latest.valid === valid) return;
+      write({ key, valid });
+    },
+    release: () => {
+      if (latest !== null) write(null);
+    },
+    isHeld: (key) => key !== null && latest !== null && latest.key === key && !latest.valid,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+}
