@@ -265,7 +265,7 @@ floor for every record either way.
 The manifest binding reads **proof fields only**: per row, per proof kind of the
 acceptance gate's `PROOF_KINDS`, each entry's `file` and `testName`. A note,
 `priorNote`, `gap`, `ruling` or proof-entry note that quotes a cell name is no
-citation. A shape the binding cannot read (rows not an array, a row or entry
+citation. A shape the binding cannot read (a manifest without `rows`, rows not an array, a row or entry
 that is not an object, a proof kind not an array, an unknown `*proofs` key) is
 refused and the CLI exits 2, never skipped.
 
