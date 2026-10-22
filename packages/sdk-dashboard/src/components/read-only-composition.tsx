@@ -42,10 +42,13 @@
 // THE NO-SERIES ROAD (cinatra#3092). A reading that holds no series still draws
 // the dashboard's chrome, titles and layout, with no numbers. Road `none` mounts
 // the same providers over a query client on which no query reaches the cube
-// client: every query is born settled with an EMPTY answer, so the grid lays the
-// portlets out by the configuration's own `grid`, `layoutMode` and `rows`, each
-// portlet settles to its empty state, and nothing is fetched and no address is
-// read.
+// client: a query of a family the road knows (a `cube` key of the family
+// `load`, `multiLoad`, `funnel`, `flow`, `retention` or `meta`) is born settled
+// with its EMPTY answer, so the grid lays the portlets out by the
+// configuration's own `grid`, `layoutMode` and `rows`, each portlet settles to
+// its empty state, and nothing is fetched and no address is read. A query of
+// any other key holds no answer, stays off and, if it is fetched, settles with
+// an error.
 //
 // ONLY THE TWO NAMED ROADS. The road is read by equality against `"none"` and
 // `"session"` and nothing else. Any other value — a missing or malformed road, a
@@ -221,23 +224,29 @@ function sameOriginHref(apiUrl: string, pageOrigin: string | null): string | und
  * the session road then carries that resolved href, never the value as given.
  * While the page's origin is pending (the server, and the client's hydrating
  * render), a session road whose address is shaped like one reads as pending.
- * Everything else is refused — the composition does not guess which road a
- * value it cannot read meant, and never sends the reader's session to another
- * origin.
+ * Everything else is refused, and so is a value whose read throws — the
+ * composition does not guess which road a value it cannot read meant, and
+ * never sends the reader's session to another origin.
  */
 function readDataRoad(dataRoad: unknown, pageOrigin: PageOrigin): ReadDataRoad {
-  if (typeof dataRoad !== "object" || dataRoad === null || Array.isArray(dataRoad)) return REFUSED;
-  const road = ownValue(dataRoad, "road");
-  if (road === "none") return { road: "none" };
-  if (road === "session") {
-    const apiUrl = ownValue(dataRoad, "apiUrl");
-    if (typeof apiUrl === "string" && isAddressShaped(apiUrl)) {
-      if (pageOrigin === undefined) return PENDING;
-      const href = sameOriginHref(apiUrl, pageOrigin);
-      if (href !== undefined) return { road: "session", apiUrl: href };
+  // Every read of the value sits inside this guard, so a read that throws is
+  // the refusal: a revoked Proxy throws even for `Array.isArray`.
+  try {
+    if (typeof dataRoad !== "object" || dataRoad === null || Array.isArray(dataRoad)) return REFUSED;
+    const road = ownValue(dataRoad, "road");
+    if (road === "none") return { road: "none" };
+    if (road === "session") {
+      const apiUrl = ownValue(dataRoad, "apiUrl");
+      if (typeof apiUrl === "string" && isAddressShaped(apiUrl)) {
+        if (pageOrigin === undefined) return PENDING;
+        const href = sameOriginHref(apiUrl, pageOrigin);
+        if (href !== undefined) return { road: "session", apiUrl: href };
+      }
     }
+    return REFUSED;
+  } catch {
+    return REFUSED;
   }
-  return REFUSED;
 }
 
 /** The pending placeholder: no provider, no address, no refusal, no text. The
@@ -315,10 +324,12 @@ function refuseUnknownQuery(): Promise<never> {
  * of the grid passes through is the query client the provider is given
  * (`queryClient`): each portlet's series, the cube metadata and a portlet's
  * refresh, including the `fetchQuery` a cache-busting refresh calls. On this
- * client every query is off, is born holding its family's empty answer
- * (`initialData`), and its function answers that same empty answer at once — so
- * no query reaches the cube client, the road fetches nothing, and every portlet
- * settles to its empty state instead of loading forever.
+ * client every query is off. A query of a family `emptyAnswerFor` names is born
+ * holding that family's empty answer (`initialData`), and its function answers
+ * that same empty answer at once; any other query holds no answer and its
+ * function rejects. So no query reaches the cube client, the road fetches
+ * nothing, and every portlet settles to its empty state instead of loading
+ * forever.
  */
 class NoSeriesQueryClient extends QueryClient {
   override defaultQueryOptions<

@@ -18,9 +18,11 @@
 import "./jsdom-shims";
 import React from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { ReadOnlyComposedDashboard } from "@cinatra-ai/sdk-dashboard/components";
+
+import { CONFIGURED, CONFIGURED_PORTLETS } from "./read-only-composition-road-fixtures";
 
 // Typed loosely so this file reads the same before the road admits `none`.
 const Dashboard = ReadOnlyComposedDashboard as unknown as (p: Record<string, unknown>) => React.JSX.Element;
@@ -90,15 +92,25 @@ function heightsOf(container: HTMLElement, selector: string): string[] {
 }
 
 describe("the no-series road lays the dashboard out with the real grid and fetches nothing (cinatra#3092)", () => {
-  test("(n1) draws every portlet's title and makes no network call, even when a portlet is refreshed", async () => {
-    render(<Dashboard config={gridConfig(80)} dataRoad={NONE} />);
+  test("(n1) draws every portlet's title and makes no network call, even when each portlet is refreshed", async () => {
+    // CONFIGURED portlets each draw a refresh control, so the refresh is read:
+    // the test fails if there is none to click.
+    render(<Dashboard config={CONFIGURED} dataRoad={NONE} />);
     await settle();
-    for (const title of ["Portlet one", "Portlet two", "Portlet three"]) {
-      expect(screen.getByText(title)).toBeTruthy();
+    for (const portlet of CONFIGURED_PORTLETS) {
+      expect(screen.getByText(portlet.title)).toBeTruthy();
     }
-    for (const refresh of screen.queryAllByTitle(/^Refresh portlet data/)) {
-      fireEvent.click(refresh);
-    }
+    const refreshes = await waitFor(
+      () => {
+        const found = screen.getAllByTitle(/^Refresh portlet data/);
+        expect(found).toHaveLength(CONFIGURED_PORTLETS.length);
+        return found;
+      },
+      { timeout: 15_000 },
+    );
+    for (const refresh of refreshes) fireEvent.click(refresh);
+    await settle();
+    for (const refresh of refreshes) fireEvent.click(refresh, { shiftKey: true });
     await settle();
     expect(fetched).toEqual([]);
   });

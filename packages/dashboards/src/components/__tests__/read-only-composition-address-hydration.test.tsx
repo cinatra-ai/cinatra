@@ -9,7 +9,8 @@
 // client drew the provider is a hydration mismatch.
 //
 // Also here: on the client, a page with no usable origin (opaque, empty, no
-// location, a location read that throws) still refuses the session road.
+// location, a location read that throws, no window at all) still refuses the
+// session road.
 //
 // The server render runs with the window removed (`typeof window` is
 // "undefined", as on a server) and is then hydrated into jsdom with
@@ -196,6 +197,37 @@ describe("the server's markup of the session road hydrates without a mismatch, t
   });
 });
 
+/**
+ * Runs `run` with `window` absent for the composition's client snapshot read
+ * alone: inside `readPageOrigin`, `typeof window` is "undefined", as on a client
+ * with no window; React and jsdom keep jsdom's own window, which React's own
+ * scheduling reads. Returns how many reads it answered with no window.
+ */
+function withoutWindowForTheOriginRead(run: () => void): number {
+  const scope = globalThis as unknown as Record<string, unknown>;
+  const own = Object.getOwnPropertyDescriptor(scope, "window");
+  if (own === undefined || own.configurable !== true) throw new Error("the window cannot be hidden here");
+  const real = scope.window;
+  let hidden = 0;
+  Object.defineProperty(scope, "window", {
+    configurable: true,
+    enumerable: own.enumerable,
+    get() {
+      if ((new Error().stack ?? "").includes("readPageOrigin")) {
+        hidden += 1;
+        return undefined;
+      }
+      return real;
+    },
+  });
+  try {
+    run();
+  } finally {
+    Object.defineProperty(scope, "window", own);
+  }
+  return hidden;
+}
+
 describe("on the client, a page with no usable origin refuses the session road (#4118)", () => {
   // Each stand-in replaces only what `window` names; the document React renders
   // into is jsdom's own.
@@ -216,6 +248,16 @@ describe("on the client, a page with no usable origin refuses the session road (
   test.each(NO_ORIGIN)("(a1) %s: a root-relative path is refused and reaches no provider", (_name, stand) => {
     vi.stubGlobal("window", stand());
     render(<Dashboard config={CONFIG} dataRoad={{ road: "session", apiUrl: API }} />);
+    expectRefusedOnClient();
+  });
+
+  test("(a3) a client render with no window at all: a root-relative path is refused and reaches no provider", () => {
+    const hidden = withoutWindowForTheOriginRead(() => {
+      render(<Dashboard config={CONFIG} dataRoad={{ road: "session", apiUrl: API }} />);
+    });
+    // The client snapshot read saw no window, on every read React made of it.
+    expect(hidden).toBeGreaterThan(0);
+    expect(typeof window).not.toBe("undefined");
     expectRefusedOnClient();
   });
 

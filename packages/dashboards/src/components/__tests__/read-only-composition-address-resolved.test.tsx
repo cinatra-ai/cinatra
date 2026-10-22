@@ -8,8 +8,9 @@
 // another origin moves. Each test reads both the verdict (admitted or refused)
 // and the address that reaches the provider.
 //
-// Also here: the fail-closed own-property read when the read itself throws, and
-// the settled answers the no-series road's query client gives each query family.
+// Also here: the fail-closed own-property read when the read itself throws, a
+// revoked Proxy as the road, the session road on an https page, and the settled
+// answers the no-series road's query client gives each query family and key.
 //
 // `drizzle-cube/client` is substituted by the same RECORDING module as
 // read-only-composition-unknown-road-providers.test.tsx.
@@ -59,6 +60,7 @@ import {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   rec.cube.length = 0;
   rec.dashboard.length = 0;
   for (const base of Array.from(document.querySelectorAll("base"))) base.remove();
@@ -192,6 +194,39 @@ describe("the session road hands the provider the address resolved against the p
   });
 });
 
+/** An https page: `window` names a stand-in whose only field is the page's
+ *  location; the document React renders into is jsdom's own. */
+const HTTPS_PAGE_ORIGIN = "https://app.example";
+
+function onHttpsPage() {
+  vi.stubGlobal("window", { location: { origin: HTTPS_PAGE_ORIGIN } });
+}
+
+/** Admitted on the https page: one session provider over exactly `href`, an
+ *  https address of that page's origin, and no refusal. */
+function expectAdmittedOnHttpsPage(href: string) {
+  expect(rec.cube).toHaveLength(1);
+  expect(rec.cube[0]?.apiOptions).toEqual({ apiUrl: href, credentials: "include" });
+  expect(new URL(href).protocol).toBe("https:");
+  expect(new URL(href).origin).toBe(HTTPS_PAGE_ORIGIN);
+  expect(rec.dashboard).toHaveLength(1);
+  expect(document.querySelectorAll(REFUSAL)).toHaveLength(0);
+}
+
+describe("on an https page the session road is admitted over https (#4118)", () => {
+  test("(r14) on an https page, a root-relative path reaches the provider as the https href of the page's own origin", () => {
+    onHttpsPage();
+    render(<Dashboard config={CONFIG} dataRoad={session(API)} />);
+    expectAdmittedOnHttpsPage(`${HTTPS_PAGE_ORIGIN}${API}`);
+  });
+
+  test("[guard] (r15) on an https page, an absolute https URL of the page's own origin is admitted and reaches the provider", () => {
+    onHttpsPage();
+    render(<Portlet config={CONFIG} portletId="p1" dataRoad={session(`${HTTPS_PAGE_ORIGIN}${API}`)} />);
+    expectAdmittedOnHttpsPage(`${HTTPS_PAGE_ORIGIN}${API}`);
+  });
+});
+
 /** A road whose own-property read throws for each key in `throwing`. */
 function throwingRoad(target: Record<string, unknown>, throwing: readonly string[], asked: string[]) {
   return new Proxy(target, {
@@ -201,6 +236,15 @@ function throwingRoad(target: Record<string, unknown>, throwing: readonly string
       return Reflect.getOwnPropertyDescriptor(t, key);
     },
   });
+}
+
+/** A road its caller revoked: every operation on it throws, `Array.isArray`
+ *  included, before any own-property read is reached. */
+function revokedRoad(): object {
+  const { proxy, revoke } = Proxy.revocable({ road: "session", apiUrl: API }, {});
+  revoke();
+  expect(() => Array.isArray(proxy)).toThrow();
+  return proxy;
 }
 
 describe("a road whose own-property read throws reads as absent (#4118, the ownValue throw path)", () => {
@@ -227,6 +271,16 @@ describe("a road whose own-property read throws reads as absent (#4118, the ownV
     expect(rec.cube[0]?.apiOptions).toEqual({ credentials: "omit" });
     expect(document.querySelectorAll(REFUSAL)).toHaveLength(0);
   });
+
+  test("(t4) a revoked Proxy as the dashboard's road is refused, and the render does not throw", () => {
+    render(<Dashboard config={CONFIG} dataRoad={revokedRoad()} />);
+    expectRefused();
+  });
+
+  test("(t5) a revoked Proxy as the single portlet's road is refused, and the render does not throw", () => {
+    render(<Portlet config={CONFIG} portletId="p1" dataRoad={revokedRoad()} />);
+    expectRefused();
+  });
 });
 
 /** The query client the no-series road hands its cube provider. */
@@ -251,6 +305,12 @@ const UNANSWERED: ReadonlyArray<readonly [string, readonly unknown[]]> = [
   ["a key outside the cube", ["other", "load"]],
 ];
 
+/** Keys that are not arrays: the road reads no family from them. */
+const NOT_ARRAY_KEYS: ReadonlyArray<readonly [string, unknown]> = [
+  ["(q4a) a query with no key", undefined],
+  ["(q4b) a query whose key is an array-like object, not an array", { 0: "cube", 1: "load", length: 2 }],
+];
+
 describe("the no-series road answers each query family settled and fetches nothing (#4118)", () => {
   test.each(SETTLED_ANSWERS)(
     "[guard] (q1) family %s is off, born with its empty answer, and answers it without the given query function",
@@ -261,7 +321,12 @@ describe("the no-series road answers each query family settled and fetches nothi
       expect(options.retry).toBe(false);
       expect(options.initialData).toEqual(answer);
       const given = vi.fn(() => Promise.resolve<unknown>("a request"));
-      await expect(client.fetchQuery({ queryKey: ["cube", family, "q2"], queryFn: given })).resolves.toEqual(answer);
+      // `staleTime: 0` makes the initial answer stale at once, so the fetch runs a
+      // query function instead of answering from the cache; only the road's own
+      // function may answer, and the given one is never called.
+      const key = ["cube", family, "q2"];
+      await expect(client.fetchQuery({ queryKey: key, queryFn: given, staleTime: 0 })).resolves.toEqual(answer);
+      expect(client.getQueryState(key)?.dataUpdateCount).toBe(1);
       expect(given).not.toHaveBeenCalled();
     },
   );
@@ -287,6 +352,18 @@ describe("the no-series road answers each query family settled and fetches nothi
         "The no-series road answers no such query.",
       );
       expect(given).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each(NOT_ARRAY_KEYS)(
+    "[guard] %s has no answer, stays off, and its query function rejects",
+    async (_name, queryKey) => {
+      const client = noSeriesQueryClient();
+      const options = client.defaultQueryOptions({ queryKey } as never);
+      expect(options.enabled).toBe(false);
+      expect(options.initialData).toBeUndefined();
+      const queryFn = options.queryFn as unknown as () => Promise<unknown>;
+      await expect(queryFn()).rejects.toThrow("The no-series road answers no such query.");
     },
   );
 });
