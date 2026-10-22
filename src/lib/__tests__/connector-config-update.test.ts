@@ -460,6 +460,12 @@ describe("connector-config update: the storable value is an allow-list of JSON k
         throw 0;
       },
     })],
+    ["a proxy whose then read throws", () => new Proxy({ note: SENTINEL }, {
+      get(target, name) {
+        if (name === "then") throw new Error(SENTINEL);
+        return Reflect.get(target, name);
+      },
+    })],
   ])("C1 the updater returns a value with %s: UPDATE_INVALID before any store call", (_label, updater) => {
     const h = makePort({ [KEY]: STORED_RAW });
     const error = caught(() => updateConnectorConfigVia(h.port, ID, updater as () => unknown, hasSecretFields));
