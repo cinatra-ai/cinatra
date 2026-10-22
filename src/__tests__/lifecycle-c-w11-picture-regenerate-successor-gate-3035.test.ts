@@ -133,3 +133,85 @@ describe("#3035 picture regeneration — only a witnessed leg of a declared revi
     expect(isDeclaredReviewLeg({ runId: RUN, orgId: "org-1", reviewTaskId: "lifecycle-review:evt-1", pinnedTargets: leg(FEATURED) })).toBe(false);
   });
 });
+
+describe("#3035 picture regeneration — the witness reader refuses every malformed pin (C2)", () => {
+  const plan = declaredReviewPlan({ runId: RUN, orgId: "org-1", reviewTaskId: STEP, targets: [POST, FEATURED] })!;
+  const leg2 = (pinnedTargets: unknown) =>
+    isDeclaredReviewLeg({ runId: RUN, orgId: "org-1", reviewTaskId: `${STEP}#2`, pinnedTargets });
+
+  it("refuses a gate that pins more than one target, even with the witness on each pin", () => {
+    expect(leg2([{ ...FEATURED, declaredReviewPlan: plan }, { ...POST, declaredReviewPlan: plan }])).toBe(false);
+    expect(leg2([{ ...FEATURED, declaredReviewPlan: plan }, { ...FEATURED, declaredReviewPlan: plan }])).toBe(false);
+  });
+
+  it("refuses pinned targets that are not an array of one valid pin", () => {
+    for (const pinned of [null, undefined, "art-img-featured", 7, { ...FEATURED, declaredReviewPlan: plan }, [],
+      [null], [{ artifactId: "art-img-featured", declaredReviewPlan: plan }], [{ ...FEATURED, artifactId: "", declaredReviewPlan: plan }]]) {
+      expect(leg2(pinned)).toBe(false);
+    }
+  });
+
+  it("refuses a witness with an extra key, a missing key or a reshaped leg", () => {
+    const { legs: _legs, ...noLegs } = plan;
+    const { orgId: _orgId, ...noOrg } = plan;
+    for (const witness of [
+      { ...plan, approvedBy: "reader-1" },
+      noLegs,
+      noOrg,
+      { ...plan, legs: [plan.legs[0]] },
+      { ...plan, legs: [...plan.legs, { reviewTaskId: `${STEP}#3`, targets: [REGENERATED] }] },
+      { ...plan, legs: plan.legs.map((l) => ({ ...l, note: "x" })) },
+      { ...plan, legs: plan.legs.map((l) => ({ ...l, targets: [{ ...l.targets[0], extra: true }] })) },
+      { ...plan, legs: [plan.legs[1], plan.legs[0]] },
+      { ...plan, baseTaskId: `${STEP}#2` },
+      null,
+      "witness",
+    ]) {
+      expect(leg2([{ ...FEATURED, declaredReviewPlan: witness }])).toBe(false);
+    }
+  });
+});
+
+describe("#3035 picture regeneration — the decision action on a declared gate (C2)", () => {
+  it("keeps the plain comment when the store refuses the gate as no lifecycle gate", async () => {
+    p.changes.mockResolvedValueOnce({ ok: false, code: "not-a-lifecycle-gate", error: "not a lifecycle review gate" });
+    const outcome = await submitReviewDecisionAction(RUN, `${STEP}#2`, "comment", "Make the sky darker");
+
+    expect(p.changes).toHaveBeenCalledTimes(1);
+    expect(p.decision).toHaveBeenCalledTimes(1);
+    expect(p.decision.mock.calls[0][0].decision).toMatchObject({
+      runId: RUN, reviewTaskId: `${STEP}#2`, disposition: "comment", comment: "Make the sky darker", reviewedTargets: [FEATURED],
+    });
+    expect(outcome).toEqual({ kind: "annotated" });
+    expect(pending().map((g) => g.reviewTaskId)).toEqual([STEP, `${STEP}#2`]);
+  });
+
+  it("blocks without a plain comment when the store refuses the declared gate for another reason", async () => {
+    p.changes.mockResolvedValueOnce({ ok: false, code: "gate-not-pending", error: "the review gate is no longer available" });
+    const outcome = await submitReviewDecisionAction(RUN, `${STEP}#2`, "comment", "Make the sky darker");
+
+    expect(outcome).toEqual({ kind: "blocked", reason: "no-longer-pending" });
+    expect(p.decision).not.toHaveBeenCalled();
+  });
+
+  it("sends an empty or blank note on a declared gate down the plain comment, never the repair road", async () => {
+    for (const note of ["", "   ", null]) {
+      await submitReviewDecisionAction(RUN, `${STEP}#2`, "comment", note);
+    }
+    expect(p.changes).not.toHaveBeenCalled();
+    expect(p.decision).toHaveBeenCalledTimes(3);
+    expect(pending().map((g) => g.reviewTaskId)).toEqual([STEP, `${STEP}#2`]);
+  });
+
+  it("sends a note on the post's own leg down the repair road too, and leaves the picture's leg as it was", async () => {
+    const before = structuredClone(gate(`${STEP}#2`));
+    const outcome = await submitReviewDecisionAction(RUN, STEP, "comment", "Tighten the intro");
+
+    expect(outcome).toEqual({ kind: "changes-requested", status: "requested", idempotent: false });
+    expect(p.changes).toHaveBeenCalledTimes(1);
+    expect(p.changes.mock.calls[0][0]).toMatchObject({ runId: RUN, reviewTaskId: STEP, baseTarget: POST, feedback: "Tighten the intro" });
+    expect(p.decision).not.toHaveBeenCalled();
+    expect(gate(STEP)).toMatchObject({ status: "resolved", disposition: "changes_requested" });
+    expect(gate(`${STEP}#2`)).toEqual(before);
+  });
+});
