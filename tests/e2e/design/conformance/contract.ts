@@ -123,6 +123,7 @@ import {
   type RecurrenceFieldName,
   type SchedulingRecurrenceSurfaceId,
 } from "../../../../src/app/design-fixtures/conformance/scheduling-recurrence-fixture-data";
+import { recurrenceSourceCollisions, undeclaredFieldNames } from "./scheduling-recurrence-sentinels";
 import {
   RUN_STEP_RAIL_ROWS,
   SHIPPED_RAIL_ACTION,
@@ -2457,8 +2458,13 @@ const SCHEDULING_STEP_CONFIGURED_DRIVER: SurfaceDriver = {
  *
  * A segment (Start / End, Day / Weekday) carries the name on both halves; the
  * pressed half is the value. A select carries it on its one trigger, which
- * reads the value. The surface also draws no recurrence field it does not
- * declare.
+ * reads the value.
+ *
+ * `present` also refuses two things a value check cannot see
+ * (scheduling-recurrence-sentinels.ts): any rendered `data-field` under the
+ * root outside the surface's declared set, whatever its name, and a reading
+ * whose selection holds one value in two fields, where a field bound to the
+ * wrong source would still draw the expected word.
  */
 function recurrenceSelectorsDriver(surfaceId: SchedulingRecurrenceSurfaceId): SurfaceDriver {
   const reading = schedulingRecurrenceReading(surfaceId);
@@ -2489,10 +2495,18 @@ function recurrenceSelectorsDriver(surfaceId: SchedulingRecurrenceSurfaceId): Su
     present: async (_page, root) => {
       await expect(root).toBeVisible();
       await expect(root.locator(`[data-field="${declared[0]}"]`).first()).toBeVisible();
-      for (const name of Object.keys(RECURRENCE_FIELD_SOURCE) as RecurrenceFieldName[]) {
-        if (declared.includes(name)) continue;
-        await expect(root.locator(`[data-field="${name}"]`), `${surfaceId} draws "${name}"`).toHaveCount(0);
-      }
+      const rendered = await root
+        .locator("[data-field]")
+        .evaluateAll((elements) => elements.map((element) => element.getAttribute("data-field")));
+      expect(rendered.length, `${surfaceId}: the root draws its fields`).toBeGreaterThan(0);
+      expect(
+        undeclaredFieldNames(rendered, declared),
+        `${surfaceId}: every rendered data-field is one the surface declares`,
+      ).toEqual([]);
+      expect(
+        recurrenceSourceCollisions(reading.selection, Object.values(RECURRENCE_FIELD_SOURCE)),
+        `${surfaceId}: every source field of the reading holds its own value`,
+      ).toEqual([]);
     },
     fields,
     actions: {},

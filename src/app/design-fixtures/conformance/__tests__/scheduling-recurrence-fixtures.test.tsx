@@ -5,7 +5,9 @@
 // recurrence fields the pinned manifest declares for it, under the bare names
 // the shipped RecurrenceFrequencySelectors writes, and each field reads the
 // value of the drawing. The browser reading of the same four is
-// tests/e2e/design/conformance/contract.ts (recurrenceSelectorsDriver).
+// tests/e2e/design/conformance/contract.ts (recurrenceSelectorsDriver). Both
+// refuse a rendered data-field outside the declared set, whatever its name,
+// and a reading whose fields share a value (scheduling-recurrence-sentinels.ts).
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -21,6 +23,10 @@ import {
   type RecurrenceFieldName,
   type SchedulingRecurrenceReading,
 } from "../scheduling-recurrence-fixture-data";
+import {
+  recurrenceSourceCollisions,
+  undeclaredFieldNames,
+} from "../../../../../tests/e2e/design/conformance/scheduling-recurrence-sentinels";
 
 type ManifestSurface = { id: string; fields: Array<{ field: string; source: string }>; actions: unknown[]; states: unknown[] };
 
@@ -101,8 +107,57 @@ describe("the scheduling step's recurrence mounts on the conformance harness (de
         expect(drawn).toHaveLength(RECURRENCE_FIELD_CONTROL[name] === "segment" ? 2 : 1);
         await waitFor(() => expect(valueOf(mount, name).map((el) => el.textContent)).toEqual([expected]));
       }
+      const rendered = Array.from(mount.querySelectorAll("[data-field]"), (el) => el.getAttribute("data-field"));
+      expect(rendered.length).toBeGreaterThan(0);
+      expect(
+        undeclaredFieldNames(rendered, Object.keys(row.drawn)),
+        `${surfaceId}: every rendered data-field is one the surface declares`,
+      ).toEqual([]);
     },
   );
+
+  it.each(SCHEDULING_RECURRENCE_READINGS.map((row): [string, SchedulingRecurrenceReading] => [row.surfaceId, row]))(
+    "binds %s to distinct sentinels: no two fields of its selection share a value",
+    (_surfaceId, row) => {
+      expect(recurrenceSourceCollisions(row.selection, Object.values(RECURRENCE_FIELD_SOURCE))).toEqual([]);
+    },
+  );
+
+  it("refuses a selection that cannot tell its sources apart, and passes one that can", () => {
+    const sources = Object.values(RECURRENCE_FIELD_SOURCE);
+    const distinct = { frequency: "yearly", quarterAnchor: "start", monthlyMode: "weekday", dayOfMonth: 9, nthWeek: 4, monthlyWeekday: 2, yearlyMonth: 3 };
+    expect(recurrenceSourceCollisions(distinct, sources)).toEqual([]);
+    // The yearly reading before the sentinels: the week and the weekday both 2.
+    expect(recurrenceSourceCollisions({ ...distinct, nthWeek: 2 }, sources)).toEqual([
+      'selection.nthWeek and selection.monthlyWeekday share the value "2"',
+    ]);
+    // An undrawn field counts too, and a number and its text are one value.
+    expect(recurrenceSourceCollisions({ ...distinct, dayOfMonth: "3" }, sources)).toEqual([
+      'selection.dayOfMonth and selection.yearlyMonth share the value "3"',
+    ]);
+    const missing: Record<string, unknown> = { ...distinct };
+    Reflect.deleteProperty(missing, "yearlyMonth");
+    expect(recurrenceSourceCollisions(missing, sources)).toEqual(["selection.yearlyMonth is not a field of the selection"]);
+    expect(recurrenceSourceCollisions(distinct, ["yearlyMonth"])).toEqual(["yearlyMonth is not a field of the selection"]);
+    expect(recurrenceSourceCollisions(distinct, ["selection.toString"])).toEqual([
+      "selection.toString is not a field of the selection",
+    ]);
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, "", null, undefined, true, {}]) {
+      expect(recurrenceSourceCollisions({ ...distinct, nthWeek: bad }, sources)).toEqual([
+        "selection.nthWeek holds no finite number or non-empty string",
+      ]);
+    }
+  });
+
+  it("names every rendered data-field outside the declared set, whatever its name", () => {
+    const declared = ["recurring-monthly-mode", "recurring-day-of-month"];
+    expect(undeclaredFieldNames(["recurring-monthly-mode", "recurring-monthly-mode", "recurring-day-of-month"], declared)).toEqual([]);
+    expect(undeclaredFieldNames(["recurring-monthly-mode", "recurring-timezone", "recurring-timezone"], declared)).toEqual([
+      "recurring-timezone",
+    ]);
+    expect(undeclaredFieldNames(["Recurring-Monthly-Mode", "", null], declared)).toEqual(["", "Recurring-Monthly-Mode"]);
+    expect(undeclaredFieldNames([], declared)).toEqual([]);
+  });
 
   it("draws a stated day of month past 28 as 31, never blank", async () => {
     const { container } = render(<SchedulingRecurrenceConformanceFixtures />);
