@@ -3003,10 +3003,12 @@ function kindDisplayKindState(surface: string, kind: string): StateAssert {
  *     all."
  *   - §XI: "Where a display divides one artifact into readings, they are the
  *     design system's tabs … never a toggle and never a segmented control."
- *   - the one field the manifest binds, addressed through the binding the
+ *   - every field the manifest binds, addressed through the binding the
  *     display names on itself — the `data-field="<name>=<source>"` convention the
  *     shipped review target already carries — so a display bound to the wrong
- *     source cannot resolve the locator at all.
+ *     source cannot resolve the locator at all. A field the drawing binds only
+ *     once the review is continued is read on the continued mount, and its
+ *     absence on the open one (`continuedOnlyField`).
  *   - the one action the manifest declares, pressed on the control that declares
  *     exactly that action AND that outcome (`declaredAction`), so a driver
  *     cannot press one control and report another one's outcome.
@@ -3037,17 +3039,18 @@ function artifactKindDisplayDriver(row: ArtifactKindDisplay): SurfaceDriver {
     states: {},
   };
 
-  const field = row.field;
-  if (field !== null) {
+  for (const field of row.fields) {
+    const binding = `[data-field="${field.name}=${field.source}"]`;
     driver.fields[field.name] = {
       source: field.source,
-      assert: async (_page, root) => {
-        const bound = kindDisplayPanel(root, row.surface).locator(
-          `[data-field="${field.name}=${field.source}"]`,
-        );
-        await expect(bound).toHaveCount(1);
-        await expect(bound).toBeVisible();
-      },
+      assert:
+        field.reading === "continued"
+          ? continuedOnlyField(row.surface, binding)
+          : async (_page, root) => {
+              const bound = kindDisplayPanel(root, row.surface).locator(binding);
+              await expect(bound).toHaveCount(1);
+              await expect(bound).toBeVisible();
+            },
     };
   }
 
@@ -3063,6 +3066,31 @@ function artifactKindDisplayDriver(row: ArtifactKindDisplay): SurfaceDriver {
   }
 
   return driver;
+}
+
+/**
+ * A field the drawing binds only in the continued reading. §XI.5 and §XI.6 draw
+ * "Open live dashboard" (open-live = artifact.sourceUrl) only once the review
+ * is continued: "while a decision is still open the proposal is not the live
+ * dashboard, so the display offers no way to open one". So the binding is
+ * asserted ABSENT on the open reading, which must itself be drawn (on a missing
+ * mount a zero count proves nothing), and PRESENT once on the settled mount.
+ */
+function continuedOnlyField(
+  surface: string,
+  binding: string,
+): (page: Page, root: Locator) => Promise<void> {
+  return async (page, root) => {
+    await expect(page.locator(kindDisplayMount(surface, "populated"))).toHaveCount(1);
+    await expect(kindDisplayPanel(root, surface)).toBeVisible();
+    await expect(kindDisplayPanel(root, surface).locator(binding)).toHaveCount(0);
+    const settled = page.locator(kindDisplayMount(surface, "continued"));
+    await expect(settled).toHaveCount(1);
+    await expect(settled.locator('[data-conformance-id="settled-marker"]')).toBeVisible();
+    const bound = kindDisplayPanel(settled, surface).locator(binding);
+    await expect(bound).toHaveCount(1);
+    await expect(bound).toBeVisible();
+  };
 }
 
 /** Assert the display draws no tab strip at all — a surface the drawing gives
@@ -3530,10 +3558,11 @@ const RUN_STEP_KIND_ASSERT: Record<RunStepKind, (row: RunStepRailRow) => RunStep
     }
   },
 
-  // Section I.1 — "one row per stored idea no draft has used ... the idea's
-  // first line as its title over the idea's own text", with "Generate new ideas"
-  // and the primary Continue over a hairline floor, and "Nothing is selected for
-  // them".
+  // Section I.1 — "one row per entry the agent's declared list offers ... each
+  // row carrying the title the declaration binds over the entry's own detail
+  // line", and "Nothing is selected for them". Under the rows sits the primary
+  // Continue "and nothing else, because the host draws one control on a gate
+  // page" — so the host draws no Generate new ideas of its own.
   idea: (row) => async (_page, root) => {
     const panel = runStepPanel(root, row.surface);
     const rows = panel.locator('[data-conformance-id="run-idea-row"]');
@@ -3541,7 +3570,7 @@ const RUN_STEP_KIND_ASSERT: Record<RunStepKind, (row: RunStepRailRow) => RunStep
     await expect(panel.locator('[data-conformance-id="run-idea-row"][aria-selected="true"]')).toHaveCount(0);
     await expect(
       panel.locator('[data-action="generate-ideas -> ideas-stored"]'),
-    ).toBeVisible();
+    ).toHaveCount(0);
   },
 
   // Section I.2 — "Every row carries the artifact's title, the type that owns
