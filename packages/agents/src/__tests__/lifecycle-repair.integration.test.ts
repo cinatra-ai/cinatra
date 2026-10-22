@@ -37,9 +37,11 @@ import {
 import {
   autoReviewTaskId,
   batchPartitionReviewTaskId,
+  isAutoReviewTaskId,
   isBatchAutoReviewTaskId,
   repairSuccessorReviewTaskId,
 } from "@/lib/lifecycle/lifecycle-orchestration";
+import { declaredReviewFamilyState } from "@/lib/artifacts/artifact-review-target";
 import { partitionBatchTargets, type BatchTarget } from "@/lib/lifecycle/lifecycle-batch";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
 import type { ChangesRequestedRequest } from "@/lib/lifecycle/lifecycle-repair";
@@ -57,6 +59,7 @@ let orch: typeof import("../lifecycle-review-orchestration-store");
 let repairStore: typeof import("../lifecycle-repair-store");
 let recoveryStore: typeof import("../lifecycle-repair-recovery-store");
 let crStore: typeof import("../lifecycle-review-changes-requested-store");
+let holdStore: typeof import("../run-produced-review-hold");
 let dbMod: typeof import("../db");
 
 async function pool(text: string, values: unknown[] = []) {
@@ -178,6 +181,7 @@ beforeAll(async () => {
   repairStore = await import("../lifecycle-repair-store");
   recoveryStore = await import("../lifecycle-repair-recovery-store");
   crStore = await import("../lifecycle-review-changes-requested-store");
+  holdStore = await import("../run-produced-review-hold");
   dbMod = await import("../db");
 }, 90_000);
 
@@ -1155,5 +1159,159 @@ describe.skipIf(!HAS_DB)("cinatra#2040 — repair loop (real store)", () => {
     const closed = await gateStore.readReviewGate(ev.producerRunId!, baseTaskId);
     expect(closed!.status).toBe("resolved");
     expect(closed!.resolvedBy).toBeNull();
+  });
+});
+
+// cinatra#4312 — Regenerate on the featured image's leg of a per-artifact DECLARED
+// review (cinatra#3035 W11). The family comes from the real emitDeclaredReviewGateFamily
+// (the witness on every pin), the note goes through the real store entry point, and
+// the producer's repair mints the successor. The resume readings are the delivery
+// worker's own inputs (artifact-review-resume-delivery.ts): the family state it
+// branches on for a `wayflow-` intent, and releaseHeldRun for an automatic gate's
+// intent. No WayFlow resume is sent here.
+describe.skipIf(!HAS_DB)("cinatra#4312 — Regenerate on a declared review leg (real store)", () => {
+  type Pin = { artifactId: string; representationRevisionId: string };
+  type Family = { runId: string; step: string; leg2: string; post: Pin; picture: Pin };
+
+  async function declaredFamily(): Promise<Family> {
+    const runId = `run-blog-${randomUUID()}`;
+    await seedRepairCapableProducer(runId);
+    // The blog pipeline's run, paused at its marked review step.
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status='pending_approval' WHERE id=$1`, [runId]);
+    const post = { artifactId: `art-post-${randomUUID()}`, representationRevisionId: `rev-post-${randomUUID()}` };
+    const picture = { artifactId: `art-img-${randomUUID()}`, representationRevisionId: `rev-img-${randomUUID()}` };
+    await insertObject(post.artifactId, "document");
+    await insertObject(picture.artifactId, "image");
+    const step = `wayflow-task-${randomUUID()}`;
+    await gateStore.emitDeclaredReviewGateFamily({ runId, orgId: ORG, reviewTaskId: step, targets: [post, picture] });
+    return { runId, step, leg2: `${step}#2`, post, picture };
+  }
+
+  async function regenerate(f: Family) {
+    const cr = await crStore.recordReviewSurfaceChangesRequested({
+      runId: f.runId,
+      reviewTaskId: f.leg2,
+      baseTarget: f.picture,
+      currentBaseRevisionId: f.picture.representationRevisionId,
+      feedback: "Make the sky darker",
+    });
+    expect(cr).toMatchObject({ ok: true, status: "requested", idempotent: false });
+    if (!cr.ok) throw new Error(`changes_requested refused: ${cr.code}`);
+    expect(cr.route.kind).toBe("producer_repair");
+    const leg = await gateStore.readReviewGate(f.runId, f.leg2);
+    expect(leg).toMatchObject({ status: "resolved", disposition: "changes_requested" });
+    // A leg settled as changes requested writes no resume intent.
+    expect(await gateStore.readResumeIntent(leg!.id)).toBeNull();
+
+    const regenerated = { artifactId: f.picture.artifactId, representationRevisionId: `rev-img-r1-${randomUUID()}` };
+    const rr = await repairStore.submitRepairResponse({
+      repairId: cr.repairId,
+      currentBaseRevisionId: f.picture.representationRevisionId,
+      reauthorized: true,
+      response: {
+        gateId: leg!.id,
+        baseTarget: f.picture,
+        successorTarget: regenerated,
+        findingOutcomes: [{ findingId: "prompt-window", applied: true }],
+        changeSummary: "darker sky",
+        producerProvenance: { runId: f.runId, agentId: null },
+      },
+    });
+    expect(rr.ok).toBe(true);
+    if (!rr.ok) throw new Error(`repair refused: ${rr.code}`);
+    return { successorTaskId: rr.successorTaskId, successorGateId: rr.successorGateId, regenerated };
+  }
+
+  async function pendingGates(runId: string) {
+    const r = await pool(
+      `SELECT review_task_id, pinned_targets FROM "${q(TEST_SCHEMA)}"."artifact_review_gates"
+       WHERE run_id=$1 AND status='pending' ORDER BY created_at, review_task_id`,
+      [runId],
+    );
+    return (r.rows as Array<{ review_task_id: string; pinned_targets: Pin[] }>).map((x) => ({
+      reviewTaskId: x.review_task_id,
+      pinned: x.pinned_targets.map(({ artifactId, representationRevisionId }) => ({ artifactId, representationRevisionId })),
+    }));
+  }
+
+  /** What the resume worker branches on for a decided `wayflow-` leg. */
+  async function familyState(f: Family, reviewTaskId: string) {
+    return declaredReviewFamilyState({
+      runId: f.runId, orgId: ORG, reviewTaskId, gates: await gateStore.listReviewGatesForRun(f.runId),
+    });
+  }
+
+  async function runStatus(runId: string) {
+    const r = await pool(`SELECT status FROM "${q(TEST_SCHEMA)}"."agent_runs" WHERE id=$1`, [runId]);
+    return (r.rows[0] as { status: string }).status;
+  }
+
+  it("PICTURE FIRST: #2 settles changes_requested, one successor pins the regenerated picture, the post stays pending", async () => {
+    const f = await declaredFamily();
+    const s = await regenerate(f);
+
+    const pending = await pendingGates(f.runId);
+    expect(pending.map((g) => g.reviewTaskId).sort()).toEqual([f.step, s.successorTaskId].sort());
+    const successors = pending.filter((g) => g.reviewTaskId !== f.step);
+    expect(successors).toHaveLength(1);
+    expect(successors[0].pinned).toEqual([s.regenerated]);
+    expect(await gateStore.readReviewGate(f.runId, f.step)).toMatchObject({ status: "pending", disposition: null });
+    expect(isAutoReviewTaskId(s.successorTaskId)).toBe(true);
+    expect(await familyState(f, f.leg2)).toBe("pending");
+
+    // RECORDED (cinatra#4312 follow-up): the successor is no leg of the family, so
+    // once the post is decided the family reads complete and the worker resumes the
+    // paused run while the regenerated picture's review is still open.
+    const postGate = await gateStore.readReviewGate(f.runId, f.step);
+    await resolveGateApprove(postGate!.id);
+    expect(await familyState(f, f.step)).toBe("complete");
+    expect((await pendingGates(f.runId)).map((g) => g.reviewTaskId)).toEqual([s.successorTaskId]);
+  });
+
+  it("POST FIRST: the post's approval keeps the run parked; #2 then settles changes_requested with one successor, and its approval resumes nothing", async () => {
+    const f = await declaredFamily();
+    const postGate = await gateStore.readReviewGate(f.runId, f.step);
+    await resolveGateApprove(postGate!.id);
+    expect(await familyState(f, f.step)).toBe("pending");
+
+    const s = await regenerate(f);
+    expect(await gateStore.readReviewGate(f.runId, f.step)).toMatchObject({ status: "resolved", disposition: "approve" });
+    const pending = await pendingGates(f.runId);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toEqual({ reviewTaskId: s.successorTaskId, pinned: [s.regenerated] });
+    // The family reads complete for the post's leg only now, but the post's intent
+    // was already acknowledged while #2 was open, and #2 itself wrote none.
+    expect(await familyState(f, f.leg2)).toBe("complete");
+
+    // RECORDED (cinatra#4312 follow-up): the successor's approval takes the
+    // automatic-gate release, which leaves a declared review's pause alone, so the
+    // paused run is not resumed by it.
+    expect(isAutoReviewTaskId(s.successorTaskId)).toBe(true);
+    await resolveGateApprove(s.successorGateId);
+    // The refusal returns before any write, so a bare org scope stands in for the
+    // worker's dispatch mint (whose importers the org-write boundary gate restricts).
+    const scope = { orgId: ORG } as unknown as Parameters<typeof holdStore.releaseHeldRun>[1];
+    const release = await holdStore.releaseHeldRun(f.runId, scope);
+    expect(release).toEqual({ released: false, reason: "not-produced-review-park" });
+    expect(await runStatus(f.runId)).toBe("pending_approval");
+  });
+
+  it("a flow-authored leg whose witness names another run keeps its gate pending (no repair)", async () => {
+    const f = await declaredFamily();
+    await pool(
+      `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates"
+       SET pinned_targets = jsonb_set(pinned_targets, '{0,declaredReviewPlan,runId}', '"run-other"')
+       WHERE run_id=$1 AND review_task_id=$2`,
+      [f.runId, f.leg2],
+    );
+    const cr = await crStore.recordReviewSurfaceChangesRequested({
+      runId: f.runId,
+      reviewTaskId: f.leg2,
+      baseTarget: f.picture,
+      currentBaseRevisionId: f.picture.representationRevisionId,
+      feedback: "Make the sky darker",
+    });
+    expect(cr).toMatchObject({ ok: false, code: "not-a-lifecycle-gate" });
+    expect(await gateStore.readReviewGate(f.runId, f.leg2)).toMatchObject({ status: "pending" });
   });
 });
