@@ -117,6 +117,15 @@ import {
   type LifecycleScheduleCardFixture,
 } from "../../../../src/app/design-fixtures/conformance/lifecycle-schedule-card-fixture-data";
 import {
+  RECURRENCE_FIELD_CONTROL,
+  RECURRENCE_FIELD_SOURCE,
+  schedulingRecurrenceProbeFor,
+  schedulingRecurrenceReading,
+  type RecurrenceFieldName,
+  type SchedulingRecurrenceSurfaceId,
+} from "../../../../src/app/design-fixtures/conformance/scheduling-recurrence-fixture-data";
+import { recurrenceAliasProblems, undeclaredFieldNames } from "./scheduling-recurrence-sentinels";
+import {
   RUN_STEP_RAIL_ROWS,
   SHIPPED_RAIL_ACTION,
   type RunStepKind,
@@ -2435,6 +2444,85 @@ const SCHEDULING_STEP_CONFIGURED_DRIVER: SurfaceDriver = {
     },
   },
 };
+
+/**
+ * The scheduling step's recurrence selectors (design#212): four surfaces that
+ * declare fields only, over the shipped `RecurrenceFrequencySelectors` in the
+ * drawing's four readings (scheduling-recurrence-fixtures.tsx).
+ *
+ * BINDING FORM. The shipped component writes the bare field name
+ * (`data-field="recurring-day-of-month"`), not the `name=source` pair the
+ * harness-drawn mounts carry. The driver binds to what ships; the source is
+ * reconciled with the manifest by the driver's `source`, which the suite
+ * compares with the pinned binding. A field the component no longer draws, or
+ * draws under another name, is found zero times and is RED.
+ *
+ * A segment (Start / End, Day / Weekday) carries the name on both halves; the
+ * pressed half is the value. A select carries it on its one trigger, which
+ * reads the value.
+ *
+ * `present` also refuses two things a value check cannot see
+ * (scheduling-recurrence-sentinels.ts): any rendered `data-field` under the
+ * root outside the surface's declared set, whatever its name, and a reading
+ * whose selection holds one value in two fields, where a field bound to the
+ * wrong source would still draw the expected word, unless its anti-alias
+ * probe (the same fields over distinct values, under `data-conformance-probe`)
+ * draws every field from its own source.
+ */
+async function assertRecurrenceField(root: Locator, label: string, name: RecurrenceFieldName, word: string): Promise<void> {
+  const controls = root.locator(`[data-field="${name}"]`);
+  const value =
+    RECURRENCE_FIELD_CONTROL[name] === "segment" ? root.locator(`[data-field="${name}"][aria-pressed="true"]`) : controls;
+  await expect(controls, `${label}: "${name}" must be drawn`).toHaveCount(RECURRENCE_FIELD_CONTROL[name] === "segment" ? 2 : 1);
+  await expect(value, `${label}: "${name}" must read one value`).toHaveCount(1);
+  await expect(value).toBeVisible();
+  await expect(value, `${label}: "${name}" reads its own source`).toHaveText(word, { timeout: HYDRATION_TIMEOUT_MS });
+}
+
+async function assertOnlyDeclaredFields(root: Locator, label: string, declared: readonly string[]): Promise<void> {
+  const rendered = await root
+    .locator("[data-field]")
+    .evaluateAll((elements) => elements.map((element) => element.getAttribute("data-field")));
+  expect(rendered.length, `${label}: the root draws its fields`).toBeGreaterThan(0);
+  expect(undeclaredFieldNames(rendered, declared), `${label}: every rendered data-field is one the surface declares`).toEqual([]);
+}
+
+function recurrenceSelectorsDriver(surfaceId: SchedulingRecurrenceSurfaceId): SurfaceDriver {
+  const reading = schedulingRecurrenceReading(surfaceId);
+  const probe = schedulingRecurrenceProbeFor(reading);
+  const declared = Object.keys(reading.drawn) as RecurrenceFieldName[];
+  const sources = Object.values(RECURRENCE_FIELD_SOURCE);
+  const fields: SurfaceDriver["fields"] = {};
+  for (const name of declared) {
+    const drawn = reading.drawn[name]!;
+    fields[name] = {
+      source: RECURRENCE_FIELD_SOURCE[name],
+      assert: async (_page, root) => assertRecurrenceField(root, surfaceId, name, drawn),
+    };
+  }
+  return {
+    path: HARNESS_PATH,
+    root: harnessRoot(surfaceId),
+    present: async (page, root) => {
+      await expect(root).toBeVisible();
+      await expect(root.locator(`[data-field="${declared[0]}"]`).first()).toBeVisible();
+      await assertOnlyDeclaredFields(root, surfaceId, declared);
+      expect(
+        recurrenceAliasProblems(reading.selection, probe?.selection, sources),
+        `${surfaceId}: every source field of the reading, or of its probe, holds its own value`,
+      ).toEqual([]);
+      if (recurrenceAliasProblems(reading.selection, undefined, sources).length === 0) return;
+      // The reading shares a value: its probe draws the same fields over distinct values.
+      const probeRoot = page.locator(`[data-conformance-probe="${probe!.probeId}"]`);
+      await expect(probeRoot, `${probe!.probeId} is mounted once`).toHaveCount(1);
+      await assertOnlyDeclaredFields(probeRoot, probe!.probeId, declared);
+      for (const name of declared) await assertRecurrenceField(probeRoot, probe!.probeId, name, probe!.reads[name]!);
+    },
+    fields,
+    actions: {},
+    states: {},
+  };
+}
 
 // ---------------------------------------------------------------------------
 // App-shell drivers adopted with the cinatra#3057 pin reconciliation:
@@ -8003,6 +8091,10 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "approvals-marketplace-states": APPROVALS_MARKETPLACE_STATES_DRIVER,
   "scheduling-step": SCHEDULING_STEP_DRIVER,
   "scheduling-step-configured": SCHEDULING_STEP_CONFIGURED_DRIVER,
+  "scheduling-step-quarterly": recurrenceSelectorsDriver("scheduling-step-quarterly"),
+  "scheduling-step-yearly": recurrenceSelectorsDriver("scheduling-step-yearly"),
+  "scheduling-step-configured-monthly": recurrenceSelectorsDriver("scheduling-step-configured-monthly"),
+  "scheduling-step-configured-quarterly": recurrenceSelectorsDriver("scheduling-step-configured-quarterly"),
   "sidebar-assistants-entry": SIDEBAR_ASSISTANTS_ENTRY_DRIVER,
   "breadcrumb-entity-resolution": BREADCRUMB_ENTITY_RESOLUTION_DRIVER,
   "button": BUTTON_SURFACE_DRIVER, // The components drawing's shared primitives, one mount each (cinatra#3189).
