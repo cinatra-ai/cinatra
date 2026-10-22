@@ -16,27 +16,32 @@
 // in scheduling-recurrence-fixture-data.ts.
 //
 // The surfaces declare fields only (no action, no state variant), so there is
-// no error or loading mount. Kept OFF the pixel-diffed /design-fixtures index,
+// no error or loading mount.
+//
+// Beside the four drawn readings sit the ANTI-ALIAS PROBES: the same component
+// over a selection whose fields all hold their own value, under
+// `data-conformance-probe` (never `data-surface-id`, so no surface reads them
+// as its own). A drawn reading that holds one value in two fields (the 2nd
+// Tuesday) is checked for crossed sources on its probe.
+//
+// Kept OFF the pixel-diffed /design-fixtures index,
 // like the other conformance fixtures; driven by
 // tests/e2e/design/conformance/contract.ts.
 // ---------------------------------------------------------------------------
 
 import { useState, type ReactElement } from "react";
 
-import { RecurrenceFrequencySelectors } from "@cinatra-ai/agents/schedule-proposal-card";
+import { RecurrenceFrequencySelectors, type RecurrenceFrequencySelection } from "@cinatra-ai/agents/schedule-proposal-card";
 import { Card, CardContent } from "@/components/ui/card";
 
 import {
+  SCHEDULING_RECURRENCE_PROBES,
   schedulingRecurrenceReading,
   type SchedulingRecurrenceSurfaceId,
 } from "./scheduling-recurrence-fixture-data";
 
-function RecurrenceReading({
-  surfaceId,
-}: {
-  surfaceId: SchedulingRecurrenceSurfaceId;
-}): ReactElement {
-  const [selection, setSelection] = useState(() => schedulingRecurrenceReading(surfaceId).selection);
+function RecurrenceSelectorsMount({ initial }: { initial: RecurrenceFrequencySelection }): ReactElement {
+  const [selection, setSelection] = useState(initial);
   return (
     <div className="flex flex-col gap-3">
       <RecurrenceFrequencySelectors
@@ -49,7 +54,11 @@ function RecurrenceReading({
   );
 }
 
-/** The four recurrence readings, mounted by the base conformance harness page. */
+function RecurrenceReading({ surfaceId }: { surfaceId: SchedulingRecurrenceSurfaceId }): ReactElement {
+  return <RecurrenceSelectorsMount initial={schedulingRecurrenceReading(surfaceId).selection} />;
+}
+
+/** The four recurrence readings and their probes, mounted by the base conformance harness page. */
 export function SchedulingRecurrenceConformanceFixtures(): ReactElement {
   return (
     <Card className="border-line bg-surface backdrop-blur-none">
@@ -71,6 +80,11 @@ export function SchedulingRecurrenceConformanceFixtures(): ReactElement {
         <div data-surface-id="scheduling-step-configured-quarterly" data-variant="populated">
           <RecurrenceReading surfaceId="scheduling-step-configured-quarterly" />
         </div>
+        {SCHEDULING_RECURRENCE_PROBES.map((probe) => (
+          <div key={probe.probeId} data-conformance-probe={probe.probeId}>
+            <RecurrenceSelectorsMount initial={probe.selection} />
+          </div>
+        ))}
       </CardContent>
     </Card>
   );

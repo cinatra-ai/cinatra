@@ -119,11 +119,12 @@ import {
 import {
   RECURRENCE_FIELD_CONTROL,
   RECURRENCE_FIELD_SOURCE,
+  schedulingRecurrenceProbeFor,
   schedulingRecurrenceReading,
   type RecurrenceFieldName,
   type SchedulingRecurrenceSurfaceId,
 } from "../../../../src/app/design-fixtures/conformance/scheduling-recurrence-fixture-data";
-import { recurrenceSourceCollisions, undeclaredFieldNames } from "./scheduling-recurrence-sentinels";
+import { recurrenceAliasProblems, undeclaredFieldNames } from "./scheduling-recurrence-sentinels";
 import {
   RUN_STEP_RAIL_ROWS,
   SHIPPED_RAIL_ACTION,
@@ -2464,49 +2465,58 @@ const SCHEDULING_STEP_CONFIGURED_DRIVER: SurfaceDriver = {
  * (scheduling-recurrence-sentinels.ts): any rendered `data-field` under the
  * root outside the surface's declared set, whatever its name, and a reading
  * whose selection holds one value in two fields, where a field bound to the
- * wrong source would still draw the expected word.
+ * wrong source would still draw the expected word, unless its anti-alias
+ * probe (the same fields over distinct values, under `data-conformance-probe`)
+ * draws every field from its own source.
  */
+async function assertRecurrenceField(root: Locator, label: string, name: RecurrenceFieldName, word: string): Promise<void> {
+  const controls = root.locator(`[data-field="${name}"]`);
+  const value =
+    RECURRENCE_FIELD_CONTROL[name] === "segment" ? root.locator(`[data-field="${name}"][aria-pressed="true"]`) : controls;
+  await expect(controls, `${label}: "${name}" must be drawn`).toHaveCount(RECURRENCE_FIELD_CONTROL[name] === "segment" ? 2 : 1);
+  await expect(value, `${label}: "${name}" must read one value`).toHaveCount(1);
+  await expect(value).toBeVisible();
+  await expect(value, `${label}: "${name}" reads its own source`).toHaveText(word, { timeout: HYDRATION_TIMEOUT_MS });
+}
+
+async function assertOnlyDeclaredFields(root: Locator, label: string, declared: readonly string[]): Promise<void> {
+  const rendered = await root
+    .locator("[data-field]")
+    .evaluateAll((elements) => elements.map((element) => element.getAttribute("data-field")));
+  expect(rendered.length, `${label}: the root draws its fields`).toBeGreaterThan(0);
+  expect(undeclaredFieldNames(rendered, declared), `${label}: every rendered data-field is one the surface declares`).toEqual([]);
+}
+
 function recurrenceSelectorsDriver(surfaceId: SchedulingRecurrenceSurfaceId): SurfaceDriver {
   const reading = schedulingRecurrenceReading(surfaceId);
+  const probe = schedulingRecurrenceProbeFor(reading);
   const declared = Object.keys(reading.drawn) as RecurrenceFieldName[];
+  const sources = Object.values(RECURRENCE_FIELD_SOURCE);
   const fields: SurfaceDriver["fields"] = {};
   for (const name of declared) {
     const drawn = reading.drawn[name]!;
     fields[name] = {
       source: RECURRENCE_FIELD_SOURCE[name],
-      assert: async (_page, root) => {
-        const controls = root.locator(`[data-field="${name}"]`);
-        const value =
-          RECURRENCE_FIELD_CONTROL[name] === "segment"
-            ? root.locator(`[data-field="${name}"][aria-pressed="true"]`)
-            : controls;
-        await expect(controls, `${surfaceId}: "${name}" must be drawn`).toHaveCount(
-          RECURRENCE_FIELD_CONTROL[name] === "segment" ? 2 : 1,
-        );
-        await expect(value, `${surfaceId}: "${name}" must read one value`).toHaveCount(1);
-        await expect(value).toBeVisible();
-        await expect(value).toHaveText(drawn, { timeout: HYDRATION_TIMEOUT_MS });
-      },
+      assert: async (_page, root) => assertRecurrenceField(root, surfaceId, name, drawn),
     };
   }
   return {
     path: HARNESS_PATH,
     root: harnessRoot(surfaceId),
-    present: async (_page, root) => {
+    present: async (page, root) => {
       await expect(root).toBeVisible();
       await expect(root.locator(`[data-field="${declared[0]}"]`).first()).toBeVisible();
-      const rendered = await root
-        .locator("[data-field]")
-        .evaluateAll((elements) => elements.map((element) => element.getAttribute("data-field")));
-      expect(rendered.length, `${surfaceId}: the root draws its fields`).toBeGreaterThan(0);
+      await assertOnlyDeclaredFields(root, surfaceId, declared);
       expect(
-        undeclaredFieldNames(rendered, declared),
-        `${surfaceId}: every rendered data-field is one the surface declares`,
+        recurrenceAliasProblems(reading.selection, probe?.selection, sources),
+        `${surfaceId}: every source field of the reading, or of its probe, holds its own value`,
       ).toEqual([]);
-      expect(
-        recurrenceSourceCollisions(reading.selection, Object.values(RECURRENCE_FIELD_SOURCE)),
-        `${surfaceId}: every source field of the reading holds its own value`,
-      ).toEqual([]);
+      if (recurrenceAliasProblems(reading.selection, undefined, sources).length === 0) return;
+      // The reading shares a value: its probe draws the same fields over distinct values.
+      const probeRoot = page.locator(`[data-conformance-probe="${probe!.probeId}"]`);
+      await expect(probeRoot, `${probe!.probeId} is mounted once`).toHaveCount(1);
+      await assertOnlyDeclaredFields(probeRoot, probe!.probeId, declared);
+      for (const name of declared) await assertRecurrenceField(probeRoot, probe!.probeId, name, probe!.reads[name]!);
     },
     fields,
     actions: {},

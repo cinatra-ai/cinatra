@@ -12,11 +12,19 @@
 // the surface declares, in the words of the drawing. Every field the surface
 // declares is in `drawn`, and no other recurrence field is drawn there.
 //
-// DISTINCT SENTINELS. No two fields of a `selection` hold the same value as
-// text, drawn or not, so a field bound to the wrong source draws a word the
-// driver does not expect (a weekday select reading nthWeek 4 draws "Thu", not
-// "Tue"). The drivers and the unit test refuse a reading that breaks this
-// (tests/e2e/design/conformance/scheduling-recurrence-sentinels.ts).
+// THE DRAWING IS THE ORACLE. Each reading draws the words of the pinned
+// drawing (specs/app-components.html), and the unit test states those words
+// a second time, literally, so a change here that leaves the drawing is red.
+//
+// DISTINCT SENTINELS. A field bound to the wrong source is caught only where
+// the two sources hold different values. Two drawn readings hold one value in
+// two fields (the 2nd Tuesday: nthWeek 2 and Tuesday, weekday 2; the 1st
+// Monday: nthWeek 1 and Monday, weekday 1), so each such reading has an
+// ANTI-ALIAS PROBE: a separate mount, outside every drawn surface, that draws
+// the same fields from a selection whose fields all hold their own value (a
+// weekday select reading nthWeek 4 draws "Thu", not "Tue"). The drivers and
+// the unit test refuse a colliding reading without a distinct probe of the
+// same fields (tests/e2e/design/conformance/scheduling-recurrence-sentinels.ts).
 // ---------------------------------------------------------------------------
 
 import type { RecurrenceFrequencySelection } from "@cinatra-ai/agents/schedule-proposal-card";
@@ -75,11 +83,11 @@ export const SCHEDULING_RECURRENCE_READINGS: readonly SchedulingRecurrenceReadin
     drawn: { "recurring-quarter-anchor": "Start", "recurring-monthly-mode": "Day", "recurring-day-of-month": "1" },
   },
   {
-    // In flow: every year, in March, on the 4th Tuesday (4th, not the
-    // drawing's 2nd: Tuesday is weekday 2, and the week must differ from it).
+    // In flow: every year, in March, on the 2nd Tuesday, as drawn. The week
+    // and the weekday both hold 2: the yearly probe below tells them apart.
     surfaceId: "scheduling-step-yearly",
-    selection: { frequency: "yearly", quarterAnchor: "start", monthlyMode: "weekday", dayOfMonth: 9, nthWeek: 4, monthlyWeekday: 2, yearlyMonth: 3 },
-    drawn: { "recurring-yearly-month": "Mar", "recurring-monthly-mode": "Weekday", "recurring-nth-week": "4th", "recurring-monthly-weekday": "Tue" },
+    selection: { frequency: "yearly", quarterAnchor: "start", monthlyMode: "weekday", dayOfMonth: 9, nthWeek: 2, monthlyWeekday: 2, yearlyMonth: 3 },
+    drawn: { "recurring-yearly-month": "Mar", "recurring-monthly-mode": "Weekday", "recurring-nth-week": "2nd", "recurring-monthly-weekday": "Tue" },
   },
   {
     // Configured: every month on day 31, a stated day past the 1-28 list.
@@ -88,11 +96,12 @@ export const SCHEDULING_RECURRENCE_READINGS: readonly SchedulingRecurrenceReadin
     drawn: { "recurring-monthly-mode": "Day", "recurring-day-of-month": "31" },
   },
   {
-    // Configured: every quarter, End (Mar / Jun / Sep / Dec), on the 2nd Monday
-    // (2nd, not the drawing's 1st: Monday is weekday 1, and the week must differ).
+    // Configured: every quarter, End (Mar / Jun / Sep / Dec), on the 1st
+    // Monday, as drawn. The week and the weekday both hold 1: the quarterly
+    // probe below tells them apart.
     surfaceId: "scheduling-step-configured-quarterly",
-    selection: { frequency: "quarterly", quarterAnchor: "end", monthlyMode: "weekday", dayOfMonth: 12, nthWeek: 2, monthlyWeekday: 1, yearlyMonth: 6 },
-    drawn: { "recurring-quarter-anchor": "End", "recurring-monthly-mode": "Weekday", "recurring-nth-week": "2nd", "recurring-monthly-weekday": "Mon" },
+    selection: { frequency: "quarterly", quarterAnchor: "end", monthlyMode: "weekday", dayOfMonth: 12, nthWeek: 1, monthlyWeekday: 1, yearlyMonth: 6 },
+    drawn: { "recurring-quarter-anchor": "End", "recurring-monthly-mode": "Weekday", "recurring-nth-week": "1st", "recurring-monthly-weekday": "Mon" },
   },
 ];
 
@@ -103,4 +112,41 @@ export function schedulingRecurrenceReading(
   const reading = SCHEDULING_RECURRENCE_READINGS.find((row) => row.surfaceId === surfaceId);
   if (reading === undefined) throw new Error(`no scheduling recurrence reading for "${surfaceId}"`);
   return reading;
+}
+
+export type SchedulingRecurrenceProbeId = "recurrence-probe-yearly-weekday" | "recurrence-probe-quarterly-weekday";
+
+/**
+ * An anti-alias probe: not a drawing, and no surface of the manifest. The
+ * harness mounts it under `data-conformance-probe`, never `data-surface-id`.
+ * Every field of its `selection` holds its own value, so each word in `reads`
+ * is drawn only by a field bound to its own source.
+ */
+export type SchedulingRecurrenceProbe = {
+  probeId: SchedulingRecurrenceProbeId;
+  selection: RecurrenceFrequencySelection;
+  reads: Readonly<Partial<Record<RecurrenceFieldName, string>>>;
+};
+
+export const SCHEDULING_RECURRENCE_PROBES: readonly SchedulingRecurrenceProbe[] = [
+  {
+    // The yearly reading's fields, on the 4th Tuesday: week 4, weekday 2.
+    probeId: "recurrence-probe-yearly-weekday",
+    selection: { frequency: "yearly", quarterAnchor: "start", monthlyMode: "weekday", dayOfMonth: 9, nthWeek: 4, monthlyWeekday: 2, yearlyMonth: 3 },
+    reads: { "recurring-yearly-month": "Mar", "recurring-monthly-mode": "Weekday", "recurring-nth-week": "4th", "recurring-monthly-weekday": "Tue" },
+  },
+  {
+    // The configured quarterly reading's fields, on the 2nd Monday: week 2, weekday 1.
+    probeId: "recurrence-probe-quarterly-weekday",
+    selection: { frequency: "quarterly", quarterAnchor: "end", monthlyMode: "weekday", dayOfMonth: 12, nthWeek: 2, monthlyWeekday: 1, yearlyMonth: 6 },
+    reads: { "recurring-quarter-anchor": "End", "recurring-monthly-mode": "Weekday", "recurring-nth-week": "2nd", "recurring-monthly-weekday": "Mon" },
+  },
+];
+
+/** The probe that draws exactly a reading's fields, or undefined when there is none. */
+export function schedulingRecurrenceProbeFor(
+  reading: SchedulingRecurrenceReading,
+): SchedulingRecurrenceProbe | undefined {
+  const fields = Object.keys(reading.drawn).sort().join(",");
+  return SCHEDULING_RECURRENCE_PROBES.find((probe) => Object.keys(probe.reads).sort().join(",") === fields);
 }

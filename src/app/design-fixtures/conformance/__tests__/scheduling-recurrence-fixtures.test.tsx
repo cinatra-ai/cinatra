@@ -7,7 +7,10 @@
 // value of the drawing. The browser reading of the same four is
 // tests/e2e/design/conformance/contract.ts (recurrenceSelectorsDriver). Both
 // refuse a rendered data-field outside the declared set, whatever its name,
-// and a reading whose fields share a value (scheduling-recurrence-sentinels.ts).
+// and a reading whose fields share a value unless its anti-alias probe draws
+// the same fields over distinct values (scheduling-recurrence-sentinels.ts).
+// The drawing is the oracle: the words each reading draws are stated here a
+// second time, literally, from the pinned drawing.
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -19,14 +22,28 @@ import { SchedulingRecurrenceConformanceFixtures } from "../scheduling-recurrenc
 import {
   RECURRENCE_FIELD_CONTROL,
   RECURRENCE_FIELD_SOURCE,
+  SCHEDULING_RECURRENCE_PROBES,
   SCHEDULING_RECURRENCE_READINGS,
+  schedulingRecurrenceProbeFor,
   type RecurrenceFieldName,
+  type SchedulingRecurrenceProbe,
   type SchedulingRecurrenceReading,
 } from "../scheduling-recurrence-fixture-data";
 import {
+  recurrenceAliasProblems,
   recurrenceSourceCollisions,
   undeclaredFieldNames,
 } from "../../../../../tests/e2e/design/conformance/scheduling-recurrence-sentinels";
+
+// The words of the pinned drawing (specs/app-components.html at the pinned
+// content hash, the mounts of each data-conformance-id), stated apart from the
+// fixture data so that the data cannot leave the drawing unseen.
+const DRAWN_WORDS: Readonly<Record<string, Readonly<Partial<Record<RecurrenceFieldName, string>>>>> = {
+  "scheduling-step-quarterly": { "recurring-quarter-anchor": "Start", "recurring-monthly-mode": "Day", "recurring-day-of-month": "1" },
+  "scheduling-step-yearly": { "recurring-yearly-month": "Mar", "recurring-monthly-mode": "Weekday", "recurring-nth-week": "2nd", "recurring-monthly-weekday": "Tue" },
+  "scheduling-step-configured-monthly": { "recurring-monthly-mode": "Day", "recurring-day-of-month": "31" },
+  "scheduling-step-configured-quarterly": { "recurring-quarter-anchor": "End", "recurring-monthly-mode": "Weekday", "recurring-nth-week": "1st", "recurring-monthly-weekday": "Mon" },
+};
 
 type ManifestSurface = { id: string; fields: Array<{ field: string; source: string }>; actions: unknown[]; states: unknown[] };
 
@@ -116,12 +133,73 @@ describe("the scheduling step's recurrence mounts on the conformance harness (de
     },
   );
 
+  it("draws the words of the pinned drawing, reading by reading", () => {
+    expect(Object.fromEntries(SCHEDULING_RECURRENCE_READINGS.map((row) => [row.surfaceId, row.drawn]))).toEqual(DRAWN_WORDS);
+  });
+
   it.each(SCHEDULING_RECURRENCE_READINGS.map((row): [string, SchedulingRecurrenceReading] => [row.surfaceId, row]))(
-    "binds %s to distinct sentinels: no two fields of its selection share a value",
+    "tells the sources of %s apart: its own fields, or its probe's, each hold their own value",
     (_surfaceId, row) => {
-      expect(recurrenceSourceCollisions(row.selection, Object.values(RECURRENCE_FIELD_SOURCE))).toEqual([]);
+      expect(
+        recurrenceAliasProblems(row.selection, schedulingRecurrenceProbeFor(row)?.selection, Object.values(RECURRENCE_FIELD_SOURCE)),
+      ).toEqual([]);
     },
   );
+
+  it("gives the two drawn readings that share a value a probe of their fields", () => {
+    const sharing = SCHEDULING_RECURRENCE_READINGS.filter(
+      (row) => recurrenceSourceCollisions(row.selection, Object.values(RECURRENCE_FIELD_SOURCE)).length > 0,
+    );
+    expect(sharing.map((row) => [row.surfaceId, schedulingRecurrenceProbeFor(row)?.probeId])).toEqual([
+      ["scheduling-step-yearly", "recurrence-probe-yearly-weekday"],
+      ["scheduling-step-configured-quarterly", "recurrence-probe-quarterly-weekday"],
+    ]);
+  });
+
+  it.each(SCHEDULING_RECURRENCE_PROBES.map((probe): [string, SchedulingRecurrenceProbe] => [probe.probeId, probe]))(
+    "mounts the anti-alias probe %s once, outside every surface, each field reading its own source",
+    async (probeId, probe) => {
+      expect(recurrenceSourceCollisions(probe.selection, Object.values(RECURRENCE_FIELD_SOURCE))).toEqual([]);
+      const { container } = render(<SchedulingRecurrenceConformanceFixtures />);
+      const mounts = container.querySelectorAll(`[data-conformance-probe="${probeId}"]`);
+      expect(mounts).toHaveLength(1);
+      const mount = mounts[0];
+      expect(mount.closest("[data-surface-id]")).toBeNull();
+      expect(mount.querySelector("[data-surface-id]")).toBeNull();
+      for (const name of RECURRENCE_FIELDS) {
+        const expected = probe.reads[name];
+        if (expected === undefined) {
+          expect(mount.querySelectorAll(`[data-field="${name}"]`), `${probeId} draws no ${name}`).toHaveLength(0);
+          continue;
+        }
+        await waitFor(() => expect(valueOf(mount, name).map((el) => el.textContent)).toEqual([expected]));
+      }
+      const rendered = Array.from(mount.querySelectorAll("[data-field]"), (el) => el.getAttribute("data-field"));
+      expect(rendered.length).toBeGreaterThan(0);
+      expect(undeclaredFieldNames(rendered, Object.keys(probe.reads))).toEqual([]);
+    },
+  );
+
+  it("refuses a reading that shares a value without a distinct probe, and a malformed one whatever its probe", () => {
+    const sources = Object.values(RECURRENCE_FIELD_SOURCE);
+    const distinct = { frequency: "yearly", quarterAnchor: "start", monthlyMode: "weekday", dayOfMonth: 9, nthWeek: 4, monthlyWeekday: 2, yearlyMonth: 3 };
+    const sharing = { ...distinct, nthWeek: 2 };
+    const shared = 'selection.nthWeek and selection.monthlyWeekday share the value "2"';
+    expect(recurrenceAliasProblems(distinct, undefined, sources)).toEqual([]);
+    expect(recurrenceAliasProblems(sharing, distinct, sources)).toEqual([]);
+    expect(recurrenceAliasProblems(sharing, undefined, sources)).toEqual([shared, "no anti-alias probe draws the reading's fields"]);
+    expect(recurrenceAliasProblems(sharing, sharing, sources)).toEqual([`probe: ${shared}`]);
+    expect(recurrenceAliasProblems(sharing, { ...distinct, nthWeek: Number.NaN }, sources)).toEqual([
+      "probe: selection.nthWeek holds no finite number or non-empty string",
+    ]);
+    expect(recurrenceAliasProblems({ ...sharing, dayOfMonth: "" }, distinct, sources)).toEqual([
+      "selection.dayOfMonth holds no finite number or non-empty string",
+      shared,
+    ]);
+    expect(recurrenceAliasProblems(distinct, distinct, ["selection.toString"])).toEqual([
+      "selection.toString is not a field of the selection",
+    ]);
+  });
 
   it("refuses a selection that cannot tell its sources apart, and passes one that can", () => {
     const sources = Object.values(RECURRENCE_FIELD_SOURCE);
