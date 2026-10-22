@@ -114,7 +114,7 @@ function DataRoadProviders({
 
 type ReadDataRoad =
   | { readonly road: "none" }
-  | { readonly road: "session"; readonly apiUrl: string }
+  | { readonly road: "session"; /** the resolved href */ readonly apiUrl: string }
   | { readonly road: "refused" };
 
 const REFUSED: ReadDataRoad = { road: "refused" };
@@ -130,47 +130,46 @@ function ownValue(value: object, key: string): unknown {
   }
 }
 
-/** A stand-in origin for reading a root-relative path where no page exists. */
-const PATH_PROBE_ORIGIN = "http://read-only-composition.invalid";
+/** A value that may hold no backslash, whitespace or control character. */
+const UNSAFE_CHARACTER = /[\\\s\u0000-\u001f\u007f]/;
+/** A root-relative path ("/x", never "//x") or an absolute URL with a scheme. */
+const ADDRESS_SHAPE = /^(?:\/(?!\/)|[a-z][a-z0-9+.-]*:)/i;
 
 /**
- * AN ADDRESS THE READER'S SESSION MAY GO TO: the session road sends the
- * reader's credentials (`credentials: "include"`), so its address must be the
- * page's own origin. Admitted are exactly
- *   - a root-relative path: starts with "/" and not with "//", holds no
- *     backslash, no whitespace and no control character, and still parses as a
- *     path of the origin it is read against; or
- *   - an absolute URL whose parsed origin EQUALS the page's origin, with no
- *     user name or password in it.
- * A parse that throws, a page without an origin ("null") and everything else —
- * another origin or port, another scheme, "//host", "javascript:" — is refused.
+ * THE ADDRESS THE READER'S SESSION GOES TO, RESOLVED ONCE. The session road
+ * sends the reader's credentials (`credentials: "include"`), so its address
+ * must be the page's own origin. The value is resolved exactly once, against
+ * `window.location.origin` (never `document.baseURI`, so a `<base>` element
+ * cannot move it), and the RESOLVED href is the one handed on: the provider
+ * never receives a path a browser would resolve again. Admitted is a value of
+ * the address shape whose resolved origin EQUALS the page's origin, with no
+ * user name and no password. Refused (`undefined`) is everything else: no
+ * window, a missing, empty or opaque ("null") page origin, a value that does
+ * not parse, a backslash, whitespace or control character, "//host", a bare
+ * relative path, another origin, port or scheme, "javascript:", and any user
+ * name or password (an empty user name with a password included).
  */
-function isSameOriginAddress(apiUrl: string): boolean {
-  if (/[\\\s\u0000-\u001f\u007f]/.test(apiUrl)) return false;
-  if (apiUrl.startsWith("/")) {
-    if (apiUrl.startsWith("//")) return false;
-    try {
-      return new URL(apiUrl, PATH_PROBE_ORIGIN).origin === PATH_PROBE_ORIGIN;
-    } catch {
-      return false;
-    }
-  }
-  const pageOrigin = typeof window === "undefined" ? undefined : window.location?.origin;
-  if (typeof pageOrigin !== "string" || pageOrigin === "null" || pageOrigin.length === 0) return false;
+function sameOriginHref(apiUrl: string): string | undefined {
+  if (UNSAFE_CHARACTER.test(apiUrl) || !ADDRESS_SHAPE.test(apiUrl)) return undefined;
   try {
-    const url = new URL(apiUrl);
-    return url.origin === pageOrigin && url.username === "" && url.password === "";
+    const pageOrigin = typeof window === "undefined" ? undefined : window.location?.origin;
+    if (typeof pageOrigin !== "string" || pageOrigin.length === 0 || pageOrigin === "null") return undefined;
+    const url = new URL(apiUrl, pageOrigin);
+    if (url.origin !== pageOrigin || url.username !== "" || url.password !== "") return undefined;
+    return url.href;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
 /**
  * THE ROAD, READ FAIL-CLOSED. A road is admitted only when it is a non-array
  * object whose own `road` equals `"none"`, or equals `"session"` with an own
- * string `apiUrl` of the page's own origin (`isSameOriginAddress`). Everything
- * else is refused — the composition does not guess which road a value it cannot
- * read meant, and never sends the reader's session to another origin.
+ * string `apiUrl` that resolves to the page's own origin (`sameOriginHref`);
+ * the session road then carries that resolved href, never the value as given.
+ * Everything else is refused — the composition does not guess which road a
+ * value it cannot read meant, and never sends the reader's session to another
+ * origin.
  */
 function readDataRoad(dataRoad: unknown): ReadDataRoad {
   if (typeof dataRoad !== "object" || dataRoad === null || Array.isArray(dataRoad)) return REFUSED;
@@ -178,7 +177,8 @@ function readDataRoad(dataRoad: unknown): ReadDataRoad {
   if (road === "none") return { road: "none" };
   if (road === "session") {
     const apiUrl = ownValue(dataRoad, "apiUrl");
-    if (typeof apiUrl === "string" && isSameOriginAddress(apiUrl)) return { road: "session", apiUrl };
+    const href = typeof apiUrl === "string" ? sameOriginHref(apiUrl) : undefined;
+    if (href !== undefined) return { road: "session", apiUrl: href };
   }
   return REFUSED;
 }

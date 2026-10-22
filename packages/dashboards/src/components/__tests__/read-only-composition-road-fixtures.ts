@@ -1,9 +1,11 @@
 // FIXTURES FOR THE READ-ONLY COMPOSITION'S DATA ROADS (cinatra#3092, #4118 fold).
 //
 // The composition admits exactly two roads, read by equality: `{ road: "none" }`
-// and `{ road: "session", apiUrl: <non-empty string> }`. Every value below is
-// one it must REFUSE: it mounts no provider, draws a settled refusal, and never
-// falls through to the session road, which sends the reader's credentials.
+// and `{ road: "session", apiUrl }` where `apiUrl` is a root-relative path or an
+// absolute URL that resolves, against the page's own origin, to that origin
+// with no user name or password. Every value below is one it must REFUSE: it
+// mounts no provider, draws a settled refusal, and never falls through to the
+// session road, which sends the reader's credentials.
 // Not a test file: the suites that read it import it.
 
 export const API = "/api/dashboards/cubejs-api/v1";
@@ -54,6 +56,7 @@ export const REFUSED_ROADS: ReadonlyArray<readonly [string, unknown]> = [
   ["a session road to the page host on another scheme", { road: "session", apiUrl: `${OTHER_SCHEME}//${PAGE.host}${API}` }],
   ["a session road to the page host on another port", { road: "session", apiUrl: `${PAGE.protocol}//${PAGE.hostname}:${OTHER_PORT}${API}` }],
   ["a session road with a user name and password", { road: "session", apiUrl: `${PAGE.protocol}//user:pw@${PAGE.host}${API}` }],
+  ["a session road with an empty user name and a password", { road: "session", apiUrl: `${PAGE.protocol}//:pw@${PAGE.host}${API}` }],
   ["a session road with the page origin as a user name", { road: "session", apiUrl: `${PAGE_ORIGIN}@evil.example${API}` }],
   ["a session road to a host that starts like the page host", { road: "session", apiUrl: `${PAGE_ORIGIN}.evil.example${API}` }],
   ["a session road to a relative path", { road: "session", apiUrl: "api/dashboards/cubejs-api/v1" }],

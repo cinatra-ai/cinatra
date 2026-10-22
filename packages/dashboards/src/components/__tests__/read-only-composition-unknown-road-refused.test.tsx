@@ -22,6 +22,7 @@ import {
   API,
   CONFIGURED,
   CONFIGURED_PORTLETS,
+  PAGE_ORIGIN,
   recordingFetch,
   REFUSED_ROADS,
   SAME_ORIGIN_API,
@@ -82,12 +83,12 @@ describe("an unknown data road draws its refusal and fetches nothing (cinatra#30
 });
 
 describe("the session road still fetches from its own address with the reader's session (guard)", () => {
-  test("[guard] (f3) road session reads the cube metadata from its address, with credentials", async () => {
+  test("(f3) road session with a root-relative address reads the cube metadata from it, resolved against the page's own origin, with credentials", async () => {
     render(<Dashboard config={CONFIGURED} dataRoad={{ road: "session", apiUrl: API }} />);
-    await waitFor(() => expect(calls.map((call) => call.url)).toContain(`${API}/meta`), { timeout: 15_000 });
+    await waitFor(() => expect(calls.map((call) => call.url)).toContain(`${SAME_ORIGIN_API}/meta`), { timeout: 15_000 });
     expect(document.querySelectorAll(REFUSAL)).toHaveLength(0);
     for (const call of calls) {
-      expect(call.url.startsWith(`${API}/`)).toBe(true);
+      expect(call.url.startsWith(`${SAME_ORIGIN_API}/`)).toBe(true);
       expect(call.credentials).toBe("include");
     }
   });
@@ -99,6 +100,28 @@ describe("the session road still fetches from its own address with the reader's 
     for (const call of calls) {
       expect(call.url.startsWith(`${SAME_ORIGIN_API}/`)).toBe(true);
       expect(call.credentials).toBe("include");
+    }
+  });
+
+  // A browser's fetch resolves a relative address against `document.baseURI`,
+  // which a `<base>` element of another origin moves; so every recorded request
+  // is read the way a browser reads it.
+  test("(f5) under a <base> of another origin, road session with a root-relative address sends every request to the page's own origin", async () => {
+    const base = document.createElement("base");
+    base.href = "https://evil.example/";
+    document.head.appendChild(base);
+    try {
+      expect(new URL(API, document.baseURI).origin).toBe("https://evil.example");
+      render(<Dashboard config={CONFIGURED} dataRoad={{ road: "session", apiUrl: API }} />);
+      await waitFor(() => expect(calls.length).toBeGreaterThan(0), { timeout: 15_000 });
+      expect(document.querySelectorAll(REFUSAL)).toHaveLength(0);
+      for (const call of calls) {
+        expect(new URL(call.url, document.baseURI).origin).toBe(PAGE_ORIGIN);
+        expect(call.url.startsWith(`${SAME_ORIGIN_API}/`)).toBe(true);
+      }
+      expect(calls.map((call) => call.url)).toContain(`${SAME_ORIGIN_API}/meta`);
+    } finally {
+      base.remove();
     }
   });
 });

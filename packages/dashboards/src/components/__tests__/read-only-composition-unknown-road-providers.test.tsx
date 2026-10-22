@@ -112,10 +112,10 @@ describe("an unknown data road mounts no provider and draws a settled refusal (c
 });
 
 describe("the two named roads are still admitted (cinatra#3092 fold, MF2; guards, green at the base too)", () => {
-  test("[guard] (u3) road session with an address mounts the session provider over that address", () => {
+  test("(u3) road session with a root-relative address mounts the session provider over it, resolved against the page's own origin", () => {
     render(<Dashboard config={CONFIG} dataRoad={{ road: "session", apiUrl: API }} />);
     expect(rec.cube).toHaveLength(1);
-    expect(rec.cube[0]?.apiOptions).toEqual({ apiUrl: API, credentials: "include" });
+    expect(rec.cube[0]?.apiOptions).toEqual({ apiUrl: SAME_ORIGIN_API, credentials: "include" });
     expect(rec.dashboard).toHaveLength(1);
     expect(document.querySelectorAll(REFUSAL)).toHaveLength(0);
   });

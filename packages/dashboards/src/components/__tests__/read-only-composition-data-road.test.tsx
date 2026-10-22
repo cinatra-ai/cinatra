@@ -89,6 +89,9 @@ const CONFIG = {
 } as never;
 
 const ROAD = { road: "session" as const, apiUrl: "/api/dashboards/cubejs-api/v1" };
+// The provider is handed the address resolved once against the page's own
+// origin (#4118), never the path as given, which a browser would resolve again.
+const ROAD_HREF = new URL(ROAD.apiUrl, window.location.origin).href;
 
 // Typed loosely so this file reads the same before the views name the prop.
 const Dashboard = ReadOnlyComposedDashboard as unknown as (p: Record<string, unknown>) => React.JSX.Element;
@@ -98,7 +101,7 @@ describe("given a data road, each promoted view mounts its own query client and 
   test("(c1) the read-only dashboard", () => {
     render(<Dashboard config={CONFIG} dataRoad={ROAD} />);
     expect(rec.cube).toHaveLength(1);
-    expect(rec.cube[0]?.apiOptions).toEqual({ apiUrl: ROAD.apiUrl, credentials: "include" });
+    expect(rec.cube[0]?.apiOptions).toEqual({ apiUrl: ROAD_HREF, credentials: "include" });
     expect(rec.gridSawQueryClient).toEqual([true]);
     // The road is the composition's, never a prop the dashboard provider is handed.
     expect(rec.dashboard).toHaveLength(1);
@@ -110,7 +113,7 @@ describe("given a data road, each promoted view mounts its own query client and 
   test("(c1) the single portlet", () => {
     render(<Portlet config={CONFIG} portletId="p2" dataRoad={ROAD} />);
     expect(rec.cube).toHaveLength(1);
-    expect(rec.cube[0]?.apiOptions).toEqual({ apiUrl: ROAD.apiUrl, credentials: "include" });
+    expect(rec.cube[0]?.apiOptions).toEqual({ apiUrl: ROAD_HREF, credentials: "include" });
     expect(rec.gridSawQueryClient).toEqual([true]);
     expect(rec.dashboard).toHaveLength(1);
     expect(Object.prototype.hasOwnProperty.call(rec.dashboard[0], "dataRoad")).toBe(false);
