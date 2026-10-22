@@ -272,6 +272,15 @@ input (see `superseded-pins-2026-08-28/`, `superseded-pins-2026-09-12/`,
 frozen published ones, and every row a later frozen fetch superseded), because
 a gate whose drift path has no input is a gate whose drift path is untested.
 
+**Then one more, adopted on 2026-10-22 — NOT hashes-only.** `app-components`
+republished with the recurrence selectors of the scheduling step drawn (every
+quarter, every year, and a configured monthly and quarterly schedule), and the
+`push`-to-`main` arm was red on that pin: four pins read `match` and that one
+read `drift`. The body declares thirty-seven surfaces where the pin declared
+thirty-three; the thirty-three are field-for-field identical and four are new.
+The 2026-10-22 reconciliation below adopted it with the drivers of the four
+surfaces, and all five pins read `match` against the bodies published that day.
+
 ## Reconciliation record
 
 Measured 2026-08-28 and adopted on 2026-08-30, after re-fetching each published
@@ -801,6 +810,61 @@ the adopted body's own `contentHash` field — never typed. No other pin moved.
 | `app-extensions` | `match` | nothing — the published body is still the pinned artifact | none |
 | `app-connectors` | `match` | nothing — the published body is still the pinned artifact | none |
 | `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
+
+## Reconciliation record — 2026-10-22
+
+Measured 2026-10-22 against the manifests published under `publishedBaseUrl`,
+after the docs mirror published two `app-components` bodies in a row: the
+recurrence selectors of the scheduling step (cinatra-ai/docs#237), then the
+drawing's corrected prose (cinatra-ai/docs#238), whose body this adopts. All
+five bodies were fetched with one anonymous `curl -sS` each into a scratch
+directory outside every repository tree, and their hashes were compared
+with the five pins as this change leaves them: every published body is
+byte-identical to the artifact its pin names. `app`, `app-extensions`,
+`app-connectors` and `app-notifications` came back byte-identical to the
+artifacts their pins already named. The adopted `app-components` body was
+compared, as parsed JSON, with the committed copy under
+`tests/e2e/design/conformance/manifests/` that it replaces: `schemaVersion`,
+`spec` and the thirty-three surfaces the copy already declared are
+field-for-field identical, four surfaces are added after
+`scheduling-step-configured`, none is retired, and `contentHash` moved.
+cinatra-ai/docs#238 changed seven lines of the drawing's published page and,
+in the manifest, the `contentHash` line only, so no surface of the thirty-three
+moved, and this change edits no driver of them. This is the first case "Why a
+hash-only re-pin is refused" names, so the pin moves together with
+the drivers that answer the four surfaces. The committed artifact is now the
+verbatim published body, and both hashes of the entry in `conformance-pins.json`
+were re-derived from the adopted bytes on the branch — the manifest hash over
+the file's bytes, the spec-content hash read back out of the adopted body's own
+`contentHash` field — never typed. No other pin moved.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-components` | `drift` | 4 new surfaces, fields only: `scheduling-step-quarterly`, `scheduling-step-yearly`, `scheduling-step-configured-monthly`, `scheduling-step-configured-quarterly` | 4 drivers behind the awaiting-mount guard, their readings and two unit checks |
+| `app-extensions` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-connectors` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
+
+The four surfaces bind the six `data-field` names of the shared recurrence
+selectors, which the in-flow scheduling step and the schedule card both draw.
+That component is not on the default branch yet: it arrives with cinatra#4280.
+So, as with the Workspace surfaces of the `app` pin, each driver is written in
+full against the adopted manifest's own field sources
+(`tests/e2e/design/conformance/scheduling-recurrence-driver.ts`) and registered
+in `tests/e2e/design/conformance/contract.ts` behind `awaitingMount`: while the
+harness mounts nothing under the surface id, its battery SKIPS with that reason,
+and the same assertions run unchanged the moment the mount exists. The readings each
+driver expects are stated once
+(`src/app/design-fixtures/conformance/scheduling-recurrence-fixture-data.ts`)
+and checked against the pinned manifest without a browser.
+`scripts/design/__tests__/awaiting-mount-guard.test.mjs` names the four with the
+change they wait for, and refuses an allowlist entry or a stable-id contract row
+for them before the component exists. The harness mounts, their unit test and
+the stable-id contract rows land with the component. Every new surface is driven
+by a literal entry of the driver table, so
+`tests/e2e/design/conformance/allowlist.json` is untouched, and no body is
+frozen under the checker's fixtures.
 
 ## Running it locally
 
