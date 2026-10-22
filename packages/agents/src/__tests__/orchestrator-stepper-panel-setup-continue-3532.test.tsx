@@ -733,3 +733,193 @@ describe("OrchestratorStepperPanel — a setup field whose renderer draws no con
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#3562 — A RENDERER THAT REPORTS ITS VALUE UNSENDABLE HOLDS THE
+// CONTINUE DRAWN FOR ITS GATE, on the setup road and mid-run alike.
+// ---------------------------------------------------------------------------
+
+/**
+ * A pack-shaped list step that takes several picks: two boxes, nothing ticked
+ * when it opens, and it reports through `onValidityChange` whether anything is
+ * ticked. A string-typed input receives the ticks as JSON; any other input
+ * receives the object itself.
+ */
+const TICKING_RENDERER_ID = "@cinatra-test/pack-agent:ticking";
+/** The same, on a gate this panel classifies as mid-run (`:list-picker`). */
+const MID_RUN_TICKING_RENDERER_ID = "@cinatra-test/pack-agent:list-picker";
+/** The email outreach agent's own account-scope binding: a mid-run list step. */
+const OUTREACH_LIST_PICKER_ID = "@cinatra-ai/email-outreach-agent:list-picker";
+
+function TickingRenderer({ schema, onChange, onValidityChange }: FieldRendererProps) {
+  const [ticked, setTicked] = React.useState<string[]>([]);
+  React.useEffect(() => {
+    onValidityChange?.(ticked.length > 0);
+  }, [onValidityChange, ticked]);
+  const toggle = (id: string) => {
+    const next = ticked.includes(id) ? ticked.filter((t) => t !== id) : [...ticked, id];
+    setTicked(next);
+    const picks = { type: "list", listIds: next, listNames: next.map((t) => `View ${t}`) };
+    void onChange(schema.type === "string" ? JSON.stringify(picks) : picks);
+  };
+  return (
+    <div>
+      {["one", "two"].map((id) => (
+        <Input
+          key={id}
+          type="checkbox"
+          aria-label={`View ${id}`}
+          checked={ticked.includes(id)}
+          onChange={() => toggle(id)}
+        />
+      ))}
+    </div>
+  );
+}
+
+describe("OrchestratorStepperPanel — a renderer that reports its value unsendable (cinatra#3562)", () => {
+  beforeEach(() => {
+    for (const id of [TICKING_RENDERER_ID, MID_RUN_TICKING_RENDERER_ID]) {
+      fieldRendererRegistry.register({
+        id,
+        priority: 100,
+        condition: (_fieldName, schema) =>
+          (schema as { "x-renderer"?: unknown })["x-renderer"] === id,
+        renderer: TickingRenderer,
+      });
+    }
+  });
+
+  it("holds the setup field's Continue while nothing is ticked and sends every tick once one is", async () => {
+    const view = await mountGate({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
+    fireEvent.click(productContinues()[0]!);
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    fireEvent.click(view.getByRole("checkbox", { name: "View two" }));
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(false));
+    fireEvent.click(view.getByRole("checkbox", { name: "View two" }));
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
+
+    fireEvent.click(view.getByRole("checkbox", { name: "View two" }));
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(false));
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    fireEvent.click(productContinues()[0]!);
+    await waitFor(() =>
+      expect(hitlActions.approveReviewTask).toHaveBeenCalledWith(
+        "setup-run-3532",
+        {
+          accountScope: JSON.stringify({
+            type: "list",
+            listIds: ["two", "one"],
+            listNames: ["View two", "View one"],
+          }),
+        },
+        "accountScope",
+        { type: "string" },
+      ),
+    );
+  });
+
+  it("holds a mid-run gate's Continue while nothing is ticked and resumes with every tick", async () => {
+    const view = await mountGate({
+      xRenderer: MID_RUN_TICKING_RENDERER_ID,
+      fieldName: "accountScope",
+      schema: { type: "object" },
+      reviewTaskId: "review-run-3562",
+    });
+
+    await view.findByRole("checkbox", { name: "View one" });
+    expect(productContinues()).toHaveLength(0);
+    const outer = () => view.getByRole("button", { name: /Continue/ }) as HTMLButtonElement;
+    await waitFor(() => expect(outer().disabled).toBe(true));
+    fireEvent.click(outer());
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    fireEvent.click(view.getByRole("checkbox", { name: "View two" }));
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(outer().disabled).toBe(false));
+    fireEvent.click(outer());
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("review-run-3562");
+    expect(JSON.parse(payload.approvalNote as string)).toMatchObject({
+      type: "list",
+      listIds: ["two", "one"],
+      listNames: ["View two", "View one"],
+    });
+  });
+
+  it("holds the email outreach agent's own mid-run list step and resumes it with every tick", async () => {
+    // THE REAL GATE: the outreach agent's account-scope step is a mid-run
+    // `:list-picker` gate under this binding id. The build declares the id
+    // (the host's list kind draws it today); the stand-in below takes its place
+    // the way an extension-shipped component does, which keeps its own send
+    // (`drawsOwnSubmit: true`, the map-first branch of the default renderers).
+    expect(fieldRendererRegistry.list().some((e) => e.id === OUTREACH_LIST_PICKER_ID)).toBe(true);
+    fieldRendererRegistry.register({
+      id: OUTREACH_LIST_PICKER_ID,
+      priority: 90,
+      condition: (_fieldName, schema) =>
+        (schema as { "x-renderer"?: unknown })["x-renderer"] === OUTREACH_LIST_PICKER_ID,
+      renderer: TickingRenderer,
+      drawsOwnSubmit: true,
+    });
+    const view = await mountGate({
+      xRenderer: OUTREACH_LIST_PICKER_ID,
+      fieldName: "accountScope",
+      schema: { type: "object" },
+      reviewTaskId: "review-run-3562-outreach",
+    });
+
+    await view.findByRole("checkbox", { name: "View one" });
+    expect(productContinues()).toHaveLength(0);
+    const outer = () => view.getByRole("button", { name: /Continue/ }) as HTMLButtonElement;
+    await waitFor(() => expect(outer().disabled).toBe(true));
+    fireEvent.click(outer());
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(outer().disabled).toBe(false));
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(outer().disabled).toBe(true));
+    fireEvent.click(outer());
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    fireEvent.click(view.getByRole("checkbox", { name: "View two" }));
+    await waitFor(() => expect(outer().disabled).toBe(false));
+    fireEvent.click(outer());
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("review-run-3562-outreach");
+    const note = JSON.parse(payload.approvalNote as string) as Record<string, unknown>;
+    expect(note).toMatchObject({
+      type: "list",
+      listIds: ["one", "two"],
+      listNames: ["View one", "View two"],
+    });
+    expect(typeof note.snapshotAt).toBe("string");
+    expect(note).not.toHaveProperty("listId");
+  });
+
+  it("a report belongs to its own gate: the next gate, whose renderer reports nothing, is not held", async () => {
+    const view = await mountGate({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
+    view.advanceTo({ xRenderer: CONTROL_LESS_RENDERER_ID, fieldName: "callToAction" });
+    await waitFor(() => expect(ctaBox()).not.toBeNull());
+    await waitFor(() => expect(productContinues()).toHaveLength(1));
+    expect(productContinues()[0]!.disabled).toBe(false);
+  });
+});

@@ -522,6 +522,7 @@ function setupGateIdentity(gate: {
 function SetupFieldContinue({
   submitting,
   alreadySent,
+  blocked,
   onContinue,
 }: {
   submitting: boolean;
@@ -529,6 +530,7 @@ function SetupFieldContinue({
   // The control stays drawn until the stream advances the card, but it is dead:
   // a second press must never send the same approval twice.
   alreadySent: boolean;
+  blocked: boolean;
   onContinue: () => Promise<void>;
 }): ReactElement {
   // ONE PRESS IS ONE DRAWN STATE (cinatra#3532, fix leg 3). The control was
@@ -543,7 +545,7 @@ function SetupFieldContinue({
         size="sm"
         className="gap-1.5"
         data-action="submit-hitl-screen"
-        disabled={busy}
+        disabled={busy || blocked}
         onClick={() => void onContinue()}
       >
         {busy ? "Continuing…" : "Continue"}
@@ -941,6 +943,10 @@ function HitlApprovalCard({
   };
 
   const handleContinue = async () => {
+    // Reported unsendable (see `gateValidity`): the press sends nothing, before
+    // the run-name check and the optimistic spinner below.
+    const validity = gateValidityRef.current;
+    if (validity !== null && validity.key === setupGateKey && !validity.valid) return;
     if (!(await checkRunName())) return;
     // Optimistically switch to SpinnerCard right away — before the API call starts.
     // onApproveRejected rolls back if the call fails.
@@ -1113,6 +1119,27 @@ function HitlApprovalCard({
   >(null);
   const setupFlushRef = useRef<{ key: string; fn: () => Promise<void> } | null>(null);
   const setupPressRef = useRef(false);
+  // THE RENDERER'S OWN READING OF ITS VALUE (cinatra#3562). A renderer may
+  // report through `onValidityChange` that what it holds may not be sent (a
+  // list step with nothing ticked); the latest report is kept per gate, by the
+  // gate's identity. While the last report for the gate on screen is `false`,
+  // the Continue drawn for it (the setup field's or the mid-run one) is
+  // unavailable and a press sends nothing. A renderer that never reports blocks
+  // nothing, so no undeclared reason ever stops a reader (cinatra#3532). State
+  // for the drawn control, a ref for the press, which reads it in the same turn.
+  const [gateValidity, setGateValidity] = useState<{ key: string; valid: boolean } | null>(null);
+  const gateValidityRef = useRef<{ key: string; valid: boolean } | null>(null);
+  // A plain function, not a useCallback: the React Compiler memoizes this
+  // card itself, and a manual memo keyed by the gate identity would make it
+  // skip the whole component. The report is idempotent, so a renderer that
+  // reports again after a re-render changes nothing.
+  const reportGateValidity = (valid: boolean) => {
+    gateValidityRef.current = { key: setupGateKey, valid };
+    setGateValidity((previous) => previous?.key === setupGateKey && previous.valid === valid
+      ? previous : { key: setupGateKey, valid });
+  };
+  const gateReportedInvalid =
+    gateValidity !== null && gateValidity.key === setupGateKey && !gateValidity.valid;
   // cinatra#3532 (convergence) — THE GATE WHOSE ANSWER WAS ALREADY ACCEPTED.
   // The submit core returns without throwing for an accepted answer, for the
   // blocked outcome and for an already-resolved gate; in every one of those the
@@ -1180,6 +1207,9 @@ function HitlApprovalCard({
   // value the way the renderer's own button would, then submits what the change
   // road staged — nothing more.
   const submitStagedSetupAnswer = async (key: string): Promise<void> => {
+    // Reported unsendable (see `gateValidity`): the press sends nothing.
+    const validity = gateValidityRef.current;
+    if (validity !== null && validity.key === key && !validity.valid) return;
     // ONE PRESS AT A TIME, on a ref rather than the rendered `disabled` alone:
     // the flush is asynchronous and `isApproving` is React state, so two presses
     // in one tick would both reach the submit core.
@@ -1409,6 +1439,10 @@ function HitlApprovalCard({
             onApply={handleApply}
             aiSuggestions={aiSuggestions}
             onHitlContextChange={handleHitlContextChange}
+            // Any gate's renderer may report its value unsendable; the report
+            // holds the Continue drawn for this gate (see `gateValidity`), on
+            // the setup road and mid-run.
+            onValidityChange={reportGateValidity}
             // cinatra#3532 — where the product owns the send, the renderer's own
             // submit is not drawn inside the field (the shared props contract
             // says a renderer that draws its own Continue must skip it), and the
@@ -1436,13 +1470,19 @@ function HitlApprovalCard({
           <SetupFieldContinue
             submitting={isApproving}
             alreadySent={setupSentKey === setupGateKey}
+            blocked={gateReportedInvalid}
             onContinue={() => submitStagedSetupAnswer(setupGateKey)}
           />
         ) : null}
 
         {showContinueButton && (
           <div className="flex justify-end pt-2 border-t border-line">
-            <Button size="sm" disabled={isApproving} onClick={handleContinue} className="gap-1.5">
+            <Button
+              size="sm"
+              disabled={isApproving || gateReportedInvalid}
+              onClick={handleContinue}
+              className="gap-1.5"
+            >
               {isApproving ? "Continuing…" : "Continue"}
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>
