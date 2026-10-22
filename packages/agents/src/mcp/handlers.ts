@@ -54,6 +54,7 @@ import { claimGateForResume } from "../run-status";
 // the file-size ratchet). The send PORT, ledger store, and port types are
 // imported by that module, not here.
 import { handleEmailTestDeliveryRunSend, handleEmailTestDeliveryParseAction } from "./test-delivery-handlers";
+import { declarePersonDecisionEvaluation } from "@/lib/authz/person-decision-declaration";
 // The `agent_run` create → decide → dispatch sequence (chat-hitl S9b).
 import { createAgentRunForLaunchFrame } from "../actions";
 import { handleEmailOutreachInitialDraftsUpdate } from "./drafts-persist-handler";
@@ -5751,10 +5752,9 @@ export function createAgentBuilderPrimitiveHandlers(): Record<
       handleAgentRunHitlPromptsList(req as Parameters<typeof handleAgentRunHitlPromptsList>[0]),
     agent_run_hitl_prompts_exclude: (req) =>
       handleAgentRunHitlPromptsExclude(req as Parameters<typeof handleAgentRunHitlPromptsExclude>[0]),
-    // run-scoped test-delivery send + parse primitives (#1625) — run,
-    // declaring package, campaign, and submission id all context-derived.
-    email_test_delivery_run_send: (req) =>
-      handleEmailTestDeliveryRunSend(req as Parameters<typeof handleEmailTestDeliveryRunSend>[0]),
+    // run-scoped test-delivery send + parse (#1625), context-derived; the send evaluates the person's gate (#3745).
+    email_test_delivery_run_send: declarePersonDecisionEvaluation((req: unknown) =>
+      handleEmailTestDeliveryRunSend(req as Parameters<typeof handleEmailTestDeliveryRunSend>[0])),
     email_test_delivery_parse_action: (req) =>
       handleEmailTestDeliveryParseAction(req as Parameters<typeof handleEmailTestDeliveryParseAction>[0]),
     // run-scoped drafts-review PERSIST primitive (#1959) — run, declaring

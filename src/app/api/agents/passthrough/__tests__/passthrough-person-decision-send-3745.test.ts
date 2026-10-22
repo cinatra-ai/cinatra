@@ -2,13 +2,16 @@
  * cinatra#3745 (criterion 5b) — the deterministic passthrough keeps the
  * person-decision road of `email_test_delivery_run_send`.
  *
- * The send tool is in the outward-effect set, and it evaluates the person's
- * answered gate itself: it sends only for the verified submission the host
- * reads from its own latest-gate-task record and stamps on the run-scoped
- * frame, and its ledger uses that submission once. With that verified
- * submission the route serves it behind every other boundary ceiling. Without
- * one (no record, or a read error), or with only a caller-supplied id, the full
- * boundary refuses it for want of the person's recorded decision.
+ * The send tool is in the outward-effect set, and its registration declares
+ * that it evaluates the person's answered gate itself: it sends only for the
+ * verified submission the host reads from its own latest-gate-task record and
+ * stamps on the run-scoped frame, and its ledger uses that submission once.
+ * With that verified submission the route serves it behind every other
+ * boundary ceiling. Without one (no record, or a read error), or with only a
+ * caller-supplied id, the full boundary refuses it for want of the person's
+ * recorded decision. The host names no tool for this road: a handler whose
+ * registration does not declare it is refused the same way, and the boundary
+ * module carries no tool set for it (the core/extension border, cinatra#3821).
  *
  * Drives the real route, the real run binding and the real boundary; the run
  * store, the handler registry (the send handler records the frame it is served
@@ -26,6 +29,7 @@ const h = vi.hoisted(() => ({
   verifyRunExecutedSource: vi.fn(),
   mintRunWriteAuthorityForMcp: vi.fn(),
   sends: [] as Array<{ input: unknown; frame: Record<string, unknown> }>,
+  declareSend: true,
 }));
 
 vi.mock("server-only", () => ({}));
@@ -71,22 +75,26 @@ vi.mock("@/lib/primitive-handlers", async () => {
   const { mcpRequestContextStorage } = await vi.importActual<
     typeof import("@cinatra-ai/mcp-server/request-context")
   >("@cinatra-ai/mcp-server/request-context");
+  const { declarePersonDecisionEvaluation } = await vi.importActual<
+    typeof import("@/lib/authz/person-decision-declaration")
+  >("@/lib/authz/person-decision-declaration");
+  const send = async (call: { input: unknown }) => {
+    h.sends.push({ input: call.input, frame: { ...mcpRequestContextStorage.getStore() } as Record<string, unknown> });
+    return { sent: 1 };
+  };
+  // The same send, once as its registration declares it and once undeclared.
+  const declared = declarePersonDecisionEvaluation(async (call: { input: unknown }) => send(call));
+  const undeclared = async (call: { input: unknown }) => send(call);
   return {
     collectAllPrimitiveHandlers: async () => ({
-      email_test_delivery_run_send: async (call: { input: unknown }) => {
-        h.sends.push({ input: call.input, frame: { ...mcpRequestContextStorage.getStore() } as Record<string, unknown> });
-        return { sent: 1 };
-      },
+      email_test_delivery_run_send: h.declareSend ? declared : undeclared,
     }),
   };
 });
 
 import { POST } from "@/app/api/agents/passthrough/route";
-import {
-  OUTWARD_EFFECT_TOOL_NAMES,
-  PERSON_DECISION_EVALUATING_TOOLS,
-  RECORDED_DECISION_REQUIRED_REASON,
-} from "@/lib/authz/mcp-boundary";
+import * as boundary from "@/lib/authz/mcp-boundary";
+import { OUTWARD_EFFECT_TOOL_NAMES, RECORDED_DECISION_REQUIRED_REASON } from "@/lib/authz/mcp-boundary";
 
 const SEND = "email_test_delivery_run_send";
 const ATTEST_KEY = "step-attest-key-under-test";
@@ -127,6 +135,7 @@ function sendReq(body: Record<string, unknown> = {}): Request {
 
 beforeEach(() => {
   h.sends.length = 0;
+  h.declareSend = true;
   h.readAgentRunById.mockReset().mockResolvedValue(RUN);
   h.readAgentRunByContextId.mockReset().mockImplementation(async (ctx: string) => (ctx === CTX ? RUN : null));
   h.resolveLatestWayflowGateTaskId.mockReset().mockResolvedValue(null);
@@ -183,9 +192,18 @@ describe("the passthrough's person-decision send road (cinatra#3745, 5b)", () =>
     expect(h.sends[0]!.frame.verifiedSubmissionId).toBe("gate-task-1");
   });
 
-  it("census: exactly the one send tool evaluates the person's decision, and it is an outward tool", () => {
-    expect([...PERSON_DECISION_EVALUATING_TOOLS]).toEqual([SEND]);
-    for (const tool of PERSON_DECISION_EVALUATING_TOOLS) expect(OUTWARD_EFFECT_TOOL_NAMES.has(tool)).toBe(true);
+  it("refuses the send when its registration does not declare the road, even with a verified submission", async () => {
+    h.declareSend = false;
+    h.resolveLatestWayflowGateTaskId.mockResolvedValue("gate-task-1");
+    const res = await POST(sendReq());
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: RECORDED_DECISION_REQUIRED_REASON });
+    expect(h.sends).toHaveLength(0);
+  });
+
+  it("the boundary names no person-decision tool; the send stays an outward tool", () => {
+    expect(Object.keys(boundary)).not.toContain("PERSON_DECISION_EVALUATING_TOOLS");
+    expect(OUTWARD_EFFECT_TOOL_NAMES.has(SEND)).toBe(true);
   });
 });
 
