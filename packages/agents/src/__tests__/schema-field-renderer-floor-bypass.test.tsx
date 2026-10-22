@@ -20,7 +20,13 @@
  * (empty) + overridden per-test, so the suite runs in a partial worktree and CI.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { useEffect, useState, type ComponentType } from "react";
+import {
+  Component,
+  useEffect,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from "react";
 import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import {
   fieldRendererRegistry,
@@ -192,5 +198,47 @@ describe("ExtensionFieldRenderer — a crashed component's validity report goes 
     await waitFor(() => expect(view.container.querySelector("#field-accountScope")).toBeTruthy());
     expect(view.queryByRole("button", { name: "Break" })).toBeNull();
     expect(onValidityChange).toHaveBeenLastCalledWith(true);
+  });
+
+  /** Draws what the wrapper lets escape, so a throw past the wrapper is read here. */
+  class EscapeCatcher extends Component<{ children?: ReactNode }, { escaped: boolean }> {
+    state = { escaped: false };
+
+    static getDerivedStateFromError(): { escaped: boolean } {
+      return { escaped: true };
+    }
+
+    render(): ReactNode {
+      return this.state.escaped ? <p>escaped the wrapper</p> : this.props.children;
+    }
+  }
+
+  it("still draws the floor when the caller passes no onValidityChange", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    __setFieldRendererComponentMapForTests({
+      [BINDING_ID]: {
+        resolution: "guardedOptional",
+        packageName: "@cinatra-test/pack-agent",
+        propsApiVersion: 1,
+        load: async () => ({ default: ReportsThenThrows }),
+      },
+    });
+    const Wrapper = makeExtensionFieldRenderer(BINDING_ID);
+    const view = render(
+      <EscapeCatcher>
+        <Wrapper
+          {...senderProps()}
+          fieldName="accountScope"
+          context={{ connectedApps: [] } as unknown as FieldRendererProps["context"]}
+        />
+      </EscapeCatcher>,
+    );
+
+    await view.findByRole("button", { name: "Break" });
+    fireEvent.click(view.getByRole("button", { name: "Break" }));
+
+    await waitFor(() => expect(view.container.querySelector("#field-accountScope")).toBeTruthy());
+    expect(view.queryByRole("button", { name: "Break" })).toBeNull();
+    expect(view.queryByText("escaped the wrapper")).toBeNull();
   });
 });

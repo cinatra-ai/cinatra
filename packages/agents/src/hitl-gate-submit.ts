@@ -547,9 +547,13 @@ export function applyAttachmentEnvelopeUserResponseOnly(
  * A report lives exactly as long as the renderer that made it. Each surface
  * releases it when that renderer leaves the screen or another renderer takes
  * its place on the same gate, so a renderer that never reports blocks nothing
- * (cinatra#3532) even where an earlier one reported `false`. React runs every
- * effect cleanup of a commit before any effect of it starts, so the release
- * comes before the next renderer's first report.
+ * (cinatra#3532) even where an earlier one reported `false`. The release runs
+ * in a passive effect cleanup, and React runs every passive effect cleanup of
+ * a commit before any passive effect of it starts. So the release comes before
+ * the next renderer's first report only when that renderer reports from a
+ * passive effect (`useEffect`). A report made while rendering, in a layout
+ * effect or in a ref callback can come before that release, which then drops
+ * it.
  */
 export type GateValidityStore = {
   /** The renderer on gate `key` reports whether its value may be sent. */
