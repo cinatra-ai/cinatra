@@ -16,7 +16,7 @@ export type BreadcrumbCrumb = {
 };
 
 export function humanizePathSegment(segment: string): string {
-  return decodeURIComponent(segment)
+  return safelyDecodePathSegment(segment)
     .replace(/[-_]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
@@ -31,6 +31,11 @@ export function humanizePathSegment(segment: string): string {
 // obvious short-id placeholder instead.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LONG_HEX_RE = /^[0-9a-f]{16,}$/i;
+// The supported seed namespace (cinatra#4295): `org-*`, `team-*` and `proj-*`
+// ids from scripts/seed.mjs, which src/lib/id-policy.ts keeps valid. Without
+// this they title-case into words ("Org Acme Group"). No literal route segment
+// under src/app starts with one of these prefixes, so no route name is caught.
+const SEED_ID_RE = /^(?:org|team|proj)-[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 // Malformed percent-encoding ("%", truncated UTF-8 escapes) makes
 // decodeURIComponent THROW — and these helpers run while rendering the shell,
@@ -49,7 +54,8 @@ export function isIdLikeSegment(segment: string): boolean {
   return (
     UUID_RE.test(decoded) ||
     LONG_HEX_RE.test(decoded) ||
-    LEGACY_NANOID_RE.test(decoded)
+    LEGACY_NANOID_RE.test(decoded) ||
+    SEED_ID_RE.test(decoded)
   );
 }
 
