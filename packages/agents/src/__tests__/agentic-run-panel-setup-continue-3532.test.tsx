@@ -445,21 +445,42 @@ function replaceTickingRenderer(id: string, renderer: (props: FieldRendererProps
 /**
  * A step that hands the test its report and its value, so that a report and a
  * press can run inside one act(): the press then reaches a Continue that is
- * still drawn available, and only the press-time check can stop it.
+ * still drawn available, and only the press-time check can stop it. The handle
+ * is bound by the drawn step's own effect; until then, and in every new case
+ * until it is bound again, a call through it throws rather than going nowhere
+ * (or to the step a previous case drew). The step draws the value the panel
+ * hands it back, so a case can read that its staging reached the panel.
  */
-const stepHandle: { report: (valid: boolean) => void; stage: (ids: string[]) => void } = {
-  report: () => {},
-  stage: () => {},
-};
-function HandleRenderer({ schema, onChange, onValidityChange }: FieldRendererProps) {
+const stepHandle: {
+  bound: boolean;
+  report: (valid: boolean) => void;
+  stage: (ids: string[]) => void;
+} = { bound: false, report: () => {}, stage: () => {} };
+function unbindStepHandle() {
+  stepHandle.bound = false;
+  stepHandle.report = () => {
+    throw new Error("no Handle step is drawn yet");
+  };
+  stepHandle.stage = () => {
+    throw new Error("no Handle step is drawn yet");
+  };
+}
+unbindStepHandle();
+function HandleRenderer({ schema, value, onChange, onValidityChange }: FieldRendererProps) {
   React.useEffect(() => {
     stepHandle.report = (valid) => onValidityChange?.(valid);
     stepHandle.stage = (ids) => {
       const picks = { type: "list", listIds: ids, listNames: ids.map((t) => `View ${t}`) };
       void onChange(schema.type === "string" ? JSON.stringify(picks) : picks);
     };
+    stepHandle.bound = true;
   });
-  return <p>Handle step</p>;
+  return (
+    <div>
+      <p>Handle step</p>
+      <p data-testid="handle-step-value">{typeof value === "string" ? value : ""}</p>
+    </div>
+  );
 }
 
 /**
@@ -520,6 +541,7 @@ async function renderMovablePanel(options: { strict?: boolean } = {}) {
 
 describe("AgenticRunPanel — a renderer that reports its value unsendable (cinatra#3562)", () => {
   beforeEach(() => {
+    unbindStepHandle();
     for (const id of [TICKING_RENDERER_ID, MID_RUN_TICKING_RENDERER_ID]) {
       fieldRendererRegistry.register({
         id,
@@ -664,10 +686,20 @@ describe("AgenticRunPanel — a renderer that reports its value unsendable (cina
     const view = await renderPanel();
 
     await view.findByText("Handle step");
+    await waitFor(() => expect(stepHandle.bound).toBe(true));
     act(() => stepHandle.stage(["one"]));
+    // THE ANSWER IS STAGED: the panel hands the step back what it staged, so a
+    // press that passed the hold would send it.
+    await waitFor(() =>
+      expect(view.getByTestId("handle-step-value").textContent).toBe(
+        JSON.stringify({ type: "list", listIds: ["one"], listNames: ["View one"] }),
+      ),
+    );
     await waitFor(() => expect(productContinue()?.disabled).toBe(false));
     act(() => {
       stepHandle.report(false);
+      // Still drawn available: only the press-time check can stop this press.
+      expect(productContinue()!.disabled).toBe(false);
       fireEvent.click(productContinue()!);
     });
     await waitFor(() => expect(productContinue()?.disabled).toBe(true));
@@ -693,10 +725,13 @@ describe("AgenticRunPanel — a renderer that reports its value unsendable (cina
     const view = await renderPanel();
 
     await view.findByText("Handle step");
+    await waitFor(() => expect(stepHandle.bound).toBe(true));
     act(() => stepHandle.stage(["one"]));
     await waitFor(() => expect(productContinue()?.disabled).toBe(false));
     act(() => {
       stepHandle.report(false);
+      // Still drawn available: only the press-time check can stop this press.
+      expect(productContinue()!.disabled).toBe(false);
       fireEvent.click(productContinue()!);
     });
     await waitFor(() => expect(productContinue()?.disabled).toBe(true));
@@ -794,6 +829,7 @@ describe("AgenticRunPanel — a renderer that reports its value unsendable (cina
     const view = await renderMovablePanel();
 
     await view.findByText("Handle step");
+    await waitFor(() => expect(stepHandle.bound).toBe(true));
     act(() => stepHandle.stage(["one"]));
     await waitFor(() => expect(productContinue()?.disabled).toBe(false));
     const lateReport = stepHandle.report;

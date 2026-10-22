@@ -28,6 +28,7 @@ import {
   type ReactNode,
 } from "react";
 import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { Button } from "@/components/ui/button";
 import {
   fieldRendererRegistry,
   type FieldRendererProps,
@@ -164,9 +165,9 @@ describe("ExtensionFieldRenderer — a crashed component's validity report goes 
     }, [onValidityChange]);
     if (broken) throw new Error("render crash");
     return (
-      <button type="button" onClick={() => setBroken(true)}>
+      <Button type="button" onClick={() => setBroken(true)}>
         Break
-      </button>
+      </Button>
     );
   }
 

@@ -974,6 +974,28 @@ function HitlApprovalCard({
     return true;
   };
 
+  // THE GATE A STAGED ANSWER BELONGS TO, and to no other. Sequential setup
+  // gates share one xRenderer and arrive with no frame between them (the same
+  // reason the renderer's remount key carries the field name, #810), so an
+  // answer staged for one field must never be sent for the next question.
+  const setupGateKey = setupGateIdentity(interruptContext);
+  // THE RENDERER'S OWN READING OF ITS VALUE (cinatra#3562). A renderer may
+  // report through `onValidityChange` that what it holds may not be sent (a
+  // list step with nothing ticked); each renderer's latest report is kept with
+  // its gate, by the gate's identity. While a report for the gate on screen is
+  // `false`, the Continue drawn for it (the setup field's or the mid-run one)
+  // is unavailable and a press sends nothing. A renderer that never reports
+  // blocks nothing, so no undeclared reason ever stops a reader (cinatra#3532).
+  // A report is released with the renderer that made it (`GateValidityOwner`).
+  // The drawn control subscribes to the store; the press reads it in the same
+  // turn.
+  const [gateValidity] = useState(createGateValidityStore);
+  const gateReportedInvalid = useSyncExternalStore(
+    gateValidity.subscribe,
+    () => gateValidity.isHeld(setupGateKey),
+    () => false,
+  );
+
   const handleContinue = async () => {
     // Reported unsendable (see `gateValidity`): the press sends nothing, before
     // the run-name check and the optimistic spinner below.
@@ -1129,11 +1151,6 @@ function HitlApprovalCard({
     !isMidRunHitl &&
     !isGroupedSetup &&
     entry?.drawsOwnSubmit !== true;
-  // THE GATE A STAGED ANSWER BELONGS TO, and to no other. Sequential setup
-  // gates share one xRenderer and arrive with no frame between them (the same
-  // reason the renderer's remount key carries the field name, #810), so an
-  // answer staged for one field must never be sent for the next question.
-  const setupGateKey = setupGateIdentity(interruptContext);
   // WHAT THE FIELD SHOWS WHILE ITS ANSWER IS STAGED. A field renderer is
   // CONTROLLED by the `value` prop — CtaRenderer's textarea reads it and keeps
   // no state of its own — so a staging path that changed nothing here would
@@ -1150,22 +1167,6 @@ function HitlApprovalCard({
   >(null);
   const setupFlushRef = useRef<{ key: string; fn: () => Promise<void> } | null>(null);
   const setupPressRef = useRef(false);
-  // THE RENDERER'S OWN READING OF ITS VALUE (cinatra#3562). A renderer may
-  // report through `onValidityChange` that what it holds may not be sent (a
-  // list step with nothing ticked); each renderer's latest report is kept with
-  // its gate, by the gate's identity. While a report for the gate on screen is
-  // `false`, the Continue drawn for it (the setup field's or the mid-run one)
-  // is unavailable and a press sends nothing. A renderer that never reports
-  // blocks nothing, so no undeclared reason ever stops a reader (cinatra#3532).
-  // A report is released with the renderer that made it (`GateValidityOwner`).
-  // The drawn control subscribes to the store; the press reads it in the same
-  // turn.
-  const [gateValidity] = useState(createGateValidityStore);
-  const gateReportedInvalid = useSyncExternalStore(
-    gateValidity.subscribe,
-    () => gateValidity.isHeld(setupGateKey),
-    () => false,
-  );
   // cinatra#3532 (convergence) — THE GATE WHOSE ANSWER WAS ALREADY ACCEPTED.
   // The submit core returns without throwing for an accepted answer, for the
   // blocked outcome and for an already-resolved gate; in every one of those the

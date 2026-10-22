@@ -126,10 +126,14 @@ const conversation = vi.hoisted(() => ({
 }));
 vi.mock("../hitl-conversation-panel", async (importOriginal) => {
   const real = await importOriginal<typeof import("../hitl-conversation-panel")>();
+  const { useLayoutEffect } = await vi.importActual<typeof import("react")>("react");
   function PassThroughConversationPanel(
     props: React.ComponentProps<typeof real.HitlConversationPanel>,
   ) {
-    conversation.onSubmit = props.onSubmit as typeof conversation.onSubmit;
+    // Handed to the test once the panel is drawn, never during its render.
+    useLayoutEffect(() => {
+      conversation.onSubmit = props.onSubmit as typeof conversation.onSubmit;
+    });
     return <real.HitlConversationPanel {...props} />;
   }
   return { ...real, HitlConversationPanel: PassThroughConversationPanel };
