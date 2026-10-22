@@ -55,6 +55,17 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { parseSpecCommit } from "../../ci/lib/design-pin.mjs";
+import { ANCHOR_CONTRACT_PATH, loadAnchorContract } from "../lib/anchor-contract.mjs";
+import {
+  ADOPTION_VARIANT_NAMES,
+  EXPECTED_VERSION_HISTORY,
+  adoptionVariants,
+  duplicateMemberNames,
+  duplicateVariants,
+  pinAdoptionProblems,
+  versionHistoryProblems,
+  versionHistoryVariants,
+} from "./chat-hitl-records.mjs";
 
 import {
   CANONICAL_CRITERIA,
@@ -455,5 +466,69 @@ describe("an injected document reader is honoured only under the flag", () => {
       virtualFilesystem: true,
     });
     expect(honoured.some((v) => v.includes(`no "${CELL}"`))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The version history and the pin adoption, as data (cinatra#4308). The
+// manifest's prose note is narrative; these records are what is checked.
+// ---------------------------------------------------------------------------
+
+// The counts of generated near-misses; a change of a generator changes them here.
+const N2 = 784;
+const N3 = 7;
+const N4 = 33;
+
+const rawTexts = () => ({
+  contractText: readFileSync(ANCHOR_CONTRACT_PATH, "utf8"),
+  manifestText: readFileSync(MANIFEST_PATH, "utf8"),
+});
+
+describe("the version history and the pin adoption are records, checked exactly", () => {
+  it("the manifest file has no duplicate member name", () => {
+    expect(duplicateMemberNames(readFileSync(MANIFEST_PATH, "utf8"))).toEqual([]);
+  });
+
+  it("the versionHistory is exactly the recorded history", () => {
+    expect(duplicateMemberNames(readFileSync(MANIFEST_PATH, "utf8"))).toEqual([]);
+    expect(versionHistoryProblems(manifest()), "the manifest's versionHistory").toEqual([]);
+    expect(manifest().version).toBe(EXPECTED_VERSION_HISTORY[EXPECTED_VERSION_HISTORY.length - 1].version);
+  });
+
+  it("every generated version-history variant is refused", () => {
+    const variants = versionHistoryVariants(EXPECTED_VERSION_HISTORY);
+    expect(variants.length).toBe(N2);
+    expect(new Set(variants.map((v) => v.name)).size).toBe(variants.length);
+    for (const { name, input } of variants) {
+      expect(versionHistoryProblems(input), name).not.toEqual([]);
+    }
+    const real = manifest();
+    expect(versionHistoryProblems({ version: real.version, versionHistory: JSON.parse(JSON.stringify(real.versionHistory)) })).toEqual([]);
+  });
+
+  it("every generated duplicate-member variant is refused", () => {
+    const texts = rawTexts();
+    const variants = duplicateVariants(texts);
+    expect(variants.length).toBe(N4);
+    expect(new Set(variants.map((v) => v.name)).size).toBe(variants.length);
+    for (const { name, text } of variants) {
+      expect(() => JSON.parse(text), name).not.toThrow();
+      expect(duplicateMemberNames(text), name).not.toEqual([]);
+    }
+    expect(duplicateMemberNames(texts.contractText)).toEqual([]);
+    expect(duplicateMemberNames(texts.manifestText)).toEqual([]);
+    expect(() => duplicateMemberNames("{")).toThrow();
+  });
+
+  it("the pin adoption owns a new version dated the move", () => {
+    expect(pinAdoptionProblems(manifest(), loadAnchorContract()), "the pin adoption").toEqual([]);
+    expect(adoptionVariants(manifest(), loadAnchorContract()).map((v) => v.name)).toEqual([...ADOPTION_VARIANT_NAMES]);
+    expect(ADOPTION_VARIANT_NAMES.length).toBe(N3);
+  });
+
+  it.each(ADOPTION_VARIANT_NAMES)("adoption variant %s is refused", (variantName) => {
+    const variant = adoptionVariants(manifest(), loadAnchorContract()).find((v) => v.name === variantName);
+    expect(variant, variantName).toBeTruthy();
+    expect(pinAdoptionProblems(variant.manifest, variant.contract, variant.ledger), variantName).not.toEqual([]);
   });
 });

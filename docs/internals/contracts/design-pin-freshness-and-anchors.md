@@ -209,13 +209,51 @@ node scripts/audit/adopt-design-pin.mjs --pin "design@<40-hex> specs/<drawing>.h
   mirror behind, the exact disagreement this script refuses to adopt on top of.
   A rollback that itself fails is reported in those words rather than reported
   as a clean tree;
-- the **re-ratification note is not written by the script**. That prose is a
-  claim a person makes about what they re-examined, and the script has
-  re-examined nothing. It prints where the note goes.
+- the **re-ratification note and records are not written by the script**.
+  That prose, and the `reRatification` record below, are a claim a person makes
+  about what they re-examined, and the script has re-examined nothing. It
+  prints what is still owed: the note, the record, the manifest's `version`
+  bump with its `versionHistory` entry, and the two literals of the records
+  helper.
 
 While `anchorsUnresolvedAtPin` is absent — as it is today — the digest is taken
 over the original three inputs and stands exactly where it stood. That is what
 lets these checks land before the adoption that writes it.
+
+## The re-ratification records — the checked claim of a pin move
+
+A pin move is told twice. The prose notes explain it; two **records** state it
+as data, and only the records are checked. No test reads the prose.
+
+- **`reRatification`** in `scripts/audit/chat-hitl-anchor-contract.json`, a
+  top-level object of exactly five keys. `previousRevision` is the revision of
+  the manifest's `specCommitDrift.previousPin`; `revision` is the manifest pin's;
+  `movedOn` is `specCommitDrift.movedOn` and must be a real calendar day;
+  `unresolvedAnchors` is the contract's `anchorsUnresolvedAtPin`, in the same
+  order; `anchorsReExamined` is the boolean `true`, the one claim the manifests
+  cannot derive, with no room for a denial or a hedge. The record is compared
+  **exactly** (canonical JSON, key set included) with the one those fields
+  imply. It is not a digest input, so writing it moves no digest. Its array is
+  named `unresolvedAnchors` so the adoption script's line locator never meets it.
+- **`versionHistory`** in `scripts/audit/chat-hitl-acceptance-manifest.json`,
+  directly after `version`: one `{"version": <int>, "date": "YYYY-MM-DD"}`
+  entry per manifest version from 2 on, oldest first. It must equal **exactly**
+  the frozen literal `EXPECTED_VERSION_HISTORY` of
+  `scripts/audit/__tests__/chat-hitl-records.mjs`, and `version` must be its
+  last entry's version; the same structural rules are checked on both.
+- **A pin adoption owns a version.** The helper's frozen `PIN_ADOPTIONS` lists
+  each adopted revision with the manifest version it owns. The last revision
+  is the manifest pin, the one before it is `reRatification.previousRevision`,
+  the last version is new and at most `version`, and its history entry is
+  dated the record's `movedOn` and the drift's `movedOn`.
+- **Duplicate member names are refused in the raw text.** `JSON.parse` keeps
+  the last of two equal names, so a stale first member would be invisible to
+  every parsed comparison. Both files are scanned for a member name that occurs
+  twice in one object (escaped spellings decoded) before any other check.
+
+The next adoption therefore, in the same change: bumps `version`, appends its
+`versionHistory` entry, writes `reRatification` with the moved revisions, and
+appends one entry to each literal. Otherwise the real-tree tests turn red.
 
 ## Rollout
 

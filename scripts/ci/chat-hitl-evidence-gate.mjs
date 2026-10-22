@@ -50,6 +50,9 @@ import {
   validateCaptureIndex,
 } from "./lib/capture-record-contract.mjs";
 import { decideOutcome } from "./lib/evidence-gate-rollout.mjs";
+// The proof kinds are the acceptance gate's own constant, never a second list:
+// a cell is cited only where that gate validates a proof.
+import { PROOF_KINDS } from "../audit/chat-hitl-acceptance-gate.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_REPO_ROOT = join(__dirname, "..", "..");
@@ -262,38 +265,58 @@ export function collectCitedCells(repoRoot, manifestPath = ACCEPTANCE_MANIFEST_P
   } catch {
     return [];
   }
+  return citedCellsOf(manifest, manifestPath);
+}
+
+function isPlainObject(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * The cells a parsed manifest cites: per row, per proof kind of PROOF_KINDS,
+ * each entry's `file` and `testName`. Nothing else is read -- no top-level key,
+ * no row note, priorNote, gap or ruling, no proof-entry note -- so prose that
+ * quotes a cell name is no citation. A shape it cannot read is refused (a
+ * throw; the CLI exits 2), never skipped.
+ */
+export function citedCellsOf(manifest, manifestPath = ACCEPTANCE_MANIFEST_PATH) {
+  if (!isPlainObject(manifest)) throw new Error(`${manifestPath}: the manifest is not an object`);
+  if (manifest.rows === undefined) return [];
+  if (!Array.isArray(manifest.rows)) throw new Error(`${manifestPath}: rows is not an array`);
   const cited = [];
   const seen = new Set();
-  const visit = (node, rowLabel) => {
-    if (Array.isArray(node)) {
-      for (const item of node) visit(item, rowLabel);
-      return;
-    }
-    if (!node || typeof node !== "object") return;
+  manifest.rows.forEach((row, index) => {
+    if (!isPlainObject(row)) throw new Error(`${manifestPath}: rows[${index}] is not an object`);
     // The rows carry no id, so a row is named by the criterion it answers --
     // that is what a person reading the finding needs in order to find it.
     const label =
-      typeof node.criterion === "string"
-        ? `row "${node.criterion.slice(0, 60)}${node.criterion.length > 60 ? "…" : ""}"`
-        : rowLabel;
-    for (const value of Object.values(node)) {
-      if (typeof value === "string") {
-        const base = value.split("/").pop() ?? value;
-        const claim = parseCellName(base);
-        if (!claim) continue;
-        const key = `${label}::${claim.cell}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        cited.push({
-          cell: claim.cell,
-          citedBy: `${manifestPath}${label ? ` ${label}` : ""}`,
-        });
-      } else {
-        visit(value, label);
+      typeof row.criterion === "string"
+        ? `row "${row.criterion.slice(0, 60)}${row.criterion.length > 60 ? "…" : ""}"`
+        : null;
+    for (const [key, proofs] of Object.entries(row)) {
+      if (!PROOF_KINDS.includes(key)) {
+        if (/proofs$/i.test(key)) throw new Error(`${manifestPath}: rows[${index}].${key} is not a proof kind the acceptance gate validates`);
+        continue;
       }
+      if (!Array.isArray(proofs)) throw new Error(`${manifestPath}: rows[${index}].${key} is not an array`);
+      proofs.forEach((entry, at) => {
+        if (!isPlainObject(entry)) throw new Error(`${manifestPath}: rows[${index}].${key}[${at}] is not an object`);
+        for (const field of Object.keys(entry)) {
+          if (field !== "file" && field !== "testName") continue;
+          const value = entry[field];
+          if (typeof value !== "string") continue;
+          const claim = parseCellName(value.split("/").pop() ?? value);
+          if (!claim) continue;
+          const seenKey = `${label}::${claim.cell}`;
+          if (seen.has(seenKey)) continue;
+          seen.add(seenKey);
+          cited.push({ cell: claim.cell, citedBy: `${manifestPath}${label ? ` ${label}` : ""}` });
+        }
+      });
     }
-  };
-  visit(manifest, null);
+  });
   return cited;
 }
 

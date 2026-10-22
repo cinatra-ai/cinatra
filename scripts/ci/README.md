@@ -261,6 +261,14 @@ path. The audit half is the stricter reader — painted counts, measured absence
 a pinned card instance — and its extras are graded when present on a committed
 record and required of what its own driver writes, with this contract as the
 floor for every record either way.
+
+The manifest binding reads **proof fields only**: per row, per proof kind of the
+acceptance gate's `PROOF_KINDS`, each entry's `file` and `testName`. A note,
+`priorNote`, `gap`, `ruling` or proof-entry note that quotes a cell name is no
+citation. A shape the binding cannot read (rows not an array, a row or entry
+that is not an object, a proof kind not an array, an unknown `*proofs` key) is
+refused and the CLI exits 2, never skipped.
+
 `chat-hitl-evidence-gate.rollout.json` is the warn-first policy — the gate
 enforces only for branches created after `gateLandedAt`, grandfathers the
 branches listed by name, and keeps the findings already on `main` as warnings

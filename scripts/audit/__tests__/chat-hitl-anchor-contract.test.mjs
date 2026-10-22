@@ -41,6 +41,12 @@ import {
   loadAnchorContract,
 } from "../lib/anchor-contract.mjs";
 import { MANIFEST_PATH } from "../chat-hitl-acceptance-gate.mjs";
+import {
+  duplicateMemberNames,
+  expectedReRatification,
+  reRatificationProblems,
+  reRatificationVariants,
+} from "./chat-hitl-records.mjs";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const GATE = join(REPO_ROOT, "scripts", "audit", "chat-hitl-acceptance-gate.mjs");
@@ -328,5 +334,40 @@ describe("the fifth kind is covered by the same alarm", () => {
     const decided = anchors.chat_thread[`${KIND}|decided`].join("\n");
     expect(decided).toContain(`[data-lifecycle-card="${KIND}"] frame absent`);
     expect(decided).not.toContain(`[data-lifecycle-card="${KIND}"] frame present`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. The re-ratification RECORD (cinatra#4308): the move as data, compared
+//    exactly; the prose note beside it is narrative and is not read here.
+// ---------------------------------------------------------------------------
+
+// The count of generated near-misses; a change of the generator changes it here.
+const N1 = 384;
+
+describe("the re-ratification record is the checked claim of the pin move", () => {
+  it("the contract file has no duplicate member name", () => {
+    const text = readFileSync(ANCHOR_CONTRACT_PATH, "utf8");
+    expect(duplicateMemberNames(text)).toEqual([]);
+  });
+
+  it("the reRatification record is the move the manifest declares", () => {
+    expect(duplicateMemberNames(readFileSync(ANCHOR_CONTRACT_PATH, "utf8"))).toEqual([]);
+    const record = contract().reRatification;
+    const problems = reRatificationProblems(record, expectedReRatification(manifest(), contract()));
+    expect(problems, "the contract's reRatification record").toEqual([]);
+    expect(record.anchorsReExamined).toBe(true);
+  });
+
+  it("every generated re-ratification variant is refused", () => {
+    const expected = expectedReRatification(manifest(), contract());
+    const variants = reRatificationVariants(expected);
+    expect(variants.length).toBe(N1);
+    expect(new Set(variants.map((v) => v.name)).size).toBe(variants.length);
+    for (const { name, record } of variants) {
+      expect(reRatificationProblems(record, expected), name).not.toEqual([]);
+    }
+    expect(reRatificationProblems(contract().reRatification, expected)).toEqual([]);
+    expect(reRatificationProblems(clone(contract().reRatification), expected)).toEqual([]);
   });
 });

@@ -36,6 +36,8 @@ import {
   scanDispatchProse,
   POLICY_PATH,
 } from "../chat-hitl-evidence-gate.mjs";
+import * as gateModule from "../chat-hitl-evidence-gate.mjs";
+import { parseCellName } from "../lib/capture-record-contract.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..", "..");
@@ -276,7 +278,7 @@ beforeAll(() => {
       rows: [
         {
           id: "AC-15",
-          proofs: [
+          e2eProofs: [
             // Deliberately NOT one of the grandfathered cell names: this
             // fixture is the NEW claim a new branch makes, which must fail.
             { file: "test-results/x/README.md", testName: "X9__review-card__chat_thread__pending.png" },
@@ -324,7 +326,7 @@ describe("runGate over a fixture tree", () => {
         rows: [
           {
             criterion: "a pre-existing chat capture",
-            proofs: [{ testName: "X1__review-card__chat_thread__pending.png" }],
+            e2eProofs: [{ testName: "X1__review-card__chat_thread__pending.png" }],
           },
         ],
       }),
@@ -363,5 +365,97 @@ describe("the CLI on the real tree", () => {
     expect(run.status, run.stderr).toBe(0);
     const parsed = JSON.parse(run.stdout);
     expect(parsed.failing).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The binding reads proof fields only (cinatra#4308): a cell is cited by a
+// proof entry's `file` or `testName` of a proof kind the acceptance gate
+// validates, never by prose that quotes a cell name.
+// ---------------------------------------------------------------------------
+
+describe("the manifest binding reads proof fields only", () => {
+  const MANIFEST_REL = join("scripts", "audit", "chat-hitl-acceptance-manifest.json");
+  let root;
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "evidence-proof-fields-"));
+    mkdirSync(join(root, "scripts", "audit"), { recursive: true });
+  });
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+  const citedFrom = (manifest) => {
+    writeFileSync(join(root, MANIFEST_REL), typeof manifest === "string" ? manifest : JSON.stringify(manifest));
+    return collectCitedCells(root, MANIFEST_REL);
+  };
+  const collectCitedCells = (...args) => gateModule.collectCitedCells(...args);
+
+  it("only proof file and testName values are cited", () => {
+    const manifest = {
+      note: "X9__review-card__chat_thread__pending.png",
+      rows: [
+        {
+          criterion: "a cited capture",
+          note: "X2__review-card__chat_thread__pending.png",
+          priorNote: "X3__review-card__run_card__pending.png",
+          gap: "X4__review-card__chat_thread__pending.png",
+          ruling: "X5__review-card__chat_thread__pending.png",
+          e2eProofs: [
+            {
+              file: "test-results/x/X6__review-card__chat_thread__pending.png",
+              testName: "X7__review-card__chat_thread__pending.png",
+              note: "X8__review-card__chat_thread__pending.png",
+            },
+          ],
+          unitProofs: [{ testName: "X1__review-card__site_widget__pending.png" }],
+        },
+      ],
+    };
+    const cited = citedFrom(manifest);
+    expect(cited.map((c) => c.cell)).toEqual([
+      "X6__review-card__chat_thread__pending",
+      "X7__review-card__chat_thread__pending",
+      "X1__review-card__site_widget__pending",
+    ]);
+    expect(cited.every((c) => c.citedBy === `${MANIFEST_REL} row "a cited capture"`)).toBe(true);
+    expect(typeof gateModule.citedCellsOf).toBe("function");
+    expect(gateModule.citedCellsOf(manifest, MANIFEST_REL)).toEqual(cited);
+  });
+
+  it("a malformed or unknown proof field is refused, not skipped", () => {
+    const cases = [
+      ["the manifest is an array", "[]", /the manifest is not an object/],
+      ["rows is not an array", { rows: {} }, /rows is not an array/],
+      ["a row is null", { rows: [null] }, /rows\[0\] is not an object/],
+      ["a row is a string", { rows: ["X9__review-card__chat_thread__pending.png"] }, /rows\[0\] is not an object/],
+      ["a row is an array", { rows: [[]] }, /rows\[0\] is not an object/],
+      ["a proof kind is not an array", { rows: [{ e2eProofs: { testName: "X9__review-card__chat_thread__pending.png" } }] }, /rows\[0\]\.e2eProofs is not an array/],
+      ["a proof entry is not an object", { rows: [{ e2eProofs: ["X9__review-card__chat_thread__pending.png"] }] }, /rows\[0\]\.e2eProofs\[0\] is not an object/],
+      ["a proof entry is null", { rows: [{ gateProofs: [null] }] }, /rows\[0\]\.gateProofs\[0\] is not an object/],
+      ["an unknown proofs key", { rows: [{ proofs: [] }] }, /rows\[0\]\.proofs is not a proof kind/],
+      ["an unknown extraProofs key", { rows: [{ extraProofs: [] }] }, /rows\[0\]\.extraProofs is not a proof kind/],
+      ["an odd-case proof kind", { rows: [{ E2EPROOFS: [] }] }, /rows\[0\]\.E2EPROOFS is not a proof kind/],
+    ];
+    for (const [name, manifest, message] of cases) {
+      expect(() => citedFrom(manifest), name).toThrow(message);
+    }
+    writeFileSync(join(root, "capture-index.json"), JSON.stringify({ records: [] }));
+    writeFileSync(join(root, MANIFEST_REL), JSON.stringify({ rows: [{ proofs: [] }] }));
+    expect(() => scanCaptureEvidence(root, { captureIndexPath: join(root, "capture-index.json"), manifestPath: MANIFEST_REL })).toThrow(
+      /is not a proof kind/,
+    );
+    expect(citedFrom({ rows: [{ criterion: "no proofs at all" }] })).toEqual([]);
+    expect(citedFrom({ note: "no rows" })).toEqual([]);
+  });
+
+  it("the real manifest cites exactly its 19 proof cells", () => {
+    const cited = collectCitedCells(REPO_ROOT);
+    expect(cited).toHaveLength(19);
+    const real = JSON.parse(readFileSync(join(REPO_ROOT, MANIFEST_REL), "utf8"));
+    const prior = real.rows[14].priorNote;
+    const priorClaim = parseCellName(prior.split("/").pop());
+    expect(priorClaim, "row 15's priorNote names a run_card cell").toBeTruthy();
+    expect(cited.map((c) => c.cell)).not.toContain(priorClaim.cell);
+    expect(scanCaptureEvidence(REPO_ROOT)).toEqual([]);
   });
 });
