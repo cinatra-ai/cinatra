@@ -792,6 +792,26 @@ function replaceTickingRenderer(id: string, renderer: (props: FieldRendererProps
   });
 }
 
+/**
+ * A step that hands the test its report and its value, so that a report and a
+ * press can run inside one act(): the press then reaches a Continue that is
+ * still drawn available, and only the press-time check can stop it.
+ */
+const stepHandle: { report: (valid: boolean) => void; stage: (ids: string[]) => void } = {
+  report: () => {},
+  stage: () => {},
+};
+function HandleRenderer({ schema, onChange, onValidityChange }: FieldRendererProps) {
+  React.useEffect(() => {
+    stepHandle.report = (valid) => onValidityChange?.(valid);
+    stepHandle.stage = (ids) => {
+      const picks = { type: "list", listIds: ids, listNames: ids.map((t) => `View ${t}`) };
+      void onChange(schema.type === "string" ? JSON.stringify(picks) : picks);
+    };
+  });
+  return <p>Handle step</p>;
+}
+
 describe("OrchestratorStepperPanel — a renderer that reports its value unsendable (cinatra#3562)", () => {
   beforeEach(() => {
     for (const id of [TICKING_RENDERER_ID, MID_RUN_TICKING_RENDERER_ID]) {
@@ -986,5 +1006,72 @@ describe("OrchestratorStepperPanel — a renderer that reports its value unsenda
     ];
     expect(taskId).toBe("review-run-3562-confirm");
     expect(payload).toMatchObject({ approved: true });
+  });
+
+  it("a setup field's Continue pressed in the same turn as a false report sends nothing", async () => {
+    replaceTickingRenderer(TICKING_RENDERER_ID, HandleRenderer);
+    const view = await mountGate({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+
+    await view.findByText("Handle step");
+    act(() => stepHandle.stage(["one"]));
+    await waitFor(() => expect(productContinues()[0]?.disabled).toBe(false));
+    act(() => {
+      stepHandle.report(false);
+      fireEvent.click(productContinues()[0]!);
+    });
+    await waitFor(() => expect(productContinues()[0]?.disabled).toBe(true));
+    act(() => {
+      stepHandle.stage(["two"]);
+      stepHandle.report(true);
+    });
+    await waitFor(() => expect(productContinues()[0]?.disabled).toBe(false));
+    fireEvent.click(productContinues()[0]!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalled());
+    expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1);
+    expect(hitlActions.approveReviewTask).toHaveBeenNthCalledWith(
+      1,
+      "setup-run-3532",
+      { accountScope: JSON.stringify({ type: "list", listIds: ["two"], listNames: ["View two"] }) },
+      "accountScope",
+      { type: "string" },
+    );
+  });
+
+  it("a mid-run gate's Continue pressed in the same turn as a false report sends nothing", async () => {
+    replaceTickingRenderer(MID_RUN_TICKING_RENDERER_ID, HandleRenderer);
+    const view = await mountGate({
+      xRenderer: MID_RUN_TICKING_RENDERER_ID,
+      fieldName: "accountScope",
+      schema: { type: "object" },
+      reviewTaskId: "review-run-3562",
+    });
+    const outer = () => view.queryByRole("button", { name: /Continue/ }) as HTMLButtonElement | null;
+
+    await view.findByText("Handle step");
+    act(() => stepHandle.stage(["one"]));
+    await waitFor(() => expect(outer()?.disabled).toBe(false));
+    act(() => {
+      stepHandle.report(false);
+      fireEvent.click(outer()!);
+    });
+    await waitFor(() => expect(outer()?.disabled).toBe(true));
+    act(() => {
+      stepHandle.stage(["two"]);
+      stepHandle.report(true);
+    });
+    await waitFor(() => expect(outer()?.disabled).toBe(false));
+    fireEvent.click(outer()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalled());
+    expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1);
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("review-run-3562");
+    expect(JSON.parse(payload.approvalNote as string)).toMatchObject({
+      type: "list",
+      listIds: ["two"],
+      listNames: ["View two"],
+    });
   });
 });

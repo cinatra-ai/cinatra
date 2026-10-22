@@ -26,7 +26,7 @@
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 
 import { Input } from "@/components/ui/input";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
@@ -440,6 +440,26 @@ function replaceTickingRenderer(id: string, renderer: (props: FieldRendererProps
   });
 }
 
+/**
+ * A step that hands the test its report and its value, so that a report and a
+ * press can run inside one act(): the press then reaches a Continue that is
+ * still drawn available, and only the press-time check can stop it.
+ */
+const stepHandle: { report: (valid: boolean) => void; stage: (ids: string[]) => void } = {
+  report: () => {},
+  stage: () => {},
+};
+function HandleRenderer({ schema, onChange, onValidityChange }: FieldRendererProps) {
+  React.useEffect(() => {
+    stepHandle.report = (valid) => onValidityChange?.(valid);
+    stepHandle.stage = (ids) => {
+      const picks = { type: "list", listIds: ids, listNames: ids.map((t) => `View ${t}`) };
+      void onChange(schema.type === "string" ? JSON.stringify(picks) : picks);
+    };
+  });
+  return <p>Handle step</p>;
+}
+
 /** Mount the panel, and move it to another gate the way the stream does. */
 async function renderMovablePanel() {
   const { AgenticRunPanel } = await import("../agentic-run-panel");
@@ -589,5 +609,63 @@ describe("AgenticRunPanel — a renderer that reports its value unsendable (cina
       expect((view.getByRole("checkbox", { name: "View one" }) as HTMLInputElement).checked).toBe(true),
     );
     await waitFor(() => expect(productContinue()!.disabled).toBe(false));
+  });
+
+  it("a setup field's Continue pressed in the same turn as a false report sends nothing", async () => {
+    replaceTickingRenderer(TICKING_RENDERER_ID, HandleRenderer);
+    await setGate(TICKING_RENDERER_ID, "accountScope", { type: "string" });
+    const view = await renderPanel();
+
+    await view.findByText("Handle step");
+    act(() => stepHandle.stage(["one"]));
+    await waitFor(() => expect(productContinue()?.disabled).toBe(false));
+    act(() => {
+      stepHandle.report(false);
+      fireEvent.click(productContinue()!);
+    });
+    await waitFor(() => expect(productContinue()?.disabled).toBe(true));
+    act(() => {
+      stepHandle.stage(["two"]);
+      stepHandle.report(true);
+    });
+    await waitFor(() => expect(productContinue()?.disabled).toBe(false));
+    fireEvent.click(productContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalled());
+    expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1);
+    expect(hitlActions.approveReviewTask).toHaveBeenNthCalledWith(
+      1,
+      "setup-run-3532",
+      { accountScope: JSON.stringify({ type: "list", listIds: ["two"], listNames: ["View two"] }) },
+      "accountScope",
+    );
+  });
+
+  it("a mid-run gate's Continue pressed in the same turn as a false report sends nothing", async () => {
+    replaceTickingRenderer(MID_RUN_TICKING_RENDERER_ID, HandleRenderer);
+    await setGate(MID_RUN_TICKING_RENDERER_ID, "accountScope", { type: "object" });
+    const view = await renderPanel();
+
+    await view.findByText("Handle step");
+    act(() => stepHandle.stage(["one"]));
+    await waitFor(() => expect(productContinue()?.disabled).toBe(false));
+    act(() => {
+      stepHandle.report(false);
+      fireEvent.click(productContinue()!);
+    });
+    await waitFor(() => expect(productContinue()?.disabled).toBe(true));
+    act(() => {
+      stepHandle.stage(["two"]);
+      stepHandle.report(true);
+    });
+    await waitFor(() => expect(productContinue()?.disabled).toBe(false));
+    fireEvent.click(productContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalled());
+    expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1);
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("setup-run-3532");
+    expect(payload).toMatchObject({ type: "list", listIds: ["two"], listNames: ["View two"], approved: true });
   });
 });

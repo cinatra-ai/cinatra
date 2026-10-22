@@ -556,7 +556,7 @@ export type GateValidityStore = {
   report: (key: string, valid: boolean) => void;
   /** The reporting renderer is gone: nothing is held any more. */
   release: () => void;
-  /** True only while the latest report is `false` and was made on `key`. */
+  /** True only while the latest report, made on `key`, is anything but `true`. */
   isHeld: (key: string | null) => boolean;
   subscribe: (listener: () => void) => () => void;
 };
@@ -571,7 +571,7 @@ export function createGateValidityStore(): GateValidityStore {
   return {
     report: (key, valid) => {
       if (latest !== null && latest.key === key && latest.valid === valid) return;
-      write({ key, valid });
+      write({ key, valid: valid === true });
     },
     release: () => {
       if (latest !== null) write(null);

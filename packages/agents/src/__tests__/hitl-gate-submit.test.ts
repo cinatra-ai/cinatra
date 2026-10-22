@@ -658,4 +658,14 @@ describe("createGateValidityStore (cinatra#3562)", () => {
     expect(calls).toBe(2);
     expect(store.isHeld("g1")).toBe(true);
   });
+
+  it("a report that is not exactly true holds the gate, as false does", () => {
+    const store = createGateValidityStore();
+    for (const report of [1, "yes", undefined, null]) {
+      store.report("g1", report as unknown as boolean);
+      expect(store.isHeld("g1")).toBe(true);
+      store.report("g1", true);
+      expect(store.isHeld("g1")).toBe(false);
+    }
+  });
 });
