@@ -91,7 +91,6 @@ export function parseAuthPolicySafe(raw: string | null): AgentAuthPolicy | null 
     const parsed: unknown = JSON.parse(raw);
     const result = AgentAuthPolicySchema.safeParse(parsed);
     if (!result.success) {
-      // eslint-disable-next-line no-console
       console.warn(
         "[agent-builder/store] AgentAuthPolicy row failed zod validation; treating as null override",
         { issues: result.error.issues },
@@ -100,7 +99,6 @@ export function parseAuthPolicySafe(raw: string | null): AgentAuthPolicy | null 
     }
     return result.data;
   } catch (err) {
-    // eslint-disable-next-line no-console
     console.warn(
       "[agent-builder/store] AgentAuthPolicy row failed JSON.parse; treating as null override",
       { error: err instanceof Error ? err.message : String(err) },

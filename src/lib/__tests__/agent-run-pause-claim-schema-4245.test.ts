@@ -121,7 +121,7 @@ describe("pause claim columns: rollback and ledger (cinatra#4245)", () => {
   it("ships its manifest fragment naming the module and both tables", () => {
     const { entries, errors } = readManifestUnion(path.resolve(__dirname, "../../../migrations"));
     expect(errors).toEqual([]);
-    const entry = entries.find((row: { seq: string }) => row.seq === "0116");
+    const entry = entries.find((row: Record<string, unknown>) => row.seq === "0116");
     expect(entry?.file).toBe("core/core__0116_agent-run-pause-claim.mjs");
     expect(entry?.tables).toEqual(["agent_runs", "lifecycle_repair"]);
     // The convention counts a NOT NULL column and a CHECK on an existing table
