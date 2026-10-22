@@ -9,6 +9,7 @@ import {
   humanizePathSegment,
   isIdLikeSegment,
   isIdLikeSegmentAt,
+  scopeBaseFromSegments,
 } from "../breadcrumb-trail";
 import type { CrumbContribution } from "../breadcrumb-contributions";
 
@@ -211,5 +212,59 @@ describe("humanizePathSegment — a malformed percent sign (cinatra#4295)", () =
   it("does not crash the trail", () => {
     expect(() => buildBreadcrumbTrail("/artifacts/100%")).not.toThrow();
     expect(() => buildBreadcrumbTrail("/teams/team-rob-hardware/%E0%A4%A")).not.toThrow();
+  });
+});
+
+// The router reads a percent-encoded container as
+// the container itself, so `/%74eams/<id>` is `/teams/<id>` and its seed id is
+// still an id. A malformed escape matches no container (fail closed).
+describe("an encoded scope container (cinatra#4295)", () => {
+  const labels = (pathname: string) => buildBreadcrumbTrail(pathname).map((c) => c.label);
+  const titleOf = (pathname: string) =>
+    documentTitleLabelFromTrail(buildBreadcrumbTrail(pathname));
+
+  const encoded: Array<[string, string, string]> = [
+    // [encoded path, canonical path, placeholder]
+    ["/%74eams/team-rob-hardware", "/teams/team-rob-hardware", "team-rob…"],
+    ["/%6Frganizations/org-acme-group", "/organizations/org-acme-group", "org-acme…"],
+    ["/%6frganizations/org-acme-group", "/organizations/org-acme-group", "org-acme…"],
+    ["/pr%6Fjects/proj-rob-q3-launch", "/projects/proj-rob-q3-launch", "proj-rob…"],
+    ["/%70%72%6F%6a%65%63%74%73/proj-rob-q3-launch", "/projects/proj-rob-q3-launch", "proj-rob…"],
+  ];
+
+  it.each(encoded)("%s reads its seed id as an id", (path, canonical, placeholder) => {
+    expect(isIdLikeSegmentAt(segs(path), 1)).toBe(true);
+    expect(scopeBaseFromSegments(segs(path))).toBe(path);
+    expect(labels(path)).toEqual(labels(canonical));
+    expect(labels(path)).toContain(placeholder);
+    expect(labels(path).join(" ")).not.toMatch(/Team Rob|Org Acme|Proj Rob/);
+    expect(titleOf(path)).toBeNull();
+  });
+
+  it("an encoded container keeps its own prefix", () => {
+    expect(isIdLikeSegmentAt(segs("/%74eams/org-acme-group"), 1)).toBe(false);
+    expect(isIdLikeSegmentAt(segs("/pr%6Fjects/team-rob-hardware"), 1)).toBe(false);
+  });
+
+  it("an encoded prototype name is not a container", () => {
+    for (const container of ["%63onstructor", "%5F%5Fproto%5F%5F", "__proto__", "constructor"]) {
+      expect(isIdLikeSegmentAt([container, "proj-plan"], 1)).toBe(false);
+      expect(scopeBaseFromSegments([container, "proj-plan"])).toBeNull();
+    }
+  });
+
+  it("a malformed escape does not throw and fails closed", () => {
+    for (const container of ["%E0%A4%A", "%E0%A4%Ateams", "%74eams%"]) {
+      expect(() => isIdLikeSegmentAt([container, "team-rob-hardware"], 1)).not.toThrow();
+      expect(isIdLikeSegmentAt([container, "team-rob-hardware"], 1)).toBe(false);
+      expect(scopeBaseFromSegments([container, "team-rob-hardware"])).toBeNull();
+      expect(() => buildBreadcrumbTrail(`/${container}/team-rob-hardware`)).not.toThrow();
+      // The malformed segment itself is never decoded into a word.
+      expect(labels(`/${container}/team-rob-hardware`)[0]).toBe(container);
+    }
+    // A malformed id under an encoded container is no id, and does not throw.
+    expect(isIdLikeSegmentAt(["%74eams", "%E0%A4%A"], 1)).toBe(false);
+    expect(() => buildBreadcrumbTrail("/%74eams/%E0%A4%A")).not.toThrow();
+    expect(titleOf("/%74eams/%E0%A4%A") ?? "").not.toMatch(/^Team/);
   });
 });

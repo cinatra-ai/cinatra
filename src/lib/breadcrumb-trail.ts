@@ -78,7 +78,11 @@ export function isIdLikeSegmentAt(segments: readonly string[], i: number): boole
   if (segment === undefined) return false;
   if (isIdLikeSegment(segment)) return true;
   if (i !== 1) return false;
-  const prefix = SEED_ID_PREFIX_BY_SCOPE_CONTAINER.get(segments[0] ?? "");
+  // The container is read decoded, as the router reads it: `/%74eams/<id>` is
+  // `/teams/<id>`. A malformed escape stays raw and so matches no container.
+  const prefix = SEED_ID_PREFIX_BY_SCOPE_CONTAINER.get(
+    safelyDecodePathSegment(segments[0] ?? ""),
+  );
   if (prefix === undefined) return false;
   const decoded = safelyDecodePathSegment(segment);
   return decoded.startsWith(prefix) && SEED_ID_RE.test(decoded);
@@ -315,7 +319,9 @@ const SCOPE_BASE_SINGLETONS = new Set(["workspace", "personal"]);
 export function scopeBaseFromSegments(segments: string[]): string | null {
   if (segments.length === 0) return null;
   if (SCOPE_BASE_SINGLETONS.has(segments[0])) return `/${segments[0]}`;
-  if (SCOPE_BASE_CONTAINERS.has(segments[0]) && segments.length >= 2 && segments[1]) {
+  // Decoded, like `isIdLikeSegmentAt` (cinatra#4295): `/%74eams/<id>` is a scope.
+  const container = safelyDecodePathSegment(segments[0]);
+  if (SCOPE_BASE_CONTAINERS.has(container) && segments.length >= 2 && segments[1]) {
     return `/${segments[0]}/${segments[1]}`;
   }
   return null;
