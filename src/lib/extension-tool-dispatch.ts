@@ -355,9 +355,14 @@ export async function dispatchExtensionTool(input: {
     }));
     const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
     if (mcpRequestContextStorage.getStore()?.runId) {
-      if (!selected.identity) throw new ExtensionToolRefusal("extension_tool: executed module identity is unavailable");
+      // A module selected without a loaded identity (a bundled, legacy or dev
+      // load) runs under an unpinned owner: the guard serves it only when the
+      // call is not outward, after its source fence (cinatra#3745).
       const { withGuardedRunActionInvocation } = await import("./extension-host-context");
-      result = await withGuardedRunActionInvocation({ action: { ...selected.identity, toolName: tool.name, wrapper: "extension_tool" }, arguments: moduleInput }, invoke);
+      const owner = selected.identity
+        ? { ...selected.identity, toolName: tool.name, wrapper: "extension_tool" as const }
+        : { unpinned: true as const, packageName: input.packageName, toolName: tool.name, wrapper: "extension_tool" as const };
+      result = await withGuardedRunActionInvocation({ action: owner, arguments: moduleInput }, invoke);
     } else result = await invoke(moduleInput);
   } catch (e) {
     throw (

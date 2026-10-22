@@ -1789,15 +1789,19 @@ export function canonicalActionJson(value: unknown): string { return JSON.string
 export function actionContentSha256(value: unknown): string {
   return createHash("sha256").update(canonicalActionJson(value)).digest("hex");
 }
-/** An exact host-stamped registration, never a diagnostic serving record or provider[0]. */
-export function resolveArtifactActionChecker(identity: ArtifactActionIdentity): ArtifactActionCheckProvider {
+/** The extension providers stamped with exactly this loaded identity. */
+function matchingArtifactActionCheckers(identity: ArtifactActionIdentity) {
   const retained = resolveVersionKeyedCapabilityProviders(identity.packageName, identity.version, ARTIFACT_ACTION_CHECK_CAPABILITY);
   const candidates = [...resolveCapabilityProviders(ARTIFACT_ACTION_CHECK_CAPABILITY), ...(retained.kind === "serve" ? retained.value : [])];
-  const matches = [...new Set(candidates)].filter((p) => {
+  return [...new Set(candidates)].filter((p) => {
     const i = capabilityProviderLoadedIdentity(p);
     return i && i.packageName === identity.packageName && i.version === identity.version &&
       i.installId === identity.installId && i.digest === identity.digest && i.generation === identity.generation;
   });
+}
+/** An exact host-stamped registration, never a diagnostic serving record or provider[0]. */
+export function resolveArtifactActionChecker(identity: ArtifactActionIdentity): ArtifactActionCheckProvider {
+  const matches = matchingArtifactActionCheckers(identity);
   // The host's in-tree provider answers only when no extension provider does,
   // and only for a digest-pinned primitive whose bound registration reads read-only.
   if (matches.length === 0 && inTreeActionCheckAdmits(identity)) return inTreeArtifactActionChecker();
@@ -1851,15 +1855,18 @@ function rows<T>(result: { rows: unknown[] }): T[] { return result.rows as T[]; 
 const schema = sql.identifier(postgresSchema);
 
 /** Actual pinned bytes only. Unsupported connector/dashboard content refuses. */
-async function pinnedContent(row: { kind: string; substance_key: string; metadata: unknown; size_bytes: number; form: string }): Promise<ActionJson> {
+async function pinnedContent(row: { kind: string; substance_key: string; metadata: unknown; size_bytes: number | string; form: string }): Promise<ActionJson> {
+  // resource.size_bytes is bigint: the driver hands it over as a decimal string.
+  const sizeBytes = typeof row.size_bytes === "string" && /^[0-9]{1,6}$/.test(row.size_bytes) ? Number(row.size_bytes) : row.size_bytes;
   if (row.kind !== "blob" || row.form !== "file" || !/^blob:[a-f0-9]{64}$/.test(row.substance_key) ||
-      row.size_bytes < 0 || row.size_bytes > 262144) throw new OutwardActionRefusal("action_pin_content_unavailable");
+      typeof sizeBytes !== "number" || !Number.isSafeInteger(sizeBytes) ||
+      sizeBytes < 0 || sizeBytes > 262144) throw new OutwardActionRefusal("action_pin_content_unavailable");
   const storageKey = (row.metadata as { storageKey?: unknown } | null)?.storageKey;
   if (typeof storageKey !== "string") throw new OutwardActionRefusal("action_pin_content_unavailable");
   const frame = mcpRequestContextStorage.getStore();
   if (!frame?.orgId) throw new OutwardActionRefusal("action_run_context_missing");
   const handle = await createLocalDiskBlobStore().openByStorageKey({ orgId: frame.orgId, storageKey });
-  if (handle.sizeBytes !== row.size_bytes) throw new OutwardActionRefusal("action_pin_bytes_changed");
+  if (handle.sizeBytes !== sizeBytes) throw new OutwardActionRefusal("action_pin_bytes_changed");
   const chunks: Uint8Array[] = []; let length = 0;
   for await (const chunk of handle.stream) {
     length += chunk.byteLength;
@@ -1867,7 +1874,7 @@ async function pinnedContent(row: { kind: string; substance_key: string; metadat
     chunks.push(chunk);
   }
   const bytes = Buffer.concat(chunks);
-  if (bytes.length !== row.size_bytes || createHash("sha256").update(bytes).digest("hex") !== row.substance_key.slice(5)) {
+  if (bytes.length !== sizeBytes || createHash("sha256").update(bytes).digest("hex") !== row.substance_key.slice(5)) {
     throw new OutwardActionRefusal("action_pin_bytes_changed");
   }
   const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -1941,7 +1948,7 @@ export async function withArtifactReviewAction<T>(input: {
         const result = rows<{ id: string; type: string; deleted_at: unknown }>(await tx.execute(sql`
           SELECT id, type, deleted_at FROM ${schema}.objects WHERE id=${pin.artifactId} AND org_id=${frame.orgId} FOR UPDATE`));
         if (result.length !== 1 || result[0]!.deleted_at !== null) { valid = false; break; }
-        const reps = rows<{ id: string; kind: string; form: string; substance_key: string; metadata: unknown; size_bytes: number }>(await tx.execute(sql`
+        const reps = rows<{ id: string; kind: string; form: string; substance_key: string; metadata: unknown; size_bytes: number | string }>(await tx.execute(sql`
           SELECT p.id, p.form, r.kind, r.substance_key, r.metadata, r.size_bytes
           FROM ${schema}.representation p JOIN ${schema}.resource r ON r.id=p.resource_id AND r.org_id=p.org_id
           WHERE p.id=${pin.representationRevisionId} AND p.artifact_id=${pin.artifactId} AND p.org_id=${frame.orgId}
@@ -1969,7 +1976,8 @@ export async function withArtifactReviewAction<T>(input: {
       throw new OutwardActionRefusal("action_checker_changed");
     }
     const burned = await tx.insert(artifactReviewActionConsumptions).values({ gateId: matching[0]!,
-      runId: frame.runId!, orgId: frame.orgId!, stepId: proof.stepId, toolIdentity: action,
+      // A plain copy: the frozen identity has a null prototype, which the query builder cannot read.
+      runId: frame.runId!, orgId: frame.orgId!, stepId: proof.stepId, toolIdentity: { ...action },
       executedSourceSha256: proof.executedSourceSha256 }).onConflictDoNothing().returning({ gateId: artifactReviewActionConsumptions.gateId });
     if (burned.length !== 1) throw new OutwardActionRefusal("action_gate_already_consumed");
   });
@@ -1983,8 +1991,13 @@ export async function withArtifactReviewAction<T>(input: {
 }
 
 /** A legacy session has no run declaration. A run frame requires actual signed
- * loader proof and current durable run/attempt/source binding, even for reads. */
-export async function prepareDeclaredRunToolArguments(toolName: string, args: unknown): Promise<unknown> {
+ * loader proof and current durable run/attempt/source binding, even for reads.
+ * `inner` (host only, set from the guarded call's wrapper, never from a request):
+ * an extension module or connector wire call made inside an outer tool whose
+ * name the step's declaration already admitted. Its source is still proven; its
+ * own name is not the step's tool offer, so the offer check is not repeated. */
+export async function prepareDeclaredRunToolArguments(toolName: string, args: unknown,
+  options?: { readonly inner?: true }): Promise<unknown> {
   const frame = mcpRequestContextStorage.getStore();
   if (!frame?.runId) return args;
   // Capture before the first asynchronous source lookup; the effect and CHECK
@@ -1995,16 +2008,30 @@ export async function prepareDeclaredRunToolArguments(toolName: string, args: un
       !await isRunExecutedSourceCurrent(frame.runId, frame.orgId, proof)) {
     throw new OutwardActionRefusal("action_executed_source_missing_or_stale");
   }
+  if (options?.inner === true) return frozenArguments;
   assertRunStepToolAllowed({ policy: await readRunStepToolPolicy(frame.runId, frame.orgId),
     contextId: proof.contextId, executedSourceSha256: proof.executedSourceSha256,
     stepId: proof.stepId, toolName });
   return frozenArguments;
 }
+/** cinatra#3745: the owner of a guarded call whose load carries no current loaded
+ * identity (a legacy, dev or bundled load, or a stale one). It is never an
+ * `ArtifactActionIdentity`: it owns no CHECK and never reaches the person gate,
+ * so it serves only a call the host does not read as outward. */
+export type UnpinnedActionOwner = {
+  readonly unpinned: true; readonly packageName?: string; readonly toolName: string;
+  readonly wrapper: ArtifactActionIdentity["wrapper"];
+  readonly instanceId?: string; readonly serverId?: string; readonly endpoint?: string; readonly connectorKey?: string;
+};
+export type GuardedActionOwner = ArtifactActionIdentity | UnpinnedActionOwner;
+export function isUnpinnedActionOwner(owner: unknown): owner is UnpinnedActionOwner {
+  return typeof owner === "object" && owner !== null && (owner as { unpinned?: unknown }).unpinned === true;
+}
 /** Exact effect handler and arguments are captured by caller before awaiting.
- * No boolean/public field can skip this; missing CHECK refuses affected calls.
+ * No boolean/public field can skip this; a missing CHECK refuses outward calls.
  * Inner extension/instance calls keep their existing scoped auth spine. */
 export async function withGuardedRunActionInvocation<T>(input: {
-  action: ArtifactActionIdentity; arguments: unknown;
+  action: GuardedActionOwner; arguments: unknown;
   /** The executed registration's own outward declaration. It can only hold. */
   declaresOutward?: boolean;
 }, effect: (frozenArguments: ActionJson) => Promise<T>): Promise<T> {
@@ -2016,8 +2043,9 @@ export async function withGuardedRunActionInvocation<T>(input: {
   // under another version's planned entry, so either one holds the call.
   const declaresOutward = isDeclaredOutwardRunFrame(frame) || input.declaresOutward === true;
   // Capture the selected owner/tool before any asynchronous policy lookup.
-  const action = immutableActionJson(input.action) as unknown as ArtifactActionIdentity;
-  const args = await prepareDeclaredRunToolArguments(action.toolName, input.arguments);
+  const action = immutableActionJson(input.action) as unknown as GuardedActionOwner;
+  const args = await prepareDeclaredRunToolArguments(action.toolName, input.arguments,
+    action.wrapper === "primitive" ? undefined : { inner: true });
   const { enforceMcpBoundary, enforceMcpBoundaryPrerequisites, OUTWARD_EFFECT_TOOL_NAMES } = await import("@/lib/authz/mcp-boundary");
   if (action.wrapper === "primitive") {
     const ordinary = await enforceMcpBoundaryPrerequisites({ primitiveName: action.toolName,
@@ -2025,13 +2053,25 @@ export async function withGuardedRunActionInvocation<T>(input: {
     if (!ordinary.allowed && ordinary.shouldBlock) throw new OutwardActionRefusal("action_ordinary_authorization_denied");
   }
   if (GATELESS_ACTION_NAMES.has(action.toolName)) throw new OutwardActionRefusal("action_has_no_artifact_gate");
+  // The host's definition of outward (cinatra#3745): a named tool, or a declared
+  // or unreadable declaration. A call that is not outward needs no CHECK, as on
+  // main; an extension's own provider can still hold it below. An unpinned owner
+  // owns no CHECK, so its outward call refuses before any effect.
+  const outward = OUTWARD_EFFECT_TOOL_NAMES.has(action.toolName) || declaresOutward;
+  if (isUnpinnedActionOwner(action)) {
+    if (outward) throw new OutwardActionRefusal("action_loaded_identity_missing_or_stale");
+    return withActionOwner(action, () => effect(args as ActionJson));
+  }
+  if (!outward && matchingArtifactActionCheckers(action).length === 0) {
+    return withActionOwner(action, () => effect(args as ActionJson));
+  }
   const checker = resolveArtifactActionChecker(action);
   if (!isLoadedExtensionIdentityCurrent(action)) throw new OutwardActionRefusal("action_loaded_identity_stale");
   const classify = checker.classify;
   const reading = classify ? immutableActionJson(classify({ action: action, arguments: args as ActionJson })) : { kind: "outward" };
   const kind = (reading as { kind?: unknown }).kind;
   if (!["read-only", "delegate", "outward"].includes(String(kind))) throw new OutwardActionRefusal("action_classification_incompatible");
-  if (!OUTWARD_EFFECT_TOOL_NAMES.has(action.toolName) && !declaresOutward && (kind === "read-only" || kind === "delegate")) {
+  if (!outward && (kind === "read-only" || kind === "delegate")) {
     if (resolveArtifactActionChecker(action) !== checker || !isLoadedExtensionIdentityCurrent(action)) throw new OutwardActionRefusal("action_checker_changed");
     return withActionOwner(action, () => effect(args as ActionJson));
   }
@@ -2048,13 +2088,13 @@ export async function withGuardedRunActionInvocation<T>(input: {
 }
 
 const ownerKey = Symbol.for("@cinatra-ai/host:guarded-action-owner/v1");
-const ownerHolder = globalThis as unknown as { [ownerKey]?: WeakMap<object, ArtifactActionIdentity> };
+const ownerHolder = globalThis as unknown as { [ownerKey]?: WeakMap<object, GuardedActionOwner> };
 const actionOwners = ownerHolder[ownerKey] ??= new WeakMap();
-export function currentGuardedActionOwner(): ArtifactActionIdentity | undefined {
+export function currentGuardedActionOwner(): GuardedActionOwner | undefined {
   const frame = mcpRequestContextStorage.getStore();
   return frame && actionOwners.get(frame);
 }
-async function withActionOwner<T>(action: ArtifactActionIdentity, effect: () => Promise<T>): Promise<T> {
+async function withActionOwner<T>(action: GuardedActionOwner, effect: () => Promise<T>): Promise<T> {
   const parent = mcpRequestContextStorage.getStore();
   if (!parent) throw new OutwardActionRefusal("action_owner_context_missing");
   // No opaque outer admission is inherited by another inner handler/action.
@@ -2088,8 +2128,12 @@ export function bindArtifactGuardedMcpHandler<T>(toolName: string,
   const wrapped = markGuardedRunDispatch(async (input: unknown) => {
     const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
     if (!mcpRequestContextStorage.getStore()?.runId) return handler(input);
-    if (!identity || !isLoadedExtensionIdentityCurrent(identity)) throw new Error("action_loaded_identity_missing_or_stale");
-    return withGuardedRunActionInvocation({ action: { ...identity, toolName, wrapper: "primitive" }, arguments: input, declaresOutward },
+    // A load without a current loaded identity runs under an unpinned owner: its
+    // outward call refuses before any effect, any other call takes the fences.
+    const owner: GuardedActionOwner = identity && isLoadedExtensionIdentityCurrent(identity)
+      ? { ...identity, toolName, wrapper: "primitive" }
+      : { unpinned: true, ...(identity ? { packageName: identity.packageName } : {}), toolName, wrapper: "primitive" };
+    return withGuardedRunActionInvocation({ action: owner, arguments: input, declaresOutward },
       (frozenInput) => Promise.resolve(handler(frozenInput)));
   });
   markGuardedRunLeaf(wrapped);

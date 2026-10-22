@@ -173,6 +173,20 @@ export const OUTWARD_EFFECT_TOOL_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Tools of the outward-effect set that evaluate a person's answered decision
+ * themselves (cinatra#3745, criterion 5b). `email_test_delivery_run_send` sends
+ * only for the verified submission of the person's answered gate, stamped on
+ * its frame from the host's own read, and uses it once through its ledger. On
+ * the deterministic passthrough, and only with that verified submission, such a
+ * tool takes `enforceMcpBoundaryPrerequisites` instead of the recorded-decision
+ * rule. Its census test is
+ * src/app/api/agents/passthrough/__tests__/passthrough-person-decision-send-3745.test.ts.
+ */
+export const PERSON_DECISION_EVALUATING_TOOLS: ReadonlySet<string> = new Set([
+  "email_test_delivery_run_send",
+]);
+
+/**
  * True when the call is a tool of the outward-effect set, or a tool whose
  * registration declares that it acts outward, on an agent run's frame, so it is
  * served only together with the person's recorded decision for the run's

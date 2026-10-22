@@ -708,9 +708,19 @@ export async function POST(req: Request): Promise<Response> {
       // enough — the ALS frame is read by `runDeterministicLlmTask` from
       // the surrounding async context.
       const invokeHandler = async () => {
-        const { enforceMcpBoundary } = await import("@/lib/authz/mcp-boundary");
+        const { enforceMcpBoundary, enforceMcpBoundaryPrerequisites, PERSON_DECISION_EVALUATING_TOOLS } =
+          await import("@/lib/authz/mcp-boundary");
         const frame = mcpRequestContextStorage.getStore();
-        const decision = await enforceMcpBoundary({ primitiveName: tool, arguments: input,
+        // cinatra#3745 (criterion 5b): a tool that evaluates the person's answered
+        // gate itself keeps that road. Only with the verified submission the host
+        // read stamped on the run-scoped frame below does it skip the
+        // recorded-decision rule; every other ceiling still applies. Without one,
+        // the full boundary refuses it.
+        const evaluatesPersonDecision = PERSON_DECISION_EVALUATING_TOOLS.has(tool) &&
+          RUN_SCOPED_CONTEXT_TOOLS.has(tool) && typeof frame?.verifiedSubmissionId === "string" &&
+          frame.verifiedSubmissionId.length > 0;
+        const boundary = evaluatesPersonDecision ? enforceMcpBoundaryPrerequisites : enforceMcpBoundary;
+        const decision = await boundary({ primitiveName: tool, arguments: input,
           ctx: frame, delegatedRestricted: !!frame?.delegatedRestricted });
         if (!decision.allowed && decision.shouldBlock) throw new Error(decision.reason);
         return withActorContext(alsActorContext, () =>

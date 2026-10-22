@@ -906,6 +906,9 @@ export async function invokeConnectorInstanceTool(
     const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
     if (mcpRequestContextStorage.getStore()?.runId) {
       const { currentGuardedActionOwner, withGuardedRunActionInvocation } = await import("@/lib/extension-host-context");
+      // The guarded leaf's owner, pinned or unpinned (cinatra#3745): the guard
+      // serves a call that is not outward under either one and holds an outward
+      // one for the person gate. A call outside any guarded leaf has no owner.
       const owner = currentGuardedActionOwner();
       if (!owner) throw new InvokerError("tool_error", "executed connector owner is unavailable");
       result = await withGuardedRunActionInvocation({ action: { ...owner, toolName: name, wrapper: "instance_tool",

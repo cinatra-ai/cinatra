@@ -1,12 +1,15 @@
 /**
  * The host's in-tree `artifact-action-check/v1` provider (cinatra#3745).
  *
- * On an agent run's frame a guarded leaf needs exactly one CHECK provider for
- * the loaded identity that executes. Without one from the extension, the
- * in-tree provider admits only a digest-pinned install's primitive whose bound
- * registration declares the read class. Everything else keeps refusing:
- * an outward or undeclared tool, a legacy or dev load without an install id or
- * a digest, and a call with two providers.
+ * On an agent run's frame a guarded leaf the host reads as outward (a named
+ * tool, or a declared or unreadable declaration) needs exactly one CHECK
+ * provider for the loaded identity that executes. Without one from the
+ * extension, the in-tree provider admits only a digest-pinned install's
+ * primitive whose bound registration declares the read class. A call the host
+ * does not read as outward needs no CHECK, as on main (the MF2 posture): an
+ * undeclared tool, a legacy or dev load and a stale load are served behind the
+ * source and step fences. Two providers, or an extension's own outward reading,
+ * still refuse.
  *
  * These cases drive the real guarded leaf (`bindArtifactGuardedMcpHandler` ->
  * `withGuardedRunActionInvocation`), the real capability registry, the real
@@ -97,16 +100,16 @@ describe("the in-tree artifact-action-check/v1 provider on a run's frame", () =>
     expect(effects).toEqual([]);
   });
 
-  it("refuses a digest-pinned tool that declares no class", async () => {
+  it("serves a digest-pinned tool that declares no class and is not outward, as on main", async () => {
     const { call, effects } = leafFor(pinnedIdentity(), {});
-    await expect(call()).rejects.toThrow(MISSING);
-    expect(effects).toEqual([]);
+    await expect(call()).resolves.toEqual({ served: true });
+    expect(effects).toEqual([{ q: "x" }]);
   });
 
-  it("refuses a digest-pinned tool bound without a registration", async () => {
+  it("serves a digest-pinned tool bound without a registration, as on main", async () => {
     const { call, effects } = leafFor(pinnedIdentity(), undefined);
-    await expect(call()).rejects.toThrow(MISSING);
-    expect(effects).toEqual([]);
+    await expect(call()).resolves.toEqual({ served: true });
+    expect(effects).toEqual([{ q: "x" }]);
   });
 
   it.each([
@@ -116,18 +119,20 @@ describe("the in-tree artifact-action-check/v1 provider on a run's frame", () =>
     ["a malformed class", { delegatedChat: "READ" }],
     ["readOnlyHint false", { delegatedChat: "read", annotations: { readOnlyHint: false } }],
     ["destructiveHint true", { delegatedChat: "read", annotations: { destructiveHint: true } }],
-  ])("refuses a digest-pinned tool declaring %s", async (_label, registration) => {
+  ])("serves a digest-pinned, non-outward tool declaring %s, as on main", async (_label, registration) => {
     const { call, effects } = leafFor(pinnedIdentity(), registration);
-    await expect(call()).rejects.toThrow(MISSING);
-    expect(effects).toEqual([]);
+    await expect(call()).resolves.toEqual({ served: true });
+    expect(effects).toEqual([{ q: "x" }]);
   });
 
-  it("refuses when the same identity bound the tool once as read and once as outward", async () => {
+  it("the same identity bound once as read and once as outward: the read leaf serves, the outward leaf refuses", async () => {
     const identity = pinnedIdentity();
     const read = leafFor(identity, { delegatedChat: "read" });
-    leafFor(identity, { delegatedChat: "read", outward: {} });
-    await expect(read.call()).rejects.toThrow(MISSING);
-    expect(read.effects).toEqual([]);
+    const outward = leafFor(identity, { delegatedChat: "read", outward: {} });
+    await expect(read.call()).resolves.toEqual({ served: true });
+    expect(read.effects).toEqual([{ q: "x" }]);
+    await expect(outward.call()).rejects.toThrow(MISSING);
+    expect(outward.effects).toEqual([]);
   });
 
   it("a digest-pinned read tool named by the boundary's outward list still needs the person's gate", async () => {
@@ -143,8 +148,14 @@ describe("the in-tree artifact-action-check/v1 provider on a run's frame", () =>
     expect(effects).toEqual([]);
   });
 
-  it("refuses a legacy or dev load with no loaded identity, even when it declares the read class", async () => {
+  it("serves a legacy or dev load with no loaded identity when the call is not outward", async () => {
     const { call, effects } = leafFor(undefined, { delegatedChat: "read" });
+    await expect(call()).resolves.toEqual({ served: true });
+    expect(effects).toEqual([{ q: "x" }]);
+  });
+
+  it("refuses a legacy or dev load with no loaded identity when the call is outward", async () => {
+    const { call, effects } = leafFor(undefined, { delegatedChat: "read", outward: {} });
     await expect(call()).rejects.toThrow("action_loaded_identity_missing_or_stale");
     expect(effects).toEqual([]);
   });
@@ -156,10 +167,18 @@ describe("the in-tree artifact-action-check/v1 provider on a run's frame", () =>
       .toThrow("action_loaded_identity_invalid");
   });
 
-  it("refuses a read tool whose identity is no longer the current one", async () => {
+  it("serves a non-outward read tool whose identity is no longer the current one, under an unpinned owner", async () => {
     const identity = pinnedIdentity();
     const stale = { ...identity, generation: identity.generation + 1000 };
     const { call, effects } = leafFor(stale as LoadedExtensionIdentity, { delegatedChat: "read" });
+    await expect(call()).resolves.toEqual({ served: true });
+    expect(effects).toEqual([{ q: "x" }]);
+  });
+
+  it("refuses an outward tool whose identity is no longer the current one", async () => {
+    const identity = pinnedIdentity();
+    const stale = { ...identity, generation: identity.generation + 1000 };
+    const { call, effects } = leafFor(stale as LoadedExtensionIdentity, { outward: {} });
     await expect(call()).rejects.toThrow("action_loaded_identity_missing_or_stale");
     expect(effects).toEqual([]);
   });
