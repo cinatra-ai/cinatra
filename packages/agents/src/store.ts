@@ -4014,6 +4014,6 @@ export {
 } from "./agent-template-identity";
 
 // #3745 public package subpath remains ./store; no held export-map edit.
-export { bindRunStepToolPolicy, rebindRunStepToolPolicyForResume, readRunStepToolPolicy, verifyRunExecutedSource, isRunExecutedSourceCurrent, withRunActionPolicyTransaction } from "./agent-run-serde";
+export { bindRunStepToolPolicy, readRunStepToolPolicy, verifyRunExecutedSource, isRunExecutedSourceCurrent, withRunActionPolicyTransaction } from "./agent-run-serde";
 export { selectWayflowRunStepToolPolicy, createRunStepToolPolicy, parseRunStepToolPolicy, readTrustedStepToolDeclaration, assertRunStepToolAllowed, RunStepToolPolicyRefusal } from "./agent-run-serde";
 export type { RunStepToolPolicy, StepToolReading } from "./agent-run-serde";

@@ -33,7 +33,6 @@ import {
   readRunCoOwners,
   transitionRunStatus,
   RunTransitionError,
-  rebindRunStepToolPolicyForResume,
 } from "./store";
 import { cancelOrchestratorRun } from "./orchestrator-execution";
 import { mintResumeRunTokenMetadata } from "./wayflow-run-token-carrier";
@@ -295,21 +294,17 @@ export async function resumeStoppedOrchestratorAction(
   // (cinatra#3745). The resumed leg's callbacks are admitted only while the run is
   // `running` under the attempt its step policy is bound to. So the dispatch edge
   // `queued -> running` (which mints the fresh attempt) is taken BEFORE the send,
-  // and the run's one bound graph is carried forward to that attempt. The rebind
-  // refuses a binding held by any attempt other than the one the run carried
-  // before this resume. A failure here sends nothing and puts the run back.
-  const priorAttemptId = run.executionAttemptId ?? null;
+  // and in that SAME transaction the run's one bound graph is carried forward to
+  // the attempt (`carryBoundStepToolPolicy`). The prior attempt is the locked run
+  // row's, so a binding held by any other attempt is refused. A failure here
+  // commits nothing, sends nothing and puts the run back.
   const attemptId = randomUUID();
-  let claimed = false;
   try {
     await transitionRunStatus(runId, "queued", "running", {
-      dispatch: { attemptId },
+      dispatch: { attemptId, carryBoundStepToolPolicy: true },
     }, authority);
-    claimed = true;
-    await rebindRunStepToolPolicyForResume({ orgId: run.orgId, runId,
-      priorExecutionAttemptId: priorAttemptId, executionAttemptId: attemptId, authority });
   } catch (err) {
-    await transitionRunStatus(runId, claimed ? "running" : "queued", "stopped", undefined, authority).catch(() => undefined);
+    await transitionRunStatus(runId, "queued", "stopped", undefined, authority).catch(() => undefined);
     if (err instanceof RunTransitionError && err.code === "stale_from_status") {
       return { ok: false, error: "race condition — run status changed" };
     }

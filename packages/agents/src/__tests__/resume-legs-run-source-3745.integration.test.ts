@@ -58,17 +58,22 @@ const h = vi.hoisted(() => ({
   sends: 0,
   staleRead: null as unknown,
   mintError: null as null | Error,
+  createError: null as null | Error,
+  runPatch: null as null | Record<string, unknown>,
 }));
 
 vi.mock("@cinatra-ai/a2a", () => ({
-  createExternalA2AClient: vi.fn(async () => ({
-    sendTask: vi.fn(async () => {
-      h.sends++;
-      if (h.onSend) h.callbacks.push(await h.onSend());
-      if (h.sendError) throw h.sendError;
-      return { id: `task-next-${randomUUID()}`, contextId: h.contextId, status: { state: "completed" } };
-    }),
-  })),
+  createExternalA2AClient: vi.fn(async () => {
+    if (h.createError) throw h.createError;
+    return {
+      sendTask: vi.fn(async () => {
+        h.sends++;
+        if (h.onSend) h.callbacks.push(await h.onSend());
+        if (h.sendError) throw h.sendError;
+        return { id: `task-next-${randomUUID()}`, contextId: h.contextId, status: { state: "completed" } };
+      }),
+    };
+  }),
   resolveRunIdByWayflowTaskId: vi.fn(async () => null),
   resolveLatestWayflowGateTaskId: vi.fn(async () => h.taskId),
   // The terminal edge's best-effort stream expiry (a stop is terminal).
@@ -100,8 +105,14 @@ vi.mock("../store", async (orig) => {
   const actual = await orig<typeof import("../store")>();
   return {
     ...actual,
-    // The real row read, without the session-derived visibility filter.
-    readAgentRunById: (id: string) => actual.readAgentRunById(id),
+    // The real row read, without the session-derived visibility filter. `runPatch`
+    // models a caller snapshot taken before another writer moved the row (T11).
+    readAgentRunById: async (id: string) => {
+      const run = await actual.readAgentRunById(id);
+      const patch = h.runPatch;
+      h.runPatch = null;
+      return run && patch ? { ...run, ...patch } : run;
+    },
     // A read taken before another writer moved the run (the race the claim closes).
     readAgentRunByTaskId: async (taskId: string) => {
       const stale = h.staleRead as Awaited<ReturnType<typeof actual.readAgentRunByTaskId>> | null;
@@ -306,6 +317,8 @@ beforeEach(() => {
   h.sends = 0;
   h.staleRead = null;
   h.mintError = null;
+  h.createError = null;
+  h.runPatch = null;
 });
 
 describe.skipIf(!HAS_DB)("(a) the artifact-review resume delivery", () => {
@@ -456,53 +469,147 @@ describe.skipIf(!HAS_DB)("the claim's other exits", () => {
   });
 });
 
-describe.skipIf(!HAS_DB)("rebindRunStepToolPolicyForResume refuses every carry it cannot prove", () => {
-  async function runningAfterResume() {
+describe.skipIf(!HAS_DB)("the dispatch transaction carries the bound graph, or refuses and commits nothing", () => {
+  /** A dispatched run, stopped and re-queued for resume: the next `queued -> running` carries. */
+  async function queuedForResume() {
     const attemptA = await seedDispatchedRun("stopped");
     await transitions.transitionRunStatus(h.runId, "stopped", "queued", undefined, AUTHORITY as never);
-    const attemptB = randomUUID();
-    await transitions.transitionRunStatus(h.runId, "queued", "running", { dispatch: { attemptId: attemptB } }, AUTHORITY as never);
-    return { attemptA, attemptB };
+    return attemptA;
   }
-  const carry = (priorExecutionAttemptId: string | null, executionAttemptId: string) =>
-    serde.rebindRunStepToolPolicyForResume({ orgId: ORG, runId: h.runId, priorExecutionAttemptId,
-      executionAttemptId, authority: AUTHORITY as never });
+  const dispatch = (attemptId: string) =>
+    transitions.transitionRunStatus(h.runId, "queued", "running",
+      { dispatch: { attemptId, carryBoundStepToolPolicy: true } }, AUTHORITY as never);
 
-  it("carries the binding from the prior attempt to the dispatching one, once", async () => {
-    const { attemptA, attemptB } = await runningAfterResume();
-    await carry(attemptA, attemptB);
+  it("carries the binding from the locked prior attempt to the dispatching one, once", async () => {
+    await queuedForResume();
+    const attemptB = randomUUID();
+    await dispatch(attemptB);
     expect(await rows()).toEqual({ status: "running", runAttempt: attemptB, boundAttempt: attemptB });
-    await expect(carry(attemptA, attemptB)).rejects.toThrow("step_tool_dispatch_rebind_refused");
+    await expect(dispatch(randomUUID())).rejects.toMatchObject({ code: "stale_from_status" });
+    expect((await rows()).boundAttempt).toBe(attemptB);
   });
 
-  it("refuses an attempt the run is not running under, and a run that is not running", async () => {
-    const { attemptA } = await runningAfterResume();
-    await expect(carry(attemptA, randomUUID())).rejects.toThrow("step_tool_dispatch_binding_mismatch");
-    await expect(carry(attemptA, "")).rejects.toThrow("step_tool_dispatch_binding_mismatch");
-    const stopped = await seedDispatchedRun("stopped");
-    await expect(carry(stopped, stopped)).rejects.toThrow("step_tool_dispatch_binding_mismatch");
+  it("refuses a foreign or other-org binding, and commits neither the CAS nor the move", async () => {
+    await queuedForResume();
+    const foreign = await rebindToForeignAttempt();
+    await expect(dispatch(randomUUID())).rejects.toThrow("step_tool_dispatch_rebind_refused");
+    expect(await rows()).toMatchObject({ status: "queued", boundAttempt: foreign });
+    const attemptA = await queuedForResume();
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."agent_run_outward_action_policies" SET org_id = 'org-other' WHERE run_id = $1`, [h.runId]);
+    await expect(dispatch(randomUUID())).rejects.toThrow("step_tool_dispatch_rebind_refused");
+    expect(await rows()).toEqual({ status: "queued", runAttempt: attemptA, boundAttempt: attemptA });
   });
 
-  it("refuses a missing, equal or wrong prior attempt, and leaves the binding where it was", async () => {
-    const { attemptA, attemptB } = await runningAfterResume();
-    await expect(carry(null, attemptB)).rejects.toThrow("step_tool_dispatch_rebind_refused");
-    await expect(carry(attemptB, attemptB)).rejects.toThrow("step_tool_dispatch_rebind_refused");
-    await expect(carry(randomUUID(), attemptB)).rejects.toThrow("step_tool_dispatch_rebind_refused");
-    expect((await rows()).boundAttempt).toBe(attemptA);
+  it("refuses an equal, empty or missing prior attempt, and leaves the binding where it was", async () => {
+    const attemptA = await queuedForResume();
+    await expect(dispatch(attemptA)).rejects.toThrow("step_tool_dispatch_rebind_refused");
+    await expect(dispatch("")).rejects.toThrow("step_tool_dispatch_binding_mismatch");
+    expect(await rows()).toEqual({ status: "queued", runAttempt: attemptA, boundAttempt: attemptA });
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET execution_attempt_id = NULL WHERE id = $1`, [h.runId]);
+    await expect(dispatch(randomUUID())).rejects.toThrow("step_tool_dispatch_rebind_refused");
+    expect(await rows()).toEqual({ status: "queued", runAttempt: null, boundAttempt: attemptA });
   });
 
   it("refuses a binding whose graph names another context", async () => {
-    const { attemptA, attemptB } = await runningAfterResume();
+    const attemptA = await queuedForResume();
     await pool(`UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET a2a_context_id = $2 WHERE id = $1`, [h.runId, `ctx-${randomUUID()}`]);
-    await expect(carry(attemptA, attemptB)).rejects.toThrow("step_tool_dispatch_rebind_refused");
-    expect((await rows()).boundAttempt).toBe(attemptA);
+    await expect(dispatch(randomUUID())).rejects.toThrow("step_tool_dispatch_rebind_refused");
+    expect(await rows()).toMatchObject({ status: "queued", boundAttempt: attemptA });
   });
 
   it("leaves an unbound run unbound", async () => {
-    await runningAfterResume();
+    await queuedForResume();
     await pool(`DELETE FROM "${q(TEST_SCHEMA)}"."agent_run_outward_action_policies" WHERE run_id = $1`, [h.runId]);
-    const r = await rows();
-    await carry(randomUUID(), r.runAttempt!);
-    expect((await rows()).boundAttempt).toBeNull();
+    const attemptB = randomUUID();
+    await dispatch(attemptB);
+    expect(await rows()).toEqual({ status: "running", runAttempt: attemptB, boundAttempt: null });
+  });
+});
+
+/** Barrier: a backend is blocked on a row lock of the binding table (never a sleep alone). */
+async function waitForBindingLockWaiter(c: Client) {
+  for (let i = 0; i < 200; i++) {
+    const r = await c.query(
+      `SELECT count(*)::int AS n FROM pg_stat_activity
+        WHERE wait_event_type = 'Lock' AND pid <> pg_backend_pid()
+          AND query ILIKE '%agent_run_outward_action_policies%'`,
+    );
+    if ((r.rows[0] as { n: number }).n > 0) return;
+    await new Promise((res) => setTimeout(res, 50));
+  }
+  throw new Error("barrier: no backend ever waited on the binding lock");
+}
+
+describe.skipIf(!HAS_DB)("NOTE 6: the dispatch claim and the binding move commit together", () => {
+  it("T10 (c) the dispatch claim and the binding move commit together", async () => {
+    const attemptA = await seedDispatchedRun("stopped");
+    const holder = new Client({ connectionString: DB_URL });
+    await holder.connect();
+    try {
+      await holder.query("BEGIN");
+      await holder.query(
+        `SELECT 1 FROM "${q(TEST_SCHEMA)}"."agent_run_outward_action_policies" WHERE run_id = $1 FOR UPDATE`, [h.runId]);
+      const { resumeStoppedOrchestratorAction } = await import("../orchestrator-actions");
+      const resumed = resumeStoppedOrchestratorAction(h.runId);
+      await waitForBindingLockWaiter(holder);
+      const seen = await admin(async (c) => (await c.query(
+        `SELECT r.status, b.execution_attempt_id AS bound
+           FROM "${q(TEST_SCHEMA)}"."agent_runs" r
+           JOIN "${q(TEST_SCHEMA)}"."agent_run_outward_action_policies" b ON b.run_id = r.id
+          WHERE r.id = $1`, [h.runId])).rows[0] as { status: string; bound: string });
+      // Never `running` while the binding still names the prior attempt.
+      expect({ status: seen.status, boundToPrior: seen.bound === attemptA }).not.toEqual({ status: "running", boundToPrior: true });
+      await holder.query("COMMIT");
+      expect(await resumed).toEqual({ ok: true });
+      const after = await rows();
+      expect(after.status).toBe("running");
+      expect(after.runAttempt).not.toBe(attemptA);
+      expect(after.boundAttempt).toBe(after.runAttempt);
+    } finally {
+      await holder.query("ROLLBACK").catch(() => {});
+      await holder.end().catch(() => {});
+    }
+  });
+
+  it("T11 (c) the prior attempt comes from the locked run row, never from the caller", async () => {
+    const attemptB = await seedDispatchedRun("stopped");
+    // The caller's snapshot carries attempt A; the locked row carries B, bound to B.
+    h.runPatch = { executionAttemptId: randomUUID() };
+    const { resumeStoppedOrchestratorAction } = await import("../orchestrator-actions");
+    expect(await resumeStoppedOrchestratorAction(h.runId)).toEqual({ ok: true });
+    const after = await rows();
+    expect(after.status).toBe("running");
+    expect(after.runAttempt).not.toBe(attemptB);
+    expect(after.boundAttempt).toBe(after.runAttempt);
+  });
+});
+
+describe.skipIf(!HAS_DB)("NOTE 5 pins: agent_run_resume keeps its claim posture", () => {
+  const settle = (p: Promise<Record<string, unknown>>) =>
+    p.catch((err: unknown) => ({ error: err instanceof Error ? err.message : String(err) }));
+
+  it("T8 agent_run_resume: WayFlow unreachable at client creation leaves the gate pending and a retry is sent", async () => {
+    const attemptA = await seedDispatchedRun("pending_approval");
+    h.createError = new Error("agent card unreachable");
+    expect(await settle(resumeByMcp())).toHaveProperty("error");
+    expect(h.sends).toBe(0);
+    expect(await rows()).toEqual({ status: "pending_approval", runAttempt: attemptA, boundAttempt: attemptA });
+    h.createError = null;
+    expect(await resumeByMcp()).not.toHaveProperty("error");
+    expect(h.sends).toBe(1);
+    expect(h.callbacks).toMatchObject([{ admitted: true, status: "running" }]);
+  });
+
+  it("T9 agent_run_resume: a send that fails after the claim keeps the claim; the retry is refused as answered", async () => {
+    await seedDispatchedRun("pending_approval");
+    h.sendError = new Error("wayflow unreachable");
+    expect(await settle(resumeByMcp())).toHaveProperty("error");
+    expect(h.sends).toBe(1);
+    expect((await rows()).status).toBe("running");
+    h.sendError = null;
+    const retry = await settle(resumeByMcp());
+    // The run left pending_approval with the claim: the retry is refused before any send.
+    expect(String(retry.error)).toMatch(/not pending approval|already answered/);
+    expect(h.sends).toBe(1);
   });
 });
