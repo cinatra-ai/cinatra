@@ -246,12 +246,14 @@ docs#242 merge, so `app-connectors` drifted and the `design-pin-drift` job was
 red on the default branch. Compared as parsed JSON with the pinned body,
 `schemaVersion`, `spec` and all eleven surfaces are unchanged and `contentHash`
 alone moved. The 2026-10-23 reconciliation below re-pinned it hashes-only.
-`app-components` drifts at the same time, with new surfaces
+Read on 2026-10-23 against main's pin `e4da7a2b…`, `app-components` drifted at
+the same time, with new surfaces
 (`scheduling-step-quarterly` and `scheduling-step-yearly` among them), which is
 the class this page's rule names: that pin moves only together with the
-drivers, harness mounts and stable-id contract that answer those surfaces, in
-its own pending change, and until then the `push`-to-`main` arm stays red on
-that one pin.
+drivers, harness mounts and stable-id contract that answer those surfaces, and
+on main the `push`-to-`main` arm stayed red on that one pin. The 2026-10-22
+reconciliation below, in this same change, adopts it (`cbb8e3ac…`) with the
+drivers of its four new surfaces.
 
 Nine adoptions got them there and all nine are recorded below: the 2026-09-10
 adoption of `app-connectors`, whose published body redeclares the manifest
@@ -907,15 +909,16 @@ now the verbatim published body, and both hashes of the entry in
 `conformance-pins.json` were re-derived from the adopted bytes on the branch —
 the manifest hash over the file's bytes (`2293c96c…` before, `1f0b66a9…` now),
 the spec-content hash read back out of the adopted body's own `contentHash`
-field — never typed. `app-components` still drifts: its published body adds
-surfaces, so it is not adopted here but by its own pending change, with the
-drivers, harness mounts and stable-id contract rows that answer them. No other
-pin moved.
+field — never typed. Read on 2026-10-23 against main's pin `e4da7a2b…`,
+`app-components` drifted: its published body adds surfaces, so this
+reconciliation does not adopt it; the 2026-10-22 reconciliation above, in this
+same change, adopts it (`cbb8e3ac…`) with the drivers of its four new surfaces.
+No other pin moved.
 
 | Pin | Was | What the adoption changed | Cost |
 | --- | --- | --- | --- |
 | `app` | `match` | nothing — the published body is still the pinned artifact | none |
-| `app-components` | `drift` | not adopted here — new surfaces, adopted with their drivers by its own pending change | not this diff |
+| `app-components` | `drift` (2026-10-23, against main's pin `e4da7a2b…`) | not adopted here — new surfaces, adopted (`cbb8e3ac…`) with their drivers by the 2026-10-22 record above | not this record |
 | `app-extensions` | `match` | nothing — the published body is still the pinned artifact | none |
 | `app-connectors` | `drift` | **hashes only** — byte-identical surface declarations (11 surfaces); `contentHash` moved | re-pin |
 | `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
