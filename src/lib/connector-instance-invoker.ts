@@ -875,10 +875,11 @@ export async function invokeConnectorInstanceTool(
     }
     wireTarget = perServer;
   }
-  const wire =
-    snapshot.exposureMode === "triad-only"
-      ? { name: TRIAD_EXECUTE_ABILITY, arguments: { ability_name: name, parameters: input.args } }
-      : { name, arguments: input.args };
+  // Capture the selected destination and ABI once, before CHECK awaits.
+  const endpoint = wireTarget.endpoint;
+  const authHeader = wireTarget.authHeader;
+  const triadOnly = snapshot.exposureMode === "triad-only";
+  const wireName = triadOnly ? TRIAD_EXECUTE_ABILITY : name;
   // Execution-audit failures (both step-5 sites below) are logged and
   // swallowed: by then the wire call has already run and cannot be rolled
   // back or safely replayed, so audit persistence must never turn a completed
@@ -894,12 +895,25 @@ export async function invokeConnectorInstanceTool(
   };
   let result: unknown;
   try {
-    result = await deps.callWireTool({
-      endpoint: wireTarget.endpoint,
-      authHeader: wireTarget.authHeader,
-      name: wire.name,
-      arguments: wire.arguments,
-    });
+    const callWire = (frozen: unknown) => {
+      if (!frozen || typeof frozen !== "object" || Array.isArray(frozen)) {
+        throw new InvokerError("tool_error", "tool arguments must be an object");
+      }
+      const argumentsValue = frozen as Record<string, unknown>;
+      return deps.callWireTool({ endpoint, authHeader, name: wireName,
+        arguments: triadOnly ? { ability_name: name, parameters: argumentsValue } : argumentsValue });
+    };
+    const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
+    if (mcpRequestContextStorage.getStore()?.runId) {
+      const { currentGuardedActionOwner, withGuardedRunActionInvocation } = await import("@/lib/extension-host-context");
+      // The guarded leaf's owner, pinned or unpinned (cinatra#3745): the guard
+      // serves a call that is not outward under either one and holds an outward
+      // one for the person gate. A call outside any guarded leaf has no owner.
+      const owner = currentGuardedActionOwner();
+      if (!owner) throw new InvokerError("tool_error", "executed connector owner is unavailable");
+      result = await withGuardedRunActionInvocation({ action: { ...owner, toolName: name, wrapper: "instance_tool",
+        instanceId: effectiveInstanceId, serverId, endpoint, connectorKey: input.connectorKey }, arguments: input.args }, callWire);
+    } else result = await callWire(input.args);
   } catch (err) {
     // Step 5 — execution audit (failure). Then re-throw the typed error.
     await auditSafely({

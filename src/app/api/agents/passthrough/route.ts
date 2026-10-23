@@ -1,3 +1,5 @@
+import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
+import { verifyRunExecutedSource } from "@cinatra-ai/agents/store";
 import "server-only";
 import { NextResponse } from "next/server";
 
@@ -7,6 +9,8 @@ import { isAuthorizedBridgeRequest } from "@/lib/wayflow-bridge-auth";
 import { bindBridgeRunId } from "@/lib/authz/bridge-run-binding";
 import {
   verifyRunStepAttestation,
+  verifySourceBoundRunStep,
+  RUN_RAW_SOURCE_HEADER, RUN_EXECUTED_SOURCE_HEADER, RUN_DECLARATION_SOURCE_HEADER,
   RUN_STEP_NODE_HEADER,
   RUN_STEP_ATTESTATION_HEADER,
 } from "@/lib/agent-run-token";
@@ -402,7 +406,7 @@ export async function POST(req: Request): Promise<Response> {
   // signs the executing step's id over the run's context id; it is verified
   // here with the context id the run binding above proved, and stamped on the
   // run-scoped frame below. An absent or unverified pair gives no step.
-  const verifiedStepId =
+  let verifiedStepId =
     verifyRunStepAttestation({
       key: process.env.CINATRA_CONTEXT_ATTEST_KEY,
       contextId: req.headers.get("x-cinatra-a2a-context-id"),
@@ -410,6 +414,21 @@ export async function POST(req: Request): Promise<Response> {
       attestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER),
     }) ?? undefined;
 
+  let verifiedExecutedSource: VerifiedExecutedRunSource | undefined;
+  if (req.headers.get(RUN_RAW_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTED_SOURCE_HEADER) !== null ||
+      req.headers.get(RUN_DECLARATION_SOURCE_HEADER) !== null) {
+    const attestation = verifySourceBoundRunStep({ key: process.env.CINATRA_CONTEXT_ATTEST_KEY,
+      contextId: req.headers.get("x-cinatra-a2a-context-id"), node: req.headers.get(RUN_STEP_NODE_HEADER),
+      attestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER), sourceSha256: req.headers.get(RUN_RAW_SOURCE_HEADER),
+      executedSourceSha256: req.headers.get(RUN_EXECUTED_SOURCE_HEADER),
+      declarationSourceSha256: req.headers.get(RUN_DECLARATION_SOURCE_HEADER) });
+    try {
+      const sourceRun = await readAgentRunById(agentRunId);
+      if (!attestation || !sourceRun?.orgId) throw new Error("source_binding_invalid");
+      verifiedExecutedSource = await verifyRunExecutedSource(agentRunId, sourceRun.orgId, attestation);
+      verifiedStepId = verifiedExecutedSource.stepId;
+    } catch { return NextResponse.json({ error: "Executing source could not be verified" }, { status: 403 }); }
+  }
   const shaper = TOOL_INPUT_SHAPERS[tool];
   let input: Record<string, unknown>;
   try {
@@ -465,6 +484,21 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   try {
+    const { mintRunWriteAuthorityForMcp } = await import("@/lib/org-write/run-authority-mint");
+    const { prepareDeclaredRunToolArguments } = await import("@/lib/extension-host-context");
+    const orgWriteAuthority = verifiedExecutedSource
+      ? await mintRunWriteAuthorityForMcp({ runId: run.id, orgId: run.orgId,
+          executionAttemptId: verifiedExecutedSource.executionAttemptId }) : undefined;
+    return await mcpRequestContextStorage.run({ runId: binding.runId,
+      userId: run.runBy ?? undefined, orgId: run.orgId,
+      ...(run.oboCeiling ? { oboCeiling: run.oboCeiling } : {}),
+      ...(verifiedStepId ? { verifiedStepId } : {}),
+      ...(verifiedExecutedSource ? { verifiedExecutedSource } : {}),
+      ...(orgWriteAuthority ? { orgWriteAuthority } : {}),
+    }, async () => {
+    // Every deterministic branch shares the verified executing-source frame;
+    // no materializer, extension-data branch or primitive gets a legacy bypass.
+    input = await prepareDeclaredRunToolArguments(tool, input) as Record<string, unknown>;
     let result: unknown;
     if (tool === "artifact_materialize") {
       // Deterministic artifact materialization (cinatra#925) — NOT an MCP
@@ -673,8 +707,24 @@ export async function POST(req: Request): Promise<Response> {
       // Storage frame isn't set. Passing the actor as a parameter is NOT
       // enough — the ALS frame is read by `runDeterministicLlmTask` from
       // the surrounding async context.
-      const invokeHandler = () =>
-        withActorContext(alsActorContext, () =>
+      const invokeHandler = async () => {
+        const { enforceMcpBoundary, enforceMcpBoundaryPrerequisites } = await import("@/lib/authz/mcp-boundary");
+        const { registrationEvaluatesPersonDecision } = await import("@/lib/authz/person-decision-declaration");
+        const frame = mcpRequestContextStorage.getStore();
+        // cinatra#3745 (criterion 5b): a tool whose registration declares that its
+        // handler evaluates the person's answered gate itself keeps that road. Only
+        // with the verified submission the host read stamped on the run-scoped frame
+        // below does it skip the recorded-decision rule; every other ceiling still
+        // applies. Without the declaration or that submission, the full boundary
+        // refuses it.
+        const evaluatesPersonDecision = registrationEvaluatesPersonDecision(handler) &&
+          RUN_SCOPED_CONTEXT_TOOLS.has(tool) && typeof frame?.verifiedSubmissionId === "string" &&
+          frame.verifiedSubmissionId.length > 0;
+        const boundary = evaluatesPersonDecision ? enforceMcpBoundaryPrerequisites : enforceMcpBoundary;
+        const decision = await boundary({ primitiveName: tool, arguments: input,
+          ctx: frame, delegatedRestricted: !!frame?.delegatedRestricted });
+        if (!decision.allowed && decision.shouldBlock) throw new Error(decision.reason);
+        return withActorContext(alsActorContext, () =>
           handler({
             primitiveName: tool,
             input,
@@ -682,6 +732,7 @@ export async function POST(req: Request): Promise<Response> {
             mode: "agentic",
           }),
         );
+      };
       // Run-scoped primitives (#1794) additionally execute inside an
       // mcpRequestContextStorage frame carrying the VERIFIED run id as
       // `verifiedRunScopeId` (binding.runId, proven by bindBridgeRunId above).
@@ -743,10 +794,12 @@ export async function POST(req: Request): Promise<Response> {
       result = RUN_SCOPED_CONTEXT_TOOLS.has(tool)
         ? await mcpRequestContextStorage.run(
             {
+              ...mcpRequestContextStorage.getStore(),
               runId: binding.runId,
               verifiedRunScopeId: binding.runId,
               ...(verifiedSubmissionId ? { verifiedSubmissionId } : {}),
               ...(verifiedStepId ? { verifiedStepId } : {}),
+              ...(verifiedExecutedSource ? { verifiedExecutedSource } : {}),
               userId: run.runBy ?? undefined,
               orgId: run.orgId,
               ...(run.oboCeiling ? { oboCeiling: run.oboCeiling } : {}),
@@ -875,6 +928,7 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     return NextResponse.json(result);
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });

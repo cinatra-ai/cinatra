@@ -31,6 +31,9 @@ const {
   readAgentTemplateByIdMock,
   resolveAgentRunMcpActorMock,
   issueAgentRunMcpActorTokenMock,
+  verifyRunExecutedSourceMock,
+  readRunStepToolPolicyMock,
+  readTrustedStepToolDeclarationMock,
 } = vi.hoisted(() => ({
   runResolvedSkillAwareDeterministicLlmTaskMock: vi.fn<
     (input: Record<string, unknown>) => Promise<{ text: string; artifacts: unknown[] }>
@@ -48,7 +51,7 @@ const {
   ),
   buildLlmMcpServerToolForAgentRunMock: vi.fn(() => ({ type: "mcp-tool" })),
   buildLlmMcpServerToolMock: vi.fn(
-    async (): Promise<{ type: string; headers: { Authorization: string } } | null> => ({
+    async (): Promise<{ type: string; headers?: { Authorization?: string } } | null> => ({
       type: "mcp",
       headers: { Authorization: "Bearer machine-token-abc" },
     }),
@@ -70,6 +73,9 @@ const {
   readAgentTemplateByIdMock: vi.fn(),
   resolveAgentRunMcpActorMock: vi.fn(),
   issueAgentRunMcpActorTokenMock: vi.fn(() => "obo-token"),
+  verifyRunExecutedSourceMock: vi.fn(),
+  readRunStepToolPolicyMock: vi.fn(),
+  readTrustedStepToolDeclarationMock: vi.fn(),
 }));
 
 vi.mock("server-only", () => ({}));
@@ -86,6 +92,11 @@ vi.mock("@cinatra-ai/llm", () => ({
     modelId !== "gpt-5" && modelId !== "gpt-5-mini",
   PreferredProviderUnavailableError: class extends Error {},
   uploadFile: vi.fn(),
+}));
+vi.mock("@cinatra-ai/agents/store", () => ({
+  verifyRunExecutedSource: verifyRunExecutedSourceMock,
+  readRunStepToolPolicy: readRunStepToolPolicyMock,
+  readTrustedStepToolDeclaration: readTrustedStepToolDeclarationMock,
 }));
 vi.mock("@/lib/agent-run-context-durable", () => ({
   writeDurableRunContextBinding: writeDurableRunContextBindingMock,
@@ -197,6 +208,11 @@ const RUN = {
   projectId: null,
   oboCeiling: [{ tier: "organization", id: "org-1" }],
 };
+const VERIFIED_SOURCE = Object.freeze({
+  contextId: CTX, stepId: NODE, executionAttemptId: "attempt-1",
+  sourceSha256: "b".repeat(64), executedSourceSha256: "c".repeat(64),
+  declarationSourceSha256: "d".repeat(64),
+});
 const OTHER_RUN = { ...RUN, id: "run-2" };
 const PROBE = { id: RUN.id, orgId: RUN.orgId, runBy: RUN.runBy };
 
@@ -220,6 +236,20 @@ function stepHeaders(opts: { ctx?: string; node?: string; key?: string; expiry?:
   return {
     "x-cinatra-step-node": node,
     "x-cinatra-step-attestation": `s1:${expiry}:${sig}`,
+  };
+}
+
+function sourceHeaders() {
+  const expiry = Math.floor(Date.now() / 1000) + 300;
+  const { sourceSha256, executedSourceSha256, declarationSourceSha256 } = VERIFIED_SOURCE;
+  const material = `s2\n${CTX}\n${NODE}\n${sourceSha256}\n${executedSourceSha256}\n${declarationSourceSha256}\n${expiry}`;
+  const sig = createHmac("sha256", ATTEST_KEY).update(material).digest("hex");
+  return {
+    "x-cinatra-run-token": RUN_TOKEN, "x-cinatra-a2a-context-id": CTX,
+    "x-cinatra-step-node": NODE, "x-cinatra-step-attestation": `s2:${expiry}:${sig}`,
+    "x-cinatra-raw-source": sourceSha256,
+    "x-cinatra-executed-source": executedSourceSha256,
+    "x-cinatra-declaration-source": declarationSourceSha256,
   };
 }
 
@@ -262,6 +292,9 @@ beforeEach(async () => {
     headers: { Authorization: "Bearer machine-token-abc" },
   });
   readAgentRunTokenHashByIdMock.mockResolvedValue(null);
+  verifyRunExecutedSourceMock.mockResolvedValue(VERIFIED_SOURCE);
+  readRunStepToolPolicyMock.mockResolvedValue({ source: "test-source" });
+  readTrustedStepToolDeclarationMock.mockReturnValue({ kind: "undeclared" });
   writeDurableRunContextBindingMock.mockResolvedValue("cinatra:run-ctx:v1:test-key");
   const mod = await import("../route");
   POST = mod.POST;
@@ -377,11 +410,89 @@ describe("the model bridge carries the verified step", () => {
   });
 });
 
+describe("source-bound machine fallback requires a durable binding", () => {
+  async function sourceBoundFallback() {
+    resolveAgentRunMcpActorMock.mockResolvedValue(null);
+    const res = await POST(makeReq({ user: "hi" }, sourceHeaders()));
+    expect(res.status).toBe(200);
+    expect(verifyRunExecutedSourceMock).toHaveBeenCalledWith(
+      RUN.id, RUN.orgId, expect.objectContaining({ stepId: NODE, contextId: CTX }),
+    );
+    expect(readTrustedStepToolDeclarationMock).toHaveBeenCalledWith("test-source", NODE);
+    return invokeOverride();
+  }
+
+  it("refuses a verified run whose authoritative credential hash disappeared", async () => {
+    readAgentRunTokenHashByIdMock.mockResolvedValue(null);
+    expect(await sourceBoundFallback()).toBeNull();
+    expect(buildLlmMcpServerToolMock).toHaveBeenCalledTimes(1);
+    expect(readAgentRunTokenHashByIdMock).toHaveBeenCalledWith(RUN.id);
+    expect(writeDurableRunContextBindingMock).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "Basic opaque-token", "Bearer ", "Bearer \t", "Bearer token with-space"])(
+    "refuses missing or unusable machine authorization %s", async (authorization) => {
+      readAgentRunTokenHashByIdMock.mockResolvedValue("a".repeat(64));
+      buildLlmMcpServerToolMock.mockResolvedValue({ type: "mcp", headers: { Authorization: authorization } });
+      expect(await sourceBoundFallback()).toBeNull();
+      expect(writeDurableRunContextBindingMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a durable binding write that returns no key", async () => {
+    readAgentRunTokenHashByIdMock.mockResolvedValue("a".repeat(64));
+    writeDurableRunContextBindingMock.mockResolvedValue(null);
+    expect(await sourceBoundFallback()).toBeNull();
+    expect(writeDurableRunContextBindingMock).toHaveBeenCalledWith(
+      "machine-token-abc", expect.objectContaining({ tokenHash: "a".repeat(64), verifiedExecutedSource: VERIFIED_SOURCE }),
+    );
+  });
+
+  it("refuses a durable binding write that throws", async () => {
+    readAgentRunTokenHashByIdMock.mockResolvedValue("a".repeat(64));
+    writeDurableRunContextBindingMock.mockRejectedValue(new Error("binding unavailable"));
+    expect(await sourceBoundFallback()).toBeNull();
+    expect(writeDurableRunContextBindingMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns the machine tool only after the source-bound binding succeeds", async () => {
+    readAgentRunTokenHashByIdMock.mockResolvedValue("a".repeat(64));
+    expect(await sourceBoundFallback()).toEqual({ type: "mcp", headers: { Authorization: "Bearer machine-token-abc" } });
+    expect(writeDurableRunContextBindingMock).toHaveBeenCalledWith(
+      "machine-token-abc", expect.objectContaining({ tokenHash: "a".repeat(64), stepId: NODE, verifiedExecutedSource: VERIFIED_SOURCE }),
+    );
+    expect(buildLlmMcpServerToolForAgentRunMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves a source-bound on-behalf-of success without minting a machine tool", async () => {
+    const res = await POST(makeReq({ user: "hi" }, sourceHeaders()));
+    expect(res.status).toBe(200);
+    expect(await invokeOverride()).toEqual({ type: "mcp-tool" });
+    expect(mintedActor()).toMatchObject({ runId: RUN.id, verifiedStepId: NODE, verifiedExecutedSource: VERIFIED_SOURCE });
+    expect(buildLlmMcpServerToolMock).not.toHaveBeenCalled();
+    expect(writeDurableRunContextBindingMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["missing hash", "missing bearer", "binding refusal"])(
+    "preserves the ordinary non-source-bound machine fallback with %s", async (missing) => {
+      resolveAgentRunMcpActorMock.mockResolvedValue(null);
+      if (missing !== "missing hash") readAgentRunTokenHashByIdMock.mockResolvedValue("a".repeat(64));
+      if (missing === "missing bearer") buildLlmMcpServerToolMock.mockResolvedValue({ type: "mcp", headers: {} });
+      if (missing === "binding refusal") writeDurableRunContextBindingMock.mockResolvedValue(null);
+      const res = await POST(makeReq({ user: "hi" }, { "x-cinatra-run-token": RUN_TOKEN, "x-cinatra-a2a-context-id": CTX }));
+      expect(res.status).toBe(200);
+      expect(await invokeOverride()).toEqual(await buildLlmMcpServerToolMock.mock.results[0]!.value);
+      expect(verifyRunExecutedSourceMock).not.toHaveBeenCalled();
+    },
+  );
+});
+
 // Leave the module registry as this file found it.
 afterAll(() => {
   vi.doUnmock("server-only");
   vi.doUnmock("@cinatra-ai/llm");
   vi.doUnmock("@/lib/agent-run-context-durable");
+  vi.doUnmock("@cinatra-ai/agents/store");
   vi.doUnmock("@/lib/a2a-auth");
   vi.doUnmock("@cinatra-ai/skills");
   vi.doUnmock("@/lib/agents-store");

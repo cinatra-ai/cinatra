@@ -1,6 +1,8 @@
 import "server-only";
 
 import { createHmac, timingSafeEqual } from "node:crypto";
+import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
+import { parseVerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
 import {
   getLocalMcpServerUrl,
   getPublicMcpServerUrl,
@@ -107,6 +109,8 @@ export type AgentRunMcpActor = {
    * carried to the tool server's frame; it grants nothing on its own.
    */
   verifiedStepId?: string;
+  /** Signed executed-source proof; legacy step-only tokens grant no action. */
+  verifiedExecutedSource?: VerifiedExecutedRunSource;
 };
 
 type AgentRunMcpActorTokenClaims = {
@@ -126,6 +130,7 @@ type AgentRunMcpActorTokenClaims = {
   /** The verified step of the calling model step (cinatra#3745) — optional;
    *  see `AgentRunMcpActor.verifiedStepId`. */
   stp?: string;
+  src?: VerifiedExecutedRunSource;
   scope: "mcp:connect";
   aud: string;
   iss: string;
@@ -192,6 +197,10 @@ function issueIssuer(): string {
 }
 
 export function issueAgentRunMcpActorToken(input: AgentRunMcpActor): string {
+  const source = input.verifiedExecutedSource === undefined ? undefined : parseVerifiedExecutedRunSource(input.verifiedExecutedSource);
+  if (input.verifiedExecutedSource !== undefined && (!source || source.stepId !== input.verifiedStepId || source.executionAttemptId !== input.executionAttemptId)) {
+    throw new Error("agent_run_source_claim_mismatch");
+  }
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: "HS256", typ: "JWT" };
   const payload: AgentRunMcpActorTokenClaims = {
@@ -215,6 +224,7 @@ export function issueAgentRunMcpActorToken(input: AgentRunMcpActor): string {
     // The verified step of the calling model step (cinatra#3745), written only
     // when the bridge verified one.
     ...(input.verifiedStepId ? { stp: input.verifiedStepId } : {}),
+    ...(source ? { src: source } : {}),
     scope: TOKEN_SCOPE,
     aud: issueAudience(),
     iss: issueIssuer(),
@@ -323,8 +333,12 @@ export function verifyAgentRunMcpActorToken(input: {
       return null;
     }
     if (payload.exp < now) return null;
+    const source = payload.src === undefined ? undefined : parseVerifiedExecutedRunSource(payload.src);
+    // A present corrupt proof refuses the WHOLE token, never a step-only downgrade.
+    if (payload.src !== undefined && (!source || source.stepId !== payload.stp || source.executionAttemptId !== payload.att)) return null;
 
     return {
+      ...(source ? { verifiedExecutedSource: source } : {}),
       delegation: "agent_run",
       userId: payload.sub,
       orgId: payload.org,
