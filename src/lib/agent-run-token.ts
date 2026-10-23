@@ -234,3 +234,23 @@ export function verifyGateNodeClaim(input: {
   const expected = hmacHex(key, `g1\n${contextId}\n${taskId}\n${node}`);
   return hexEquals(match[1]!, expected) ? node : null;
 }
+
+// #3745 s2 binds the ACTUAL loaded assistant, not a mutable active-mount GET.
+export const RUN_EXECUTED_SOURCE_HEADER = "x-cinatra-executed-source";
+export const RUN_DECLARATION_SOURCE_HEADER = "x-cinatra-declaration-source";
+export const RUN_RAW_SOURCE_HEADER = "x-cinatra-raw-source";
+export function verifySourceBoundRunStep(input: {
+  key?: string | null; contextId?: string | null; node?: string | null;
+  attestation?: string | null; sourceSha256?: string | null;
+  executedSourceSha256?: string | null; declarationSourceSha256?: string | null; nowMs?: number;
+}): { stepId: string; contextId: string; sourceSha256: string; executedSourceSha256: string; declarationSourceSha256: string } | null {
+  const { key, contextId, node, attestation, sourceSha256, executedSourceSha256, declarationSourceSha256 } = input;
+  if (!key || !contextId || !node || /[\r\n]/.test(contextId + node) ||
+      ![sourceSha256, executedSourceSha256, declarationSourceSha256].every((v) => typeof v === "string" && /^[a-f0-9]{64}$/.test(v))) return null;
+  const m = /^s2:([0-9]+):([a-f0-9]{64})$/.exec(attestation ?? "");
+  if (!m || !Number.isSafeInteger(Number(m[1]))) return null;
+  const expiry = Number(m[1]); const now = input.nowMs ?? Date.now();
+  if (now > expiry * 1000 + RUN_STEP_ATTESTATION_SKEW_MS || expiry * 1000 > now + RUN_STEP_ATTESTATION_MAX_FUTURE_MS) return null;
+  if (!hexEquals(m[2]!, hmacHex(key, `s2\n${contextId}\n${node}\n${sourceSha256}\n${executedSourceSha256}\n${declarationSourceSha256}\n${expiry}`))) return null;
+  return Object.freeze({ stepId: node, contextId, sourceSha256: sourceSha256!, executedSourceSha256: executedSourceSha256!, declarationSourceSha256: declarationSourceSha256! });
+}

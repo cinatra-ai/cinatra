@@ -286,17 +286,24 @@ describe("cinatra#3007 — an unrecordable hold inside the resume primitive", ()
       Buffer.byteLength(JSON.stringify(data.producedReviewHold) ?? "", "utf8"),
     ).toBeLessThanOrEqual(PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES);
 
-    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    // The only transition is the resume's own claim of the gate before its send
+    // (cinatra#3745); no terminal status is written.
+    const edges = (storeMock.transitionRunStatus.mock.calls as unknown as Array<[string, string, string]>)
+      .map((c) => [c[1], c[2]]);
+    expect(edges).toEqual([["pending_approval", "running"]]);
   });
 
   it("the delivered payload lets a later convergence pass land the withheld verdict", async () => {
     await resume().catch(() => undefined);
     const [, data] = deliveredRecovery()!;
+    // The resume claimed the gate before its send (cinatra#3745), so the run the
+    // later pass finds is running.
+    storeMock.transitionRunStatus.mockClear();
 
     holdSpy.mockResolvedValue({ held: false, reason: "no-review" });
     await recoverProducedReviewHold({
       runId: "run-1",
-      run: { orgId: "org-1", status: "pending_approval" },
+      run: { orgId: "org-1", status: "running" },
       recovery: data.producedReviewHold as never,
       authority: AUTHORITY,
       park: data.producedReviewHoldPark as number,
@@ -306,7 +313,7 @@ describe("cinatra#3007 — an unrecordable hold inside the resume primitive", ()
       [string, string, string, Record<string, unknown> | undefined, unknown]
     >;
     expect(calls).toHaveLength(1);
-    expect([calls[0][1], calls[0][2]]).toEqual(["pending_approval", "completed"]);
+    expect([calls[0][1], calls[0][2]]).toEqual(["running", "completed"]);
     expect(calls[0][3]?.stepResults).toBeDefined();
     // The withheld terminal write carries no derivation outbox: cinatra#3029
     // (PR 3311) retired the response-text derivation on the path that produced

@@ -106,6 +106,13 @@ export default defineConfig({
       // `handlers` from `@cinatra-ai/projects` to call the `project_access_*`
       // MCP handlers in-process through the server-action wrapper. tsconfig
       // has the path alias; vitest needs the mirrored entry.
+      // The `module` subpath first: the prefix entry below would map it onto
+      // the barrel file. Mirrors the tsconfig path; only `src/lib/mcp-server.ts`
+      // imports it.
+      {
+        find: /^@cinatra-ai\/projects\/module$/,
+        replacement: path.join(__dirname, "packages/projects/src/integration/module.ts"),
+      },
       {
         find: "@cinatra-ai/projects",
         replacement: path.join(__dirname, "packages/projects/src/index.ts"),
@@ -279,6 +286,13 @@ export default defineConfig({
       // route references so all bridge tests can load route.ts. The
       // media-input-routing.test.ts file additionally `vi.mock`s this entry
       // to spy on emitUsageEvent payloads.
+      // The `mcp-module` subpath first: the stub entry below would map it onto
+      // the stub file. Mirrors the tsconfig path; only `src/lib/mcp-server.ts`
+      // imports it.
+      {
+        find: /^@cinatra-ai\/metric-usage-api\/mcp-module$/,
+        replacement: path.join(__dirname, "packages/metric-usage-api/src/mcp/module.ts"),
+      },
       {
         find: "@cinatra-ai/metric-usage-api",
         replacement: path.join(
