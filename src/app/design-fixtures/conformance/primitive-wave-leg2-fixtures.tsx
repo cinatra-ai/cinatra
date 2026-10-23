@@ -35,6 +35,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -257,6 +258,22 @@ export function PrimitiveWaveLeg2ConformanceFixtures() {
           <SelectContent>
             <SelectItem value="today">Most-used today</SelectItem>
             <SelectItem value="week">Most-used this week</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <div data-wave-seam="select-long-list">
+        <Select>
+          <SelectTrigger aria-label="Long list" className="w-60">
+            <SelectValue placeholder="Choose an item" />
+          </SelectTrigger>
+          <SelectContent className="max-h-48">
+            <SelectGroup>
+              {Array.from({ length: 48 }, (_, index) => (
+                <SelectItem key={index} value={`item-${index + 1}`}>
+                  List item {String(index + 1).padStart(2, "0")}
+                </SelectItem>
+              ))}
+            </SelectGroup>
           </SelectContent>
         </Select>
       </div>
