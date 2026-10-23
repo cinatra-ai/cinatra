@@ -212,8 +212,8 @@ async function resolveLineageId(reviewTaskId: string): Promise<string | undefine
  *
  * Guards (defence in depth — the action also checks these before calling):
  *   - the gate must exist and be a LIFECYCLE gate (auto/repair-successor task id)
- *     or one leg of a per-artifact DECLARED review (cinatra#3035 W11), proven by
- *     the family witness on its pin;
+ *     or a later leg (the picture's, never the post's own) of a per-artifact
+ *     DECLARED review (cinatra#3035 W11), proven by the family witness on its pin;
  *   - the gate must pin EXACTLY the one base target (the repair path is single-base).
  * A non-lifecycle / mismatched / multi-target gate returns a typed failure rather
  * than closing the wrong gate.
@@ -236,8 +236,9 @@ export async function recordReviewSurfaceChangesRequested(
   if (!gate) {
     return { ok: false, code: "gate-not-pending", error: "the review gate is no longer available" };
   }
-  // A flow-authored gate takes this road only as a leg of a declared per-artifact
-  // review; any other flow-authored gate keeps its plain Comment.
+  // A flow-authored gate takes this road only as a later leg (the picture's) of a
+  // declared per-artifact review, read from the family witness on its pin; the
+  // post's own leg and any other flow-authored gate keep their plain Comment.
   if (!lifecycleGate && !isDeclaredReviewLeg({ runId, orgId: gate.orgId, reviewTaskId, pinnedTargets: gate.pinnedTargets })) {
     return { ok: false, code: "not-a-lifecycle-gate", error: "not a lifecycle review gate" };
   }
