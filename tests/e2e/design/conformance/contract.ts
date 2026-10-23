@@ -884,7 +884,17 @@ async function changeARow(root: Locator): Promise<void> {
  *  carrying the reader's. */
 const EDITED_ROWS = JSON.stringify({ kind: "immediate" });
 
-const CONFIRM_CONTROL = '[data-action="confirm-schedule-proposal"]';
+// THE DRAWN CONFIRM (cinatra#3678). The drawing carries Confirm's action on the
+// FLOOR itself, as `confirm-schedule -> scheduled`, and the button inside it
+// carries none. So the floor that carries the action is located by both of its
+// attributes, and Confirm is pressed as the button inside that floor.
+const CONFIRM_FLOOR =
+  '[data-conformance-id="schedule-proposal-floor"][data-action="confirm-schedule -> scheduled"]';
+
+/** The shipped Confirm: the button inside the floor that carries the drawn action. */
+function confirmControl(root: Locator): Locator {
+  return scheduleCard(root).locator(CONFIRM_FLOOR).getByRole("button", { name: "Confirm" });
+}
 const SAVE_CONTROL = '[data-action="save-schedule-changes"]';
 
 export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): SurfaceDriver {
@@ -916,7 +926,7 @@ export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): Surfa
         // press" — the rows go read-only and simply stand.
         await expect(scheduleFloor(root)).toHaveCount(0);
         await expect(card.locator(SAVE_CONTROL)).toHaveCount(0);
-        await expect(card.locator(CONFIRM_CONTROL)).toHaveCount(0);
+        await expect(card.locator(CONFIRM_FLOOR)).toHaveCount(0);
         for (const control of await card.getByRole("button").all()) {
           await expect(control).toBeDisabled();
         }
@@ -933,14 +943,14 @@ export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): Surfa
       await expect(scheduleFloor(root)).toBeVisible();
       if (reading === "first-shown" || reading === "expired") {
         // "the floor is Confirm. It is the only control: there is no Adjust".
-        await expect(scheduleFloor(root).locator(CONFIRM_CONTROL)).toBeVisible();
+        await expect(confirmControl(root)).toBeVisible();
         await expect(scheduleFloor(root).locator(SAVE_CONTROL)).toHaveCount(0);
       } else {
         // "the floor becomes Save changes — quiet until a row is actually
         // changed, because there is nothing to save until then."
         await expect(scheduleFloor(root).locator(SAVE_CONTROL)).toBeVisible();
         await expect(scheduleFloor(root).locator(SAVE_CONTROL)).toBeDisabled();
-        await expect(scheduleFloor(root).locator(CONFIRM_CONTROL)).toHaveCount(0);
+        await expect(scheduleCard(root).locator(CONFIRM_FLOOR)).toHaveCount(0);
       }
       // WHAT THE FIRED-RECURRING FLOOR REALLY CARRIES (cinatra#3174 fix leg 8).
       // This assertion used to read "the floor carries exactly ONE thing to
@@ -995,7 +1005,7 @@ export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): Surfa
       // settled between the two readings is pressed again, and the press counts
       // only when the word and the dead control are read in the same flight.
       driver.states.loading = async (_page, root) => {
-        const confirm = scheduleFloor(root).locator(CONFIRM_CONTROL);
+        const confirm = confirmControl(root);
         await pressScheduleUntil(confirm, async () => {
           await expect(confirm).toContainText("Confirming…", { timeout: 2_000 });
           await expect(confirm).toBeDisabled({ timeout: 2_000 });
@@ -1004,7 +1014,7 @@ export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): Surfa
       // The refusal, said on the card rather than swallowed. It never reveals
       // whether a token was expired, foreign or forged.
       driver.states.error = async (_page, root) => {
-        const confirm = scheduleFloor(root).locator(CONFIRM_CONTROL);
+        const confirm = confirmControl(root);
         const refusal = scheduleFloor(root).locator(
           '[data-conformance-id="schedule-proposal-refusal"]',
         );
@@ -1023,7 +1033,7 @@ export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): Surfa
       driver.actions["confirm-schedule"] = {
         outcome: "scheduled",
         run: async (_page, root) => {
-          const confirm = scheduleFloor(root).locator(CONFIRM_CONTROL);
+          const confirm = confirmControl(root);
           await pressScheduleUntil(confirm, async () => {
             await expect(decisionRoads(root)).toHaveCount(1, { timeout: 5_000 });
           });
@@ -1172,7 +1182,7 @@ export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): Surfa
 
     case "schedule-card-expired":
       driver.states.error = async (_page, root) => {
-        const confirm = scheduleFloor(root).locator(CONFIRM_CONTROL);
+        const confirm = confirmControl(root);
         const refusal = scheduleFloor(root).locator(
           '[data-conformance-id="schedule-proposal-refusal"]',
         );
@@ -1193,7 +1203,7 @@ export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): Surfa
       driver.actions["confirm-schedule"] = {
         outcome: "scheduled",
         run: async (_page, root) => {
-          const confirm = scheduleFloor(root).locator(CONFIRM_CONTROL);
+          const confirm = confirmControl(root);
           // "change it if you like, then confirm it again" — the expired card's
           // rows still take a change, and the change is what the re-propose has
           // to carry. Confirming an untouched expired card would prove only

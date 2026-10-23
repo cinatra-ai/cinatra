@@ -369,7 +369,7 @@ describe.each(["chat", "widget"] as const)(
         //  -- and the card carries no floor at all"
         expect(card.getAttribute("data-lifecycle-card-phase")).toBe("settled");
         expect(card.querySelectorAll("select").length).toBe(0);
-        expect(card.querySelectorAll('[data-action="confirm-schedule-proposal"]').length).toBe(0);
+        expect(card.querySelectorAll('[data-action="confirm-schedule -> scheduled"]').length).toBe(0);
         // "the values still legible" -- the option rows stay readable, and
         // the row the person chose is one of them.
         expect(card.textContent).toContain("Run right after setup");
@@ -545,7 +545,7 @@ describe.each(["chat", "widget"] as const)(
       );
       expect(container.querySelectorAll(CARD).length).toBe(1);
       expect(
-        container.querySelectorAll('[data-action="confirm-schedule-proposal"]').length,
+        container.querySelectorAll('[data-action="confirm-schedule -> scheduled"]').length,
       ).toBe(0);
     }, 40_000);
   },
