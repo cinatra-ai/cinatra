@@ -314,13 +314,17 @@ export function HitlConversationPanel({
   // nothing passes under it now. The inset it keeps is the window's own
   // breathing room inside the column it stands in.
   return createPortal(
+    // THE WINDOW'S OWN ANCHOR (cinatra#3487). The ruling's conformance reading
+    // is that the window's anchor is a descendant of the page chrome and never
+    // of `[data-lifecycle-card-host]`; the anchor itself is the id the drawing
+    // declares and the staged manifest carries, `review-prompt-window`,
+    // so the anchor rides the window's own markup: it exists exactly when a
+    // window is drawn, which is what makes "count the windows on this page" an
+    // answerable question.
     <div
       data-conv-open={convOpen}
+      data-conformance-id="review-prompt-window"
       data-run-window-placement={placement}
-      // IN FLOW IS PLAIN STATIC FLOW — no `sticky`, no `bottom`, no stacking
-      // context, and no fade: an element that is not taken out of flow and
-      // comes after the work in document order cannot draw over it at any
-      // width, which is the whole of §VI's "beneath the decision bar".
       className="px-5 pb-4 pt-6"
     >
       <div ref={convContainerRef} className="mx-auto max-w-3xl">
