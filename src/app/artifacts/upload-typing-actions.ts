@@ -52,6 +52,10 @@ import {
 } from "@/lib/notifications";
 import { resolveRecipientToUserIds } from "@cinatra-ai/notifications/server";
 import { loadMarketplaceBrowse } from "@/lib/marketplace-browse";
+import {
+  narrowMeaningOfferToOffered,
+  type PickerMeaningOffer,
+} from "@/lib/artifacts/picker-meaning-offer";
 
 /**
  * Apply the per-actor extension-ACCESS gate to raw §VI.1 picker candidates. The
@@ -123,6 +127,156 @@ async function filterCandidatesByActorAccess(
   return candidates.filter((c) => accessible.has(c.extension));
 }
 
+/**
+ * THE PRESENTED BASE MEANING (spec §VI.1 "Derived meaning & suggestion chips",
+ * cinatra#3319). The candidate list keeps the extension that defines the row's
+ * CURRENT type off the picker (`excludeTypeId`), because re-asserting that
+ * extension is normally a no-op. It is not a no-op when the row PRESENTS exactly
+ * that extension's live matcher draft: as its auto-surfaced meaning (a draft at
+ * or above the pack's threshold) or as a suggestion (a draft that did not
+ * auto-surface). The drawing says the picker then opens pre-selected on it or
+ * draws it as a suggestion chip, and that confirming it writes a user-sourced
+ * meaning.
+ *
+ * Of the given extensions, this answers the admitted picker candidates of those
+ * for which ALL of these hold:
+ *   - the extension defines the row's current type (`extensionDefinesType`, the
+ *     same question the converging road asks: the extension the base exclusion
+ *     removed, and no other);
+ *   - it is an installed type whose `accepts` admit the file's MIME now (the
+ *     same list, read without the base exclusion — the drawing's admission
+ *     rule);
+ *   - this actor passes the same per-actor access gate as every candidate.
+ * The caller also requires the row's presentation reading to present the
+ * extension (its pre-selection or one of its suggestions). The list and the
+ * confirmation both decide through this one function, so what the picker offers
+ * is what the confirmation accepts.
+ */
+async function presentedBaseCandidates(input: {
+  extensions: readonly string[];
+  mime: string;
+  objectType: string | null | undefined;
+  actor: ActorContext;
+  orgId: string;
+}): Promise<InstalledMeaningType[]> {
+  return (await screenPresentedBase(input, extensionDefinesType)).accessible;
+}
+
+/**
+ * The checks of {@link presentedBaseCandidates}, with each stage's answer kept:
+ * `admitted` are the definers' installed types that accept the MIME, and
+ * `accessible` are those this actor passes the access gate for. The list reads
+ * the definer leniently (a failed read is "not a definer"); the confirmation
+ * passes a definer read that throws, so a failed read is never an answer.
+ */
+async function screenPresentedBase(
+  input: {
+    extensions: readonly string[];
+    mime: string;
+    objectType: string | null | undefined;
+    actor: ActorContext;
+    orgId: string;
+  },
+  definesType: (extension: string, objectType: string) => Promise<boolean>,
+): Promise<{ admitted: InstalledMeaningType[]; accessible: InstalledMeaningType[] }> {
+  const { objectType } = input;
+  if (!objectType || input.extensions.length === 0) return { admitted: [], accessible: [] };
+  const definers = new Set<string>();
+  for (const extension of new Set(input.extensions)) {
+    if (await definesType(extension, objectType)) definers.add(extension);
+  }
+  if (definers.size === 0) return { admitted: [], accessible: [] };
+  const admitted = listInstalledMeaningTypesAcceptingMime(input.mime).filter((t) =>
+    definers.has(t.extension),
+  );
+  return {
+    admitted,
+    accessible: await filterCandidatesByActorAccess(admitted, input.actor, input.orgId),
+  };
+}
+
+/** The offered types with the presented base meaning added, in the picker's
+ *  stable order (alphabetical by display name, then extension). */
+function withPresentedBase(
+  types: InstalledMeaningType[],
+  base: readonly InstalledMeaningType[],
+): InstalledMeaningType[] {
+  const added = base.filter((b) => !types.some((t) => t.extension === b.extension));
+  if (added.length === 0) return types;
+  return [...types, ...added].sort(
+    (a, b) =>
+      a.displayName.localeCompare(b.displayName) || a.extension.localeCompare(b.extension),
+  );
+}
+
+/**
+ * The confirmation's half of {@link presentedBaseCandidates}: does this request
+ * confirm the row's presented base meaning? Asked FIRST when the candidate gate
+ * refused the extension, before the converging road, so a presented meaning
+ * never reaches the promotion road. The definer, MIME and access checks come
+ * first; only then is the row's ONE presentation reading taken (the same
+ * `resolveArtifactPresentationReading` the list's deferred reading uses), and
+ * its pre-selection or one of its suggestions must name exactly this extension.
+ *
+ *   "presented" — the reading presents exactly this extension.
+ *   "absent"    — every read answered, and the extension is not a presented
+ *                 base meaning: it defines no such type, no installed type of it
+ *                 accepts the file, or the complete reading does not present it.
+ *                 The converging road decides, and it needs the row's own proof.
+ *   "refused"   — a read failed (thrown, or a reading that degraded a failed
+ *                 read to an empty offer), or the access gate denied this actor
+ *                 the extension. The confirmation is refused: a failed or denied
+ *                 verification must never fall through to the converging road,
+ *                 whose store can append a revision on the matcher alone.
+ */
+async function confirmsPresentedBaseMeaning(input: {
+  artifactId: string;
+  extension: string;
+  mime: string;
+  objectType: string;
+  actor: ActorContext;
+  orgId: string;
+}): Promise<"presented" | "absent" | "refused"> {
+  try {
+    const { admitted, accessible } = await screenPresentedBase(
+      {
+        extensions: [input.extension],
+        mime: input.mime,
+        objectType: input.objectType,
+        actor: input.actor,
+        orgId: input.orgId,
+      },
+      readExtensionDefinesType,
+    );
+    if (admitted.length === 0) return "absent";
+    if (accessible.length === 0) return "refused";
+    const { resolveArtifactPresentationReading } = await import(
+      "@/lib/objects/presentation-identity"
+    );
+    const reading = resolveArtifactPresentationReading({
+      orgId: input.orgId,
+      artifactId: input.artifactId,
+      baseType: input.objectType,
+    });
+    if (reading.complete !== true) return "refused";
+    const { offer } = reading;
+    const presents =
+      offer.preselect === input.extension ||
+      offer.suggestions.some((s) => s.extension === input.extension);
+    return presents ? "presented" : "absent";
+  } catch {
+    return "refused";
+  }
+}
+
+/** The one refusal a confirmation answers when its type cannot be accepted. */
+const INVALID_TYPE_REFUSAL = {
+  ok: false,
+  reason: "invalid-type",
+  message:
+    "That type is not an installed type that accepts this file — refresh and pick again.",
+} as const;
+
 export type ArtifactMarketplacePack = {
   packageName: string;
   version: string;
@@ -131,7 +285,16 @@ export type ArtifactMarketplacePack = {
 };
 
 export type ListTypesResult =
-  | { ok: true; types: InstalledMeaningType[]; mime: string }
+  | {
+      ok: true;
+      types: InstalledMeaningType[];
+      mime: string;
+      /** The row's derived meaning narrowed to `types` (§VI.1, cinatra#3319):
+       *  the extension the picker opens pre-selected on and the suggestion
+       *  chips. Absent when nothing is offered or the detail read answered
+       *  none; the picker then opens with nothing selected and no chip. */
+      meaning?: PickerMeaningOffer;
+    }
   | { ok: false; reason: "auth-required" | "not-found" | "denied" };
 
 /**
@@ -150,7 +313,12 @@ export async function listInstalledTypesForArtifact(
   const orgId = session?.session?.activeOrganizationId ?? null;
   const actor = await getActorContext();
   if (!orgId || !actor) return { ok: false, reason: "auth-required" };
-  const read = readArtifactForDetail({ orgId, actor, artifactId });
+  // `withMeaningOffer` (cinatra#3319): the detail read runs the row's gates now
+  // and DEFERS its one presentation reading to `readPresentation()`, which this
+  // action calls only after the registry warm below. So the gates still come
+  // before any store scan, the warm runs once per request, and the offer and
+  // the candidate list are decided over the same registry.
+  const read = readArtifactForDetail({ orgId, actor, artifactId, withMeaningOffer: true });
   if (read.kind === "not-found") return { ok: false, reason: "not-found" };
   if (read.kind === "denied") return { ok: false, reason: "denied" };
   // The picker reads the in-process object-type registry, and the ordinary read
@@ -169,7 +337,46 @@ export async function listInstalledTypesForArtifact(
   // is not addressable by THIS actor (foreign-org / foreign-scope / torn-down),
   // and matcher-channel members not org-writable (== the A6 resolver's gate).
   const types = await filterCandidatesByActorAccess(raw, actor, orgId);
-  return { ok: true, types, mime };
+  // THE DERIVED MEANING (§VI.1, cinatra#3319): a matcher draft at or above its
+  // pack's threshold opens the picker pre-selected on it; a draft that did not
+  // auto-surface is a suggestion chip. It is the detail read's one presentation
+  // reading, taken here, after the warm above, and narrowed to the offered
+  // types: the types above (installed, accepting this file's MIME, not the
+  // row's base type, addressable by this actor), plus the row's base-defining
+  // extension when the reading presents exactly it (pre-selection or
+  // suggestion) and it passes the same MIME and access checks
+  // (`presentedBaseCandidates`). The confirmation gate decides through the same
+  // function and refuses any other extension.
+  const meaningOffer = read.readPresentation?.().meaningOffer;
+  if (!meaningOffer) return { ok: true, types, mime };
+  const presentedOutside = [
+    ...new Set(
+      [
+        ...(meaningOffer.preselect ? [meaningOffer.preselect] : []),
+        ...meaningOffer.suggestions.map((s) => s.extension),
+      ].filter((extension) => !types.some((t) => t.extension === extension)),
+    ),
+  ];
+  const offered =
+    presentedOutside.length === 0
+      ? types
+      : withPresentedBase(
+          types,
+          await presentedBaseCandidates({
+            extensions: presentedOutside,
+            mime,
+            objectType,
+            actor,
+            orgId,
+          }),
+        );
+  if (offered.length === 0) return { ok: true, types: offered, mime };
+  return {
+    ok: true,
+    types: offered,
+    mime,
+    meaning: narrowMeaningOfferToOffered(meaningOffer, offered),
+  };
 }
 
 export type AssertMeaningResult =
@@ -259,6 +466,46 @@ export async function assertUploadMeaning(input: {
   );
   const candidates = await filterCandidatesByActorAccess(raw, actor, orgId);
   if (!candidates.some((c) => c.extension === input.extension)) {
+    // THE PRESENTED BASE MEANING (§VI.1, cinatra#3319), decided FIRST. The row
+    // presents this extension's live matcher draft (its auto-surfaced meaning or
+    // a suggestion chip), so the picker offered it, and confirming it records the
+    // person's user-sourced meaning. It is decided BEFORE the converging road,
+    // and it never calls the promotion road: a presented extension has an active
+    // matcher draft, so no user assertion of it stands, and an interrupted
+    // promotion (which wrote the person's assertion before it promoted) is
+    // therefore never presented. The converging road below would only append a
+    // revision for a promotion that never happened.
+    const presentedBase = objectType
+      ? await confirmsPresentedBaseMeaning({
+          artifactId: input.artifactId,
+          extension: input.extension,
+          mime,
+          objectType,
+          actor,
+          orgId,
+        })
+      : "absent";
+    // A failed or denied verification refuses the confirmation here: it never
+    // reaches the converging road below.
+    if (presentedBase === "refused") return { ...INVALID_TYPE_REFUSAL };
+    if (presentedBase === "presented") {
+      const presented = assertSemanticType({
+        orgId,
+        artifactId: input.artifactId,
+        extension: input.extension,
+        assertedBy: "user",
+        principal: actor.principalId ?? null,
+      });
+      if (presented.blockedByPrecedence) {
+        return {
+          ok: false,
+          reason: "blocked",
+          message: "A higher-ranked meaning already applies to this artifact.",
+        };
+      }
+      revalidatePath("/artifacts");
+      return { ok: true };
+    }
     // THE CONVERGING RE-CONFIRMATION, and the reason it lives HERE rather than
     // behind the candidate gate: the candidate list EXCLUDES every candidate of
     // the extension that defines the row's CURRENT type, so a row an earlier
@@ -274,6 +521,29 @@ export async function assertUploadMeaning(input: {
     // call that retyped the row wrote the person's, and a second identical
     // assertion would stack a duplicate for a choice already recorded.
     if (objectType && (await extensionDefinesType(input.extension, objectType))) {
+      // THE ROW-OWN CONFIRMATION COUNTS ONCE (cinatra#3319). The presented arm
+      // above writes the person's assertion on a row that was NATIVELY of this
+      // type, and that write ends the presentation, so a second, stale picker of
+      // the same row arrives here. The store would accept that assertion as the
+      // person's road and append a promotion revision for a promotion that never
+      // happened. An interrupted promotion holds the same assertion, so the
+      // assertion alone cannot tell them apart: the row's own history can, because
+      // only a promotion's retype moved the row INTO this type. Without that
+      // retype on record the road is never taken, whether or not an assertion
+      // stands: on a row that was never promoted the store could append on the
+      // matcher's association alone.
+      const standing = await readRowOwnConfirmation({
+        orgId,
+        artifactId: input.artifactId,
+        extension: input.extension,
+        objectType,
+        principal: actor.principalId ?? null,
+      });
+      if (standing === "recorded") {
+        revalidatePath("/artifacts");
+        return { ok: true };
+      }
+      if (standing === "unproven") return { ...INVALID_TYPE_REFUSAL };
       const completed = await promoteOnConfirmedMeaning({
         orgId,
         artifactId: input.artifactId,
@@ -286,12 +556,7 @@ export async function assertUploadMeaning(input: {
         return { ok: true, promotion: completed };
       }
     }
-    return {
-      ok: false,
-      reason: "invalid-type",
-      message:
-        "That type is not an installed type that accepts this file — refresh and pick again.",
-    };
+    return { ...INVALID_TYPE_REFUSAL };
   }
   const result = assertSemanticType({
     orgId,
@@ -342,11 +607,93 @@ export async function assertUploadMeaning(input: {
  */
 async function extensionDefinesType(extension: string, objectType: string): Promise<boolean> {
   try {
-    const { objectTypeRegistry } = await import("@cinatra-ai/objects/registry");
-    return objectTypeRegistry.getRegisteringPackage(objectType) === extension;
+    return await readExtensionDefinesType(extension, objectType);
   } catch {
     return false;
   }
+}
+
+/** {@link extensionDefinesType} without the fallback: a failed read throws, so
+ *  the confirmation can refuse it instead of reading it as "not a definer". */
+async function readExtensionDefinesType(extension: string, objectType: string): Promise<boolean> {
+  const { objectTypeRegistry } = await import("@cinatra-ai/objects/registry");
+  return objectTypeRegistry.getRegisteringPackage(objectType) === extension;
+}
+
+/** The most change events the row-own check reads (the history reader's cap). */
+const ROW_HISTORY_READ_LIMIT = 500;
+
+/**
+ * Does a confirmation of this extension already stand on a row that was
+ * NATIVELY of the type the extension defines (cinatra#3319)?
+ *
+ *   "recorded"  — the acting person's own assertion of the extension stands, and
+ *                 the row's history holds no event that retyped it INTO its
+ *                 current type. The row never was a promotion, so there is
+ *                 nothing to complete: the meaning is already recorded.
+ *   "unproven"  — the assertion could not be read, or the history could not be
+ *                 read, or the read was full without that event, or no such
+ *                 assertion stands and no retype is on record. Whether a
+ *                 promotion was interrupted cannot be told, or the row never was
+ *                 one, so nothing is written. A failed assertion read must not
+ *                 converge: the store reads the assertion again on its own, and a
+ *                 read that recovers there would append the revision this check
+ *                 exists to refuse. A missing assertion must not converge on its
+ *                 own either: the store would then append on the matcher's
+ *                 association alone, on a row that was never promoted.
+ *   "converge"  — a retype into the current type is on record (the row an
+ *                 interrupted promotion leaves): the base road decides.
+ *
+ * The retype is the one write a promotion makes through the canonical
+ * history-aware writer, which records its change event in the same statement
+ * (`typed-promotion-store.ts` `canonicalRetype`). Its before snapshot is the row
+ * as it stood, so it carries the old `type`.
+ */
+async function readRowOwnConfirmation(input: {
+  orgId: string;
+  artifactId: string;
+  extension: string;
+  objectType: string;
+  principal: string | null;
+}): Promise<"recorded" | "unproven" | "converge"> {
+  let asserted: boolean;
+  try {
+    const { readPersonAssertion } = await import("@/lib/artifacts/typed-promotion-store");
+    asserted = readPersonAssertion({
+      orgId: input.orgId,
+      artifactId: input.artifactId,
+      extension: input.extension,
+      principal: input.principal,
+    });
+  } catch {
+    return "unproven";
+  }
+  try {
+    const { listEventsForObject } = await import("@/lib/object-history/eligibility");
+    const events = listEventsForObject(input.artifactId, {
+      orgId: input.orgId,
+      limit: ROW_HISTORY_READ_LIMIT,
+    });
+    if (events.some((event) => retypedInto(event, input.objectType))) return "converge";
+    if (events.length >= ROW_HISTORY_READ_LIMIT) return "unproven";
+    return asserted ? "recorded" : "unproven";
+  } catch {
+    return "unproven";
+  }
+}
+
+/** A change event that moved the row from another type INTO `objectType`. */
+function retypedInto(
+  event: {
+    objectType: string;
+    beforeSnapshot: { payload: Record<string, unknown> } | null;
+    afterSnapshot: { payload: Record<string, unknown> } | null;
+  },
+  objectType: string,
+): boolean {
+  const before = event.beforeSnapshot?.payload?.type;
+  const after = event.afterSnapshot?.payload?.type ?? event.objectType;
+  return typeof before === "string" && before !== objectType && after === objectType;
 }
 
 /**

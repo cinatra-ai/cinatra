@@ -19,12 +19,11 @@
  * `LibraryUploadButton` is composed by the server shell (library-mode.tsx)
  * into the client `LibraryToolbar`'s right edge (cinatra#2449).
  *
- * SCOPED OUT (honest, spec §VI.1 "Derived meaning & suggestion chips", ruling 2):
- * the classifier-derived SUGGESTION chip + auto-surface are the matcher service
- * (cinatra#1883 D1/D2, slice A3 #1891 — IN FLIGHT, not merged). The picker
- * renders the Suggested section ONLY when candidates are supplied (none until A3
- * lands the matcher); the user-sourced meaning path here is complete and does
- * not depend on it.
+ * DERIVED MEANING (spec §VI.1 "Derived meaning & suggestion chips", cinatra#3319):
+ * the picker reads the row's derived meaning with its candidates. A matcher draft
+ * at or above its pack's threshold opens the picker PRE-SELECTED on it; a draft
+ * that did not auto-surface is a SUGGESTION chip, and confirming a chip writes a
+ * user-sourced meaning through the same confirmation as the list.
  */
 
 import {
@@ -68,6 +67,7 @@ import {
 } from "@/app/artifacts/upload-typing-actions";
 import { promotionRefusalNotice } from "@/lib/artifacts/promotion-notice";
 import type { InstalledMeaningType } from "@/lib/artifacts/installed-type-picker";
+import type { PickerMeaningSuggestion } from "@/lib/artifacts/picker-meaning-offer";
 
 // ---------------------------------------------------------------------------
 // Upload state machine
@@ -495,6 +495,7 @@ function TypePickerPanel() {
   const [serverMime, setServerMime] = useState<string>("");
   const [error, setError] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<PickerMeaningSuggestion[]>([]);
   const [busy, setBusy] = useState(false);
 
   const artifactId = state.phase === "typed" ? state.artifactId : "";
@@ -514,6 +515,18 @@ function TypePickerPanel() {
         if (r.ok) {
           setTypes(r.types);
           setServerMime(r.mime);
+          // §VI.1: a derived meaning at or above its pack's threshold opens the
+          // picker pre-selected on it — only when it is an offered type, and
+          // never over a choice the person already made.
+          const preselect = r.meaning?.preselect ?? null;
+          if (preselect && r.types.some((t) => t.extension === preselect)) {
+            setSelected((current) => current ?? preselect);
+          }
+          setSuggestions(
+            (r.meaning?.suggestions ?? []).filter((s) =>
+              r.types.some((t) => t.extension === s.extension),
+            ),
+          );
         } else setError(true);
       })
       .catch(() => {
@@ -524,12 +537,15 @@ function TypePickerPanel() {
     };
   }, [artifactId]);
 
-  const confirm = useCallback(async () => {
-    if (!selected || !artifactId) return;
+  // Confirms the list's choice, or — from a suggestion chip — the chip's own
+  // extension: either way a USER-sourced meaning (§VI.1), never the draft.
+  const confirm = useCallback(async (chosen?: string) => {
+    const extension = chosen ?? selected;
+    if (!extension || !artifactId || busy) return;
     setBusy(true);
     let r: Awaited<ReturnType<typeof assertUploadMeaning>>;
     try {
-      r = await assertUploadMeaning({ artifactId, extension: selected });
+      r = await assertUploadMeaning({ artifactId, extension });
     } catch {
       setBusy(false);
       toast.error("Couldn't set the meaning — try again.");
@@ -551,7 +567,7 @@ function TypePickerPanel() {
     } else {
       toast.error(r.message);
     }
-  }, [selected, artifactId, closeDialog, router]);
+  }, [selected, artifactId, busy, closeDialog, router]);
 
   return (
     <div
@@ -579,11 +595,14 @@ function TypePickerPanel() {
         </p>
       </DialogHeader>
       <div className="px-3.5 py-3">
-        {/* Suggested (§VI.1, ruling 2) — the classifier-derived suggestion chip.
-            SCOPED OUT until the matcher lands (A3 #1891): rendered only when
-            candidates are present, which is never until A3. Kept structurally so
-            the surface is spec-shaped and A3 fills it with zero UI change. */}
-        <SuggestedMeaningChips suggestions={[]} onConfirm={() => undefined} />
+        {/* Suggested (§VI.1) — the matcher drafts that did not auto-surface,
+            each confirmable as a user-sourced meaning. Rendered only when the
+            row carries one. */}
+        <SuggestedMeaningChips
+          suggestions={suggestions}
+          disabled={busy}
+          onConfirm={(extension) => void confirm(extension)}
+        />
 
         <div className="mb-2 font-mono text-badge-2xs uppercase tracking-kicker-wide text-muted-foreground">
           Installed types that accept {mimeShortLabel(mime)}
@@ -671,9 +690,11 @@ function TypePickerPanel() {
 
 function SuggestedMeaningChips({
   suggestions,
+  disabled,
   onConfirm,
 }: {
-  suggestions: Array<{ extension: string; label: string; confidence: number }>;
+  suggestions: PickerMeaningSuggestion[];
+  disabled?: boolean;
   onConfirm: (extension: string) => void;
 }) {
   if (suggestions.length === 0) return null;
@@ -690,14 +711,21 @@ function SuggestedMeaningChips({
             variant="outline"
             size="sm"
             data-action="confirm-suggestion -> meaning-asserted"
+            data-testid="artifacts-picker-suggestion"
             className="h-auto gap-1.5 rounded-full border-dashed border-warning/60 bg-warning/10 px-2.5 py-1 text-xs font-semibold text-warning"
+            disabled={disabled}
             onClick={() => onConfirm(s.extension)}
           >
             <Sparkles aria-hidden className="size-3" />
-            {s.label}{" "}
-            <span className="font-mono text-badge-2xs opacity-75">
-              {s.confidence.toFixed(2)}
-            </span>
+            {s.label}
+            {s.confidence !== null ? (
+              <>
+                {" "}
+                <span className="font-mono text-badge-2xs opacity-75">
+                  {s.confidence.toFixed(2)}
+                </span>
+              </>
+            ) : null}
           </Button>
         ))}
       </div>

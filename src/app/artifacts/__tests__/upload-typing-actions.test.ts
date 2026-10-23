@@ -83,8 +83,16 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 // action. Mocked here so the ACTION's wiring is what these cases prove — the
 // road's own decisions are proved in its two suites.
 const promoteMatchedArtifactType = vi.fn();
+// The person's own assertion and the row's change events, read by the action's
+// row-own check before the converging road (cinatra#3319).
+const readPersonAssertion = vi.fn();
 vi.mock("@/lib/artifacts/typed-promotion-store", () => ({
   promoteMatchedArtifactType: (...a: unknown[]) => promoteMatchedArtifactType(...a),
+  readPersonAssertion: (...a: unknown[]) => readPersonAssertion(...a),
+}));
+const listEventsForObject = vi.fn();
+vi.mock("@/lib/object-history/eligibility", () => ({
+  listEventsForObject: (...a: unknown[]) => listEventsForObject(...a),
 }));
 const verifySessionAuthority = vi.fn();
 vi.mock("@/lib/org-write/authority", () => ({
@@ -126,6 +134,8 @@ describe("assertUploadMeaning — the converging re-confirmation (cinatra#3028, 
   // is why the road's convergence has to be reachable from HERE or from nowhere.
   const PACK = "@acme/voice";
   const OWN_TYPE = "@acme/voice:brief";
+  /** The base type the row carried before the promotion retyped it. */
+  const BASE_TYPE = "@cinatra-ai/markdown-artifact:artifact";
 
   beforeEach(() => {
     objectTypeRegistry._clearForTests();
@@ -152,6 +162,23 @@ describe("assertUploadMeaning — the converging re-confirmation (cinatra#3028, 
     // …so the picker's own exclusion leaves nothing to pick.
     listInstalledMeaningTypesAcceptingMime.mockReturnValue([]);
     verifySessionAuthority.mockResolvedValue({ kind: "org-write" });
+    // The confirmation that retyped the row wrote the person's assertion, and
+    // the row's history holds that retype (newest first).
+    readPersonAssertion.mockReturnValue(true);
+    listEventsForObject.mockReturnValue([
+      {
+        objectType: OWN_TYPE,
+        operation: "update",
+        beforeSnapshot: { payload: { type: BASE_TYPE } },
+        afterSnapshot: { payload: { type: OWN_TYPE } },
+      },
+      {
+        objectType: BASE_TYPE,
+        operation: "create",
+        beforeSnapshot: null,
+        afterSnapshot: { payload: { type: BASE_TYPE } },
+      },
+    ]);
   });
   afterEach(() => {
     objectTypeRegistry._clearForTests();
