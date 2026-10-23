@@ -292,7 +292,11 @@ quarter, every year, and a configured monthly and quarterly schedule), and the
 read `drift`. The body declares thirty-seven surfaces where the pin declared
 thirty-three; the thirty-three are field-for-field identical and four are new.
 The 2026-10-22 reconciliation below adopted it with the drivers of the four
-surfaces, and all five pins read `match` against the bodies published that day.
+surfaces. In CI on `e205e8a2`, the `design-pin-drift` job (job 120090738176,
+2026-10-22 21:09:57Z to 21:10:16Z) read all five pins `match` against the
+bodies published then. The docs#242 merge (2026-10-22 22:44:11Z) then
+republished the connectors manifest, and the 2026-10-23 reconciliation below
+re-pins `app-connectors` to it.
 
 ## Reconciliation record
 
@@ -826,8 +830,9 @@ the adopted body's own `contentHash` field — never typed. No other pin moved.
 
 ## Reconciliation record — 2026-10-22
 
-Measured 2026-10-22 against the manifests published under `publishedBaseUrl`,
-after the docs mirror published several `app-components` bodies in a row: the
+Measured 2026-10-22, before the docs#242 merge (22:44:11Z), against the
+manifests published under `publishedBaseUrl`, after the docs mirror
+published several `app-components` bodies in a row: the
 recurrence selectors of the scheduling step (cinatra-ai/docs#237), the
 drawing's corrected prose (cinatra-ai/docs#238), then the drawing's legend
 sentences (cinatra-ai/docs#241). This adopts the body published at 2026-10-22
@@ -836,10 +841,12 @@ which cinatra-ai/docs#241 produced (its merge commit's version of the file
 hashes to that value; its parent's does not). All
 five bodies were fetched with one anonymous `curl -sS` each into a scratch
 directory outside every repository tree, and their hashes were compared
-with the five pins as this change leaves them: every published body is
-byte-identical to the artifact its pin names. `app`, `app-extensions`,
-`app-connectors` and `app-notifications` came back byte-identical to the
-artifacts their pins already named. The adopted `app-components` body was
+with the five pins as the re-pin commit `e205e8a2` leaves them: every body
+published then was byte-identical to the artifact its pin names, as the
+`design-pin-drift` job in CI on `e205e8a2` (job 120090738176, 2026-10-22
+21:10:16Z) also read. `app`, `app-extensions`, `app-connectors` and
+`app-notifications` came back byte-identical to the artifacts their pins
+already named. The adopted `app-components` body was
 compared, as parsed JSON, with the committed copy under
 `tests/e2e/design/conformance/manifests/` that it replaces: `schemaVersion`,
 `spec` and the thirty-three surfaces the copy already declared are
@@ -858,7 +865,7 @@ the file's bytes, the spec-content hash read back out of the adopted body's own
 | `app` | `match` | nothing — the published body is still the pinned artifact | none |
 | `app-components` | `drift` | 4 new surfaces, fields only: `scheduling-step-quarterly`, `scheduling-step-yearly`, `scheduling-step-configured-monthly`, `scheduling-step-configured-quarterly` | 4 drivers behind the awaiting-mount guard, their readings and two unit checks |
 | `app-extensions` | `match` | nothing — the published body is still the pinned artifact | none |
-| `app-connectors` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-connectors` | `match` | nothing — on 2026-10-22 the published body was still the pinned artifact (`2293c96c…`); docs#242 republished it at 22:44:11Z, adopted in the 2026-10-23 record below | none |
 | `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
 
 The four surfaces bind the six `data-field` names of the shared recurrence
