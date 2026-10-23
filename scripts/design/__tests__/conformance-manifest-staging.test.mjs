@@ -66,12 +66,13 @@ const STAGED = {
   },
   // The artifact-review drawing, staged by cinatra#3158 (the artifact-kind
   // display wave). First-time adoption: the drawing has never been committed
-  // here, so there is no earlier record to move. Eleven of its forty surfaces are
-  // driven by that wave; it joins the pin gate when every one of them is covered.
+  // here, so there is no earlier record to move. Re-copied verbatim from the
+  // published body (design@70c209dd), which declares fifty-nine surfaces; it joins
+  // the pin gate when every one of them is covered.
   "app-artifact-review.json": {
     spec: "specs/app-artifact-review.html",
-    manifestSha256: "605745f5f670628d1bbaeb6e5e868e3d4401d653666cdf450ab149120ce94113",
-    contentHash: "sha256:eed1cc2d55f1aa561b77e637d382bef271340c87239a189c117d12baa51c44b1",
+    manifestSha256: "21c21430bf3932219a9ffc4ff315449c1db6909c0181a0585bb983aaacc12c27",
+    contentHash: "sha256:cc1ba264246997f63ed7711c8bee635d9911ce1b18ab794994efda9cf41d5c0d",
   },
 };
 
