@@ -16,7 +16,7 @@ export type BreadcrumbCrumb = {
 };
 
 export function humanizePathSegment(segment: string): string {
-  return decodeURIComponent(segment)
+  return safelyDecodePathSegment(segment)
     .replace(/[-_]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
@@ -31,6 +31,20 @@ export function humanizePathSegment(segment: string): string {
 // obvious short-id placeholder instead.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LONG_HEX_RE = /^[0-9a-f]{16,}$/i;
+// The supported seed namespace (cinatra#4295): `org-*`, `team-*` and `proj-*`
+// ids from scripts/seed.mjs, which src/lib/id-policy.ts keeps valid. Without
+// this they title-case into words ("Org Acme Group"). The shape alone does not
+// make an id: a connector slug ("team-connector"), a package or marketplace
+// name, or a run name ("team-lead") can have it too. So it is read ONLY at the
+// scope id position — segment 1 of `/organizations/<id>`, `/teams/<id>` and
+// `/projects/<id>`, each with its own prefix (`isIdLikeSegmentAt`) — and never
+// by `isIdLikeSegment`, which also judges resolved labels.
+const SEED_ID_RE = /^(?:org|team|proj)-[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const SEED_ID_PREFIX_BY_SCOPE_CONTAINER: ReadonlyMap<string, string> = new Map([
+  ["organizations", "org-"],
+  ["teams", "team-"],
+  ["projects", "proj-"],
+]);
 
 // Malformed percent-encoding ("%", truncated UTF-8 escapes) makes
 // decodeURIComponent THROW — and these helpers run while rendering the shell,
@@ -51,6 +65,27 @@ export function isIdLikeSegment(segment: string): boolean {
     LONG_HEX_RE.test(decoded) ||
     LEGACY_NANOID_RE.test(decoded)
   );
+}
+
+/**
+ * Is `segments[i]` an id IN ITS POSITION? Every id `isIdLikeSegment` knows,
+ * plus a seed id at the scope id position whose prefix belongs to that scope
+ * container (`/teams/team-rob-hardware`, never `/teams/org-acme-group`). Any
+ * other position keeps its word: a seed-shaped slug there is a name.
+ */
+export function isIdLikeSegmentAt(segments: readonly string[], i: number): boolean {
+  const segment = segments[i];
+  if (segment === undefined) return false;
+  if (isIdLikeSegment(segment)) return true;
+  if (i !== 1) return false;
+  // The container is read decoded, as the router reads it: `/%74eams/<id>` is
+  // `/teams/<id>`. A malformed escape stays raw and so matches no container.
+  const prefix = SEED_ID_PREFIX_BY_SCOPE_CONTAINER.get(
+    safelyDecodePathSegment(segments[0] ?? ""),
+  );
+  if (prefix === undefined) return false;
+  const decoded = safelyDecodePathSegment(segment);
+  return decoded.startsWith(prefix) && SEED_ID_RE.test(decoded);
 }
 
 /** The obvious short-id placeholder for an unresolved id crumb — never
@@ -284,7 +319,9 @@ const SCOPE_BASE_SINGLETONS = new Set(["workspace", "personal"]);
 export function scopeBaseFromSegments(segments: string[]): string | null {
   if (segments.length === 0) return null;
   if (SCOPE_BASE_SINGLETONS.has(segments[0])) return `/${segments[0]}`;
-  if (SCOPE_BASE_CONTAINERS.has(segments[0]) && segments.length >= 2 && segments[1]) {
+  // Decoded, like `isIdLikeSegmentAt` (cinatra#4295): `/%74eams/<id>` is a scope.
+  const container = safelyDecodePathSegment(segments[0]);
+  if (SCOPE_BASE_CONTAINERS.has(container) && segments.length >= 2 && segments[1]) {
     return `/${segments[0]}/${segments[1]}`;
   }
   return null;
@@ -588,11 +625,15 @@ export function buildBreadcrumbTrail(
    */
   const scopeCrumb = (base: string): BreadcrumbCrumb => {
     const contributed = replacementFor(base);
-    const last = base.split("/").filter(Boolean).at(-1) ?? "";
+    const baseSegments = base.split("/").filter(Boolean);
+    const lastAt = baseSegments.length - 1;
+    const last = baseSegments[lastAt] ?? "";
     return {
       label:
         contributed?.label ??
-        (isIdLikeSegment(last) ? idSegmentPlaceholder(last) : humanizePathSegment(last)),
+        (isIdLikeSegmentAt(baseSegments, lastAt)
+          ? idSegmentPlaceholder(last)
+          : humanizePathSegment(last)),
       href: contributed?.href ?? base,
     };
   };
@@ -738,7 +779,7 @@ export function buildBreadcrumbTrail(
       contributed?.label ??
       (isLast && !isAreaRoot && pageTitle && pageTitle.pathname === pathname
         ? pageTitle.title
-        : isIdLikeSegment(seg)
+        : isIdLikeSegmentAt(segments, i)
           ? idSegmentPlaceholder(seg)
           : (connectorNameCrumbFallbackLabel(segments, i) ??
             humanizePathSegment(seg)));
