@@ -279,38 +279,19 @@ describe('clause: "surface (default)"', () => {
   });
 });
 
-describe('RECORDED DEPARTURE (landing on the sibling change for this issue): clauses "surface-strong (interactive)", "1px line border" and "Hover lifts it 1px"', () => {
-  // RECORDED DEPARTURE — recorded, not fixed, and not because the clauses are
-  // in doubt. All three are already graded and repaired on the sibling change
-  // for this same issue (branch `fix/3189-primitives-button-select-card`),
-  // which turns the card's `ring-1` into a real `border border-border`, adds
-  // the `interactive` form that draws `--surface-strong` per rule #8, and
-  // gives that form the section's own 1px hover lift. Landing the same three
-  // repairs a second time here would put two changes to one primitive's base
-  // recipe in flight at once and conflict them against each other.
-  //
-  // They are graded here rather than left out, because a checklist that omits
-  // the clauses its primitive currently fails is not a checklist. Each of the
-  // three assertions below turns green the moment that sibling change lands,
-  // with nothing in this file to update.
-  // DOCUMENTED EXPECTED FAILURE. The assertion below is unchanged and still
-  // runs: `it.fails` reports a pass only while the body throws, so the
-  // departure stays measured and the checklist stays green. The day the
-  // follow-up this departure names lands, this case stops throwing, the suite
-  // goes red, and the record must be retired with it.
-  it.fails('RECORDED DEPARTURE (landing on the sibling change for this issue): draws a real 1px border rather than a ring — clause "1px line border"', () => {
+describe('clauses "surface-strong (interactive)", "1px line border" and "Hover lifts it 1px"', () => {
+  // These three departures remained on main a37 despite the old sibling
+  // carrier. They are ordinary regressions on this host-only Card repair.
+  // Current decision 407 A retires connector/artifact vendoring; the one
+  // remaining agent vendors only label/textarea, so Card needs no pin change.
+  it('draws a real 1px border rather than a ring — clause "1px line border"', () => {
     // MEASURED: the base spells `ring-1 ring-foreground/10`, which paints as a
     // box-shadow. The computed border-width is 0px, so a consumer that passes
     // a border colour gets no stroke at all.
     expect(slot(renderCard(), "card").className).toMatch(/(^|\s)border(\s|$)/);
   });
 
-  // DOCUMENTED EXPECTED FAILURE. The assertion below is unchanged and still
-  // runs: `it.fails` reports a pass only while the body throws, so the
-  // departure stays measured and the checklist stays green. The day the
-  // follow-up this departure names lands, this case stops throwing, the suite
-  // goes red, and the record must be retired with it.
-  it.fails('RECORDED DEPARTURE (landing on the sibling change for this issue): offers the clickable form the rule reserves white for — clause "surface-strong (interactive)"', () => {
+  it('offers the clickable form the rule reserves white for — clause "surface-strong (interactive)"', () => {
     // MEASURED: the primitive has one form, and it is the presentation one.
     // Every surface that wants the white ground hand-rolls its own container.
     //
@@ -322,12 +303,39 @@ describe('RECORDED DEPARTURE (landing on the sibling change for this issue): cla
     expect(slot(container, "card").getAttribute("data-interactive")).toBe("true");
   });
 
-  // DOCUMENTED EXPECTED FAILURE. The assertion below is unchanged and still
-  // runs: `it.fails` reports a pass only while the body throws, so the
-  // departure stays measured and the checklist stays green. The day the
-  // follow-up this departure names lands, this case stops throwing, the suite
-  // goes red, and the record must be retired with it.
-  it.fails('RECORDED DEPARTURE (landing on the sibling change for this issue): lifts the clickable form 1px on hover — the section example "Hover lifts it 1px."', () => {
+  it('lifts the clickable form 1px on hover — the section example "Hover lifts it 1px."', () => {
     expect(slot(renderInteractive(), "card").className).toContain("hover:-translate-y-px");
+  });
+});
+
+
+describe("Card interaction controls", () => {
+  it("keeps default and explicit false cards static and consumes the interaction prop", () => {
+    for (const props of [{}, { interactive: false }]) {
+      const card = slot(render(<Card {...props}>Presentation</Card>).container, "card");
+      expect(card.hasAttribute("interactive")).toBe(false);
+      expect(card.hasAttribute("data-interactive")).toBe(false);
+      expect(card.className).not.toContain("hover:-translate-y-px");
+      expect(card.className).toContain("bg-card");
+    }
+  });
+
+  it("gives the interactive form its own ground and respects reduced motion", () => {
+    const card = slot(renderInteractive(), "card");
+    expect(card.className).toContain("bg-surface-strong");
+    expect(card.className).not.toMatch(/(^|\s)bg-card(\s|$)/);
+    expect(card.className).toContain("motion-reduce:transition-none");
+    expect(card.className).toContain("motion-reduce:hover:translate-y-0");
+    expect(card.hasAttribute("interactive")).toBe(false);
+  });
+
+  it("preserves small composition and caller ground overrides on the interactive form", () => {
+    const card = slot(render(<Card interactive size="sm" className="bg-surface-muted" aria-label="Owned card"><CardHeader><CardTitle>Agent</CardTitle></CardHeader><CardContent>One run</CardContent><CardFooter>Ready</CardFooter></Card>).container, "card");
+    expect(card.getAttribute("data-size")).toBe("sm");
+    expect(card.getAttribute("aria-label")).toBe("Owned card");
+    expect(card.className).toContain("bg-surface-muted");
+    expect(card.className).not.toContain("bg-surface-strong");
+    expect(card.querySelector('[data-slot="card-header"]')).not.toBeNull();
+    expect(card.querySelector('[data-slot="card-footer"]')).not.toBeNull();
   });
 });
