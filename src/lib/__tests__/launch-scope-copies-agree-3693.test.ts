@@ -28,7 +28,7 @@ import {
   launchScopeAnchorBase,
   parseLaunchScopeAnchor,
 } from "@/lib/launch-scope-anchor";
-import { RUN_STEP_QUERY_KEY, buildRunStepPath } from "@/lib/agent-url";
+import { RUN_STEP_QUERY_KEY, buildAgentInstancePath, buildRunStepPath } from "@/lib/agent-url";
 import { runReviewGateStepKey } from "@cinatra-ai/agents/run-surface-rail-step";
 import { WORKSPACE_SCOPE_SENTINEL } from "@/lib/assignment-scope";
 import {
@@ -100,6 +100,23 @@ describe("the deep-link builders' copy of the base map (cinatra#3693)", () => {
       "/agents/acme/writer/R1",
     );
     expect(packageInstancePath("@acme/writer", "R1")).toBe("/agents/acme/writer/R1");
+  });
+
+  it("writes a repair run's id as the same one encoded segment as the host (cinatra#3080)", () => {
+    // A repair run's id carries a colon a path segment must escape. The host's
+    // builder and this copy agree on the address, under a scope base and flat.
+    const repairRunId = "lifecycle-repair-run:8f1d2a3b-4c5d-6e7f-8091-a2b3c4d5e6f7";
+    const anchor = { v: 1, kind: "team", id: "t1" };
+    const host = buildAgentInstancePath("@acme/writer", repairRunId, {
+      scopeBase: launchScopeAnchorBase(parseLaunchScopeAnchor(anchor)),
+    });
+    expect(host).toBe(
+      "/teams/t1/agents/acme/writer/lifecycle-repair-run%3A8f1d2a3b-4c5d-6e7f-8091-a2b3c4d5e6f7",
+    );
+    expect(packageInstancePath("@acme/writer", repairRunId, { launchScopeAnchor: anchor })).toBe(host);
+    expect(packageInstancePath("@acme/writer", repairRunId)).toBe(
+      buildAgentInstancePath("@acme/writer", repairRunId),
+    );
   });
 });
 
