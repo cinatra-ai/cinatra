@@ -5,7 +5,6 @@ import Link from "next/link";
 import { Plus, Paperclip, ExternalLink } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Button } from "./ui/button";
-import { Checkbox } from "./ui/checkbox";
 import { Input } from "./ui/input";
 import {
   DropdownMenu,
@@ -17,6 +16,7 @@ import {
 } from "./ui/dropdown-menu";
 import { Label } from "./ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { Switch } from "./ui/switch";
 import { cn } from "./lib/utils";
 import { LoadingSpinner } from "./loading-spinner";
 
@@ -377,12 +377,11 @@ function AttachmentMenu({ autosave, onUploadClick, uploadDisabled = false, remot
               disabled={!autosave.canToggle || !autosave.onToggle}
               className="pr-1.5 [&_[data-slot='dropdown-menu-checkbox-item-indicator']]:hidden"
             >
-              <Checkbox
-                checked={autosave.enabled}
-                tabIndex={-1}
-                aria-hidden="true"
-                className="size-4 shrink-0 rounded-[4px] border-line bg-surface shadow-none data-[state=checked]:border-primary data-[state=checked]:bg-primary [&_svg]:text-primary-foreground!"
-              />
+              {/* An immediate-effect setting draws a switch, not a checkbox
+                  (cinatra#4297). The row itself is the control: the switch is
+                  its visual only, so it is hidden from the tab order and from
+                  assistive technology, which reads the row's aria-checked. */}
+              <Switch checked={autosave.enabled} tabIndex={-1} aria-hidden="true" />
               Skills autosave
             </DropdownMenuCheckboxItem>
           )}
