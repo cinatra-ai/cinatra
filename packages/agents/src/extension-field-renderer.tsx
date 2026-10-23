@@ -21,6 +21,7 @@ import {
   type ComponentType,
   type ReactNode,
 } from "react";
+import { useHitlRenderInputValue } from "./hitl-render-input-projection";
 import type { FieldRendererProps } from "./field-renderer-registry";
 import { SchemaOnlyFloorRenderer } from "./schema-field-renderer";
 import { loadFieldRendererComponent } from "./field-renderer-components";
@@ -60,6 +61,7 @@ export function makeExtensionFieldRenderer(
   bindingId: string,
 ): ComponentType<FieldRendererProps> {
   function ExtensionFieldRenderer(props: FieldRendererProps): ReactNode {
+    const value = useHitlRenderInputValue(bindingId, props);
     const [resolved, setResolved] = useState<
       ComponentType<FieldRendererProps> | null
     >(null);
@@ -115,7 +117,7 @@ export function makeExtensionFieldRenderer(
     return createElement(
       FieldRendererErrorBoundary,
       { fallback: floor },
-      createElement(resolved, props),
+      createElement(resolved, { ...props, value }),
     );
   }
   ExtensionFieldRenderer.displayName = `ExtensionFieldRenderer(${bindingId})`;
