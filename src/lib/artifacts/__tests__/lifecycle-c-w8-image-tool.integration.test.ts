@@ -35,10 +35,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { resolve as resolvePath } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client } from "pg";
 import { z } from "zod";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
+import { registerArtifactExtensionDir } from "@cinatra-ai/objects/register-artifact-extensions";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 import { vi } from "vitest";
@@ -92,6 +94,18 @@ const PICTURE_TYPE = "@cinatra-ai/picture-artifact:picture";
  *  makes and not the only option available. */
 const NOTE_EXT = "@cinatra-ai/note-artifact";
 const NOTE_TYPE = "@cinatra-ai/note-artifact:note";
+
+/**
+ * THE REAL IMAGE TYPE (cinatra#3033, closing reading): the required-lock pin
+ * image-artifact 52d9265c (cinatra-required-extensions.lock.json) declares
+ * `@cinatra-ai/image-artifact:image`. The suite registers it from the pinned
+ * pack's own manifest on disk, through the same bridge the app boots with, so
+ * the schema, the accepted forms and the dispositions are the pack's, not a
+ * copy written here.
+ */
+const IMAGE_EXT = "@cinatra-ai/image-artifact";
+const IMAGE_TYPE = "@cinatra-ai/image-artifact:image";
+const REPO_ROOT = resolvePath(__dirname, "..", "..", "..", "..");
 
 /** Two real 1x1 PNGs — different bytes, so a regeneration is a different
  *  picture and not a de-duplicated re-drive of the first. */
@@ -289,7 +303,18 @@ beforeAll(async () => {
   objectTypeRegistry._clearForTests();
   registerPictureType();
   registerNoteType();
+  const imagePackRegistered = registerArtifactExtensionDir(
+    resolvePath(REPO_ROOT, "extensions/cinatra-ai/image-artifact"),
+  );
+  if (!imagePackRegistered || !objectTypeRegistry.resolve(IMAGE_TYPE)) {
+    throw new Error(
+      "the pinned image-artifact pack did not register " +
+        IMAGE_TYPE +
+        ": sync the pinned extensions (scripts/ci/sync-dev-extensions.mjs --pinned) before this tier",
+    );
+  }
   await seedClaim(PICTURE_TYPE, PICTURE_EXT);
+  await seedClaim(IMAGE_TYPE, IMAGE_EXT);
   await seedClaim(NOTE_TYPE, NOTE_EXT);
   await sql(
     `INSERT INTO "${S()}"."agent_templates"
@@ -567,6 +592,54 @@ describe.skipIf(!HAS_REAL_DB)(
       expect(loser.reason).toBe("stale_base");
       // The refusal left the picture at two revisions.
       expect(await revisionCount(first.artifactId)).toBe(2);
+    });
+  },
+);
+
+describe.skipIf(!HAS_REAL_DB)(
+  "the pipeline's image is filed as the REAL image type, joined to its post (cinatra#3033)",
+  () => {
+    it("files the image as @cinatra-ai/image-artifact:image with data.post equal to the run's post artifact and data.placement featured, as an image/* form", async () => {
+      const runId = nextId("run");
+      await seedRun(runId);
+      // The run's post artifact id: what the draft-writing step filed. The
+      // image names it, and the join below reads it back off the filed row.
+      const postArtifactId = nextId("post-artifact");
+      const provider = providerServing([PNG_RED]);
+
+      const outcome = await tool.generateArtifactImage(
+        {
+          runId,
+          orgId: ORG,
+          templateId: TEMPLATE,
+          packageVersion: "1.0.0",
+          createdBy: "user-3032",
+          nodeId: "image-node",
+          extension: IMAGE_EXT,
+          title: "Featured image",
+          prompt: "a lighthouse at dusk",
+          data: { post: postArtifactId, placement: "featured" },
+        },
+        provider.deps({
+          // The run package declares the real image kind as its production.
+          loadProducesRefs: async () => [{ extension: IMAGE_EXT, objectTypeId: IMAGE_TYPE }],
+        }),
+      );
+
+      expect(outcome.ok).toBe(true);
+      if (!outcome.ok) throw new Error(outcome.error);
+
+      const row = await objectRow(outcome.artifactId);
+      // The filed row's type is the pack's real one, not the stand-in.
+      expect(row?.type).toBe(IMAGE_TYPE);
+      // The join: the image names the post the same run wrote, and where it sits.
+      expect(row?.data.post).toBe(postArtifactId);
+      expect(row?.data.placement).toBe("featured");
+      // An image form, carried on the row and on the outcome.
+      expect(String(row?.data.mime)).toMatch(/^image\//);
+      expect(outcome.mime).toMatch(/^image\//);
+      // The bytes on disk are the bytes the provider produced.
+      expect((await artifactBytes(outcome.artifactId)).toString("base64")).toBe(PNG_RED);
     });
   },
 );
