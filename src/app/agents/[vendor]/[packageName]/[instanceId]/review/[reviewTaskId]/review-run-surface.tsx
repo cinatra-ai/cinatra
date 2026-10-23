@@ -61,6 +61,7 @@ export function ReviewRunSurface({
   recommendationEntry,
   recommendationStepOpens,
   scheduleCardRef,
+  scheduleSettled,
   rail,
   detail,
 }: {
@@ -81,6 +82,13 @@ export function ReviewRunSurface({
   /** The run-scoped schedule ref, minted by the page. `null` for a run with no
    *  schedule, which draws no schedule step at all rather than an empty one. */
   scheduleCardRef: string | null;
+  /** HAS THIS RUN'S OWN SCHEDULE BEEN SPENT? (cinatra#3189) The page answers it
+   *  from the run's stored trigger row with `shouldFreezeFiredOneOffSchedule`,
+   *  the run page's own reading, so the schedule entry settles on this rail
+   *  exactly where it settles on the run page's. REQUIRED, with no default:
+   *  every mount states its reading, so a page that forgets to pass it does
+   *  not compile rather than quietly drawing a spent schedule as live. */
+  scheduleSettled: boolean;
   /** The REST of the rail: this page's own step rows (`ReviewRunSteps`). */
   rail: ReactNode;
   /** The gate region as the page composes it — the review card and the run's
@@ -132,8 +140,17 @@ export function ReviewRunSurface({
     steps.push({
       key: "schedule",
       row: (
-        <ScheduleRailStepRow host="page_gate_region" displayStep={numerals[keys.indexOf("schedule")] ?? 1} />
+        <ScheduleRailStepRow
+          host="page_gate_region"
+          displayStep={numerals[keys.indexOf("schedule")] ?? 1}
+          settled={scheduleSettled}
+        />
       ),
+      // THE RUN HAS BEEN THROUGH IT, and a spent one-off settles — the run
+      // page's two reads of the same step (`instance-screens.tsx`). A settled
+      // entry still opens: it is the read-only history of the schedule.
+      reached: true,
+      settled: scheduleSettled,
       // The review page passes NO prompt window template: plan (A) §7.2's
       // "below the scheduler" names the run page, so this page's schedule step
       // is the scheduler alone. Unchanged by this composition.

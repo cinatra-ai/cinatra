@@ -67,6 +67,7 @@
     "./schedule-proposal-card": "./src/schedule-proposal-card.tsx",
     "./run-not-authorized-panel": "./src/run-not-authorized-panel.tsx",
     "./schedule-rail-step": "./src/schedule-rail-step.tsx",
+    "./schedule-freeze": "./src/schedule-freeze.ts",
     "./recommendation-rail-step": "./src/recommendation-rail-step.tsx",
     "./recommendation-rail-entry": "./src/recommendation-rail-entry.ts",
     "./run-surface-rail": "./src/run-surface-rail.tsx",
