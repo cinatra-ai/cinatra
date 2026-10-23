@@ -158,6 +158,9 @@ export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunReco
     // run-start presence discriminator (cinatra#2067). Drizzle returns the typed
     // boolean column directly; null on pre-backfill / headless rows.
     humanPresent: row.humanPresent ?? null,
+    // cinatra#4220 — the dispatch-derived connector-instance binding, parsed
+    // fail-closed (null when absent or malformed).
+    connectorInstanceBinding: parseConnectorInstanceBinding(row.connectorInstanceBinding ?? null),
     // The lifecycle MOMENT TRIPLE (cinatra#2928). Surfaced as written: a run at
     // no moment reads all three as null, which is what every row created before
     // the columns existed reads too. Nothing here interprets the values — the
@@ -189,6 +192,28 @@ export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunReco
     // authority on which scopes a run may read assignments from.
     assignmentScopeSnapshot: row.assignmentScopeSnapshot ?? null,
   };
+}
+
+/** cinatra#4220 — fail-closed parse of agent_runs.connector_instance_binding.
+ * Returns the binding only for a JSON object with exactly the two keys
+ * connectorKey and instanceId, both non-empty strings; null otherwise. */
+export function parseConnectorInstanceBinding(
+  raw: string | null,
+): { connectorKey: string; instanceId: string } | null {
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const keys = Object.keys(value).sort();
+  if (keys.length !== 2 || keys[0] !== "connectorKey" || keys[1] !== "instanceId") return null;
+  const { connectorKey, instanceId } = value as Record<string, unknown>;
+  if (typeof connectorKey !== "string" || connectorKey.length === 0) return null;
+  if (typeof instanceId !== "string" || instanceId.length === 0) return null;
+  return { connectorKey, instanceId };
 }
 
 // ---------------------------------------------------------------------------

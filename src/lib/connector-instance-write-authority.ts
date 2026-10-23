@@ -89,7 +89,7 @@ import {
 import { requireConnectorAuthority } from "@/lib/connector-authority";
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
 import { logAuditEvent } from "@/lib/authz/audit";
-import type { ActorContext } from "@/lib/authz/actor-context";
+import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
 // The wordpress/drupal instance stores are CONNECTOR-owned since cinatra#975
 // Wave 3: the per-instance org-binding readers below resolve the relocated
 // clients lazily. FAIL-CLOSED: an absent owning connector resolves NO row
@@ -645,4 +645,61 @@ export function createInstanceWriteAuthorityService(): {
       return { requireWrite, requireUse };
     },
   };
+}
+
+/** cinatra#4220 — an agent run's host-derived connector-instance binding. */
+export type AgentRunConnectorInstanceBinding = {
+  connectorKey: InstanceWriteConnectorKind;
+  instanceId: string;
+};
+
+/**
+ * cinatra#4220 — derive an agent run's connector-instance binding ONCE, at
+ * dispatch, from the run row's start input `instanceId`. HOST-SIDE only: the
+ * connector kind is found by the host-owned instance readers (the closed kind
+ * map above), never named by the caller; the run's OWN user and org are then
+ * authorized by the same per-instance `requireUse` gate the governed invoker
+ * runs on every call. Returns null (no binding) when the start input has no
+ * usable `instanceId` or no connector knows the id. Throws
+ * InstanceWriteAuthorityError on any deny (fail-closed, audited by the gate).
+ */
+export async function deriveAgentRunConnectorInstanceBinding(input: {
+  runId: string;
+  runBy: string;
+  orgId: string;
+  inputParams: Record<string, unknown>;
+}): Promise<AgentRunConnectorInstanceBinding | null> {
+  const raw = input.inputParams?.instanceId;
+  if (typeof raw !== "string" || raw.length === 0 || raw !== raw.trim()) return null;
+  if (!input.runBy || !input.orgId) throw new InstanceWriteAuthorityError("no_trusted_actor");
+  const kinds: InstanceWriteConnectorKind[] = [];
+  for (const kind of Object.keys(CONNECTOR_KIND_TO_INSTANCE_ORG_RESOLVER) as InstanceWriteConnectorKind[]) {
+    let binding: InstanceOrgBinding | null;
+    try {
+      binding = CONNECTOR_KIND_TO_INSTANCE_ORG_RESOLVER[kind](raw);
+    } catch {
+      throw new InstanceWriteAuthorityError("instance_resolution_error");
+    }
+    if (binding) kinds.push(kind);
+  }
+  if (kinds.length === 0) return null;
+  if (kinds.length > 1) throw new InstanceWriteAuthorityError("instance_kind_ambiguous");
+  const kind = kinds[0];
+  const resolved: ResolvedActor = {
+    actor: {
+      principalType: "HumanUser",
+      principalId: input.runBy,
+      organizationId: input.orgId,
+      authSource: "worker",
+      policyVersion: POLICY_VERSION,
+    },
+    userId: input.runBy,
+    orgId: input.orgId,
+  };
+  await createInstanceUseAuthority(kind)(resolved, {
+    instanceId: raw,
+    primitiveName: "agent_run_connector_instance_binding",
+    causation: input.runId,
+  });
+  return { connectorKey: kind, instanceId: raw };
 }
