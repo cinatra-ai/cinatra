@@ -365,6 +365,13 @@ function AgentRunTurnSlot({
   // "Awaiting input" on this page. That makes the moment reach the OPEN page
   // live, and the card mount here with no reload.
   const credential = useConversationCredential();
+  // THE SAME ANSWER'S START STAMP (cinatra#3062, fix leg 6). The route already
+  // sends the row's `startedAt` beside its status; it is kept here, off the SAME
+  // read, for the one card that needs it — the §V row, whose replay in a
+  // re-created turn may not guess whether the run has started. `undefined`
+  // until this container's own read has answered; `null` for a row with no
+  // stamp. No second reader and no new poll.
+  const [runStartedAt, setRunStartedAt] = useState<string | null | undefined>(undefined);
   const momentReader = useMemo<RunMomentCardReader | null>(() => {
     const request = runSeedRequest(credential, runId);
     // A host that cannot say who is asking reads NOTHING, and the turn keeps
@@ -373,7 +380,13 @@ function AgentRunTurnSlot({
     return async (signal) => {
       const response = await fetch(request.url, { ...request.init, signal });
       if (!response.ok) return null;
-      return parseRunMomentCard(await response.json());
+      const body: unknown = await response.json();
+      const card = parseRunMomentCard(body);
+      if (card) {
+        const stamp = (body as { startedAt?: unknown }).startedAt;
+        setRunStartedAt(typeof stamp === "string" && stamp.length > 0 ? stamp : null);
+      }
+      return card;
     };
   }, [credential, runId]);
   const {
@@ -820,7 +833,16 @@ function AgentRunTurnSlot({
           makes it survive a transcript reload and what lets it settle IN PLACE
           into its confirmed/skipped summary after a decision instead of
           disappearing. */}
-      <RecommendationHoldCard runId={runId} wireRef={null} onStateChange={setHold} />
+      <RecommendationHoldCard
+        runId={runId}
+        wireRef={null}
+        onStateChange={setHold}
+        runStatus={momentCard.status}
+        // THE SAME READING'S START STAMP (cinatra#3062, fix leg 6): the fact a
+        // re-created turn's replayed row may not guess, from the row this
+        // container already reads — no second reader, no new poll.
+        runStartedAt={runStartedAt}
+      />
       {/* THE SETTLED MOMENT'S OWN READING (cinatra#3044). Drawn here, in the
           producing part's own container, ABOVE the reading the run has now:
           the schedule was settled before the run moved on, and a conversation

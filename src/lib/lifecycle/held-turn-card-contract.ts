@@ -484,11 +484,21 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
     // selector here inside one declaring root, so leaving the row-level pair
     // would have failed the real card on controls it no longer draws. Both
     // routes arrived at the same three names, which is the reassuring part.
-    decisionControls: Object.freeze([
-      '[data-skill-action="confirm"]',
-      '[data-skill-action="adjust"]',
-      '[data-skill-action="skip"]',
-    ]),
+    //
+    // RE-READ AGAIN FOR THE CONVERSATION'S OWN READING (cinatra#3062). This row
+    // is the CHAT_THREAD carriage, and the chat draws §V's checklist now: "The
+    // reader sets the boxes and presses Continue beneath the list … and the
+    // whole row is answered at once, every box together." So this host's
+    // decision act is the Continue, and it is the only one — the three per-chip
+    // names are drawn on the review page's gate region, which this table does
+    // not describe. The evaluator requires EVERY selector here inside one
+    // declaring root, so naming a control this host stopped drawing would fail
+    // the real card on a reading it does not have.
+    //
+    // THE BOXES ARE NOT LISTED, for the reason the capture contract gives at the
+    // same field: a box is drawn in every reading, including the read-only one,
+    // so it says nothing about whether a decision is open. The Continue does.
+    decisionControls: Object.freeze(["[data-skills-step-continue]"]),
     foreignHostSubtrees: RUN_CARD_SUBTREES,
     enforcer: "held-turn-card-contract",
   },
