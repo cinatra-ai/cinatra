@@ -896,7 +896,7 @@ Measured 2026-10-23 against the manifests published under `publishedBaseUrl`,
 after the docs#242 merge republished the connectors manifest. All five bodies
 were fetched with one anonymous `curl -sS` each into a scratch directory
 outside every repository tree, and their hashes were compared with the five
-pins as this change leaves them. `app`, `app-extensions` and
+pins as the `3ebf9958` commit left them. `app`, `app-extensions` and
 `app-notifications` came back byte-identical to the artifacts their pins
 already named. `app-connectors` had republished, and the adopted body was
 compared, as parsed JSON, with the committed copy under
