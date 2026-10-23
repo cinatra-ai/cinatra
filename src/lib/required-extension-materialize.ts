@@ -223,7 +223,7 @@ function listPlainFiles(root: string): string[] | null {
   if (!existsSync(root)) return null;
   const out: string[] = [];
   const walk = (rel: string): boolean => {
-    const abs = path.join(root, rel || ".");
+    const abs = path.join(/* turbopackIgnore: true */ root, rel || ".");
     const st = lstatSync(abs);
     if (st.isSymbolicLink()) return false;
     if (st.isDirectory()) {
@@ -401,7 +401,7 @@ export function materializeRequiredExtensions(opts: {
   // 1. Materialize / refresh each seeded required slug.
   for (const { vendor, slug } of manifest.slugs) {
     const key = `${vendor}/${slug}`;
-    const seedSlugDir = path.join(seedDir, vendor, slug);
+    const seedSlugDir = path.join(/* turbopackIgnore: true */ seedDir, vendor, slug);
     if (!existsSync(path.join(seedSlugDir, OAS_REL_PATH))) {
       // Manifest/seed inconsistency — fail-closed in prod, skip otherwise.
       if (failClosed) {

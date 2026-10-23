@@ -114,7 +114,7 @@ const sourceDirPackageRoot = async (
   if (sourceDir === "") return null;
   // The repo-root-relative convention the host already resolves a package's own
   // files by: the directory is taken against the process's working directory.
-  const root = path.resolve(process.cwd(), sourceDir);
+  const root = path.resolve(/* turbopackIgnore: true */ process.cwd(), sourceDir);
   let parsed: { name?: unknown; version?: unknown };
   try {
     parsed = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")) as {

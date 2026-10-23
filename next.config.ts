@@ -873,6 +873,24 @@ const SENTRY_BUILD_READY = Boolean(
     process.env.SENTRY_PROJECT,
 );
 
+// ---------------------------------------------------------------------------
+// Server source maps (cinatra#4103): off unless the Sentry upload reads them.
+//
+// The production build writes a source map beside every server chunk: about
+// 2 GB of map files next to about 590 MB of server JavaScript. Nothing reads
+// them unless the upload above runs, which needs all three SENTRY_* build
+// variables and deletes the maps once they are uploaded. In the build that
+// measured this, the same project peaked at 28.8 GB with the maps and 26.0 GB
+// without them. The switch stands here, below SENTRY_BUILD_READY, because that
+// constant is defined below the config literal.
+// ---------------------------------------------------------------------------
+if (!SENTRY_BUILD_READY) {
+  nextConfig.experimental = {
+    ...nextConfig.experimental,
+    serverSourceMaps: false,
+  };
+}
+
 export default SENTRY_BUILD_READY
   ? withSentryConfig(nextConfig, {
       org: process.env.SENTRY_ORG,
