@@ -22,6 +22,7 @@ import { expect, request as playwrightRequest, test, type Locator, type Page } f
 import { RUN_ELIGIBILITY_AGENT, RUN_ELIGIBILITY_CONNECTOR, RUN_ELIGIBILITY_MISSING } from "../../../../src/app/design-fixtures/conformance/agent-run-eligibility-fixture-data";
 import { HYDRATION_TIMEOUT_MS } from "../../config/hydration";
 import { TOAST_DRIVER } from "./toast-driver";
+import { recurrenceSelectorsDriver } from "./scheduling-recurrence-driver";
 import { AGENT_ASSIGNMENT_SKILLS_DRIVER } from "./scope-assignment-skills-driver";
 import {
   BUTTON_SURFACE_DRIVER,
@@ -2435,6 +2436,29 @@ const SCHEDULING_STEP_CONFIGURED_DRIVER: SurfaceDriver = {
     },
   },
 };
+
+// ---------------------------------------------------------------------------
+// The scheduling step's recurrence selectors: four surfaces of the components
+// drawing that declare fields only, driven by recurrenceSelectorsDriver
+// (scheduling-recurrence-driver.ts) from the readings of
+// src/app/design-fixtures/conformance/scheduling-recurrence-fixture-data.ts.
+//
+// The component they bind, the shared `RecurrenceFrequencySelectors` that the
+// in-flow scheduling step and the schedule card both draw, is NOT on the
+// default branch: it arrives with cinatra#4280. Until it does, nothing on the
+// conformance harness carries these surface ids. So, exactly as with the
+// Workspace surfaces of the application drawing (below, `awaitingMount`), each
+// driver is written in full but guarded by `awaitingMount`: it SKIPS with the
+// reason below while the harness mounts nothing, and runs unchanged the moment
+// the mount exists. scripts/design/__tests__/awaiting-mount-guard.test.mjs
+// holds the arrangement honest.
+// ---------------------------------------------------------------------------
+/** Why the four recurrence drivers skip, named on every skipped test. */
+const AWAITING_RECURRENCE_SELECTORS =
+  "the shared recurrence selectors are not on the default branch yet — they " +
+  "arrive with cinatra#4280 — so the conformance harness mounts none of the " +
+  "four recurrence readings. Every assertion in this driver is written and runs " +
+  "unchanged the moment the mount exists.";
 
 // ---------------------------------------------------------------------------
 // App-shell drivers adopted with the cinatra#3057 pin reconciliation:
@@ -8032,6 +8056,10 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "approvals-marketplace-states": APPROVALS_MARKETPLACE_STATES_DRIVER,
   "scheduling-step": SCHEDULING_STEP_DRIVER,
   "scheduling-step-configured": SCHEDULING_STEP_CONFIGURED_DRIVER,
+  "scheduling-step-quarterly": awaitingMount("scheduling-step-quarterly", recurrenceSelectorsDriver("scheduling-step-quarterly"), AWAITING_RECURRENCE_SELECTORS),
+  "scheduling-step-yearly": awaitingMount("scheduling-step-yearly", recurrenceSelectorsDriver("scheduling-step-yearly"), AWAITING_RECURRENCE_SELECTORS),
+  "scheduling-step-configured-monthly": awaitingMount("scheduling-step-configured-monthly", recurrenceSelectorsDriver("scheduling-step-configured-monthly"), AWAITING_RECURRENCE_SELECTORS),
+  "scheduling-step-configured-quarterly": awaitingMount("scheduling-step-configured-quarterly", recurrenceSelectorsDriver("scheduling-step-configured-quarterly"), AWAITING_RECURRENCE_SELECTORS),
   "sidebar-assistants-entry": SIDEBAR_ASSISTANTS_ENTRY_DRIVER,
   "breadcrumb-entity-resolution": BREADCRUMB_ENTITY_RESOLUTION_DRIVER,
   "button": BUTTON_SURFACE_DRIVER, // The components drawing's shared primitives, one mount each (cinatra#3189).
