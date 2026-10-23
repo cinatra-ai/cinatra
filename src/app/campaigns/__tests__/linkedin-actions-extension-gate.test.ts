@@ -24,10 +24,14 @@
  *   `await requireExtensionAction(PACKAGE_NAME, "manage");` (the SDK gate:
  *   org_owner/org_admin/platform_admin, fail-closed).
  *
- * Each layout whose file carries its save handler is checked. The test FAILS
- * CLOSED: when neither file carries a save handler, or a file names the handler
- * in a shape this test does not recognise, it fails. It never skips and never
- * passes on an empty set.
+ * Each layout whose file carries its save handler is checked. A file carries it
+ * when it names the handler at all ("saveConnection" in src/register.ts,
+ * saveLinkedInOAuthConnectionAction in src/actions.ts); an actions file that no
+ * longer names its save action is skipped, by design, because the register
+ * layout then holds the save road. The test FAILS CLOSED: when neither file
+ * carries a save handler, or a file names the handler in a shape this test does
+ * not recognise, or src/register.ts names "saveConnection" more than once, it
+ * fails. It never skips and never passes on an empty set.
  *
  * Strategy: extract the handler body from the source text and assert that its
  * first executable statement is the awaited manage gate. A positional check
@@ -107,7 +111,10 @@ const REGISTER_LAYOUT: Layout = {
       /registerAction\(\s*\{\s*id:\s*"saveConnection"\s*,\s*handler:\s*async\s*\([^)]*\)\s*(?::[^=]*)?=>\s*\{/,
       "saveConnection handler",
     );
-    expect(firstExecutableStatement(handler).startsWith("await requireManage();")).toBe(true);
+    expect(
+      firstExecutableStatement(handler).startsWith("await requireManage();"),
+      "saveConnection starts with await requireManage()",
+    ).toBe(true);
 
     const guard = onlyBody(
       source,
@@ -115,17 +122,22 @@ const REGISTER_LAYOUT: Layout = {
       "requireManage",
     );
     // The guard comes from the host's own provider of the action-guard capability.
-    expect(guard).toMatch(/hostProvider\(\s*ctx\s*,\s*"@cinatra-ai\/host:extension-action-guard"\s*\)/);
+    expect(guard, "requireManage takes the guard from hostProvider").toMatch(
+      /hostProvider\(\s*ctx\s*,\s*"@cinatra-ai\/host:extension-action-guard"\s*\)/,
+    );
     // Fail closed: a missing guard (or one without require) throws.
     const failClosed = guard.search(
       /if\s*\(\s*!guard\s*\|\|\s*typeof\s+guard\.require\s*!==\s*"function"\s*\)\s*\{\s*throw\b/,
     );
-    expect(failClosed).toBeGreaterThanOrEqual(0);
+    expect(failClosed, "requireManage throws when the guard is missing").toBeGreaterThanOrEqual(0);
     // Then the manage check itself, after the fail-closed branch.
     const manageCheck = guard.indexOf(`await guard.require(PACKAGE_NAME, "manage");`);
-    expect(manageCheck).toBeGreaterThan(failClosed);
+    expect(manageCheck, "requireManage awaits the manage check after the throw").toBeGreaterThan(failClosed);
     // Nothing may return early from, or swallow a refusal of, the gate.
-    expect(guard).not.toMatch(/\b(return|try|catch)\b/);
+    expect(guard, "requireManage has no return, try or catch").not.toMatch(/\b(return|try|catch)\b/);
+    // A second registration in another shape (one the header pattern does not
+    // match, e.g. one without the gate) fails too: the id is named once.
+    expect(source.match(/["'`]saveConnection["'`]/g)?.length ?? 0, `${REGISTER_PATH} names saveConnection once`).toBe(1);
   },
 };
 
@@ -141,18 +153,17 @@ const ACTIONS_LAYOUT: Layout = {
     );
     // The very first executable statement (after any comments) must be exactly
     // the awaited manage gate; nothing may run before it.
-    expect(firstExecutableStatement(body).startsWith(`await requireExtensionAction(PACKAGE_NAME, "manage");`)).toBe(
-      true,
-    );
+    expect(
+      firstExecutableStatement(body).startsWith(`await requireExtensionAction(PACKAGE_NAME, "manage");`),
+      "saveLinkedInOAuthConnectionAction starts with the manage gate",
+    ).toBe(true);
   },
 };
 
-/** A file carries a layout's save handler when it names that handler at all;
- *  a named handler in an unrecognised shape then fails its check. */
+/** A file carries a layout's save handler when it names that handler at all,
+ *  in any shape; a named handler in an unrecognised shape then fails its check. */
 function carries(layout: Layout, source: string): boolean {
-  return layout === REGISTER_LAYOUT
-    ? /\bid:\s*"saveConnection"/.test(source)
-    : source.includes("saveLinkedInOAuthConnectionAction");
+  return source.includes(layout === REGISTER_LAYOUT ? "saveConnection" : "saveLinkedInOAuthConnectionAction");
 }
 
 function readIfPresent(path: string): string | null {
