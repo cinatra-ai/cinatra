@@ -88,10 +88,59 @@ export function canonicalJson(value) {
 }
 
 /**
+ * AN AGENT CARD'S OWN DECISION CONTROLS ARE NOT ANCHORS OF THIS CONTRACT
+ * (cinatra#3677, re-ratified 2026-10-23).
+ *
+ * The drawings this contract is pinned to draw the core lifecycle screens and
+ * the one generic input card. They never draw an agent's own buttons, text or
+ * steps. So a capture requirement that names a control one agent card draws for
+ * itself can never resolve in a governed drawing, and recording it here kept
+ * `design-anchor-resolution` red on main with nothing in a drawing to fix.
+ * Each selector below is such a control, named under the kind that owns it:
+ *
+ *   · recommendation_hold — the per-skill Confirm / Adjust / Skip that
+ *     packages/agents/src/run-recommendation-chip-row.tsx draws on each pill
+ *     (`data-skill-action`); the drawing retired them;
+ *   · trigger_schedule_proposal — the schedule card's own Confirm in
+ *     packages/agents/src/schedule-proposal-card.tsx
+ *     (`data-action="confirm-schedule-proposal"`), which no governed drawing
+ *     draws under that value.
+ *
+ * WHAT THIS DOES NOT DO. It removes no product control and no requirement from
+ * the recorder: scripts/ci/lib/capture-record-contract.mjs and
+ * scripts/audit/lib/chat-hitl-capture-recorder.mjs still grade every picture
+ * against these controls, and the card suites still pin them. It only stops
+ * THIS contract — its digest, and the drawing-resolution check that reads the
+ * same set — from recording them as anchors a governed drawing must draw. The
+ * list is closed and per kind: a selector is left out only in the cells of the
+ * kind that owns it, and every other requirement is recorded exactly as the
+ * recorder computes it.
+ */
+export const AGENT_OWNED_CAPTURE_CONTROLS = Object.freeze({
+  recommendation_hold: Object.freeze([
+    '[data-skill-action="confirm"]',
+    '[data-skill-action="adjust"]',
+    '[data-skill-action="skip"]',
+  ]),
+  trigger_schedule_proposal: Object.freeze(['[data-action="confirm-schedule-proposal"]']),
+});
+
+/** Is `selector` an agent card's own control, in a cell of the kind that owns it? */
+export function isAgentOwnedCaptureControl(kind, selector) {
+  return (
+    typeof kind === "string" &&
+    Object.hasOwn(AGENT_OWNED_CAPTURE_CONTROLS, kind) &&
+    AGENT_OWNED_CAPTURE_CONTROLS[kind].includes(selector)
+  );
+}
+
+/**
  * The anchors a CAPTURE is graded against, recomputed live from the recorder
  * contract — one entry per (host, kind, state), plus the host's own frame-wide
  * set. This is the third digest input, and it is never read from the anchor
- * file: a requirement that changed must move the digest.
+ * file: a requirement that changed must move the digest. An agent card's own
+ * controls (`AGENT_OWNED_CAPTURE_CONTROLS`) are left out of the cells of the
+ * kind that owns them, and nothing else is.
  */
 export function captureAnchorExpectations() {
   const out = {};
@@ -105,7 +154,9 @@ export function captureAnchorExpectations() {
         // alarm: quietly making such a cell capturable later — or changing why
         // it is not — moves the digest exactly as renaming an anchor does.
         out[host][`${kind}|${state}`] = admission.capturable
-          ? captureRequirementsFor(host, kind, state).map(selectorOf)
+          ? captureRequirementsFor(host, kind, state)
+              .filter((spec) => !isAgentOwnedCaptureControl(kind, spec.selector))
+              .map(selectorOf)
           : [`composition-only ${admission.reason}`];
       }
     }

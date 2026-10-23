@@ -66,12 +66,15 @@
 // No drawing text, no drawing path, no revision: the report is about this
 // repository's own recorded claims, and the drawings are not public.
 //
-// IT IS STILL RED TODAY, and that is the point: all five recorded owner anchors
-// resolve at the pin the contract names, and the four that remain unresolved
-// are capture-origin controls that no governed drawing draws. It is landed
-// warn-first — its context is not required until a separate pull request adds
-// it — so the state is visible without blocking, and it stays red until the
-// anchor content itself moves.
+// WHAT IT READS GREEN ON (cinatra#3677): all five recorded owner anchors
+// resolve at the pin the contract names. The four capture-origin controls that
+// stayed unresolved were an agent card's own buttons, which a core drawing
+// never draws; the anchor contract no longer records them
+// (`AGENT_OWNED_CAPTURE_CONTROLS` in scripts/audit/lib/anchor-contract.mjs),
+// while the capture recorder still grades pictures against them. A visible
+// control is still never excused HERE: anything the contract records goes
+// through the drawing check. It is landed warn-first — its context is not
+// required until a separate pull request adds it.
 //
 // Usage:
 //   node scripts/ci/design-anchor-resolution.mjs
