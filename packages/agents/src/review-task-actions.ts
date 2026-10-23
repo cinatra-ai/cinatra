@@ -1005,6 +1005,33 @@ export async function approveReviewTaskInternal(
       throw e;
     }
 
+    // cinatra#4245 — THE CLAIM SEES A CHANGE REQUEST. A reviewer who asked for
+    // changes on a gate of this pause committed that under the run's row lock
+    // while the run was still `pending_approval` here; a change request refuses
+    // once this claim committed (`claimPauseForResume` in mcp/handlers.ts). So this read, after the
+    // claim, sees every change request that can end the pause: one that did
+    // gives the claim back, records nothing and dispatches nothing.
+    {
+      const { claimedPauseStillOpen } = await import("./lifecycle-declared-review-gate");
+      let open: boolean;
+      try {
+        open = await claimedPauseStillOpen({ id: run.id, orgId: run.orgId, expectedTaskId: taskId });
+      } catch (readError) {
+        await transitionRunStatus(run.id, "running", "pending_approval", undefined, resumeAuthority);
+        throw readError;
+      }
+      if (!open) {
+        await transitionRunStatus(run.id, "running", "pending_approval", undefined, resumeAuthority);
+        throw new GateNotPendingError({
+          runId: run.id,
+          currentStatus: "pending_approval",
+          message:
+            `WayFlow approval rejected: gate ${taskId} on run ${run.id} ended — changes were ` +
+            `requested on its review, or the run moved on`,
+        });
+      }
+    }
+
     // Precedence for the WayFlow resume message:
     //   1. values.userResponse (string, non-empty after trim)  — structured-form path
     //      Renderers wanting structured round-trip MUST set this to JSON.stringify

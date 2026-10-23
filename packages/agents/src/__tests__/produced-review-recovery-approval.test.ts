@@ -31,6 +31,15 @@ const storeMock = vi.hoisted(() => ({
   updateAgentRunA2ATaskId: vi.fn(async () => undefined),
   updateAgentRunA2AContextId: vi.fn(async () => undefined),
 }));
+
+// cinatra#4245: after the Continue claim the answer re-reads the pause for a
+// change request (a database read this suite does not stand up); the pause is
+// open here. The refusal has its own suite (continue-claim-sees-change-request-4245).
+vi.mock("../lifecycle-declared-review-gate", async (orig) => ({
+  ...(await orig<typeof import("../lifecycle-declared-review-gate")>()),
+  claimedPauseStillOpen: vi.fn(async () => true),
+}));
+
 vi.mock("../store", () => storeMock);
 
 const holdSpy = vi.hoisted(() =>

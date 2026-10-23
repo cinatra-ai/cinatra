@@ -4,6 +4,15 @@ const ports = vi.hoisted(() => ({
   query: vi.fn(), send: vi.fn(), get: vi.fn(), handle: vi.fn(),
   status: "pending_approval", gate: null as Record<string, unknown> | null,
 }));
+
+// cinatra#4245: after the Continue claim the answer re-reads the pause for a
+// change request (a database read this suite does not stand up); the pause is
+// open here. The refusal has its own suite (continue-claim-sees-change-request-4245).
+vi.mock("../lifecycle-declared-review-gate", async (orig) => ({
+  ...(await orig<typeof import("../lifecycle-declared-review-gate")>()),
+  claimedPauseStillOpen: vi.fn(async () => true),
+}));
+
 vi.mock("../db", () => ({
   db: { insert: () => ({ values: async (row: Record<string, unknown>) => {
     ports.events.push("capture"); ports.rows.push(row);

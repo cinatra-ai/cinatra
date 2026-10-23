@@ -86,8 +86,8 @@ import "server-only";
 import { and, asc, eq, sql } from "drizzle-orm";
 
 import { db } from "./db";
-import { agentRuns, agentTemplates, lifecycleRepair } from "./schema";
-import { launchAgentRun } from "./lifecycle-coordinator";
+import { agentRuns, agentTemplates, artifactReviewGates, lifecycleRepair } from "./schema";
+import { advanceAgentRun, clearRunLifecycleMoment, launchAgentRun } from "./lifecycle-coordinator";
 import { markRepairDispatched } from "./lifecycle-repair-store";
 
 import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
@@ -233,6 +233,34 @@ export async function dispatchPendingProducerRepairs(opts?: {
         if (escalated) summary.escalated += 1;
         else summary.raced += 1;
         continue;
+      }
+
+      // cinatra#4245 — a change request on a review step the flow declares itself
+      // (a `wayflow-` gate) leaves that run paused at the step; its next step would
+      // write the content the reviewer asked to change. The repair row IS the stop
+      // instruction: it was committed in the same transaction that resolved the
+      // gate. So the paused run is stopped HERE, before any repair run starts, by an
+      // idempotent compare-and-set — a crash after the gate's commit (or after the
+      // stop) is converged by the next drain, which re-reads the still-`requested`
+      // row and stops (or finds stopped) the same run.
+      if (row.continuationAddress !== null && row.continuationAddress === row.gateId) {
+        const stop = await stopRunPausedAtDeclaredGate(row);
+        if (stop === "claim-pending") {
+          // A resume holds a claim taken after this change request committed;
+          // that claim sees the change request and gives itself back. The row
+          // stays `requested`: the next drain stops the run at its pause.
+          summary.raced += 1;
+          continue;
+        }
+        if (stop === "not-paused") {
+          const escalated = await escalateRepair(
+            row.id,
+            "the run of the declared review step is no longer paused at that step, so no repair run is started",
+          );
+          if (escalated) summary.escalated += 1;
+          else summary.raced += 1;
+          continue;
+        }
       }
 
       const producer = await resolveProducingTemplate(row.producerRunId, row.orgId);
@@ -412,6 +440,140 @@ export async function dispatchPendingProducerRepairs(opts?: {
   }
 
   return summary;
+}
+
+/** The review-task prefix of a review step a flow declares in its own template. */
+const DECLARED_REVIEW_TASK_PREFIX = "wayflow-";
+
+/** The pause a declared gate belongs to: its task id without the per-artifact
+ * `#<n>` leg suffix (`baseReviewTaskId` of the review-target model). */
+function declaredPauseOf(reviewTaskId: string): string {
+  const cut = reviewTaskId.indexOf("#");
+  return cut === -1 ? reviewTaskId : reviewTaskId.slice(0, cut);
+}
+
+/**
+ * Stop the run paused at the declared review gate a repair was requested on
+ * (cinatra#4245). `not-declared` — the repair's gate is not a declared review
+ * gate (nothing to stop; every lifecycle gate keeps its road); `stopped` — the
+ * run is stopped now, or already was; `not-paused` — the run left its review
+ * step some other way, so the caller escalates instead of dispatching.
+ *
+ * BOUND TO THE PAUSE, NOT ONLY TO A STATUS. `pending_approval` alone does not
+ * say WHERE the run waits: a run that went on and paused at a later review step
+ * reads the same status, and stopping it there would end a review the change
+ * request was never made on. So the stop also requires that the run has opened
+ * no declared gate of another pause after this gate and waits at no other
+ * declared pause (the gate itself was resolved `changes_requested` in the same
+ * transaction that wrote the repair row this drain reads).
+ * The resume worker never resumes a pause one of whose gates has a change
+ * request, so once these hold, nothing the review flow does moves the run off
+ * this pause before the compare-and-set below.
+ *
+ * Idempotent: the move is a compare-and-set `pending_approval` → `stopped`
+ * through the lifecycle coordinator's `advanceAgentRun` (the one entry that
+ * moves a parked run); a second call (the next drain after a crash)
+ * reads `stopped` and changes nothing. A transient failure throws, so the row
+ * stays `requested` and the next drain tries again before any repair run starts.
+ *
+ * THE MOMENT GOES WITH THE PAUSE. The release dispatches nothing (a stopped run
+ * is never queued again), so the coordinator leaves the clear to its caller;
+ * this function clears the run's lifecycle moment and card through the
+ * coordinator's own `clearRunLifecycleMoment` once the run reads `stopped`.
+ */
+export async function stopRunPausedAtDeclaredGate(row: {
+  gateId: string;
+  orgId: string;
+}): Promise<"not-declared" | "stopped" | "not-paused" | "claim-pending"> {
+  const [gate] = await db
+    .select({
+      runId: artifactReviewGates.runId,
+      reviewTaskId: artifactReviewGates.reviewTaskId,
+      createdAt: artifactReviewGates.createdAt,
+    })
+    .from(artifactReviewGates)
+    .where(and(eq(artifactReviewGates.id, row.gateId), eq(artifactReviewGates.orgId, row.orgId)))
+    .limit(1);
+  if (!gate || typeof gate.reviewTaskId !== "string" || !gate.reviewTaskId.startsWith(DECLARED_REVIEW_TASK_PREFIX)) {
+    return "not-declared";
+  }
+  const authority = mintLifecycleRepairDispatchAuthority(row.orgId);
+  const stopped = async (): Promise<"stopped"> => {
+    await clearRunLifecycleMoment(gate.runId, authority);
+    return "stopped";
+  };
+  const pause = declaredPauseOf(gate.reviewTaskId);
+  // cinatra#4245 — THE STOP IS BOUND TO THE EXACT PAUSE. `pending_approval` alone
+  // does not say WHICH pause the run waits at: a run that went on and now waits
+  // at a later, ordinary HITL step reads the same status. The run waits at this
+  // gate's pause only while its paused task IS that pause's task.
+  const readRun = async (): Promise<{ status: string | null; atPause: boolean }> => {
+    const [run] = await db
+      .select({ status: agentRuns.status, a2aTaskId: agentRuns.a2aTaskId })
+      .from(agentRuns)
+      .where(and(eq(agentRuns.id, gate.runId), eq(agentRuns.orgId, row.orgId)))
+      .limit(1);
+    const atPause = typeof run?.a2aTaskId === "string" && `${DECLARED_REVIEW_TASK_PREFIX}${run.a2aTaskId}` === pause;
+    return { status: run?.status ?? null, atPause };
+  };
+  // cinatra#4245 — A CLAIM IS NOT A MOVE. A resume claims a pause with
+  // `pending_approval -> running` before its first write and gives the claim
+  // back when the pause had a change request (`claimPauseForResume` in mcp/handlers.ts); a change
+  // request refuses once a claim committed. So a run that reads `running` at
+  // THIS pause, with this repair's change request committed, is a claim taken
+  // after it that is being given back: wait for it, never escalate on it.
+  const settledOutcome = (r: { status: string | null; atPause: boolean }): Promise<"stopped"> | "not-paused" | "claim-pending" =>
+    r.status === "stopped" ? stopped() : r.status === "running" && r.atPause ? "claim-pending" : "not-paused";
+  const first = await readRun();
+  if (first.status !== "pending_approval" || !first.atPause) return settledOutcome(first);
+  const runGates = await db
+    .select({
+      id: artifactReviewGates.id,
+      reviewTaskId: artifactReviewGates.reviewTaskId,
+      status: artifactReviewGates.status,
+      createdAt: artifactReviewGates.createdAt,
+    })
+    .from(artifactReviewGates)
+    .where(and(eq(artifactReviewGates.runId, gate.runId), eq(artifactReviewGates.orgId, row.orgId)));
+  const waitsElsewhere = runGates.some((other) => {
+    if (typeof other.reviewTaskId !== "string" || !other.reviewTaskId.startsWith(DECLARED_REVIEW_TASK_PREFIX)) return false;
+    if (declaredPauseOf(other.reviewTaskId) === pause) return false;
+    const later = other.createdAt instanceof Date && gate.createdAt instanceof Date && other.createdAt > gate.createdAt;
+    return later || other.status === "pending";
+  });
+  if (waitsElsewhere) return "not-paused";
+  // Re-read right before the stop, so a run that moved on meanwhile is left alone.
+  //
+  // NO ABA BETWEEN THIS READ AND THE STOP. The stop below is a status-only
+  // compare-and-set, so it is bound to this pause by the arbitration, not by its
+  // WHERE: with this repair's change request committed, no resume can send the
+  // run past this pause (its claim gives itself back; the resume worker resumes
+  // only a pause whose every gate is approved), so a run that reads
+  // `pending_approval` here is still at this pause when the stop lands.
+  const now = await readRun();
+  if (now.status !== "pending_approval" || !now.atPause) return settledOutcome(now);
+  try {
+    await advanceAgentRun({
+      run: { id: gate.runId, orgId: row.orgId, status: "pending_approval" },
+      release: {
+        reason: "changes_requested",
+        from: "pending_approval",
+        to: "stopped",
+        dispatch: {
+          kind: "caller_dispatches",
+          why: "a stopped run is never queued again; this drain starts the separate repair run itself",
+        },
+        onLostRace: "throw",
+      },
+      authority,
+    });
+    return stopped();
+  } catch (err) {
+    // Lost the compare-and-set: a concurrent drain stopped it (converged), or the
+    // run moved on its own (escalate). Anything else is transient: rethrow.
+    if ((err as { code?: string } | null)?.code !== "stale_from_status") throw err;
+    return settledOutcome(await readRun());
+  }
 }
 
 /** Resolve the producing run's template (the agent that must repair). */

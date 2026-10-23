@@ -745,29 +745,131 @@ describe.skipIf(!HAS_DB)("cinatra#2040 — repair loop (real store)", () => {
     expect(gate!.status).toBe("pending");
   });
 
-  it("SURFACE: a NON-lifecycle (flow-authored wayflow-) gate is rejected — the composer only closes lifecycle gates", async () => {
+  // cinatra#4245 — a review step a flow declares in its own template (a `wayflow-`
+  // gate) whose produced event names it takes the change request: this case
+  // replaces the former rejection of every `wayflow-` gate.
+  async function seedDeclaredGate() {
     const runId = `run-wf-${randomUUID()}`;
     const artifactId = `art-${randomUUID()}`;
     const rev = `rev-${randomUUID()}`;
-    await insertObject(artifactId, "document");
+    await seedRepairCapableProducer(runId);
+    // The run waits at the declared step's pause: its paused task is the gate's task.
+    const task = randomUUID();
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status='pending_approval', a2a_task_id=$2 WHERE id=$1`, [runId, task]);
+    const reviewTaskId = `wayflow-${task}`;
     const wf = await gateStore.emitArtifactReviewGate({
       runId,
       orgId: ORG,
-      reviewTaskId: `wayflow-${randomUUID()}`,
+      reviewTaskId,
       targets: [{ artifactId, representationRevisionId: rev }],
       expiresAt: null,
     });
     expect(wf.gateId).toBeTruthy();
+    await produce("document", { artifactId, representationRevisionId: rev, producerRunId: runId, continuationAddress: wf.gateId });
+    return { runId, artifactId, rev, reviewTaskId, gateId: wf.gateId as string };
+  }
+
+  async function runStatus(runId: string): Promise<string | undefined> {
+    const r = await pool(`SELECT status FROM "${q(TEST_SCHEMA)}"."agent_runs" WHERE id=$1`, [runId]);
+    return (r.rows[0] as { status: string } | undefined)?.status;
+  }
+
+  it("SURFACE: a comment on a DECLARED (flow-authored wayflow-) gate whose produced event names it resolves the gate as changes_requested + opens exactly one requested repair", async () => {
+    const g = await seedDeclaredGate();
+    const cr = await crStore.recordReviewSurfaceChangesRequested({
+      runId: g.runId,
+      reviewTaskId: g.reviewTaskId,
+      baseTarget: { artifactId: g.artifactId, representationRevisionId: g.rev },
+      currentBaseRevisionId: g.rev,
+      feedback: "  Shorten the second paragraph.  ",
+    });
+    expect(cr.ok).toBe(true);
+    if (!cr.ok) return;
+    expect(cr.status).toBe("requested");
+    expect(cr.route.kind).toBe("producer_repair");
+    const closed = await gateStore.readReviewGate(g.runId, g.reviewTaskId);
+    expect(closed!.status).toBe("resolved");
+    expect(closed!.disposition).toBe("changes_requested");
+    const rows = await pool(
+      `SELECT status, continuation_address, producer_run_id FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE gate_id=$1`,
+      [g.gateId],
+    );
+    expect(rows.rows).toEqual([{ status: "requested", continuation_address: g.gateId, producer_run_id: g.runId }]);
+    const repair = await repairStore.readRepair(cr.repairId);
+    expect(repair!.findings[0].message).toBe("Shorten the second paragraph.");
+  });
+
+  it("SURFACE: a crash after the declared gate's commit and before the status change still ends with the paused run stopped (idempotent)", async () => {
+    const g = await seedDeclaredGate();
+    await pool(
+      `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $1, $1, now()) ON CONFLICT (id) DO NOTHING`,
+      [ORG],
+    );
+    const cr = await crStore.recordReviewSurfaceChangesRequested({
+      runId: g.runId,
+      reviewTaskId: g.reviewTaskId,
+      baseTarget: { artifactId: g.artifactId, representationRevisionId: g.rev },
+      currentBaseRevisionId: g.rev,
+      feedback: "Shorten the second paragraph.",
+    });
+    expect(cr.ok).toBe(true);
+    // The crash: the gate's transaction committed, no drain ran. The run is still
+    // paused, and the committed repair row is the stop instruction.
+    expect(await runStatus(g.runId)).toBe("pending_approval");
+    const { stopRunPausedAtDeclaredGate } = await import("../lifecycle-repair-dispatch-store");
+    expect(await stopRunPausedAtDeclaredGate({ gateId: g.gateId, orgId: ORG })).toBe("stopped");
+    expect(await runStatus(g.runId)).toBe("stopped");
+    expect(await stopRunPausedAtDeclaredGate({ gateId: g.gateId, orgId: ORG })).toBe("stopped");
+    expect(await runStatus(g.runId)).toBe("stopped");
+  });
+
+  it("SURFACE: a comment before the sweep links the produced event is filed on the gate the link will name, and the stop clears the run's lifecycle moment", async () => {
+    const runId = `run-wf-${randomUUID()}`;
+    const artifactId = `art-${randomUUID()}`;
+    const rev = `rev-${randomUUID()}`;
+    await seedRepairCapableProducer(runId);
+    // The run waits at the declared step's pause: its paused task is the gate's task.
+    const task = randomUUID();
+    await pool(
+      `UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status='pending_approval', lifecycle_moment='review',
+         lifecycle_card_kind='review', lifecycle_card_ref='card-1', a2a_task_id=$2 WHERE id=$1`,
+      [runId, task],
+    );
+    await pool(
+      `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $1, $1, now()) ON CONFLICT (id) DO NOTHING`,
+      [ORG],
+    );
+    const reviewTaskId = `wayflow-${task}`;
+    const wf = await gateStore.emitArtifactReviewGate({
+      runId,
+      orgId: ORG,
+      reviewTaskId,
+      targets: [{ artifactId, representationRevisionId: rev }],
+      expiresAt: null,
+    });
+    // The produced event is still pending with no continuation address: the
+    // sweep has not linked it to the declared gate yet.
+    await produce("document", { artifactId, representationRevisionId: rev, producerRunId: runId });
     const cr = await crStore.recordReviewSurfaceChangesRequested({
       runId,
-      reviewTaskId: (await gatesForRun(runId))[0].reviewTaskId,
+      reviewTaskId,
       baseTarget: { artifactId, representationRevisionId: rev },
       currentBaseRevisionId: rev,
-      feedback: "please revise",
+      feedback: "Shorten the second paragraph.",
     });
-    expect(cr.ok).toBe(false);
-    if (cr.ok) return;
-    expect(cr.code).toBe("not-a-lifecycle-gate");
+    expect(cr.ok).toBe(true);
+    const rows = await pool(
+      `SELECT status, continuation_address FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE gate_id=$1`,
+      [wf.gateId],
+    );
+    expect(rows.rows).toEqual([{ status: "requested", continuation_address: wf.gateId }]);
+    const { stopRunPausedAtDeclaredGate } = await import("../lifecycle-repair-dispatch-store");
+    expect(await stopRunPausedAtDeclaredGate({ gateId: wf.gateId as string, orgId: ORG })).toBe("stopped");
+    const run = await pool(
+      `SELECT status, lifecycle_moment, lifecycle_card_kind, lifecycle_card_ref FROM "${q(TEST_SCHEMA)}"."agent_runs" WHERE id=$1`,
+      [runId],
+    );
+    expect(run.rows).toEqual([{ status: "stopped", lifecycle_moment: null, lifecycle_card_kind: null, lifecycle_card_ref: null }]);
   });
 
   it("SURFACE: MULTI-CYCLE — a 2-round repair chain does NOT strand the held effect; approve of the final successor releases it (cinatra#2063 codex fix)", async () => {

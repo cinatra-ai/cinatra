@@ -66,6 +66,7 @@ import {
   declaredReviewFamilyState,
 } from "@/lib/artifacts/artifact-review-target";
 import { isAutoReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
+import { pauseHasChangeRequest } from "./lifecycle-declared-review-gate";
 
 /** The per-intent delivery outcome. */
 export type ResumeDeliveryOutcome =
@@ -332,6 +333,21 @@ export async function deliverArtifactReviewResumeIntent(
   const familyState = declaredReviewFamilyState({ runId: run.id, orgId: run.orgId,
     reviewTaskId, gates: siblingLegs });
   if (familyState === "incomplete") return "retryable";
+  // cinatra#4245 — A CHANGE REQUEST ENDS THE PAUSE. A reviewer who asked for
+  // changes on any gate of this pause resolved that gate `changes_requested`,
+  // and the repair drain stops this run before the repair run starts. The
+  // approval of another gate of the same pause must not resume the run past the
+  // content the reviewer asked to change, even when its intent is delivered
+  // only after the change request completed the family. Closed WITHOUT a resume.
+  // The one rule, shared with the direct resume (`pauseHasChangeRequest`).
+  if (pauseHasChangeRequest(siblingLegs, reviewTaskId)) {
+    const ok = await markResumeIntentDelivered(gateId, leaseToken);
+    console.log(
+      `[artifact-review-resume] gate=${gateId} run=${run.id} a gate of this pause has a change ` +
+        `request — the run is not resumed (the repair drain stops it), marked ${ok ? "done" : "LEASE-LOST"}`,
+    );
+    return ok ? "already-advanced" : "lease-lost";
+  }
   if (familyState === "pending") {
     const ok = await markResumeIntentDelivered(gateId, leaseToken);
     console.log(

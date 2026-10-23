@@ -64,7 +64,7 @@ vi.mock("../wayflow-url", () => ({
 
 const gateStoreMock = vi.hoisted(() => ({
   claimPendingResumeIntents: vi.fn(),
-  listReviewGatesForRun: vi.fn<(runId: string) => Promise<Array<{ runId?: string; orgId?: string; reviewTaskId: string; status: string; pinnedTargets?: unknown }>>>(async () => []),
+  listReviewGatesForRun: vi.fn<(runId: string) => Promise<Array<{ runId?: string; orgId?: string; reviewTaskId: string; status: string; disposition?: string | null; pinnedTargets?: unknown }>>>(async () => []),
   markResumeIntentDelivered: vi.fn(),
 }));
 vi.mock("../artifact-review-gate-store", () => gateStoreMock);
@@ -186,6 +186,33 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
     expect(sendTaskSpy).not.toHaveBeenCalled();
     expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
     expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-1", "lease-abc");
+  });
+
+  it("cinatra#4245: an approved leg does not resume a pause whose other leg has a change request", async () => {
+    const rows = familyRows(["resolved", "resolved"]);
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue([
+      { ...rows[0], disposition: "approved" },
+      { ...rows[1], disposition: "changes_requested" },
+    ]);
+    const outcome = await deliverArtifactReviewResumeIntent(intent());
+    expect(outcome).toBe("already-advanced");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-1", "lease-abc");
+  });
+
+  it("cinatra#4245: the change-request branch that loses its lease reports lease-lost and resumes nothing", async () => {
+    const rows = familyRows(["resolved", "resolved"]);
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue([
+      { ...rows[0], disposition: "approved" },
+      { ...rows[1], disposition: "changes_requested" },
+    ]);
+    gateStoreMock.markResumeIntentDelivered.mockResolvedValue(false);
+    const outcome = await deliverArtifactReviewResumeIntent(intent());
+    expect(outcome).toBe("lease-lost");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledTimes(1);
   });
 
   it("does not let another pause's pending leg hold this original task", async () => {
