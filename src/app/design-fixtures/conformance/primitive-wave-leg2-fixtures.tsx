@@ -24,6 +24,7 @@
  * clause that stays a recorded cross-repository departure.
  */
 import * as React from "react";
+import { Button } from "@/components/ui/button";
 
 import {
   InputOTP,
@@ -78,6 +79,12 @@ const TABLE_ROWS = [
 export function PrimitiveWaveLeg2ConformanceFixtures() {
   return (
     <div className="flex flex-col gap-6" data-wave-seam="leg2-root">
+      {/* Real host recipes, with no fixture paint or variant substitutions. */}
+      <div data-wave-seam="button-roster">
+        {(["primary", "default", "outline", "secondary", "destructive", "ghost", "link"] as const).map((variant) => (
+          <Button key={variant} type="button" variant={variant}>{variant}</Button>
+        ))}
+      </div>
       {/* Input OTP — "40px white slots", "mono 18px digit", "active = indigo
           ring", "middle dash separator". Six slots split into two groups by the
           real separator, so the dash clause has the element it names. Three
