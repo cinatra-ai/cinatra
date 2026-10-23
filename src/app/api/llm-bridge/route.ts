@@ -190,6 +190,12 @@ const RequestSchema = z.object({
   toolbox_ids: z.array(z.string()).optional(),
   // Structured output schema — passed through to the orchestration layer.
   output_schema: z.record(z.string(), z.unknown()).optional(),
+  // The error codes that still end this step as COMPLETED. A step answers a
+  // failure with a non-empty top-level `error.code`; the bridge ends the step
+  // failed on such an answer (422 STEP_DECLARED_FAILURE, see
+  // readDeclaredStepFailure) unless the step's own data lists the code here —
+  // e.g. a write step whose update was saved and only its re-read failed.
+  completed_error_codes: z.array(z.string()).max(50).optional(),
   // Explicit SKILL.md path on the host filesystem. Must be under an allowed skill root
   // and end with SKILL.md (path traversal guard). When absent, the route
   // auto-discovers from agents/<agent_id>/skills/<agent_id>/SKILL.md.
@@ -778,6 +784,44 @@ export function buildAgentRunInjectionPorts(
       }
     },
   };
+}
+
+// The bridge's answer to a step that answered a failure. WayFlow's ApiCallStep
+// fails a step on any non-2xx answer; the runtime's loader reads this code and
+// fails the step at once, without the retries it gives other non-2xx answers
+// (docker/wayflow/agent_loader.py, _patch_api_call_step_bridge_token).
+const STEP_DECLARED_FAILURE = "STEP_DECLARED_FAILURE";
+const STEP_FAILURE_CODE_MAX = 200;
+const STEP_FAILURE_MESSAGE_MAX = 1000;
+
+/**
+ * A step's answer that ends the step FAILED, or null.
+ *
+ * A bridge step answers a failure in its own declared `error` output: an object
+ * whose `code` is a non-empty string. That answer ends the step failed unless
+ * the step's data lists the code in `completed_error_codes`. A successful answer
+ * carries no `error`, a null one, or one with an empty `code` (a strict
+ * structured-output schema makes every declared output appear, so a success
+ * answers `error: { code: "", message: "" }`). Only the TOP-LEVEL `error` of an
+ * object answer is read: an `error` nested in another output, and every answer
+ * that is not a JSON object, are passed on unchanged as before.
+ */
+function readDeclaredStepFailure(
+  parsed: unknown,
+  completedCodes: readonly string[] | undefined,
+): { code: string; message: string } | null {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const error = (parsed as { error?: unknown }).error;
+  if (!error || typeof error !== "object" || Array.isArray(error)) return null;
+  const { code, message } = error as { code?: unknown; message?: unknown };
+  if (typeof code !== "string" || code.trim() === "") return null;
+  if (completedCodes?.includes(code)) return null;
+  const shown = code.slice(0, STEP_FAILURE_CODE_MAX);
+  const said =
+    typeof message === "string" && message.trim() !== ""
+      ? message.trim().slice(0, STEP_FAILURE_MESSAGE_MAX)
+      : `The step answered the error code ${shown}.`;
+  return { code: shown, message: said };
 }
 
 function toPersonalDelta(
@@ -2089,6 +2133,23 @@ export async function POST(req: Request): Promise<Response> {
 
     try {
       const parsed = JSON.parse(text);
+      const declaredFailure = readDeclaredStepFailure(parsed, body.completed_error_codes);
+      if (declaredFailure) {
+        console.warn(
+          `[llm-bridge] step answered the error code ${JSON.stringify(declaredFailure.code)} ` +
+            `(agent=${body.agent_id ?? "wayflow"}); its data does not list the code ` +
+            `as completed, so the step ends failed (422 ${STEP_DECLARED_FAILURE}).`,
+        );
+        return NextResponse.json(
+          {
+            error: "The step answered a failure",
+            code: STEP_DECLARED_FAILURE,
+            stepErrorCode: declaredFailure.code,
+            message: declaredFailure.message,
+          },
+          { status: 422 },
+        );
+      }
       return NextResponse.json(
         skillSelection && parsed && typeof parsed === "object" && !Array.isArray(parsed)
           ? { ...parsed, skillSelection }
