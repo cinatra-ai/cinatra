@@ -348,7 +348,7 @@ describe("the walk cell is OBSERVED, and refused if it did not come out", () => 
     // root rather than anywhere on the screen.
     expect(record.assertions).toContainEqual(
       expect.objectContaining({
-        selector: '[data-action="confirm-schedule-proposal"]',
+        selector: '[data-action="confirm-schedule -> scheduled"]',
         scope: "root",
         count: 1,
         visible: 1,
@@ -381,11 +381,11 @@ describe("the walk cell is OBSERVED, and refused if it did not come out", () => 
     const page = pageAnswering(required, {
       url: "/chat/org/agent/t-1",
       overrides: {
-        '[data-lifecycle-card="trigger_schedule_proposal"]>>[data-action="confirm-schedule-proposal"]': 0,
+        '[data-lifecycle-card="trigger_schedule_proposal"]>>[data-action="confirm-schedule -> scheduled"]': 0,
       },
     });
     await expect(observe(CHAT_PENDING, page)).rejects.toThrow(
-      /the index would refuse[\s\S]*confirm-schedule-proposal/,
+      /the index would refuse[\s\S]*confirm-schedule -> scheduled/,
     );
   });
 
@@ -412,7 +412,7 @@ describe("the kind is measured wherever it is drawn — the run-page cell", () =
     // ...and offers no decision any more, MEASURED absent rather than omitted.
     expect(record.assertions).toContainEqual(
       expect.objectContaining({
-        selector: '[data-action="confirm-schedule-proposal"]',
+        selector: '[data-action="confirm-schedule -> scheduled"]',
         scope: "root",
         expect: "absent",
         count: 0,

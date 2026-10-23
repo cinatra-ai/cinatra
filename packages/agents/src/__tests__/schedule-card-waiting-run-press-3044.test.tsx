@@ -184,7 +184,7 @@ for (const host of ["chat_thread", "site_widget"] as const) {
       expect(
         container.querySelector('[data-schedule-option="immediate"]')?.getAttribute("data-chosen"),
       ).toBe("true");
-      expect(container.querySelector('[data-action="confirm-schedule-proposal"]')).not.toBeNull();
+      expect(container.querySelector('[data-action="confirm-schedule -> scheduled"] button')).not.toBeNull();
       // ONE card root, on this host, for this kind.
       expect(
         container.querySelectorAll('[data-lifecycle-card="trigger_schedule_proposal"]'),
@@ -196,9 +196,9 @@ for (const host of ["chat_thread", "site_widget"] as const) {
       const { container } = renderOn(host);
 
       await waitFor(() =>
-        expect(container.querySelector('[data-action="confirm-schedule-proposal"]')).not.toBeNull(),
+        expect(container.querySelector('[data-action="confirm-schedule -> scheduled"] button')).not.toBeNull(),
       );
-      fireEvent.click(container.querySelector('[data-action="confirm-schedule-proposal"]')!);
+      fireEvent.click(container.querySelector('[data-action="confirm-schedule -> scheduled"] button')!);
 
       await waitFor(() => expect(decisionBodies(fetchMock).length).toBeGreaterThan(0));
       const bodies = decisionBodies(fetchMock);
@@ -222,7 +222,7 @@ for (const host of ["chat_thread", "site_widget"] as const) {
       // it dispatches the run, and the ratified reading of that card is pinned
       // separately below rather than papered over with a fabricated body.
       fireEvent.click(container.querySelector('[data-schedule-option="scheduled"] button')!);
-      fireEvent.click(container.querySelector('[data-action="confirm-schedule-proposal"]')!);
+      fireEvent.click(container.querySelector('[data-action="confirm-schedule -> scheduled"] button')!);
 
       await waitFor(() => expect(decisionBodies(fetchMock).length).toBe(1));
       expect((decisionBodies(fetchMock)[0].schedule as { kind: string }).kind).toBe("scheduled");
@@ -240,7 +240,7 @@ for (const host of ["chat_thread", "site_widget"] as const) {
       ).toHaveLength(1);
       expect(container.querySelector('[data-conformance-id="schedule-option-rows"]')).not.toBeNull();
       // The confirm floor is gone — the decision has been made.
-      expect(container.querySelector('[data-action="confirm-schedule-proposal"]')).toBeNull();
+      expect(container.querySelector('[data-action="confirm-schedule -> scheduled"]')).toBeNull();
     });
 
     it("is STILL THERE after a reload, drawn from the turn's durable reference", async () => {
@@ -291,9 +291,9 @@ for (const host of ["chat_thread", "site_widget"] as const) {
 
       const { container } = renderOn(host);
       await waitFor(() =>
-        expect(container.querySelector('[data-action="confirm-schedule-proposal"]')).not.toBeNull(),
+        expect(container.querySelector('[data-action="confirm-schedule -> scheduled"] button')).not.toBeNull(),
       );
-      fireEvent.click(container.querySelector('[data-action="confirm-schedule-proposal"]')!);
+      fireEvent.click(container.querySelector('[data-action="confirm-schedule -> scheduled"] button')!);
 
       // The press carried the DEFAULT row, untouched.
       await waitFor(() => expect(decisionBodies(fetchMock).length).toBe(1));
@@ -304,7 +304,7 @@ for (const host of ["chat_thread", "site_widget"] as const) {
           container.querySelector('[data-lifecycle-card="trigger_schedule_proposal"]'),
         ).toBeNull(),
       );
-      expect(container.querySelector('[data-action="confirm-schedule-proposal"]')).toBeNull();
+      expect(container.querySelector('[data-action="confirm-schedule -> scheduled"]')).toBeNull();
     });
 
     it("sends the EDITED rows on that same one press", async () => {
@@ -315,7 +315,7 @@ for (const host of ["chat_thread", "site_widget"] as const) {
         expect(container.querySelector('[data-schedule-option="recurring"] button')).not.toBeNull(),
       );
       fireEvent.click(container.querySelector('[data-schedule-option="recurring"] button')!);
-      fireEvent.click(container.querySelector('[data-action="confirm-schedule-proposal"]')!);
+      fireEvent.click(container.querySelector('[data-action="confirm-schedule -> scheduled"] button')!);
 
       await waitFor(() => expect(decisionBodies(fetchMock).length).toBeGreaterThan(0));
       const bodies = decisionBodies(fetchMock);
@@ -361,7 +361,7 @@ describe("the proposal token's card is untouched", () => {
       expect(container.querySelector('[data-schedule-option="recurring"] button')).not.toBeNull(),
     );
     fireEvent.click(container.querySelector('[data-schedule-option="recurring"] button')!);
-    fireEvent.click(container.querySelector('[data-action="confirm-schedule-proposal"]')!);
+    fireEvent.click(container.querySelector('[data-action="confirm-schedule -> scheduled"] button')!);
 
     await waitFor(() => expect(decisionBodies(fetchMock).length).toBe(2));
     const bodies = decisionBodies(fetchMock);
