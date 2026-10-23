@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-artifact-review.html",
-  "contentHash": "sha256:eed1cc2d55f1aa561b77e637d382bef271340c87239a189c117d12baa51c44b1",
+  "contentHash": "sha256:cc1ba264246997f63ed7711c8bee635d9911ce1b18ab794994efda9cf41d5c0d",
   "surfaces": [
     {
       "id": "run-surface",
@@ -23,6 +23,41 @@
         }
       ],
       "states": []
+    },
+    {
+      "id": "run-started-runs",
+      "fields": [
+        {
+          "field": "agent-name",
+          "source": "run.agent.displayName"
+        },
+        {
+          "field": "state",
+          "source": "run.status"
+        },
+        {
+          "field": "agent-name",
+          "source": "run.agent.displayName"
+        },
+        {
+          "field": "state",
+          "source": "run.status"
+        }
+      ],
+      "actions": [
+        {
+          "action": "open-started-run",
+          "outcome": "started-run-page"
+        },
+        {
+          "action": "open-started-run",
+          "outcome": "started-run-page"
+        }
+      ],
+      "states": [
+        "empty",
+        "kind:agent"
+      ]
     },
     {
       "id": "run-gate-notification",
@@ -108,6 +143,23 @@
       "states": []
     },
     {
+      "id": "run-failed-recovery",
+      "fields": [],
+      "actions": [
+        {
+          "action": "retry-run",
+          "outcome": "run-reset"
+        },
+        {
+          "action": "start-new-run",
+          "outcome": "new-run"
+        }
+      ],
+      "states": [
+        "error"
+      ]
+    },
+    {
       "id": "run-schedule-step-fired-recurring",
       "fields": [],
       "actions": [
@@ -138,10 +190,6 @@
         {
           "action": "pick-idea",
           "outcome": "idea-reserved"
-        },
-        {
-          "action": "generate-ideas",
-          "outcome": "ideas-stored"
         }
       ],
       "states": [
@@ -149,6 +197,33 @@
         "error",
         "kind:artifact",
         "loading"
+      ]
+    },
+    {
+      "id": "run-list-step-multi-pick",
+      "fields": [
+        {
+          "field": "title",
+          "source": "entry.title"
+        }
+      ],
+      "actions": [
+        {
+          "action": "pick-list-entries",
+          "outcome": "entries-selected"
+        }
+      ],
+      "states": [
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "run-list-step-empty-source",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "empty"
       ]
     },
     {
@@ -219,6 +294,80 @@
         "kind:artifact",
         "loading"
       ]
+    },
+    {
+      "id": "run-linkedin-publish-step",
+      "fields": [
+        {
+          "field": "copy",
+          "source": "representation.pinned-revision"
+        }
+      ],
+      "actions": [
+        {
+          "action": "continue",
+          "outcome": "answer-sent"
+        }
+      ],
+      "states": [
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "run-wordpress-publish-step",
+      "fields": [
+        {
+          "field": "title",
+          "source": "representation.first-heading"
+        }
+      ],
+      "actions": [
+        {
+          "action": "continue",
+          "outcome": "answer-sent"
+        }
+      ],
+      "states": [
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "run-wordpress-publish-step-no-site",
+      "fields": [
+        {
+          "field": "title",
+          "source": "representation.first-heading"
+        }
+      ],
+      "actions": [
+        {
+          "action": "continue",
+          "outcome": "answer-sent"
+        }
+      ],
+      "states": [
+        "kind:artifact"
+      ]
+    },
+    {
+      "id": "run-window",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "schedule-prompt-window",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "schedule-window-over",
+      "fields": [],
+      "actions": [],
+      "states": []
     },
     {
       "id": "run-chip-row",
@@ -421,6 +570,141 @@
       ]
     },
     {
+      "id": "email-gate-sender-field",
+      "fields": [
+        {
+          "field": "sender",
+          "source": "context.gmailAliases"
+        }
+      ],
+      "actions": [
+        {
+          "action": "pick-sender",
+          "outcome": "field-value-set"
+        }
+      ],
+      "states": [
+        "empty",
+        "error",
+        "kind:artifact"
+      ]
+    },
+    {
+      "id": "email-gate-follow-up-cadence-field",
+      "fields": [
+        {
+          "field": "cadence",
+          "source": "field.value"
+        }
+      ],
+      "actions": [
+        {
+          "action": "edit-day",
+          "outcome": "cadence-updated"
+        },
+        {
+          "action": "continue",
+          "outcome": "cadence-submitted"
+        }
+      ],
+      "states": [
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "email-gate-drafts-review-field",
+      "fields": [
+        {
+          "field": "drafts",
+          "source": "gate.draftBundle.draftedEmails"
+        },
+        {
+          "field": "subject",
+          "source": "draft.subject"
+        },
+        {
+          "field": "body",
+          "source": "draft.body"
+        }
+      ],
+      "actions": [
+        {
+          "action": "edit-draft",
+          "outcome": "resume-payload-updated"
+        },
+        {
+          "action": "reset-draft",
+          "outcome": "draft-restored"
+        }
+      ],
+      "states": [
+        "empty",
+        "kind:artifact"
+      ]
+    },
+    {
+      "id": "email-gate-recipients-review-field",
+      "fields": [
+        {
+          "field": "recipients",
+          "source": "gate.confirmedRecipients"
+        }
+      ],
+      "actions": [
+        {
+          "action": "undo-removal",
+          "outcome": "recipient-restored"
+        },
+        {
+          "action": "redo-removal",
+          "outcome": "recipient-removed-again"
+        },
+        {
+          "action": "remove-recipient",
+          "outcome": "recipient-removed"
+        }
+      ],
+      "states": [
+        "empty",
+        "kind:artifact"
+      ]
+    },
+    {
+      "id": "email-gate-test-delivery-field",
+      "fields": [
+        {
+          "field": "recipient-email",
+          "source": "value.defaultRecipientEmail"
+        }
+      ],
+      "actions": [
+        {
+          "action": "choose-scope",
+          "outcome": "selection-mode-set"
+        },
+        {
+          "action": "toggle-all-follow-ups",
+          "outcome": "follow-up-selection-set"
+        },
+        {
+          "action": "send-test",
+          "outcome": "gate-resolved-send"
+        },
+        {
+          "action": "continue",
+          "outcome": "gate-resolved-continue"
+        }
+      ],
+      "states": [
+        "empty",
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
       "id": "mixed-kind-display",
       "fields": [
         {
@@ -466,6 +750,10 @@
         {
           "field": "layout",
           "source": "representation.pinned-configuration"
+        },
+        {
+          "field": "open-live",
+          "source": "artifact.sourceUrl"
         }
       ],
       "actions": [
@@ -481,11 +769,40 @@
       ]
     },
     {
+      "id": "dashboard-continued-reading",
+      "fields": [
+        {
+          "field": "reading",
+          "source": "review.reading"
+        },
+        {
+          "field": "decision",
+          "source": "review.decidedAt"
+        },
+        {
+          "field": "effect-recorded-at",
+          "source": "review.effect.recordedAt"
+        },
+        {
+          "field": "effect-record",
+          "source": "review.effect.record"
+        }
+      ],
+      "actions": [],
+      "states": [
+        "empty"
+      ]
+    },
+    {
       "id": "portlet-display",
       "fields": [
         {
           "field": "entry",
           "source": "representation.portlet-instance-id"
+        },
+        {
+          "field": "open-live",
+          "source": "artifact.sourceUrl"
         }
       ],
       "actions": [
@@ -498,6 +815,31 @@
         "error",
         "kind:artifact",
         "loading"
+      ]
+    },
+    {
+      "id": "portlet-continued-reading",
+      "fields": [
+        {
+          "field": "reading",
+          "source": "review.reading"
+        },
+        {
+          "field": "decision",
+          "source": "review.decidedAt"
+        },
+        {
+          "field": "effect-recorded-at",
+          "source": "review.effect.recordedAt"
+        },
+        {
+          "field": "effect-record",
+          "source": "review.effect.record"
+        }
+      ],
+      "actions": [],
+      "states": [
+        "empty"
       ]
     },
     {
@@ -521,6 +863,31 @@
       ]
     },
     {
+      "id": "drupal-pointer-continued-reading",
+      "fields": [
+        {
+          "field": "reading",
+          "source": "review.reading"
+        },
+        {
+          "field": "decision",
+          "source": "review.decidedAt"
+        },
+        {
+          "field": "effect-recorded-at",
+          "source": "review.effect.recordedAt"
+        },
+        {
+          "field": "effect-record",
+          "source": "review.effect.record"
+        }
+      ],
+      "actions": [],
+      "states": [
+        "empty"
+      ]
+    },
+    {
       "id": "cms-page-display",
       "fields": [
         {
@@ -538,6 +905,31 @@
         "error",
         "kind:artifact",
         "loading"
+      ]
+    },
+    {
+      "id": "cms-page-continued-reading",
+      "fields": [
+        {
+          "field": "reading",
+          "source": "review.reading"
+        },
+        {
+          "field": "decision",
+          "source": "review.decidedAt"
+        },
+        {
+          "field": "effect-recorded-at",
+          "source": "review.effect.recordedAt"
+        },
+        {
+          "field": "effect-record",
+          "source": "review.effect.record"
+        }
+      ],
+      "actions": [],
+      "states": [
+        "empty"
       ]
     },
     {
