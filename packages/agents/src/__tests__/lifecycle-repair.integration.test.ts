@@ -188,13 +188,13 @@ beforeAll(async () => {
 /** Seed a repair-capable producing run + template so the surface composer resolves
  * `repairCapable: true` from `agent_templates.lifecycle_config` (the route → a live
  * producer repair). Minimal NOT-NULL columns only. */
-async function seedRepairCapableProducer(runId: string): Promise<void> {
+async function seedRepairCapableProducer(runId: string, repairCapable = true): Promise<void> {
   const templateId = `tmpl-${randomUUID()}`;
   await pool(
     `INSERT INTO "${q(TEST_SCHEMA)}"."agent_templates"
        (id, org_id, owner_level, owner_id, name, source_nl, compiled_plan, input_schema, approval_policy, package_name, lifecycle_config)
      VALUES ($1,$2,'organization',$2,'seed','seed','[]','{}','{}',$3,$4) ON CONFLICT (id) DO NOTHING`,
-    [templateId, ORG, `@cinatra-ai/seed-${templateId}`, JSON.stringify({ repairCapable: true })],
+    [templateId, ORG, `@cinatra-ai/seed-${templateId}`, JSON.stringify({ repairCapable })],
   );
   await pool(
     `INSERT INTO "${q(TEST_SCHEMA)}"."agent_runs" (id, template_id, org_id, input_params)
@@ -1173,9 +1173,9 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — Regenerate on a declared review leg (
   type Pin = { artifactId: string; representationRevisionId: string };
   type Family = { runId: string; step: string; leg2: string; post: Pin; picture: Pin };
 
-  async function declaredFamily(): Promise<Family> {
+  async function declaredFamily(repairCapable = true): Promise<Family> {
     const runId = `run-blog-${randomUUID()}`;
-    await seedRepairCapableProducer(runId);
+    await seedRepairCapableProducer(runId, repairCapable);
     // The blog pipeline's run, paused at its marked review step.
     await pool(`UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status='pending_approval' WHERE id=$1`, [runId]);
     const post = { artifactId: `art-post-${randomUUID()}`, representationRevisionId: `rev-post-${randomUUID()}` };
@@ -1313,5 +1313,31 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — Regenerate on a declared review leg (
     });
     expect(cr).toMatchObject({ ok: false, code: "not-a-lifecycle-gate" });
     expect(await gateStore.readReviewGate(f.runId, f.leg2)).toMatchObject({ status: "pending" });
+  });
+
+  // C3 option B: the post's own leg keeps main's plain annotation. With a producer
+  // that is not repair-capable the store would otherwise settle the post's gate as
+  // escalated (recordChangesRequested's human route); it must stay pending instead.
+  it("a note on the post's own leg leaves the post gate pending and records no repair, repair-capable or not", async () => {
+    for (const repairCapable of [true, false]) {
+      const f = await declaredFamily(repairCapable);
+      const cr = await crStore.recordReviewSurfaceChangesRequested({
+        runId: f.runId,
+        reviewTaskId: f.step,
+        baseTarget: f.post,
+        currentBaseRevisionId: f.post.representationRevisionId,
+        feedback: "Tighten the intro",
+      });
+      expect(cr).toMatchObject({ ok: false, code: "not-a-lifecycle-gate" });
+      const postGate = await gateStore.readReviewGate(f.runId, f.step);
+      expect(postGate).toMatchObject({ status: "pending", disposition: null });
+      expect(await gateStore.readReviewGate(f.runId, f.leg2)).toMatchObject({ status: "pending", disposition: null });
+      const repairs = await pool(
+        `SELECT id FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE gate_id = ANY($1::text[])`,
+        [[postGate!.id, (await gateStore.readReviewGate(f.runId, f.leg2))!.id]],
+      );
+      expect(repairs.rows).toEqual([]);
+      expect((await pendingGates(f.runId)).map((g) => g.reviewTaskId).sort()).toEqual([f.step, f.leg2].sort());
+    }
   });
 });

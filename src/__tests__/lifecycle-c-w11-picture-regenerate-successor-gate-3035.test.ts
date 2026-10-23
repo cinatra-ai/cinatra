@@ -24,7 +24,7 @@ import { repairSuccessorReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestra
 type Target = { artifactId: string; representationRevisionId: string };
 type Gate = { reviewTaskId: string; status: "pending" | "resolved"; disposition: string | null; targets: Target[] };
 
-const p = vi.hoisted(() => ({ gates: [] as Gate[], actor: vi.fn(), changes: vi.fn(), decision: vi.fn() }));
+const p = vi.hoisted(() => ({ gates: [] as Gate[], fence: true, actor: vi.fn(), changes: vi.fn(), decision: vi.fn() }));
 
 vi.mock("@/app/artifacts/[id]/review-gate-ports", () => ({
   enforceReviewDecisionAccess: async () => ({ ok: true }),
@@ -36,7 +36,7 @@ vi.mock("@/app/artifacts/[id]/review-gate-ports", () => ({
 vi.mock("@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor", () => ({
   resolveReviewActorContext: p.actor,
 }));
-vi.mock("@/lib/lifecycle/lifecycle-activation", () => ({ isLifecycleReviewOrchestrationActive: () => true }));
+vi.mock("@/lib/lifecycle/lifecycle-activation", () => ({ isLifecycleReviewOrchestrationActive: () => p.fence }));
 
 import { submitReviewDecisionAction } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/actions";
 
@@ -51,6 +51,7 @@ const pending = () => p.gates.filter((g) => g.status === "pending");
 
 beforeEach(() => {
   vi.clearAllMocks();
+  p.fence = true;
   p.gates = planPerArtifactReviewGates({ reviewTaskId: STEP, targets: [POST, FEATURED] }).map((leg) => ({
     reviewTaskId: leg.reviewTaskId,
     status: "pending" as const,
@@ -121,7 +122,12 @@ describe("#3035 picture regeneration — only a witnessed leg of a declared revi
 
   it("accepts the picture's leg whose pin carries the family witness", () => {
     expect(isDeclaredReviewLeg({ runId: RUN, orgId: "org-1", reviewTaskId: `${STEP}#2`, pinnedTargets: leg(FEATURED) })).toBe(true);
-    expect(isDeclaredReviewLeg({ runId: RUN, orgId: "org-1", reviewTaskId: STEP, pinnedTargets: leg(POST) })).toBe(true);
+  });
+
+  // Fold 2 (C3 option B) reverses fold 1's reading: the post's own leg carries the
+  // witness too, but it is the plan's first leg and keeps main's plain annotation.
+  it("refuses the post's own leg, the plan's first, although its pin carries the witness", () => {
+    expect(isDeclaredReviewLeg({ runId: RUN, orgId: "org-1", reviewTaskId: STEP, pinnedTargets: leg(POST) })).toBe(false);
   });
 
   it("refuses a flow-authored gate with no witness, a foreign witness, or a pin the plan does not name", () => {
@@ -203,15 +209,40 @@ describe("#3035 picture regeneration — the decision action on a declared gate 
     expect(pending().map((g) => g.reviewTaskId)).toEqual([STEP, `${STEP}#2`]);
   });
 
-  it("sends a note on the post's own leg down the repair road too, and leaves the picture's leg as it was", async () => {
+  // Fold 2 (C3 option B) REVERSES fold 1's case, which sent this note down the
+  // repair road: the post's own leg keeps main's plain annotation.
+  it("keeps a note on the post's own leg a plain comment and never calls the repair road", async () => {
     const before = structuredClone(gate(`${STEP}#2`));
     const outcome = await submitReviewDecisionAction(RUN, STEP, "comment", "Tighten the intro");
 
-    expect(outcome).toEqual({ kind: "changes-requested", status: "requested", idempotent: false });
-    expect(p.changes).toHaveBeenCalledTimes(1);
-    expect(p.changes.mock.calls[0][0]).toMatchObject({ runId: RUN, reviewTaskId: STEP, baseTarget: POST, feedback: "Tighten the intro" });
-    expect(p.decision).not.toHaveBeenCalled();
-    expect(gate(STEP)).toMatchObject({ status: "resolved", disposition: "changes_requested" });
+    expect(outcome).toEqual({ kind: "annotated" });
+    expect(p.changes).not.toHaveBeenCalled();
+    expect(p.decision).toHaveBeenCalledTimes(1);
+    expect(p.decision.mock.calls[0][0].decision).toMatchObject({
+      runId: RUN, reviewTaskId: STEP, disposition: "comment", comment: "Tighten the intro", reviewedTargets: [POST],
+    });
+    expect(gate(STEP)).toMatchObject({ status: "pending", disposition: null });
     expect(gate(`${STEP}#2`)).toEqual(before);
+  });
+
+  it("keeps a note on the picture's leg a plain comment while the orchestration fence is off", async () => {
+    p.fence = false;
+    const outcome = await submitReviewDecisionAction(RUN, `${STEP}#2`, "comment", "Make the sky darker");
+
+    expect(outcome).toEqual({ kind: "annotated" });
+    expect(p.changes).not.toHaveBeenCalled();
+    expect(p.decision).toHaveBeenCalledTimes(1);
+    expect(pending().map((g) => g.reviewTaskId)).toEqual([STEP, `${STEP}#2`]);
+  });
+
+  it("keeps a note on a declared leg that pins two targets a plain comment", async () => {
+    gate(`${STEP}#2`)!.targets = [FEATURED, REGENERATED];
+    const outcome = await submitReviewDecisionAction(RUN, `${STEP}#2`, "comment", "Make the sky darker");
+
+    expect(outcome).toEqual({ kind: "annotated" });
+    expect(p.changes).not.toHaveBeenCalled();
+    expect(p.decision).toHaveBeenCalledTimes(1);
+    expect(p.decision.mock.calls[0][0].decision).toMatchObject({ reviewTaskId: `${STEP}#2`, reviewedTargets: [FEATURED, REGENERATED] });
+    expect(pending().map((g) => g.reviewTaskId)).toEqual([STEP, `${STEP}#2`]);
   });
 });
