@@ -31,11 +31,8 @@ vi.mock("../../marketplace-decision-helpers", () => ({
   withdrawMarketplaceSubmission: vi.fn(),
   decideMarketplaceVendorApplication: vi.fn(),
 }));
-vi.mock("@cinatra-ai/marketplace-mcp-client/http-client", () => ({
-  createHttpMarketplaceMcpClient: vi.fn(() => {
-    throw new Error("no remote call in a render test");
-  }),
-}));
+// The marketplace client is not mocked here: the sources import it, but a
+// rowRenderer never calls it, and its module has no import-time effect.
 
 import { marketplaceSubmissionModerationSource } from "../marketplace-submission-moderation";
 import { marketplaceVendorAppModerationSource } from "../marketplace-vendor-app-moderation";
