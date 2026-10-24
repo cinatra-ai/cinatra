@@ -165,14 +165,20 @@ modules are real. The registry client also handles pacote's native Node ESM
 default export, where its computed CommonJS methods are exposed.
 All fixture entry points require an explicit development runtime.
 
-The artifact page carries the authorized live object record through the bounded
-object-content projection when a file has no text projection and its row holds
-a typed record of its own. That lets the screenshot display read the recorded
-capture facts beside the actual PNG. A file whose row carries only the core file
-fields (an uploaded pdf or image) gets no live record, so its page is unchanged. The
-projection explicitly says `source: "live"` and names no snapshot revision.
-Historical review readers do not receive this live record; this page wiring does
-not claim to supply immutable capture facts for a pinned review.
+The authorized detail read returns the row's live object record. A bounded
+composition turns it into the object-content projection only for a file-form
+revision whose pinned content is `none` with reason `unsupported-form` and names
+a pinned revision, and only when the row holds a typed record of its own: a
+plain record with at least one field beyond the eight core file fields that
+holds a value. Any other pinned content (text, an over-cap or absent result, no
+pinned revision) is kept. A file whose row carries only the core file fields
+(an uploaded pdf or image) gets no live record. The projection explicitly says
+`source: "live"` and names no snapshot revision. The artifact page does not use
+this composition yet, so it draws no live record and the screenshot display does
+not yet show the recorded capture facts beside the PNG. That page change waits
+for design coverage of a live record beside a file view. Historical review
+readers do not receive this live record and never claim immutable capture facts
+for a pinned review.
 
 ## Validation and remaining acceptance
 

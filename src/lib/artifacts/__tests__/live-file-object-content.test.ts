@@ -50,6 +50,33 @@ describe("live file record beside a binary representation", () => {
       expect(withLiveFileObjectContent({ ...input, authorizedLiveData })).toBe(input.content);
     }
   });
+  it("counts a producer's own excerpt or connectorRef field as a typed record, as the file writer stamps neither", () => {
+    const envelope = {
+      artifactType: "file", latestRepresentationRevisionId: "revision", latestDigest: "f00d".repeat(16),
+      mime: "application/pdf", size: 2048, originKind: "agent_generated", viewerHint: "mime", title: "Measured report",
+    };
+    for (const own of [{ excerpt: "measured summary" }, { connectorRef: { url: "https://example.com/doc" } }]) {
+      expect(withLiveFileObjectContent({ ...input, authorizedLiveData: { ...envelope, ...own } })).toMatchObject({
+        kind: "object", source: "live", data: { ...envelope, ...own },
+      });
+    }
+  });
+  it("refuses a non-plain object and an extra field that holds no value", () => {
+    class Measured { capturedAt = facts.capturedAt; }
+    const envelope = {
+      artifactType: "file", latestRepresentationRevisionId: "revision", latestDigest: "f00d".repeat(16),
+      mime: "image/png", size: 2048, originKind: "upload", viewerHint: "mime", title: "Holiday picture",
+    };
+    for (const authorizedLiveData of [
+      new Measured(), new Date(), new Map([["capturedAt", facts.capturedAt]]),
+      { capturedAt: undefined }, { ...envelope, capturedAt: undefined },
+      Object.create({ capturedAt: facts.capturedAt }),
+    ]) {
+      expect(withLiveFileObjectContent({ ...input, authorizedLiveData })).toBe(input.content);
+    }
+    const nullPrototype = Object.assign(Object.create(null), facts);
+    expect(withLiveFileObjectContent({ ...input, authorizedLiveData: nullPrototype })).toMatchObject({ kind: "object", source: "live" });
+  });
   it("preserves the file's existing text content", async () => {
     const content = await buildArtifactContentProjection({
       orgId: "org", artifactId: "artifact", representationRevisionId: "revision", form: "file", mime: "text/plain",
