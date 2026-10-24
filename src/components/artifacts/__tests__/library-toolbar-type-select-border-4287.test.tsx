@@ -6,10 +6,10 @@
  *   pnpm vitest run --config vitest.config.ts --no-coverage \
  *     src/components/artifacts/__tests__/library-toolbar-type-select-border-4287.test.tsx
  *
- * The agreed drawing (cinatra-ai/design#214): a select trigger inside a
- * toolbar keeps its 1px `--line` border and its `--surface-strong` fill, as
- * the artifacts screen draws the Type facet. It does not drop them the way a
- * borderless toolbar field would.
+ * The agreed drawing (the design ruling recorded on #4287): a select trigger
+ * inside a toolbar keeps its 1px `--line` border and its `--surface-strong`
+ * fill, as the artifacts screen draws the Type facet. It does not drop them
+ * the way a borderless toolbar field would.
  *
  * jsdom loads no stylesheet, so the border and the fill are read where they
  * are declared: the classes on the rendered trigger element.
