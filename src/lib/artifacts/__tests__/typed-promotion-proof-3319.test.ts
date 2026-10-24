@@ -46,6 +46,12 @@ const db = vi.hoisted(() => ({
   proofThrows: false,
   revisionPresent: false,
   appends: [] as unknown[][],
+  /** The row's content revisions, oldest first (the row read names the last). */
+  reps: [] as Array<{ id: string; resource: string }>,
+  /** Runs once the proof read has selected its rows (a concurrent writer). */
+  afterProofRead: null as null | (() => void),
+  /** How the proof read's result is missing, when it is. */
+  proofAnswer: "rows" as "rows" | "no-result" | "no-rows",
 }));
 
 vi.mock("@/lib/postgres-config", () => ({
@@ -57,14 +63,29 @@ vi.mock("@/lib/postgres-sync", () => ({
   runPostgresQueriesSync: (input: { queries: Array<{ text: string; values?: unknown[] }> }) => {
     const text = input.queries[0]?.text ?? "";
     if (text.includes("pg_advisory_xact_lock")) {
-      db.appends.push(input.queries[1]?.values ?? []);
+      // The insert's own guard, as Postgres runs it: `1 / 0` when the latest
+      // revision is not the one the row read named, which aborts the whole
+      // transaction. A statement without the guard always inserts.
+      const insert = input.queries.find((q) => q.text.includes('INSERT INTO "cinatra_test"."representation"'));
+      const values = insert?.values ?? [];
+      if (insert?.text.includes("latest.id") && values[6] !== db.reps.at(-1)?.id) {
+        throw new Error("division by zero");
+      }
+      db.appends.push(values);
       const landed = !db.revisionPresent;
       db.revisionPresent = true;
-      return [{ rows: [] }, { rows: landed ? [{ revision: 2 }] : [] }, { rows: [] }];
+      if (landed) db.reps.push({ id: String(values[0]), resource: String(values[3]) });
+      return input.queries.map((q) =>
+        q === insert && landed ? { rows: [{ revision: db.reps.length }] } : { rows: [] },
+      );
     }
     if (text.includes('"object_change_event"')) {
       if (db.proofThrows) throw new Error("history read failed");
-      return [{ rows: db.events }];
+      if (db.proofAnswer === "no-result") return [];
+      if (db.proofAnswer === "no-rows") return [{}];
+      const rows = [...db.events];
+      db.afterProofRead?.();
+      return [{ rows }];
     }
     if (text.includes('"semantic_assertion"')) {
       return [{ rows: db.matcher === null ? [] : [{ confidence: db.matcher }] }];
@@ -78,8 +99,8 @@ vi.mock("@/lib/postgres-sync", () => ({
                   type: db.row.type,
                   version: db.row.version,
                   data: { title: "an upload" },
-                  rep_id: "rep_base",
-                  resource_id: RES,
+                  rep_id: db.reps.at(-1)!.id,
+                  resource_id: db.reps.at(-1)!.resource,
                   form: "file",
                   mime: "text/markdown",
                 },
@@ -196,6 +217,9 @@ beforeEach(() => {
   db.proofThrows = false;
   db.revisionPresent = false;
   db.appends = [];
+  db.reps = [{ id: "rep_base", resource: RES }];
+  db.afterProofRead = null;
+  db.proofAnswer = "rows";
   historyAwareUpsert.mockClear();
 });
 
@@ -476,5 +500,97 @@ describe("the fresh road keys its retype and appends only on its own proof", () 
     });
     expect(out).toMatchObject({ ok: true, retyped: true, revision: 2 });
     expect(db.appends).toHaveLength(1);
+  });
+});
+
+/** A content editor's revision over its own resource (the editor's append). */
+const EDITOR_REP = { id: "rep_editor", resource: "res-editor" };
+const repIds = () => db.reps.map((r) => r.id);
+
+describe("C4: a content writer after the row read is never superseded by the promotion's stale resource", () => {
+  it("C4a: the fresh road, an editor appending between the retype and the append: nothing appended, representation-moved, the editor's revision stays latest", async () => {
+    db.row = { type: BASE_TYPE, version: 3 };
+    db.matcher = 0.9;
+    db.events = [created(BASE_TYPE)];
+    const retype = async (input: { toType: string; expectedVersion: number; idempotencyKey?: string }) => {
+      db.events.push(
+        event({ type: input.toType, before: BASE_TYPE, base: 3, key: input.idempotencyKey ?? promotionKey(3) }),
+      );
+      db.reps.push(EDITOR_REP);
+      return { ok: true as const };
+    };
+    const { promoteMatchedArtifactType } = await store();
+    expect(await promoteMatchedArtifactType(args({ retype }))).toEqual({
+      ok: false,
+      reason: "representation-moved",
+    });
+    expect(repIds()).toEqual(["rep_base", "rep_editor"]);
+  });
+
+  it("C4b: the converging road, an editor appending between the proof read and the append: nothing appended, the editor's revision stays latest", async () => {
+    convergingRow([keyedRetype(3)]);
+    db.afterProofRead = () => db.reps.push(EDITOR_REP);
+    const { promoteMatchedArtifactType } = await store();
+    expect(await promoteMatchedArtifactType(args())).toEqual({
+      ok: false,
+      reason: "already-promoted",
+    });
+    expect(repIds()).toEqual(["rep_base", "rep_editor"]);
+  });
+
+  it("C4c: the accepted type-only window, a move away after the proof read: the revision lands over the base content and supersedes no content (green at base)", async () => {
+    convergingRow([keyedRetype(3)]);
+    db.afterProofRead = () =>
+      db.events.push(event({ type: OTHER_TYPE, before: OWN_TYPE, base: 4, key: "evt-move" }));
+    const { promoteMatchedArtifactType } = await store();
+    expect(await promoteMatchedArtifactType(args())).toMatchObject({ ok: true, revision: 2 });
+    expect(db.reps.map((r) => r.resource)).toEqual([RES, RES]);
+  });
+});
+
+describe("C1/C2: a version is a nonnegative safe integer or its digits, and nothing else", () => {
+  const NOT_VERSIONS: unknown[] = [
+    "9007199254740993", "9".repeat(400), -1, 4.5, "4.5", "1e3", Number.POSITIVE_INFINITY, " 3", "3 ", "\t3",
+    "+1", "-1", "", true, {}, [3], BigInt(3),
+  ];
+  const refused = { ok: false, reason: "already-promoted" };
+
+  it("C1a: a result version that is not one is no proof, however its key reads (red at cfd83771 for the unsafe digits and -1)", async () => {
+    const { promoteMatchedArtifactType } = await store();
+    for (const result of NOT_VERSIONS) {
+      convergingRow([{ ...keyedRetype(3), result_version: result }]);
+      expect(await promoteMatchedArtifactType(args()), String(result)).toEqual(refused);
+    }
+    expect(db.appends).toEqual([]);
+  });
+
+  it("C1b: a base version that is not one is no proof, even under the key a lenient parse would make (red at cfd83771 for the unsafe digits and -1)", async () => {
+    const { promoteMatchedArtifactType } = await store();
+    for (const base of NOT_VERSIONS) {
+      const lenient = typeof base === "string" ? Number(base) : Number(base as number);
+      convergingRow([event({ type: OWN_TYPE, before: BASE_TYPE, base, result: 5, key: promotionKey(lenient) })]);
+      expect(await promoteMatchedArtifactType(args()), String(base)).toEqual(refused);
+    }
+    expect(db.appends).toEqual([]);
+  });
+
+  it("C1c: digits and safe integers up to the safe maximum still prove (green at base)", async () => {
+    const { promoteMatchedArtifactType } = await store();
+    for (const base of ["0", 0, "9007199254740991", Number.MAX_SAFE_INTEGER]) {
+      db.revisionPresent = false;
+      db.reps = [{ id: "rep_base", resource: RES }];
+      convergingRow([event({ type: OWN_TYPE, before: BASE_TYPE, base, result: "5", key: promotionKey(Number(base)) })]);
+      expect(await promoteMatchedArtifactType(args()), String(base)).toMatchObject({ ok: true, revision: 2 });
+    }
+  });
+
+  it("NOTE-278: a proof read with no result, or a result with no rows, is no proof (green at base)", async () => {
+    const { promoteMatchedArtifactType } = await store();
+    for (const answer of ["no-result", "no-rows"] as const) {
+      convergingRow([keyedRetype(3)]);
+      db.proofAnswer = answer;
+      expect(await promoteMatchedArtifactType(args()), answer).toEqual(refused);
+    }
+    expect(db.appends).toEqual([]);
   });
 });

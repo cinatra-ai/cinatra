@@ -844,6 +844,50 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.14 the typed promotion road
     expect(typeOf(objectId)).toBe(OWN_TYPE);
     expect(representationsOf(objectId)).toHaveLength(1);
   });
+
+  it("C4: a real editor append between the retype and the append is never superseded: nothing appended, representation-moved", async () => {
+    const objectId = nextId("obj-editor-race");
+    const seeded = seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });
+    seedMatcherAssertion({ objectId, extension: EXT, confidence: 0.9 });
+    const editorResource = nextId("res-editor");
+    sql(
+      `INSERT INTO "${S()}"."resource" (id, org_id, kind, substance_key, mime, size_bytes, created_by, metadata)
+       VALUES ($1,$2,'blob',$3,'text/markdown',10,NULL,'{}'::jsonb)`,
+      [editorResource, ORG, nextId("sub")],
+    );
+    const { appendRepresentationWithExpectedBase } = await import("@/lib/artifacts/representation-store");
+    let edited: unknown = null;
+    const out = await promotionStore.promoteMatchedArtifactType({
+      orgId: ORG,
+      artifactId: objectId,
+      extension: EXT,
+      ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
+      threshold: 0.8,
+      confirmed: true,
+      actor: ACTOR,
+      authority: AUTHORITY,
+      retype: async (input) => {
+        const retyped = await RETYPE(input);
+        // The editor saves on the revision it read, under its own lock.
+        edited = await appendRepresentationWithExpectedBase({
+          orgId: ORG,
+          artifactId: objectId,
+          baseRevisionId: seeded.revisionId,
+          resourceId: editorResource,
+          form: "file",
+        });
+        return retyped;
+      },
+    });
+    expect(edited).toMatchObject({ kind: "appended" });
+    expect(out).toEqual({ ok: false, reason: "representation-moved" });
+    expect(typeOf(objectId)).toBe(OWN_TYPE);
+    // The editor's revision stays the latest; the stale resource is not re-appended.
+    expect(representationsOf(objectId).map((r) => r.resource_id)).toEqual([
+      seeded.resourceId,
+      editorResource,
+    ]);
+  });
 });
 
 /**

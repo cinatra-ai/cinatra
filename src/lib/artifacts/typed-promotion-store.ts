@@ -202,8 +202,9 @@ export type PromoteMatchedArtifactTypeResult =
       ok: false;
       /** `promotion-unproven`: the retype committed, but the row's latest type
        *  change is not this promotion's own keyed retype, so nothing was
-       *  appended. */
-      reason: TypedPromotionRefusal | "row-moved" | "not-authorized" | "promotion-unproven";
+       *  appended. `representation-moved`: the retype committed, but a content
+       *  writer appended after the row was read, so nothing was appended. */
+      reason: TypedPromotionRefusal | "row-moved" | "not-authorized" | "promotion-unproven" | "representation-moved";
     };
 
 /**
@@ -223,11 +224,12 @@ function promotionRetypeKey(input: {
   return `typed-promotion:${promotionRevisionId(input)}:${input.baseVersion}`;
 }
 
-/** A version column as the driver answers it (an integer, or its text). */
+/** A version column as the driver answers it: a nonnegative safe integer, or
+ *  its digits. A sign, a fraction, an exponent, a space, an unsafe or
+ *  non-finite value and any other type are no version. */
 function readVersion(value: unknown): number | null {
-  if (typeof value === "number" && Number.isSafeInteger(value)) return value;
-  if (typeof value === "string" && /^[0-9]+$/.test(value)) return Number(value);
-  return null;
+  const n = typeof value === "string" && /^[0-9]+$/.test(value) ? Number(value) : value;
+  return typeof n === "number" && Number.isSafeInteger(n) && n >= 0 ? n : null;
 }
 
 /** One type-change event of the row, as the proof read selects it. */
@@ -307,12 +309,14 @@ LIMIT 1`,
 function appendProvenPromotionRevision(
   input: Parameters<typeof appendPromotionRevision>[0],
 ): ReturnType<typeof appendPromotionRevision> | null {
-  // ACCEPTED WINDOW: the append's lock (per artifact) is not the canonical
+  // ACCEPTED WINDOW, TYPE ONLY: the append's lock (per artifact) is not the canonical
   // writer's (org write lock), so a writer can move the row between this read
   // and the append. The revision then lands on a row that has left the type:
   // the state of "promote, append, move away". The retype did happen, the
   // revision is deterministic (ON CONFLICT DO NOTHING) and shares the base
   // resource, and no later decision reads a revision as proof (events do).
+  // A CONTENT writer cannot be superseded: the append lands only over the
+  // revision the row read named, under the lock content writers take.
   const proven = readPromotionProof({
     orgId: input.orgId,
     artifactId: input.artifactId,
@@ -428,12 +432,13 @@ export async function promoteMatchedArtifactType(input: {
         orgId: input.orgId,
         artifactId: input.artifactId,
         sharedResourceId: row.latestRevision.resourceId,
+        baseRevisionId: row.latestRevision.representationRevisionId,
         toType: input.ownType.typeId,
         form: row.latestRevision.form,
         createdBy: input.createdBy ?? null,
         mime: row.latestRevision.mime,
       });
-      if (landed !== null && landed.revision !== null) {
+      if (landed !== null && landed !== "representation-moved" && landed.revision !== null) {
         return { ok: true, ...landed, toType: input.ownType.typeId, retyped: false };
       }
     }
@@ -470,12 +475,14 @@ export async function promoteMatchedArtifactType(input: {
     orgId: input.orgId,
     artifactId: input.artifactId,
     sharedResourceId: plan.sharedResourceId,
+    baseRevisionId: plan.baseRevisionId,
     toType: plan.toType,
     form: plan.form,
     createdBy: input.createdBy ?? null,
     mime: row?.latestRevision?.mime ?? null,
   });
   if (landed === null) return { ok: false, reason: "promotion-unproven" };
+  if (landed === "representation-moved") return { ok: false, reason: landed };
   return {
     ok: true,
     representationRevisionId: landed.representationRevisionId,
@@ -574,6 +581,8 @@ export function buildPromotionAppendQueries(
     createdBy: string | null;
     toType: string;
     mime?: string | null;
+    /** The latest revision when the promotion read the row. */
+    baseRevisionId: string;
   },
 ): Array<{ text: string; values: unknown[] }> {
   const s = schema.replaceAll('"', '""');
@@ -586,6 +595,7 @@ export function buildPromotionAppendQueries(
       sharedResourceId: input.sharedResourceId,
       form: input.form,
       createdBy: input.createdBy,
+      baseRevisionId: input.baseRevisionId,
     }),
     buildArtifactWriterWitnessOpIfAbsent(s, {
       orgId: input.orgId,
@@ -608,14 +618,16 @@ function appendPromotionRevision(input: {
   createdBy: string | null;
   /** The shared content's MIME, for the witness's provenance detail. */
   mime?: string | null;
-}): { representationRevisionId: string; revision: number | null } {
+  /** The latest revision when the promotion read the row. */
+  baseRevisionId: string;
+}): { representationRevisionId: string; revision: number | null } | "representation-moved" {
   ensurePostgresSchema();
   const representationRevisionId = promotionRevisionId({
     artifactId: input.artifactId,
     sharedResourceId: input.sharedResourceId,
     toType: input.toType,
   });
-  const results = runPostgresQueriesSync({
+  const results = unlessRepresentationMoved(() => runPostgresQueriesSync({
     connectionString: conn(),
     transaction: true,
     queries: buildPromotionAppendQueries(postgresSchema, {
@@ -627,11 +639,24 @@ function appendPromotionRevision(input: {
       createdBy: input.createdBy,
       toType: input.toType,
       mime: input.mime ?? null,
+      baseRevisionId: input.baseRevisionId,
     }),
-  });
+  }));
+  if (results === "representation-moved") return results;
   const appended = results?.[1]?.rows?.[0] as { revision?: unknown } | undefined;
   return {
     representationRevisionId,
     revision: appended ? Number(appended.revision) : null,
   };
+}
+
+/** The append's own guard (`1 / 0`) aborted it: the latest revision is no longer
+ *  the one the row read named, and the transaction wrote nothing. */
+function unlessRepresentationMoved<T>(run: () => T): T | "representation-moved" {
+  try {
+    return run();
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("division by zero")) return "representation-moved";
+    throw error;
+  }
 }
