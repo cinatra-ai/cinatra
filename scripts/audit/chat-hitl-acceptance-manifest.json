@@ -4,6 +4,22 @@
  "epic": 2564,
  "specCommit": "design@06230d4e8de397e86e3216199342d15c0b4fc5a6 specs/app-lifecycle-cards.html specs/app-artifact-review.html",
  "version": 15,
+ "versionHistory": [
+  {"version": 2, "date": "2026-08-13"},
+  {"version": 3, "date": "2026-08-15"},
+  {"version": 4, "date": "2026-08-22"},
+  {"version": 5, "date": "2026-08-25"},
+  {"version": 6, "date": "2026-08-26"},
+  {"version": 7, "date": "2026-08-27"},
+  {"version": 8, "date": "2026-09-01"},
+  {"version": 9, "date": "2026-09-18"},
+  {"version": 10, "date": "2026-09-29"},
+  {"version": 11, "date": "2026-10-02"},
+  {"version": 12, "date": "2026-10-06"},
+  {"version": 13, "date": "2026-10-07"},
+  {"version": 14, "date": "2026-10-15"},
+  {"version": 15, "date": "2026-10-21"}
+ ],
  "rows": [
   {
    "criterion": "Chat-dispatch → typed chip-row hold → confirm → artifact → review card renders island + capture pair → focused-composer comment → `changes_requested` → repair successor in the same chat → verification chip → approve → effects release.",

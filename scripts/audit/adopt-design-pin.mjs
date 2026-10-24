@@ -26,9 +26,12 @@
 // documents whose formatting, key order and long prose notes are part of the
 // record; `JSON.stringify` would reformat every line and bury the change.
 //
-// IT DOES NOT WRITE THE RE-RATIFICATION NOTE. That prose is a claim a person
-// makes about what they re-examined, and this script has re-examined nothing.
-// It prints where the note goes.
+// IT DOES NOT WRITE THE RE-RATIFICATION NOTE OR RECORDS. That prose, and the
+// contract's `reRatification` record with its `anchorsReExamined: true`, are a
+// claim a person makes about what they re-examined, and this script has
+// re-examined nothing. It prints what is owed: the record, a `version` bump
+// with its `versionHistory` entry, and one entry in each literal of
+// scripts/audit/__tests__/chat-hitl-records.mjs.
 //
 // Usage:
 //   node scripts/audit/adopt-design-pin.mjs --pin "design@<40-hex> specs/a.html [specs/b.html]"
@@ -247,7 +250,9 @@ export function adoptDesignPin({
     log("  then, on the moved tree, in this order:");
     log("    anchorsUnresolvedAtPin <- design-anchor-resolution.mjs --print-unresolved");
     log("    digest                 <- chat-hitl-acceptance-gate.mjs --print-anchor-digest");
-    log("  and a re-ratification note, written by the person who re-examined the anchors.");
+    log("  and a re-ratification note, written by the person who re-examined the anchors;");
+    log(`  and, in the same change: ${CONTRACT_RELATIVE} reRatification, the manifest's version + 1`);
+    log("  with its versionHistory entry, and both literals of chat-hitl-records.mjs.");
     return { exitCode: 0, pin: nextPin };
   }
 
@@ -329,7 +334,10 @@ export function adoptDesignPin({
   log(`adopted ${nextPin}`);
   log(`  anchorsUnresolvedAtPin: ${unresolved.length} recorded (truthful, and a passing state)`);
   log(`  digest: ${digest} (printed by the canonical script on this tree)`);
-  log("  still owed: the re-ratification note, in the contract's established form.");
+  log("  still owed: the re-ratification note, in the contract's established form;");
+  log(`  the reRatification record in ${CONTRACT_RELATIVE} (anchorsReExamined: true only once re-examined);`);
+  log("  the manifest's version + 1 with its versionHistory entry dated the move;");
+  log("  and one entry each in EXPECTED_VERSION_HISTORY and PIN_ADOPTIONS (chat-hitl-records.mjs).");
   return { exitCode: 0, pin: nextPin, unresolved, digest };
 }
 
