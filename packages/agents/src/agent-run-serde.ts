@@ -91,7 +91,6 @@ export function parseAuthPolicySafe(raw: string | null): AgentAuthPolicy | null 
     const parsed: unknown = JSON.parse(raw);
     const result = AgentAuthPolicySchema.safeParse(parsed);
     if (!result.success) {
-      // eslint-disable-next-line no-console
       console.warn(
         "[agent-builder/store] AgentAuthPolicy row failed zod validation; treating as null override",
         { issues: result.error.issues },
@@ -100,13 +99,23 @@ export function parseAuthPolicySafe(raw: string | null): AgentAuthPolicy | null 
     }
     return result.data;
   } catch (err) {
-    // eslint-disable-next-line no-console
     console.warn(
       "[agent-builder/store] AgentAuthPolicy row failed JSON.parse; treating as null override",
       { error: err instanceof Error ? err.message : String(err) },
     );
     return null;
   }
+}
+
+// The pause generation, parsed strictly (cinatra#4245): a safe integer >= 0, or
+// its canonical decimal text (the driver's form for a bigint read outside
+// Drizzle). Anything else is undefined, so a reader of the pause refuses rather
+// than guess a generation; it is never coerced to 0.
+export function parsePauseGeneration(raw: unknown): number | undefined {
+  const n = typeof raw === "number" ? raw
+    : typeof raw === "string" && /^(?:0|[1-9][0-9]{0,15})$/.test(raw) ? Number(raw)
+    : Number.NaN;
+  return Number.isSafeInteger(n) && n >= 0 ? n : undefined;
 }
 
 export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunRecord {
@@ -166,6 +175,8 @@ export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunReco
     lifecycleMoment: row.lifecycleMoment ?? null,
     lifecycleCardKind: row.lifecycleCardKind ?? null,
     lifecycleCardRef: row.lifecycleCardRef ?? null,
+    // The pause generation (cinatra#4245), parsed strictly; see above.
+    pauseGeneration: parsePauseGeneration(row.pauseGeneration),
     // The LAUNCH ANCHOR (cinatra#2809), surfaced AS STORED. It is decoded by
     // src/lib/launch-scope-anchor.ts at the surface that addresses the
     // instance, where a malformed or unknown payload reads UNANCHORED — the row

@@ -75,4 +75,9 @@ export type AgentRunRecord = {
   lifecycleMoment: string | null;
   lifecycleCardKind: string | null;
   lifecycleCardRef: string | null;
+  // THE PAUSE GENERATION (cinatra#4245): counts every change of what the run
+  // waits at. deserializeRun supplies it only when the stored value is a safe
+  // integer >= 0; otherwise (and on a hand-built record) it is absent, which a
+  // reader of the pause must treat as unverifiable, never as 0.
+  pauseGeneration?: number;
 };

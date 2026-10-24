@@ -77,3 +77,47 @@ export function agentRunStartedBySchemaQueries(schemaName: string): { text: stri
     { text: `CREATE INDEX IF NOT EXISTS agent_runs_started_by_run_id_idx ON "${s}"."agent_runs" (started_by_run_id, org_id, created_at) WHERE started_by_run_id IS NOT NULL` },
   ];
 }
+
+// The PAUSE CLAIM columns (cinatra#4245): a generation-stamped lease on a paused
+// run's own row. Migration twin core__0116, which carries the same statements
+// and explains them. Inert until a later change reads them: no backfill. Each
+// statement runs on its own (the bootstrap runs no transaction), so the table
+// scan happens only in VALIDATE CONSTRAINT under SHARE UPDATE EXCLUSIVE; each
+// CHECK is added NOT VALID while pg_constraint lacks its name and validated
+// while it is still NOT VALID, so a replay re-scans nothing.
+export function agentRunPauseClaimSchemaQueries(schemaName: string): { text: string }[] {
+  const s = schemaName.replaceAll('"', '""'); // identifier-position quote
+  // The regclass text is a quoted identifier inside a literal: quote the
+  // identifier first, then escape the literal (a schema like team"blue).
+  const rel = `"${s}"."agent_runs"`.replaceAll("'", "''");
+  const guardedCheck = (name: string, body: string) => `DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = '${name}'
+      AND conrelid = '${rel}'::regclass
+  ) THEN
+    ALTER TABLE "${s}"."agent_runs"
+      ADD CONSTRAINT ${name}
+      CHECK (${body}) NOT VALID;
+  END IF;
+END $$`;
+  const guardedValidate = (name: string) => `DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = '${name}'
+      AND conrelid = '${rel}'::regclass
+      AND NOT convalidated
+  ) THEN
+    ALTER TABLE "${s}"."agent_runs" VALIDATE CONSTRAINT ${name};
+  END IF;
+END $$`;
+  return [
+    { text: `ALTER TABLE "${s}"."agent_runs" ADD COLUMN IF NOT EXISTS pause_generation bigint NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS pause_claim_token text, ADD COLUMN IF NOT EXISTS pause_claim_phase text, ADD COLUMN IF NOT EXISTS pause_claim_expires_at timestamptz` },
+    { text: guardedCheck("agent_runs_pause_claim_phase_chk", "pause_claim_phase IS NULL OR pause_claim_phase IN ('claimed','sending','changes_requested')") },
+    { text: guardedCheck("agent_runs_pause_claim_shape_chk", "(pause_claim_token IS NULL AND pause_claim_phase IS NULL AND pause_claim_expires_at IS NULL) OR (pause_claim_token IS NOT NULL AND pause_claim_phase IS NOT NULL AND (pause_claim_phase = 'changes_requested') = (pause_claim_expires_at IS NULL))") },
+    { text: guardedValidate("agent_runs_pause_claim_phase_chk") },
+    { text: guardedValidate("agent_runs_pause_claim_shape_chk") },
+  ];
+}
