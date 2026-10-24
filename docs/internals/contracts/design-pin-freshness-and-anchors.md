@@ -130,9 +130,19 @@ authenticated reader at the contract's own pinned revision — and says so.
   proves the array was not edited afterwards; it can never prove it was true
   when it was written, and this is the script that decides that.
 
-It reports what is true today: the recorded owner anchors do not resolve at the
-pin the contract names. That is the state the check exists to make visible
-rather than digest-passable, and it stays until the anchor content itself moves.
+- **An agent card's own controls are not anchors of the contract.** The
+  governed drawings draw only the core lifecycle screens and the one generic
+  input card, never an agent card's own buttons, text or steps. So the anchor
+  contract leaves those controls out of the capture requirements it records
+  (`AGENT_OWNED_CAPTURE_CONTROLS` in `scripts/audit/lib/anchor-contract.mjs`,
+  a closed list per kind). The capture recorder still grades pictures against
+  them; only the contract's digest and this check stop asking a drawing to
+  draw them (cinatra#3677).
+
+With those controls out, every recorded owner anchor and capture requirement
+resolves in a governed drawing or is a passive capture marker, and
+`anchorsUnresolvedAtPin` is empty. A recorded anchor that a later pin stops
+drawing turns the check red again.
 
 ## `design-record-grammar` — does a graded record name its pin?
 

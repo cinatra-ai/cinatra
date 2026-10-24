@@ -97,15 +97,21 @@ describe("the run surface's drawing pin is recorded", () => {
  *
  * `specCommit` and this record are two DIFFERENT pins in one file, and a
  * merge-forward is exactly where one of them quietly wins. The main line adopted
- * a newer `specCommit` and recorded the anchor set that resolves at it; this
- * branch recorded the run surface's own drawing pin. Both survive, and the note
- * beside the run-surface pin reads against the pin the file actually carries
- * rather than the one it carried before the forward.
+ * a newer `specCommit` and recorded, as `anchorsUnresolvedAtPin`, the set of
+ * recorded anchors that do not resolve at it; this branch recorded the run
+ * surface's own drawing pin. Both survive, and the note beside the run-surface
+ * pin reads against the pin the file actually carries rather than the one it
+ * carried before the forward.
+ *
+ * Since cinatra#3677 that set is EMPTY at this pin: the selectors it carried
+ * were an agent card's own controls, which the anchor contract no longer
+ * records. The key stays present, because an absent key would take the set out
+ * of the digest.
  */
 describe("the merge-forward keeps both of the file's pins", () => {
   it("carries the adopted anchor set the newer pin was recorded with", () => {
     expect(Array.isArray(CONTRACT.anchorsUnresolvedAtPin)).toBe(true);
-    expect(CONTRACT.anchorsUnresolvedAtPin.length).toBeGreaterThan(0);
+    expect(CONTRACT.anchorsUnresolvedAtPin).toEqual([]);
     // Sorted and unique, which is how the adoption writes it -- a hand-merged
     // union of two sides would not be either.
     expect(CONTRACT.anchorsUnresolvedAtPin).toEqual(
