@@ -24,7 +24,10 @@
       "src/app/design-fixtures/conformance/toast-fixture-data.ts",
       "tests/e2e/design/conformance/component-surface-drivers.ts",
       "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
-      "src/app/design-fixtures/conformance/__tests__/component-surface-fixtures.test.tsx"
+      "src/app/design-fixtures/conformance/__tests__/component-surface-fixtures.test.tsx",
+      "tests/e2e/design/conformance/scheduling-recurrence-driver.ts",
+      "tests/e2e/design/conformance/scheduling-recurrence-sentinels.ts",
+      "src/app/design-fixtures/conformance/scheduling-recurrence-fixture-data.ts"
     ],
     "app-extensions": [
       "tests/e2e/design/conformance/manifests/app-extensions.json",
