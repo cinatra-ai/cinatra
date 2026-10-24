@@ -965,8 +965,8 @@ never typed. No other pin moved.
 
 Measured 2026-10-24 against the manifest published under `publishedBaseUrl`,
 for the `app-components` pin after the docs mirror published the design
-source's version 0.7.1 of the components spec (cinatra-ai/design PR 225,
-cinatra-ai/docs PR 247). The published `app-components` body was fetched with
+source's version 0.7.1 of the components spec (the design source PR,
+with the cinatra-ai/docs PR 247 publication). The published `app-components` body was fetched with
 one anonymous `curl -sS` into a scratch directory outside every repository
 tree. It hashes to `sha256:54b4bd7b677437bbd2dbb2117f0cb78c5dbf7c4ea066ee0949e7d86372193051`,
 and the `contentHash` read back out of its own body is
