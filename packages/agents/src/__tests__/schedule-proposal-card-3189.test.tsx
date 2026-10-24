@@ -382,3 +382,130 @@ describe("the card draws the recurring row's frequency selectors (cinatra#3189 P
     expect(sent.some((s) => s?.dayOfMonth === 15 && s.frequency === "monthly")).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The pressed half of a segmented pair is legible on both grounds and on
+// hover. The scheduling step draws the pressed half in indigo with white ink
+// and the other half on the reserved surface. jsdom paints nothing, so these
+// read the classes the button carries: the pressed half carries the indigo
+// fill and NO themed or hover fill that could paint over it, which is what the
+// `outline` variant's `dark:` and `hover:` fills did.
+// ---------------------------------------------------------------------------
+
+/** The background classes of an element, modifiers included (`bg-clip-*` is not a fill). */
+function fills(el: Element): string[] {
+  return (el.getAttribute("class") ?? "")
+    .split(/\s+/)
+    .filter((c) => /^([a-z-]+:)*bg-/.test(c) && !/(^|:)bg-clip-/.test(c));
+}
+
+/** The themed or hover ink classes of an element (`dark:text-*`, `hover:text-*`). */
+function modifiedInks(el: Element): string[] {
+  return (el.getAttribute("class") ?? "")
+    .split(/\s+/)
+    .filter((c) => /^([a-z-]+:)+text-/.test(c));
+}
+
+describe("the pressed half of a segmented pair draws as the scheduling step draws it", () => {
+  const PAIRS = [
+    {
+      name: "the quarter anchor",
+      schedule: recurringSchedule({ frequency: "quarterly", quarterAnchor: "end" }),
+      field: "recurring-quarter-anchor",
+    },
+    {
+      name: "Day / Weekday",
+      schedule: recurringSchedule({ frequency: "monthly", monthlyMode: "weekday" }),
+      field: "recurring-monthly-mode",
+    },
+  ] as const;
+
+  for (const pair of PAIRS) {
+    it(`${pair.name}: the pressed half is indigo with white ink, and nothing themed or hovered paints over it`, async () => {
+      const { rows } = await renderCard(PENDING, proposal(pair.schedule));
+      const pressed = rows.querySelector(`[data-field="${pair.field}"][aria-pressed="true"]`);
+      expect(pressed, "no pressed half").not.toBeNull();
+      expect(fills(pressed!)).toEqual(["bg-indigo-ink"]);
+      expect(pressed!.getAttribute("class")).toMatch(/(^|\s)text-white(\s|$)/);
+      expect(modifiedInks(pressed!)).toEqual([]);
+    });
+
+    it(`${pair.name}: the other half stands on the reserved surface on both grounds`, async () => {
+      const { rows } = await renderCard(PENDING, proposal(pair.schedule));
+      const other = rows.querySelector(`[data-field="${pair.field}"][aria-pressed="false"]`);
+      expect(other, "no unpressed half").not.toBeNull();
+      const f = fills(other!);
+      expect(f).toContain("bg-surface-strong");
+      expect(f).toContain("dark:bg-surface-strong");
+      // On hover it may go muted, on both grounds the same way, and never
+      // to the outline variant's own control fill (`dark:bg-input-fill/30`,
+      // `dark:hover:bg-input-fill/50`). The variant's `aria-expanded:bg-muted`
+      // is the same muted fill and a segment never carries `aria-expanded`.
+      for (const c of f) {
+        expect([
+          "bg-surface-strong",
+          "dark:bg-surface-strong",
+          "hover:bg-muted",
+          "dark:hover:bg-muted",
+          "aria-expanded:bg-muted",
+        ]).toContain(c);
+      }
+    });
+  }
+
+  it("pressing the other half moves the indigo with it", async () => {
+    const { rows } = await renderCard(
+      PENDING,
+      proposal(recurringSchedule({ frequency: "quarterly", quarterAnchor: "start" })),
+    );
+    fireEvent.click(rows.querySelector('[data-field="recurring-quarter-anchor"][data-anchor="end"]')!);
+    await waitFor(() =>
+      expect(
+        fills(rows.querySelector('[data-field="recurring-quarter-anchor"][data-anchor="end"]')!),
+      ).toEqual(["bg-indigo-ink"]),
+    );
+    expect(
+      fills(rows.querySelector('[data-field="recurring-quarter-anchor"][data-anchor="start"]')!),
+    ).toContain("bg-surface-strong");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A quarter and a year always repeat every 1, so the scheduling step draws
+// "Repeat every" with the unit alone for them, in flow and once a schedule is
+// set; days, weeks and months keep the number beside the unit. The card draws
+// the same, editable and read-only. Saving stays as it is: the recurrence
+// parser already forces interval 1 for a quarter and a year.
+// ---------------------------------------------------------------------------
+
+describe("Repeat every carries no number for a quarter or a year", () => {
+  const FREQUENCIES: { frequency: RecurringSelection["frequency"]; number: boolean; unit: string }[] = [
+    { frequency: "daily", number: true, unit: "day(s)" },
+    { frequency: "weekly", number: true, unit: "week(s)" },
+    { frequency: "monthly", number: true, unit: "month(s)" },
+    { frequency: "quarterly", number: false, unit: "quarter" },
+    { frequency: "yearly", number: false, unit: "year" },
+  ];
+
+  for (const { frequency, number, unit } of FREQUENCIES) {
+    it(`the editable card ${number ? "draws" : "draws no"} interval number for ${frequency}`, async () => {
+      const { rows } = await renderCard(PENDING, proposal(recurringSchedule({ frequency, interval: 1 })));
+      expect(rows.querySelector('[data-field="recurring-interval"]') !== null).toBe(number);
+      expect(rows.querySelector('[aria-label="Repeat every"]') !== null).toBe(number);
+      expect(rows.querySelector('[data-field="recurring-frequency"]')?.textContent).toBe(unit);
+    });
+
+    it(`the read-only card ${number ? "draws" : "draws no"} interval number for ${frequency}`, async () => {
+      const { rows } = await renderCard(
+        { state: "settled" } as LifecycleCardState,
+        settled(recurringSchedule({ frequency, interval: 1 }), {
+          canSave: false,
+          canCancel: false,
+          stopped: true,
+        }),
+      );
+      expect(rows.querySelector('[data-readonly-field="recurring-interval"]') !== null).toBe(number);
+      expect(rows.querySelector('[data-readonly-field="recurring-frequency"]')?.textContent).toContain(unit);
+    });
+  }
+});

@@ -1632,15 +1632,18 @@ function ScheduleOptionRows({
             <span className="text-sm text-muted-foreground">Repeat every</span>
             {readOnly ? (
               <>
-                <ReadOnlyValue field="recurring-interval" width="w-20" label="Repeat every">
-                  {String(recurring.interval)}
-                </ReadOnlyValue>
+                {repeatsWithInterval(recurring.frequency) && (
+                  <ReadOnlyValue field="recurring-interval" width="w-20" label="Repeat every">
+                    {String(recurring.interval)}
+                  </ReadOnlyValue>
+                )}
                 <ReadOnlyValue field="recurring-frequency" width="w-32" label="Frequency">
                   {FREQUENCY_LABELS[recurring.frequency]}
                 </ReadOnlyValue>
               </>
             ) : (
               <>
+            {repeatsWithInterval(recurring.frequency) && (
             <Select
               disabled={!editable}
               value={String(recurring.interval)}
@@ -1657,6 +1660,7 @@ function ScheduleOptionRows({
                 ))}
               </SelectContent>
             </Select>
+            )}
             <Select
               disabled={!editable}
               value={recurring.frequency}
@@ -1913,6 +1917,18 @@ function Field({ label, children }: { label: string; children: ReactElement }): 
       {children}
     </div>
   );
+}
+
+/**
+ * Whether "Repeat every" carries a number for this frequency. A quarter and a
+ * year always repeat every 1, so the scheduling step draws the unit alone for
+ * them, in flow and once a schedule is set; days, weeks and months keep the
+ * interval beside the unit. The in-flow step hides it on the same condition.
+ * Saving is unchanged: the recurrence parser forces interval 1 for a quarter
+ * and a year whatever the state holds.
+ */
+function repeatsWithInterval(frequency: RecurringSelection["frequency"]): boolean {
+  return frequency === "daily" || frequency === "weekly" || frequency === "monthly";
 }
 
 /** The words the frequency picker itself draws, so a spent schedule reads back
@@ -2174,8 +2190,31 @@ export function dayOfMonthOptions(stated: number): number[] {
   return [...days, stated].sort((a, b) => a - b);
 }
 
+/**
+ * A HALF OF A SEGMENTED PAIR (Quarter Start / End, On Day / Weekday), AS THE
+ * SCHEDULING STEP DRAWS IT: the pressed half is filled indigo with white ink,
+ * the other half stands on the reserved surface in the ink colour.
+ *
+ * THE VARIANT CARRIES THE STATE, as it does for the weekday chips. The
+ * `outline` variant brings `dark:bg-input-fill/30`, `dark:hover:bg-input-fill/50`
+ * and `hover:bg-muted hover:text-foreground`; tailwind-merge keeps those beside
+ * an unprefixed fill (different modifier), so a pressed half drawn on `outline`
+ * lost its fill in the dark palette and on hover and could not be told
+ * from the other half. A pressed half is therefore the `default` variant, which
+ * has no themed or hover fill of a button's own. Its fill is `indigo-ink`, the
+ * colour that marks a choice in both palettes (`primary` moves to near-white in
+ * the dark palette). The other half stays `outline` and names the surface under
+ * `dark:` and the hover fill under `dark:hover:` too, so tailwind-merge drops
+ * the variant's own control fills and the half stands where the drawing stands
+ * it on both grounds.
+ */
+const segmentVariant = (on: boolean): "default" | "outline" => (on ? "default" : "outline");
 const segmentClass = (on: boolean) =>
-  `rounded-none border-0 px-3 py-1 transition-colors ${on ? "bg-primary text-primary-foreground" : "bg-background text-foreground hover:bg-muted"}`;
+  `rounded-none border-0 px-3 py-1 transition-colors ${
+    on
+      ? "bg-indigo-ink text-white"
+      : "bg-surface-strong text-foreground hover:bg-muted dark:bg-surface-strong dark:hover:bg-muted"
+  }`;
 
 export function RecurrenceFrequencySelectors({
   selection,
@@ -2210,7 +2249,7 @@ export function RecurrenceFrequencySelectors({
                 <Button
                   key={anchor}
                   type="button"
-                  variant="outline"
+                  variant={segmentVariant(selection.quarterAnchor === anchor)}
                   size="sm"
                   data-field="recurring-quarter-anchor"
                   data-anchor={anchor}
@@ -2260,7 +2299,7 @@ export function RecurrenceFrequencySelectors({
               <Button
                 key={mode}
                 type="button"
-                variant="outline"
+                variant={segmentVariant(selection.monthlyMode === mode)}
                 size="sm"
                 data-field="recurring-monthly-mode"
                 data-mode={mode}
