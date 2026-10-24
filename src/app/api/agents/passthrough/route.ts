@@ -44,6 +44,10 @@ import { shapeObjectsUpdateInput } from "./objects-update-seam";
 import { EXTENSION_SCOPED_TOOLS } from "@/lib/extension-scoped-tools";
 import { EXTENSION_TOOL_REVIEW_TARGETS_KEY } from "@/lib/extension-tool-dispatch";
 import { RUN_FOLDER_TOOLS } from "@/lib/run-folder-tools";
+import {
+  PASSTHROUGH_ACTOR_CONTEXT_ERROR,
+  passthroughFailureText,
+} from "./passthrough-refusal";
 
 /**
  * Deterministic MCP-call passthrough for WayFlow.
@@ -457,9 +461,16 @@ export async function POST(req: Request): Promise<Response> {
       platformRole: actorContext.platformRole,
     };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    // cinatra#4223: a fixed sentence, never the exception's own text (it can
+    // name a table or a connection); the detail is logged on the server.
     return NextResponse.json(
-      { error: `failed to build actor context: ${message}` },
+      {
+        error: passthroughFailureText(
+          err,
+          { tool, runId: agentRunId, stage: "actor context" },
+          PASSTHROUGH_ACTOR_CONTEXT_ERROR,
+        ),
+      },
       { status: 500 },
     );
   }
@@ -876,7 +887,12 @@ export async function POST(req: Request): Promise<Response> {
 
     return NextResponse.json(result);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: message }, { status: 500 });
+    // cinatra#4223: a primitive's stated refusal and an input-schema error keep
+    // their text (the caller acts on it); every other throw answers one fixed
+    // sentence, with the detail logged on the server.
+    return NextResponse.json(
+      { error: passthroughFailureText(err, { tool, runId: agentRunId, stage: "tool call" }) },
+      { status: 500 },
+    );
   }
 }
