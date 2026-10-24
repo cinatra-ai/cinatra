@@ -29,6 +29,27 @@ describe("live file record beside a binary representation", () => {
     expect(withLiveFileObjectContent({ ...input, form: "connectorRef" })).toBe(input.content);
     expect(withLiveFileObjectContent({ ...input, authorizedLiveData: { oversized: "x".repeat(ARTIFACT_CONTENT_CHANNEL_CAPS.object + 1) } })).toMatchObject({ kind: "none", reason: "over-cap" });
   });
+  it("gives a pdf or image row that carries only the core file envelope no live content", () => {
+    for (const [objectType, mime] of [["@acme/pdf:document", "application/pdf"], ["@acme/image:picture", "image/png"]] as const) {
+      const envelope = {
+        artifactType: "file", latestRepresentationRevisionId: "revision", latestDigest: "f00d".repeat(16),
+        mime, size: 2048, originKind: "upload", viewerHint: "mime", title: "Quarterly report",
+      };
+      expect(withLiveFileObjectContent({ ...input, objectType, authorizedLiveData: envelope })).toBe(input.content);
+    }
+  });
+  it("carries a typed record beside the envelope, and refuses data that is no record", () => {
+    const envelope = {
+      artifactType: "file", latestRepresentationRevisionId: "revision", latestDigest: "f00d".repeat(16),
+      mime: "image/png", size: 2048, originKind: "agent_generated", viewerHint: "mime", title: "WordPress screenshot",
+    };
+    expect(withLiveFileObjectContent({ ...input, authorizedLiveData: { ...envelope, ...facts } })).toMatchObject({
+      kind: "object", source: "live", objectType: input.objectType, data: { ...envelope, ...facts },
+    });
+    for (const authorizedLiveData of [null, "capturedUrl", ["capturedUrl"], {}]) {
+      expect(withLiveFileObjectContent({ ...input, authorizedLiveData })).toBe(input.content);
+    }
+  });
   it("preserves the file's existing text content", async () => {
     const content = await buildArtifactContentProjection({
       orgId: "org", artifactId: "artifact", representationRevisionId: "revision", form: "file", mime: "text/plain",

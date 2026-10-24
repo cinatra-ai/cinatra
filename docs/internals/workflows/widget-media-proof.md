@@ -166,8 +166,10 @@ default export, where its computed CommonJS methods are exposed.
 All fixture entry points require an explicit development runtime.
 
 The artifact page carries the authorized live object record through the bounded
-object-content projection when a file has no text projection. That lets the
-screenshot display read the recorded capture facts beside the actual PNG. The
+object-content projection when a file has no text projection and its row holds
+a typed record of its own. That lets the screenshot display read the recorded
+capture facts beside the actual PNG. A file whose row carries only the core file
+fields (an uploaded pdf or image) gets no live record, so its page is unchanged. The
 projection explicitly says `source: "live"` and names no snapshot revision.
 Historical review readers do not receive this live record; this page wiring does
 not claim to supply immutable capture facts for a pinned review.

@@ -270,3 +270,46 @@ describe("a row nothing installed can draw still shows its work (cinatra#3319)",
     expect(html).toContain("Login loop on SSO");
   });
 });
+
+describe("the live record beside a binary file reaches the page only when the row holds one", () => {
+  /** The core file writer's envelope, which every file row carries. */
+  const ENVELOPE = {
+    artifactType: "file",
+    latestRepresentationRevisionId: "rev-1",
+    latestDigest: "f00d".repeat(16),
+    mime: "application/pdf",
+    size: 412,
+    originKind: "upload",
+    viewerHint: "mime",
+    title: "Login loop on SSO",
+  };
+  const STRUCTURED_BODY = "data-artifact-structured-body";
+
+  beforeEach(() => {
+    mocks.getRepresentationByIdForReplay.mockReturnValue({ form: "file" });
+    mocks.resolveArtifactVersionForServe.mockReturnValue({ mime: "application/pdf" });
+    mocks.hostArtifactContentBuilder.mockReturnValue(async () => ({
+      kind: "none", channelVersion: 1, representationRevisionId: "rev-1", reason: "unsupported-form",
+    }));
+  });
+
+  it("a pdf row with only the core envelope draws no structured body", async () => {
+    mocks.readArtifactForDetail.mockReturnValue({
+      kind: "ok", artifact: { ...ARTIFACT, mime: "application/pdf" }, liveObjectData: ENVELOPE,
+    });
+    const html = await renderPage();
+    expect(html).toContain(VIEW);
+    expect(html).not.toContain(STRUCTURED_BODY);
+    expect(html).not.toContain(ENVELOPE.latestDigest);
+  });
+
+  it("a file row with a typed record of its own carries that record as live content", async () => {
+    mocks.readArtifactForDetail.mockReturnValue({
+      kind: "ok", artifact: { ...ARTIFACT, mime: "application/pdf" },
+      liveObjectData: { ...ENVELOPE, capturedUrl: "http://localhost:8087/live-record-proof" },
+    });
+    const html = await renderPage();
+    expect(html).toContain(STRUCTURED_BODY);
+    expect(html).toContain("live-record-proof");
+  });
+});
