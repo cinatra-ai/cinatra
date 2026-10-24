@@ -61,6 +61,24 @@ describe("MarketplaceDecisionActions: both decisions refused", () => {
     expect(container.querySelector("form")).toBeNull();
   });
 
+  it("keeps the Details link and the refusal reason", () => {
+    const { container } = render(
+      <MarketplaceDecisionActions
+        sourceId="s"
+        rowId="r1"
+        mode="moderate"
+        eligibility={BOTH_REFUSED}
+        detailsHref="/configuration/marketplace/vendor-applications"
+      />,
+    );
+    const details = Array.from(container.querySelectorAll("a")).find(
+      (a) => (a.textContent ?? "").trim() === "Details",
+    );
+    expect(details?.getAttribute("href")).toBe("/configuration/marketplace/vendor-applications");
+    expect(container.textContent).toContain("SoD");
+    expect(buttonLabels(container)).toEqual([]);
+  });
+
   it("still draws both controls when only one decision is refused (the other stays decidable)", () => {
     const { container } = render(
       <MarketplaceDecisionActions
