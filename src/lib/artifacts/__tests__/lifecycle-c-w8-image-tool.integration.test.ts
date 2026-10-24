@@ -570,3 +570,92 @@ describe.skipIf(!HAS_REAL_DB)(
     });
   },
 );
+
+/** A provider of another name and model that answers the given picture. */
+function otherProvider(image: string) {
+  return async () => ({
+    provider: "other-image-provider",
+    generateImage: async () => ({ imageData: image, mimeType: "image/png", model: "other-model" }),
+  });
+}
+
+describe.skipIf(!HAS_REAL_DB)(
+  "cinatra#4223 — a re-drive reports the facts stored with the revision it returns",
+  () => {
+    it("a re-drive of the same node with the same bytes from another provider reports the first write's provider and model", async () => {
+      const runId = nextId("run");
+      await seedRun(runId);
+      const base = {
+        runId,
+        orgId: ORG,
+        templateId: TEMPLATE,
+        packageVersion: "1.0.0",
+        createdBy: "user-3032",
+        nodeId: "picture-node",
+        extension: PICTURE_EXT,
+        title: "The lighthouse",
+        prompt: "a lighthouse at dusk",
+        data: { post: "post-artifact-1", placement: "featured" },
+      };
+      const first = await tool.generateArtifactImage(base, providerServing([PNG_RED]).deps());
+      if (!first.ok) throw new Error(first.error);
+
+      const again = await tool.generateArtifactImage(
+        base,
+        providerServing([PNG_RED]).deps({ resolveImageProvider: otherProvider(PNG_RED) }),
+      );
+      expect(again.ok).toBe(true);
+      if (!again.ok) throw new Error(again.error);
+      expect(again.deduped).toBe(true);
+      expect(again.artifactId).toBe(first.artifactId);
+      expect(again.representationRevisionId).toBe(first.representationRevisionId);
+      // The facts stored with that revision, never this attempt's.
+      expect(again.provider).toBe("test-image-provider");
+      expect(again.model).toBe("test-image-model-1");
+      const ledger = await ledgerRow(runId, "picture-node");
+      expect(ledger?.image_provider).toBe("test-image-provider");
+    });
+
+    it("a re-drive of a landed regeneration from another provider reports that append's stored facts", async () => {
+      const runId = nextId("run");
+      await seedRun(runId);
+      const create = {
+        runId,
+        orgId: ORG,
+        templateId: TEMPLATE,
+        packageVersion: "1.0.0",
+        createdBy: "user-3032",
+        nodeId: "picture-node",
+        extension: PICTURE_EXT,
+        title: "The lighthouse",
+        prompt: "a lighthouse at dusk",
+        data: { post: "post-artifact-1", placement: "featured" },
+      };
+      const first = await tool.generateArtifactImage(create, providerServing([PNG_RED]).deps());
+      if (!first.ok) throw new Error(first.error);
+      const regen = {
+        ...create,
+        title: "",
+        prompt: "the same lighthouse, at dawn",
+        artifactId: first.artifactId,
+        baseRepresentationRevisionId: first.representationRevisionId,
+      };
+      const appended = await tool.generateArtifactImage(regen, providerServing([PNG_BLUE]).deps());
+      if (!appended.ok) throw new Error(appended.error);
+      expect(appended.revision).toBe(2);
+
+      const again = await tool.generateArtifactImage(
+        regen,
+        providerServing([PNG_BLUE]).deps({ resolveImageProvider: otherProvider(PNG_BLUE) }),
+      );
+      expect(again.ok).toBe(true);
+      if (!again.ok) throw new Error(again.error);
+      expect(again.deduped).toBe(true);
+      expect(again.representationRevisionId).toBe(appended.representationRevisionId);
+      expect(again.revision).toBe(2);
+      expect(again.provider).toBe("test-image-provider");
+      expect(again.model).toBe("test-image-model-1");
+      expect(await revisionCount(first.artifactId)).toBe(2);
+    });
+  },
+);
