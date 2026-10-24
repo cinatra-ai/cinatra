@@ -67,8 +67,8 @@ describe("the wave covers the artifact-kind display surfaces of the staged drawi
       const surface = byId.get(row.surface);
       expect(
         surface.fields.map((f) => ({ name: f.field, source: f.source })),
-        `${row.surface}: the wave's recorded field binding no longer matches the drawing's — reconcile the row with the manifest before the drivers claim to assert it.`,
-      ).toEqual(row.field === null ? [] : [{ name: row.field.name, source: row.field.source }]);
+        `${row.surface}: the wave's recorded field bindings no longer match the drawing's — reconcile the row with the manifest before the drivers claim to assert them.`,
+      ).toEqual(row.fields.map((f) => ({ name: f.name, source: f.source })));
       expect(
         surface.actions.map((a) => ({ name: a.action, outcome: a.outcome })),
         `${row.surface}: the wave's recorded action no longer matches the drawing's.`,
