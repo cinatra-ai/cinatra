@@ -198,7 +198,123 @@ export type PromoteMatchedArtifactTypeResult =
        *  append an interrupted promotion left behind. */
       retyped: boolean;
     }
-  | { ok: false; reason: TypedPromotionRefusal | "row-moved" | "not-authorized" };
+  | {
+      ok: false;
+      /** `promotion-unproven`: the retype committed, but the row's latest type
+       *  change is not this promotion's own keyed retype, so nothing was
+       *  appended. */
+      reason: TypedPromotionRefusal | "row-moved" | "not-authorized" | "promotion-unproven";
+    };
+
+/**
+ * THE KEY A PROMOTION'S OWN RETYPE RECORDS on its change event (cinatra#3319,
+ * cinatra#4266). Only this module makes it, and only for the retype it runs:
+ * the promotion revision's own id plus the version the retype's compare-and-set
+ * was anchored on. Every other writer of a type change (a restore, a merge, the
+ * CMS state machine, a native create) records another key, so its event is
+ * never read as a promotion.
+ */
+function promotionRetypeKey(input: {
+  artifactId: string;
+  sharedResourceId: string;
+  toType: string;
+  baseVersion: number;
+}): string {
+  return `typed-promotion:${promotionRevisionId(input)}:${input.baseVersion}`;
+}
+
+/** A version column as the driver answers it (an integer, or its text). */
+function readVersion(value: unknown): number | null {
+  if (typeof value === "number" && Number.isSafeInteger(value)) return value;
+  if (typeof value === "string" && /^[0-9]+$/.test(value)) return Number(value);
+  return null;
+}
+
+/** One type-change event of the row, as the proof read selects it. */
+type TypeChangeEvent = {
+  object_type: unknown;
+  before_type: unknown;
+  base_version: unknown;
+  result_version: unknown;
+  idempotency_key: unknown;
+  org_id: unknown;
+};
+
+/**
+ * Does the row's history PROVE that this promotion retyped it?
+ *
+ * Only the row's LATEST type change counts (the highest result version): an
+ * older promotion that a restore, a merge or another move later overwrote is no
+ * proof. It proves only when it landed in the target type, in this
+ * organization, and carries exactly the key this promotion's retype records
+ * for that event's own base version. A restore, a merge, a native type, the
+ * person's standing assertion or a later move away is therefore never a proof.
+ * A failed read throws: an error is never a proof.
+ */
+function readPromotionProof(input: {
+  orgId: string;
+  artifactId: string;
+  sharedResourceId: string;
+  toType: string;
+}): boolean {
+  ensurePostgresSchema();
+  const s = schema();
+  const [res] = runPostgresQueriesSync({
+    connectionString: conn(),
+    queries: [
+      {
+        text: `SELECT object_type, before_snapshot->>'type' AS before_type,
+  base_version, result_version, idempotency_key, org_id
+FROM "${s}"."object_change_event"
+WHERE object_id = $1 AND org_id = $2
+  AND (before_snapshot->>'type') IS DISTINCT FROM object_type
+ORDER BY result_version DESC, created_at DESC, sequence DESC
+LIMIT 1`,
+        values: [input.artifactId, input.orgId],
+      },
+    ],
+  });
+  let latest: { event: TypeChangeEvent; version: number } | null = null;
+  for (const event of (res?.rows ?? []) as TypeChangeEvent[]) {
+    if (event.before_type === event.object_type) continue;
+    const version = readVersion(event.result_version);
+    if (version === null) continue;
+    if (latest === null || version > latest.version) latest = { event, version };
+  }
+  if (latest === null) return false;
+  const { event } = latest;
+  const baseVersion = readVersion(event.base_version);
+  return (
+    event.org_id === input.orgId &&
+    event.object_type === input.toType &&
+    baseVersion !== null &&
+    event.idempotency_key ===
+      promotionRetypeKey({
+        artifactId: input.artifactId,
+        sharedResourceId: input.sharedResourceId,
+        toType: input.toType,
+        baseVersion,
+      })
+  );
+}
+
+/**
+ * THE ONLY ROAD TO THE APPEND: the promotion revision is appended only when the
+ * row's history proves that this promotion retyped it ({@link readPromotionProof}).
+ * Without that proof it writes nothing and answers null. Both the fresh
+ * promotion and the converging completion of an interrupted one append here.
+ */
+function appendProvenPromotionRevision(
+  input: Parameters<typeof appendPromotionRevision>[0],
+): ReturnType<typeof appendPromotionRevision> | null {
+  const proven = readPromotionProof({
+    orgId: input.orgId,
+    artifactId: input.artifactId,
+    sharedResourceId: input.sharedResourceId,
+    toType: input.toType,
+  });
+  return proven ? appendPromotionRevision(input) : null;
+}
 
 /**
  * THE ROAD, END TO END: read the row, read the matcher's association, decide,
@@ -298,7 +414,11 @@ export async function promoteMatchedArtifactType(input: {
       (personAsserted || (matcher !== null && matcher.confidence >= matcher.threshold)) &&
       mimeAccepted(input.ownType.acceptsMimes, row.latestRevision.mime)
     ) {
-      const landed = appendPromotionRevision({
+      // AND ONLY ON PROOF (cinatra#3319, cinatra#4266): the conditions above
+      // also hold for a row that carried this type from the start, or that a
+      // restore moved back into it. Only this promotion's own keyed retype,
+      // still the row's latest type change, makes the row an interrupted one.
+      const landed = appendProvenPromotionRevision({
         orgId: input.orgId,
         artifactId: input.artifactId,
         sharedResourceId: row.latestRevision.resourceId,
@@ -307,7 +427,7 @@ export async function promoteMatchedArtifactType(input: {
         createdBy: input.createdBy ?? null,
         mime: row.latestRevision.mime,
       });
-      if (landed.revision !== null) {
+      if (landed !== null && landed.revision !== null) {
         return { ok: true, ...landed, toType: input.ownType.typeId, retyped: false };
       }
     }
@@ -324,14 +444,23 @@ export async function promoteMatchedArtifactType(input: {
     data: row!.data,
     toType: plan.toType,
     expectedVersion: plan.expectedVersion,
+    // The key its change event records: what makes this retype readable as the
+    // promotion's own, now and on a later converging confirmation.
+    idempotencyKey: promotionRetypeKey({
+      artifactId: input.artifactId,
+      sharedResourceId: plan.sharedResourceId,
+      toType: plan.toType,
+      baseVersion: plan.expectedVersion,
+    }),
     actor: input.actor,
     authority: input.authority,
   });
   if (!retyped.ok) return { ok: false, reason: retyped.reason };
 
-  // 2. THE APPEND. The retype has committed, so the row carries the target type
-  //    and this needs no guard of its own.
-  const landed = appendPromotionRevision({
+  // 2. THE APPEND, on the same proof as the converging road: another writer may
+  //    have moved the row between the retype and here, and then the revision
+  //    would name a type change this promotion no longer made.
+  const landed = appendProvenPromotionRevision({
     orgId: input.orgId,
     artifactId: input.artifactId,
     sharedResourceId: plan.sharedResourceId,
@@ -340,6 +469,7 @@ export async function promoteMatchedArtifactType(input: {
     createdBy: input.createdBy ?? null,
     mime: row?.latestRevision?.mime ?? null,
   });
+  if (landed === null) return { ok: false, reason: "promotion-unproven" };
   return {
     ok: true,
     representationRevisionId: landed.representationRevisionId,
@@ -356,6 +486,8 @@ export type TypedPromotionRetype = (input: {
   data: unknown;
   toType: string;
   expectedVersion: number;
+  /** The key the retype's change event must record (`typed-promotion:…`). */
+  idempotencyKey: string;
   actor: { userId: string; orgId: string };
   authority: OrgWriteAuthority;
 }) => Promise<{ ok: true } | { ok: false; reason: "row-moved" | "not-authorized" }>;
@@ -388,6 +520,7 @@ const canonicalRetype: TypedPromotionRetype = async (input) => {
         actor: { actorId: input.actor.userId, actorKind: "user", orgId: input.actor.orgId },
         historyEffect: "reversible-internal",
         expectedBaseVersion: input.expectedVersion,
+        idempotencyKey: input.idempotencyKey,
         authority: input.authority,
       },
     );
@@ -419,7 +552,7 @@ const canonicalRetype: TypedPromotionRetype = async (input) => {
  * The witness is the CONVERGING form because the representation INSERT is: both
  * halves of a re-run promotion must be able to land exactly once, and a
  * revision an earlier promotion appended without a witness is repaired by the
- * same re-run.
+ * same re-run (a re-run that the row's history proves, cinatra#3319).
  *
  * Pure so the one-transaction composition is fixture-provable, the same shape
  * the other host writers' witness proofs take.

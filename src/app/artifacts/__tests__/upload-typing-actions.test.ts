@@ -98,6 +98,10 @@ const verifySessionAuthority = vi.fn();
 vi.mock("@/lib/org-write/authority", () => ({
   verifySessionAuthority: (...a: unknown[]) => verifySessionAuthority(...a),
 }));
+// The pack whose claim wins the row's type (cinatra#3319): none in this suite.
+vi.mock("@/lib/artifacts/resolve-bound-artifact-type", () => ({
+  readArtifactSafeClaimWinnerForType: () => null,
+}));
 
 // `@/lib/artifacts/type-install-request` is deliberately NOT mocked: the real
 // pure notification builder runs (its href-org behavior is asserted in
@@ -209,8 +213,33 @@ describe("assertUploadMeaning — the converging re-confirmation (cinatra#3028, 
     expect(assertSemanticType).not.toHaveBeenCalled();
   });
 
-  it("still answers invalid-type when the road refuses — a row that merely CARRIES the type is not converged", async () => {
+  // THE REPEAT (cinatra#3319, cinatra#4266): the store appends nothing on a row
+  // it holds no promotion of, and answers `already-promoted`.
+  it("a repeat while the person's own meaning stands answers ok and writes nothing", async () => {
     promoteMatchedArtifactType.mockResolvedValue({ ok: false, reason: "already-promoted" });
+    const { assertUploadMeaning } = await import("../upload-typing-actions");
+    const res = await assertUploadMeaning({ artifactId: "a1", extension: PACK });
+    expect(res).toEqual({ ok: true });
+    expect(assertSemanticType).not.toHaveBeenCalled();
+    expect(readPersonAssertion).toHaveBeenCalledWith({
+      orgId: "org-1",
+      artifactId: "a1",
+      extension: PACK,
+      principal: "u1",
+    });
+  });
+
+  it("still answers invalid-type when the road refuses and no meaning of the person stands — a row that merely CARRIES the type is not converged", async () => {
+    promoteMatchedArtifactType.mockResolvedValue({ ok: false, reason: "already-promoted" });
+    readPersonAssertion.mockReturnValue(false);
+    const { assertUploadMeaning } = await import("../upload-typing-actions");
+    const res = await assertUploadMeaning({ artifactId: "a1", extension: PACK });
+    expect(res).toMatchObject({ ok: false, reason: "invalid-type" });
+    expect(assertSemanticType).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the store fails, although the person's meaning stands", async () => {
+    promoteMatchedArtifactType.mockRejectedValue(new Error("history read failed"));
     const { assertUploadMeaning } = await import("../upload-typing-actions");
     const res = await assertUploadMeaning({ artifactId: "a1", extension: PACK });
     expect(res).toMatchObject({ ok: false, reason: "invalid-type" });

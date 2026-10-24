@@ -159,7 +159,11 @@ async function presentedBaseCandidates(input: {
   actor: ActorContext;
   orgId: string;
 }): Promise<InstalledMeaningType[]> {
-  return (await screenPresentedBase(input, extensionDefinesType)).accessible;
+  return (
+    await screenPresentedBase(input, (extension, objectType) =>
+      extensionDefinesType(extension, objectType, input.orgId),
+    )
+  ).accessible;
 }
 
 /**
@@ -246,7 +250,7 @@ async function confirmsPresentedBaseMeaning(input: {
         actor: input.actor,
         orgId: input.orgId,
       },
-      readExtensionDefinesType,
+      (extension, objectType) => readExtensionDefinesType(extension, objectType, input.orgId),
     );
     if (admitted.length === 0) return "absent";
     if (accessible.length === 0) return "refused";
@@ -336,7 +340,15 @@ export async function listInstalledTypesForArtifact(
   // Per-actor extension-access gate: drop candidates whose defining extension
   // is not addressable by THIS actor (foreign-org / foreign-scope / torn-down),
   // and matcher-channel members not org-writable (== the A6 resolver's gate).
-  const types = await filterCandidatesByActorAccess(raw, actor, orgId);
+  // The pack whose claim owns the row's type is the row's own meaning, as the
+  // registrant of a registered type is, so it is no ordinary candidate
+  // (cinatra#3319): the presented-base check below decides it. The list reads
+  // the claims leniently (a failed read names no claimant), because the
+  // confirmation reads them again and refuses on a failure.
+  const claimant = objectType ? await readRowTypeClaimantLeniently(orgId, objectType) : null;
+  const types = (await filterCandidatesByActorAccess(raw, actor, orgId)).filter(
+    (t) => t.extension !== claimant,
+  );
   // THE DERIVED MEANING (§VI.1, cinatra#3319): a matcher draft at or above its
   // pack's threshold opens the picker pre-selected on it; a draft that did not
   // auto-surface is a suggestion chip. It is the detail read's one presentation
@@ -465,7 +477,21 @@ export async function assertUploadMeaning(input: {
     objectType ? { excludeTypeId: objectType } : undefined,
   );
   const candidates = await filterCandidatesByActorAccess(raw, actor, orgId);
-  if (!candidates.some((c) => c.extension === input.extension)) {
+  let ordinary = candidates.some((c) => c.extension === input.extension);
+  if (ordinary && objectType) {
+    // THE ROW'S OWN CLAIMANT IS NO ORDINARY CANDIDATE (cinatra#3319): the
+    // registry names the host, not the pack, for a claim-backed type, so the
+    // exclusion above keeps that pack on the list. Its binding blocks a fresh
+    // assertion and its confirmation must be verified against the row's
+    // presentation like the registrant's. A failed claim read refuses: whether
+    // this pack owns the row cannot be told.
+    try {
+      ordinary = (await readRowTypeClaimant(orgId, objectType)) !== input.extension;
+    } catch {
+      return { ...INVALID_TYPE_REFUSAL };
+    }
+  }
+  if (!ordinary) {
     // THE PRESENTED BASE MEANING (§VI.1, cinatra#3319), decided FIRST. The row
     // presents this extension's live matcher draft (its auto-surfaced meaning or
     // a suggestion chip), so the picker offered it, and confirming it records the
@@ -489,20 +515,17 @@ export async function assertUploadMeaning(input: {
     // reaches the converging road below.
     if (presentedBase === "refused") return { ...INVALID_TYPE_REFUSAL };
     if (presentedBase === "presented") {
-      const presented = assertSemanticType({
+      // A user assertion is blocked only by a binding of the same pack: the row's
+      // own claim-backed type, which already asserts this pack with a higher
+      // authority. The meaning the person confirmed then already stands, so the
+      // answer is the one a fresh write gives.
+      assertSemanticType({
         orgId,
         artifactId: input.artifactId,
         extension: input.extension,
         assertedBy: "user",
         principal: actor.principalId ?? null,
       });
-      if (presented.blockedByPrecedence) {
-        return {
-          ok: false,
-          reason: "blocked",
-          message: "A higher-ranked meaning already applies to this artifact.",
-        };
-      }
       revalidatePath("/artifacts");
       return { ok: true };
     }
@@ -514,36 +537,14 @@ export async function assertUploadMeaning(input: {
     // retyped, with its promotion revision missing — so without this the
     // convergence the road promises is unreachable from the product.
     //
-    // It completes and nothing else: the road itself still demands the matcher's
-    // assertion at its threshold, so a row that merely CARRIES this extension's
-    // type is refused there and this call falls through to the same
-    // `invalid-type` it always answered. No meaning assertion is written — the
-    // call that retyped the row wrote the person's, and a second identical
-    // assertion would stack a duplicate for a choice already recorded.
-    if (objectType && (await extensionDefinesType(input.extension, objectType))) {
-      // THE ROW-OWN CONFIRMATION COUNTS ONCE (cinatra#3319). The presented arm
-      // above writes the person's assertion on a row that was NATIVELY of this
-      // type, and that write ends the presentation, so a second, stale picker of
-      // the same row arrives here. The store would accept that assertion as the
-      // person's road and append a promotion revision for a promotion that never
-      // happened. An interrupted promotion holds the same assertion, so the
-      // assertion alone cannot tell them apart: the row's own history can, because
-      // only a promotion's retype moved the row INTO this type. Without that
-      // retype on record the road is never taken, whether or not an assertion
-      // stands: on a row that was never promoted the store could append on the
-      // matcher's association alone.
-      const standing = await readRowOwnConfirmation({
-        orgId,
-        artifactId: input.artifactId,
-        extension: input.extension,
-        objectType,
-        principal: actor.principalId ?? null,
-      });
-      if (standing === "recorded") {
-        revalidatePath("/artifacts");
-        return { ok: true };
-      }
-      if (standing === "unproven") return { ...INVALID_TYPE_REFUSAL };
+    // It completes and nothing else: the store appends a promotion revision only
+    // when the row's own history proves that a promotion retyped it and did not
+    // append (its keyed retype is the row's latest type change). A row that
+    // merely CARRIES this extension's type, natively or through a restore, gets
+    // no revision. No meaning assertion is written: the call that retyped the
+    // row wrote the person's, and a second identical assertion would stack a
+    // duplicate for a choice already recorded.
+    if (objectType && (await extensionDefinesType(input.extension, objectType, orgId))) {
       const completed = await promoteOnConfirmedMeaning({
         orgId,
         artifactId: input.artifactId,
@@ -554,6 +555,21 @@ export async function assertUploadMeaning(input: {
       if (completed?.promoted) {
         revalidatePath("/artifacts");
         return { ok: true, promotion: completed };
+      }
+      // THE ROW-OWN CONFIRMATION COUNTS ONCE (cinatra#3319, cinatra#4266). A
+      // second, stale picker of a row whose own meaning the person already
+      // confirmed arrives here, and the store wrote nothing for it. The person's
+      // meaning stands, so that is the answer; anything else is refused.
+      if (
+        await personsOwnMeaningStands(completed, {
+          orgId,
+          artifactId: input.artifactId,
+          extension: input.extension,
+          principal: actor.principalId ?? null,
+        })
+      ) {
+        revalidatePath("/artifacts");
+        return { ok: true };
       }
     }
     return { ...INVALID_TYPE_REFUSAL };
@@ -604,10 +620,16 @@ export async function assertUploadMeaning(input: {
  * The one question the converging re-confirmation asks: it is what separates
  * "this row is already in the type this extension defines" (the interrupted
  * promotion's own row) from "this extension has nothing to do with this row".
+ * The pack defines the type when it registered it, or when its claim wins the
+ * type in this organization (a claim-backed type, which the host registers).
  */
-async function extensionDefinesType(extension: string, objectType: string): Promise<boolean> {
+async function extensionDefinesType(
+  extension: string,
+  objectType: string,
+  orgId: string,
+): Promise<boolean> {
   try {
-    return await readExtensionDefinesType(extension, objectType);
+    return await readExtensionDefinesType(extension, objectType, orgId);
   } catch {
     return false;
   }
@@ -615,85 +637,59 @@ async function extensionDefinesType(extension: string, objectType: string): Prom
 
 /** {@link extensionDefinesType} without the fallback: a failed read throws, so
  *  the confirmation can refuse it instead of reading it as "not a definer". */
-async function readExtensionDefinesType(extension: string, objectType: string): Promise<boolean> {
+async function readExtensionDefinesType(
+  extension: string,
+  objectType: string,
+  orgId: string,
+): Promise<boolean> {
   const { objectTypeRegistry } = await import("@cinatra-ai/objects/registry");
-  return objectTypeRegistry.getRegisteringPackage(objectType) === extension;
+  if (objectTypeRegistry.getRegisteringPackage(objectType) === extension) return true;
+  return (await readRowTypeClaimant(orgId, objectType)) === extension;
 }
-
-/** The most change events the row-own check reads (the history reader's cap). */
-const ROW_HISTORY_READ_LIMIT = 500;
 
 /**
- * Does a confirmation of this extension already stand on a row that was
- * NATIVELY of the type the extension defines (cinatra#3319)?
- *
- *   "recorded"  — the acting person's own assertion of the extension stands, and
- *                 the row's history holds no event that retyped it INTO its
- *                 current type. The row never was a promotion, so there is
- *                 nothing to complete: the meaning is already recorded.
- *   "unproven"  — the assertion could not be read, or the history could not be
- *                 read, or the read was full without that event, or no such
- *                 assertion stands and no retype is on record. Whether a
- *                 promotion was interrupted cannot be told, or the row never was
- *                 one, so nothing is written. A failed assertion read must not
- *                 converge: the store reads the assertion again on its own, and a
- *                 read that recovers there would append the revision this check
- *                 exists to refuse. A missing assertion must not converge on its
- *                 own either: the store would then append on the matcher's
- *                 association alone, on a row that was never promoted.
- *   "converge"  — a retype into the current type is on record (the row an
- *                 interrupted promotion leaves): the base road decides.
- *
- * The retype is the one write a promotion makes through the canonical
- * history-aware writer, which records its change event in the same statement
- * (`typed-promotion-store.ts` `canonicalRetype`). Its before snapshot is the row
- * as it stood, so it carries the old `type`.
+ * The pack whose winning artifact-safe claim in this organization is over the
+ * row's type, or null (cinatra#3319). A failed claim read throws.
  */
-async function readRowOwnConfirmation(input: {
-  orgId: string;
-  artifactId: string;
-  extension: string;
-  objectType: string;
-  principal: string | null;
-}): Promise<"recorded" | "unproven" | "converge"> {
-  let asserted: boolean;
+async function readRowTypeClaimant(orgId: string, objectType: string): Promise<string | null> {
+  const { readArtifactSafeClaimWinnerForType } = await import(
+    "@/lib/artifacts/resolve-bound-artifact-type"
+  );
+  return readArtifactSafeClaimWinnerForType(orgId, objectType);
+}
+
+/** {@link readRowTypeClaimant} for the list: a failed read names no claimant. */
+async function readRowTypeClaimantLeniently(
+  orgId: string,
+  objectType: string,
+): Promise<string | null> {
   try {
-    const { readPersonAssertion } = await import("@/lib/artifacts/typed-promotion-store");
-    asserted = readPersonAssertion({
-      orgId: input.orgId,
-      artifactId: input.artifactId,
-      extension: input.extension,
-      principal: input.principal,
-    });
+    return await readRowTypeClaimant(orgId, objectType);
   } catch {
-    return "unproven";
-  }
-  try {
-    const { listEventsForObject } = await import("@/lib/object-history/eligibility");
-    const events = listEventsForObject(input.artifactId, {
-      orgId: input.orgId,
-      limit: ROW_HISTORY_READ_LIMIT,
-    });
-    if (events.some((event) => retypedInto(event, input.objectType))) return "converge";
-    if (events.length >= ROW_HISTORY_READ_LIMIT) return "unproven";
-    return asserted ? "recorded" : "unproven";
-  } catch {
-    return "unproven";
+    return null;
   }
 }
 
-/** A change event that moved the row from another type INTO `objectType`. */
-function retypedInto(
-  event: {
-    objectType: string;
-    beforeSnapshot: { payload: Record<string, unknown> } | null;
-    afterSnapshot: { payload: Record<string, unknown> } | null;
-  },
-  objectType: string,
-): boolean {
-  const before = event.beforeSnapshot?.payload?.type;
-  const after = event.afterSnapshot?.payload?.type ?? event.objectType;
-  return typeof before === "string" && before !== objectType && after === objectType;
+/**
+ * THE REPEAT OF A CONFIRMATION THAT STANDS (cinatra#3319, cinatra#4266). True
+ * only when the promotion road wrote nothing because there was nothing to do (it
+ * does not apply to this pack, or it answered `already-promoted`) and the acting
+ * person's own assertion of the extension reads true. A store error, any other
+ * refusal and a failed assertion read are false, so the confirmation is refused.
+ */
+async function personsOwnMeaningStands(
+  outcome: Exclude<Extract<AssertMeaningResult, { ok: true }>["promotion"], undefined> | null,
+  input: { orgId: string; artifactId: string; extension: string; principal: string | null },
+): Promise<boolean> {
+  if (outcome !== null && (outcome.promoted || outcome.reason !== "already-promoted")) {
+    return false;
+  }
+  try {
+    const { readPersonAssertion } = await import("@/lib/artifacts/typed-promotion-store");
+    return readPersonAssertion(input);
+  } catch {
+    return false;
+  }
 }
 
 /**
