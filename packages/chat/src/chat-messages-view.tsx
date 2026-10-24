@@ -2818,7 +2818,22 @@ export function ChatMessagesView({
                         messages without parts fall through to the
                         legacy path below. */}
                     {message.error && message.parts && message.parts.length > 0 ? (
-                      <ErrorCard error={message.error} errorRaw={message.errorRaw} />
+                      // An error turn with a trace keeps the turn's thought-group
+                      // summary above its error card, as the flat layout draws it.
+                      <>
+                        {message.thoughtGroups && message.thoughtGroups.length > 0 && !isStreaming(message.id) && (
+                          <div>
+                            {message.thoughtGroups.map((group) => (
+                              <ThoughtGroupSection
+                                key={group.id}
+                                group={group}
+                                isLive={isStreaming(message.id)}
+                              />
+                            ))}
+                          </div>
+                        )}
+                        <ErrorCard error={message.error} errorRaw={message.errorRaw} />
+                      </>
                     ) : null}
                     {message.parts && message.parts.length > 0 ? (
                       <OrderedPartsSection
@@ -3003,7 +3018,22 @@ export function ChatMessagesView({
                     above. Same conditional applies here in slack-mode
                     view. */}
                 {message.error && message.parts && message.parts.length > 0 ? (
-                  <ErrorCard error={message.error} errorRaw={message.errorRaw} />
+                  // Same thought-group summary above the error card as the
+                  // render site above.
+                  <>
+                    {message.thoughtGroups && message.thoughtGroups.length > 0 && !isStreaming(message.id) && (
+                      <div>
+                        {message.thoughtGroups.map((group) => (
+                          <ThoughtGroupSection
+                            key={group.id}
+                            group={group}
+                            isLive={isStreaming(message.id)}
+                          />
+                        ))}
+                      </div>
+                    )}
+                    <ErrorCard error={message.error} errorRaw={message.errorRaw} />
+                  </>
                 ) : null}
                 {message.parts && message.parts.length > 0 ? (
                   <OrderedPartsSection
