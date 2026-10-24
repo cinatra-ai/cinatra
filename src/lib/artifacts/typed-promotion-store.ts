@@ -307,6 +307,12 @@ LIMIT 1`,
 function appendProvenPromotionRevision(
   input: Parameters<typeof appendPromotionRevision>[0],
 ): ReturnType<typeof appendPromotionRevision> | null {
+  // ACCEPTED WINDOW: the append's lock (per artifact) is not the canonical
+  // writer's (org write lock), so a writer can move the row between this read
+  // and the append. The revision then lands on a row that has left the type:
+  // the state of "promote, append, move away". The retype did happen, the
+  // revision is deterministic (ON CONFLICT DO NOTHING) and shares the base
+  // resource, and no later decision reads a revision as proof (events do).
   const proven = readPromotionProof({
     orgId: input.orgId,
     artifactId: input.artifactId,

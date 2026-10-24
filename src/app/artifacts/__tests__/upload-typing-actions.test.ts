@@ -254,6 +254,66 @@ describe("assertUploadMeaning — the converging re-confirmation (cinatra#3028, 
   });
 });
 
+describe("assertUploadMeaning — the fresh promotion whose retype the store cannot prove (cinatra#3319)", () => {
+  const PACK = "@acme/voice";
+  const OWN_TYPE = "@acme/voice:brief";
+  const BASE_TYPE = "@cinatra-ai/markdown-artifact:artifact";
+
+  beforeEach(() => {
+    objectTypeRegistry._clearForTests();
+    objectTypeRegistry.register(
+      {
+        type: OWN_TYPE,
+        category: "data",
+        isArtifact: { accepts: { file: { mimeTypes: ["text/markdown"] } } },
+      } as never,
+      PACK,
+    );
+    matcherManifestRegistry._clearForTests();
+    matcherManifestRegistry.register({
+      packageName: PACK,
+      matcherSkillIds: ["@acme/voice:match"],
+      matcherConfidenceThreshold: 0.7,
+      fileMimeTypes: ["text/markdown"],
+    });
+    // A natively typed base row, and the pack offered for it: the ordinary road.
+    readArtifactForMeaningWrite.mockReturnValue({
+      kind: "ok",
+      artifact: { mime: "text/markdown", objectType: BASE_TYPE },
+    });
+    listInstalledMeaningTypesAcceptingMime.mockReturnValue([
+      { objectTypeId: OWN_TYPE, extension: PACK, displayName: "Brief", extensionLabel: "Voice" },
+    ]);
+    isSystemExtension.mockReturnValue(true);
+    isArtifactExtensionWriteAllowed.mockResolvedValue(true);
+    assertSemanticType.mockReturnValue({ blockedByPrecedence: false });
+    verifySessionAuthority.mockResolvedValue({ kind: "org-write" });
+  });
+  afterEach(() => {
+    objectTypeRegistry._clearForTests();
+    matcherManifestRegistry._clearForTests();
+  });
+
+  it("C2h: a retype the store committed but could not prove answers ok with the refusal named, after the person's meaning was written", async () => {
+    promoteMatchedArtifactType.mockResolvedValue({ ok: false, reason: "promotion-unproven" });
+    const { assertUploadMeaning } = await import("../upload-typing-actions");
+    const res = await assertUploadMeaning({ artifactId: "a1", extension: PACK });
+    expect(res).toEqual({
+      ok: true,
+      promotion: { promoted: false, reason: "promotion-unproven" },
+    });
+    // The person's own meaning stands; the road appended nothing it cannot prove.
+    expect(assertSemanticType).toHaveBeenCalledTimes(1);
+    expect(promoteMatchedArtifactType).toHaveBeenCalledTimes(1);
+    expect(promoteMatchedArtifactType.mock.calls[0]![0]).toMatchObject({
+      orgId: "org-1",
+      artifactId: "a1",
+      extension: PACK,
+      confirmed: true,
+    });
+  });
+});
+
 describe("assertUploadMeaning — B2 write authority", () => {
   it("uses the WRITE gate (readArtifactForMeaningWrite) and rejects a read-only actor", async () => {
     const { assertUploadMeaning } = await import("../upload-typing-actions");

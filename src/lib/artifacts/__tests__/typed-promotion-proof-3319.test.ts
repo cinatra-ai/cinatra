@@ -354,6 +354,37 @@ describe("the converging road appends only on the promotion's own keyed retype",
     });
     expect(db.appends).toHaveLength(1);
   });
+
+  it("C2f: a latest type change whose result version the driver answers unreadably is no proof, however its key reads", async () => {
+    const { promoteMatchedArtifactType } = await store();
+    for (const unreadable of [null, undefined, "abc", "4.5", "-1", 4.5, Number.NaN]) {
+      // `event` falls back to base + 1 for a missing result, so set it after.
+      convergingRow([{ ...keyedRetype(3), result_version: unreadable }]);
+      expect(await promoteMatchedArtifactType(args())).toEqual({
+        ok: false,
+        reason: "already-promoted",
+      });
+    }
+    expect(db.appends).toEqual([]);
+  });
+
+  it("C2g: no type-change row at all (no rows, or only rows that left the type as it was) is no proof", async () => {
+    const { promoteMatchedArtifactType } = await store();
+    convergingRow([]);
+    expect(await promoteMatchedArtifactType(args())).toEqual({
+      ok: false,
+      reason: "already-promoted",
+    });
+    // A data-only update: the row's type before and after are the same.
+    convergingRow([
+      event({ type: OWN_TYPE, before: OWN_TYPE, base: 3, key: promotionKey(3) }),
+    ]);
+    expect(await promoteMatchedArtifactType(args())).toEqual({
+      ok: false,
+      reason: "already-promoted",
+    });
+    expect(db.appends).toEqual([]);
+  });
 });
 
 describe("the fresh road keys its retype and appends only on its own proof", () => {
