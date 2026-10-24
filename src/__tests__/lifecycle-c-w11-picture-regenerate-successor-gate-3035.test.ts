@@ -56,7 +56,7 @@ beforeEach(() => {
     reviewTaskId: leg.reviewTaskId,
     status: "pending" as const,
     disposition: null,
-    targets: leg.targets,
+    targets: [...leg.targets],
   }));
   p.actor.mockResolvedValue({ orgId: "org-1", actor: { userId: "reader-1" }, roleHints: [] });
   // The #1807 core: a comment is a non-terminal annotation; Continue resolves.
