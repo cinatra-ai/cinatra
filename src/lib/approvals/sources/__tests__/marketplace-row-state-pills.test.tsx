@@ -186,6 +186,38 @@ describe("repair stuck: the Failed pill beside the state pill, the count on the 
     expect(meta?.textContent).toContain("3 repair attempts");
   });
 
+  it("says '1 repair attempt' in the singular for exactly one attempt", () => {
+    const c = draw(
+      marketplaceVendorAppModerationSource,
+      row("marketplace-vendor-app-moderation", "applied", {
+        ...VENDOR_APP_RAW,
+        repairStuck: true,
+        recoveryAttempts: 1,
+      }),
+      "inbox",
+    );
+    const pills = Array.from(c.querySelectorAll<HTMLElement>('[data-slot="status-pill"]'));
+    expect(pills.map((p) => p.getAttribute("data-status"))).toEqual(["hold", "failed"]);
+    const meta = c.querySelector("p")?.textContent ?? "";
+    expect(meta).toContain("1 repair attempt");
+    expect(meta).not.toContain("1 repair attempts");
+  });
+
+  it("draws the Failed pill but no attempt count when a stuck repair has 0 attempts", () => {
+    const c = draw(
+      marketplaceVendorAppModerationSource,
+      row("marketplace-vendor-app-moderation", "applied", {
+        ...VENDOR_APP_RAW,
+        repairStuck: true,
+        recoveryAttempts: 0,
+      }),
+      "inbox",
+    );
+    const pills = Array.from(c.querySelectorAll<HTMLElement>('[data-slot="status-pill"]'));
+    expect(pills.map((p) => p.getAttribute("data-status"))).toEqual(["hold", "failed"]);
+    expect(c.querySelector("p")?.textContent ?? "").not.toContain("repair attempt");
+  });
+
   it("draws no Failed pill when the application is not stuck", () => {
     const c = draw(
       marketplaceVendorAppModerationSource,

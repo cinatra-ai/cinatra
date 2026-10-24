@@ -57,6 +57,19 @@ describe("marketplaceStatePill — one pill per drawn state", () => {
   });
 });
 
+describe("marketplaceStatePill — state matching is exact", () => {
+  it.each(["Applied", "PENDING", "Approved", " applied", ""])(
+    "draws the case- or space-varied state %j as the neutral Unknown pill, not as its drawn state",
+    (state) => {
+      expect(marketplaceStatePill(state, { viewerMayDecide: true })).toEqual({
+        status: "idle",
+        label: "Unknown",
+        glyph: "icon",
+      });
+    },
+  );
+});
+
 describe("viewerMayDecide — the moderation row's eligibility", () => {
   it("is true when the marketplace sends no eligibility (action-time enforcement)", () => {
     expect(viewerMayDecide(undefined)).toBe(true);
@@ -66,6 +79,12 @@ describe("viewerMayDecide — the moderation row's eligibility", () => {
   it("stays true while one decision is still open to the viewer", () => {
     expect(viewerMayDecide({ can_approve: false, can_reject: true })).toBe(true);
     expect(viewerMayDecide({ can_approve: false })).toBe(true);
+  });
+
+  it("treats an empty eligibility object and a lone can_reject false as still open", () => {
+    expect(viewerMayDecide({})).toBe(true);
+    expect(viewerMayDecide({ can_reject: false })).toBe(true);
+    expect(viewerMayDecide({ can_approve: true, can_reject: false })).toBe(true);
   });
 
   it("is false when the viewer may neither approve nor reject", () => {
