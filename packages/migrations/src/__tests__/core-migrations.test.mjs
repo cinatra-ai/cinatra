@@ -241,9 +241,13 @@ describe("core__0116 pause claim columns (cinatra#4245)", () => {
     const files = await validateCoreMigrationsDir(path.join(REPO_ROOT, CORE_MIGRATIONS_DIR));
     expect(files.filter((name) => name.startsWith("core__0116_"))).toEqual(["core__0116_agent-run-pause-claim.mjs"]);
     const mod = await import(path.join(REPO_ROOT, CORE_MIGRATIONS_DIR, "core__0116_agent-run-pause-claim.mjs"));
-    const record = (fn) => { const calls = []; fn({ sql: (text) => calls.push(String(text)) }); return calls; };
+    const noTx = [];
+    const record = (fn) => { const calls = []; fn({ sql: (text) => calls.push(String(text)), noTransaction: () => noTx.push(fn.name) }); return calls; };
     const up = record(mod.up);
     expect(record(mod.up)).toEqual(up);
+    // Pre-1 C4: up runs outside a transaction, so no lock outlives its statement;
+    // each CHECK is added NOT VALID and validated in a later statement of its own.
+    expect(noTx).toEqual(["up", "up"]);
     // Re-up: every column add is IF NOT EXISTS, every CHECK sits behind its pg_constraint guard.
     const adds = up.flatMap((stmt) => stmt.match(/ADD COLUMN (?:IF NOT EXISTS )?\w+/g) ?? []);
     expect(adds.every((add) => add.startsWith("ADD COLUMN IF NOT EXISTS "))).toBe(true);
@@ -255,6 +259,11 @@ describe("core__0116 pause claim columns (cinatra#4245)", () => {
     for (const name of constraints) {
       const guarded = up.find((stmt) => stmt.includes(`ADD CONSTRAINT ${name}`));
       expect(guarded).toMatch(new RegExp(`IF NOT EXISTS \\(\\s*SELECT 1 FROM pg_constraint\\s+WHERE conname = '${name}'`));
+      expect(guarded).toMatch(/\) NOT VALID;/);
+      const validate = up.findIndex((stmt) => stmt.includes(`VALIDATE CONSTRAINT ${name};`));
+      expect(validate).toBeGreaterThan(up.indexOf(guarded));
+      expect(up[validate]).toMatch(/AND NOT convalidated/);
+      expect(up[validate]).not.toMatch(/ADD CONSTRAINT/);
     }
     // Down: IF EXISTS throughout, constraints before columns, and nothing up did not add.
     const down = record(mod.down).join(";\n");

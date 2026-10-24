@@ -18,8 +18,19 @@
 // because the repository convention counts a NOT NULL column and a CHECK added
 // to an existing table as user-land-affecting.
 //
-// IDEMPOTENT. ADD COLUMN IF NOT EXISTS, and each CHECK is added only while
-// pg_constraint holds no constraint of its name, so a replay re-scans nothing.
+// LOCKS (pre-1 MUST-FIX C4). `up` runs OUTSIDE a transaction
+// (`pgm.noTransaction()`), one statement at a time, so no lock outlives its
+// own statement. The statements that take ACCESS EXCLUSIVE touch the catalog
+// only: the column add (a constant default needs no rewrite and no scan) and
+// each CHECK added NOT VALID (no scan; new writes are checked at once). The
+// table scan happens in VALIDATE CONSTRAINT, which holds only SHARE UPDATE
+// EXCLUSIVE, so reads and writes go on while it runs. Both CHECKs end
+// validated. A crash between two statements leaves no ledger row; the replay
+// finishes the work, because every statement is guarded.
+//
+// IDEMPOTENT. ADD COLUMN IF NOT EXISTS; each CHECK is added only while
+// pg_constraint holds no constraint of its name, and validated only while it
+// is still NOT VALID, so a replay re-scans nothing.
 //
 // DOWN drops the two constraints, then the five columns. It discards any live
 // claim, so it is safe only once no deployed code reads the columns.
@@ -33,8 +44,11 @@ const phaseList = PAUSE_CLAIM_PHASES.map((p) => `'${p}'`).join(",");
 
 /** The CHECKs, by name; the bootstrap leaf carries the same two. */
 export const pauseClaimPhaseCheckSql = `pause_claim_phase IS NULL OR pause_claim_phase IN (${phaseList})`;
+// No claim: token, phase and expiry are all NULL (pre-1 MUST-FIX C1/C6: an
+// expiry alone is refused). A claim: token and phase are set, and only the
+// changes_requested end mark has no expiry.
 export const pauseClaimShapeCheckSql =
-  `(pause_claim_token IS NULL) = (pause_claim_phase IS NULL) AND (pause_claim_phase IS NULL OR (pause_claim_phase = 'changes_requested') = (pause_claim_expires_at IS NULL))`;
+  `(pause_claim_token IS NULL AND pause_claim_phase IS NULL AND pause_claim_expires_at IS NULL) OR (pause_claim_token IS NOT NULL AND pause_claim_phase IS NOT NULL AND (pause_claim_phase = 'changes_requested') = (pause_claim_expires_at IS NULL))`;
 
 const guardedCheck = (name, body) => `DO $$
 BEGIN
@@ -45,7 +59,19 @@ BEGIN
   ) THEN
     ALTER TABLE agent_runs
       ADD CONSTRAINT ${name}
-      CHECK (${body});
+      CHECK (${body}) NOT VALID;
+  END IF;
+END $$`;
+
+const guardedValidate = (name) => `DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = '${name}'
+      AND conrelid = 'agent_runs'::regclass
+      AND NOT convalidated
+  ) THEN
+    ALTER TABLE agent_runs VALIDATE CONSTRAINT ${name};
   END IF;
 END $$`;
 
@@ -54,6 +80,8 @@ export const pauseClaimDdlStatements = [
   `ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS pause_generation bigint NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS pause_claim_token text, ADD COLUMN IF NOT EXISTS pause_claim_phase text, ADD COLUMN IF NOT EXISTS pause_claim_expires_at timestamptz`,
   guardedCheck("agent_runs_pause_claim_phase_chk", pauseClaimPhaseCheckSql),
   guardedCheck("agent_runs_pause_claim_shape_chk", pauseClaimShapeCheckSql),
+  guardedValidate("agent_runs_pause_claim_phase_chk"),
+  guardedValidate("agent_runs_pause_claim_shape_chk"),
   `ALTER TABLE lifecycle_repair ADD COLUMN IF NOT EXISTS paused_run_generation bigint`,
 ];
 
@@ -63,8 +91,10 @@ export const pauseClaimDownStatements = [
   `ALTER TABLE lifecycle_repair DROP COLUMN IF EXISTS paused_run_generation`,
 ];
 
-/** @param {Pick<import("node-pg-migrate").MigrationBuilder, "sql">} pgm */
+/** @param {Pick<import("node-pg-migrate").MigrationBuilder, "sql" | "noTransaction">} pgm */
 export function up(pgm) {
+  // One autocommit statement each: see LOCKS above.
+  pgm.noTransaction();
   for (const statement of pauseClaimDdlStatements) pgm.sql(statement);
 }
 

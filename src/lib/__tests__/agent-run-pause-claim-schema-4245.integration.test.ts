@@ -17,6 +17,13 @@
  * instead of skipping.
  *
  * Red at main: the migration module and the bootstrap leaf export do not exist.
+ *
+ * Pre-1 fold (each red at b128ee97): the shape CHECK refuses an orphan expiry
+ * (C1/C6); no statement scans agent_runs under ACCESS EXCLUSIVE, and other
+ * sessions read and write while VALIDATE scans (C4); a schema name holding
+ * both quote characters boots (C5). No CI job runs this file: every DB job
+ * pins literal paths and none names it, so its reading is a recorded host run
+ * (C2/C9).
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client } from "pg";
@@ -35,19 +42,30 @@ const describeDb = HAS_DB ? describe : describe.skip;
 const suffix = `${process.pid}_${Date.now()}`;
 const UPGRADE = `x4245_up_${suffix}`;
 const FRESH = `x4245_fresh_${suffix}`;
+const LOCKS = `x4245_lk_${suffix}`;
+const QUOTED = `x4245_q"u'o_${suffix}`;
+const qi = (name: string) => `"${name.replaceAll('"', '""')}"`;
 const NEW_COLUMNS = ["pause_claim_expires_at", "pause_claim_phase", "pause_claim_token", "pause_generation"];
 const CHECKS = ["agent_runs_pause_claim_phase_chk", "agent_runs_pause_claim_shape_chk"];
 
 let client: Client;
 
 async function minimalTables(schema: string) {
-  await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
-  await client.query(`CREATE SCHEMA "${schema}"`);
-  await client.query(`CREATE TABLE "${schema}"."agent_runs" (id text PRIMARY KEY, status text NOT NULL)`);
-  await client.query(`CREATE TABLE "${schema}"."lifecycle_repair" (id text PRIMARY KEY)`);
+  await client.query(`DROP SCHEMA IF EXISTS ${qi(schema)} CASCADE`);
+  await client.query(`CREATE SCHEMA ${qi(schema)}`);
+  await client.query(`CREATE TABLE ${qi(schema)}."agent_runs" (id text PRIMARY KEY, status text NOT NULL)`);
+  await client.query(`CREATE TABLE ${qi(schema)}."lifecycle_repair" (id text PRIMARY KEY)`);
 }
 
-const pgm = { sql: (text: string) => { pending.push(text); } };
+// `up` declares noTransaction; this harness runs every statement on its own in
+// autocommit, which is what the runner then does.
+// Typed as `up`'s own parameter: node-pg-migrate's noTransaction() returns the
+// builder (chainable), so a void stub would not type-check.
+type Pgm = Parameters<typeof migration.up>[0];
+const pgm: Pgm = {
+  sql: (text: string) => { pending.push(text); },
+  noTransaction: () => pgm as unknown as ReturnType<Pgm["noTransaction"]>,
+};
 let pending: string[] = [];
 async function runMigration(fn: (b: typeof pgm) => void, schema: string) {
   pending = [];
@@ -75,6 +93,64 @@ async function checks(schema: string) {
   return rows as { conname: string; def: string }[];
 }
 
+async function validated(schema: string) {
+  const { rows } = await client.query(
+    `SELECT c.conname, c.convalidated FROM pg_constraint c
+       JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace
+      WHERE n.nspname = $1 AND t.relname = 'agent_runs' AND c.contype = 'c' ORDER BY c.conname`,
+    [schema],
+  );
+  return rows;
+}
+
+/** The relation locks this session holds on <schema>.agent_runs. */
+async function heldLocks(schema: string): Promise<string[]> {
+  const { rows } = await client.query(
+    `SELECT l.mode FROM pg_locks l
+       JOIN pg_class t ON t.oid = l.relation JOIN pg_namespace n ON n.oid = t.relnamespace
+      WHERE l.pid = pg_backend_pid() AND l.locktype = 'relation' AND l.granted
+        AND n.nspname = $1 AND t.relname = 'agent_runs' ORDER BY l.mode`,
+    [schema],
+  );
+  return rows.map((row: { mode: string }) => row.mode);
+}
+
+let probeSeq = 0;
+/** Can a second session read and write <schema>.agent_runs right now? null = yes, else the SQLSTATE. */
+async function otherSession(schema: string): Promise<{ read: string | null; write: string | null }> {
+  const other = new Client({ connectionString: DB_URL });
+  await other.connect();
+  const attempt = async (text: string) => {
+    try {
+      await other.query(text);
+      return null;
+    } catch (error) {
+      return (error as { code?: string }).code ?? "unknown";
+    }
+  };
+  try {
+    await other.query("SET statement_timeout = '1500ms'");
+    probeSeq += 1;
+    return {
+      read: await attempt(`SELECT count(*) FROM ${qi(schema)}."agent_runs"`),
+      write: await attempt(`INSERT INTO ${qi(schema)}."agent_runs" (id, status) VALUES ('probe-${probeSeq}', 'running')`),
+    };
+  } finally {
+    await other.end();
+  }
+}
+
+/** Runs one statement in an open transaction and reads its locks (and, with probe, a second session) before the commit. */
+async function holdingLocksOf(schema: string, text: string, probe = true) {
+  await client.query("BEGIN");
+  try {
+    await client.query(text);
+    return { locks: await heldLocks(schema), other: probe ? await otherSession(schema) : null };
+  } finally {
+    await client.query("COMMIT");
+  }
+}
+
 async function sqlState(text: string, params: unknown[] = []): Promise<string | null> {
   try {
     await client.query(text, params);
@@ -92,7 +168,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!HAS_DB) return;
-  for (const schema of [UPGRADE, FRESH]) await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+  for (const schema of [UPGRADE, FRESH, LOCKS, QUOTED]) await client.query(`DROP SCHEMA IF EXISTS ${qi(schema)} CASCADE`);
   await client.end();
 });
 
@@ -128,6 +204,7 @@ describeDb("core__0116 on a real database (cinatra#4245)", () => {
   });
 
   it.each([
+    ["an orphan expiry", null, null, "now()"],
     ["a token without a phase", "tok", null, "now()"],
     ["a phase without a token", null, "claimed", "now()"],
     ["an unknown phase", "tok", "held", "now()"],
@@ -165,7 +242,7 @@ describeDb("core__0116 on a real database (cinatra#4245)", () => {
       ...agentRunPauseClaimSchemaQueries(FRESH).map((row) => row.text),
       ...lifecycleRepairSchemaQueries(FRESH).map((row) => row.text).filter((text) => text.includes("paused_run_generation")),
     ];
-    expect(bootstrap).toHaveLength(4);
+    expect(bootstrap).toHaveLength(6);
     for (let replay = 0; replay < 2; replay += 1) {
       for (const text of bootstrap) await client.query(text);
     }
@@ -173,5 +250,52 @@ describeDb("core__0116 on a real database (cinatra#4245)", () => {
     expect(pick(await columns(FRESH, "agent_runs"))).toEqual(pick(await columns(UPGRADE, "agent_runs")));
     expect(pick(await columns(FRESH, "lifecycle_repair"))).toEqual(pick(await columns(UPGRADE, "lifecycle_repair")));
     expect(await checks(FRESH)).toEqual(await checks(UPGRADE));
+  });
+
+  it("scans agent_runs only in VALIDATE, under SHARE UPDATE EXCLUSIVE, while other sessions read and write", async () => {
+    await minimalTables(LOCKS);
+    await client.query(`INSERT INTO ${qi(LOCKS)}."agent_runs" (id, status) SELECT 'row-' || g, 'running' FROM generate_series(1, 50) g`);
+    pending = [];
+    migration.up(pgm);
+    const statements = [...pending];
+    expect(statements).toHaveLength(6);
+    const [columnsAdd, phaseAdd, shapeAdd, phaseValidate, shapeValidate, repairAdd] = statements;
+    await client.query(`SET search_path TO ${qi(LOCKS)}`);
+
+    // The column add holds ACCESS EXCLUSIVE, and the probe sees it block.
+    const added = await holdingLocksOf(LOCKS, columnsAdd);
+    expect(added.locks).toContain("AccessExclusiveLock");
+    expect(added.other?.read).toBe("57014");
+
+    // A row the phase CHECK refuses: the NOT VALID adds succeed over it, so
+    // they read no row; the VALIDATE refuses it, so the scan happens there.
+    await client.query(
+      `INSERT INTO ${qi(LOCKS)}."agent_runs" (id, status, pause_claim_token, pause_claim_phase, pause_claim_expires_at)
+       VALUES ('stale', 'running', 'tok', 'held', now() + interval '1 hour')`,
+    );
+    for (const add of [phaseAdd, shapeAdd]) {
+      expect((await holdingLocksOf(LOCKS, add, false)).locks).toContain("AccessExclusiveLock");
+    }
+    expect(await sqlState(phaseValidate)).toBe("23514");
+    await client.query(`DELETE FROM ${qi(LOCKS)}."agent_runs" WHERE id = 'stale'`);
+
+    for (const validate of [phaseValidate, shapeValidate]) {
+      const held = await holdingLocksOf(LOCKS, validate);
+      expect(held.locks).toContain("ShareUpdateExclusiveLock");
+      expect(held.locks).not.toContain("AccessExclusiveLock");
+      expect(held.other).toEqual({ read: null, write: null });
+    }
+    await client.query(repairAdd);
+    expect(await validated(LOCKS)).toEqual(CHECKS.map((conname) => ({ conname, convalidated: true })));
+    expect(await checks(LOCKS)).toEqual(await checks(UPGRADE));
+  }, 60_000);
+
+  it("boots a schema whose name holds a double quote and a single quote, and replays cleanly", async () => {
+    await minimalTables(QUOTED);
+    for (let replay = 0; replay < 2; replay += 1) {
+      for (const { text } of agentRunPauseClaimSchemaQueries(QUOTED)) await client.query(text);
+    }
+    expect(await validated(QUOTED)).toEqual(CHECKS.map((conname) => ({ conname, convalidated: true })));
+    expect(await checks(QUOTED)).toEqual(await checks(UPGRADE));
   });
 });
