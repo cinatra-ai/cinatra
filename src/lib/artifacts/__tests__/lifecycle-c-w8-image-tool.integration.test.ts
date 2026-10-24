@@ -659,3 +659,80 @@ describe.skipIf(!HAS_REAL_DB)(
     });
   },
 );
+
+describe.skipIf(!HAS_REAL_DB)(
+  "cinatra#4223 — the stored-facts read answers exactly one finalized picture row, or nothing",
+  () => {
+    it("reads the provider and model of exactly one finalized row of that organisation, artifact and revision", async () => {
+      const { readRevisionImageProvenance } = await import("@/lib/artifacts/materialization-ledger");
+      const runId = nextId("run");
+      await seedRun(runId);
+      const first = await tool.generateArtifactImage(
+        {
+          runId,
+          orgId: ORG,
+          templateId: TEMPLATE,
+          packageVersion: "1.0.0",
+          createdBy: "user-3032",
+          nodeId: "reader-node",
+          extension: PICTURE_EXT,
+          title: "The lighthouse",
+          prompt: "a lighthouse at dusk",
+          data: { post: "post-artifact-1", placement: "featured" },
+        },
+        providerServing([PNG_RED]).deps(),
+      );
+      if (!first.ok) throw new Error(first.error);
+      const key = {
+        orgId: ORG,
+        artifactId: first.artifactId,
+        representationRevisionId: first.representationRevisionId,
+      };
+      const table = `"${S()}"."artifact_materializations"`;
+      const where = `run_id = $1 AND output_id = 'reader-node'`;
+
+      // One finalized row: its facts.
+      expect(await readRevisionImageProvenance(key)).toEqual({
+        provider: "test-image-provider",
+        model: "test-image-model-1",
+      });
+      // Another organisation, another revision: no row.
+      expect(await readRevisionImageProvenance({ ...key, orgId: "org-other" })).toBeNull();
+      expect(
+        await readRevisionImageProvenance({ ...key, representationRevisionId: "rep-none" }),
+      ).toBeNull();
+
+      // A null or empty stored model reads as a null model.
+      await sql(`UPDATE ${table} SET image_model = NULL WHERE ${where}`, [runId]);
+      expect(await readRevisionImageProvenance(key)).toEqual({
+        provider: "test-image-provider",
+        model: null,
+      });
+      await sql(`UPDATE ${table} SET image_model = '' WHERE ${where}`, [runId]);
+      expect((await readRevisionImageProvenance(key))?.model).toBeNull();
+
+      // An empty stored provider is no fact: nothing.
+      await sql(`UPDATE ${table} SET image_provider = '' WHERE ${where}`, [runId]);
+      expect(await readRevisionImageProvenance(key)).toBeNull();
+      await sql(`UPDATE ${table} SET image_provider = 'test-image-provider' WHERE ${where}`, [runId]);
+
+      // A row that is not finalized is no fact: nothing.
+      await sql(`UPDATE ${table} SET phase = 'claimed' WHERE ${where}`, [runId]);
+      expect(await readRevisionImageProvenance(key)).toBeNull();
+      await sql(`UPDATE ${table} SET phase = 'finalized' WHERE ${where}`, [runId]);
+      expect((await readRevisionImageProvenance(key))?.provider).toBe("test-image-provider");
+
+      // Two finalized rows for one revision are ambiguous: nothing, never a guess.
+      await sql(
+        `INSERT INTO ${table}
+           (id, org_id, run_id, output_id, node_id, path, extension, content_hash, phase,
+            artifact_id, representation_revision_id, image_prompt, image_provider, image_model)
+         SELECT $2, org_id, run_id, output_id || '#second', node_id, path, extension, content_hash, phase,
+                artifact_id, representation_revision_id, image_prompt, 'other-image-provider', image_model
+           FROM ${table} WHERE ${where}`,
+        [runId, nextId("ledger")],
+      );
+      expect(await readRevisionImageProvenance(key)).toBeNull();
+    });
+  },
+);
