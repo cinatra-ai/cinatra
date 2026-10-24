@@ -55,6 +55,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { parseSpecCommit } from "../../ci/lib/design-pin.mjs";
+import { captureAnchorExpectations } from "../lib/anchor-contract.mjs";
 
 import {
   CANONICAL_CRITERIA,
@@ -415,6 +416,19 @@ describe("the REAL manifest", () => {
       expect(contractNote, surface).toContain(surface);
     }
     expect(contractNote).toMatch(/RE-RATIFIED 2026-10-22 \(cinatra#4308[^]*NO RECORDED ANCHOR CHANGED/);
+    // The controls drawn inside those five examples carry twelve `data-action`
+    // attributes of their own. The contract records the bare capture selector
+    // `[data-action]`, which names no value and so reads every one of them: the
+    // drift record names that selector, and claims only that no recorded
+    // selector names their values, never that no recorded selector reads them.
+    const recordedCaptureSelectors = new Set(
+      Object.values(captureAnchorExpectations())
+        .flatMap((cells) => Object.values(cells).flat())
+        .map((claim) => claim.split(" ")[0]),
+    );
+    expect(recordedCaptureSelectors.has("[data-action]")).toBe(true);
+    expect(m.specCommitDrift.differs).toContain("the bare capture selector `[data-action]`");
+    expect(m.specCommitDrift.differs).not.toMatch(/none of them is a selector the anchor contract records/);
   });
 
   it("row 15 keeps the proofs it had — a flip withdraws a claim, not evidence", () => {
