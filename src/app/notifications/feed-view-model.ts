@@ -92,6 +92,11 @@ export interface ApprovalRowVM {
   actionable: boolean;
   /** Which inline decide to render when `actionable`; `none` otherwise. */
   decideKind: ApprovalDecideKind;
+  /** A stuck vendor-application repair (cinatra#4296): the card draws the
+   *  Failed pill beside its pending pill and the attempt count on its meta
+   *  line. Only the PUBLIC `ApprovalRow.repairStuck` field is copied, never
+   *  `raw`. Absent when the repair is not stuck. */
+  repairStuck?: { attempts: number };
 }
 
 export type FeedRowVM =
@@ -233,6 +238,7 @@ export function buildFeedRowVMs(
           direction,
           actionable,
           decideKind: actionable ? approvalDecideKind(row.sourceId) : "none",
+          ...(row.repairStuck ? { repairStuck: { attempts: row.repairStuck.attempts } } : {}),
         },
       });
     }

@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/card";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { StatusPill } from "@/components/ui/status-pill";
+import { ApprovalPendingPill } from "@/lib/approvals/approval-pills";
 import type { InstanceIdentity } from "@/lib/instance-identity-store";
 import {
   cancelVendorApplicationAction,
@@ -49,7 +49,10 @@ export function VendorApplicationStatusCard({
               decision state from cm.
             </CardDescription>
           </div>
-          <StatusPill status="running">Applied</StatusPill>
+          {/* The instance's own open application waits on a marketplace
+              moderator: the approval's pending pill, Awaiting others
+              (specs/app.html V.1). */}
+          <ApprovalPendingPill viewerMayDecide={false} data-state="applied" />
         </div>
       </CardHeader>
       <CardContent>

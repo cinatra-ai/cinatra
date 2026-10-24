@@ -93,6 +93,12 @@ export interface ApprovalRow {
    *  the owning source's own `rowRenderer`) may read it; the decide primitive stays
    *  the authoritative re-check regardless of what this flag says. */
   decidableOwn?: boolean;
+  /** PUBLIC (cinatra#4296): set when a vendor application's recovery is stuck
+   *  (it will not retry; an administrator must step in). It carries only what a
+   *  view draws: the Failed pill beside the state pill, and the attempt count
+   *  on the meta line (specs/app.html V.1). Absent when the repair is not stuck.
+   *  Any renderer of the row may read it, unlike {@link raw}. */
+  repairStuck?: { attempts: number };
 }
 
 export interface ApprovalEnvelope {

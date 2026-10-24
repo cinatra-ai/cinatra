@@ -7,6 +7,7 @@ import type { MarketplaceVendorApplicationAdminRow } from "@cinatra-ai/marketpla
 
 import { Badge } from "@/components/ui/badge";
 
+import { repairAttemptsText } from "../approval-pills";
 import { MarketplaceDecisionActions } from "../marketplace-decision-actions";
 import { decideMarketplaceVendorApplication } from "../marketplace-decision-helpers";
 import { MarketplaceRowView } from "./marketplace-row";
@@ -63,8 +64,9 @@ interface VendorAppRaw {
 // application (also visible via the self-status mirror) onto the SAME local
 // timestamp both adapters resolve, so the unified feed's deduped keyset cursor
 // is stable no matter which mirror fetched it (cinatra#1555). Every OTHER
-// vendor's row keeps the authoritative remote `applied_at`.
-function toRow(
+// vendor's row keeps the authoritative remote `applied_at`. Exported for its
+// unit test (the public repair fields, cinatra#4296).
+export function toVendorApplicationModerationRow(
   r: MarketplaceVendorApplicationAdminRow,
   ownAppId: string | undefined,
   ownCreatedAt: string,
@@ -83,6 +85,9 @@ function toRow(
     status: r.status,
     createdAt: ownAppId && r.application_id === ownAppId ? ownCreatedAt : r.applied_at,
     eligibility: toRowEligibility(r.eligibility),
+    // PUBLIC: only the two repair fields a view draws (cinatra#4296), so the
+    // Notifications card can draw the flag without reading `raw`.
+    ...(raw.repairStuck ? { repairStuck: { attempts: raw.recoveryAttempts } } : {}),
     raw,
   };
 }
@@ -131,7 +136,7 @@ export const marketplaceVendorAppModerationSource: ApprovalSource = {
       // so its row aligns with the self-status mirror's timestamp.
       const ownAppId = resolveOwnVendorApplicationId();
       const ownCreatedAt = resolveOwnVendorApplicationCreatedAt();
-      return rows.map((r) => toRow(r, ownAppId, ownCreatedAt));
+      return rows.map((r) => toVendorApplicationModerationRow(r, ownAppId, ownCreatedAt));
     });
   },
 
@@ -145,10 +150,8 @@ export const marketplaceVendorAppModerationSource: ApprovalSource = {
     const applied = formatDistanceToNow(new Date(row.createdAt), { addSuffix: true });
     // Repair stuck is a flag, not a state: the Failed pill sits beside the state
     // pill and the attempt count rides on the meta line (specs/app.html V.1).
-    const attempts =
-      raw.repairStuck && raw.recoveryAttempts > 0
-        ? ` · ${raw.recoveryAttempts} repair ${raw.recoveryAttempts === 1 ? "attempt" : "attempts"}`
-        : "";
+    const count = raw.repairStuck ? repairAttemptsText(raw.recoveryAttempts) : "";
+    const attempts = count ? ` · ${count}` : "";
     return (
       <MarketplaceRowView
         title={row.title}

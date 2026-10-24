@@ -1,5 +1,6 @@
 import type { StatusPillStatus } from "@/components/ui/status-pill";
 
+import { pendingApprovalPill } from "../approval-pills";
 import type { RowEligibility } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -19,6 +20,11 @@ export type MarketplaceStatePill = {
   glyph: "icon" | "dot";
 };
 
+/** The two pending states, drawn with the approval's one pending pill. */
+export function isPendingApprovalState(state: string): boolean {
+  return state === "applied" || state === "pending";
+}
+
 export function marketplaceStatePill(
   state: string,
   { viewerMayDecide }: { viewerMayDecide: boolean },
@@ -26,9 +32,9 @@ export function marketplaceStatePill(
   switch (state) {
     case "applied":
     case "pending":
-      return viewerMayDecide
-        ? { status: "hold", label: "Awaiting you", glyph: "dot" }
-        : { status: "idle", label: "Awaiting others", glyph: "dot" };
+      // The approval's one pending pill (../approval-pills), shared with the
+      // Notifications approval card.
+      return { ...pendingApprovalPill(viewerMayDecide) };
     case "approved":
     case "promoted":
       return { status: "approved", label: "Approved", glyph: "icon" };
