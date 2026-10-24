@@ -185,8 +185,8 @@ describe('clause: "it has no sort"', () => {
             '[data-slot="table-body"] > [data-slot="table-row"]',
           ),
         ).map((row) => row.textContent);
-      const before = bodyText();
-      expect(before).toEqual(["Outreach #2,31814:21", "Enricher #2,31714:08"]);
+      const given = ["Outreach #2,31814:21", "Enricher #2,31714:08"];
+      expect(bodyText()).toEqual(given);
 
       expect(container.querySelectorAll("[aria-sort]")).toHaveLength(0);
       const heads = Array.from(
@@ -197,10 +197,14 @@ describe('clause: "it has no sort"', () => {
         expect(head.querySelector('button, a, [role="button"]')).toBeNull();
       }
 
+      // The order is read after each click: a two-state sort would reorder
+      // the rows on the first click and restore them on the second.
       fireEvent.click(heads[0]);
-      fireEvent.click(heads[0]);
+      expect(bodyText()).toEqual(given);
+      expect(container.querySelectorAll("[aria-sort]")).toHaveLength(0);
 
-      expect(bodyText()).toEqual(before);
+      fireEvent.click(heads[0]);
+      expect(bodyText()).toEqual(given);
       expect(container.querySelectorAll("[aria-sort]")).toHaveLength(0);
     },
   );
