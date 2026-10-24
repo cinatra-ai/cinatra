@@ -1,5 +1,5 @@
 /**
- * cinatra#3745, MF2: a guarded leaf's call the host does not read as outward
+ * cinatra#3745: a guarded leaf's call the host does not read as outward
  * needs no CHECK provider, as on main.
  *
  * The host reads a call as outward when its name is in the boundary's
@@ -85,7 +85,7 @@ function leafFor(identity: LoadedExtensionIdentity | undefined, registration: Re
   return { call, effects, owners };
 }
 
-describe("a non-outward guarded call on a run's frame (cinatra#3745 MF2)", () => {
+describe("a non-outward guarded call on a run's frame (cinatra#3745)", () => {
   beforeEach(() => {
     h.sourceCurrent = true;
     const realLookup = augmentModule.lookupPrimitiveClassification;

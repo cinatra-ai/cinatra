@@ -35,7 +35,7 @@ describe("actual declared module selection without authoritative loaded identity
   const effects:unknown[]=[];
   expect(await dispatchExtensionTool(identityLess(effects))).toEqual({ok:true});expect(effects).toHaveLength(1);
  });
- it("serves an identity-less, non-outward call once on a run frame with a verified source (cinatra#3745 MF2)",async()=>{
+ it("serves an identity-less, non-outward call once on a run frame with a verified source (cinatra#3745)",async()=>{
   const effects:unknown[]=[];
   await expect(mcpRequestContextStorage.run(verifiedRunFrame(),()=>dispatchExtensionTool(identityLess(effects)))).resolves.toEqual({ok:true});
   expect(effects).toEqual([{q:"x"}]);

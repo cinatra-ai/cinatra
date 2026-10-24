@@ -6,7 +6,7 @@
  * provider for the loaded identity that executes. Without one from the
  * extension, the in-tree provider admits only a digest-pinned install's
  * primitive whose bound registration declares the read class. A call the host
- * does not read as outward needs no CHECK, as on main (the MF2 posture): an
+ * does not read as outward needs no CHECK, as on main (the same posture): an
  * undeclared tool, a legacy or dev load and a stale load are served behind the
  * source and step fences. Two providers, or an extension's own outward reading,
  * still refuse.

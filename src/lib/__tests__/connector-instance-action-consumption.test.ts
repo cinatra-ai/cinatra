@@ -1,5 +1,5 @@
 /**
- * The connector-instance invoker under the real run guard (cinatra#3745 MF2).
+ * The connector-instance invoker under the real run guard (cinatra#3745).
  *
  * A connector's model-visible primitive is a guarded leaf; its handler calls
  * the invoker, which hands the wire call to the same guard under the leaf's

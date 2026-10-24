@@ -1,5 +1,5 @@
 /**
- * cinatra#3745 MF2 — AN EXISTING APPROVED REVIEW-DECISION ROAD STILL COMPLETES,
+ * cinatra#3745 — AN EXISTING APPROVED REVIEW-DECISION ROAD STILL COMPLETES,
  * ON A REAL DATABASE.
  *
  * A person approves a WayFlow gate (`approveReviewTaskInternal`, the `wayflow-`
@@ -347,7 +347,7 @@ beforeEach(() => {
   h.leaf = null;
 });
 
-describe.skipIf(!HAS_DB)("an approved review-decision road still completes (cinatra#3745 MF2)", () => {
+describe.skipIf(!HAS_DB)("an approved review-decision road still completes (cinatra#3745)", () => {
   it("(a) a non-outward extension tool with no loaded identity files its review targets on the resumed leg", async () => {
     await seedRunAtGate();
     h.onSend = () => passthrough("extension_tool", { name: "fixture_tool", input: { draft: "x" } });
