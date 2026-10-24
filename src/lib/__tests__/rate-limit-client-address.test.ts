@@ -47,6 +47,16 @@ describe("rateLimitClientAddress", () => {
     ).toBe(CLIENT);
     expect(rateLimitClientAddress(req({}))).toBe("unknown");
   });
+
+  // cinatra#4217 fold 3. RED BEFORE fold 3 (head e804438a): the helper tested the
+  // header's TRUTHINESS, so a present but empty X-Forwarded-For fell through to
+  // X-Real-IP, against "only when there is no X-Forwarded-For" above.
+  it("a present but empty X-Forwarded-For keys unknown and never reads X-Real-IP", () => {
+    const headers = new Headers({ "x-forwarded-for": "", "x-real-ip": VICTIM });
+    expect(headers.get("x-forwarded-for"), "control: the empty header is present").toBe("");
+    expect(rateLimitClientAddress({ headers })).toBe("unknown");
+    expect(rateLimitClientAddress(req({ "x-forwarded-for": "   ", "x-real-ip": VICTIM }))).toBe("unknown");
+  });
 });
 
 describe("a forged hop and the shared bucket (cinatra#4217)", () => {

@@ -85,13 +85,14 @@ beforeEach(() => {
  * The timeout is generous relative to the fake work but still bounded, so a
  * ceremony that never reaches the listener fails fast instead of hanging.
  */
-async function run(fetchImpl: typeof fetch, timeoutMs = 2_000) {
+async function run(fetchImpl: typeof fetch, timeoutMs = 2_000, now?: () => number) {
   const promise = runFrameSignIn(SELECTORS, {
     fetchImpl,
     openPopup: openPopup as unknown as (url: string) => Window | null,
     listenWindow: listen,
     selfOrigin: SELF,
     timeoutMs,
+    ...(now ? { now } : {}),
   });
   await vi.waitFor(() => expect(listen.count).toBeGreaterThan(0));
   return { promise };
@@ -117,6 +118,7 @@ describe("the ceremony", () => {
     expect(result).toEqual({
       ok: true,
       credential: { userToken: "cwu_user", transportToken: "cit_transport", expiresIn: 600 },
+      mintedAt: expect.any(Number),
     });
 
     const init = calls.find((c) => c.url === FRAME_INIT_PATH)!;
@@ -385,6 +387,81 @@ describe("renewal (cinatra#4217)", () => {
         fetchImpl: answer(status) as unknown as typeof fetch,
       });
       expect(refused, `HTTP ${status}`).toEqual({ ok: false, reason: "renew_failed" });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4217 fold 3 — the mint anchor, the delay's edge inputs and a
+// malformed renewal answer.
+//
+// RED BEFORE fold 3 (head e804438a): runFrameSignIn answered no mint time, so
+// its caller could only count the pair's life from when it got round to it
+// (after its negotiation). The two other cases pin behaviour e804438a already
+// had (frameRenewalDelayMs's floor and credentialPairFrom's both-or-nothing);
+// they are not red there.
+// ---------------------------------------------------------------------------
+
+describe("fold 3 (cinatra#4217)", () => {
+  it("answers the clock read just before the token request: after the popup, before a slow answer", async () => {
+    let clock = 1_000;
+    const { impl, calls } = fetchDouble();
+    const slowImpl = vi.fn(async (url: string, options: RequestInit) => {
+      const answer = await (impl as unknown as (u: string, o: RequestInit) => Promise<Response>)(url, options);
+      // The token answer takes 60 s to arrive.
+      if (url === FRAME_TOKEN_PATH) clock += 60_000;
+      return answer;
+    });
+    const { promise } = await run(slowImpl as unknown as typeof fetch, 2_000, () => clock);
+    // The person spends 100 s in the hosted sign-in window.
+    clock += 100_000;
+    listen.deliver({
+      origin: SELF,
+      source: popup as unknown as Window,
+      data: { type: WIDGET_AUTH_MESSAGE_TYPE, code: "the-code", state: mintedState(calls) },
+    });
+    const result = await promise;
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.mintedAt, "the request start, not the sign-in start nor the answer").toBe(101_000);
+  });
+
+  it("renews at the 30 s floor for zero, negative and non-finite life", () => {
+    for (const life of [0, -5, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(frameSession.frameRenewalDelayMs(life), String(life)).toBe(30_000);
+    }
+    expect(frameSession.frameRenewalDelayMs(120)).toBe(30_000);
+    expect(frameSession.frameRenewalDelayMs(121)).toBe(31_000);
+  });
+
+  it("a 200 answer whose body is malformed renews nothing: renew_failed, or no life", async () => {
+    const answer = (json: () => Promise<unknown>) =>
+      vi.fn(async () => ({ ok: true, status: 200, json }) as unknown as Response) as unknown as typeof fetch;
+    const current = { userToken: "cwu_current", transportToken: "cit_current", expiresIn: 300 };
+    const refused: Array<[string, () => Promise<unknown>]> = [
+      ["not JSON", async () => Promise.reject(new SyntaxError("Unexpected token"))],
+      ["null", async () => null],
+      ["an array", async () => [{ userToken: "cwu_a", transportToken: "cit_a", expiresIn: 300 }]],
+      ["a string", async () => "cwu_a cit_a"],
+      ["half a pair (user token only)", async () => ({ userToken: "cwu_a", expiresIn: 300 })],
+      ["half a pair (transport only)", async () => ({ transportToken: "cit_a", expiresIn: 300 })],
+      ["tokens that are not strings", async () => ({ userToken: 1, transportToken: true, expiresIn: 300 })],
+      ["empty tokens", async () => ({ userToken: "", transportToken: "", expiresIn: 300 })],
+    ];
+    for (const [label, json] of refused) {
+      await expect(
+        frameSession.renewFrameCredential(SELECTORS, current, { fetchImpl: answer(json) }),
+        label,
+      ).resolves.toEqual({ ok: false, reason: "renew_failed" });
+    }
+    // A whole pair with a life that is not a finite number keeps the pair and
+    // advertises NO life, so the chain renews it at the 30 s floor.
+    for (const expiresIn of ["300", null, Number.NaN]) {
+      await expect(
+        frameSession.renewFrameCredential(SELECTORS, current, {
+          fetchImpl: answer(async () => ({ userToken: "cwu_a", transportToken: "cit_a", expiresIn })),
+        }),
+        String(expiresIn),
+      ).resolves.toEqual({ ok: true, credential: { userToken: "cwu_a", transportToken: "cit_a", expiresIn: 0 } });
     }
   });
 });

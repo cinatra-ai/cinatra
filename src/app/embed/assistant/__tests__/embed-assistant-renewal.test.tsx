@@ -31,7 +31,10 @@
  *   (xi)  a sign-in that answers after a newer sign-in took over cannot
  *         replace the newer pair;
  *   (xii) a sign-in again after a refused renewal waits for its own restore:
- *         the column never mounts with the previous sign-in's transcript.
+ *         the column never mounts with the previous sign-in's transcript;
+ *   (xiii) a negotiation that takes 100 s and renewal answers that take 60 s
+ *         never push a renewal past the end of the pair the frame holds: the
+ *         pair's life runs from its mint (cinatra#4217 fold 3).
  *
  * Only the edges are doubled: the bridge (the parent page), the sign-in popup
  * and the renew call (the network), the capability negotiation, the transcript
@@ -63,7 +66,8 @@ vi.mock("@/lib/embed/embed-bridge.client", () => ({
   },
 }));
 
-const runFrameSignIn = vi.fn<(selectors: unknown) => Promise<{ ok: true; credential: Pair } | { ok: false; reason: string }>>();
+type SignedIn = { ok: true; credential: Pair; mintedAt: number };
+const runFrameSignIn = vi.fn<(selectors: unknown) => Promise<SignedIn | { ok: false; reason: string }>>();
 const renewFrameCredential = vi.fn<
   (selectors: unknown, current: Pair) => Promise<{ ok: true; credential: Pair } | { ok: false; reason: string }>
 >();
@@ -216,7 +220,7 @@ async function wait(ms: number) {
 /** Context, sign-in with `p`, an `ok` negotiation and an empty restore. */
 async function signedIn(p: Pair, threadId = "t-1") {
   await deliverContext(threadId);
-  runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: p });
+  runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: p, mintedAt: Date.now() });
   negotiate.mockResolvedValueOnce({ ok: true });
   fetchThreadMessages.mockResolvedValueOnce([]);
   await clickSignIn();
@@ -271,7 +275,7 @@ describe("EmbedAssistantClient — the renewal chain, wired (cinatra#4217)", () 
   it("(ii) a negotiation that ends gated arms nothing and drops the pair", async () => {
     await render();
     await deliverContext();
-    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(1) });
+    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(1), mintedAt: Date.now() });
     negotiate.mockResolvedValueOnce({ ok: false, reason: "auth_mode_unsupported" });
     await clickSignIn();
     expect(phase()).toBe("gated");
@@ -283,7 +287,7 @@ describe("EmbedAssistantClient — the renewal chain, wired (cinatra#4217)", () 
   it("(iii) a negotiation that answers after the frame moved on changes nothing", async () => {
     await render("inst-1");
     await deliverContext("t-1");
-    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(1) });
+    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(1), mintedAt: Date.now() });
     const slow = deferred<{ ok: boolean }>();
     negotiate.mockReturnValueOnce(slow.promise);
     await clickSignIn();
@@ -354,7 +358,7 @@ describe("EmbedAssistantClient — the renewal chain, wired (cinatra#4217)", () 
   it("(vii) a restore that answers after the frame moved on neither settles the history nor seeds the next conversation", async () => {
     await render("inst-1");
     await deliverContext("t-1");
-    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(1) });
+    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(1), mintedAt: Date.now() });
     negotiate.mockResolvedValueOnce({ ok: true });
     const staleRestore = deferred<unknown[] | null>();
     fetchThreadMessages.mockReturnValueOnce(staleRestore.promise);
@@ -369,7 +373,7 @@ describe("EmbedAssistantClient — the renewal chain, wired (cinatra#4217)", () 
       await drain();
     });
 
-    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(2) });
+    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(2), mintedAt: Date.now() });
     negotiate.mockResolvedValueOnce({ ok: true });
     const freshRestore = deferred<unknown[] | null>();
     fetchThreadMessages.mockReturnValueOnce(freshRestore.promise);
@@ -409,7 +413,7 @@ describe("EmbedAssistantClient — the renewal chain, wired (cinatra#4217)", () 
   it("(ix) a restore that answers after the chain was armed still settles the history", async () => {
     await render();
     await deliverContext("t-1");
-    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(1) });
+    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(1), mintedAt: Date.now() });
     negotiate.mockResolvedValueOnce({ ok: true });
     const restore = deferred<unknown[] | null>();
     fetchThreadMessages.mockReturnValueOnce(restore.promise);
@@ -434,7 +438,7 @@ describe("EmbedAssistantClient — the renewal chain, wired (cinatra#4217)", () 
   it("(x) a parity seed that answers after the chain was armed still seeds the column", async () => {
     await render("inst-1", "wordpress", { threadId: "seed-1" });
     await deliverContext("t-1");
-    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(1) });
+    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(1), mintedAt: Date.now() });
     negotiate.mockResolvedValueOnce({ ok: true });
     const seed = deferred<unknown[] | null>();
     fetchThreadMessages.mockReturnValueOnce(seed.promise);
@@ -458,7 +462,7 @@ describe("EmbedAssistantClient — the renewal chain, wired (cinatra#4217)", () 
   it("(xi) a sign-in that answers after a newer sign-in took over cannot replace the newer pair", async () => {
     await render("inst-1", "wordpress");
     await deliverContext("t-1");
-    const slowSignIn = deferred<{ ok: true; credential: Pair }>();
+    const slowSignIn = deferred<SignedIn>();
     runFrameSignIn.mockReturnValueOnce(slowSignIn.promise);
     negotiate.mockResolvedValue({ ok: true });
     fetchThreadMessages.mockResolvedValue([]);
@@ -470,14 +474,14 @@ describe("EmbedAssistantClient — the renewal chain, wired (cinatra#4217)", () 
     await render("inst-1", "drupal");
     await deliverContext("t-2");
     expect(phase()).toBe("signin");
-    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(3) });
+    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(3), mintedAt: Date.now() });
     await clickSignIn();
     expect(phase()).toBe("active");
     expect(requestHeaders()).toEqual(headersOf(pair(3)));
 
     // Now A's window answers.
     await act(async () => {
-      slowSignIn.resolve({ ok: true, credential: pair(1) });
+      slowSignIn.resolve({ ok: true, credential: pair(1), mintedAt: Date.now() });
       await drain();
     });
     expect(requestHeaders(), "the stale sign-in's pair never replaces B's").toEqual(headersOf(pair(3)));
@@ -493,7 +497,7 @@ describe("EmbedAssistantClient — the renewal chain, wired (cinatra#4217)", () 
     await render();
     await deliverContext("t-1");
     const oldTranscript = [{ id: "old", role: "user", content: "the old transcript" }];
-    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(1) });
+    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(1), mintedAt: Date.now() });
     negotiate.mockResolvedValueOnce({ ok: true });
     fetchThreadMessages.mockResolvedValueOnce(oldTranscript);
     await clickSignIn();
@@ -505,7 +509,7 @@ describe("EmbedAssistantClient — the renewal chain, wired (cinatra#4217)", () 
     expect(phase(), "the refused renewal returns to the sign-in card").toBe("signin");
     const seedsBefore = columnSeeds.length;
 
-    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(2) });
+    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(2), mintedAt: Date.now() });
     negotiate.mockResolvedValueOnce({ ok: true });
     const freshRestore = deferred<unknown[] | null>();
     fetchThreadMessages.mockReturnValueOnce(freshRestore.promise);
@@ -524,5 +528,56 @@ describe("EmbedAssistantClient — the renewal chain, wired (cinatra#4217)", () 
     expect(secondMount[0], "seeded with the new transcript").toEqual(newTranscript);
     expect(secondMount, "the old transcript never seeds it").not.toContainEqual(oldTranscript);
     expect(fetchThreadMessages.mock.calls.map((c) => c[0])).toEqual(["t-1", "t-1"]);
+  });
+  // cinatra#4217 fold 3. RED BEFORE fold 3 (head e804438a): the frame armed the
+  // chain after its negotiation with the pair's FULL advertised life, so a 100 s
+  // negotiation put the first renewal at mint + 310 s, ten seconds after the
+  // 300 s transport token had run out; a slow renewal answer moved every later
+  // renewal by its own delay too.
+  it("(xiii) a slow negotiation and slow renewal answers never push a renewal past the pair's end", async () => {
+    await render();
+    await deliverContext("t-1");
+    const t0 = Date.now();
+    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(1), mintedAt: t0 });
+    const slowNegotiation = deferred<{ ok: boolean }>();
+    negotiate.mockReturnValueOnce(slowNegotiation.promise);
+    fetchThreadMessages.mockResolvedValueOnce([]);
+    await clickSignIn();
+    expect(phase()).toBe("authorizing");
+
+    // The negotiation takes 100 s of the pair's 300 s.
+    await wait(100_000);
+    await act(async () => {
+      slowNegotiation.resolve({ ok: true });
+      await drain();
+    });
+    expect(phase()).toBe("active");
+
+    // Each renewal answer reaches the frame 60 s after the request; the pair in
+    // it was minted when the request arrived.
+    const startedAt: number[] = [];
+    let n = 1;
+    renewFrameCredential.mockImplementation((_s, current) => {
+      expect(current, "the chain presents the pair the frame holds").toEqual(pair(n));
+      startedAt.push((Date.now() - t0) / 1_000);
+      n += 1;
+      const next = pair(n);
+      return new Promise<{ ok: true; credential: Pair }>((resolve) => {
+        setTimeout(() => resolve({ ok: true, credential: next }), 60_000);
+      });
+    });
+
+    await wait(110_000 - 1_000);
+    expect(renewFrameCredential, "not before mint + 210 s").not.toHaveBeenCalled();
+    await wait(1_000);
+    expect(startedAt, "the first renewal at mint + 210 s, before the pair's 300 s end").toEqual([210]);
+
+    // At 299 s the frame already holds the renewed pair (answered at 270 s).
+    await wait(89_000);
+    expect(requestHeaders(), "the first pair is not held to its end").toEqual(headersOf(pair(2)));
+
+    await wait(20 * 60_000 - 299_000);
+    expect(startedAt, "every renewal 210 s after the previous one started").toEqual([210, 420, 630, 840, 1050]);
+    expect(phase(), "still signed in after 20 minutes").toBe("active");
   });
 });

@@ -529,7 +529,10 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
         credentialRef.current = null;
         return;
       }
-      renewal.arm(result.credential, result.credential.expiresIn);
+      // The pair's life runs from its MINT (result.mintedAt, read before the
+      // minting request), not from now: the negotiation above may have taken a
+      // good part of it, and the chain renews before the real end.
+      renewal.arm(result.credential, result.credential.expiresIn, result.mintedAt);
     })();
   }, [props.instanceId, negotiateAndMount]);
 

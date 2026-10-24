@@ -10,13 +10,24 @@
 // hand-over callbacks.
 //
 // THE CHAIN:
-//   1. arm(credential, expiresIn) sets ONE timer for frameRenewalDelayMs(
-//      expiresIn), that is max(expiresIn - 90, 30) seconds.
+//   1. arm(credential, expiresIn, mintedAt) sets ONE timer for
+//      frameRenewalDelayMs(life left), that is max(left - 90, 30) seconds,
+//      where the life left is counted from `mintedAt`, the clock reading taken
+//      just before the request that minted the pair. THE LIFE IS ANCHORED TO
+//      THE MINT and never restarts after awaited work: a caller that arms only
+//      once its own work is done (the frame arms after its negotiation) still
+//      renews 90 s before the pair's real end, not 90 s before "now + life".
+//      A mint time that is not a finite number, or that lies ahead of the
+//      clock, is never trusted beyond now (the life left is then at most the
+//      advertised one; a non-finite one counts as none left: the 30 s floor).
 //   2. When it fires, renew(credential) runs with the credential it was armed
-//      with. The server spends that token on success.
+//      with. The server spends that token on success. The chain reads the
+//      clock just BEFORE it asks: that is the new pair's mint anchor.
 //   3. On success: onRenewed(newCredential) FIRST, so the caller holds the new
 //      pair before anything else can run, THEN arm(newCredential,
-//      newCredential.expiresIn).
+//      newCredential.expiresIn, the request start of step 2), so a slow
+//      answer shortens the next wait instead of pushing it past the pair's
+//      end.
 //   4. On a refusal or a throw: onEnded() exactly once, and nothing re-arms. The
 //      caller drops the pair and returns to its sign-in card.
 //   5. On a RATE-LIMIT refusal (reason "renew_rate_limited", an HTTP 429): the
@@ -95,13 +106,16 @@ export type FrameCredentialRenewalDeps = {
    *  fake timers apply even when installed after this instance was made. */
   setTimer?: (callback: () => void, ms: number) => FrameRenewalTimerHandle;
   clearTimer?: (handle: FrameRenewalTimerHandle) => void;
-  /** Clock seam for the retry deadline. Default Date.now, read at call time. */
+  /** Clock seam for the mint anchor and the retry deadline. Default Date.now,
+   *  read at call time. */
   now?: () => number;
 };
 
 export type FrameCredentialRenewal = {
-  /** Start a new chain for `credential`, cancelling any earlier one. */
-  arm: (credential: FrameWidgetCredential, expiresInSeconds: number) => void;
+  /** Start a new chain for `credential`, cancelling any earlier one. Its life
+   *  `expiresInSeconds` is counted from `mintedAtMs`, the clock reading taken
+   *  just before the request that minted it (step 1 above). */
+  arm: (credential: FrameWidgetCredential, expiresInSeconds: number, mintedAtMs: number) => void;
   /** Cancel the pending timer and invalidate any renewal in flight. */
   dispose: () => void;
   /** The current generation. Changes on every arm() and dispose(). */
@@ -161,6 +175,8 @@ export function createFrameCredentialRenewal(
     attempt: number,
   ): Promise<void> {
     let outcome: FrameRenewalOutcome;
+    // The new pair's mint anchor: the server mints after this moment.
+    const requestedAt = now();
     try {
       outcome = await deps.renew(credential);
     } catch {
@@ -193,16 +209,23 @@ export function createFrameCredentialRenewal(
     // onRenewed may itself have disposed or re-armed; then that call owns the
     // chain and this one stops here.
     if (armedGeneration !== generation) return;
-    arm(renewed, renewed.expiresIn);
+    arm(renewed, renewed.expiresIn, requestedAt);
   }
 
-  function arm(credential: FrameWidgetCredential, expiresInSeconds: number): void {
+  function arm(
+    credential: FrameWidgetCredential,
+    expiresInSeconds: number,
+    mintedAtMs: number,
+  ): void {
     cancelTimer();
     generation += 1;
     const armedGeneration = generation;
+    const at = now();
     const life = Number.isFinite(expiresInSeconds) ? expiresInSeconds : 0;
-    const deadline = now() + life * 1000;
-    setChainTimer(armedGeneration, frameRenewalDelayMs(expiresInSeconds), () => {
+    // Anchored to the mint, never to this call: the time spent between the mint
+    // and this arm() is already gone from the pair's life.
+    const deadline = Number.isFinite(mintedAtMs) ? Math.min(mintedAtMs, at) + life * 1000 : at;
+    setChainTimer(armedGeneration, frameRenewalDelayMs((deadline - at) / 1000), () => {
       void renewNow(credential, armedGeneration, deadline, 0);
     });
   }

@@ -20,6 +20,15 @@ const allowConnectTokenRequest = vi.fn();
 const allowNamedRateLimit = vi.fn();
 const emitWidgetAuthAudit = vi.fn();
 const getTrustedTokenOrigins = vi.fn();
+const resolveWidgetStreamAgentUnion = vi.fn();
+const KNOWN_AGENT = async (slug: string) =>
+  slug === "wordpress-content-editor"
+    ? {
+        entry: {
+          auth: { instancesConfigKey: "wordpress", tokenConfigKey: "wordpress_widget_auth" },
+        },
+      }
+    : null;
 
 vi.mock("@/lib/widget-frame-auth", async () => {
   const actual = await vi.importActual<typeof import("@/lib/widget-frame-auth")>(
@@ -49,14 +58,7 @@ vi.mock("@cinatra-ai/mcp-server/credentials", () => ({
   getTrustedTokenOrigins: (...a: unknown[]) => getTrustedTokenOrigins(...a),
 }));
 vi.mock("@/lib/widget-stream-agents.server", () => ({
-  resolveWidgetStreamAgentUnion: async (slug: string) =>
-    slug === "wordpress-content-editor"
-      ? {
-          entry: {
-            auth: { instancesConfigKey: "wordpress", tokenConfigKey: "wordpress_widget_auth" },
-          },
-        }
-      : null,
+  resolveWidgetStreamAgentUnion: (...a: unknown[]) => resolveWidgetStreamAgentUnion(...a),
 }));
 
 import { POST as frameRenew } from "../renew/route";
@@ -92,6 +94,7 @@ beforeEach(() => {
   allowConnectTokenRequest.mockReturnValue(true);
   allowNamedRateLimit.mockReturnValue(true);
   getTrustedTokenOrigins.mockReturnValue([SELF]);
+  resolveWidgetStreamAgentUnion.mockImplementation(KNOWN_AGENT);
   deriveFrameBinding.mockReturnValue({
     ok: true,
     binding: {
@@ -340,6 +343,44 @@ describe("the route's other refusals (cinatra#4217)", () => {
     const res = await frameRenew(frameRequest(SELECTORS, { "X-Cinatra-Widget-User-Token": CURRENT }));
     expect(await expectRefused(res, 400, "transport_mint_failed")).toEqual({ error: "invalid_grant" });
     expect(renewUserWidgetToken, "the user token was renewed first").toHaveBeenCalledTimes(1);
+  });
+
+  // cinatra#4217 fold 3 — the branches the official review named untested. Not
+  // red before fold 3: the route already behaved so; these cases pin it.
+
+  // A throw is not caught by the route: the request fails (the framework
+  // answers 500, which the frame maps to renew_failed and its sign-in card).
+  // What matters is what did NOT happen: nothing after the throw ran, and no
+  // token reached a response or an audit line.
+  it.each([
+    ["the agent lookup", () => resolveWidgetStreamAgentUnion.mockRejectedValue(new Error("registry down"))],
+    ["the user-token renewal", () => renewUserWidgetToken.mockImplementation(() => { throw new Error("db down"); })],
+    ["the transport mint", () => mintWidgetStreamToken.mockImplementation(() => { throw new Error("db down"); })],
+  ])("a throw in %s fails the request and hands out no token", async (label, breakIt) => {
+    breakIt();
+    await expect(
+      frameRenew(frameRequest(SELECTORS, { "X-Cinatra-Widget-User-Token": CURRENT })),
+    ).rejects.toThrow();
+    if (label === "the agent lookup") expect(renewUserWidgetToken, "nothing renewed").not.toHaveBeenCalled();
+    if (label !== "the transport mint") expect(mintWidgetStreamToken, "nothing minted").not.toHaveBeenCalled();
+    const audits = JSON.stringify(emitWidgetAuthAudit.mock.calls);
+    expect(audits).not.toContain("renew_success");
+    expect(audits).not.toContain("cwu_");
+    expect(audits).not.toContain("cit_");
+  });
+
+  it("advertises the SHORTER life when the renewed user token ends before the transport token", async () => {
+    renewUserWidgetToken.mockReturnValue({
+      ok: true,
+      token: "cwu_the_renewed_bearer",
+      tokenType: "Bearer",
+      expiresIn: 120, // the session cap is near
+      scope: "wordpress-content-editor.user lifecycle.read",
+      userId: "user-1",
+    });
+    const res = await frameRenew(frameRequest(SELECTORS, { "X-Cinatra-Widget-User-Token": CURRENT }));
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { expiresIn: number }).expiresIn).toBe(120);
   });
 });
 

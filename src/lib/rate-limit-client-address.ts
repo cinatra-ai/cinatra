@@ -33,7 +33,10 @@ type HeaderBag = { get(name: string): string | null };
 
 export function rateLimitClientAddress(request: { headers: HeaderBag }): string {
   const fwd = request.headers.get("x-forwarded-for");
-  if (fwd) {
+  // PRESENCE, not truthiness: a header that is there but empty has no hop left,
+  // so it keys "unknown" like any other empty chain. It never falls through to
+  // X-Real-IP, which only a request WITHOUT X-Forwarded-For reads.
+  if (fwd !== null) {
     const hops = fwd.split(",");
     return hops[hops.length - 1]?.trim() || "unknown";
   }

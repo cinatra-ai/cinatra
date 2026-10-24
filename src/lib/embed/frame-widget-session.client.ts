@@ -65,7 +65,10 @@ export type FrameSignInSelectors = {
 export type FrameWidgetCredential = {
   userToken: string;
   transportToken: string;
-  /** Seconds from mint. Advisory — the server re-checks at every use. */
+  /** Seconds from mint. Advisory — the server re-checks at every use. The
+   *  life is counted from the MINT, never from the moment a caller gets round
+   *  to reading it: whoever schedules on it anchors it to the mint time it was
+   *  handed (`mintedAt` of a sign-in, the request start of a renewal). */
   expiresIn: number;
 };
 
@@ -80,6 +83,20 @@ export type FrameSignInFailure =
   | "renew_rate_limited";
 
 export type FrameSignInResult =
+  | {
+      ok: true;
+      credential: FrameWidgetCredential;
+      /** cinatra#4217 — this document's clock (ms) read just BEFORE the request
+       *  that minted the pair was sent. The server mints after that moment, so
+       *  `mintedAt + expiresIn * 1000` is never later than the pair's real end,
+       *  however long the answer, or the caller's work after it, then takes. */
+      mintedAt: number;
+    }
+  | { ok: false; reason: FrameSignInFailure };
+
+/** What a renewal answers. The renewal chain reads its own clock before it asks
+ *  (frame-credential-renewal.client), so no mint time travels here. */
+export type FrameRenewResult =
   | { ok: true; credential: FrameWidgetCredential }
   | { ok: false; reason: FrameSignInFailure };
 
@@ -97,7 +114,10 @@ export const FRAME_RENEW_MARGIN_SECONDS = 90;
  *  the server no longer extends) cannot turn the timer into a busy loop. */
 export const FRAME_RENEW_MIN_DELAY_SECONDS = 30;
 
-/** When to renew a pair advertised to live `expiresIn` seconds, in ms. */
+/** When to renew a pair that has `expiresIn` seconds of life LEFT, in ms. The
+ *  caller passes the life left NOW, counted from the pair's mint (see
+ *  FrameWidgetCredential.expiresIn), never the advertised life after an await.
+ *  Zero, negative or non-finite life renews at the 30 s floor. */
 export function frameRenewalDelayMs(expiresIn: number): number {
   const life = Number.isFinite(expiresIn) ? expiresIn : 0;
   return Math.max(life - FRAME_RENEW_MARGIN_SECONDS, FRAME_RENEW_MIN_DELAY_SECONDS) * 1000;
@@ -150,6 +170,8 @@ export type FrameSignInEnvironment = {
   selfOrigin?: string;
   /** How long to wait for the return message before giving up, ms. */
   timeoutMs?: number;
+  /** cinatra#4217 — the clock read just before the minting request, ms. */
+  now?: () => number;
 };
 
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // the hosted transaction's own life
@@ -172,6 +194,7 @@ export async function runFrameSignIn(
   const listenWindow: FrameMessageTarget = env.listenWindow ?? (window as FrameMessageTarget);
   const selfOrigin = env.selfOrigin ?? window.location.origin;
   const timeoutMs = env.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const now = env.now ?? ((): number => Date.now());
 
   // 1. The two secrets this frame keeps.
   const verifier = mintFrameSecret();
@@ -267,6 +290,9 @@ export async function runFrameSignIn(
   if (!code) return { ok: false, reason: "cancelled" };
 
   // 5. Redeem, same-origin, with the verifier that never left this closure.
+  // The clock is read BEFORE the request goes out: the pair is minted after
+  // this moment, so its life counted from here never outlasts the real one.
+  const mintedAt = now();
   try {
     const response = await doFetch(FRAME_TOKEN_PATH, {
       method: "POST",
@@ -284,7 +310,7 @@ export async function runFrameSignIn(
     if (!response.ok) return { ok: false, reason: "redeem_failed" };
     const credential = credentialPairFrom(await response.json());
     if (!credential) return { ok: false, reason: "redeem_failed" };
-    return { ok: true, credential };
+    return { ok: true, credential, mintedAt };
   } catch {
     return { ok: false, reason: "redeem_failed" };
   }
@@ -321,7 +347,7 @@ export async function renewFrameCredential(
   selectors: FrameSignInSelectors,
   current: FrameWidgetCredential,
   env: Pick<FrameSignInEnvironment, "fetchImpl"> = {},
-): Promise<FrameSignInResult> {
+): Promise<FrameRenewResult> {
   const doFetch = env.fetchImpl ?? fetch;
   try {
     const response = await doFetch(FRAME_RENEW_PATH, {

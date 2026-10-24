@@ -81,7 +81,7 @@ afterEach(() => {
 describe("when the first renewal fires", () => {
   it("fires at expiresIn minus 90 seconds (210 s for a 300 s pair) and not a millisecond before", async () => {
     const c = chain(async () => ({ ok: true, credential: pair(2) }));
-    c.renewal.arm(pair(1), 300);
+    c.renewal.arm(pair(1), 300, Date.now());
 
     await vi.advanceTimersByTimeAsync(210 * SECOND - 1);
     expect(c.renew).not.toHaveBeenCalled();
@@ -93,7 +93,7 @@ describe("when the first renewal fires", () => {
 
   it("never fires sooner than 30 seconds, even for a pair that lives only 40", async () => {
     const c = chain(async () => ({ ok: true, credential: pair(2) }));
-    c.renewal.arm(pair(1, 40), 40);
+    c.renewal.arm(pair(1, 40), 40, Date.now());
 
     await vi.advanceTimersByTimeAsync(30 * SECOND - 1);
     expect(c.renew).not.toHaveBeenCalled();
@@ -107,7 +107,7 @@ describe("after a successful renewal", () => {
   it("hands the new pair to onRenewed first, then re-arms from the new pair's expiresIn", async () => {
     const answers = [pair(2, 120), pair(3, 300)];
     const c = chain(async () => ({ ok: true, credential: answers.shift()! }));
-    c.renewal.arm(pair(1), 300);
+    c.renewal.arm(pair(1), 300, Date.now());
 
     await vi.advanceTimersByTimeAsync(210 * SECOND);
     expect(c.onRenewed).toHaveBeenCalledTimes(1);
@@ -128,7 +128,7 @@ describe("after a successful renewal", () => {
 describe("a refused renewal ends the chain", () => {
   it("calls onEnded exactly once and arms no further timer", async () => {
     const c = chain(async () => ({ ok: false }));
-    c.renewal.arm(pair(1), 300);
+    c.renewal.arm(pair(1), 300, Date.now());
 
     await vi.advanceTimersByTimeAsync(210 * SECOND);
     expect(c.onEnded).toHaveBeenCalledTimes(1);
@@ -144,7 +144,7 @@ describe("a refused renewal ends the chain", () => {
     const c = chain(async () => {
       throw new Error("network down");
     });
-    c.renewal.arm(pair(1), 300);
+    c.renewal.arm(pair(1), 300, Date.now());
 
     await vi.advanceTimersByTimeAsync(210 * SECOND);
     expect(c.onEnded).toHaveBeenCalledTimes(1);
@@ -165,7 +165,7 @@ describe("a rate-limited renewal is retried while the pair still has life", () =
   it("retries a 429 on the same pair with backoff, and the chain goes on when a retry succeeds", async () => {
     const answers: FrameRenewalOutcome[] = [LIMITED, LIMITED, { ok: true, credential: pair(2) }];
     const c = chain(async () => answers.shift()!);
-    c.renewal.arm(pair(1), 300);
+    c.renewal.arm(pair(1), 300, Date.now());
 
     await vi.advanceTimersByTimeAsync(210 * SECOND);
     expect(c.renew).toHaveBeenCalledTimes(1);
@@ -199,7 +199,7 @@ describe("a rate-limited renewal is retried while the pair still has life", () =
       calledAt.push((Date.now() - t0) / SECOND);
       return LIMITED;
     });
-    c.renewal.arm(pair(1), 300);
+    c.renewal.arm(pair(1), 300, Date.now());
 
     await vi.advanceTimersByTimeAsync(300 * SECOND);
     // 210, then 5, 10 and 20 s later; the 40 s retry would fire with 15 s left,
@@ -219,7 +219,7 @@ describe("a rate-limited renewal is retried while the pair still has life", () =
 
   it("does not retry a 429 on a pair whose life is already too short", async () => {
     const c = chain(async () => LIMITED);
-    c.renewal.arm(pair(1, 40), 40); // the first attempt fires at 30 s, with 10 s left
+    c.renewal.arm(pair(1, 40), 40, Date.now()); // the first attempt fires at 30 s, with 10 s left
     await vi.advanceTimersByTimeAsync(30 * SECOND);
     expect(c.renew).toHaveBeenCalledTimes(1);
     expect(c.onEnded).toHaveBeenCalledTimes(1);
@@ -229,7 +229,7 @@ describe("a rate-limited renewal is retried while the pair still has life", () =
   it("any other refusal during the retries still ends the chain at once", async () => {
     const answers: FrameRenewalOutcome[] = [LIMITED, { ok: false, reason: "renew_failed" }];
     const c = chain(async () => answers.shift()!);
-    c.renewal.arm(pair(1), 300);
+    c.renewal.arm(pair(1), 300, Date.now());
     await vi.advanceTimersByTimeAsync(215 * SECOND);
     expect(c.renew).toHaveBeenCalledTimes(2);
     expect(c.onEnded).toHaveBeenCalledTimes(1);
@@ -242,7 +242,7 @@ describe("a rate-limited renewal is retried while the pair still has life", () =
   it("a retry whose timer fires late, with no more than 30 s left, presents nothing and ends the chain", async () => {
     const t0 = Date.now();
     const c = chain(async () => LIMITED);
-    c.renewal.arm(pair(1), 300);
+    c.renewal.arm(pair(1), 300, Date.now());
     await vi.advanceTimersByTimeAsync(210 * SECOND);
     expect(c.renew).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount(), "the 5 s retry is pending").toBe(1);
@@ -261,7 +261,7 @@ describe("a rate-limited renewal is retried while the pair still has life", () =
     const t0 = Date.now();
     const answers: FrameRenewalOutcome[] = [LIMITED, { ok: true, credential: pair(2) }];
     const c = chain(async () => answers.shift()!);
-    c.renewal.arm(pair(1), 300);
+    c.renewal.arm(pair(1), 300, Date.now());
     await vi.advanceTimersByTimeAsync(210 * SECOND);
     vi.setSystemTime(t0 + 260 * SECOND); // the retry then fires at 265 s, with 35 s left
     await vi.advanceTimersByTimeAsync(5 * SECOND);
@@ -272,7 +272,7 @@ describe("a rate-limited renewal is retried while the pair still has life", () =
 
   it("dispose() during a retry wait cancels the retry", async () => {
     const c = chain(async () => LIMITED);
-    c.renewal.arm(pair(1), 300);
+    c.renewal.arm(pair(1), 300, Date.now());
     await vi.advanceTimersByTimeAsync(210 * SECOND);
     expect(vi.getTimerCount(), "the retry is pending").toBe(1);
 
@@ -302,7 +302,7 @@ describe("a first timer that fires late presents the user token once and the ser
   it("a late first timer whose user token is still live renews once and the chain goes on", async () => {
     const t0 = Date.now();
     const c = chain(userTokenServer(t0, 900));
-    c.renewal.arm(pair(1), 300);
+    c.renewal.arm(pair(1), 300, Date.now());
     await vi.advanceTimersByTimeAsync(200 * SECOND);
     expect(c.renew, "the first timer has not fired yet").not.toHaveBeenCalled();
 
@@ -321,7 +321,7 @@ describe("a first timer that fires late presents the user token once and the ser
   it("a late first timer whose user token has run out is refused and ends the chain once", async () => {
     const t0 = Date.now();
     const c = chain(userTokenServer(t0, 900));
-    c.renewal.arm(pair(1), 300);
+    c.renewal.arm(pair(1), 300, Date.now());
     await vi.advanceTimersByTimeAsync(200 * SECOND);
     expect(c.renew).not.toHaveBeenCalled();
 
@@ -343,7 +343,7 @@ describe("the answer of a chain the caller let go of is dropped", () => {
   it("drops a success that lands after dispose(): no onRenewed, no onEnded, no timer", async () => {
     const inFlight = deferred<FrameRenewalOutcome>();
     const c = chain(() => inFlight.promise);
-    c.renewal.arm(pair(1), 300);
+    c.renewal.arm(pair(1), 300, Date.now());
     await vi.advanceTimersByTimeAsync(210 * SECOND);
     expect(c.renew).toHaveBeenCalledTimes(1);
 
@@ -359,7 +359,7 @@ describe("the answer of a chain the caller let go of is dropped", () => {
   it("drops a refusal that lands after dispose(): the caller is not sent back to sign-in", async () => {
     const inFlight = deferred<FrameRenewalOutcome>();
     const c = chain(() => inFlight.promise);
-    c.renewal.arm(pair(1), 300);
+    c.renewal.arm(pair(1), 300, Date.now());
     await vi.advanceTimersByTimeAsync(210 * SECOND);
 
     c.renewal.dispose();
@@ -375,13 +375,13 @@ describe("the answer of a chain the caller let go of is dropped", () => {
     const c = chain(async (presented) =>
       presented.userToken === "cwu_1" ? oldFlight.promise : { ok: true, credential: pair(9) },
     );
-    c.renewal.arm(pair(1), 300);
+    c.renewal.arm(pair(1), 300, Date.now());
     await vi.advanceTimersByTimeAsync(210 * SECOND);
     expect(c.renew).toHaveBeenCalledTimes(1);
 
     // A new sign-in arms a new chain while the old renewal is still in flight.
     const before = c.renewal.generation;
-    c.renewal.arm(pair(5), 300);
+    c.renewal.arm(pair(5), 300, Date.now());
     expect(c.renewal.generation).not.toBe(before);
 
     oldFlight.resolve({ ok: true, credential: pair(2) });
@@ -400,7 +400,7 @@ describe("the answer of a chain the caller let go of is dropped", () => {
 
   it("never calls renew() when dispose() comes before the timer fires", async () => {
     const c = chain(async () => ({ ok: true, credential: pair(2) }));
-    c.renewal.arm(pair(1), 300);
+    c.renewal.arm(pair(1), 300, Date.now());
     await vi.advanceTimersByTimeAsync(209 * SECOND);
 
     c.renewal.dispose();
@@ -495,7 +495,7 @@ describe("acceptance 1: a long-open frame can still send a review decision", () 
       },
       onEnded,
     });
-    renewal.arm(first, first.expiresIn);
+    renewal.arm(first, first.expiresIn, Date.now());
 
     // Twenty minutes: past the 900 s user token and four times the 300 s
     // transport token. Renewals fall at 210, 420, 630, 840 and 1050 s.
@@ -523,5 +523,128 @@ describe("acceptance 1: a long-open frame can still send a review decision", () 
     await vi.advanceTimersByTimeAsync(20 * MINUTE);
 
     expect(server.decide(first)).toEqual({ ok: false });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4217 fold 3 — THE PAIR'S LIFE IS ANCHORED TO ITS MINT.
+//
+// RED BEFORE fold 3 (head e804438a): arm() counted the life from the moment it
+// was called and ignored the mint time, and a renewal re-armed from the moment
+// its answer arrived. So a pair armed after 100 s of awaited work renewed at
+// arm + 210 s = mint + 310 s, ten seconds after the 300 s pair had run out, and
+// every slow renewal answer pushed the next renewal later by the same amount.
+// ---------------------------------------------------------------------------
+
+describe("the pair's life runs from its mint, never from after awaited work", () => {
+  it("a pair armed 100 s after its mint renews at mint + 210 s, not arm + 210 s", async () => {
+    const c = chain(async () => ({ ok: true, credential: pair(2) }));
+    const mintedAt = Date.now();
+    // The caller's own awaited work (the frame's negotiation) takes 100 s.
+    await vi.advanceTimersByTimeAsync(100 * SECOND);
+    c.renewal.arm(pair(1), 300, mintedAt);
+
+    await vi.advanceTimersByTimeAsync(110 * SECOND - 1);
+    expect(c.renew, "not before mint + 210 s").not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(c.renew, "at mint + 210 s, 90 s before the pair's real end").toHaveBeenCalledTimes(1);
+  });
+
+  it("a renewal answer that takes 60 s re-arms from the request start, so the next renewal is not pushed past the pair's end", async () => {
+    const t0 = Date.now();
+    const calledAt: number[] = [];
+    let n = 1;
+    const c = chain(() => {
+      calledAt.push((Date.now() - t0) / SECOND);
+      n += 1;
+      const next = pair(n);
+      // The server mints at once; its answer reaches the frame 60 s later.
+      return new Promise<FrameRenewalOutcome>((resolve) => {
+        globalThis.setTimeout(() => resolve({ ok: true, credential: next }), 60 * SECOND);
+      });
+    });
+    c.renewal.arm(pair(1), 300, t0);
+
+    await vi.advanceTimersByTimeAsync(420 * SECOND - 1);
+    expect(calledAt, "the second renewal is due at 210 + 210 s, not 270 + 210 s").toEqual([210]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calledAt).toEqual([210, 420]);
+
+    await vi.advanceTimersByTimeAsync(20 * MINUTE);
+    // Every renewal starts 210 s after the previous one STARTED: 90 s before
+    // the end of the pair it presents, whatever the answer then takes.
+    for (let i = 1; i < calledAt.length; i += 1) {
+      expect(calledAt[i]! - calledAt[i - 1]!, `renewal ${i + 1}`).toBe(210);
+    }
+    expect(c.onEnded).not.toHaveBeenCalled();
+    c.renewal.dispose();
+  });
+
+  it("a mint time ahead of the clock counts from now, and a non-finite one renews at the 30 s floor", async () => {
+    const ahead = chain(async () => ({ ok: true, credential: pair(2) }));
+    ahead.renewal.arm(pair(1), 300, Date.now() + 10 * MINUTE);
+    await vi.advanceTimersByTimeAsync(210 * SECOND - 1);
+    expect(ahead.renew, "a future mint time never lengthens the life").not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ahead.renew).toHaveBeenCalledTimes(1);
+    ahead.renewal.dispose();
+
+    const unknown = chain(async () => ({ ok: true, credential: pair(2) }));
+    unknown.renewal.arm(pair(1), 300, Number.NaN);
+    await vi.advanceTimersByTimeAsync(30 * SECOND - 1);
+    expect(unknown.renew).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(unknown.renew, "an unknown mint time counts as no life left").toHaveBeenCalledTimes(1);
+    unknown.renewal.dispose();
+  });
+});
+
+// cinatra#4217 fold 3 — the branch after onRenewed (frame-credential-renewal
+// .client.ts, "onRenewed may itself have disposed or re-armed"). Not red before
+// fold 3: the branch exists since the chain was written; these cases pin it.
+describe("an onRenewed that moves the chain on owns it", () => {
+  it("an onRenewed that disposes stops the chain: nothing re-arms", async () => {
+    const renew = vi.fn(async () => ({ ok: true as const, credential: pair(2) }));
+    const onEnded = vi.fn();
+    // onRenewed runs only after arm(), so the const is assigned by then.
+    const renewal: ReturnType<typeof createFrameCredentialRenewal> = createFrameCredentialRenewal({
+      renew,
+      onRenewed: () => renewal.dispose(),
+      onEnded,
+    });
+    renewal.arm(pair(1), 300, Date.now());
+    await vi.advanceTimersByTimeAsync(210 * SECOND);
+    expect(renew).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount(), "the disposed chain set no new timer").toBe(0);
+    await vi.advanceTimersByTimeAsync(60 * MINUTE);
+    expect(renew).toHaveBeenCalledTimes(1);
+    expect(onEnded).not.toHaveBeenCalled();
+  });
+
+  it("an onRenewed that re-arms keeps only its own chain's timer", async () => {
+    const renew = vi.fn(async (presented: FrameWidgetCredential) => ({
+      ok: true as const,
+      credential: pair(presented.userToken === "cwu_1" ? 2 : 9),
+    }));
+    let rearmed = false;
+    const renewal: ReturnType<typeof createFrameCredentialRenewal> = createFrameCredentialRenewal({
+      renew,
+      onRenewed: () => {
+        if (rearmed) return;
+        rearmed = true;
+        renewal.arm(pair(7, 120), 120, Date.now());
+      },
+      onEnded: vi.fn(),
+    });
+    renewal.arm(pair(1), 300, Date.now());
+    await vi.advanceTimersByTimeAsync(210 * SECOND);
+    expect(renew).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount(), "one timer: the re-armed chain's").toBe(1);
+    // The re-armed chain renews ITS pair at max(120 - 90, 30) s, not the
+    // renewed pair on a 210 s timer of the old chain.
+    await vi.advanceTimersByTimeAsync(30 * SECOND);
+    expect(renew).toHaveBeenCalledTimes(2);
+    expect(renew).toHaveBeenLastCalledWith(pair(7, 120));
+    renewal.dispose();
   });
 });
