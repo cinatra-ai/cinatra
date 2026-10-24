@@ -16,7 +16,7 @@
 // erased at build) — there is no runtime import of ./store, so no module-init
 // cycle. Every other dependency is imported from its SOURCE module.
 // ---------------------------------------------------------------------------
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { expireRunStream } from "@cinatra-ai/a2a";
 import type { OrgWriteAuthority, OrgWriteCapability, OrgWriteDb, OrgWriteTx } from "@cinatra-ai/org-write-kernel";
 // cinatra#1940 P1 (Decision 4): the per-run, epoch-agnostic lease-settle shape,
@@ -36,7 +36,7 @@ import { orgWriteLeaseSchemaName } from "@/lib/org-write/schema-name";
 // above — packages/agents already reaches into src/lib/org-write/* directly.
 import { mintLeaseExpiryFinalizerAuthority } from "@/lib/org-write/lease-expiry-authority-mint";
 import { db } from "./db";
-import { agentRuns, artifactReviewResumeOutbox } from "./schema";
+import { agentRuns } from "./schema";
 import { dispatchRunWaitTransition } from "./run-wait-notifier"; // #1559/E9: zero-dep leaf seam
 import { LEGAL_TRANSITIONS, TERMINAL_RUN_STATUSES, RunTransitionError } from "./run-status";
 import type { AgentRunStatus } from "./run-status";
@@ -312,6 +312,9 @@ function assertResumeIntentLeaseEdge(runId: string, from: AgentRunStatus, to: Ag
   }
 }
 
+// The intent writes themselves live in the gate store, which owns every write to
+// the resume outbox. It is imported at the call (as ./agent-run-serde is below):
+// the store imports ./store, which imports this module.
 async function fenceResumeIntentLeaseInTx(
   tx: GuardedRunTx,
   input: { runId: string; from: AgentRunStatus; to: AgentRunStatus; lease: ResumeIntentLease },
@@ -319,24 +322,18 @@ async function fenceResumeIntentLeaseInTx(
   const { runId, from, to, lease } = input;
   const claimMark =
     from === "pending_approval" && to === "running"
-      ? { runClaimedAt: sql`now()`, resumeTaskResult: null }
+      ? "claim"
       : from === "running" && to === "pending_approval"
-        ? { runClaimedAt: null, resumeTaskResult: null }
-        : {};
-  const fenced = await (tx as unknown as typeof db)
-    .update(artifactReviewResumeOutbox)
-    .set({ ...claimMark, updatedAt: sql`now()` })
-    .where(
-      and(
-        eq(artifactReviewResumeOutbox.gateId, lease.gateId),
-        eq(artifactReviewResumeOutbox.runId, runId),
-        eq(artifactReviewResumeOutbox.leaseToken, lease.leaseToken),
-        eq(artifactReviewResumeOutbox.status, "delivering"),
-        isNull(artifactReviewResumeOutbox.deadLetteredAt),
-      ),
-    )
-    .returning({ gateId: artifactReviewResumeOutbox.gateId });
-  if (fenced.length !== 1) {
+        ? "release"
+        : "none";
+  const { fenceResumeIntentLeaseInRunTx } = await import("./artifact-review-gate-store");
+  const fenced = await fenceResumeIntentLeaseInRunTx(tx, {
+    runId,
+    gateId: lease.gateId,
+    leaseToken: lease.leaseToken,
+    claimMark,
+  });
+  if (!fenced) {
     throw new RunTransitionError({
       code: "resume_intent_lease_lost",
       runId,
@@ -357,11 +354,8 @@ async function clearOtherResumeClaimsInTx(
   tx: GuardedRunTx,
   input: { runId: string; keepGateId: string | null },
 ): Promise<void> {
-  const keep = input.keepGateId === null ? sql`` : sql` AND gate_id <> ${input.keepGateId}`;
-  await tx.execute(
-    sql`UPDATE ${artifactReviewResumeOutbox} SET run_claimed_at = NULL, resume_task_result = NULL, updated_at = now()
-        WHERE run_id = ${input.runId} AND status = 'delivering' AND run_claimed_at IS NOT NULL${keep}`,
-  );
+  const { clearOtherResumeClaimsInRunTx } = await import("./artifact-review-gate-store");
+  await clearOtherResumeClaimsInRunTx(tx, input);
 }
 
 // ---------------------------------------------------------------------------

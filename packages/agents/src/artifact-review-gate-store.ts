@@ -52,6 +52,7 @@ import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "dr
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 
 import { db } from "./db";
+import type { GuardedRunTx } from "./org-write-run-seam";
 import { dispatchAutoGateResolved } from "./run-wait-notifier";
 // THE PARK'S OWN READING (cinatra#3046), from the module that writes the marker.
 // Re-exported below for the seed route, which reads this module already and must
@@ -1225,6 +1226,64 @@ export async function recordResumeTaskResult(gateId: string, leaseToken: string,
     .where(and(liveLease(gateId, leaseToken), isNotNull(artifactReviewResumeOutbox.runClaimedAt)))
     .returning({ gateId: artifactReviewResumeOutbox.gateId });
   return recorded.length === 1;
+}
+
+// The two writes a run edge makes to the resume intents (cinatra#3745).
+// transitionRunStatus (run-transition.ts) calls them inside the run's own
+// guarded transaction, right after its CAS. They live here because this store
+// owns every write to the resume outbox (the review-decision writer guard).
+
+/** What a fenced run edge does to its intent's claim mark. */
+export type ResumeIntentClaimMark = "claim" | "release" | "none";
+
+/**
+ * Fence a run edge on its intent's live lease, in the run's transaction, and
+ * move the claim mark with the edge: "claim" sets run_claimed_at and clears the
+ * recorded task, "release" clears both, "none" only fences. False when no row is
+ * `delivering` under this lease for this run; the caller then throws, so the
+ * run CAS rolls back with it.
+ */
+export async function fenceResumeIntentLeaseInRunTx(
+  tx: GuardedRunTx,
+  input: { runId: string; gateId: string; leaseToken: string; claimMark: ResumeIntentClaimMark },
+): Promise<boolean> {
+  const claimMark =
+    input.claimMark === "claim"
+      ? { runClaimedAt: sql`now()`, resumeTaskResult: null }
+      : input.claimMark === "release"
+        ? { runClaimedAt: null, resumeTaskResult: null }
+        : {};
+  const fenced = await (tx as unknown as typeof db)
+    .update(artifactReviewResumeOutbox)
+    .set({ ...claimMark, updatedAt: sql`now()` })
+    .where(
+      and(
+        eq(artifactReviewResumeOutbox.gateId, input.gateId),
+        eq(artifactReviewResumeOutbox.runId, input.runId),
+        eq(artifactReviewResumeOutbox.leaseToken, input.leaseToken),
+        eq(artifactReviewResumeOutbox.status, "delivering"),
+        isNull(artifactReviewResumeOutbox.deadLetteredAt),
+      ),
+    )
+    .returning({ gateId: artifactReviewResumeOutbox.gateId });
+  return fenced.length === 1;
+}
+
+/**
+ * On every run edge into `running`, in the run's transaction: clear the claim
+ * marks of the run's OTHER delivering intents, because another driver advances
+ * the run from now on. `keepGateId` is the delivery's own gate on its claim
+ * (null on any other entry). One statement on the tx's `execute` surface.
+ */
+export async function clearOtherResumeClaimsInRunTx(
+  tx: GuardedRunTx,
+  input: { runId: string; keepGateId: string | null },
+): Promise<void> {
+  const keep = input.keepGateId === null ? sql`` : sql` AND gate_id <> ${input.keepGateId}`;
+  await tx.execute(
+    sql`UPDATE ${artifactReviewResumeOutbox} SET run_claimed_at = NULL, resume_task_result = NULL, updated_at = now()
+        WHERE run_id = ${input.runId} AND status = 'delivering' AND run_claimed_at IS NOT NULL${keep}`,
+  );
 }
 
 /**
