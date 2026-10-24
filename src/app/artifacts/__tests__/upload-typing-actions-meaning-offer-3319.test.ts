@@ -135,8 +135,8 @@ vi.mock("@cinatra-ai/extensions/system-extension-inventory", () => ({
 }));
 // The org-scoped write gate for matcher-channel members (the access gate's
 // matcher arm). A10/A11 refuse named packs through it.
-const isArtifactExtensionWriteAllowed = vi.fn(
-  async (_extension: string, _orgId?: string) => true,
+const isArtifactExtensionWriteAllowed = vi.fn<(extension: string, orgId?: string) => Promise<boolean>>(
+  async () => true,
 );
 vi.mock("@/lib/artifacts/artifact-extension-access", () => ({
   isArtifactExtensionWriteAllowed: (extension: string, orgId: string) =>
@@ -149,13 +149,13 @@ const promoteMatchedArtifactType = vi.fn();
 /** Every append the promotion-store double records (revision 6). */
 const appends: unknown[] = [];
 /** The person's own assertion, as the store's reader answers it (A19). */
-const readPersonAssertion = vi.fn((_input?: unknown) => false);
+const readPersonAssertion = vi.fn<(input?: unknown) => boolean>(() => false);
 vi.mock("@/lib/artifacts/typed-promotion-store", () => ({
   promoteMatchedArtifactType: (...a: unknown[]) => promoteMatchedArtifactType(...a),
   readPersonAssertion: (input: unknown) => readPersonAssertion(input),
 }));
 /** The row's change events, newest first, as the history reader answers them. */
-const listEventsForObject = vi.fn((_id?: string, _o?: unknown): unknown[] => []);
+const listEventsForObject = vi.fn<(id?: string, o?: unknown) => unknown[]>(() => []);
 vi.mock("@/lib/object-history/eligibility", () => ({
   listEventsForObject: (id: string, o: unknown) => listEventsForObject(id, o),
 }));
@@ -165,12 +165,12 @@ vi.mock("@/lib/org-write/authority", () => ({
 // The claim-backed reader a later change reads in this action; harmless when
 // the action does not import it. A NAMED spy (default: no claims) so A18 sets it
 // and the list double can tell the tree it runs on.
-const readClaimBackedMeaningTypesForOrg = vi.fn(
-  async (_orgId?: string): Promise<unknown[]> => [],
+const readClaimBackedMeaningTypesForOrg = vi.fn<(orgId?: string) => Promise<unknown[]>>(
+  async () => [],
 );
 /** The pack whose claim wins a type in the org (R12-MF1): none by default. */
-const readArtifactSafeClaimWinnerForType = vi.fn(
-  (_orgId: string, _objectTypeId: string): string | null => null,
+const readArtifactSafeClaimWinnerForType = vi.fn<(orgId: string, objectTypeId: string) => string | null>(
+  () => null,
 );
 vi.mock("@/lib/artifacts/resolve-bound-artifact-type", () => ({
   readClaimBackedMeaningTypesForOrg: (orgId: string) => readClaimBackedMeaningTypesForOrg(orgId),
