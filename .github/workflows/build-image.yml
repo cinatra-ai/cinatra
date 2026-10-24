@@ -4043,6 +4043,28 @@ jobs:
           node scripts/audit/chat-hitl-one-card-gate.mjs
           node scripts/audit/chat-hitl-one-card-gate.mjs --audit
 
+      # cinatra#3089 (lifecycle-d W1), acceptance item 5 - the email fan-out
+      # cutover is forward-only. A fixture schema holds the raw body rows, the
+      # recipient rows and the associations a send wrote before the cutover;
+      # the production fan-out then runs twice over the same send, and every row
+      # the schema held before the first drive must read back byte-identical
+      # after both. A stubbed store cannot rewrite a row, so only this database
+      # can show that none was rewritten. Wired here on arrival, by the same
+      # convention as the real-DB tiers above, so it cannot join the class of
+      # root tiers that run nowhere.
+      #
+      # APPENDED, after the one-card gate, for the reason that gate records:
+      # adding a step after the last one is the one placement that cannot have
+      # changed the measured order of the steps above. The tier writes only its
+      # own schema (it creates and drops `cinatra_test_email_fanout_history_3089`)
+      # and names no `public.*` relation, so it can neither disturb an earlier
+      # step nor be disturbed by one. `shell: bash` and `!cancelled()` are the
+      # siblings' and load-bearing for the same reasons stated at the tiers above.
+      - name: Email fan-out history byte-identical - real-DB tier (cinatra#3089, item 5)
+        if: ${{ !cancelled() && needs.detect.outputs.skip_runtime != 'true' }}
+        shell: bash
+        run: pnpm test:email-fanout-history
+
   image:
     # The container build itself, UN-SERIALIZED from the unit tier (critical-path
     # fix): it now starts at `detect` instead of waiting ~5-6 min for `test` +
