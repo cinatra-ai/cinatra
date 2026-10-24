@@ -114,6 +114,31 @@ const hitlActions = vi.hoisted(() => ({
 }));
 vi.mock("../hitl-actions", () => hitlActions);
 
+/**
+ * THE CONVERSATION PANEL, PASSED THROUGH. The stepper draws it without its
+ * paperclip, so no case here can attach a file from the screen; the one case
+ * that needs the card's attachment road calls the `onSubmit` the card hands
+ * the panel, which is the road the paperclip takes. The panel itself is the
+ * real one, drawn with the same props.
+ */
+const conversation = vi.hoisted(() => ({
+  onSubmit: null as null | ((prompt: string, attachments?: unknown[]) => Promise<void>),
+}));
+vi.mock("../hitl-conversation-panel", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../hitl-conversation-panel")>();
+  const { useLayoutEffect } = await vi.importActual<typeof import("react")>("react");
+  function PassThroughConversationPanel(
+    props: React.ComponentProps<typeof real.HitlConversationPanel>,
+  ) {
+    // Handed to the test once the panel is drawn, never during its render.
+    useLayoutEffect(() => {
+      conversation.onSubmit = props.onSubmit as typeof conversation.onSubmit;
+    });
+    return <real.HitlConversationPanel {...props} />;
+  }
+  return { ...real, HitlConversationPanel: PassThroughConversationPanel };
+});
+
 vi.mock("../use-runtime-field-renderer-bindings", () => ({
   useRuntimeFieldRendererBindings: () => ({ bindings: {}, loading: false }),
 }));
@@ -234,6 +259,8 @@ async function mountGate(args: {
   fieldName: string;
   schema?: Record<string, unknown>;
   reviewTaskId?: string;
+  /** Draw the panel under React.StrictMode. */
+  strict?: boolean;
 }) {
   INTERRUPT = {
     schema: args.schema ?? { type: "string" },
@@ -243,17 +270,19 @@ async function mountGate(args: {
     fieldName: args.fieldName,
   };
   const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
-  const view = render(<OrchestratorStepperPanel {...baseProps()} />);
+  const draw = (element: React.ReactElement) =>
+    args.strict === true ? <React.StrictMode>{element}</React.StrictMode> : element;
+  const view = render(draw(<OrchestratorStepperPanel {...baseProps()} />));
   /** Advance the live gate under the mounted panel, as the setup loop does. */
-  const advanceTo = (next: { xRenderer: string; fieldName: string }) => {
+  const advanceTo = (next: { xRenderer: string; fieldName: string; reviewTaskId?: string }) => {
     INTERRUPT = {
       schema: args.schema ?? { type: "string" },
       xRenderer: next.xRenderer,
       values: {},
-      reviewTaskId: args.reviewTaskId ?? "setup-run-3532",
+      reviewTaskId: next.reviewTaskId ?? args.reviewTaskId ?? "setup-run-3532",
       fieldName: next.fieldName,
     };
-    view.rerender(<OrchestratorStepperPanel {...baseProps()} />);
+    view.rerender(draw(<OrchestratorStepperPanel {...baseProps()} />));
   };
   /** The run's own status, as the stream reports it (convergence, fix leg 3). */
   const setRunStatus = (nextStatus: string) => {
@@ -731,5 +760,529 @@ describe("OrchestratorStepperPanel — a setup field whose renderer draws no con
     await waitFor(() =>
       expect(document.querySelector('[data-run-input-step-reading="answered"]')).toBeNull(),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3562 — A RENDERER THAT REPORTS ITS VALUE UNSENDABLE HOLDS THE
+// CONTINUE DRAWN FOR ITS GATE, on the setup road and mid-run alike.
+// ---------------------------------------------------------------------------
+
+/**
+ * A pack-shaped list step that takes several picks: two boxes, nothing ticked
+ * when it opens, and it reports through `onValidityChange` whether anything is
+ * ticked. A string-typed input receives the ticks as JSON; any other input
+ * receives the object itself.
+ */
+const TICKING_RENDERER_ID = "@cinatra-test/pack-agent:ticking";
+/** The same, on a gate this panel classifies as mid-run (`:list-picker`). */
+const MID_RUN_TICKING_RENDERER_ID = "@cinatra-test/pack-agent:list-picker";
+/** The email outreach agent's own account-scope binding: a mid-run list step. */
+const OUTREACH_LIST_PICKER_ID = "@cinatra-ai/email-outreach-agent:list-picker";
+
+function TickingRenderer({ schema, onChange, onValidityChange }: FieldRendererProps) {
+  const [ticked, setTicked] = React.useState<string[]>([]);
+  React.useEffect(() => {
+    onValidityChange?.(ticked.length > 0);
+  }, [onValidityChange, ticked]);
+  const toggle = (id: string) => {
+    const next = ticked.includes(id) ? ticked.filter((t) => t !== id) : [...ticked, id];
+    setTicked(next);
+    const picks = { type: "list", listIds: next, listNames: next.map((t) => `View ${t}`) };
+    void onChange(schema.type === "string" ? JSON.stringify(picks) : picks);
+  };
+  return (
+    <div>
+      {["one", "two"].map((id) => (
+        <Input
+          key={id}
+          type="checkbox"
+          aria-label={`View ${id}`}
+          checked={ticked.includes(id)}
+          onChange={() => toggle(id)}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** The same step drawn already ticked, by a renderer that never reports. */
+function QuietTickedRenderer() {
+  return <Input type="checkbox" aria-label="View one" checked readOnly />;
+}
+
+/** Puts `renderer` in place of the ticking one under its id. */
+function replaceTickingRenderer(id: string, renderer: (props: FieldRendererProps) => React.ReactNode) {
+  fieldRendererRegistry.register({
+    id,
+    priority: 100,
+    condition: (_fieldName, schema) => (schema as { "x-renderer"?: unknown })["x-renderer"] === id,
+    renderer,
+  });
+}
+
+/**
+ * A step that reports its value unsendable once, from a layout effect: that
+ * runs in the commit that mounts it, before the renderer it replaces is
+ * cleaned up, and it never reports again.
+ */
+function LayoutHeldRenderer({ onValidityChange }: FieldRendererProps) {
+  React.useLayoutEffect(() => {
+    onValidityChange?.(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one report, at mount
+  }, []);
+  return <p>Layout step</p>;
+}
+
+/**
+ * A step that hands the test its report and its value, so that a report and a
+ * press can run inside one act(): the press then reaches a Continue that is
+ * still drawn available, and only the press-time check can stop it.
+ */
+const stepHandle: { report: (valid: boolean) => void; stage: (ids: string[]) => void } = {
+  report: () => {},
+  stage: () => {},
+};
+function HandleRenderer({ schema, onChange, onValidityChange }: FieldRendererProps) {
+  React.useEffect(() => {
+    stepHandle.report = (valid) => onValidityChange?.(valid);
+    stepHandle.stage = (ids) => {
+      const picks = { type: "list", listIds: ids, listNames: ids.map((t) => `View ${t}`) };
+      void onChange(schema.type === "string" ? JSON.stringify(picks) : picks);
+    };
+  });
+  return <p>Handle step</p>;
+}
+
+/**
+ * A step that keeps its own state and reports only when that state changes:
+ * nothing ticked at mount, so it reports `false` once, and again on a tick.
+ */
+const keptStep = { mounts: 0 };
+function KeptStateRenderer({ onValidityChange }: FieldRendererProps) {
+  const [ticked, setTicked] = React.useState(false);
+  React.useEffect(() => {
+    keptStep.mounts += 1;
+  }, []);
+  React.useEffect(() => {
+    onValidityChange?.(ticked);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reports on a change of its own state only
+  }, [ticked]);
+  return (
+    <Input type="checkbox" aria-label="View one" checked={ticked} onChange={() => setTicked(!ticked)} />
+  );
+}
+
+describe("OrchestratorStepperPanel — a renderer that reports its value unsendable (cinatra#3562)", () => {
+  beforeEach(() => {
+    for (const id of [TICKING_RENDERER_ID, MID_RUN_TICKING_RENDERER_ID]) {
+      fieldRendererRegistry.register({
+        id,
+        priority: 100,
+        condition: (_fieldName, schema) =>
+          (schema as { "x-renderer"?: unknown })["x-renderer"] === id,
+        renderer: TickingRenderer,
+      });
+    }
+  });
+
+  it("holds the setup field's Continue while nothing is ticked and sends every tick once one is", async () => {
+    const view = await mountGate({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
+    fireEvent.click(productContinues()[0]!);
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    fireEvent.click(view.getByRole("checkbox", { name: "View two" }));
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(false));
+    fireEvent.click(view.getByRole("checkbox", { name: "View two" }));
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
+
+    fireEvent.click(view.getByRole("checkbox", { name: "View two" }));
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(false));
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    fireEvent.click(productContinues()[0]!);
+    await waitFor(() =>
+      expect(hitlActions.approveReviewTask).toHaveBeenCalledWith(
+        "setup-run-3532",
+        {
+          accountScope: JSON.stringify({
+            type: "list",
+            listIds: ["two", "one"],
+            listNames: ["View two", "View one"],
+          }),
+        },
+        "accountScope",
+        { type: "string" },
+      ),
+    );
+  });
+
+  it("holds a mid-run gate's Continue while nothing is ticked and resumes with every tick", async () => {
+    const view = await mountGate({
+      xRenderer: MID_RUN_TICKING_RENDERER_ID,
+      fieldName: "accountScope",
+      schema: { type: "object" },
+      reviewTaskId: "review-run-3562",
+    });
+
+    await view.findByRole("checkbox", { name: "View one" });
+    expect(productContinues()).toHaveLength(0);
+    const outer = () => view.getByRole("button", { name: /Continue/ }) as HTMLButtonElement;
+    await waitFor(() => expect(outer().disabled).toBe(true));
+    fireEvent.click(outer());
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    fireEvent.click(view.getByRole("checkbox", { name: "View two" }));
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(outer().disabled).toBe(false));
+    fireEvent.click(outer());
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("review-run-3562");
+    expect(JSON.parse(payload.approvalNote as string)).toMatchObject({
+      type: "list",
+      listIds: ["two", "one"],
+      listNames: ["View two", "View one"],
+    });
+  });
+
+  it("holds the email outreach agent's own mid-run list step and resumes it with every tick", async () => {
+    // THE REAL GATE: the outreach agent's account-scope step is a mid-run
+    // `:list-picker` gate under this binding id. The build declares the id
+    // (the host's list kind draws it today); the stand-in below takes its place
+    // the way an extension-shipped component does, which keeps its own send
+    // (`drawsOwnSubmit: true`, the map-first branch of the default renderers).
+    expect(fieldRendererRegistry.list().some((e) => e.id === OUTREACH_LIST_PICKER_ID)).toBe(true);
+    fieldRendererRegistry.register({
+      id: OUTREACH_LIST_PICKER_ID,
+      priority: 90,
+      condition: (_fieldName, schema) =>
+        (schema as { "x-renderer"?: unknown })["x-renderer"] === OUTREACH_LIST_PICKER_ID,
+      renderer: TickingRenderer,
+      drawsOwnSubmit: true,
+    });
+    const view = await mountGate({
+      xRenderer: OUTREACH_LIST_PICKER_ID,
+      fieldName: "accountScope",
+      schema: { type: "object" },
+      reviewTaskId: "review-run-3562-outreach",
+    });
+
+    await view.findByRole("checkbox", { name: "View one" });
+    expect(productContinues()).toHaveLength(0);
+    const outer = () => view.getByRole("button", { name: /Continue/ }) as HTMLButtonElement;
+    await waitFor(() => expect(outer().disabled).toBe(true));
+    fireEvent.click(outer());
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(outer().disabled).toBe(false));
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(outer().disabled).toBe(true));
+    fireEvent.click(outer());
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    fireEvent.click(view.getByRole("checkbox", { name: "View two" }));
+    await waitFor(() => expect(outer().disabled).toBe(false));
+    fireEvent.click(outer());
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("review-run-3562-outreach");
+    const note = JSON.parse(payload.approvalNote as string) as Record<string, unknown>;
+    expect(note).toMatchObject({
+      type: "list",
+      listIds: ["one", "two"],
+      listNames: ["View one", "View two"],
+    });
+    expect(typeof note.snapshotAt).toBe("string");
+    expect(note).not.toHaveProperty("listId");
+  });
+
+  it("a report belongs to its own gate: the next gate, whose renderer reports nothing, is not held", async () => {
+    const view = await mountGate({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
+    view.advanceTo({ xRenderer: CONTROL_LESS_RENDERER_ID, fieldName: "callToAction" });
+    await waitFor(() => expect(ctaBox()).not.toBeNull());
+    await waitFor(() => expect(productContinues()).toHaveLength(1));
+    expect(productContinues()[0]!.disabled).toBe(false);
+  });
+
+  it("a report leaves with its renderer: one that takes its place on the same gate and reports nothing is not held", async () => {
+    const view = await mountGate({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
+    replaceTickingRenderer(TICKING_RENDERER_ID, QuietTickedRenderer);
+    view.advanceTo({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+
+    await waitFor(() =>
+      expect((view.getByRole("checkbox", { name: "View one" }) as HTMLInputElement).checked).toBe(true),
+    );
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(false));
+  });
+
+  it("a gate drawn again, ticked, by a renderer that reports nothing is not held by the report made before", async () => {
+    const view = await mountGate({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
+    view.advanceTo({ xRenderer: CONTROL_LESS_RENDERER_ID, fieldName: "callToAction" });
+    await waitFor(() => expect(ctaBox()).not.toBeNull());
+    replaceTickingRenderer(TICKING_RENDERER_ID, QuietTickedRenderer);
+    view.advanceTo({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+
+    await waitFor(() =>
+      expect((view.getByRole("checkbox", { name: "View one" }) as HTMLInputElement).checked).toBe(true),
+    );
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(false));
+  });
+
+  it("a generic confirmation draws no renderer, so its Continue is never held", async () => {
+    const view = await mountGate({
+      xRenderer: SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+      fieldName: "accountScope",
+      schema: { type: "object" },
+      reviewTaskId: "review-run-3562-confirm",
+    });
+
+    const outer = await view.findByRole("button", { name: /Continue/ });
+    expect((outer as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(outer);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("review-run-3562-confirm");
+    expect(payload).toMatchObject({ approved: true });
+  });
+
+  it("a setup field's Continue pressed in the same turn as a false report sends nothing", async () => {
+    replaceTickingRenderer(TICKING_RENDERER_ID, HandleRenderer);
+    const view = await mountGate({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+
+    await view.findByText("Handle step");
+    act(() => stepHandle.stage(["one"]));
+    await waitFor(() => expect(productContinues()[0]?.disabled).toBe(false));
+    act(() => {
+      stepHandle.report(false);
+      fireEvent.click(productContinues()[0]!);
+    });
+    await waitFor(() => expect(productContinues()[0]?.disabled).toBe(true));
+    act(() => {
+      stepHandle.stage(["two"]);
+      stepHandle.report(true);
+    });
+    await waitFor(() => expect(productContinues()[0]?.disabled).toBe(false));
+    fireEvent.click(productContinues()[0]!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalled());
+    expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1);
+    expect(hitlActions.approveReviewTask).toHaveBeenNthCalledWith(
+      1,
+      "setup-run-3532",
+      { accountScope: JSON.stringify({ type: "list", listIds: ["two"], listNames: ["View two"] }) },
+      "accountScope",
+      { type: "string" },
+    );
+  });
+
+  it("a mid-run gate's Continue pressed in the same turn as a false report sends nothing", async () => {
+    replaceTickingRenderer(MID_RUN_TICKING_RENDERER_ID, HandleRenderer);
+    const view = await mountGate({
+      xRenderer: MID_RUN_TICKING_RENDERER_ID,
+      fieldName: "accountScope",
+      schema: { type: "object" },
+      reviewTaskId: "review-run-3562",
+    });
+    const outer = () => view.queryByRole("button", { name: /Continue/ }) as HTMLButtonElement | null;
+
+    await view.findByText("Handle step");
+    act(() => stepHandle.stage(["one"]));
+    await waitFor(() => expect(outer()?.disabled).toBe(false));
+    act(() => {
+      stepHandle.report(false);
+      fireEvent.click(outer()!);
+    });
+    await waitFor(() => expect(outer()?.disabled).toBe(true));
+    act(() => {
+      stepHandle.stage(["two"]);
+      stepHandle.report(true);
+    });
+    await waitFor(() => expect(outer()?.disabled).toBe(false));
+    fireEvent.click(outer()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalled());
+    expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1);
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("review-run-3562");
+    expect(JSON.parse(payload.approvalNote as string)).toMatchObject({
+      type: "list",
+      listIds: ["two"],
+      listNames: ["View two"],
+    });
+  });
+
+  it("a renderer that takes the gate's place and reports false from a layout effect keeps it held", async () => {
+    const view = await mountGate({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+
+    await view.findByRole("checkbox", { name: "View one" });
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(false));
+    replaceTickingRenderer(TICKING_RENDERER_ID, LayoutHeldRenderer);
+    view.advanceTo({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+
+    await view.findByText("Layout step");
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
+    fireEvent.click(productContinues()[0]!);
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
+
+  it("a gate of another review task with the same renderer and field gets a new renderer, which holds it", async () => {
+    keptStep.mounts = 0;
+    replaceTickingRenderer(TICKING_RENDERER_ID, KeptStateRenderer);
+    const view = await mountGate({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
+    view.advanceTo({
+      xRenderer: TICKING_RENDERER_ID,
+      fieldName: "accountScope",
+      reviewTaskId: "setup-run-3532-next",
+    });
+
+    await waitFor(() => expect(keptStep.mounts).toBe(2));
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
+    fireEvent.click(productContinues()[0]!);
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(false));
+  });
+
+  it("under StrictMode a renderer's report holds its gate exactly while it is false, and leaves with it", async () => {
+    const view = await mountGate({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope", strict: true });
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(false));
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
+    fireEvent.click(productContinues()[0]!);
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    replaceTickingRenderer(TICKING_RENDERER_ID, QuietTickedRenderer);
+    view.advanceTo({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+    await waitFor(() =>
+      expect((view.getByRole("checkbox", { name: "View one" }) as HTMLInputElement).checked).toBe(true),
+    );
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(false));
+  });
+
+  // --- the stepper's gate card is NOT keyed by the review task ---------------
+  // Only the renderer below it is. The card's own per-gate state therefore
+  // outlives a change of review task, and the card clears it itself when the
+  // task changes. These two cases pin that clearing.
+  const BLOCKED = '[data-conformance-id="review-gate-blocked"]';
+  const outerContinue = () =>
+    Array.from(document.querySelectorAll("button")).find((b) =>
+      /Continue/.test(b.textContent ?? ""),
+    ) ?? null;
+
+  it("the card's blocked state goes with its review task: the next task's gate is open", async () => {
+    hitlActions.approveReviewTask.mockResolvedValueOnce({
+      ok: false,
+      blocked: "no-longer-pending",
+    } as never);
+    const view = await mountGate({
+      xRenderer: MID_RUN_RENDERER_ID,
+      fieldName: "callToAction",
+      reviewTaskId: "review-run-3562-a",
+    });
+
+    await waitFor(() => expect(outerContinue()).not.toBeNull());
+    fireEvent.click(outerContinue()!);
+    await waitFor(() => expect(document.querySelector(BLOCKED)).not.toBeNull());
+
+    view.advanceTo({
+      xRenderer: MID_RUN_RENDERER_ID,
+      fieldName: "callToAction",
+      reviewTaskId: "review-run-3562-b",
+    });
+    await waitFor(() => expect(document.querySelector(BLOCKED)).toBeNull());
+    await waitFor(() => expect(outerContinue()).not.toBeNull());
+    fireEvent.click(outerContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(2));
+    const [nextTaskId] = hitlActions.approveReviewTask.mock.calls[1] as unknown as [string];
+    expect(nextTaskId).toBe("review-run-3562-b");
+  });
+
+  it("the card's pending attachments go with their review task: the next task's Continue sends none", async () => {
+    const ATTACHMENT = {
+      artifactId: "art-3562-attached",
+      representationRevisionId: "rep-3562",
+      digest: "sha256:3562",
+      mime: "application/pdf",
+      originKind: "upload",
+      filename: "brief.pdf",
+      title: "brief.pdf",
+      size: 3,
+    };
+    conversation.onSubmit = null;
+    hitlActions.approveReviewTask.mockResolvedValueOnce({
+      ok: false,
+      blocked: "no-longer-pending",
+    } as never);
+    const view = await mountGate({
+      xRenderer: MID_RUN_RENDERER_ID,
+      fieldName: "callToAction",
+      reviewTaskId: "review-run-3562-attach-a",
+    });
+
+    await waitFor(() => expect(outerContinue()).not.toBeNull());
+    await waitFor(() => expect(conversation.onSubmit).not.toBeNull());
+    // An empty message: the card keeps the file, and the run window sends
+    // nothing for an empty message, so no turn leaves this file.
+    await act(async () => {
+      await conversation.onSubmit!("", [ATTACHMENT]);
+    });
+
+    // The road is live: the press on the task the file was attached on carries it.
+    fireEvent.click(outerContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [, firstPayload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(JSON.stringify(firstPayload)).toContain("art-3562-attached");
+    await waitFor(() => expect(document.querySelector(BLOCKED)).not.toBeNull());
+
+    view.advanceTo({
+      xRenderer: MID_RUN_RENDERER_ID,
+      fieldName: "callToAction",
+      reviewTaskId: "review-run-3562-attach-b",
+    });
+    await waitFor(() => expect(outerContinue()).not.toBeNull());
+    fireEvent.click(outerContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(2));
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[1] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("review-run-3562-attach-b");
+    expect(JSON.stringify(payload)).not.toContain("art-3562-attached");
   });
 });

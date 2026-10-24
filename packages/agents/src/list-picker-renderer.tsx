@@ -1,10 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -208,33 +206,11 @@ export function ListPickerRenderer({
           aria-label="Search lists by name"
         />
         {/*
-          "Create new list" affordance retired. CRM lists are scoped to the
-          provider (Twenty Views); operators create them via the Twenty UI
-          or via the list-curator-agent run dispatched below. Direct CRUD
-          on lists from a cinatra route was removed alongside the
-          `lists_*` MCP retirement.
+          No road out of the step (cinatra#3562): the "Create new list"
+          affordance and the "Build a list with AI" link to a list-building
+          run are gone. The step picks from the lists that fetchAvailableLists
+          returns and creates none.
         */}
-        {/*
-          "Build a list with AI" CTA.
-          Deep-links to a NEW list-curator-agent run. The operator completes
-          the curator's two HITL gates (scrape-schema-review + final-list-review)
-          there; on completion they return to this picker with the new listId
-          pre-selected via the ?onComplete query param.
-
-          Separate-run UX (not nested HITL): the WayFlow runtime does not yet
-          support surfacing child HITL gates in a parent run, so deep-linking
-          keeps the child run's review gates visible and actionable.
-        */}
-        <Button asChild type="button" variant="default" disabled={disabled}>
-          <Link
-            href="/agents/cinatra-ai/list-curator-agent/new?onComplete=list-picker"
-            target="_blank"
-            rel="noreferrer"
-            data-testid="build-list-with-ai-cta"
-          >
-            Build a list with AI
-          </Link>
-        </Button>
       </div>
 
       {loading ? (

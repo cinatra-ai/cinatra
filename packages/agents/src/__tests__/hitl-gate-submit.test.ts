@@ -14,6 +14,7 @@ import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
   buildChatGateSubmitPayload,
+  createGateValidityStore,
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
@@ -268,6 +269,81 @@ describe("liftRendererApprovalNote", () => {
       listId: "",
       listName: "",
       memberCount: 0,
+      snapshotAt: NOW,
+    });
+  });
+
+  it(":list-picker with several picks lifts every ticked id in tick order, each once, with its name (cinatra#3562)", () => {
+    const lift = liftRendererApprovalNote(
+      "@cinatra-ai/x:list-picker",
+      {
+        type: "list",
+        listIds: ["v2", "v1", "v2", "", 7],
+        listNames: ["Second view", "First list", "Second view", "Blank", "Number"],
+      },
+      NOW,
+    );
+    expect(JSON.parse(lift!.approvalNote)).toEqual({
+      type: "list",
+      listIds: ["v2", "v1"],
+      listNames: ["Second view", "First list"],
+      snapshotAt: NOW,
+    });
+    const unnamed = liftRendererApprovalNote(
+      "@cinatra-ai/x:list-picker",
+      { listIds: ["v3"] },
+      NOW,
+    );
+    expect(JSON.parse(unnamed!.approvalNote)).toEqual({
+      type: "list",
+      listIds: ["v3"],
+      listNames: [""],
+      snapshotAt: NOW,
+    });
+  });
+
+  it(":list-picker with an empty pick array keeps the one-pick snapshot (cinatra#3562)", () => {
+    const lift = liftRendererApprovalNote(
+      "@cinatra-ai/x:list-picker",
+      { listIds: [], listId: "l1", listName: "My list", memberCount: 5 },
+      NOW,
+    );
+    expect(JSON.parse(lift!.approvalNote)).toEqual({
+      type: "list",
+      listId: "l1",
+      listName: "My list",
+      memberCount: 5,
+      snapshotAt: NOW,
+    });
+  });
+
+  it(":list-picker whose picks are all unusable keeps the one-pick snapshot (cinatra#3562)", () => {
+    for (const listIds of [[7, ""], "v1"]) {
+      const lift = liftRendererApprovalNote(
+        "@cinatra-ai/x:list-picker",
+        { listIds, listId: "l1", listName: "My list", memberCount: 5 },
+        NOW,
+      );
+      expect(JSON.parse(lift!.approvalNote)).toEqual({
+        type: "list",
+        listId: "l1",
+        listName: "My list",
+        memberCount: 5,
+        snapshotAt: NOW,
+      });
+    }
+  });
+
+  it(":list-picker gives a pick an empty name where its name is missing or not a string (cinatra#3562)", () => {
+    const lift = liftRendererApprovalNote(
+      "@cinatra-ai/x:list-picker",
+      { listIds: ["v1", "v2", "v3"], listNames: ["First", 5] },
+      NOW,
+    );
+    expect(JSON.parse(lift!.approvalNote)).toEqual({
+      type: "list",
+      listIds: ["v1", "v2", "v3"],
+      listNames: ["First", "", ""],
       snapshotAt: NOW,
     });
   });
@@ -541,5 +617,137 @@ describe("hitlRendererFieldName (cinatra#2541)", () => {
     expect(resolveFieldLabel(hitlRendererFieldName(undefined))).toBe(
       GENERIC_FIELD_LABEL,
     );
+  });
+});
+
+describe("createGateValidityStore (cinatra#3562)", () => {
+  it("holds a gate only while a report on it is false, and only that gate", () => {
+    const store = createGateValidityStore();
+    const a = {};
+    const b = {};
+    store.attach(a);
+    store.attach(b);
+    expect(store.isHeld("g1")).toBe(false);
+    expect(store.isHeld(null)).toBe(false);
+    store.report(a, "g1", false);
+    expect(store.isHeld("g1")).toBe(true);
+    expect(store.isHeld("g2")).toBe(false);
+    expect(store.isHeld(null)).toBe(false);
+    store.report(b, "g2", true);
+    expect(store.isHeld("g1")).toBe(true);
+    expect(store.isHeld("g2")).toBe(false);
+    store.report(a, "g1", true);
+    expect(store.isHeld("g1")).toBe(false);
+    // An owner keeps one report, its latest: a report on another gate replaces it.
+    store.report(a, "g2", false);
+    expect(store.isHeld("g1")).toBe(false);
+    expect(store.isHeld("g2")).toBe(true);
+  });
+
+  it("a release drops only its owner's report, and tells the listeners only on a change", () => {
+    const store = createGateValidityStore();
+    const a = {};
+    const b = {};
+    store.attach(a);
+    store.attach(b);
+    let calls = 0;
+    const unsubscribe = store.subscribe(() => {
+      calls += 1;
+    });
+    store.release({});
+    expect(calls).toBe(0);
+    store.report(a, "g1", false);
+    store.report(a, "g1", false);
+    expect(calls).toBe(1);
+    store.report(b, "g1", true);
+    expect(calls).toBe(2);
+    expect(store.isHeld("g1")).toBe(true);
+    store.release(b);
+    expect(calls).toBe(3);
+    expect(store.isHeld("g1")).toBe(true);
+    store.release(a);
+    expect(calls).toBe(4);
+    expect(store.isHeld("g1")).toBe(false);
+    store.release(a);
+    expect(calls).toBe(4);
+    const c = {};
+    store.attach(c);
+    expect(calls).toBe(4);
+    unsubscribe();
+    store.report(c, "g1", false);
+    expect(calls).toBe(4);
+    expect(store.isHeld("g1")).toBe(true);
+  });
+
+  it("a report made under a new owner before the old owner's release stays", () => {
+    const store = createGateValidityStore();
+    const before = {};
+    const after = {};
+    store.attach(before);
+    store.report(before, "g1", false);
+    // The replacing renderer reports from its own layout effect, before its
+    // owner is attached and before the old owner is released.
+    store.report(after, "g1", false);
+    store.attach(after);
+    store.release(before);
+    expect(store.isHeld("g1")).toBe(true);
+    store.release(after);
+    expect(store.isHeld("g1")).toBe(false);
+  });
+
+  it("a report that is not exactly true holds the gate, as false does", () => {
+    const store = createGateValidityStore();
+    const a = {};
+    store.attach(a);
+    for (const report of [1, "yes", undefined, null]) {
+      store.report(a, "g1", report as unknown as boolean);
+      expect(store.isHeld("g1")).toBe(true);
+      store.report(a, "g1", true);
+      expect(store.isHeld("g1")).toBe(false);
+    }
+  });
+
+  it("a report through an owner that is not attached, or no longer is, holds nothing", () => {
+    const store = createGateValidityStore();
+    const live = {};
+    const gone = {};
+    store.attach(live);
+    store.attach(gone);
+    let calls = 0;
+    store.subscribe(() => {
+      calls += 1;
+    });
+    store.report(gone, "g1", true);
+    store.release(gone);
+    expect(calls).toBe(2);
+    // A renderer that has left the screen reports late: nothing is held.
+    store.report(gone, "g1", false);
+    expect(store.isHeld("g1")).toBe(false);
+    // An owner that was never attached holds nothing either.
+    store.report({}, "g1", false);
+    expect(store.isHeld("g1")).toBe(false);
+    expect(calls).toBe(2);
+    // The attached owner still holds on anything but true.
+    store.report(live, "g1", false);
+    expect(store.isHeld("g1")).toBe(true);
+    expect(calls).toBe(3);
+  });
+
+  it("an owner attached again holds with its latest report, as StrictMode and a shown subtree attach it again", () => {
+    const store = createGateValidityStore();
+    const a = {};
+    store.attach(a);
+    store.report(a, "g1", false);
+    expect(store.isHeld("g1")).toBe(true);
+    store.release(a);
+    expect(store.isHeld("g1")).toBe(false);
+    store.attach(a);
+    expect(store.isHeld("g1")).toBe(true);
+    store.release(a);
+    store.report(a, "g1", true);
+    store.attach(a);
+    expect(store.isHeld("g1")).toBe(false);
+    store.report(a, "g1", false);
+    expect(store.isHeld("g1")).toBe(true);
   });
 });

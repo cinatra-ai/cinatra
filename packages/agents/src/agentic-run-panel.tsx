@@ -7,6 +7,8 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
+  type ComponentType,
   type ReactNode,
 } from "react";
 import { flushSync } from "react-dom";
@@ -39,7 +41,7 @@ import {
 import type { AgentRunMessageBody } from "./store";
 import { StatusPill } from "@/components/ui/status-pill";
 import { fieldRendererRegistry } from "./field-renderer-registry";
-import type { FieldRendererContext } from "./field-renderer-registry";
+import type { FieldRendererContext, FieldRendererProps } from "./field-renderer-registry";
 import { ArrowRight } from "lucide-react";
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
 import {
@@ -75,6 +77,7 @@ import { approveReviewTask } from "./hitl-actions";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
   buildChatGateSubmitPayload,
+  createGateValidityStore,
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
@@ -82,6 +85,7 @@ import {
   setupFieldRendererValue,
   withContextSelectorEnvelope,
   wrapPrimitiveSetupPayload,
+  type GateValidityStore,
 } from "./hitl-gate-submit";
 import {
   applyJustSubmittedSuppression,
@@ -485,6 +489,33 @@ function withoutLifecycleCardRef(
   const { lifecycleCardRef: _ref, ...rest } = values;
   void _ref;
   return rest;
+}
+
+/**
+ * Draws a gate's renderer so that its validity reports (cinatra#3562, see
+ * `GateValidityStore`) are its own: the renderer reports under an owner that
+ * lives as long as it does, and the release drops only that owner's report.
+ * Another renderer in its place gets a new owner. The owner is attached and
+ * released in a layout effect: a renderer's own layout effects run first, so a
+ * report it makes at mount is kept and counts at the attach, in the same commit.
+ */
+function GateValidityOwner({
+  renderer: Renderer,
+  store,
+  gateKey,
+  ...props
+}: FieldRendererProps & {
+  renderer: ComponentType<FieldRendererProps>;
+  store: GateValidityStore;
+  gateKey: string;
+}): ReactNode {
+  const [owner, setOwner] = useState(() => ({ renderer: Renderer }));
+  if (owner.renderer !== Renderer) setOwner({ renderer: Renderer });
+  useLayoutEffect(() => {
+    store.attach(owner);
+    return () => store.release(owner);
+  }, [store, owner]);
+  return <Renderer {...props} onValidityChange={(valid) => store.report(owner, gateKey, valid)} />;
 }
 
 export function AgenticRunPanel({
@@ -1260,11 +1291,37 @@ export function AgenticRunPanel({
   >(null);
   const setupFlushRef = useRef<{ key: string; fn: () => Promise<void> } | null>(null);
   const setupPressRef = useRef(false);
+  // THE RENDERER'S OWN READING OF ITS VALUE (cinatra#3562). A renderer may
+  // report through `onValidityChange` that what it holds may not be sent (a
+  // list step with nothing ticked); each renderer's latest report is kept with
+  // its gate, keyed by the same three parts the setup field's staged answer is
+  // keyed by. While a report for the gate on screen is `false`, the Continue
+  // drawn for it (the setup field's or the mid-run one) is unavailable, and
+  // neither a press nor the composer sends anything. A renderer that never
+  // reports blocks nothing, so no undeclared reason ever stops a reader
+  // (cinatra#3532). A report is released with the renderer that made it
+  // (`GateValidityOwner`). The drawn control subscribes to the store; the press
+  // reads it in the same turn.
+  const [gateValidity] = useState(createGateValidityStore);
+  const activeGateKey = effectiveHitlContext
+    ? [
+        effectiveHitlContext.reviewTaskId,
+        effectiveHitlContext.xRenderer,
+        effectiveHitlContext.fieldName ?? "",
+      ].join("::")
+    : null;
+  const activeGateReportedInvalid = useSyncExternalStore(
+    gateValidity.subscribe,
+    () => gateValidity.isHeld(activeGateKey),
+    () => false,
+  );
   const registerSetupFlush = useCallback((key: string, fn: () => Promise<void>) => {
     setupFlushRef.current = { key, fn };
   }, []);
   const submitStagedSetupAnswer = useCallback(
     async (key: string, reviewTaskId: string, xRenderer: string) => {
+      // Reported unsendable (see `gateValidity`): the press sends nothing.
+      if (gateValidity.isHeld(key)) return;
       // ONE PRESS AT A TIME, on a ref rather than the rendered `disabled` alone:
       // the flush is asynchronous and `isApproving` is React state, so two
       // presses in one tick would both reach the submit core.
@@ -1309,7 +1366,7 @@ export function AgenticRunPanel({
         setupPressRef.current = false;
       }
     },
-    [performGateSubmit],
+    [performGateSubmit, gateValidity],
   );
 
   // Stable submit — empty deps, reads refs. The payload discrimination
@@ -1319,6 +1376,10 @@ export function AgenticRunPanel({
     async (value: Record<string, unknown> | string | number | boolean) => {
       const ctx = latestHitlContextRef.current;
       if (!ctx) return;
+      // Reported unsendable (see `gateValidity`): the composer sends nothing,
+      // as the Continue drawn for the gate does.
+      const gateKey = [ctx.reviewTaskId, ctx.xRenderer, ctx.fieldName ?? ""].join("::");
+      if (gateValidity.isHeld(gateKey)) return;
       const { payload, payloadFieldName } = buildChatGateSubmitPayload({
         reviewTaskId: ctx.reviewTaskId,
         fieldName: ctx.fieldName,
@@ -1337,7 +1398,7 @@ export function AgenticRunPanel({
         errorMode: "rethrow",
       });
     },
-    [performGateSubmit],
+    [performGateSubmit, gateValidity],
   );
 
   // cinatra#2566 — the SERVER-MINTED opaque ref a marked review gate carries.
@@ -1974,7 +2035,9 @@ export function AgenticRunPanel({
       ) : null}
       <Button
         size="sm"
-        disabled={isApproving}
+        // Unavailable while the gate's renderer reports its value unsendable
+        // (see `gateValidity`); a renderer that never reports changes nothing.
+        disabled={isApproving || activeGateReportedInvalid}
         className="gap-1.5"
         // THE HITL SCREEN'S ONE DECISION (cinatra#2930). Named on the row this
         // panel draws INSIDE the screen card, and deliberately not on the
@@ -1983,6 +2046,9 @@ export function AgenticRunPanel({
         // anchor there would be reading a control the screen does not offer.
         {...(opts?.withReject ? {} : { "data-action": "submit-hitl-screen" })}
         onClick={async () => {
+          // Reported unsendable: the press sends nothing (the drawn state can
+          // lag the report by one frame; the store cannot).
+          if (gateValidity.isHeld(activeGateKey)) return;
           // The visible Continue may need to wrap the WayFlow `userResponse`
           // with the envelope when paperclip attachments are pending, but must
           // preserve any renderer-authored `userResponse` already on
@@ -2918,7 +2984,11 @@ export function AgenticRunPanel({
                 // affordances are one resume path with two entrances, not two.
                 return (
                   <>
-                    <RendererComponent
+                    {/* The renderer reports this gate's validity as its own. */}
+                    <GateValidityOwner
+                      renderer={RendererComponent}
+                      store={gateValidity}
+                      gateKey={setupGateKey}
                       // Keyed by xRenderer AND fieldName — the identity the
                       // orchestrator stepper already uses (#810), adopted here
                       // in cinatra#2541 because this surface now passes a
@@ -2930,8 +3000,12 @@ export function AgenticRunPanel({
                       // localValue, which a non-string next value does not clear)
                       // would pre-fill field 2 under field 2's label. fieldName is
                       // undefined for mid-run gates, so those keep their existing
-                      // xRenderer-keyed identity exactly.
-                      key={`${effectiveHitlContext.xRenderer}::${effectiveHitlContext.fieldName ?? ""}`}
+                      // xRenderer-keyed identity. The review task is in the key
+                      // too (cinatra#3562): a gate of another review task with
+                      // the same renderer and field gets a new renderer and a
+                      // new validity owner, never the one that reported on the
+                      // gate before it.
+                      key={setupGateKey}
                       // The gate's REAL field identity (cinatra#2541) — the same
                       // seam the orchestrator stepper regressed at, with the
                       // same consequence: `fieldName` is what the renderer
@@ -3055,6 +3129,7 @@ export function AgenticRunPanel({
                       <AgentHitlScreenSetupContinue
                         submitting={isApproving}
                         blocked={false}
+                        held={activeGateReportedInvalid}
                         onContinue={() =>
                           submitStagedSetupAnswer(
                             setupGateKey,
