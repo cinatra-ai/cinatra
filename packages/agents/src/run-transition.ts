@@ -16,7 +16,7 @@
 // erased at build) — there is no runtime import of ./store, so no module-init
 // cycle. Every other dependency is imported from its SOURCE module.
 // ---------------------------------------------------------------------------
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { expireRunStream } from "@cinatra-ai/a2a";
 import type { OrgWriteAuthority, OrgWriteCapability, OrgWriteDb, OrgWriteTx } from "@cinatra-ai/org-write-kernel";
 // cinatra#1940 P1 (Decision 4): the per-run, epoch-agnostic lease-settle shape,
@@ -36,7 +36,7 @@ import { orgWriteLeaseSchemaName } from "@/lib/org-write/schema-name";
 // above — packages/agents already reaches into src/lib/org-write/* directly.
 import { mintLeaseExpiryFinalizerAuthority } from "@/lib/org-write/lease-expiry-authority-mint";
 import { db } from "./db";
-import { agentRuns } from "./schema";
+import { agentRuns, artifactReviewResumeOutbox } from "./schema";
 import { dispatchRunWaitTransition } from "./run-wait-notifier"; // #1559/E9: zero-dep leaf seam
 import { LEGAL_TRANSITIONS, TERMINAL_RUN_STATUSES, RunTransitionError } from "./run-status";
 import type { AgentRunStatus } from "./run-status";
@@ -268,6 +268,103 @@ async function settleLeaseInTx(
 }
 
 // ---------------------------------------------------------------------------
+// cinatra#3745 — the resume delivery's run edges, fenced by its intent's lease
+// ---------------------------------------------------------------------------
+//
+// When the caller passes `resumeIntentLease`, the intent row is updated under the
+// live lease in the run's own guarded transaction, right after the CAS, so a run
+// edge the delivery writes (its claim, its release, its scope-refusal failure)
+// lands only while the worker still holds the gate's lease, and the claim mark
+// moves with the edge:
+//
+//   pending_approval -> running   claim:   run_claimed_at = now(), resume_task_result = NULL
+//   running -> pending_approval   release: run_claimed_at = NULL,  resume_task_result = NULL
+//   pending_approval -> failed    fence only
+//   running -> failed             fence only
+//
+// No row under the lease throws `resume_intent_lease_lost`, which rolls the run
+// CAS back with it. The outbox table is not on the org axis.
+//
+// Every edge INTO `running` also clears the claim marks of the run's OTHER
+// intents: from then on another driver advances the run, so an earlier delivery
+// whose handler moved the run on and died before its mark-done closes, and never
+// replays its stored task into that run.
+
+export type ResumeIntentLease = { gateId: string; leaseToken: string };
+
+const RESUME_LEASED_EDGES = new Set([
+  "pending_approval->running",
+  "running->pending_approval",
+  "pending_approval->failed",
+  "running->failed",
+]);
+
+/** Pre-guard: the lease key is legal only on the four delivery edges. */
+function assertResumeIntentLeaseEdge(runId: string, from: AgentRunStatus, to: AgentRunStatus): void {
+  if (!RESUME_LEASED_EDGES.has(`${from}->${to}`)) {
+    throw new RunTransitionError({
+      code: "illegal_transition",
+      runId,
+      from,
+      to,
+      message: `transitionRunStatus(${runId}) illegal_transition: resumeIntentLease is not legal on ${from} → ${to}`,
+    });
+  }
+}
+
+async function fenceResumeIntentLeaseInTx(
+  tx: GuardedRunTx,
+  input: { runId: string; from: AgentRunStatus; to: AgentRunStatus; lease: ResumeIntentLease },
+): Promise<void> {
+  const { runId, from, to, lease } = input;
+  const claimMark =
+    from === "pending_approval" && to === "running"
+      ? { runClaimedAt: sql`now()`, resumeTaskResult: null }
+      : from === "running" && to === "pending_approval"
+        ? { runClaimedAt: null, resumeTaskResult: null }
+        : {};
+  const fenced = await (tx as unknown as typeof db)
+    .update(artifactReviewResumeOutbox)
+    .set({ ...claimMark, updatedAt: sql`now()` })
+    .where(
+      and(
+        eq(artifactReviewResumeOutbox.gateId, lease.gateId),
+        eq(artifactReviewResumeOutbox.runId, runId),
+        eq(artifactReviewResumeOutbox.leaseToken, lease.leaseToken),
+        eq(artifactReviewResumeOutbox.status, "delivering"),
+        isNull(artifactReviewResumeOutbox.deadLetteredAt),
+      ),
+    )
+    .returning({ gateId: artifactReviewResumeOutbox.gateId });
+  if (fenced.length !== 1) {
+    throw new RunTransitionError({
+      code: "resume_intent_lease_lost",
+      runId,
+      from,
+      to,
+      message: `transitionRunStatus(${runId}) resume_intent_lease_lost: gate ${lease.gateId} is not under this lease`,
+    });
+  }
+}
+
+/**
+ * On every edge whose target is `running`, after the CAS and the lease fence.
+ * `keepGateId` is the delivery's own gate on its claim (null on any other
+ * entry). One statement on the tx's `execute` surface, so the run writes of the
+ * CAS and the meta patch stay exactly as they were.
+ */
+async function clearOtherResumeClaimsInTx(
+  tx: GuardedRunTx,
+  input: { runId: string; keepGateId: string | null },
+): Promise<void> {
+  const keep = input.keepGateId === null ? sql`` : sql` AND gate_id <> ${input.keepGateId}`;
+  await tx.execute(
+    sql`UPDATE ${artifactReviewResumeOutbox} SET run_claimed_at = NULL, resume_task_result = NULL, updated_at = now()
+        WHERE run_id = ${input.runId} AND status = 'delivering' AND run_claimed_at IS NOT NULL${keep}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // canonical run-status transition primitive
 // ---------------------------------------------------------------------------
 //
@@ -316,6 +413,8 @@ export async function transitionRunStatus(
         dispatch?: AgentRunDispatchFields;
         /** cinatra#1893 (epic #1883 A5): when present, delegate to transitionRunToCompletedWithDerivationOutbox — terminal CAS + final-output snapshot + derivation-outbox INSERT in ONE transaction (legal ONLY for `to === "completed"`). Absent for every other caller — the historical two-write path is unchanged. */
         derivationOutbox?: DerivationOutboxCapture;
+        /** cinatra#3745: the resume delivery's lease. The edge lands only while the intent row is `delivering` under this token, in the same transaction (fenceResumeIntentLeaseInTx); legal only on the delivery's four edges. Not a DB column. */
+        resumeIntentLease?: ResumeIntentLease;
       }
     | undefined,
   // cinatra#1939 wave 2 — REQUIRED host-minted authority (the compile-time
@@ -341,6 +440,7 @@ export async function transitionRunStatus(
   if (!LEGAL_TRANSITIONS.has(`${from}->${to}` as const)) {
     throw new RunTransitionError({ code: "illegal_transition", runId, from, to });
   }
+  if (meta?.resumeIntentLease) assertResumeIntentLeaseEdge(runId, from, to);
   // (2) Fail-closed: every status transition requires a host-minted authority.
   // The org (lock + CAS scope) is the authority's org — a wrong-org authority
   // fails closed as `stale_from_status` via the §1d org-scoped CAS.
@@ -424,12 +524,19 @@ export async function transitionRunStatus(
       // commit, so no waiter wakeup / stream expiry).
       throw new RunTransitionError({ code: "stale_from_status", runId, from, to });
     }
+    // cinatra#3745: no lease, no edge — a lost lease rolls the CAS back with it.
+    if (meta?.resumeIntentLease) {
+      await fenceResumeIntentLeaseInTx(guardedTx, { runId, from, to, lease: meta.resumeIntentLease });
+    }
+    if (to === "running") {
+      await clearOtherResumeClaimsInTx(guardedTx, { runId, keepGateId: meta?.resumeIntentLease?.gateId ?? null });
+    }
     // Delegate the meta patch to updateAgentRunStatus on the SAME guarded tx. The
     // CAS already wrote the status column; re-writing it is a no-op that still
     // runs the meta-patch logic. The CONTROL keys (`dispatch` — written BY the
     // CAS — and `humanWaitGate` — not a DB column) are stripped first: only
     // genuine DB meta reaches the delegated write.
-    const { dispatch: _dispatch, humanWaitGate: _humanWaitGate, ...dbMeta } = meta ?? {};
+    const { dispatch: _dispatch, humanWaitGate: _humanWaitGate, resumeIntentLease: _lease, ...dbMeta } = meta ?? {};
     const hasDelegatedMeta =
       dbMeta.error !== undefined ||
       dbMeta.startedAt !== undefined ||

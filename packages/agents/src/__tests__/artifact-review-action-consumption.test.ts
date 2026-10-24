@@ -12,9 +12,9 @@ import { describe, expect, it } from "vitest";
 import { getTableConfig } from "drizzle-orm/pg-core";
 
 import { agentRunOutwardActionPolicies, artifactReviewActionConsumptions } from "../schema";
-import { down, outwardActionPolicyDdlSql, up } from "../../../../migrations/core/core__0115_agent-run-outward-action-policy.mjs";
+import { core0115SessionMarkSql, down, outwardActionPolicyDdlSql, up } from "../../../../migrations/core/core__0115_agent-run-outward-action-policy.mjs";
 
-const core0115 = { outwardActionPolicyDdlSql, up, down };
+const core0115 = { outwardActionPolicyDdlSql, core0115SessionMarkSql, up, down };
 
 function columnsOf(table: Parameters<typeof getTableConfig>[0]) {
   const config = getTableConfig(table);
@@ -79,7 +79,9 @@ describe("the one-time consumption of a person's approval", () => {
   it("applies its statements once through the migration runner, and refuses an automatic downgrade", () => {
     const applied: string[] = [];
     core0115.up({ sql: (text: string) => applied.push(text) });
-    expect(applied).toEqual([core0115.outwardActionPolicyDdlSql]);
+    // Then the session mark core__0116's rollout guard reads; it writes no row.
+    expect(applied).toEqual([core0115.outwardActionPolicyDdlSql, core0115.core0115SessionMarkSql]);
+    expect(core0115.core0115SessionMarkSql).toBe("SELECT set_config('cinatra.core_0115_this_session', 'on', false);");
     expect(() => core0115.down()).toThrow("outward_action_policy_downgrade_requires_preserved_consumptions");
   });
 });

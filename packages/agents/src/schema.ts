@@ -734,6 +734,12 @@ export const artifactReviewResumeOutbox = cinatraSchema.table("artifact_review_r
   maxAttempts:    integer("max_attempts").notNull().default(20),
   deadLetteredAt: timestamp("dead_lettered_at", { withTimezone: true }),
   lastError:      text("last_error"),
+  // cinatra#3745 (core__0116): runClaimedAt — this gate's delivery moved the run
+  // pending_approval -> running (set and cleared with that edge, under the lease);
+  // resumeTaskResult — the A2A task its send returned, recorded before the handler
+  // runs (the durable "sent, not yet handled" witness; never carries a run token).
+  runClaimedAt:   timestamp("run_claimed_at", { withTimezone: true }),
+  resumeTaskResult: jsonb("resume_task_result"),
 }, (t) => ({
   statusIdx: index("artifact_review_resume_outbox_status_idx").on(t.status, t.createdAt),
   deadIdx:   index("artifact_review_resume_outbox_dead_idx").on(t.deadLetteredAt).where(sql`dead_lettered_at IS NOT NULL`),

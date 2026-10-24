@@ -1,4 +1,4 @@
-// App869 reserved #3745. Nullable legacy behavior is enforced by the reader:
+// Nullable legacy behavior is enforced by the reader:
 // missing binding cannot admit an outward action. No backfilled authority.
 export const outwardActionPolicyDdlSql = `
   CREATE TABLE IF NOT EXISTS agent_run_outward_action_policies (
@@ -11,7 +11,10 @@ export const outwardActionPolicyDdlSql = `
     executed_source_sha256 text NOT NULL, consumed_at timestamptz NOT NULL DEFAULT now()
   );
 `;
-export function up(pgm) { pgm.sql(outwardActionPolicyDdlSql); }
+// A session mark core__0116's rollout guard reads: this module ran in the same
+// migration session as 0116, so no delivery of the pre-0116 kind ran between them.
+export const core0115SessionMarkSql = `SELECT set_config('cinatra.core_0115_this_session', 'on', false);`;
+export function up(pgm) { pgm.sql(outwardActionPolicyDdlSql); pgm.sql(core0115SessionMarkSql); }
 // Dropping burned gates would permit re-admission. Require a separately
 // authorized data-preserving downgrade; automatic rollback must refuse.
 export function down() { throw new Error("outward_action_policy_downgrade_requires_preserved_consumptions"); }

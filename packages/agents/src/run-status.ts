@@ -222,13 +222,13 @@ export class CannotReassignAfterFirstRun extends Error {
 }
 
 export class RunTransitionError extends Error {
-  readonly code: "illegal_transition" | "stale_from_status";
+  readonly code: "illegal_transition" | "stale_from_status" | "resume_intent_lease_lost";
   readonly runId: string;
   readonly from: AgentRunStatus;
   readonly to: AgentRunStatus;
 
   constructor(args: {
-    code: "illegal_transition" | "stale_from_status";
+    code: "illegal_transition" | "stale_from_status" | "resume_intent_lease_lost";
     runId: string;
     from: AgentRunStatus;
     to: AgentRunStatus;

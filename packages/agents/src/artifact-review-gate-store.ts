@@ -1078,16 +1078,13 @@ export interface ResumeIntentRow {
   attempts: number;
   leaseToken: string | null;
   leaseExpiresAt: Date | null;
+  /** cinatra#3745: set while this gate's delivery holds the run it moved pending_approval -> running. */
+  runClaimedAt: Date | null;
+  /** cinatra#3745: the A2A task this gate's send returned (run token stripped), recorded before the handler ran. */
+  resumeTaskResult: unknown | null;
 }
 
-export async function readResumeIntent(gateId: string): Promise<ResumeIntentRow | null> {
-  const rows = await db
-    .select()
-    .from(artifactReviewResumeOutbox)
-    .where(eq(artifactReviewResumeOutbox.gateId, gateId))
-    .limit(1);
-  const row = rows[0];
-  if (!row) return null;
+function toResumeIntentRow(row: typeof artifactReviewResumeOutbox.$inferSelect): ResumeIntentRow {
   return {
     gateId: row.gateId,
     runId: row.runId,
@@ -1098,7 +1095,19 @@ export async function readResumeIntent(gateId: string): Promise<ResumeIntentRow 
     attempts: row.attempts,
     leaseToken: row.leaseToken,
     leaseExpiresAt: row.leaseExpiresAt,
+    runClaimedAt: row.runClaimedAt ?? null,
+    resumeTaskResult: row.resumeTaskResult ?? null,
   };
+}
+
+export async function readResumeIntent(gateId: string): Promise<ResumeIntentRow | null> {
+  const rows = await db
+    .select()
+    .from(artifactReviewResumeOutbox)
+    .where(eq(artifactReviewResumeOutbox.gateId, gateId))
+    .limit(1);
+  const row = rows[0];
+  return row ? toResumeIntentRow(row) : null;
 }
 
 /**
@@ -1156,17 +1165,47 @@ export async function claimPendingResumeIntents(opts?: {
       .returning();
   });
 
-  return claimed.map((row) => ({
-    gateId: row.gateId,
-    runId: row.runId,
-    reviewTaskId: row.reviewTaskId,
-    kind: row.kind as "approve" | "reject",
-    responseText: row.responseText,
-    status: row.status as "pending" | "delivering" | "done",
-    attempts: row.attempts,
-    leaseToken: row.leaseToken,
-    leaseExpiresAt: row.leaseExpiresAt,
-  }));
+  return claimed.map(toResumeIntentRow);
+}
+
+/** The live-lease guard every in-flight write of a delivery shares (cinatra#3745). */
+function liveLease(gateId: string, leaseToken: string) {
+  return and(
+    eq(artifactReviewResumeOutbox.gateId, gateId),
+    eq(artifactReviewResumeOutbox.leaseToken, leaseToken),
+    eq(artifactReviewResumeOutbox.status, "delivering"),
+    isNull(artifactReviewResumeOutbox.deadLetteredAt),
+  );
+}
+
+/**
+ * Extend a live lease (cinatra#3745 D3). The delivery renews while it is in
+ * flight and fences on it before every send, re-send and replay. False when the
+ * lease is no longer this worker's: the caller must send, release and close nothing.
+ */
+export async function renewResumeIntentLease(gateId: string, leaseToken: string, leaseMs: number): Promise<boolean> {
+  const ms = Math.max(1000, leaseMs);
+  const renewed = await db
+    .update(artifactReviewResumeOutbox)
+    .set({ leaseExpiresAt: sql`now() + (${ms} || ' milliseconds')::interval`, updatedAt: sql`now()` })
+    .where(liveLease(gateId, leaseToken))
+    .returning({ gateId: artifactReviewResumeOutbox.gateId });
+  return renewed.length === 1;
+}
+
+/**
+ * Record the A2A task this gate's send returned, under the live lease and the
+ * delivery's own run claim (cinatra#3745 D1/D4), BEFORE the handler runs. A
+ * re-claim that finds it replays the handler instead of re-sending. The caller
+ * strips the run token first. False when the lease or the claim is gone.
+ */
+export async function recordResumeTaskResult(gateId: string, leaseToken: string, task: unknown): Promise<boolean> {
+  const recorded = await db
+    .update(artifactReviewResumeOutbox)
+    .set({ resumeTaskResult: task, updatedAt: sql`now()` })
+    .where(and(liveLease(gateId, leaseToken), isNotNull(artifactReviewResumeOutbox.runClaimedAt)))
+    .returning({ gateId: artifactReviewResumeOutbox.gateId });
+  return recorded.length === 1;
 }
 
 /**
@@ -1224,6 +1263,10 @@ export async function deadLetterExhaustedResumeIntents(opts?: {
   // actively in-flight (a `delivering` row with a LIVE lease is left to finish).
   const eligibleCond = and(
     isNull(artifactReviewResumeOutbox.deadLetteredAt),
+    // cinatra#3745 (MF4): an intent whose delivery claimed the run is never
+    // dead-lettered — that would strand the run `running` with no driver. It stays
+    // claimable until the delivery closes it (agent_run_stop is the operator road).
+    isNull(artifactReviewResumeOutbox.runClaimedAt),
     gte(artifactReviewResumeOutbox.attempts, artifactReviewResumeOutbox.maxAttempts),
     or(
       // A pending (un-leased) exhausted row.

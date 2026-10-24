@@ -1,0 +1,9 @@
+{
+  "seq": "0116",
+  "file": "core/core__0116_resume-intent-run-claim.mjs",
+  "summary": "Add the artifact-review resume delivery's durable claim mark (run_claimed_at) and send witness (resume_task_result) to artifact_review_resume_outbox for cinatra#3745. Both columns are nullable and additive (ADD COLUMN IF NOT EXISTS); fresh-install bootstrap and Drizzle twins ship with the module and no row is rewritten. A rollout guard raises, with a count and the agent_run_stop operator road, only when core__0115 was applied in an earlier migration session and an unmarked delivering intent holds a running run. Automatic down refuses because dropping the columns would strand claimed runs.",
+  "destructive": false,
+  "tables": [
+    "artifact_review_resume_outbox"
+  ]
+}
