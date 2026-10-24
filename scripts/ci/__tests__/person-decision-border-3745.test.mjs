@@ -2,7 +2,7 @@
 //
 // The boundary module names no pack's tool in a tool-admission set. The
 // person-decision road moved to the tool's registration
-// (src/lib/authz/person-decision-declaration.ts), so the border gate's
+// (declarePersonDecisionEvaluation in src/lib/extension-capabilities-registry.ts), so the border gate's
 // passthrough rule finds no crossing in src/lib/authz/mcp-boundary.ts. The
 // second case keeps the first from passing vacuously: the same rule, with the
 // same pack universe, flags the set the boundary used to carry.

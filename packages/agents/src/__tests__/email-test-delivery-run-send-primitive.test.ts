@@ -816,7 +816,7 @@ describe("email_test_delivery_parse_action", () => {
 // ===========================================================================
 describe("email_test_delivery_run_send — person-decision declaration (cinatra#3745)", () => {
   it("its registration declares that it evaluates the person's answered gate; the parse action's does not", async () => {
-    const { registrationEvaluatesPersonDecision } = await import("@/lib/authz/person-decision-declaration");
+    const { registrationEvaluatesPersonDecision } = await import("@/lib/extension-capabilities-registry");
     const handlers = await getHandlers();
     expect(registrationEvaluatesPersonDecision(handlers.email_test_delivery_run_send)).toBe(true);
     expect(registrationEvaluatesPersonDecision(handlers.email_test_delivery_parse_action)).toBe(false);

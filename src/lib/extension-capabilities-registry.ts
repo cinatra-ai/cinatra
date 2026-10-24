@@ -505,3 +505,29 @@ export function isDeclaredOutwardRunFrame(frame: unknown): boolean {
 
 /** Host only: marks an actual captured effect guard, not an admission. */
 export function markGuardedRunLeaf<T extends (...args: never[])=>unknown>(handler:T):T { guardedLeaves.add(handler); return handler; }
+
+// cinatra#3745 (criterion 5b): a primitive registration's declaration that its
+// handler evaluates the person's answered decision itself. The host names no
+// tool for this. The registration that owns a handler declares it where the
+// handler enters the host's primitive registry, as a guarded dispatch is marked
+// above; the host reads it from the handler it actually executes, never from
+// the request or the tool name. CO-LOCATED HERE for the reason the serving
+// record is: a standalone module would add a route-reachable first-party module
+// to the route-graph ratchet, whose ceilings only shrink.
+// FAIL-CLOSED: an undeclared handler is not person-decision evaluating, and
+// every unreadable value reads as not declared. The declaration alone admits
+// nothing: the deterministic passthrough reads it only for a run-scoped tool the
+// host stamped with a verified submission, and every other boundary ceiling
+// still applies.
+const PERSON_DECISION_KEY = Symbol.for("@cinatra-ai/host:person-decision-evaluating-handlers/v1");
+const personDecisionHolder = globalThis as unknown as { [PERSON_DECISION_KEY]?: WeakSet<object> };
+const personDecisionHandlers = personDecisionHolder[PERSON_DECISION_KEY] ??= new WeakSet<object>();
+/** Declares that this registered handler evaluates the person's answered
+ * decision itself. Returns the same handler, so a registration wraps it in place. */
+export function declarePersonDecisionEvaluation<T extends (...args: never[]) => unknown>(handler: T): T {
+  personDecisionHandlers.add(handler); return handler;
+}
+/** True only for a handler whose registration declared it. */
+export function registrationEvaluatesPersonDecision(handler: unknown): boolean {
+  return typeof handler === "function" && personDecisionHandlers.has(handler);
+}

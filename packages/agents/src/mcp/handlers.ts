@@ -54,7 +54,7 @@ import { claimGateForResume } from "../run-status";
 // the file-size ratchet). The send PORT, ledger store, and port types are
 // imported by that module, not here.
 import { handleEmailTestDeliveryRunSend, handleEmailTestDeliveryParseAction } from "./test-delivery-handlers";
-import { declarePersonDecisionEvaluation } from "@/lib/authz/person-decision-declaration";
+import { declarePersonDecisionEvaluation } from "@/lib/extension-capabilities-registry";
 // The `agent_run` create → decide → dispatch sequence (chat-hitl S9b).
 import { createAgentRunForLaunchFrame } from "../actions";
 import { handleEmailOutreachInitialDraftsUpdate } from "./drafts-persist-handler";

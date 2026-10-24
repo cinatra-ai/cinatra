@@ -709,7 +709,7 @@ export async function POST(req: Request): Promise<Response> {
       // the surrounding async context.
       const invokeHandler = async () => {
         const { enforceMcpBoundary, enforceMcpBoundaryPrerequisites } = await import("@/lib/authz/mcp-boundary");
-        const { registrationEvaluatesPersonDecision } = await import("@/lib/authz/person-decision-declaration");
+        const { registrationEvaluatesPersonDecision } = await import("@/lib/extension-capabilities-registry");
         const frame = mcpRequestContextStorage.getStore();
         // cinatra#3745 (criterion 5b): a tool whose registration declares that its
         // handler evaluates the person's answered gate itself keeps that road. Only

@@ -76,8 +76,8 @@ vi.mock("@/lib/primitive-handlers", async () => {
     typeof import("@cinatra-ai/mcp-server/request-context")
   >("@cinatra-ai/mcp-server/request-context");
   const { declarePersonDecisionEvaluation } = await vi.importActual<
-    typeof import("@/lib/authz/person-decision-declaration")
-  >("@/lib/authz/person-decision-declaration");
+    typeof import("@/lib/extension-capabilities-registry")
+  >("@/lib/extension-capabilities-registry");
   const send = async (call: { input: unknown }) => {
     h.sends.push({ input: call.input, frame: { ...mcpRequestContextStorage.getStore() } as Record<string, unknown> });
     return { sent: 1 };
