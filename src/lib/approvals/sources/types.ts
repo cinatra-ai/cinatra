@@ -16,6 +16,8 @@
  */
 import type { ReactNode } from "react";
 
+import type { RepairStuck } from "../repair-stuck";
+
 /**
  * Coarse "can this source EXIST for this viewer/org" state — NOT a per-direction
  * or per-row permission. The per-direction gate lives in {@link ApprovalSource.appliesTo}
@@ -94,11 +96,14 @@ export interface ApprovalRow {
    *  the authoritative re-check regardless of what this flag says. */
   decidableOwn?: boolean;
   /** PUBLIC (cinatra#4296): set when a vendor application's recovery is stuck
-   *  (it will not retry; an administrator must step in). It carries only what a
-   *  view draws: the Failed pill beside the state pill, and the attempt count
-   *  on the meta line (specs/app.html V.1). Absent when the repair is not stuck.
-   *  Any renderer of the row may read it, unlike {@link raw}. */
-  repairStuck?: { attempts: number };
+   *  (it will not retry; an administrator must step in). Its presence is the
+   *  flag: a view draws the Failed pill beside the state pill (specs/app.html
+   *  V.1). `attempts` is optional and present only when the source has a valid
+   *  count, which the meta line then carries; a source that knows only the
+   *  stuck stamp (the instance's own application status) sets `{}`. Absent when
+   *  the repair is not stuck. Any renderer of the row may read it, unlike
+   *  {@link raw}. Built only through ../repair-stuck from unchecked JSON. */
+  repairStuck?: RepairStuck;
 }
 
 export interface ApprovalEnvelope {

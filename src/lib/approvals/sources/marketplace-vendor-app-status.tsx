@@ -4,7 +4,9 @@ import { format } from "date-fns";
 import Link from "next/link";
 
 import { createHttpMarketplaceMcpClient } from "@cinatra-ai/marketplace-mcp-client/http-client";
+import type { MarketplaceVendorApplicationStatusOutput } from "@cinatra-ai/marketplace-mcp-client";
 
+import { textField, toRepairStuck } from "../repair-stuck";
 import { MarketplaceRowView } from "./marketplace-row";
 import { marketplaceVendorAppStatusContract } from "./marketplace-vendor-app-status.contract";
 import {
@@ -34,11 +36,55 @@ import type { ApprovalRow, ApprovalSource } from "./types";
 
 const SOURCE_ID = MARKETPLACE_VENDOR_APP_STATUS_SOURCE_ID;
 
+// Every field below is read from the marketplace's unchecked JSON through
+// ../repair-stuck: a text field that is not a non-empty string is null and is
+// not drawn (cinatra#4296).
 interface StatusRaw {
   tier: string | null;
   decisionReason: string | null;
   decidedAt: string | null;
-  repairStuck: boolean;
+}
+
+/**
+ * The instance's own pending application as an approval row, or null when it is
+ * not pending. Exported for its unit test (cinatra#4296).
+ *
+ * Repair stuck is published on the PUBLIC `repairStuck` field, so the row, the
+ * Notifications card and every other renderer draw the Failed pill. The status
+ * API carries the stuck stamp but no attempt count, so the field is `{}`: the
+ * flag stands without a count. Stuck only for a valid `repair_stuck_at`
+ * timestamp; missing, null, empty, invalid or a non-string is not stuck.
+ */
+export function toVendorApplicationStatusRow(
+  status: MarketplaceVendorApplicationStatusOutput,
+  createdAt: string,
+): ApprovalRow | null {
+  // Pending-only (E5 #1555): the unified feed surfaces the instance's own
+  // vendor application only while it is in flight. `applied` is the sole
+  // pending state; a decided/terminal application (approved / rejected) and
+  // the "none" (no-row) sentinel leave the list — matching the contract's
+  // `counts()`, which already counts only `state === "applied"`.
+  if (status.state !== "applied") return null;
+  const repairStuck = toRepairStuck(status.repair_stuck_at);
+  const raw: StatusRaw = {
+    tier: textField(status.tier),
+    decisionReason: textField(status.decision_reason),
+    decidedAt: textField(status.decided_at),
+  };
+  return {
+    id: textField(status.application_id) ?? "vendor-application",
+    sourceId: SOURCE_ID,
+    title: textField(status.scope) ?? "Vendor application",
+    status: status.state,
+    // A REAL, sortable createdAt for the chronological merge (E5 #1555),
+    // resolved from LOCAL durable state — the SAME value the moderator-queue
+    // mirror emits for this instance's own application, so the deduped feed
+    // row's keyset paging key is stable regardless of which mirror fetched it
+    // (the old bug shipped `createdAt: ""`, unsortable).
+    createdAt,
+    ...(repairStuck ? { repairStuck } : {}),
+    raw,
+  };
 }
 
 export const marketplaceVendorAppStatusSource: ApprovalSource = {
@@ -68,32 +114,8 @@ export const marketplaceVendorAppStatusSource: ApprovalSource = {
     return guardedFetch(viewer, sectionToken, [], async (token) => {
       const client = createHttpMarketplaceMcpClient({ token });
       const status = await client.vendorApplicationStatus();
-      // Pending-only (E5 #1555): the unified feed surfaces the instance's own
-      // vendor application only while it is in flight. `applied` is the sole
-      // pending state; a decided/terminal application (approved / rejected) and
-      // the "none" (no-row) sentinel leave the list — matching the contract's
-      // `counts()`, which already counts only `state === "applied"`.
-      if (status.state !== "applied") return [];
-      const raw: StatusRaw = {
-        tier: status.tier ?? null,
-        decisionReason: status.decision_reason ?? null,
-        decidedAt: status.decided_at ?? null,
-        repairStuck: status.repair_stuck_at != null,
-      };
-      const row: ApprovalRow = {
-        id: status.application_id ?? "vendor-application",
-        sourceId: SOURCE_ID,
-        title: status.scope ?? "Vendor application",
-        status: status.state,
-        // A REAL, sortable createdAt for the chronological merge (E5 #1555),
-        // resolved from LOCAL durable state — the SAME value the moderator-queue
-        // mirror emits for this instance's own application, so the deduped feed
-        // row's keyset cursor is stable regardless of which mirror fetched it
-        // (the old bug shipped `createdAt: ""`, unsortable).
-        createdAt: resolveOwnVendorApplicationCreatedAt(),
-        raw,
-      };
-      return [row];
+      const row = toVendorApplicationStatusRow(status, resolveOwnVendorApplicationCreatedAt());
+      return row ? [row] : [];
     });
   },
 
@@ -112,6 +134,10 @@ export const marketplaceVendorAppStatusSource: ApprovalSource = {
       <MarketplaceRowView
         title={row.title}
         state={row.status}
+        // The instance's own stuck application keeps the Failed pill beside
+        // its Awaiting others pill (specs/app.html V.1); the status API has no
+        // attempt count, so the meta line names none.
+        repairStuck={row.repairStuck !== undefined}
         meta={`${metaParts}${reason}` || "Vendor application"}
         right={
           <Link

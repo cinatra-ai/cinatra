@@ -50,7 +50,9 @@ export function InstalledStatusIndicator({
           : undefined
       }
     >
-      <Icon aria-hidden className="size-3 shrink-0" strokeWidth={3} />
+      {/* The drawing's strokes: 3 for the check and the cross, 2.4 for the
+          lock (app-extensions.html, "Example — lifecycle status"). */}
+      <Icon aria-hidden className="size-3 shrink-0" strokeWidth={locked ? 2.4 : 3} />
       {label}
     </span>
   );

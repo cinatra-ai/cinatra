@@ -25,6 +25,7 @@ import { configurationHrefForViewer } from "@/lib/configuration-href";
 import type { UnifiedFeedItem } from "@/lib/approvals/unified-feed";
 import type { AppNotification } from "@cinatra-ai/notifications/types";
 import type { RowEligibility } from "@/lib/approvals/sources/types";
+import { copyRepairStuck, type RepairStuck } from "@/lib/approvals/repair-stuck";
 import {
   AGENT_SOURCE_ID,
   PROMOTION_SOURCE_ID,
@@ -93,10 +94,11 @@ export interface ApprovalRowVM {
   /** Which inline decide to render when `actionable`; `none` otherwise. */
   decideKind: ApprovalDecideKind;
   /** A stuck vendor-application repair (cinatra#4296): the card draws the
-   *  Failed pill beside its pending pill and the attempt count on its meta
-   *  line. Only the PUBLIC `ApprovalRow.repairStuck` field is copied, never
-   *  `raw`. Absent when the repair is not stuck. */
-  repairStuck?: { attempts: number };
+   *  Failed pill beside its pending pill and, when a valid count exists, the
+   *  attempt count on its meta line. Only the PUBLIC `ApprovalRow.repairStuck`
+   *  field is copied (its validated count, no other key), never `raw`. Absent
+   *  when the repair is not stuck. */
+  repairStuck?: RepairStuck;
 }
 
 export type FeedRowVM =
@@ -238,12 +240,21 @@ export function buildFeedRowVMs(
           direction,
           actionable,
           decideKind: actionable ? approvalDecideKind(row.sourceId) : "none",
-          ...(row.repairStuck ? { repairStuck: { attempts: row.repairStuck.attempts } } : {}),
+          ...repairStuckField(row.repairStuck),
         },
       });
     }
   }
   return out;
+}
+
+/** The view model's repair field: the row's public field re-read through
+ *  ../repair-stuck, so a source that published a malformed count draws the
+ *  flag without a count, and no other key reaches the client. */
+function repairStuckField(value: unknown): { repairStuck?: RepairStuck } {
+  if (value === undefined) return {};
+  const repairStuck = copyRepairStuck(value);
+  return repairStuck ? { repairStuck } : {};
 }
 
 // ---------------------------------------------------------------------------

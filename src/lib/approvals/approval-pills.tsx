@@ -2,6 +2,8 @@ import type { ComponentProps } from "react";
 
 import { StatusPill, type StatusPillStatus } from "@/components/ui/status-pill";
 
+import { repairAttemptCount } from "./repair-stuck";
+
 // ---------------------------------------------------------------------------
 // The pending pill of an approval and the repair-stuck flag (cinatra#4296).
 //
@@ -61,10 +63,12 @@ export function RepairStuckPill() {
 
 /**
  * The attempt count of a stuck repair, for the row's meta line. Empty when there
- * is no attempt to count.
+ * is no attempt to count: zero attempts, or a count that is not a non-negative
+ * safe integer of type number (./repair-stuck). A malformed count is never
+ * rounded or coerced into a plausible one.
  */
-export function repairAttemptsText(attempts: number): string {
-  const n = Math.floor(attempts);
-  if (!Number.isFinite(n) || n <= 0) return "";
+export function repairAttemptsText(attempts: unknown): string {
+  const n = repairAttemptCount(attempts);
+  if (n === undefined || n === 0) return "";
   return `${n} repair ${n === 1 ? "attempt" : "attempts"}`;
 }

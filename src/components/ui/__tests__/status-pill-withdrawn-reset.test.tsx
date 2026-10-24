@@ -43,7 +43,8 @@ describe("the Withdrawn and Reset roster pills", () => {
     const cls = renderPill(status).className;
     expect(cls).toContain("text-muted-foreground");
     expect(cls).toContain("bg-transparent");
-    expect(cls).toContain("border-line");
+    // `pill idle`'s border is the strong line (specs/app.html, the pill recipes).
+    expect(cls.split(/\s+/)).toContain("border-line-strong");
     // The same recipe as the idle pill, so the two never drift apart.
     expect(cls).toBe(idle);
   });

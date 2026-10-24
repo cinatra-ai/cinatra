@@ -40,17 +40,23 @@ const pillVariants = cva(
       status: {
         running:      "border-primary/30 bg-primary/10 text-primary",
         approved:     "border-success/30 bg-success/10 text-success",
-        hold:         "border-warning/30 bg-warning/15 text-warning",
+        // `pill hold` as the roster draws it (specs/app.html, the pill
+        // recipes): the mustard tint at 16%, its border at 42%, and the
+        // drawing's MUSTARD INK for the label, the readable shade of the same
+        // mustard on that tint (cinatra#4296).
+        hold:         "border-warning/42 bg-warning/16 text-mustard-ink",
         "needs-review":"border-warning/40 bg-warning/15 text-warning",
         scheduled:    "border-primary/30 bg-primary/8 text-primary",
         queued:       "border-muted/30 bg-muted/10 text-muted-foreground",
-        idle:         "border-line bg-transparent text-muted-foreground",
-        archived:     "border-line bg-transparent text-muted-foreground opacity-70",
-        // The two idle-family pills the marketplace approval states add
-        // (specs/app.html, pill roster and block V.1): drawn as `pill idle`,
-        // so they share the idle recipe and differ only by their glyph.
-        withdrawn:    "border-line bg-transparent text-muted-foreground",
-        reset:        "border-line bg-transparent text-muted-foreground",
+        // `pill idle` as the roster draws it: no ground, the muted ink, and
+        // the strong line for its border (specs/app.html, the pill recipes).
+        // Archived, Withdrawn and Reset are drawn as `pill idle` too, so they
+        // share this recipe and differ only by their glyph (Archived also by
+        // its 0.7 opacity).
+        idle:         "border-line-strong bg-transparent text-muted-foreground",
+        archived:     "border-line-strong bg-transparent text-muted-foreground opacity-70",
+        withdrawn:    "border-line-strong bg-transparent text-muted-foreground",
+        reset:        "border-line-strong bg-transparent text-muted-foreground",
         failed:       "border-destructive bg-destructive text-destructive-foreground",
         declined:     "border-destructive bg-destructive text-destructive-foreground",
       },
@@ -133,12 +139,14 @@ function StatusIcon({ status }: { status: StatusPillStatus }) {
         </svg>
       );
     case "archived":
-      // Cross (✕) per design system §VI — archived reads as "crossed out",
-      // muted grey (colour comes from the pill variant, not the glyph).
+      // Archive box, as the roster draws Archived (specs/app.html, the pill
+      // roster and block V.1: "retired and kept for the record"). The
+      // Extensions lifecycle chip keeps its own grey cross; that chip is the
+      // marked text of installed-status-indicator.tsx, not this pill.
       return (
         <svg {...common} strokeWidth="2.4">
-          <path d="M18 6 6 18" />
-          <path d="m6 6 12 12" />
+          <path d="M21 8v13H3V8" />
+          <path d="M1 3h22v5H1z" />
         </svg>
       );
     case "withdrawn":
@@ -157,8 +165,17 @@ function StatusIcon({ status }: { status: StatusPillStatus }) {
           <path d="M3 3v5h5" />
         </svg>
       );
-    case "failed":
     case "declined":
+      // Trash can, as the roster draws Declined (specs/app.html, the pill
+      // roster and block V.1).
+      return (
+        <svg {...common} strokeWidth="2.8">
+          <path d="M3 6h18" />
+          <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+        </svg>
+      );
+    case "failed":
       return (
         <svg {...common} strokeWidth="3">
           <path d="M18 6 6 18" />
@@ -174,6 +191,13 @@ function StatusIcon({ status }: { status: StatusPillStatus }) {
       );
   }
 }
+
+// The dot's fill. It takes the label's colour (`bg-current`) except where the
+// roster draws it otherwise: `.pill.hold .dot` is the mustard (`--logo`, the
+// app's `--warning`), while the hold label is the darker mustard ink.
+const DOT_FILL: Partial<Record<StatusPillStatus, string>> = {
+  hold: "bg-warning",
+};
 
 // Default human-readable label per status — overridable via children.
 const DEFAULT_LABEL: Record<StatusPillStatus, string> = {
@@ -207,13 +231,12 @@ export function StatusPill({
       {...props}
     >
       {glyph === "dot" ? (
-        // 7px, round, in the pill's own status colour. `bg-current` IS the
-        // drawing's rule: the dot carries the same colour as the label beside
-        // it, so one variant string keeps both halves in one family.
+        // 7px, round, in the pill's own status colour: the label's colour
+        // (`bg-current`) for every status but hold (DOT_FILL above).
         <span
           data-slot="status-pill-dot"
           aria-hidden="true"
-          className="h-[7px] w-[7px] shrink-0 rounded-full bg-current"
+          className={cn("h-[7px] w-[7px] shrink-0 rounded-full", DOT_FILL[status] ?? "bg-current")}
         />
       ) : (
         <StatusIcon status={status} />

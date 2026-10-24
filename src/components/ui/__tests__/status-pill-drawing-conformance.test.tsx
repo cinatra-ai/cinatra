@@ -24,7 +24,8 @@
 // strokes; that was the wrong seam — see badge-drawing-conformance.test.tsx
 // for the record of that correction and the reason the badge is not edited.
 //
-// NO DEPARTURE FOUND.
+// NO DEPARTURE FOUND. (`hold` is graded at the drawing's own mustard-ink
+// recipe since cinatra#4296; see SAME_INK below.)
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 
@@ -49,13 +50,21 @@ const TINTED: StatusPillStatus[] = [
 
 const NEUTRAL: StatusPillStatus[] = ["queued", "idle", "archived", "withdrawn", "reset"];
 
+// `hold` is tinted from the mustard too, but the drawing writes its label in
+// the darker MUSTARD INK, the readable shade of that mustard on its own tint
+// (specs/app.html: `.pill.hold { background: rgba(199,149,69,0.16); color:
+// var(--mustard-ink); border-color: rgba(199,149,69,0.42) }`; cinatra#4296).
+// So its text is not the tint's own token, and it is graded by its own case
+// below, at the drawing's three values.
+const SAME_INK = TINTED.filter((s) => s !== "hold");
+
 function renderPill(status: StatusPillStatus) {
   const { container } = render(<StatusPill status={status}>Label</StatusPill>);
   return container.firstElementChild as HTMLElement;
 }
 
 describe('clause: "bg tinted from the status colour, text in the same colour, border at higher alpha"', () => {
-  it.each(TINTED)(
+  it.each(SAME_INK)(
     "draws '%s' as one status colour at three alphas — tinted ground, solid text, stronger stroke",
     (status) => {
       const cls = renderPill(status).className;
@@ -81,6 +90,12 @@ describe('clause: "bg tinted from the status colour, text in the same colour, bo
       ).toBeGreaterThan(bgAlpha);
     },
   );
+
+  it("draws 'hold' as the mustard tint at 16%, its border at 42%, and the mustard ink", () => {
+    const cls = renderPill("hold").className.split(/\s+/);
+    // The border (42%) still sits at a higher alpha than the ground (16%).
+    expect(cls).toEqual(expect.arrayContaining(["bg-warning/16", "border-warning/42", "text-mustard-ink"]));
+  });
 
   it("always draws a border, so the pill has an edge on every ground", () => {
     for (const status of [...TINTED, ...NEUTRAL]) {
