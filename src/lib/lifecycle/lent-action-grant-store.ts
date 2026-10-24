@@ -171,16 +171,28 @@ export async function consumeLentActionGrant(
     readonly orgId: string;
     /** The card the CALL names — the row must agree. */
     readonly cardRefFingerprint: string;
-    /** The control the CALL asks for — the row must agree. */
+    /**
+     * The grant's ANCHOR control — `claims.control`, which is what the row was
+     * written with (cinatra#2853).
+     *
+     * IT IS NOT NECESSARILY THE CONTROL BEING PRESSED. A grant may name a MENU
+     * of the card's own buttons, narrowed by the person's own words; which of
+     * them runs is authorized by the signed menu and by what the live card
+     * lends, not here. The row's job is unchanged and is the one single-use
+     * rests on: one atomic statement, one winner, bound to the person and to
+     * the card.
+     */
     readonly control: string;
   },
   deps: LentActionGrantStoreDeps = {},
 ): Promise<LentActionGrantSpend> {
   const query = deps.query ?? defaultQuery;
   try {
-    // The statement also names the CARD and the CONTROL, so the row itself
-    // refuses a grant spent for anything other than what it was minted for —
-    // defence in depth beneath the signature check, not a substitute for it.
+    // The statement also names the CARD and the anchor CONTROL, so the row
+    // itself refuses a grant spent against another card or under another
+    // anchor — defence in depth beneath the signature check, not a substitute
+    // for it. It no longer speaks about WHICH BUTTON of a menu ran
+    // (cinatra#2853): the database sees the anchor whichever one it was.
     const table = grantTable();
     const rows = await query<{ jti: string; message_text: string | null }>(
       `WITH spent AS (

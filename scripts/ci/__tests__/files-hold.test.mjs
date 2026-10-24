@@ -8,7 +8,8 @@
 // fake of the platform's API: how a listing cut short is recognised, what a
 // push to a labelled pull request does, how many requests each kind of
 // evaluation makes, and that a status the head already carries is not written
-// again.
+// again. A hold lasts at most 24 hours: the clock is an input, a fixed number
+// handed in, never the machine's clock.
 
 import { describe, expect, it } from "vitest";
 
@@ -28,6 +29,9 @@ import {
   heldDescription,
   scope,
 } from "../files-hold.mjs";
+// The exports of the 24-hour rule are read through the namespace, so that a
+// missing one fails its own cases and never the whole module.
+import * as filesHold from "../files-hold.mjs";
 
 const head = (n) => n.toString(16).padStart(40, "0");
 const T1 = "2026-09-29T08:00:00Z";
@@ -273,6 +277,158 @@ describe("decide: the rules around the seven cases", () => {
   });
 });
 
+const HOUR = 60 * 60 * 1000;
+/** A time `hours` (and `ms`) after the label time `labelledAt`, as the clock decide takes. */
+const after = (labelledAt, hours, ms = 0) => Date.parse(labelledAt) + hours * HOUR + ms;
+const EXPIRED_TEXT = "Its holds-files label is more than 24 hours old: the hold expired, it holds nothing now.";
+
+describe("decide: a hold lasts at most 24 hours", () => {
+  it("25 hours after its label the holder holds nothing: the pull request that shares its file succeeds and names the expired hold", () => {
+    const decision = decide({
+      pullRequests: [pr(10, { labelledAt: T1, files: ["a.ts", "b.ts"] }), pr(11, { files: ["b.ts", "c.ts"] })],
+      now: after(T1, 25),
+    });
+    expect(statusOf(decision, 11)).toEqual({
+      number: 11,
+      head: head(11),
+      state: "success",
+      description: "Hold of #10 expired after 24 hours: b.ts",
+    });
+    expect(statusOf(decision, 10)).toEqual({ number: 10, head: head(10), state: "success", description: EXPIRED_TEXT });
+    expect(filesHold.EXPIRED).toBe(EXPIRED_TEXT);
+  });
+
+  it("23 hours after its label the holder still holds (green at the base too)", () => {
+    const decision = decide({
+      pullRequests: [pr(10, { labelledAt: T1, files: ["a.ts", "b.ts"] }), pr(11, { files: ["b.ts", "c.ts"] })],
+      now: after(T1, 23),
+    });
+    expect(statusOf(decision, 11)).toEqual({
+      number: 11,
+      head: head(11),
+      state: "failure",
+      description: "Held by #10: b.ts",
+      holder: 10,
+    });
+    expect(statusOf(decision, 10)).toMatchObject({ state: "success", description: HOLDS });
+  });
+
+  it("exactly 24 hours still holds; 24 hours and one millisecond has expired", () => {
+    expect(filesHold.HOLD_LASTS_HOURS).toBe(24);
+    expect(filesHold.HOLD_LASTS_MS).toBe(24 * HOUR);
+    const at = (now) =>
+      decide({ pullRequests: [pr(10, { labelledAt: T1, files: ["a.ts"] }), pr(11, { files: ["a.ts"] })], now });
+    expect(statusOf(at(after(T1, 24)), 11)).toMatchObject({ state: "failure", holder: 10 });
+    expect(statusOf(at(after(T1, 24)), 10)).toMatchObject({ state: "success", description: HOLDS });
+    expect(statusOf(at(after(T1, 24, 1)), 11)).toMatchObject({
+      state: "success",
+      description: "Hold of #10 expired after 24 hours: a.ts",
+    });
+    expect(statusOf(at(after(T1, 24, 1)), 10)).toMatchObject({ state: "success", description: EXPIRED_TEXT });
+  });
+
+  it("without a clock a label of any age holds: the clock is an input (green at the base too)", () => {
+    const decision = decide({
+      pullRequests: [pr(10, { labelledAt: "2020-01-01T00:00:00Z", files: ["a.ts"] }), pr(11, { files: ["a.ts"] })],
+    });
+    expect(statusOf(decision, 10)).toMatchObject({ state: "success", description: HOLDS });
+    expect(statusOf(decision, 11)).toMatchObject({ state: "failure", description: "Held by #10: a.ts", holder: 10 });
+  });
+
+  it("a live holder labelled after an expired one holds against it, and holds a pull request that shares files with both", () => {
+    const T_LATER = "2026-09-30T04:00:00Z"; // 20 hours after T1
+    const decision = decide({
+      pullRequests: [
+        pr(10, { labelledAt: T1, files: ["a.ts"] }),
+        pr(20, { labelledAt: T_LATER, files: ["a.ts", "b.ts"] }),
+        pr(30, { files: ["a.ts", "b.ts"] }),
+      ],
+      now: after(T1, 25),
+    });
+    expect(statusOf(decision, 10)).toEqual({
+      number: 10,
+      head: head(10),
+      state: "failure",
+      description: "Held by #20: a.ts",
+      holder: 20,
+    });
+    expect(statusOf(decision, 20)).toMatchObject({ state: "success", description: HOLDS });
+    expect(statusOf(decision, 30)).toMatchObject({ state: "failure", description: "Held by #20: a.ts, b.ts", holder: 20 });
+  });
+
+  it("an expired holder is in no holder list and no fingerprint, and is listed as expired", () => {
+    const T_LATER = "2026-09-30T04:00:00Z";
+    const listing = {
+      pullRequests: [pr(10, { labelledAt: T1, files: ["a.ts"] }), pr(20, { labelledAt: T_LATER, files: ["x.ts"] })],
+      now: after(T1, 25),
+    };
+    const live = [{ number: 20, at: "2026-09-30T04:00:00.000Z", head: head(20) }];
+    const decision = decide(listing);
+    expect(decision.holders).toEqual(live);
+    expect(decision.fingerprint).toBe(fingerprint(live));
+    expect(decision.expired).toEqual([{ number: 10, at: "2026-09-29T08:00:00.000Z", head: head(10) }]);
+    expect(filesHold.holdersOf(listing)).toEqual(live);
+  });
+
+  it("a clock that is not a finite number is refused", () => {
+    const pullRequests = [pr(10, { labelledAt: T1, files: ["a.ts"] })];
+    for (const now of [Number.NaN, Number.POSITIVE_INFINITY, "2026-09-30T12:00:00Z", null]) {
+      expect(() => decide({ pullRequests, now }), String(now)).toThrow(TypeError);
+      expect(() => filesHold.holdersOf({ pullRequests, now }), String(now)).toThrow(TypeError);
+    }
+  });
+});
+
+describe("the descriptions of an expired hold stay within the platform's limit", () => {
+  const within = (text) => {
+    expect(text.length, text).toBeLessThanOrEqual(DESCRIPTION_LIMIT);
+    expect(text.length, text).toBeGreaterThan(0);
+  };
+
+  it("the expired holder's own text fits", () => {
+    within(EXPIRED_TEXT);
+    within(filesHold.EXPIRED);
+  });
+
+  it("an expired description always names the holder and counts every path it leaves out", () => {
+    const prefix = "Hold of #123456 expired after 24 hours: ";
+    for (const count of [1, 2, 3, 4, 7, 250]) {
+      for (const width of [1, 10, 40, 60, 139, 400]) {
+        const paths = Array.from({ length: count }, (_, i) => `${String(i).padStart(4, "0")}/${"p".repeat(width)}.ts`);
+        const text = filesHold.expiredDescription(123456, paths);
+        within(text);
+        expect(text.startsWith(prefix), text).toBe(true);
+        const more = /and (\d+) more$/.exec(text);
+        const named = text.slice(prefix.length).replace(/ and \d+ more$/, "").split(", ").length;
+        expect(named, text).toBeLessThanOrEqual(3);
+        expect(named + (more ? Number(more[1]) : 0), text).toBe(count);
+      }
+    }
+  });
+
+  it("names the paths as a held description does, and a path too long for the limit keeps its end", () => {
+    expect(filesHold.expiredDescription(80, ["e.ts", "d.ts", "c.ts", "b.ts", "a.ts"])).toBe(
+      "Hold of #80 expired after 24 hours: a.ts, b.ts, c.ts and 2 more",
+    );
+    const text = filesHold.expiredDescription(7, [`${"deep/".repeat(60)}the-file-that-matters.ts`]);
+    within(text);
+    expect(text.startsWith("Hold of #7 expired after 24 hours: …")).toBe(true);
+    expect(text.endsWith("the-file-that-matters.ts")).toBe(true);
+    expect(filesHold.expiredDescription(5, ["a\nb‮.ts"])).toBe("Hold of #5 expired after 24 hours: a?b?.ts");
+  });
+
+  it("every description decide writes after an expiry fits, whatever the paths", () => {
+    const long = Array.from({ length: 12 }, (_, i) => `packages/${"nested/".repeat(i + 3)}file-${i}.test.ts`);
+    const decision = decide({
+      pullRequests: [pr(1000000, { labelledAt: T1, files: long }), pr(1000001, { files: long })],
+      now: after(T1, 25),
+    });
+    expect(decision.statuses).toHaveLength(2);
+    expect(statusOf(decision, 1000001).description.startsWith("Hold of #1000000 expired after 24 hours: ")).toBe(true);
+    for (const status of decision.statuses) within(status.description);
+  });
+});
+
 describe("which pull requests an event evaluates", () => {
   const open = [1, 2, 3, 4].map((n) => ({ number: n, head: head(n), labelled: n === 1 }));
   const holders = [{ number: 1, at: "2026-09-29T08:00:00.000Z", head: head(1) }];
@@ -373,6 +529,95 @@ describe("which pull requests an event evaluates", () => {
       all: false,
       numbers: [1, 3],
     });
+  });
+});
+
+describe("which pull requests a scheduled run evaluates", () => {
+  const open = [1, 2, 3, 4].map((n) => ({ number: n, head: head(n), labelled: n === 1 }));
+  const holders = [{ number: 1, at: "2026-09-29T08:00:00.000Z", head: head(1) }];
+  const fp = fingerprint(holders);
+  const status = (description, holdersThen = holders) => ({ state: "success", description, fingerprint: fingerprint(holdersThen) });
+  const statuses = (byNumber) => new Map(open.map((p) => [p.head, byNumber[p.number]]));
+  const scheduled = (holdersNow, current) =>
+    scope({ eventName: "schedule", payload: { schedule: "17 * * * *" }, open, holders: holdersNow, current });
+
+  it("evaluates nothing of its own when every status fits", () => {
+    const fitting = statuses({ 1: status(HOLDS), 2: status(SHARES_NOTHING), 3: status(SHARES_NOTHING), 4: status(SHARES_NOTHING) });
+    expect(fitting.get(head(1)).fingerprint).toBe(fp);
+    expect(scheduled(holders, fitting)).toEqual({
+      all: false,
+      numbers: [],
+      why: "a scheduled run renews what the time changed",
+      stale: [],
+    });
+    // After the last hold expired: the holder's own text, the expired hold named, nothing held.
+    const afterExpiry = statuses({
+      1: status(EXPIRED_TEXT, []),
+      2: status("Hold of #1 expired after 24 hours: a.ts", []),
+      3: status(NOTHING_HELD, []),
+      4: status(NOTHING_HELD, []),
+    });
+    expect(scheduled([], afterExpiry)).toMatchObject({ all: false, numbers: [], stale: [] });
+  });
+
+  it("takes in a status that says it holds on a pull request that holds nothing now", () => {
+    const current = statuses({
+      1: status(HOLDS),
+      2: status("Hold of #1 expired after 24 hours: a.ts", []),
+      3: status(NOTHING_HELD, []),
+      4: status(NOTHING_HELD, []),
+    });
+    expect(scheduled([], current)).toEqual({
+      all: false,
+      numbers: [1],
+      why: "a scheduled run renews what the time changed",
+      stale: ["#1 says it holds, and it holds nothing now"],
+    });
+  });
+
+  it("takes in a status that names no hold while no pull request holds", () => {
+    const current = statuses({
+      1: status(EXPIRED_TEXT, []),
+      2: status(SHARES_NOTHING),
+      3: status(NOTHING_HELD, []),
+      4: status("Hold of #1 expired after 24 hours: a.ts", []),
+    });
+    expect(scheduled([], current)).toEqual({
+      all: false,
+      numbers: [2],
+      why: "a scheduled run renews what the time changed",
+      stale: ["#2 was set while a pull request held files, and none does now"],
+    });
+  });
+
+  it("takes in every status that names an expired holder when it was the last, and every one when others still hold", () => {
+    const held = { state: "failure", description: "Held by #1: a.ts", fingerprint: fp };
+    const lastExpired = statuses({ 1: status(HOLDS), 2: held, 3: status(SHARES_NOTHING), 4: status(NOTHING_HELD, []) });
+    expect(scheduled([], lastExpired)).toMatchObject({ all: false, numbers: [1, 2, 3] });
+    // #1 expired while #4 still holds: the holders changed, so every open pull request is evaluated.
+    const stillHeld = [{ number: 4, at: "2026-09-30T04:00:00.000Z", head: head(4) }];
+    const bothHeld = [...holders, ...stillHeld];
+    const withLabelOn4 = open.map((p) => ({ ...p, labelled: p.number === 1 || p.number === 4 }));
+    const setWhileBothHeld = statuses({
+      1: status(HOLDS, bothHeld),
+      2: { ...held, fingerprint: fingerprint(bothHeld) },
+      3: status(SHARES_NOTHING, bothHeld),
+      4: status(HOLDS, bothHeld),
+    });
+    expect(
+      scope({ eventName: "schedule", payload: {}, open: withLabelOn4, holders: stillHeld, current: setWhileBothHeld }),
+    ).toMatchObject({ all: true, numbers: [1, 2, 3, 4] });
+  });
+
+  it("reads a scheduled event as a run by hand is read, and refuses any other event by naming the three it runs on", () => {
+    expect(filesHold.readEvent("schedule", { schedule: "17 * * * *" })).toEqual({
+      name: "schedule",
+      action: null,
+      number: null,
+      pushedAt: null,
+      carriesLabel: false,
+    });
+    expect(() => filesHold.readEvent("push", {})).toThrow(/pull_request_target, schedule and workflow_dispatch only/);
   });
 });
 
@@ -560,7 +805,13 @@ const payload = (action, number, { labels = [], label } = {}) => ({
   ...(label ? { label: { name: label } } : {}),
 });
 const quiet = () => {};
-const common = (api) => ({ request: api.request, repository: REPOSITORY, log: quiet, pause: async () => {} });
+const common = (api) => ({
+  request: api.request,
+  repository: REPOSITORY,
+  log: quiet,
+  pause: async () => {},
+  now: () => Date.parse("2026-09-29T12:00:00Z"),
+});
 const evaluateWith = (api, action, number, extra = {}) =>
   evaluate({ ...common(api), eventName: "pull_request_target", payload: payload(action, number, extra), ...extra });
 const byHand = (api, extra = {}) => evaluate({ ...common(api), eventName: "workflow_dispatch", payload: {}, ...extra });
@@ -801,6 +1052,88 @@ describe("the evaluation", () => {
     const result = await byHand(api, { dryRun: true });
     expect(result.target.all).toBe(true);
     expect(api.writes()).toEqual([]);
+  });
+});
+
+describe("the scheduled evaluation", () => {
+  const scheduledRun = (api, extra = {}) =>
+    evaluate({ ...common(api), eventName: "schedule", payload: { schedule: "17 * * * *" }, ...extra });
+
+  it("rewrites the status that a hold now expired held, and the holder's own, and writes nothing else", async () => {
+    const api = fakeApi({
+      pulls: [openPull(1, true), openPull(2)],
+      files: { 1: fileRows("a.ts"), 2: fileRows("a.ts", "b.ts") },
+      events: { 1: [labelledEvent(T1)] },
+      current: {
+        [head(1)]: { state: "success", description: HOLDS },
+        [head(2)]: { state: "failure", description: "Held by #1: a.ts" },
+      },
+    });
+    const lines = [];
+    const result = await scheduledRun(api, { runUrl: RUN_URL, log: (line) => lines.push(line), now: () => after(T1, 25) });
+    expect(result.failures).toEqual([]);
+    expect(result.decision.holders).toEqual([]);
+    expect(api.writes()).toEqual([
+      {
+        method: "POST",
+        path: `/repos/${REPOSITORY}/statuses/${head(1)}`,
+        body: { state: "success", context: CONTEXT, description: EXPIRED_TEXT, target_url: `${RUN_URL}#holders-${fingerprint([])}` },
+      },
+      {
+        method: "POST",
+        path: `/repos/${REPOSITORY}/statuses/${head(2)}`,
+        body: {
+          state: "success",
+          context: CONTEXT,
+          description: "Hold of #1 expired after 24 hours: a.ts",
+          target_url: `${RUN_URL}#holders-${fingerprint([])}`,
+        },
+      },
+    ]);
+    // The label stays on: the evaluation takes nothing off and writes no comment.
+    expect(api.labels.get(1)).toEqual([LABEL]);
+    expect(lines).toContain("files-hold: #1's hold expired: labelled 2026-09-29T08:00:00.000Z, more than 24 hours ago.");
+  });
+
+  it("a second scheduled run after an expiry writes nothing", async () => {
+    const api = fakeApi({
+      pulls: [openPull(1, true), openPull(2), openPull(3)],
+      files: { 1: fileRows("a.ts"), 2: fileRows("a.ts"), 3: fileRows("c.ts") },
+      events: { 1: [labelledEvent(T1)] },
+    });
+    await byHand(api, { runUrl: RUN_URL });
+    expect(api.current[head(2)]).toMatchObject({ state: "failure", description: "Held by #1: a.ts" });
+    await scheduledRun(api, { runUrl: RUN_URL, now: () => after(T1, 25) });
+    expect(api.current[head(2)]).toMatchObject({ state: "success", description: "Hold of #1 expired after 24 hours: a.ts" });
+    api.calls.length = 0;
+    const result = await scheduledRun(api, { runUrl: RUN_URL, now: () => after(T1, 26) });
+    expect(result.target).toMatchObject({ all: false, numbers: [] });
+    expect(api.writes()).toEqual([]);
+  });
+
+  it("with no labelled pull request and fitting statuses, makes 1 REST and 1 GraphQL request and writes nothing", async () => {
+    const api = fakeApi({ pulls: Array.from({ length: 50 }, (_, i) => openPull(i + 1)) });
+    await byHand(api, { runUrl: RUN_URL });
+    api.calls.length = 0;
+    const result = await scheduledRun(api, { runUrl: RUN_URL });
+    expect(result.target).toMatchObject({ all: false, numbers: [] });
+    expect(api.count()).toEqual({ rest: 1, graphql: 1, writes: 0 });
+  });
+
+  it("with two labelled pull requests and fitting statuses, reads only the holders and writes nothing", async () => {
+    const api = fifty();
+    await byHand(api, { runUrl: RUN_URL });
+    api.calls.length = 0;
+    const result = await scheduledRun(api, { runUrl: RUN_URL });
+    expect(result.target).toMatchObject({ all: false, numbers: [] });
+    expect(api.count()).toEqual({ rest: 7, graphql: 1, writes: 0 });
+  });
+
+  it("the job that takes the label off makes no request on a scheduled run", async () => {
+    const api = fakeApi({ pulls: [openPull(1, true)], events: { 1: [labelledEvent(T1)] } });
+    const result = await endHold({ ...common(api), eventName: "schedule", payload: { schedule: "17 * * * *" } });
+    expect(result).toEqual({ failures: [], endHolds: [] });
+    expect(api.calls).toEqual([]);
   });
 });
 

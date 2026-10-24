@@ -180,6 +180,17 @@ import type {
 // 1). Tier-neutral: pure functions, no React, no server-only import, no DB.
 
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -191,9 +202,13 @@ import {
 } from "@/components/ui/select";
 
 import {
+  useComposerFocusBinding,
   useLifecycleCardAuth,
   useLifecycleCardHost,
   useLifecycleCardResolve,
+  useLifecycleCardReplacement,
+  useLifecycleCardSettleBus,
+  useLifecycleCardSettleSignal,
   useReportSettledSchedule,
   useReportScheduleReading,
   type LifecycleCardAuth,
@@ -516,17 +531,62 @@ export function ScheduleProposalCard({
   // with the previous proposal's ref still live, and this card's ref is what
   // every decision is taken against.
   const [wireRef, setWireRef] = useState(view.ref);
-  if (wireRef !== view.ref) {
+  const wireChanged = wireRef !== view.ref;
+  if (wireChanged) {
     setWireRef(view.ref);
     setLiveRef(view.ref);
   }
+  // THE REF THIS RENDER IS ABOUT. On a wire change the state updates above are
+  // queued, not applied, so `liveRef` still reads as the PREVIOUS proposal for
+  // the rest of this pass — and everything below must be about the new one.
+  const currentRef = wireChanged ? view.ref : liveRef;
   const [reloadToken, setReloadToken] = useState(0);
 
+  // THE SAME-SESSION SETTLE (cinatra#2853, the picture leg) — the same seam the
+  // review card takes, on the ref this card is CURRENTLY drawn from, so an
+  // adjust that replaced the ref is answered about the proposal in front of the
+  // reader and not about the one it replaced.
+  const settleSignal = useLifecycleCardSettleSignal(liveRef);
+  const settleBus = useLifecycleCardSettleBus();
+
+  // A TYPED CHANGE RE-DRAWS THIS CARD IN PLACE (cinatra#2853, the second fix
+  // leg; plan (A) §2.2 — "a typed change re-draws the bound card IN PLACE,
+  // never a second card; the stale Confirm gone").
+  //
+  // THE DEFECT THIS CLOSES. Adjusting from the prompt window reaches the same
+  // `adjust` the card's own button reaches, and adjust RE-PROPOSES: the new
+  // rows live behind a NEW ref and the old one stays addressable, because a
+  // proposal ref IS the proposal and there is no row to edit. The button knows
+  // the replacement because it made the call itself (`setLiveRef(outcome.ref)`
+  // below); the typed road's answer went to the assistant, so this card kept
+  // drawing the 09:00 it had been asked to change, Confirm and all, while the
+  // 08:00 rows existed behind a ref nothing on the page knew.
+  //
+  // THE SAME SWAP, THE SAME LINE. Whichever road took the decision, the card
+  // ends up on the replacement ref and re-resolves it — one card, the adjusted
+  // rows, one Confirm, and the stale ref no longer drawn anywhere.
+  //
+  // DURING RENDER, for the reason the wire-ref swap above states: an effect
+  // would let one paint go out with the superseded ref still live, and this
+  // card's ref is what every decision is taken against. It settles in one extra
+  // render — the replacement's own entry is absent, so the next read is `null`
+  // — and a chain of adjusts walks itself forward the same way.
+  //
+  // THE WIRE CHANGE WINS. Asked about the PREVIOUS ref while the wire is handing
+  // this instance a different proposal, a replacement announced for that
+  // previous ref would queue AFTER the wire reset and land last — the card would
+  // draw, and decide about, a proposal the turn already moved off. So the lookup
+  // is about `currentRef`, and on the render that resets the wire ref nothing is
+  // swapped: the next render reads the new ref's own replacement, if it has one.
+  const replacementRef = useLifecycleCardReplacement(currentRef);
+  if (!wireChanged && replacementRef !== null && replacementRef !== currentRef) {
+    setLiveRef(replacementRef);
+  }
   const resolved = useLifecycleCardResolve({
     viewType: "trigger_schedule_proposal",
     ref: liveRef,
     enabled: present,
-    reloadToken,
+    reloadToken: reloadToken + settleSignal,
   });
   const state: LifecycleCardState | null = resolved?.state ?? null;
   const body = resolved?.body ?? null;
@@ -545,7 +605,11 @@ export function ScheduleProposalCard({
   //
   // A NO-OP WHERE NOBODY IS LISTENING. The run page and the review page declare
   // no register, so this changes nothing on them.
-  useReportSettledSchedule(wireRef, present && body !== null && body.phase === "settled");
+  useReportSettledSchedule(
+    wireRef,
+    present && body !== null && body.phase === "settled",
+    present && state?.state === "settled" && body?.phase === "settled" ? body.runId : null,
+  );
   // THE CARD TELLS THE TURN WHAT IT IS READING (cinatra#3044).
   //
   // The line above this card was minted at dispatch and frozen into the turn,
@@ -581,8 +645,12 @@ export function ScheduleProposalCard({
   // saying "the rows below still take a change" over rows that take nothing.
   // The signal is the body's own `stopped`, which is exactly what the rows
   // freeze on below, so the sentence and the rows cannot come to two answers.
+  //
+  // The readings that have not fired are named (cinatra#2853 fix leg 2), so the
+  // turn can draw section VI's proposal sentence; a card with no body still
+  // reports `other`.
   useReportScheduleReading(
-    body === null
+    !present || body === null || state === null || state.state === "absent"
       ? "other"
       : stoppedRecurringSchedule(body)
         ? "stopped-recurring"
@@ -590,10 +658,40 @@ export function ScheduleProposalCard({
           ? "spent-one-off"
           : scheduleReadingOf(body, firedOnce) === "fired-recurring"
             ? "fired-recurring"
-            : "other",
+            : "never-fired",
   );
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
+
+  // ONE BINDING ROAD FOR EVERY LIFECYCLE CARD KIND (cinatra#2853, the picture
+  // leg; plan (A) §2.2 — "the prompt window acts on the ACTIVE card").
+  //
+  // THE DEFECT THIS CLOSES. The server road for a typed schedule change has been
+  // complete since this branch opened: the schedule card lends `adjust`, the
+  // grant carries it and the decide road presses it through the card's own
+  // entry. None of it was reachable, because the claim a send carries is built
+  // from the refs cards REGISTER, and only the review card registered. So a
+  // person who typed "make it 8 in the morning on weekdays" at a schedule card
+  // minted no grant at all; the assistant answered the only way left to it and
+  // called the PRODUCER again, drawing a SECOND proposal underneath the first
+  // and leaving the stale one live with its own Confirm.
+  //
+  // THE REF IS THE LIVE ONE, not the wire one: Adjust re-proposes and mints a
+  // new ref, and the card the reader is looking at after an adjust is the one a
+  // second message must reach.
+  //
+  // NO COMMENT ROAD, AND NO CHROME. This card has no comment path — its typed
+  // road is the grant the send mints — and §VI draws no pick control on it, so
+  // none is invented here. What that leaves is stated as a deviation: a lone
+  // schedule card binds with no press, exactly as a lone review does, and with a
+  // review card open beside it nothing routes and only the review card offers
+  // the control the refusal names.
+  const composerEligible =
+    state !== null &&
+    state.state === "pending" &&
+    state.canDecide &&
+    (body?.phase === "proposal" || body?.phase === "expired");
+  useComposerFocusBinding({ ref: liveRef, eligible: composerEligible });
 
   const decide = useCallback(
     async (op: ScheduleDecisionOp, schedule?: ProposedSchedule) => {
@@ -610,9 +708,16 @@ export function ScheduleProposalCard({
       ) {
         refresh();
       }
+      // AND EVERY OTHER COPY OF THIS CARD, for the reason the review card states
+      // where it does the same: one proposal can be drawn on more than one
+      // surface in one page, and settling only the copy that was pressed leaves
+      // the others offering a decision that has already been taken.
+      if (outcome.kind !== "not-permitted" && outcome.kind !== "error") {
+        settleBus?.announceSettled(liveRef);
+      }
       return outcome;
     },
-    [liveRef, auth, refresh],
+    [liveRef, auth, refresh, settleBus],
   );
 
   if (!present || state === null || body === null) return null;
@@ -1165,6 +1270,10 @@ function SettledPhase({
 
   return (
     <div className="flex w-full flex-col gap-4 rounded-card border border-line bg-surface-strong p-4">
+      <AlertDialog
+        open={!frozen && confirming === "cancel"}
+        onOpenChange={(open) => setConfirming(open ? "cancel" : null)}
+      >
       {/* NOTHING IS DRAWN ABOVE THE ROWS for an ordinary settled card, and an
           ADJUSTED-THEN-CONFIRMED one is an ordinary settled card. Plan (A)
           §7.2: "the same card, with the same option rows, shows the schedule as
@@ -1294,83 +1403,43 @@ function SettledPhase({
               fired yet, and one already stopped. There is no Run now beside it
               (cinatra#2972). */}
           {body.canCancel ? (
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              data-action="cancel-trigger-schedule"
-              disabled={pending !== null}
-              onClick={() => setConfirming("cancel")}
-            >
-              {pending === "cancel" ? "Stopping…" : "Cancel schedule"}
-            </Button>
+            <AlertDialogTrigger asChild>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                data-action="cancel-trigger-schedule"
+                disabled={pending !== null}
+              >
+                {pending === "cancel" ? "Stopping…" : "Cancel schedule"}
+              </Button>
+            </AlertDialogTrigger>
           ) : null}
         </div>
       )}
 
-      {/* THE WORDS SAY WHAT THE ACT NOW IS (cinatra#2972). The old copy — "The
+      {/* Section VI.1 uses the shared destructive modal (cinatra#3280).
+          THE WORDS SAY WHAT THE ACT NOW IS (cinatra#2972). The old copy — "The
           run will stay paused" — described the DELETE this control used to
           perform, and the plan withdrew both halves of it: Cancel schedule
           "never deletes the schedule or pauses the run". */}
-      {!frozen && confirming === "cancel" ? (
-        <ConfirmStrip
-          conformanceId="schedule-cancel-confirm"
-          title="Stop this recurring schedule?"
-          description="No further runs will start from it. The runs it has already started are not affected, and this run is not changed. The schedule stays here, and you will not be able to change it afterwards."
-          dismissLabel="Keep schedule"
-          confirmLabel="Cancel schedule"
-          onDismiss={() => setConfirming(null)}
-          onConfirm={() => void act("cancel")}
-        />
+      {!frozen ? (
+          <AlertDialogContent data-conformance-id="schedule-cancel-confirm" aria-modal="true">
+            <AlertDialogHeader>
+              <AlertDialogTitle>Stop this recurring schedule?</AlertDialogTitle>
+              <AlertDialogDescription>
+                No further runs will start from it. The runs it has already started are not affected, and this run is not changed. The schedule stays here, and you will not be able to change it afterwards.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel data-action="keep-schedule">Keep schedule</AlertDialogCancel>
+              <AlertDialogAction data-action="cancel-schedule" onClick={() => void act("cancel")}>
+                Cancel schedule
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
       ) : null}
-    </div>
-  );
-}
-
-/**
- * The ask-first strip.
- *
- * IN THE CARD, NOT IN A MODAL. The Trigger tab asks through an AlertDialog,
- * which portals to the document body — correct on a page it owns, wrong inside a
- * chat transcript and inside the widget's frame, where a portalled overlay
- * escapes the card's own box and the embed's scroll. The WORDS are the Trigger
- * tab's, verbatim; only the container differs, which is the "host supplies a
- * frame, never a second drawing" rule applied to a confirmation.
- */
-function ConfirmStrip({
-  conformanceId,
-  title,
-  description,
-  dismissLabel,
-  confirmLabel,
-  onDismiss,
-  onConfirm,
-}: {
-  conformanceId: string;
-  title: string;
-  description: string;
-  dismissLabel: string;
-  confirmLabel: string;
-  onDismiss: () => void;
-  onConfirm: () => void;
-}): ReactElement {
-  return (
-    <div
-      role="alertdialog"
-      aria-label={title}
-      data-conformance-id={conformanceId}
-      className="flex flex-col gap-2 rounded-control border border-line-strong bg-surface-muted p-3"
-    >
-      <p className="text-sm font-medium text-foreground">{title}</p>
-      <p className="text-sm text-muted-foreground">{description}</p>
-      <div className="flex justify-end gap-2">
-        <Button type="button" variant="ghost" size="sm" onClick={onDismiss}>
-          {dismissLabel}
-        </Button>
-        <Button type="button" size="sm" data-action="confirm-destructive" onClick={onConfirm}>
-          {confirmLabel}
-        </Button>
-      </div>
+      </AlertDialog>
     </div>
   );
 }
@@ -1412,8 +1481,8 @@ function browserTimezone(): string {
  * portals its listbox to the document body. Inside a chat transcript and inside
  * the widget's iframe that overlay escapes the card, so the rows here use the
  * platform's own select and input with the step's classes. The STRUCTURE, the
- * copy and the selection vocabulary are the step's; only the widget primitive
- * differs, for the same reason the confirmation strip is not a modal.
+ * copy and the selection vocabulary are the step's; only the row's picker
+ * primitive differs. The destructive confirmation uses the shared modal.
  */
 function ScheduleOptionRows({
   schedule,

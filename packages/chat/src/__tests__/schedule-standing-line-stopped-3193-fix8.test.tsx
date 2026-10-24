@@ -15,13 +15,23 @@
  * leaves the rows no longer editable", and the reading it leaves behind is
  * written as:
  *
- *   "Pressing it stops the recurring schedule, and the rows are not editable
- *    after that."
+ *   "The recurring schedule was stopped; its rows are no longer editable."
+ *
+ * THE DRAWING GIVES THE STOPPED READING ITS OWN PAST-TENSE REPORT
+ * (cinatra#3304). Section VI's own note says so: "Once it is stopped, the turn
+ * says so in the past tense. Above a stopped recurring card the one line the
+ * rule above fixes for every reading is The recurring schedule was stopped; its
+ * rows are no longer editable. — it reports the press that was already taken,
+ * and it is never the description of the control itself, which speaks of a press
+ * still to come." The sentence about pressing the control is the fired-recurring
+ * note's description of Cancel schedule and is not this reading's sentence: it
+ * speaks of a press still to come, and by the time this turn is drawn the press
+ * has already been made.
  *
  * THE REAL ROAD, AND A REAL PRESS. Like its fix-leg-7 sibling this file drives
  * the WHOLE conversation column — the real composer, the real card, resolved
  * through the real refetch seam — and it does not hand the card a stopped body
- * to begin with: it presses Cancel schedule, confirms the strip, answers the
+ * to begin with: it presses Cancel schedule, confirms the dialog, answers the
  * real decision endpoint, and lets the card re-resolve the way a landed
  * decision really makes it. What a reader sees after the press is what is
  * measured.
@@ -107,7 +117,7 @@ import { mountSurface } from "./conversation-column-harness";
  * pass a test that imported it.
  */
 const STOPPED_RECURRING_SENTENCE =
-  "Pressing it stops the recurring schedule, and the rows are not editable after that.";
+  "The recurring schedule was stopped; its rows are no longer editable.";
 
 const RUN_ID = "1d3a7c60-8b21-4f0e-9a55-6c2b4d0f7a13";
 const CARD_REF = "schedule-ref-3193-fix8";
@@ -260,7 +270,7 @@ async function mountFiredRecurringTurn() {
   return result;
 }
 
-/** Press Cancel schedule and confirm the strip — the reader's own two acts. */
+/** Press Cancel schedule and confirm it in the shared dialog — the reader's own two acts. */
 async function stopTheSchedule(container: HTMLElement): Promise<void> {
   const cancel = await waitFor(() => {
     const el = container.querySelector('[data-action="cancel-trigger-schedule"]');
@@ -268,11 +278,13 @@ async function stopTheSchedule(container: HTMLElement): Promise<void> {
     return el;
   });
   fireEvent.click(cancel);
+  // Section VI.1 (cinatra#3280): the confirmation is the shared modal
+  // AlertDialog, portalled to the document body, so it is read there.
   const confirm = await waitFor(() => {
-    const strip = container.querySelector('[data-conformance-id="schedule-cancel-confirm"]');
-    if (strip === null) throw new Error("the ask-first strip never drew");
-    const el = strip.querySelector('[data-action="confirm-destructive"]');
-    if (el === null) throw new Error("the strip drew no confirm");
+    const dialog = document.querySelector('[data-conformance-id="schedule-cancel-confirm"]');
+    if (dialog === null) throw new Error("the shared confirmation dialog never drew");
+    const el = dialog.querySelector('[data-action="cancel-schedule"]');
+    if (el === null) throw new Error("the dialog drew no Cancel schedule");
     return el;
   });
   fireEvent.click(confirm);

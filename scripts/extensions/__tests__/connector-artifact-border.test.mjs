@@ -295,10 +295,11 @@ describe("not a connector, not a call — no border finding", () => {
 });
 
 describe("the floor — the four connectors that name a road today", () => {
-  const FLOORED = "@cinatra-ai/wordpress-mcp-connector";
+  const FLOORED = "@cinatra-ai/email-connector";
+  const FLOORED_REGISTER = CMS_REVIEW_REGISTER.replace('"@cinatra-ai/host:cms-review"', '"@cinatra-ai/host:email-routing"');
 
   it("U-i: a floored file naming its floored road is conform with the finding in known, and blocking under strict", () => {
-    const dir = connector({ name: FLOORED, register: CMS_REVIEW_REGISTER });
+    const dir = connector({ name: FLOORED, register: FLOORED_REGISTER });
     const r = gate(dir);
     expect(r.infra).toBe(false);
     expect(r.conform).toBe(true);
@@ -311,7 +312,7 @@ describe("the floor — the four connectors that name a road today", () => {
   });
 
   it("U-i: a second road in the floored file is not conform", () => {
-    const register = CMS_REVIEW_REGISTER + 'export const emitName = "artifact_authoring_emit";\n';
+    const register = FLOORED_REGISTER + 'export const emitName = "artifact_authoring_emit";\n';
     const r = gate(connector({ name: FLOORED, register }));
     expect(r.conform).toBe(false);
     const hit = r.blocking.filter((f) => f.rule === "border.connector-creates-artifact");
@@ -322,7 +323,7 @@ describe("the floor — the four connectors that name a road today", () => {
   // single-package run at a pinned commit of the application whose floor still
   // holds the entry; the fleet reading below still fails it.
   it("U-i: a floored package naming no road passes its single-package run with a note naming the stale entry", () => {
-    const key = `${FLOORED}:src/register.ts:@cinatra-ai/host:cms-review`;
+    const key = `${FLOORED}:src/register.ts:@cinatra-ai/host:email-routing`;
     const dir = connector({ name: FLOORED });
     for (const r of [gate(dir), gate(dir, true)]) {
       expect(r.infra).toBe(false);
@@ -342,7 +343,7 @@ describe("the floor — the four connectors that name a road today", () => {
   });
 
   it("U-i: the fleet reading still returns a stale floor entry and fails on it", () => {
-    const key = `${FLOORED}:src/register.ts:@cinatra-ai/host:cms-review`;
+    const key = `${FLOORED}:src/register.ts:@cinatra-ai/host:email-routing`;
     const dir = connector({ name: FLOORED });
     const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
     const result = checkConnectorArtifactBorder(dir, pkg, loadLiveRules(REPO_ROOT));

@@ -44,6 +44,7 @@ import {
 import {
   absentArtifactContent,
   buildArtifactRendererProps,
+  type ArtifactRendererProps,
   readOnlyArtifactEdit,
 } from "@/lib/artifacts/artifact-renderer-props";
 import type { ArtifactContentProjection } from "@cinatra-ai/sdk-extensions/artifact-content-channel";
@@ -64,6 +65,7 @@ import {
   type ArtifactRepresentationForm,
 } from "@/lib/artifacts/artifact-content-channel";
 import { createPinnedSubstanceReader } from "@/lib/artifacts/artifact-content-substance-reader";
+import { reviewTargetVersionPath } from "@cinatra-ai/agent-ui-protocol/renderable-views/lifecycle-cards";
 // The ROADS themselves stay type-only: they are CONSTRUCTED on the surfaces
 // that choose them (`./review-surface-roads`), none of which is a locked
 // route, and named here by type alone, which the compiler erases.
@@ -72,8 +74,10 @@ import type {
   ArtifactByteUrlMinter,
 } from "./review-surface-roads";
 import {
+  beginReviewTargetsCore,
   prepareReviewTargetsCore,
   type ArtifactReadOutcome,
+  type BeginReviewResult,
   type PrepareReviewInput,
   type PrepareReviewPorts,
   type PrepareReviewResult,
@@ -254,6 +258,7 @@ export function bindArtifactReviewPorts(ctx: {
         slot: mount.slot,
         packageName: mount.packageName,
         generatedKey: mount.generatedKey,
+        ...(mount.propsApiVersion === undefined ? {} : { propsApiVersion: mount.propsApiVersion }),
       };
     }
     if (mount.kind === "runtime") {
@@ -325,12 +330,28 @@ export function bindArtifactReviewPorts(ctx: {
       return absentArtifactContent(input.representationRevisionId, "absent");
     }
   };
+  /**
+   * One version-pinned session address (cinatra#4129), composed by the review
+   * target's projection module: each id is ONE path segment that the version
+   * route reads back as the very id that was pinned. An id the module refuses
+   * (empty, `.` or `..`, which URL resolution would remove, or ill-formed
+   * text) gets no address (`null`), never a rewritten one.
+   */
+  const versionPinnedHref = (
+    artifactId: string,
+    revisionId: string,
+    leaf: "preview" | "content",
+  ): string | null => {
+    const path = reviewTargetVersionPath(artifactId, revisionId, leaf);
+    return path.ok ? path.value : null;
+  };
   const buildProps = async (input: {
     artifact: ArtifactSummary;
     representationRevisionId: string;
     mime: string;
     propsApiVersion: number;
     member: NonNullable<RevisionMemberOutcome>;
+    review?: ArtifactRendererProps["review"];
   }) => {
     // Host-authorized, version-PINNED hrefs (the exact reviewed revision, never
     // the artifact's latest) — the same content/preview endpoints the detail
@@ -343,10 +364,10 @@ export function bindArtifactReviewPorts(ctx: {
     const { artifact, representationRevisionId, mime } = input;
     const fileBacked = isFileFormMember(input.member);
     const previewHref = fileBacked
-      ? `/api/artifacts/${artifact.artifactId}/versions/${representationRevisionId}/preview`
+      ? versionPinnedHref(artifact.artifactId, representationRevisionId, "preview")
       : null;
     const downloadHref = fileBacked
-      ? `/api/artifacts/${artifact.artifactId}/versions/${representationRevisionId}/content`
+      ? versionPinnedHref(artifact.artifactId, representationRevisionId, "content")
       : null;
     // THE BYTE REFERENCE (wave 3, cinatra#3091). A non-file revision has no
     // bytes at all and therefore no road: enabler 0.10's rule that "non-file
@@ -433,6 +454,7 @@ export function bindArtifactReviewPorts(ctx: {
       // THE NEGOTIATED VERSION (enabler 0.4) — the display's own, resolved
       // before this builder ran.
       propsApiVersion: input.propsApiVersion,
+      ...(input.propsApiVersion >= 5 && input.review ? { review: input.review } : {}),
       content,
       bytes,
     });
@@ -487,4 +509,35 @@ export async function prepareArtifactReviewTargets(args: {
     buildContent: args.buildContent,
   });
   return prepareReviewTargetsCore(args.input, { ...artifactPorts, ...args.runGatePorts });
+}
+
+/**
+ * The STREAMING reading of the same call (cinatra#3334): the authorization,
+ * gate and substitution preflight is awaited, and the per-target preparations
+ * come back started, capped and in the gate's order. Same core, same ports,
+ * same hard failures — only the moment the caller is answered moves.
+ */
+export async function beginArtifactReviewTargets(args: {
+  input: PrepareReviewInput;
+  orgId: string;
+  actor: ActorContext;
+  runGatePorts: ReviewRunGatePorts;
+  /** The island's byte minter, when this preparation is for an island reader
+   *  (wave 3). Absent on every cookie surface. */
+  byteMinter?: ArtifactByteUrlMinter;
+  /** How this surface reads content (wave 3). Absent on a surface that has not
+   *  named a road. */
+  buildContent?: ArtifactContentBuilder;
+}): Promise<BeginReviewResult> {
+  // THE ROADS TRAVEL THE STREAMING ARM TOO. The island is the one surface that
+  // names a road and, since cinatra#3334, the one surface that enters through
+  // this arm: binding the ports without them here would hand the island the
+  // session addresses and the channel's named absence it cannot fetch.
+  const artifactPorts = bindArtifactReviewPorts({
+    orgId: args.orgId,
+    actor: args.actor,
+    byteMinter: args.byteMinter,
+    buildContent: args.buildContent,
+  });
+  return beginReviewTargetsCore(args.input, { ...artifactPorts, ...args.runGatePorts });
 }

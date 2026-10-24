@@ -3,7 +3,7 @@
 // (cinatra#3158, epic #3155 W2).
 //
 // One row per manifest surface this wave covers, carrying exactly what the
-// ratified drawing declares for it — the field and its source, the action and
+// ratified drawing declares for it — the fields and their sources, the action and
 // its outcome, the state variants — and, where the display is not on the default
 // branch yet, what it is waiting for.
 //
@@ -39,7 +39,18 @@ export const ARTIFACT_KIND_DISPLAY_SURFACES = [
 
 export type ArtifactKindDisplaySurfaceId = (typeof ARTIFACT_KIND_DISPLAY_SURFACES)[number];
 
-export type ArtifactKindDisplayField = { readonly name: string; readonly source: string };
+export type ArtifactKindDisplayField = {
+  readonly name: string;
+  readonly source: string;
+  /**
+   * Set only where the drawing binds the field in ONE reading of the display.
+   * "continued": the field is drawn once the review is continued and not while
+   * it is open — §XI.5 and §XI.6 draw the Open live dashboard link, bound to
+   * artifact.sourceUrl, only in the continued reading. Absent: the field is
+   * drawn in the open (populated) reading.
+   */
+  readonly reading?: "continued";
+};
 export type ArtifactKindDisplayAction = { readonly name: string; readonly outcome: string };
 
 export type ArtifactKindDisplay = {
@@ -56,8 +67,8 @@ export type ArtifactKindDisplay = {
    * ride the same factory rather than getting individual drivers").
    */
   readonly factoryOnly: boolean;
-  /** The one field the manifest binds on this surface, or null where it binds none. */
-  readonly field: ArtifactKindDisplayField | null;
+  /** The fields the manifest binds on this surface, in the manifest's own order; empty where it binds none. */
+  readonly fields: readonly ArtifactKindDisplayField[];
   /** The one action the manifest declares on this surface, or null where it declares none. */
   readonly action: ArtifactKindDisplayAction | null;
   /** The state variants the manifest declares, in the manifest's own order. */
@@ -76,7 +87,7 @@ export const ARTIFACT_KIND_DISPLAYS: Readonly<
     surface: "email-body-display",
     section: "XI.1",
     factoryOnly: false,
-    field: { name: "body", source: "representation.body-markdown" },
+    fields: [{ name: "body", source: "representation.body-markdown" }],
     action: { name: "edit-email-body", outcome: "revision-saved" },
     states: ["error", "kind:artifact", "loading"],
     readiness:
@@ -86,7 +97,7 @@ export const ARTIFACT_KIND_DISPLAYS: Readonly<
     surface: "mixed-kind-display",
     section: "XI.2",
     factoryOnly: false,
-    field: { name: "form", source: "representation.content-form" },
+    fields: [{ name: "form", source: "representation.content-form" }],
     action: null,
     states: ["error", "kind:artifact", "loading"],
     readiness:
@@ -96,7 +107,7 @@ export const ARTIFACT_KIND_DISPLAYS: Readonly<
     surface: "screenshot-display",
     section: "XI.3",
     factoryOnly: false,
-    field: { name: "source", source: "representation.captured-url" },
+    fields: [{ name: "source", source: "representation.captured-url" }],
     action: null,
     states: ["error", "kind:artifact", "loading"],
     readiness:
@@ -106,7 +117,7 @@ export const ARTIFACT_KIND_DISPLAYS: Readonly<
     surface: "slide-deck-display",
     section: "XI.4",
     factoryOnly: false,
-    field: null,
+    fields: [],
     action: null,
     states: ["error", "kind:artifact", "loading"],
     readiness:
@@ -116,7 +127,10 @@ export const ARTIFACT_KIND_DISPLAYS: Readonly<
     surface: "dashboard-display",
     section: "XI.5",
     factoryOnly: false,
-    field: { name: "layout", source: "representation.pinned-configuration" },
+    fields: [
+      { name: "layout", source: "representation.pinned-configuration" },
+      { name: "open-live", source: "artifact.sourceUrl", reading: "continued" },
+    ],
     action: { name: "open-live-dashboard", outcome: "dashboard-canonical" },
     states: ["error", "kind:artifact", "loading"],
     readiness:
@@ -126,7 +140,10 @@ export const ARTIFACT_KIND_DISPLAYS: Readonly<
     surface: "portlet-display",
     section: "XI.6",
     factoryOnly: false,
-    field: { name: "entry", source: "representation.portlet-instance-id" },
+    fields: [
+      { name: "entry", source: "representation.portlet-instance-id" },
+      { name: "open-live", source: "artifact.sourceUrl", reading: "continued" },
+    ],
     action: { name: "open-live-dashboard", outcome: "dashboard-canonical" },
     states: ["error", "kind:artifact", "loading"],
     readiness:
@@ -136,7 +153,7 @@ export const ARTIFACT_KIND_DISPLAYS: Readonly<
     surface: "drupal-pointer-display",
     section: "XI.7",
     factoryOnly: false,
-    field: { name: "target", source: "representation.node-id" },
+    fields: [{ name: "target", source: "representation.node-id" }],
     action: { name: "open-in-cms", outcome: "cms-opened" },
     states: ["error", "kind:artifact", "loading"],
     readiness:
@@ -146,7 +163,7 @@ export const ARTIFACT_KIND_DISPLAYS: Readonly<
     surface: "cms-page-display",
     section: "XI.8",
     factoryOnly: false,
-    field: { name: "excerpts", source: "representation.changed-excerpts" },
+    fields: [{ name: "excerpts", source: "representation.changed-excerpts" }],
     action: { name: "open-in-cms", outcome: "cms-opened" },
     states: ["error", "kind:artifact", "loading"],
     readiness:
@@ -156,17 +173,17 @@ export const ARTIFACT_KIND_DISPLAYS: Readonly<
     surface: "markdown-display-tabs",
     section: "V.1",
     factoryOnly: true,
-    field: { name: "content", source: "representation.markdown" },
+    fields: [{ name: "content", source: "representation.markdown" }],
     action: { name: "edit-markdown", outcome: "revision-saved" },
     states: ["error", "loading"],
     readiness:
-      "the shipped markdown display draws the rendered reading and the raw source SIDE BY SIDE in one grid, which the drawing forbids outright (\"They are never drawn side by side\"): there is no tab strip, no Code and Preview, no saving indicator, and no edit in place",
+      "the pinned markdown display draws the Code and Preview tabs, one panel at a time, the saving indicator beside them and the edit in place (read-only on a review target), and it now stamps the conformance anchors this factory addresses (the surface anchor on the display root, the content field on the Code and on the Preview panel, the declared edit-markdown control on the editable Code source, and the loading and error display states while the indicator reads saving or Not saved), but no harness mount exists for it: it is an extension renderer the conformance harness may not mount, which the core/extension instance-coupling ban exists to stop",
   },
   "binary-download-card": {
     surface: "binary-download-card",
     section: "V.2",
     factoryOnly: true,
-    field: { name: "name", source: "artifact.fileName" },
+    fields: [{ name: "name", source: "artifact.fileName" }],
     action: { name: "download-artifact", outcome: "file-downloaded" },
     states: ["error", "kind:artifact", "loading"],
     readiness:
@@ -176,7 +193,7 @@ export const ARTIFACT_KIND_DISPLAYS: Readonly<
     surface: "chart-display-only",
     section: "XI.9",
     factoryOnly: true,
-    field: null,
+    fields: [],
     action: null,
     states: ["empty", "kind:artifact"],
     readiness:

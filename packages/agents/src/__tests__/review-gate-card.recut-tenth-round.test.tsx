@@ -15,10 +15,11 @@
 // the work."
 //
 // COUNTED DEFECT 2 — "SIX pinned targets, TWO representation slots ... Four of
-// six pinned targets draw no display at all". The card draws one header per
-// pinned target and frames ONE island holding every target's panel, at a height
+// six pinned targets draw no display at all". The card then drew one header per
+// pinned target and framed ONE island holding every target's panel, at a height
 // fixed for a single target — so four of six panels sat below the frame's own
-// fold with nothing on the card saying they were there.
+// fold with nothing on the card saying they were there. (A pending gate that
+// pins several targets now frames each in its own island, cinatra#4129.)
 // `specs/app-artifact-review.html` §IV: "Beneath the header sits the
 // representation slot — the single region into which the artifact's type
 // renderer mounts".
@@ -67,6 +68,8 @@ function mockResolve(targetHeaders: LifecycleTargetHeader[]): void {
           state: PENDING,
           body: null,
           targetHeaders,
+          // Every target the gate pins is named: the route says so beside the headers.
+          targetHeadersComplete: true,
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
@@ -101,18 +104,25 @@ const islandIn = (container: HTMLElement): HTMLElement => {
   return island;
 };
 
-const frameIn = (container: HTMLElement): HTMLIFrameElement => {
-  const frame = container.querySelector("iframe");
-  if (!frame) throw new Error("no island frame");
+/** Every island on the card, in pinned order — one per pinned target. */
+const islandsIn = (container: HTMLElement): HTMLElement[] =>
+  Array.from(container.querySelectorAll<HTMLElement>('[data-conformance-id="review-target-island"]'));
+
+/** Every island frame on the card, in pinned order. */
+const framesIn = (container: HTMLElement): HTMLIFrameElement[] =>
+  Array.from(container.querySelectorAll("iframe"));
+
+const frameIn = (container: HTMLElement, index = 0): HTMLIFrameElement => {
+  const frame = framesIn(container)[index];
+  if (!frame) throw new Error(`no island frame ${index + 1}`);
   return frame;
 };
 
 const skeletonIn = (container: HTMLElement) =>
   container.querySelector('[data-conformance-id="review-target-island-skeleton"]');
 
-/** The island document naming the height it actually drew. */
-async function islandReports(container: HTMLElement, height: number): Promise<void> {
-  const frame = frameIn(container);
+/** One island document naming the height it actually drew. */
+async function islandReports(frame: HTMLIFrameElement, height: number): Promise<void> {
   await act(async () => {
     window.dispatchEvent(
       new MessageEvent("message", {
@@ -164,6 +174,39 @@ describe("a palette repaint never draws a blank plate over work already on scree
     expect(skeletonIn(container)).toBeNull();
   });
 
+  it("keeps every painted island of a gate drawn as pairs painted when the surface goes dark", async () => {
+    paintHost("light");
+    mockResolve(headers(2));
+    const { container } = mountCard();
+    await settle();
+
+    // One island per pinned target (cinatra#4129), each painted.
+    expect(framesIn(container)).toHaveLength(2);
+    await act(async () => {
+      for (const frame of framesIn(container)) fireEvent.load(frame);
+    });
+    expect(islandsIn(container).map((island) => island.getAttribute("data-island-load-state"))).toEqual([
+      "loaded",
+      "loaded",
+    ]);
+
+    await act(async () => {
+      paintHost("dark");
+      await Promise.resolve();
+    });
+    await settle();
+
+    // EVERY island stays on screen while it repaints, the second as the first.
+    const repainted = framesIn(container);
+    expect(repainted).toHaveLength(2);
+    for (const frame of repainted) expect(frame.getAttribute("src")).toContain("scheme=dark");
+    expect(islandsIn(container).map((island) => island.getAttribute("data-island-load-state"))).toEqual([
+      "loaded",
+      "loaded",
+    ]);
+    expect(skeletonIn(container)).toBeNull();
+  });
+
   it("still draws the skeleton for a target that has never painted", async () => {
     paintHost("dark");
     mockResolve(headers(1));
@@ -188,10 +231,14 @@ describe("a palette repaint never draws a blank plate over work already on scree
 // target's body on the other. The defect these readings guard is unchanged —
 // every pinned target's panel is inside the frame — but the frame is now as
 // tall as the island document says its work is, so that is what they read.
+// And since cinatra#4129 a pending gate that pins several targets frames each
+// target in its OWN island, under its own header: the representation slot of
+// every pinned target is its own frame, sized by its own document, so these
+// readings read every frame, never the first one alone.
 // `review-gate-card.island-height.test.tsx` carries the height contract itself.
 describe("every pinned target gets a representation slot on the card", () => {
   for (const count of [1, 2, 6]) {
-    it(`frames ${count} pinned target(s) at the height the island reports`, async () => {
+    it(`frames ${count} pinned target(s), each at the height its own island reports`, async () => {
       paintHost("light");
       mockResolve(headers(count));
       const { container } = mountCard();
@@ -202,14 +249,17 @@ describe("every pinned target gets a representation slot on the card", () => {
         container.querySelectorAll('[data-conformance-id="review-target-header"]').length,
       ).toBe(count);
 
-      // Room for one representation slot per header beneath them: the island
-      // draws every panel in one document and names how tall that came out, so
-      // a frame that fits two of six is four targets that "draw no display at
-      // all" — and a frame taller than the document is empty panel.
-      const drawn = 300 * count + 24;
-      await islandReports(container, drawn);
-      expect(frameIn(container).style.height).toBe(
-        `${Math.max(ISLAND_MIN_HEIGHT, drawn)}px`,
+      // One representation slot per header: a frame per pinned target, so no
+      // target "draws no display at all" — and each frame as tall as its own
+      // document's work, so none is clipped and none draws empty panel. The
+      // first target's work is shorter than the floor.
+      expect(framesIn(container)).toHaveLength(count);
+      const drawn = Array.from({ length: count }, (_unused, index) => 324 + 100 * index);
+      for (let index = 0; index < count; index += 1) {
+        await islandReports(frameIn(container, index), drawn[index]);
+      }
+      expect(framesIn(container).map((frame) => frame.style.height)).toEqual(
+        drawn.map((height) => `${Math.max(ISLAND_MIN_HEIGHT, height)}px`),
       );
     });
   }

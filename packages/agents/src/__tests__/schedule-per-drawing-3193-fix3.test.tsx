@@ -386,7 +386,7 @@ describe("the fired recurring floor carries Cancel schedule beside Save changes"
     await waitFor(() => expect(cancel(container)).not.toBeNull());
     fireEvent.click(cancel(container)!);
     const confirm = await waitFor(() => {
-      const strip = container.querySelector(
+      const strip = document.querySelector(
         '[data-conformance-id="schedule-cancel-confirm"]',
       );
       expect(strip).not.toBeNull();

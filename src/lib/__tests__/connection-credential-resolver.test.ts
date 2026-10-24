@@ -23,7 +23,8 @@ const resolveConnectionAccessDeclaration = vi.fn(
     declaration: null,
   }),
 );
-vi.mock("@/lib/connection-use-gate", () => ({
+vi.mock("@/lib/connection-use-gate", async () => ({
+  ...await vi.importActual<typeof import("@/lib/connection-use-gate")>("@/lib/connection-use-gate"),
   decideConnectionUse: (...a: unknown[]) => decideConnectionUse(...a),
   enforceConnectionUse: (...a: unknown[]) => enforceConnectionUse(...a),
   resolveConnectionAccessDeclaration: (identity: Record<string, unknown>) =>
@@ -208,3 +209,4 @@ describe("blob address + caching contract", () => {
     expect(enforceConnectionUse).toHaveBeenCalledTimes(2);
   });
 });
+

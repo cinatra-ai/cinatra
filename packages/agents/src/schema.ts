@@ -294,6 +294,7 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // Self-referential link to orchestrator parent run. Nullable, no CASCADE:
   // children survive parent deletion.
   parentRunId: text("parent_run_id"),
+  startedByRunId: text("started_by_run_id"), // independent tool starter (#3749), never an orchestrator parent
   // Explicit AG-UI capability marker. Set to true for runs created with AG-UI
   // support. Null for legacy runs (no backfill). Used by AgenticRunPanel
   // to decide: SSE path (agUiEnabled=true) vs. legacy polling path (agUiEnabled=null|false).
@@ -484,6 +485,7 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // Aligning the Drizzle schema declaration prevents `drizzle-kit generate`
   // from diffing against the live DB and attempting to drop/recreate as a
   // full index.
+  startedByRunIdIdx: index("agent_runs_started_by_run_id_idx").on(t.startedByRunId, t.orgId, t.createdAt).where(sql`started_by_run_id IS NOT NULL`),
   parentRunIdIdx:   index("agent_runs_parent_run_id_idx")
     .on(t.parentRunId)
     .where(sql`parent_run_id IS NOT NULL`),
@@ -1158,6 +1160,7 @@ export const agentRunHitlPrompts = cinatraSchema.table("agent_run_hitl_prompts",
   excluded:   boolean("excluded").notNull().default(false),
   submittedValues: jsonb("submitted_values").$type<Record<string, unknown> | null>(),
   schemaSnapshot: jsonb("schema_snapshot").$type<Record<string, unknown> | null>(),
+  dispatchReceipt: jsonb("dispatch_receipt").$type<Record<string, unknown> | null>(),
 }, (t) => ({
   runIdAgentIdx: index("agent_run_hitl_prompts_run_id_agent_idx").on(t.runId, t.agentId),
 }));

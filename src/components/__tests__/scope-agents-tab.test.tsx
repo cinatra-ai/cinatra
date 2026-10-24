@@ -210,3 +210,100 @@ describe("ScopeAgentsTab", () => {
     expect(render()).toContain("More details");
   });
 });
+
+// Approved app-extensions §IV.1: the actual scope card withholds Run, while
+// the side links and scoped targets keep the same behavior as a runnable card.
+const AVAILABILITY_SCOPES: ScopeSurfaceRef[] = [
+  { kind: "personal" }, { kind: "workspace" }, { kind: "organization", id: "org-a" },
+  { kind: "team", id: "team-a" }, { kind: "project", id: "proj-a" },
+];
+const MISSING_DEPENDENCY = {
+  state: "missing-required-dependency" as const,
+  missing: [{ packageName: "@acme/list-skill", displayName: "List Curation Skill", kind: "skill", reason: "not-installed" as const }],
+};
+
+describe("#3960 dependency availability on actual scope cards", () => {
+  for (const scope of AVAILABILITY_SCOPES) {
+    for (const admin of [false, true]) {
+      it(`${scope.kind}: ${admin ? "admin requirements" : "member unavailable"} replaces Run only on the blocked card`, () => {
+        const rows = buildScopeSurfaceAgentRows(scope, FIXTURES, {
+          availabilityByPackage: new Map([[FIXTURES[0].packageName, MISSING_DEPENDENCY]]),
+          canViewRequirements: admin,
+        });
+        const cards = cardSegments(renderToStaticMarkup(<ScopeAgentsTab rows={rows} />));
+        expect(cards).toHaveLength(2);
+        const blocked = cards[0];
+        expect(blocked).not.toContain(`href="${scopeSurfaceAgentLaunchHref(scope, FIXTURES[0].packageName)}"`);
+        expect(blocked).not.toContain(">Run<");
+        expect(blocked).not.toContain("lucide-play");
+        expect(blocked).toContain('title="This agent cannot run: List Curation Skill is not installed."');
+        expect(blocked).toContain(`href="${scopeSurfaceAgentSettingsHref(scope, FIXTURES[0].packageName)}"`);
+        expect(blocked).toContain("More details");
+        expect(rows[0].detailHref).toBeNull();
+        const side = textLinks(blocked);
+        expect(classOf(side.settings)).toBe(classOf(side.moreDetails));
+        expect(side.between).toBe("");
+        expect(blocked).not.toContain('data-slot="installed-status-indicator"');
+        if (admin) {
+          expect(blocked).toContain(">View requirements<");
+          expect(blocked).toContain('href="/configuration/marketplace/acme/research-assistant"');
+          expect(blocked).toContain('aria-label="Research Assistant cannot run — List Curation Skill not installed. View requirements"');
+          expect(blocked).toContain('data-variant="outline"');
+        } else {
+          expect(blocked).toContain(">Unavailable<");
+          expect(blocked).not.toContain("/configuration");
+          expect(blocked).not.toContain(">View requirements<");
+        }
+        expect(cards[1]).toContain(`href="${scopeSurfaceAgentLaunchHref(scope, FIXTURES[1].packageName)}"`);
+        expect(cards[1]).toContain(">Run<");
+      });
+    }
+  }
+  it("uses comma-separated product names, package fallback, and plural reason", () => {
+    const rows = buildScopeSurfaceAgentRows(SCOPE, FIXTURES.slice(0, 1), {
+      canViewRequirements: true,
+      availabilityByPackage: new Map([[FIXTURES[0].packageName, {
+        state: "missing-required-dependency",
+        missing: [...MISSING_DEPENDENCY.missing, { packageName: "@acme/unnamed", displayName: null, kind: "connector", reason: "archived" }],
+      }]]),
+    });
+    const html = renderToStaticMarkup(<ScopeAgentsTab rows={rows} />);
+    expect(html).toContain('title="This agent cannot run: List Curation Skill, @acme/unnamed are not installed."');
+    expect(html).toContain('aria-label="Research Assistant cannot run — List Curation Skill, @acme/unnamed not installed. View requirements"');
+    expect(html).not.toContain(">Run<");
+  });
+  it("blank dependency display names use the package fallback on the actual card", () => {
+    const rows = buildScopeSurfaceAgentRows(SCOPE, FIXTURES.slice(0, 1), {
+      availabilityByPackage: new Map([[FIXTURES[0].packageName, { state: "missing-required-dependency", missing: [
+        { ...MISSING_DEPENDENCY.missing[0], displayName: "" },
+        { ...MISSING_DEPENDENCY.missing[0], packageName: "@acme/other-skill", displayName: "   " },
+      ] }]]), canViewRequirements: true,
+    });
+    const html = renderToStaticMarkup(<ScopeAgentsTab rows={rows} />);
+    expect(html).toContain('title="This agent cannot run: @acme/list-skill, @acme/other-skill are not installed."');
+    expect(html).toContain('aria-label="Research Assistant cannot run — @acme/list-skill, @acme/other-skill not installed. View requirements"');
+    expect(html).not.toContain(">Run<");
+  });
+  it("a legacy package with no marketplace route never receives an admin dead link", () => {
+    const row = { ...FIXTURES[0], packageName: "legacy-agent" };
+    const rows = buildScopeSurfaceAgentRows(SCOPE, [row], { canViewRequirements: true, availabilityByPackage: new Map([[row.packageName, MISSING_DEPENDENCY]]) });
+    const html = renderToStaticMarkup(<ScopeAgentsTab rows={rows} />);
+    expect(html).toContain(">Unavailable<");
+    expect(html).not.toContain("/configuration");
+    expect(html).not.toContain(">Run<");
+  });
+  it("does not list a package proven archived or not installed", () => {
+    const rows = buildScopeSurfaceAgentRows(SCOPE, FIXTURES, { availabilityByPackage: new Map([
+      [FIXTURES[0].packageName, { state: "archived" }],
+      [FIXTURES[1].packageName, { state: "not-installed", displayName: "Media Transcript Agent" }],
+    ]) });
+    expect(rows).toEqual([]);
+    expect(renderToStaticMarkup(<ScopeAgentsTab rows={rows} />)).not.toContain('data-slot="installed-extension-card"');
+  });
+  it("a fresh runnable verdict restores the original scoped Run and side links", () => {
+    const blocked = buildScopeSurfaceAgentRows(SCOPE, FIXTURES, { availabilityByPackage: new Map([[FIXTURES[0].packageName, MISSING_DEPENDENCY]]) });
+    expect(renderToStaticMarkup(<ScopeAgentsTab rows={blocked} />)).toContain(">Unavailable<");
+    const restored = buildScopeSurfaceAgentRows(SCOPE, FIXTURES, { availabilityByPackage: new Map([[FIXTURES[0].packageName, { state: "runnable" }]]) });
+    expect(renderToStaticMarkup(<ScopeAgentsTab rows={restored} />)).toBe(render());
+  });
+});
