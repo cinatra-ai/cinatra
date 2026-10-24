@@ -191,6 +191,10 @@ async function snapshot(client: Client, columnsOf?: Snapshot): Promise<Snapshot>
       );
       columns = cols.rows.map((r) => r.column_name);
     }
+    expect(columns).toBeDefined();
+    if (columns === undefined) {
+      throw new Error(`no column list resolved for table ${name}`);
+    }
     const res = await client.query<{ r: string }>(
       `SELECT ROW(${columns.map(q).join(", ")})::text AS r FROM ${q(S())}.${q(name)}`,
     );
