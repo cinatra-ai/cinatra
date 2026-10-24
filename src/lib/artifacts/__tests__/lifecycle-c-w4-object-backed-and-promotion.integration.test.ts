@@ -116,6 +116,38 @@ const RETYPE = async (input: {
 
 const S = () => TEST_SCHEMA;
 
+/**
+ * THE ROAD'S RETYPE AS IT IS STORED (cinatra#4266): the type moves, the data
+ * does not, and the row's history gains the change event the canonical
+ * history-aware writer commits for it, in that writer's shape (`update`, the
+ * road's history effect, before and after snapshots of the whole row). Called
+ * on its own, it leaves exactly the state an interruption between the road's
+ * two writes leaves: retyped, its history saying so, no promotion revision.
+ */
+function retypeWithHistory(input: { objectId: string; toType: string }) {
+  const res = sql(
+    `WITH before_row AS (
+       SELECT row_to_json(o.*)::jsonb AS j FROM "${S()}"."objects" o WHERE o.id = $1 AND o.org_id = $2
+     ),
+     updated AS (
+       UPDATE "${S()}"."objects" SET type = $3, version = version + 1, updated_at = now()
+       WHERE id = $1 AND org_id = $2 AND deleted_at IS NULL
+       RETURNING id, type, version, org_id, row_to_json("${S()}"."objects".*)::jsonb AS j
+     )
+     INSERT INTO "${S()}"."object_change_event"
+       (id, change_set_id, sequence, object_id, object_type, operation, history_effect,
+        before_snapshot, after_snapshot, base_version, result_version,
+        actor_id, actor_kind, org_id, idempotency_key, event_checksum)
+     SELECT $4, $5, 1, updated.id, updated.type, 'update', 'reversible-internal',
+            (SELECT j FROM before_row), updated.j, updated.version - 1, updated.version,
+            'user-3028', 'user', updated.org_id, $6, 'fixture-checksum'
+     FROM updated
+     RETURNING id`,
+    [input.objectId, ORG, input.toType, nextId("che"), nextId("cs"), nextId("idem")],
+  );
+  expect(res?.rows ?? []).toHaveLength(1);
+}
+
 function sql(text: string, values: unknown[] = []) {
   return runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
@@ -523,11 +555,12 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.14 the typed promotion road
 
   it("COMPLETES an interrupted promotion — the retype committed, the append did not", async () => {
     // The state an interruption between the road's two transactions leaves: the
-    // row already carries the target type, its promotion revision is missing,
-    // and the matcher's assertion is still on the row. A later confirmation
-    // CONVERGES it rather than stranding it.
+    // row already carries the target type, its history holds the road's retype
+    // event, its promotion revision is missing, and the matcher's assertion is
+    // still on the row. A later confirmation CONVERGES it rather than stranding it.
     const objectId = nextId("obj-interrupted");
-    seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
+    seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });
+    retypeWithHistory({ objectId, toType: OWN_TYPE });
     seedMatcherAssertion({ objectId, extension: EXT, confidence: 0.9 });
     const out = await promotionStore.promoteMatchedArtifactType({
       orgId: ORG,
@@ -545,6 +578,65 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.14 the typed promotion road
     // It COMPLETED — it did not retype anything, because the retype had landed.
     expect(out.retyped).toBe(false);
     expect(representationsOf(objectId)).toHaveLength(2);
+  });
+
+  it("cinatra#4266: a row typed from upload, confirmed twice, keeps its revision count", async () => {
+    // The row carried the pack's own type from its upload: its history holds no
+    // retype by this road, so a confirmation (a crafted call, a stale second
+    // picker) is not the completion of anything and appends nothing.
+    const objectId = nextId("obj-native");
+    seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
+    seedMatcherAssertion({ objectId, extension: EXT, confidence: 0.9 });
+    const args = {
+      orgId: ORG,
+      artifactId: objectId,
+      extension: EXT,
+      ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
+      threshold: 0.8,
+      confirmed: true,
+      actor: ACTOR,
+      authority: AUTHORITY,
+      retype: RETYPE,
+    };
+    expect(await promotionStore.promoteMatchedArtifactType(args)).toEqual({
+      ok: false,
+      reason: "already-promoted",
+    });
+    expect(await promotionStore.promoteMatchedArtifactType(args)).toEqual({
+      ok: false,
+      reason: "already-promoted",
+    });
+    expect(representationsOf(objectId)).toHaveLength(1);
+  });
+
+  it("cinatra#4266: an interrupted retype gets exactly one promotion revision on the next confirmations", async () => {
+    const objectId = nextId("obj-interrupted-once");
+    const seeded = seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });
+    retypeWithHistory({ objectId, toType: OWN_TYPE });
+    seedMatcherAssertion({ objectId, extension: EXT, confidence: 0.9 });
+    const args = {
+      orgId: ORG,
+      artifactId: objectId,
+      extension: EXT,
+      ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
+      threshold: 0.8,
+      confirmed: true,
+      actor: ACTOR,
+      authority: AUTHORITY,
+      retype: RETYPE,
+    };
+    expect(await promotionStore.promoteMatchedArtifactType(args)).toMatchObject({
+      ok: true,
+      retyped: false,
+      revision: 2,
+    });
+    expect(await promotionStore.promoteMatchedArtifactType(args)).toEqual({
+      ok: false,
+      reason: "already-promoted",
+    });
+    const after = representationsOf(objectId);
+    expect(after).toHaveLength(2);
+    expect(after[1]!.resource_id).toBe(seeded.resourceId);
   });
 
   it("does NOT append to a row that merely CARRIES the target type — no matcher, no write", async () => {
@@ -633,7 +725,8 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.14 the typed promotion road
 
   it("COMPLETES the converging append for the person who asserted, once confirmed", async () => {
     const objectId = nextId("obj-carries-own-person");
-    seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
+    seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });
+    retypeWithHistory({ objectId, toType: OWN_TYPE });
     seedPersonAssertion({ objectId, extension: EXT, principal: "principal-alice" });
     const out = await promotionStore.promoteMatchedArtifactType({
       orgId: ORG,
