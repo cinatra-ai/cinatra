@@ -138,6 +138,8 @@ import { approveReviewTask } from "./hitl-actions";
 import { getFieldRendererContextForAgentBuilderAction } from "./server-actions";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
+  buildGateContinuePayload,
+  mergeGateRendererValues,
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
@@ -821,7 +823,9 @@ export function AgentHitlScreenFields({
                   // the reader only ever sees one Continue.
                   let nextBuffered = buffered;
                   if (next && typeof next === "object" && !Array.isArray(next)) {
-                    nextBuffered = { ...buffered, ...(next as Record<string, unknown>) };
+                    nextBuffered = mergeGateRendererValues(
+                      gate.reviewTaskId, buffered, next as Record<string, unknown>,
+                    );
                     onBuffer(nextBuffered);
                   }
                   if (isGroupedSetup) await onSubmitBuffer(nextBuffered);
@@ -916,11 +920,7 @@ export function AgentHitlScreenContinue({
       submitting={submitting}
       blocked={blocked}
       onPress={async () => {
-        let payload: Record<string, unknown> = {
-          ...buffered,
-          approved: true,
-          approvedAt: new Date().toISOString(),
-        };
+        let payload = buildGateContinuePayload(gate.reviewTaskId, buffered);
         if (!isSetupGateTaskId(gate.reviewTaskId)) {
           payload = applyAttachmentEnvelopeUserResponseOnly(payload, []);
         }
@@ -1020,15 +1020,16 @@ export function AgentHitlScreenCard({
     },
     [carrier, runId],
   );
-  const [buffered, setBufferedState] = useState<Record<string, unknown>>(
+  // WHAT THE READER STAGED, AND THE GATE IT WAS STAGED INTO, both SEEDED FROM
+  // THE BOX (cinatra#3193), so a card that was MOVED mid-answer knows which
+  // question the words it is holding were typed into. A card with no box starts
+  // where it always did: holding nothing, for no gate. The box is written from
+  // what is committed (below), never from a render.
+  const [buffered, setBuffered] = useState<Record<string, unknown>>(
     () => carriedRef.current?.buffered ?? EMPTY_BUFFER,
   );
-  const setBuffered = useCallback(
-    (next: Record<string, unknown>) => {
-      setBufferedState(next);
-      writeCarry({ buffered: next });
-    },
-    [writeCarry],
+  const [bufferedGate, setBufferedGate] = useState<string | null>(
+    () => carriedRef.current?.gateKey ?? null,
   );
   const [submitting, setSubmitting] = useState(false);
 
@@ -1104,35 +1105,41 @@ export function AgentHitlScreenCard({
   // hand — and the next submit would merge them into a question that never
   // asked for them. So the buffer is KEYED by the gate it was typed into: a
   // buffer whose key does not match the gate on screen is not this gate's
-  // answer and is not read, and the effect below drops it.
+  // answer and is not read, and the render below drops it.
   const gateKey = gate === null ? null : hitlGateKey(gate);
-  // SEEDED FROM THE BOX (cinatra#3193), so a card that was MOVED mid-answer
-  // knows which question the words it is holding were typed into. A card with
-  // no box starts where it always did: holding nothing, for no gate.
-  const bufferedGateRef = useRef<string | null>(carriedRef.current?.gateKey ?? null);
-  useEffect(() => {
-    // NO GATE ON SCREEN IS NOT A DIFFERENT GATE (cinatra#3193). `gate` is null
-    // on every first frame - the read has not landed yet - and on any frame the
-    // run is not asking. Treating that as a gate change threw away the words a
-    // moved card was carrying before its own re-read could say they still
-    // belonged to the question on screen. What ends a buffer is another gate
-    // taking the screen, which the comparison below still catches the moment
-    // one does.
-    if (gateKey === null) return;
-    if (bufferedGateRef.current === gateKey) return;
-    bufferedGateRef.current = gateKey;
-    writeCarry({ gateKey, buffered: EMPTY_BUFFER });
+  // DROPPED IN THE RENDER THAT SEES ANOTHER GATE, NEVER IN AN EFFECT
+  // (cinatra#3650). An effect runs only after the commit that drew the new
+  // gate, and React applies a press that lands before it, and a child's own
+  // effects, first: a choice staged in that gap was queued before the reset and
+  // then overwritten by it, so Continue sent a stored decline as an approval.
+  // Dropped here, as the run panel drops its buffer, the new gate is never
+  // drawn holding another gate's buffer and nothing staged into it is lost.
+  //
+  // NO GATE ON SCREEN IS NOT A DIFFERENT GATE (cinatra#3193). `gate` is null on
+  // every first frame - the read has not landed yet - and on any frame the run
+  // is not asking. Treating that as a gate change threw away the words a moved
+  // card was carrying before its own re-read could say they still belonged to
+  // the question on screen. What ends a buffer is another gate taking the
+  // screen, which the comparison below still catches the moment one does.
+  if (gateKey !== null && bufferedGate !== gateKey) {
+    setBufferedGate(gateKey);
     setBuffered(EMPTY_BUFFER);
-    // THE STAGED SETUP ANSWER BELONGS TO ONE GATE TOO, for exactly the reason
-    // the buffer does, and so does the flush that produced it: the renderer is
-    // keyed by the gate and re-registers on the new one, and a flush left over
-    // from the previous gate would answer the next question with the last one's
-    // field.
+  }
+  // THE BOX HOLDS WHAT IS COMMITTED, with the gate it belongs to (cinatra#3193).
+  useEffect(() => {
+    if (bufferedGate === null) return;
+    writeCarry({ gateKey: bufferedGate, buffered });
+  }, [bufferedGate, buffered, writeCarry]);
+  // THE STAGED SETUP ANSWER BELONGS TO ONE GATE TOO, for exactly the reason
+  // the buffer does, and so does the flush that produced it: the renderer is
+  // keyed by the gate and re-registers on the new one, and a flush left over
+  // from the previous gate would answer the next question with the last one's
+  // field.
+  useEffect(() => {
     setupAnswerRef.current = null;
-  }, [gateKey, setBuffered, writeCarry]);
-  // Read in the SAME render the key changed in, so a submit that lands before
-  // the effect runs cannot carry the previous gate's values either.
-  const activeBuffered = bufferedGateRef.current === gateKey ? buffered : EMPTY_BUFFER;
+  }, [bufferedGate]);
+  // A frame with no gate reads nothing of what is held.
+  const activeBuffered = bufferedGate === gateKey ? buffered : EMPTY_BUFFER;
   // ASKING, on both paths: the host's own gate, or the authorized read's answer.
   const asking = hostSuppliesScreen || gate !== null;
 
@@ -1260,13 +1267,14 @@ export function AgentHitlScreenCard({
     }
   }, [submit, gateKey, takeSetupAnswer]);
 
-  // The grouped-setup form's own submit lands here: the SAME approved envelope
-  // the Continue builds, from the buffer the form just wrote.
+  // The grouped form submits the same stored choice as Continue. Setup values
+  // remain field data, without adding the mid-run approval envelope.
   const onSubmitBuffer = useCallback(
     async (next: Record<string, unknown>) => {
-      await submit({ ...next, approved: true, approvedAt: new Date().toISOString() }, undefined);
+      if (!gate) return;
+      await submit(buildGateContinuePayload(gate.reviewTaskId, next), undefined);
     },
-    [submit],
+    [submit, gate],
   );
 
   const body = useMemo<ReactNode>(() => {
