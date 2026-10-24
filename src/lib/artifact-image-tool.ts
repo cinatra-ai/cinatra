@@ -336,6 +336,9 @@ export async function generateArtifactImage(
       bindingObjectTypeId: input.objectTypeId,
       producesObjectTypeId:
         producesObjectTypeIdForExtension(producesRefs, input.extension) ?? undefined,
+      // The install-state explanation of a zero-claim extension is built from
+      // the store's own read errors; on this road it answers a fixed sentence.
+      deps: { explainAbsentClaims: (arg) => explainAbsentClaimsFixed(input, arg) },
     });
     if (!resolvedTarget.ok) {
       return { ok: false, reason: "type_unresolved", error: resolvedTarget.error };
@@ -640,6 +643,39 @@ export const FILING_DATA_REJECTED_ERROR =
 export const FILING_STORED_FACTS_UNREADABLE_ERROR =
   "this node already filed this picture, but the provider and model stored with that " +
   "revision could not be read; no second picture was filed";
+
+/**
+ * THE FIXED INSTALL-STATE SENTENCE (cinatra#4223). When the extension has no
+ * artifact-safe claim in the organisation, the shared target resolver asks an
+ * explainer what is missing in the install state, and that explanation quotes
+ * the store's own read errors. On the image tool's road the explanation is
+ * logged on the server and the result says this sentence instead.
+ */
+export function installStateUnresolvedError(extension: string): string {
+  return (
+    `no artifact-safe claim resolved for extension "${extension}" in this organisation: its ` +
+    "install state is incomplete or could not be read; the detail is logged on the server, " +
+    "and no picture was made"
+  );
+}
+
+/** The explainer seam of the shared resolver, answered with the fixed sentence. */
+async function explainAbsentClaimsFixed(
+  input: { orgId: string; runId: string; nodeId: string; extension: string },
+  arg: { orgId: string; extension: string; declaredObjectTypeIds?: readonly string[] },
+): Promise<string> {
+  try {
+    const { explainAbsentArtifactSafeClaims } = await import("@/lib/extension-install-anchor");
+    logFilingFailure(
+      "artifact_image_generate",
+      input,
+      new Error(await explainAbsentArtifactSafeClaims(arg)),
+    );
+  } catch (err) {
+    logFilingFailure("artifact_image_generate", input, err);
+  }
+  return installStateUnresolvedError(arg.extension);
+}
 
 /** Log a failure's own detail on the server, never in the refusal. */
 export function logFilingFailure(
