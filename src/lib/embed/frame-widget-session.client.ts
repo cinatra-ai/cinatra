@@ -40,6 +40,12 @@
 // browsers that allow third-party cookies and browsers that do not, which is
 // exactly why the credential is held here rather than in a cookie the frame
 // cannot rely on having.
+//
+// RENEWAL (cinatra#4217). While the frame stays open it renews the pair before it
+// runs out (renewFrameCredential, scheduled by the embed client), presenting the
+// current user token same-origin and replacing the pair in memory. The server
+// caps a renewed session at a maximum lifetime; a refused renewal returns the
+// frame to its sign-in card, exactly like a reload does.
 // ---------------------------------------------------------------------------
 
 /** The public selectors the frame sends. Not authority — the server re-derives
@@ -67,7 +73,11 @@ export type FrameSignInFailure =
   | "init_failed"
   | "popup_blocked"
   | "cancelled"
-  | "redeem_failed";
+  | "redeem_failed"
+  | "renew_failed"
+  /** cinatra#4217: the renewal was refused by the rate limit (HTTP 429). The
+   *  presented pair is unspent, so the renewal chain may try it again. */
+  | "renew_rate_limited";
 
 export type FrameSignInResult =
   | { ok: true; credential: FrameWidgetCredential }
@@ -78,6 +88,20 @@ export const WIDGET_AUTH_MESSAGE_TYPE = "cinatra-widget-auth";
 
 export const FRAME_INIT_PATH = "/api/widget-auth/frame/init";
 export const FRAME_TOKEN_PATH = "/api/widget-auth/frame/token";
+export const FRAME_RENEW_PATH = "/api/widget-auth/frame/renew";
+
+/** Renew this long before the advertised expiry. Generous on purpose: a hidden
+ *  tab's timers may be throttled to about once a minute. */
+export const FRAME_RENEW_MARGIN_SECONDS = 90;
+/** Never renew more often than this, so a pair near the session cap (whose life
+ *  the server no longer extends) cannot turn the timer into a busy loop. */
+export const FRAME_RENEW_MIN_DELAY_SECONDS = 30;
+
+/** When to renew a pair advertised to live `expiresIn` seconds, in ms. */
+export function frameRenewalDelayMs(expiresIn: number): number {
+  const life = Number.isFinite(expiresIn) ? expiresIn : 0;
+  return Math.max(life - FRAME_RENEW_MARGIN_SECONDS, FRAME_RENEW_MIN_DELAY_SECONDS) * 1000;
+}
 
 /** base64url without padding — the PKCE encoding. */
 function base64url(bytes: Uint8Array): string {
@@ -258,23 +282,70 @@ export async function runFrameSignIn(
       }),
     });
     if (!response.ok) return { ok: false, reason: "redeem_failed" };
-    const body = (await response.json()) as {
-      userToken?: unknown;
-      transportToken?: unknown;
-      expiresIn?: unknown;
-    };
-    const userToken = typeof body.userToken === "string" ? body.userToken : "";
-    const transportToken =
-      typeof body.transportToken === "string" ? body.transportToken : "";
-    // BOTH or NOTHING. A half pair cannot drive a turn, and holding one bearer
-    // with no way to use it is a credential in a browser for no benefit.
-    if (!userToken || !transportToken) return { ok: false, reason: "redeem_failed" };
-    const expiresIn =
-      typeof body.expiresIn === "number" && Number.isFinite(body.expiresIn)
-        ? body.expiresIn
-        : 0;
-    return { ok: true, credential: { userToken, transportToken, expiresIn } };
+    const credential = credentialPairFrom(await response.json());
+    if (!credential) return { ok: false, reason: "redeem_failed" };
+    return { ok: true, credential };
   } catch {
     return { ok: false, reason: "redeem_failed" };
+  }
+}
+
+/** Read the pair out of a ../token or ../renew answer. BOTH or NOTHING: a half
+ *  pair cannot drive a turn, and holding one bearer with no way to use it is a
+ *  credential in a browser for no benefit. */
+function credentialPairFrom(raw: unknown): FrameWidgetCredential | null {
+  const body = (raw && typeof raw === "object" ? raw : {}) as {
+    userToken?: unknown;
+    transportToken?: unknown;
+    expiresIn?: unknown;
+  };
+  const userToken = typeof body.userToken === "string" ? body.userToken : "";
+  const transportToken =
+    typeof body.transportToken === "string" ? body.transportToken : "";
+  if (!userToken || !transportToken) return null;
+  const expiresIn =
+    typeof body.expiresIn === "number" && Number.isFinite(body.expiresIn)
+      ? body.expiresIn
+      : 0;
+  return { userToken, transportToken, expiresIn };
+}
+
+/**
+ * cinatra#4217 — renew the pair this frame holds. Presents the CURRENT user
+ * token, same-origin and cookie-less, and resolves with the replacement pair or
+ * a neutral failure (the caller returns to the sign-in card). The presented
+ * token is spent by a successful renewal, so the caller must replace the pair it
+ * holds with the result.
+ */
+export async function renewFrameCredential(
+  selectors: FrameSignInSelectors,
+  current: FrameWidgetCredential,
+  env: Pick<FrameSignInEnvironment, "fetchImpl"> = {},
+): Promise<FrameSignInResult> {
+  const doFetch = env.fetchImpl ?? fetch;
+  try {
+    const response = await doFetch(FRAME_RENEW_PATH, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Cinatra-Widget-User-Token": current.userToken,
+      },
+      credentials: "omit",
+      body: JSON.stringify({
+        assistant: selectors.assistant,
+        instanceId: selectors.instanceId,
+        ...(selectors.siteId ? { siteId: selectors.siteId } : {}),
+      }),
+    });
+    // A 429 refused the request before the server verified, claimed or minted
+    // anything: nothing was spent, so it is the one refusal worth trying again
+    // (frame-credential-renewal).
+    if (response.status === 429) return { ok: false, reason: "renew_rate_limited" };
+    if (!response.ok) return { ok: false, reason: "renew_failed" };
+    const credential = credentialPairFrom(await response.json());
+    if (!credential) return { ok: false, reason: "renew_failed" };
+    return { ok: true, credential };
+  } catch {
+    return { ok: false, reason: "renew_failed" };
   }
 }

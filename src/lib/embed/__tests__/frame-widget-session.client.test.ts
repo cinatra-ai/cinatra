@@ -18,6 +18,9 @@ import {
   WIDGET_AUTH_MESSAGE_TYPE,
   runFrameSignIn,
 } from "@/lib/embed/frame-widget-session.client";
+// cinatra#4217 — the renewal names, reached through a namespace import so this
+// file still loads at main, where they do not exist (see the last describe).
+import * as frameSession from "@/lib/embed/frame-widget-session.client";
 
 const SELF = "https://app.cinatra.test";
 const SELECTORS = { assistant: "wordpress", instanceId: "inst-1" };
@@ -273,5 +276,115 @@ describe("the credential is FRAME-PRIVATE — proven as an absence", () => {
     expect(JSON.stringify(calls)).not.toContain("cit_");
 
     vi.unstubAllGlobals();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4217 — RENEWAL, browser side: the timer's delay and the renew call.
+//
+// Reached through the namespace import at the top so this file still LOADS at
+// main, where neither name exists: there each case below is red by its first
+// assertion (`typeof … === "function"`), and the cases above stay green.
+// ---------------------------------------------------------------------------
+
+describe("renewal (cinatra#4217)", () => {
+  it("renews 90 seconds before the advertised expiry, but never sooner than 30 seconds", () => {
+    expect(typeof frameSession.frameRenewalDelayMs).toBe("function");
+    expect(frameSession.frameRenewalDelayMs(300)).toBe(210_000);
+    expect(frameSession.frameRenewalDelayMs(40)).toBe(30_000);
+  });
+
+  it("POSTs to the renew path with the user token in the header only, cookie-less, selectors-only body", async () => {
+    expect(typeof frameSession.renewFrameCredential).toBe("function");
+    expect(frameSession.FRAME_RENEW_PATH).toBe("/api/widget-auth/frame/renew");
+
+    const seen: Array<{ url: string; options: RequestInit }> = [];
+    const impl = vi.fn(async (url: string, options: RequestInit) => {
+      seen.push({ url, options });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          userToken: "cwu_next",
+          transportToken: "cit_next",
+          expiresIn: 300,
+        }),
+      } as unknown as Response;
+    });
+
+    const result = await frameSession.renewFrameCredential(
+      { ...SELECTORS, siteId: "site-1" },
+      { userToken: "cwu_current", transportToken: "cit_current", expiresIn: 300 },
+      { fetchImpl: impl as unknown as typeof fetch },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      credential: { userToken: "cwu_next", transportToken: "cit_next", expiresIn: 300 },
+    });
+    expect(seen).toHaveLength(1);
+    const { url, options } = seen[0]!;
+    expect(url).toBe(frameSession.FRAME_RENEW_PATH);
+    expect(options.method).toBe("POST");
+    expect(options.credentials).toBe("omit");
+    const headers = options.headers as Record<string, string>;
+    expect(headers["X-Cinatra-Widget-User-Token"]).toBe("cwu_current");
+    // Selectors only: no token of either kind travels in the body.
+    expect(JSON.parse(String(options.body))).toEqual({
+      assistant: "wordpress",
+      instanceId: "inst-1",
+      siteId: "site-1",
+    });
+    expect(String(options.body)).not.toContain("cwu_");
+    expect(String(options.body)).not.toContain("cit_");
+  });
+
+  it("maps a non-200 answer to a neutral renew_failed", async () => {
+    expect(typeof frameSession.renewFrameCredential).toBe("function");
+    const impl = vi.fn(
+      async () =>
+        ({
+          ok: false,
+          status: 400,
+          json: async () => ({ error: "invalid_grant" }),
+        }) as unknown as Response,
+    );
+
+    const result = await frameSession.renewFrameCredential(
+      SELECTORS,
+      { userToken: "cwu_current", transportToken: "cit_current", expiresIn: 300 },
+      { fetchImpl: impl as unknown as typeof fetch },
+    );
+
+    expect(result).toEqual({ ok: false, reason: "renew_failed" });
+  });
+
+  // cinatra#4217 r4. RED BEFORE r4: every non-200, a 429 included, was
+  // renew_failed, so the renewal chain could not tell a rate limit (the pair is
+  // unspent and may be tried again) from a refusal (the chain ends).
+  it("maps a 429 answer to renew_rate_limited, and only a 429", async () => {
+    expect(typeof frameSession.renewFrameCredential).toBe("function");
+    const answer = (status: number) =>
+      vi.fn(
+        async () =>
+          ({
+            ok: false,
+            status,
+            json: async () => ({ error: "invalid_grant" }),
+          }) as unknown as Response,
+      );
+    const current = { userToken: "cwu_current", transportToken: "cit_current", expiresIn: 300 };
+
+    const limited = await frameSession.renewFrameCredential(SELECTORS, current, {
+      fetchImpl: answer(429) as unknown as typeof fetch,
+    });
+    expect(limited).toEqual({ ok: false, reason: "renew_rate_limited" });
+
+    for (const status of [400, 401, 500]) {
+      const refused = await frameSession.renewFrameCredential(SELECTORS, current, {
+        fetchImpl: answer(status) as unknown as typeof fetch,
+      });
+      expect(refused, `HTTP ${status}`).toEqual({ ok: false, reason: "renew_failed" });
+    }
   });
 });

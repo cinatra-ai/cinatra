@@ -26,6 +26,9 @@ export type WidgetAuthAuditEvent =
   | "code_issued"
   | "redeem_success"
   | "redeem_failure"
+  // cinatra#4217 — the frame renewed (or failed to renew) the pair it holds.
+  | "renew_success"
+  | "renew_failure"
   // cinatra#408 stream-side dual-token validation (CHILD 3). The stream route
   // emits exactly one of these per per-user widget request: an AUTHORIZED event
   // when the `cwu_` validates and a per-user OBO override is minted (this marks

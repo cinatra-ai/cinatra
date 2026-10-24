@@ -470,3 +470,51 @@ describe("cinatra#3715 — a binding refusal of the transaction answers the one 
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#4217 — the per-address bucket is keyed on the hop the platform
+// appended to X-Forwarded-For (the LAST one), never on a hop the caller wrote.
+// RED BEFORE: both routes keyed it on the FIRST hop, so a caller could name any
+// address's bucket, and rotate the first hop to get a fresh one.
+// ---------------------------------------------------------------------------
+describe("cinatra#4217 — a forged X-Forwarded-For hop keys no bucket", () => {
+  const CLIENT = "2001:db8::9";
+  const initBody = {
+    ...SELECTORS,
+    codeChallenge: "a".repeat(43),
+    codeChallengeMethod: "S256",
+    state: "state-value-1234",
+  };
+  const tokenBody = {
+    ...SELECTORS,
+    grantType: "authorization_code",
+    code: "an-authorization-code",
+    codeVerifier: "v".repeat(64),
+  };
+
+  it("init: two forged first hops from one client charge that client's one key", async () => {
+    for (const forged of ["2001:db8::5", "2001:db8::a1, 2001:db8::a2"]) {
+      await frameInit(
+        frameRequest("/api/widget-auth/frame/init", initBody, { "X-Forwarded-For": `${forged}, ${CLIENT}` }),
+      );
+    }
+    const ipKeys = allowNamedRateLimit.mock.calls
+      .map((c) => (c[0] as { key: string }).key)
+      .filter((k) => k.startsWith("frame-init-ip:"));
+    expect(ipKeys).toEqual([`frame-init-ip:${CLIENT}`, `frame-init-ip:${CLIENT}`]);
+  });
+
+  it("token: two forged first hops from one client charge that client's one address bucket", async () => {
+    for (const forged of ["2001:db8::5", "2001:db8::a1, 2001:db8::a2"]) {
+      const res = await frameToken(
+        frameRequest("/api/widget-auth/frame/token", tokenBody, { "X-Forwarded-For": `${forged}, ${CLIENT}` }),
+      );
+      expect(res.status).toBe(200);
+    }
+    const ips = allowConnectTokenRequest.mock.calls.map((c) => (c[0] as { ip: string }).ip);
+    expect(ips).toEqual([CLIENT, CLIENT]);
+    for (const [, fields] of emitWidgetAuthAudit.mock.calls) {
+      expect((fields as { ip?: string }).ip, "the audit names the same address").toBe(CLIENT);
+    }
+  });
+});
