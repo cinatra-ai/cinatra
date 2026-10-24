@@ -33,8 +33,9 @@ import { StatusPill, type StatusPillStatus } from "@/components/ui/status-pill";
 afterEach(cleanup);
 
 // The states the clause's "tinted from the status colour" recipe governs: the
-// six that carry a STATUS colour. `queued`, `idle` and `archived` are the
-// neutral states — they carry no status colour to tint from — and `failed` /
+// six that carry a STATUS colour. `queued`, `idle`, `archived`, `withdrawn`
+// and `reset` are the neutral states — they carry no status colour to tint
+// from — and `failed` /
 // `declined` are the terminal states the drawing's §V draws solid rather than
 // tinted. Each of those two groups is graded in its own block below, so the
 // relation asserted here stays the relation the clause actually states.
@@ -46,7 +47,7 @@ const TINTED: StatusPillStatus[] = [
   "scheduled",
 ];
 
-const NEUTRAL: StatusPillStatus[] = ["queued", "idle", "archived"];
+const NEUTRAL: StatusPillStatus[] = ["queued", "idle", "archived", "withdrawn", "reset"];
 
 function renderPill(status: StatusPillStatus) {
   const { container } = render(<StatusPill status={status}>Label</StatusPill>);

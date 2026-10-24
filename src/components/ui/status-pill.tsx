@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 /**
  * StatusPill — canonical status indicator from the design system.
  *
- * One component, ten states. Sibling of `<LifecycleBadge />`, but for run /
+ * One component, twelve states. Sibling of `<LifecycleBadge />`, but for run /
  * connection / approval lifecycle states that surface in lists, table rows,
  * run-detail headers, and inline within prose.
  *
@@ -23,7 +23,10 @@ import { cn } from "@/lib/utils";
  *     `.pill .dot { width: 7px; height: 7px; border-radius: 50% }` with
  *     `.pill.approved .dot { background: var(--green) }`, the same green as
  *     `.pill.approved`'s own text. Reach for it ONLY where the drawing draws
- *     a dot; everywhere else the icon-led form is the rule.
+ *     a dot; everywhere else the icon-led form is the rule. The marketplace
+ *     approval states draw it too: their two pending pills, Awaiting you
+ *     (`pill hold`) and Awaiting others (`pill idle`), carry the dot
+ *     (specs/app.html, marketplace approval states block, cinatra#4296).
  *   - Tinted background + same-colour text + matching border (status colour)
  *   - "running" is indigo; "failed" / destructive is red. Red never means run.
  *   - "needs-review" reads as the brand mustard so it picks up the same
@@ -43,6 +46,11 @@ const pillVariants = cva(
         queued:       "border-muted/30 bg-muted/10 text-muted-foreground",
         idle:         "border-line bg-transparent text-muted-foreground",
         archived:     "border-line bg-transparent text-muted-foreground opacity-70",
+        // The two idle-family pills the marketplace approval states add
+        // (specs/app.html, pill roster and block V.1): drawn as `pill idle`,
+        // so they share the idle recipe and differ only by their glyph.
+        withdrawn:    "border-line bg-transparent text-muted-foreground",
+        reset:        "border-line bg-transparent text-muted-foreground",
         failed:       "border-destructive bg-destructive text-destructive-foreground",
         declined:     "border-destructive bg-destructive text-destructive-foreground",
       },
@@ -55,6 +63,7 @@ export type StatusPillStatus =
   | "running" | "approved" | "hold" | "needs-review"
   | "scheduled" | "queued"
   | "idle" | "archived"
+  | "withdrawn" | "reset"
   | "failed" | "declined";
 
 export type StatusPillProps = {
@@ -132,6 +141,22 @@ function StatusIcon({ status }: { status: StatusPillStatus }) {
           <path d="m6 6 12 12" />
         </svg>
       );
+    case "withdrawn":
+      // Undo arrow: the requester took the request back (specs/app.html V.1).
+      return (
+        <svg {...common} strokeWidth="2.4">
+          <path d="M9 14 4 9l5-5" />
+          <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11" />
+        </svg>
+      );
+    case "reset":
+      // Back-to-start arrow: an administrator cleared the approval (V.1).
+      return (
+        <svg {...common} strokeWidth="2.4">
+          <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+          <path d="M3 3v5h5" />
+        </svg>
+      );
     case "failed":
     case "declined":
       return (
@@ -160,6 +185,8 @@ const DEFAULT_LABEL: Record<StatusPillStatus, string> = {
   queued:         "Queued",
   idle:           "Idle",
   archived:       "Archived",
+  withdrawn:      "Withdrawn",
+  reset:          "Reset",
   failed:         "Failed",
   declined:       "Declined",
 };

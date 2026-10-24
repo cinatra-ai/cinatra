@@ -8,7 +8,7 @@ import type { MarketplaceVendorSubmission } from "@cinatra-ai/marketplace-mcp-cl
 
 import { MarketplaceDecisionActions } from "../marketplace-decision-actions";
 import { withdrawMarketplaceSubmission } from "../marketplace-decision-helpers";
-import { MarketplaceRowView, type MarketplaceBadgeVariant } from "./marketplace-row";
+import { MarketplaceRowView } from "./marketplace-row";
 import { marketplaceMySubmissionsContract } from "./marketplace-my-submissions.contract";
 import {
   MARKETPLACE_GROUP,
@@ -39,20 +39,6 @@ interface MySubmissionRaw {
   promotionState: string;
   promotionError: string | null;
   decisionReason: string | null;
-}
-
-function statusVariant(status: string): MarketplaceBadgeVariant {
-  switch (status) {
-    case "approved":
-    case "promoted":
-      return "default";
-    case "rejected":
-      return "destructive";
-    case "pending":
-      return "secondary";
-    default:
-      return "outline";
-  }
 }
 
 function toRow(s: MarketplaceVendorSubmission): ApprovalRow {
@@ -121,8 +107,7 @@ export const marketplaceMySubmissionsSource: ApprovalSource = {
     return (
       <MarketplaceRowView
         title={row.title}
-        statusLabel={row.status}
-        statusVariant={statusVariant(row.status)}
+        state={row.status}
         meta={`submitted ${submitted}${detail}${reason}`}
         right={right}
       />

@@ -5,7 +5,7 @@ import Link from "next/link";
 
 import { createHttpMarketplaceMcpClient } from "@cinatra-ai/marketplace-mcp-client/http-client";
 
-import { MarketplaceRowView, type MarketplaceBadgeVariant } from "./marketplace-row";
+import { MarketplaceRowView } from "./marketplace-row";
 import { marketplaceVendorAppStatusContract } from "./marketplace-vendor-app-status.contract";
 import {
   MARKETPLACE_GROUP,
@@ -39,19 +39,6 @@ interface StatusRaw {
   decisionReason: string | null;
   decidedAt: string | null;
   repairStuck: boolean;
-}
-
-function statusVariant(state: string): MarketplaceBadgeVariant {
-  switch (state) {
-    case "approved":
-      return "default";
-    case "rejected":
-      return "destructive";
-    case "applied":
-      return "secondary";
-    default:
-      return "outline";
-  }
 }
 
 export const marketplaceVendorAppStatusSource: ApprovalSource = {
@@ -124,8 +111,7 @@ export const marketplaceVendorAppStatusSource: ApprovalSource = {
     return (
       <MarketplaceRowView
         title={row.title}
-        statusLabel={row.status}
-        statusVariant={statusVariant(row.status)}
+        state={row.status}
         meta={`${metaParts}${reason}` || "Vendor application"}
         right={
           <Link

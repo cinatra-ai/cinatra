@@ -9,7 +9,8 @@ import { Badge } from "@/components/ui/badge";
 
 import { MarketplaceDecisionActions } from "../marketplace-decision-actions";
 import { decideMarketplaceVendorApplication } from "../marketplace-decision-helpers";
-import { MarketplaceRowView, type MarketplaceBadgeVariant } from "./marketplace-row";
+import { MarketplaceRowView } from "./marketplace-row";
+import { viewerMayDecide } from "./marketplace-state";
 import { marketplaceVendorAppModerationContract } from "./marketplace-vendor-app-moderation.contract";
 import {
   MARKETPLACE_GROUP,
@@ -56,19 +57,6 @@ interface VendorAppRaw {
   tier: string;
   repairStuck: boolean;
   recoveryAttempts: number;
-}
-
-function statusVariant(status: string): MarketplaceBadgeVariant {
-  switch (status) {
-    case "approved":
-      return "default";
-    case "rejected":
-      return "destructive";
-    case "applied":
-      return "secondary";
-    default:
-      return "outline";
-  }
 }
 
 // `ownAppId` / `ownCreatedAt` align the ONE row that is this instance's own
@@ -155,24 +143,24 @@ export const marketplaceVendorAppModerationSource: ApprovalSource = {
   rowRenderer(row: ApprovalRow) {
     const raw = (row.raw ?? {}) as VendorAppRaw;
     const applied = formatDistanceToNow(new Date(row.createdAt), { addSuffix: true });
+    // Repair stuck is a flag, not a state: the Failed pill sits beside the state
+    // pill and the attempt count rides on the meta line (specs/app.html V.1).
+    const attempts =
+      raw.repairStuck && raw.recoveryAttempts > 0
+        ? ` · ${raw.recoveryAttempts} repair ${raw.recoveryAttempts === 1 ? "attempt" : "attempts"}`
+        : "";
     return (
       <MarketplaceRowView
         title={row.title}
-        statusLabel={row.status}
-        statusVariant={statusVariant(row.status)}
+        state={row.status}
+        viewerMayDecide={viewerMayDecide(row.eligibility)}
+        repairStuck={raw.repairStuck}
         extraBadges={
-          <>
-            <Badge variant="outline" className="font-mono text-xs">
-              {raw.scope}
-            </Badge>
-            {raw.repairStuck ? (
-              <Badge variant="destructive" className="text-xs">
-                {raw.recoveryAttempts > 0 ? `repair stuck · ${raw.recoveryAttempts}` : "repair stuck"}
-              </Badge>
-            ) : null}
-          </>
+          <Badge variant="outline" className="font-mono text-xs">
+            {raw.scope}
+          </Badge>
         }
-        meta={`${raw.tier} tier · applied ${applied}`}
+        meta={`${raw.tier} tier · applied ${applied}${attempts}`}
         right={
           <MarketplaceDecisionActions
             sourceId={SOURCE_ID}

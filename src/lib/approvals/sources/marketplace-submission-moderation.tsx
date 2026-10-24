@@ -7,7 +7,8 @@ import type { MarketplaceAdminSubmission } from "@cinatra-ai/marketplace-mcp-cli
 
 import { MarketplaceDecisionActions } from "../marketplace-decision-actions";
 import { decideMarketplaceSubmission } from "../marketplace-decision-helpers";
-import { MarketplaceRowView, type MarketplaceBadgeVariant } from "./marketplace-row";
+import { MarketplaceRowView } from "./marketplace-row";
+import { viewerMayDecide } from "./marketplace-state";
 import { marketplaceSubmissionModerationContract } from "./marketplace-submission-moderation.contract";
 import {
   MARKETPLACE_GROUP,
@@ -55,20 +56,6 @@ const MODERATE_ACTIONS: ApprovalAction[] = [
 interface SubmissionRaw {
   vendorId: number;
   promotionState: string;
-}
-
-function statusVariant(status: string): MarketplaceBadgeVariant {
-  switch (status) {
-    case "approved":
-    case "promoted":
-      return "default";
-    case "rejected":
-      return "destructive";
-    case "pending":
-      return "secondary";
-    default:
-      return "outline";
-  }
 }
 
 // `showVendorCopy` gates the vendor-identifying `vendor #N` copy behind the
@@ -146,8 +133,8 @@ export const marketplaceSubmissionModerationSource: ApprovalSource = {
     return (
       <MarketplaceRowView
         title={row.title}
-        statusLabel={row.status}
-        statusVariant={statusVariant(row.status)}
+        state={row.status}
+        viewerMayDecide={viewerMayDecide(row.eligibility)}
         meta={meta}
         right={
           <MarketplaceDecisionActions
