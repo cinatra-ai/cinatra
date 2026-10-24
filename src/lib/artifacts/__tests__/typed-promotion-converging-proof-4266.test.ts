@@ -50,6 +50,11 @@ const db = vi.hoisted(() => ({
   persons: new Map<string, string>(),
   events: [] as Array<Record<string, unknown>>,
   proofReads: 0,
+  /** When set, the change-event read answers exactly this result instead of
+   *  the stored events (the shapes a driver could hand back). */
+  proofResult: null as null | Record<string, unknown>,
+  /** When set, the change-event read throws (the query failed). */
+  proofThrows: false,
 }));
 
 vi.mock("@/lib/postgres-config", () => ({
@@ -103,6 +108,8 @@ vi.mock("@/lib/postgres-sync", () => ({
       }
       if (/"object_change_event"/.test(t)) {
         db.proofReads += 1;
+        if (db.proofThrows) throw new Error("the change-event read failed");
+        if (db.proofResult !== null) return db.proofResult;
         return {
           rows: db.events.filter((e) => e.objectId === v[0] && e.orgId === v[1]),
         };
@@ -170,14 +177,22 @@ const NEVER_RETYPE = async () => {
   throw new Error("the converging branch must never retype");
 };
 
-function confirm(id: string, over: { threshold?: number | null; principal?: string | null } = {}) {
+function confirm(
+  id: string,
+  over: {
+    threshold?: number | null;
+    principal?: string | null;
+    confirmed?: boolean;
+    acceptsMimes?: string[];
+  } = {},
+) {
   return promoteMatchedArtifactType({
     orgId: ORG,
     artifactId: id,
     extension: EXT,
-    ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
+    ownType: { typeId: OWN_TYPE, acceptsMimes: over.acceptsMimes ?? ["text/markdown"] },
     threshold: over.threshold === undefined ? 0.8 : over.threshold,
-    confirmed: true,
+    confirmed: over.confirmed ?? true,
     createdBy: "user-4266",
     principal: over.principal === undefined ? "user-4266" : over.principal,
     actor: { userId: "user-4266", orgId: ORG },
@@ -193,6 +208,8 @@ beforeEach(() => {
   db.persons.clear();
   db.events.length = 0;
   db.proofReads = 0;
+  db.proofResult = null;
+  db.proofThrows = false;
 });
 
 describe("cinatra#4266: the converging branch appends only on a proven retype", () => {
@@ -301,6 +318,110 @@ describe("cinatra#4266: the converging branch appends only on a proven retype", 
   });
 });
 
+describe("cinatra#4266: with a proof stored, each other condition of the converging branch still refuses", () => {
+  // Every row here holds the road's own retype event (seedInterrupted), so the
+  // proof is present and each case refuses on the one condition it names.
+  it("refuses an unconfirmed caller on the matcher's road", async () => {
+    seedInterrupted("obj-proof-unconfirmed");
+    db.matcher.set("obj-proof-unconfirmed", 0.9);
+    expect(await confirm("obj-proof-unconfirmed", { confirmed: false })).toEqual({
+      ok: false,
+      reason: "already-promoted",
+    });
+    expect(revisionsOf("obj-proof-unconfirmed")).toHaveLength(1);
+  });
+
+  it("refuses an unconfirmed caller on the person's own road", async () => {
+    seedInterrupted("obj-proof-person-unconfirmed");
+    db.persons.set("obj-proof-person-unconfirmed", "principal-alice");
+    expect(
+      await confirm("obj-proof-person-unconfirmed", {
+        threshold: null,
+        principal: "principal-alice",
+        confirmed: false,
+      }),
+    ).toEqual({ ok: false, reason: "already-promoted" });
+    expect(revisionsOf("obj-proof-person-unconfirmed")).toHaveLength(1);
+  });
+
+  it("refuses a person who is not the one who asserted", async () => {
+    seedInterrupted("obj-proof-other-person");
+    db.persons.set("obj-proof-other-person", "principal-alice");
+    expect(
+      await confirm("obj-proof-other-person", { threshold: null, principal: "principal-bob" }),
+    ).toEqual({ ok: false, reason: "already-promoted" });
+    expect(revisionsOf("obj-proof-other-person")).toHaveLength(1);
+  });
+
+  it("refuses a match below the extension's own threshold", async () => {
+    seedInterrupted("obj-proof-low");
+    db.matcher.set("obj-proof-low", 0.4);
+    expect(await confirm("obj-proof-low")).toEqual({ ok: false, reason: "already-promoted" });
+    expect(revisionsOf("obj-proof-low")).toHaveLength(1);
+  });
+
+  it("completes a match exactly at the threshold", async () => {
+    seedInterrupted("obj-proof-at");
+    db.matcher.set("obj-proof-at", 0.8);
+    expect(await confirm("obj-proof-at")).toMatchObject({ ok: true, retyped: false, revision: 2 });
+    expect(revisionsOf("obj-proof-at")).toHaveLength(2);
+  });
+
+  it("refuses content the target type does not accept", async () => {
+    seedInterrupted("obj-proof-form");
+    db.matcher.set("obj-proof-form", 0.9);
+    expect(await confirm("obj-proof-form", { acceptsMimes: ["application/pdf"] })).toEqual({
+      ok: false,
+      reason: "already-promoted",
+    });
+    expect(revisionsOf("obj-proof-form")).toHaveLength(1);
+  });
+
+  it("refuses a row with no content revision, and does not throw", async () => {
+    seedInterrupted("obj-proof-empty");
+    db.reps.length = 0;
+    db.matcher.set("obj-proof-empty", 0.9);
+    expect(await confirm("obj-proof-empty")).toEqual({ ok: false, reason: "already-promoted" });
+    expect(revisionsOf("obj-proof-empty")).toHaveLength(0);
+  });
+});
+
+describe("cinatra#4266: the proof read fails closed through the road", () => {
+  // Every authority holds (confirmed, matcher at 0.9) and the stored events
+  // hold the road's own retype; only the change-event read's answer differs.
+  function seedReady(id: string) {
+    seedInterrupted(id);
+    db.matcher.set(id, 0.9);
+  }
+
+  it.each([
+    ["no rows field", {}],
+    ["rows null", { rows: null }],
+    ["rows an object", { rows: { 0: { operation: "update" } } }],
+    ["rows a string", { rows: "update" }],
+  ])("a result with %s proves nothing", async (_name, result) => {
+    seedReady("obj-proof-shape");
+    db.proofResult = result;
+    expect(await confirm("obj-proof-shape")).toEqual({ ok: false, reason: "already-promoted" });
+    expect(db.proofReads).toBe(1);
+    expect(revisionsOf("obj-proof-shape")).toHaveLength(1);
+  });
+
+  it("a null row proves nothing", async () => {
+    seedReady("obj-proof-null-row");
+    db.proofResult = { rows: [null] };
+    expect(await confirm("obj-proof-null-row")).toEqual({ ok: false, reason: "already-promoted" });
+    expect(revisionsOf("obj-proof-null-row")).toHaveLength(1);
+  });
+
+  it("a failed query propagates and appends nothing", async () => {
+    seedReady("obj-proof-throws");
+    db.proofThrows = true;
+    await expect(confirm("obj-proof-throws")).rejects.toThrow("the change-event read failed");
+    expect(revisionsOf("obj-proof-throws")).toHaveLength(1);
+  });
+});
+
 describe("cinatra#4266: provesPromotionRetype reads the road's own retype only", () => {
   const PROOF: PromotionRetypeEvent = {
     operation: "update",
@@ -353,6 +474,7 @@ describe("cinatra#4266: provesPromotionRetype reads the road's own retype only",
     ["array order changed", with_({ afterSnapshot: { type: OWN_TYPE, data: { a: 1, b: [2, 1] } } })],
     ["a before snapshot with no data key", with_({ beforeSnapshot: { type: BASE_TYPE } })],
     ["an after snapshot with no data key", with_({ afterSnapshot: { type: OWN_TYPE } })],
+    ["neither snapshot with a data key", with_({ beforeSnapshot: { type: BASE_TYPE }, afterSnapshot: { type: OWN_TYPE } })],
   ])("refuses %s", (_name, events) => {
     expect(provesPromotionRetype(events, OWN_TYPE)).toBe(false);
   });
@@ -364,6 +486,16 @@ describe("cinatra#4266: provesPromotionRetype reads the road's own retype only",
     expect(provesPromotionRetype([null as never, 5 as never], OWN_TYPE)).toBe(false);
     expect(provesPromotionRetype([PROOF], "")).toBe(false);
     expect(provesPromotionRetype([PROOF], OWN_TYPE.toUpperCase())).toBe(false);
+    // An event that names the same malformed target proves nothing either.
+    expect(
+      provesPromotionRetype(with_({ objectType: "", afterSnapshot: { type: "", data: { a: 1, b: [1, 2] } } }), ""),
+    ).toBe(false);
+    expect(
+      provesPromotionRetype(
+        with_({ objectType: undefined, afterSnapshot: { data: { a: 1, b: [1, 2] } } }),
+        undefined as never,
+      ),
+    ).toBe(false);
   });
 
   it("null data on both sides is unchanged data", () => {

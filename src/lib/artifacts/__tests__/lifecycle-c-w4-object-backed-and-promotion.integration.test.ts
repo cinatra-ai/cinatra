@@ -640,12 +640,13 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.14 the typed promotion road
   });
 
   it("does NOT append to a row that merely CARRIES the target type — no matcher, no write", async () => {
-    // A row written in that type from the start, or typed by some other road, is
-    // not a half-finished promotion of THIS road: the converging branch carries
-    // the same two authorities the promotion itself does, so a bare confirmation
-    // appends nothing.
+    // The converging branch carries the same two authorities the promotion
+    // itself does, so a bare confirmation appends nothing. The row holds the
+    // road's own retype event (cinatra#4266), so the proof is present and the
+    // refusal is the missing authority's alone.
     const objectId = nextId("obj-carries");
-    seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
+    seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });
+    retypeWithHistory({ objectId, toType: OWN_TYPE });
     const out = await promotionStore.promoteMatchedArtifactType({
       orgId: ORG,
       artifactId: objectId,
@@ -663,7 +664,9 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.14 the typed promotion road
 
   it("REFUSES the converging append to an unconfirmed caller", async () => {
     const objectId = nextId("obj-carries-unconfirmed");
-    seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
+    // The proof is present (cinatra#4266): the refusal is the confirmation's.
+    seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });
+    retypeWithHistory({ objectId, toType: OWN_TYPE });
     seedMatcherAssertion({ objectId, extension: EXT, confidence: 0.9 });
     const out = await promotionStore.promoteMatchedArtifactType({
       orgId: ORG,
@@ -682,10 +685,13 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.14 the typed promotion road
 
   // THE PERSON'S OWN ROAD, AT THE CONVERGING BRANCH (fix leg 2, convergence
   // round). It carries the same two conditions as the matcher's: the acting
-  // person's own assertion, and the confirmation.
+  // person's own assertion, and the confirmation. Each row below holds the
+  // road's own retype event (cinatra#4266), so each refuses on the condition it
+  // names and not on a missing proof.
   it("REFUSES the converging append to an unconfirmed caller on the person's road too", async () => {
     const objectId = nextId("obj-carries-person-unconfirmed");
-    seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
+    seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });
+    retypeWithHistory({ objectId, toType: OWN_TYPE });
     seedPersonAssertion({ objectId, extension: EXT, principal: "principal-3143" });
     const out = await promotionStore.promoteMatchedArtifactType({
       orgId: ORG,
@@ -705,7 +711,8 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.14 the typed promotion road
 
   it("REFUSES the converging append to a person who is not the one who asserted", async () => {
     const objectId = nextId("obj-carries-other-person");
-    seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
+    seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });
+    retypeWithHistory({ objectId, toType: OWN_TYPE });
     seedPersonAssertion({ objectId, extension: EXT, principal: "principal-alice" });
     const out = await promotionStore.promoteMatchedArtifactType({
       orgId: ORG,

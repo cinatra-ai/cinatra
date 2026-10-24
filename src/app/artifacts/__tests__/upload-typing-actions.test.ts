@@ -190,6 +190,15 @@ describe("assertUploadMeaning — the converging re-confirmation (cinatra#3028, 
     expect(assertSemanticType).not.toHaveBeenCalled();
   });
 
+  it("answers invalid-type when the road throws (its proof read failed, cinatra#4266) — fails closed", async () => {
+    promoteMatchedArtifactType.mockRejectedValueOnce(new Error("the change-event read failed"));
+    const { assertUploadMeaning } = await import("../upload-typing-actions");
+    const res = await assertUploadMeaning({ artifactId: "a1", extension: PACK });
+    expect(promoteMatchedArtifactType).toHaveBeenCalledTimes(1);
+    expect(res).toMatchObject({ ok: false, reason: "invalid-type" });
+    expect(assertSemanticType).not.toHaveBeenCalled();
+  });
+
   it("never takes the converging road for an extension that does not define the row's type", async () => {
     const { assertUploadMeaning } = await import("../upload-typing-actions");
     const res = await assertUploadMeaning({ artifactId: "a1", extension: "@acme/unrelated" });
