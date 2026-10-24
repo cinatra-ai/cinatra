@@ -138,7 +138,6 @@ vi.mock("../artifact-review-gate-store", async (orig) => ({
     { runId: h.runId, orgId: ORG, reviewTaskId: `wayflow-${h.taskId}`, status: "resolved",
       pinnedTargets: [{ artifactId: "post", representationRevisionId: "r1" }] },
   ]),
-  markResumeIntentDelivered: vi.fn(async () => true),
 }));
 vi.mock("@/lib/org-write/agent-run-authority-mint", () => ({
   mintAgentRunExecutionAuthority: () => ({ orgId: ORG, can: () => true }),
@@ -247,17 +246,36 @@ async function rebindToForeignAttempt() {
   return foreign;
 }
 
-function approveIntent() {
+/** A resolved gate and its intent, leased to this worker: the delivery reads its
+ *  claim columns and writes under that lease (cinatra#3745 D1-D4). */
+async function approveIntent() {
+  const gateId = `gate-${randomUUID()}`;
+  const reviewTaskId = `wayflow-${h.taskId}`;
+  const responseText = JSON.stringify({ approved: true });
+  await pool(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_review_gates"
+       (id, run_id, org_id, review_task_id, status, pinned_targets, disposition, fingerprint, resolved_at)
+     VALUES ($1, $2, $3, $4, 'resolved', '[{"artifactId":"post","representationRevisionId":"r1"}]'::jsonb, 'approve', $5, now())`,
+    [gateId, h.runId, ORG, reviewTaskId, `fp-${gateId}`],
+  );
+  await pool(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_review_resume_outbox"
+       (gate_id, run_id, review_task_id, kind, response_text, status, attempts, lease_token, lease_expires_at)
+     VALUES ($1, $2, $3, 'approve', $4, 'delivering', 1, 'lease-3745', now() + interval '5 minutes')`,
+    [gateId, h.runId, reviewTaskId, responseText],
+  );
   return {
-    gateId: `gate-${randomUUID()}`,
+    gateId,
     runId: h.runId,
-    reviewTaskId: `wayflow-${h.taskId}`,
+    reviewTaskId,
     kind: "approve" as const,
-    responseText: JSON.stringify({ approved: true }),
+    responseText,
     status: "delivering",
     attempts: 1,
     leaseToken: "lease-3745",
-    leaseExpiresAt: new Date(Date.now() + 60_000),
+    leaseExpiresAt: new Date(Date.now() + 300_000),
+    runClaimedAt: null,
+    resumeTaskResult: null,
   };
 }
 
@@ -325,7 +343,7 @@ describe.skipIf(!HAS_DB)("(a) the artifact-review resume delivery", () => {
   it("dispatches with the run running under its bound attempt, so the approved callback is admitted", async () => {
     const attemptA = await seedDispatchedRun("pending_approval");
     const { deliverArtifactReviewResumeIntent } = await import("../artifact-review-resume-delivery");
-    expect(await deliverArtifactReviewResumeIntent(approveIntent() as never)).toBe("delivered");
+    expect(await deliverArtifactReviewResumeIntent((await approveIntent()) as never)).toBe("delivered");
     expect(h.callbacks).toEqual([{ admitted: true, current: true, status: "running", runAttempt: attemptA, boundAttempt: attemptA }]);
     expect(h.handled).toEqual([{ fromStatus: "running" }]);
   });
@@ -334,7 +352,7 @@ describe.skipIf(!HAS_DB)("(a) the artifact-review resume delivery", () => {
     await seedDispatchedRun("pending_approval");
     const foreign = await rebindToForeignAttempt();
     const { deliverArtifactReviewResumeIntent } = await import("../artifact-review-resume-delivery");
-    await deliverArtifactReviewResumeIntent(approveIntent() as never);
+    await deliverArtifactReviewResumeIntent((await approveIntent()) as never);
     expect(h.callbacks).toHaveLength(1);
     expect(h.callbacks[0]).toMatchObject({ admitted: false, code: "run_source_mismatch",
       cause: "step_tool_run_source_inactive", boundAttempt: foreign });
@@ -396,7 +414,7 @@ describe.skipIf(!HAS_DB)("the claim's other exits", () => {
     const attemptA = await seedDispatchedRun("pending_approval");
     h.sendError = new Error("wayflow unreachable");
     const { deliverArtifactReviewResumeIntent } = await import("../artifact-review-resume-delivery");
-    await expect(deliverArtifactReviewResumeIntent(approveIntent() as never)).rejects.toThrow("wayflow unreachable");
+    await expect(deliverArtifactReviewResumeIntent((await approveIntent()) as never)).rejects.toThrow("wayflow unreachable");
     expect(await rows()).toEqual({ status: "pending_approval", runAttempt: attemptA, boundAttempt: attemptA });
     expect(h.handled).toEqual([]);
   });
@@ -408,7 +426,7 @@ describe.skipIf(!HAS_DB)("the claim's other exits", () => {
     h.staleRead = await readAgentRunByTaskId(h.taskId);
     expect((h.staleRead as { status: string }).status).toBe("pending_approval");
     await transitions.transitionRunStatus(h.runId, "pending_approval", "running", undefined, AUTHORITY as never);
-    expect(await deliverArtifactReviewResumeIntent(approveIntent() as never)).toBe("already-advanced");
+    expect(await deliverArtifactReviewResumeIntent((await approveIntent()) as never)).toBe("already-advanced");
     expect(h.sends).toBe(0);
   });
 

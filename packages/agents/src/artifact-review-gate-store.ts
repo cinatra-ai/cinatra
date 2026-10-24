@@ -1194,6 +1194,25 @@ export async function renewResumeIntentLease(gateId: string, leaseToken: string,
 }
 
 /**
+ * The claim mark and send witness of an intent this worker leases, read AFTER
+ * the run (cinatra#3745 D2): an entry into `running` by another driver clears the
+ * mark in the run's own transaction, so the claim-time copy can be stale. Null
+ * when the row is no longer under this lease.
+ */
+export async function readResumeIntentClaim(
+  gateId: string,
+  leaseToken: string,
+): Promise<{ runClaimed: boolean; result: unknown } | null> {
+  const rows = await db
+    .select({ runClaimedAt: artifactReviewResumeOutbox.runClaimedAt, result: artifactReviewResumeOutbox.resumeTaskResult })
+    .from(artifactReviewResumeOutbox)
+    .where(liveLease(gateId, leaseToken))
+    .limit(1);
+  const row = rows[0];
+  return row ? { runClaimed: row.runClaimedAt != null, result: row.result ?? null } : null;
+}
+
+/**
  * Record the A2A task this gate's send returned, under the live lease and the
  * delivery's own run claim (cinatra#3745 D1/D4), BEFORE the handler runs. A
  * re-claim that finds it replays the handler instead of re-sending. The caller
