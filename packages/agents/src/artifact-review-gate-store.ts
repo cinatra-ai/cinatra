@@ -1272,8 +1272,11 @@ export async function fenceResumeIntentLeaseInRunTx(
 /**
  * On every run edge into `running`, in the run's transaction: clear the claim
  * marks of the run's OTHER delivering intents, because another driver advances
- * the run from now on. `keepGateId` is the delivery's own gate on its claim
- * (null on any other entry). One statement on the tx's `execute` surface.
+ * the run from now on. The recorded task is KEPT: it is the witness that the
+ * intent's resume was delivered, so its delivery closes instead of waiting, and
+ * with no mark it is never replayed (cinatra#3745). `keepGateId` is the
+ * delivery's own gate on its claim (null on any other entry). One statement on
+ * the tx's `execute` surface.
  */
 export async function clearOtherResumeClaimsInRunTx(
   tx: GuardedRunTx,
@@ -1281,9 +1284,27 @@ export async function clearOtherResumeClaimsInRunTx(
 ): Promise<void> {
   const keep = input.keepGateId === null ? sql`` : sql` AND gate_id <> ${input.keepGateId}`;
   await tx.execute(
-    sql`UPDATE ${artifactReviewResumeOutbox} SET run_claimed_at = NULL, resume_task_result = NULL, updated_at = now()
+    sql`UPDATE ${artifactReviewResumeOutbox} SET run_claimed_at = NULL, updated_at = now()
         WHERE run_id = ${input.runId} AND status = 'delivering' AND run_claimed_at IS NOT NULL${keep}`,
   );
+}
+
+/**
+ * Leave a leased intent for a later lease and give its attempt back
+ * (cinatra#3745). The delivery found another driver holding the run with no
+ * witness that this gate's resume was delivered, so it decides nothing now: a
+ * claim that fails before its dispatch puts the run back on this gate. The row
+ * stays `delivering` under this lease until the lease lapses; the attempt is
+ * not spent, so a long competing leg never dead-letters the intent. False when
+ * the lease is no longer this worker's.
+ */
+export async function deferResumeIntent(gateId: string, leaseToken: string): Promise<boolean> {
+  const deferred = await db
+    .update(artifactReviewResumeOutbox)
+    .set({ attempts: sql`GREATEST(${artifactReviewResumeOutbox.attempts} - 1, 0)`, updatedAt: sql`now()` })
+    .where(liveLease(gateId, leaseToken))
+    .returning({ gateId: artifactReviewResumeOutbox.gateId });
+  return deferred.length === 1;
 }
 
 /**

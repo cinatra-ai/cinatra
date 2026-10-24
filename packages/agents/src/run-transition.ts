@@ -287,8 +287,9 @@ async function settleLeaseInTx(
 //
 // Every edge INTO `running` also clears the claim marks of the run's OTHER
 // intents: from then on another driver advances the run, so an earlier delivery
-// whose handler moved the run on and died before its mark-done closes, and never
-// replays its stored task into that run.
+// whose handler moved the run on and died before its mark-done closes on its
+// recorded task, which the clear keeps as the witness of a delivered resume, and
+// never replays it into that run (a replay needs the mark).
 
 export type ResumeIntentLease = { gateId: string; leaseToken: string };
 

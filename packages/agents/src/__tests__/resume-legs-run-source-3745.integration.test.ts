@@ -419,14 +419,15 @@ describe.skipIf(!HAS_DB)("the claim's other exits", () => {
     expect(h.handled).toEqual([]);
   });
 
-  it("(a) a run another writer already moved off the gate is not sent again", async () => {
+  it("(a) a run another writer already moved off the gate is not sent again, and its intent is not closed", async () => {
     await seedDispatchedRun("pending_approval");
     const { deliverArtifactReviewResumeIntent } = await import("../artifact-review-resume-delivery");
     const { readAgentRunByTaskId } = await import("../store");
     h.staleRead = await readAgentRunByTaskId(h.taskId);
     expect((h.staleRead as { status: string }).status).toBe("pending_approval");
     await transitions.transitionRunStatus(h.runId, "pending_approval", "running", undefined, AUTHORITY as never);
-    expect(await deliverArtifactReviewResumeIntent((await approveIntent()) as never)).toBe("already-advanced");
+    // That writer's claim can still fail before its dispatch, so the intent waits for a later lease.
+    expect(await deliverArtifactReviewResumeIntent((await approveIntent()) as never)).toBe("retryable");
     expect(h.sends).toBe(0);
   });
 

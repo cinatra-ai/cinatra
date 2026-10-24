@@ -10,6 +10,9 @@
  *     the run's own transaction, and carries the claim mark with it;
  *   - a claimed delivery that dies, outlives its lease, loses its lease or
  *     fails before the wire is re-sent, replayed or left alone, never closed early;
+ *   - a run another driver holds, with no recorded task of this gate, leaves the
+ *     intent for a later lease with its attempt given back: a competing claim that
+ *     fails before its dispatch never consumes the intent;
  *   - the 0116 rollout guard on populated tables; a claimed intent is never dead-lettered.
  *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided. Run with:
@@ -363,7 +366,7 @@ describe.skipIf(!HAS_DB)("the delivery's run edges are fenced by its lease, in t
     expect((await runState(run.runId)).status).toBe("failed");
   });
 
-  it("T21 every entry into running clears the run's other claim marks; the claim keeps its own", async () => {
+  it("T21 every entry into running clears the run's other claim marks and keeps their records; the claim keeps its own", async () => {
     const run = await seedRun("pending_approval");
     const earlier = await seedIntent(run, { status: "delivering", leaseToken: "L0", runClaimed: true, result: { id: "t-old" },
       reviewTask: `wayflow-task-earlier-${randomUUID()}` });
@@ -372,7 +375,8 @@ describe.skipIf(!HAS_DB)("the delivery's run edges are fenced by its lease, in t
     const otherRunIntent = await seedIntent(otherRun, { status: "delivering", leaseToken: "L2", runClaimed: true });
     await transitions.transitionRunStatus(run.runId, "pending_approval", "running", lease(own, "L1"), AUTHORITY as never);
     expect(await intentState(own)).toMatchObject({ claimed: true, result: null });
-    expect(await intentState(earlier)).toMatchObject({ claimed: false, result: null, status: "delivering", leaseToken: "L0" });
+    // The record stays: it witnesses that the earlier gate's resume was delivered.
+    expect(await intentState(earlier)).toMatchObject({ claimed: false, result: { id: "t-old" }, status: "delivering", leaseToken: "L0" });
     // An entry with no lease (the human or MCP resume) clears every mark of the run, its own run only.
     await transitions.transitionRunStatus(run.runId, "running", "pending_approval", lease(own, "L1"), AUTHORITY as never);
     await pool(`UPDATE ${T("artifact_review_resume_outbox")} SET run_claimed_at = now() WHERE gate_id = $1`, [own]);
@@ -468,25 +472,89 @@ describe.skipIf(!HAS_DB)("the delivery re-sends, replays or leaves alone; it nev
     await expectNoStrand(run, gateId);
   });
 
-  it("T4 a lost run CAS records no claim and closes as already advanced", async () => {
+  it("T4 a lost run CAS records no claim, closes nothing and gives the attempt back", async () => {
     const run = await seedRun("pending_approval");
     const gateId = await seedIntent(run);
     const row = await claimOne(gateId);
     h.beforeScope = async () => { await pool(`UPDATE ${T("agent_runs")} SET status = 'running' WHERE id = $1`, [run.runId]); };
-    expect(await delivery.deliverArtifactReviewResumeIntent(row)).toBe("already-advanced");
+    expect(await delivery.deliverArtifactReviewResumeIntent(row)).toBe("retryable");
     expect(h.sends.length).toBe(0);
-    expect(await intentState(gateId)).toMatchObject({ claimed: false, status: "done" });
+    expect(await intentState(gateId)).toMatchObject({ claimed: false, status: "delivering", attempts: 0, leaseToken: row.leaseToken });
     await expectNoStrand(run, gateId);
   });
 
-  it("T6 running with no claim mark is another actor's resume: closed, not re-sent", async () => {
+  it("T6 running with no claim mark and nothing recorded is another driver's hold: deferred, not closed or sent", async () => {
     const run = await seedRun("running");
     const gateId = await seedIntent(run, { status: "delivering", leaseExpired: true });
     const summary = await delivery.sweepArtifactReviewResumeIntents({ limit: 1 });
-    expect(summary.alreadyAdvanced).toBe(1);
+    expect(summary).toMatchObject({ attempted: 1, retryable: 1, alreadyAdvanced: 0 });
     expect(h.sends.length).toBe(0);
     expect(h.handled.length).toBe(0);
+    expect(await intentState(gateId)).toMatchObject({ status: "delivering", claimed: false, attempts: 1 });
+  });
+
+  it("T22 a competing claim that fails before its dispatch does not consume the intent: the next lease sends", async () => {
+    const run = await seedRun("pending_approval");
+    const gateId = await seedIntent(run);
+    const row = await claimOne(gateId);
+    // An MCP or human resume claims the gate after this delivery read the run ...
+    h.beforeScope = async () => {
+      await transitions.transitionRunStatus(run.runId, "pending_approval", "running", undefined, AUTHORITY as never);
+    };
+    expect(await delivery.deliverArtifactReviewResumeIntent(row)).toBe("retryable");
+    h.beforeScope = null;
+    expect(h.sends.length).toBe(0);
+    // ... and puts it back before its dispatch, as claimGateForResume and the human path do.
+    await transitions.transitionRunStatus(run.runId, "running", "pending_approval", undefined, AUTHORITY as never);
+    expect(await intentState(gateId)).toMatchObject({ status: "delivering", claimed: false, attempts: 0 });
+    await expire(gateId);
+    expect(await delivery.sweepArtifactReviewResumeIntents({ limit: 1 })).toMatchObject({ attempted: 1, delivered: 1 });
+    expect(h.sends.map((x) => x.messageId)).toEqual([`artifact-review-resume-${gateId}`]);
+    expect((await runState(run.runId)).status).toBe("running");
     expect((await outboxRow(gateId)).status).toBe("done");
+  });
+
+  it("T23 a run another driver holds is left for a later lease; once that driver puts it back, the next lease sends", async () => {
+    const run = await seedRun("pending_approval");
+    const gateId = await seedIntent(run);
+    await transitions.transitionRunStatus(run.runId, "pending_approval", "running", undefined, AUTHORITY as never);
+    expect(await delivery.sweepArtifactReviewResumeIntents({ limit: 1 })).toMatchObject({ attempted: 1, retryable: 1 });
+    expect(await intentState(gateId)).toMatchObject({ status: "delivering", claimed: false, attempts: 0 });
+    expect(h.sends.length).toBe(0);
+    await transitions.transitionRunStatus(run.runId, "running", "pending_approval", undefined, AUTHORITY as never);
+    await expire(gateId);
+    expect(await delivery.sweepArtifactReviewResumeIntents({ limit: 1 })).toMatchObject({ attempted: 1, delivered: 1 });
+    expect(h.sends.length).toBe(1);
+    expect((await outboxRow(gateId)).status).toBe("done");
+  });
+
+  it("T24 a scope refusal that loses its CAS to another driver stamps nothing; the next lease fails the run", async () => {
+    const run = await seedRun("pending_approval");
+    const gateId = await seedIntent(run);
+    const row = await claimOne(gateId);
+    h.scopeDenied = "the owning team is gone";
+    h.beforeScope = async () => {
+      await transitions.transitionRunStatus(run.runId, "pending_approval", "running", undefined, AUTHORITY as never);
+    };
+    expect(await delivery.deliverArtifactReviewResumeIntent(row)).toBe("retryable");
+    h.beforeScope = null;
+    expect(await intentState(gateId)).toMatchObject({ status: "delivering" });
+    expect((await runState(run.runId)).status).toBe("running");
+    await transitions.transitionRunStatus(run.runId, "running", "pending_approval", undefined, AUTHORITY as never);
+    await expire(gateId);
+    expect(await delivery.sweepArtifactReviewResumeIntents({ limit: 1 })).toMatchObject({ attempted: 1, refusedOutOfScope: 1 });
+    expect((await runState(run.runId)).status).toBe("failed");
+    expect((await outboxRow(gateId)).status).toBe("done");
+    expect(h.sends.length).toBe(0);
+  });
+
+  it("T25 a deferral at the final attempt gives the attempt back: no dead letter while another driver holds the run", async () => {
+    const run = await seedRun("running");
+    const gateId = await seedIntent(run, { attempts: 19, maxAttempts: 20 });
+    expect(await delivery.sweepArtifactReviewResumeIntents({ limit: 1 })).toMatchObject({ attempted: 1, retryable: 1 });
+    await expire(gateId);
+    await gateStore.deadLetterExhaustedResumeIntents();
+    expect(await intentState(gateId)).toMatchObject({ status: "delivering", attempts: 19, deadLettered: false });
   });
 
   it("T12 RED (iii) a handler that wrote Redis and died before its CAS is replayed from the recorded result, not closed", async () => {
