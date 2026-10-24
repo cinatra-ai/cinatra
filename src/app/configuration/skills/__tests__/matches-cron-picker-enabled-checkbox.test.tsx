@@ -5,10 +5,11 @@
 //
 //   pnpm exec vitest run src/app/configuration/skills/__tests__/matches-cron-picker-enabled-checkbox.test.tsx
 //
-// The drawing: specs/app-components.html:704 (data-conformance-id="checkbox"):
-// "Switches are reserved for immediate-effect settings; checkboxes for
-// confirmable form choices." The schedule is applied only by "Save schedule",
-// so its Enabled control is a confirmable form choice and draws as a checkbox.
+// The approved component rule for checkboxes reserves switches for settings
+// that take effect at once and checkboxes for choices that a form action
+// confirms. The schedule is applied only by "Save schedule", so its Enabled
+// control is a confirmable form choice: it draws as a checkbox, and changing
+// it writes nothing until Save schedule.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
@@ -54,6 +55,26 @@ describe("Matches tab: the schedule's Enabled control", () => {
     fireEvent.click(control);
     expect(control.getAttribute("aria-checked")).toBe("true");
     expect(screen.getByText("Frequency")).toBeTruthy();
+    expect(setScheduleAction).not.toHaveBeenCalled();
+  });
+
+  it("writes nothing when unticked and ticked, and Save schedule while unticked posts the disabled payload", async () => {
+    await renderPicker(true);
+    const control = screen.getByRole("checkbox", { name: "Enabled" });
+    fireEvent.click(control);
+    expect(control.getAttribute("aria-checked")).toBe("false");
+    expect(screen.queryByText("Frequency")).toBeNull();
+    fireEvent.click(control);
+    expect(control.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(control);
+    expect(control.getAttribute("aria-checked")).toBe("false");
+    expect(setScheduleAction).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Save schedule" }));
+    expect(setScheduleAction).toHaveBeenCalledTimes(1);
+    const fd = setScheduleAction.mock.calls[0][0] as FormData;
+    expect(fd.get("enabled")).toBeNull();
+    expect(fd.get("cronExpression")).toBeNull();
+    expect(fd.get("timezone")).toBe("UTC");
   });
 
   it("is applied only by Save schedule, which posts enabled=on while ticked", async () => {
