@@ -1,4 +1,4 @@
-// cinatra#3745 (unit 4097-resume2): the resume delivery's durable claim mark and
+// cinatra#3745: the resume delivery's durable claim mark and
 // send witness. Additive and nullable; no row is rewritten.
 export const resumeIntentRunClaimDdlSql = `
   ALTER TABLE artifact_review_resume_outbox ADD COLUMN IF NOT EXISTS run_claimed_at timestamptz;

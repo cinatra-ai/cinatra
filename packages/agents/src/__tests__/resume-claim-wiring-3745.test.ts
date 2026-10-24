@@ -1,7 +1,7 @@
 /**
- * cinatra#3745 (unit 4097-resume2) — source pins for the resume claim repair.
+ * cinatra#3745 — source pins for the resume claim repair.
  *
- * NOTE 6: the stopped-orchestrator resume carries its bound step-tool graph inside
+ * The stopped-orchestrator resume carries its bound step-tool graph inside
  * the dispatch transaction, from the LOCKED run row's attempt. No caller-supplied
  * prior attempt and no separate rebind export may come back.
  */
@@ -22,7 +22,7 @@ const SRC = join(__dirname, "..");
 const ROOT = join(SRC, "..", "..", "..");
 const read = (file: string) => readFileSync(join(SRC, file), "utf8");
 
-describe("NOTE 6: no caller-supplied prior attempt survives", () => {
+describe("no caller-supplied prior attempt survives", () => {
   it("the old rebind export is gone from serde and from every re-export", () => {
     for (const file of ["agent-run-serde.ts", "store.ts", "run-step-tool-policy-store.ts", "orchestrator-actions.ts"]) {
       expect(read(file), file).not.toContain("rebindRunStepToolPolicyForResume");
@@ -50,7 +50,7 @@ describe("NOTE 6: no caller-supplied prior attempt survives", () => {
   });
 });
 
-describe("D7: the claim mark and send witness, on every schema road", () => {
+describe("the claim mark and send witness, on every schema road", () => {
   const CLAIM_COLUMNS = { run_claimed_at: "timestamptz", resume_task_result: "jsonb" } as const;
 
   it("Drizzle, the bootstrap twin and core__0116 declare the same two nullable columns", () => {

@@ -66,7 +66,7 @@ const gateStoreMock = vi.hoisted(() => ({
   claimPendingResumeIntents: vi.fn(),
   listReviewGatesForRun: vi.fn<(runId: string) => Promise<Array<{ runId?: string; orgId?: string; reviewTaskId: string; status: string; pinnedTargets?: unknown }>>>(async () => []),
   markResumeIntentDelivered: vi.fn(),
-  // cinatra#3745 D2-D4: the claim read, the lease renewal and the task record.
+  // cinatra#3745: the claim read, the lease renewal and the task record.
   readResumeIntentClaim: vi.fn<(gateId: string, leaseToken: string) => Promise<{ runClaimed: boolean; result: unknown } | null>>(),
   renewResumeIntentLease: vi.fn<(gateId: string, leaseToken: string, leaseMs: number) => Promise<boolean>>(),
   recordResumeTaskResult: vi.fn<(gateId: string, leaseToken: string, task: unknown) => Promise<boolean>>(),
@@ -438,7 +438,7 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
   });
 
 
-  describe("cinatra#3745 D2-D4: the claim row decides, the lease is kept and fenced", () => {
+  describe("cinatra#3745: the claim row decides, the lease is kept and fenced", () => {
     const edges = () => claimSpy.mock.calls.map((c) => `${c[1]}->${c[2]}`);
     const leaseOf = (call: unknown[]) => (call[3] as { resumeIntentLease?: unknown } | undefined)?.resumeIntentLease;
 
@@ -508,6 +508,101 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
       gateStoreMock.recordResumeTaskResult.mockResolvedValue(false);
       expect(await deliverArtifactReviewResumeIntent(intent())).toBe("lease-lost");
       expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+      expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+    });
+
+    // Fail-closed branches. Each case asserts what the delivery must not do: send,
+    // run the handler or close the intent. A throw is settled into a value, so a
+    // delivery that resolves instead of rejecting fails on an assertion.
+    const settle = (p: Promise<unknown>) => p.then((value) => ({ value }), (error: unknown) => ({ error }));
+    const replayRow = () => {
+      storeMock.readAgentRunByTaskId.mockResolvedValue(pausedRun({ status: "running" }));
+      const recorded = { id: "task-recorded", status: { state: "input-required" } };
+      gateStoreMock.readResumeIntentClaim.mockResolvedValue({ runClaimed: true, result: recorded });
+    };
+
+    it("F1 a refused renewal before the replay runs no handler and closes nothing", async () => {
+      replayRow();
+      gateStoreMock.renewResumeIntentLease.mockResolvedValue(false);
+      expect(await deliverArtifactReviewResumeIntent(intent())).toBe("lease-lost");
+      expect(gateStoreMock.renewResumeIntentLease).toHaveBeenCalledTimes(1);
+      expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+      expect(sendTaskSpy).not.toHaveBeenCalled();
+      expect(edges()).toEqual([]);
+      expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+    });
+
+    it("F2 a refused renewal after a recorded task runs no handler, releases nothing and closes nothing", async () => {
+      gateStoreMock.renewResumeIntentLease.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+      expect(await deliverArtifactReviewResumeIntent(intent())).toBe("lease-lost");
+      expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+      expect(gateStoreMock.recordResumeTaskResult).toHaveBeenCalledTimes(1);
+      expect(gateStoreMock.renewResumeIntentLease).toHaveBeenCalledTimes(2);
+      expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+      expect(edges()).toEqual(["pending_approval->running"]);
+      expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+    });
+
+    it("F3 a claim read that throws propagates: no claim, no send, intent not closed", async () => {
+      const failure = new Error("claim read unavailable");
+      gateStoreMock.readResumeIntentClaim.mockRejectedValueOnce(failure);
+      expect(await settle(deliverArtifactReviewResumeIntent(intent()))).toEqual({ error: failure });
+      expect(edges()).toEqual([]);
+      expect(sendTaskSpy).not.toHaveBeenCalled();
+      expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+      expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+    });
+
+    it("F4 a task record that throws propagates: no handler, no release, intent not closed", async () => {
+      const failure = new Error("record unavailable");
+      gateStoreMock.recordResumeTaskResult.mockRejectedValueOnce(failure);
+      expect(await settle(deliverArtifactReviewResumeIntent(intent()))).toEqual({ error: failure });
+      expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+      expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+      expect(edges()).toEqual(["pending_approval->running"]);
+      expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+    });
+
+    it("F5 an awaited renewal that throws before the send propagates: no send, intent not closed", async () => {
+      const failure = new Error("renewal unavailable");
+      gateStoreMock.renewResumeIntentLease.mockRejectedValueOnce(failure);
+      expect(await settle(deliverArtifactReviewResumeIntent(intent()))).toEqual({ error: failure });
+      expect(edges()).toEqual(["pending_approval->running"]);
+      expect(sendTaskSpy).not.toHaveBeenCalled();
+      expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+      expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+    });
+
+    it("F6 an awaited renewal that throws after the record propagates: no handler, intent not closed", async () => {
+      const failure = new Error("renewal unavailable");
+      gateStoreMock.renewResumeIntentLease.mockResolvedValueOnce(true).mockRejectedValueOnce(failure);
+      expect(await settle(deliverArtifactReviewResumeIntent(intent()))).toEqual({ error: failure });
+      expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+      expect(gateStoreMock.recordResumeTaskResult).toHaveBeenCalledTimes(1);
+      expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+      expect(edges()).toEqual(["pending_approval->running"]);
+      expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+    });
+
+    it("F7 an awaited renewal that throws before the replay propagates: no handler, intent not closed", async () => {
+      replayRow();
+      const failure = new Error("renewal unavailable");
+      gateStoreMock.renewResumeIntentLease.mockRejectedValueOnce(failure);
+      expect(await settle(deliverArtifactReviewResumeIntent(intent()))).toEqual({ error: failure });
+      expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+      expect(sendTaskSpy).not.toHaveBeenCalled();
+      expect(edges()).toEqual([]);
+      expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+    });
+
+    it("F8 a replay whose handler throws propagates: nothing sent, intent not closed", async () => {
+      replayRow();
+      const failure = new Error("handler failed");
+      handleWayflowTaskStateSpy.mockRejectedValueOnce(failure);
+      expect(await settle(deliverArtifactReviewResumeIntent(intent()))).toEqual({ error: failure });
+      expect(handleWayflowTaskStateSpy).toHaveBeenCalledTimes(1);
+      expect(sendTaskSpy).not.toHaveBeenCalled();
+      expect(edges()).toEqual([]);
       expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
     });
 

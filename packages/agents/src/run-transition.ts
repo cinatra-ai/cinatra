@@ -234,7 +234,7 @@ export async function updateAgentRunStatusConditional(
 export type AgentRunDispatchFields = {
   /** Fresh per-dispatch id — mint with crypto.randomUUID() at each dispatch. */
   attemptId: string;
-  /** cinatra#3745 NOTE 6: a resume's dispatch carries the run's bound step-tool graph to `attemptId` in THIS transaction (carryRunStepToolPolicyInTx). */
+  /** cinatra#3745: a resume's dispatch carries the run's bound step-tool graph to `attemptId` in THIS transaction (carryRunStepToolPolicyInTx). */
   carryBoundStepToolPolicy?: true;
 };
 
@@ -511,7 +511,7 @@ export async function transitionRunStatus(
   }
 
   await guardedRunWrite(authority, { orgId, runId, capability }, async (guardedTx) => {
-    // cinatra#3745 NOTE 6: the binding moves with the dispatch CAS or not at all;
+    // cinatra#3745: the binding moves with the dispatch CAS or not at all;
     // the prior attempt is the run row locked inside, never a caller value.
     if (meta?.dispatch?.carryBoundStepToolPolicy && from === "queued" && to === "running") {
       const { carryRunStepToolPolicyInTx } = await import("./agent-run-serde");

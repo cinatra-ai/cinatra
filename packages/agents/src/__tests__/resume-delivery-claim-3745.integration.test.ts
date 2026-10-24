@@ -1,16 +1,16 @@
 /**
- * cinatra#3745 (unit 4097-resume2) — THE RESUME DELIVERY'S CLAIM, ON A REAL DATABASE.
+ * cinatra#3745 — THE RESUME DELIVERY'S CLAIM, ON A REAL DATABASE.
  *
  * The artifact-review resume delivery moves a paused run `pending_approval ->
  * running` before it sends. This file drives the real transitionRunStatus, the
  * real gate store and the real sweeper on Postgres, and mocks only the A2A client,
  * the run-token mint and handleWayflowTaskState. It proves:
  *
- *   - D1: every run edge the delivery writes is fenced by the intent's lease, in
+ *   - every run edge the delivery writes is fenced by the intent's lease, in
  *     the run's own transaction, and carries the claim mark with it;
- *   - D2-D4: a claimed delivery that dies, outlives its lease, loses its lease or
+ *   - a claimed delivery that dies, outlives its lease, loses its lease or
  *     fails before the wire is re-sent, replayed or left alone, never closed early;
- *   - D7: the 0116 rollout guard on populated tables; D8: no claimed dead-letter.
+ *   - the 0116 rollout guard on populated tables; a claimed intent is never dead-lettered.
  *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided. Run with:
  *   CINATRA_TEST_DB_URL=postgres://user:pass@localhost:5432/db \
@@ -324,7 +324,7 @@ beforeEach(async () => {
   h.renewThrows = 0;
 });
 
-describe.skipIf(!HAS_DB)("D1: the delivery's run edges are fenced by its lease, in the run's transaction", () => {
+describe.skipIf(!HAS_DB)("the delivery's run edges are fenced by its lease, in the run's transaction", () => {
   const lease = (gateId: string, leaseToken: string) => ({ resumeIntentLease: { gateId, leaseToken } });
 
   it("the claim sets the mark under the live lease, and the release clears mark and result", async () => {
@@ -391,7 +391,7 @@ describe.skipIf(!HAS_DB)("D1: the delivery's run edges are fenced by its lease, 
   });
 });
 
-describe.skipIf(!HAS_DB)("D2-D4: the delivery re-sends, replays or leaves alone; it never closes early", () => {
+describe.skipIf(!HAS_DB)("the delivery re-sends, replays or leaves alone; it never closes early", () => {
   const OUTBOX = () => T("artifact_review_resume_outbox");
   const expire = (gateId: string) =>
     pool(`UPDATE ${OUTBOX()} SET lease_expires_at = now() - interval '1 second' WHERE gate_id = $1`, [gateId]);
@@ -646,7 +646,7 @@ describe.skipIf(!HAS_DB)("D2-D4: the delivery re-sends, replays or leaves alone;
   });
 });
 
-describe.skipIf(!HAS_DB)("D8: a claimed intent is never dead-lettered", () => {
+describe.skipIf(!HAS_DB)("a claimed intent is never dead-lettered", () => {
   it("T17 a claimed intent at its final attempt is not dead-lettered; an unclaimed one is", async () => {
     const claimedRun = await seedRun("running");
     const claimedGate = await seedIntent(claimedRun, { status: "delivering", leaseExpired: true, runClaimed: true, attempts: 20, maxAttempts: 20 });
@@ -662,7 +662,7 @@ describe.skipIf(!HAS_DB)("D8: a claimed intent is never dead-lettered", () => {
   });
 });
 
-describe.skipIf(!HAS_DB)("D7: the 0116 rollout guard on populated tables", () => {
+describe.skipIf(!HAS_DB)("the 0116 rollout guard on populated tables", () => {
   async function withGuardSchema<T>(fn: (c: Client) => Promise<T>): Promise<T> {
     return admin(async (c) => {
       await c.query(`DROP SCHEMA IF EXISTS "${q(GUARD_SCHEMA)}" CASCADE`);

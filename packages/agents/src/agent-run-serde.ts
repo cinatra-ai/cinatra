@@ -803,7 +803,7 @@ export async function bindRunStepToolPolicy(input: {
 }
 /** A resumed run dispatches under a FRESH attempt (a stopped run's queued->running
  * claim mints one). This carries the run's ONE bound graph forward to that attempt
- * INSIDE the dispatch transaction (cinatra#3745 NOTE 6): transitionRunStatus calls it
+ * INSIDE the dispatch transaction (cinatra#3745): transitionRunStatus calls it
  * on its guarded tx, before the CAS, when `dispatch.carryBoundStepToolPolicy` is set.
  * The prior attempt is read from the run row locked here, never from a caller, and a
  * lost CAS rolls the move back with it. It never selects or replaces a graph. It

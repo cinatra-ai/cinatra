@@ -1179,7 +1179,7 @@ function liveLease(gateId: string, leaseToken: string) {
 }
 
 /**
- * Extend a live lease (cinatra#3745 D3). The delivery renews while it is in
+ * Extend a live lease (cinatra#3745). The delivery renews while it is in
  * flight and fences on it before every send, re-send and replay. False when the
  * lease is no longer this worker's: the caller must send, release and close nothing.
  */
@@ -1195,7 +1195,7 @@ export async function renewResumeIntentLease(gateId: string, leaseToken: string,
 
 /**
  * The claim mark and send witness of an intent this worker leases, read AFTER
- * the run (cinatra#3745 D2): an entry into `running` by another driver clears the
+ * the run (cinatra#3745): an entry into `running` by another driver clears the
  * mark in the run's own transaction, so the claim-time copy can be stale. Null
  * when the row is no longer under this lease.
  */
@@ -1214,7 +1214,7 @@ export async function readResumeIntentClaim(
 
 /**
  * Record the A2A task this gate's send returned, under the live lease and the
- * delivery's own run claim (cinatra#3745 D1/D4), BEFORE the handler runs. A
+ * delivery's own run claim (cinatra#3745), BEFORE the handler runs. A
  * re-claim that finds it replays the handler instead of re-sending. The caller
  * strips the run token first. False when the lease or the claim is gone.
  */
@@ -1282,7 +1282,7 @@ export async function deadLetterExhaustedResumeIntents(opts?: {
   // actively in-flight (a `delivering` row with a LIVE lease is left to finish).
   const eligibleCond = and(
     isNull(artifactReviewResumeOutbox.deadLetteredAt),
-    // cinatra#3745 (MF4): an intent whose delivery claimed the run is never
+    // cinatra#3745: an intent whose delivery claimed the run is never
     // dead-lettered — that would strand the run `running` with no driver. It stays
     // claimable until the delivery closes it (agent_run_stop is the operator road).
     isNull(artifactReviewResumeOutbox.runClaimedAt),

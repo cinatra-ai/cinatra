@@ -120,7 +120,7 @@ export interface ResumeSweepSummary {
  * delivered on `delivered` / `already-advanced`; leaves it pending on
  * `retryable`.
  *
- * cinatra#3745 D3: from the WayFlow branch on, the lease is renewed while the
+ * cinatra#3745: from the WayFlow branch on, the lease is renewed while the
  * delivery runs (`opts.leaseMs`, the length the sweep claimed it for) and fenced
  * by an awaited renewal before every send, re-send and replay. The renewal timer
  * stops on every exit.
@@ -196,7 +196,7 @@ async function deliverWayflowResume(
     return "retryable";
   }
 
-  // cinatra#3745 D2 — THE DURABLE ROW DECIDES, NEVER REDIS ALONE. The claim mark
+  // cinatra#3745 — THE DURABLE ROW DECIDES, NEVER REDIS ALONE. The claim mark
   // and the recorded task are read fresh, after the run: an entry into `running`
   // by another driver clears this intent's mark in the run's own transaction. The
   // intent closes only once the run has left this gate:
@@ -442,7 +442,7 @@ async function deliverWayflowResume(
   // exactly as the human approve path does. One conditional write: a lost claim
   // means another delivery already took this gate, so the intent closes without
   // a re-send. The claim and every later run edge carry this intent's lease
-  // (cinatra#3745 D1): the claim sets the intent's mark in the run's transaction.
+  // (cinatra#3745): the claim sets the intent's mark in the run's transaction.
   if (!claimedByUs) {
     try {
       await transitionRunStatus(run.id, "pending_approval", "running", { resumeIntentLease: { gateId, leaseToken } }, authority);
@@ -457,7 +457,7 @@ async function deliverWayflowResume(
       return ok ? "already-advanced" : "lease-lost";
     }
   }
-  // D3: fence before the wire. A refused fence sends, releases and closes nothing.
+  // Renew the lease before the wire. A refused renewal sends, releases and closes nothing.
   if (!(await lease.fence())) return "lease-lost";
   let task: Awaited<ReturnType<typeof client.sendTask>>;
   let resumeMetadata: Record<string, unknown> = {};
@@ -481,7 +481,7 @@ async function deliverWayflowResume(
       configuration: { acceptedOutputModes: ["text"] },
     });
   } catch (sendErr) {
-    // D4: a failure before the wire (the token mint) or on it puts the gate back
+    // A failure before the wire (the token mint) or on it puts the gate back
     // under the lease, which clears the mark. A lost lease releases nothing: the
     // live lease holder decides. Any other release error is logged and the send
     // error rethrown; the lease lapses and the re-claim re-sends.
@@ -496,7 +496,7 @@ async function deliverWayflowResume(
     throw sendErr;
   }
 
-  // D1/D4: record what WayFlow returned, under the lease and this claim, BEFORE
+  // Record what WayFlow returned, under the lease and this claim, BEFORE
   // the handler runs, without the run token. A refused record runs no handler.
   if (!(await recordResumeTaskResult(gateId, leaseToken, withoutRunToken(task, resumeMetadata)))) return "lease-lost";
   if (!(await lease.fence())) return "lease-lost";
@@ -517,7 +517,7 @@ async function deliverWayflowResume(
 type ResumeLeaseKeeper = { fence(): Promise<boolean>; stop(): void };
 
 /**
- * cinatra#3745 D3: renew the lease every third of its length while the delivery
+ * cinatra#3745: renew the lease every third of its length while the delivery
  * runs. A refused renewal stops the timer and every later fence refuses; a
  * renewal that throws is logged and retried on the next tick. `fence()` is an
  * awaited renewal, called before every wire action.
@@ -657,7 +657,7 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
     refusedOutOfScope: 0,
     failed: 0,
   };
-  // cinatra#3745 D3: ONE row per claim. A row this pass has not reached stays
+  // cinatra#3745: ONE row per claim. A row this pass has not reached stays
   // pending and unleased, so no row waits leased behind another row's send; the
   // delivery renews its own row's lease while it runs, so a send longer than the
   // lease keeps it, while a crashed worker's row is still recovered after the

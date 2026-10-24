@@ -247,7 +247,7 @@ async function rebindToForeignAttempt() {
 }
 
 /** A resolved gate and its intent, leased to this worker: the delivery reads its
- *  claim columns and writes under that lease (cinatra#3745 D1-D4). */
+ *  claim columns and writes under that lease (cinatra#3745). */
 async function approveIntent() {
   const gateId = `gate-${randomUUID()}`;
   const reviewTaskId = `wayflow-${h.taskId}`;
@@ -558,7 +558,7 @@ async function waitForBindingLockWaiter(c: Client) {
   throw new Error("barrier: no backend ever waited on the binding lock");
 }
 
-describe.skipIf(!HAS_DB)("NOTE 6: the dispatch claim and the binding move commit together", () => {
+describe.skipIf(!HAS_DB)("a resumed dispatch moves its step-tool binding in the same transaction", () => {
   it("T10 (c) the dispatch claim and the binding move commit together", async () => {
     const attemptA = await seedDispatchedRun("stopped");
     const holder = new Client({ connectionString: DB_URL });
@@ -602,7 +602,7 @@ describe.skipIf(!HAS_DB)("NOTE 6: the dispatch claim and the binding move commit
   });
 });
 
-describe.skipIf(!HAS_DB)("NOTE 5 pins: agent_run_resume keeps its claim posture", () => {
+describe.skipIf(!HAS_DB)("agent_run_resume keeps its claim posture", () => {
   const settle = (p: Promise<Record<string, unknown>>) =>
     p.catch((err: unknown) => ({ error: err instanceof Error ? err.message : String(err) }));
 
