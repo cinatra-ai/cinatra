@@ -141,6 +141,7 @@ function minimalOas(packageName: string): string {
           component_type: "StartNode",
           id: "startNode",
           name: "Start",
+          metadata: { cinatra: { required: ["instructions"] } },
           inputs: [{ title: "instructions", type: "string" }],
         },
         endNode: {

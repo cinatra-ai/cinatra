@@ -186,9 +186,17 @@ export function artifactImageToolDeps(): ArtifactImageToolDeps {
     resolveImageProvider: async () => {
       // Dynamic import keeps the provider graph out of this module's static
       // graph (same posture as the materializer's registry reads).
-      const { resolveDefaultImageProvider } = await import("@cinatra-ai/llm");
+      const { resolveDefaultImageProvider, resolveScriptedImageProvider } = await import(
+        "@cinatra-ai/llm"
+      );
       const resolved = await resolveDefaultImageProvider();
-      if (!resolved?.adapter.generateImage) return null;
+      // No keyed provider can make a picture: the scripted image provider is
+      // the last resort. It resolves only under the scripted test flag in an
+      // explicit development runtime and answers a constant placeholder PNG
+      // under its own provider and model names, which the provenance below
+      // records; everywhere else it is null and the call is refused as
+      // `no_provider`.
+      if (!resolved?.adapter.generateImage) return resolveScriptedImageProvider();
       const adapter = resolved.adapter;
       return {
         provider: resolved.provider,

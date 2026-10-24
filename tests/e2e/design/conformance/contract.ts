@@ -19,9 +19,43 @@
  * coverage ratchet (allowlist.json, shrink-only) is the only escape hatch.
  */
 import { expect, request as playwrightRequest, test, type Locator, type Page } from "@playwright/test";
-import { RUN_ELIGIBILITY_AGENT, RUN_ELIGIBILITY_MISSING } from "../../../../src/app/design-fixtures/conformance/agent-run-eligibility-fixture-data";
+import { RUN_ELIGIBILITY_AGENT, RUN_ELIGIBILITY_CONNECTOR, RUN_ELIGIBILITY_MISSING } from "../../../../src/app/design-fixtures/conformance/agent-run-eligibility-fixture-data";
+import { HYDRATION_TIMEOUT_MS } from "../../config/hydration";
 import { TOAST_DRIVER } from "./toast-driver";
+import { recurrenceSelectorsDriver } from "./scheduling-recurrence-driver";
 import { AGENT_ASSIGNMENT_SKILLS_DRIVER } from "./scope-assignment-skills-driver";
+import {
+  BUTTON_SURFACE_DRIVER,
+  CARD_SURFACE_DRIVER,
+  INPUT_SURFACE_DRIVER,
+  SELECT_SURFACE_DRIVER,
+  DIALOG_SURFACE_DRIVER,
+  BADGE_SURFACE_DRIVER,
+  TABS_SURFACE_DRIVER,
+  TOOLBAR_SURFACE_DRIVER,
+  TOOLBAR_NESTED_SURFACE_DRIVER,
+  SIDEBAR_SURFACE_DRIVER,
+  SIDEBAR_GROUP_LABEL_SURFACE_DRIVER,
+  TOOLTIP_SURFACE_DRIVER,
+  AVATAR_SURFACE_DRIVER,
+  FORM_SURFACE_DRIVER,
+  CHECKBOX_SURFACE_DRIVER,
+  ALERT_SURFACE_DRIVER,
+  TABLE_SURFACE_DRIVER,
+  COMMAND_SURFACE_DRIVER,
+  BREADCRUMB_SURFACE_DRIVER,
+  PAGINATION_SURFACE_DRIVER,
+  SKELETON_SURFACE_DRIVER,
+  EMPTY_SURFACE_DRIVER,
+  ACCORDION_SURFACE_DRIVER,
+  SEPARATOR_SURFACE_DRIVER,
+  TOGGLE_SURFACE_DRIVER,
+  CALENDAR_SURFACE_DRIVER,
+  COMBOBOX_SURFACE_DRIVER,
+  SCROLL_AREA_SURFACE_DRIVER,
+  INPUT_OTP_SURFACE_DRIVER,
+} from "./component-surface-drivers";
+import { AGENT_CARD_ACCENT_HOVER_DRIVER } from "./agent-card-accent-hover-driver";
 
 import { CONFORMANCE_SEED_REFUSAL_HEADER } from "../../../../src/lib/test-support/conformance-seed-fence";
 import {
@@ -66,9 +100,10 @@ import {
 // the way the shipped composer derives it and never restated by the test.
 import { artifactKindLabelFor } from "../../../../src/lib/artifacts/artifact-kind-label";
 import {
-  reviewRevisionMarker,
-  reviewTargetRowFacts,
-} from "../../../../src/lib/artifacts/review-surface-model";
+  projectReviewTargetHeaderRevision,
+  reviewTargetRevisionMarker,
+} from "@cinatra-ai/agent-ui-protocol/renderable-views";
+import { reviewTargetRowFacts } from "../../../../src/lib/artifacts/review-target-row-facts";
 import {
   ARTIFACT_KIND_DISPLAY_ROWS,
   type ArtifactKindDisplay,
@@ -614,30 +649,27 @@ export function suggestionChipDriver(fixture: LifecycleSuggestionChipFixture): S
 //   • It asserts §IV per kind against the SHIPPED CHAIN: the title, the type tag
 //     (attribute AND visible text, both derived by the product's own
 //     `artifactKindLabelFor` from the row's type id), the type id on the meta line,
-//     the pinned revision (addressed by the exact id, read as the elided marker
-//     the shipped `reviewRevisionMarker` rule produces) with its pinned marker,
+//     the pinned revision (addressed by the revision the header carries, read
+//     as the elided marker the shipped `reviewTargetRevisionMarker` produces)
+//     with its pinned marker,
 //     each authorized row fact as the product's own `reviewTargetRowFacts`
 //     composes it from the stored row, and the inertness — no control, no link,
 //     no revision picker anywhere inside it.
 //
 //     THE FIXTURE SEEDS THE ARTIFACT, NOT THE READING. A row carries only what a
-//     stored artifact row carries; both readings the header draws over it are
-//     composed by the two product functions the server-side composer calls. That
-//     is what keeps this a driver and not an echo test: a fixture that named a
-//     finished fact could assert a line the shipped composer cannot produce, and
-//     the assertion would pass on the component printing its own props back.
+//     stored artifact row carries; every reading the header draws over it is
+//     composed by the product's own functions: `artifactKindLabelFor`,
+//     `reviewTargetRowFacts`, and the section's header projection and revision
+//     marker. That is what keeps this a driver and not an echo test: a fixture
+//     that named a finished fact could assert a line the shipped composer cannot
+//     produce, and the assertion would pass on the component printing its own
+//     props back.
 //
 //   • It does NOT assert the plural ORDERING of several pinned targets. Every
 //     surface of this wave pins one target: the mixed-kind gate draws the same
 //     artifact at the same revision under two content forms, and target
 //     normalization (src/lib/artifacts/artifact-review-target.ts) treats that as
 //     one target, so seeding two would seed a gate the product does not compose.
-//     Reported with it: `ReviewTargetHeaders` keys its list on
-//     `${revisionId}:${objectType}` alone (packages/agents/src/review-gate-card.tsx),
-//     which omits the artifact id that is part of a target's identity, so two
-//     distinct artifacts sharing a type and a revision string would collide.
-//     That is a product change, not a drivers-wave change; it is on the wave's
-//     readiness list with the ordering reading that would exercise it.
 //
 //   • TWO DRAWN READINGS IT REPORTS RATHER THAN ASSERTS, because the shipped
 //     composer has no reading for them: the scope pair's CASING (the drawing
@@ -726,18 +758,21 @@ export function reviewTargetHeaderDriver(
         await expect(tag).toHaveText(artifactKindLabelFor(seed.objectType));
         await expect(header).toContainText(seed.objectType);
         // "… the pinned representation revision (shown as a mono revision id
-        // with a pinned marker) …". Addressed by the EXACT revision the gate
-        // pinned, so a card drawing a different revision cannot resolve at all,
-        // while the VISIBLE reading is the elided one the product draws — the
-        // shipped truncation rule (`reviewRevisionMarker`), not the full id,
-        // which for an id past the bound is not what the header prints at all.
+        // with a pinned marker) …". Both readings are derived through the
+        // projection section the product draws with: the revision the header
+        // carries is the section's header projection of the pinned id, so a
+        // card drawing a different revision cannot resolve at all, and the
+        // VISIBLE reading is the section's own marker over it
+        // (`reviewTargetRevisionMarker`), not the full id, which for an id past
+        // the marker's bound is not what the header prints at all.
+        const marker = reviewTargetRevisionMarker(
+          projectReviewTargetHeaderRevision(seed.revisionId).revisionId,
+        );
         const revision = header.locator(
-          `[data-review-target-revision="${seed.revisionId}"]`,
+          `[data-review-target-revision="${marker.full}"]`,
         );
         await expect(revision).toHaveCount(1);
-        await expect(revision).toHaveText(
-          `revision ${reviewRevisionMarker(seed.revisionId).short}`,
-        );
+        await expect(revision).toHaveText(`revision ${marker.short}`);
         await expect(header).toContainText("· pinned");
         // "… and the read-only row facts the host authorized". The expected
         // line is composed from the row by the PRODUCT's own
@@ -949,13 +984,22 @@ export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): Surfa
   switch (fixture.surfaceId) {
     case "schedule-card-first-shown":
       // The in-flight floor: the word and the dead control are both computed by
-      // the component while its answer is outstanding.
+      // the component while its answer is outstanding. BOTH ARE READ INSIDE THE
+      // PRESS'S RETRY. The floor is in flight only briefly: this row's harness
+      // answers 1.2 s after the press (`answerDelayMs` in
+      // lifecycle-schedule-card-fixture-data.ts) with a refusal, and the refusal
+      // turns the control back on. The first press often lands while the harness
+      // page is still hydrating, its slowest moment, so a dead-control reading
+      // taken after the retry could meet the settled floor and fail for good
+      // although the card drew both readings. Inside the retry, a floor that
+      // settled between the two readings is pressed again, and the press counts
+      // only when the word and the dead control are read in the same flight.
       driver.states.loading = async (_page, root) => {
         const confirm = scheduleFloor(root).locator(CONFIRM_CONTROL);
         await pressScheduleUntil(confirm, async () => {
           await expect(confirm).toContainText("Confirming…", { timeout: 2_000 });
+          await expect(confirm).toBeDisabled({ timeout: 2_000 });
         });
-        await expect(confirm).toBeDisabled();
       };
       // The refusal, said on the card rather than swallowed. It never reveals
       // whether a token was expired, foreign or forged.
@@ -1013,25 +1057,6 @@ export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): Surfa
 
     case "schedule-card-save-floor":
     case "schedule-card-fired-recurring-floor":
-      // NO `cancel-schedule` DRIVER — AND THE REASON CHANGED (cinatra#3174 fix
-      // leg 5). It used to be that the shipped card drew that control only on
-      // the two page hosts, so the in-conversation floor had no such control to
-      // drive. That is no longer the product: the ratified drawing's own
-      // fired-recurring example draws the card IN A CHAT THREAD with "Save
-      // changes" and "Cancel schedule" side by side, and the second graded proof
-      // round failed the floor against it, so the host map was retired and the
-      // control is now drawn wherever `canCancel` says the schedule is
-      // recurring — this host included.
-      //
-      // What is missing now is the HARNESS's half, not the product's: a fixture
-      // row declares ONE answer for its decision endpoint, and this row's is
-      // `saved`, so a cancel press here could only ever be answered with the
-      // outcome of a save. Giving the row a per-op answer is its own change with
-      // its own proof, and this leg is a forward-merge; the act stays on the
-      // wave's readiness list, now for the harness to answer rather than the
-      // drawing. It is still NOT approximated through the run-card host — these
-      // nine surfaces are the conversation's readings, and asserting one of them
-      // on another host would prove something the drawing never said.
       driver.actions["save-schedule"] = {
         outcome: "rearmed",
         run: async (_page, root) => {
@@ -1063,6 +1088,86 @@ export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): Surfa
           await expect(save).toBeDisabled();
         },
       };
+      if (fixture.surfaceId === "schedule-card-fired-recurring-floor") {
+        driver.actions["cancel-schedule"] = {
+          outcome: "stopped",
+          run: async (page, root) => {
+            const card = scheduleCard(root);
+            const cancel = scheduleFloor(root).locator('[data-action="cancel-trigger-schedule"]');
+            const dialog = page.getByRole("alertdialog", { name: "Stop this recurring schedule?" });
+            await pressScheduleUntil(cancel, async () => {
+              await expect(dialog).toBeVisible({ timeout: 2_000 });
+            });
+            await expect(dialog).toHaveAttribute("data-slot", "alert-dialog-content");
+            await expect(dialog).toHaveAttribute("aria-modal", "true");
+            // Approved lifecycle-cards §VI.1: measure the shared modal geometry here.
+            // The imported shared AlertDialog owns these dimensions and tokens.
+            const modalDrawing = await dialog.evaluate((element) => {
+              const style = getComputedStyle(element);
+              const title = element.querySelector('[data-slot="alert-dialog-title"]')!;
+              const description = element.querySelector('[data-slot="alert-dialog-description"]')!;
+              const titleStyle = getComputedStyle(title);
+              const descriptionStyle = getComputedStyle(description);
+              return {
+                radius: style.borderRadius, padding: style.padding, gap: style.gap,
+                width: element.getBoundingClientRect().width, border: style.borderTopWidth,
+                titleSize: titleStyle.fontSize, titleWeight: titleStyle.fontWeight,
+                descriptionSize: descriptionStyle.fontSize,
+                title: title.textContent,
+                description: description.textContent?.trim(),
+                buttons: [...element.querySelectorAll('button')].map((button) => button.textContent),
+              };
+            });
+            expect(modalDrawing).toMatchObject({
+              radius: "8px", padding: "24px", gap: "16px", border: "1px",
+              titleSize: "18px", titleWeight: "600", descriptionSize: "14px",
+              title: "Stop this recurring schedule?",
+              description: "No further runs will start from it. The runs it has already started are not affected, and this run is not changed. The schedule stays here, and you will not be able to change it afterwards.",
+              buttons: ["Keep schedule", "Cancel schedule"],
+            });
+            expect(modalDrawing.width).toBeLessThanOrEqual(512);
+            const overlayDrawing = await page.locator('[data-slot="alert-dialog-overlay"]').evaluate((element) => {
+              const style = getComputedStyle(element);
+              // Resolve equivalent CSS color serializations through the browser.
+              const canvas = document.createElement("canvas");
+              canvas.width = canvas.height = 1;
+              const context = canvas.getContext("2d")!;
+              context.fillStyle = style.backgroundColor;
+              context.fillRect(0, 0, 1, 1);
+              return { top: style.top, background: Array.from(context.getImageData(0, 0, 1, 1).data) };
+            });
+            expect(overlayDrawing).toEqual({ top: "64px", background: [0, 0, 0, 128] });
+            await expect(card.locator('[data-conformance-id="schedule-cancel-confirm"]')).toHaveCount(0);
+            await expect(page.locator('[data-slot="alert-dialog-overlay"]')).toBeVisible();
+            await dialog.getByRole("button", { name: "Keep schedule" }).click();
+            await expect(dialog).toHaveCount(0);
+            await expect(decisionRoads(root)).toHaveCount(0);
+            await expect(cancel).toBeEnabled();
+            await cancel.click();
+            await expect(dialog).toBeVisible();
+            const confirm = dialog.getByRole("button", { name: "Cancel schedule" });
+            await expect(confirm).toHaveClass(/bg-destructive/);
+            await confirm.click();
+            await expect(decisionRoads(root)).toHaveCount(1);
+            await expect(decisionRoads(root)).toHaveAttribute("data-harness-road", "cancel");
+            await expect(decisionRoads(root)).toHaveAttribute("data-harness-carried-rows", "none");
+            await expect(dialog).toHaveCount(0);
+            await expect(scheduleFloor(root)).toHaveCount(0);
+            await expect(card.locator('[data-conformance-id="schedule-option-rows"]')).toBeVisible();
+            const hour = card.locator('[data-readonly-field="recurring-hour"]');
+            const minute = card.locator('[data-readonly-field="recurring-minute"]');
+            await expect(hour).toBeVisible();
+            await expect(hour).toHaveText("Hour: 09");
+            await expect(minute).toBeVisible();
+            await expect(minute).toHaveText("00 Minute");
+            await expect(card.getByText("Europe/Berlin", { exact: true })).toBeVisible();
+            await expect(card.locator('button, input, [role="combobox"]')).toHaveCount(0);
+            for (const control of await card.locator('button, input, [role="combobox"]').all()) {
+              await expect(control).toBeDisabled();
+            }
+          },
+        };
+      }
       break;
 
     case "schedule-card-expired":
@@ -2034,8 +2139,22 @@ async function assertStartRefused(root: Locator): Promise<void> {
 // The static harness consumes actual product-Link navigation at its declared
 // fixture port. This proves dispatch and its exact address, not an authenticated
 // destination page; the latter belongs to the actual host's browser proof.
+// A link pressed before hydration can follow its native href and leave the
+// fixture. Wait on the actual control; never recover that navigation by retrying.
+async function waitForControlHydration(control: Locator): Promise<void> {
+  await expect
+    .poll(
+      () => control.evaluate((element) =>
+        Object.keys(element).some((key) => key.startsWith("__reactFiber$")),
+      ),
+      { timeout: HYDRATION_TIMEOUT_MS, message: "the control did not hydrate before interaction" },
+    )
+    .toBe(true);
+}
+
 async function followEligibilityLink(root: Locator, link: Locator, href: string, outcome: string): Promise<void> {
   await expect(link).toHaveAttribute("href", href);
+  await waitForControlHydration(link);
   await link.click();
   await expect(root).toHaveAttribute("data-outcome", outcome);
   await expect(root).toHaveAttribute("data-destination", href);
@@ -2077,6 +2196,58 @@ const AGENT_START_REFUSED_DRIVER: SurfaceDriver = {
   states: {
     error: async (page) => assertStartRefused(page.locator('[data-surface-id="agent-start-refused"]')),
     "kind:agent": async (page) => assertStartRefused(page.locator('[data-surface-id="agent-start-refused"]')),
+  },
+};
+
+// Approved Extensions §IV.4: a start a missing connection refuses. The same
+// static mount road as §IV.2, on the product's own needs-connection panel. The
+// reader who may set the connection up gets the strip and its configure link;
+// a member is told to ask a platform administrator and gets no setup address.
+async function assertStartNeedsConnection(root: Locator): Promise<void> {
+  for (const reader of ["administrator", "member"] as const) {
+    const panel = eligibilityReader(root, reader);
+    const alert = panel.getByRole("alert");
+    await expect(alert).toBeVisible();
+    await expect(alert).toHaveAttribute("data-conformance-id", "agent-start-needs-connection");
+    await expect(alert).toHaveAttribute("data-state", "error kind:agent");
+    await expect(alert.locator('[data-field="name=manifest.displayName"]')).toHaveText(`${RUN_ELIGIBILITY_AGENT.name} can't start`);
+    const named = alert.locator('[data-field="connector=connector.manifest.displayName"]');
+    await expect(named.locator("b")).toHaveText(RUN_ELIGIBILITY_CONNECTOR.displayName);
+    await expect(named.locator(".font-mono")).toHaveText(RUN_ELIGIBILITY_CONNECTOR.packageId);
+    await expect(panel.getByRole("link", { name: "Run", exact: true })).toHaveCount(0);
+    await expect(panel.getByText("not found", { exact: false })).toHaveCount(0);
+    await expect(panel.getByRole("link", { name: "Back to Agents" })).toHaveAttribute("href", RUN_ELIGIBILITY_AGENT.agentsHref);
+    const configure = panel.locator('[data-action="configure -> connector-setup"]');
+    if (reader === "administrator") {
+      await expect(alert).toContainText("Set up connections first:");
+      await expect(configure).toHaveText(RUN_ELIGIBILITY_CONNECTOR.displayName);
+      await expect(configure).toHaveAttribute("href", RUN_ELIGIBILITY_CONNECTOR.settingsHref);
+      await expect(named).toContainText("Set it up, then start the agent again.");
+    } else {
+      await expect(alert).not.toContainText("Set up connections first:");
+      await expect(configure).toHaveCount(0);
+      await expect(named).toContainText("Ask a platform administrator to set it up for you, then start the agent again.");
+    }
+  }
+}
+
+const AGENT_START_NEEDS_CONNECTION_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) => page.locator('[data-surface-id="agent-start-needs-connection"]'),
+  present: async (_page, root) => assertStartNeedsConnection(root),
+  fields: {
+    name: { source: "manifest.displayName", assert: async (_page, root) => assertStartNeedsConnection(root) },
+    connector: { source: "connector.manifest.displayName", assert: async (_page, root) => assertStartNeedsConnection(root) },
+  },
+  actions: {
+    "back-to-agents": { outcome: "scope-agents-tab", run: async (_page, root) =>
+      followEligibilityLink(eligibilityReader(root, "member"), eligibilityReader(root, "member").getByRole("link", { name: "Back to Agents" }), RUN_ELIGIBILITY_AGENT.agentsHref, "scope-agents-tab") },
+    configure: { outcome: "connector-setup", run: async (_page, root) =>
+      followEligibilityLink(eligibilityReader(root, "administrator"), eligibilityReader(root, "administrator").locator('[data-action="configure -> connector-setup"]'), RUN_ELIGIBILITY_CONNECTOR.settingsHref, "connector-setup") },
+  },
+  states: {
+    error: async (page) => assertStartNeedsConnection(page.locator('[data-surface-id="agent-start-needs-connection"]')),
+    "kind:agent": async (page) => assertStartNeedsConnection(page.locator('[data-surface-id="agent-start-needs-connection"]')),
   },
 };
 
@@ -2265,6 +2436,29 @@ const SCHEDULING_STEP_CONFIGURED_DRIVER: SurfaceDriver = {
     },
   },
 };
+
+// ---------------------------------------------------------------------------
+// The scheduling step's recurrence selectors: four surfaces of the components
+// drawing that declare fields only, driven by recurrenceSelectorsDriver
+// (scheduling-recurrence-driver.ts) from the readings of
+// src/app/design-fixtures/conformance/scheduling-recurrence-fixture-data.ts.
+//
+// The component they bind, the shared `RecurrenceFrequencySelectors` that the
+// in-flow scheduling step and the schedule card both draw, is NOT on the
+// default branch: it arrives with cinatra#4280. Until it does, nothing on the
+// conformance harness carries these surface ids. So, exactly as with the
+// Workspace surfaces of the application drawing (below, `awaitingMount`), each
+// driver is written in full but guarded by `awaitingMount`: it SKIPS with the
+// reason below while the harness mounts nothing, and runs unchanged the moment
+// the mount exists. scripts/design/__tests__/awaiting-mount-guard.test.mjs
+// holds the arrangement honest.
+// ---------------------------------------------------------------------------
+/** Why the four recurrence drivers skip, named on every skipped test. */
+const AWAITING_RECURRENCE_SELECTORS =
+  "the shared recurrence selectors are not on the default branch yet — they " +
+  "arrive with cinatra#4280 — so the conformance harness mounts none of the " +
+  "four recurrence readings. Every assertion in this driver is written and runs " +
+  "unchanged the moment the mount exists.";
 
 // ---------------------------------------------------------------------------
 // App-shell drivers adopted with the cinatra#3057 pin reconciliation:
@@ -2833,10 +3027,12 @@ function kindDisplayKindState(surface: string, kind: string): StateAssert {
  *     all."
  *   - §XI: "Where a display divides one artifact into readings, they are the
  *     design system's tabs … never a toggle and never a segmented control."
- *   - the one field the manifest binds, addressed through the binding the
+ *   - every field the manifest binds, addressed through the binding the
  *     display names on itself — the `data-field="<name>=<source>"` convention the
  *     shipped review target already carries — so a display bound to the wrong
- *     source cannot resolve the locator at all.
+ *     source cannot resolve the locator at all. A field the drawing binds only
+ *     once the review is continued is read on the continued mount, and its
+ *     absence on the open one (`continuedOnlyField`).
  *   - the one action the manifest declares, pressed on the control that declares
  *     exactly that action AND that outcome (`declaredAction`), so a driver
  *     cannot press one control and report another one's outcome.
@@ -2867,17 +3063,18 @@ function artifactKindDisplayDriver(row: ArtifactKindDisplay): SurfaceDriver {
     states: {},
   };
 
-  const field = row.field;
-  if (field !== null) {
+  for (const field of row.fields) {
+    const binding = `[data-field="${field.name}=${field.source}"]`;
     driver.fields[field.name] = {
       source: field.source,
-      assert: async (_page, root) => {
-        const bound = kindDisplayPanel(root, row.surface).locator(
-          `[data-field="${field.name}=${field.source}"]`,
-        );
-        await expect(bound).toHaveCount(1);
-        await expect(bound).toBeVisible();
-      },
+      assert:
+        field.reading === "continued"
+          ? continuedOnlyField(row.surface, binding)
+          : async (_page, root) => {
+              const bound = kindDisplayPanel(root, row.surface).locator(binding);
+              await expect(bound).toHaveCount(1);
+              await expect(bound).toBeVisible();
+            },
     };
   }
 
@@ -2893,6 +3090,31 @@ function artifactKindDisplayDriver(row: ArtifactKindDisplay): SurfaceDriver {
   }
 
   return driver;
+}
+
+/**
+ * A field the drawing binds only in the continued reading. §XI.5 and §XI.6 draw
+ * "Open live dashboard" (open-live = artifact.sourceUrl) only once the review
+ * is continued: "while a decision is still open the proposal is not the live
+ * dashboard, so the display offers no way to open one". So the binding is
+ * asserted ABSENT on the open reading, which must itself be drawn (on a missing
+ * mount a zero count proves nothing), and PRESENT once on the settled mount.
+ */
+function continuedOnlyField(
+  surface: string,
+  binding: string,
+): (page: Page, root: Locator) => Promise<void> {
+  return async (page, root) => {
+    await expect(page.locator(kindDisplayMount(surface, "populated"))).toHaveCount(1);
+    await expect(kindDisplayPanel(root, surface)).toBeVisible();
+    await expect(kindDisplayPanel(root, surface).locator(binding)).toHaveCount(0);
+    const settled = page.locator(kindDisplayMount(surface, "continued"));
+    await expect(settled).toHaveCount(1);
+    await expect(settled.locator('[data-conformance-id="settled-marker"]')).toBeVisible();
+    const bound = kindDisplayPanel(settled, surface).locator(binding);
+    await expect(bound).toHaveCount(1);
+    await expect(bound).toBeVisible();
+  };
 }
 
 /** Assert the display draws no tab strip at all — a surface the drawing gives
@@ -3360,10 +3582,11 @@ const RUN_STEP_KIND_ASSERT: Record<RunStepKind, (row: RunStepRailRow) => RunStep
     }
   },
 
-  // Section I.1 — "one row per stored idea no draft has used ... the idea's
-  // first line as its title over the idea's own text", with "Generate new ideas"
-  // and the primary Continue over a hairline floor, and "Nothing is selected for
-  // them".
+  // Section I.1 — "one row per entry the agent's declared list offers ... each
+  // row carrying the title the declaration binds over the entry's own detail
+  // line", and "Nothing is selected for them". Under the rows sits the primary
+  // Continue "and nothing else, because the host draws one control on a gate
+  // page" — so the host draws no Generate new ideas of its own.
   idea: (row) => async (_page, root) => {
     const panel = runStepPanel(root, row.surface);
     const rows = panel.locator('[data-conformance-id="run-idea-row"]');
@@ -3371,7 +3594,7 @@ const RUN_STEP_KIND_ASSERT: Record<RunStepKind, (row: RunStepRailRow) => RunStep
     await expect(panel.locator('[data-conformance-id="run-idea-row"][aria-selected="true"]')).toHaveCount(0);
     await expect(
       panel.locator('[data-action="generate-ideas -> ideas-stored"]'),
-    ).toBeVisible();
+    ).toHaveCount(0);
   },
 
   // Section I.2 — "Every row carries the artifact's title, the type that owns
@@ -3713,6 +3936,7 @@ const NOTIFICATIONS_LIST_DRIVER: SurfaceDriver = {
       {
         outcome: "toggled",
         run: async (_page, root) => {
+          await waitForControlHydration(root.locator('[data-action="activate -> toggled"]'));
           await clickUntil(
             root.locator('[data-action="activate -> toggled"]'),
             async () => {
@@ -3837,6 +4061,7 @@ const NOTIFICATION_ROW_DRIVER: SurfaceDriver = {
       {
         outcome: "toggled",
         run: async (_page, root) => {
+          await waitForControlHydration(root.locator('[data-action="activate -> toggled"]'));
           await clickUntil(
             root.locator('[data-action="activate -> toggled"]'),
             async () => {
@@ -4277,7 +4502,7 @@ const CONNECTOR_SETUP_DRIVER: SurfaceDriver = {
   path: HARNESS_PATH,
   root: (page) =>
     page.locator(`${setupTabbed("populated")} [data-conformance-id="connector-setup"]`),
-  present: async (_page, root) => {
+  present: async (page, root) => {
     // The §II two-column body: the configuration fields and the 236px status
     // card are BOTH inside the one annotated surface. (The form's FieldSet is
     // this surface's ANCESTOR — the tablist is page-header chrome hoisted
@@ -4289,6 +4514,63 @@ const CONNECTOR_SETUP_DRIVER: SurfaceDriver = {
     ).toBeVisible();
     await expect(root.locator('[data-testid="connector-connect"]')).toBeVisible();
     await expect(root.locator('[data-testid="connector-status-probe-card"]')).toBeVisible();
+    // design#201 §II / APP898: schema Help is read-only bare labeled prose,
+    // Narrow and flush-left under the Wide tabs. Use the REAL fixture and the
+    // existing network-bound action stub, never a second imitation renderer.
+    const mount = page.locator(setupTabbed("populated"));
+    const helpLog = await stubConnectorActionEndpoint(page);
+    const tabs = mount.getByRole("tablist");
+    const names = await tabs.getByRole("tab").allTextContents();
+    expect(names.at(-1)).toBe("Help");
+    const prose = mount.getByTestId("help-prose");
+    await clickUntil(mount.getByRole("tab", { name: "Help", exact: true }), async () => {
+      await expect(prose).toBeVisible({ timeout: 5_000 });
+    });
+    await expect(prose.locator('[data-slot="card"], [data-slot="card-content"], input, textarea, select, button, form, [role="switch"]')).toHaveCount(0);
+    await expect(prose.getByRole("heading", { level: 3 })).toHaveText(["Connect the fixture", "About the local shell"]);
+    await expect(prose.locator("p")).toHaveText([
+      "Create a fixture key and paste it into the API key field on the Setup tab.",
+      "The Local shell tab controls the fixture's sandbox policy.",
+    ]);
+    const readings = await prose.evaluate((body) => {
+      const css = getComputedStyle(body);
+      const rect = body.getBoundingClientRect();
+      const row = body.closest('[data-slot="tabs"]')!.querySelector('[role="tablist"]')!.parentElement!;
+      const rowRect = row.getBoundingClientRect();
+      const resolve = (property: "color" | "fontFamily", value: string) => {
+        const node = document.createElement("span");
+        node.style[property] = value; document.body.append(node);
+        const result = getComputedStyle(node)[property]; node.remove(); return result;
+      };
+      const sections = [...body.querySelectorAll('[data-testid="help-section"]')].map((section) => {
+        const heading = section.querySelector("h3")!;
+        const paragraph = section.querySelector("p")!;
+        const h = getComputedStyle(heading), p = getComputedStyle(paragraph);
+        return { heading: { size: h.fontSize, line: h.lineHeight, weight: h.fontWeight, family: h.fontFamily.split(",")[0], color: h.color }, paragraph: { size: p.fontSize, line: p.lineHeight, family: p.fontFamily.split(",")[0], color: p.color, margin: p.margin }, gap: paragraph.getBoundingClientRect().top - heading.getBoundingClientRect().bottom };
+      });
+      return { maxWidth: css.maxWidth, gap: css.rowGap, display: css.display, direction: css.flexDirection, background: css.backgroundColor, shadow: css.boxShadow, border: [css.borderTopWidth, css.borderRightWidth, css.borderBottomWidth, css.borderLeftWidth], padding: css.padding, leftDelta: rect.left - rowRect.left, belowTabs: rect.top - rowRect.bottom, width: rect.width, rowWidth: rowRect.width, sections, ink: resolve("color", "var(--ink)"), muted: resolve("color", "var(--muted)"), headingFamily: resolve("fontFamily", "var(--font-archivo)").split(",")[0], bodyFamily: resolve("fontFamily", "var(--font-inter)").split(",")[0] };
+    });
+    expect(readings.maxWidth).toBe("576px");
+    expect(readings.width).toBeCloseTo(Math.min(576, readings.rowWidth), 0);
+    expect(readings.leftDelta).toBeCloseTo(0, 1);
+    expect(readings.belowTabs).toBeCloseTo(24, 1);
+    expect(readings.gap).toBe("20px");
+    expect(readings.display).toBe("flex"); expect(readings.direction).toBe("column");
+    expect(readings.background).toBe("rgba(0, 0, 0, 0)"); expect(readings.shadow).toBe("none");
+    expect(readings.border).toEqual(["0px", "0px", "0px", "0px"]); expect(readings.padding).toBe("0px");
+    for (const section of readings.sections) {
+      expect(section.heading).toEqual({ size: "14px", line: "20px", weight: "600", family: readings.headingFamily, color: readings.ink });
+      expect(section.paragraph).toEqual({ size: "14px", line: "24px", family: readings.bodyFamily, color: readings.muted, margin: "0px" });
+      expect(section.gap).toBeCloseTo(4, 1);
+    }
+    expect(helpLog.rejected).toEqual([]);
+    expect(helpLog.accepted.filter((call) => WRITE_ACTION_IDS.has(call.actionId))).toEqual([]);
+    // Every manifest field/action/state still starts on Setup. Help must not
+    // hide the original annotated surface from the remaining contract checks.
+    await clickUntil(mount.getByRole("tab", { name: "Setup", exact: true }), async () => {
+      await expect(root).toBeVisible({ timeout: 5_000 });
+    });
+    await expect(root.locator(`input[name="${CONNECTOR_SETUP_CONFIG.apiKey.key}"]`)).toBeVisible();
   },
   fields: {
     "api-key": boundSecret("config.apiKey", CONNECTOR_SETUP_CONFIG.apiKey.key),
@@ -5025,10 +5307,9 @@ const CONNECTOR_SHARING_DRIVER: SurfaceDriver = {
       outcome: "people-listed",
       run: async (page, root) => {
         const search = root.getByPlaceholder("Search by name or email…");
-        // Hydration-sensitive: under a loaded box the click and the keystrokes
-        // can land before this island hydrates, and React then re-renders the
-        // controlled field back to empty with the popover shut, so the typing
-        // is retried until the listbox answers (the same road as `clickUntil`).
+        // Wait on this controlled field before the first keystroke so React
+        // cannot replace a pre-hydration edit with its initial empty value.
+        await waitForControlHydration(search);
         await fillUntil(search, CONNECTOR_SHARING_SEARCH_QUERY, async () => {
           // The listbox is portalled, so it is asserted at the page level.
           await expect(
@@ -7342,13 +7623,14 @@ const UPLOAD_PANEL_NODE = '[data-conformance-id="upload-resolved-install-panel"]
 const UPLOAD_RESOLVE_CONTROL = '[data-conformance-id="resolve-reference"]';
 
 /**
- * Type the drawn link and press Continue until the panel mounts, retrying
- * through hydration (a click landing before React hydrates is silently
- * swallowed on the standalone build). Typing clears any previous resolution, so
- * a retry converges rather than compounding.
+ * Wait for the URL field and Continue button to hydrate before typing the
+ * drawn link. Typing clears any previous resolution, so the existing panel
+ * readiness retry converges rather than compounding.
  */
 async function resolveUploadReference(root: Locator): Promise<Locator> {
   const panel = root.locator(UPLOAD_PANEL_NODE);
+  await waitForControlHydration(root.locator("#github-repo-url"));
+  await waitForControlHydration(root.locator(UPLOAD_RESOLVE_CONTROL));
   await expect(async () => {
     // An unbounded action consumes the outer budget before toPass can refill.
     await root.locator("#github-repo-url").fill(UPLOAD_CONFORMANCE_REPO_URL, { timeout: 5_000 });
@@ -7459,15 +7741,140 @@ const UPLOAD_GITHUB_FORM_DRIVER: SurfaceDriver = {
     // loading — "reads Looking up... while the lookup is in flight", and the
     // form says so on its own root only while it is.
     loading: async (_page, root) => {
-      const submit = root.locator(UPLOAD_RESOLVE_CONTROL);
-      await expect(async () => {
-        await root.locator("#github-repo-url").fill(UPLOAD_CONFORMANCE_REPO_URL);
-        await submit.click();
-        await expect(
-          root.locator(`${UPLOAD_FORM_NODE}[data-state="loading"]`),
-        ).toBeVisible({ timeout: 2_000 });
-        await expect(submit).toContainText("Looking up");
-      }).toPass({ timeout: 30_000 });
+      // Wait for the URL field and Continue to hydrate before the first fill,
+      // as resolveUploadReference does for the same form: a fill that lands
+      // before hydration never reaches the form's state, so Continue stays
+      // disabled and refilling the same link does not turn it on (cinatra#4131).
+      await waitForControlHydration(root.locator("#github-repo-url"));
+      await waitForControlHydration(root.locator(UPLOAD_RESOLVE_CONTROL));
+      const cleanups = new Map<string, () => Promise<void>>();
+      let finished = false;
+      try {
+        await expect(async () => {
+          if (finished) throw new Error("The loading observation has finished");
+          const submit = root.locator(UPLOAD_RESOLVE_CONTROL);
+          const form = await root.locator(UPLOAD_FORM_NODE).elementHandle({ timeout: 5_000 });
+          if (!form) throw new Error("The upload form is not mounted");
+          if (finished) {
+            await form.dispose();
+            throw new Error("The loading observation has finished");
+          }
+          // Observe before the action: a fast lookup can finish before click's
+          // transport reply arrives. Retain one actual same-form DOM sample,
+          // rather than requiring two later reads inside the loading window.
+          const key = `__conformanceUploadLoading_${crypto.randomUUID()}`;
+          let cleanupPromise: Promise<void> | undefined;
+          const cleanup = () => cleanupPromise ??= (async () => {
+            try {
+              await form.evaluate((node, key) => {
+                const target = node as HTMLElement & Record<string, unknown>;
+                const record = target[key] as { observer: MutationObserver | null } | undefined;
+                record?.observer?.disconnect();
+                delete target[key];
+              }, key);
+            } finally {
+              try {
+                await form.dispose();
+              } finally {
+                cleanups.delete(key);
+              }
+            }
+          })();
+          cleanups.set(key, cleanup);
+          try {
+            await form.evaluate((node, { key, selector, mountSelector, formSelector }) => {
+              const target = node as HTMLElement & Record<string, unknown>;
+              const mount = node.closest(mountSelector);
+              const record = {
+                mount,
+                armed: false,
+                snapshot: null as { state: string; text: string } | null,
+                observer: null as MutationObserver | null,
+                sample: null as (() => void) | null,
+              };
+              target[key] = record;
+              // Match the maintained assertion's visibility semantics while
+              // sampling: opacity zero is still visible; hidden/empty boxes
+              // cannot supply the loading witness.
+              const isVisible = (element: Element): boolean => {
+                const style = element.ownerDocument.defaultView?.getComputedStyle(element);
+                if (!style) return true;
+                if (style.display === "contents") {
+                  return Array.from(element.childNodes).some((child) => {
+                    if (child.nodeType === 1) return isVisible(child as Element);
+                    if (child.nodeType !== 3) return false;
+                    const range = element.ownerDocument.createRange();
+                    range.selectNode(child);
+                    const rect = range.getBoundingClientRect();
+                    return rect.width > 0 && rect.height > 0;
+                  });
+                }
+                const details = element.closest("details, summary");
+                if (details !== element && details?.tagName === "DETAILS"
+                  && !details.hasAttribute("open")) return false;
+                if (style.visibility !== "visible") return false;
+                if (typeof element.checkVisibility === "function" && !element.checkVisibility()) return false;
+                const rect = element.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+              };
+              record.sample = () => {
+                const state = node.getAttribute("data-state");
+                const text = node.querySelector(selector)?.textContent ?? "";
+                if (record.armed && !record.snapshot && node.isConnected && mount?.isConnected
+                  && mount.querySelector(formSelector) === node
+                  && isVisible(node)
+                  && state === "loading" && text.includes("Looking up")) {
+                  record.snapshot = { state, text };
+                  record.observer?.disconnect();
+                }
+              };
+              record.observer = new MutationObserver(record.sample);
+              record.observer.observe(node, {
+                attributes: true,
+                attributeFilter: ["data-state", "class", "style", "hidden", "open"],
+                childList: true,
+                subtree: true,
+                characterData: true,
+              });
+              if (!mount?.isConnected || node.getAttribute("data-state") === "loading") {
+                throw new Error("The loading driver requires an idle upload form");
+              }
+            }, { key, selector: UPLOAD_RESOLVE_CONTROL, mountSelector: UPLOAD_GITHUB_FORM_MOUNT, formSelector: UPLOAD_FORM_NODE });
+            if (finished) throw new Error("The loading observation has finished");
+            await root.locator("#github-repo-url").fill(UPLOAD_CONFORMANCE_REPO_URL, { timeout: 5_000 });
+            // Continue is read enabled in THIS attempt, before the observer is
+            // armed and the button pressed: a Continue still disabled fails the
+            // attempt in 2 s and the retry fills again, inside the same 30 s.
+            await expect(submit).toBeEnabled({ timeout: 2_000 });
+            if (finished) throw new Error("The loading observation has finished");
+            await form.evaluate((node, key) => {
+              const record = (node as HTMLElement & Record<string, unknown>)[key] as { armed: boolean };
+              if (record) record.armed = true;
+            }, key);
+            if (finished) throw new Error("The loading observation has finished");
+            await submit.click({ timeout: 5_000 });
+            if (finished) throw new Error("The loading observation has finished");
+            await expect.poll(() => form.evaluate((node, { key, formSelector }) => {
+              const record = (node as HTMLElement & Record<string, unknown>)[key] as {
+                snapshot: { state: string; text: string } | null;
+                mount: Element | null;
+                sample: (() => void) | null;
+              } | undefined;
+              record?.sample?.();
+              return node.isConnected && record?.mount?.isConnected
+                && record.mount.querySelector(formSelector) === node ? record.snapshot : null;
+            }, { key, formSelector: UPLOAD_FORM_NODE }), { timeout: 2_000 }).toEqual({
+              state: "loading",
+              text: expect.stringContaining("Looking up"),
+            });
+          } finally {
+            await cleanup();
+          }
+        }).toPass({ timeout: 30_000 });
+      } finally {
+        finished = true;
+        await Promise.all([...cleanups.values()].map((cleanup) => cleanup()));
+      }
     },
   },
 };
@@ -7606,6 +8013,8 @@ const UPLOAD_RESOLVED_INSTALL_PANEL_DRIVER: SurfaceDriver = {
 export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "agent-card-cannot-run": AGENT_CARD_CANNOT_RUN_DRIVER,
   "agent-start-refused": AGENT_START_REFUSED_DRIVER,
+  "agent-card-accent-hover": AGENT_CARD_ACCENT_HOVER_DRIVER, // The coloured-panel hover of the extensions drawing (cinatra#2851).
+  "agent-start-needs-connection": AGENT_START_NEEDS_CONNECTION_DRIVER, // Extensions §IV.4, a start a missing connection refuses (cinatra#4041).
   toast: TOAST_DRIVER,
   "agent-assignment-skills": AGENT_ASSIGNMENT_SKILLS_DRIVER,
   "extension-install-panel": INSTALL_PANEL_DRIVER,
@@ -7647,8 +8056,41 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "approvals-marketplace-states": APPROVALS_MARKETPLACE_STATES_DRIVER,
   "scheduling-step": SCHEDULING_STEP_DRIVER,
   "scheduling-step-configured": SCHEDULING_STEP_CONFIGURED_DRIVER,
+  "scheduling-step-quarterly": awaitingMount("scheduling-step-quarterly", recurrenceSelectorsDriver("scheduling-step-quarterly"), AWAITING_RECURRENCE_SELECTORS),
+  "scheduling-step-yearly": awaitingMount("scheduling-step-yearly", recurrenceSelectorsDriver("scheduling-step-yearly"), AWAITING_RECURRENCE_SELECTORS),
+  "scheduling-step-configured-monthly": awaitingMount("scheduling-step-configured-monthly", recurrenceSelectorsDriver("scheduling-step-configured-monthly"), AWAITING_RECURRENCE_SELECTORS),
+  "scheduling-step-configured-quarterly": awaitingMount("scheduling-step-configured-quarterly", recurrenceSelectorsDriver("scheduling-step-configured-quarterly"), AWAITING_RECURRENCE_SELECTORS),
   "sidebar-assistants-entry": SIDEBAR_ASSISTANTS_ENTRY_DRIVER,
   "breadcrumb-entity-resolution": BREADCRUMB_ENTITY_RESOLUTION_DRIVER,
+  "button": BUTTON_SURFACE_DRIVER, // The components drawing's shared primitives, one mount each (cinatra#3189).
+  "card": CARD_SURFACE_DRIVER,
+  "input": INPUT_SURFACE_DRIVER,
+  "select": SELECT_SURFACE_DRIVER,
+  "dialog": DIALOG_SURFACE_DRIVER,
+  "badge": BADGE_SURFACE_DRIVER,
+  "tabs": TABS_SURFACE_DRIVER,
+  "toolbar": TOOLBAR_SURFACE_DRIVER,
+  "toolbar-nested": TOOLBAR_NESTED_SURFACE_DRIVER,
+  "sidebar": SIDEBAR_SURFACE_DRIVER,
+  "sidebar-group-label": SIDEBAR_GROUP_LABEL_SURFACE_DRIVER,
+  "tooltip": TOOLTIP_SURFACE_DRIVER,
+  "avatar": AVATAR_SURFACE_DRIVER,
+  "form": FORM_SURFACE_DRIVER,
+  "checkbox": CHECKBOX_SURFACE_DRIVER,
+  "alert": ALERT_SURFACE_DRIVER,
+  "table": TABLE_SURFACE_DRIVER,
+  "command": COMMAND_SURFACE_DRIVER,
+  "breadcrumb": BREADCRUMB_SURFACE_DRIVER,
+  "pagination": PAGINATION_SURFACE_DRIVER,
+  "skeleton": SKELETON_SURFACE_DRIVER,
+  "empty": EMPTY_SURFACE_DRIVER,
+  "accordion": ACCORDION_SURFACE_DRIVER,
+  "separator": SEPARATOR_SURFACE_DRIVER,
+  "toggle": TOGGLE_SURFACE_DRIVER,
+  "calendar": CALENDAR_SURFACE_DRIVER,
+  "combobox": COMBOBOX_SURFACE_DRIVER,
+  "scroll-area": SCROLL_AREA_SURFACE_DRIVER,
+  "input-otp": INPUT_OTP_SURFACE_DRIVER,
   // The Workspace surfaces the ratified drawing adds (epic cinatra#2806). Their
   // manifest is not pinned yet, so these generate no test today; they are what
   // the recorded pin advance is waiting for, and they SKIP with a reason until

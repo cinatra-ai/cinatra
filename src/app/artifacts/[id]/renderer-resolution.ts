@@ -540,7 +540,11 @@ export async function classifyArtifactDisplayMount({
 }): Promise<ArtifactDisplayMount> {
   const path = classifyLoadablePath(generatedKey);
   if (path === "build-map") {
-    return { kind: "build-map", slot: ARTIFACT_DISPLAY_SLOT, dispatch, packageName, generatedKey };
+    const declaredVersion = GENERATED_ARTIFACT_RENDERERS[generatedKey]?.propsApiVersion;
+    if (!Number.isInteger(declaredVersion) || declaredVersion < 1 || declaredVersion > propsApiVersion) {
+      return { kind: "floor", slot: ARTIFACT_DISPLAY_SLOT, dispatch, packageName, reason: "requires-rebuild" };
+    }
+    return { kind: "build-map", slot: ARTIFACT_DISPLAY_SLOT, dispatch, packageName, generatedKey, propsApiVersion: declaredVersion };
   }
   if (path === "runtime") {
     const descriptor = await resolveRuntimeRendererForRoute(generatedKey, propsApiVersion);

@@ -105,13 +105,19 @@ import "server-only";
 // all, so there is nothing to press on either side of the boundary.
 // ---------------------------------------------------------------------------
 
-import { Suspense } from "react";
+import { Suspense, use } from "react";
 import { redirect } from "next/navigation";
+
+import {
+  readReviewIslandTargetSelector,
+  reviewTargetStreamKey,
+  selectReviewIslandTargets,
+} from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
 import { getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
 import { resolveVerifiedWidgetFrameOrigin } from "@/lib/embed/frame-ancestors.server";
 import { loadReviewGateSurface } from "@/app/artifacts/[id]/review-gate-ports";
-import { pinnedCaptureKey } from "@/lib/artifacts/review-surface-model";
+import { type ReviewTargetStream } from "@/lib/artifacts/review-surface-model";
 import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import { REVIEW_ISLAND_CREDENTIAL_QUERY_PARAM } from "@/lib/lifecycle/review-island-credential";
 import {
@@ -123,6 +129,10 @@ import {
   type IslandColorScheme,
 } from "./island-color-scheme";
 import { resolveIslandCredentialReader } from "@/lib/lifecycle/review-island-serving";
+import {
+  IslandPanelMountedSignal,
+  IslandReadySignal,
+} from "./island-height-reporter";
 // WAVE 3 of `PLAN: Agents Lifecycle (D) — Review` (cinatra#3091) — the byte
 // road. The island is the ONE surface whose reader holds no cookie, so it is
 // the one surface that has to name a road at all.
@@ -186,6 +196,17 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
   const scheme = parseIslandColorScheme(one(sp[REVIEW_ISLAND_COLOR_SCHEME_PARAM]));
   const groundCss = islandDocumentGroundCss(scheme);
   const empty = emptyIsland(scheme);
+  // The ONE pinned target this frame draws, when the card framed each target
+  // of a gate that pins several under its own header (cinatra#4129). A closed
+  // selector over the gate's own frozen set, read back by the review target's
+  // projection section and used only below. An ABSENT parameter names no
+  // target, and the frame draws the gate's whole set. A PRESENT one must be ONE
+  // name that section accepts as an exact selector, the very rule the card and
+  // the route address a pair under: a repeated parameter, an empty one, `.` or
+  // `..`, ill-formed text and one past the key bound are REFUSED. A refused
+  // selector is never read as "no selector": it draws the one empty document
+  // every denial draws.
+  const selector = readReviewIslandTargetSelector(sp);
 
   // Is this a VERIFIED widget frame? Resolved server-side from the SAME closed
   // binding the island's `frame-ancestors` wall uses, so the header and this
@@ -282,6 +303,7 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
     runId = payload.runId;
     reviewTaskId = payload.reviewTaskId;
   }
+  if (!selector.ok) return empty;
 
   const surface = await loadReviewGateSurface({
     runId,
@@ -298,6 +320,25 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
   if (surface.kind !== "ready" && surface.kind !== "settled") return empty;
   const decided = surface.kind === "settled";
 
+  // ONE TARGET PER FRAME (cinatra#4129). A frame that names a target draws the
+  // pinned target whose revision it names, and no other; a frame that names
+  // none draws the gate's whole set, exactly as before. The name must answer
+  // to EXACTLY ONE pinned target: two pins of different artifacts may share
+  // one revision id, and a name that answers to both stands for no one target,
+  // so it draws neither. The loader started every target's work, so a target
+  // this frame does not draw has its promises observed here — a failure there
+  // is the other frame's to show, never an unhandled rejection in this one. A
+  // name the gate does not pin, or pins twice, draws the one empty document
+  // every denial draws: the selector is no oracle.
+  const selection = selectReviewIslandTargets(selector.target, surface.targets);
+  const drawn = selection.ok ? selection.value : [];
+  for (const stream of surface.targets) {
+    if (drawn.includes(stream)) continue;
+    void stream.prepared.catch(() => undefined);
+    void stream.capturePair.catch(() => undefined);
+  }
+  if (!selection.ok) return empty;
+
   return (
     <div
       className={islandBodyClassName(scheme)}
@@ -306,7 +347,7 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
       // conformance check and for nothing else. Both readings draw the same
       // panels from the same frozen set; neither carries decision chrome.
       data-review-reading={decided ? "decided" : "pending"}
-      data-target-count={surface.targets.length}
+      data-target-count={drawn.length}
       data-island-color-scheme={scheme ?? undefined}
       style={scheme ? { colorScheme: scheme } : undefined}
     >
@@ -314,6 +355,12 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
           scrollbar and the canvas an overscroll exposes. Composed from the
           closed enum, never from the request's text. */}
       {groundCss ? <style>{groundCss}</style> : null}
+
+      {/* cinatra#3334 — the EARLY answer, before any panel work: it tells the
+          card that this document is alive, so the card stops watching for a
+          first response and starts watching for progress instead. It carries
+          nothing (see `island-height-report.ts`) and renders nothing. */}
+      <IslandReadySignal />
 
       {/* §II — the producing agent's one-line summary when the gate carried one.
           Part of the target's context, not of the decision. */}
@@ -329,18 +376,28 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
       {/* §II/§III — every pinned target as a sibling panel, in gate order. The
           card below the frame carries ONE floor for all of them, because the
           decision is all-or-nothing across the gate. */}
-      {surface.targets.map((prepared) => (
+      {/* Keyed by POSITION as well as by target, so the same target pinned
+          twice still draws two panels. */}
+      {drawn.map((stream, index) => (
         <Suspense
-          key={`${prepared.target.artifactId}:${prepared.target.representationRevisionId}`}
+          key={reviewTargetStreamKey(index, stream.target)}
           fallback={<ReviewGateLoading />}
         >
-          <ReviewTargetPanel
-            prepared={prepared}
+          <StreamedReviewTarget
+            prepared={stream.prepared}
+            capturePair={stream.capturePair}
+            // ONE BORDER PER TARGET (cinatra#3441). A document that draws ONE
+            // target is framed by the CARD — that target's header over this
+            // document inside one panel — so a border here too would be the
+            // nested body card §IV does not draw. That is a gate that pins one
+            // target, and each frame of a gate the card draws as pairs, which
+            // names its one target (cinatra#4129). Only a document that still
+            // draws several targets frames each of its panels here, as before.
+            framed={drawn.length > 1}
             // The TRUSTED organization scope, from the reader this island just
             // authorized — never from the query string and never from the
             // display props. The form rung reads the pinned bytes under it.
             orgId={actorCtx.orgId}
-            capturePair={surface.pinnedCapturePairs[pinnedCaptureKey(prepared.target)] ?? null}
           />
         </Suspense>
       ))}
@@ -350,5 +407,44 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
           so the work it measures is not moved by its being there. */}
       <IslandHeightReporter />
     </div>
+  );
+}
+
+/**
+ * ONE TARGET, UNDER ITS OWN BOUNDARY (cinatra#3334).
+ *
+ * The boundaries around the targets used to be decoration: the page awaited the
+ * whole prepared set before it built them, so nothing inside one could still be
+ * pending. The surface now hands this document a promise per target, and THIS
+ * is what waits on it — inside the boundary, one target at a time — so a target
+ * that is ready paints while its siblings are still being prepared, and a gate
+ * over several targets stops spending the card's whole load bound before its
+ * first body can stream.
+ *
+ * It is the SAME `ReviewTargetPanel` the review page has always rendered, fed
+ * the same prepared value and the same pinned pair. Nothing about the ladder,
+ * the floor or the trusted organization scope moves.
+ */
+function StreamedReviewTarget({
+  prepared,
+  capturePair,
+  framed,
+  orgId,
+}: {
+  prepared: ReviewTargetStream["prepared"];
+  capturePair: ReviewTargetStream["capturePair"];
+  /** Whether this panel draws its own frame (cinatra#3441) — see the caller. */
+  framed: boolean;
+  orgId: string;
+}) {
+  const target = use(prepared);
+  const pair = use(capturePair);
+  return (
+    <>
+      <ReviewTargetPanel prepared={target} orgId={orgId} capturePair={pair} framed={framed} />
+      {/* The card's idle-progress bound restarts on this: a gate that is still
+          streaming panels is never painted over with a failure plate. */}
+      <IslandPanelMountedSignal />
+    </>
   );
 }

@@ -1427,7 +1427,9 @@ export async function explainAbsentArtifactSafeClaims(
         `no active artifact-safe claim for ${named} in org "${input.orgId}" — extension install/activation incomplete ` +
         `for "${input.extension}" (its ${probe.scope}-scoped installed_extension row is '${probe.status}', but ` +
         `artifact_type_claims holds no active claim governing this org). ${manifestNote} ` +
-        `Heal: restart the instance (the boot claim-activation backstop re-fires activation) or reinstall the extension.`
+        `Heal: restart the instance (every boot re-fires claim activation: the claim-activation backstop for a ` +
+        `package installed at runtime, the bundled artifact claim heal for one shipped in the image) or ` +
+        `reinstall the extension.`
       );
     case "unreadable":
       return (

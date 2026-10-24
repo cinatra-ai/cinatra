@@ -6,7 +6,8 @@ import "server-only";
 // ./install-package-with-dependencies (cinatra#1039 Phase 2: unified planner).
 
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
 import type { SuppliedPackageProvenance } from "@cinatra-ai/extension-types";
 import type { InstalledExtension, InstallRowOwnership, ExtensionDependency } from "@cinatra-ai/extensions/canonical-types";
 import {
@@ -823,13 +824,12 @@ async function enforceTypedProducesContractForInstall(input: {
  * substitute a default/global row for the selected identity. */
 async function readInstalledClaimManifest(row: InstalledExtension): Promise<Record<string, unknown> | null> {
   try {
-    const { readFile } = await import("node:fs/promises");
+    const { readFile, realpath } = await import("node:fs/promises");
     let sourceDir: string;
     let expectedVersion: string | null = null;
     if (row.source.type === "bundled") {
       // Bundled rows have no install journal. The generated image inventory,
       // rather than a row-supplied sourceDir, owns the metadata read address.
-      const { STATIC_EXTENSION_MANIFEST } = await import("@/lib/generated/extensions.server");
       const { readRecordedBundledDigests } = await import("@/lib/bundled-digests");
       const image = STATIC_EXTENSION_MANIFEST[row.packageName];
       const recorded = readRecordedBundledDigests().get(row.packageName);
@@ -840,6 +840,33 @@ async function readInstalledClaimManifest(row: InstalledExtension): Promise<Reco
           (recorded && (recorded.version !== image.version || recorded.kind !== row.kind || recorded.digest !== row.source.digest)) ||
           (row.source.digest && !recorded)) return null;
       sourceDir = image.sourceDir;
+      expectedVersion = image.version;
+    } else if (process.env.CINATRA_RUNTIME_MODE === "development" &&
+        row.source.type === "local" &&
+        !["contentDigest", "contentHash", "integrity", "activeDigest"].some((key) => key in row.source)) {
+      // The boot heal records in-tree@version; the development recorder may
+      // replace it with the current core Git SHA without changing row.version.
+      // Neither owns a finalized digest. The generated in-tree address, never
+      // an arbitrary row path, owns this metadata-only read in development.
+      const image = STATIC_EXTENSION_MANIFEST[row.packageName];
+      if (row.kind !== "artifact" || !image || image.kind !== row.kind ||
+          image.packageName !== row.packageName || !/^@[^/]+\/[^/]+$/.test(row.packageName) ||
+          image.sourceDir !== `extensions/${row.packageName.slice(1)}` ||
+          image.sourceDir.includes("\\") || image.sourceDir.split("/").some((part) => part === "." || part === "..") ||
+          !image.version || row.version !== image.version) return null;
+      sourceDir = resolve(process.cwd(), image.sourceDir);
+      if (row.source.path !== sourceDir ||
+          await realpath(sourceDir) !== resolve(await realpath(process.cwd()), image.sourceDir) ||
+          await realpath(join(sourceDir, "package.json")) !== join(await realpath(sourceDir), "package.json")) return null;
+      if (row.source.resolvedCommitOrTreeHash === `in-tree@${image.version}`) {
+        // This exact heal writer always creates a platform row.
+        if (row.organizationId !== null || row.ownerLevel !== "platform" ||
+            (row.ownerId !== null && row.ownerId !== "__platform__")) return null;
+      } else {
+        const { currentGitSha } = await import("@cinatra-ai/extensions/dev-version");
+        if (!/^[0-9a-f]{7,40}$/.test(row.source.resolvedCommitOrTreeHash) ||
+            row.source.resolvedCommitOrTreeHash !== currentGitSha()) return null;
+      }
       expectedVersion = image.version;
     } else {
       const { resolveInstallAnchor } = await import("@/lib/extension-install-anchor");

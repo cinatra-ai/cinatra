@@ -65,6 +65,16 @@
  *                     input is present in the compiled schema, so a caller
  *                     that can see it (the `agent_run` tool, chat extraction,
  *                     the API) can still pre-supply it.
+ *   OAS-RUNTIME-015 — a model-bridge step's declared tool list. A model-bridge
+ *                     ApiNode may carry `metadata.cinatra.tools`: a list of
+ *                     distinct lower-case tool names of the application. The
+ *                     finding names the node and its path when the list is
+ *                     not of that form, when the key sits on a node that is not
+ *                     a model-bridge step (the key is read on model-bridge
+ *                     steps only), or when two model-bridge steps share one id
+ *                     and one of them declares (a declaration is read by the
+ *                     step's id). A flow that declares nothing yields no
+ *                     finding of this code.
  *
  * See `docs/developing-agents.md` "pyagentspec constraints when authoring
  * oas.json" for the human-readable description of each pattern.
@@ -98,6 +108,7 @@
 import type { ReviewFinding } from "./validate-agent-json";
 import {
   collectArtifactBindingsFromOasDocument,
+  collectArtifactImageNodesFromOasDocument,
   collectArtifactMaterializeNodesFromOasDocument,
   ARTIFACT_MATERIALIZE_TOOL,
   AGENTS_PASSTHROUGH_URL_MARKER,
@@ -106,6 +117,7 @@ import { SIDE_EFFECT_PATTERNS } from "./trigger-infer-side-effects";
 import {
   PLATFORM_SUPPLIED_FLOW_INPUTS,
   isExemptFromUnsatisfiableInputCheck,
+  isOnVisibleInputInstallBaseline,
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore — dependency-free .mjs data module (allowJs)
 } from "../../../scripts/extensions/platform-supplied-flow-inputs.mjs";
@@ -192,6 +204,7 @@ export function scanOasForRuntimeInvariantFindings(
   findings.push(...scanForFloatPropertyIntegerDefault(parsed));
   findings.push(...scanForCinatraLlmInSource(parsed));
   findings.push(...scanForToolboxIdsInSource(parsed));
+  findings.push(...scanForStepToolDeclarations(parsed));
   findings.push(...scanForInternalA2aAgentMisuse(parsed));
   findings.push(...scanInputMessageGateMountability(parsed));
   // Placeholder/inputs parity + agent_run_id propagation + EndNode source
@@ -201,6 +214,7 @@ export function scanOasForRuntimeInvariantFindings(
     findings.push(...scanAgentRunIdPropagation(flow));
     findings.push(...scanEndNodeOutputSources(flow));
   }
+  findings.push(...scanOasForVisibleInputContractFindings(parsed));
   // OAS-RUNTIME-014 scans the START-CONVERSATION surface only — the TOP-LEVEL
   // Flow. That is the one input set the A2A start message has to satisfy. A
   // nested subflow's inputs are fed by its parent's DataFlowEdges, never by the
@@ -451,6 +465,13 @@ function walkBridgeApiNodes(
     if (isPlainObject(subflow)) {
       go(subflow, `${path}.subflow`);
     }
+    // Supported parallel flows may inline Flow objects instead of referencing
+    // them from $referenced_components. Keep their indexed paths in findings.
+    if (o.component_type === "ParallelFlowNode" && Array.isArray(o.subflows)) {
+      o.subflows.forEach((inlineFlow, index) => {
+        go(inlineFlow, `${path}.subflows[${index}]`);
+      });
+    }
   }
   go(parsed, "$");
 }
@@ -507,6 +528,188 @@ function scanForToolboxIdsInSource(
       source: "deterministic",
     });
   });
+  return findings;
+}
+
+// ---------------------------------------------------------------------------
+// Invariant 15 — a model-bridge step's declared tool list (OAS-RUNTIME-015).
+//
+// A model-bridge ApiNode may carry `metadata.cinatra.tools`: the list of the
+// application's tools the step uses. The list is read by the step's id and
+// validated with the flow. Names are checked for their form only; which names
+// the application serves is decided where the tools are served.
+// ---------------------------------------------------------------------------
+
+export type StepToolDeclaration =
+  | { kind: "undeclared" }
+  | { kind: "declared"; tools: string[] }
+  | { kind: "invalid"; reason: string };
+
+function isModelBridgeApiNode(node: Record<string, unknown>): boolean {
+  return (
+    node.component_type === "ApiNode" &&
+    typeof node.url === "string" &&
+    node.url.includes("/api/llm-bridge")
+  );
+}
+
+function carriesStepToolKey(node: Record<string, unknown>): boolean {
+  const metadata = node.metadata;
+  if (!isPlainObject(metadata)) return false;
+  const cinatra = metadata.cinatra;
+  if (!isPlainObject(cinatra)) return false;
+  return Object.prototype.hasOwnProperty.call(cinatra, "tools");
+}
+
+/**
+ * Reads the tool list a node declares under `metadata.cinatra.tools`.
+ * `undeclared`: the node carries no such key. `declared`: a list of distinct,
+ * non-empty, lower-case names without whitespace, kept in written order (an
+ * empty list declares no tools). `invalid`: anything else, with a short reason.
+ */
+export function readStepToolDeclaration(node: unknown): StepToolDeclaration {
+  if (!isPlainObject(node) || !carriesStepToolKey(node)) {
+    return { kind: "undeclared" };
+  }
+  const value = ((node.metadata as Record<string, unknown>).cinatra as Record<
+    string,
+    unknown
+  >).tools;
+  if (!Array.isArray(value)) {
+    return { kind: "invalid", reason: "the value is not a list" };
+  }
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      return { kind: "invalid", reason: "an entry is not a text value" };
+    }
+    if (entry.trim() === "") {
+      return { kind: "invalid", reason: "an entry is empty or blank" };
+    }
+    if (/\s/.test(entry)) {
+      return { kind: "invalid", reason: `the entry "${entry}" contains whitespace` };
+    }
+    if (entry !== entry.toLowerCase()) {
+      return { kind: "invalid", reason: `the entry "${entry}" contains upper-case letters` };
+    }
+    if (seen.has(entry)) {
+      return { kind: "invalid", reason: `the entry "${entry}" is written more than once` };
+    }
+    seen.add(entry);
+  }
+  return { kind: "declared", tools: [...(value as string[])] };
+}
+
+/**
+ * Reads the declaration of the model-bridge step with the given id from a flow
+ * document, nested subflows included. When several model-bridge steps carry the
+ * id, the result is `invalid` if any one is, otherwise the names common to every
+ * declared list; a step that declares nothing adds no name.
+ */
+export function findStepToolDeclaration(
+  document: unknown,
+  stepId: string,
+): StepToolDeclaration {
+  if (!isPlainObject(document)) return { kind: "undeclared" };
+  const declared: string[][] = [];
+  let invalid: StepToolDeclaration | null = null;
+  walkBridgeApiNodes(document, (node) => {
+    if (node.id !== stepId) return;
+    const reading = readStepToolDeclaration(node);
+    if (reading.kind === "invalid") invalid = invalid ?? reading;
+    else if (reading.kind === "declared") declared.push(reading.tools);
+  });
+  if (invalid) return invalid;
+  if (declared.length === 0) return { kind: "undeclared" };
+  const [first, ...rest] = declared;
+  return {
+    kind: "declared",
+    tools: first!.filter((name) => rest.every((list) => list.includes(name))),
+  };
+}
+
+function scanForStepToolDeclarations(
+  parsed: Record<string, unknown>,
+): ReviewFinding[] {
+  const findings: ReviewFinding[] = [];
+  const idOf = (node: Record<string, unknown>): string =>
+    typeof node.id === "string" ? node.id : (node.name as string) ?? "<unknown>";
+
+  // (a) a model-bridge step whose declaration is not of the accepted form,
+  // and the ids the model-bridge steps carry.
+  const stepsById = new Map<string, Array<{ path: string; declares: boolean }>>();
+  walkBridgeApiNodes(parsed, (node, path) => {
+    const reading = readStepToolDeclaration(node);
+    if (reading.kind === "invalid") {
+      findings.push({
+        code: "OAS-RUNTIME-015",
+        severity: "blocker",
+        message:
+          `ApiNode "${idOf(node)}" at ${path} targets /api/llm-bridge and its ` +
+          `metadata.cinatra.tools declaration is not accepted: ${reading.reason}. ` +
+          `The form is metadata.cinatra.tools: a list of distinct lower-case ` +
+          `tool names of the application.`,
+        location: path,
+        source: "deterministic",
+      });
+    }
+    if (typeof node.id === "string") {
+      const steps = stepsById.get(node.id) ?? [];
+      steps.push({ path, declares: reading.kind === "declared" });
+      stepsById.set(node.id, steps);
+    }
+  });
+
+  // (b) the key on a node that is not a model-bridge step. The top-level
+  // document is not a step and is left as it is read elsewhere.
+  function walkOtherNodes(node: unknown, path: string, isRoot: boolean): void {
+    if (!isPlainObject(node)) return;
+    if (!isRoot && !isModelBridgeApiNode(node) && carriesStepToolKey(node)) {
+      findings.push({
+        code: "OAS-RUNTIME-015",
+        severity: "blocker",
+        message:
+          `Node "${idOf(node)}" at ${path} carries metadata.cinatra.tools; the ` +
+          `key is read on model-bridge steps only (an ApiNode whose url targets ` +
+          `/api/llm-bridge). Declare the tools on the model-bridge step that uses them.`,
+        location: path,
+        source: "deterministic",
+      });
+    }
+    const refs = node.$referenced_components;
+    if (isPlainObject(refs)) {
+      for (const [k, v] of Object.entries(refs)) {
+        walkOtherNodes(v, `${path}.$referenced_components.${k}`, false);
+      }
+    }
+    if (isPlainObject(node.subflow)) {
+      walkOtherNodes(node.subflow, `${path}.subflow`, false);
+    }
+    if (node.component_type === "ParallelFlowNode" && Array.isArray(node.subflows)) {
+      node.subflows.forEach((inlineFlow, index) => {
+        walkOtherNodes(inlineFlow, `${path}.subflows[${index}]`, false);
+      });
+    }
+  }
+  walkOtherNodes(parsed, "$", true);
+
+  // (c) model-bridge steps that share an id while one of them declares: a
+  // declaration is read by the step's id, so each such step needs its own.
+  for (const [id, steps] of stepsById) {
+    if (steps.length < 2 || !steps.some((s) => s.declares)) continue;
+    findings.push({
+      code: "OAS-RUNTIME-015",
+      severity: "blocker",
+      message:
+        `Model-bridge steps share the id "${id}" (${steps
+          .map((s) => s.path)
+          .join(", ")}) and at least one of them declares metadata.cinatra.tools. ` +
+        `A step's declaration is read by its id, so each model-bridge step that ` +
+        `declares tools carries an id of its own.`,
+      location: steps[0]!.path,
+      source: "deterministic",
+    });
+  }
   return findings;
 }
 
@@ -1578,6 +1781,7 @@ export function scanOasForArtifactParityFindings(
   const materializeResult = collectArtifactMaterializeNodesFromOasDocument(parsed, {
     produces,
   });
+  const imageResult = collectArtifactImageNodesFromOasDocument(parsed, { produces });
 
   // (a) Advisory mirror of the grammar errors the compile/publish gate
   // HARD-BLOCKS (oas-compiler step 10b/10c). WARNING here — Layer 3 is advisory.
@@ -1599,6 +1803,7 @@ export function scanOasForArtifactParityFindings(
     const covered = new Set<string>();
     for (const b of bindingResult.bindings) covered.add(b.binding.extension);
     for (const n of materializeResult.nodes) covered.add(n.extension);
+    for (const n of imageResult.nodes) covered.add(n.extension);
     for (const ext of produces) {
       if (covered.has(ext)) continue;
       findings.push({
@@ -1607,8 +1812,9 @@ export function scanOasForArtifactParityFindings(
         message:
           `package.json cinatra.produces declares "${ext}" but the OAS has no runnable ` +
           `materialization edge for it. Add an EndNode output binding ` +
-          `(outputs[].cinatra.artifact with extension "${ext}") or an artifact_materialize ` +
-          `passthrough ApiNode targeting "${ext}". Until migrated, the declared artifact is ` +
+          `(outputs[].cinatra.artifact with extension "${ext}"), an artifact_materialize ` +
+          `passthrough ApiNode targeting "${ext}", or an artifact_image_generate passthrough ` +
+          `step filing "${ext}". Until migrated, the declared artifact is ` +
           `never persisted at run completion. (Advisory now; the publish contract flips this ` +
           `to a republish BLOCK once the fleet migration completes — cinatra#924.)`,
         source: "deterministic",
@@ -1909,6 +2115,36 @@ export function scanOasForUndeclaredTypeSaves(
         }
       }
     }
+  }
+  return findings;
+}
+
+
+/**
+ * cinatra#3759: a root Flow input not collected by setup needs a declared
+ * default. Installers pass their actual package identity; OAS metadata cannot
+ * impersonate one of the bounded legacy package/input pairs.
+ */
+export function scanOasForVisibleInputContractFindings(
+  parsed: Record<string, unknown>,
+  packageName = resolvePackageName(parsed),
+): ReviewFinding[] {
+  if (parsed.component_type !== "Flow") return [];
+  const flow = extractFlow(parsed);
+  if (!flow) return [];
+  const findings: ReviewFinding[] = [];
+  const agentLabel = packageName || describeAgentForFindings(parsed);
+  for (const title of flow.flowInputTitles) {
+    if (flow.startHidden.includes(title) || flow.startRequired.includes(title)) continue;
+    if (flow.flowInputDefaults.has(title) || PLATFORM_SUPPLIED_FLOW_INPUTS.includes(title)) continue;
+    if (isOnVisibleInputInstallBaseline(packageName, title)) continue;
+    findings.push({
+      code: "visible_input_setup_omission",
+      severity: "blocker",
+      message: `${agentLabel}: visible Flow input "${title}" has no default and is not declared required in the StartNode's metadata.cinatra.required. Setup cannot ask for it as a required field. Declare it required or give the Flow and StartNode input an explicit default before installing.`,
+      location: `inputs[] "${title}" (Flow "${flow.flowId}")`,
+      source: "deterministic",
+    });
   }
   return findings;
 }

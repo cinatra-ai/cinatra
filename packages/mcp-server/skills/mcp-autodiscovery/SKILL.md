@@ -14,7 +14,7 @@ Cinatra is an AI agent platform. Its MCP server exposes agent templates as calla
 1. List available agents: call `agent_list` or `agent_source_list` to see what is installed.
 2. Read the agent definition: call `agent_source_read` with the package name to understand its inputs and expected behavior.
 3. Start a run: call `agent_run` with the required inputs. A normal dispatch returns `{ runId, status: "queued", message }`. A chat-origin run can instead come back `{ runId, status: "pending_input", message }`, held on the in-chat recommendation card, paused for the person to decide the recommended skills on that card before it starts. (A request that fails validation or preflight returns a structured error instead of either.) `message` is the platform's OWN sentence about what happened, and it is the reply: say it back exactly as it is written, add nothing to it, and never print the answer itself. A refusal is relayed the same way.
-4. Read a run's state when you need it: `agent_run_get` with the `runId` answers with the run's status and results. The terminal statuses are `"completed"`, `"failed"`, `"stopped"`, `"pending_approval"` and `"pending_input"`. IN A CONVERSATION THE RUN REPORTS ITSELF and this read is not part of a start: the run's own card re-reads the run's state and shows its progress beside the sentence step 3 gave you, so do not poll the run after a start and do not describe its progress yourself — where your sentence and the card could disagree, the card is right. A client with no conversation surface of its own, which has nothing drawing the run, reads the state with `agent_run_get` when it needs the outcome. `pending_input` is an OVERLOADED status: reached from a run that started `queued`, it means the run paused on a different, mid-execution human-wait gate — NOT the recommendation card, which only ever arrives as the initial `agent_run` result in step 3, never from a later read. Report it as paused and needing attention without guessing the gate. A run that returned `pending_input` at dispatch has not started at all: never read it back in a loop and never report it as running — only the person's own decision on the card changes that, and nothing notifies you when they decide.
+4. Read a run's state when you need it: `agent_run_get` with the `runId` answers with the run's status and results. A run's status is one of ten. `"queued"` means accepted and not yet executing, and `"running"` means executing. `"completed"`, `"failed"` and `"stopped"` mean the run has ended; only these three are final. `"pending_approval"` means the run waits on a person at a review or setup gate, and `"waiting_trigger"` means an executing run is paused at a trigger-wait step until its trigger fires. Three statuses mean the run has not begun executing: `"pending_input"` (at its setup, or held on the recommendation card), `"pending_trigger"` (its trigger form is open) and `"armed"` (a scheduled or recurring trigger is set and has not fired yet). IN A CONVERSATION THE RUN REPORTS ITSELF and this read is not part of a start: the run's own card re-reads the run's state and shows its progress beside the sentence step 3 gave you, so do not poll the run after a start and do not describe its progress yourself — where your sentence and the card could disagree, the card is right. A client with no conversation surface of its own, which has nothing drawing the run, reads the state with `agent_run_get` when it needs the outcome. `pending_input` is an OVERLOADED status: reached from a run that started `queued`, it means the run was returned to its setup before it began executing (its dispatch did not go through) — NOT the recommendation card, which only ever arrives as the initial `agent_run` result in step 3, never from a later read. Report it as paused and needing attention without guessing the gate. A run that returned `pending_input` at dispatch has not started at all: never read it back in a loop and never report it as running — only the person's own decision on the card changes that, and nothing notifies you when they decide.
 5. Handle HITL if required: when `status === "pending_approval"`, the agent is waiting for a human decision at an A2UI surface. Render the surface and resume via `agent_run_resume` once the user has acted.
 6. Read results: call `agent_run_messages_list` with the `runId` to retrieve the full message history and structured outputs.
 
@@ -22,7 +22,7 @@ Cinatra is an AI agent platform. Its MCP server exposes agent templates as calla
 
 Spec: https://docs.ag-ui.com
 
-The event stream URL pattern is `{CINATRA_BASE_URL}/api/a2a?taskId={runId}` (SSE, `Content-Type: text/event-stream`).
+The per-run event stream URL is `{CINATRA_BASE_URL}/api/agents/runs/{runId}/stream` (a GET, SSE, `Content-Type: text/event-stream`). It answers only a caller who may read the run, and a reconnect that sends `Last-Event-ID` resumes after that event. `{CINATRA_BASE_URL}/api/a2a` is not this stream: it is the A2A JSON-RPC endpoint (POST), and it reads a task id from the JSON-RPC body, never from the URL.
 
 Event types you will encounter on the stream:
 
@@ -39,7 +39,7 @@ Event types you will encounter on the stream:
 - `RUN_ERROR` — run failed
 - `DATA_PART` — structured data payload attached to the run
 
-Ordering guarantee: `RUN_STARTED` always precedes any `TEXT_MESSAGE_*` or `TOOL_CALL_*` events. `INTERRUPT` always precedes `RUN_FINISHED` when a HITL step is involved. Do not process `DATA_PART` until after `RUN_FINISHED`.
+Ordering guarantee: `RUN_STARTED` always precedes any `TEXT_MESSAGE_*` or `TOOL_CALL_*` events. `INTERRUPT` always precedes `RUN_FINISHED` when a HITL step is involved. `DATA_PART` frames arrive during the run, as the agent produces each structured part, and so before `RUN_FINISHED`: handle each one as it arrives (a payload that carries a `viewType` is a renderable view to draw), and order the parts of one artifact by `partIndex`. A run's stream ends with `RUN_FINISHED` or `RUN_ERROR`.
 
 ### Typed lifecycle interactions on `INTERRUPT`
 
@@ -64,17 +64,9 @@ Rules for a client:
 
 Spec: https://a2ui.org
 
-CRITICAL RENDERING RULE: Never describe a HITL surface in prose. Always render it as an inline interactive artifact using the surface ID provided in the `a2uiSurfaceId` field of the interrupted run node. The surface ID maps to a registered renderer on the client side.
+CRITICAL RENDERING RULE: Never describe a HITL surface in prose. Always render it as an inline interactive artifact. The surface is named by the `INTERRUPT` event on the run's stream: its `xRenderer` field is the renderer key, namespaced by the agent package that declares the screen, and it maps to a registered renderer on the client side. The event's `schema` and `values` are the form and its current values, and its `reviewTaskId` names the review task the decision answers. The `cinatra://protocols/a2ui` resource lists the HITL screens each installed agent declares.
 
-Standard surface IDs in Cinatra:
-
-- `email-sender:step-1:output` — draft email preview; user approves, edits, or rejects
-- `email-sender:approval-gate:input` — explicit send confirmation before delivery
-- `email-recipients:step-1:output` — recipient list review before bulk send
-
-When `agent_run_get` returns `status === "pending_approval"`, read the `a2uiSurfaceId` field on the run record to determine which surface to render. After the user acts, call `agent_run_resume` with the `runId` and the user decision payload.
-
-Override behavior: if the run record also has an `a2uiSurfaceIdOverride` field, use that value instead of the default `a2uiSurfaceId`.
+When `agent_run_get` returns `status === "pending_approval"`, the run record does not name the surface: read the `INTERRUPT` from the run's stream (a fresh subscriber to a `pending_approval` run is replayed from the start of the run's event log, so the `INTERRUPT` is delivered). After the user acts, call `agent_run_resume` with the `runId` and the user's decision as `userResponse` (the renderer's payload as a JSON string). A run paused at a setup-input gate (it stopped before it began executing because required inputs were missing) REQUIRES `userResponse`, a JSON object of the missing input fields; a resume without it is refused. Only a review-task decision may carry a free-text `approvalNote` instead, which is used when `userResponse` is absent.
 
 ## A2A — Agent-to-Agent Protocol
 
@@ -85,7 +77,8 @@ Each published agent has an A2A Agent Card at `{CINATRA_BASE_URL}/api/a2a/agents
 Supported JSON-RPC methods on the A2A endpoint:
 
 - `message/send` — send a task message and receive a response
-- `message/sendStreaming` — send a task message and receive SSE stream of events
+- `message/stream` — send a task message and receive an SSE stream of events
+- `tasks/resubscribe` — re-attach to the SSE stream of a task that is still running
 - `tasks/get` — poll for task status by task ID
 - `tasks/cancel` — cancel a running task
 

@@ -48,7 +48,7 @@ const h = vi.hoisted(() => {
         cancelBatch: cancelBatchMock,
       },
       anthropic: { provider: "anthropic", defaultModel: "claude-sonnet-4-6" },
-      gemini: { provider: "gemini", defaultModel: "gemini-2.5-flash" },
+      gemini: { provider: "gemini", defaultModel: "gemini-3.5-flash" },
     } as Record<string, object>,
   };
 });

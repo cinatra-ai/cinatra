@@ -365,14 +365,14 @@ export function ExtensionCardListingBanner({
   const style = muted ? undefined : { background: bg, color: fg };
   const inner = (
     <>
-      {/* Hover wash for the interactive accent — a token-tinted overlay that
-          reads on any category ground. `pointer-events-none` so clicks pass to
+      {/* Hover wash for the interactive accent (app-extensions §IV.3):
+          the same five-percent navy in both palettes preserves name contrast. `pointer-events-none` so clicks pass to
           the anchor; the content below is `relative` so it paints above it. */}
       {interactive && (
         <span
           aria-hidden
           data-slot="extension-card-accent-hover"
-          className="pointer-events-none absolute inset-0 bg-foreground/5 opacity-0 transition-opacity duration-150 group-hover/accent:opacity-100"
+          className="pointer-events-none absolute inset-0 bg-[#15213a]/5 opacity-0 transition-opacity duration-150 group-hover/accent:opacity-100"
         />
       )}
       {/* Square icon tile — 46×46, 11px radius, white ground, soft shadow,

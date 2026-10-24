@@ -141,9 +141,9 @@ const OAS = JSON.stringify({
   metadata: { cinatra: { packageName: PKG } },
 });
 
-function zip(): string {
+function zip(oas = OAS): string {
   return createZipBuffer([
-    { name: "agent.json", content: OAS },
+    { name: "agent.json", content: oas },
     { name: "manifest.json", content: JSON.stringify({ version: 1 }) },
     {
       name: "package.json",
@@ -412,4 +412,20 @@ describe("cinatra#3493 — the supplied-install road materializes and mounts wha
     expect(reload).not.toHaveBeenCalled();
     expect(createTemplate).toHaveBeenCalledTimes(1);
   });
+});
+
+
+it("refuses an undeclared visible input before ZIP import writes or materializes, even if OAS claims a baseline package", async () => {
+  const input = { title: "postId", type: "string" };
+  const oas = JSON.stringify({
+    ...JSON.parse(OAS), id: "fixture", inputs: [input],
+    metadata: { cinatra: { packageName: "@cinatra-ai/wordpress-agent" } },
+    start_node: { $component_ref: "start" },
+    $referenced_components: { start: { component_type: "StartNode", id: "start", inputs: [input] } },
+  });
+  await expect(importAgentTemplateCore(zip(oas), undefined, { redirect: false, requireRuntimeMount: true })).rejects.toThrow(/postId/);
+  expect(createTemplate).not.toHaveBeenCalled();
+  expect(updateTemplate).not.toHaveBeenCalled();
+  expect(reload).not.toHaveBeenCalled();
+  await expect(stat(agentDir)).rejects.toMatchObject({ code: "ENOENT" });
 });

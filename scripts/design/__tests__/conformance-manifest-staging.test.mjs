@@ -47,13 +47,16 @@ const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
  */
 const STAGED = {
   // The artifacts drawing, adopted at the ratification that made the entity-page
-  // tablist the five-entry strip and added the workspace scope (epic cinatra#2806).
+  // tablist the five-entry strip and added the workspace scope (epic cinatra#2806),
+  // and re-copied verbatim at version 0.12.0 (design@bda0cf8d, cinatra#4126): the copy carries
+  // every surface the drawing has added since, among them the console's fourth tab,
+  // review-policy, and its gate-volume.
   // Unpinned because only one of its surfaces is in scope for that adoption; it
   // joins the pin gate when every surface of the drawing has a driver.
   "app-artifacts.json": {
     spec: "specs/app-artifacts.html",
-    manifestSha256: "555413acbeb45f943a39cdcaba4fce519d51eaddbbf2338f875a54033c5933a0",
-    contentHash: "sha256:c6cad4b9f61f50ecccb3185913afa0f400a41ca6f06327ab57fcbcda68f1e563",
+    manifestSha256: "213e69761afecc68527cd97ca1bfdd9d2f6af011c1209026f43146f2eb7c0ae4",
+    contentHash: "sha256:f1d26ced35085568cc8286365a625939d77021d7836e03c46e0871468f415de9",
   },
   // The lifecycle-cards drawing, staged by cinatra#3156 (the suggestion-chip wave).
   "app-lifecycle-cards.json": {
@@ -63,12 +66,13 @@ const STAGED = {
   },
   // The artifact-review drawing, staged by cinatra#3158 (the artifact-kind
   // display wave). First-time adoption: the drawing has never been committed
-  // here, so there is no earlier record to move. Eleven of its forty surfaces are
-  // driven by that wave; it joins the pin gate when every one of them is covered.
+  // here, so there is no earlier record to move. Re-copied verbatim from the
+  // published body (design@70c209dd), which declares fifty-nine surfaces; it joins
+  // the pin gate when every one of them is covered.
   "app-artifact-review.json": {
     spec: "specs/app-artifact-review.html",
-    manifestSha256: "605745f5f670628d1bbaeb6e5e868e3d4401d653666cdf450ab149120ce94113",
-    contentHash: "sha256:eed1cc2d55f1aa561b77e637d382bef271340c87239a189c117d12baa51c44b1",
+    manifestSha256: "21c21430bf3932219a9ffc4ff315449c1db6909c0181a0585bb983aaacc12c27",
+    contentHash: "sha256:cc1ba264246997f63ed7711c8bee635d9911ce1b18ab794994efda9cf41d5c0d",
   },
 };
 

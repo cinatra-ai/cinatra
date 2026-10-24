@@ -240,6 +240,21 @@ class this page's rule names: those two pins move only together with the
 drivers, harness mounts and stable-id contract that answer those surfaces, and
 until then the `push`-to-`main` arm stays red on those two.
 
+**Then two on 2026-10-23 — one reconciled hashes-only, one awaiting its
+drivers.** The design source republished the connectors manifest with the
+docs#242 merge, so `app-connectors` drifted and the `design-pin-drift` job was
+red on the default branch. Compared as parsed JSON with the pinned body,
+`schemaVersion`, `spec` and all eleven surfaces are unchanged and `contentHash`
+alone moved. The 2026-10-23 reconciliation below re-pinned it hashes-only.
+Read on 2026-10-23 against main's pin `e4da7a2b…`, `app-components` drifted at
+the same time, with new surfaces
+(`scheduling-step-quarterly` and `scheduling-step-yearly` among them), which is
+the class this page's rule names: that pin moves only together with the
+drivers, harness mounts and stable-id contract that answer those surfaces, and
+on main the `push`-to-`main` arm stayed red on that one pin. The 2026-10-22
+reconciliation below, in this same change, adopts it (`cbb8e3ac…`) with the
+drivers of its four new surfaces.
+
 Nine adoptions got them there and all nine are recorded below: the 2026-09-10
 adoption of `app-connectors`, whose published body redeclares the manifest
 (three sharing surfaces gained) and therefore moves with the drivers and harness
@@ -271,6 +286,19 @@ input (see `superseded-pins-2026-08-28/`, `superseded-pins-2026-09-12/`,
 `superseded-pins-2026-10-02/` beside the
 frozen published ones, and every row a later frozen fetch superseded), because
 a gate whose drift path has no input is a gate whose drift path is untested.
+
+**Then one more, adopted on 2026-10-22 — NOT hashes-only.** `app-components`
+republished with the recurrence selectors of the scheduling step drawn (every
+quarter, every year, and a configured monthly and quarterly schedule), and the
+`push`-to-`main` arm was red on that pin: four pins read `match` and that one
+read `drift`. The body declares thirty-seven surfaces where the pin declared
+thirty-three; the thirty-three are field-for-field identical and four are new.
+The 2026-10-22 reconciliation below adopted it with the drivers of the four
+surfaces. In CI on `e205e8a2`, the `design-pin-drift` job (job 120090738176,
+2026-10-22 21:09:57Z to 21:10:16Z) read all five pins `match` against the
+bodies published then. The docs#242 merge (2026-10-22 22:44:11Z) then
+republished the connectors manifest, and the 2026-10-23 reconciliation below
+re-pins `app-connectors` to it.
 
 ## Reconciliation record
 
@@ -695,6 +723,243 @@ with the provenance receipt that names the commit its bytes were read from, and
 the checker's own suite asserts both halves of the finding: that the superseded
 body still classifies as `drift` in both hashes, and that the body adopted in
 its place declares the same six surfaces.
+
+## Reconciliation record — 2026-10-13
+
+Measured 2026-10-13 against the manifests published under `publishedBaseUrl`,
+for the shared-primitives conformance wave (cinatra#3189), the coloured-panel
+hover of the agent card (cinatra#2851) and the start a missing connection
+refuses (cinatra#4041). All five bodies were fetched with one
+anonymous `curl -sS` each into a scratch directory outside every repository
+tree, and their hashes were compared with the five pins as this change leaves
+them: every published body is byte-identical to the artifact its pin names.
+`app`, `app-connectors` and `app-notifications` came back byte-identical to the
+artifacts their pins already named. `app-components` and `app-extensions` had
+republished after their drawings gained surfaces, and each adopted body was
+compared, as parsed JSON, with the committed copy under
+`tests/e2e/design/conformance/manifests/` that it replaces. For
+`app-components`, `schemaVersion` and `spec` are unchanged, the four surfaces
+the copy already declared (`toast`, `breadcrumb-entity-resolution`,
+`scheduling-step`, `scheduling-step-configured`) are field-for-field identical,
+twenty-nine surfaces are added, and `contentHash` moved. For `app-extensions`,
+`schemaVersion` and `spec` are unchanged, the nineteen surfaces the copy already
+declared are field-for-field identical, two surfaces are added
+(`agent-card-accent-hover` and then `agent-start-needs-connection`, between
+`agent-start-refused` and `install-config-needs-callout`), and `contentHash`
+moved. Each committed artifact is now the verbatim published body, and both
+hashes of both entries in
+`conformance-pins.json` were re-derived from the adopted bytes on the branch —
+the manifest hash over the file's bytes, the spec-content hash read back out of
+the adopted body's own `contentHash` field — never typed; both entries now read
+`source: "published"`. No other pin moved.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-components` | `drift` | 29 new surfaces: `button`, `card`, `input`, `select`, `dialog`, `badge`, `tabs`, `toolbar`, `toolbar-nested`, `sidebar`, `sidebar-group-label`, `tooltip`, `avatar`, `form`, `checkbox`, `alert`, `table`, `command`, `breadcrumb`, `pagination`, `skeleton`, `empty`, `accordion`, `separator`, `toggle`, `calendar`, `combobox`, `scroll-area`, `input-otp` | 29 drivers, 29 harness mounts, 29 test-id contract rows |
+| `app-extensions` | `drift` | 2 new surfaces: `agent-card-accent-hover`, `agent-start-needs-connection` | 2 drivers, 2 harness mounts, 2 test-id contract rows |
+| `app-connectors` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
+
+Every surface the two bodies add is driven by a literal entry of the driver
+table and mounted once on the conformance harness, so
+`tests/e2e/design/conformance/allowlist.json` is untouched. The adoption record
+of the two bodies stays outside the repository: no body is frozen under the
+checker's fixtures, because the frozen-capture road ended with the suite header
+the toast adoption wrote.
+
+## Reconciliation record — 2026-10-14
+
+Measured 2026-10-14 against the manifests published under `publishedBaseUrl`,
+for the tooltip's shadow in both palettes (cinatra#4036). All five bodies were
+fetched with one anonymous `curl -sS` each into a scratch directory outside
+every repository tree, and their hashes were compared with the five pins as
+this change leaves them: every published body is byte-identical to the
+artifact its pin names. `app`, `app-extensions`, `app-connectors` and
+`app-notifications` came back byte-identical to the artifacts their pins
+already named. `app-components` had republished after its drawing (version
+0.6.0) drew the tooltip's shadow per palette, and the adopted body was
+compared, as parsed JSON, with the committed copy under
+`tests/e2e/design/conformance/manifests/` that it replaces: `schemaVersion`,
+`spec` and all thirty-three surfaces are field-for-field identical, and only
+`contentHash` moved. This is the case "Why a hash-only re-pin is refused"
+names: the drawing changed under an unchanged surface list. The same change
+adopts what moved: `src/components/ui/tooltip.tsx` draws the light tooltip's
+approved shadow and the dark tooltip's shadow, and its unit check and its
+browser case read both palettes. The committed artifact is now the verbatim
+published body, and both hashes of the entry in `conformance-pins.json` were
+re-derived from the adopted bytes on the branch — the manifest hash over the
+file's bytes, the spec-content hash read back out of the adopted body's own
+`contentHash` field — never typed. No other pin moved.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-components` | `drift` | no surface; `contentHash` moved with the tooltip's shadow per palette (`tooltip`) | the tooltip's two shadow classes, one unit check, one browser reading |
+| `app-extensions` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-connectors` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
+
+## Reconciliation record — 2026-10-21
+
+Measured 2026-10-21 against the manifests published under `publishedBaseUrl`,
+for the paging sentence of the PaginatedTable section of the components drawing
+(design#209). All five bodies were fetched with one anonymous `curl -sS` each
+into a scratch directory outside every repository tree, and their hashes were
+compared with the five pins as this change leaves them: every published body is
+byte-identical to the artifact its pin names. `app`, `app-extensions`,
+`app-connectors` and `app-notifications` came back byte-identical to the
+artifacts their pins already named. `app-components` had republished after the
+design source corrected one sentence of its drawing, and the adopted body was
+compared, as parsed JSON, with the committed copy under
+`tests/e2e/design/conformance/manifests/` that it replaces: `schemaVersion`,
+`spec` and all thirty-three surfaces are field-for-field identical, and only
+`contentHash` moved. This is the case "Why a hash-only re-pin is refused"
+names: the spec source changed under an unchanged surface list, so no driver,
+harness mount or allowlist entry moves with the pin. The committed artifact is
+now the verbatim published body, and both hashes of the entry in
+`conformance-pins.json` were re-derived from the adopted bytes on the branch —
+the manifest hash over the file's bytes, the spec-content hash read back out of
+the adopted body's own `contentHash` field — never typed. No other pin moved.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-components` | `drift` | no surface; `contentHash` moved with one corrected sentence | re-pin |
+| `app-extensions` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-connectors` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
+
+## Reconciliation record — 2026-10-22
+
+Measured 2026-10-22, before the docs#242 merge (22:44:11Z), against the
+manifests published under `publishedBaseUrl`, after the docs mirror
+published several `app-components` bodies in a row: the
+recurrence selectors of the scheduling step (cinatra-ai/docs#237), the
+drawing's corrected prose (cinatra-ai/docs#238), then the drawing's legend
+sentences (cinatra-ai/docs#241). This adopts the body published at 2026-10-22
+19:50:16Z (Last-Modified), sha256 `cbb8e3ac...` and `contentHash` `3afedd76...`,
+which cinatra-ai/docs#241 produced (its merge commit's version of the file
+hashes to that value; its parent's does not). All
+five bodies were fetched with one anonymous `curl -sS` each into a scratch
+directory outside every repository tree, and their hashes were compared
+with the five pins as the re-pin commit `e205e8a2` leaves them: every body
+published then was byte-identical to the artifact its pin names, as the
+`design-pin-drift` job in CI on `e205e8a2` (job 120090738176, 2026-10-22
+21:10:16Z) also read. `app`, `app-extensions`, `app-connectors` and
+`app-notifications` came back byte-identical to the artifacts their pins
+already named. The adopted `app-components` body was
+compared, as parsed JSON, with the committed copy under
+`tests/e2e/design/conformance/manifests/` that it replaces: `schemaVersion`,
+`spec` and the thirty-three surfaces the copy already declared are
+field-for-field identical, four surfaces are added after
+`scheduling-step-configured`, none is retired, and `contentHash` moved.
+No surface of the thirty-three moved, and this change edits no driver of them. This is the first case "Why a
+hash-only re-pin is refused" names, so the pin moves together with
+the drivers that answer the four surfaces. The committed artifact is now the
+verbatim published body, and both hashes of the entry in `conformance-pins.json`
+were re-derived from the adopted bytes on the branch — the manifest hash over
+the file's bytes, the spec-content hash read back out of the adopted body's own
+`contentHash` field — never typed. No other pin moved.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-components` | `drift` | 4 new surfaces, fields only: `scheduling-step-quarterly`, `scheduling-step-yearly`, `scheduling-step-configured-monthly`, `scheduling-step-configured-quarterly` | 4 drivers behind the awaiting-mount guard, their readings and two unit checks |
+| `app-extensions` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-connectors` | `match` | nothing — on 2026-10-22 the published body was still the pinned artifact (`2293c96c…`); docs#242 republished it at 22:44:11Z, adopted in the 2026-10-23 record below | none |
+| `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
+
+The four surfaces bind the six `data-field` names of the shared recurrence
+selectors, which the in-flow scheduling step and the schedule card both draw.
+That component is not on the default branch yet: it arrives with cinatra#4280.
+So, as with the Workspace surfaces of the `app` pin, each driver is written in
+full against the adopted manifest's own field sources
+(`tests/e2e/design/conformance/scheduling-recurrence-driver.ts`) and registered
+in `tests/e2e/design/conformance/contract.ts` behind `awaitingMount`: while the
+harness mounts nothing under the surface id, its battery SKIPS with that reason,
+and the same assertions run unchanged the moment the mount exists. The readings each
+driver expects are stated once
+(`src/app/design-fixtures/conformance/scheduling-recurrence-fixture-data.ts`)
+and checked against the pinned manifest without a browser.
+`scripts/design/__tests__/awaiting-mount-guard.test.mjs` names the four with the
+change they wait for, and refuses an allowlist entry or a stable-id contract row
+for them before the component exists. The harness mounts, their unit test and
+the stable-id contract rows land with the component. Every new surface is driven
+by a literal entry of the driver table, so
+`tests/e2e/design/conformance/allowlist.json` is untouched, and no body is
+frozen under the checker's fixtures.
+
+## Reconciliation record — 2026-10-23
+
+Measured 2026-10-23 against the manifests published under `publishedBaseUrl`,
+after the docs#242 merge republished the connectors manifest. All five bodies
+were fetched with one anonymous `curl -sS` each into a scratch directory
+outside every repository tree, and their hashes were compared with the five
+pins as the `3ebf9958` commit left them. `app`, `app-extensions` and
+`app-notifications` came back byte-identical to the artifacts their pins
+already named. `app-connectors` had republished, and the adopted body was
+compared, as parsed JSON, with the committed copy under
+`tests/e2e/design/conformance/manifests/` that it replaces: `schemaVersion`,
+`spec` and all eleven surfaces are field-for-field identical, and only
+`contentHash` moved. This is the case "Why a hash-only re-pin is refused"
+names: the spec source changed under an unchanged surface list, so no driver,
+harness mount or allowlist entry moves with the pin. The committed artifact is
+now the verbatim published body, and both hashes of the entry in
+`conformance-pins.json` were re-derived from the adopted bytes on the branch —
+the manifest hash over the file's bytes (`2293c96c…` before, `1f0b66a9…` now),
+the spec-content hash read back out of the adopted body's own `contentHash`
+field — never typed. Read on 2026-10-23 against main's pin `e4da7a2b…`,
+`app-components` drifted: its published body adds surfaces, so this
+reconciliation does not adopt it; the 2026-10-22 reconciliation above, in this
+same change, adopts it (`cbb8e3ac…`) with the drivers of its four new surfaces.
+No other pin moved.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-components` | `drift` (2026-10-23, against main's pin `e4da7a2b…`) | not adopted here — new surfaces, adopted (`cbb8e3ac…`) with their drivers by the 2026-10-22 record above | not this record |
+| `app-extensions` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-connectors` | `drift` | **hashes only** — byte-identical surface declarations (11 surfaces); `contentHash` moved | re-pin |
+| `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
+
+## Reconciliation record — 2026-10-23 (app)
+
+Measured 2026-10-23 against the manifests published under `publishedBaseUrl`,
+for the `app` pin after the docs mirror published the design source at the
+head of cinatra-ai/design PR 220 (`82eff46c…`). The published `app` body was
+fetched with one anonymous `curl -sS` into a scratch directory outside every
+repository tree, and its hash (`bdbae343…`) was compared with the five pins as
+the `2cc8b51b` commit left them. `app-components`, `app-extensions`,
+`app-connectors` and `app-notifications` are byte-identical to the artifacts
+their pins name (the committed copies hash to `cbb8e3ac…`, `b1f00ffc…`,
+`1f0b66a9…` and `1538d309…`), and the `design-pin-drift` annotations of main's
+check run 120203969290 report only `app` as drifted. The published `app` body
+was compared, as parsed JSON, with the committed copy under
+`tests/e2e/design/conformance/manifests/` that it replaces: `schemaVersion`,
+`spec` and the whole `surfaces` array (all six surfaces, with their fields,
+actions and states) compare equal, and the only top-level key that differs is
+`contentHash` (`038c3bc7…` before, `0652a741…` now). This is the case "Why a
+hash-only re-pin is refused" names: the spec source changed under an unchanged
+surface list, so no driver, harness mount or allowlist entry moves with the
+pin. What the spec source drew differently is, in the design PR 220 head as
+mirrored (its `specs/app.html` diff against design main), the status-pill
+roster's two new pills, Withdrawn and Reset, and the new block V.1
+"Marketplace approval states". The application's adoption of those pills
+belongs to the cinatra#4296 unit, after the design source merges. The committed
+artifact is now the verbatim published body, and both hashes of the entry in
+`conformance-pins.json` were re-derived from the adopted bytes — the manifest
+hash over the file's bytes (`684604141…` before, `bdbae343…` now), the
+spec-content hash read back out of the adopted body's own `contentHash` field —
+never typed. No other pin moved.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app` | `drift` | **hashes only** — byte-identical surface declarations (6 surfaces); `contentHash` moved with the roster's two new pills and block V.1 | re-pin |
+| `app-components` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-extensions` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-connectors` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
 
 ## Running it locally
 

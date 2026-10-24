@@ -20,6 +20,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { parseSpecCommit } from "../../ci/lib/design-pin.mjs";
+
 const REPO_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -82,7 +84,10 @@ describe("the run surface's drawing pin is recorded", () => {
     expect(
       CONTRACT.runSurfaceDrawingPin.specCommitDeliberatelyNotMoved,
     ).toMatch(/run-recommendation-chip-row/);
-    expect(CONTRACT.specCommit).toMatch(/app-lifecycle-cards\.html$/);
+    expect(parseSpecCommit(CONTRACT.specCommit)).toEqual({
+      revision: "06230d4e8de397e86e3216199342d15c0b4fc5a6",
+      paths: ["specs/app-lifecycle-cards.html", "specs/app-artifact-review.html"],
+    });
   });
 });
 

@@ -1,8 +1,104 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-components.html",
-  "contentHash": "sha256:2be889540aced3df6ca9f1c6998b54c3d3e53a97b5f84c40ad460ac15680072c",
+  "contentHash": "sha256:3afedd763f349a9161a64f4d4e7f356a1f1d4d3373d3b67d7c484f07a051ba20",
   "surfaces": [
+    {
+      "id": "button",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "card",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "input",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "select",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "dialog",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "badge",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "tabs",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "toolbar",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "toolbar-nested",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "sidebar",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "sidebar-group-label",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "tooltip",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "avatar",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "form",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "checkbox",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "alert",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
     {
       "id": "toast",
       "fields": [
@@ -21,6 +117,24 @@
           "outcome": "toast-dismissed"
         }
       ],
+      "states": []
+    },
+    {
+      "id": "table",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "command",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "breadcrumb",
+      "fields": [],
+      "actions": [],
       "states": []
     },
     {
@@ -44,6 +158,66 @@
       "states": [
         "loading"
       ]
+    },
+    {
+      "id": "pagination",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "skeleton",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "empty",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "accordion",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "separator",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "toggle",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "calendar",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "combobox",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "scroll-area",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "input-otp",
+      "fields": [],
+      "actions": [],
+      "states": []
     },
     {
       "id": "scheduling-step",
@@ -76,6 +250,86 @@
         "error",
         "loading"
       ]
+    },
+    {
+      "id": "scheduling-step-quarterly",
+      "fields": [
+        {
+          "field": "recurring-quarter-anchor",
+          "source": "selection.quarterAnchor"
+        },
+        {
+          "field": "recurring-monthly-mode",
+          "source": "selection.monthlyMode"
+        },
+        {
+          "field": "recurring-day-of-month",
+          "source": "selection.dayOfMonth"
+        }
+      ],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "scheduling-step-yearly",
+      "fields": [
+        {
+          "field": "recurring-yearly-month",
+          "source": "selection.yearlyMonth"
+        },
+        {
+          "field": "recurring-monthly-mode",
+          "source": "selection.monthlyMode"
+        },
+        {
+          "field": "recurring-nth-week",
+          "source": "selection.nthWeek"
+        },
+        {
+          "field": "recurring-monthly-weekday",
+          "source": "selection.monthlyWeekday"
+        }
+      ],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "scheduling-step-configured-monthly",
+      "fields": [
+        {
+          "field": "recurring-monthly-mode",
+          "source": "selection.monthlyMode"
+        },
+        {
+          "field": "recurring-day-of-month",
+          "source": "selection.dayOfMonth"
+        }
+      ],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "scheduling-step-configured-quarterly",
+      "fields": [
+        {
+          "field": "recurring-quarter-anchor",
+          "source": "selection.quarterAnchor"
+        },
+        {
+          "field": "recurring-monthly-mode",
+          "source": "selection.monthlyMode"
+        },
+        {
+          "field": "recurring-nth-week",
+          "source": "selection.nthWeek"
+        },
+        {
+          "field": "recurring-monthly-weekday",
+          "source": "selection.monthlyWeekday"
+        }
+      ],
+      "actions": [],
+      "states": []
     }
   ]
 }
