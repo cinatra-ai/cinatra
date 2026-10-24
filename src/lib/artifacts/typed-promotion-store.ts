@@ -23,9 +23,12 @@ import {
   mimeAccepted,
   planTypedPromotion,
   promotionRevisionId,
+  provesPromotionRetype,
+  PROMOTION_RETYPE_HISTORY_EFFECT,
   type ExtensionOwnType,
   type MatcherAssociation,
   type PromotableRow,
+  type PromotionRetypeEvent,
   type TypedPromotionRefusal,
 } from "./typed-promotion";
 
@@ -186,6 +189,64 @@ export function readPersonAssertion(input: {
   );
 }
 
+/**
+ * THE STORED PROOF of an earlier retype by this road (cinatra#4266), as one
+ * read: the row's own change events that moved it INTO the target type.
+ *
+ * The statement only narrows the rows; `provesPromotionRetype` decides, over
+ * every field it reads, whether one of them is the road's own retype. A row
+ * that a later caller finds already in the target type, with no such event,
+ * was typed that way from the start (or by another road), and the converging
+ * branch appends nothing to it.
+ *
+ * Bounded: the newest 20 type-changing events into the target type. A row with
+ * more than that is read on its newest ones only, and an older proof that falls
+ * outside the bound proves nothing (the branch then refuses; it never appends
+ * on a guess).
+ */
+export function buildPromotionRetypeProofQuery(
+  schema: string,
+  input: { orgId: string; artifactId: string; toType: string },
+): { text: string; values: unknown[] } {
+  const s = schema.replaceAll('"', '""');
+  return {
+    text: `SELECT operation, history_effect, object_type, before_snapshot, after_snapshot, tombstoned_at
+FROM "${s}"."object_change_event"
+WHERE object_id = $1 AND org_id = $2 AND object_type = $3
+  AND operation = 'update' AND tombstoned_at IS NULL
+  AND (before_snapshot->>'type') IS DISTINCT FROM $3
+ORDER BY created_at DESC
+LIMIT 20`,
+    values: [input.artifactId, input.orgId, input.toType],
+  };
+}
+
+export function readPromotionRetypeProof(input: {
+  orgId: string;
+  artifactId: string;
+  toType: string;
+}): boolean {
+  ensurePostgresSchema();
+  const [res] = runPostgresQueriesSync({
+    connectionString: conn(),
+    queries: [buildPromotionRetypeProofQuery(postgresSchema, input)],
+  });
+  const rows = res?.rows;
+  if (!Array.isArray(rows)) return false;
+  const events: PromotionRetypeEvent[] = rows.map((r) => {
+    const row = (r ?? {}) as Record<string, unknown>;
+    return {
+      operation: row.operation,
+      historyEffect: row.history_effect,
+      objectType: row.object_type,
+      beforeSnapshot: row.before_snapshot,
+      afterSnapshot: row.after_snapshot,
+      tombstonedAt: row.tombstoned_at,
+    };
+  });
+  return provesPromotionRetype(events, input.toType);
+}
+
 export type PromoteMatchedArtifactTypeResult =
   | {
       ok: true;
@@ -212,7 +273,8 @@ export type PromoteMatchedArtifactTypeResult =
  * CONVERGENT ON `already-promoted`. The two writes are two transactions, because
  * the canonical objects writer owns its own; an interruption between them leaves
  * a retyped row whose promotion revision is missing. So the `already-promoted`
- * branch does not simply refuse: it re-runs the idempotent append first, and
+ * branch does not simply refuse: when stored state proves that this road
+ * retyped the row (cinatra#4266), it re-runs the idempotent append first, and
  * refuses only when there was nothing left to do.
  */
 export async function promoteMatchedArtifactType(input: {
@@ -296,7 +358,17 @@ export async function promoteMatchedArtifactType(input: {
       // second rule.
       input.confirmed &&
       (personAsserted || (matcher !== null && matcher.confidence >= matcher.threshold)) &&
-      mimeAccepted(input.ownType.acceptsMimes, row.latestRevision.mime)
+      mimeAccepted(input.ownType.acceptsMimes, row.latestRevision.mime) &&
+      // STORED STATE MUST PROVE THE RETYPE (cinatra#4266). The authorities
+      // above say a promotion MAY run; they do not say one DID. A row typed
+      // natively from its upload carries the target type with every revision,
+      // and an append there would record a promotion that never happened. Read
+      // last, so a refusal above costs no read.
+      readPromotionRetypeProof({
+        orgId: input.orgId,
+        artifactId: input.artifactId,
+        toType: input.ownType.typeId,
+      })
     ) {
       const landed = appendPromotionRevision({
         orgId: input.orgId,
@@ -386,7 +458,9 @@ const canonicalRetype: TypedPromotionRetype = async (input) => {
       },
       {
         actor: { actorId: input.actor.userId, actorKind: "user", orgId: input.actor.orgId },
-        historyEffect: "reversible-internal",
+        // The proof of an interrupted promotion reads this effect back
+        // (`provesPromotionRetype`), so both name one constant.
+        historyEffect: PROMOTION_RETYPE_HISTORY_EFFECT,
         expectedBaseVersion: input.expectedVersion,
         authority: input.authority,
       },

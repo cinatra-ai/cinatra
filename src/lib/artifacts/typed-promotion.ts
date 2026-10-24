@@ -52,6 +52,8 @@
 
 import { createHash } from "node:crypto";
 
+import { canonicalJsonStringify } from "@/lib/object-history/event-snapshot";
+
 // ---------------------------------------------------------------------------
 // The refusals — closed and named.
 // ---------------------------------------------------------------------------
@@ -336,4 +338,81 @@ RETURNING id, revision`,
       input.createdBy,
     ],
   };
+}
+
+// ---------------------------------------------------------------------------
+// The stored proof the converging branch needs (cinatra#4266).
+// ---------------------------------------------------------------------------
+
+/**
+ * The history effect the road's own retype records. Shared with the store's
+ * production retype so that the write and the proof that reads it back cannot
+ * drift apart.
+ */
+export const PROMOTION_RETYPE_HISTORY_EFFECT = "reversible-internal";
+
+/** One `object_change_event` row, as the store read it. Every field is
+ *  untrusted: a value this module does not recognise proves nothing. */
+export interface PromotionRetypeEvent {
+  operation: unknown;
+  historyEffect: unknown;
+  objectType: unknown;
+  beforeSnapshot: unknown;
+  afterSnapshot: unknown;
+  tombstonedAt: unknown;
+}
+
+function snapshotObject(value: unknown): Record<string, unknown> | null {
+  let v = value;
+  if (typeof v === "string") {
+    try {
+      v = JSON.parse(v);
+    } catch {
+      return null;
+    }
+  }
+  return v !== null && typeof v === "object" && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : null;
+}
+
+/**
+ * DOES STORED STATE PROVE THAT AN EARLIER PROMOTION CALL RETYPED THIS ROW?
+ *
+ * The converging branch completes an interrupted promotion: the retype
+ * committed, the append did not. A row that carries the target type does not
+ * by itself prove that. A file typed natively from its upload carries it too,
+ * and an append on that row would put a promotion in its history that never ran
+ * (cinatra#4266; app-artifacts §VI.1: "a user-sourced meaning assertion over
+ * those types, never a re-type").
+ *
+ * The proof is the change event that the road's own retype commits through the
+ * canonical history-aware writer, in its exact shape: an `update` with the
+ * road's history effect, whose BEFORE snapshot names a different type, whose
+ * AFTER snapshot names the target type, and whose data did not move (the road
+ * renames the work, it never changes it). Allow-list: a tombstoned event, a
+ * create, a content-only update, a retype into another type, a retype that also
+ * changed the data, and any snapshot this function cannot read prove nothing.
+ */
+export function provesPromotionRetype(
+  events: readonly PromotionRetypeEvent[] | null | undefined,
+  toType: string,
+): boolean {
+  if (!Array.isArray(events) || typeof toType !== "string" || toType === "") return false;
+  return (events as readonly PromotionRetypeEvent[]).some((e: PromotionRetypeEvent | null) => {
+    if (!e || typeof e !== "object") return false;
+    if (e.operation !== "update") return false;
+    if (e.historyEffect !== PROMOTION_RETYPE_HISTORY_EFFECT) return false;
+    if (e.objectType !== toType) return false;
+    if (e.tombstonedAt !== null && e.tombstonedAt !== undefined) return false;
+    const before = snapshotObject(e.beforeSnapshot);
+    const after = snapshotObject(e.afterSnapshot);
+    if (!before || !after) return false;
+    if (typeof before.type !== "string" || before.type === "" || before.type === toType) {
+      return false;
+    }
+    if (after.type !== toType) return false;
+    if (!Object.hasOwn(before, "data") || !Object.hasOwn(after, "data")) return false;
+    return canonicalJsonStringify(before.data) === canonicalJsonStringify(after.data);
+  });
 }
