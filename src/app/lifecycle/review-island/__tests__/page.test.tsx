@@ -62,6 +62,7 @@ vi.mock("@cinatra-ai/agents/review-gate-states", () => ({
   ReviewGateLoading: () => createElement("div", null, "island-panel-loading"),
 }));
 
+import { ARTIFACT_RENDERER_SESSION_DATA_ROAD } from "@/lib/artifacts/artifact-renderer-props";
 import { encodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import { reviewTargetStreamKey } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
@@ -163,10 +164,13 @@ describe("the island draws §III's ladder for the gate the ref names", () => {
       permissions: Promise.resolve({ canDecide: true, canComment: true }),
     });
     await renderIsland(REF);
+    // cinatra#4311: the cookie reader's displays are handed the session data
+    // road, and nothing else of the roads (island-data-road-4311.test.tsx).
     expect(loadReviewGateSurface).toHaveBeenCalledWith({
       runId: "run-1",
       reviewTaskId: "task-1",
       actorCtx: ACTOR,
+      roads: { dataRoad: ARTIFACT_RENDERER_SESSION_DATA_ROAD },
     });
   });
 

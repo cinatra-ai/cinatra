@@ -21,8 +21,8 @@
  *      none — the display's own no-series reading, never a core one.
  *   4. Core never DRAWS it: the never-blank floor shows no backend address.
  */
-import { readFileSync, existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -174,6 +174,36 @@ describe("(2) the surface chooses the road", () => {
       reviewTaskId: "task_4311",
     }) as Record<string, unknown>;
     expect(Object.prototype.hasOwnProperty.call(roads, "dataRoad")).toBe(false);
+  });
+
+  it("the island's cookie branch names the session data road and nothing else", () => {
+    // Read loosely, so a red is the code's answer rather than a type error.
+    const make = (surfaceRoads as Record<string, unknown>).cookieIslandReviewSurfaceRoads;
+    expect(typeof make).toBe("function");
+    const roads = (make as () => Record<string, unknown>)();
+    expect(Object.keys(roads)).toEqual(["dataRoad"]);
+    expect(roads.dataRoad).toBe(namedRoad());
+  });
+
+  it("every surface that loads a review gate is classified: the review page and the island, each naming its road", () => {
+    // THE CLASS, not one instance: a cookie surface that renders a review or a
+    // lifecycle card reaches its targets through the gate loader, so every
+    // production caller of it is listed here, with the road it names. A new
+    // caller fails this until it names a road or a tested reason it has none.
+    const callers = (readdirSync(join(REPO_ROOT, "src"), { recursive: true }) as string[])
+      .map((f) => `src/${f.split(sep).join("/")}`)
+      .filter((f) => /\.tsx?$/.test(f) && !/\/__tests__\//.test(f) && !/\.test\.tsx?$/.test(f))
+      .filter((f) => f !== "src/app/artifacts/[id]/review-gate-ports.ts")
+      .filter((f) => /loadReviewGateSurface\(\{/.test(source(f)))
+      .sort();
+    expect(callers).toEqual([
+      "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
+      "src/app/lifecycle/review-island/page.tsx",
+    ]);
+    const reviewPage = source(callers[0]);
+    expect(reviewPage).toMatch(/roads: firstPartyReviewSurfaceRoads\(\)/);
+    const island = source(callers[1]);
+    expect(island).toMatch(/roads = cookieIslandReviewSurfaceRoads\(\);/);
   });
 
   it("the shared preparation path carries the named road from the surface to the binder", () => {

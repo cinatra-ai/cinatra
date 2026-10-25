@@ -148,12 +148,31 @@ export function hostArtifactContentBuilder(): ArtifactContentBuilder {
  */
 export function firstPartyReviewSurfaceRoads(): ReviewSurfaceRoads {
   // THE DATA ROAD (cinatra#4311): a first-party reader carries a cookie, so the
-  // session road reaches the application's own series route. The island below
-  // names none: its reader holds no cookie, and its sealed road is a later leg.
+  // session road reaches the application's own series route. The island's
+  // CREDENTIAL road below names none: that reader holds no cookie, and its
+  // sealed road is a later leg. The island's COOKIE branch names the session
+  // data road through `cookieIslandReviewSurfaceRoads` below.
   return {
     buildContent: hostArtifactContentBuilder(),
     dataRoad: ARTIFACT_RENDERER_SESSION_DATA_ROAD,
   };
+}
+
+/**
+ * The roads for the island's COOKIE branch (cinatra#4311): the session data
+ * road, and nothing else.
+ *
+ * The lifecycle card's cookie-session hosts (the chat thread, the run card and
+ * the page gate region) frame the island with no credential, so the island's
+ * reader there is the first-party reader of a session cookie, and the session
+ * road reaches the application's own series route with that cookie. Every
+ * other road stays the one this branch always had: the session byte addresses,
+ * the content channel's named absence and the first-party capture pair. Only
+ * the data road is named here, so this is the one difference from the call
+ * without roads.
+ */
+export function cookieIslandReviewSurfaceRoads(): ReviewSurfaceRoads {
+  return { dataRoad: ARTIFACT_RENDERER_SESSION_DATA_ROAD };
 }
 
 /**
