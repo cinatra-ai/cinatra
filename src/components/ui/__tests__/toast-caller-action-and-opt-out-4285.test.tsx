@@ -113,7 +113,7 @@ function buttonNamesIn(rendered: HTMLElement): string[] {
 }
 
 describe("cinatra#4285: the Copy control in a rendered Toaster", () => {
-  it("control: a toast with no action carries the default Copy and the Close", async () => {
+  it("control: a toast with a non-empty text message and no action carries the default Copy and the Close", async () => {
     const message = "Install failed: reference CIN-4285-C0.";
     const rendered = await raiseToast(message, {});
 
