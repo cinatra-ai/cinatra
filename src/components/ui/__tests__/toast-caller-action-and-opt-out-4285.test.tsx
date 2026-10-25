@@ -15,9 +15,10 @@
  * library, and the test reads the buttons inside that toast by their
  * accessible names.
  *
- * The first case is the control: a toast with no action carries Copy and
- * Close, so the absence of Copy in the other two cases is a reading of the
- * rendered toast and not of a Toaster that never draws Copy.
+ * The first case is the control: a toast with a non-empty text message (or a
+ * non-empty `copyText`) and no action carries Copy and Close, so the absence
+ * of Copy in the other two cases is a reading of the rendered toast and not of
+ * a Toaster that never draws Copy.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
