@@ -961,6 +961,68 @@ never typed. No other pin moved.
 | `app-connectors` | `match` | nothing — the published body is still the pinned artifact | none |
 | `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
 
+## Reconciliation record — 2026-10-24 (app-components)
+
+Measured 2026-10-24 against the manifest published under `publishedBaseUrl`,
+for the `app-components` pin after the docs mirror published the design
+source's version 0.7.1 of the components spec (the design source PR,
+with the cinatra-ai/docs PR 247 publication). The published `app-components` body was fetched with
+one anonymous `curl -sS` into a scratch directory outside every repository
+tree. It hashes to `sha256:54b4bd7b677437bbd2dbb2117f0cb78c5dbf7c4ea066ee0949e7d86372193051`,
+and the `contentHash` read back out of its own body is
+`sha256:a194bc10172b7cbea6df7f4d4800df6c73c38b524d8834d94d08cc26a92aaabc`; the
+pin named `cbb8e3ac…` and `3afedd76…` before. The published body was compared,
+as parsed JSON, with the committed copy under
+`tests/e2e/design/conformance/manifests/` that it replaces: only the top-level
+`contentHash` differs. This is a prose-only change: the spec source changed one
+sentence, the description of the Breadcrumb, and no drawn element, surface,
+field, action or state moved. It is the case "Why a hash-only re-pin is
+refused" names, so no driver, harness mount or allowlist entry moves with the
+pin. The committed artifact is now the verbatim published body, and both
+hashes of the entry in `conformance-pins.json` were re-derived from the
+adopted bytes, never typed. No other pin moved.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-components` | `drift` | **hashes only** — byte-identical surface declarations; `contentHash` moved with the Breadcrumb description sentence (prose, version 0.7.1) | re-pin |
+| `app-extensions` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-connectors` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
+
+## Reconciliation record — 2026-10-25 (app)
+
+Measured 2026-10-25 against the manifest published under `publishedBaseUrl`,
+for the `app` pin after the docs mirror published version 0.14.0 of the
+application design spec (cinatra-ai/docs PR 248, the marketplace approval
+states drawn as a table on the design system page). The `design-pin-drift`
+annotations of main's push run at `e164c00c` report only `app` as drifted. The
+published `app` body was fetched with one anonymous `curl -sS` into a scratch
+directory outside every repository tree, and its bytes equal the file on the
+docs main branch. It hashes to
+`sha256:32e9d03e579a238296df7319e1fa24306ac176b1404f398c98c1fea88f6d1162`,
+and the `contentHash` read back out of its own body is
+`sha256:760599a032d86b6e7cfb2bd3a7d20f3735502ea1d05999bb9fce85beb2b9775d`; the
+pin named `bdbae343…` and `0652a741…` before. The published body was compared,
+as parsed JSON, with the committed copy under
+`tests/e2e/design/conformance/manifests/` that it replaces: `schemaVersion`,
+`spec` and the whole `surfaces` array (the same six surfaces, with their
+fields, actions and states) compare equal, and the only top-level key that
+differs is `contentHash`. This is the case "Why a hash-only re-pin is refused"
+names: the spec source changed under an unchanged surface list, so no driver,
+harness mount or allowlist entry moves with the pin. The committed artifact is
+now the verbatim published body, and both hashes of the entry in
+`conformance-pins.json` were re-derived from the adopted bytes, never typed. No
+other pin moved.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app` | `drift` | **hashes only** — byte-identical surface declarations (6 surfaces); `contentHash` moved with the marketplace approval states table (version 0.14.0) | re-pin |
+| `app-components` | `match` in that run | nothing — this record does not move it | none |
+| `app-extensions` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-connectors` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
+
 ## Running it locally
 
 ```sh
