@@ -35,6 +35,7 @@ import { LifecycleScheduleCardFixtures } from "./lifecycle-schedule-card-fixture
 import { RunStepRailConformanceFixture } from "./run-step-rail-conformance-fixtures";
 import { ToastConformanceFixture } from "./toast-fixture";
 import { ReviewGateStateConformanceFixtures } from "./review-gate-state-fixtures";
+import { EmailGateConformanceFixtures } from "./gate-field-fixtures";
 import { LifecycleResolveFixtures } from "./lifecycle-resolve-fixtures";
 import { LifecycleTierFloorFixture } from "./lifecycle-tier-fixture";
 import { LifecycleOneOffFixtures } from "./lifecycle-one-off-fixtures";
@@ -373,6 +374,21 @@ export default async function ConformanceHarnessPage({ searchParams }: {
                 the blocked reason comes from the closed set the surface model
                 owns and the panel writes its own words from it. */}
             <ReviewGateStateConformanceFixtures />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              Email gate fields (surfaces: email-gate-sender-field,
+              email-gate-drafts-review-field, email-gate-recipients-review-field)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#4319: the REAL field renderers of the email extension,
+                loaded through the build's field-renderer map and handed fixed
+                snapshots. No mail account, no CRM, no credential. */}
+            <EmailGateConformanceFixtures />
           </CardContent>
         </Card>
 
