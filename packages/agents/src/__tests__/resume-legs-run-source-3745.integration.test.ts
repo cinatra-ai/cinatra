@@ -545,9 +545,13 @@ describe.skipIf(!HAS_DB)("the dispatch transaction carries the bound graph, or r
   });
 });
 
-/** Barrier: a backend is blocked on a row lock of the binding table (never a sleep alone). */
+/** Barrier: a backend is blocked on a row lock of the binding table (never a sleep alone).
+ * `c` is the lock holder, inside its open transaction. Postgres reads the activity of all sessions once per
+ * transaction, at the first access, and shows that same snapshot until the transaction ends, so every poll first
+ * discards the snapshot; without that the barrier only ever sees the sessions as they were at its first poll. */
 async function waitForBindingLockWaiter(c: Client) {
   for (let i = 0; i < 200; i++) {
+    await c.query("SELECT pg_stat_clear_snapshot()");
     const r = await c.query(
       `SELECT count(*)::int AS n FROM pg_stat_activity
         WHERE wait_event_type = 'Lock' AND pid <> pg_backend_pid()
