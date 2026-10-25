@@ -7,60 +7,129 @@
 // directions: a site without a reading fails, and a reading whose site is gone
 // fails.
 //
-// Pure functions over file text plus one git listing; only `node:` built-ins
-// are imported, so the scan also runs under `node --experimental-strip-types`.
+// The scan reads the TypeScript syntax tree of each file (`ts.createSourceFile`
+// of the repository's own `typescript`), never its text: a comment or the text
+// of a string or template is no element and no evidence, and every element is
+// one node with its own position, so each call site gets its own reading.
 //
-// Six rules keep the scan fail-closed:
+// Seven rules keep the scan fail-closed:
 //
 //   1. THE WHOLE TREE. Files come from `git ls-files --cached --others
 //      --exclude-standard` over `src/` and `packages/` (the toast-import-guard
-//      road): every tracked or new, not-ignored source file, and never a
-//      node_modules tree. A git failure, an empty listing or a listed file that
-//      cannot be read throws; it is never an empty result.
+//      road): every tracked or new, not-ignored .ts, .tsx, .mts, .cts, .js,
+//      .jsx, .mjs or .cjs file, and never a node_modules tree. A git failure, an
+//      empty listing or a listed file that cannot be read throws; it is never an
+//      empty result. A file that does not parse is a problem no reading clears.
 //   2. ANY REFERENCE COUNTS. A file is in scope when its text holds any
 //      checkbox token (`CHECKBOX_TOKEN`): an identifier that contains
-//      `Checkbox`, or the word checkbox in any letter case as a quoted value
+//      `Checkbox` from a capital C in any letter case after it (`CheckBox`,
+//      `CHECKBOX`), or the word checkbox in any letter case as a quoted value
 //      (`type="CHECKBOX"`, `role='checkbox'`), `menuitemcheckbox`, `=checkbox`,
 //      `checkbox]`, a `ui/checkbox` import or `react-checkbox`. It is also in
-//      scope when it holds a site of rule 3 without any token. The number of
-//      tokens is recorded per file, so any new reference in a read file, an
-//      alias the element scan cannot name included, changes the count and fails
-//      until the file is read again.
-//   3. NAMED ELEMENTS. A site is a JSX opening tag whose name contains
-//      `Checkbox`; a tag named by a local alias of such a name (`const C =
-//      R.Checkbox`, `import { Checkbox as C }`, `const { Checkbox: C } = R`);
-//      a tag named by a name another file exports a checkbox under (`export {
-//      Checkbox as Tick }`, `export const Tick = Checkbox`); any element whose
-//      `type` or `role` is the word checkbox or menuitemcheckbox in any letter
-//      case, or is an expression that holds that word; and an `input` or `Input`
-//      whose `type` is an expression, or that has a spread and no literal
-//      `type`, because such an element may be a checkbox (it is UNRESOLVED and
-//      must be read). An opening tag with no end is a site too, never skipped.
-//      A checkbox exported as a default export cannot be followed by name, so
-//      it is a problem that no reading clears.
-//   4. IDENTITY, NOT COUNTS. Each recorded site names an anchor that must stand
+//      scope when it holds a site of rules 4 or 5 without any token, a load
+//      of rule 5 that binds no name, or an export of a checkbox name (rule 3,
+//      `export const checkbox`). The number of tokens is recorded per file,
+//      so any new reference in a read file changes the count and fails until
+//      the file is read again.
+//   3. NAMES ARE RESOLVED, NOT MATCHED. A name is a checkbox when it is spelled
+//      with checkbox in any letter case, from any letter (`Checkbox`,
+//      `CheckBox`, `MenuCHECKBOXItem`, `checkbox` in `{ checkbox as Box }`,
+//      `Kit.checkbox` or `{ checkbox: Box }`), is bound by an
+//      import whose module names a checkbox, or is bound to such a name in its
+//      file: a renamed import (`{ Checkbox as Tick }`), `const Tick = R.Checkbox`
+//      (through parentheses, `as`, `!`, `? :`, `||`, `??` and `&&`), a
+//      destructured key (`const { Checkbox: Box } = R`, a parameter's
+//      `({ Checkbox: Box })`). A name another file exports a checkbox under
+//      (`export { Tick }`, `export { Checkbox as Tick }`, `export const Tick =
+//      Checkbox`) is a checkbox in every file, followed until no new name
+//      appears. A checkbox exported as a default export (`export default
+//      Checkbox`, `export default function Checkbox`, `export { X as default }`)
+//      cannot be followed by name, so it is a problem no reading clears. A
+//      member key the syntax settles is a name like `R.Checkbox`, on any value:
+//      `R["Check" + "box"]`, a template of strings, a choice of strings, a
+//      number, and the same as a destructured key (`{ ["Check" + "box"]: B }`).
+//   4. EVERY ELEMENT. A site is a JSX element whose tag has a segment that is a
+//      checkbox name or holds checkbox in any letter case (`<UI.Tick />`,
+//      `<M.CheckboxItem />`, `<CheckBox />`, `<md-checkbox>`, `<sl-checkbox>`);
+//      any element whose `type` or `role` is the word checkbox or
+//      menuitemcheckbox in any letter case (a literal, or a literal inside its
+//      expression); an element whose `role` is an expression, or whose role a
+//      later spread may set; and an `input` or `Input`-named wrapper whose
+//      `type` is an expression or that has a spread after its last literal type
+//      (a spread before a literal is overridden by it). Attributes are read in
+//      source order, an object-literal spread by its own keys. An element the
+//      scan cannot settle is UNRESOLVED and must be read.
+//   5. EVERY OTHER USE IS A SITE. A checkbox name used as a value anywhere but
+//      a JSX tag, an import or export, a declaration, a type or an alias of rule
+//      3 (passed on, put in an object, given to createElement or memo, assigned
+//      to `module.exports`) is an UNRESOLVED site that must be read. So is
+//      every use of a MODULE OBJECT the scan cannot follow by name: a name
+//      bound to a whole module (`import * as P`, `import P = require()`, a
+//      `require()` or `import()` bound to a name, an alias or a rest of one) of
+//      a module that may export a checkbox (`moduleObjectsOf`: a file of the
+//      tree that exports a checkbox name or re-exports such a module whole,
+//      the root `tsconfig.json` path aliases and the workspace packages'
+//      `package.json` entries resolved to their files; and
+//      any module outside the tree but a Node built-in, which the scan does not
+//      read). A computed member of it anywhere in a chain (`P[k]`, `P.a[k]`)
+//      or a computed destructuring key on it (`const { [k]: B } = P`) whose key
+//      the syntax does not settle, and any use of it as a value but a member
+//      read by name (passed on, put in an object, spread, exported, `export *
+//      as`), is a site; a file that re-exports a module outside the tree whole
+//      is such a module too. A VALUE FROM OUTSIDE THE TREE is a name bound by
+//      any import or load of a module outside the tree (a default or named
+//      import, `.default` of a load, a destructured `default`), a name another
+//      file exports such a value under (followed only under that exported name)
+//      or imports from such a re-exporting file, and a name bound to a member read or a call of one (`const UI =
+//      makeUi()`); React's hooks hand back their arguments (`useState({})` is
+//      the tree's value, `useContext(OutsideCtx)` is from outside). A computed
+//      member or a computed destructuring key of such a value is a site. A load
+//      of a module outside the tree that binds no name (`() => import("@x/y")`,
+//      `[import("x")]`, `import("x").then(...)`), and every load whose
+//      specifier is no string (`import(url)`, bound or not), hands a module on
+//      that no name follows: the file's reading names those loads (their
+//      number, a pattern each matches, a sentence), so a new one fails until
+//      it is read. A value of the tree (a local, a prop, an import of a file of
+//      the tree) holds a checkbox only through a use this rule makes a site
+//      where it enters (a checkbox name, a module object, a load). LIMITS: the
+//      scan follows names in one file, not scopes (a parameter that shares a
+//      name with an outside value counts as one); a value from outside handed
+//      on whole as a value (an argument, a prop, an object value, a return)
+//      and a value an outside module passes to a callback of the tree are not
+//      followed into the code that receives them; a value from outside that a
+//      tree file exports is followed only under its own exported name, so a
+//      rename on import (`import { ui as kit }`) or on re-export
+//      (`export { ui as kit } from "./ui"`), a namespace import of the
+//      exporting file or of a barrel of it (`import * as U from "./ui";
+//      U.ui[k]`, `const { ui } = U`), a default export of it and a re-import
+//      under another name are not followed (the tree had no site of these
+//      forms when this was written); rule 4 reads JSX elements,
+//      so `createElement("input", { type: t })` is a site only where it names
+//      a checkbox or holds the word.
+//   6. IDENTITY, NOT COUNTS. Each recorded site names an anchor that must stand
 //      in exactly one found site of its file, with the same tag; so removing one
 //      checkbox and adding another in the same file fails even though the count
-//      of sites is unchanged.
-//   5. NO EMPTY READING. Every text a reading holds (anchor, tag, reading,
-//      mentions, each pinned text, each evidence entry, the reason a box stays)
-//      must hold more than white space; a reading and a reason are sentences of
-//      20 characters at least. A pinned text must stand in the CODE of its
-//      file, not only in one of its comments.
-//   6. CALLERS ARE FOUND BY EVERY NAME. A shared component whose box is read at
-//      its callers (`COMPONENT_CALLERS` in the readings) is found under its own
-//      name, under a name another file exports it as, under a local alias and
-//      as `<X.Name`. Any other use of one of those names in code (a value
-//      passed on, a member of an object, a createElement call) is a problem,
-//      because a caller could hide behind it.
+//      of sites is unchanged. Every change handler (`on…`) and every spread of
+//      an element must be named by the reading.
+//   7. NO EMPTY READING. Every text a reading holds must hold more than white
+//      space; a reading and a reason are sentences of 20 characters at least. A
+//      pinned text must stand in the CODE of its file: not only in a comment and
+//      not only inside a string or template. A switch counts as drawn only as a
+//      JSX element inside the site's element.
+//
+// Callers (`COMPONENT_CALLERS` in the readings): a shared component whose box
+// is read at its callers is resolved by the same rules under its own name, and
+// each of its call sites (one JSX element) needs its own reading.
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { builtinModules } from "node:module";
 import path from "node:path";
+import ts from "typescript";
 
 export const SCAN_ROOTS = ["src", "packages"] as const;
 
-export const SOURCE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"] as const;
+export const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"] as const;
 
 /** A test, mock or stub file is not a call site of the application. */
 export function isTestPath(rel: string): boolean {
@@ -78,7 +147,7 @@ function anyCase(word: string): string {
 const CB = anyCase("checkbox");
 
 export const CHECKBOX_TOKEN = new RegExp(
-  `Checkbox|["'\`]${CB}["'\`]|${anyCase("menuitem")}${CB}|=${CB}|${CB}\\]|ui\\/${CB}|react-${CB}`,
+  `C${anyCase("heckbox")}|["'\`]${CB}["'\`]|${anyCase("menuitem")}${CB}|=${CB}|${CB}\\]|ui\\/${CB}|react-${CB}`,
   "g",
 );
 
@@ -88,7 +157,9 @@ export function countCheckboxTokens(text: string): number {
 
 /** Every tracked or new, not-ignored source file under the scan roots, repo-relative. */
 export function listSourceFiles(repoRoot: string): string[] {
-  const globs = SCAN_ROOTS.flatMap((root) => SOURCE_EXTENSIONS.map((ext) => `${root}/**/*${ext}`));
+  // `:(glob)` makes `**/` match zero or more folders, so a file right under a root (`src/proxy.ts`) is listed
+  // too; a plain pathspec `src/**/*.ts` needs a folder between `src/` and the file.
+  const globs = SCAN_ROOTS.flatMap((root) => SOURCE_EXTENSIONS.map((ext) => `:(glob)${root}/**/*${ext}`));
   const out = execFileSync(
     "git",
     ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ...globs],
@@ -99,213 +170,1134 @@ export function listSourceFiles(repoRoot: string): string[] {
   return files.sort();
 }
 
-export type FoundSite = {
-  /** The tag name as written, for example `Checkbox` or `CheckboxPrimitive.Root`. */
-  tag: string;
-  /** 1-based line of the `<`. */
-  line: number;
-  /** The opening tag's text, from `<` to its closing `>` (to the end of the text when it has none). */
-  openingTag: string;
-  /** The element's children text up to its closing tag (empty when self-closing). */
-  body: string;
-  /** Why the scan cannot tell whether it draws a checkbox (rule 3), when it cannot. */
-  unresolved?: string;
-};
+// ---------------------------------------------------------------------------
+// The syntax tree
+// ---------------------------------------------------------------------------
 
-const IDENT = /^[A-Za-z_$][\w$]*$/;
+/** The script kind the compiler gives the file's extension; an unknown extension throws. */
+export function scriptKindOf(file: string): ts.ScriptKind {
+  if (file.endsWith(".tsx")) return ts.ScriptKind.TSX;
+  if (file.endsWith(".jsx")) return ts.ScriptKind.JSX;
+  if (/\.[cm]?js$/.test(file)) return ts.ScriptKind.JS;
+  if (/\.[cm]?ts$/.test(file)) return ts.ScriptKind.TS;
+  throw new Error(`${file}: not a source file the scan reads`);
+}
+
+export function parseSource(file: string, text: string): ts.SourceFile {
+  return ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, scriptKindOf(file));
+}
+
+function lineOf(sf: ts.SourceFile, pos: number): number {
+  return sf.getLineAndCharacterOfPosition(pos).line + 1;
+}
+
+/** The parse errors of a file, each as `file:line: message`; [] when it parses. */
+export function parseErrors(sf: ts.SourceFile): string[] {
+  const diagnostics = (sf as unknown as { parseDiagnostics?: ts.Diagnostic[] }).parseDiagnostics ?? [];
+  return diagnostics.map((d) => `${sf.fileName}:${lineOf(sf, d.start ?? 0)}: ${ts.flattenDiagnosticMessageText(d.messageText, " ")}`);
+}
+
+/** Parentheses, `as`, `satisfies`, `!`, `<T>x` and `X<T>` taken off an expression. */
+function unwrap(e: ts.Expression): ts.Expression {
+  for (;;) {
+    if (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isSatisfiesExpression(e) || ts.isNonNullExpression(e) || ts.isTypeAssertionExpression(e)) {
+      e = e.expression;
+    } else if (ts.isExpressionWithTypeArguments(e)) {
+      e = e.expression;
+    } else {
+      return e;
+    }
+  }
+}
+
+function isStringLike(e: ts.Node): e is ts.StringLiteral | ts.NoSubstitutionTemplateLiteral {
+  return ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e);
+}
+
+/** At most this many strings are followed for one key; a key that can take more is unsettled. */
+const KEY_LIMIT = 64;
 
 /**
- * Local names bound to a name for which `isTarget` holds, in this file: renamed
- * imports and exports (`X as Y`), `const Y = <...X...>;` and `const { X: Y } =`,
- * followed until no new name appears.
+ * The strings a member key or a computed key settles to (G1): a string, a
+ * number, a template of settled parts, `+` of settled parts, or a choice of
+ * them (`? :`, `||`, `??`). Null when the syntax does not settle the key
+ * (`P[k]`, `P[name.trim()]`): such a key is a computed key no name follows.
  */
-export function localAliases(text: string, isTarget: (name: string) => boolean): Set<string> {
-  const aliases = new Set<string>();
-  const hit = (expr: string) =>
-    expr.split(/[^\w$]+/).some((part) => part.length > 0 && (isTarget(part) || aliases.has(part)));
-  let size = -1;
-  while (aliases.size !== size) {
-    size = aliases.size;
-    for (const m of text.matchAll(/(?<![\w$])([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)/g)) {
-      if (hit(m[1])) aliases.add(m[2]);
-    }
-    for (const m of text.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([\w$.]+)\s*[;\n]/g)) {
-      if (hit(m[2])) aliases.add(m[1]);
-    }
-    for (const m of text.matchAll(/\b(?:const|let|var)\s*\{([^}]*)\}\s*=/g)) {
-      for (const part of m[1].split(",")) {
-        const pair = part.split(":").map((s) => s.trim());
-        if (pair.length === 2 && hit(pair[0]) && IDENT.test(pair[1])) aliases.add(pair[1]);
-      }
-    }
+export function keyStrings(expr: ts.Expression): string[] | null {
+  const e = unwrap(expr);
+  if (isStringLike(e)) return [e.text];
+  if (ts.isNumericLiteral(e)) return [String(Number(e.text))];
+  const product = (a: string[] | null, b: string[] | null): string[] | null => {
+    if (a === null || b === null || a.length * b.length > KEY_LIMIT) return null;
+    return a.flatMap((x) => b.map((y) => x + y));
+  };
+  if (ts.isTemplateExpression(e)) {
+    let out: string[] | null = [e.head.text];
+    for (const span of e.templateSpans) out = product(product(out, keyStrings(span.expression)), [span.literal.text]);
+    return out;
   }
-  return aliases;
-}
-
-/** Local names bound to a checkbox identifier in this file (rule 3). */
-export function checkboxAliases(text: string, exported: ReadonlySet<string> = new Set()): Set<string> {
-  return localAliases(text, (name) => name.includes("Checkbox") || exported.has(name));
-}
-
-/**
- * The names other files may import a target under: `export { X as Y }` and
- * `export const Y = X` over every text, followed until no new name appears.
- * `defaults` lists the files that export a target as their default export,
- * which no name follows.
- */
-export function exportedAliases(
-  texts: ReadonlyMap<string, string>,
-  isTarget: (name: string) => boolean,
-): { names: Set<string>; defaults: string[] } {
-  const names = new Set<string>();
-  const defaults = new Set<string>();
-  const hit = (expr: string) =>
-    expr.split(/[^\w$]+/).some((part) => part.length > 0 && (isTarget(part) || names.has(part)));
-  let size = -1;
-  while (names.size !== size) {
-    size = names.size;
-    for (const [file, raw] of texts) {
-      const text = blankComments(raw);
-      for (const m of text.matchAll(/\bexport\s*(?:type\s*)?\{([^}]*)\}/g)) {
-        for (const part of m[1].split(",")) {
-          const pair = part.trim().split(/\s+as\s+/);
-          if (pair.length === 2 && hit(pair[0]) && IDENT.test(pair[1].trim()) && pair[1].trim() !== "default") {
-            names.add(pair[1].trim());
-          }
-          if (pair.length === 2 && hit(pair[0]) && pair[1].trim() === "default") defaults.add(file);
-        }
-      }
-      for (const m of text.matchAll(/\bexport\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([\w$.]+)\s*[;\n]/g)) {
-        if (hit(m[2])) names.add(m[1]);
-      }
-      for (const m of text.matchAll(/\bexport\s+default\s+([\w$.]+)\s*[;\n]/g)) {
-        if (hit(m[1])) defaults.add(file);
-      }
-    }
+  if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.PlusToken) return product(keyStrings(e.left), keyStrings(e.right));
+  if (ts.isConditionalExpression(e)) {
+    const a = keyStrings(e.whenTrue);
+    const b = keyStrings(e.whenFalse);
+    return a && b && [...a, ...b];
   }
-  return { names, defaults: [...defaults].sort() };
-}
-
-/** The end index (exclusive) of the opening tag that starts at `start` (`<`), or -1. */
-function openingTagEnd(text: string, start: number): number {
-  let depth = 0;
-  let quote: string | null = null;
-  for (let i = start + 1; i < text.length; i++) {
-    const c = text[i];
-    if (quote) {
-      if (c === "\\") {
-        i++;
-        continue;
-      }
-      if (c === quote) quote = null;
-      continue;
-    }
-    if (c === '"' || c === "'" || c === "`") {
-      quote = c;
-      continue;
-    }
-    if (c === "{") depth++;
-    else if (c === "}") depth--;
-    else if (c === ">" && depth === 0) return i + 1;
-  }
-  return -1;
-}
-
-function lineOf(text: string, index: number): number {
-  let n = 1;
-  for (let i = 0; i < index; i++) if (text.charCodeAt(i) === 10) n++;
-  return n;
-}
-
-/**
- * The text with its comments blanked to spaces (newlines kept, so offsets and
- * line numbers stay). A block comment is `/* ... *\/` (the JSX `{/* ... *\/}`
- * form included). A line comment is a `//` that does not follow a `:`, so the
- * `//` of a URL (`https://`) is not one. The blanking does not read strings: a
- * `//` inside a string that does not follow a `:` blanks the rest of its line.
- */
-export function blankComments(text: string): string {
-  const blank = (s: string) => s.replace(/[^\n]/g, " ");
-  return text.replace(/\/\*[\s\S]*?\*\//g, blank).replace(/(?<!:)\/\/[^\n]*/g, blank);
-}
-
-/** The value of attribute `name` in an opening tag: a literal string, an expression, or absent. */
-function attribute(openingTag: string, name: string): { literal?: string; expression?: string } | undefined {
-  const m = new RegExp(`(?<=\\s)${name}\\s*=\\s*`).exec(openingTag);
-  if (!m) return undefined;
-  const rest = openingTag.slice(m.index + m[0].length);
-  const q = /^(["'])([^"']*)\1/.exec(rest);
-  if (q) return { literal: q[2] };
-  if (!rest.startsWith("{")) return { expression: rest.split(/\s/)[0] ?? "" };
-  let depth = 0;
-  for (let i = 0; i < rest.length; i++) {
-    if (rest[i] === "{") depth++;
-    else if (rest[i] === "}" && --depth === 0) {
-      const inner = rest.slice(1, i).trim();
-      const lit = /^(["'`])([^"'`$]*)\1$/.exec(inner);
-      return lit ? { literal: lit[2] } : { expression: inner };
-    }
-  }
-  return { expression: rest };
-}
-
-const CHECKBOX_WORD = /^(checkbox|menuitemcheckbox)$/i;
-const CHECKBOX_IN_EXPRESSION = /checkbox/i;
-
-/** Whether an element draws a checkbox, may draw one (unresolved), or does not (null). */
-function checkboxByAttributes(tag: string, openingTag: string): "checkbox" | string | null {
-  for (const name of ["type", "role"]) {
-    const a = attribute(openingTag, name);
-    if (a?.literal !== undefined && CHECKBOX_WORD.test(a.literal.trim())) return "checkbox";
-    if (a?.expression !== undefined && CHECKBOX_IN_EXPRESSION.test(a.expression)) return "checkbox";
-  }
-  if (tag === "input" || /(?:^|\.)[A-Za-z_$]*Input$/.test(tag)) {
-    const type = attribute(openingTag, "type");
-    if (type?.expression !== undefined) return `its type is the expression {${type.expression}}`;
-    if (type === undefined && /\{\s*\.\.\./.test(openingTag)) return "it has a spread and no literal type";
+  if (ts.isBinaryExpression(e) && [ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken].includes(e.operatorToken.kind)) {
+    const a = keyStrings(e.left);
+    const b = keyStrings(e.right);
+    return a && b && [...a, ...b];
   }
   return null;
 }
 
-/** Every checkbox element of one file's text (rule 3), in source order; comments are not read. */
-export function findCheckboxSites(raw: string, exported: ReadonlySet<string> = new Set()): FoundSite[] {
-  const text = blankComments(raw);
-  const aliases = checkboxAliases(text, exported);
-  const sites: FoundSite[] = [];
-  // A JSX tag: `<` not preceded by an identifier, `.`, `)` or `]` (that is a
-  // generic or a comparison), then the tag name, not followed by `,` or
-  // `extends` (a generic parameter list such as `<T,>(value: T) =>`).
-  for (const m of text.matchAll(/(?<![\w$.\])])<([A-Za-z_$][\w$]*(?:\.[\w$]+)*)(?!\s*,|\s+extends\b)/g)) {
-    const tag = m[1];
-    const head = tag.split(".")[0];
-    const byName = tag.includes("Checkbox") || aliases.has(head) || exported.has(head);
-    const start = m.index ?? 0;
-    const end = openingTagEnd(text, start);
-    const openingTag = end < 0 ? text.slice(start) : text.slice(start, end);
-    const byAttributes = checkboxByAttributes(tag, openingTag);
-    if (!byName && byAttributes === null) continue;
-    let body = "";
-    if (end >= 0 && !openingTag.endsWith("/>")) {
-      const close = text.indexOf(`</${tag}>`, end);
-      body = close < 0 ? text.slice(end) : text.slice(end, close);
-    }
-    const site: FoundSite = { tag, line: lineOf(text, start), openingTag, body };
-    if (end < 0) site.unresolved = "its opening tag has no end";
-    else if (!byName && byAttributes !== "checkbox") site.unresolved = byAttributes ?? undefined;
-    sites.push(site);
+/**
+ * The names an alias takes its value from, when `expr` is an alias form: a
+ * name, a member chain (`R.Checkbox`, `R["Checkbox"]`), or a choice of such
+ * forms (`? :`, `||`, `??`, `&&`) whose conditions are `rest`. Any other
+ * expression (a call, a function, an object) is no alias: null.
+ */
+export function aliasSources(expr: ts.Expression): { names: string[]; rest: ts.Expression[] } | null {
+  const e = unwrap(expr);
+  if (ts.isIdentifier(e)) return { names: [e.text], rest: [] };
+  if (e.kind === ts.SyntaxKind.ThisKeyword || e.kind === ts.SyntaxKind.NullKeyword || e.kind === ts.SyntaxKind.TrueKeyword || e.kind === ts.SyntaxKind.FalseKeyword) {
+    return { names: [], rest: [] };
   }
-  return sites;
+  if (isStringLike(e) || ts.isNumericLiteral(e)) return { names: [], rest: [] };
+  if (ts.isPropertyAccessExpression(e)) {
+    const inner = aliasSources(e.expression);
+    return inner && { names: [...inner.names, e.name.text], rest: inner.rest };
+  }
+  if (ts.isElementAccessExpression(e)) {
+    const keys = keyStrings(e.argumentExpression);
+    if (keys === null) return null;
+    const inner = aliasSources(e.expression);
+    return inner && { names: [...inner.names, ...keys], rest: inner.rest };
+  }
+  if (ts.isConditionalExpression(e)) {
+    const a = aliasSources(e.whenTrue);
+    const b = aliasSources(e.whenFalse);
+    return a && b && { names: [...a.names, ...b.names], rest: [e.condition, ...a.rest, ...b.rest] };
+  }
+  if (
+    ts.isBinaryExpression(e) &&
+    [ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.AmpersandAmpersandToken].includes(e.operatorToken.kind)
+  ) {
+    const a = aliasSources(e.left);
+    const b = aliasSources(e.right);
+    return a && b && { names: [...a.names, ...b.names], rest: [...a.rest, ...b.rest] };
+  }
+  return null;
 }
 
-export type ScannedFile = { file: string; tokens: number; sites: FoundSite[] };
+function hasModifier(node: ts.Node, kind: ts.SyntaxKind): boolean {
+  return ts.canHaveModifiers(node) && (ts.getModifiers(node) ?? []).some((m) => m.kind === kind);
+}
+
+/** The module a call imports, when it is `require("x")` or `import("x")` (awaited or not). */
+function importedModule(expr: ts.Expression): string | undefined {
+  let e = unwrap(expr);
+  if (ts.isAwaitExpression(e)) e = unwrap(e.expression);
+  if (!ts.isCallExpression(e) || e.arguments.length === 0 || !isStringLike(e.arguments[0])) return undefined;
+  const callee = e.expression;
+  if (callee.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(callee) && callee.text === "require")) return e.arguments[0].text;
+  return undefined;
+}
+
+/** A load whose specifier is no string (`import(spec)`, `require(spec)`): which module it is, the syntax does not say (GAP 1). */
+function dynamicLoad(expr: ts.Expression): string | undefined {
+  let e = unwrap(expr);
+  if (ts.isAwaitExpression(e)) e = unwrap(e.expression);
+  if (!ts.isCallExpression(e) || e.arguments.length === 0 || isStringLike(e.arguments[0])) return undefined;
+  const callee = e.expression;
+  if (callee.kind === ts.SyntaxKind.ImportKeyword) return `import(${e.arguments[0].getText().replace(/\s+/g, " ")})`;
+  if (ts.isIdentifier(callee) && callee.text === "require") return `require(${e.arguments[0].getText().replace(/\s+/g, " ")})`;
+  return undefined;
+}
+
+/**
+ * Where a value comes from (GAP 1): the names and the loaded modules at the head of its member reads and calls,
+ * through `await`, `new`, parentheses, `as`, `!` and choices (`UI.registry`, `makeUi().parts`, `(await
+ * import("m")).default`, `a ? P : Q`). A dynamic load (`import(spec)`) is the module `DYNAMIC`.
+ */
+export const DYNAMIC = "\0a module the syntax does not name";
+
+/**
+ * React's hooks that hand back what the code gives them (state, a reducer's state, a memo, a ref, a context's value,
+ * a deferred or optimistic value): such a value comes from the hook's arguments, not from React.
+ */
+const HOOKS_OF_ARGUMENTS = new Set([
+  "useState", "useReducer", "useMemo", "useCallback", "useRef", "useContext", "use", "useDeferredValue",
+  "useOptimistic", "useActionState", "useTransition", "useSyncExternalStore", "useImperativeHandle", "useId",
+]);
+
+export function valueHeads(expr: ts.Expression): { names: string[]; specs: string[] } {
+  const names: string[] = [];
+  const specs: string[] = [];
+  /** What a function hands back: its expression body or each `return` of its block (not of nested functions). */
+  const returns = (f: ts.ArrowFunction | ts.FunctionExpression): void => {
+    if (!ts.isBlock(f.body)) return walk(f.body);
+    const inner = (n: ts.Node): void => {
+      if (ts.isReturnStatement(n) && n.expression) walk(n.expression);
+      else if (!ts.isFunctionLike(n)) ts.forEachChild(n, inner);
+    };
+    inner(f.body);
+  };
+  const walk = (x: ts.Expression): void => {
+    let e = unwrap(x);
+    if (ts.isAwaitExpression(e)) e = unwrap(e.expression);
+    if (ts.isIdentifier(e)) names.push(e.text);
+    else if (ts.isPropertyAccessExpression(e) || ts.isElementAccessExpression(e) || ts.isNewExpression(e)) walk(e.expression);
+    else if (ts.isCallExpression(e)) {
+      const spec = importedModule(e);
+      const callee = unwrap(e.expression);
+      const hook = ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : undefined;
+      if (spec !== undefined) specs.push(spec);
+      else if (dynamicLoad(e) !== undefined) specs.push(DYNAMIC);
+      else if (hook !== undefined && HOOKS_OF_ARGUMENTS.has(hook)) {
+        for (const a of e.arguments) {
+          const u = unwrap(a);
+          if (ts.isArrowFunction(u) || ts.isFunctionExpression(u)) returns(u);
+          else walk(a);
+        }
+      } else if (e.expression.kind !== ts.SyntaxKind.ImportKeyword) walk(e.expression);
+    } else if (ts.isConditionalExpression(e)) {
+      walk(e.whenTrue);
+      walk(e.whenFalse);
+    } else if (ts.isBinaryExpression(e) && [ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.AmpersandAmpersandToken].includes(e.operatorToken.kind)) {
+      walk(e.left);
+      walk(e.right);
+    }
+  };
+  walk(expr);
+  return { names, specs };
+}
+
+function boundNames(name: ts.BindingName, out: string[] = []): string[] {
+  if (ts.isIdentifier(name)) out.push(name.text);
+  else for (const el of name.elements) if (!ts.isOmittedExpression(el)) boundNames(el.name, out);
+  return out;
+}
+
+/** What a file binds and exports, as edges over names (rule 3). */
+export type FileBindings = {
+  /** A local name and the names its value is taken from. */
+  edges: [string, string[]][];
+  /** The modules each local name is imported from. */
+  imports: [string, string][];
+  /** An exported name and the local names it is taken from. */
+  exports: [string, string[]][];
+  /** Each default export and the names it is taken from. */
+  defaults: { line: number; from: string[] }[];
+  /** A name exported straight from another module (`export { X as Y } from "m"`, `export * as Y from "m"`) and that module. */
+  reexports: [string, string][];
+  /**
+   * A name bound to a whole module object and that module (G1): `import * as P from "m"`, `import P = require("m")`,
+   * `const P = require("m")`, `const P = await import("m")`.
+   */
+  holders: [string, string][];
+  /** A name bound to the whole value of other names (`const Q = P`, `const Q = a ? P : R`, `const { ...Q } = P`). */
+  wholes: [string, string[]][];
+  /** The modules a file re-exports whole (`export * from "m"`). */
+  stars: string[];
+  /** A name bound by a declaration and where its value comes from (`valueHeads` of the initializer; GAP 1). */
+  derived: [string, { names: string[]; specs: string[] }][];
+};
+
+/** The names an expression is the whole value of: a name, or a choice of names (`? :`, `||`, `??`, `&&`). */
+function wholeNames(expr: ts.Expression): string[] {
+  const e = unwrap(expr);
+  if (ts.isIdentifier(e)) return [e.text];
+  if (ts.isConditionalExpression(e)) return [...wholeNames(e.whenTrue), ...wholeNames(e.whenFalse)];
+  if (ts.isBinaryExpression(e) && [ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.AmpersandAmpersandToken].includes(e.operatorToken.kind)) {
+    return [...wholeNames(e.left), ...wholeNames(e.right)];
+  }
+  return [];
+}
+
+export function collectBindings(sf: ts.SourceFile): FileBindings {
+  const b: FileBindings = { edges: [], imports: [], exports: [], defaults: [], reexports: [], holders: [], wholes: [], stars: [], derived: [] };
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) && isStringLike(node.moduleSpecifier)) {
+      const spec = node.moduleSpecifier.text;
+      const clause = node.importClause;
+      if (clause?.name) b.imports.push([clause.name.text, spec]);
+      const nb = clause?.namedBindings;
+      if (nb && ts.isNamespaceImport(nb)) {
+        b.imports.push([nb.name.text, spec]);
+        b.holders.push([nb.name.text, spec]);
+      }
+      if (nb && ts.isNamedImports(nb)) {
+        for (const s of nb.elements) {
+          b.imports.push([s.name.text, spec]);
+          b.edges.push([s.name.text, [(s.propertyName ?? s.name).text]]);
+        }
+      }
+    } else if (ts.isImportEqualsDeclaration(node)) {
+      const ref = node.moduleReference;
+      if (ts.isExternalModuleReference(ref) && isStringLike(ref.expression)) {
+        b.imports.push([node.name.text, ref.expression.text]);
+        b.holders.push([node.name.text, ref.expression.text]);
+      } else b.edges.push([node.name.text, ref.getText(sf).split(".")]);
+    } else if (ts.isExportDeclaration(node) && node.exportClause && ts.isNamedExports(node.exportClause)) {
+      const spec = node.moduleSpecifier && isStringLike(node.moduleSpecifier) ? node.moduleSpecifier.text : undefined;
+      for (const s of node.exportClause.elements) {
+        const local = (s.propertyName ?? s.name).text;
+        if (s.name.text === "default") b.defaults.push({ line: lineOf(sf, s.getStart(sf)), from: [local] });
+        else b.exports.push([s.name.text, [local]]);
+        if (spec !== undefined) b.reexports.push([s.name.text, spec]);
+      }
+    } else if (ts.isExportDeclaration(node) && !node.exportClause && node.moduleSpecifier && isStringLike(node.moduleSpecifier)) {
+      b.stars.push(node.moduleSpecifier.text);
+    } else if (ts.isExportDeclaration(node) && node.exportClause && ts.isNamespaceExport(node.exportClause) && node.moduleSpecifier && isStringLike(node.moduleSpecifier)) {
+      b.reexports.push([node.exportClause.name.text, node.moduleSpecifier.text]);
+    } else if (ts.isExportAssignment(node)) {
+      const src = aliasSources(node.expression);
+      if (src) b.defaults.push({ line: lineOf(sf, node.getStart(sf)), from: src.names });
+    } else if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && hasModifier(node, ts.SyntaxKind.ExportKeyword) && node.name) {
+      if (hasModifier(node, ts.SyntaxKind.DefaultKeyword)) b.defaults.push({ line: lineOf(sf, node.getStart(sf)), from: [node.name.text] });
+      else b.exports.push([node.name.text, [node.name.text]]);
+    } else if (ts.isVariableStatement(node) && hasModifier(node, ts.SyntaxKind.ExportKeyword)) {
+      for (const d of node.declarationList.declarations) for (const n of boundNames(d.name)) b.exports.push([n, [n]]);
+    }
+    if (ts.isVariableDeclaration(node) && node.initializer) {
+      const src = aliasSources(node.initializer);
+      const mod = importedModule(node.initializer);
+      const heads = valueHeads(node.initializer);
+      for (const n of boundNames(node.name)) {
+        if (src) b.edges.push([n, src.names]);
+        if (mod !== undefined) b.imports.push([n, mod]);
+        if (heads.names.length > 0 || heads.specs.length > 0) b.derived.push([n, heads]);
+      }
+      if (ts.isIdentifier(node.name)) {
+        if (mod !== undefined) b.holders.push([node.name.text, mod]);
+        const whole = wholeNames(node.initializer);
+        if (whole.length > 0) b.wholes.push([node.name.text, whole]);
+      }
+    }
+    // `const { a, ...Q } = P`: the rest is the whole of P but its named keys, so a module object's rest is one too.
+    if (ts.isBindingElement(node) && node.dotDotDotToken && ts.isIdentifier(node.name) && ts.isObjectBindingPattern(node.parent)) {
+      const decl = node.parent.parent;
+      if (ts.isVariableDeclaration(decl) && decl.initializer) {
+        const mod = importedModule(decl.initializer);
+        if (mod !== undefined) b.holders.push([node.name.text, mod]);
+        const whole = wholeNames(decl.initializer);
+        if (whole.length > 0) b.wholes.push([node.name.text, whole]);
+      }
+    }
+    if (ts.isBindingElement(node) && ts.isIdentifier(node.name) && ts.isObjectBindingPattern(node.parent)) {
+      const key = node.propertyName;
+      const computed = key !== undefined && ts.isComputedPropertyName(key) ? unwrap(key.expression) : undefined;
+      const keyNames =
+        key === undefined ? [node.name.text] : ts.isIdentifier(key) || isStringLike(key) || ts.isNumericLiteral(key) ? [key.text] : computed ? keyStrings(computed) : null;
+      // A computed key the syntax settles (`{ ["Check" + "box"]: Box }`) names its keys. One it does not settle
+      // (`{ [k]: Box }`) names no key: the bound name keeps the edge of its declaration's initializer (a destructured
+      // checkbox namespace stays a checkbox), and on a module object it is a site of its own (G1, `findSites`).
+      if (keyNames !== null) b.edges.push([node.name.text, keyNames]);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return b;
+}
+
+/** The names of one target resolved over a tree (rule 3). */
+export type NameScope = {
+  /** Names a file exports the target under, beyond the target's own spelling. */
+  exported: Set<string>;
+  /** Default exports of the target: `file:line`. */
+  defaults: string[];
+  /** Whether `name` is the target in `file`. */
+  isName: (file: string, name: string) => boolean;
+};
+
+/**
+ * Resolves the target's names over every file: `target` says which spellings
+ * are the target, `targetModule` which imported modules bind it.
+ */
+export function resolveNames(
+  sources: ReadonlyMap<string, ts.SourceFile>,
+  target: (name: string) => boolean,
+  targetModule: (spec: string) => boolean = () => false,
+): NameScope {
+  const bindings = new Map([...sources].map(([file, sf]) => [file, collectBindings(sf)] as const));
+  const exported = new Set<string>();
+  const local = new Map<string, Set<string>>();
+  const localOf = (file: string, b: FileBindings): Set<string> => {
+    const set = new Set(b.imports.filter(([, spec]) => targetModule(spec)).map(([n]) => n));
+    const is = (n: string) => target(n) || exported.has(n) || set.has(n);
+    let size = -1;
+    while (set.size !== size) {
+      size = set.size;
+      for (const [name, from] of b.edges) if (!set.has(name) && from.some(is)) set.add(name);
+    }
+    local.set(file, set);
+    return set;
+  };
+  let size = -1;
+  while (exported.size !== size) {
+    size = exported.size;
+    for (const [file, b] of bindings) {
+      const set = localOf(file, b);
+      for (const [name, from] of b.exports) {
+        if (!target(name) && from.some((n) => target(n) || exported.has(n) || set.has(n))) exported.add(name);
+      }
+      for (const [name, spec] of b.reexports) if (!target(name) && targetModule(spec)) exported.add(name);
+    }
+  }
+  const isName = (file: string, name: string) => target(name) || exported.has(name) || (local.get(file)?.has(name) ?? false);
+  const defaults: string[] = [];
+  for (const [file, b] of bindings) {
+    for (const d of b.defaults) if (d.from.some((n) => isName(file, n))) defaults.push(`${file}:${d.line}`);
+  }
+  return { exported, defaults: defaults.sort(), isName };
+}
+
+// ---------------------------------------------------------------------------
+// Elements and uses
+// ---------------------------------------------------------------------------
+
+/**
+ * The value an attribute has after every attribute and spread of the element,
+ * in source order. An expression carries `values`, the strings it can take,
+ * when it is built only of strings, `undefined`, `null` and choices between
+ * them (`? :`, `||`, `??`, `&&`); otherwise `values` is null (unknown).
+ */
+export type AttributeValue =
+  | { kind: "absent" }
+  | { kind: "literal"; value: string }
+  | { kind: "expression"; text: string; values: string[] | null; literals: string[] }
+  | { kind: "spread"; text: string; over: "absent" | "literal" | "expression" };
+
+function literalsIn(node: ts.Node): string[] {
+  const out: string[] = [];
+  const visit = (n: ts.Node) => {
+    if (isStringLike(n)) out.push(n.text);
+    ts.forEachChild(n, visit);
+  };
+  visit(node);
+  return out;
+}
+
+/** The strings an expression can take, or null when it can take a value the syntax does not settle. */
+export function stringValues(expr: ts.Expression): string[] | null {
+  const e = unwrap(expr);
+  if (isStringLike(e)) return [e.text];
+  if (e.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(e) && e.text === "undefined") || ts.isVoidExpression(e)) return [];
+  if (ts.isConditionalExpression(e)) {
+    const a = stringValues(e.whenTrue);
+    const b = stringValues(e.whenFalse);
+    return a && b && [...a, ...b];
+  }
+  if (ts.isBinaryExpression(e) && [ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken].includes(e.operatorToken.kind)) {
+    const a = stringValues(e.left);
+    const b = stringValues(e.right);
+    return a && b && [...a, ...b];
+  }
+  // `a && "x"` is `"x"` or the falsy `a` (no string but ""), so only its right side can name a role or type.
+  if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) return stringValues(e.right);
+  return null;
+}
+
+function valueOf(e: ts.Expression | undefined, sf: ts.SourceFile): AttributeValue {
+  if (e === undefined) return { kind: "expression", text: "true", values: ["true"], literals: [] };
+  const u = unwrap(e);
+  if (isStringLike(u)) return { kind: "literal", value: u.text };
+  return { kind: "expression", text: e.getText(sf), values: stringValues(e), literals: literalsIn(e) };
+}
+
+function keyText(name: ts.PropertyName): string | undefined {
+  if (ts.isIdentifier(name) || isStringLike(name) || ts.isNumericLiteral(name)) return name.text;
+  return undefined;
+}
+
+export function resolveAttribute(el: ts.JsxOpeningLikeElement, name: string): AttributeValue {
+  const sf = el.getSourceFile();
+  let v: AttributeValue = { kind: "absent" };
+  const spread = (text: string): AttributeValue => ({ kind: "spread", text, over: v.kind === "spread" ? v.over : v.kind });
+  for (const p of el.attributes.properties) {
+    if (ts.isJsxAttribute(p)) {
+      if (p.name.getText(sf).toLowerCase() !== name) continue;
+      const init = p.initializer;
+      if (init === undefined) v = valueOf(undefined, sf);
+      else if (ts.isStringLiteral(init)) v = { kind: "literal", value: init.text };
+      else if (ts.isJsxExpression(init)) v = init.expression ? valueOf(init.expression, sf) : { kind: "expression", text: "", values: null, literals: [] };
+      else v = { kind: "expression", text: init.getText(sf), values: null, literals: [] };
+      continue;
+    }
+    const e = unwrap(p.expression);
+    if (!ts.isObjectLiteralExpression(e)) {
+      v = spread(p.getText(sf));
+      continue;
+    }
+    for (const prop of e.properties) {
+      if (ts.isSpreadAssignment(prop)) v = spread(prop.getText(sf));
+      else if (prop.name === undefined || keyText(prop.name) === undefined) v = spread(prop.getText(sf));
+      else if (keyText(prop.name)?.toLowerCase() !== name) continue;
+      else if (ts.isPropertyAssignment(prop)) v = valueOf(prop.initializer, sf);
+      else v = { kind: "expression", text: prop.getText(sf), values: null, literals: [] };
+    }
+  }
+  return v;
+}
+
+const CHECKBOX_WORD = /^(checkbox|menuitemcheckbox)$/i;
+
+function isInputTag(tag: string): boolean {
+  return tag === "input" || /(?:^|\.)[A-Za-z_$]*Input$/.test(tag);
+}
+
+/** Whether an element draws a checkbox, may draw one (why it is unresolved), or does not (null). */
+function checkboxByAttributes(tag: string, el: ts.JsxOpeningLikeElement): "checkbox" | string | null {
+  const type = resolveAttribute(el, "type");
+  const role = resolveAttribute(el, "role");
+  for (const v of [type, role]) {
+    if (v.kind === "literal" && CHECKBOX_WORD.test(v.value.trim())) return "checkbox";
+    if (v.kind === "expression" && v.literals.some((l) => CHECKBOX_WORD.test(l.trim()))) return "checkbox";
+  }
+  if (role.kind === "expression" && role.values === null) return `its role is the expression {${role.text}}`;
+  if (role.kind === "spread" && role.over !== "absent") return `the spread ${role.text} after its role may set it`;
+  if (isInputTag(tag)) {
+    if (type.kind === "expression" && type.values === null) return `its type is the expression {${type.text}}`;
+    if (type.kind === "spread" && type.over === "absent") return "it has a spread and no literal type after it";
+    if (type.kind === "spread") return `the spread ${type.text} after its type may set it`;
+  }
+  return null;
+}
+
+export type FoundSite = {
+  /** The tag name as written (`Checkbox`, `CheckboxPrimitive.Root`), or the name of a use (rule 5). */
+  tag: string;
+  /** 1-based line of the element's `<`, or of the use. */
+  line: number;
+  /** The opening tag's text from `<` to its `>`, or for a use the text of the expression around it. */
+  openingTag: string;
+  /** The tags of the JSX elements drawn among its children (empty when self-closing, or for a use). */
+  childTags: string[];
+  /** The texts of its change handlers (`on…` attributes) and spreads, each of which a reading must name. */
+  mustName: string[];
+  /** Why the scan cannot tell whether it draws a checkbox (rules 4 and 5), when it cannot. */
+  unresolved?: string;
+};
+
+function childTagsOf(el: ts.JsxOpeningLikeElement, sf: ts.SourceFile): string[] {
+  if (!ts.isJsxOpeningElement(el) || !ts.isJsxElement(el.parent)) return [];
+  const out: string[] = [];
+  const visit = (n: ts.Node) => {
+    if (ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) out.push(n.tagName.getText(sf));
+    ts.forEachChild(n, visit);
+  };
+  for (const child of el.parent.children) visit(child);
+  return out;
+}
+
+function mustNameOf(el: ts.JsxOpeningLikeElement, sf: ts.SourceFile): string[] {
+  return el.attributes.properties
+    .filter((p) => ts.isJsxSpreadAttribute(p) || /^on[A-Z]/.test(p.name.getText(sf)))
+    .map((p) => p.getText(sf));
+}
+
+function isTypeOnly(node: ts.Node): boolean {
+  return ts.isTypeNode(node) && !ts.isExpressionWithTypeArguments(node);
+}
+
+/** Whether an identifier names a declaration, a key or a label, not a value. */
+function isDeclarationName(id: ts.Identifier): boolean {
+  const p = id.parent;
+  if (ts.isShorthandPropertyAssignment(p) || ts.isPropertyAccessExpression(p)) return false;
+  if (ts.isLabeledStatement(p) || ts.isBreakStatement(p) || ts.isContinueStatement(p)) return p.label === id;
+  if (ts.isMetaProperty(p)) return true;
+  const named = p as unknown as { name?: ts.Node; propertyName?: ts.Node };
+  return named.name === id || named.propertyName === id;
+}
+
+/**
+ * The module objects of one file (G1): names bound to a whole module object of a module that may export a
+ * checkbox (`isObject`), and which modules those are (`isObjectModule`).
+ */
+export type ModuleObjects = {
+  isObject: (name: string) => boolean;
+  isObjectModule: (spec: string) => boolean;
+  /**
+   * Whether a value comes from outside the tree (GAP 1): a name bound by any import or load of a module outside
+   * the tree (a default, named or namespace import, a `require()` or `import()`, a destructured `default`), or bound
+   * to a member read or a call of such a value; and a loaded module outside the tree or `DYNAMIC`.
+   */
+  isOutside: (heads: { names: string[]; specs: string[] }) => boolean;
+};
+
+const NO_MODULE_OBJECTS: ModuleObjects = { isObject: () => false, isObjectModule: () => false, isOutside: () => false };
+
+const BUILTINS = new Set(builtinModules);
+
+/** The file a module specifier ends in names: its base name, or its folder's name for an `index` file. */
+function moduleKey(file: string): string {
+  const base = path.posix.basename(file).replace(/\.[^.]+$/, "");
+  return base === "index" ? path.posix.basename(path.posix.dirname(file)) : base;
+}
+
+/** A workspace package's entry points: each subpath (`.`, `./store`, `./*`) and the repo-relative files it names. */
+export type PackageEntries = Map<string, string[]>;
+
+/**
+ * The entry points of `packages/<dir>/package.json` (`exports`, else `main`): every string an entry's
+ * conditions hold, as a repo-relative file. Null when the text is no JSON object.
+ */
+export function packageEntriesOf(dir: string, packageJson: string): PackageEntries | null {
+  let json: unknown;
+  try {
+    json = JSON.parse(packageJson);
+  } catch {
+    return null;
+  }
+  if (typeof json !== "object" || json === null) return null;
+  const { exports, main } = json as { exports?: unknown; main?: unknown };
+  const leaves = (v: unknown): string[] =>
+    typeof v === "string" ? [v] : typeof v === "object" && v !== null ? Object.values(v).flatMap(leaves) : [];
+  const file = (t: string) => path.posix.normalize(`packages/${dir}/${t}`);
+  const out: PackageEntries = new Map();
+  const subpaths = typeof exports === "object" && exports !== null && !Array.isArray(exports) && Object.keys(exports).every((k) => k.startsWith("."));
+  if (subpaths) for (const [k, v] of Object.entries(exports as object)) out.set(k, leaves(v).map(file));
+  else if (exports !== undefined) out.set(".", leaves(exports).map(file));
+  else if (typeof main === "string") out.set(".", [file(main)]);
+  return out;
+}
+
+/** The path aliases of a `tsconfig.json` (`compilerOptions.paths`, comments allowed), each target repo-relative; empty when none. */
+export function pathAliasesOf(tsconfig: string): PackageEntries {
+  const { config } = ts.parseConfigFileTextToJson("tsconfig.json", tsconfig);
+  const paths = (config as { compilerOptions?: { paths?: Record<string, unknown> } } | undefined)?.compilerOptions?.paths ?? {};
+  const out: PackageEntries = new Map();
+  for (const [k, v] of Object.entries(paths)) {
+    if (Array.isArray(v)) out.set(k, v.filter((t): t is string => typeof t === "string").map((t) => path.posix.normalize(t)));
+  }
+  return out;
+}
+
+/** The files a workspace subpath names in a package's entries (a `*` entry by substitution), or null when none does. */
+function entryFiles(entries: PackageEntries, subpath: string): string[] | null {
+  const exact = entries.get(subpath);
+  if (exact !== undefined) return exact;
+  for (const [k, files] of entries) {
+    const star = k.indexOf("*");
+    if (star < 0) continue;
+    const [pre, post] = [k.slice(0, star), k.slice(star + 1)];
+    if (subpath.startsWith(pre) && subpath.endsWith(post) && subpath.length >= pre.length + post.length) {
+      const hit = subpath.slice(pre.length, subpath.length - post.length);
+      return files.map((f) => f.replace("*", hit));
+    }
+  }
+  return null;
+}
+
+/**
+ * Which modules may export a checkbox, over the scanned tree (G1). A scanned file exports one when it exports a
+ * checkbox name (rule 3) or re-exports such a module whole (`export * from`), followed until no new file appears.
+ * A specifier of the tree (`./x`, `../x`, `@/x`, `~/x`, `#x`) may name such a file when its last segment is that
+ * file's `moduleKey` (or is `.` or `..`). A specifier a path alias of the root `tsconfig.json` matches (`aliases`,
+ * exact or with `*`) is resolved to its targets first: it may name such a file when a target does, and a target
+ * outside `src/` and `packages/` is a module outside the tree. A workspace specifier (`@cinatra-ai/<folder>[/<subpath>]`, a folder
+ * under `packages/`) is resolved through the package's entries (`entries`): it may name such a file when an entry
+ * it matches names one (a file without its extension, or an `index` under a folder it names, counts too); a
+ * subpath no entry matches falls back to the `moduleKey` test; and any specifier of a package whose entries are
+ * unknown (no `package.json` read) may name any such file of its package. Any other
+ * specifier but a Node built-in names a module outside the tree, which the scan does not read, so it may export a
+ * checkbox: its module object is followed as one.
+ */
+export function moduleObjectsOf(
+  bindings: ReadonlyMap<string, FileBindings>,
+  isName: (file: string, name: string) => boolean,
+  isTargetModule: (spec: string) => boolean,
+  entries: ReadonlyMap<string, PackageEntries> = new Map(),
+  aliases: PackageEntries = new Map(),
+): {
+  mayExport: (spec: string) => boolean;
+  isObjectModule: (spec: string) => boolean;
+  objectsIn: (file: string, accept?: (spec: string) => boolean) => ModuleObjects;
+} {
+  const packages = new Set([...bindings.keys()].map((f) => /^packages\/([^/]+)\//.exec(f)?.[1]).filter((d): d is string => d !== undefined));
+  /** A set of files of the tree, with their `moduleKey`s and their packages, that a specifier may name. */
+  type FileSet = { files: Set<string>; keys: Set<string>; packages: Set<string> };
+  const fileSet = (): FileSet => ({ files: new Set(), keys: new Set(), packages: new Set() });
+  const addTo = (set: FileSet, file: string) => {
+    set.files.add(file);
+    set.keys.add(moduleKey(file));
+    const dir = /^packages\/([^/]+)\//.exec(file)?.[1];
+    if (dir !== undefined) set.packages.add(dir);
+  };
+  const exporting = fileSet();
+  const exporters = exporting.files;
+  const add = (file: string) => addTo(exporting, file);
+  const workspace = (spec: string) => {
+    const m = /^@cinatra-ai\/([^/]+)/.exec(spec);
+    return m !== null && packages.has(m[1]) ? m[1] : undefined;
+  };
+  const inTree = (spec: string) => /^(\.|@\/|~\/|#)/.test(spec);
+  const byKey = (set: FileSet, spec: string) => {
+    const segments = spec.split("/").map((x) => x.replace(/\.[cm]?[jt]sx?$/, ""));
+    // `./ui/index` names the index file of ./ui, whose key is its folder's name.
+    if (segments.length > 1 && segments[segments.length - 1] === "index") segments.pop();
+    const last = segments[segments.length - 1] ?? "";
+    return last === "." || last === ".." || set.keys.has(last);
+  };
+  const stem = (f: string) => f.replace(/\.[cm]?[jt]sx?$/, "");
+  const names = (set: FileSet, target: string) => {
+    const t = stem(target);
+    return [...set.files].some((f) => stem(f) === t || path.posix.dirname(f) === t && moduleKey(f) === path.posix.basename(t));
+  };
+  const ofTree = (f: string) => /^(src|packages)\//.test(f);
+  /** Whether a specifier may name a file of the set (the resolution of the doc comment above). */
+  const mayName = (set: FileSet, spec: string): boolean => {
+    const aliased = entryFiles(aliases, spec);
+    if (aliased !== null) return aliased.filter(ofTree).some((t) => names(set, t));
+    if (inTree(spec)) return byKey(set, spec);
+    const dir = workspace(spec);
+    if (dir === undefined || !set.packages.has(dir)) return false;
+    const subpath = `.${spec.slice(`@cinatra-ai/${dir}`.length)}`;
+    const known = entries.get(dir);
+    const files = known === undefined ? null : entryFiles(known, subpath);
+    if (files !== null) return files.some((t) => names(set, t));
+    return known === undefined || byKey(set, spec);
+  };
+  const mayExport = (spec: string): boolean => isTargetModule(spec) || mayName(exporting, spec);
+  for (const [file, b] of bindings) {
+    if (b.exports.some(([n, from]) => isName(file, n) || from.some((x) => isName(file, x))) || b.reexports.some(([n, spec]) => isName(file, n) || isTargetModule(spec))) {
+      add(file);
+    }
+  }
+  /** A module outside the tree but a Node built-in, which the scan does not read. */
+  const outsideOf = (spec: string) => {
+    const aliased = entryFiles(aliases, spec);
+    if (aliased !== null) return aliased.some((f) => !ofTree(f));
+    return !inTree(spec) && workspace(spec) === undefined && !spec.startsWith("node:") && !BUILTINS.has(spec);
+  };
+  const isObjectModule = (spec: string) => mayExport(spec) || outsideOf(spec);
+  // The files that re-export a module outside the tree whole (`export * from "@x/ui"`), and the files that
+  // re-export one of them whole, followed until no new file appears (GAP 1, R1).
+  const starring = fileSet();
+  let size = -1;
+  while (starring.files.size !== size) {
+    size = starring.files.size;
+    for (const [file, b] of bindings) if (!starring.files.has(file) && b.stars.some((x) => outsideOf(x) || (starring.files.size > 0 && mayName(starring, x)))) addTo(starring, file);
+  }
+  size = -1;
+  while (exporters.size !== size) {
+    size = exporters.size;
+    // A file that re-exports a module outside the tree whole (GAP 1, R1) may export a checkbox like that module.
+    for (const [file, b] of bindings) if (!exporters.has(file) && b.stars.some(isObjectModule)) add(file);
+  }
+  /**
+   * The values from outside the tree in one file (GAP 1): every name an import or a load of a module outside the
+   * tree binds, every name imported under a name another file exports such a value under (`exportedOutside`), and
+   * every name bound to a member read or a call of one (`derived`), followed until no new name appears.
+   */
+  // `DYNAMIC` is outside the tree by `outsideOf` too: it is no specifier of the tree, of a workspace package or of a built-in.
+  const outsideSpec = outsideOf;
+  const exportedOutside = new Set<string>();
+  const outsideNames = (b: FileBindings | undefined): Set<string> => {
+    // A name imported from such a file is from outside the tree too: the file hands on what the outside module exports.
+    const out = new Set((b?.imports ?? []).filter(([x, spec]) => outsideOf(spec) || exportedOutside.has(x) || (starring.files.size > 0 && mayName(starring, spec))).map(([x]) => x));
+    let m = -1;
+    while (out.size !== m) {
+      m = out.size;
+      for (const [name, heads] of b?.derived ?? []) {
+        if (!out.has(name) && (heads.names.some((x) => out.has(x)) || heads.specs.some(outsideSpec))) out.add(name);
+      }
+    }
+    return out;
+  };
+  // A name a file exports a value from outside the tree under (`export const ui = makeUi()`, `export { registry }
+  // from "@x/ui"`) is such a value in every file that imports it, followed until no new name appears.
+  let outsideSize = -1;
+  while (exportedOutside.size !== outsideSize) {
+    outsideSize = exportedOutside.size;
+    for (const b of bindings.values()) {
+      const out = outsideNames(b);
+      for (const [name, from] of b.exports) if (from.some((x) => out.has(x))) exportedOutside.add(name);
+      for (const [name, spec] of b.reexports) if (outsideOf(spec)) exportedOutside.add(name);
+    }
+  }
+  const objectsIn = (file: string, accept?: (spec: string) => boolean): ModuleObjects => {
+    const b = bindings.get(file);
+    const set = new Set((b?.holders ?? []).filter(([, spec]) => (accept ?? isObjectModule)(spec)).map(([n]) => n));
+    let n = -1;
+    while (set.size !== n) {
+      n = set.size;
+      for (const [name, from] of b?.wholes ?? []) if (from.some((x) => set.has(x))) set.add(name);
+    }
+    // The values from outside the tree (GAP 1), for the module objects of the scan only (`accept` left out).
+    const outside = accept === undefined ? outsideNames(b) : new Set<string>();
+    return {
+      isObject: (name) => set.has(name),
+      isObjectModule: accept ?? isObjectModule,
+      isOutside: (heads) => accept === undefined && (heads.names.some((x) => outside.has(x)) || heads.specs.some(outsideSpec)),
+    };
+  };
+  return { mayExport, isObjectModule, objectsIn };
+}
+
+/**
+ * Every checkbox element of one parsed file (rule 4) and every use of a
+ * checkbox name the scan cannot follow (rule 5), in source order.
+ * `isName(name)` says whether a name is a checkbox in this file.
+ */
+export function findSites(
+  sf: ts.SourceFile,
+  isName: (name: string) => boolean,
+  tagSegment: (segment: string) => boolean = isName,
+  isModule: (spec: string) => boolean = () => false,
+  readsWords = false,
+  objects: ModuleObjects = NO_MODULE_OBJECTS,
+): FoundSite[] {
+  const sites: FoundSite[] = [];
+  const siteElements = new Set<ts.Node>();
+  const pushUse = (node: ts.Node, why?: string, wider = false) => {
+    let around: ts.Node = node;
+    while (ts.isParenthesizedExpression(around.parent) || ts.isAsExpression(around.parent) || ts.isNonNullExpression(around.parent)) around = around.parent;
+    let context: ts.Node = ts.isSourceFile(around.parent) ? around : around.parent;
+    // A module object put in an object is read with the object, and with the call it is passed to.
+    if (wider && ts.isShorthandPropertyAssignment(context) && ts.isObjectLiteralExpression(context.parent)) {
+      context = ts.isCallExpression(context.parent.parent) ? context.parent.parent : context.parent;
+    }
+    // A template span or a heritage type is read with what holds it: `${X}` with its template, `extends X` with its clause.
+    if (ts.isTemplateSpan(context) || ts.isExpressionWithTypeArguments(context)) context = context.parent;
+    // An element of a list is read alone, so its anchor is its own text.
+    if (ts.isArrayLiteralExpression(context)) context = around;
+    // A branch of a choice is read from its `?` or `:` on, so a site in the condition and one in a branch differ.
+    let opening = context.getText(sf);
+    if (ts.isConditionalExpression(context) && around !== context.condition) {
+      const token = around === context.whenTrue ? context.questionToken : context.colonToken;
+      opening = sf.text.slice(token.getStart(sf), around.end);
+    }
+    sites.push({
+      tag: node.getText(sf),
+      line: lineOf(sf, node.getStart(sf)),
+      openingTag: opening,
+      childTags: [],
+      mustName: [],
+      unresolved: why ?? `a use of ${node.getText(sf)} that is no JSX tag, import, export, declaration, type or alias`,
+    });
+  };
+  const element = (el: ts.JsxOpeningLikeElement) => {
+    const tag = el.tagName.getText(sf);
+    const byName = tag.split(".").some(tagSegment);
+    const byAttributes = checkboxByAttributes(tag, el);
+    if (!byName && byAttributes === null) return;
+    const site: FoundSite = {
+      tag,
+      line: lineOf(sf, el.getStart(sf)),
+      openingTag: el.getText(sf),
+      childTags: childTagsOf(el, sf),
+      mustName: mustNameOf(el, sf),
+    };
+    if (!byName && byAttributes !== "checkbox" && byAttributes !== null) site.unresolved = byAttributes;
+    sites.push(site);
+    siteElements.add(el);
+  };
+  /**
+   * The word checkbox as a whole string anywhere but inside the opening tag of
+   * an element that is a site (which is read with that site): a use (rule 5).
+   */
+  const word = (node: ts.StringLiteral | ts.NoSubstitutionTemplateLiteral) => {
+    if (!readsWords || !CHECKBOX_WORD.test(node.text.trim())) return;
+    let up: ts.Node = node.parent;
+    while (!ts.isSourceFile(up) && !ts.isJsxAttributes(up)) up = up.parent;
+    if (ts.isJsxAttributes(up) && siteElements.has(up.parent)) return;
+    pushUse(node, `the word ${node.text.trim()} in a string outside a site's opening tag`);
+  };
+  /**
+   * A member chain whose names hold a checkbox name is a use; so is a computed member (a key the syntax does
+   * not settle) anywhere in a chain whose head is a module object (G1); otherwise its head is read on. A key
+   * the syntax settles (`P["Check" + "box"]`, `` P[`Check${"box"}`] ``) is a name like `P.Checkbox`.
+   */
+  const chain = (node: ts.PropertyAccessExpression | ts.ElementAccessExpression) => {
+    const names: string[] = [];
+    let computed = false;
+    let head: ts.Expression = node;
+    for (;;) {
+      if (ts.isPropertyAccessExpression(head)) {
+        names.push(head.name.text);
+        head = head.expression;
+      } else if (ts.isElementAccessExpression(head)) {
+        const key = unwrap(head.argumentExpression);
+        const keys = keyStrings(key);
+        if (keys === null) computed = true;
+        else names.push(...keys);
+        if (!isStringLike(key)) visit(head.argumentExpression);
+        head = head.expression;
+      } else break;
+    }
+    if (ts.isIdentifier(head)) names.push(head.text);
+    if (names.some(isName)) pushUse(node);
+    else if (computed && ts.isIdentifier(head) && objects.isObject(head.text)) {
+      pushUse(node, `a use of a computed member of the module object ${head.text}, which no name follows`);
+    } else if (computed && objects.isOutside(valueHeads(head))) {
+      // GAP 1: a value from outside the tree (an import, a load, a member or a call of one) may hold a checkbox.
+      pushUse(node, `a use of a computed member of ${head.getText(sf)}, a value from outside the tree, which no name follows`);
+      if (!ts.isIdentifier(head)) visit(head);
+    } else if (!ts.isIdentifier(head)) visit(head);
+  };
+  const objectUse = (node: ts.Node, name: string, how: string) =>
+    pushUse(node, `a use of the module object ${name} ${how}, whose exports no name follows`, true);
+  /** Whether a destructured value is (a member of) a module object: its declaration's initializer. */
+  const fromObject = (pattern: ts.ObjectBindingPattern): boolean => {
+    let up: ts.Node = pattern.parent;
+    while (ts.isBindingElement(up) || ts.isObjectBindingPattern(up) || ts.isArrayBindingPattern(up)) up = up.parent;
+    if (!ts.isVariableDeclaration(up) || !up.initializer) return false;
+    const mod = importedModule(up.initializer);
+    if (mod !== undefined) return objects.isObjectModule(mod);
+    const src = aliasSources(up.initializer);
+    return (
+      (src?.names.slice(0, 1).some(objects.isObject) ?? false) || wholeNames(up.initializer).some(objects.isObject) || objects.isOutside(valueHeads(up.initializer))
+    );
+  };
+  const skipAlias = (init: ts.Expression) => {
+    const src = aliasSources(init);
+    if (src === null) visit(init);
+    else for (const r of src.rest) visit(r);
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isExportDeclaration(node) && node.exportClause) {
+      // `export { P }` hands a module object on under a name no rule follows; `export * as ns from "m"` makes one.
+      if (ts.isNamedExports(node.exportClause) && node.moduleSpecifier === undefined) {
+        for (const s of node.exportClause.elements) {
+          const local = (s.propertyName ?? s.name).text;
+          if (objects.isObject(local)) objectUse(s, local, "exported on");
+        }
+      }
+      const spec = node.moduleSpecifier && isStringLike(node.moduleSpecifier) ? node.moduleSpecifier.text : undefined;
+      // GAP 1 (R2): `export * as ns from` a module outside the tree hands its module object on like one that may export a checkbox.
+      if (ts.isNamespaceExport(node.exportClause) && spec !== undefined && (isModule(spec) || objects.isObjectModule(spec))) {
+        pushUse(node, `a use of the module ${node.moduleSpecifier.text} exported whole as ${node.exportClause.name.text}, which no name follows`);
+      }
+    }
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node) || ts.isImportEqualsDeclaration(node)) return;
+    if (ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node)) return;
+    if (ts.isHeritageClause(node)) {
+      if (node.token === ts.SyntaxKind.ExtendsKeyword && (ts.isClassDeclaration(node.parent) || ts.isClassExpression(node.parent))) {
+        for (const t of node.types) visit(t.expression);
+      }
+      return;
+    }
+    if (ts.isExpressionWithTypeArguments(node)) return visit(node.expression);
+    if (isTypeOnly(node)) return;
+    if (ts.isExportAssignment(node)) {
+      for (const n of wholeNames(node.expression)) if (objects.isObject(n)) objectUse(node, n, "exported as the default export");
+      return skipAlias(node.expression);
+    }
+    if (ts.isVariableDeclaration(node)) {
+      if (!ts.isIdentifier(node.name)) visit(node.name);
+      else if (objects.isObject(node.name.text) && ts.isVariableDeclarationList(node.parent) && hasModifier(node.parent.parent, ts.SyntaxKind.ExportKeyword)) {
+        objectUse(node.name, node.name.text, "exported on");
+      }
+      if (node.initializer && importedModule(node.initializer) !== undefined) return;
+      if (node.initializer) skipAlias(node.initializer);
+      return;
+    }
+    if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+      element(node);
+      return visit(node.attributes);
+    }
+    if (ts.isJsxClosingElement(node)) return;
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) return chain(node);
+    if (ts.isBindingElement(node) && node.propertyName && ts.isComputedPropertyName(node.propertyName) && ts.isObjectBindingPattern(node.parent)) {
+      if (keyStrings(node.propertyName.expression) === null && fromObject(node.parent)) {
+        pushUse(node, `a use of a computed key destructured from a module object or a value from outside the tree, which no name follows`);
+      }
+    }
+    if (ts.isShorthandPropertyAssignment(node)) {
+      if (isName(node.name.text)) pushUse(node.name);
+      else if (objects.isObject(node.name.text)) objectUse(node.name, node.name.text, "put in an object");
+      if (node.objectAssignmentInitializer) visit(node.objectAssignmentInitializer);
+      return;
+    }
+    if (ts.isIdentifier(node)) {
+      if (!isDeclarationName(node) && isName(node.text)) pushUse(node);
+      else if (!isDeclarationName(node) && objects.isObject(node.text)) objectUse(node, node.text, "used as a value");
+      return;
+    }
+    if (isStringLike(node)) return word(node);
+    if (ts.isCallExpression(node)) {
+      // `import("m")` or `require("m")` of a module that names the target, not bound by a declaration of rule 3
+      // (`lazy(() => import("./checkbox"))`): what it loads cannot be followed by name.
+      const spec = importedModule(node);
+      if (spec !== undefined && isModule(spec)) pushUse(node, `a load of the module ${spec}, which no name follows`);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return sites.sort((a, b) => a.line - b.line);
+}
+
+// ---------------------------------------------------------------------------
+// Code, comments and literals
+// ---------------------------------------------------------------------------
+
+const LITERAL_TOKENS = new Set([
+  ts.SyntaxKind.StringLiteral,
+  ts.SyntaxKind.NoSubstitutionTemplateLiteral,
+  ts.SyntaxKind.TemplateHead,
+  ts.SyntaxKind.TemplateMiddle,
+  ts.SyntaxKind.TemplateTail,
+  ts.SyntaxKind.RegularExpressionLiteral,
+]);
+
+/**
+ * The ranges of a file's comments and of its string, template and
+ * regular-expression tokens. The comments are read from the trivia before each
+ * token (the text between the token's full start and its start, which holds
+ * only white space and comments), scanned by the compiler's own scanner; JSX
+ * text is no trivia, so a `//` in it is no comment.
+ */
+export function nonCodeRanges(sf: ts.SourceFile): { comments: [number, number][]; literals: [number, number][] } {
+  const text = sf.getFullText();
+  const comments: [number, number][] = [];
+  const literals: [number, number][] = [];
+  const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, sf.languageVariant);
+  const visit = (node: ts.Node) => {
+    if (node.kind >= ts.SyntaxKind.FirstJSDocNode && node.kind <= ts.SyntaxKind.LastJSDocNode) return;
+    const children = node.getChildren(sf);
+    if (children.length > 0) {
+      for (const c of children) visit(c);
+      return;
+    }
+    if (node.kind === ts.SyntaxKind.JsxText) return;
+    const start = node.getStart(sf);
+    if (start > node.pos) {
+      scanner.setText(text, node.pos, start - node.pos);
+      for (let k = scanner.scan(); k !== ts.SyntaxKind.EndOfFileToken; k = scanner.scan()) {
+        if (k === ts.SyntaxKind.SingleLineCommentTrivia || k === ts.SyntaxKind.MultiLineCommentTrivia) {
+          comments.push([scanner.getTokenStart(), scanner.getTokenEnd()]);
+        }
+      }
+    }
+    if (LITERAL_TOKENS.has(node.kind)) literals.push([start, node.end]);
+  };
+  visit(sf);
+  return { comments, literals };
+}
+
+const RANGES = new WeakMap<ts.SourceFile, ReturnType<typeof nonCodeRanges>>();
+
+/** Whether `pin` stands in the code of the file: one occurrence that touches no comment and is not inside one string or template. */
+export function standsInCode(sf: ts.SourceFile, pin: string): boolean {
+  const text = sf.getFullText();
+  const ranges = RANGES.get(sf) ?? nonCodeRanges(sf);
+  RANGES.set(sf, ranges);
+  const { comments, literals } = ranges;
+  for (let i = text.indexOf(pin); i >= 0; i = text.indexOf(pin, i + 1)) {
+    const end = i + pin.length;
+    if (comments.some(([a, b]) => i < b && end > a)) continue;
+    if (literals.some(([a, b]) => i >= a && end <= b)) continue;
+    return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// The tree
+// ---------------------------------------------------------------------------
+
+export type ScannedFile = {
+  file: string;
+  tokens: number;
+  sites: FoundSite[];
+  /** The modules outside the tree it loads without a binding (G1, `externalLoadsOf`), in source order. */
+  loads: string[];
+};
+
+/**
+ * The modules outside the tree (`isExternal`) a file loads without binding the loaded module object to a name
+ * (G1): `() => import("@x/y")`, `[import("x")]`, `import("x").then(...)`, `require("x")[k]`. Such a module
+ * object is handed on whole, so which export is drawn no name follows; the scan does not read the module (rule
+ * 1), so the file's reading must say what these loads are. A load bound by a declaration (`const P = await
+ * import("x")`, `const { a } = await import("x")`) or read by a name (`(await import("x")).a`) is not one: a
+ * bound module object is followed by `findSites`.
+ */
+export function externalLoadsOf(sf: ts.SourceFile, isExternal: (spec: string) => boolean): string[] {
+  const out: string[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node)) {
+      // GAP 1: a load whose specifier is no string names no module, so each is recorded, bound or not.
+      const dynamic = dynamicLoad(node);
+      if (dynamic !== undefined) out.push(dynamic);
+      const spec = importedModule(node);
+      if (spec !== undefined && isExternal(spec)) {
+        let up: ts.Node = node;
+        while (ts.isParenthesizedExpression(up.parent) || ts.isAwaitExpression(up.parent) || ts.isAsExpression(up.parent) || ts.isNonNullExpression(up.parent)) {
+          up = up.parent;
+        }
+        const p = up.parent;
+        const bound = ts.isVariableDeclaration(p) && p.initializer === up;
+        const named =
+          (ts.isPropertyAccessExpression(p) && p.expression === up && !["then", "catch", "finally"].includes(p.name.text)) ||
+          (ts.isElementAccessExpression(p) && p.expression === up && keyStrings(p.argumentExpression) !== null);
+        if (!bound && !named) out.push(spec);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+}
 
 export type ScannedTree = {
   files: ScannedFile[];
-  /** Names other files export a checkbox under (rule 3). */
+  /** Names other files export a checkbox under, beyond the spelling `Checkbox` (rule 3). */
   exported: Set<string>;
-  /** Files that export a checkbox as their default export: a problem no reading clears. */
+  /** Default exports of a checkbox (`file:line`): a problem no reading clears. */
   defaultExports: string[];
+  /** Parse errors of any scanned file: a problem no reading clears. */
+  parseErrors: string[];
 };
+
+/** The word checkbox in a name or a tag, in any letter case (G2: `CheckBox`, `<md-checkbox>`, `<sl-checkbox>`). */
+const CHECKBOX_NAME = /checkbox/i;
+
+/**
+ * A checkbox by spelling: a name that holds checkbox in any letter case, from any letter (GAP 2: an import, export,
+ * member or key name `checkbox` is one too, so `{ checkbox as Box }`, `Kit.checkbox` and `{ checkbox: Box }` bind one).
+ */
+export function isCheckboxSpelling(name: string): boolean {
+  return CHECKBOX_NAME.test(name);
+}
+
+/** A module that names a checkbox: every name imported from it is a checkbox. */
+export function isCheckboxModule(spec: string): boolean {
+  return /checkbox/i.test(spec);
+}
+
+/** The in-scope files of the given texts (rule 2) with their tokens and sites; test files are left out. */
+export function scanSources(
+  texts: ReadonlyMap<string, string>,
+  entries: ReadonlyMap<string, PackageEntries> = new Map(),
+  aliases: PackageEntries = new Map(),
+): ScannedTree {
+  const sources = new Map<string, ts.SourceFile>();
+  const errors: string[] = [];
+  for (const [file, text] of texts) {
+    if (isTestPath(file)) continue;
+    const sf = parseSource(file, text);
+    errors.push(...parseErrors(sf));
+    sources.set(file, sf);
+  }
+  const scope = resolveNames(sources, isCheckboxSpelling, isCheckboxModule);
+  const bindings = new Map([...sources].map(([file, sf]) => [file, collectBindings(sf)] as const));
+  const modules = moduleObjectsOf(bindings, scope.isName, isCheckboxModule, entries, aliases);
+  const out: ScannedFile[] = [];
+  for (const [file, sf] of sources) {
+    const isName = (n: string) => scope.isName(file, n);
+    const tokens = countCheckboxTokens(sf.getFullText());
+    // A tag segment is a checkbox by the name test, which takes checkbox in any letter case (G2, GAP 2).
+    const sites = findSites(sf, isName, isName, modules.mayExport, true, modules.objectsIn(file));
+    const loads = externalLoadsOf(sf, (spec) => modules.isObjectModule(spec) && !modules.mayExport(spec));
+    // GAP 2 (Q7): a file that exports a checkbox name is in scope even when no token spells it (`export const checkbox`).
+    const b = bindings.get(file)!;
+    const exportsName = b.exports.some(([n, from]) => isName(n) || from.some(isName));
+    if (tokens === 0 && sites.length === 0 && loads.length === 0 && !exportsName) continue;
+    out.push({ file, tokens, sites, loads });
+  }
+  return { files: out, exported: scope.exported, defaultExports: scope.defaults, parseErrors: errors };
+}
 
 /** The in-scope files of the tree (rule 2) with their tokens and sites. */
 export function scanTree(repoRoot: string, files: string[] = listSourceFiles(repoRoot)): ScannedTree {
@@ -314,15 +1306,40 @@ export function scanTree(repoRoot: string, files: string[] = listSourceFiles(rep
     if (isTestPath(file)) continue;
     texts.set(file, readFileSync(path.join(repoRoot, file), "utf8"));
   }
-  const { names: exported, defaults } = exportedAliases(texts, (name) => name.includes("Checkbox"));
-  const out: ScannedFile[] = [];
-  for (const [file, text] of texts) {
-    const tokens = countCheckboxTokens(text);
-    const sites = findCheckboxSites(text, exported);
-    if (tokens === 0 && sites.length === 0) continue;
-    out.push({ file, tokens, sites });
+  const read = (f: string) => readFileSync(path.join(repoRoot, f), "utf8");
+  return scanSources(texts, workspaceEntries([...texts.keys()], read), rootAliases(read));
+}
+
+/** The path aliases of the root `tsconfig.json`; empty when there is none. */
+export function rootAliases(fileText: (file: string) => string): PackageEntries {
+  let text: string;
+  try {
+    text = fileText("tsconfig.json");
+  } catch {
+    return new Map();
   }
-  return { files: out, exported, defaultExports: defaults };
+  return pathAliasesOf(text);
+}
+
+/** The entries of each workspace package (`packages/<dir>/package.json`) of the files; a package without one is left out. */
+export function workspaceEntries(files: string[], fileText: (file: string) => string): Map<string, PackageEntries> {
+  const out = new Map<string, PackageEntries>();
+  for (const dir of new Set(files.map((f) => /^packages\/([^/]+)\//.exec(f)?.[1]).filter((d): d is string => d !== undefined))) {
+    let text: string;
+    try {
+      text = fileText(`packages/${dir}/package.json`);
+    } catch {
+      continue;
+    }
+    const e = packageEntriesOf(dir, text);
+    if (e !== null) out.set(dir, e);
+  }
+  return out;
+}
+
+/** The sites of one file's text, scanned as a tree of that one file. */
+export function findCheckboxSites(text: string, file = "f.tsx"): FoundSite[] {
+  return scanSources(new Map([[file, text]])).files.find((f) => f.file === file)?.sites ?? [];
 }
 
 // ---------------------------------------------------------------------------
@@ -347,13 +1364,13 @@ export type SiteReading = {
   tag: string;
   /**
    * What the person sees: a checkbox, a switch drawn inside a checkbox-role
-   * row, or, for an unresolved site, no checkbox (`notACheckbox` says why).
+   * row, or, for an unresolved site, no checkbox (the reading says why).
    */
   drawn: "checkbox" | "switch" | "no checkbox";
   effect: Effect;
   /** Why: the reading in a sentence, naming what applies the change. */
   reading: string;
-  /** Texts that must stand in the opening tag (the change handler, when it has one). */
+  /** Texts that must stand in the opening tag: each change handler and each spread, at least. */
   tagIncludes: string[];
   /** Texts that must stand in the code of the file: the confirm control, the write, the form. */
   fileIncludes: string[];
@@ -370,6 +1387,11 @@ export type FileReading = {
   /** For a file with no site: what its checkbox tokens are. */
   mentions?: string;
   sites: SiteReading[];
+  /**
+   * For a file that loads modules outside the tree without a binding (G1): how many, a pattern (a regular
+   * expression source) each of them matches, and what they are in a sentence.
+   */
+  loads?: { count: number; modules: string; reading: string };
 };
 
 const SENTENCE = 20;
@@ -382,12 +1404,19 @@ function shortSentence(s: unknown): boolean {
   return typeof s !== "string" || s.trim().length < SENTENCE;
 }
 
-/** Problems of pinned texts: each must hold more than white space and stand in the code (not only a comment). */
-function pinProblems(
-  at: string,
-  pins: { file: string; text: string }[],
-  fileText: (file: string) => string,
-): string[] {
+const PARSED = new Map<string, { raw: string; sf: ts.SourceFile }>();
+
+/** The parsed text of a pinned file, parsed once per text. */
+function parsedPin(file: string, raw: string): ts.SourceFile {
+  const hit = PARSED.get(file);
+  if (hit && hit.raw === raw) return hit.sf;
+  const sf = parseSource(file, raw);
+  PARSED.set(file, { raw, sf });
+  return sf;
+}
+
+/** Problems of pinned texts: each must hold more than white space and stand in the code (rule 7). */
+function pinProblems(at: string, pins: { file: string; text: string }[], fileText: (file: string) => string): string[] {
   const problems: string[] = [];
   for (const pin of pins) {
     if (blankText(pin.file) || blankText(pin.text)) {
@@ -402,21 +1431,33 @@ function pinProblems(
       continue;
     }
     if (!raw.includes(pin.text)) problems.push(`${at}: ${pin.file} no longer holds ${JSON.stringify(pin.text)}`);
-    else if (!blankComments(raw).includes(pin.text)) {
-      problems.push(`${at}: ${pin.file} holds ${JSON.stringify(pin.text)} only in a comment; pin the code`);
+    else if (!standsInCode(parsedPin(pin.file, raw), pin.text)) {
+      problems.push(`${at}: ${pin.file} holds ${JSON.stringify(pin.text)} only in a comment, a string or a template; pin the code`);
     }
   }
   return problems;
 }
 
 /**
+ * Whether a tagIncludes text names an attribute: the attribute itself, or a
+ * prefix of it that reaches past a handler's `=` or past a spread's `{...`.
+ */
+function namesAttribute(t: string, attribute: string): boolean {
+  if (t === attribute) return true;
+  const reach = attribute.startsWith("{...") ? 4 : attribute.indexOf("=") + 1;
+  return reach > 0 && attribute.startsWith(t) && t.length > reach;
+}
+
+const SWITCH_TAG = /^Switch(?:\.|$)/;
+
+/**
  * The problems between the recorded readings and the scanned tree; [] means
  * every in-scope file and every site has exactly one true reading.
  */
 export function readingProblems(readings: FileReading[], tree: ScannedTree, fileText: (file: string) => string): string[] {
-  const problems: string[] = [];
-  for (const file of tree.defaultExports) {
-    problems.push(`${file}: exports a checkbox as its default export, which no name follows: export it by name`);
+  const problems: string[] = [...tree.parseErrors.map((e) => `${e}: the file does not parse, so it cannot be read`)];
+  for (const at of tree.defaultExports) {
+    problems.push(`${at}: exports a checkbox as its default export, which no name follows: export it by name`);
   }
   const byFile = new Map(tree.files.map((s) => [s.file, s]));
   const recorded = new Map<string, FileReading>();
@@ -438,7 +1479,26 @@ export function readingProblems(readings: FileReading[], tree: ScannedTree, file
     if (s.tokens !== r.tokens) {
       problems.push(`${r.file}: holds ${s.tokens} checkbox token(s), the reading was recorded at ${r.tokens}: read the file again`);
     }
-    if (r.sites.length === 0 && shortSentence(r.mentions)) {
+    if (s.loads.length > 0 && r.loads === undefined) {
+      problems.push(`${r.file}: loads ${s.loads.length} module(s) outside the tree without a binding, which the reading must name in loads`);
+    }
+    if (r.loads !== undefined) {
+      if (s.loads.length === 0) problems.push(`${r.file}: the reading records loads, the file loads no module outside the tree without a binding`);
+      else if (r.loads.count !== s.loads.length) {
+        problems.push(`${r.file}: loads ${s.loads.length} module(s) outside the tree without a binding, the reading was recorded at ${r.loads.count}: read the file again`);
+      }
+      let pattern: RegExp | undefined;
+      try {
+        pattern = blankText(r.loads.modules) ? undefined : new RegExp(`^(?:${r.loads.modules})$`);
+      } catch {
+        pattern = undefined;
+      }
+      if (pattern === undefined) problems.push(`${r.file}: the loads pattern is no regular expression`);
+      else for (const spec of s.loads) if (!pattern.test(spec)) problems.push(`${r.file}: loads ${spec}, which the recorded loads pattern does not cover`);
+      if (shortSentence(r.loads.reading)) problems.push(`${r.file}: the loads reading is not a sentence`);
+    }
+    const onlyLoads = s.tokens === 0 && s.sites.length === 0 && s.loads.length > 0;
+    if (r.sites.length === 0 && !onlyLoads && shortSentence(r.mentions)) {
       problems.push(`${r.file}: a file with no site must say in a sentence what its tokens are`);
     }
     if (r.mentions !== undefined && r.sites.length > 0) problems.push(`${r.file}: mentions is only for a file with no site`);
@@ -460,28 +1520,22 @@ export function readingProblems(readings: FileReading[], tree: ScannedTree, file
       if (used.has(index)) problems.push(`${r.file}: two readings name the site at line ${found.line}`);
       used.add(index);
       const at = `${r.file}:${found.line}`;
-      if (found.unresolved !== undefined && found.unresolved.startsWith("its opening tag has no end")) {
-        problems.push(`${at}: its opening tag has no end, so it cannot be read`);
-      }
       if (found.tag !== site.tag) problems.push(`${at}: the tag is ${found.tag}, the reading says ${site.tag}`);
       if (!EFFECTS.includes(site.effect)) problems.push(`${at}: the effect ${JSON.stringify(site.effect)} is not one of ${EFFECTS.join(", ")}`);
       for (const t of site.tagIncludes) {
         if (blankText(t)) problems.push(`${at}: a tagIncludes text is empty`);
         else if (!found.openingTag.includes(t)) problems.push(`${at}: the opening tag no longer holds ${JSON.stringify(t)}`);
       }
-      for (const handler of ["onCheckedChange=", "onChange=", "onSelect=", "onClick="]) {
-        if (found.openingTag.includes(handler) && !site.tagIncludes.some((t) => typeof t === "string" && t.startsWith(handler))) {
-          problems.push(`${at}: the opening tag has ${handler.slice(0, -1)}, which the reading must name in tagIncludes`);
+      for (const attribute of found.mustName) {
+        if (!site.tagIncludes.some((t) => typeof t === "string" && namesAttribute(t, attribute))) {
+          const label = attribute.startsWith("{") ? attribute.replace(/\s+/g, " ").slice(0, 80) : attribute.split(/\s*=/)[0];
+          problems.push(`${at}: the opening tag has ${label}, which the reading must name in tagIncludes`);
         }
       }
       problems.push(
-        ...pinProblems(
-          at,
-          [...site.fileIncludes.map((text) => ({ file: r.file, text })), ...(site.evidence ?? [])],
-          fileText,
-        ),
+        ...pinProblems(at, [...site.fileIncludes.map((text) => ({ file: r.file, text })), ...(site.evidence ?? [])], fileText),
       );
-      const drawsSwitch = /<Switch\b/.test(found.body);
+      const drawsSwitch = found.childTags.some((t) => SWITCH_TAG.test(t));
       if (site.drawn === "switch" && !drawsSwitch) problems.push(`${at}: the reading says a switch is drawn, the element draws none`);
       if (site.drawn === "checkbox" && drawsSwitch) problems.push(`${at}: the element draws a switch, the reading says a checkbox`);
       if (site.drawn === "no checkbox" && found.unresolved === undefined) {
@@ -501,9 +1555,15 @@ export function readingProblems(readings: FileReading[], tree: ScannedTree, file
   return problems;
 }
 
-/** One caller of a shared component whose rows or children draw the box. */
+// ---------------------------------------------------------------------------
+// Callers of a shared component
+// ---------------------------------------------------------------------------
+
+/** One call site (one JSX element) of a shared component whose rows or children draw the box. */
 export type CallerReading = {
   file: string;
+  /** A text that stands in exactly one call site's opening tag of the file. */
+  anchor: string;
   effect: Effect;
   reading: string;
   fileIncludes: string[];
@@ -511,101 +1571,113 @@ export type CallerReading = {
   staysBecause?: string;
 };
 
-/** A shared component whose box is read at its callers, with the opening tags that count as a caller. */
+/** A shared component whose box is read at its callers. */
 export type ComponentCallers = {
   component: string;
-  /** Says which opening tags are callers; without it, every use is one. */
-  isCaller?: (openingTag: string) => boolean;
+  /**
+   * When set, an element is a caller only when this attribute, read in source
+   * order, is one of `values`; an expression, or a spread that may set it,
+   * makes it a caller too. Without it, every element is one.
+   */
+  callerWhen?: { attribute: string; values: string[] };
   /** Why these are the callers, in a sentence. */
   why: string;
   callers: CallerReading[];
 };
 
+export type CallerSite = { file: string; line: number; tag: string; openingTag: string };
+
 export type CallerScan = {
-  /** Every name the component is found under (its own, exported and local aliases). */
-  names: string[];
-  callers: string[];
-  /** Uses of one of the names that are neither a JSX tag, an import or export, a declaration nor a type. */
+  /** Names the component is exported under beyond its own. */
+  exported: string[];
+  /** Every call site, in file and line order. */
+  sites: CallerSite[];
+  /** Uses of a name of the component the scan cannot follow, and default exports of it. */
   unresolved: string[];
 };
 
+function isCallerElement(el: ts.JsxOpeningLikeElement, when: ComponentCallers["callerWhen"]): boolean {
+  if (when === undefined) return true;
+  const v = resolveAttribute(el, when.attribute.toLowerCase());
+  if (v.kind === "absent") return false;
+  if (v.kind === "literal") return when.values.includes(v.value);
+  if (v.kind === "expression" && v.values !== null) return v.values.some((x) => when.values.includes(x));
+  return true;
+}
+
 /**
- * The files outside tests that open the component (under any of its names) with
- * an opening tag `isCaller` accepts, and every use of a name the scan cannot
- * follow (rule 6).
+ * The call sites outside tests that open the component under any of its names
+ * with an element `callerWhen` accepts, and every use of a name the scan
+ * cannot follow.
  */
 export function findCallers(
   scannedFiles: string[],
   fileText: (file: string) => string,
   component: string,
-  isCaller: (openingTag: string) => boolean = () => true,
+  callerWhen?: ComponentCallers["callerWhen"],
 ): CallerScan {
-  const files = scannedFiles.filter((f) => !isTestPath(f));
-  const texts = new Map(files.map((f) => [f, fileText(f)] as const));
-  const { names: exported, defaults } = exportedAliases(texts, (name) => name === component);
-  const allNames = new Set<string>([component]);
-  const callers: string[] = [];
-  const unresolved = defaults.map((f) => `${f}: exports ${component} as its default export, which no name follows`);
-  for (const [file, raw] of texts) {
-    const text = blankComments(raw);
-    const local = localAliases(text, (name) => name === component || exported.has(name));
-    const names = new Set<string>([component, ...exported, ...local]);
-    for (const n of names) allNames.add(n);
-    let isCallerFile = false;
-    const allowed: [number, number][] = [];
-    for (const m of text.matchAll(/\b(?:import|export)\s*(?:type\s*)?\{[^}]*\}/g)) allowed.push([m.index ?? 0, (m.index ?? 0) + m[0].length]);
-    for (const name of names) {
-      const word = new RegExp(`(?<![\\w$])${name.replace(/\$/g, "\\$")}(?![\\w$])`, "g");
-      for (const m of text.matchAll(word)) {
-        const i = m.index ?? 0;
-        const before = text.slice(Math.max(0, i - 200), i);
-        const after = text.slice(i + name.length, i + name.length + 40);
-        if (/<\/?(?:[A-Za-z_$][\w$]*\.)*$/.test(before)) {
-          if (/<(?:[A-Za-z_$][\w$]*\.)*$/.test(before)) {
-            const start = before.lastIndexOf("<") + Math.max(0, i - 200);
-            const end = openingTagEnd(text, start);
-            const tag = end < 0 ? text.slice(start) : text.slice(start, end);
-            if (end < 0 || isCaller(tag)) isCallerFile = true;
-          }
-          continue;
-        }
-        if (allowed.some(([a, b]) => i >= a && i < b)) continue;
-        // Inside a string literal of its line (an odd number of its quotes
-        // before it): a name in a string is no reference. A JSX use was taken
-        // above, so this cannot hide a caller.
-        const lineStart = text.lastIndexOf("\n", i) + 1;
-        const lead = text.slice(lineStart, i);
-        if (['"', "'", "`"].some((q) => (lead.split(q).length - 1) % 2 === 1)) continue;
-        if (/\b(?:function|class|typeof|keyof)\s+$/.test(before)) continue;
-        if (/\bimport\s+(?:type\s+)?$/.test(before) && /^\s*(?:,|from\b)/.test(after)) continue;
-        if (/\bimport\s+\*\s+as\s+$/.test(before)) continue;
-        if (/\b(?:const|let|var)\s+$/.test(before) && /^\s*[=:(<]/.test(after)) continue;
-        if (/\b(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*$/.test(before) && /^\s*[;\n]/.test(after)) continue;
-        unresolved.push(`${file}:${lineOf(text, i)}: a use of ${name} that is no JSX tag, import, export, declaration or type`);
+  const sources = new Map<string, ts.SourceFile>();
+  const unresolved: string[] = [];
+  for (const file of scannedFiles) {
+    if (isTestPath(file)) continue;
+    const sf = parseSource(file, fileText(file));
+    unresolved.push(...parseErrors(sf).map((e) => `${e}: the file does not parse`));
+    sources.set(file, sf);
+  }
+  const scope = resolveNames(sources, (n) => n === component);
+  unresolved.push(...scope.defaults.map((at) => `${at}: exports ${component} as its default export, which no name follows`));
+  const modules = moduleObjectsOf(
+    new Map([...sources].map(([file, sf]) => [file, collectBindings(sf)] as const)),
+    scope.isName,
+    () => false,
+    workspaceEntries([...sources.keys()], fileText),
+    rootAliases(fileText),
+  );
+  const sites: CallerSite[] = [];
+  for (const [file, sf] of sources) {
+    const isName = (n: string) => scope.isName(file, n);
+    // Only the modules of the tree that export the component are followed here: a module outside the tree cannot
+    // export this tree's component.
+    for (const site of findSites(sf, isName, isName, modules.mayExport, false, modules.objectsIn(file, modules.mayExport))) {
+      if (site.unresolved !== undefined && (site.unresolved.startsWith("a use of") || site.unresolved.startsWith("a load of"))) {
+        unresolved.push(`${file}:${site.line}: ${site.unresolved}`);
       }
     }
-    if (isCallerFile) callers.push(file);
+    const visit = (n: ts.Node) => {
+      if ((ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) && n.tagName.getText(sf).split(".").some(isName)) {
+        if (isCallerElement(n, callerWhen)) sites.push({ file, line: lineOf(sf, n.getStart(sf)), tag: n.tagName.getText(sf), openingTag: n.getText(sf) });
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
   }
-  return { names: [...allNames].sort(), callers: callers.sort(), unresolved };
+  sites.sort((a, b) => (a.file === b.file ? a.line - b.line : a.file < b.file ? -1 : 1));
+  return { exported: [...scope.exported].sort(), sites, unresolved };
 }
 
-export function callerProblems(
-  set: ComponentCallers,
-  found: CallerScan,
-  fileText: (file: string) => string,
-): string[] {
+export function callerProblems(set: ComponentCallers, found: CallerScan, fileText: (file: string) => string): string[] {
   const problems: string[] = [...found.unresolved];
   const { component, callers } = set;
   if (shortSentence(set.why)) problems.push(`${component}: say in a sentence why these are its callers`);
-  const seen = new Set<string>();
-  for (const c of callers) {
-    if (seen.has(c.file)) problems.push(`${c.file}: recorded twice as a caller of ${component}`);
-    seen.add(c.file);
-  }
-  for (const f of found.callers) if (!seen.has(f)) problems.push(`${f}: a caller of ${component} with no recorded reading`);
+  const used = new Set<number>();
   for (const c of callers) {
     const at = `${c.file} (caller of ${component})`;
-    if (!found.callers.includes(c.file)) problems.push(`${at}: recorded as a caller, but it is not one`);
+    if (blankText(c.anchor)) {
+      problems.push(`${at}: a caller reading has an empty anchor`);
+      continue;
+    }
+    const hits = found.sites.map((s, i) => [s, i] as const).filter(([s]) => s.file === c.file && s.openingTag.includes(c.anchor));
+    if (hits.length === 0 && !found.sites.some((s) => s.file === c.file)) {
+      problems.push(`${at}: recorded as a caller, but it is not one`);
+      continue;
+    }
+    if (hits.length !== 1) {
+      problems.push(`${at}: anchor ${JSON.stringify(c.anchor)} stands in ${hits.length} call site(s), not one`);
+      continue;
+    }
+    const [site, index] = hits[0];
+    if (used.has(index)) problems.push(`${c.file}:${site.line}: two readings name this call site of ${component}`);
+    used.add(index);
     if (!EFFECTS.includes(c.effect)) problems.push(`${at}: the effect ${JSON.stringify(c.effect)} is not one of ${EFFECTS.join(", ")}`);
     problems.push(...pinProblems(at, [...c.fileIncludes.map((text) => ({ file: c.file, text })), ...(c.evidence ?? [])], fileText));
     if (c.effect === "confirmed" && c.fileIncludes.length + (c.evidence ?? []).length === 0) {
@@ -615,5 +1687,8 @@ export function callerProblems(
     if (c.staysBecause !== undefined && shortSentence(c.staysBecause)) problems.push(`${at}: the reason the box stays is not a sentence`);
     if (shortSentence(c.reading)) problems.push(`${at}: the reading is not a sentence`);
   }
+  found.sites.forEach((s, i) => {
+    if (!used.has(i)) problems.push(`${s.file}:${s.line}: a call site of ${component} with no recorded reading`);
+  });
   return problems;
 }
