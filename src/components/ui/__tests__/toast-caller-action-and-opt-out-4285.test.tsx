@@ -5,7 +5,8 @@
  *
  * The components drawing (Toast / Sonner) says "Every toast carries a Copy
  * action by default and a Close". The wrapper's option builder
- * (packages/sdk-ui/src/toast.ts, `buildOptions`) adds that Copy unless the
+ * (packages/sdk-ui/src/toast.ts, `buildOptions`) adds that Copy for a message
+ * that is a non-empty string (or when `copyText` is non-empty), unless the
  * caller passes its own `action`, which replaces it, or `action: null`, which
  * leaves it out. The builder's payload is pinned by
  * packages/sdk-ui/src/__tests__/toast-ghost-icon-controls-3566.test.tsx (C8).
