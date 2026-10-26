@@ -703,6 +703,10 @@ describe("the cap", () => {
     const server = new FakeServer(at(1000), 100); // 100 ms each way
     const h = harness();
     capOnlyServer(h, server);
+    let endedAt: number | null = null;
+    h.onEnded.mockImplementation(() => {
+      endedAt = Date.now();
+    });
     const first = pair(1, 300, { userExpiresIn: 900 });
     server.users.set(first.userToken, at(900));
     server.transports.set(first.transportToken, at(300));
@@ -717,6 +721,34 @@ describe("the cap", () => {
     // chain holds that pair to its hi bound and renews no more.
     expect(starts).toEqual([210, 420]);
     expect(h.onEnded).toHaveBeenCalledTimes(1);
+    // K14 (the known limit): the frame ends at the held pair's E_hi, the 420 s
+    // answer's receipt (420.2 s) + 301 s, early against the cap (1000 s) and
+    // never before the pair's real end (its transport token, 420.1 + 300 s).
+    expect(endedAt).toBe(T0 + 721_200);
+    expect(endedAt!).toBeLessThan(at(1000));
+  });
+
+  it("C12 (spec v3, the other side): with sessionExpiresIn known, a no-gain successor does NOT stop the chain; it renews to the cap and ends at about K", async () => {
+    // The same server and schedule as the burst case, with K advertised. At
+    // 420 s the successor gains no user life (both end at the cap, 1000 s), but
+    // (a) applies to K unknown only: the cap rule life_E >= life_K decides.
+    const server = new FakeServer(at(1000));
+    const h = harness();
+    h.renew.mockImplementation(server.renew);
+    let endedAt: number | null = null;
+    h.onEnded.mockImplementation(() => {
+      endedAt = Date.now();
+    });
+    const first = pair(1, 300, { userExpiresIn: 900, sessionExpiresIn: 1000 });
+    server.users.set(first.userToken, at(900));
+    server.transports.set(first.transportToken, at(300));
+    h.chain.arm(first, livesOf(first), at(0), at(0));
+    await advanceTo(2000);
+    // 210: user 790 (to the cap), pair 300; 420: user 580, no gain, pair 300;
+    // 630: user 370, pair 300; 840: user 160 = K left, pair 160: capReached.
+    expect(h.requests.map((r) => r.at)).toEqual([210, 420, 630, 840]);
+    expect(h.onEnded).toHaveBeenCalledTimes(1);
+    expect(endedAt, "END at E_hi = 840 + 161 s, at about K").toBe(at(1001));
   });
 
   it("C26 (spec v3): with no sessionExpiresIn the chain renews by decide; at the cap it holds the last pair to E_hi and ends once", async () => {
