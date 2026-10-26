@@ -153,7 +153,10 @@ export function readRunSelectedSkillRevisions(
  * skills hold's own park puts a NOT-YET-EXECUTED run into. A returning reader was
  * therefore offered a live box on a run that had not started and had their change
  * refused by this statement when they used it. The stamp tells the hold's park
- * apart from an interrupt raised mid-flight, which the status cannot.
+ * apart from an interrupt raised mid-flight, which the status cannot. A run
+ * dispatched before the stamp existed carries no stamp, so the statement also
+ * reads `human_wait_attempt_id IS NULL`: that marker (cinatra#1938) is set only
+ * on `running->pending_approval`, so a row that carries it has executed.
  *
  * SCOPED TO THE NAMED SKILLS, never to the run. The caller names the skills its
  * own decision is authoritative for — the hold's offered set — so a selection
@@ -180,6 +183,7 @@ export function clearRunSelectedSkillRevisionsBeforeStart(input: {
                  AND r.id = s.run_id
                  AND s.skill_id = ANY($2::text[])
                  AND r.started_at IS NULL
+                 AND r.human_wait_attempt_id IS NULL
                  AND r.status = ANY($3::text[])`,
         values: [
           input.runId,
@@ -237,7 +241,7 @@ export function replaceRunSelectedSkillRevisionsBeforeStart(input: {
     //    writes, so "it applied" is the transaction's own view and not a probe
     //    taken a moment earlier.
     {
-      text: `SELECT 1 FROM ${runs} WHERE id = $1 AND started_at IS NULL AND status = ANY($2::text[])`,
+      text: `SELECT 1 FROM ${runs} WHERE id = $1 AND started_at IS NULL AND human_wait_attempt_id IS NULL AND status = ANY($2::text[])`,
       values: [input.runId, preStart],
     },
   ];
@@ -249,6 +253,7 @@ export function replaceRunSelectedSkillRevisionsBeforeStart(input: {
                AND r.id = s.run_id
                AND s.skill_id = ANY($2::text[])
                AND r.started_at IS NULL
+               AND r.human_wait_attempt_id IS NULL
                AND r.status = ANY($3::text[])`,
       values: [input.runId, dropped, preStart],
     });
@@ -273,6 +278,7 @@ export function replaceRunSelectedSkillRevisionsBeforeStart(input: {
                SELECT 1 FROM ${runs} r
                WHERE r.id = ${runIdParam}
                  AND r.started_at IS NULL
+                 AND r.human_wait_attempt_id IS NULL
                  AND r.status = ANY(${statusParam}::text[])
              )
              ON CONFLICT (run_id, skill_id) DO NOTHING`,

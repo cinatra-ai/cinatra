@@ -708,3 +708,108 @@ describe.skipIf(!HAS_DB)(
     }, 120_000);
   },
 );
+
+// A RUN DISPATCHED BEFORE THE START STAMP EXISTED, PAUSED MID-FLIGHT AT A GATE
+// (cinatra#3062, merge-1 MUST-FIX 1). Every dispatch before this change left
+// `started_at` NULL, and no backfill writes it. Such a row that went
+// running->pending_approval reads exactly like the hold's own pre-execution
+// park — status `pending_approval`, no stamp — except for ONE column: the
+// in-attempt wait marker `human_wait_attempt_id` (cinatra#1938), which the CAS
+// stamps only on running->pending_approval. That run HAS executed: the card must
+// read it as started, and the store must refuse to rewrite its selection.
+describe.skipIf(!HAS_DB)("cinatra#3062 merge-1 MF1 — a pre-deploy run paused mid-flight reads as STARTED", () => {
+  async function pausedMidFlightBeforeTheStamp(): Promise<string> {
+    const runId = await decidedButNotStarted();
+    const attempt = `attempt-${randomUUID()}`;
+    const c = new Client({ connectionString: DB_URL });
+    await c.connect();
+    await c.query(
+      `UPDATE "${q(TEST_SCHEMA)}"."agent_runs"
+         SET execution_attempt_id = $2, human_wait_attempt_id = $2
+       WHERE id = $1`,
+      [runId, attempt],
+    );
+    const { rows } = await c.query(
+      `SELECT status, started_at, human_wait_attempt_id FROM "${q(TEST_SCHEMA)}"."agent_runs" WHERE id = $1`,
+      [runId],
+    );
+    await c.end();
+    // EXACTLY the row the review named: pending_approval, no stamp, marker set.
+    expect(rows[0].status).toBe("pending_approval");
+    expect(rows[0].started_at).toBeNull();
+    expect(rows[0].human_wait_attempt_id).toBe(attempt);
+    return runId;
+  }
+
+  it("the pure boundary reads the wait marker as the start", () => {
+    expect(
+      statusMod.recommendationRunHasStartedForRow({
+        status: "pending_approval",
+        startedAt: null,
+        humanWaitAttemptId: "attempt-1",
+      } as never),
+    ).toBe(true);
+    // The hold's own pre-execution park (no marker) still reads NOT started.
+    expect(
+      statusMod.recommendationRunHasStartedForRow({
+        status: "pending_approval",
+        startedAt: null,
+        humanWaitAttemptId: null,
+      } as never),
+    ).toBe(false);
+  });
+
+  it("the resolver reads that row as started", async () => {
+    const runId = await pausedMidFlightBeforeTheStamp();
+    const state = (await resolveForTestActor!(runId)) as { state: string; runStarted?: boolean };
+    expect(state.state).toBe("confirmed");
+    expect(state.runStarted).toBe(true);
+  }, 120_000);
+
+  it("the chat card draws that row read-only, with no Continue", async () => {
+    const runId = await pausedMidFlightBeforeTheStamp();
+    const { container } = reload(runId, "chat_thread");
+    await drawn(container);
+    await waitFor(
+      () => {
+        expect(step(container)?.getAttribute("data-skills-step-editable")).toBe("false");
+      },
+      { timeout: 20_000 },
+    );
+    expect(continues(container)).toHaveLength(0);
+  }, 120_000);
+
+  it("the store's guard refuses to rewrite its selection and its rejected evidence", async () => {
+    const runId = await pausedMidFlightBeforeTheStamp();
+    const rejectedBefore = selectionStore
+      .readRunRejectedRecommendations(runId)
+      .map((r: { skillId: string }) => r.skillId)
+      .sort();
+    const applied = selectionStore.replaceRunSelectedSkillRevisionsBeforeStart({
+      runId,
+      scopeSkillIds: ["skill-kept", "skill-cleared"],
+      selections: [
+        {
+          skillId: "skill-cleared",
+          skillRevisionId: "skill-cleared@1",
+          selectionSource: "recommended_confirmed",
+        },
+      ],
+    });
+    expect(applied).toBe(false);
+    const cleared = selectionStore.clearRunSelectedSkillRevisionsBeforeStart({
+      runId,
+      skillIds: ["skill-kept"],
+    });
+    expect(cleared).toBe(0);
+    expect(
+      selectionStore.readRunSelectedSkillRevisions(runId).map((r) => r.skillId).sort(),
+    ).toEqual(["skill-kept"]);
+    expect(
+      selectionStore
+        .readRunRejectedRecommendations(runId)
+        .map((r: { skillId: string }) => r.skillId)
+        .sort(),
+    ).toEqual(rejectedBefore);
+  }, 120_000);
+});

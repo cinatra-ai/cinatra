@@ -144,6 +144,13 @@ export const START_AMBIGUOUS_RUN_STATUSES: ReadonlySet<string> = new Set<AgentRu
  *     has run, which is what §V calls "before the run starts". The status-only
  *     answer calls it started, and the card drew the read-only reading with no
  *     Continue for as long as the row sat there right after the one Continue;
+ *   - a row that carries the in-attempt wait marker `humanWaitAttemptId`
+ *     (cinatra#1938) HAS started, whatever its stamp says. The marker is set
+ *     only on `running->pending_approval`, the interrupt raised mid-flight, so
+ *     its presence is the fact "this run executed". It tells a run dispatched
+ *     BEFORE the stamp existed (its `started_at` was left NULL) and paused
+ *     mid-flight at a gate apart from a run parked before it ever ran: both
+ *     read `pending_approval` with no stamp;
  *   - anything else with no stamp keeps the status-only answer
  *     `recommendationRunHasStarted` gives, so a row whose stamp is missing for
  *     any other reason never becomes editable on that account.
@@ -154,10 +161,14 @@ export const START_AMBIGUOUS_RUN_STATUSES: ReadonlySet<string> = new Set<AgentRu
  * and therefore on every reload.
  */
 export function recommendationRunHasStartedForRow(
-  run: { status?: string | null; startedAt?: Date | string | null } | null | undefined,
+  run:
+    | { status?: string | null; startedAt?: Date | string | null; humanWaitAttemptId?: string | null }
+    | null
+    | undefined,
 ): boolean {
   if (!run) return false;
   if (run.startedAt !== null && run.startedAt !== undefined) return true;
+  if (run.humanWaitAttemptId !== null && run.humanWaitAttemptId !== undefined) return true;
   const status = run.status;
   if (typeof status === "string" && START_AMBIGUOUS_RUN_STATUSES.has(status)) return false;
   if (status === "queued") return false;
@@ -171,8 +182,9 @@ export function recommendationRunHasStartedForRow(
  * puts its status test INSIDE the DELETE and the INSERT on purpose — so a
  * dispatch cannot land between a status read and the write. That statement needs
  * the boundary as a VALUE, and this is it: the statuses a run can hold while it
- * has not executed. Paired with `started_at IS NULL` in the same predicate it is
- * exactly `recommendationRunHasStartedForRow` negated, expressed in SQL.
+ * has not executed. Paired with `started_at IS NULL` and
+ * `human_wait_attempt_id IS NULL` in the same predicate it is exactly
+ * `recommendationRunHasStartedForRow` negated, expressed in SQL.
  *
  * `pending_approval` is in it because the recommendation hold's own park is
  * BEFORE execution — see `START_AMBIGUOUS_RUN_STATUSES` — and leaving it out is

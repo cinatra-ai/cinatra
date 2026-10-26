@@ -369,6 +369,27 @@ describe("the boundary, asked of the row, over every status", () => {
     expect(PRE_START_RUN_STATUSES_WITHOUT_A_START_STAMP.has("queued")).toBe(false);
     expect(recommendationRunHasStartedForRow(null)).toBe(false);
   });
+
+  it("a pending_approval row with NO stamp but the in-attempt wait marker HAS started (merge-1 MF1)", () => {
+    // A run dispatched before the stamp existed (its `started_at` was left NULL)
+    // and paused mid-flight at a gate: running->pending_approval stamps
+    // `humanWaitAttemptId` (cinatra#1938), and only that edge does. It executed.
+    expect(
+      recommendationRunHasStartedForRow({
+        status: "pending_approval",
+        startedAt: null,
+        humanWaitAttemptId: "attempt-1",
+      } as never),
+    ).toBe(true);
+    // The hold's own pre-execution park carries no marker and reads NOT started.
+    expect(
+      recommendationRunHasStartedForRow({
+        status: "pending_approval",
+        startedAt: null,
+        humanWaitAttemptId: null,
+      } as never),
+    ).toBe(false);
+  });
 });
 
 describe("the card after the one Continue, while the run is queued and then held at its next gate", () => {
