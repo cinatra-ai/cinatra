@@ -28,12 +28,13 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Lock, Trash2, Users } from "lucide-react";
+import { Loader2, Lock, Trash2 } from "lucide-react";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 
 import { toast } from "./toast";
+import { userAvatarAccent, userInitials } from "./lib/user-avatar";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Button } from "./ui/button";
 import {
@@ -75,6 +76,8 @@ export type OwnerView = {
   name: string;
   email: string;
   image: string | null;
+  /** The person's persisted avatar accent (`user.accent_color`), when the host has it. */
+  accentColor?: string | null;
 };
 
 export type SharingCandidate = {
@@ -185,16 +188,6 @@ const PAGE_SIZE = 20;
 // guarantees non-emptiness so the picker always has a floor token.
 const AccessFormSchema = z.object({ access: z.array(z.string()).nonempty() });
 type AccessFormValues = z.infer<typeof AccessFormSchema>;
-
-function getInitials(name: string): string {
-  if (!name) return "";
-  const parts = name.trim().split(/\s+/);
-  if (parts.length === 0 || !parts[0]) return "";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  const first = parts[0][0] ?? "";
-  const last = parts[parts.length - 1][0] ?? "";
-  return (first + last).toUpperCase();
-}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -615,8 +608,10 @@ export function PermissionsPanel({
                         extraction, so the row is unchanged for a person. */}
                     <Avatar className="size-9 h-8 w-8 rounded-full">
                       <AvatarImage src={c.image ?? undefined} alt={c.name} />
-                      <AvatarFallback>
-                        {getInitials(c.name) || <Users className="size-4" />}
+                      <AvatarFallback
+                        accent={userAvatarAccent({ id: c.userId, accentColor: c.accentColor })}
+                      >
+                        {userInitials(c)}
                       </AvatarFallback>
                     </Avatar>
                     <div className="flex flex-col flex-1 min-w-0 leading-tight">
