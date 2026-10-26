@@ -83,6 +83,13 @@ vi.mock("@cinatra-ai/a2a", () => ({
   resolveLatestWayflowGateTaskId: resolveLatestSpy,
 }));
 vi.mock("../execution", () => ({ handleWayflowTaskState: handleWayflowTaskStateSpy }));
+// cinatra#4312 — the repair-lineage reads the worker takes for a Regenerate on a
+// declared picture leg. Real-store proofs: lifecycle-c-w11-picture-regenerate-parks-run-3035.integration.test.ts.
+const repairStoreMock = vi.hoisted(() => ({
+  readRepairLineageRootGate: vi.fn<(taskId: string) => Promise<unknown>>(async () => null),
+  isRepairLineageOpen: vi.fn<(gateId: string) => Promise<boolean>>(async () => false),
+}));
+vi.mock("../lifecycle-repair-store", () => repairStoreMock);
 
 import {
   deliverArtifactReviewResumeIntent,
@@ -388,4 +395,93 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
     expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
   });
 
+});
+
+
+describe("cinatra#4312 — Regenerate on a declared picture leg keeps the pause parked at its successor", () => {
+  const SUCCESSOR = "lifecycle-review:repair:0b6f2d6e-3c1a-4c55-9d7e-2f0a1b2c3d4e:1";
+  function regeneratedFamily() {
+    const rows = familyRows(["resolved", "resolved"]).map((r, i) => ({
+      ...r, id: i === 0 ? "gate-post" : "gate-leg2", disposition: i === 0 ? "approve" : "changes_requested",
+    }));
+    return rows;
+  }
+  beforeEach(() => {
+    vi.clearAllMocks();
+    storeMock.readAgentRunByTaskId.mockImplementation(async (taskId: string) => (taskId === "task-1" ? pausedRun() : null));
+    storeMock.readAgentTemplateById.mockResolvedValue(internalTemplate());
+    gateStoreMock.markResumeIntentDelivered.mockResolvedValue(true);
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue(regeneratedFamily());
+    sendTaskSpy.mockResolvedValue({ id: "task-x", status: { state: "completed" } });
+    resolveLatestSpy.mockResolvedValue("task-1");
+    repairStoreMock.readRepairLineageRootGate.mockResolvedValue(null);
+    repairStoreMock.isRepairLineageOpen.mockResolvedValue(false);
+  });
+
+  it("the post's decision leaves the run parked while the regenerated picture's lineage is open", async () => {
+    repairStoreMock.isRepairLineageOpen.mockResolvedValue(true);
+    const outcome = await deliverArtifactReviewResumeIntent(intent({ gateId: "gate-post" }));
+    expect(outcome).toBe("already-advanced");
+    expect(repairStoreMock.isRepairLineageOpen).toHaveBeenCalledWith("gate-leg2");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-post", "lease-abc");
+  });
+
+  it("the post's decision resumes the run once that lineage is decided", async () => {
+    const outcome = await deliverArtifactReviewResumeIntent(intent({ gateId: "gate-post" }));
+    expect(outcome).toBe("delivered");
+    expect(repairStoreMock.isRepairLineageOpen).toHaveBeenCalledWith("gate-leg2");
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("the successor's decision resumes the paused run through the picture's leg, carrying its own decision", async () => {
+    const leg = regeneratedFamily()[1];
+    repairStoreMock.readRepairLineageRootGate.mockResolvedValue({
+      id: leg.id, runId: leg.runId, orgId: leg.orgId, reviewTaskId: leg.reviewTaskId, pinnedTargets: leg.pinnedTargets,
+    });
+    const responseText = JSON.stringify(buildReviewApproveEnvelope({ reviewTaskId: SUCCESSOR, comment: null, targets: [] }));
+    const outcome = await deliverArtifactReviewResumeIntent(intent({ gateId: "gate-succ", reviewTaskId: SUCCESSOR, responseText }));
+    expect(outcome).toBe("delivered");
+    expect(repairStoreMock.readRepairLineageRootGate).toHaveBeenCalledWith(SUCCESSOR);
+    expect(storeMock.readAgentRunByTaskId).toHaveBeenCalledWith("task-1");
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+    const sent = sendTaskSpy.mock.calls[0]![0] as { message: { contextId: string; parts: Array<{ text: string }> } };
+    expect(sent.message.contextId).toBe("ctx-1");
+    expect(sent.message.parts[0]!.text).toBe(responseText);
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-succ", "lease-abc");
+  });
+
+  it("the successor's decision keeps the run parked while another artifact of the pause is open", async () => {
+    const rows = regeneratedFamily();
+    rows[0] = { ...rows[0], status: "pending", disposition: null as unknown as string };
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue(rows);
+    repairStoreMock.readRepairLineageRootGate.mockResolvedValue({
+      id: rows[1].id, runId: rows[1].runId, orgId: rows[1].orgId, reviewTaskId: rows[1].reviewTaskId, pinnedTargets: rows[1].pinnedTargets,
+    });
+    const outcome = await deliverArtifactReviewResumeIntent(intent({ gateId: "gate-succ", reviewTaskId: SUCCESSOR }));
+    expect(outcome).toBe("already-advanced");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-succ", "lease-abc");
+  });
+
+  it.each([
+    ["an ordinary automatic gate", "lifecycle-review:ev-1"],
+    ["the post's own leg (the plan's first)", "wayflow-task-1"],
+  ])("a successor whose lineage started on %s keeps the automatic-gate road", async (_name, rootTaskId) => {
+    const leg = regeneratedFamily()[rootTaskId === "wayflow-task-1" ? 0 : 1];
+    repairStoreMock.readRepairLineageRootGate.mockResolvedValue({
+      id: "gate-root", runId: "run-1", orgId: "org-1", reviewTaskId: rootTaskId, pinnedTargets: leg.pinnedTargets,
+    });
+    const outcome = await deliverArtifactReviewResumeIntent(intent({ gateId: "gate-succ", reviewTaskId: SUCCESSOR }));
+    expect(outcome).toBe("already-advanced");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(storeMock.readAgentRunByTaskId).not.toHaveBeenCalled();
+  });
+
+  it("a successor of an unknown repair keeps the automatic-gate road", async () => {
+    const outcome = await deliverArtifactReviewResumeIntent(intent({ gateId: "gate-succ", reviewTaskId: SUCCESSOR }));
+    expect(outcome).toBe("already-advanced");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+  });
 });
