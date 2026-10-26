@@ -680,21 +680,93 @@ describe("the cap", () => {
     }
   });
 
-  /** A server double that drops sessionExpiresIn from every answer (K unknown)
-   *  and stops answering after `limit` requests, so a burst shows as a count,
-   *  never as a hung test. */
-  function capOnlyServer(h: ReturnType<typeof harness>, server: FakeServer, limit = 40) {
+  /** A server double whose answers carry no usable session life (K unknown):
+   *  sessionExpiresIn is dropped, or replaced by `session` (an invalid or short
+   *  value the frame must not read as a cap). It stops answering after `limit`
+   *  requests, so a burst shows as a count, never as a hung test. */
+  function capOnlyServer(
+    h: ReturnType<typeof harness>,
+    server: FakeServer,
+    limit = 40,
+    session: { value: unknown } | null = null,
+  ) {
     h.renew.mockImplementation(async (p) => {
       if (h.requests.length > limit) return new Promise<FrameRenewalOutcome>(() => undefined);
       const out = await server.renew(p);
       if (out.ok) {
         const rest: Pair = { ...out.credential };
         delete rest.sessionExpiresIn;
+        if (session) (rest as Record<string, unknown>).sessionExpiresIn = session.value;
         return { ...out, credential: rest };
       }
       return out;
     });
   }
+
+  // Spec v3 (a), SC G1: a session life that is PRESENT but invalid or shorter
+  // than the user life leaves K unknown (C47), so the no-gain rule applies
+  // exactly as when it is absent. RED ON 1555a8a7: the chain bursts.
+  it.each([
+    ["NaN", Number.NaN],
+    ["0", 0],
+    ["299 (below the user life)", 299],
+  ])(
+    "C26 (spec v3): sessionExpiresIn %s reads as K unknown: a no-gain successor counts as the cap, no burst, END at E_hi",
+    async (_label, value) => {
+      const server = new FakeServer(at(1000), 100);
+      const h = harness();
+      capOnlyServer(h, server, 40, { value });
+      let endedAt: number | null = null;
+      h.onEnded.mockImplementation(() => {
+        endedAt = Date.now();
+      });
+      const first = pair(1, 300, { userExpiresIn: 900, sessionExpiresIn: value });
+      server.users.set(first.userToken, at(900));
+      server.transports.set(first.transportToken, at(300));
+      h.chain.arm(first, livesOf(first), at(0), at(0));
+      await advanceTo(2000);
+      expect(h.requests.map((r) => r.at)).toEqual([210, 420]);
+      expect(h.onEnded).toHaveBeenCalledTimes(1);
+      expect(endedAt).toBe(T0 + 721_200);
+    },
+  );
+
+  // Spec v3 (a), SC G1: the boundary of `U'_lo <= U_lo`. A successor whose
+  // user token ends exactly where the replaced one did gained nothing (cap);
+  // one that ends 1 s later gained, and the chain renews on. The equal side is
+  // RED ON 1555a8a7 (no such rule there); the +1 s side is a guard, green at
+  // 1555a8a7 too.
+  it.each([
+    ["no gain (U'_lo = U_lo)", 390, "holding"],
+    ["a 1 s gain (U'_lo = U_lo + 1 s)", 391, "armed"],
+  ] as const)(
+    "C26 (spec v3): with K unknown, %s",
+    async (_label, successorUserLife, stateAfter) => {
+      const h = harness();
+      // The sign-in: pair 300 s, user token 600 s, K unknown: U_lo = 600 s.
+      const first = pair(1, 300, { userExpiresIn: 600 });
+      // The renewal at 210 s answers at once: U'_lo = 210 + life.
+      const successor = pair(2, 300, { userExpiresIn: successorUserLife });
+      h.renew.mockResolvedValueOnce({ ok: true, credential: successor, receivedAt: at(210) });
+      h.renew.mockImplementation(() => new Promise(() => undefined));
+      h.chain.arm(first, livesOf(first), at(0), at(0));
+      await advanceTo(210);
+      await advance(0);
+      expect(h.renew).toHaveBeenCalledTimes(1);
+      expect(h.onRenewed).toHaveBeenCalledWith(successor);
+      expect(h.chain.state).toBe(stateAfter);
+      await advanceTo(420);
+      if (stateAfter === "holding") {
+        expect(h.renew, "no request after a no-gain successor").toHaveBeenCalledTimes(1);
+        expect(h.onEnded, "held to E_hi = 210 + 301 s").not.toHaveBeenCalled();
+        await advanceTo(511);
+        expect(h.onEnded).toHaveBeenCalledTimes(1);
+      } else {
+        expect(h.renew, "the next renewal at want = 210 + 300 - 90 s").toHaveBeenCalledTimes(2);
+        expect(h.onEnded).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("C26 (spec v3): with no sessionExpiresIn and a fixed server cap, renewals never burst: a no-gain successor counts as the cap", async () => {
     // RED ON 1555a8a7 (spec v2): once the successors end at the cap, fireAt =

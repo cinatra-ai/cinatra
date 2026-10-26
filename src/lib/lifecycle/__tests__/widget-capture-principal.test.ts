@@ -17,7 +17,7 @@ const getActiveConnectSiteById = vi.fn();
 const widgetAuthSessionIsLive = vi.fn();
 // cinatra#4217 r5 — the default answers every read with `rows`; the renewal
 // cases below swap in a store that reads the statement itself.
-const defaultRunQuery = (_input: unknown): unknown => [{ rows }];
+const defaultRunQuery: (input: unknown) => unknown = () => [{ rows }];
 let runQuery = defaultRunQuery;
 
 vi.mock("@/lib/postgres-sync", () => ({
