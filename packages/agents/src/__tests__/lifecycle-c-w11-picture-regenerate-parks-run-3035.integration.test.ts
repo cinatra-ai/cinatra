@@ -107,8 +107,9 @@ type Pipeline = { runId: string; contextId: string; step: string; leg2: string; 
 
 /** The blog pipeline's run, paused at its marked review step: one declared gate per
  * artifact (the post's on the step's task id, the featured image's on `#2`), from
- * the real `emitDeclaredReviewGateFamily`. The run is internal and repair-capable. */
-async function pausedPipeline(): Promise<Pipeline> {
+ * the real `emitDeclaredReviewGateFamily`. The run is internal and, unless a case
+ * says otherwise, repair-capable. */
+async function pausedPipeline(repairCapable = true): Promise<Pipeline> {
   const runId = `run-blog-${randomUUID()}`;
   const templateId = `tmpl-${randomUUID()}`;
   const taskId = `task-${randomUUID()}`;
@@ -117,7 +118,7 @@ async function pausedPipeline(): Promise<Pipeline> {
     `INSERT INTO "${q(TEST_SCHEMA)}"."agent_templates"
        (id, org_id, owner_level, owner_id, name, source_nl, compiled_plan, input_schema, approval_policy, package_name, lifecycle_config)
      VALUES ($1,$2,'organization',$2,'seed','seed','[]','{}','{}',$3,$4)`,
-    [templateId, ORG, `@cinatra-ai/seed-${templateId}`, JSON.stringify({ repairCapable: true })],
+    [templateId, ORG, `@cinatra-ai/seed-${templateId}`, JSON.stringify({ repairCapable })],
   );
   await pool(
     `INSERT INTO "${q(TEST_SCHEMA)}"."agent_runs"
@@ -301,5 +302,26 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — the run stays parked at the picture's
     const text = await approve(p.runId, second.taskId);
     await resumeDelivery.sweepArtifactReviewResumeIntents({ limit: 50 });
     expectResumedWith(p, text);
+  });
+
+  it("ESCALATED: Regenerate on #2 with a producer that cannot repair opens no successor, so the post's decision lets the run go on", async () => {
+    const p = await pausedPipeline(false);
+    const cr = await crStore.recordReviewSurfaceChangesRequested({
+      runId: p.runId,
+      reviewTaskId: p.leg2,
+      baseTarget: p.picture,
+      currentBaseRevisionId: p.picture.representationRevisionId,
+      feedback: "Make the sky darker",
+    });
+    expect(cr).toMatchObject({ ok: true, status: "escalated" });
+    const leg = await gateStore.readReviewGate(p.runId, p.leg2);
+    expect(leg).toMatchObject({ status: "resolved", disposition: "changes_requested" });
+    expect(await repairStore.isRepairLineageOpen(leg!.id)).toBe(false);
+    expect(await pendingGates(p.runId)).toEqual([p.step]);
+
+    const text = await approve(p.runId, p.step);
+    await resumeDelivery.sweepArtifactReviewResumeIntents({ limit: 50 });
+    expectResumedWith(p, text);
+    expect(await intentStatus(p.runId, p.step)).toBe("done");
   });
 });

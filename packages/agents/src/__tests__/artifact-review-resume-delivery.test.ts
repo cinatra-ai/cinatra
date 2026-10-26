@@ -479,6 +479,22 @@ describe("cinatra#4312 — Regenerate on a declared picture leg keeps the pause 
     expect(storeMock.readAgentRunByTaskId).not.toHaveBeenCalled();
   });
 
+  it("a failed lineage read on the post's decision throws: nothing is resumed and the intent is not marked done", async () => {
+    repairStoreMock.isRepairLineageOpen.mockRejectedValue(new Error("lineage read failed"));
+    await expect(deliverArtifactReviewResumeIntent(intent({ gateId: "gate-post" }))).rejects.toThrow("lineage read failed");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+  });
+
+  it("a failed lineage-root read on the successor's decision throws: nothing is resumed and the intent is not marked done", async () => {
+    repairStoreMock.readRepairLineageRootGate.mockRejectedValue(new Error("lineage root read failed"));
+    await expect(deliverArtifactReviewResumeIntent(intent({ gateId: "gate-succ", reviewTaskId: SUCCESSOR }))).rejects.toThrow("lineage root read failed");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+  });
+
   it("a successor of an unknown repair keeps the automatic-gate road", async () => {
     const outcome = await deliverArtifactReviewResumeIntent(intent({ gateId: "gate-succ", reviewTaskId: SUCCESSOR }));
     expect(outcome).toBe("already-advanced");
