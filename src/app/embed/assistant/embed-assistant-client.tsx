@@ -97,9 +97,16 @@ import type { EmbedContext } from "@/lib/embed/bridge-protocol";
 // widget where a credential is ever created, and it is created HERE, inside the
 // Cinatra-served document, from a PKCE verifier no other party sees.
 import {
+  renewFrameCredential,
   runFrameSignIn,
   type FrameWidgetCredential,
 } from "@/lib/embed/frame-widget-session.client";
+// cinatra#4217 — the renewal chain that keeps that credential alive while the
+// frame stays open.
+import {
+  createFrameCredentialRenewal,
+  type FrameCredentialRenewal,
+} from "@/lib/embed/frame-credential-renewal.client";
 import { Button } from "@/components/ui/button";
 import { negotiateEmbedChatContract } from "./embed-chat-negotiate";
 // cinatra#2577 (epic #2564 S8d) — the host declaration that turns lifecycle
@@ -194,7 +201,7 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   // So the conversation waits: the frame keeps its neutral waiting card for the
   // one round trip, and the column is mounted ONCE, already seeded. `false` only
   // between reaching `active` and the read answering (or failing) — both of
-  // which settle it.
+  // which settle it. A new sign-in sets it back to `false` (cinatra#4217).
   const [historySettled, setHistorySettled] = useState(false);
 
   // Session context (PUBLIC SELECTORS) and the CREDENTIAL, held ONLY here —
@@ -204,6 +211,13 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   // comes from this frame's own sign-in and never leaves it.
   const contextRef = useRef<EmbedContext | null>(null);
   const credentialRef = useRef<FrameWidgetCredential | null>(null);
+  const renewalRef = useRef<FrameCredentialRenewal | null>(null);
+  // cinatra#4217 — the SIGN-IN TICKET. Every sign-in attempt takes the next
+  // number; a new context, an ended chain and the chain's cleanup move it on.
+  // It is its own counter, NOT the renewal chain's generation: the chain's
+  // re-arms and holds must not make the negotiation, the restore or the parity
+  // seed that the same sign-in started look stale.
+  const signInTicketRef = useRef(0);
   const bridgeRef = useRef<EmbedBridge | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -288,8 +302,12 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   // this fetch never runs for a real user. It cannot bypass auth — it runs only
   // AFTER the real handshake + frame sign-in + broker negotiation reached
   // `active`.
+  //
+  // cinatra#4217 — `isCurrent` is the sign-in attempt's ticket: an answer that
+  // arrives after a new context, a new sign-in, an ended chain or an unmount
+  // writes nothing. Arming the renewal chain does not move the ticket.
   const loadParitySeed = useCallback(
-    async (threadId: string) => {
+    async (threadId: string, isCurrent: () => boolean) => {
       // THROUGH THE BROKER, like everything else this surface asks (codex round
       // 1, finding 1 on the client). This used to be the file's one
       // `credentials: "include"` fetch — inert in production behind the server
@@ -302,6 +320,7 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
         authHeaders,
         credentialsMode: "omit",
       });
+      if (!isCurrent()) return;
       const assistantMsg = messages?.find((m) => m.role === "assistant");
       setSeededMessages([
         { id: "parity-seed", role: "assistant", content: assistantMsg?.content ?? "" },
@@ -314,12 +333,18 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   // The broker-authenticated transcript read (cinatra#2683 item 1). Built from
   // the closure-held tokens at call time, exactly like every other request this
   // surface makes — the tokens never enter state, a prop, a log or the DOM.
+  //
+  // cinatra#4217 — bound to the sign-in attempt that started it, like the
+  // negotiation: a stale answer neither restores nor settles anything. The
+  // chain is armed while this read is still on its way; that does not make
+  // it stale.
   const restoreThread = useCallback(
-    async (threadId: string) => {
+    async (threadId: string, isCurrent: () => boolean) => {
       const messages = await fetchThreadMessages(threadId, {
         authHeaders,
         credentialsMode: "omit",
       });
+      if (!isCurrent()) return;
       if (messages && messages.length > 0) setRestoredMessages(messages);
       // A new thread, a denied read and a transport failure all SETTLE — the
       // column must open for every one of them, with whatever there was.
@@ -337,16 +362,26 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   // same restore, the same one-round-trip settle before the ONE shared column
   // mounts. The sign-in changed WHERE the credential comes from, and nothing
   // about what a reader then sees.
+  //
+  // cinatra#4217 — resolves `true` only when it brought the phase to `active`;
+  // on `false` the caller drops the pair and the chain it armed, so no chain
+  // ever renews behind a gated card. `isCurrent` is the caller's sign-in
+  // ticket, read after the negotiation answers and BEFORE any state is touched:
+  // an answer that arrives after a new context, a newer sign-in, an ended chain
+  // or an unmount changes nothing — no phase, no session, no restore — and
+  // resolves `false`. The negotiation builds its headers from the pair the
+  // frame holds when it is sent, under the caller's renewal lease.
   const negotiateAndMount = useCallback(
-    async (session: MountedSession) => {
+    async (session: MountedSession, isCurrent: () => boolean): Promise<boolean> => {
       try {
         const negotiation = await negotiateEmbedChatContract(authHeaders, {
           assistant: session.assistant, // "wordpress" | "drupal"
           parentOrigin: props.expectedParentOrigin, // the CMS origin the pair binds
         });
+        if (!isCurrent()) return false;
         if (!negotiation.ok) {
           setPhase({ kind: "gated", reason: negotiation.reason });
-          return;
+          return false;
         }
         setSession(session);
         setPhase({ kind: "active" });
@@ -354,19 +389,22 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
         // place of a live turn, through the same mounted column.
         if (props.paritySeam) {
           // The seam supplies the transcript, so it settles the history too.
-          void loadParitySeed(props.paritySeam.threadId).finally(() =>
-            setHistorySettled(true),
-          );
+          void loadParitySeed(props.paritySeam.threadId, isCurrent).finally(() => {
+            if (isCurrent()) setHistorySettled(true);
+          });
         } else {
           // The REAL restore. Best-effort by design: a new thread, a denied
           // read and a transport failure are all "nothing to restore", and all
           // three leave the reader in the empty conversation they would have
           // had anyway. Nothing is reported to the page — a restore that told
           // the host whether a thread exists would be an oracle.
-          void restoreThread(session.threadId);
+          void restoreThread(session.threadId, isCurrent);
         }
+        return true;
       } catch {
+        if (!isCurrent()) return false;
         setPhase({ kind: "gated", reason: "handshake_failed" });
+        return false;
       }
     },
     [
@@ -378,14 +416,99 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
     ],
   );
 
+  // cinatra#4217 — KEEP THE PAIR ALIVE while the frame is open. Every consumer
+  // reads `credentialRef.current` at call time (authHeaders above, and the
+  // lifecycle card's per-request headers), so replacing the ref is the whole
+  // hand-over. The pair presented is spent by the renewal. A refusal that leaves
+  // the pair valid (the session cap, a rate limit) keeps it until its end; at
+  // that end, and at once on any other refusal (a sign-out, a revoked site),
+  // the chain ends: the pair is dropped and the frame returns to the same
+  // neutral sign-in card a reload shows.
+  //
+  // ONE chain per mount. The scheduler drops every timer and every renewal
+  // answer of a chain that was disposed or re-armed, so this effect's cleanup
+  // (an unmount), a new context and a new sign-in each cut the old chain off even
+  // while one of its renewals is in flight: its answer can neither replace the
+  // pair, nor change the phase, nor start another timer.
+  useEffect(() => {
+    const renewal = createFrameCredentialRenewal({
+      renew: async (current) => {
+        const ctx = contextRef.current;
+        if (!ctx) return { ok: false };
+        return renewFrameCredential(
+          {
+            assistant: ctx.session.assistant,
+            instanceId: props.instanceId,
+            siteId: ctx.site?.siteId ?? null,
+          },
+          current,
+        );
+      },
+      onRenewed: (credential) => {
+        credentialRef.current = credential;
+      },
+      onEnded: () => {
+        // The sign-in this chain served is over: a restore of it that is
+        // still on its way must not settle the next sign-in's history.
+        signInTicketRef.current += 1;
+        credentialRef.current = null;
+        setPhase({ kind: "signin" });
+      },
+    });
+    renewalRef.current = renewal;
+    return () => {
+      // An unmount or a new instance drops the chain AND the pair it kept.
+      renewal.dispose();
+      signInTicketRef.current += 1;
+      credentialRef.current = null;
+      if (renewalRef.current === renewal) renewalRef.current = null;
+    };
+  }, [props.instanceId]);
+
   // THE SIGN-IN THIS FRAME OWNS (cinatra#2674). Started by an explicit gesture,
   // because opening the hosted window is a navigation a person must have asked
   // for — a popup opened without a click is blocked by every browser, and a
   // sign-in nobody asked for is not a sign-in. The credential lands in the ref
   // and nowhere else; a failure returns to the same neutral card.
+  //
+  // cinatra#4217 — a new sign-in never inherits the old chain: it disposes it
+  // and drops the old pair FIRST. It then takes the next sign-in ticket: a
+  // newer sign-in, a new context, an ended chain or an unmount moves the
+  // ticket on, and this attempt's answer (success or failure) is then dropped
+  // instead of overwriting the newer state. The negotiation reads the same
+  // ticket before it touches any state, and so do the restore and the parity
+  // seed it starts.
+  //
+  // THE CHAIN IS ARMED AT THE MINT, at once, with the pair's two clock
+  // readings (result.mintedAt before the token request, result.receivedAt after
+  // its answer), so the pair's life is counted from its mint however long the
+  // negotiation then takes. The negotiation runs under a RENEWAL LEASE: while
+  // it is in flight the chain sends no renewal (one that falls due waits for the
+  // release), so the bearer the negotiation carries is never spent and replaced
+  // underneath it; the chain still holds and ends on time. The lease is released
+  // in `finally`, whatever the negotiation answers; a renewal that waited goes
+  // out at once then. A negotiation that ends gated disposes the chain and drops
+  // the pair, so nothing renews behind a gated card.
+  //
+  // The dispose here is defence in depth: the sign-in card that calls this is
+  // reachable only after a new context (which disposed the chain), an ended
+  // chain or a failed sign-in (which armed nothing).
   const startSignIn = useCallback(() => {
     const ctx = contextRef.current;
-    if (!ctx) return;
+    const renewal = renewalRef.current;
+    if (!ctx || !renewal) return;
+    renewal.dispose();
+    credentialRef.current = null;
+    signInTicketRef.current += 1;
+    const ticket = signInTicketRef.current;
+    const isCurrent = () => renewalRef.current === renewal && signInTicketRef.current === ticket;
+    // A sign-in again (after an ended chain or a new context) waits for its
+    // OWN restore: the history the previous sign-in settled, and the transcript
+    // it restored or seeded, must not mount the column at once. Every road to
+    // `active` starts here, so this is the one place to forget them.
+    setHistorySettled(false);
+    setRestoredMessages(undefined);
+    setSeededMessages(undefined);
     setPhase({ kind: "authorizing" });
     void (async () => {
       const result = await runFrameSignIn({
@@ -396,6 +519,7 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
         instanceId: props.instanceId,
         siteId: ctx.site?.siteId ?? null,
       });
+      if (!isCurrent()) return;
       if (!result.ok) {
         // Neutral: the person may try again. No reason is surfaced and none is
         // sent anywhere — a failed sign-in must not become an oracle about which
@@ -404,16 +528,50 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
         return;
       }
       credentialRef.current = result.credential;
-      await negotiateAndMount({
-        threadId: ctx.session.threadId,
-        assistant: ctx.session.assistant,
-      });
+      renewal.arm(
+        result.credential,
+        {
+          expiresIn: result.credential.expiresIn,
+          userExpiresIn: result.credential.userExpiresIn,
+          sessionExpiresIn: result.credential.sessionExpiresIn,
+        },
+        result.mintedAt,
+        result.receivedAt,
+      );
+      // No renewal is in flight on a fresh chain, so this settles at once; it
+      // keeps the lease from ever being taken over a request already sent.
+      await renewal.quiesce();
+      if (!isCurrent()) return;
+      const release = renewal.lease();
+      let active = false;
+      try {
+        active = await negotiateAndMount(
+          {
+            threadId: ctx.session.threadId,
+            assistant: ctx.session.assistant,
+          },
+          isCurrent,
+        );
+      } finally {
+        release();
+      }
+      if (!isCurrent()) return;
+      if (!active) {
+        renewal.dispose();
+        credentialRef.current = null;
+      }
     })();
   }, [props.instanceId, negotiateAndMount]);
 
   const onContext = useCallback((context: EmbedContext) => {
     // Selectors only — this cannot mount a wire on its own. The frame now needs
     // a credential, and it goes and gets one itself.
+    //
+    // cinatra#4217 — a new context never inherits the old chain or the old
+    // pair, and an answer of a sign-in under the old context is stale.
+    renewalRef.current?.dispose();
+    signInTicketRef.current += 1;
+    credentialRef.current = null;
     contextRef.current = context;
     setPhase({ kind: "signin" });
   }, []);

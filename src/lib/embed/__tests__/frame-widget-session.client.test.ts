@@ -18,6 +18,9 @@ import {
   WIDGET_AUTH_MESSAGE_TYPE,
   runFrameSignIn,
 } from "@/lib/embed/frame-widget-session.client";
+// cinatra#4217 — the renewal names, reached through a namespace import so this
+// file still loads at main, where they do not exist (see the renewal blocks).
+import * as frameSession from "@/lib/embed/frame-widget-session.client";
 
 const SELF = "https://app.cinatra.test";
 const SELECTORS = { assistant: "wordpress", instanceId: "inst-1" };
@@ -82,13 +85,14 @@ beforeEach(() => {
  * The timeout is generous relative to the fake work but still bounded, so a
  * ceremony that never reaches the listener fails fast instead of hanging.
  */
-async function run(fetchImpl: typeof fetch, timeoutMs = 2_000) {
+async function run(fetchImpl: typeof fetch, timeoutMs = 2_000, now?: () => number) {
   const promise = runFrameSignIn(SELECTORS, {
     fetchImpl,
     openPopup: openPopup as unknown as (url: string) => Window | null,
     listenWindow: listen,
     selfOrigin: SELF,
     timeoutMs,
+    ...(now ? { now } : {}),
   });
   await vi.waitFor(() => expect(listen.count).toBeGreaterThan(0));
   return { promise };
@@ -114,6 +118,9 @@ describe("the ceremony", () => {
     expect(result).toEqual({
       ok: true,
       credential: { userToken: "cwu_user", transportToken: "cit_transport", expiresIn: 600 },
+      // cinatra#4217: the two clock readings of the minting request.
+      mintedAt: expect.any(Number),
+      receivedAt: expect.any(Number),
     });
 
     const init = calls.find((c) => c.url === FRAME_INIT_PATH)!;
@@ -273,5 +280,256 @@ describe("the credential is FRAME-PRIVATE — proven as an absence", () => {
     expect(JSON.stringify(calls)).not.toContain("cit_");
 
     vi.unstubAllGlobals();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4217 — RENEWAL, browser side: the mint anchors, the bounded lives and
+// the renew call. Each title names its census row of the rebuild spec.
+//
+// Reached through the namespace import at the top so this file still LOADS at
+// main, where none of these names exist: there each case below is red by its
+// first assertion, and the ceremony cases above stay green.
+// ---------------------------------------------------------------------------
+
+const CURRENT = { userToken: "cwu_current", transportToken: "cit_current", expiresIn: 300 };
+
+function answering(status: number, json: () => Promise<unknown>) {
+  return vi.fn(
+    async () => ({ ok: status >= 200 && status < 300, status, json }) as unknown as Response,
+  ) as unknown as typeof fetch;
+}
+
+describe("the mint anchors (cinatra#4217)", () => {
+  it("C01: A is read after the popup and before the token request; R once its answer is read", async () => {
+    let clock = 1_000;
+    const { impl, calls } = fetchDouble();
+    const slowImpl = vi.fn(async (url: string, options: RequestInit) => {
+      const answer = await (impl as unknown as (u: string, o: RequestInit) => Promise<Response>)(url, options);
+      // The token answer takes 60 s to arrive.
+      if (url === FRAME_TOKEN_PATH) clock += 60_000;
+      return answer;
+    });
+    const { promise } = await run(slowImpl as unknown as typeof fetch, 2_000, () => clock);
+    // The person spends 100 s in the hosted sign-in window.
+    clock += 100_000;
+    listen.deliver({
+      origin: SELF,
+      source: popup as unknown as Window,
+      data: { type: WIDGET_AUTH_MESSAGE_TYPE, code: "the-code", state: mintedState(calls) },
+    });
+    const result = await promise;
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.mintedAt, "the request start, not the sign-in start nor the answer").toBe(101_000);
+    expect(
+      (result as unknown as { receivedAt?: number }).receivedAt,
+      "after the slow answer was read",
+    ).toBe(161_000);
+  });
+});
+
+describe("credentialPairFrom: the lives are bounded (cinatra#4217)", () => {
+  const pairWith = (fields: Record<string, unknown>) => ({
+    userToken: "cwu_a",
+    transportToken: "cit_a",
+    ...fields,
+  });
+
+  it("C05: an expiresIn that is not a whole number of seconds in [1, 28800] makes no pair", () => {
+    expect(typeof frameSession.credentialPairFrom).toBe("function");
+    for (const expiresIn of [
+      0,
+      -5,
+      Number.NaN,
+      undefined,
+      299.5,
+      "300",
+      null,
+      Number.MAX_VALUE,
+      1e308,
+      Number.POSITIVE_INFINITY,
+      28_801,
+    ]) {
+      expect(frameSession.credentialPairFrom(pairWith({ expiresIn })), String(expiresIn)).toBeNull();
+    }
+    // The edges that are lives.
+    expect(frameSession.credentialPairFrom(pairWith({ expiresIn: 1 }))).toEqual(pairWith({ expiresIn: 1 }));
+    expect(frameSession.credentialPairFrom(pairWith({ expiresIn: 28_800 }))).toEqual(
+      pairWith({ expiresIn: 28_800 }),
+    );
+  });
+
+  it("C47: a userExpiresIn or sessionExpiresIn that is invalid, absent or too short is dropped", () => {
+    expect(typeof frameSession.credentialPairFrom).toBe("function");
+    // Valid: kept.
+    expect(
+      frameSession.credentialPairFrom(pairWith({ expiresIn: 300, userExpiresIn: 900, sessionExpiresIn: 28_800 })),
+    ).toEqual(pairWith({ expiresIn: 300, userExpiresIn: 900, sessionExpiresIn: 28_800 }));
+    // The user life must be a valid life of at least the pair's: else U := E.
+    for (const userExpiresIn of [undefined, 299, 0, 900.5, "900", Number.MAX_VALUE, 28_801]) {
+      const got = frameSession.credentialPairFrom(pairWith({ expiresIn: 300, userExpiresIn }));
+      expect(got, `userExpiresIn ${String(userExpiresIn)}`).toEqual(pairWith({ expiresIn: 300 }));
+    }
+    // The cap must be a valid life of at least the user token's (or the pair's,
+    // when the user life was dropped): else K is unknown.
+    for (const sessionExpiresIn of [undefined, 899, 0, -1, "28800", Number.NaN, 1e308]) {
+      const got = frameSession.credentialPairFrom(
+        pairWith({ expiresIn: 300, userExpiresIn: 900, sessionExpiresIn }),
+      );
+      expect(got, `sessionExpiresIn ${String(sessionExpiresIn)}`).toEqual(
+        pairWith({ expiresIn: 300, userExpiresIn: 900 }),
+      );
+    }
+    expect(
+      frameSession.credentialPairFrom(pairWith({ expiresIn: 300, sessionExpiresIn: 300 })),
+      "a cap equal to the pair's life, with no user life",
+    ).toEqual(pairWith({ expiresIn: 300, sessionExpiresIn: 300 }));
+  });
+
+  it("C26: an answer without sessionExpiresIn yields a pair with no cap", () => {
+    expect(typeof frameSession.credentialPairFrom).toBe("function");
+    const got = frameSession.credentialPairFrom(pairWith({ expiresIn: 300, userExpiresIn: 900 }));
+    expect(got).toEqual(pairWith({ expiresIn: 300, userExpiresIn: 900 }));
+    expect(got && "sessionExpiresIn" in got).toBe(false);
+  });
+});
+
+describe("renewFrameCredential (cinatra#4217)", () => {
+  it("POSTs to the renew path with the user token in the header only, cookie-less, selectors-only body", async () => {
+    expect(typeof frameSession.renewFrameCredential).toBe("function");
+    expect(frameSession.FRAME_RENEW_PATH).toBe("/api/widget-auth/frame/renew");
+
+    let clock = 5_000;
+    const seen: Array<{ url: string; options: RequestInit }> = [];
+    const impl = vi.fn(async (url: string, options: RequestInit) => {
+      seen.push({ url, options });
+      clock += 2_000; // the answer takes 2 s
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          userToken: "cwu_next",
+          transportToken: "cit_next",
+          expiresIn: 300,
+          userExpiresIn: 900,
+          sessionExpiresIn: 27_000,
+        }),
+      } as unknown as Response;
+    });
+
+    const result = await frameSession.renewFrameCredential({ ...SELECTORS, siteId: "site-1" }, CURRENT, {
+      fetchImpl: impl as unknown as typeof fetch,
+      now: () => clock,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      credential: {
+        userToken: "cwu_next",
+        transportToken: "cit_next",
+        expiresIn: 300,
+        userExpiresIn: 900,
+        sessionExpiresIn: 27_000,
+      },
+      requestedAt: 5_000,
+      receivedAt: 7_000,
+    });
+    expect(seen).toHaveLength(1);
+    const { url, options } = seen[0]!;
+    expect(url).toBe(frameSession.FRAME_RENEW_PATH);
+    expect(options.method).toBe("POST");
+    expect(options.credentials).toBe("omit");
+    const headers = options.headers as Record<string, string>;
+    expect(headers["X-Cinatra-Widget-User-Token"]).toBe("cwu_current");
+    // Selectors only: no token of either kind travels in the body.
+    expect(JSON.parse(String(options.body))).toEqual({
+      assistant: "wordpress",
+      instanceId: "inst-1",
+      siteId: "site-1",
+    });
+    expect(String(options.body)).not.toContain("cwu_");
+    expect(String(options.body)).not.toContain("cit_");
+  });
+
+  it("C14: a 400 (and every other non-200 that is not 429 or an exact 409) is renew_failed", async () => {
+    expect(typeof frameSession.renewFrameCredential).toBe("function");
+    for (const status of [400, 401, 403, 500, 502, 503]) {
+      const refused = await frameSession.renewFrameCredential(SELECTORS, CURRENT, {
+        fetchImpl: answering(status, async () => ({ error: "invalid_grant" })),
+      });
+      expect(refused.ok, `HTTP ${status}`).toBe(false);
+      expect(!refused.ok && refused.reason, `HTTP ${status}`).toBe("renew_failed");
+    }
+  });
+
+  it("a 429 is renew_rate_limited", async () => {
+    expect(typeof frameSession.renewFrameCredential).toBe("function");
+    const limited = await frameSession.renewFrameCredential(SELECTORS, CURRENT, {
+      fetchImpl: answering(429, async () => ({ error: "invalid_grant" })),
+    });
+    expect(!limited.ok && limited.reason).toBe("renew_rate_limited");
+  });
+
+  it("C22: only a 409 whose body is exactly {error:\"not_renewable\"} is renew_not_renewable", async () => {
+    expect(typeof frameSession.renewFrameCredential).toBe("function");
+    let clock = 10_000;
+    const exact = await frameSession.renewFrameCredential(SELECTORS, CURRENT, {
+      fetchImpl: vi.fn(async () => {
+        clock += 1_500;
+        return { ok: false, status: 409, json: async () => ({ error: "not_renewable" }) } as unknown as Response;
+      }) as unknown as typeof fetch,
+      now: () => clock,
+    });
+    expect(exact).toEqual({ ok: false, reason: "renew_not_renewable", requestedAt: 10_000, receivedAt: 11_500 });
+
+    const notExact: Array<[string, () => Promise<unknown>]> = [
+      ["another error", async () => ({ error: "invalid_grant" })],
+      ["an extra field", async () => ({ error: "not_renewable", hint: "x" })],
+      ["the error in an array", async () => [{ error: "not_renewable" }]],
+      ["a string body", async () => "not_renewable"],
+      ["null", async () => null],
+      ["not JSON", async () => Promise.reject(new SyntaxError("Unexpected token"))],
+    ];
+    for (const [label, json] of notExact) {
+      const got = await frameSession.renewFrameCredential(SELECTORS, CURRENT, { fetchImpl: answering(409, json) });
+      expect(!got.ok && got.reason, label).toBe("renew_failed");
+    }
+  });
+
+  it("C21: a fetch throw, a 5xx and every malformed 200 body is renew_failed", async () => {
+    expect(typeof frameSession.renewFrameCredential).toBe("function");
+    const thrown = await frameSession.renewFrameCredential(SELECTORS, CURRENT, {
+      fetchImpl: vi.fn(async () => {
+        throw new TypeError("network down");
+      }) as unknown as typeof fetch,
+    });
+    expect(!thrown.ok && thrown.reason, "a fetch throw").toBe("renew_failed");
+    const fiveHundred = await frameSession.renewFrameCredential(SELECTORS, CURRENT, {
+      fetchImpl: answering(500, async () => ({})),
+    });
+    expect(!fiveHundred.ok && fiveHundred.reason, "a 5xx").toBe("renew_failed");
+
+    const refused: Array<[string, () => Promise<unknown>]> = [
+      ["not JSON", async () => Promise.reject(new SyntaxError("Unexpected token"))],
+      ["null", async () => null],
+      ["an array", async () => [{ userToken: "cwu_a", transportToken: "cit_a", expiresIn: 300 }]],
+      ["a string", async () => "cwu_a cit_a"],
+      ["half a pair (user token only)", async () => ({ userToken: "cwu_a", expiresIn: 300 })],
+      ["half a pair (transport only)", async () => ({ transportToken: "cit_a", expiresIn: 300 })],
+      ["tokens that are not strings", async () => ({ userToken: 1, transportToken: true, expiresIn: 300 })],
+      ["empty tokens", async () => ({ userToken: "", transportToken: "", expiresIn: 300 })],
+      // C05 through the renew call: a whole pair with an invalid life.
+      ["a string life", async () => ({ userToken: "cwu_a", transportToken: "cit_a", expiresIn: "300" })],
+      ["no life", async () => ({ userToken: "cwu_a", transportToken: "cit_a", expiresIn: null })],
+      ["a NaN life", async () => ({ userToken: "cwu_a", transportToken: "cit_a", expiresIn: Number.NaN })],
+      ["a zero life", async () => ({ userToken: "cwu_a", transportToken: "cit_a", expiresIn: 0 })],
+      ["a huge life", async () => ({ userToken: "cwu_a", transportToken: "cit_a", expiresIn: Number.MAX_VALUE })],
+    ];
+    for (const [label, json] of refused) {
+      const got = await frameSession.renewFrameCredential(SELECTORS, CURRENT, { fetchImpl: answering(200, json) });
+      expect(got.ok, label).toBe(false);
+      expect(!got.ok && got.reason, label).toBe("renew_failed");
+    }
   });
 });

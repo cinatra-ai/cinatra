@@ -327,8 +327,10 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
     // writer cannot gain a caller); cinatra#1942 V5 added 3 (the real
     // archive/unarchive transaction pair, banned from day one, plus the
     // kernel's invalidateLeasesBeforeEpochQuery registered with its first
-    // production caller). 20 + 8 + 2 + 3 + 3 + 3 = 39.
-    expect(banned.size).toBe(39);
+    // production caller); cinatra#4217 added 1 (renewUserWidgetToken, the
+    // frame's token renewal, banned from day one to its one route).
+    // 20 + 8 + 2 + 3 + 3 + 3 + 1 = 40.
+    expect(banned.size).toBe(40);
   });
 });
 

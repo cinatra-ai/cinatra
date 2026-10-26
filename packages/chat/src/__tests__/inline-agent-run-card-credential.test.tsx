@@ -251,6 +251,44 @@ describe("the review-slot reader asks with the host's own credential", () => {
     });
   });
 
+  // cinatra#4217 — the frame renews its credential while it stays open, so a
+  // slot read made AFTER a renewal must carry the renewed token, not the one the
+  // reader was built with. RED BEFORE THE CURE: the reader built its request
+  // once, when the panel mounted, and every later look sent those headers.
+  it("BROKER: a slot read after a renewal carries the renewed token", async () => {
+    let userToken = "cwu_first";
+    let transportToken = "cit_first";
+    const renewingAuth = {
+      headers: () => ({
+        Authorization: `Bearer ${transportToken}`,
+        "X-Cinatra-Widget-User-Token": userToken,
+        "X-Cinatra-Widget-Assistant": "wordpress",
+        "X-Cinatra-Widget-Origin": "https://blog.example.com",
+      }),
+      credentials: "omit" as const,
+    };
+    render(
+      <LifecycleCardSurfaceProvider host="site_widget" auth={renewingAuth} frame={BROKER_FRAME}>
+        <InlineAgentRunCard runId={RUN_ID} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await screen.findByTestId("run-panel-stub");
+    await waitFor(() => expect(panelProps.current).not.toBeNull());
+    const read = panelProps.current!.readReviewSlot as () => Promise<unknown>;
+
+    // The frame renews: same declaration, new tokens behind its callback.
+    userToken = "cwu_renewed";
+    transportToken = "cit_renewed";
+    fetchCalls = [];
+    await read();
+
+    expect(fetchCalls).toHaveLength(1);
+    const headers = headersOf(fetchCalls[0].init);
+    expect(headers["x-cinatra-widget-user-token"]).toBe("cwu_renewed");
+    expect(headers["authorization"]).toBe("Bearer cit_renewed");
+    expect(fetchCalls[0].init.credentials).toBe("omit");
+  });
+
   it("REFUSED: no reader is handed down, so nothing is ever read", async () => {
     panelProps.current = null;
     render(refusedHost(<InlineAgentRunCard runId={RUN_ID} />));
