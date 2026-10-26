@@ -1023,6 +1023,43 @@ other pin moved.
 | `app-connectors` | `match` | nothing — the published body is still the pinned artifact | none |
 | `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
 
+## Reconciliation record — 2026-10-26 (app-connectors)
+
+Measured 2026-10-26 for the `app-connectors` pin, which moves back to the
+0.8.1 connectors manifest. Docs PR 242 published version 0.8.2 of the
+connectors page as the mirror of a spec source change that was later closed
+without merging; the spec source still stands at 0.8.1. Docs PR 254 reverts
+the mirror to the 0.8.1 bytes it served before docs PR 242, and this change
+follows it: it merges right after docs PR 254, never before, because a
+`published` pin is checked against the served file. Until docs PR 254 merges,
+the served file is still the 0.8.2 body (`1f0b66a9…`), so this change's own
+pin-drift reading reports `drift` for `app-connectors`. The adopted body is the
+file on docs PR 254's head, which is byte-identical to the file docs main
+served before docs PR 242. It hashes to
+`sha256:2293c96c7b10363fcaf15549fd2690ad52b9b0ba4794d1679b1c8f0a150211b4`,
+and the `contentHash` read back out of its own body is
+`sha256:be15e54fb6267260cdd6b196ff77bab8a6f8a6c76e0758a5528e920121a7b576`;
+these are the values the 2026-10-23 record above moved away from, and the pin
+named `1f0b66a9…` and `7c817a91…` before. The adopted body was compared, as
+parsed JSON, with the committed copy under
+`tests/e2e/design/conformance/manifests/` that it replaces: `schemaVersion`,
+`spec` and all eleven surfaces compare equal, and the only top-level key that
+differs is `contentHash`. This is the case "Why a hash-only re-pin is refused"
+names: the spec source changed under an unchanged surface list, so no driver,
+harness mount or allowlist entry moves with the pin. The committed artifact is
+now the verbatim adopted body, and both hashes of the entry in
+`conformance-pins.json` were re-derived from the adopted bytes, never typed.
+The other four pins were read against their served files with one anonymous
+GET each on 2026-10-26 and match. No other pin moved.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app` | `match` | nothing — the served body is still the pinned artifact | none |
+| `app-components` | `match` | nothing — the served body is still the pinned artifact | none |
+| `app-extensions` | `match` | nothing — the served body is still the pinned artifact | none |
+| `app-connectors` | `match` against the 0.8.2 body; `drift` once docs PR 254 merges | **hashes only** — byte-identical surface declarations (11 surfaces); `contentHash` moves back to the 0.8.1 spec hash | re-pin |
+| `app-notifications` | `match` | nothing — the served body is still the pinned artifact | none |
+
 ## Running it locally
 
 ```sh
