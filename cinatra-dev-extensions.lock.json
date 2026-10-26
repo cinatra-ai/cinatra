@@ -420,7 +420,7 @@
     {
       "packageName": "@cinatra-ai/wordpress-agent",
       "repo": "cinatra-ai/wordpress-agent",
-      "resolvedSha": "881883e7824311f1e4f1d5a000d251b5bad73c36"
+      "resolvedSha": "7f03b8a2b004233551bb7804ffad14ffdb91b265"
     },
     {
       "packageName": "@cinatra-ai/wordpress-assistant-connector",
