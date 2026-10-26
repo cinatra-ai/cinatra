@@ -99,7 +99,12 @@ const AUTHORITY = {
  * change event with the key it is handed, in the same statement, as the
  * canonical writer does (cinatra#3319: the road appends only when that keyed
  * event is the row's latest type change). The road's use of the canonical writer
- * itself runs in the last describe of this file.
+ * itself is not run here: the real writer's module graph is the boot graph this
+ * tier must not pull in (the CI command's config aliases only `server-only`,
+ * none of the root config's other stubs). The unit tier pins that the production
+ * retype hands the road's key to the canonical writer (the CANON case of
+ * `typed-promotion-proof-3319.test.ts`), with a substituted store; no test here
+ * runs the real writer against the real change-event row.
  */
 type RetypeInput = {
   orgId: string;
@@ -887,78 +892,5 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.14 the typed promotion road
       seeded.resourceId,
       editorResource,
     ]);
-  });
-});
-
-/**
- * THE REAL CANONICAL WRITER (cinatra#3319): the production retype, with no
- * substitute. Its change event must carry the promotion's key, and the store's
- * real proof read must accept it. The org-write kernel's guarded batch reads the
- * organization's archive state, so this describe seeds that one row (the form
- * memory-promotion-atomic-apply.integration.test.ts uses) and removes it.
- */
-describe.skipIf(!HAS_REAL_DB)("cinatra#3319 — the canonical writer's keyed retype is the promotion's proof (real DB)", () => {
-  const BASE_TYPE = "@cinatra-ai/text-artifact:text";
-  const OWN_TYPE = "@cinatra-ai/campaigns:voice";
-
-  beforeAll(async () => {
-    const client = new Client({ connectionString: DB_URL });
-    await client.connect();
-    await client.query(
-      `CREATE TABLE IF NOT EXISTS public."organization" (
-         id text PRIMARY KEY, name text, slug text,
-         "archivedAt" timestamptz, "archiveEpoch" integer DEFAULT 0,
-         "createdAt" timestamptz)`,
-    );
-    await client.query(
-      `INSERT INTO public."organization" (id, name, slug, "archivedAt", "archiveEpoch", "createdAt")
-       VALUES ($1, 'Typed promotion 3319', 'typed-promotion-3319-w4', NULL, 0, now())
-       ON CONFLICT (id) DO NOTHING`,
-      [ORG],
-    );
-    await client.end();
-  });
-  afterAll(async () => {
-    const client = new Client({ connectionString: DB_URL });
-    await client.connect();
-    await client.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG]).catch(() => {});
-    await client.end().catch(() => {});
-  });
-
-  it("PROMOTES through the real writer: its event carries the key, the real proof read accepts it, and a repeat appends nothing", async () => {
-    const objectId = nextId("obj-canonical");
-    const seeded = seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });
-    seedMatcherAssertion({ objectId, extension: EXT, confidence: 0.9 });
-    const args = {
-      orgId: ORG,
-      artifactId: objectId,
-      extension: EXT,
-      ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
-      threshold: 0.8,
-      confirmed: true,
-      createdBy: "user-3028",
-      actor: ACTOR,
-      // The kernel asks the authority for each capability; a membership-grounded
-      // mint needs the auth tables this tier does not provision.
-      authority: { orgId: ORG, can: () => true } as never,
-    };
-    const out = await promotionStore.promoteMatchedArtifactType(args);
-    expect(out).toMatchObject({ ok: true, retyped: true, toType: OWN_TYPE, revision: 2 });
-    expect(typeOf(objectId)).toBe(OWN_TYPE);
-    expect(representationsOf(objectId)).toHaveLength(2);
-    const events = sql(
-      `SELECT idempotency_key, base_version FROM "${S()}"."object_change_event"
-       WHERE object_id = $1 AND org_id = $2`,
-      [objectId, ORG],
-    ).rows;
-    expect(events).toContainEqual({
-      idempotency_key: promotionKey(objectId, seeded.resourceId, OWN_TYPE, 1),
-      base_version: 1,
-    });
-    expect(await promotionStore.promoteMatchedArtifactType(args)).toEqual({
-      ok: false,
-      reason: "already-promoted",
-    });
-    expect(representationsOf(objectId)).toHaveLength(2);
   });
 });
