@@ -64,8 +64,9 @@ import {
 import {
   baseReviewTaskId,
   declaredReviewFamilyState,
+  isDeclaredReviewLeg,
 } from "@/lib/artifacts/artifact-review-target";
-import { isAutoReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
+import { isAutoReviewTaskId, isRepairSuccessorTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
 
 /** The per-intent delivery outcome. */
 export type ResumeDeliveryOutcome =
@@ -131,6 +132,18 @@ export async function deliverArtifactReviewResumeIntent(
   if (isAutoReviewTaskId(reviewTaskId)) {
     if (!leaseToken) return "retryable";
     await releaseRunForResolvedAutoGate(gateId);
+    // cinatra#4312 — Regenerate on a later leg of a per-artifact declared review
+    // (the featured image's) settled that leg and opened this successor gate on
+    // its repair lineage. The run the leg paused waits for THIS decision, so the
+    // intent takes that leg's WayFlow road below (with this gate's own decision).
+    if (isRepairSuccessorTaskId(reviewTaskId)) {
+      const { readRepairLineageRootGate } = await import("./lifecycle-repair-store");
+      const leg = await readRepairLineageRootGate(reviewTaskId);
+      if (leg && isDeclaredReviewLeg({ runId: leg.runId, orgId: leg.orgId,
+        reviewTaskId: leg.reviewTaskId, pinnedTargets: leg.pinnedTargets })) {
+        return deliverArtifactReviewResumeIntent({ ...intent, reviewTaskId: leg.reviewTaskId });
+      }
+    }
     const ok = await markResumeIntentDelivered(gateId, leaseToken);
     console.log(
       `[artifact-review-resume] gate=${gateId} is an S1 auto-gate (task=${reviewTaskId}); the decision released the producing run — marked ${ok ? "done" : "LEASE-LOST"}`,
@@ -332,12 +345,12 @@ export async function deliverArtifactReviewResumeIntent(
   const familyState = declaredReviewFamilyState({ runId: run.id, orgId: run.orgId,
     reviewTaskId, gates: siblingLegs });
   if (familyState === "incomplete") return "retryable";
-  if (familyState === "pending") {
+  if (familyState === "pending" || await regenerationOpen(siblingLegs, reviewTaskId)) {
     const ok = await markResumeIntentDelivered(gateId, leaseToken);
     console.log(
       `[artifact-review-resume] gate=${gateId} run=${run.id} decided one artifact of a ` +
-        `per-artifact review; another artifact of the same pause is still open — the run stays ` +
-        `parked, marked ${ok ? "done" : "LEASE-LOST"}`,
+        `per-artifact review; another artifact of the same pause, or a regenerated artifact's ` +
+        `review, is still open — the run stays parked, marked ${ok ? "done" : "LEASE-LOST"}`,
     );
     return ok ? "already-advanced" : "lease-lost";
   }
@@ -395,6 +408,28 @@ export async function deliverArtifactReviewResumeIntent(
       `(resultState=${task.status?.state}) — marked ${marked ? "done" : "LEASE-LOST"}`,
   );
   return marked ? "delivered" : "lease-lost";
+}
+
+/**
+ * cinatra#4312 — is a regenerated artifact of this pause still under review? A
+ * leg settled as `changes_requested` (Regenerate) is resolved, so the family can
+ * read complete while the successor gate of its repair lineage is still open.
+ * The run stays parked until that lineage is decided. A failed read propagates,
+ * like the sibling read above: it never authorizes a resume.
+ */
+async function regenerationOpen(
+  legs: readonly { id: string; reviewTaskId: string; disposition: string | null }[],
+  reviewTaskId: string,
+): Promise<boolean> {
+  const base = baseReviewTaskId(reviewTaskId);
+  const settled = legs.filter((g) =>
+    baseReviewTaskId(g.reviewTaskId) === base && g.disposition === "changes_requested");
+  if (settled.length === 0) return false;
+  const { isRepairLineageOpen } = await import("./lifecycle-repair-store");
+  for (const leg of settled) {
+    if (await isRepairLineageOpen(leg.id)) return true;
+  }
+  return false;
 }
 
 /**

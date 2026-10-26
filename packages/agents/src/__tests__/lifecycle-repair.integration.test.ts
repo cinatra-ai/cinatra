@@ -1259,9 +1259,10 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — Regenerate on a declared review leg (
     expect(isAutoReviewTaskId(s.successorTaskId)).toBe(true);
     expect(await familyState(f, f.leg2)).toBe("pending");
 
-    // RECORDED (cinatra#4312 follow-up): the successor is no leg of the family, so
-    // once the post is decided the family reads complete and the worker resumes the
-    // paused run while the regenerated picture's review is still open.
+    // The successor is no leg of the family, so once the post is decided the family
+    // reads complete. The resume worker still keeps the run parked: it also reads
+    // the open repair lineage of the settled leg (cinatra#4312,
+    // lifecycle-c-w11-picture-regenerate-parks-run-3035.integration.test.ts).
     const postGate = await gateStore.readReviewGate(f.runId, f.step);
     await resolveGateApprove(postGate!.id);
     expect(await familyState(f, f.step)).toBe("complete");
@@ -1283,9 +1284,10 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — Regenerate on a declared review leg (
     // was already acknowledged while #2 was open, and #2 itself wrote none.
     expect(await familyState(f, f.leg2)).toBe("complete");
 
-    // RECORDED (cinatra#4312 follow-up): the successor's approval takes the
-    // automatic-gate release, which leaves a declared review's pause alone, so the
-    // paused run is not resumed by it.
+    // The successor's approval takes the automatic-gate release, which leaves a
+    // declared review's pause alone. The resume worker resumes that pause through
+    // the settled leg's WayFlow road instead (cinatra#4312,
+    // lifecycle-c-w11-picture-regenerate-parks-run-3035.integration.test.ts).
     expect(isAutoReviewTaskId(s.successorTaskId)).toBe(true);
     await resolveGateApprove(s.successorGateId);
     // The refusal returns before any write, so a bare org scope stands in for the

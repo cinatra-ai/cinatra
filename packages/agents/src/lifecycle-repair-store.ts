@@ -74,7 +74,11 @@ import {
   type PerTargetOutcome,
   type BatchDisposition,
 } from "@/lib/lifecycle/lifecycle-batch";
-import { repairSuccessorReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
+import {
+  REPAIR_SUCCESSOR_TASK_PREFIX,
+  isRepairSuccessorTaskId,
+  repairSuccessorReviewTaskId,
+} from "@/lib/lifecycle/lifecycle-orchestration";
 
 // ---------------------------------------------------------------------------
 // changes_requested — close the review attempt, open the repair.
@@ -718,6 +722,54 @@ export async function readRepairLineage(lineageId: string): Promise<RepairRow[]>
     .where(eq(lifecycleRepair.lineageId, lineageId))
     .orderBy(asc(lifecycleRepair.attempt), asc(lifecycleRepair.createdAt));
   return rows.map(toRepairRow);
+}
+
+/** The gate a repair-SUCCESSOR gate's lineage started on (the gate that first
+ * received `changes_requested`), or null for any other task id or an unknown
+ * repair. cinatra#4312: the resume worker reads it to find the declared review
+ * leg a regenerated picture's successor gate answers. */
+export async function readRepairLineageRootGate(successorReviewTaskId: string): Promise<{
+  id: string; runId: string; orgId: string; reviewTaskId: string; pinnedTargets: unknown;
+} | null> {
+  if (!isRepairSuccessorTaskId(successorReviewTaskId)) return null;
+  // `${PREFIX}${repairId}:${attempt}`; the repair id is a UUID (no colon).
+  const repairId = successorReviewTaskId.slice(REPAIR_SUCCESSOR_TASK_PREFIX.length).split(":")[0];
+  if (!repairId) return null;
+  const repair = await readRepair(repairId);
+  if (!repair) return null;
+  const [root] = await db
+    .select({
+      id: artifactReviewGates.id,
+      runId: artifactReviewGates.runId,
+      orgId: artifactReviewGates.orgId,
+      reviewTaskId: artifactReviewGates.reviewTaskId,
+      pinnedTargets: artifactReviewGates.pinnedTargets,
+    })
+    .from(artifactReviewGates)
+    .where(eq(artifactReviewGates.id, repair.lineageId))
+    .limit(1);
+  return root ?? null;
+}
+
+/** Is the repair lineage that `gateId` started still open (cinatra#4312)? Open
+ * while its latest attempt waits for the producer (`requested` / `dispatched`),
+ * or has pinned a successor gate that is not decided yet (or cannot be read).
+ * An escalated or stale attempt has no successor to wait for, so it is not open.
+ * A successor that itself received `changes_requested` opened the next attempt of
+ * the same lineage, so the latest attempt is always the one to read. */
+export async function isRepairLineageOpen(gateId: string): Promise<boolean> {
+  const chain = await readRepairLineage(gateId);
+  const latest = chain[chain.length - 1];
+  if (!latest) return false;
+  if (latest.status === "requested" || latest.status === "dispatched") return true;
+  if (latest.status !== "repaired") return false;
+  if (!latest.successorGateId) return true;
+  const [successor] = await db
+    .select({ status: artifactReviewGates.status })
+    .from(artifactReviewGates)
+    .where(eq(artifactReviewGates.id, latest.successorGateId))
+    .limit(1);
+  return successor?.status !== "resolved";
 }
 
 function toRepairRow(r: typeof lifecycleRepair.$inferSelect): RepairRow {
