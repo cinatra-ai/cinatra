@@ -31,10 +31,14 @@
 //   - ARM a timer for fireAt, when the pair is renewable and fireAt lies ahead:
 //       latest = U_lo - (grace + safety + fire margin)
 //       want   = E_lo - margin (90 s)
-//       fireAt = min(latest, max(want, the previous request's start + 30 s))
+//       fireAt = max(min(latest, want), the previous request's start + 30 s)
+//     The 30 s floor holds after EVERY renewal: when it lies past latest, the
+//     timer fires there and the same function holds instead of renewing.
 //   - RENEW NOW, when the pair is renewable and fireAt has come. Deferred while
 //     a lease is held (see lease()).
-// "Renewable" is: the pair does not already reach the session cap, the USER
+// "Renewable" is: the pair does not already reach the session cap (with the
+// session's life unknown, a successor whose user token ends no later than the
+// one it replaced counts as reaching it: that renewal gained nothing), the USER
 // token has more than the server's grace window plus the request latency left
 // at this document's clock, and no refusal put the chain on hold. A timer set
 // for fireAt therefore fires as a request: at fireAt the user token still has
@@ -259,7 +263,10 @@ export function createFrameCredentialRenewal(
       const latest = c.uLo - (G_MS + S_MS + FIRE_MS);
       const want = c.eLo - MARGIN_MS;
       const earliest = lastAttempt === null ? Number.NEGATIVE_INFINITY : lastAttempt + SPACING_MS;
-      fireAt = Math.min(latest, Math.max(want, earliest));
+      // The spacing floor is applied LAST, so it holds after every renewal; a
+      // floor past latest fires where the pair is no longer renewable, and
+      // that fire holds (spec v3, C26).
+      fireAt = Math.max(Math.min(latest, want), earliest);
     }
     const armed = generation;
     if (fireAt > t) {
@@ -314,7 +321,7 @@ export function createFrameCredentialRenewal(
         // onRenewed may itself have disposed or re-armed; then that call owns
         // the chain and this one stops here.
         if (armedGeneration !== generation || chain !== c) return;
-        arm(renewed, livesOf(renewed), requestedAt, receivedAt);
+        armChain(renewed, livesOf(renewed), requestedAt, receivedAt, c.loKnown ? c.uLo : null);
         return;
       }
       if (!c.loKnown) {
@@ -372,6 +379,18 @@ export function createFrameCredentialRenewal(
     mintedAt: number,
     receivedAt: number,
   ): void {
+    armChain(credential, lives, mintedAt, receivedAt, null);
+  }
+
+  /** `priorULo`: the U_lo of the pair a successful renewal replaced (null for a
+   *  sign-in, or when that pair's lo bounds were unknown). */
+  function armChain(
+    credential: FrameWidgetCredential,
+    lives: FrameCredentialLives,
+    mintedAt: number,
+    receivedAt: number,
+    priorULo: number | null,
+  ): void {
     cancelTimer();
     generation += 1;
     deferred = false;
@@ -420,6 +439,11 @@ export function createFrameCredentialRenewal(
       c.loKnown = true;
       c.eLo = a + lifeE * 1000;
       c.uLo = a + lifeU * 1000;
+      // With the session's life unknown (no cap reading), a successor whose
+      // user token ends no later than the one it replaced gained nothing: the
+      // session cap has stopped it, so the chain renews no more (spec v3, C26).
+      // A known session life keeps the cap rule above (C12: renew to the cap).
+      if (lifeK === null && priorULo !== null && c.uLo <= priorULo) c.capReached = true;
     }
     decide(t, false);
   }

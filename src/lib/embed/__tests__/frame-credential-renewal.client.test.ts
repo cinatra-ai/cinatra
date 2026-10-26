@@ -315,10 +315,10 @@ describe("R3 / C10: one decision function, the worked table", () => {
     },
   );
 
-  it("R3: with a request made just now the spacing applies: left 100 gives 30 s (ul 70), left 60 gives 24 s (ul 36)", async () => {
+  it("R3 (spec v3): after a renewal the next request waits 30 s; left 100 gives 30 s (ul 70); left 60 HOLDs, since the floor lies past latest", async () => {
     for (const [life, wait, ulAt] of [
       [100, 30, 70],
-      [60, 24, 36],
+      [60, null, null],
     ] as const) {
       vi.setSystemTime(T0);
       const h = harness();
@@ -329,6 +329,17 @@ describe("R3 / C10: one decision function, the worked table", () => {
       expect(h.renew).toHaveBeenCalledTimes(1);
       await advance(0);
       expect(h.onRenewed).toHaveBeenCalledTimes(1);
+      if (wait === null) {
+        // latest = 60 - 36 = 24 s < the floor at 30 s: the timer fires at 30 s,
+        // where ul = 30 <= 35, and the chain holds to E_hi = 61 s.
+        await advance(60.999);
+        expect(h.renew, `life ${life}: no second request inside the floor`).toHaveBeenCalledTimes(1);
+        expect(h.chain.state).toBe("holding");
+        expect(h.onEnded).not.toHaveBeenCalled();
+        await advance(0.001);
+        expect(h.onEnded).toHaveBeenCalledTimes(1);
+        continue;
+      }
       await advance(wait - 0.001);
       expect(h.renew, `life ${life}: not before ${wait} s`).toHaveBeenCalledTimes(1);
       await advance(0.001);
@@ -669,30 +680,71 @@ describe("the cap", () => {
     }
   });
 
-  it("C26: with no sessionExpiresIn the chain renews by decide, and near the cap the 409 HOLD applies", async () => {
-    const server = new FakeServer(at(700));
-    const h = harness();
+  /** A server double that drops sessionExpiresIn from every answer (K unknown)
+   *  and stops answering after `limit` requests, so a burst shows as a count,
+   *  never as a hung test. */
+  function capOnlyServer(h: ReturnType<typeof harness>, server: FakeServer, limit = 40) {
     h.renew.mockImplementation(async (p) => {
+      if (h.requests.length > limit) return new Promise<FrameRenewalOutcome>(() => undefined);
       const out = await server.renew(p);
       if (out.ok) {
-        const { sessionExpiresIn: _dropped, ...rest } = out.credential;
+        const rest: Pair = { ...out.credential };
+        delete rest.sessionExpiresIn;
         return { ...out, credential: rest };
       }
       return out;
+    });
+  }
+
+  it("C26 (spec v3): with no sessionExpiresIn and a fixed server cap, renewals never burst: a no-gain successor counts as the cap", async () => {
+    // RED ON 1555a8a7 (spec v2): once the successors end at the cap, fireAt =
+    // latest = the request's own start, so the chain renews again at once,
+    // again and again, until the user token has 35 s left.
+    const server = new FakeServer(at(1000), 100); // 100 ms each way
+    const h = harness();
+    capOnlyServer(h, server);
+    const first = pair(1, 300, { userExpiresIn: 900 });
+    server.users.set(first.userToken, at(900));
+    server.transports.set(first.transportToken, at(300));
+    h.chain.arm(first, livesOf(first), at(0), at(0));
+    await advanceTo(2000);
+    const starts = h.requests.map((r) => r.at);
+    for (let i = 1; i < starts.length; i += 1) {
+      expect(starts[i]! - starts[i - 1]!, `requests ${i - 1} and ${i}: ${starts.join(", ")}`).toBeGreaterThanOrEqual(30);
+    }
+    // 210 s: the successor's user token ends at the cap (1000 > 900, a gain).
+    // 420 s: its successor ends at the cap too (1000 <= 1000): no gain, so the
+    // chain holds that pair to its hi bound and renews no more.
+    expect(starts).toEqual([210, 420]);
+    expect(h.onEnded).toHaveBeenCalledTimes(1);
+  });
+
+  it("C26 (spec v3): with no sessionExpiresIn the chain renews by decide; at the cap it holds the last pair to E_hi and ends once", async () => {
+    const server = new FakeServer(at(700));
+    const h = harness();
+    capOnlyServer(h, server);
+    let endedAt: number | null = null;
+    let lastHeld: Pair | null = null;
+    h.onRenewed.mockImplementation((c) => {
+      lastHeld = c;
+    });
+    h.onEnded.mockImplementation(() => {
+      endedAt = Date.now();
     });
     const first = pair(1, 300, { userExpiresIn: 700 });
     server.users.set(first.userToken, at(700));
     server.transports.set(first.transportToken, at(300));
     h.chain.arm(first, livesOf(first), at(0), at(0));
     await advanceTo(2000);
-    // 210: user min(1110, 700) -> 490 left, pair 300; 420: 280 left, pair 280;
-    // 630: 70 left, pair 70 (> G): renewed to 70 more... the server's guard
-    // refuses once 30 s or less are left: a 409, then HOLD and END.
-    const outcomes = await Promise.all(h.renew.mock.results.map((r) => r.value));
-    const last = outcomes[outcomes.length - 1] as FrameRenewalOutcome;
-    expect(last.ok === false && last.reason).toBe("renew_not_renewable");
+    // 210 s: the successor ends at the cap like the sign-in's user token (700 <=
+    // 700): no gain, so the cap stops the chain after one renewal.
+    expect(h.requests.map((r) => r.at)).toEqual([210]);
     expect(h.onEnded).toHaveBeenCalledTimes(1);
-    expect(h.requests.every((r) => r.at < 700)).toBe(true);
+    // END at E_hi of the pair it holds (210 + 301 s), never before its real end.
+    expect(endedAt).toBe(at(511));
+    expect(endedAt!).toBeGreaterThanOrEqual(server.pairEnd(lastHeld!));
+    const outcomes = (await Promise.all(h.renew.mock.results.map((r) => r.value))) as FrameRenewalOutcome[];
+    expect(outcomes.every((o) => o.ok), "no refusal was needed").toBe(true);
   });
 
   it("C47: an invalid or short userExpiresIn counts the user token as the pair; an invalid or short sessionExpiresIn leaves the cap unknown", async () => {
@@ -1018,13 +1070,15 @@ describe("C46: P1-P4 over a grid of lives, latency, leases and timer lateness", 
     latencyMs: number;
     lease: [number, number] | null;
     lateMs: number;
+    session: boolean;
   };
   const grid: Run[] = [];
   for (const userLife of [300, 900])
     for (const capLeft of [null, 600, 1000, 2000])
       for (const latencyMs of [0, 1000, 5000])
         for (const lease of [null, [0, 280], [100, 400], [1, 1000]] as Array<[number, number] | null>)
-          for (const lateMs of [0, 7000, 75_000]) grid.push({ userLife, capLeft, latencyMs, lease, lateMs });
+          for (const lateMs of [0, 7000, 75_000])
+            for (const session of [true, false]) grid.push({ userLife, capLeft, latencyMs, lease, lateMs, session });
 
   it(`holds every obligation in ${grid.length} runs`, async () => {
     const failures: string[] = [];
@@ -1035,8 +1089,19 @@ describe("C46: P1-P4 over a grid of lives, latency, leases and timer lateness", 
       const server = new FakeServer(capAt, run.latencyMs);
       // A timer is late by lateMs once in three (a throttled tab).
       const h = harness({ lateness: (i) => (i % 3 === 1 ? run.lateMs : 0) });
-      h.renew.mockImplementation(server.renew);
+      // Without a session reading (an older server, K unknown), every answer
+      // drops sessionExpiresIn; past 400 requests the double stops answering,
+      // so a busy loop shows as a P3 failure, never as a hung run.
+      h.renew.mockImplementation(async (p) => {
+        if (h.requests.length > 400) return new Promise<FrameRenewalOutcome>(() => undefined);
+        const out = await server.renew(p);
+        if (run.session || !out.ok) return out;
+        const rest: Pair = { ...out.credential };
+        delete rest.sessionExpiresIn;
+        return { ...out, credential: rest };
+      });
       const { pair: first } = server.mint(at(0), Math.min(at(run.userLife), capAt));
+      if (!run.session) delete first.sessionExpiresIn;
       // The record of each pair the frame holds: its A and its user life.
       const held: Array<{ pair: Pair; a: number; userLife: number }> = [
         { pair: first, a: at(0), userLife: first.userExpiresIn ?? first.expiresIn },
@@ -1074,15 +1139,16 @@ describe("C46: P1-P4 over a grid of lives, latency, leases and timer lateness", 
         const ul = (record.a + record.userLife * 1000 - (req.at * 1000 + T0)) / 1000;
         if (!(ul > 35)) failures.push(`${label}: a request at ul ${ul}`);
       }
-      // P3: spacing between requests is at least min(F, max(0, latest - lastAttempt)).
+      // P3 (spec v3): after every renewal the next request starts at least
+      // F = 30 s after the renewal's own start (no busy loop). This grid has
+      // no 429, so every request but a refused last one is a renewal.
+      const answered = (await Promise.all(
+        h.renew.mock.results.slice(0, h.requests.length - 1).map((r) => r.value),
+      )) as FrameRenewalOutcome[];
       for (let i = 1; i < h.requests.length; i += 1) {
-        const prev = h.requests[i - 1]!.at * 1000 + T0;
-        const cur = h.requests[i]!.at * 1000 + T0;
-        const record = held.find((x) => x.pair === h.requests[i]!.presented);
-        if (!record) continue;
-        const latest = record.a + (record.userLife - 36) * 1000;
-        const floor = Math.min(30_000, Math.max(0, latest - prev));
-        if (cur - prev < floor) failures.push(`${label}: spacing ${cur - prev} ms < ${floor} ms`);
+        if (!answered[i - 1]?.ok) continue;
+        const gap = (h.requests[i]!.at - h.requests[i - 1]!.at) * 1000;
+        if (gap < 30_000) failures.push(`${label}: spacing ${gap} ms < 30000 ms after a renewal`);
       }
       // At most one timer is live at a time.
       if (h.maxLiveTimers > 1) failures.push(`${label}: ${h.maxLiveTimers} live timers`);
