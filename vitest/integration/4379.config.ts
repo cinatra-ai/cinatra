@@ -41,9 +41,6 @@ const rootAlias = (rootResolve.alias ?? []) as Array<{
 const rootEnv =
   (rootConfig as { test?: { env?: Record<string, string> } }).test?.env ?? {};
 
-/** The throwaway schema this tier builds and drops. */
-const TEST_SCHEMA = "cinatra_test_typed_promotion_writer_4379";
-
 export default defineConfig({
   resolve: {
     tsconfigPaths: true,
@@ -59,7 +56,9 @@ export default defineConfig({
     environment: "node",
     testTimeout: 120_000,
     hookTimeout: 120_000,
-    // Serial: the suite owns ONE shared schema.
+    // One file. Its schema and organization are this run's own (a random name per
+    // run, set by the suite itself before any app module loads), so two runs of
+    // this tier against one database never touch each other's state.
     fileParallelism: false,
     include: [
       "src/lib/artifacts/__tests__/typed-promotion-canonical-writer-4379.integration.test.ts",
@@ -71,7 +70,6 @@ export default defineConfig({
       // failure mode is "skipped" reports success by doing nothing. This flag
       // says "you are in the lane that exists to run these".
       CINATRA_TYPED_PROMOTION_WRITER_REALDB: "1",
-      SUPABASE_SCHEMA: TEST_SCHEMA,
       // Nothing in this tier signs or verifies anything. A fixed placeholder is
       // what belongs here; it is not a credential and must never be treated as one.
       BETTER_AUTH_SECRET:

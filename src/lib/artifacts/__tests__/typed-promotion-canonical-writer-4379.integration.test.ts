@@ -25,9 +25,12 @@
  * from-scratch schema bootstrap (the schema is built below from the canonical
  * DDL), as the #1381 real-writer suite does.
  *
- * ISOLATION: a fresh schema per file from the CANONICAL
+ * ISOLATION: a schema and an organization row of THIS RUN'S OWN (a random name
+ * per run; setup refuses a name that exists and teardown removes only what the
+ * run created), the schema built from the CANONICAL
  * `buildCreateStoreSchemaQueries` DDL — never hand-rolled DDL, so every
- * constraint is the production one. Because `postgresSchema` is a module-load
+ * constraint is the production one. The Better Auth `public."organization"`
+ * table must already exist (scripts/apply-public-schema.mjs, as CI provisions it). Because `postgresSchema` is a module-load
  * const, every app module is dynamically imported in `beforeAll` AFTER the env
  * is set.
  */
@@ -69,16 +72,21 @@ if (process.env.CINATRA_TYPED_PROMOTION_WRITER_REALDB === "1" && !HAS_REAL_DB) {
   );
 }
 
-const TEST_SCHEMA = "cinatra_test_typed_promotion_writer_4379";
-const ORG = "org-4379-writer";
+// A per-run random tag (lowercase hex, so it is a plain identifier) plus a counter:
+// unique without the wall clock, so two runs against one database never mint the
+// same schema, organization or object id.
+const RUN = randomUUID().replaceAll("-", "").slice(0, 12);
+// THIS RUN'S OWN schema and organization. Two runs of this tier against one
+// database (two CI jobs, a re-run, a lane) never share either: setup creates them
+// fresh and refuses a name that already exists, and teardown removes only what
+// this run created. A fixed name let one run drop another run's live schema.
+const TEST_SCHEMA = `cinatra_test_tpw4379_${RUN}`;
+const ORG = `org-4379-${RUN}`;
 const EXT = "@cinatra-ai/campaigns-artifact";
 const BASE_TYPE = "@cinatra-ai/text-artifact:text";
 const OWN_TYPE = "@cinatra-ai/campaigns:voice";
 const USER = "user-4379";
 
-// A per-process random tag plus a counter: unique without the wall clock, so two
-// runs against one database never mint the same id.
-const RUN = randomUUID().slice(0, 8);
 let uniq = 0;
 const nextId = (p: string) => `${p}-${RUN}-${uniq++}`;
 
@@ -217,6 +225,60 @@ function rowOf(objectId: string) {
   ]).rows[0] as { type: string; version: number };
 }
 
+/** What THIS run created, so teardown removes exactly that and nothing else. */
+const owned = { schema: false, org: false };
+
+/**
+ * Remove what this run created. EVERY step is tried, whatever an earlier step
+ * did, and every failure is collected and thrown together: a teardown that
+ * swallowed a failed DROP or DELETE would report green while leaving state
+ * behind. Idempotent (a step that succeeded is not repeated), so setup's own
+ * failure path and `afterAll` can both call it.
+ */
+async function cleanUpOwned(): Promise<void> {
+  if (!owned.schema && !owned.org) return;
+  const errors: unknown[] = [];
+  const client = new Client({ connectionString: DB_URL });
+  let connected = false;
+  try {
+    await client.connect();
+    connected = true;
+  } catch (err) {
+    errors.push(err);
+  }
+  if (connected) {
+    if (owned.schema) {
+      try {
+        await client.query(`DROP SCHEMA "${TEST_SCHEMA}" CASCADE`);
+        owned.schema = false;
+      } catch (err) {
+        errors.push(err);
+      }
+    }
+    if (owned.org) {
+      try {
+        await client.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG]);
+        owned.org = false;
+      } catch (err) {
+        errors.push(err);
+      }
+    }
+    try {
+      await client.end();
+    } catch (err) {
+      errors.push(err);
+    }
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(
+      errors,
+      `cinatra#4379 teardown failed in ${errors.length} step(s); left behind: ` +
+        `${owned.schema ? `schema ${TEST_SCHEMA} ` : ""}${owned.org ? `organization ${ORG}` : ""}`.trim() +
+        `: ${errors.map((e) => (e instanceof Error ? e.message : String(e))).join(" | ")}`,
+    );
+  }
+}
+
 beforeAll(async () => {
   if (!HAS_REAL_DB) return;
   // MUST precede every app-module import (module-load schema const).
@@ -224,33 +286,52 @@ beforeAll(async () => {
 
   const client = new Client({ connectionString: DB_URL });
   await client.connect();
-  await client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`);
-  await client.query(`CREATE SCHEMA "${TEST_SCHEMA}"`);
-  const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
-  for (const qy of buildCreateStoreSchemaQueries(TEST_SCHEMA)) {
-    const head = qy.text.trim().slice(0, 6).toUpperCase();
-    if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S") continue;
-    try {
-      await client.query(qy.text, (qy as { values?: unknown[] }).values as never[]);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!msg.includes("does not exist")) throw err;
+  try {
+    // NEVER a drop here: this run's schema is new. Without IF NOT EXISTS the
+    // CREATE itself refuses a name that already exists, so setup can never adopt
+    // or destroy a schema another run (or anyone) owns.
+    await client.query(`CREATE SCHEMA "${TEST_SCHEMA}"`);
+    owned.schema = true;
+    const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
+    for (const qy of buildCreateStoreSchemaQueries(TEST_SCHEMA)) {
+      const head = qy.text.trim().slice(0, 6).toUpperCase();
+      if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S") continue;
+      try {
+        await client.query(qy.text, (qy as { values?: unknown[] }).values as never[]);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!msg.includes("does not exist")) throw err;
+      }
     }
+    // The org-write kernel's guarded batch reads the organization's archive state
+    // before it lets any statement run. The table is the Better Auth one, which
+    // the CI job (and any lane) provisions with scripts/apply-public-schema.mjs;
+    // this tier never creates or drops a table outside its own schema.
+    const table = await client.query(`SELECT to_regclass('public."organization"') AS t`);
+    if (!(table.rows[0] as { t: string | null }).t) {
+      throw new Error(
+        'this tier needs the Better Auth table public."organization": provision it with ' +
+          "scripts/apply-public-schema.mjs (the CI job does) before running the tier",
+      );
+    }
+    // This run's own row: no ON CONFLICT, so a row that already exists is refused,
+    // never adopted and later deleted.
+    await client.query(
+      `INSERT INTO public."organization" (id, name, slug, "archivedAt", "archiveEpoch", "createdAt")
+       VALUES ($1, 'Typed promotion writer 4379', $2, NULL, 0, now())`,
+      [ORG, `typed-promotion-writer-4379-${RUN}`],
+    );
+    owned.org = true;
+  } catch (err) {
+    await client.end().catch(() => {});
+    // Setup failed part-way: remove what it already created, and report both.
+    try {
+      await cleanUpOwned();
+    } catch (cleanupErr) {
+      throw new AggregateError([err, cleanupErr], "cinatra#4379 setup failed, and so did its cleanup");
+    }
+    throw err;
   }
-  // The org-write kernel's guarded batch reads the organization's archive state
-  // before it lets any statement run (the form the #1381 suite seeds).
-  await client.query(
-    `CREATE TABLE IF NOT EXISTS public."organization" (
-       id text PRIMARY KEY, name text, slug text,
-       "archivedAt" timestamptz, "archiveEpoch" integer DEFAULT 0,
-       "createdAt" timestamptz)`,
-  );
-  await client.query(
-    `INSERT INTO public."organization" (id, name, slug, "archivedAt", "archiveEpoch", "createdAt")
-     VALUES ($1, 'Typed promotion writer 4379', 'typed-promotion-writer-4379', NULL, 0, now())
-     ON CONFLICT (id) DO NOTHING`,
-    [ORG],
-  );
   await client.end();
   (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized = true;
 
@@ -261,14 +342,14 @@ beforeAll(async () => {
   writerMod = await import("@/lib/object-history/canonical-writer");
 }, 120_000);
 
+// On every exit road the runner reaches (cases passed, failed or skipped after a
+// failed setup) this removes what the run created, and fails loudly if it cannot.
+// A killed process runs no hook at all; its leftovers carry this run's own random
+// name, so they never collide with a later run.
 afterAll(async () => {
   if (!HAS_REAL_DB) return;
-  const client = new Client({ connectionString: DB_URL });
-  await client.connect();
-  await client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`).catch(() => {});
-  await client.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG]).catch(() => {});
-  await client.end().catch(() => {});
   delete (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized;
+  await cleanUpOwned();
 });
 
 describe.skipIf(!HAS_REAL_DB)("cinatra#4379 — the canonical writer's keyed retype is the promotion's proof (real DB)", () => {
