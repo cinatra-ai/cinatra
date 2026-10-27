@@ -390,8 +390,11 @@ function devInstallOwnerBinding(): { orgId: string; runBy: string } | undefined 
  * its OWN ENUMERABLE fields are copied one by one, except `orgId` and `runBy`,
  * which are never read (on these dev members only the host names the owner).
  * A field the input only inherits (for example a getter on a class prototype)
- * is NOT copied, and the caller's object is never changed. The result type
- * holds for a plain-object input.
+ * is NOT copied, and the caller's object is never changed. Each field is
+ * DEFINED as an own data property (never assigned), so an own `__proto__` key
+ * (for example from `JSON.parse`) is copied as an ordinary field and cannot
+ * change the copy's prototype: the copy's `orgId`/`runBy` are only the host's.
+ * The result type holds for a plain-object input.
  */
 function withDevInstallOwnerBinding<T extends object>(input: T): Omit<T, "orgId" | "runBy"> & {
   orgId?: string;
@@ -401,7 +404,12 @@ function withDevInstallOwnerBinding<T extends object>(input: T): Omit<T, "orgId"
   for (const key of Reflect.ownKeys(input)) {
     if (key === "orgId" || key === "runBy") continue;
     if (!Object.prototype.propertyIsEnumerable.call(input, key)) continue;
-    out[key] = (input as Record<PropertyKey, unknown>)[key];
+    Object.defineProperty(out, key, {
+      value: (input as Record<PropertyKey, unknown>)[key],
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
   const binding = devInstallOwnerBinding();
   if (binding) {

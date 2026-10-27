@@ -1473,4 +1473,28 @@ describe("drupal-mcp dev writers bind the dev owner host-side (cinatra#4387)", (
     expect("name" in handed).toBe(false);
     expect(Object.keys(handed).sort()).toEqual(["orgId", "runBy", "siteUrl"]);
   });
+
+  it("an own __proto__ field cannot carry a caller pair: the copy keeps the plain prototype and only the host's pair", async () => {
+    const input = JSON.parse(
+      '{"id":"i-1","name":"Local","siteUrl":"http://localhost:8082","__proto__":{"orgId":"evil-org","runBy":"evil-user"}}',
+    ) as { id: string; name: string; siteUrl: string };
+    expect(Object.prototype.hasOwnProperty.call(input, "__proto__")).toBe(true);
+    devBoot(null);
+    await drupal().devSaveInstance!(input);
+    await drupal().devPersistLocalInstanceUnvalidated!(input);
+    for (const handed of [drupalApiCalls.save.at(-1)![0], drupalApiCalls.devPersist.at(-1)![0]] as Array<
+      Record<string, unknown>
+    >) {
+      expect(Object.getPrototypeOf(handed)).toBe(Object.prototype);
+      expect(handed.orgId).toBeUndefined();
+      expect(handed.runBy).toBeUndefined();
+      // The own field is copied as an ordinary field, as every own enumerable field is.
+      expect(Object.prototype.hasOwnProperty.call(handed, "__proto__")).toBe(true);
+    }
+    devBoot(DEV_OWNER);
+    await drupal().devSaveInstance!(input);
+    const bound = drupalApiCalls.save.at(-1)![0] as Record<string, unknown>;
+    expect(Object.getPrototypeOf(bound)).toBe(Object.prototype);
+    expect(bound).toMatchObject({ orgId: "dev-org-1", runBy: "dev-admin-1" });
+  });
 });
