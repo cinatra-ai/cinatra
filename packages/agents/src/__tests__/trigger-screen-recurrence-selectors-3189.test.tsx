@@ -41,7 +41,7 @@ import {
   TriggerScreenClient,
   type TriggerScreenClientProps,
 } from "../trigger-screen-client";
-import { dayOfMonthOptions } from "../schedule-proposal-card";
+import { dayOfMonthOptions, isOfferedDayOfMonth } from "../schedule-proposal-card";
 
 const ORIGINAL_RESIZE_OBSERVER = (globalThis as { ResizeObserver?: unknown }).ResizeObserver;
 const ORIGINAL_ELEMENT_SHIMS = {
@@ -341,4 +341,56 @@ describe("dayOfMonthOptions adds a saved day 29-31 and nothing else (cinatra#437
   it("a day in 1-28 adds nothing", () => {
     expect(dayOfMonthOptions(15)).toEqual(plain);
   });
+});
+
+describe("the bound's edges, as a fill and as the check itself (cinatra#4377)", () => {
+  for (const [name, value, cron] of [
+    ["1", 1, "0 9 1 * *"],
+    ["28", 28, "0 9 28 * *"],
+  ] as const) {
+    it(`a filled day of ${name} is a choice: the select and the cron move to it`, async () => {
+      const container = await renderThenFill(10, { dayOfMonth: value });
+      await waitFor(() => expect(storedCron(container)).toBe(cron));
+      expect(byLabel(container, "Day of month")!.textContent).toBe(name);
+    });
+  }
+
+  for (const [name, value] of [
+    ["29", 29],
+    ["-1", -1],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ["null", null],
+    ["true", true],
+  ] as const) {
+    it(`a filled day of ${name} is refused: the select and the cron keep their day`, async () => {
+      const container = await renderThenFill(10, { dayOfMonth: value });
+      expect(byLabel(container, "Day of month")!.textContent).toBe("10");
+      expect(storedCron(container)).toBe("0 9 10 * *");
+    });
+  }
+
+  for (const value of [1, 15, 28]) {
+    it(`isOfferedDayOfMonth(${value}) is true`, () => {
+      expect(isOfferedDayOfMonth(value)).toBe(true);
+    });
+  }
+
+  for (const [name, value] of [
+    ["0", 0],
+    ["29", 29],
+    ["31", 31],
+    ["32", 32],
+    ["-1", -1],
+    ["1.5", 1.5],
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ['"15"', "15"],
+    ["null", null],
+    ["undefined", undefined],
+    ["true", true],
+  ] as const) {
+    it(`isOfferedDayOfMonth(${name}) is false`, () => {
+      expect(isOfferedDayOfMonth(value)).toBe(false);
+    });
+  }
 });
