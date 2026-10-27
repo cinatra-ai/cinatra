@@ -1243,3 +1243,70 @@ describe("one resolution for every rule, and refusal where it is unsure (pre-4)"
     expect(tree.files.find((f) => f.file === "d.ts")?.loads).toEqual(["some-kit/c"]);
   });
 });
+
+describe("the switch rule takes the same resolution, and a malformed manifest refuses (fold 5)", () => {
+  const SWITCH_ROW: SiteReading = {
+    anchor: "onCheckedChange={(c) => toggle(c)}",
+    tag: "DropdownMenuCheckboxItem",
+    drawn: "switch",
+    effect: "immediate",
+    reading: "a menu row whose change applies at once",
+    tagIncludes: ["onCheckedChange={(c) => toggle(c)}"],
+    fileIncludes: [],
+  };
+  const rowText = (head: string, inner: string) =>
+    `${head}\nexport const R = () => <DropdownMenuCheckboxItem checked={on} onCheckedChange={(c) => toggle(c)}>${inner}Row</DropdownMenuCheckboxItem>;\n`;
+  /** The problems of SWITCH_ROW (and of any other site, when given) in f.tsx, scanned with the given path aliases. */
+  const aliasProblems = (paths: Record<string, string[]>, text: string, extra: Record<string, string> = {}) => {
+    const tree = scanSources(new Map(Object.entries({ "f.tsx": text, ...extra })), new Map(), pathAliasesOf(JSON.stringify({ compilerOptions: { paths } })));
+    const row = tree.files.find((f) => f.file === "f.tsx")!;
+    return readingProblems([reading("f.tsx", countCheckboxTokens(text), [SWITCH_ROW])], { ...tree, files: [row] }, reader({ "f.tsx": text, ...extra })).join("\n");
+  };
+  const NOT_SURE = "the element draws one only by a name that may not be a switch";
+
+  it("takes a switch imported through a path alias that resolves to a switch module", () => {
+    const text = rowText('import { Root as Thumb } from "@ui/toggle";', "<Thumb checked={on} />");
+    expect(aliasProblems({ "@ui/toggle": ["src/ui/switch.tsx"] }, text)).toBe("");
+  });
+
+  it("takes no sure switch from a module spelled switch whose alias resolves to a checkbox module or to no switch", () => {
+    for (const target of ["src/ui/checkbox.tsx", "src/ui/radio.tsx"]) {
+      const text = rowText('import { Root as Knob } from "@ui/switch";', "<Knob checked={on} />");
+      expect(aliasProblems({ "@ui/switch": [target] }, text)).toContain(NOT_SURE);
+      // Such a name may still be a switch, so a checkbox cannot be claimed either.
+      const tree = scanSources(new Map([["f.tsx", text]]), new Map(), pathAliasesOf(JSON.stringify({ compilerOptions: { paths: { "@ui/switch": [target] } } })));
+      const site = tree.files.find((f) => f.file === "f.tsx")!.sites.find((s) => s.tag === "DropdownMenuCheckboxItem")!;
+      expect(site.switches).toEqual({ drawn: false, any: true, byName: true });
+    }
+  });
+
+  it("takes a sure switch only when every file of the alias names one, and a possible one when any does", () => {
+    const text = rowText('import { Root as Knob } from "@ui/toggle";', "<Knob checked={on} />");
+    const paths = { "@ui/toggle": ["src/ui/switch.tsx", "src/ui/radio.tsx"] };
+    expect(aliasProblems(paths, text)).toContain(NOT_SURE);
+    const tree = scanSources(new Map([["f.tsx", text]]), new Map(), pathAliasesOf(JSON.stringify({ compilerOptions: { paths } })));
+    const site = tree.files.find((f) => f.file === "f.tsx")!.sites.find((s) => s.tag === "DropdownMenuCheckboxItem")!;
+    expect(site.switches).toEqual({ drawn: false, any: true, byName: true });
+  });
+
+  it("takes no sure switch from a name that is a checkbox name too", () => {
+    expect(problemsOf(rowText('import { Checkbox } from "@/components/ui/checkbox";\nconst Switch = Checkbox;', "<Switch checked={on} />"), [SWITCH_ROW])).toContain(NOT_SURE);
+    expect(problemsOf(rowText('import { Switch } from "./ui/checkbox";', "<Switch checked={on} />"), [SWITCH_ROW])).toContain(NOT_SURE);
+  });
+
+  it("takes a switch module by its last segment with an extension or /index, through the workspace entries too", () => {
+    const tree = scanSources(
+      new Map([["f.tsx", rowText('import { Root as Thumb } from "@cinatra-ai/kit/toggle";', "<Thumb checked={on} />")]]),
+      new Map([["kit", packageEntriesOf("kit", '{ "exports": { "./toggle": "./src/switch/index.tsx" } }')!]]),
+    );
+    const site = tree.files.find((f) => f.file === "f.tsx")!.sites.find((s) => s.tag === "DropdownMenuCheckboxItem")!;
+    expect(site.switches).toEqual({ drawn: true, any: true, byName: true });
+  });
+
+  it("refuses a workspace package.json that is malformed, as an unreadable one", () => {
+    for (const json of ["[]", "not json", '{ "exports": 42 }', '{ "main": 7 }']) {
+      expect(() => workspaceEntries(["packages/kit/src/a.ts"], reader({ "packages/kit/package.json": json }))).toThrow("packages/kit/package.json");
+    }
+    expect(workspaceEntries(["packages/kit/src/a.ts"], reader({}))).toEqual(new Map());
+  });
+});

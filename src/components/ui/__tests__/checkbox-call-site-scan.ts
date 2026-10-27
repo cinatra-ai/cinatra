@@ -21,8 +21,10 @@
 //      empty listing or a listed file that cannot be read throws; it is never an
 //      empty result. A file that does not parse is a problem no reading clears,
 //      and a root `tsconfig.json` that does not parse, or whose `paths` are no
-//      map of string lists, throws. Only an absent root `tsconfig.json` or
-//      `package.json` (ENOENT) is none; every other read error throws.
+//      map of string lists, throws, and so does a workspace `package.json`
+//      that is no JSON object or has malformed `exports` or `main`. Only an
+//      absent root `tsconfig.json` or `package.json` (ENOENT) is none; every
+//      other read error throws.
 //   2. ANY REFERENCE COUNTS. A file is in scope when its text holds any
 //      checkbox token (`CHECKBOX_TOKEN`): an identifier that contains
 //      `Checkbox` from a capital C in any letter case after it (`CheckBox`,
@@ -139,10 +141,17 @@
 //      pinned text must stand in the CODE of its file: not only in a comment and
 //      not only inside a string or template. A switch counts as drawn only as a
 //      JSX element inside the site's element, by name (a tag segment `Switch`,
-//      a name bound to it, or one imported from a module whose specifier ends
-//      in switch), that is drawn whenever the element
-//      is: one under a choice (`? :`, `&&`, `||`, `??`) or in a function (`rows.map`,
-//      a render prop) may be drawn, so neither a switch nor a checkbox is claimed.
+//      a name bound to it, or one imported from a module that names a switch),
+//      that is drawn whenever the element is: one under a choice (`? :`, `&&`,
+//      `||`, `??`) or in a function (`rows.map`, a render prop) may be drawn, so
+//      neither a switch nor a checkbox is claimed. A module is resolved as in
+//      rule 3: it surely names a switch only when every file its path aliases or
+//      workspace entries resolve it to (its spelling when none) names one; it
+//      may name one when any does. A tag with a segment that is a checkbox name
+//      (a name from a module that names a checkbox is one) draws no sure switch. A name that may
+//      be a switch is enough to refuse a checkbox claim, and not enough for a
+//      switch claim. A name spelled `Switch` counts wherever it comes from,
+//      unless it is a checkbox name too (a stated limit, K13).
 //
 // LIMIT of the whole scan: the files are listed and read once, with no snapshot
 // or lock, so a file added or changed while a run reads the tree may be missed
@@ -743,8 +752,11 @@ export type FoundSite = {
    * `??`) or a function (`rows.map((r) => <X />)`, a render prop), which may draw nothing (pre-3 NOTE).
    */
   drawnTags: string[];
-  /** Whether a child is a switch by name (any segment `Switch` or bound to it, pre-4 NOTE): drawn whenever the element is, or at all. */
-  switches: { drawn: boolean; any: boolean };
+  /**
+   * Whether a child is a switch by name (rule 7, pre-4 NOTE, fold 5): `drawn`, surely one drawn whenever the element is;
+   * `any`, one that may be a switch, drawn or not; `byName`, one that may be a switch, drawn whenever the element is.
+   */
+  switches: { drawn: boolean; any: boolean; byName: boolean };
   /** The texts of its change handlers (`on…` attributes) and spreads, each of which a reading must name. */
   mustName: string[];
   /** Why the scan cannot tell whether it draws a checkbox (rules 4 and 5), when it cannot. */
@@ -894,17 +906,17 @@ function entryFiles(entries: PackageEntries, subpath: string): string[] | null {
 }
 
 /**
- * Whether a specifier names a checkbox module through the one resolution every rule uses (pre-4 MF1): its own
- * spelling, every target of the root `tsconfig.json` path aliases it matches, and, for a workspace specifier
- * (`@cinatra-ai/<folder>[/<subpath>]`), every file of the package's entries it matches.
+ * The one resolution of a specifier that every rule uses (pre-4 MF1, fold 5): `files` are every target of the root
+ * `tsconfig.json` path aliases it matches and, for a workspace specifier (`@cinatra-ai/<folder>[/<subpath>]`), every
+ * file of the package's entries it matches; null when nothing matches, so only its own spelling names it.
  */
-function checkboxModuleThrough(entries: ReadonlyMap<string, PackageEntries>, aliases: PackageEntries): (spec: string) => boolean {
+function moduleTargets(entries: ReadonlyMap<string, PackageEntries>, aliases: PackageEntries): (spec: string) => string[] | null {
   return (spec) => {
-    if (isCheckboxModule(spec)) return true;
-    if ((entryFiles(aliases, spec) ?? []).some(isCheckboxModule)) return true;
+    const out = [...(entryFiles(aliases, spec) ?? [])];
     const m = /^@cinatra-ai\/([^/]+)(.*)$/.exec(spec);
     const known = m === null ? undefined : entries.get(m[1]);
-    return known !== undefined && (entryFiles(known, `.${m![2]}`) ?? []).some(isCheckboxModule);
+    if (known !== undefined) out.push(...(entryFiles(known, `.${m![2]}`) ?? []));
+    return out.length > 0 ? out : null;
   };
 }
 
@@ -1067,6 +1079,7 @@ export function findSites(
   readsWords = false,
   objects: ModuleObjects = NO_MODULE_OBJECTS,
   isSwitch: (name: string) => boolean = (n) => n === "Switch",
+  mayBeSwitch: (name: string) => boolean = isSwitch,
 ): FoundSite[] {
   const sites: FoundSite[] = [];
   const siteElements = new Set<ts.Node>();
@@ -1094,7 +1107,7 @@ export function findSites(
       openingTag: opening,
       childTags: [],
       drawnTags: [],
-      switches: { drawn: false, any: false },
+      switches: { drawn: false, any: false, byName: false },
       mustName: [],
       unresolved: why ?? `a use of ${node.getText(sf)} that is no JSX tag, import, export, declaration, type or alias`,
     });
@@ -1112,8 +1125,10 @@ export function findSites(
       childTags: children.all,
       drawnTags: children.drawn,
       switches: {
-        drawn: children.drawn.some((t) => t.split(".").some(isSwitch)),
-        any: children.all.some((t) => t.split(".").some(isSwitch)),
+        // A tag draws a switch surely only when a segment is surely a switch and no segment is a checkbox name (fold 5).
+        drawn: children.drawn.some((t) => t.split(".").some(isSwitch) && !t.split(".").some(tagSegment)),
+        any: children.all.some((t) => t.split(".").some((s) => isSwitch(s) || mayBeSwitch(s))),
+        byName: children.drawn.some((t) => t.split(".").some((s) => isSwitch(s) || mayBeSwitch(s))),
       },
       mustName: mustNameOf(el, sf),
     };
@@ -1396,6 +1411,11 @@ export function isCheckboxModule(spec: string): boolean {
   return /checkbox/i.test(spec);
 }
 
+/** A module that names a switch: its last segment is switch or ends in -switch, with or without `/index` and an extension. */
+export function isSwitchModule(spec: string): boolean {
+  return /(?:^|[/-])switch(?:\/index)?(?:\.[cm]?[jt]sx?)?$/i.test(spec);
+}
+
 /** The in-scope files of the given texts (rule 2) with their tokens and sites; test files are left out. */
 export function scanSources(
   texts: ReadonlyMap<string, string>,
@@ -1411,18 +1431,23 @@ export function scanSources(
     sources.set(file, sf);
   }
   // One resolution of a specifier (its spelling, the path aliases, the workspace entries) feeds every rule (pre-4 MF1).
-  const boxModule = checkboxModuleThrough(entries, aliases);
+  const targets = moduleTargets(entries, aliases);
+  const boxModule = (spec: string) => isCheckboxModule(spec) || (targets(spec) ?? []).some(isCheckboxModule);
   const scope = resolveNames(sources, isCheckboxSpelling, boxModule);
   const bindings = new Map([...sources].map(([file, sf]) => [file, collectBindings(sf)] as const));
   const modules = moduleObjectsOf(bindings, scope.isName, boxModule, entries, aliases);
-  // A switch by name: Switch, or any name bound to it or imported from a module that names a switch (pre-4 NOTE).
-  const switches = resolveNames(sources, (n) => n === "Switch", (spec) => /(?:^|[/-])switch$/i.test(spec));
+  // A switch by name, through the same resolution (pre-4 NOTE, fold 5): Switch, a name bound to it, or a name imported
+  // from a module that names a switch. It MAY be one when the specifier or any file it resolves to names a switch; it
+  // is SURELY one only when every file it resolves to (its spelling when it resolves to none) names a switch. A name
+  // from a module that names a checkbox is a checkbox name, which findSites never takes as a sure switch.
+  const mayBeSwitch = resolveNames(sources, (n) => n === "Switch", (spec) => isSwitchModule(spec) || (targets(spec) ?? []).some(isSwitchModule));
+  const sureSwitch = resolveNames(sources, (n) => n === "Switch", (spec) => (targets(spec) ?? [spec]).every(isSwitchModule));
   const out: ScannedFile[] = [];
   for (const [file, sf] of sources) {
     const isName = (n: string) => scope.isName(file, n);
     const tokens = countCheckboxTokens(sf.getFullText());
     // A tag segment is a checkbox by the name test, which takes checkbox in any letter case (G2, GAP 2).
-    const sites = findSites(sf, isName, isName, modules.mayExport, true, modules.objectsIn(file), (n) => switches.isName(file, n));
+    const sites = findSites(sf, isName, isName, modules.mayExport, true, modules.objectsIn(file), (n) => sureSwitch.isName(file, n), (n) => mayBeSwitch.isName(file, n));
     const loads = externalLoadsOf(sf, (spec) => modules.isObjectModule(spec) && !modules.mayExport(spec));
     // GAP 2 (Q7): a file that exports a checkbox name is in scope even when no token spells it (`export const checkbox`).
     const b = bindings.get(file)!;
@@ -1464,7 +1489,10 @@ export function rootAliases(fileText: (file: string) => string): PackageEntries 
   return pathAliasesOf(text);
 }
 
-/** The entries of each workspace package (`packages/<dir>/package.json`) of the files; a package without one is left out. */
+/**
+ * The entries of each workspace package (`packages/<dir>/package.json`) of the files; a package without one (ENOENT)
+ * is left out, and any other read error or a malformed package.json throws (pre-4 MF3, fold 5).
+ */
 export function workspaceEntries(files: string[], fileText: (file: string) => string): Map<string, PackageEntries> {
   const out = new Map<string, PackageEntries>();
   for (const dir of new Set(files.map((f) => /^packages\/([^/]+)\//.exec(f)?.[1]).filter((d): d is string => d !== undefined))) {
@@ -1477,7 +1505,9 @@ export function workspaceEntries(files: string[], fileText: (file: string) => st
       throw error;
     }
     const e = packageEntriesOf(dir, text);
-    if (e !== null) out.set(dir, e);
+    // A package.json that is no JSON object or has malformed exports or main refuses, never no entries (fold 5).
+    if (e === null) throw new Error(`packages/${dir}/package.json is no JSON object or has malformed exports or main`);
+    out.set(dir, e);
   }
   return out;
 }
@@ -1688,9 +1718,11 @@ export function readingProblems(readings: FileReading[], tree: ScannedTree, file
       const mayDrawSwitch = found.switches.any;
       if (site.drawn === "switch" && !drawsSwitch) {
         problems.push(
-          mayDrawSwitch
-            ? `${at}: the reading says a switch is drawn, the element draws one only under a condition or in a function`
-            : `${at}: the reading says a switch is drawn, the element draws none`,
+          found.switches.byName
+            ? `${at}: the reading says a switch is drawn, the element draws one only by a name that may not be a switch (its module resolves to a file that names no switch, or the name is a checkbox name too)`
+            : mayDrawSwitch
+              ? `${at}: the reading says a switch is drawn, the element draws one only under a condition or in a function`
+              : `${at}: the reading says a switch is drawn, the element draws none`,
         );
       }
       if (site.drawn === "checkbox" && mayDrawSwitch) problems.push(`${at}: the element draws a switch, the reading says a checkbox`);
