@@ -73,8 +73,8 @@ import {
 // node, and through the passthrough the flow. A provider's or a store's
 // exception can name a credential, a schema, a table or a connection, so a
 // failure that comes from a throw answers a fixed sentence. The server log
-// records the run, the node and the error's class and code, never its text
-// (src/lib/failure-log.ts), and logging never throws or changes the answer.
+// records the run, the node and a word for the error's class from a fixed
+// list, never text taken from the error (src/lib/failure-log.ts), and logging never throws or changes the answer.
 // ---------------------------------------------------------------------------
 
 /**
@@ -665,7 +665,7 @@ export function installStateUnresolvedError(extension: string): string {
  * The explainer seam of the shared resolver, answered with the fixed sentence.
  * The explanation quotes the store's read errors, so its text is never logged:
  * the log says the install state was incomplete or unreadable, or, when the
- * explainer throws, the error's class and code. The seam never throws, so the
+ * explainer throws, the error's class word. The seam never throws, so the
  * resolver's own catch, which quotes an exception's text, is not reached.
  */
 async function explainAbsentClaimsFixed(
@@ -714,7 +714,7 @@ function filingLogFields(input: {
 
 /**
  * Log a failure on the server: the tool, the run, the node and the error's
- * class and code, never its text. Never a throw (src/lib/failure-log.ts).
+ * class word, never text taken from the error. Never a throw (src/lib/failure-log.ts).
  */
 export function logFilingFailure(
   tool: string,

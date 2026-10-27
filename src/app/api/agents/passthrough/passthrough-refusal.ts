@@ -12,8 +12,9 @@
 //     text names the caller's own fields.
 //
 // Every other throw is answered with one fixed sentence. The server log records
-// that sentence's stage, the tool, the run and the error's class and code,
-// never its text (src/lib/failure-log.ts). Reading the error and writing the
+// that sentence's stage, the tool, the run and a word for the error's class
+// from a fixed list, never text taken from the error (src/lib/failure-log.ts).
+// A caller-facing refusal answered with its own text is not logged. Reading the error and writing the
 // log can never throw out of this module or change the answer.
 //
 // Pure module apart from its runtime imports, so it is unit-testable in
@@ -68,7 +69,8 @@ function callerFacingText(err: unknown): string | null {
 /**
  * The text a failure answers with: the caller-facing refusal's own message,
  * or the fixed sentence `fixed`, with the stage, the tool, the run and the
- * error's class logged on the server.
+ * error's class word logged on the server. The caller-facing refusal is not
+ * logged: its text is the caller's own answer.
  */
 export function passthroughFailureText(
   err: unknown,
