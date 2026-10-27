@@ -588,6 +588,37 @@ describe("cinatra#4223 — a failure that cannot be logged or printed never chan
     expect(outcome.error).toBe(`the second-provider image provider failed; ${tool.PROVIDER_FAILED_DETAIL}`);
   });
 
+  it("a provider that rejects with a value whose conversion to text throws is answered with the fixed provider sentence", async () => {
+    const outcome = await generateArtifactImage(
+      call,
+      deps({
+        resolveImageProvider: async () => ({
+          provider: "second-provider",
+          generateImage: async () => {
+            throw unprintable();
+          },
+        }),
+      }),
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("unreachable");
+    expect(outcome.reason).toBe("provider_failed");
+    expect(outcome.error).toBe(`the second-provider image provider failed; ${tool.PROVIDER_FAILED_DETAIL}`);
+    expectLoggedWithoutText();
+  });
+
+  it("a console that throws never changes a write failure's answer", async () => {
+    logged.mockImplementation(() => {
+      throw new Error(SECRET_DETAIL);
+    });
+    m.createSemanticArtifact.mockRejectedValue(new Error(SECRET_DETAIL));
+    const outcome = await generateArtifactImage(call, deps());
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("unreachable");
+    expect(outcome.reason).toBe("write_refused");
+    expect(outcome.error).toBe(tool.FILING_WRITE_FAILED_ERROR);
+  });
+
   it("a write that throws a value whose conversion to text throws is answered with the fixed write sentence", async () => {
     m.createSemanticArtifact.mockRejectedValue(unprintable());
     const outcome = await generateArtifactImage(call, deps());

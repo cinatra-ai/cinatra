@@ -4,7 +4,8 @@
  * Only a primitive's stated refusal (PrimitiveInvocationError) and an
  * input-schema error (ZodError) keep their own text; every other throw answers
  * a fixed sentence. The server log records the stage, the tool, the run and
- * the error's class and code, never its text, and reading the error or
+ * a word for the error's class from a fixed list, never text taken from the
+ * error (no message, no class name it made up, no code), and reading the error or
  * writing the log never throws or changes the answer. The module is new in
  * this change, so on the base this file fails at its import.
  *
@@ -155,16 +156,12 @@ describe("cinatra#4223 — the failure log carries no text and never throws", ()
     expect(logged).toHaveBeenCalled();
   });
 
-  it("logs an error's plain code, never a code that carries text", () => {
+  it("never logs an error's code", () => {
     passthroughFailureText(Object.assign(new Error(SECRET), { code: "ECONNREFUSED" }), CTX);
-    expect(logged.mock.calls[0]?.[1]).toEqual({
-      tool: "objects_save",
-      runId: "run-1",
-      errorClass: "Error",
-      errorCode: "ECONNREFUSED",
-    });
+    expect(logged.mock.calls[0]?.[1]).toEqual({ tool: "objects_save", runId: "run-1", errorClass: "Error" });
     passthroughFailureText(Object.assign(new TypeError(SECRET), { code: SECRET }), CTX);
     expect(logged.mock.calls[1]?.[1]).toEqual({ tool: "objects_save", runId: "run-1", errorClass: "TypeError" });
+    expect(consoleText()).not.toContain("ECONNREFUSED");
     expectNoSecretLogged();
   });
 
@@ -197,5 +194,84 @@ describe("cinatra#4223 — the failure log carries no text and never throws", ()
     expect(passthroughFailureText({ _zod: { traits }, issues: [], message: SECRET }, CTX)).toBe(
       PASSTHROUGH_UNEXPECTED_ERROR,
     );
+  });
+});
+
+describe("cinatra#4223 — the failure log names a class from a fixed list and never a code", () => {
+  const SENTENCE = "[agents-passthrough] tool call failed; the error's own text is not logged";
+
+  /** No part of `words` reaches any console call. */
+  function expectNotLogged(words: string[]) {
+    const text = consoleText();
+    for (const word of words) expect(text).not.toContain(word);
+  }
+
+  it("a class and a code the thrown object makes up are not logged", () => {
+    class artifact_materializations extends Error {}
+    const err = Object.assign(new artifact_materializations("failed"), { code: "PROVIDER_SAYS_BLOCKED" });
+    expect(passthroughFailureText(err, CTX)).toBe(PASSTHROUGH_UNEXPECTED_ERROR);
+    expect(logged.mock.calls).toEqual([[SENTENCE, { tool: "objects_save", runId: "run-1", errorClass: "Error" }]]);
+    expectNotLogged(["artifact_materializations", "PROVIDER_SAYS_BLOCKED"]);
+  });
+
+  it("a credential-shaped code is not logged", () => {
+    const err = Object.assign(new Error("failed"), { code: "SK_LIVE_0000" });
+    expect(passthroughFailureText(err, CTX)).toBe(PASSTHROUGH_UNEXPECTED_ERROR);
+    expect(logged.mock.calls).toEqual([[SENTENCE, { tool: "objects_save", runId: "run-1", errorClass: "Error" }]]);
+    expectNotLogged(["SK_LIVE_0000"]);
+  });
+
+  it("a proxy that reports a made-up prototype and code logs neither", () => {
+    class artifact_materializations {}
+    const forged = new Proxy(
+      {},
+      {
+        getPrototypeOf: () => artifact_materializations.prototype,
+        getOwnPropertyDescriptor: (target, key) =>
+          key === "code"
+            ? { value: "SK_LIVE_0000", writable: true, enumerable: true, configurable: true }
+            : Reflect.getOwnPropertyDescriptor(target, key),
+      },
+    );
+    expect(passthroughFailureText(forged, CTX)).toBe(PASSTHROUGH_UNEXPECTED_ERROR);
+    expect(logged.mock.calls).toEqual([[SENTENCE, { tool: "objects_save", runId: "run-1", errorClass: "other" }]]);
+    expectNotLogged(["artifact_materializations", "SK_LIVE_0000"]);
+  });
+
+  it("a class is matched by identity, never by its name", () => {
+    const NamedLikeTypeError = class {};
+    Object.defineProperty(NamedLikeTypeError, "name", { value: "TypeError" });
+    class ProviderTimeout extends TypeError {}
+    expect(passthroughFailureText(new NamedLikeTypeError(), CTX)).toBe(PASSTHROUGH_UNEXPECTED_ERROR);
+    expect(passthroughFailureText(new ProviderTimeout("failed"), CTX)).toBe(PASSTHROUGH_UNEXPECTED_ERROR);
+    expect(logged.mock.calls.map((call) => call[1])).toEqual([
+      { tool: "objects_save", runId: "run-1", errorClass: "other" },
+      { tool: "objects_save", runId: "run-1", errorClass: "TypeError" },
+    ]);
+    expectNotLogged(["ProviderTimeout"]);
+  });
+
+  it("names the classes the code handles, and every other value as other", () => {
+    const refusal = new PrimitiveInvocationError({
+      code: "OBJECTS_TYPE_NOT_REGISTERED",
+      message: SECRET,
+      retryable: false,
+    });
+    const ctx = { ...CTX, stage: "actor context" };
+    const fixed = PASSTHROUGH_ACTOR_CONTEXT_ERROR;
+    for (const err of [refusal, realZodError(), new RangeError(SECRET), new SyntaxError(SECRET), SECRET, null, 7]) {
+      expect(passthroughFixedFailureText(err, ctx, fixed)).toBe(fixed);
+    }
+    expect(logged.mock.calls.map((call) => (call[1] as { errorClass: string }).errorClass)).toEqual([
+      "PrimitiveInvocationError",
+      "ZodError",
+      "RangeError",
+      "SyntaxError",
+      "other",
+      "other",
+      "other",
+    ]);
+    expectNotLogged(["OBJECTS_TYPE_NOT_REGISTERED"]);
+    expectNoSecretLogged();
   });
 });
