@@ -26,12 +26,14 @@
  * DDL), as the #1381 real-writer suite does.
  *
  * ISOLATION: a schema and an organization row of THIS RUN'S OWN (a random name
- * per run; setup refuses a name that exists and teardown removes only what the
- * run created), the schema built from the CANONICAL
- * `buildCreateStoreSchemaQueries` DDL — never hand-rolled DDL, so every
- * constraint is the production one. That DDL runs with the search path set to
- * the run's schema only, and a statement whose text names `public` (the slug
- * columns, indexes and triggers on the Better Auth tables) is left out. That
+ * per run; setup refuses a name that exists; teardown drops the run's schema,
+ * with CASCADE, and deletes the run's organization row), the schema built from
+ * the CANONICAL `buildCreateStoreSchemaQueries` DDL, not hand-rolled DDL, so its
+ * constraints are the production ones. Setup runs the statements of that DDL
+ * that begin CREATE, ALTER, DROP T or DROP S, with the search path set to the
+ * run's schema only; a statement whose text names `public` (the slug columns,
+ * indexes and triggers on the Better Auth tables) is left out, and a DROP INDEX
+ * statement or a DO block does not begin with one of those four. That
  * leave-out is LEXICAL, over the canonical DDL as it is today. The boundary is
  * SEMANTIC: the catalog of every schema but the run's own (and the system
  * schemas) is read once, after the tier lock is taken and the Better Auth tables
@@ -39,9 +41,10 @@
  * and counted, after setup, after the cases and after teardown; an entry added
  * or removed at one of those three reads fails the run. A change made before the
  * first read is part of what it compares against, and a change undone before the
- * next read is not seen. Runs of this tier hold one advisory lock from before the
- * first read until after the last, so, while that lock's connection stays open,
- * they run one after another; another run's schema is read like any other.
+ * next read is not seen. Runs of this version of the tier hold one advisory lock
+ * from before the first read until after the last, so, while that lock's
+ * connection stays open, they run one after another; a run of an earlier version
+ * of this tier takes no lock. Another run's schema is read like any other.
  * It reads schemas, relations, columns, constraints, indexes, triggers,
  * functions and types; a change of any other kind (a column default, a
  * privilege, row security or a policy, a comment, an extension, a row), and of
@@ -101,8 +104,10 @@ if (process.env.CINATRA_TYPED_PROMOTION_WRITER_REALDB === "1" && !HAS_REAL_DB) {
 const RUN = randomUUID().replaceAll("-", "").slice(0, 12);
 // THIS RUN'S OWN schema and organization. Two runs of this tier against one
 // database (two CI jobs, a re-run, a lane) never share either: setup creates them
-// fresh and refuses a name that already exists, and teardown removes only what
-// this run created. A fixed name let one run drop another run's live schema.
+// fresh and refuses a name that already exists; teardown drops this run's
+// schema (with CASCADE, so an object elsewhere that depends on one of its
+// objects is dropped too) and deletes this run's organization row. A fixed name
+// let one run drop another run's live schema.
 const TEST_SCHEMA = `cinatra_test_tpw4379_${RUN}`;
 const ORG = `org-4379-${RUN}`;
 const EXT = "@cinatra-ai/campaigns-artifact";
@@ -248,7 +253,10 @@ function rowOf(objectId: string) {
   ]).rows[0] as { type: string; version: number };
 }
 
-/** What THIS run created, so teardown removes exactly that and nothing else. */
+/**
+ * What THIS run created, so teardown drops and deletes these two (the schema's
+ * CASCADE drop also drops an object elsewhere that depends on one of its objects).
+ */
 const owned = { schema: false, org: false };
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -282,7 +290,9 @@ async function cleanupStep(label: string, sql: string, params: unknown[], errors
 }
 
 /**
- * Remove what this run created. EVERY step is tried, whatever an earlier step
+ * Drop this run's schema (CASCADE: an object elsewhere that depends on one of its
+ * objects is dropped too) and delete its organization row. EVERY step is tried,
+ * whatever an earlier step
  * did (each on its own connection), and every failure — a connect, a statement
  * or a close — is collected and thrown together: a teardown that swallowed one
  * would report green while leaving state behind. Idempotent (a step that ran is
@@ -426,7 +436,8 @@ async function assertCatalogUnchanged(phase: string): Promise<void> {
  * schemas out. A run of an earlier version of this tier takes no lock. A run
  * that cannot take the lock within 600 s fails its setup. A killed run's
  * connection closes, and Postgres releases its lock; a lock connection lost
- * while the run goes on releases the lock too, and nothing checks for that.
+ * while the run goes on releases the lock too, and no code checks, while the run
+ * goes on, that the session still holds it.
  */
 const TIER_LOCK_WAIT_S = 600;
 let tierLock: Client | undefined;
@@ -506,9 +517,9 @@ beforeAll(async () => {
     // The boundary: what lies outside this run before it creates anything.
     catalogBefore = await catalogOutsideRun();
 
-    // NEVER a drop here: this run's schema is new. Without IF NOT EXISTS the
-    // CREATE itself refuses a name that already exists, so setup can never adopt
-    // or destroy a schema another run (or anyone) owns.
+    // No schema that existed before is dropped here: this run's schema is new.
+    // Without IF NOT EXISTS the CREATE itself refuses a name that already exists,
+    // so setup does not adopt a schema that existed before it.
     await client.query(`CREATE SCHEMA "${TEST_SCHEMA}"`);
     owned.schema = true;
     // Unqualified names resolve to this run's schema only (pg_catalog is always
@@ -579,8 +590,9 @@ beforeAll(async () => {
 }, (TIER_LOCK_WAIT_S + 120) * 1000);
 
 // On every exit road the runner reaches (cases passed, failed or skipped after a
-// failed setup) this checks the catalog outside the run, removes what the run
-// created and checks the catalog again, and fails loudly if any step fails.
+// failed setup) this checks the catalog outside the run, drops the run's schema
+// (with CASCADE) and deletes its organization row, checks the catalog again, and
+// fails loudly if one of these steps fails.
 // A killed process runs no hook at all; its leftovers carry this run's own random
 // name (48 random bits). A later run that drew the same name would be refused at
 // CREATE SCHEMA or at its organization insert; it would never adopt them.
@@ -588,8 +600,10 @@ afterAll(async () => {
   if (!HAS_REAL_DB) return;
   delete (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized;
   // The catalog outside the run after the cases, then the cleanup, then the
-  // catalog again (a CASCADE drop must not reach outside the run either), then
-  // the tier lock is released. Every step is tried; every failure is reported.
+  // catalog again (it reports what a CASCADE drop removed outside the run when
+  // that was in place at an earlier read; an object made after the read after
+  // the cases and dropped by the CASCADE is not seen), then the tier lock is
+  // released. Each step is tried; each step's failure is reported.
   const failures: unknown[] = [];
   const steps: Array<() => Promise<void>> = [
     () => assertCatalogUnchanged("the cases"),
