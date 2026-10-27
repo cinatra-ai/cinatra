@@ -1142,21 +1142,20 @@ export const SCRIPTED_STRING_ARRAY_MEMBERS = 5;
 const SCRIPTED_MEMBER_TITLE_PREFIX = "Title:";
 
 /**
- * Does this node answer as the plain scripted string? The same keyword order
- * as `scriptedValueForSchema` (`enum`, then `const`, then the first union
- * keyword with members, then `type`), so exactly a node that reaches the
- * `string` case is a string item. An `enum`, a `const`, a union or an untyped
- * node is not, and its array keeps the one-element answer.
+ * Is this node an UNADORNED string declaration? Its `type` (or the first entry
+ * of a type list) is `"string"`, and it carries NO `enum`, `const`, `oneOf`,
+ * `anyOf` or `allOf` keyword at all, not even an empty or non-array one. Every
+ * other node (one with any of those keywords, an untyped node, a non-object
+ * node) is not, and its array takes the unchanged old road.
  */
 function isScriptedStringNode(schema: unknown): boolean {
   // A non-object node (a boolean schema, say) is no string declaration; it
-  // takes the one-element road unchanged.
+  // takes the old road unchanged (a boolean still throws there, as before).
   if (typeof schema !== "object" || schema === null) return false;
   const node = schema as Record<string, unknown>;
-  if (Array.isArray(node.enum) && node.enum.length > 0) return false;
-  if ("const" in node) return false;
-  const union = ["oneOf", "anyOf", "allOf"].find((k) => Array.isArray(node[k]));
-  if (union && (node[union] as unknown[]).length > 0) return false;
+  // The keyword's presence decides, whatever its value: an empty `enum: []`
+  // or `anyOf: []` keeps the one-element answer too.
+  if (["enum", "const", "oneOf", "anyOf", "allOf"].some((k) => k in node)) return false;
   const type = Array.isArray(node.type) ? node.type[0] : node.type;
   return type === "string";
 }
@@ -1201,8 +1200,9 @@ function scriptedStringArrayMember(propertyName: string, n: number): string {
  *    `number` / `integer`, `boolean`, `null`. A node with no usable type
  *    yields a string;
  *  - `array` — a STRING array (its `items` declares `type: "string"`, or a
- *    type list whose first entry is `"string"`, with no `enum`, `const` or
- *    union keyword in front of it) answers EXACTLY
+ *    type list whose first entry is `"string"`, and carries no `enum`,
+ *    `const`, `oneOf`, `anyOf` or `allOf` keyword at all, not even an empty
+ *    one) answers EXACTLY
  *    `SCRIPTED_STRING_ARRAY_MEMBERS` (5) members. Member `n` (1-based) is two
  *    lines: `Title: CINATRA_UAT_OK scripted <prop> item <n>`, a newline, then
  *    `CINATRA_UAT_OK: scripted <prop> item <n> body`, where `<prop>` is the
@@ -1212,8 +1212,10 @@ function scriptedStringArrayMember(propertyName: string, n: number): string {
  *    It holds when the members fall past the depth cap too (they are strings
  *    either way); an array node that is itself past the cap is a string, as
  *    the depth rule below says.
- *    EVERY OTHER array (numbers, objects, enums, consts, unions, untyped or
- *    absent `items`) answers EXACTLY ONE element, as before;
+ *    EVERY OTHER array (numbers, objects, items carrying any `enum`, `const`
+ *    or union keyword, even an empty one, untyped, `null` or absent `items`)
+ *    answers EXACTLY ONE element, as before (a boolean `items` still throws,
+ *    as before);
  *  - depth — a node deeper than `SCRIPTED_SCHEMA_MAX_DEPTH` yields a STRING
  *    whatever its declared type, so a deeply nested or recursive schema stops
  *    matching its own declaration at that depth.

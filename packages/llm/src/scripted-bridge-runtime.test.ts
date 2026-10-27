@@ -744,24 +744,29 @@ describe("a string-array answer — five members, each opening with a Title: lin
     );
   });
 
-  it("an EMPTY `enum` or an EMPTY union on a string item is a string array — the type decides", () => {
-    // An empty `enum: []` or `anyOf: []` picks nothing, so the node reaches the
-    // `string` case, as the value path reads it: five members.
-    const out = scriptedOutputFor({
-      type: "object",
-      required: ["emptyEnum", "emptyUnion"],
-      properties: {
-        emptyEnum: { type: "array", items: { type: "string", enum: [] } },
-        emptyUnion: { type: "array", items: { type: "string", anyOf: [] } },
+  it("ANY `enum`, `const` or union keyword on a string item, even an EMPTY or non-array one, keeps the one-element answer", () => {
+    // Only an UNADORNED string declaration is a string array. The keyword's
+    // presence decides, whatever its value, so each of these answers exactly
+    // what main answers: one scripted string.
+    enableScriptedDevelopmentRuntime();
+    const names = ["emptyEnum", "emptyAnyOf", "emptyOneOf", "emptyAllOf", "scalarEnum", "objectOneOf"];
+    const response = runScriptedBridgeCompletion({
+      user: "produce it",
+      outputSchema: {
+        type: "object",
+        required: names,
+        properties: {
+          emptyEnum: { type: "array", items: { type: "string", enum: [] } },
+          emptyAnyOf: { type: "array", items: { type: "string", anyOf: [] } },
+          emptyOneOf: { type: "array", items: { type: "string", oneOf: [] } },
+          emptyAllOf: { type: "array", items: { type: "string", allOf: [] } },
+          scalarEnum: { type: "array", items: { type: "string", enum: "a" } },
+          objectOneOf: { type: "array", items: { type: "string", oneOf: {} } },
+        },
       },
-    }) as { emptyEnum: string[]; emptyUnion: string[] };
-    expect(out.emptyEnum).toHaveLength(5);
-    expect(out.emptyEnum[0]).toBe(
-      "Title: CINATRA_UAT_OK scripted emptyEnum item 1\nCINATRA_UAT_OK: scripted emptyEnum item 1 body",
-    );
-    expect(out.emptyUnion).toHaveLength(5);
-    expect(out.emptyUnion[0]).toBe(
-      "Title: CINATRA_UAT_OK scripted emptyUnion item 1\nCINATRA_UAT_OK: scripted emptyUnion item 1 body",
+    });
+    expect(response.text).toBe(
+      "{" + names.map((n) => `"${n}":["CINATRA_UAT_OK: scripted ${n} item"]`).join(",") + "}",
     );
   });
 
