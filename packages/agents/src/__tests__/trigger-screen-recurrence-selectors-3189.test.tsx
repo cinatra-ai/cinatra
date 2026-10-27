@@ -423,6 +423,19 @@ describe("a filled cron is a fill of the same rows (cinatra#4377)", () => {
     expect(byLabel(container, "Weekday")!.textContent).toBe("Mon");
   });
 
+  it("a filled list cron read as day 29 (0 9 29,30 * *) is refused: the select and the stored cron keep theirs", async () => {
+    const container = await renderThenFill(10, { triggerType: "recurring", cronExpression: "0 9 29,30 * *" });
+    expect(byLabel(container, "Day of month")!.textContent).toBe("10");
+    expect(storedCron(container)).toBe("0 9 10 * *");
+    expect(await dayOptions(container)).toEqual(DAYS_1_TO_28);
+  });
+
+  it("a filled list cron read as day 1 (0 9 1,15 * *) is applied as given: the select reads 1, the cron is stored verbatim", async () => {
+    const container = await renderThenFill(10, { triggerType: "recurring", cronExpression: "0 9 1,15 * *" });
+    await waitFor(() => expect(storedCron(container)).toBe("0 9 1,15 * *"));
+    expect(byLabel(container, "Day of month")!.textContent).toBe("1");
+  });
+
   it("a filled weekly cron (it has no day of month) moves the frequency and is the stored cron", async () => {
     const container = await renderThenFill(10, { triggerType: "recurring", cronExpression: "0 9 * * 1,3" });
     await waitFor(() => expect(storedCron(container)).toBe("0 9 * * 1,3"));

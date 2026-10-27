@@ -139,15 +139,16 @@ export function buildCron(c: RecurringConfig): string {
 
 /**
  * The day of month that a date cron's day field names (cinatra#4377). A day
- * written in digits must be one that some month has, 1 to 31: `0`, `32` or
- * `99` is no selection the form can draw, so the cron is not read back (null),
- * rather than drawn as a day with no option or silently read as the 1st. A
- * saved day 29-31 is read back as it is. Any other field keeps the earlier
- * reading, `parseInt` or the 1st (the every-N-days limit the tests pin).
+ * written in digits is read as it is. Any other field (a list, a range or a
+ * step) keeps the earlier approximate reading: the number it starts with, or
+ * the 1st when that is missing or 0 (the every-N-days limit the tests pin).
+ * Either way the day must be one that some month has, 1 to 31: `0`, `32`,
+ * `99` or a list such as `32,33` is no selection the form can draw, so the
+ * cron is not read back (null), rather than drawn as a day with no option. A
+ * saved day 29-31 is read back as it is.
  */
 function dateCronDay(domStr: string): number | null {
-  if (!/^\d+$/.test(domStr)) return parseInt(domStr, 10) || 1;
-  const day = Number(domStr);
+  const day = /^\d+$/.test(domStr) ? Number(domStr) : parseInt(domStr, 10) || 1;
   return day >= 1 && day <= 31 ? day : null;
 }
 

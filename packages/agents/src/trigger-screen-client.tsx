@@ -557,9 +557,12 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
       // only when `parseCronToRecurring` reads it back, and when the day of
       // month it names, if any, is one the select offers as a new choice
       // (1-28). Otherwise neither the cron nor the selection moves, so a day
-      // the select cannot draw is never stored under it. A cron the reader
-      // reads only approximately (a list or a step in the day field) is still
-      // applied as before: the reader's own limit, which its tests pin.
+      // the select cannot draw is never stored under it. A list, a range or a
+      // step in the day field is read by the number it starts with (the 1st
+      // when that is missing or 0), the reader's own approximation, which its
+      // tests pin. Such a cron is applied as given when that day is 1-28
+      // (`0 9 1,15 * *` is stored and draws day 1), and refused when it is 29
+      // or more (`0 9 29,30 * *`).
       if (typeof values.cronExpression === "string") {
         const parsed = parseCronToRecurring(values.cronExpression);
         if (parsed && (parsed.dayOfMonth === undefined || isOfferedDayOfMonth(parsed.dayOfMonth))) {

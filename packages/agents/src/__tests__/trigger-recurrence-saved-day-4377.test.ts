@@ -42,6 +42,25 @@ describe("a saved cron's day of month is read back only when a month has it (cin
     expect(parseCronToRecurring("15 7 */4 * *")!.frequency).toBe("monthly");
   });
 
+  // A list, a range or a step in the day field is read by its first number (the
+  // reader's approximation). That number is held to the same 1-31 bound.
+  for (const cron of ["0 9 32,33 * *", "0 9 45-50 * *", "0 9 99/5 * *", "0 9 32,33 3,6,9,12 *"]) {
+    it(`"${cron}" (its first day number is past 31) is not read back`, () => {
+      expect(parseCronToRecurring(cron)).toBeNull();
+    });
+  }
+
+  for (const [cron, day] of [
+    ["0 9 1,15 * *", 1],
+    ["0 9 29,30 * *", 29],
+  ] as const) {
+    it(`"${cron}" is still read back by its first day, ${day}`, () => {
+      const parsed = parseCronToRecurring(cron);
+      expect(parsed!.frequency).toBe("monthly");
+      expect(parsed!.dayOfMonth).toBe(day);
+    });
+  }
+
   it("an installed cron with day 32 draws no day 32: its rows are the vocabulary's own", () => {
     const schedule = selectionsFromInstalled({
       triggerType: "recurring",
