@@ -235,12 +235,16 @@ const LifecycleCardDeclarationRefusedContext = createContext<boolean>(false);
 // progress plate over a run that was working.
 //
 // So the sibling card says it here, and only this: "on this run, the question
-// with this review task, renderer and field was accepted". It says it only on
-// an accepted submit (`outcome.ok === true`); a refusal, a throw, an "already
-// resolved" race and a gate that moved on say nothing. The panel only ever
-// compares what is on file against it, so a question with any other review
-// task, renderer or field still counts as open. It carries no credential and
-// no answer, and it authorizes nothing.
+// with this review task, renderer and field was answered". It says it AT THE
+// PRESS, before its request, exactly as the panel's own Continue arms its key
+// before its own request (cinatra#4011: on the widget the request stayed
+// in flight until the run had reached its next gate, 32 s later, so a record
+// written on the answer held the working slot only for that one moment). It
+// TAKES IT BACK unless that submit is accepted (`outcome.ok === true`): a
+// refusal, a throw, an "already resolved" race and a gate that moved on leave
+// no record behind. The panel only ever compares what is on file against it,
+// so a question with any other review task, renderer or field still counts as
+// open. It carries no credential and no answer, and it authorizes nothing.
 //
 // ONE REGISTER PER CONVERSATION. The provider below declares one, and a nested
 // declaration (the run panel's own `run_card`) inherits the enclosing one, so
@@ -257,10 +261,12 @@ export type AnsweredHitlQuestion = {
 /** One accepted question per run, compared BY VALUE as a string key. */
 export type AnsweredHitlQuestionRegister = {
   subscribe: (listener: () => void) => () => void;
-  /** The last accepted question's key on this run, or `null`. */
+  /** The key of the question on record for this run, or `null`. */
   answeredOn: (runId: string) => string | null;
-  /** Record that this run's question was accepted. */
+  /** Record that this run's question was answered (from the press on). */
   announceAnswered: (runId: string, question: AnsweredHitlQuestion) => void;
+  /** Take the record back, only if it still names this very question. */
+  withdrawAnswered: (runId: string, question: AnsweredHitlQuestion) => void;
 };
 
 /** The key a question is matched on: its review task, renderer and field. */
@@ -293,6 +299,14 @@ export function createAnsweredHitlQuestionRegister(): AnsweredHitlQuestionRegist
       const key = answeredHitlQuestionKey(question);
       if (answered.get(runId) === key) return;
       answered.set(runId, key);
+      for (const listener of listeners) listener();
+    },
+    withdrawAnswered(runId, question) {
+      if (typeof runId !== "string" || runId.length === 0) return;
+      if (typeof question?.reviewTaskId !== "string" || typeof question.xRenderer !== "string") return;
+      // Only the question it names: a later press's record is not this one's.
+      if (answered.get(runId) !== answeredHitlQuestionKey(question)) return;
+      answered.delete(runId);
       for (const listener of listeners) listener();
     },
   };

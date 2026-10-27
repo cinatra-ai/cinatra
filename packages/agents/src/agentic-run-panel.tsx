@@ -734,10 +734,11 @@ export function AgenticRunPanel({
   // (`runCardOwnsLifecycleCopy`), so this panel's own submit never runs there
   // and the key above was never armed: on the widget the panel drew its
   // "pending approval" plate over a run that was working. That card now records
-  // the question it had ACCEPTED in the conversation's register, and it counts
-  // here exactly as the key above does: the same review task, renderer and
-  // field, or nothing. Only where the sibling owns the Continue; the run page
-  // keeps its own submit as the one source.
+  // the question in the conversation's register at the press, and takes it back
+  // unless its submit is accepted, as the key above is armed and released; it
+  // counts here exactly as the key above does: the same review task, renderer
+  // and field, or nothing. Only where the sibling owns the Continue; the run
+  // page keeps its own submit as the one source.
   const siblingAnsweredKeyOnFile = useAnsweredHitlQuestionKey(runId);
   const siblingAnsweredKey = runCardOwnsLifecycleCopy(ambientLifecycleHost)
     ? null

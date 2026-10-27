@@ -1147,6 +1147,20 @@ export function AgentHitlScreenCard({
       // same silence the Continue's `blocked` state draws.
       if (!auth && !cookieSession) return;
       setSubmitting(true);
+      // THE RUN PANEL BESIDE THIS CARD IS TOLD AT THE PRESS (cinatra#4375,
+      // cinatra#4011). Inside a conversation this card owns the question
+      // and its Continue, so the panel learns of the answer only here. It is
+      // told BEFORE the request, exactly as the panel's own Continue arms its
+      // key before its own request: the request can stay in flight until the
+      // run has reached its next gate (32 s on the widget), and the panel must
+      // hold its working slot for all of that, not only after the answer. A
+      // submit that is not accepted takes it back below.
+      const answeredQuestion = {
+        reviewTaskId: gate.reviewTaskId,
+        xRenderer: gate.xRenderer,
+        fieldName: gate.fieldName,
+      };
+      answeredRegister?.announceAnswered(runId, answeredQuestion);
       let landed: boolean;
       // ACCEPTED, as opposed to LANDED (cinatra#4375): only this submit's own
       // accepted answer. "Already resolved" and "no longer pending" settle the
@@ -1190,18 +1204,12 @@ export function AgentHitlScreenCard({
           );
         }
       }
+      // NOT ACCEPTED, NOT ANSWERED: the record the press made is taken back
+      // before the card draws its Continue again, so the panel returns to the
+      // question. An accepted answer keeps it, and the panel holds its working
+      // slot until the server resumes, exactly as after its own Continue.
+      if (!accepted) answeredRegister?.withdrawAnswered(runId, answeredQuestion);
       setSubmitting(false);
-      // THE RUN PANEL BESIDE THIS CARD IS TOLD (cinatra#4375). Inside a
-      // conversation this card owns the question and its Continue, so the panel
-      // learns of an accepted answer only here; it then holds its working slot
-      // until the server resumes, exactly as after its own Continue.
-      if (accepted) {
-        answeredRegister?.announceAnswered(runId, {
-          reviewTaskId: gate.reviewTaskId,
-          xRenderer: gate.xRenderer,
-          fieldName: gate.fieldName,
-        });
-      }
       // WHAT WAS TYPED SURVIVES A REFUSAL and is cleared by a landing. A
       // refusal leaves the screen exactly as it was, with the answer in hand.
       if (landed) setBuffered(EMPTY_BUFFER);

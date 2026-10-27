@@ -10,6 +10,13 @@
  * "pending approval" progress plate while the stream and the row still carried
  * the answered question.
  *
+ * AND FROM THE PRESS, NOT FROM THE ANSWER (cinatra#4011). On the widget
+ * the Continue's request stayed in flight until the run had reached its next
+ * gate, 32 s later, so a working slot that waited for the answer stood only for
+ * the moment between the answer and that gate. The card now records the
+ * question at the press and takes the record back unless its submit is
+ * accepted, as the panel's own Continue arms and releases its key.
+ *
  * Mounted as the conversation view mounts them (`chat-messages-view.tsx`): the
  * real `AgentHitlScreenCard` and the real `AgenticRunPanel` side by side under
  * one host declaration. Only the server, stream and slot-reader ports are
@@ -354,10 +361,14 @@ async function blockedOnTheQuestion(): Promise<HTMLButtonElement> {
 
 /**
  * Press the sibling's Continue, let its submit land with the arm's answer, and
- * return every reading of the column from the landing on: one per DOM change,
- * then a few more over the panel's own ticks.
+ * return the reading taken while the submit was still in flight (`before`),
+ * every reading of the column from the landing on (`after`: one per DOM change,
+ * then a few more over the panel's own ticks) and the tick readings alone
+ * (`settled`).
  */
-async function pressSiblingContinue(button: HTMLButtonElement): Promise<{ before: Reading; after: Reading[] }> {
+async function pressSiblingContinue(
+  button: HTMLButtonElement,
+): Promise<{ before: Reading; after: Reading[]; settled: Reading[] }> {
   await act(async () => {
     button.click();
     await flush();
@@ -376,31 +387,56 @@ async function pressSiblingContinue(button: HTMLButtonElement): Promise<{ before
     await flush();
   });
   after.push(readColumn());
+  const settled: Reading[] = [];
   for (let i = 0; i < 4; i += 1) {
     await act(async () => {
       await new Promise((r) => setTimeout(r, 700));
     });
-    after.push(readColumn());
+    const reading = readColumn();
+    after.push(reading);
+    settled.push(reading);
   }
   observer.disconnect();
-  return { before, after };
+  return { before, after, settled };
 }
 
 function told(readings: Reading[]): string {
   return readings.map((r) => (r.placeholder ? `placeholder(${r.slot})` : r.plate ? "plate" : `other(${r.slot})`)).join(", ");
 }
 
-function expectWorkingFromTheFirstReading(before: Reading, after: Reading[]): void {
-  expect(before.plate, "before the submit landed the panel stood on the plate").toBe(true);
+function isWorking(r: Reading): boolean {
+  return r.placeholder && r.slot === "working" && !r.plate;
+}
+
+/**
+ * THE WORKING SLOT STANDS FROM THE PRESS (cinatra#4011). The answer's
+ * request is in flight for as long as the server takes to resume the run - on
+ * the widget it answered only when the run had reached its next gate, 32 s
+ * later - so the working slot cannot wait for the answer: it stands from the
+ * press, exactly as the run page's own Continue arms its key before its
+ * request, and it is still standing when the answer lands.
+ */
+function expectWorkingFromThePress(before: Reading, after: Reading[]): void {
+  expect(
+    isWorking(before),
+    `while the sibling's submit was in flight the panel did not draw the working slot (${told([before])})`,
+  ).toBe(true);
   expect(after.length).toBeGreaterThan(0);
   expect(
-    after[0].placeholder && after[0].slot === "working" && !after[0].plate,
+    isWorking(after[0]),
     `the first reading after the sibling's submit landed is not the working slot (${told(after)})`,
   ).toBe(true);
   expect(
     after.filter((r) => r.plate || !r.placeholder).length,
     `a reading after the landing left the working slot (${told(after)})`,
   ).toBe(0);
+}
+
+/** The refused card's Continue is a Continue again, not "Continuing...". */
+function expectContinueStandsAgain(): void {
+  const button = document.querySelector<HTMLButtonElement>(CARD_CONTINUE);
+  expect(button, "the sibling card's Continue is gone after the refusal").not.toBeNull();
+  expect(button!.textContent ?? "").not.toContain("Continuing");
 }
 
 function expectStillBlocked(after: Reading[]): void {
@@ -421,7 +457,7 @@ describe("AC 1: the sibling card's Continue on the widget holds the working slot
     expect(approveReviewTask).not.toHaveBeenCalled();
     expect(streamState.status).toBe("pending_approval");
     expect(streamState.interruptContext).toEqual(interrupt(ANSWERED));
-    expectWorkingFromTheFirstReading(before, after);
+    expectWorkingFromThePress(before, after);
   }, 60_000);
 });
 
@@ -431,9 +467,13 @@ describe("AC 2: refusals stay blocked", () => {
       brokerSubmit = answer;
       mountConversation("site_widget");
       const button = await blockedOnTheQuestion();
-      const { after } = await pressSiblingContinue(button);
+      const { before, settled } = await pressSiblingContinue(button);
       expect(requests.some((u) => u.endsWith("/hitl-screen/submit"))).toBe(true);
-      expectStillBlocked(after);
+      // In flight the press holds the working slot, as the run page's own
+      // Continue does; the refusal takes it back.
+      expect(isWorking(before), `in flight (${told([before])})`).toBe(true);
+      expectStillBlocked(settled);
+      expectContinueStandsAgain();
     }, 60_000);
   }
 
@@ -444,9 +484,10 @@ describe("AC 2: refusals stay blocked", () => {
       cookieDoor.answer = answer;
       mountConversation("chat_thread");
       const button = await blockedOnTheQuestion();
-      const { after } = await pressSiblingContinue(button);
+      const { before, settled } = await pressSiblingContinue(button);
       expect(approveReviewTask).toHaveBeenCalled();
-      expectStillBlocked(after);
+      expect(isWorking(before), `in flight (${told([before])})`).toBe(true);
+      expectStillBlocked(settled);
     }, 60_000);
   }
 
@@ -487,8 +528,8 @@ describe("AC 2: refusals stay blocked", () => {
     rowAnswer = rowWith({ reviewTaskId: "", xRenderer: RENDERER, fieldName: null });
     // Two of the panel's own ticks read the changed row before the landing.
     await rowReads(2);
-    const { after } = await pressSiblingContinue(button);
-    expectStillBlocked(after);
+    const { before, after } = await pressSiblingContinue(button);
+    expectStillBlocked([before, ...after]);
   }, 60_000);
 });
 
@@ -518,9 +559,9 @@ describe("AC 3: another question stays open", () => {
       const button = await blockedOnTheQuestion();
       // The panel has read the row's own question before the Continue lands.
       await rowReads(1);
-      const { after } = await pressSiblingContinue(button);
+      const { before, after } = await pressSiblingContinue(button);
       expect(requests.some((u) => u.endsWith("/hitl-screen/submit"))).toBe(true);
-      expectStillBlocked(after);
+      expectStillBlocked([before, ...after]);
     }, 60_000);
   }
 });
@@ -532,8 +573,50 @@ describe("AC 4: the chat host, with the same sibling-Continue setup", () => {
     const { before, after } = await pressSiblingContinue(button);
     expect(approveReviewTask).toHaveBeenCalledTimes(1);
     expect(requests.some((u) => u.endsWith("/hitl-screen/submit"))).toBe(false);
-    expectWorkingFromTheFirstReading(before, after);
+    expectWorkingFromThePress(before, after);
   }, 60_000);
+});
+
+describe("AC 5: the working slot stands while the sibling's submit is in flight (cinatra#4011)", () => {
+  // Measured on the widget: the Continue's request stayed
+  // in flight from the press until the run had reached its next gate, 32 s later;
+  // for all of it the card read "Continuing..." and the panel its "Awaiting input"
+  // plate, and the working slot stood only for the moment between the answer and
+  // the next gate. The slot must stand from the press.
+  for (const host of ["site_widget", "chat_thread"] as const) {
+    it(`${host}: from the press, over the panel's own ticks, the working slot with its placeholder stands while the answer is not back`, async () => {
+      mountConversation(host);
+      const button = await blockedOnTheQuestion();
+      await act(async () => {
+        button.click();
+        await flush();
+      });
+      await waitFor(() => {
+        const sent =
+          requests.some((u) => u.endsWith("/hitl-screen/submit")) || approveReviewTask.mock.calls.length > 0;
+        if (!sent) throw new Error("the sibling's Continue issued no submit");
+      });
+      const inFlight: Reading[] = [readColumn()];
+      if (host === "site_widget") await rowReads(2);
+      for (let i = 0; i < 4; i += 1) {
+        await act(async () => {
+          await new Promise((r) => setTimeout(r, 700));
+        });
+        inFlight.push(readColumn());
+      }
+      // The submit really was still in flight for every reading above.
+      expect(document.querySelector(CARD_CONTINUE)?.textContent ?? "").toContain("Continuing");
+      expect(
+        inFlight.filter((r) => !isWorking(r)).length,
+        `a reading while the sibling's submit was in flight was not the working slot (${told(inFlight)})`,
+      ).toBe(0);
+      await act(async () => {
+        releaseSubmit();
+        await flush();
+      });
+      expect(isWorking(readColumn()), "the accepted answer took the working slot away").toBe(true);
+    }, 60_000);
+  }
 });
 
 describe("the conversation's answered-question register", () => {
@@ -555,6 +638,24 @@ describe("the conversation's answered-question register", () => {
     expect(answeredHitlQuestionKey({ ...ANSWERED, xRenderer: "other" })).not.toBe(answeredHitlQuestionKey(ANSWERED));
     expect(answeredHitlQuestionKey({ ...ANSWERED, fieldName: "f" })).not.toBe(answeredHitlQuestionKey(ANSWERED));
     expect(heard).toHaveBeenCalledTimes(1);
+  });
+
+  it("a withdrawal takes back only the question it names, and is heard only when it changes the record", () => {
+    const register = createAnsweredHitlQuestionRegister();
+    const heard = vi.fn();
+    register.subscribe(heard);
+    register.announceAnswered(RUN_ID, ANSWERED);
+    expect(heard).toHaveBeenCalledTimes(1);
+    // Another question, another run, or nothing on file: the record stands.
+    register.withdrawAnswered(RUN_ID, { ...ANSWERED, fieldName: "destination" });
+    register.withdrawAnswered("run-other", ANSWERED);
+    expect(register.answeredOn(RUN_ID)).toBe(answeredHitlQuestionKey(ANSWERED));
+    expect(heard).toHaveBeenCalledTimes(1);
+    register.withdrawAnswered(RUN_ID, ANSWERED);
+    expect(register.answeredOn(RUN_ID)).toBeNull();
+    expect(heard).toHaveBeenCalledTimes(2);
+    register.withdrawAnswered(RUN_ID, ANSWERED);
+    expect(heard).toHaveBeenCalledTimes(2);
   });
 
   it("a nested host declaration shares the enclosing conversation's register", () => {
