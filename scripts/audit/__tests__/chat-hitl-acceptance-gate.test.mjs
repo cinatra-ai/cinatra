@@ -71,6 +71,19 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."
 const GATE = join(REPO_ROOT, "scripts", "audit", "chat-hitl-acceptance-gate.mjs");
 const manifest = () => JSON.parse(readFileSync(MANIFEST_PATH, "utf8"));
 
+// One re-ratification entry of the anchor contract's note: from its own head
+// (for example "RE-RATIFIED 2026-10-23 (cinatra#4308") up to the head of the
+// next entry, or to the end of the note. An assertion about one entry reads
+// only that entry, so a later entry that repeats a phrase cannot satisfy it.
+const NOTE_ENTRY_HEAD = /RE-RATIFIED (?:AGAIN )?\d{4}-\d{2}-\d{2} \(/g;
+function noteEntry(note, head) {
+  const start = note.indexOf(head);
+  if (start === -1) return "";
+  NOTE_ENTRY_HEAD.lastIndex = start + head.length;
+  const next = NOTE_ENTRY_HEAD.exec(note);
+  return note.slice(start, next ? next.index : note.length);
+}
+
 /** A minimal well-formed manifest: every criterion, all MAPPED to one real proof. */
 function wellFormed() {
   const proof = {
@@ -282,13 +295,13 @@ describe("the REAL manifest", () => {
     // still MISSING as a criterion, and the gap now names each remaining cell
     // with the shipped line that blocks it, which is what this assertion pins.
     expect(unproven.map((r) => r.gap).join("\n")).toMatch(/CARD AXIS PARTIAL/);
-    // NOT pinned here: row 15's gap also still says trigger_schedule_proposal
-    // "is NOT DRAWN on main" (item (a) of its own STILL-ABSENT list). That
-    // sentence is stale as of this same commit — the card IS drawn — but row 15
-    // is untouched by this round (it asks for the S0 spec-matrix capture sweep
-    // specifically, a different round's work), and this suite must not pin a
-    // sentence it knows to be false. See the manifest row itself for the open
-    // follow-up this leaves.
+    // Row 15's gap no longer says that trigger_schedule_proposal "is NOT DRAWN
+    // on main". Item (a) of its STILL ABSENT list now says that the obstacle it
+    // used to name is gone (the card is drawn and dispatched on main) and that
+    // what is owed is the picture. The row stays MISSING because it asks for the
+    // S0 spec-matrix capture sweep, a different round's work. This suite pins
+    // only that the false sentence does not come back.
+    expect(manifest().rows[14].gap).not.toMatch(/is NOT DRAWN on main/);
     // The line the CLI would print, spelled out here so a regression in either
     // count is still legible as the sentence a reader sees.
     expect(`${total - unproven.length}/${total} criteria proven, ${unproven.length} MISSING, ${partial.length} partial`).toBe(
@@ -406,7 +419,20 @@ describe("the REAL manifest", () => {
       expect(contractNote, surface).toContain(surface);
     }
     expect(m.specCommitDrift.differs).toMatch(/No recorded anchor changed/);
-    expect(contractNote).toMatch(/RE-RATIFIED 2026-10-27 \(cinatra#4386[^]*NO RECORDED ANCHOR CHANGED/);
+    const entry1027 = noteEntry(contractNote, "RE-RATIFIED 2026-10-27 (cinatra#4386");
+    expect(entry1027).toMatch(/NO RECORDED ANCHOR CHANGED/);
+    // The quarter and year interval boxes removed in §VI carry `style`, and
+    // eight of them `role="combobox"` and an `svg` chevron, but no `data-*`
+    // attribute. Both records say exactly that: no recorded anchor attribute
+    // and no data attribute moves. Neither claims that no attribute moves.
+    for (const [where, text] of [
+      ["differs", m.specCommitDrift.differs],
+      ["the 2026-10-27 note entry", entry1027],
+    ]) {
+      expect(text, where).not.toMatch(/adds or removes no attribute/);
+      expect(text, where).toContain("none carries a `data-*` attribute");
+      expect(text, where).toContain("adds or removes no recorded anchor attribute and no data attribute");
+    }
     // An adoption APPENDS its entry to the note: the newest entry stands last.
     expect(contractNote.lastIndexOf("RE-RATIFIED 2026-10-27 (cinatra#4386")).toBeGreaterThan(
       contractNote.lastIndexOf("RE-RATIFIED 2026-10-23 (cinatra#4308"),
@@ -423,7 +449,7 @@ describe("the REAL manifest", () => {
     ]) {
       expect(contractNote, surface).toContain(surface);
     }
-    expect(contractNote).toMatch(/RE-RATIFIED 2026-10-23 \(cinatra#4308[^]*NO RECORDED ANCHOR CHANGED/);
+    expect(noteEntry(contractNote, "RE-RATIFIED 2026-10-23 (cinatra#4308")).toMatch(/NO RECORDED ANCHOR CHANGED/);
     for (const surface of [
       "email-gate-sender-field",
       "email-gate-follow-up-cadence-field",
@@ -433,7 +459,18 @@ describe("the REAL manifest", () => {
     ]) {
       expect(contractNote, surface).toContain(surface);
     }
-    expect(contractNote).toMatch(/RE-RATIFIED 2026-10-22 \(cinatra#4308[^]*NO RECORDED ANCHOR CHANGED/);
+    expect(noteEntry(contractNote, "RE-RATIFIED 2026-10-22 (cinatra#4308")).toMatch(/NO RECORDED ANCHOR CHANGED/);
+    // The mutants: each earlier entry that loses the phrase must fail its own
+    // check, although later entries still carry it. The unbounded form the
+    // checks above replaced, `<head>[^]*NO RECORDED ANCHOR CHANGED`, still
+    // passes on each mutant, which is why the checks read one entry only.
+    for (const head of ["RE-RATIFIED 2026-10-22 (cinatra#4308", "RE-RATIFIED 2026-10-23 (cinatra#4308"]) {
+      const entry = noteEntry(contractNote, head);
+      const mutant = contractNote.replace(entry, entry.replaceAll("NO RECORDED ANCHOR CHANGED", "(phrase removed)"));
+      expect(mutant, head).not.toBe(contractNote);
+      expect(noteEntry(mutant, head), head).not.toMatch(/NO RECORDED ANCHOR CHANGED/);
+      expect(mutant.slice(mutant.indexOf(head)), head).toMatch(/NO RECORDED ANCHOR CHANGED/);
+    }
     // The two Sign in buttons of the added section carry a `data-action` of
     // their own. The contract records the bare capture selector `[data-action]`,
     // which names no value and so reads both of them: the drift record names
