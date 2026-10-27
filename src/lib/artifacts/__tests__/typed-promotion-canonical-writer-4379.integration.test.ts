@@ -29,8 +29,12 @@
  * per run; setup refuses a name that exists and teardown removes only what the
  * run created), the schema built from the CANONICAL
  * `buildCreateStoreSchemaQueries` DDL — never hand-rolled DDL, so every
- * constraint is the production one. The Better Auth `public."organization"`
- * table must already exist (scripts/apply-public-schema.mjs, as CI provisions it). Because `postgresSchema` is a module-load
+ * constraint is the production one. That DDL runs with the search path set to
+ * the run's schema only; a statement that names `public` (the slug columns,
+ * indexes and triggers on the Better Auth tables) is left out, and one that
+ * names any other schema of the database fails the setup. The tier creates
+ * nothing in public: the Better Auth tables the DDL names must already exist
+ * (scripts/apply-public-schema.mjs, as CI provisions them). Because `postgresSchema` is a module-load
  * const, every app module is dynamically imported in `beforeAll` AFTER the env
  * is set.
  */
@@ -67,8 +71,10 @@ const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 if (process.env.CINATRA_TYPED_PROMOTION_WRITER_REALDB === "1" && !HAS_REAL_DB) {
   throw new Error(
     "this tier exists to run against a real Postgres, and it was asked to run: " +
-      "set SUPABASE_DB_URL to a scratch database. It builds and drops its own " +
-      "schema, so any throwaway database will do.",
+      "set SUPABASE_DB_URL to a scratch database that already holds the Better Auth " +
+      "public tables (apply them with scripts/apply-public-schema.mjs, as the CI job " +
+      "does). The tier creates and drops only its own schema and its own " +
+      "organization row there, and creates nothing in public.",
   );
 }
 
@@ -228,56 +234,69 @@ function rowOf(objectId: string) {
 /** What THIS run created, so teardown removes exactly that and nothing else. */
 const owned = { schema: false, org: false };
 
+const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
 /**
- * Remove what this run created. EVERY step is tried, whatever an earlier step
- * did, and every failure is collected and thrown together: a teardown that
- * swallowed a failed DROP or DELETE would report green while leaving state
- * behind. Idempotent (a step that succeeded is not repeated), so setup's own
- * failure path and `afterAll` can both call it.
+ * One cleanup step on a connection of its OWN, so a failed connect, query or
+ * close of one step never keeps the next step from being tried. Every failure
+ * is pushed to `errors`; the result says whether the statement ran.
  */
-async function cleanUpOwned(): Promise<void> {
-  if (!owned.schema && !owned.org) return;
-  const errors: unknown[] = [];
+async function cleanupStep(label: string, sql: string, params: unknown[], errors: Error[]): Promise<boolean> {
   const client = new Client({ connectionString: DB_URL });
-  let connected = false;
   try {
     await client.connect();
-    connected = true;
   } catch (err) {
-    errors.push(err);
+    errors.push(new Error(`${label}: connect failed: ${errText(err)}`));
+    return false;
   }
-  if (connected) {
-    if (owned.schema) {
-      try {
-        await client.query(`DROP SCHEMA "${TEST_SCHEMA}" CASCADE`);
-        owned.schema = false;
-      } catch (err) {
-        errors.push(err);
-      }
-    }
-    if (owned.org) {
-      try {
-        await client.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG]);
-        owned.org = false;
-      } catch (err) {
-        errors.push(err);
-      }
-    }
-    try {
-      await client.end();
-    } catch (err) {
-      errors.push(err);
-    }
+  let ran = false;
+  try {
+    await client.query(sql, params);
+    ran = true;
+  } catch (err) {
+    errors.push(new Error(`${label}: ${errText(err)}`));
+  }
+  try {
+    await client.end();
+  } catch (err) {
+    errors.push(new Error(`${label}: close failed: ${errText(err)}`));
+  }
+  return ran;
+}
+
+/**
+ * Remove what this run created. EVERY step is tried, whatever an earlier step
+ * did (each on its own connection), and every failure — a connect, a statement
+ * or a close — is collected and thrown together: a teardown that swallowed one
+ * would report green while leaving state behind. Idempotent (a step that ran is
+ * not repeated), so setup's own failure path and `afterAll` can both call it.
+ */
+async function cleanUpOwned(): Promise<void> {
+  const errors: Error[] = [];
+  if (owned.schema && (await cleanupStep(`drop schema ${TEST_SCHEMA}`, `DROP SCHEMA "${TEST_SCHEMA}" CASCADE`, [], errors))) {
+    owned.schema = false;
+  }
+  if (owned.org && (await cleanupStep(`delete organization ${ORG}`, `DELETE FROM public."organization" WHERE id = $1`, [ORG], errors))) {
+    owned.org = false;
   }
   if (errors.length > 0) {
     throw new AggregateError(
       errors,
       `cinatra#4379 teardown failed in ${errors.length} step(s); left behind: ` +
         `${owned.schema ? `schema ${TEST_SCHEMA} ` : ""}${owned.org ? `organization ${ORG}` : ""}`.trim() +
-        `: ${errors.map((e) => (e instanceof Error ? e.message : String(e))).join(" | ")}`,
+        `: ${errors.map((e) => e.message).join(" | ")}`,
     );
   }
 }
+
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/**
+ * Whether SQL text names `schema` as a qualifier (`schema.x` or `"schema".x`).
+ * A qualifier never follows a dot, slash, colon, `@` or hyphen, so a host name
+ * such as `registry.<schema>.ai` inside a literal does not count.
+ */
+const namesSchema = (text: string, schema: string): boolean =>
+  new RegExp(`(^|[^\\w$".\\/:@-])"?${escapeRe(schema)}"?\\s*\\.`, "i").test(text);
 
 beforeAll(async () => {
   if (!HAS_REAL_DB) return;
@@ -287,33 +306,78 @@ beforeAll(async () => {
   const client = new Client({ connectionString: DB_URL });
   await client.connect();
   try {
+    const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
+    const canonical = buildCreateStoreSchemaQueries(TEST_SCHEMA);
+
+    // The tier creates nothing in public. It reads the Better Auth tables the CI
+    // job (and any lane) provisions with scripts/apply-public-schema.mjs, and
+    // the organization-write kernel reads `public."organization"`: every public
+    // table the canonical DDL names must already exist, or nothing is created.
+    const publicTables = [
+      ...new Set([
+        "organization",
+        ...canonical.flatMap((q) => [...q.text.matchAll(/\bpublic\."([A-Za-z_][A-Za-z0-9_]*)"/g)].map((m) => m[1])),
+      ]),
+    ].sort();
+    const missing: string[] = [];
+    for (const table of publicTables) {
+      const found = await client.query(`SELECT to_regclass($1) AS t`, [`public."${table}"`]);
+      if (!(found.rows[0] as { t: string | null }).t) missing.push(`public."${table}"`);
+    }
+    if (missing.length > 0) {
+      throw new Error(
+        `this tier needs the Better Auth tables ${missing.join(", ")}: provision them with ` +
+          "scripts/apply-public-schema.mjs (the CI job does) before running the tier",
+      );
+    }
+    // Every other schema of this database is out of bounds for the DDL (another
+    // run's schema, the application's own): a statement naming one fails setup.
+    const others = (
+      await client.query(
+        `SELECT nspname FROM pg_namespace
+          WHERE nspname NOT IN ('public', 'information_schema') AND nspname NOT LIKE 'pg\\_%'`,
+      )
+    ).rows
+      .map((r) => (r as { nspname: string }).nspname)
+      .filter((n) => n !== TEST_SCHEMA);
+
     // NEVER a drop here: this run's schema is new. Without IF NOT EXISTS the
     // CREATE itself refuses a name that already exists, so setup can never adopt
     // or destroy a schema another run (or anyone) owns.
     await client.query(`CREATE SCHEMA "${TEST_SCHEMA}"`);
     owned.schema = true;
-    const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
-    for (const qy of buildCreateStoreSchemaQueries(TEST_SCHEMA)) {
+    // Unqualified names resolve to this run's schema only (pg_catalog is always
+    // searched first, for the built-in types and functions).
+    await client.query(`SET search_path TO "${TEST_SCHEMA}"`);
+    let ran = 0;
+    const leftOut: string[] = [];
+    for (const qy of canonical) {
       const head = qy.text.trim().slice(0, 6).toUpperCase();
       if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S") continue;
+      const other = others.find((n) => namesSchema(qy.text, n));
+      if (other !== undefined) {
+        throw new Error(
+          `cinatra#4379 setup refused a canonical statement that names schema "${other}" ` +
+            `(the tier runs DDL on its own schema only): ${qy.text.trim().split("\n")[0]}`,
+        );
+      }
+      // The slug columns, indexes and triggers on the Better Auth tables: shared
+      // objects of every run and of the application. Never run here.
+      if (namesSchema(qy.text, "public")) {
+        leftOut.push(qy.text.trim().split("\n")[0]);
+        continue;
+      }
       try {
         await client.query(qy.text, (qy as { values?: unknown[] }).values as never[]);
+        ran++;
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (!msg.includes("does not exist")) throw err;
+        if (!errText(err).includes("does not exist")) throw err;
       }
     }
-    // The org-write kernel's guarded batch reads the organization's archive state
-    // before it lets any statement run. The table is the Better Auth one, which
-    // the CI job (and any lane) provisions with scripts/apply-public-schema.mjs;
-    // this tier never creates or drops a table outside its own schema.
-    const table = await client.query(`SELECT to_regclass('public."organization"') AS t`);
-    if (!(table.rows[0] as { t: string | null }).t) {
-      throw new Error(
-        'this tier needs the Better Auth table public."organization": provision it with ' +
-          "scripts/apply-public-schema.mjs (the CI job does) before running the tier",
-      );
-    }
+    console.info(
+      `cinatra#4379 setup: ${ran} canonical DDL statements ran in ${TEST_SCHEMA}; ` +
+        `${leftOut.length} left out because they name public: ${leftOut.join(" | ")}`,
+    );
     // This run's own row: no ON CONFLICT, so a row that already exists is refused,
     // never adopted and later deleted.
     await client.query(
@@ -323,12 +387,25 @@ beforeAll(async () => {
     );
     owned.org = true;
   } catch (err) {
-    await client.end().catch(() => {});
-    // Setup failed part-way: remove what it already created, and report both.
+    // Setup failed part-way: close this client and remove what setup already
+    // created, and report every failure, never only the first.
+    const failures: unknown[] = [err];
+    try {
+      await client.end();
+    } catch (closeErr) {
+      failures.push(closeErr);
+    }
     try {
       await cleanUpOwned();
     } catch (cleanupErr) {
-      throw new AggregateError([err, cleanupErr], "cinatra#4379 setup failed, and so did its cleanup");
+      failures.push(cleanupErr);
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures,
+        `cinatra#4379 setup failed, and so did ${failures.length - 1} of its cleanup step(s): ` +
+          failures.map(errText).join(" | "),
+      );
     }
     throw err;
   }
@@ -345,7 +422,8 @@ beforeAll(async () => {
 // On every exit road the runner reaches (cases passed, failed or skipped after a
 // failed setup) this removes what the run created, and fails loudly if it cannot.
 // A killed process runs no hook at all; its leftovers carry this run's own random
-// name, so they never collide with a later run.
+// name (48 random bits). A later run that drew the same name would be refused at
+// CREATE SCHEMA or at its organization insert; it would never adopt them.
 afterAll(async () => {
   if (!HAS_REAL_DB) return;
   delete (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized;
