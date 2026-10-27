@@ -551,7 +551,7 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
     // card that cannot exist. Save changes is pinned where it belongs instead:
     // in the one-card gate's ratified anchor set for this kind, and in the card
     // suite's own settled cases.
-    decisionControls: Object.freeze(['[data-action="confirm-schedule-proposal"]']),
+    decisionControls: Object.freeze(['[data-action="confirm-schedule -> scheduled"]']),
     foreignHostSubtrees: RUN_CARD_SUBTREES,
     enforcer: "chat-hitl-one-card-gate",
   },
