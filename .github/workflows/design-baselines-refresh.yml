@@ -103,7 +103,15 @@ jobs:
     - name: Provision Better Auth tables (public schema)
       run: node scripts/apply-public-schema.mjs
     - name: Build (standalone production server)
-      run: pnpm build
+      # One design build at a time on a self-hosted machine, as in
+      # design-visual-verify.yml: scripts/ci/design-build-host-lock.sh waits
+      # for the machine's lock (20 minutes at most, inside this job's 70), then
+      # builds; it builds without the lock when it cannot take one, and does
+      # nothing on a GitHub-hosted runner.
+      env:
+        DESIGN_BUILD_LOCK_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        DESIGN_BUILD_LOCK_WAIT_SECONDS: '1200'
+      run: bash scripts/ci/design-build-host-lock.sh pnpm build
     - name: Derive CINATRA_CONFORMANCE_SEED_TOKEN (throwaway, per-run)
       run: |
         set -euo pipefail
