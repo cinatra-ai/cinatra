@@ -30,11 +30,18 @@
  * run created), the schema built from the CANONICAL
  * `buildCreateStoreSchemaQueries` DDL — never hand-rolled DDL, so every
  * constraint is the production one. That DDL runs with the search path set to
- * the run's schema only; a statement that names `public` (the slug columns,
- * indexes and triggers on the Better Auth tables) is left out, and one that
- * names any other schema of the database fails the setup. The tier creates
- * nothing in public: the Better Auth tables the DDL names must already exist
- * (scripts/apply-public-schema.mjs, as CI provisions them). Because `postgresSchema` is a module-load
+ * the run's schema only, and a statement whose text names `public` (the slug
+ * columns, indexes and triggers on the Better Auth tables) is left out. That
+ * leave-out is LEXICAL, over the canonical DDL as it is today. The boundary is
+ * SEMANTIC: the catalog of every schema outside the run (except the system
+ * schemas and other runs of this tier) is read before setup and compared after
+ * setup, after the cases and after teardown, and a change there fails the run.
+ * It reads schemas, relations, columns, constraints, indexes, triggers,
+ * functions and types; a change of any other kind (a column default, a
+ * privilege, row security or a policy, a comment, an extension, a row) is not
+ * seen. The check detects a change; it does not prevent one. The Better Auth tables the
+ * DDL names must already exist (scripts/apply-public-schema.mjs, as CI
+ * provisions them). Because `postgresSchema` is a module-load
  * const, every app module is dynamically imported in `beforeAll` AFTER the env
  * is set.
  */
@@ -73,8 +80,10 @@ if (process.env.CINATRA_TYPED_PROMOTION_WRITER_REALDB === "1" && !HAS_REAL_DB) {
     "this tier exists to run against a real Postgres, and it was asked to run: " +
       "set SUPABASE_DB_URL to a scratch database that already holds the Better Auth " +
       "public tables (apply them with scripts/apply-public-schema.mjs, as the CI job " +
-      "does). The tier creates and drops only its own schema and its own " +
-      "organization row there, and creates nothing in public.",
+      "does). The tier is meant to create and drop only its own schema and its own " +
+      "organization row there, and it fails when it sees a change outside its schema " +
+      "in the catalog it reads (relations, columns, constraints, indexes, triggers, " +
+      "functions, types).",
   );
 }
 
@@ -289,14 +298,98 @@ async function cleanUpOwned(): Promise<void> {
   }
 }
 
-const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /**
- * Whether SQL text names `schema` as a qualifier (`schema.x` or `"schema".x`).
- * A qualifier never follows a dot, slash, colon, `@` or hyphen, so a host name
- * such as `registry.<schema>.ai` inside a literal does not count.
+ * Whether SQL text names `public` as a qualifier (`public.x` or `"public".x`).
+ * LEXICAL, and used only to leave statements out: a form it misses (a comment
+ * between the tokens, for one) runs, and the catalog check below fails the run
+ * only if that statement changed a kind of object the check reads. A qualifier
+ * never follows a dot, slash, colon, `@` or hyphen.
  */
-const namesSchema = (text: string, schema: string): boolean =>
-  new RegExp(`(^|[^\\w$".\\/:@-])"?${escapeRe(schema)}"?\\s*\\.`, "i").test(text);
+const namesPublic = (text: string): boolean => /(^|[^\w$".\/:@-])"?public"?\s*\./i.test(text);
+
+/**
+ * The catalog of every schema outside this run: schemas, relations (tables,
+ * indexes, sequences, views), columns, constraints, indexes, triggers, functions
+ * and types. Left out: the system schemas (`pg_*`, `information_schema`) and the
+ * schemas of runs of this tier (`cinatra_test_tpw4379_*`, this run's included),
+ * which concurrent runs create and drop. Read on a connection whose search path
+ * is `pg_catalog` only, so every printed name is schema-qualified the same way.
+ * Not read: column defaults, privileges, row security and policies, comments,
+ * extensions and rows. The `"char"` columns are cast to text (`text || "char"`
+ * is ambiguous in Postgres).
+ */
+const CATALOG_OUTSIDE_RUN = `
+  WITH ns AS (
+    SELECT oid, nspname FROM pg_namespace
+     WHERE nspname NOT LIKE 'pg\\_%' AND nspname <> 'information_schema'
+       AND nspname NOT LIKE 'cinatra\\_test\\_tpw4379\\_%'
+  )
+  SELECT x FROM (
+    SELECT 'schema ' || ns.nspname AS x FROM ns
+    UNION ALL SELECT 'rel ' || ns.nspname || '.' || c.relname || ' ' || c.relkind::text
+      FROM pg_class c JOIN ns ON ns.oid = c.relnamespace
+    UNION ALL SELECT 'col ' || ns.nspname || '.' || c.relname || '.' || a.attname || ' ' ||
+        format_type(a.atttypid, a.atttypmod) || CASE WHEN a.attnotnull THEN ' not null' ELSE '' END
+      FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN ns ON ns.oid = c.relnamespace
+     WHERE a.attnum > 0 AND NOT a.attisdropped
+    UNION ALL SELECT 'con ' || ns.nspname || '.' || co.conname || ' ' || pg_get_constraintdef(co.oid)
+      FROM pg_constraint co JOIN ns ON ns.oid = co.connamespace
+    UNION ALL SELECT 'idx ' || ns.nspname || '.' || c.relname || ' ' || pg_get_indexdef(c.oid)
+      FROM pg_class c JOIN ns ON ns.oid = c.relnamespace WHERE c.relkind IN ('i', 'I')
+    UNION ALL SELECT 'trg ' || ns.nspname || '.' || c.relname || '.' || t.tgname || ' ' ||
+        pn.nspname || '.' || p.proname || ' ' || t.tgenabled::text
+      FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN ns ON ns.oid = c.relnamespace
+      JOIN pg_proc p ON p.oid = t.tgfoid JOIN pg_namespace pn ON pn.oid = p.pronamespace
+     WHERE NOT t.tgisinternal
+    UNION ALL SELECT 'fn ' || ns.nspname || '.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) ||
+        ') ' || md5(coalesce(p.prosrc, ''))
+      FROM pg_proc p JOIN ns ON ns.oid = p.pronamespace
+    UNION ALL SELECT 'type ' || ns.nspname || '.' || ty.typname || ' ' || ty.typtype::text
+      FROM pg_type ty JOIN ns ON ns.oid = ty.typnamespace
+  ) s ORDER BY x`;
+
+/** Read the catalog outside this run on a connection of its own; every failure is reported. */
+async function catalogOutsideRun(): Promise<string[]> {
+  const client = new Client({ connectionString: DB_URL });
+  await client.connect();
+  let rows: string[] = [];
+  let failure: unknown;
+  try {
+    await client.query("SET search_path TO pg_catalog");
+    rows = (await client.query(CATALOG_OUTSIDE_RUN)).rows.map((r) => (r as { x: string }).x);
+  } catch (err) {
+    failure = err;
+  }
+  try {
+    await client.end();
+  } catch (closeErr) {
+    if (failure !== undefined) throw new AggregateError([failure, closeErr], "cinatra#4379 catalog read failed, and so did its close");
+    throw closeErr;
+  }
+  if (failure !== undefined) throw failure;
+  return rows;
+}
+
+/** The catalog outside this run before setup created anything; unset until then. */
+let catalogBefore: string[] | undefined;
+
+/** Fail loudly when anything outside this run's schema was added or removed since setup began. */
+async function assertCatalogUnchanged(phase: string): Promise<void> {
+  if (catalogBefore === undefined) return;
+  const before = catalogBefore;
+  const now = await catalogOutsideRun();
+  const had = new Set(before);
+  const has = new Set(now);
+  const added = now.filter((x) => !had.has(x));
+  const removed = before.filter((x) => !has.has(x));
+  if (added.length === 0 && removed.length === 0) return;
+  const show = (xs: string[]): string =>
+    xs.slice(0, 40).join(" ; ") + (xs.length > 40 ? ` ; ... ${xs.length - 40} more` : "");
+  throw new Error(
+    `cinatra#4379 the catalog outside the run schema changed during ${phase}: ` +
+      `added ${added.length} [${show(added)}]; removed ${removed.length} [${show(removed)}]`,
+  );
+}
 
 beforeAll(async () => {
   if (!HAS_REAL_DB) return;
@@ -309,14 +402,16 @@ beforeAll(async () => {
     const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
     const canonical = buildCreateStoreSchemaQueries(TEST_SCHEMA);
 
-    // The tier creates nothing in public. It reads the Better Auth tables the CI
-    // job (and any lane) provisions with scripts/apply-public-schema.mjs, and
-    // the organization-write kernel reads `public."organization"`: every public
-    // table the canonical DDL names must already exist, or nothing is created.
+    // The tier reads the Better Auth tables the CI job (and any lane) provisions
+    // with scripts/apply-public-schema.mjs, and the organization-write kernel
+    // reads `public."organization"`: every public table the canonical DDL names
+    // (as `public."x"` or `"public"."x"`) must already exist, or nothing is created.
     const publicTables = [
       ...new Set([
         "organization",
-        ...canonical.flatMap((q) => [...q.text.matchAll(/\bpublic\."([A-Za-z_][A-Za-z0-9_]*)"/g)].map((m) => m[1])),
+        ...canonical.flatMap((q) =>
+          [...q.text.matchAll(/(?:^|[^\w".])"?public"?\."([A-Za-z_][A-Za-z0-9_]*)"/g)].map((m) => m[1]),
+        ),
       ]),
     ].sort();
     const missing: string[] = [];
@@ -330,16 +425,8 @@ beforeAll(async () => {
           "scripts/apply-public-schema.mjs (the CI job does) before running the tier",
       );
     }
-    // Every other schema of this database is out of bounds for the DDL (another
-    // run's schema, the application's own): a statement naming one fails setup.
-    const others = (
-      await client.query(
-        `SELECT nspname FROM pg_namespace
-          WHERE nspname NOT IN ('public', 'information_schema') AND nspname NOT LIKE 'pg\\_%'`,
-      )
-    ).rows
-      .map((r) => (r as { nspname: string }).nspname)
-      .filter((n) => n !== TEST_SCHEMA);
+    // The boundary: what lies outside this run before it creates anything.
+    catalogBefore = await catalogOutsideRun();
 
     // NEVER a drop here: this run's schema is new. Without IF NOT EXISTS the
     // CREATE itself refuses a name that already exists, so setup can never adopt
@@ -354,16 +441,9 @@ beforeAll(async () => {
     for (const qy of canonical) {
       const head = qy.text.trim().slice(0, 6).toUpperCase();
       if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S") continue;
-      const other = others.find((n) => namesSchema(qy.text, n));
-      if (other !== undefined) {
-        throw new Error(
-          `cinatra#4379 setup refused a canonical statement that names schema "${other}" ` +
-            `(the tier runs DDL on its own schema only): ${qy.text.trim().split("\n")[0]}`,
-        );
-      }
       // The slug columns, indexes and triggers on the Better Auth tables: shared
       // objects of every run and of the application. Never run here.
-      if (namesSchema(qy.text, "public")) {
+      if (namesPublic(qy.text)) {
         leftOut.push(qy.text.trim().split("\n")[0]);
         continue;
       }
@@ -386,6 +466,7 @@ beforeAll(async () => {
       [ORG, `typed-promotion-writer-4379-${RUN}`],
     );
     owned.org = true;
+    await assertCatalogUnchanged("setup");
   } catch (err) {
     // Setup failed part-way: close this client and remove what setup already
     // created, and report every failure, never only the first.
@@ -420,14 +501,37 @@ beforeAll(async () => {
 }, 120_000);
 
 // On every exit road the runner reaches (cases passed, failed or skipped after a
-// failed setup) this removes what the run created, and fails loudly if it cannot.
+// failed setup) this checks the catalog outside the run, removes what the run
+// created and checks the catalog again, and fails loudly if any step fails.
 // A killed process runs no hook at all; its leftovers carry this run's own random
 // name (48 random bits). A later run that drew the same name would be refused at
 // CREATE SCHEMA or at its organization insert; it would never adopt them.
 afterAll(async () => {
   if (!HAS_REAL_DB) return;
   delete (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized;
-  await cleanUpOwned();
+  // The catalog outside the run after the cases, then the cleanup, then the
+  // catalog again (a CASCADE drop must not reach outside the run either). Every
+  // step is tried; every failure is reported.
+  const failures: unknown[] = [];
+  const steps: Array<() => Promise<void>> = [
+    () => assertCatalogUnchanged("the cases"),
+    cleanUpOwned,
+    () => assertCatalogUnchanged("the teardown"),
+  ];
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (err) {
+      failures.push(err);
+    }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(
+      failures,
+      `cinatra#4379 teardown found ${failures.length} failures: ${failures.map(errText).join(" | ")}`,
+    );
+  }
 });
 
 describe.skipIf(!HAS_REAL_DB)("cinatra#4379 — the canonical writer's keyed retype is the promotion's proof (real DB)", () => {
