@@ -19,23 +19,49 @@
 # lets this job make it. /run/lock comes first because a service's private
 # /tmp (systemd PrivateTmp) does not hide it. The lock works only when every
 # runner of the machine opens the SAME file. The repository does not record
-# how the runners are installed, so this script prints the file's device and
-# inode before it waits: two jobs that print the same pair on one machine use
-# one lock. The file is opened for reading only and never made again once it
-# exists, so a runner account that did not make the file can still lock it.
+# how the runners are installed, so this script prints the device and inode of
+# the file it opened, read through the open descriptor, before it waits: two
+# jobs that print the same pair on one machine lock one file. The file is
+# opened for reading only and never made again once it exists, so a runner
+# account that did not make the file can still lock it.
+#
+# NO SYMBOLIC LINK IS USED. A candidate that is a symbolic link is skipped
+# before it is opened. Bash cannot open a file without following a link, so
+# after the open the script compares the open file (through its descriptor)
+# with the path itself (not followed). It uses the file only when the path
+# still names that same regular file; when the path was replaced, is now a
+# link, or either identity cannot be read, the file is not used. A link put in
+# place in the instant between the check and the open is opened before it is
+# refused (a named pipe there would make the open wait).
+#
+# WHO HOLDS THE LOCK. The lock belongs to the open file, which this script and
+# <command> share: <command> inherits the descriptor. The lock is therefore
+# held while either of them runs, so when this script alone is killed,
+# <command> keeps the lock until it ends. When <command> ends, this script
+# releases the lock (flock -u), so a process that <command> leaves running
+# does not keep it. When this script is killed and <command> then leaves a
+# process running, that process keeps the lock until it ends; the next job
+# waits at most its wait and then builds without the lock. The kernel drops
+# the lock when every process that holds the descriptor has ended, also when
+# they are killed.
 #
 # WAIT. At most DESIGN_BUILD_LOCK_WAIT_SECONDS (default 2700, 45 minutes); the
 # workflows keep it at most half of the job's timeout. The wait counts against
-# that timeout: with the measured worst setup (20 minutes) and build (17
-# minutes), a job that waits the full 45 minutes is at minute 82 of 90 when its
-# suite starts, so a long suite can then reach the job's limit. The kernel
-# drops the lock when its holder ends, also when the holder is killed, so a
-# dead job cannot block the next one.
+# that timeout. With the measured worst setup (20 minutes) and a build of up
+# to 17 minutes, a design-visual-verify.yml job that waits the full 45 minutes
+# ends its build at minute 82 of 90. The cache step, the server start, a
+# readiness wait of up to 240 polls 2 s apart and a suite of up to 60 minutes
+# come after the build, so such a job can reach its 90-minute limit. In
+# design-baselines-refresh.yml (a wait of 20 minutes, a 70-minute job), a job
+# that waits the full 20 minutes ends its build at minute 57. That leaves 13
+# minutes for the server start, the same readiness wait and a suite of up to
+# 30 minutes, so that job can reach its 70-minute limit too.
 #
 # FAIL OPEN. When the wait is not a whole number of seconds, when flock is not
-# on the runner, when no lock file can be opened, or when the wait ends without
-# the lock, the build runs without the lock, as it did before this script,
-# after a line that starts with "design build host lock: NOT TAKEN".
+# on the runner, when no lock file can be opened (or none is shown to be the
+# file that its path names), or when the wait ends without the lock, the build
+# runs without the lock, as it did before this script, after a line that
+# starts with "design build host lock: NOT TAKEN".
 #
 # HOSTED RUNNERS. DESIGN_BUILD_LOCK_RUNNER_ENVIRONMENT carries the step's
 # ${{ runner.environment }}, the same value the workflows' host steps read. Any
@@ -75,6 +101,7 @@ fi
 # The first directory that holds the lock file or lets this job make it. A
 # symbolic link is never used, and an existing file is never made again.
 lock_file=""
+identity=""
 dirs="${DESIGN_BUILD_LOCK_DIRS:-/run/lock:/tmp}"
 IFS=: read -r -a lock_dirs <<<"$dirs"
 for dir in "${lock_dirs[@]}"; do
@@ -85,10 +112,18 @@ for dir in "${lock_dirs[@]}"; do
     (umask 0022 && : >>"$candidate") 2>/dev/null || true
   fi
   if [ ! -f "$candidate" ] || [ -L "$candidate" ]; then continue; fi
-  if { exec 9<"$candidate"; } 2>/dev/null; then
+  if ! { exec 9<"$candidate"; } 2>/dev/null; then continue; fi
+  # The open file, read through its descriptor, must be the regular file that
+  # the path itself (not followed) names now; otherwise it is not used.
+  opened="$(stat -L -c 'device %d inode %i' /proc/self/fd/9 2>/dev/null)" || opened=""
+  named="$(stat -c 'device %d inode %i' -- "$candidate" 2>/dev/null)" || named=""
+  if [ -n "$opened" ] && [ "$opened" = "$named" ] && [ -f /proc/self/fd/9 ]; then
     lock_file="$candidate"
+    identity="$opened"
     break
   fi
+  exec 9<&-
+  note "not using ${candidate}: the file that was opened is not shown to be the regular file this path names"
 done
 
 if [ -z "$lock_file" ]; then
@@ -97,7 +132,6 @@ if [ -z "$lock_file" ]; then
   exit $?
 fi
 
-identity="$(stat -L -c 'device %d inode %i' "$lock_file" 2>/dev/null)" || identity="device and inode unreadable"
 note "lock file ${lock_file} (${identity}), runner ${RUNNER_NAME:-unnamed}"
 
 started=$SECONDS
@@ -112,10 +146,13 @@ if ! flock -n 9 2>/dev/null; then
 fi
 note "TAKEN after $((SECONDS - started)) s; building"
 
-# The build does not inherit the lock's descriptor, so nothing it leaves
-# running can keep the lock after this script ends.
-"$@" 9<&-
+# The build inherits the locked descriptor, so the lock stays taken while the
+# build runs, also when this script alone is killed. After the build, flock -u
+# releases the lock for every holder of the descriptor, so nothing the build
+# leaves running keeps it.
+"$@"
 rc=$?
+flock -u 9
 exec 9<&-
 note "released after the build (exit ${rc})"
 exit "$rc"
