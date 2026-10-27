@@ -1,12 +1,11 @@
 import "server-only";
 
-import { formatDistanceToNow } from "date-fns";
-
 import { createHttpMarketplaceMcpClient } from "@cinatra-ai/marketplace-mcp-client/http-client";
 import type { MarketplaceAdminSubmission } from "@cinatra-ai/marketplace-mcp-client";
 
 import { MarketplaceDecisionActions } from "../marketplace-decision-actions";
 import { decideMarketplaceSubmission } from "../marketplace-decision-helpers";
+import { relativeTimeText } from "../relative-time";
 import { MarketplaceRowView } from "./marketplace-row";
 import { viewerMayDecide } from "./marketplace-state";
 import { marketplaceSubmissionModerationContract } from "./marketplace-submission-moderation.contract";
@@ -123,13 +122,18 @@ export const marketplaceSubmissionModerationSource: ApprovalSource = {
 
   rowRenderer(row: ApprovalRow) {
     const raw = (row.raw ?? {}) as SubmissionRaw;
-    const submitted = formatDistanceToNow(new Date(row.createdAt), { addSuffix: true });
-    const promo =
-      raw.promotionState && raw.promotionState !== "none" ? ` · promotion ${raw.promotionState}` : "";
+    // A submitted_at the marketplace sent malformed is not drawn (date-fns
+    // throws on an invalid date); the row still renders.
+    const submitted = relativeTimeText(row.createdAt);
     // Suppress the vendor-identifying `vendor #N` prefix unless this instance is
     // a registered vendor (owner ruling); the submission itself still renders.
-    const submittedMeta = `submitted ${submitted}${promo}`;
-    const meta = isRegisteredVendor() ? `vendor #${raw.vendorId} · ${submittedMeta}` : submittedMeta;
+    const meta = [
+      isRegisteredVendor() ? `vendor #${raw.vendorId}` : null,
+      submitted ? `submitted ${submitted}` : null,
+      raw.promotionState && raw.promotionState !== "none" ? `promotion ${raw.promotionState}` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
     return (
       <MarketplaceRowView
         title={row.title}

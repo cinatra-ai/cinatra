@@ -1,6 +1,5 @@
 import "server-only";
 
-import { formatDistanceToNow } from "date-fns";
 import Link from "next/link";
 
 import { createHttpMarketplaceMcpClient } from "@cinatra-ai/marketplace-mcp-client/http-client";
@@ -8,6 +7,7 @@ import type { MarketplaceVendorSubmission } from "@cinatra-ai/marketplace-mcp-cl
 
 import { MarketplaceDecisionActions } from "../marketplace-decision-actions";
 import { withdrawMarketplaceSubmission } from "../marketplace-decision-helpers";
+import { relativeTimeText } from "../relative-time";
 import { MarketplaceRowView } from "./marketplace-row";
 import { marketplaceMySubmissionsContract } from "./marketplace-my-submissions.contract";
 import {
@@ -89,10 +89,16 @@ export const marketplaceMySubmissionsSource: ApprovalSource = {
 
   rowRenderer(row: ApprovalRow) {
     const raw = (row.raw ?? {}) as MySubmissionRaw;
-    const submitted = formatDistanceToNow(new Date(row.createdAt), { addSuffix: true });
-    const detail =
-      raw.promotionState && raw.promotionState !== "none" ? ` · promotion ${raw.promotionState}` : "";
-    const reason = raw.decisionReason ? ` · ${raw.decisionReason}` : "";
+    // A submitted_at the marketplace sent malformed is not drawn (date-fns
+    // throws on an invalid date); the row still renders.
+    const submitted = relativeTimeText(row.createdAt);
+    const meta = [
+      submitted ? `submitted ${submitted}` : null,
+      raw.promotionState && raw.promotionState !== "none" ? `promotion ${raw.promotionState}` : null,
+      raw.decisionReason || null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
     const right =
       row.status === "pending" ? (
         <MarketplaceDecisionActions sourceId={SOURCE_ID} rowId={row.id} mode="withdraw" />
@@ -108,7 +114,7 @@ export const marketplaceMySubmissionsSource: ApprovalSource = {
       <MarketplaceRowView
         title={row.title}
         state={row.status}
-        meta={`submitted ${submitted}${detail}${reason}`}
+        meta={meta}
         right={right}
       />
     );

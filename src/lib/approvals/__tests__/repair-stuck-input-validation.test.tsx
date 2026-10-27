@@ -8,7 +8,8 @@
 // card) with missing, empty, invalid and wrongly typed values.
 //
 //   stuck    only for a valid `repair_stuck_at` timestamp string; missing, null,
-//            empty, invalid or a non-string all mean NOT stuck.
+//            empty, invalid, calendar-invalid (a day Date.parse rolls over) or
+//            a non-string all mean NOT stuck.
 //   attempts only for a non-negative safe integer of type number; a fraction, a
 //            string, NaN, an infinity or an unsafe integer means no count (the
 //            flag still stands).
@@ -71,6 +72,12 @@ const NOT_STUCK: Array<[string, unknown]> = [
   ["blank", "   "],
   ["not a date", "not a date"],
   ["an impossible date", "2026-13-45T00:00:00.000Z"],
+  // Calendar-invalid stamps that Date.parse rolls over to another day.
+  ["a February 29 of a common year", "2025-02-29T00:00:00.000Z"],
+  ["a February 30", "2026-02-30T00:00:00.000Z"],
+  ["an April 31", "2026-04-31T00:00:00.000Z"],
+  ["an April 31 without a time", "2026-04-31"],
+  ["an hour 24", "2026-05-15T24:00:00.000Z"],
   ["a number", 1747292400000],
   ["true", true],
   ["an object", {}],
