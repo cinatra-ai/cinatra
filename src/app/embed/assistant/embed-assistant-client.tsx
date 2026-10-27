@@ -176,6 +176,11 @@ type Phase =
  *  the credential: the tokens stay in the ref closure and never enter state. */
 type MountedSession = { threadId: string; assistant: string };
 
+/** The mounted session with the sign-in ticket it belongs to (cinatra#4357).
+ *  The ticket is a counter, not a secret: it lets a report from the column of an
+ *  older sign-in find that its sign-in has ended. */
+type TicketedSession = MountedSession & { ticket: number };
+
 export type EmbedAssistantClientProps = {
   /** Server-resolved expected parent origin (§7). Empty when unresolvable — then
    *  the bridge posts nothing and the shell shows the neutral error card. */
@@ -226,7 +231,7 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   const [phase, setPhase] = useState<Phase>(() =>
     props.expectedParentOrigin ? { kind: "waiting" } : { kind: "error" },
   );
-  const [session, setSession] = useState<MountedSession | null>(null);
+  const [session, setSession] = useState<TicketedSession | null>(null);
   const [turnStatus, setTurnStatus] = useState<ConversationTurnStatus>("idle");
   const [seededMessages, setSeededMessages] = useState<UiMessage[] | undefined>(undefined);
   // The RESTORED transcript (cinatra#2683 item 1). A widget panel that reloads —
@@ -262,8 +267,9 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   // THE SIGN-IN'S END (cinatra#4357). Every sign-in takes a ticket. An END (the
   // pair's life ran out), a NEW CONTEXT, a NEWER sign-in and an UNMOUNT each
   // move the ticket on, so an answer that belongs to an older sign-in (the
-  // sign-in itself, its negotiation, its restore or its parity seed) finds the
-  // ticket moved and changes nothing: no credential, no phase, no history.
+  // sign-in itself, its negotiation, its end timer, its restore, its parity
+  // seed or its column's turn status) finds the ticket moved and changes
+  // nothing: no credential, no phase, no history, no turn status.
   const signInTicketRef = useRef(0);
   // The one timer that ends the current sign-in when its pair's life runs out.
   const signInEndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -459,11 +465,20 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
           setPhase({ kind: "gated", reason: negotiation.reason });
           return;
         }
-        setSession(session);
+        // A pair whose life ran out while the negotiation was on its way ends
+        // the sign-in HERE, before the frame turns `active`. A zero-delay timer
+        // is not enough: the restore's answer is a promise, and promises settle
+        // before any timer runs, so the conversation would mount with the dead
+        // pair until the timer fired.
+        if (endsAt !== null && endsAt <= Date.now()) {
+          dropSignIn("again");
+          return;
+        }
+        setSession({ ...session, ticket });
         setPhase({ kind: "active" });
         if (endsAt !== null) {
           // The life runs from the mint, so a slow negotiation shortens the
-          // wait; a pair that already ran out ends the sign-in at once.
+          // wait.
           clearSignInEndTimer();
           signInEndTimerRef.current = setTimeout(
             () => {
@@ -610,6 +625,21 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
     bridgeRef.current?.sendApplyIntent(ref);
   }, []);
 
+  // The mounted column's turn status, bound to the sign-in that mounted it
+  // (cinatra#4357). A turn keeps the callback it was given: one that is still
+  // in flight when its sign-in ends (for example inside the client's wait
+  // before its one retry) reports its settle after the column has unmounted.
+  // That report finds the ticket moved and changes nothing, on the again card
+  // and in the next sign-in alike.
+  const mountedTicket = session?.ticket;
+  const onMountedTurnStatus = useCallback(
+    (status: ConversationTurnStatus) => {
+      if (mountedTicket !== signInTicketRef.current) return;
+      setTurnStatus(status);
+    },
+    [mountedTicket],
+  );
+
   return (
     // `data-turn-status` mirrors the conversation turn status (idle → running →
     // finished/error) so an out-of-process observer (the wp-drupal-uat E2E) can
@@ -695,7 +725,7 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
             seededMessages={seededMessages ?? restoredMessages}
             remoteChat={props.remoteChat}
             onApplyIntent={onApplyIntent}
-            onTurnStatusChange={setTurnStatus}
+            onTurnStatusChange={onMountedTurnStatus}
           />
         </div>
       )}

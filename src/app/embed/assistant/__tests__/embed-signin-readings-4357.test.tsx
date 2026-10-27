@@ -70,10 +70,16 @@ vi.mock("@cinatra-ai/chat/conversation-services", () => ({
 }));
 
 const columnSeeds: unknown[] = [];
+// The turn-status callback each render of a mounted column handed the turn
+// engine. A real turn keeps the one it was given until it settles, so a test
+// can call an OLD column's callback after that column has unmounted.
+type TurnReporter = (status: "idle" | "running" | "finished" | "error") => void;
+const columnReporters: TurnReporter[] = [];
 vi.mock("@cinatra-ai/chat/conversation-column", () => ({
   ConversationColumn: () => React.createElement("div", { "data-test-column": "" }),
-  useConversationColumnTurns: (input: { initialMessages?: unknown }) => {
+  useConversationColumnTurns: (input: { initialMessages?: unknown; onTurnStatusChange?: TurnReporter }) => {
     columnSeeds.push(input.initialMessages);
+    if (input.onTurnStatusChange) columnReporters.push(input.onTurnStatusChange);
     return {
       messages: [],
       peekRemovedMessageIds: () => ({ ids: [], runIds: [], saveToken: 0 }),
@@ -166,6 +172,7 @@ function frame(): HTMLElement {
 }
 const phase = () => frame().getAttribute("data-phase");
 const shown = () => frame().querySelector("[data-embed-state]")?.getAttribute("data-embed-state");
+const turnStatus = () => frame().getAttribute("data-turn-status");
 
 /** The sign-in card as a reader sees it: its drawn id, sentence, button and action. */
 function signInCard() {
@@ -272,6 +279,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   bridges.length = 0;
   columnSeeds.length = 0;
+  columnReporters.length = 0;
   frameHeaders = null;
   runFrameSignIn.mockReset();
   negotiate.mockReset();
@@ -495,6 +503,34 @@ describe("reading 2: the sign-in-again card (embed-signin-again)", () => {
     expect(signInCard().id).toBe("embed-signin-again");
   });
 
+  it.each([
+    ["after", 5],
+    ["at the moment", 1],
+  ])(
+    "a pair whose life ran out %s its negotiation answered never mounts the conversation, not even before a timer runs",
+    async (_label, negotiationMs) => {
+      await render();
+      await deliverContext();
+      // A life of 1 ms; the negotiation answers ok later (or exactly then), and
+      // the transcript read would answer at once.
+      runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(1, 0.001) });
+      const slow = deferred<{ ok: boolean }>();
+      negotiate.mockReturnValueOnce(slow.promise);
+      fetchThreadMessages.mockResolvedValueOnce([]);
+      await clickSignIn();
+      await wait(negotiationMs);
+      await act(async () => {
+        slow.resolve({ ok: true });
+        await drain();
+      });
+      // No timer step here: every promise has settled, and no timer has run.
+      expect(columnSeeds, "no conversation mounted with the dead pair").toEqual([]);
+      expect(fetchThreadMessages, "no transcript read with the dead pair").not.toHaveBeenCalled();
+      expect(signInCard().id).toBe("embed-signin-again");
+      expect(requestHeaders(), "the dead pair is dropped").toEqual({});
+    },
+  );
+
   it("a restore that answers after the sign-in ended neither settles nor seeds the next sign-in", async () => {
     await render();
     await deliverContext();
@@ -557,6 +593,49 @@ describe("reading 2: the sign-in-again card (embed-signin-again)", () => {
     expect(columnSeeds[columnSeeds.length - 1]).toEqual([{ id: "parity-seed", role: "assistant", content: "new" }]);
   });
 
+  it.each([
+    ["while the again card shows", false],
+    ["inside the next sign-in", true],
+  ])("a turn of the ended sign-in that settles %s changes no turn status", async (_label, signInAgain) => {
+    await render();
+    await signedIn(pair(1));
+    const oldTurn = columnReporters[columnReporters.length - 1];
+    expect(oldTurn, "the first column handed its turn engine a status callback").toBeTypeOf("function");
+    await wait(LIFE_MS - 1_000);
+    await act(async () => {
+      oldTurn("running");
+      await drain();
+    });
+    expect(turnStatus()).toBe("running");
+    // The turn's first attempt fails before any stream arrives. The chat client
+    // waits three seconds before its one retry; the retry fails, and the turn
+    // settles to `error` through the callback its column gave it.
+    setTimeout(() => oldTurn("error"), 3_000);
+    await wait(1_000);
+    expect(signInCard().id).toBe("embed-signin-again");
+    expect(turnStatus()).toBe("idle");
+    if (signInAgain) {
+      runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(2) });
+      negotiate.mockResolvedValueOnce({ ok: true });
+      fetchThreadMessages.mockResolvedValueOnce([]);
+      await clickSignIn();
+      expect(shown()).toBe("active");
+    }
+    await wait(2_000);
+    expect(turnStatus(), "the old turn's settle changes nothing").toBe("idle");
+    if (signInAgain) {
+      const newTurn = columnReporters[columnReporters.length - 1];
+      expect(newTurn, "the new sign-in mounted its own column").not.toBe(oldTurn);
+      await act(async () => {
+        newTurn("running");
+        await drain();
+      });
+      expect(turnStatus(), "the new sign-in's own turn still reports").toBe("running");
+    } else {
+      expect(signInCard().id).toBe("embed-signin-again");
+    }
+  });
+
   it("a gated frame arms nothing: its card stays the gated card", async () => {
     await render();
     await deliverContext();
@@ -587,5 +666,67 @@ describe("reading 2: the sign-in-again card (embed-signin-again)", () => {
     expect(vi.getTimerCount()).toBe(0);
     // afterEach unmounts again; a fresh root keeps that harmless.
     root = createRoot(container);
+  });
+});
+
+describe("the sign-in ticket: each check and each move, tried on its own (cinatra#4357)", () => {
+  it("an end timer of an earlier pair that still runs leaves the current sign-in alone", async () => {
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    try {
+      await render();
+      await signedIn(pair(1));
+      const calls = timers.mock.calls as unknown as Array<[() => void, number?]>;
+      const firstEnd = calls.find(([, delay]) => delay === LIFE_MS)?.[0];
+      expect(firstEnd, "the first pair's end timer was armed").toBeTypeOf("function");
+      await deliverContext("t-2");
+      runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(2) });
+      negotiate.mockResolvedValueOnce({ ok: true });
+      fetchThreadMessages.mockResolvedValueOnce([]);
+      await clickSignIn();
+      expect(shown()).toBe("active");
+      // The first pair's timer was cleared; its callback runs anyway.
+      await act(async () => {
+        firstEnd?.();
+        await drain();
+      });
+      expect(shown(), "the stale end drops nothing").toBe("active");
+      expect(requestHeaders()).toEqual({
+        Authorization: "Bearer cit_secret_2",
+        "X-Cinatra-Widget-User-Token": "cwu_secret_2",
+      });
+      await wait(LIFE_MS);
+      expect(signInCard().id, "the current pair still ends at its own end").toBe("embed-signin-again");
+    } finally {
+      timers.mockRestore();
+    }
+  });
+
+  it("a sign-in that answers after the frame unmounted lands nothing", async () => {
+    await render();
+    await deliverContext();
+    const late = deferred<SignInAnswer>();
+    runFrameSignIn.mockReturnValueOnce(late.promise);
+    await clickSignIn();
+    expect(phase()).toBe("authorizing");
+    act(() => root.unmount());
+    await act(async () => {
+      late.resolve({ ok: true, credential: pair(1) });
+      await drain();
+    });
+    expect(negotiate, "the late pair negotiates nothing").not.toHaveBeenCalled();
+    expect(vi.getTimerCount(), "no end armed for the late pair").toBe(0);
+    // afterEach unmounts again; a fresh root keeps that harmless.
+    root = createRoot(container);
+  });
+
+  it("a negotiation that throws for the current sign-in shows the gated card and arms nothing", async () => {
+    await render();
+    await deliverContext();
+    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(1) });
+    negotiate.mockRejectedValueOnce(new Error("network"));
+    await clickSignIn();
+    expect(shown()).toBe("gated");
+    expect(fetchThreadMessages, "no restore for a failed negotiation").not.toHaveBeenCalled();
+    expect(vi.getTimerCount(), "no end armed for a failed negotiation").toBe(0);
   });
 });
