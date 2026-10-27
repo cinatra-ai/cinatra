@@ -218,18 +218,28 @@ async function fetchPostStatus(
 
   let raw: unknown;
   try {
-    raw = await stack.invokeConnectorInstanceTool(
-      {
-        connectorKey: "wordpress",
-        instanceId,
-        toolName,
-        args,
-        actor: trustedActor,
-        primitiveName: "wordpress_freshness_check",
-        sourceType: "freshness_sweep",
-        causation,
-      },
-      stack.buildConnectorInstanceInvokerDeps("wordpress"),
+    // cinatra#4315: on an agent run this read is made by a core tool
+    // (change_set_undo, object_version_restore, freshness_check_for_change_set),
+    // outside any guarded leaf, so the invoker finds no guarded owner and
+    // refuses it. This host code pins the owner for exactly this read: the
+    // WordPress connector, this instance and this one read ability. The owner
+    // never comes from the invoker input (sourceType, primitiveName and
+    // causation are caller fields). Off a run the read runs as before.
+    raw = await stack.withHostConnectorReadOwner(
+      { primitiveName: "wordpress_freshness_check", connectorKey: "wordpress", instanceId, toolNames: [toolName] },
+      () => stack.invokeConnectorInstanceTool(
+        {
+          connectorKey: "wordpress",
+          instanceId,
+          toolName,
+          args,
+          actor: trustedActor,
+          primitiveName: "wordpress_freshness_check",
+          sourceType: "freshness_sweep",
+          causation,
+        },
+        stack.buildConnectorInstanceInvokerDeps("wordpress"),
+      ),
     );
   } catch (e) {
     if (e instanceof stack.InvokerError) {

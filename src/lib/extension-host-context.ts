@@ -2104,6 +2104,49 @@ async function withActionOwner<T>(action: GuardedActionOwner, effect: () => Prom
   finally { actionOwners.delete(frame); }
 }
 
+/** cinatra#4315: the owner of a connector read that host code makes on a run
+ * outside any guarded leaf (the WordPress freshness read of a core restore or
+ * freshness tool). Only the host code that makes the read mints it, through
+ * `withHostConnectorReadOwner`; no request, tool input or invoker input field
+ * can. It is an unpinned owner, so an outward call refuses under it, and it
+ * serves only the connector, instance and read abilities it names. */
+export type HostReadActionOwner = UnpinnedActionOwner & {
+  readonly hostRead: { readonly connectorKey: string; readonly instanceId: string; readonly toolNames: readonly string[] };
+};
+const hostReadKey = Symbol.for("@cinatra-ai/host:host-read-action-owners/v1");
+const hostReadHolder = globalThis as unknown as { [hostReadKey]?: WeakSet<object> };
+const hostReadOwners = hostReadHolder[hostReadKey] ??= new WeakSet();
+/** Run `effect` (one host connector read) under a host read owner. Off a run it
+ * runs `effect` as it is: the invoker makes the wire call as on main. */
+export async function withHostConnectorReadOwner<T>(read: {
+  readonly primitiveName: string; readonly connectorKey: string;
+  readonly instanceId: string; readonly toolNames: readonly string[];
+}, effect: () => Promise<T>): Promise<T> {
+  const frame = mcpRequestContextStorage.getStore();
+  if (!frame?.runId) return effect();
+  // The owner's frame is a copy, which does not carry the declared-outward mark,
+  // so a declared-outward frame refuses here, as the guard refuses an outward
+  // call under an unpinned owner.
+  if (isDeclaredOutwardRunFrame(frame)) throw new OutwardActionRefusal("action_loaded_identity_missing_or_stale");
+  const hostRead = Object.freeze({ connectorKey: read.connectorKey, instanceId: read.instanceId,
+    toolNames: Object.freeze([...read.toolNames]) });
+  const owner: HostReadActionOwner = Object.freeze({ unpinned: true as const, toolName: read.primitiveName,
+    wrapper: "instance_tool" as const, connectorKey: read.connectorKey, instanceId: read.instanceId, hostRead });
+  hostReadOwners.add(owner);
+  return withActionOwner(owner, effect);
+}
+/** Whether a guarded owner serves this connector instance call. A leaf's owner
+ * serves any call (the guard then reads it). A host read owner serves only the
+ * connector, instance and abilities it names, and only when the host minted it. */
+export function guardedOwnerServesInstanceCall(owner: GuardedActionOwner,
+  call: { readonly connectorKey: string; readonly instanceId: string; readonly toolName: string }): boolean {
+  if (!Object.prototype.hasOwnProperty.call(owner, "hostRead")) return true;
+  if (!hostReadOwners.has(owner)) return false;
+  const { hostRead } = owner as HostReadActionOwner;
+  return hostRead.connectorKey === call.connectorKey && hostRead.instanceId === call.instanceId &&
+    hostRead.toolNames.includes(call.toolName);
+}
+
 import { isDeclaredOutwardRunFrame, markGuardedRunDispatch, markGuardedRunLeaf } from "./extension-capabilities-registry";
 import { readDeclaredOutward } from "@cinatra-ai/mcp-server/capability-plan";
 /** A registration's outward declaration. No registration (a legacy binding)
