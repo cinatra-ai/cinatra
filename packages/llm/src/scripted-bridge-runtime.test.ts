@@ -267,7 +267,9 @@ describe("executing the scripted runtime (cinatra#2910)", () => {
     const parsed = JSON.parse(response.text ?? "");
     expect(Object.keys(parsed).sort()).toEqual(["published", "sections", "title"]);
     expect(parsed.title).toContain(UAT_SENTINEL);
-    expect(parsed.sections).toHaveLength(1);
+    // `sections` is a STRING array, so it answers the fixed five titled
+    // members (the string-array contract at the end of this file).
+    expect(parsed.sections).toHaveLength(5);
     expect(parsed.published).toBe(false);
   });
 
@@ -440,7 +442,7 @@ describe("the scripted structured-output contract — conforming by TYPE, not by
       ).toEqual({ score: 0 });
     });
 
-    it("`minItems` is IGNORED — an array is always exactly one element", () => {
+    it("`minItems` is IGNORED — a non-string array is always exactly one element", () => {
       const out = scriptedOutputFor({
         type: "object",
         required: ["rows"],
@@ -595,5 +597,150 @@ describe("an agent whose node declares outputs cannot get shapeless prose (#2949
     expect(JSON.parse(response.text ?? "")).toEqual({
       onlyOne: expect.stringContaining(UAT_SENTINEL),
     });
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// The STRING-ARRAY contract.
+//
+// A run that fans a list output out, one artifact per member, reads each
+// member's title from its FIRST line behind the declared prefix
+// (`src/lib/artifacts/run-artifact-materializer.ts` ::readFanOutMemberTitle)
+// and refuses a member without it. The blog idea generator's bridge output
+// `ideas` is such a list (`fanOut {mode: member, titleFrom: first-line,
+// titlePrefix: "Title:"}`), and the list step after it needs several rows.
+// One untitled member, the old answer, failed every scripted idea run at
+// materialisation. A string array now answers five members, each opening with
+// a `Title:` line; every other shape is unchanged, byte for byte.
+// ---------------------------------------------------------------------------
+describe("a string-array answer — five members, each opening with a Title: line", () => {
+  /** Parse the completion's text for one declared schema. */
+  function scriptedOutputFor(outputSchema: Record<string, unknown>): unknown {
+    enableScriptedDevelopmentRuntime();
+    const response = runScriptedBridgeCompletion({ user: "produce it", outputSchema });
+    return JSON.parse(response.text ?? "");
+  }
+
+  /**
+   * The materializer's title rule, restated: the first line opens with the
+   * prefix and carries a non-empty title behind it.
+   */
+  function fanOutTitle(member: string, titlePrefix: string): string | null {
+    const firstLine = member.split("\n", 1)[0] ?? "";
+    if (!firstLine.startsWith(titlePrefix)) return null;
+    const title = firstLine.slice(titlePrefix.length).trim();
+    return title.length > 0 ? title : null;
+  }
+
+  /**
+   * EXACTLY what the runtime derives for the blog idea generator's bridge node
+   * (`docker/wayflow/agent_loader.py` ::_derive_bridge_output_schemas): two
+   * declared outputs, `ideas` an array of string.
+   */
+  const DERIVED_FOR_IDEA_GENERATOR = {
+    type: "object",
+    properties: {
+      ideas: { type: "array", title: "ideas", items: { type: "string" } },
+      notes: { type: "string", title: "notes" },
+    },
+    required: ["ideas", "notes"],
+    additionalProperties: false,
+  } satisfies Record<string, unknown>;
+
+  it("answers the idea generator's `ideas` with five members the fan-out binding can title", () => {
+    const out = scriptedOutputFor(DERIVED_FOR_IDEA_GENERATOR) as {
+      ideas: string[];
+      notes: string;
+    };
+    expect(out.ideas).toHaveLength(5);
+    const titles = out.ideas.map((member) => fanOutTitle(member, "Title:"));
+    expect(titles).toEqual([
+      "CINATRA_UAT_OK scripted ideas item 1",
+      "CINATRA_UAT_OK scripted ideas item 2",
+      "CINATRA_UAT_OK scripted ideas item 3",
+      "CINATRA_UAT_OK scripted ideas item 4",
+      "CINATRA_UAT_OK scripted ideas item 5",
+    ]);
+    // The sibling string output is unchanged.
+    expect(out.notes).toBe(`${UAT_SENTINEL}: scripted notes`);
+  });
+
+  it("each member is a title line, a newline and one body line, both carrying the sentinel", () => {
+    const out = scriptedOutputFor(DERIVED_FOR_IDEA_GENERATOR) as { ideas: string[] };
+    expect(out.ideas[0]).toBe(
+      "Title: CINATRA_UAT_OK scripted ideas item 1\nCINATRA_UAT_OK: scripted ideas item 1 body",
+    );
+    expect(out.ideas[4]).toBe(
+      "Title: CINATRA_UAT_OK scripted ideas item 5\nCINATRA_UAT_OK: scripted ideas item 5 body",
+    );
+    for (const member of out.ideas) {
+      const lines = member.split("\n");
+      expect(lines).toHaveLength(2);
+      expect(lines[0]).toContain(UAT_SENTINEL);
+      expect(lines[1]).toContain(UAT_SENTINEL);
+    }
+  });
+
+  it("a string array at the ROOT is named `output`, and a type list led by string counts", () => {
+    const expected = [1, 2, 3, 4, 5].map(
+      (n) =>
+        `Title: CINATRA_UAT_OK scripted output item ${n}\nCINATRA_UAT_OK: scripted output item ${n} body`,
+    );
+    expect(scriptedOutputFor({ type: "array", items: { type: "string" } })).toEqual(expected);
+    const out = scriptedOutputFor({
+      type: "object",
+      required: ["tags"],
+      properties: { tags: { type: "array", items: { type: ["string", "null"] } } },
+    }) as { tags: string[] };
+    expect(out.tags).toHaveLength(5);
+    expect(out.tags.every((member) => member.startsWith("Title: "))).toBe(true);
+  });
+
+  it("`minItems` / `maxItems` are still IGNORED — a string array is always five members", () => {
+    const out = scriptedOutputFor({
+      type: "object",
+      required: ["few", "many"],
+      properties: {
+        few: { type: "array", maxItems: 2, items: { type: "string" } },
+        many: { type: "array", minItems: 10, items: { type: "string" } },
+      },
+    }) as { few: string[]; many: string[] };
+    expect(out.few).toHaveLength(5);
+    expect(out.many).toHaveLength(5);
+  });
+
+  it("EVERY OTHER array shape is unchanged, byte for byte", () => {
+    enableScriptedDevelopmentRuntime();
+    const response = runScriptedBridgeCompletion({
+      user: "produce it",
+      outputSchema: {
+        type: "object",
+        required: ["n", "objs", "enums", "consts", "unions", "untyped", "noItems", "nested"],
+        properties: {
+          n: { type: "array", items: { type: "integer" } },
+          objs: {
+            type: "array",
+            items: { type: "object", required: ["label"], properties: { label: { type: "string" } } },
+          },
+          enums: { type: "array", items: { type: "string", enum: ["a", "b"] } },
+          consts: { type: "array", items: { type: "string", const: "x" } },
+          unions: { type: "array", items: { anyOf: [{ type: "string" }, { type: "integer" }] } },
+          untyped: { type: "array", items: {} },
+          noItems: { type: "array" },
+          nested: { type: "array", items: { type: "array", items: { type: "integer" } } },
+        },
+      },
+    });
+    expect(response.text).toBe(
+      '{"n":[0],' +
+        '"objs":[{"label":"CINATRA_UAT_OK: scripted label"}],' +
+        '"enums":["a"],' +
+        '"consts":["x"],' +
+        '"unions":["CINATRA_UAT_OK: scripted unions item"],' +
+        '"untyped":["CINATRA_UAT_OK: scripted untyped item"],' +
+        '"noItems":["CINATRA_UAT_OK: scripted noItems item"],' +
+        '"nested":[[0]]}',
+    );
   });
 });
