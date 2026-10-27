@@ -1661,4 +1661,125 @@ describe("drupal-mcp dev writers bind the dev owner host-side (cinatra#4387)", (
     }
     expect(trapped).toEqual([]);
   });
+
+  // Fields a property descriptor is read for. Each case below that defines one
+  // of them on Object.prototype saves the previous state and restores it in
+  // `finally`, reading what it asserts before the restore.
+  const DESCRIPTOR_KEYS = ["value", "get", "set"] as const;
+  function saveObjectPrototypeDescriptorKeys() {
+    return DESCRIPTOR_KEYS.map((key) => [key, Object.getOwnPropertyDescriptor(Object.prototype, key)] as const);
+  }
+  function restoreObjectPrototypeDescriptorKeys(saved: ReturnType<typeof saveObjectPrototypeDescriptorKeys>) {
+    for (const [key, field] of saved) {
+      if (field) Object.defineProperty(Object.prototype, key, field);
+      else Reflect.deleteProperty(Object.prototype, key);
+    }
+  }
+  // Defines `key` on Object.prototype as a getter that answers only a property
+  // descriptor (a receiver with an own `configurable`): it counts that read and
+  // returns `value`. Any other receiver reads `undefined`, so code outside a
+  // descriptor read is not handed the planted value.
+  function plantDescriptorReader(key: (typeof DESCRIPTOR_KEYS)[number], value: unknown, runs: { n: number }) {
+    Object.defineProperty(Object.prototype, key, {
+      configurable: true,
+      get(this: unknown) {
+        if (this === null || typeof this !== "object" || !Object.hasOwn(this, "configurable")) return undefined;
+        runs.n += 1;
+        return value;
+      },
+    });
+  }
+
+  it("a `value` defined on Object.prototype does not let an accessor field through: it is still refused and no getter runs", async () => {
+    const saved = saveObjectPrototypeDescriptorKeys();
+    const polluterRuns = { n: 0 };
+    let callerRuns = 0;
+    const outcomes: Array<{ owner: boolean; save: string; persist: string; saves: number; persists: number }> = [];
+    // Resolved before anything is defined on Object.prototype: resolveSingle
+    // runs vitest's expect, which defines properties with plain descriptors.
+    const service = drupal();
+    try {
+      plantDescriptorReader("value", "evil-value", polluterRuns);
+      for (const owner of [DEV_OWNER, null]) {
+        const input = {
+          get name() {
+            callerRuns += 1;
+            return "Local";
+          },
+          siteUrl: "http://localhost:8082",
+        };
+        devBoot(owner);
+        const saves = drupalApiCalls.save.length;
+        const persists = drupalApiCalls.devPersist.length;
+        const settle = (p: Promise<unknown>) =>
+          p.then(
+            () => "resolved",
+            (e: unknown) => `rejected: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        const save = await settle(service.devSaveInstance!(input));
+        const persist = await settle(service.devPersistLocalInstanceUnvalidated!(input));
+        outcomes.push({
+          owner: owner !== null,
+          save,
+          persist,
+          saves: drupalApiCalls.save.length - saves,
+          persists: drupalApiCalls.devPersist.length - persists,
+        });
+      }
+    } finally {
+      restoreObjectPrototypeDescriptorKeys(saved);
+    }
+    const refused = "rejected: A drupal-mcp dev instance save takes data fields only; the accessor field name is refused.";
+    expect(outcomes).toEqual([
+      { owner: true, save: refused, persist: refused, saves: 0, persists: 0 },
+      { owner: false, save: refused, persist: refused, saves: 0, persists: 0 },
+    ]);
+    expect(callerRuns).toBe(0);
+    expect(polluterRuns.n).toBe(0);
+  });
+
+  it("a `get` or `set` defined on Object.prototype is never read into the copy's descriptors: both writers hand the data fields and the host's pair", async () => {
+    const saved = saveObjectPrototypeDescriptorKeys();
+    const polluterRuns = { n: 0 };
+    const seen: Array<{ owner: boolean; save: string; persist: string; handed: Array<Record<string, unknown>> }> = [];
+    // Resolved before anything is defined on Object.prototype (see the case above).
+    const service = drupal();
+    try {
+      plantDescriptorReader("get", () => "evil-get", polluterRuns);
+      plantDescriptorReader("set", () => {}, polluterRuns);
+      for (const owner of [DEV_OWNER, null]) {
+        devBoot(owner);
+        const saves = drupalApiCalls.save.length;
+        const persists = drupalApiCalls.devPersist.length;
+        const settle = (p: Promise<unknown>) =>
+          p.then(
+            () => "resolved",
+            (e: unknown) => `rejected: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        const save = await settle(service.devSaveInstance!({ name: "Local", siteUrl: "http://localhost:8082" }));
+        const persist = await settle(
+          service.devPersistLocalInstanceUnvalidated!({ name: "Local", siteUrl: "http://localhost:8082" }),
+        );
+        // Only the calls this case made (none when a writer rejected).
+        const handed = [...drupalApiCalls.save.slice(saves), ...drupalApiCalls.devPersist.slice(persists)].map(
+          (call) => {
+            const h = call[0] as Record<string, unknown>;
+            return Object.fromEntries(
+              ["name", "siteUrl", "orgId", "runBy"].map((key) => [key, Object.getOwnPropertyDescriptor(h, key)?.value]),
+            );
+          },
+        );
+        seen.push({ owner: owner !== null, save, persist, handed });
+      }
+    } finally {
+      restoreObjectPrototypeDescriptorKeys(saved);
+    }
+    const bound = { name: "Local", siteUrl: "http://localhost:8082", orgId: "dev-org-1", runBy: "dev-admin-1" };
+    const unbound = { name: "Local", siteUrl: "http://localhost:8082", orgId: undefined, runBy: undefined };
+    expect(seen).toEqual([
+      { owner: true, save: "resolved", persist: "resolved", handed: [bound, bound] },
+      { owner: false, save: "resolved", persist: "resolved", handed: [unbound, unbound] },
+    ]);
+    expect(polluterRuns.n).toBe(0);
+  });
 });

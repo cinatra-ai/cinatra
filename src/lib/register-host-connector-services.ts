@@ -390,7 +390,10 @@ function devInstallOwnerBinding(): { orgId: string; runBy: string } | undefined 
  * input is a plain object of data fields (the connector's dev hook passes
  * object literals). The copy NEVER runs caller code: a Proxy input is refused
  * before any key is read, and each field is read from its own property
- * descriptor, so no getter is called. Its OWN ENUMERABLE DATA fields are
+ * descriptor, so no getter is called. A field is data only when its descriptor
+ * has an OWN `value`, and every descriptor the copy defines has no prototype,
+ * so a `value`, `get` or `set` defined on Object.prototype is never read
+ * there. Its OWN ENUMERABLE DATA fields are
  * copied one by one, except `orgId` and `runBy`, which are never read (on
  * these dev members only the host names the owner). An own enumerable
  * ACCESSOR field (a getter or a setter) is refused: the member throws and
@@ -417,21 +420,37 @@ function withDevInstallOwnerBinding<T extends object>(input: T): Omit<T, "orgId"
     if (key === "orgId" || key === "runBy") continue;
     const field = Reflect.getOwnPropertyDescriptor(input, key);
     if (!field || !field.enumerable) continue;
-    if (!("value" in field)) {
+    // An OWN `value` only: `in` would also find a `value` defined on Object.prototype.
+    if (!Object.hasOwn(field, "value")) {
       throw new Error(
         `A drupal-mcp dev instance save takes data fields only; the accessor field ${String(key)} is refused.`,
       );
     }
-    Object.defineProperty(out, key, { value: field.value, enumerable: true, writable: true, configurable: true });
+    Object.defineProperty(out, key, ownDataField(field.value));
   }
   const binding = devInstallOwnerBinding();
   for (const [key, value] of [
     ["orgId", binding?.orgId],
     ["runBy", binding?.runBy],
   ] as const) {
-    Object.defineProperty(out, key, { value, enumerable: true, writable: true, configurable: true });
+    Object.defineProperty(out, key, ownDataField(value));
   }
   return out as Omit<T, "orgId" | "runBy"> & { orgId?: string; runBy?: string };
+}
+
+/**
+ * An enumerable, writable, configurable data-property descriptor with NO
+ * prototype. `Object.defineProperty` reads `get`, `set` and `value` of the
+ * descriptor through its prototype chain, so a plain object literal would pick
+ * up (and run the getter of) a `get` or `set` defined on Object.prototype.
+ */
+function ownDataField(value: unknown): PropertyDescriptor {
+  const field: PropertyDescriptor = Object.create(null);
+  field.value = value;
+  field.enumerable = true;
+  field.writable = true;
+  field.configurable = true;
+  return field;
 }
 
 // Host-LOCAL extension of the SDK `HostDrupalMcpService` (cinatra#4387; the
