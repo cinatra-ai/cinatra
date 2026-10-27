@@ -58,6 +58,13 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  CAPTURE_HOSTS,
+  CAPTURE_INDEX_PATH,
+  CARD_KINDS,
+  captureHostAdmissibility,
+  captureStatesFor,
+} from "../../ci/lib/capture-record-contract.mjs";
 import { parseSpecCommit } from "../../ci/lib/design-pin.mjs";
 import { captureAnchorExpectations } from "../lib/anchor-contract.mjs";
 
@@ -204,6 +211,216 @@ describe("--strict means DONE, not merely 'no false claim'", () => {
     expect(r.partial).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// ROW 15'S CENSUS, READ WHOLE. Row 15's gap says its census is COUNTED, not
+// recited, off the capture index, and strict mode prints it. A reader that
+// picks out only the counts it recognises lets a stale number stand beside a
+// true one, so this one reads the census sentence from end to end and refuses
+// whatever it cannot read: a bucket stated twice, a bucket left out, a host or
+// a state the capture vocabulary does not have, and any text after a count.
+// The bucket set is the vocabulary's own (every kind x every host it may be
+// photographed on x every state it resolves), not the set the index happens
+// to hold. The numbers of clauses (a), (c) and (d) are held too: each count to
+// the index, and every other number of those clauses word for word. Clauses
+// (b) and (e) are not read here. It returns its problems instead of asserting,
+// so each mutant below is held to it on its own.
+// ---------------------------------------------------------------------------
+const NUMBER_WORDS = [
+  "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+  "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen",
+  "nineteen", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety", "hundred",
+];
+const numberWord = (n) => (n <= 20 ? NUMBER_WORDS[n] : String(n));
+const WORD = `(?:${NUMBER_WORDS.join("|")})`;
+// A number in prose: any token with a digit in it, or a number word.
+const NUMBER_TOKEN = new RegExp(`[^\\s(),;:'"\`]*\\d[^\\s(),;:'"\`]*|\\b${WORD}(?:-${WORD})?\\b`, "gi");
+const numbersIn = (text) => (text.match(NUMBER_TOKEN) ?? []).map((t) => t.toLowerCase());
+// The two hosts the census calls "the two page hosts".
+const PAGE_HOSTS = ["site_widget", "page_gate_region"];
+const CENSUS_OPEN = "per kind x host x state: ";
+const CENSUS_CLOSE = " STILL ABSENT, with the exact obstacle: ";
+const CLAUSE_D_PAIR = /chat_thread (\d+) pending \/ (\d+) decided, site_widget (\d+) pending \/ (\d+) decided/g;
+
+function row15CensusProblems(gap, index, walkPlan) {
+  const problems = [];
+  const actual = {};
+  const cells = {};
+  for (const r of index.records) {
+    const k = `${r.declaredKind} | ${r.declaredHost} | ${r.declaredState}`;
+    actual[k] = (actual[k] ?? 0) + 1;
+    (cells[k] ??= []).push(r.cell);
+  }
+  const count = (k) => actual[k] ?? 0;
+
+  const totals = [...gap.matchAll(/\(scripts\/ci\/chat-hitl-capture-index\.json, (\d+) records\)/g)];
+  if (totals.length !== 1) problems.push(`the record total is stated ${totals.length} times, not once`);
+  else if (Number(totals[0][1]) !== index.records.length) {
+    problems.push(`the record total says ${totals[0][1]}; the index holds ${index.records.length}`);
+  }
+
+  const opened = gap.split(CENSUS_OPEN);
+  const closed = gap.split(CENSUS_CLOSE);
+  if (opened.length !== 2 || closed.length !== 2) {
+    problems.push("the census sentence and the STILL ABSENT list are not each there exactly once");
+    return problems;
+  }
+  const census = opened[1].slice(0, opened[1].indexOf(CENSUS_CLOSE));
+  if (!census.endsWith(".")) problems.push(`the census sentence does not end with a full stop: "${census.slice(-40)}"`);
+
+  // --- the census, every item consumed -------------------------------------------------------------------------
+  const stated = new Map();
+  const compositionOnly = {};
+  const kinds = [];
+  const put = (kind, host, state, n) => {
+    if (!CAPTURE_HOSTS.includes(host)) return problems.push(`${kind}: "${host}" is not a capture host`);
+    if (!captureStatesFor(kind).includes(state)) return problems.push(`${kind}: "${state}" is not a state it resolves`);
+    if (!captureHostAdmissibility(kind, host).capturable) {
+      return problems.push(`${kind} | ${host} is composition-only, and the census gives it a count`);
+    }
+    const k = `${kind} | ${host} | ${state}`;
+    if (stated.has(k)) return problems.push(`${k} is stated twice`);
+    stated.set(k, n);
+  };
+  for (const clause of census.replace(/\.$/, "").split("; ")) {
+    const head = clause.match(/^([a-z_]+) — /);
+    if (!head || !Object.hasOwn(CARD_KINDS, head[1])) {
+      problems.push(`a census clause names no card kind: "${clause.slice(0, 50)}"`);
+      continue;
+    }
+    const kind = head[1];
+    if (kinds.includes(kind)) problems.push(`${kind} has two census clauses`);
+    kinds.push(kind);
+    let readingState = null;
+    const items = [
+      [/^(\w+) pending (\d+) \/ decided (\d+)/, (m) => {
+        put(kind, m[1], "pending", Number(m[2]));
+        put(kind, m[1], "decided", Number(m[3]));
+      }],
+      [/^none on (\w+)/, (m) => captureStatesFor(kind).forEach((s) => put(kind, m[1], s, 0))],
+      [/^(\w+) none/, (m) => captureStatesFor(kind).forEach((s) => put(kind, m[1], s, 0))],
+      [/^(?:and|(\w+)) on (\w+) (\d+) \(([A-Z]\d+)\)/, (m) => {
+        if (m[1]) readingState = m[1];
+        if (!readingState) return problems.push(`${kind}: "${m[0]}" names no state`);
+        put(kind, m[2], readingState, Number(m[3]));
+        const k = `${kind} | ${m[2]} | ${readingState}`;
+        if (!(cells[k] ?? []).length || !cells[k].every((c) => c.startsWith(`${m[4]}__`))) {
+          problems.push(`${k}: the label (${m[4]}) is not the group of its records`);
+        }
+      }],
+      [/^and the two page hosts recorded as composition-only with their reasons/, () => {
+        compositionOnly[kind] = [...PAGE_HOSTS];
+      }],
+    ];
+    let rest = clause.slice(head[0].length);
+    while (rest.length) {
+      const hit = items.map(([re, take]) => [rest.match(re), take]).find(([m]) => m);
+      if (!hit) {
+        problems.push(`${kind}: text the census does not read: "${rest.slice(0, 50)}"`);
+        break;
+      }
+      hit[1](hit[0]);
+      rest = rest.slice(hit[0][0].length);
+      if (!rest.length) break;
+      const sep = rest.match(/^(?:, | (?=and ))/);
+      if (!sep) {
+        problems.push(`${kind}: text after "${hit[0][0]}": "${rest.slice(0, 50)}"`);
+        break;
+      }
+      rest = rest.slice(sep[0].length);
+    }
+  }
+  for (const kind of Object.keys(CARD_KINDS)) {
+    const unreachable = CAPTURE_HOSTS.filter((h) => !captureHostAdmissibility(kind, h).capturable);
+    if (String(compositionOnly[kind] ?? []) !== String(unreachable)) {
+      problems.push(`${kind}: the census names [${compositionOnly[kind] ?? []}] composition-only; the contract, [${unreachable}]`);
+    }
+    for (const host of CAPTURE_HOSTS.filter((h) => !unreachable.includes(h))) {
+      for (const state of captureStatesFor(kind)) {
+        const k = `${kind} | ${host} | ${state}`;
+        if (!stated.has(k)) problems.push(`${k} is left out of the census`);
+        else if (stated.get(k) !== count(k)) problems.push(`${k}: the census says ${stated.get(k)}, the index holds ${count(k)}`);
+      }
+    }
+  }
+  for (const k of Object.keys(actual)) {
+    if (!stated.has(k)) problems.push(`${k}: the index holds ${actual[k]} records the census has no bucket for`);
+  }
+
+  // --- the clauses, (a) to (e) once each and in order ------------------------------------------------------------
+  const absent = closed[1];
+  const at = [..."abcde"].map((l) => absent.split(`(${l}) `).length === 2 ? absent.indexOf(`(${l}) `) : -1);
+  if (at.includes(-1) || at.some((p, i) => i && p < at[i - 1])) {
+    problems.push(`clauses (a) to (e) are not each there once and in order: ${at}`);
+    return problems;
+  }
+  const clause = (l) => {
+    const i = "abcde".indexOf(l);
+    return absent.slice(at[i], at[i + 1] ?? absent.length);
+  };
+  const held = (l, want) => {
+    const got = numbersIn(clause(l));
+    if (String(got) !== String(want)) problems.push(`clause (${l})'s numbers are [${got}], not [${want}]`);
+  };
+  const ARG = "artifact_review_gate";
+  const HOLD = "recommendation_hold";
+  const schedule = Object.keys(actual)
+    .filter((k) => k.startsWith("trigger_schedule_proposal | "))
+    .reduce((n, k) => n + actual[k], 0);
+  const walkCells = walkPlan.steps.flatMap((s) => s.cells ?? []).length;
+  held("a", [numberWord(schedule), "cinatra#2788", numberWord(walkCells), "s9d", "2026-10-27", "cinatra#4390", "3"]);
+  held("c", [
+    numberWord(count(`${ARG} | site_widget | decided`)),
+    numberWord(count(`${ARG} | run_card | decided`)),
+    "cinatra#2936", "w6", "2b", "2",
+    numberWord(count(`${ARG} | page_gate_region | decided`)),
+    "cinatra#2936", "w6", "2b", "3",
+  ]);
+  const holdCounts = ["chat_thread | pending", "chat_thread | decided", "site_widget | pending", "site_widget | decided"]
+    .map((hs) => String(count(`${HOLD} | ${hs}`)));
+  held("d", ["cinatra#2786", "s9b", "cinatra#2790/#2890", "s9f", ...holdCounts]);
+  const pairs = [...gap.matchAll(CLAUSE_D_PAIR)];
+  if (pairs.length !== 1) problems.push(`clause (d)'s pair of counts is stated ${pairs.length} times, not once`);
+  else if (String(pairs[0].slice(1)) !== String(holdCounts)) {
+    problems.push(`clause (d)'s counts are ${pairs[0].slice(1)}; the index holds ${holdCounts}`);
+  }
+  if (/records are in the index/.test(gap)) problems.push(`the gap still says "records are in the index"`);
+  return problems;
+}
+
+// Each mutant puts a stale number into the gap in a form the pre-2 review of
+// cinatra#4392 found the earlier reader passing (the last two it already
+// refused). Each returns the mutated gap, or null when its anchor is not in the
+// gap exactly once: then the census has moved and the mutant must be re-aimed.
+const once = (re, to) => (gap) => {
+  const all = gap.match(new RegExp(re.source, "g")) ?? [];
+  return all.length === 1 ? gap.replace(re, to) : null;
+};
+const first = (re, to) => (gap) => (re.test(gap) ? gap.replace(re, to) : null);
+const ROW15_MUTANTS = [
+  ["a stale bucket stated before the true one",
+    once(/recommendation_hold — (\w+) pending (\d+) \/ decided (\d+)/,
+      (m, h, p, d) => `recommendation_hold — ${h} pending ${Number(p) + 2} / decided ${Number(d) + 2}, ${h} pending ${p} / decided ${d}`)],
+  ["a zero bucket left out", once(/, run_card none(?=,)/, "")],
+  ["a zero bucket under a misspelled host", once(/\bsite_widget none\b/, "site_wdiget none")],
+  ["a stale count after a bucket", once(/\bchat_thread none(?=,)/, "chat_thread none (4 records remain)")],
+  ["a second, stale clause (d) pair",
+    once(/(chat_thread \d+ pending \/ \d+ decided, site_widget \d+ pending \/ \d+ decided)\)/,
+      "$1) (was chat_thread 5 pending / 4 decided, site_widget 5 pending / 2 decided)")],
+  ["a stale count in clause (a)", once(/\bThe (\w+) records of the S9d rework walk/, "The twelve records of the S9d rework walk")],
+  ["a stale count in clause (c)",
+    once(/answered by (\w+) records/, (m, w) => `answered by ${w === "two" ? "three" : "two"} records`)],
+  ["a stale record total",
+    once(/(chat-hitl-capture-index\.json, )(\d+)( records\))/, (m, a, n, b) => `${a}${Number(n) - 1}${b}`)],
+  ["one census count moved by one",
+    first(/(run_card pending \d+ \/ decided )(\d+)/, (m, a, n) => `${a}${Number(n) + 1}`)],
+];
+
+const captureIndex = () => JSON.parse(readFileSync(CAPTURE_INDEX_PATH, "utf8"));
+const walkPlan = () =>
+  JSON.parse(
+    readFileSync(join(REPO_ROOT, "scripts", "audit", "__fixtures__", "capture-walk", "s9d-rework-walk-plan.json"), "utf8"),
+  );
 
 describe("the REAL manifest", () => {
   it("passes audit — every named proof exists in the tree", () => {
@@ -451,58 +668,20 @@ describe("the REAL manifest", () => {
   it("row 15's census is the capture index's census, count for count", () => {
     // The gap says its census is COUNTED, not recited, and strict mode prints
     // it. cinatra#4390 (2026-10-27) withdrew ten schedule records and the gap
-    // went on counting them, beside counts of an index of 93 records, so this
-    // holds every number of that sentence to the index as it stands.
+    // went on counting them, beside counts of an index of 93 records. The
+    // reader above holds the whole census sentence and the numbers of clauses
+    // (a), (c) and (d) to the index as it stands.
+    expect(row15CensusProblems(manifest().rows[14].gap, captureIndex(), walkPlan())).toEqual([]);
+  });
+
+  it.each(ROW15_MUTANTS)("row 15's census reader refuses %s", (name, mutate) => {
+    // A reader is only as good as the stale numbers it refuses (pre-2 of
+    // cinatra#4392 found seven forms the earlier reader passed).
     const gap = manifest().rows[14].gap;
-    const index = JSON.parse(
-      readFileSync(join(REPO_ROOT, "scripts", "ci", "chat-hitl-capture-index.json"), "utf8"),
-    );
-    const actual = {};
-    for (const r of index.records) {
-      const k = `${r.declaredKind} | ${r.declaredHost} | ${r.declaredState}`;
-      actual[k] = (actual[k] ?? 0) + 1;
-    }
-    const total = gap.match(/chat-hitl-capture-index\.json, (\d+) records\)/);
-    expect(total, "the census names the index's record count").not.toBeNull();
-    expect(Number(total[1])).toBe(index.records.length);
-    const census = gap.match(/per kind x host x state: ([^]*?) STILL ABSENT/);
-    expect(census, "the census sentence").not.toBeNull();
-    const stated = {};
-    for (const clause of census[1].split("; ")) {
-      const [kind, rest] = clause.split(" — ");
-      expect(rest, clause).toBeDefined();
-      for (const [, host, p, d] of rest.matchAll(/(\w+) pending (\d+) \/ decided (\d+)/g)) {
-        stated[`${kind} | ${host} | pending`] = Number(p);
-        stated[`${kind} | ${host} | decided`] = Number(d);
-      }
-      for (const [, host] of rest.matchAll(/(?:^|, )(\w+) none\b/g)) {
-        stated[`${kind} | ${host} | pending`] = 0;
-        stated[`${kind} | ${host} | decided`] = 0;
-      }
-      for (const [, host, n] of rest.matchAll(/(?:advisory|and) on (\w+) (\d+)/g)) {
-        stated[`${kind} | ${host} | advisory`] = Number(n);
-      }
-      // `none on <host>` is said only of the verification summary, whose one
-      // drawn state is `advisory`.
-      for (const [, host] of rest.matchAll(/none on (\w+)/g)) {
-        stated[`${kind} | ${host} | advisory`] = 0;
-      }
-    }
-    // Every bucket the index holds is stated, and every stated count is the
-    // index's count (a stated zero is a bucket the index does not hold).
-    for (const [k, n] of Object.entries(actual)) expect(stated[k], k).toBe(n);
-    for (const [k, n] of Object.entries(stated)) expect(actual[k] ?? 0, k).toBe(n);
-    expect(stated["trigger_schedule_proposal | chat_thread | pending"]).toBe(0);
-    // The recommendation hold's two hosts are counted again in clause (d).
-    const d = gap.match(/chat_thread (\d+) pending \/ (\d+) decided, site_widget (\d+) pending \/ (\d+) decided/);
-    expect(d, "clause (d)'s counts").not.toBeNull();
-    expect(d.slice(1).map(Number)).toEqual([
-      actual["recommendation_hold | chat_thread | pending"] ?? 0,
-      actual["recommendation_hold | chat_thread | decided"] ?? 0,
-      actual["recommendation_hold | site_widget | pending"] ?? 0,
-      actual["recommendation_hold | site_widget | decided"] ?? 0,
-    ]);
-    expect(gap).not.toMatch(/records are in the index/);
+    const mutated = mutate(gap);
+    expect(mutated, `${name}: the anchor is not in the gap exactly once; re-aim the mutant`).not.toBeNull();
+    expect(mutated).not.toBe(gap);
+    expect(row15CensusProblems(mutated, captureIndex(), walkPlan()), name).not.toEqual([]);
   });
 
   it("row 3 is MAPPED and partial: every transaction proof stands, and the withdrawn picture proofs are named in its gap", () => {

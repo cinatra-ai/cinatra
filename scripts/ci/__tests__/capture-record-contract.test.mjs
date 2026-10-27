@@ -684,6 +684,22 @@ describe("the advisory state — one kind's vocabulary, not every kind's", () =>
     });
     expect(index.records.length).toBe(101);
   });
+
+  it("the index's own prose keeps no record total: the census above is the one count", () => {
+    // The paragraph that says what the index holds said "SEVENTY-NINE records"
+    // while the array held 101: a hand-kept total that no capture batch moved.
+    // The count lives in the ratchet above, so the prose names none. Counts of
+    // one group of records elsewhere in the prose are not totals and stay.
+    const index = JSON.parse(readFileSync(CAPTURE_INDEX_PATH, "utf8"));
+    const prose = index.$comment.join(" ");
+    const said = prose.match(/WHAT IS ACTUALLY IN IT,[^.]*\./);
+    expect(said, "the sentence that says what the index holds").not.toBeNull();
+    const words =
+      "zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|" +
+      "sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred";
+    const total = new RegExp(`\\b(?:\\d+|(?:${words})(?:-(?:${words}))?)\\s+records\\b`, "i");
+    expect(said[0]).not.toMatch(total);
+  });
 });
 
 
