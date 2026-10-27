@@ -1231,7 +1231,7 @@ export function findSites(
       const spec = node.moduleSpecifier && isStringLike(node.moduleSpecifier) ? node.moduleSpecifier.text : undefined;
       // GAP 1 (R2): `export * as ns from` a module outside the tree hands its module object on like one that may export a checkbox.
       if (ts.isNamespaceExport(node.exportClause) && spec !== undefined && (isModule(spec) || objects.isObjectModule(spec))) {
-        pushUse(node, `a use of the module ${node.moduleSpecifier.text} exported whole as ${node.exportClause.name.text}, which no name follows`);
+        pushUse(node, `a use of the module ${spec} exported whole as ${node.exportClause.name.text}, which no name follows`);
       }
     }
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node) || ts.isImportEqualsDeclaration(node)) return;

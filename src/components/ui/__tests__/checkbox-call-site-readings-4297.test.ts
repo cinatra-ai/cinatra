@@ -46,6 +46,9 @@ const readRepo = (file: string) => readFileSync(path.join(REPO_ROOT, file), "utf
 describe("the recorded readings hold for the live tree", () => {
   const files = listSourceFiles(REPO_ROOT);
   const tree = scanTree(REPO_ROOT, files);
+  // Each caller scan parses the whole tree again, so the three run once here, when the block is collected, as the
+  // tree scan above does, and not inside a case under the per-test time limit.
+  const callerScans = COMPONENT_CALLERS.map((set) => ({ set, found: findCallers(files, readRepo, set.component, set.callerWhen) }));
 
   it("scans the whole application and every shared package", () => {
     // The listing is git's whole index under src/ and packages/; these files
@@ -68,8 +71,8 @@ describe("the recorded readings hold for the live tree", () => {
 
   it("every caller of each shared component whose box is read at its callers has a reading", () => {
     expect(COMPONENT_CALLERS.map((c) => c.component)).toEqual(["AccessCombobox", "UploadConsentBlock", "PermissionsFormDraft"]);
-    for (const set of COMPONENT_CALLERS) {
-      const found = findCallers(files, readRepo, set.component, set.callerWhen);
+    expect(callerScans.map((c) => c.set)).toEqual(COMPONENT_CALLERS);
+    for (const { set, found } of callerScans) {
       expect(callerProblems(set, found, readRepo)).toEqual([]);
     }
   });
