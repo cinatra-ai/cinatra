@@ -18,6 +18,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,10 +35,13 @@ const HAS_FLOCK = spawnSync("bash", ["-c", "command -v flock"]).status === 0;
 const LOCK_CASE_TIMEOUT_MS = 30_000;
 
 // Stand-in for the build: one line when it starts and one when it ends, in a
-// shared log, a pause between them, and the exit code it is told to give.
+// shared log, a pause between them, and the exit code it is told to give. With
+// FAKE_BUILD_LEAVES_PID it also leaves a process running after it ends (as a
+// build's stray worker would) and writes that process's pid to the file named.
 const FAKE_BUILD = [
   "#!/usr/bin/env bash",
   'printf \'start %s\\n\' "$1" >>"$FAKE_BUILD_LOG"',
+  'if [ -n "${FAKE_BUILD_LEAVES_PID:-}" ]; then sleep 30 >/dev/null 2>&1 </dev/null & printf \'%s\\n\' "$!" >"$FAKE_BUILD_LEAVES_PID"; fi',
   'if [ -n "${FAKE_BUILD_PAUSE:-}" ]; then sleep "$FAKE_BUILD_PAUSE"; fi',
   'printf \'end %s\\n\' "$1" >>"$FAKE_BUILD_LOG"',
   'exit "${FAKE_BUILD_EXIT:-0}"',
@@ -46,7 +50,15 @@ const FAKE_BUILD = [
 
 const made = [];
 const holders = [];
+const strays = [];
 afterEach(() => {
+  for (const pid of strays.splice(0)) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // already gone
+    }
+  }
   // The holder's whole group: flock(1) and the command it keeps the lock for.
   for (const holder of holders.splice(0)) {
     try {
@@ -202,6 +214,83 @@ describe.skipIf(!HAS_FLOCK)("scripts/ci/design-build-host-lock.sh on a self-host
         "design build host lock: not used: the runner environment is github-hosted, not self-hosted; building",
       );
       expect(r.seconds).toBeLessThan(20);
+    },
+    LOCK_CASE_TIMEOUT_MS,
+  );
+
+  it(
+    "leaves the lock free when the build ends, even with a process the build left running",
+    async () => {
+      const w = workdir();
+      const pidFile = path.join(w.root, "stray.pid");
+      const r = await runStep(w, "a", { FAKE_BUILD_LEAVES_PID: pidFile });
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain("design build host lock: released after the build (exit 0)");
+      const stray = Number(readFileSync(pidFile, "utf8").trim());
+      strays.push(stray);
+      // The build's stray process is still running...
+      expect(() => process.kill(stray, 0)).not.toThrow();
+      // ...and the next job takes the lock at once.
+      expect(spawnSync("flock", ["-n", w.lockFile, "true"]).status).toBe(0);
+    },
+    LOCK_CASE_TIMEOUT_MS,
+  );
+
+  it(
+    "builds anyway, with a named line, when the wait is not a whole number of seconds",
+    async () => {
+      const w = workdir();
+      const r = await runStep(w, "a", { DESIGN_BUILD_LOCK_WAIT_SECONDS: "45m", FAKE_BUILD_EXIT: "8" });
+      expect(r.status).toBe(8);
+      expect(buildLog(w)).toEqual(["start a", "end a"]);
+      expect(r.stdout).toContain(
+        "design build host lock: NOT TAKEN: the wait '45m' is not a whole number of seconds; building without the lock",
+      );
+      expect(r.stdout).not.toContain("lock file");
+      expect(readdirSync(w.lockDir)).toEqual([]);
+    },
+    LOCK_CASE_TIMEOUT_MS,
+  );
+
+  it(
+    "never uses a lock file that is a symbolic link, and builds anyway when no directory is usable",
+    async () => {
+      const w = workdir();
+      const linkDir = path.join(w.root, "link-dir");
+      mkdirSync(linkDir);
+      const target = path.join(w.root, "link-target");
+      symlinkSync(target, path.join(linkDir, LOCK_NAME));
+      const notADirectory = path.join(w.root, "a-file");
+      writeFileSync(notADirectory, "");
+      const dirs = `${linkDir}:${path.join(w.root, "no-such-directory")}:${notADirectory}`;
+      const r = await runStep(w, "a", { DESIGN_BUILD_LOCK_DIRS: dirs, FAKE_BUILD_EXIT: "9" });
+      expect(r.status).toBe(9);
+      expect(buildLog(w)).toEqual(["start a", "end a"]);
+      expect(r.stdout).toContain(
+        `design build host lock: NOT TAKEN: no lock file can be opened or made in ${dirs}; building without the lock`,
+      );
+      // The link was neither followed nor used to make its target.
+      expect(existsSync(target)).toBe(false);
+    },
+    LOCK_CASE_TIMEOUT_MS,
+  );
+
+  it(
+    "takes the lock in the first usable directory of a list that starts with unusable ones",
+    async () => {
+      const w = workdir();
+      const linkDir = path.join(w.root, "link-dir");
+      mkdirSync(linkDir);
+      const target = path.join(w.root, "link-target");
+      symlinkSync(target, path.join(linkDir, LOCK_NAME));
+      const dirs = `${linkDir}:${path.join(w.root, "no-such-directory")}:${w.lockDir}`;
+      const r = await runStep(w, "a", { DESIGN_BUILD_LOCK_DIRS: dirs });
+      expect(r.status).toBe(0);
+      expect(buildLog(w)).toEqual(["start a", "end a"]);
+      const chosen = r.stdout.match(/^design build host lock: lock file (\S+) \(device \d+ inode \d+\), runner runner-a$/m);
+      expect(chosen?.[1]).toBe(w.lockFile);
+      expect(r.stdout).toMatch(/^design build host lock: TAKEN after \d+ s; building$/m);
+      expect(existsSync(target)).toBe(false);
     },
     LOCK_CASE_TIMEOUT_MS,
   );

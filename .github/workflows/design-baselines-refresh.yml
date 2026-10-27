@@ -105,7 +105,7 @@ jobs:
     - name: Build (standalone production server)
       # One design build at a time on a self-hosted machine, as in
       # design-visual-verify.yml: scripts/ci/design-build-host-lock.sh waits
-      # for the machine's lock (20 minutes at most, inside this job's 70), then
+      # for the machine's lock (20 minutes at most, under half of this job's 70), then
       # builds; it builds without the lock when it cannot take one, and does
       # nothing on a GitHub-hosted runner.
       env:

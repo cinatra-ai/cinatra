@@ -24,15 +24,18 @@
 # one lock. The file is opened for reading only and never made again once it
 # exists, so a runner account that did not make the file can still lock it.
 #
-# WAIT. At most DESIGN_BUILD_LOCK_WAIT_SECONDS (default 2700, 45 minutes), so a
-# job that waits still has time for its build and its suite inside the job's
-# timeout. The kernel drops the lock when its holder ends, also when the
-# holder is killed, so a dead job cannot block the next one.
+# WAIT. At most DESIGN_BUILD_LOCK_WAIT_SECONDS (default 2700, 45 minutes); the
+# workflows keep it at most half of the job's timeout. The wait counts against
+# that timeout: with the measured worst setup (20 minutes) and build (17
+# minutes), a job that waits the full 45 minutes is at minute 82 of 90 when its
+# suite starts, so a long suite can then reach the job's limit. The kernel
+# drops the lock when its holder ends, also when the holder is killed, so a
+# dead job cannot block the next one.
 #
-# FAIL OPEN. When flock is not on the runner, when no lock file can be opened,
-# or when the wait ends without the lock, the build runs without the lock, as
-# it did before this script, after a line that starts with
-# "design build host lock: NOT TAKEN".
+# FAIL OPEN. When the wait is not a whole number of seconds, when flock is not
+# on the runner, when no lock file can be opened, or when the wait ends without
+# the lock, the build runs without the lock, as it did before this script,
+# after a line that starts with "design build host lock: NOT TAKEN".
 #
 # HOSTED RUNNERS. DESIGN_BUILD_LOCK_RUNNER_ENVIRONMENT carries the step's
 # ${{ runner.environment }}, the same value the workflows' host steps read. Any
@@ -59,8 +62,8 @@ fi
 wait_seconds="${DESIGN_BUILD_LOCK_WAIT_SECONDS:-$DEFAULT_WAIT_SECONDS}"
 case "$wait_seconds" in
   '' | *[!0-9]*)
-    note "the wait '${wait_seconds}' is not a whole number of seconds; waiting ${DEFAULT_WAIT_SECONDS} s"
-    wait_seconds=$DEFAULT_WAIT_SECONDS
+    note "NOT TAKEN: the wait '${wait_seconds}' is not a whole number of seconds; building without the lock"
+    exec "$@"
     ;;
 esac
 

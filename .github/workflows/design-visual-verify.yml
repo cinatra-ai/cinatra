@@ -589,7 +589,7 @@ jobs:
           # share that machine and no swap step runs there; builds that
           # overlapped were killed with exit 137, builds that ran alone were
           # not. scripts/ci/design-build-host-lock.sh waits for the machine's
-          # lock (45 minutes at most, inside this job's 90), then builds; it
+          # lock (45 minutes at most, half of this job's 90), then builds; it
           # builds without the lock when it cannot take one, and does nothing
           # on a GitHub-hosted runner. The rebuild runs under the same lock.
           DESIGN_BUILD_LOCK_RUNNER_ENVIRONMENT: ${{ runner.environment }}
