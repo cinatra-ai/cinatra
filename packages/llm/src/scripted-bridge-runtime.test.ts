@@ -743,4 +743,87 @@ describe("a string-array answer — five members, each opening with a Title: lin
         '"nested":[[0]]}',
     );
   });
+
+  it("an EMPTY `enum` or an EMPTY union on a string item is a string array — the type decides", () => {
+    // An empty `enum: []` or `anyOf: []` picks nothing, so the node reaches the
+    // `string` case, as the value path reads it: five members.
+    const out = scriptedOutputFor({
+      type: "object",
+      required: ["emptyEnum", "emptyUnion"],
+      properties: {
+        emptyEnum: { type: "array", items: { type: "string", enum: [] } },
+        emptyUnion: { type: "array", items: { type: "string", anyOf: [] } },
+      },
+    }) as { emptyEnum: string[]; emptyUnion: string[] };
+    expect(out.emptyEnum).toHaveLength(5);
+    expect(out.emptyEnum[0]).toBe(
+      "Title: CINATRA_UAT_OK scripted emptyEnum item 1\nCINATRA_UAT_OK: scripted emptyEnum item 1 body",
+    );
+    expect(out.emptyUnion).toHaveLength(5);
+    expect(out.emptyUnion[0]).toBe(
+      "Title: CINATRA_UAT_OK scripted emptyUnion item 1\nCINATRA_UAT_OK: scripted emptyUnion item 1 body",
+    );
+  });
+
+  it("a NON-OBJECT `items` schema keeps the old road: null is one string, a boolean throws as before", () => {
+    // `items: null` reads as an untyped node: ONE scripted string, as before.
+    const out = scriptedOutputFor({
+      type: "object",
+      required: ["nullItems"],
+      properties: { nullItems: { type: "array", items: null } },
+    }) as { nullItems: unknown[] };
+    expect(out.nullItems).toEqual(["CINATRA_UAT_OK: scripted nullItems item"]);
+    // A boolean schema is no string declaration. The unchanged one-element code
+    // runs and throws exactly the TypeError it threw before this change.
+    enableScriptedDevelopmentRuntime();
+    expect(() =>
+      runScriptedBridgeCompletion({
+        user: "produce it",
+        outputSchema: { type: "object", properties: { boolItems: { type: "array", items: true } } },
+      }),
+    ).toThrow(/'const' in true/);
+  });
+
+  it("a type list led by a NON-string is no string array — one element, as before", () => {
+    enableScriptedDevelopmentRuntime();
+    const response = runScriptedBridgeCompletion({
+      user: "produce it",
+      outputSchema: {
+        type: "object",
+        required: ["mixed"],
+        properties: { mixed: { type: "array", items: { type: ["integer", "string"] } } },
+      },
+    });
+    expect(response.text).toBe('{"mixed":[0]}');
+  });
+
+  it("the DEPTH CAP: members past the cap are still five; an array node past the cap is a string", () => {
+    // Root 0, a 1, b 2, c 3, d 4, e 5: `deep` is at depth 6 (its members would
+    // be at 7, past the cap of 6); `tooDeep` is itself at depth 7.
+    const out = scriptedOutputFor({
+      type: "object",
+      properties: {
+        a: { type: "object", properties: {
+          b: { type: "object", properties: {
+            c: { type: "object", properties: {
+              d: { type: "object", properties: {
+                e: { type: "object", properties: {
+                  deep: { type: "array", items: { type: "string" } },
+                  f: { type: "object", properties: {
+                    tooDeep: { type: "array", items: { type: "string" } },
+                  } },
+                } },
+              } },
+            } },
+          } },
+        } },
+      },
+    }) as { a: { b: { c: { d: { e: { deep: string[]; f: { tooDeep: unknown } } } } } } };
+    const e = out.a.b.c.d.e;
+    expect(e.deep).toHaveLength(5);
+    expect(e.deep[4]).toBe(
+      "Title: CINATRA_UAT_OK scripted deep item 5\nCINATRA_UAT_OK: scripted deep item 5 body",
+    );
+    expect(e.f.tooDeep).toBe("CINATRA_UAT_OK: scripted tooDeep");
+  });
 });
