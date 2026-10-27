@@ -394,3 +394,59 @@ describe("the bound's edges, as a fill and as the check itself (cinatra#4377)", 
     });
   }
 });
+
+describe("a filled cron is a fill of the same rows (cinatra#4377)", () => {
+  for (const [name, cron] of [
+    ["day 32", "0 9 32 * *"],
+    ["day 0", "0 9 0 * *"],
+    ["day 31 (not a new choice)", "0 9 31 * *"],
+    ["an expression the rows cannot read", "not a cron"],
+  ] as const) {
+    it(`a filled cron with ${name} moves neither the select nor the stored cron`, async () => {
+      const container = await renderThenFill(10, { triggerType: "recurring", cronExpression: cron });
+      expect(byLabel(container, "Day of month")!.textContent).toBe("10");
+      expect(storedCron(container)).toBe("0 9 10 * *");
+      expect(await dayOptions(container)).toEqual(DAYS_1_TO_28);
+    });
+  }
+
+  it("a filled cron with day 15 moves the select and is the stored cron", async () => {
+    const container = await renderThenFill(10, { triggerType: "recurring", cronExpression: "0 9 15 * *" });
+    await waitFor(() => expect(storedCron(container)).toBe("0 9 15 * *"));
+    expect(byLabel(container, "Day of month")!.textContent).toBe("15");
+  });
+
+  it("a filled weekday cron (it names no day) moves the week and the weekday", async () => {
+    const container = await renderThenFill(10, { triggerType: "recurring", cronExpression: "0 9 8-14 * 1" });
+    await waitFor(() => expect(storedCron(container)).toBe("0 9 8-14 * 1"));
+    expect(byLabel(container, "Week of month")!.textContent).toBe("2nd");
+    expect(byLabel(container, "Weekday")!.textContent).toBe("Mon");
+  });
+
+  it("a filled weekly cron (it has no day of month) moves the frequency and is the stored cron", async () => {
+    const container = await renderThenFill(10, { triggerType: "recurring", cronExpression: "0 9 * * 1,3" });
+    await waitFor(() => expect(storedCron(container)).toBe("0 9 * * 1,3"));
+    expect(byLabel(container, "Day of month")).toBeNull();
+  });
+});
+
+describe("the options helper's lower edge, and a saved day 29 or 30 drawn (cinatra#4377)", () => {
+  it("dayOfMonthOptions(28) is 1-28 once, with no second 28", () => {
+    expect(dayOfMonthOptions(28)).toEqual(Array.from({ length: 28 }, (_, i) => i + 1));
+  });
+
+  it("a filled day of 28 draws exactly the options 1-28", async () => {
+    const container = await renderThenFill(10, { dayOfMonth: 28 });
+    await waitFor(() => expect(storedCron(container)).toBe("0 9 28 * *"));
+    expect(await dayOptions(container)).toEqual(DAYS_1_TO_28);
+  });
+
+  for (const day of [29, 30]) {
+    it(`a saved day of ${day} is drawn, stored and offered after 28`, async () => {
+      const container = await renderThenFill(day, {});
+      expect(byLabel(container, "Day of month")!.textContent).toBe(String(day));
+      expect(storedCron(container)).toBe(`0 9 ${day} * *`);
+      expect(await dayOptions(container)).toEqual([...DAYS_1_TO_28, String(day)]);
+    });
+  }
+});

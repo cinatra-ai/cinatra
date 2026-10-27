@@ -553,10 +553,19 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
       if (typeof values.timezone === "string") {
         sv("timezone", values.timezone);
       }
+      // A FILLED CRON IS A FILL OF THE SAME ROWS (cinatra#4377). It is applied
+      // only when `parseCronToRecurring` reads it back, and when the day of
+      // month it names, if any, is one the select offers as a new choice
+      // (1-28). Otherwise neither the cron nor the selection moves, so a day
+      // the select cannot draw is never stored under it. A cron the reader
+      // reads only approximately (a list or a step in the day field) is still
+      // applied as before: the reader's own limit, which its tests pin.
       if (typeof values.cronExpression === "string") {
-        sv("cronExpression", values.cronExpression);
         const parsed = parseCronToRecurring(values.cronExpression);
-        if (parsed) setRecurring((prev) => ({ ...prev, ...parsed }));
+        if (parsed && (parsed.dayOfMonth === undefined || isOfferedDayOfMonth(parsed.dayOfMonth))) {
+          sv("cronExpression", values.cronExpression);
+          setRecurring((prev) => ({ ...prev, ...parsed }));
+        }
       }
       // THE REPEAT ROWS THEMSELVES. The same write the form's own controls make
       // (`updateRecurring`): the selections move and the cron is rebuilt from
