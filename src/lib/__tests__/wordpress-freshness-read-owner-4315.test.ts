@@ -8,7 +8,10 @@
  * one read ability), so the read is served on a run. Off a run nothing changes.
  * The owner comes only from the host code; caller-supplied invoker fields never
  * serve a call, a write ability still refuses, and an outward call still
- * refuses under the new owner.
+ * refuses under the new owner. The minter takes no connector or ability name
+ * (a closed list of read abilities), and its mint proof is module-private: an
+ * owner added to a globally reachable set, an inherited `hostRead` or a Proxy
+ * that answers `hostRead` serves nothing.
  *
  * Drives the real adapter, the real invoker and the real run guard; the run
  * store, the audit writer, the trusted-actor resolution and the invoker's
@@ -100,7 +103,7 @@ function fixture(modifiedGmt: string = CAPTURED) {
   return { wire, deps };
 }
 
-function check() {
+function check(postType?: "page") {
   return wordpressFreshnessAdapter.check({
     objectId: "obj_1",
     orgId: "org",
@@ -109,7 +112,7 @@ function check() {
       kind: "wordpress-post",
       remoteId: "42",
       modifiedAt: CAPTURED,
-      extra: { instanceId: INSTANCE },
+      extra: postType ? { instanceId: INSTANCE, postType } : { instanceId: INSTANCE },
     } as unknown as Parameters<typeof wordpressFreshnessAdapter.check>[0]["remoteRevisionRef"],
   });
 }
@@ -119,8 +122,23 @@ const invoke = (toolName: string, deps: ConnectorInstanceInvokerDeps) =>
       primitiveName: "wordpress_freshness_check", sourceType: "freshness_sweep", causation: "obj_1" },
     deps,
   );
-const hostRead = (toolNames: string[], instanceId = INSTANCE) =>
-  ({ primitiveName: "wordpress_freshness_check", connectorKey: "wordpress", instanceId, toolNames });
+const mint = <T>(effect: (toolName: string) => Promise<T>, kind: "post" | "page" = "post", instanceId = INSTANCE) =>
+  hostContext.withWordPressFreshnessReadOwner({ instanceId, kind }, effect);
+// What any code in the same process can do with the guard's globally registered
+// current-owner map: install an owner object for a run frame.
+function runAsOwner<T>(owner: object, effect: () => Promise<T>): Promise<T> {
+  const frame = runFrame();
+  const owners = (globalThis as unknown as Record<symbol, WeakMap<object, unknown>>)[
+    Symbol.for("@cinatra-ai/host:guarded-action-owner/v1")];
+  owners.set(frame, owner);
+  return mcpRequestContextStorage.run(frame, effect).finally(() => owners.delete(frame));
+}
+// A leaf-shaped unpinned owner with no hostRead, and a forged read naming a write.
+const leafFields = () => ({ unpinned: true, toolName: "wordpress_freshness_check", wrapper: "instance_tool",
+  connectorKey: "wordpress", instanceId: INSTANCE });
+const forgedWriteRead = () => Object.freeze({ connectorKey: "wordpress", instanceId: INSTANCE,
+  toolName: "ewpa/create-post", toolNames: Object.freeze(["ewpa/create-post"]) });
+const CREATE_CALL = { connectorKey: "wordpress", instanceId: INSTANCE, toolName: "ewpa/create-post" } as const;
 const OWNERLESS = { code: "tool_error", message: "executed connector owner is unavailable" };
 
 beforeEach(() => {
@@ -133,9 +151,9 @@ afterEach(() => {
 describe("cinatra#4315 item 1: the fail-closed state without the host-derived owner", () => {
   it("reads unknown with the refusal reason and makes no wire call", async () => {
     // Remove the host-derived owner: the read runs in the bare run frame.
-    if (typeof (hostContext as Record<string, unknown>).withHostConnectorReadOwner === "function") {
-      vi.spyOn(hostContext, "withHostConnectorReadOwner").mockImplementation(
-        ((_read: unknown, effect: () => Promise<unknown>) => effect()) as typeof hostContext.withHostConnectorReadOwner,
+    if (typeof (hostContext as Record<string, unknown>).withWordPressFreshnessReadOwner === "function") {
+      vi.spyOn(hostContext, "withWordPressFreshnessReadOwner").mockImplementation(
+        ((_read: unknown, effect: (toolName: string) => Promise<unknown>) => effect("ewpa/get-post")) as typeof hostContext.withWordPressFreshnessReadOwner,
       );
     }
     const { wire } = fixture();
@@ -174,6 +192,16 @@ describe("cinatra#4315 item 3: the read is served on a run under the host-derive
   });
 });
 
+describe("cinatra#4315 item 3: a page is read with ewpa/get-page on a run", () => {
+  it("serves one ewpa/get-page wire call and reads fresh", async () => {
+    const { wire } = fixture();
+    const verdict = await mcpRequestContextStorage.run(runFrame(), () => check("page"));
+    expect(verdict.state).toBe("fresh");
+    expect(wire).toHaveBeenCalledTimes(1);
+    expect(wire).toHaveBeenCalledWith(expect.objectContaining({ arguments: { ability_name: "ewpa/get-page", parameters: { post_id: 42 } } }));
+  });
+});
+
 describe("cinatra#4315 item 4: the owner is host-derived", () => {
   it("caller-supplied sourceType and primitiveName on a run with no guarded owner refuse before any wire call", async () => {
     const { wire, deps } = fixture();
@@ -192,8 +220,62 @@ describe("cinatra#4315 item 4: the owner is host-derived", () => {
 
   it("off a run the host read owner sets no owner", async () => {
     const seen = await mcpRequestContextStorage.run(offRunFrame(), () =>
-      hostContext.withHostConnectorReadOwner(hostRead(["ewpa/get-post"]), async () => hostContext.currentGuardedActionOwner()));
+      mint(async () => hostContext.currentGuardedActionOwner()));
     expect(seen).toBeUndefined();
+  });
+
+  it("an owner added to a globally reachable set serves nothing", async () => {
+    const { wire, deps } = fixture();
+    // The first commit of this change kept its mint proof under this registered
+    // symbol; any code in the process could add to it. The proof is now module-private.
+    const holder = globalThis as unknown as Record<symbol, WeakSet<object> | undefined>;
+    const key = Symbol.for("@cinatra-ai/host:host-read-action-owners/v1");
+    const set = (holder[key] ??= new WeakSet<object>());
+    const forged = Object.freeze({ ...leafFields(), hostRead: forgedWriteRead() });
+    set.add(forged);
+    expect(hostContext.guardedOwnerServesInstanceCall(forged as never, CREATE_CALL)).toBe(false);
+    await expect(runAsOwner(forged, () => invoke("ewpa/create-post", deps))).rejects.toMatchObject(OWNERLESS);
+    expect(wire).toHaveBeenCalledTimes(0);
+  });
+
+  it("an owner with an inherited hostRead serves nothing", async () => {
+    const { wire, deps } = fixture();
+    const inherited = Object.assign(Object.create({ hostRead: forgedWriteRead() }) as object, leafFields());
+    expect(hostContext.guardedOwnerServesInstanceCall(inherited as never, CREATE_CALL)).toBe(false);
+    await expect(runAsOwner(inherited, () => invoke("ewpa/create-post", deps))).rejects.toMatchObject(OWNERLESS);
+    expect(wire).toHaveBeenCalledTimes(0);
+  });
+
+  it.each([
+    ["hides hostRead from has and getOwnPropertyDescriptor but answers get", false],
+    ["hides hostRead from getOwnPropertyDescriptor but answers has", true],
+  ] as const)("a Proxy owner that %s serves nothing", async (_label, answersHas) => {
+    const { wire, deps } = fixture();
+    const read = forgedWriteRead();
+    const proxy = new Proxy(leafFields(), {
+      has: (t, p) => (p === "hostRead" ? answersHas : Reflect.has(t, p)),
+      get: (t, p, r) => (p === "hostRead" ? read : Reflect.get(t, p, r)),
+      getOwnPropertyDescriptor: (t, p) => (p === "hostRead" ? undefined : Reflect.getOwnPropertyDescriptor(t, p)),
+    });
+    expect(hostContext.guardedOwnerServesInstanceCall(proxy as never, CREATE_CALL)).toBe(false);
+    await expect(runAsOwner(proxy, () => invoke("ewpa/create-post", deps))).rejects.toMatchObject(OWNERLESS);
+    expect(wire).toHaveBeenCalledTimes(0);
+  });
+
+  it("a Proxy owner whose trap throws on hostRead serves nothing", () => {
+    const proxy = new Proxy(leafFields(), {
+      has: (t, p) => { if (p === "hostRead") throw new Error("trap"); return Reflect.has(t, p); },
+    });
+    expect(hostContext.guardedOwnerServesInstanceCall(proxy as never, CREATE_CALL)).toBe(false);
+  });
+
+  it("a leaf owner with no hostRead still serves the call, as before (the guard then reads it)", async () => {
+    const { wire, deps } = fixture();
+    const leaf = Object.freeze(leafFields());
+    expect(hostContext.guardedOwnerServesInstanceCall(leaf as never,
+      { connectorKey: "wordpress", instanceId: INSTANCE, toolName: "ewpa/get-post" })).toBe(true);
+    await expect(runAsOwner(leaf, () => invoke("ewpa/get-post", deps))).resolves.toBeDefined();
+    expect(wire).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -207,40 +289,102 @@ describe("cinatra#4315 item 5: writes still refuse", () => {
   it("the host read owner for ewpa/get-post does not serve ewpa/create-post", async () => {
     const { wire, deps } = fixture();
     await expect(mcpRequestContextStorage.run(runFrame(), () =>
-      hostContext.withHostConnectorReadOwner(hostRead(["ewpa/get-post"]), () => invoke("ewpa/create-post", deps)))).rejects.toMatchObject(OWNERLESS);
+      mint(() => invoke("ewpa/create-post", deps)))).rejects.toMatchObject(OWNERLESS);
     expect(wire).toHaveBeenCalledTimes(0);
   });
 
-  it("the host read owner for another connector does not serve the WordPress call", async () => {
+  it("no exported minter mints an owner that serves a write ability", async () => {
     const { wire, deps } = fixture();
-    await expect(mcpRequestContextStorage.run(runFrame(), () =>
-      hostContext.withHostConnectorReadOwner({ ...hostRead(["ewpa/get-post"]), connectorKey: "drupal" }, () => invoke("ewpa/get-post", deps)))).rejects.toMatchObject(OWNERLESS);
+    // At the first commit of this change the minter took free connector and
+    // ability names, so toolNames ["ewpa/create-post"] served the write. The
+    // minter now takes only a post type from a closed list.
+    const freeNames = (hostContext as Record<string, unknown>).withHostConnectorReadOwner as
+      undefined | ((read: unknown, effect: () => Promise<unknown>) => Promise<unknown>);
+    const call = mcpRequestContextStorage.run(runFrame(), () => freeNames
+      ? freeNames({ primitiveName: "wordpress_freshness_check", connectorKey: "wordpress", instanceId: INSTANCE,
+        toolNames: ["ewpa/create-post"] }, () => invoke("ewpa/create-post", deps))
+      : hostContext.withWordPressFreshnessReadOwner({ instanceId: INSTANCE, kind: "create-post" as never },
+        (toolName) => invoke(toolName, deps)));
+    await expect(call).rejects.toBeInstanceOf(hostContext.OutwardActionRefusal);
     expect(wire).toHaveBeenCalledTimes(0);
+  });
+
+  it.each([
+    ["create-post"], ["ewpa/create-post"], ["delete-post"], [""], ["__proto__"], ["toString"], [undefined],
+  ] as const)("the minter refuses kind %j before the effect, on and off a run", async (kind) => {
+    const effect = vi.fn(async () => "served");
+    for (const frame of [runFrame(), offRunFrame()]) {
+      const call = mcpRequestContextStorage.run(frame, () =>
+        hostContext.withWordPressFreshnessReadOwner({ instanceId: INSTANCE, kind: kind as never }, effect));
+      await expect(call).rejects.toBeInstanceOf(hostContext.OutwardActionRefusal);
+      await expect(call).rejects.toThrow("action_host_read_not_allowed");
+    }
+    expect(effect).toHaveBeenCalledTimes(0);
+  });
+
+  it("the minter refuses an empty instance before the effect", async () => {
+    const effect = vi.fn(async () => "served");
+    await expect(mcpRequestContextStorage.run(runFrame(), () =>
+      hostContext.withWordPressFreshnessReadOwner({ instanceId: "", kind: "post" }, effect))).rejects.toThrow("action_host_read_not_allowed");
+    expect(effect).toHaveBeenCalledTimes(0);
+  });
+
+  it("the minted owner serves only the wordpress connector, its instance and its one read ability", async () => {
+    const served = await mcpRequestContextStorage.run(runFrame(), () => mint(async (toolName) => {
+      const owner = hostContext.currentGuardedActionOwner()!;
+      const serves = (connectorKey: string, instanceId: string, name: string) =>
+        hostContext.guardedOwnerServesInstanceCall(owner, { connectorKey, instanceId, toolName: name });
+      return {
+        toolName,
+        own: serves("wordpress", INSTANCE, "ewpa/get-post"),
+        page: serves("wordpress", INSTANCE, "ewpa/get-page"),
+        write: serves("wordpress", INSTANCE, "ewpa/create-post"),
+        connector: serves("drupal", INSTANCE, "ewpa/get-post"),
+        instance: serves("wordpress", "wp_instance_2", "ewpa/get-post"),
+      };
+    }));
+    expect(served).toEqual({ toolName: "ewpa/get-post", own: true, page: false, write: false, connector: false, instance: false });
   });
 
   it("the host read owner for one instance does not serve another instance", async () => {
     const { wire, deps } = fixture();
     await expect(mcpRequestContextStorage.run(runFrame(), () =>
-      hostContext.withHostConnectorReadOwner(hostRead(["ewpa/get-post"], "wp_instance_2"), () => invoke("ewpa/get-post", deps)))).rejects.toMatchObject(OWNERLESS);
+      mint(() => invoke("ewpa/get-post", deps), "post", "wp_instance_2"))).rejects.toMatchObject(OWNERLESS);
     expect(wire).toHaveBeenCalledTimes(0);
+  });
+
+  it("the owner ends with the read, also when the read rejects", async () => {
+    const after = await mcpRequestContextStorage.run(runFrame(), async () => {
+      await mint(async () => { throw new Error("read failed"); }).catch(() => undefined);
+      return hostContext.currentGuardedActionOwner();
+    });
+    expect(after).toBeUndefined();
   });
 });
 
 describe("cinatra#4315 item 6: outward still refuses under the new owner", () => {
-  it("a name in OUTWARD_EFFECT_TOOL_NAMES refuses with OutwardActionRefusal before any wire call", async () => {
+  it("a name in OUTWARD_EFFECT_TOOL_NAMES is not served under the host read owner and makes no wire call", async () => {
     expect(OUTWARD_EFFECT_TOOL_NAMES.has("email_send")).toBe(true);
     const { wire, deps } = fixture();
-    const call = mcpRequestContextStorage.run(runFrame(), () =>
-      hostContext.withHostConnectorReadOwner(hostRead(["email_send"]), () => invoke("email_send", deps)));
+    await expect(mcpRequestContextStorage.run(runFrame(), () =>
+      mint(() => invoke("email_send", deps)))).rejects.toMatchObject(OWNERLESS);
+    expect(wire).toHaveBeenCalledTimes(0);
+  });
+
+  it("the guard refuses an outward name under the host read owner with OutwardActionRefusal", async () => {
+    const effect = vi.fn(async () => "served");
+    const call = mcpRequestContextStorage.run(runFrame(), () => mint(() =>
+      hostContext.withGuardedRunActionInvocation({ action: { ...hostContext.currentGuardedActionOwner()!, toolName: "email_send" },
+        arguments: {} }, effect)));
     await expect(call).rejects.toBeInstanceOf(hostContext.OutwardActionRefusal);
     await expect(call).rejects.toThrow("action_loaded_identity_missing_or_stale");
-    expect(wire).toHaveBeenCalledTimes(0);
+    expect(effect).toHaveBeenCalledTimes(0);
   });
 
   it("a frame marked as declared outward refuses with OutwardActionRefusal before any wire call", async () => {
     const { wire, deps } = fixture();
     const call = mcpRequestContextStorage.run(markDeclaredOutwardRunFrame(runFrame()), () =>
-      hostContext.withHostConnectorReadOwner(hostRead(["ewpa/get-post"]), () => invoke("ewpa/get-post", deps)));
+      mint(() => invoke("ewpa/get-post", deps)));
     await expect(call).rejects.toBeInstanceOf(hostContext.OutwardActionRefusal);
     await expect(call).rejects.toThrow("action_loaded_identity_missing_or_stale");
     expect(wire).toHaveBeenCalledTimes(0);

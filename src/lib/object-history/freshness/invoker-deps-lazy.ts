@@ -41,7 +41,7 @@ import { buildConnectorInstanceInvokerDeps } from "@/lib/register-host-connector
 import { resolveTrustedWriteActor } from "@/lib/connector-instance-write-authority";
 import { InvokerError } from "@/lib/connector-instance-mcp-transport";
 // cinatra#4315: the host read owner the adapter pins for its own read on a run.
-import { withHostConnectorReadOwner } from "@/lib/extension-host-context";
+import { withWordPressFreshnessReadOwner } from "@/lib/extension-host-context";
 
 export async function loadInvokerDeps() {
   return {
@@ -49,6 +49,6 @@ export async function loadInvokerDeps() {
     buildConnectorInstanceInvokerDeps,
     resolveTrustedWriteActor,
     InvokerError,
-    withHostConnectorReadOwner,
+    withWordPressFreshnessReadOwner,
   };
 }

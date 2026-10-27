@@ -205,9 +205,9 @@ afterEach(() => {
 
 describe("cinatra#4315 item 1: without the host-derived owner the read fails closed on a run", () => {
   it("object_version_restore on a WordPress-tagged object refuses with external-source-changed and no wire call", async () => {
-    if (typeof (hostContext as Record<string, unknown>).withHostConnectorReadOwner === "function") {
-      vi.spyOn(hostContext, "withHostConnectorReadOwner").mockImplementation(
-        ((_read: unknown, effect: () => Promise<unknown>) => effect()) as typeof hostContext.withHostConnectorReadOwner,
+    if (typeof (hostContext as Record<string, unknown>).withWordPressFreshnessReadOwner === "function") {
+      vi.spyOn(hostContext, "withWordPressFreshnessReadOwner").mockImplementation(
+        ((_read: unknown, effect: (toolName: string) => Promise<unknown>) => effect("ewpa/get-post")) as typeof hostContext.withWordPressFreshnessReadOwner,
       );
     }
     const { wire } = fixture(CAPTURED);
