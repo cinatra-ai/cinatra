@@ -10,8 +10,9 @@
 // developer's macOS), as the GNU cases of design-build-cache.test.mjs are. The two cases that read file permissions
 // are skipped for root, which file modes do not bind. The cases that need two
 // jobs at once use a handshake (a gate file and the waiting line), never a
-// fixed pause. The shape cases read the two workflows whose Build step takes
-// the PIXEL runners.
+// fixed pause, and the waits of one case share one end. The clean-up ends a
+// process only while its /proc/<pid>/cmdline names a path of the case. The
+// shape cases read the two workflows whose Build step takes the PIXEL runners.
 import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -46,6 +47,9 @@ const REAL_STAT = spawnSync("bash", ["-c", "command -v stat"], { encoding: "utf8
 // The permission cases need an account that file modes bind; root ignores them.
 const IS_ROOT = typeof process.getuid === "function" && process.getuid() === 0;
 const LOCK_CASE_TIMEOUT_MS = 30_000;
+// The waits of one case share one end, set this long ahead when the case
+// starts, so all of them together stay well inside LOCK_CASE_TIMEOUT_MS.
+const HANDSHAKE_MS = 20_000;
 const WAITING_LINE = "design build host lock: held by another design build on this machine; waiting up to 60 s";
 
 // Stand-in for the build: one line when it starts and one when it ends, in a
@@ -54,7 +58,9 @@ const WAITING_LINE = "design build host lock: held by another design build on th
 // script that started it is gone. Between the two lines it can wait for a
 // gate file (FAKE_BUILD_GATE, the case's handshake) and pause. With
 // FAKE_BUILD_LEAVES_PID it also leaves a process running after it ends (as a
-// build's stray worker would) and writes that process's pid to the file named.
+// build's stray worker would) and writes that process's pid to the file named;
+// that process is `sleep 30` under the name <log>.stray, so the clean-up can
+// tell it from any other process.
 // With FAKE_BUILD_PROBE (files separated by ":") it writes, for each file,
 // whether another job could lock it now ("free <file>" or "locked <file>"),
 // to FAKE_BUILD_PROBE_LOG.
@@ -62,7 +68,7 @@ const FAKE_BUILD = [
   "#!/usr/bin/env bash",
   'printf \'%s\\n\' "$$" >>"$FAKE_BUILD_LOG.pids"',
   'printf \'start %s\\n\' "$1" >>"$FAKE_BUILD_LOG"',
-  'if [ -n "${FAKE_BUILD_LEAVES_PID:-}" ]; then sleep 30 >/dev/null 2>&1 </dev/null & printf \'%s\\n\' "$!" >"$FAKE_BUILD_LEAVES_PID"; fi',
+  'if [ -n "${FAKE_BUILD_LEAVES_PID:-}" ]; then (exec -a "$FAKE_BUILD_LOG.stray" sleep 30) >/dev/null 2>&1 </dev/null & printf \'%s\\n\' "$!" >"$FAKE_BUILD_LEAVES_PID"; fi',
   'if [ -n "${FAKE_BUILD_PROBE:-}" ]; then',
   '  IFS=: read -r -a probe <<<"$FAKE_BUILD_PROBE"',
   '  for f in "${probe[@]}"; do if flock -n "$f" true; then echo "free $f"; else echo "locked $f"; fi; done >>"$FAKE_BUILD_PROBE_LOG"',
@@ -87,26 +93,37 @@ const killQuietly = (pid) => {
     // already gone
   }
 };
-// True only while <pid> still runs the stand-in build of <dir> (never a reused pid).
-const runsBuildOf = (pid, dir) => {
+// True only while <pid> runs a command line that names every one of <marks>
+// (paths of the case), read from /proc/<pid>/cmdline just before a kill, so the
+// clean-up never ends a process that was given a pid that became free.
+const runsWith = (pid, ...marks) => {
   try {
-    return readFileSync(`/proc/${pid}/cmdline`, "utf8").includes(path.join(dir, "build.sh"));
+    const cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf8");
+    return marks.every((mark) => cmdline.includes(mark));
   } catch {
     return false;
   }
 };
 afterEach(() => {
-  for (const pid of strays.splice(0)) killQuietly(pid);
-  // The holder's whole group: flock(1) and the command it keeps the lock for.
-  for (const holder of holders.splice(0)) killQuietly(-holder.pid);
+  // Processes a stand-in build left running, by the pid file the case registered before its run.
+  for (const { pidFile, mark } of strays.splice(0)) {
+    const pid = existsSync(pidFile) ? readFileSync(pidFile, "utf8").trim() : "";
+    if (/^\d+$/.test(pid) && runsWith(pid, mark)) killQuietly(Number(pid));
+  }
+  // The holder's whole group (flock(1) and the command it keeps the lock for),
+  // while its leader is still flock on the case's lock file.
+  for (const { child, lockFile } of holders.splice(0)) {
+    if (runsWith(child.pid, "flock", lockFile)) killQuietly(-child.pid);
+  }
   for (const step of steps.splice(0)) {
-    if (step.child.exitCode === null && step.child.signalCode === null) killQuietly(step.child.pid);
+    const running = step.child.exitCode === null && step.child.signalCode === null;
+    if (running && runsWith(step.child.pid, SCRIPT, step.build)) killQuietly(step.child.pid);
   }
   for (const dir of made.splice(0)) {
     // Stand-in builds that outlived their script (a case that killed it, or a failed case).
     const pids = path.join(dir, "build.log.pids");
     for (const pid of existsSync(pids) ? readFileSync(pids, "utf8").split("\n") : []) {
-      if (/^\d+$/.test(pid) && runsBuildOf(pid, dir)) killQuietly(Number(pid));
+      if (/^\d+$/.test(pid) && runsWith(pid, path.join(dir, "build.sh"))) killQuietly(Number(pid));
     }
     rmSync(dir, { recursive: true, force: true });
   }
@@ -142,7 +159,7 @@ function startStep(w, label, env = {}) {
       ...env,
     },
   });
-  const step = { child, stdout: "", stderr: "" };
+  const step = { child, build: w.build, stdout: "", stderr: "" };
   child.stdout.on("data", (chunk) => (step.stdout += chunk));
   child.stderr.on("data", (chunk) => (step.stderr += chunk));
   step.exited = new Promise((resolve) => child.on("exit", (status, signal) => resolve({ status, signal })));
@@ -158,9 +175,11 @@ function startStep(w, label, env = {}) {
 /** The script as a Build step runs it, awaited to its end. */
 const runStep = (w, label, env = {}) => startStep(w, label, env).closed;
 
-/** Waits until test() holds; a case fails here, never by a fixed sleep. */
-async function waitUntil(what, test, ms = 20_000) {
-  const end = Date.now() + ms;
+/**
+ * Waits until test() holds, at the latest until <end> (a Date.now() time that
+ * all the waits of one case share); a case fails here, never by a fixed sleep.
+ */
+async function waitUntil(what, test, end) {
   while (Date.now() < end) {
     if (test()) return;
     await new Promise((r) => setTimeout(r, 25));
@@ -184,7 +203,7 @@ const canLockNow = (file) => spawnSync("flock", ["-n", file, "true"]).status ===
 /** Another job holding the machine's lock until the case ends. */
 async function holdLock(lockFile) {
   const holder = spawn("flock", [lockFile, "sleep", "60"], { stdio: "ignore", detached: true });
-  holders.push(holder);
+  holders.push({ child: holder, lockFile });
   for (let i = 0; i < 100; i += 1) {
     if (spawnSync("flock", ["-n", lockFile, "true"]).status !== 0) return holder;
     await new Promise((r) => setTimeout(r, 50));
@@ -198,12 +217,13 @@ describe.skipIf(!CAN_LOCK)("scripts/ci/design-build-host-lock.sh on a self-hoste
     async () => {
       const w = workdir();
       const releaseA = path.join(w.root, "release-a");
+      const end = Date.now() + HANDSHAKE_MS;
       // Job a takes the lock; its build runs until the case releases it.
       const stepA = startStep(w, "a", { FAKE_BUILD_GATE: releaseA });
-      await waitUntil("build a to start", () => buildLog(w).includes("start a"));
+      await waitUntil("build a to start", () => buildLog(w).includes("start a"), end);
       // The handshake: job b starts only now and says that it waits for the lock a holds.
       const stepB = startStep(w, "b");
-      await waitUntil("job b to wait for the lock", () => stepB.stdout.includes(WAITING_LINE));
+      await waitUntil("job b to wait for the lock", () => stepB.stdout.includes(WAITING_LINE), end);
       expect(buildLog(w)).toEqual(["start a"]);
       writeFileSync(releaseA, "");
       const [a, b] = await Promise.all([stepA.closed, stepB.closed]);
@@ -297,11 +317,12 @@ describe.skipIf(!CAN_LOCK)("scripts/ci/design-build-host-lock.sh on a self-hoste
     async () => {
       const w = workdir();
       const pidFile = path.join(w.root, "stray.pid");
+      // Registered before the run, so the clean-up ends the stray process even when an assertion below fails.
+      strays.push({ pidFile, mark: `${w.log}.stray` });
       const r = await runStep(w, "a", { FAKE_BUILD_LEAVES_PID: pidFile });
       expect(r.status).toBe(0);
       expect(r.stdout).toContain("design build host lock: released after the build (exit 0)");
       const stray = Number(readFileSync(pidFile, "utf8").trim());
-      strays.push(stray);
       // The build's stray process is still running, and it holds the lock's
       // descriptor (the build passed it on)...
       expect(isAlive(stray)).toBe(true);
@@ -375,10 +396,12 @@ describe.skipIf(!CAN_LOCK)("scripts/ci/design-build-host-lock.sh on a self-hoste
     async () => {
       const w = workdir();
       const releaseA = path.join(w.root, "release-a");
+      const end = Date.now() + HANDSHAKE_MS;
       const stepA = startStep(w, "a", { FAKE_BUILD_GATE: releaseA });
       await waitUntil(
         "job a to take the lock and start its build",
         () => /^design build host lock: TAKEN after \d+ s; building$/m.test(stepA.stdout) && buildLog(w).includes("start a"),
+        end,
       );
       // Only the script dies (SIGKILL, so it can do nothing more); its build lives on.
       stepA.child.kill("SIGKILL");
@@ -389,7 +412,7 @@ describe.skipIf(!CAN_LOCK)("scripts/ci/design-build-host-lock.sh on a self-hoste
       expect(canLockNow(w.lockFile)).toBe(false);
       // ...so the next job waits for it, and builds only after that build ends.
       const stepB = startStep(w, "b");
-      await waitUntil("job b to wait for the lock", () => stepB.stdout.includes(WAITING_LINE));
+      await waitUntil("job b to wait for the lock", () => stepB.stdout.includes(WAITING_LINE), end);
       expect(buildLog(w)).toEqual(["start a"]);
       writeFileSync(releaseA, "");
       const b = await stepB.closed;
@@ -400,17 +423,27 @@ describe.skipIf(!CAN_LOCK)("scripts/ci/design-build-host-lock.sh on a self-hoste
     LOCK_CASE_TIMEOUT_MS,
   );
 
-  // A second writer that replaces the lock file in the moment between the
-  // script's open and its check, or a stat that cannot read an identity. A
-  // stand-in `stat` first on PATH makes that moment certain. With "file" or
-  // "link", the first time the script calls stat (after its open), it moves
-  // the opened file aside to <file>.old and puts a new regular file, or a
-  // symbolic link to the opened file, in its place; then it runs the real
-  // stat. With "fail", every stat call fails and the lock file stays as it is.
-  for (const [what, replace] of [
-    ["is replaced by another regular file while it is opened", "file"],
-    ["is replaced by a symbolic link to the file it opened while it is opened", "link"],
-    ["cannot be identified (stat fails)", "fail"],
+  // A second writer that replaces the lock file, or a stat that cannot read an
+  // identity, at a moment that a stand-in `stat` first on PATH makes certain.
+  // The script checks twice that the path names the open file: after the open
+  // (stat calls 1 and 2: the open file, then the path) and after the lock is
+  // taken (calls 3 and 4). The stand-in counts its calls in <root>/stat-calls.
+  // - "open-file", "open-link": at call 1 it moves the opened file aside to
+  //   <file>.old and puts a new regular file, or a symbolic link to the opened
+  //   file, in its place; then it runs the real stat.
+  // - "fail": every call fails, and the lock file stays as it is.
+  // - "check-file", "check-link": at call 2 it runs the real stat first and
+  //   keeps its output, so the first check passes; then it replaces the file
+  //   as above and prints the kept output. The replacement is in place before
+  //   the lock is taken.
+  // - "recheck-fail": call 4 (the path's identity after the lock) fails.
+  for (const [what, mode] of [
+    ["is replaced by another regular file between the open and the first check", "open-file"],
+    ["is replaced by a symbolic link to the opened file between the open and the first check", "open-link"],
+    ["cannot be identified (every stat fails)", "fail"],
+    ["is replaced by another regular file between the first check and the lock", "check-file"],
+    ["is replaced by a symbolic link to the opened file between the first check and the lock", "check-link"],
+    ["cannot be identified after the lock is taken (the path's stat fails)", "recheck-fail"],
   ]) {
     it(
       `does not use a lock file that ${what}, and builds anyway`,
@@ -418,7 +451,9 @@ describe.skipIf(!CAN_LOCK)("scripts/ci/design-build-host-lock.sh on a self-hoste
         const w = workdir();
         writeFileSync(w.lockFile, "");
         const opened = statSync(w.lockFile).ino;
-        const moved = replace !== "fail";
+        const moved = !mode.endsWith("fail");
+        // "open-*" and "fail" are refused at the first check, the others at the second.
+        const atSecondCheck = mode.startsWith("check-") || mode === "recheck-fail";
         const shimBin = path.join(w.root, "shim-bin");
         mkdirSync(shimBin);
         const shim = path.join(shimBin, "stat");
@@ -426,44 +461,70 @@ describe.skipIf(!CAN_LOCK)("scripts/ci/design-build-host-lock.sh on a self-hoste
           shim,
           [
             "#!/usr/bin/env bash",
-            'first=""; if [ ! -e "$SHIM_DONE" ]; then : >"$SHIM_DONE"; first=yes; fi',
-            'case "$SHIM_REPLACE" in',
-            "  fail) exit 1 ;;",
-            '  file) if [ -n "$first" ]; then mv "$SHIM_TARGET" "$SHIM_TARGET.old" && : >"$SHIM_TARGET.new" && mv "$SHIM_TARGET.new" "$SHIM_TARGET"; fi ;;',
-            '  link) if [ -n "$first" ]; then mv "$SHIM_TARGET" "$SHIM_TARGET.old" && ln -s "$SHIM_TARGET.old" "$SHIM_TARGET"; fi ;;',
+            'n=$(($(cat "$SHIM_CALLS" 2>/dev/null || echo 0) + 1))',
+            'printf \'%s\\n\' "$n" >"$SHIM_CALLS"',
+            "replace() {",
+            '  mv "$SHIM_TARGET" "$SHIM_TARGET.old" || exit 98',
+            '  if [ "${SHIM_MODE#*-}" = link ]; then ln -s "$SHIM_TARGET.old" "$SHIM_TARGET"',
+            '  else : >"$SHIM_TARGET.new" && mv "$SHIM_TARGET.new" "$SHIM_TARGET"; fi',
+            "}",
+            'case "$SHIM_MODE:$n" in',
+            "  fail:* | recheck-fail:4) exit 1 ;;",
+            "  open-file:1 | open-link:1) replace ;;",
+            "  check-file:2 | check-link:2)",
+            '    out="$("$SHIM_REAL_STAT" "$@")"; rc=$?',
+            "    replace",
+            '    printf \'%s\\n\' "$out"; exit "$rc" ;;',
             "esac",
             'exec "$SHIM_REAL_STAT" "$@"',
             "",
           ].join("\n"),
         );
         chmodSync(shim, 0o755);
+        const calls = path.join(w.root, "stat-calls");
         const probeLog = path.join(w.root, "probe.log");
         const probed = moved ? [`${w.lockFile}.old`, w.lockFile] : [w.lockFile];
         const r = await runStep(w, "a", {
           PATH: `${shimBin}:${process.env.PATH}`,
-          SHIM_DONE: path.join(w.root, "shim-done"),
+          SHIM_CALLS: calls,
           SHIM_TARGET: w.lockFile,
-          SHIM_REPLACE: replace,
+          SHIM_MODE: mode,
           SHIM_REAL_STAT: REAL_STAT,
           FAKE_BUILD_PROBE: probed.join(":"),
           FAKE_BUILD_PROBE_LOG: probeLog,
           FAKE_BUILD_EXIT: "5",
         });
-        expect(existsSync(path.join(w.root, "shim-done")), "the script called stat after its open").toBe(true);
-        // The file the script opened: moved aside, or still in place.
-        expect(statSync(moved ? `${w.lockFile}.old` : w.lockFile).ino).toBe(opened);
         expect(r.status).toBe(5);
         expect(buildLog(w)).toEqual(["start a", "end a"]);
-        expect(r.stdout).toContain(
-          `design build host lock: not using ${w.lockFile}: the file that was opened is not shown to be the regular file this path names`,
-        );
-        expect(r.stdout).toContain(
-          `design build host lock: NOT TAKEN: no lock file can be opened or made in ${w.lockDir}; building without the lock`,
-        );
-        // No identity is printed for a file it does not use, and no lock is held during the build.
-        expect(r.stdout).not.toMatch(/^design build host lock: lock file /m);
+        const lines = r.stdout.split("\n");
+        if (atSecondCheck) {
+          // The first check passed: the script named the file it opened...
+          const named = lines.findIndex((l) => l.startsWith(`design build host lock: lock file ${w.lockFile} (device `));
+          expect(named, "the lock file line").toBeGreaterThan(-1);
+          expect(lines[named]).toMatch(new RegExp(` inode ${opened}\\), runner runner-a$`));
+          // ...and after the lock it found that the path no longer names that file.
+          const refused = lines.indexOf(
+            `design build host lock: not using ${w.lockFile}: after the lock was taken, the file that was locked is not shown to be the regular file this path names`,
+          );
+          expect(refused, "the not using line after the lock").toBeGreaterThan(named);
+          expect(lines).toContain("design build host lock: NOT TAKEN: the lock was released again; building without the lock");
+        } else {
+          expect(lines).toContain(
+            `design build host lock: not using ${w.lockFile}: the file that was opened is not shown to be the regular file this path names`,
+          );
+          expect(lines).toContain(
+            `design build host lock: NOT TAKEN: no lock file can be opened or made in ${w.lockDir}; building without the lock`,
+          );
+          // No identity is printed for a file it does not use.
+          expect(r.stdout).not.toMatch(/^design build host lock: lock file /m);
+        }
+        // No TAKEN line, and no lock is held during the build: every file is free.
         expect(r.stdout).not.toMatch(/^design build host lock: TAKEN after/m);
         expect(readFileSync(probeLog, "utf8").trim().split("\n")).toEqual(probed.map((f) => `free ${f}`));
+        // The file the script opened: moved aside, or still in place.
+        expect(statSync(moved ? `${w.lockFile}.old` : w.lockFile).ino).toBe(opened);
+        // The stand-in acted: two stat calls for the first check, two more for the second.
+        expect(Number(readFileSync(calls, "utf8").trim()), "the stat calls").toBe(atSecondCheck ? 4 : 2);
       },
       LOCK_CASE_TIMEOUT_MS,
     );

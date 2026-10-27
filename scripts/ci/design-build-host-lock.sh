@@ -27,12 +27,20 @@
 #
 # NO SYMBOLIC LINK IS USED. A candidate that is a symbolic link is skipped
 # before it is opened. Bash cannot open a file without following a link, so
-# after the open the script compares the open file (through its descriptor)
-# with the path itself (not followed). It uses the file only when the path
-# still names that same regular file; when the path was replaced, is now a
-# link, or either identity cannot be read, the file is not used. A link put in
-# place in the instant between the check and the open is opened before it is
-# refused (a named pipe there would make the open wait).
+# the script compares the open file (through its descriptor) with the path
+# itself (not followed), twice: after the open, and again after the lock is
+# taken. A check passes only when both identities are read, they are equal,
+# and the open file is a regular file. When the first check fails, the script
+# closes the file and goes on to the next directory. When the second check
+# fails (for example because the path was replaced, or made a link, between
+# the first check and the lock), the script releases the lock, closes the file
+# and builds without the lock: a job that opens the path from then on locks
+# the new file, and a file in another directory would not be the file that
+# job locks either. Two windows stay open. A link put in place in the instant
+# between the link check and the open is opened before it is refused (a named
+# pipe there would make the open wait). A path that is replaced after the
+# second check is not seen: a job that opens the path after that locks the new
+# file, and its build can run at the same time.
 #
 # WHO HOLDS THE LOCK. The lock belongs to the open file, which this script and
 # <command> share: <command> inherits the descriptor. The lock is therefore
@@ -59,7 +67,8 @@
 #
 # FAIL OPEN. When the wait is not a whole number of seconds, when flock is not
 # on the runner, when no lock file can be opened (or none is shown to be the
-# file that its path names), or when the wait ends without the lock, the build
+# file that its path names), when the wait ends without the lock, or when the
+# path is not shown to name the locked file after the lock is taken, the build
 # runs without the lock, as it did before this script, after a line that
 # starts with "design build host lock: NOT TAKEN".
 #
@@ -98,6 +107,16 @@ if ! command -v flock >/dev/null 2>&1; then
   exec "$@"
 fi
 
+# Reads the device and inode of the open lock file (descriptor 9, through
+# /proc) into "opened", and of <path> itself (a link is not followed) into
+# "named". True only when both are read, they are equal, and the open file is
+# a regular file: then <path> names the file that this script holds open.
+same_file() {
+  opened="$(stat -L -c 'device %d inode %i' /proc/self/fd/9 2>/dev/null)" || opened=""
+  named="$(stat -c 'device %d inode %i' -- "$1" 2>/dev/null)" || named=""
+  [ -n "$opened" ] && [ "$opened" = "$named" ] && [ -f /proc/self/fd/9 ]
+}
+
 # The first directory that holds the lock file or lets this job make it. A
 # symbolic link is never used, and an existing file is never made again.
 lock_file=""
@@ -113,11 +132,9 @@ for dir in "${lock_dirs[@]}"; do
   fi
   if [ ! -f "$candidate" ] || [ -L "$candidate" ]; then continue; fi
   if ! { exec 9<"$candidate"; } 2>/dev/null; then continue; fi
-  # The open file, read through its descriptor, must be the regular file that
-  # the path itself (not followed) names now; otherwise it is not used.
-  opened="$(stat -L -c 'device %d inode %i' /proc/self/fd/9 2>/dev/null)" || opened=""
-  named="$(stat -c 'device %d inode %i' -- "$candidate" 2>/dev/null)" || named=""
-  if [ -n "$opened" ] && [ "$opened" = "$named" ] && [ -f /proc/self/fd/9 ]; then
+  # The first check: the open file must be the regular file that the path
+  # itself (not followed) names now; otherwise it is not used.
+  if same_file "$candidate"; then
     lock_file="$candidate"
     identity="$opened"
     break
@@ -143,6 +160,17 @@ if ! flock -n 9 2>/dev/null; then
     "$@"
     exit $?
   fi
+fi
+# The second check, with the lock taken: the path must still name the locked
+# file. A job that opens the path after it was replaced opens the new file, so
+# a lock on the old file would not keep that job's build back.
+if ! same_file "$lock_file"; then
+  flock -u 9
+  exec 9<&-
+  note "not using ${lock_file}: after the lock was taken, the file that was locked is not shown to be the regular file this path names"
+  note "NOT TAKEN: the lock was released again; building without the lock"
+  "$@"
+  exit $?
 fi
 note "TAKEN after $((SECONDS - started)) s; building"
 
