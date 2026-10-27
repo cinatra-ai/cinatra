@@ -385,22 +385,30 @@ function devInstallOwnerBinding(): { orgId: string; runBy: string } | undefined 
 }
 
 /**
- * The dev-hook input with the host-bound binding. A caller-supplied
- * `orgId`/`runBy` is DROPPED first: on these dev members only the host names
- * the owner.
+ * The dev-hook input with the host-bound binding, as a NEW plain object. The
+ * input is a plain object (the connector's dev hook passes object literals):
+ * its OWN ENUMERABLE fields are copied one by one, except `orgId` and `runBy`,
+ * which are never read (on these dev members only the host names the owner).
+ * A field the input only inherits (for example a getter on a class prototype)
+ * is NOT copied, and the caller's object is never changed. The result type
+ * holds for a plain-object input.
  */
 function withDevInstallOwnerBinding<T extends object>(input: T): Omit<T, "orgId" | "runBy"> & {
   orgId?: string;
   runBy?: string;
 } {
-  const rest = { ...input } as T & { orgId?: unknown; runBy?: unknown };
-  delete rest.orgId;
-  delete rest.runBy;
+  const out: Record<PropertyKey, unknown> = {};
+  for (const key of Reflect.ownKeys(input)) {
+    if (key === "orgId" || key === "runBy") continue;
+    if (!Object.prototype.propertyIsEnumerable.call(input, key)) continue;
+    out[key] = (input as Record<PropertyKey, unknown>)[key];
+  }
   const binding = devInstallOwnerBinding();
-  return (binding ? { ...rest, ...binding } : rest) as Omit<T, "orgId" | "runBy"> & {
-    orgId?: string;
-    runBy?: string;
-  };
+  if (binding) {
+    out.orgId = binding.orgId;
+    out.runBy = binding.runBy;
+  }
+  return out as Omit<T, "orgId" | "runBy"> & { orgId?: string; runBy?: string };
 }
 
 // Host-LOCAL extension of the SDK `HostDrupalMcpService` (cinatra#4387; the

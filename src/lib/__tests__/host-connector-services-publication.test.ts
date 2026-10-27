@@ -1344,18 +1344,27 @@ describe("drupal-mcp dev writers bind the dev owner host-side (cinatra#4387)", (
   });
 
   it("production boot: both dev writers refuse and nothing reaches the connector", async () => {
-    devBootState.dev = false;
-    devBootState.owner = DEV_OWNER;
-    const persists = drupalApiCalls.devPersist.length;
-    const saves = drupalApiCalls.save.length;
-    await expect(
-      drupal().devPersistLocalInstanceUnvalidated!({ name: "Local", siteUrl: "http://localhost:8082" }),
-    ).rejects.toThrow(/dev-only devSetup provisioning member/);
-    await expect(
-      drupal().devSaveInstance!({ name: "Local", siteUrl: "http://localhost:8082" }),
-    ).rejects.toThrow(/drupal-mcp\.devSaveInstance is a dev-only devSetup provisioning member/);
-    expect(drupalApiCalls.devPersist).toHaveLength(persists);
-    expect(drupalApiCalls.save).toHaveLength(saves);
+    // A production runtime with a non-preview install profile is forced here
+    // (no profile, then "demo"), whatever the ambient environment holds; the
+    // afterEach restores both variables.
+    for (const k of PREVIEW_ENV) savedEnv[k] = process.env[k];
+    for (const profile of [undefined, "demo"]) {
+      devBootState.dev = false;
+      devBootState.owner = DEV_OWNER;
+      process.env.CINATRA_RUNTIME_MODE = "production";
+      if (profile === undefined) delete process.env.CINATRA_INSTALL_PROFILE;
+      else process.env.CINATRA_INSTALL_PROFILE = profile;
+      const persists = drupalApiCalls.devPersist.length;
+      const saves = drupalApiCalls.save.length;
+      await expect(
+        drupal().devPersistLocalInstanceUnvalidated!({ name: "Local", siteUrl: "http://localhost:8082" }),
+      ).rejects.toThrow(/dev-only devSetup provisioning member/);
+      await expect(
+        drupal().devSaveInstance!({ name: "Local", siteUrl: "http://localhost:8082" }),
+      ).rejects.toThrow(/drupal-mcp\.devSaveInstance is a dev-only devSetup provisioning member/);
+      expect(drupalApiCalls.devPersist).toHaveLength(persists);
+      expect(drupalApiCalls.save).toHaveLength(saves);
+    }
   });
 
   it("a caller-supplied orgId and runBy never reach the connector (only the host names the owner)", async () => {
@@ -1414,5 +1423,54 @@ describe("drupal-mcp dev writers bind the dev owner host-side (cinatra#4387)", (
     await expect(
       guard({ instanceId: "dev-row", primitiveName: "drupal_node_create_draft_revision" }),
     ).rejects.toMatchObject({ reason: "instance_unbound" });
+  });
+
+  it("the dev writers never read the caller's orgId or runBy (a throwing getter there is not run)", async () => {
+    const input = { name: "Local", siteUrl: "http://localhost:8082" };
+    for (const key of ["orgId", "runBy"]) {
+      Object.defineProperty(input, key, {
+        enumerable: true,
+        get() {
+          throw new Error(`the caller's ${key} was read`);
+        },
+      });
+    }
+    devBoot(DEV_OWNER);
+    await drupal().devSaveInstance!(input);
+    expect(drupalApiCalls.save.at(-1)).toEqual([
+      { name: "Local", siteUrl: "http://localhost:8082", orgId: "dev-org-1", runBy: "dev-admin-1" },
+    ]);
+    devBoot(null);
+    await drupal().devPersistLocalInstanceUnvalidated!(input);
+    expect(drupalApiCalls.devPersist.at(-1)).toEqual([{ name: "Local", siteUrl: "http://localhost:8082" }]);
+  });
+
+  it("the dev writers hand the connector a new object and leave the caller's object unchanged", async () => {
+    const forged = { id: "i-1", name: "Local", siteUrl: "http://localhost:8082", orgId: "evil-org", runBy: "evil-user" };
+    const before = { ...forged };
+    devBoot(DEV_OWNER);
+    await drupal().devSaveInstance!(forged as never);
+    expect(drupalApiCalls.save.at(-1)![0]).not.toBe(forged);
+    expect(forged).toEqual(before);
+    devBoot(null);
+    await drupal().devPersistLocalInstanceUnvalidated!(forged as never);
+    expect(drupalApiCalls.devPersist.at(-1)![0]).not.toBe(forged);
+    expect(forged).toEqual(before);
+  });
+
+  it("only the caller's own enumerable fields are copied: a field inherited from a class prototype is not", async () => {
+    class DevInput {
+      siteUrl = "http://localhost:8082";
+      get name(): string {
+        return "Local";
+      }
+    }
+    const input = new DevInput();
+    devBoot(DEV_OWNER);
+    await drupal().devSaveInstance!(input);
+    const handed = drupalApiCalls.save.at(-1)![0] as Record<string, unknown>;
+    expect(Object.getPrototypeOf(handed)).toBe(Object.prototype);
+    expect("name" in handed).toBe(false);
+    expect(Object.keys(handed).sort()).toEqual(["orgId", "runBy", "siteUrl"]);
   });
 });
