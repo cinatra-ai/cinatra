@@ -1050,12 +1050,16 @@ harness mount or allowlist entry moves with the pin. The committed artifact is
 now the verbatim adopted body, and both hashes of the entry in
 `conformance-pins.json` were re-derived from the adopted bytes, never typed.
 The other four pins were read against their served files with one anonymous
-GET each on 2026-10-26 and match. No other pin moved.
+GET each on 2026-10-26 and matched. A second reading on 2026-10-27 found
+`app-components` as `drift`: docs PR 255 had published version 0.7.2 of the
+components spec (served `9de4ae11…`, pinned `54b4bd7b…`). cinatra PR 4382
+re-pins `app-components` to that body and merges before this change; `app`,
+`app-extensions` and `app-notifications` still matched. No other pin moved.
 
 | Pin | Was | What the adoption changed | Cost |
 | --- | --- | --- | --- |
 | `app` | `match` | nothing — the served body is still the pinned artifact | none |
-| `app-components` | `match` | nothing — the served body is still the pinned artifact | none |
+| `app-components` | `match` on 2026-10-26; `drift` on 2026-10-27 until cinatra PR 4382 re-pins it | nothing — this change does not move it | none |
 | `app-extensions` | `match` | nothing — the served body is still the pinned artifact | none |
 | `app-connectors` | `match` against the 0.8.2 body; `drift` once docs PR 254 merges | **hashes only** — byte-identical surface declarations (11 surfaces); `contentHash` moves back to the 0.8.1 spec hash | re-pin |
 | `app-notifications` | `match` | nothing — the served body is still the pinned artifact | none |
