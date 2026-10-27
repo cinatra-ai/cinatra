@@ -27,6 +27,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { sendAcrossRenewal } from "@cinatra-ai/agents/lifecycle-card-runtime";
 import {
   AgenticRunPanel,
   type SerializedAgentRunMessage,
@@ -167,14 +168,6 @@ function classifyStatus(status: number): LoadFailureReason {
 // credentials. The rules are unchanged and are documented at the definition.
 const seedRequest = runSeedRequest;
 
-/** cinatra#4217 — the headers of a request as one comparable value, so the
- *  seed can tell whether the credential changed since a look was sent. It
- *  lives only for that comparison and is never stored or logged. */
-function headerKey(init: RequestInit): string {
-  const headers = (init.headers ?? {}) as Record<string, string>;
-  return JSON.stringify(Object.keys(headers).sort().map((name) => [name, headers[name]]));
-}
-
 /**
  * THE SLOT READER THIS SURFACE ASKS WITH (cinatra#2997).
  *
@@ -308,7 +301,7 @@ export function InlineAgentRunCard({
     // refused as forbidden is terminal, unless the request built now carries
     // other headers than the refused one did: then the credential was renewed
     // while the look was on its way, and the look is made once more with it.
-    // At most RENEWED_LOOKS such looks, and each needs new headers, so this
+    // At most two such looks (RENEWED_SENDS), and each needs new headers, so this
     // cannot loop; a cookie host's headers never change, so its refusal stays
     // terminal exactly as before.
     //
@@ -318,8 +311,11 @@ export function InlineAgentRunCard({
     // ones. A refusal therefore first waits for the host's renewal to settle
     // (bounded by the renewal request's own deadline; at once when none is on
     // its way), and only then compares the headers.
-    const RENEWED_LOOKS = 2;
-    let renewedLooks = 0;
+    //
+    // FOLD 3: that rule is now the lifecycle runtime's `sendAcrossRenewal`, the
+    // one every read of this surface takes (at most two renewed looks, none
+    // without a widget user token). An unmount ends its wait.
+    const ended = new AbortController();
 
     const request = seedRequest(credential, runId);
     if (!request) {
@@ -332,24 +328,18 @@ export function InlineAgentRunCard({
     }
 
     const load = async (): Promise<void> => {
-      const sent = seedRequest(credential, runId) ?? request;
       try {
-        const res = await fetch(sent.url, sent.init);
-        if (cancelled) return;
+        const res = await sendAcrossRenewal(
+          credential.kind === "broker" ? credential.auth : null,
+          () => {
+            const sent = seedRequest(credential, runId) ?? request;
+            return fetch(sent.url, sent.init);
+          },
+          ended.signal,
+        );
+        if (cancelled || res === null) return;
         if (!res.ok) {
           const reason = classifyStatus(res.status);
-          if (reason === "forbidden" && renewedLooks < RENEWED_LOOKS) {
-            if (credential.kind === "broker" && credential.auth.renewal) {
-              await credential.auth.renewal.settled();
-              if (cancelled) return;
-            }
-            const now = seedRequest(credential, runId);
-            if (now && headerKey(now.init) !== headerKey(sent.init)) {
-              renewedLooks += 1;
-              void load();
-              return;
-            }
-          }
           if (reason !== "forbidden" && attempt < RETRY_DELAYS_MS.length) {
             const delay = RETRY_DELAYS_MS[attempt];
             attempt += 1;
@@ -381,6 +371,7 @@ export function InlineAgentRunCard({
     void load();
     return () => {
       cancelled = true;
+      ended.abort();
     };
   }, [runId, credential]);
 

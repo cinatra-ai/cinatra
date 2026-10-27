@@ -1161,6 +1161,56 @@ describe("lease, quiesce and generations", () => {
     expect(t.chain.inFlight, "its deadline gave it up").toBe(false);
   });
 
+  // cinatra#4217 fold 3 (pre-3 untested branch): the conversation's readers
+  // wait on `quiesce` and read `inFlight` (lookCaughtInRenewal), so an ordinary
+  // terminal refusal must end both as well, not only a success, a dispose or
+  // the deadline. A pin: green at 749d92f2.
+  it("fold 3: an ordinary terminal refusal ends inFlight and settles a waiting quiesce", async () => {
+    const h = harness();
+    let answer!: (o: FrameRenewalOutcome) => void;
+    h.renew.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    armWithLeft(h, pair(1), 60); // D4 at once: in flight
+    expect(h.chain.inFlight).toBe(true);
+    let settled = false;
+    void h.chain.quiesce().then(() => {
+      settled = true;
+    });
+    await advance(0);
+    expect(settled, "quiesce waits while the request is on its way").toBe(false);
+    answer({ ok: false, reason: "renew_failed" });
+    await advance(0);
+    expect(h.onEnded, "an ordinary refusal ends the chain").toHaveBeenCalledTimes(1);
+    expect(h.chain.inFlight, "the refusal ended the request").toBe(false);
+    expect(settled, "and the waiting quiesce settled").toBe(true);
+    expect(h.onRenewed).not.toHaveBeenCalled();
+  });
+
+  // cinatra#4217 fold 3 (pre-3 untested branch): two leases at once (the
+  // negotiation and the transcript restore can overlap). The renewal waits
+  // for the LAST release, in either order; a second call of one release does
+  // not release the other. A pin: green at 749d92f2.
+  it("fold 3: with two leases a deferred renewal waits for the last release, in either order", async () => {
+    for (const order of [["a", "b"], ["b", "a"]] as const) {
+      const h = harness();
+      const signIn = pair(1, 300, { userExpiresIn: 900, sessionExpiresIn: 28_800 });
+      h.chain.arm(signIn, livesOf(signIn), Date.now(), Date.now());
+      await h.chain.quiesce();
+      const releases = { a: h.chain.lease(), b: h.chain.lease() };
+      h.renew.mockResolvedValue({ ok: true, credential: pair(2, 300, { userExpiresIn: 900 }) });
+      await advance(215); // past want = E_lo - 90 s = 210 s
+      expect(h.chain.deferred, `${order.join("")}: deferred under two leases`).toBe(true);
+      releases[order[0]]();
+      releases[order[0]]();
+      expect(h.renew, `${order.join("")}: one release (twice) leaves the other lease held`).not.toHaveBeenCalled();
+      expect(h.chain.deferred).toBe(true);
+      releases[order[1]]();
+      expect(h.renew, `${order.join("")}: the last release renews at once`).toHaveBeenCalledTimes(1);
+      await advance(0);
+      expect(h.onRenewed).toHaveBeenCalledTimes(1);
+      h.chain.dispose();
+    }
+  });
+
   it("C33: dispose, re-arm and a new hold drop the answers and timers of the older generation", async () => {
     // In RENEWING: the answer reaches nobody.
     let h = harness();

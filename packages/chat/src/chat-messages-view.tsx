@@ -82,7 +82,6 @@ import { SettledScheduleRegisterProvider } from "@cinatra-ai/agents/lifecycle-ca
 import {
   isConversationMomentCardKind,
   parseRunMomentCard,
-  RUN_MOMENT_CREDENTIAL_RENEWING,
   runMomentCardIsOpen,
   ScheduleReadingReport,
   useRunMomentCard,
@@ -376,20 +375,11 @@ function AgentRunTurnSlot({
       // headers are built again for every look, never kept from the first one.
       const current = runSeedRequest(credential, runId) ?? request;
       const response = await fetch(current.url, { ...current.init, signal });
-      if (!response.ok) {
-        // cinatra#4217 fold 2 (pre-2 MUST-FIX 2): a refusal while the frame's
-        // renewal is on its way can be the server refusing the pair it has
-        // just renewed away from. That look is not a miss: the watch looks
-        // again, and the look after the renewed pair is installed carries it.
-        if (
-          (response.status === 401 || response.status === 403) &&
-          credential.kind === "broker" &&
-          credential.auth.renewal?.pending() === true
-        ) {
-          return RUN_MOMENT_CREDENTIAL_RENEWING;
-        }
-        return null;
-      }
+      // A refusal is no answer. A look refused while the frame's renewal was on
+      // its way, or after it replaced the credential, is not a miss either: the
+      // watch itself reads the host's renewal and waits for it (cinatra#4217
+      // fold 3, `useRunMomentCard`).
+      if (!response.ok) return null;
       return parseRunMomentCard(await response.json());
     };
   }, [credential, runId]);

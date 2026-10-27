@@ -237,16 +237,38 @@ function renewingHeaders(token: () => string) {
   }));
 }
 
-/** The frame's renewal seam on the widget's declaration (fold 2): `pending`
- *  is true while the test holds a renewal answer back. */
-const seam = { pending: false };
+/**
+ * The frame's renewal seam on the widget's declaration: `pending` is true while
+ * the test holds a renewal answer back, and `settled` waits on a gate only the
+ * test opens (fold 3, pre-3 NOTE 5: the readings below wait on events, never on
+ * a sleep or a moved clock).
+ */
+const seam = {
+  pending: false,
+  settledCalls: 0,
+  open: (): void => undefined,
+};
 function renewalSeam() {
   seam.pending = false;
+  seam.settledCalls = 0;
+  let gate: Promise<void> | null = null;
+  const settled = () => {
+    seam.settledCalls += 1;
+    if (!seam.pending) return Promise.resolve();
+    gate ??= new Promise<void>((resolve) => {
+      seam.open = () => {
+        gate = null;
+        resolve();
+      };
+    });
+    return gate;
+  };
   Object.assign(WIDGET_LIFECYCLE_SURFACE.auth, {
-    renewal: { pending: () => seam.pending, settled: async () => undefined },
+    renewal: { pending: () => seam.pending, settled },
   });
 }
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** One macrotask turn: lets anything already started run to its end. */
+const drain = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 afterEach(() => {
   cleanup();
@@ -276,8 +298,6 @@ describe("the run's moment reader on the widget (cinatra#4217)", () => {
       if (runLooks().length === 0) throw new Error("the moment reader has not looked yet");
     });
     expect(userTokenOf(runLooks()[0]!.init)).toBe("cwu_first");
-    // Let the first look land, so the next one is a fresh look.
-    await new Promise((resolve) => setTimeout(resolve, 50));
 
     // The frame renews.
     userToken = "cwu_renewed";
@@ -296,13 +316,15 @@ describe("the run's moment reader on the widget (cinatra#4217)", () => {
     }
   });
 
-  // cinatra#4217 fold 2 (pre-2 MUST-FIX 2): the server committed the renewed
+  // cinatra#4217 fold 3 (pre-3 MUST-FIX 1): the server committed the renewed
   // pair and spent the first one, but the renewal's answer is held back, so the
-  // frame still sends the first pair and every look in that gap is refused.
-  // RED AT 2c98c0e4: each refusal was a miss, the watch stopped after ten, and
-  // the renewed pair, installed after the gap, reached a watch that no longer
-  // looked: the moment never reached the open page.
-  it("fold 2: refusals while a renewal answer is on its way are not misses; once the pair is installed the open page draws the schedule card", async () => {
+  // frame still sends the first pair and a look in that gap is refused. The
+  // watch counts that look as neither answer nor miss and does not look again,
+  // not even on a focus, until the renewal settles; however long that takes is
+  // the renewal request's own bound. RED AT 749d92f2: the fold-2 watch went on
+  // looking through the gap (and charged it after 180 s), it never waited for
+  // the renewal, so the wait below never began.
+  it("fold 3: a look refused while a renewal answer is on its way waits for the renewal; the next look carries the renewed pair and the open page draws the schedule card", async () => {
     let userToken = "cwu_first";
     const spent = new Set<string>();
     renewingHeaders(() => userToken);
@@ -318,26 +340,32 @@ describe("the run's moment reader on the widget (cinatra#4217)", () => {
     await waitFor(() => {
       if (runLooks().length === 0) throw new Error("no first look yet");
     });
-    await sleep(50);
 
     // The server commits the renewal and spends the first pair; its answer is
     // still on its way, so the frame holds the first pair.
     seam.pending = true;
     spent.add("cwu_first");
     const before = runLooks().length;
-    for (let i = 0; i < 12; i += 1) {
-      window.dispatchEvent(new Event("focus"));
-      await sleep(40);
-    }
+    window.dispatchEvent(new Event("focus"));
+    // The look that meets the gap (the focus, or the cadence when the focus
+    // came while the first look was still out) puts the watch on the renewal.
+    await waitFor(() => {
+      if (seam.settledCalls === 0) throw new Error("the watch never waited for the renewal");
+    });
     const gap = runLooks().slice(before);
-    expect(gap.length, "the watch kept looking through the gap").toBeGreaterThanOrEqual(12);
-    for (const call of gap) expect(userTokenOf(call.init)).toBe("cwu_first");
+    expect(gap.length, "exactly one look met the gap").toBe(1);
+    expect(userTokenOf(gap[0]!.init)).toBe("cwu_first");
+    // While it waits nothing looks, whatever the person does.
+    for (let i = 0; i < 5; i += 1) window.dispatchEvent(new Event("focus"));
+    await drain();
+    expect(runLooks().length, "no look while the renewal is on its way").toBe(before + 1);
 
-    // The renewal answers: the renewed pair is installed. Then the run parks.
+    // The renewal answers: the renewed pair is installed first, then the
+    // request stops counting as in flight. Then the run parks.
     userToken = "cwu_renewed";
     seam.pending = false;
     runReading = RUN_AT_SCHEDULE;
-    window.dispatchEvent(new Event("focus"));
+    seam.open();
     await waitFor(
       () => {
         if (!container.querySelector(CARD)) {
@@ -347,98 +375,9 @@ describe("the run's moment reader on the widget (cinatra#4217)", () => {
       { timeout: 10_000 },
     );
     expect(container.querySelectorAll(CARD).length).toBe(1);
-  }, 30_000);
-
-  it("fold 2 bound: a renewal still pending after the wait window counts as misses again, so the watch still ends", async () => {
-    let userToken = "cwu_first";
-    const spent = new Set<string>();
-    renewingHeaders(() => userToken);
-    renewalSeam();
-    let runReading: Record<string, unknown> = RUN_WORKING;
-    stub = installWidgetServiceStub({
-      lifecycle: () => scheduleEnvelope(),
-      runSeed: () => runReading,
-    });
-    refuseSpentTokensOnTheRunRoute(spent);
-    const { container } = await mountSurface("widget", { messages: runTurn() });
-    const runLooks = () => stub!.calls.filter((c) => c.url === RUN_URL);
-    await waitFor(() => {
-      if (runLooks().length === 0) throw new Error("no first look yet");
-    });
-    await sleep(50);
-
-    seam.pending = true;
-    spent.add("cwu_first");
-    // Two looks inside the window open it.
-    for (let i = 0; i < 2; i += 1) {
-      window.dispatchEvent(new Event("focus"));
-      await sleep(40);
+    for (const call of runLooks().slice(before + 1)) {
+      expect(userTokenOf(call.init)).toBe("cwu_renewed");
     }
-    // The renewal never settles: the clock passes the window (180 s).
-    const realNow = Date.now.bind(Date);
-    vi.spyOn(Date, "now").mockImplementation(() => realNow() + 181_000);
-    for (let i = 0; i < 12; i += 1) {
-      window.dispatchEvent(new Event("focus"));
-      await sleep(40);
-    }
-    const stopped = runLooks().length;
-    window.dispatchEvent(new Event("focus"));
-    await sleep(60);
-    expect(runLooks().length, "ten misses after the window ended the watch").toBe(stopped);
-
-    // A pair installed after the watch ended changes nothing on screen.
-    userToken = "cwu_renewed";
-    seam.pending = false;
-    runReading = RUN_AT_SCHEDULE;
-    window.dispatchEvent(new Event("focus"));
-    await sleep(300);
-    expect(container.querySelector(CARD)).toBeNull();
-  }, 30_000);
-
-  it("fold 2 cadence: a renewal gap at the very first look waits the ordinary cadence, it does not spin", async () => {
-    renewingHeaders(() => "cwu_first");
-    renewalSeam();
-    seam.pending = true;
-    stub = installWidgetServiceStub({ runSeed: () => RUN_WORKING });
-    refuseSpentTokensOnTheRunRoute(new Set(["cwu_first"]));
-    await mountSurface("widget", { messages: runTurn() });
-    const runLooks = () => stub!.calls.filter((c) => c.url === RUN_URL);
-    await waitFor(() => {
-      if (runLooks().length === 0) throw new Error("no first look yet");
-    });
-    await sleep(500);
-    expect(runLooks().length, "one look, then the 2 s cadence").toBeLessThanOrEqual(2);
-  }, 30_000);
-
-  it("fold 2 control: a server error while a renewal is on its way is still a miss, so the watch ends", async () => {
-    let userToken = "cwu_first";
-    const spent = new Set<string>();
-    renewingHeaders(() => userToken);
-    renewalSeam();
-    let runReading: Record<string, unknown> = RUN_WORKING;
-    stub = installWidgetServiceStub({
-      lifecycle: () => scheduleEnvelope(),
-      runSeed: () => runReading,
-    });
-    refuseSpentTokensOnTheRunRoute(spent, 503);
-    const { container } = await mountSurface("widget", { messages: runTurn() });
-    const runLooks = () => stub!.calls.filter((c) => c.url === RUN_URL);
-    await waitFor(() => {
-      if (runLooks().length === 0) throw new Error("no first look yet");
-    });
-    await sleep(50);
-    seam.pending = true;
-    spent.add("cwu_first");
-    for (let i = 0; i < 12; i += 1) {
-      window.dispatchEvent(new Event("focus"));
-      await sleep(40);
-    }
-    userToken = "cwu_renewed";
-    seam.pending = false;
-    runReading = RUN_AT_SCHEDULE;
-    window.dispatchEvent(new Event("focus"));
-    await sleep(300);
-    expect(container.querySelector(CARD), "ten 503 misses ended the watch").toBeNull();
   }, 30_000);
 
   // cinatra#4217 (R76 MUST-FIX 1): what the renewed look CHANGES ON SCREEN. The
@@ -466,7 +405,6 @@ describe("the run's moment reader on the widget (cinatra#4217)", () => {
     await waitFor(() => {
       if (!stub!.calls.some((c) => c.url === RUN_URL)) throw new Error("no first look yet");
     });
-    await new Promise((resolve) => setTimeout(resolve, 50));
 
     // The frame renews; the first token is spent. Then the run parks.
     userToken = "cwu_renewed";
