@@ -1285,17 +1285,38 @@ describe("lease, quiesce and generations", () => {
     expect(h.requests.map((r) => r.presented.userToken)).toEqual(["cwu_1", "cwu_7"]);
   });
 
-  it("a lease that outlasts the user token's renewable life holds and ends at E_hi (K13)", async () => {
+  // K13, both sides of the boundary, with the sign-in's lives (transport 300 s,
+  // user token 900 s; renewable while more than 30 s grace + 5 s safety is
+  // left, so until 865 s).
+  it("K13: a lease still held at 865 s, when the user token stops being renewable, ends the chain there; E_hi (301 s) is past", async () => {
     const h = harness();
     const signIn = pair(1, 300, { userExpiresIn: 900 });
     h.chain.arm(signIn, livesOf(signIn), at(0), at(0));
     const release = h.chain.lease();
+    await advanceTo(864.9);
+    expect(h.chain.state, "still deferred under the lease at 864.9 s").toBe("armed");
+    expect(h.onEnded).not.toHaveBeenCalled();
     await advanceTo(865);
-    expect(h.chain.state, "renewability lost under the lease: HOLD").toBe("ended");
-    // E_hi = 301 is long past when renewability ends at 865: END at once.
+    expect(h.chain.state, "ended at 865 s, with the lease still held").toBe("ended");
     expect(h.onEnded).toHaveBeenCalledTimes(1);
     release();
+    expect(h.renew, "no renewal was ever sent").not.toHaveBeenCalled();
+  });
+
+  it("K13: a lease released at 864.5 s, before the user token stops being renewable, renews at once", async () => {
+    const h = harness();
+    const signIn = pair(1, 300, { userExpiresIn: 900 });
+    h.chain.arm(signIn, livesOf(signIn), at(0), at(0));
+    const release = h.chain.lease();
+    h.renew.mockResolvedValue({ ok: true, credential: pair(2, 300, { userExpiresIn: 900 }) });
+    await advanceTo(864.5);
+    expect(h.chain.deferred, "the due renewal waited for the lease").toBe(true);
     expect(h.renew).not.toHaveBeenCalled();
+    release();
+    expect(h.requests.map((r) => r.at), "sent at the release").toEqual([864.5]);
+    await advance(0);
+    expect(h.onRenewed).toHaveBeenCalledTimes(1);
+    expect(h.onEnded).not.toHaveBeenCalled();
   });
 });
 

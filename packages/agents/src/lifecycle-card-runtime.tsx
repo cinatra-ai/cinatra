@@ -1066,17 +1066,28 @@ export function lifecycleRequestCredential(
  *  cannot loop. */
 const RENEWED_SENDS = 2;
 
+/** The two headers that ARE the broker credential pair: the transport token
+ *  and the widget user token. Lower case; header names are case-insensitive. */
+const CREDENTIAL_KEY_HEADERS = ["authorization", WIDGET_USER_TOKEN_HEADER] as const;
+
 /**
- * The credential a request carries, as one comparable value: the declaration's
- * headers read NOW, names sorted. It lives only for one comparison (did the
- * credential change between sending a request and reading its refusal) and is
- * never stored in state, logged or sent. A cookie host has no declaration and
- * one constant key, so its refusals never read as a renewal.
+ * The credential a request carries, as one comparable value: the two headers
+ * of the credential pair the declaration answers NOW, read by name in any
+ * case. Every other header (the assistant and origin selectors) is left out,
+ * so a selector that changes, or a header whose name changes case, is not a
+ * moved credential. It lives only for one comparison (did the credential change
+ * between sending a request and reading its refusal) and is never stored in
+ * state, logged or sent. A cookie host has no declaration and one constant key,
+ * so its refusals never read as a renewal.
  */
 export function lifecycleCredentialKey(auth: LifecycleCardAuth | null | undefined): string {
   if (!auth) return "";
-  const headers = auth.headers();
-  return JSON.stringify(Object.keys(headers).sort().map((name) => [name, headers[name]]));
+  const pair: Record<string, string> = {};
+  for (const [name, value] of Object.entries(auth.headers())) {
+    const lower = name.toLowerCase();
+    if ((CREDENTIAL_KEY_HEADERS as readonly string[]).includes(lower)) pair[lower] = value;
+  }
+  return JSON.stringify(CREDENTIAL_KEY_HEADERS.map((name) => pair[name] ?? null));
 }
 
 /**
@@ -1345,6 +1356,9 @@ export function useLifecycleCardResolve<K extends LifecycleDataPartViewType>(par
         const response = await sendAcrossRenewal(
           auth,
           () => {
+            // A resolve that a newer one superseded while it waited for the
+            // renewal sends nothing more: its answer would be dropped below.
+            if (signal.aborted || requestId !== latestRequestRef.current) return null;
             // A broker declaration with no widget user token now sends nothing.
             const credential = lifecycleRequestCredential(auth);
             if (credential === null) return null;
@@ -1702,8 +1716,11 @@ const MOMENT_READ_TIMEOUT_MS = 8000;
  *
  * At most this many such looks IN A ROW are forgiven. A valid renewal costs
  * one: the look after it carries the renewed pair. The belt is for a host whose
- * renewal reading never settles; past it, such looks count as misses again, so
- * the watch still ends.
+ * `settled()` resolves while its `pending()` keeps reading true; past it, such
+ * looks count as misses again, so the watch still ends. It does NOT cover a
+ * `settled()` that never resolves: the next look waits for it, so such a host
+ * holds the watch for as long as it stays unresolved. The embed's resolves at
+ * the latest at the renewal request's own deadline.
  */
 const MOMENT_RENEWAL_WAIT_LIMIT = 3;
 
@@ -2193,9 +2210,13 @@ async function reviewTicketStillPending(
     // EXCEPT ACROSS THE HOST'S RENEWAL (cinatra#4217 fold 3): a refusal while a
     // renewal is on its way, or after it replaced the credential, says nothing
     // about the gate, so it is indeterminate and the authorized ticket stays on
-    // file. The next look asks again with the renewed credential, and a chain
-    // the renewal ended holds no token, which withdraws above.
+    // file. The next look asks again with the renewed credential.
+    // BUT NOT WHEN THE CHAIN ENDED WHILE THIS PROBE WAS OUT: the declaration
+    // then holds no widget user token, its key moved only because the pair was
+    // dropped, and no renewed credential will ever ask again. That refusal is
+    // read exactly as a probe with no token is read before sending: withdrawn.
     if (response.status === 401 || response.status === 403) {
+      if (lifecycleRequestCredential(auth) === null) return "withdrawn";
       return lookCaughtInRenewal(auth, sentKey) ? "indeterminate" : "withdrawn";
     }
     const envelope = parseLifecycleResolveEnvelope(
@@ -2356,8 +2377,10 @@ export function useRunReviewSlot({
      * nothing about the slot, so it spends none of the three budgets above, and
      * the next look waits until no renewal is on its way. At most
      * SLOT_RENEWAL_WAIT_LIMIT in a row; past it (LIMIT + 1) such looks are
-     * charged again, so a host whose renewal reading never settles still meets
-     * every belt.
+     * charged again, so a host whose `settled()` resolves while its
+     * `pending()` keeps reading true still meets every belt. A `settled()`
+     * that never resolves holds the next look for as long as it stays
+     * unresolved (the embed's resolves at the renewal request's deadline).
      */
     renewalWaits: number;
   }>({
@@ -2389,6 +2412,16 @@ export function useRunReviewSlot({
   // budget (fix leg 8).
   const lastLookAtRef = useRef<number>(0);
   const lastLookSignalRef = useRef<number | undefined>(liveSignal);
+  // THE ONE WAIT FOR THE HOST'S RENEWAL (cinatra#4217). The schedule below is
+  // rebuilt whenever the caller's liveness signal moves, and a rebuilt schedule
+  // that waits for the renewal asks the SAME renewal reading for the same
+  // settlement. So the reading is asked once per renewal and the wait shared.
+  // A stopped schedule still waits on that one shared promise until it
+  // settles, and then returns without looking.
+  const renewalWaitRef = useRef<{
+    renewal: LifecycleCardAuthRenewal;
+    settled: Promise<void>;
+  } | null>(null);
   // AND WHICH LOOK OWNS THE ANSWER (cinatra#3007, fix leg 8, convergence).
   //
   // Leg 8 put the caller's liveness signal into the scheduling effect's
@@ -2715,9 +2748,26 @@ export function useRunReviewSlot({
           // runs first, so a renewal reading that settles at once cannot make
           // this reader spin. `settled` is bounded by the renewal request's own
           // deadline; past the belt nothing waits. Only the newest schedule
-          // goes on after the wait: a rebuilt effect stops this one.
+          // goes on after the wait: a rebuilt effect stops this one. The
+          // reading is asked once per renewal; a rebuilt schedule joins the
+          // wait already asked for (see renewalWaitRef).
           if (waitForRenewal) {
-            await waitForRenewal.settled().catch(() => undefined);
+            let shared = renewalWaitRef.current;
+            if (shared === null || shared.renewal !== waitForRenewal) {
+              const entry = {
+                renewal: waitForRenewal,
+                settled: waitForRenewal.settled().then(
+                  () => undefined,
+                  () => undefined,
+                ),
+              };
+              renewalWaitRef.current = entry;
+              void entry.settled.then(() => {
+                if (renewalWaitRef.current === entry) renewalWaitRef.current = null;
+              });
+              shared = entry;
+            }
+            await shared.settled;
             if (stopped) return;
           }
           // The budget above is spent HERE, when the look actually starts, and

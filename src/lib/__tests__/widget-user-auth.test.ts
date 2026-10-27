@@ -2594,6 +2594,30 @@ describe("renewUserWidgetToken — the frame's token renewal (cinatra#4217)", ()
     expect(liveRows(), "exactly one live row per frame").toBe(1);
   });
 
+  // K5 of the PR: what decides a slow renewal is the user token's life left
+  // when the statement runs, not the request's latency alone. With the
+  // sign-in's lives the frame's timer sends a renewal at 210 s, and at the
+  // latest at 864 s (36 s left: 30 s grace, 5 s safety, 1 s fire margin).
+  it("a slow renewal renews while more than the 30 s grace is left when it arrives: 6 s late at 216 s and 5 s late at 869 s renew, 6 s late at 870 s is refused", () => {
+    expect(TTL, "the sign-in's user token life").toBe(900);
+    expect(GRACE).toBe(30);
+
+    const due = signIn();
+    advance(210 + 6);
+    expect(renew(due).ok, "sent at 210 s, 6 s late: 684 s left, renewed").toBe(true);
+
+    const latestFiveLate = signIn();
+    advance(TTL - 36 + 5);
+    expect(renew(latestFiveLate).ok, "sent at 864 s, 5 s late: 31 s left, renewed").toBe(true);
+
+    const latestSixLate = signIn();
+    advance(TTL - 36 + 6);
+    expect(renew(latestSixLate), "sent at 864 s, 6 s late: 30 s left, refused").toEqual({
+      ok: false,
+      reason: "not_renewable",
+    });
+  });
+
   // (b) Acceptance 2, second item.
   it("an expired or revoked token is refused and cannot be renewed", () => {
     function refusedWithoutWrite(

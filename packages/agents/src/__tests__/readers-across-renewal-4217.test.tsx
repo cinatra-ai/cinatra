@@ -13,16 +13,22 @@
  * What this file pins, under fake timers and with every answer driven by the
  * test (no real sleeps):
  *
- *   · `sendAcrossRenewal` and `lookCaughtInRenewal`, branch by branch.
+ *   · `sendAcrossRenewal`, `lookCaughtInRenewal` and `lifecycleCredentialKey`,
+ *     branch by branch; the key reads the credential pair only.
  *   · The card resolve (pre-3 MF2): a resolve refused before the renewed pair
- *     is installed resolves with it, instead of staying unresolved.
+ *     is installed resolves with it, instead of staying unresolved; of two
+ *     resolves waiting for one renewal, only the newest sends again.
  *   · The run-moment watch (pre-3 MF1, MF4): a renewal that outlasts 180 s, and
  *     looks that time out while it is on its way, do not end the watch; a host
- *     whose renewal never settles still ends it; a watch that was never
- *     answered reports `gaveUp` when it stops.
+ *     whose `pending()` stays true while its `settled()` resolves at once still
+ *     ends it; a `settled()` that has not resolved holds the next look (no
+ *     limit is reached meanwhile); a watch that was never answered reports
+ *     `gaveUp` when it stops.
  *   · The review slot (pre-3 MF3): a refusal in the gap does not spend the
- *     completed reader's last look, in either order.
- *   · The ticket probe: a refusal in the gap keeps the authorized ticket.
+ *     completed reader's last look, in either order; schedules rebuilt while
+ *     it waits ask the renewal reading once.
+ *   · The ticket probe: a refusal in the gap keeps the authorized ticket; a
+ *     refusal after the chain ended while the probe was out withdraws it.
  *
  *   pnpm --filter @cinatra-ai/agents exec vitest run \
  *     src/__tests__/readers-across-renewal-4217.test.tsx
@@ -59,8 +65,14 @@ import { ReviewGateCard } from "../review-gate-card";
 
 type Frame = ReturnType<typeof frame>;
 
-function frame(options: { stuck?: boolean } = {}) {
-  const state = { n: 1, dropped: false, pending: options.stuck === true };
+/**
+ * `alwaysPending`: `pending()` reads true from the start and never turns false,
+ * while `settled()` resolves at once whenever no `begin()` is outstanding. It
+ * models a host whose two readings disagree; it is NOT a `settled()` that never
+ * resolves (that is `begin()` with no `answer()`).
+ */
+function frame(options: { alwaysPending?: boolean } = {}) {
+  const state = { n: 1, dropped: false, pending: options.alwaysPending === true };
   let gate: { promise: Promise<void>; resolve: () => void } | null = null;
   const settled = vi.fn((): Promise<void> => (gate ? gate.promise : Promise.resolve()));
   const auth: LifecycleCardAuth = {
@@ -94,7 +106,7 @@ function frame(options: { stuck?: boolean } = {}) {
      *  stops counting as in flight, as the frame's scheduler does. */
     answer(renewed = true) {
       if (renewed) state.n += 1;
-      if (!options.stuck) state.pending = false;
+      if (!options.alwaysPending) state.pending = false;
       const g = gate;
       gate = null;
       g?.resolve();
@@ -106,7 +118,7 @@ function frame(options: { stuck?: boolean } = {}) {
     /** The renewal ended the chain: the frame drops its pair. */
     drop() {
       state.dropped = true;
-      if (!options.stuck) state.pending = false;
+      if (!options.alwaysPending) state.pending = false;
       const g = gate;
       gate = null;
       g?.resolve();
@@ -332,6 +344,39 @@ describe("lookCaughtInRenewal (cinatra#4217 fold 3)", () => {
     expect(lookCaughtInRenewal(f.auth, sentKey), "the credential moved").toBe(true);
     expect(lookCaughtInRenewal(f.auth, lifecycleCredentialKey(f.auth)), "settled, unchanged").toBe(false);
   });
+
+  // RED AT af66c965: the key serialized every header, so a selector change or
+  // a change of a header name's case read as a moved credential.
+  it("the key reads only the credential pair: selectors and header-name case do not move it", () => {
+    const h = {
+      transport: "cit_1",
+      user: "cwu_1",
+      assistant: "assistant-a",
+      upper: false,
+    };
+    const auth: LifecycleCardAuth = {
+      headers: (): Record<string, string> => ({
+        [h.upper ? "AUTHORIZATION" : "Authorization"]: `Bearer ${h.transport}`,
+        [h.upper ? "x-cinatra-widget-user-token" : "X-Cinatra-Widget-User-Token"]: h.user,
+        "X-Cinatra-Widget-Assistant": h.assistant,
+        "X-Cinatra-Widget-Origin": "https://site.example",
+      }),
+      credentials: "omit",
+      renewal: { pending: () => false, settled: () => Promise.resolve() },
+    };
+    const sentKey = lifecycleCredentialKey(auth);
+    h.assistant = "assistant-b";
+    expect(lifecycleCredentialKey(auth), "a selector changed").toBe(sentKey);
+    expect(lookCaughtInRenewal(auth, sentKey), "a selector change is not a renewal").toBe(false);
+    h.upper = true;
+    expect(lifecycleCredentialKey(auth), "the header names changed case").toBe(sentKey);
+    h.transport = "cit_2";
+    expect(lifecycleCredentialKey(auth), "the transport token moved").not.toBe(sentKey);
+    h.transport = "cit_1";
+    h.user = "cwu_2";
+    expect(lifecycleCredentialKey(auth), "the user token moved").not.toBe(sentKey);
+    expect(lookCaughtInRenewal(auth, sentKey)).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -387,6 +432,25 @@ describe("useLifecycleCardResolve across the renewal (pre-3 MUST-FIX 2)", () => 
     await pass(500);
     expect(result.current).toBeNull();
     expect(tokens).toEqual(["cwu_1"]);
+  });
+
+  // RED AT af66c965: both resolves sent again after the renewal, and the older
+  // one's answer was dropped only after its request had been made.
+  it("of two resolves waiting for one renewal, only the newer sends again", async () => {
+    const f = frame();
+    f.begin();
+    const tokens = resolveServer(f, new Set(["cwu_1"]));
+    const { result } = mount(f);
+    await pass(500);
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await flush();
+    expect(tokens, "the mount resolve and the focus resolve, both refused").toEqual(["cwu_1", "cwu_1"]);
+    f.answer();
+    await flush();
+    expect(tokens, "one renewed send, by the newer resolve").toEqual(["cwu_1", "cwu_1", "cwu_2"]);
+    expect(result.current?.state?.state, "resolved with the renewed pair").toBe("pending");
   });
 
   it("an unmount while the resolve waits for the renewal sends nothing more", async () => {
@@ -542,12 +606,14 @@ describe("useRunMomentCard across the renewal (pre-3 MUST-FIX 1 and 4)", () => {
     expect(server.looks).toEqual(["cwu_1", "cwu_2"]);
   });
 
-  it("belt: a host whose renewal reading never settles still ends the watch (3 forgiven, then 10 misses)", async () => {
-    const f = frame({ stuck: true });
+  // The belt covers a host whose pending() stays true while its settled()
+  // resolves; it does not cover a settled() that never resolves (next test).
+  it("belt: a host whose pending() stays true while settled() resolves at once still ends the watch (3 forgiven, then 10 misses)", async () => {
+    const f = frame({ alwaysPending: true });
     const { server, read } = momentServer(f);
     const { result } = watch(f, read);
-    // `stuck`: pending() is true from the start and settled() resolves at once.
-    // The first look lands (the server has not spent the pair yet).
+    // `alwaysPending`: pending() is true from the start and settled() resolves
+    // at once. The first look lands (the server has not spent the pair yet).
     await pass(0);
     expect(result.current.answered).toBe(true);
     server.spent.add("cwu_1");
@@ -556,6 +622,27 @@ describe("useRunMomentCard across the renewal (pre-3 MUST-FIX 1 and 4)", () => {
     expect(stopped, "the first look, 3 forgiven looks and 10 misses").toBe(14);
     await pass(60_000);
     expect(server.looks.length, "the watch ended").toBe(stopped);
+  });
+
+  // What the belt does NOT cover, pinned as it is: a settled() that has not
+  // resolved holds the next look, so no limit is reached while it is
+  // unresolved (here for one hour). The site widget's frame resolves it at the
+  // latest at the renewal request's own deadline (the frame's own tests).
+  it("a settled() that has not resolved holds the next look for as long as it is unresolved; no limit is reached", async () => {
+    const f = frame();
+    const { server, read } = momentServer(f);
+    const { result } = watch(f, read);
+    await pass(0);
+    f.begin();
+    server.spent.add("cwu_1");
+    await pass(2500);
+    expect(server.looks, "the look that met the gap").toEqual(["cwu_1", "cwu_1"]);
+    await pass(3_600_000);
+    expect(server.looks.length, "no look while settled() is unresolved").toBe(2);
+    expect(result.current.gaveUp, "and no limit was reached").toBe(false);
+    f.answer();
+    await pass(2500);
+    expect(server.looks.slice(2), "the look after it carries the renewed pair").toEqual(["cwu_2"]);
   });
 
   it("a refusal unrelated to the renewal still counts once the renewal settled with no new pair", async () => {
@@ -697,8 +784,10 @@ describe("useRunReviewSlot across the renewal (pre-3 MUST-FIX 3)", () => {
     expect(looks).toEqual(["cwu_1", "cwu_2"]);
   });
 
-  it("belt: a host whose renewal reading never settles still meets the park's failure belt", async () => {
-    const f = frame({ stuck: true });
+  // As in the moment watch: this covers a pending() that stays true while
+  // settled() resolves at once, not a settled() that never resolves.
+  it("belt: a host whose pending() stays true while settled() resolves at once still meets the park's failure belt", async () => {
+    const f = frame({ alwaysPending: true });
     const looks: string[] = [];
     const read: RunReviewSlotReader = async () => {
       looks.push(f.token);
@@ -710,6 +799,54 @@ describe("useRunReviewSlot across the renewal (pre-3 MUST-FIX 3)", () => {
     await pass(300_000);
     expect(result.current.stillReading, "3 forgiven looks, then 5 failures end the hold").toBe(false);
     expect(looks.length).toBeGreaterThanOrEqual(8);
+  });
+
+  // RED AT af66c965: every schedule rebuilt by a liveness bump while the slot
+  // waited asked the renewal reading again (one more settled() call each), and
+  // each waiter was kept until the renewal answered.
+  it("schedules rebuilt by liveness bumps while the slot waits ask the renewal reading once; one look follows; a later renewal is asked for and waited for afresh", async () => {
+    const f = frame();
+    const looks: string[] = [];
+    const spent = new Set<string>();
+    const read: RunReviewSlotReader = async () => {
+      looks.push(f.token);
+      return spent.has(f.token) ? null : AWAITING_NO_GATE;
+    };
+    const { rerender } = renderHook(
+      ({ signal }: { signal: number }) =>
+        useRunReviewSlot({ runId: "run-4217", status: "completed", read, liveSignal: signal }),
+      { initialProps: { signal: 0 }, wrapper: host(f.auth) },
+    );
+    await pass(0);
+    expect(looks, "the first look lands").toEqual(["cwu_1"]);
+    f.begin();
+    spent.add("cwu_1");
+    for (let i = 0; i < 60 && looks.length < 2; i += 1) await pass(1000);
+    expect(looks, "the look that met the gap").toEqual(["cwu_1", "cwu_1"]);
+    await pass(30_000);
+    expect(f.settled, "the wait asked the renewal reading").toHaveBeenCalledTimes(1);
+    for (let signal = 1; signal <= 5; signal += 1) {
+      rerender({ signal });
+      await pass(30_000);
+    }
+    expect(looks.length, "nothing looked while the renewal was on its way").toBe(2);
+    expect(f.settled, "five rebuilt schedules joined the one wait").toHaveBeenCalledTimes(1);
+    f.answer();
+    await flush();
+    expect(looks.slice(2), "one look follows, with the renewed pair").toEqual(["cwu_2"]);
+
+    // A LATER renewal asks the reading afresh and is waited for too: the
+    // shared wait of the first renewal is not reused once it settled.
+    f.begin();
+    spent.add("cwu_2");
+    for (let i = 0; i < 60 && looks.length < 4; i += 1) await pass(1000);
+    expect(looks.slice(3), "the look that met the second gap").toEqual(["cwu_2"]);
+    await pass(30_000);
+    expect(looks.length, "nothing looked while the second renewal was on its way").toBe(4);
+    expect(f.settled, "the second renewal was asked for once").toHaveBeenCalledTimes(2);
+    f.answer();
+    await flush();
+    expect(looks.slice(4), "one look follows, with the second renewed pair").toEqual(["cwu_3"]);
   });
 });
 
@@ -733,9 +870,15 @@ describe("the review ticket probe across the renewal", () => {
 
   function SlotCard({ read }: { read: RunReviewSlotReader }) {
     const { slot } = useRunReviewSlot({ status: "pending_approval", initial: OLD, read, runId: "run-on-file" });
-    return slot.ref ? (
-      <ReviewGateCard view={{ viewType: "artifact_review_gate", schemaVersion: 1, ref: slot.ref }} />
-    ) : null;
+    return (
+      <>
+        {/* The ticket the slot holds now, read by the chain-end test below. */}
+        <span data-slot-ref={slot.ref ?? ""} />
+        {slot.ref ? (
+          <ReviewGateCard view={{ viewType: "artifact_review_gate", schemaVersion: 1, ref: slot.ref }} />
+        ) : null}
+      </>
+    );
   }
 
   async function landedThenProbed(f: Frame, probe: () => Response, beforeProbe: () => void) {
@@ -787,5 +930,55 @@ describe("the review ticket probe across the renewal", () => {
     const page = await landedThenProbed(f, () => refused(), () => undefined);
     expect(page.root?.isConnected).toBe(false);
     expect(page.replacementResolves).toHaveBeenCalled();
+  });
+
+  // RED AT af66c965: the probe left with the held pair, the chain ended while
+  // it was out (the frame dropped its pair through the SAME declaration object,
+  // so no identity reset), and the refusal then read as "caught in the
+  // renewal" because the key had moved to the empty one, so the slot kept the
+  // old ticket at that look. (Its NEXT look withdrew it there, through the
+  // probe's check before sending; so this reads the slot right after the
+  // first probe's answer, before any next look.)
+  it("a refusal after the chain ended while the probe was out withdraws the ticket at that look", async () => {
+    const f = frame();
+    let probing = false;
+    let next: RunReviewSlot = OLD;
+    const replacementResolves = vi.fn();
+    const probes = vi.fn(() => {
+      f.drop();
+      return refused();
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: unknown, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body));
+        if (body.ref === OLD.ref && !probing) return envelope(PENDING);
+        if (body.ref === OLD.ref) return probes();
+        replacementResolves();
+        return new Promise<Response>(() => {});
+      }),
+    );
+    const read = vi.fn(async () => next);
+    const rendered = render(
+      <LifecycleCardSurfaceProvider host="site_widget" auth={f.auth}>
+        <SlotCard read={read} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const ticket = () => rendered.container.querySelector("[data-slot-ref]")?.getAttribute("data-slot-ref");
+    expect(rendered.container.querySelector('[data-conformance-id="review-gate-card"]'), "a real review lands first").not.toBeNull();
+    expect(ticket()).toBe(OLD.ref);
+    probing = true;
+    next = NEXT;
+    for (let i = 0; i < 80 && probes.mock.calls.length === 0; i += 1) await pass(250);
+    expect(probes, "one probe, refused after the chain ended while it was out").toHaveBeenCalledTimes(1);
+    const looksAtProbe = read.mock.calls.length;
+    await flush();
+    expect(read.mock.calls.length, "no next look yet").toBe(looksAtProbe);
+    expect(f.token, "the chain ended").toBe("");
+    expect(ticket(), "the old ticket is withdrawn at that look").toBe(NEXT.ref);
+    expect(replacementResolves, "nothing is sent without a token").not.toHaveBeenCalled();
   });
 });
