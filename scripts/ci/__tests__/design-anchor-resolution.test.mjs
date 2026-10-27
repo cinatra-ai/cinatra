@@ -144,15 +144,18 @@ describe("serialized capture assertions retain selector and observation provenan
     expect(report.unresolved.map((a) => a.selector)).toEqual([selector]);
   });
 
-  it("keeps the current three controls and their absences as drawing claims", () => {
+  it("keeps the retired three controls and their absences as drawing claims", () => {
     const captureAnchors = captureAnchorExpectations();
     const before = JSON.stringify(captureAnchors);
     const inputs = anchorDigestInputs({ specCommit: manifest().specCommit, domExpectations: contract().domExpectations, captureAnchors });
     const digestBefore = computeAnchorDigest(inputs);
     const report = checked(collectRecordedAnchors({ anchorContract: contract(), captureAnchors }));
-    expect(CARD_KINDS.recommendation_hold.retiredDecisionControls).toBeUndefined();
+    // cinatra#3062: the drawing at design@06230d4e (specs/app-lifecycle-cards.html:689) gives a pill
+    // nothing to press, so the per-pill trio is RETIRED on every declared host and recorded only as
+    // an absence there.
+    expect(CARD_KINDS.recommendation_hold.retiredDecisionControls).toEqual(retired);
     expect(report.results.filter((a) => retired.includes(a.selector)).map((a) => a.selector).sort()).toEqual([...retired].sort());
-    expect(report.results.filter((a) => retired.includes(a.selector)).every((a) => a.captureAssertions.some((claim) => claim.expect === "present"))).toBe(true);
+    expect(report.results.filter((a) => retired.includes(a.selector)).every((a) => a.captureAssertions.length > 0 && a.captureAssertions.every((claim) => claim.expect === "absent"))).toBe(true);
     expect(JSON.stringify(captureAnchors)).toBe(before);
     expect(computeAnchorDigest(inputs)).toBe(digestBefore);
   });
