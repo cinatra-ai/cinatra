@@ -498,10 +498,16 @@ describe("anchors and bounds", () => {
     expect(h.renew).not.toHaveBeenCalled();
   });
 
-  it("C08: an answer read before its successor's whole life ran out, but handled after it, ends the chain", async () => {
-    const h = harness();
-    // The answer body was read at +211 s (receivedAt), but the tab only
-    // handles it at +600 s: E'_hi = 211 + 301 = 512 <= 600.
+  // Restated in the fold 1 cure (pre-1 MF1). (a) The old case: the answer was
+  // read at +211 s but handled at +600 s. A request is now awaited only to its
+  // deadline, max(E_hi 301, start 210 + 90) = 301 s: the chain gives it up
+  // there, ends once (the sign-in card), aborts its signal, and the answer at
+  // +600 s reaches nobody. (b) The row's point, an answer handled after its
+  // successor's whole life ran out ends the chain without presenting the
+  // successor, still holds for an answer handled before the deadline.
+  it("C08: an answer handled after its successor's whole life ends the chain; one handled after the deadline is given up there", async () => {
+    // (a) handled at +600 s, after the deadline.
+    let h = harness();
     h.renew.mockImplementation(
       () =>
         new Promise((resolve) => {
@@ -509,7 +515,33 @@ describe("anchors and bounds", () => {
         }),
     );
     h.chain.arm(pair(1), livesOf(pair(1)), at(0), at(0));
+    await advanceTo(300.999);
+    expect(h.requests.map((r) => r.at)).toEqual([210]);
+    expect(h.onEnded).not.toHaveBeenCalled();
+    expect(h.chain.state).toBe("renewing");
+    await advanceTo(301);
+    expect(h.onEnded, "given up at the deadline, 301 s").toHaveBeenCalledTimes(1);
+    expect(h.chain.state).toBe("ended");
+    expect(h.signals[0]!.aborted, "its signal aborts").toBe(true);
     await advanceTo(600);
+    await advance(3600);
+    expect(h.onRenewed, "the answer at +600 s reaches nobody").not.toHaveBeenCalled();
+    expect(h.onEnded).toHaveBeenCalledTimes(1);
+    expect(h.requests, "the successor is never presented").toHaveLength(1);
+    expect(h.liveTimers).toBe(0);
+
+    // (b) read at +211 s, handled at +290 s (before the deadline), with a
+    // successor of 60 s: E'_hi = 211 + 61 = 272 <= 290, so END at its arm.
+    vi.setSystemTime(T0);
+    h = harness();
+    h.renew.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve({ ok: true, credential: pair(2, 60), receivedAt: at(211) }), 80_000);
+        }),
+    );
+    h.chain.arm(pair(1), livesOf(pair(1)), at(0), at(0));
+    await advanceTo(290);
     expect(h.onRenewed).toHaveBeenCalledTimes(1);
     expect(h.onEnded, "END at once at arm").toHaveBeenCalledTimes(1);
     expect(h.onEnded.mock.invocationCallOrder[0]).toBeGreaterThan(h.onRenewed.mock.invocationCallOrder[0]);
@@ -518,6 +550,7 @@ describe("anchors and bounds", () => {
       h.requests.filter((r) => r.presented.userToken === "cwu_2"),
       "the successor is never presented",
     ).toEqual([]);
+    expect(h.liveTimers).toBe(0);
   });
 
   // Restated in fold 1 (pre-1 MF1): the answer of the old case arrived at
@@ -1012,9 +1045,13 @@ describe("refusals", () => {
 
   it("C20: a late retry timer goes through decide: HOLD or END, no request at ul <= 35", async () => {
     // A 429 at ul 50; the 5 s retry timer fires 20 s late (ul 25): HOLD.
-    let h = harness({ lateness: (i) => (i === 0 ? 20_000 : 0) });
+    // Timer 0 is the request's deadline (fold 1, pre-1 MF1: max(E_hi 51 s,
+    // start + 90 s) = 90 s), which the retry timer (timer 1) replaces.
+    let h = harness({ lateness: (i) => (i === 1 ? 20_000 : 0) });
     h.renew.mockResolvedValue({ ok: false, reason: "renew_rate_limited" });
     armWithLeft(h, pair(1), 50);
+    await advance(0);
+    expect(h.timerArgs, "the deadline, then the 5 s retry wait").toEqual([90_000, 5_000]);
     await advance(25);
     expect(h.requests).toHaveLength(1);
     expect(h.chain.state).toBe("holding");
@@ -1024,9 +1061,11 @@ describe("refusals", () => {
 
     // Late past E_hi: END at the fire.
     vi.setSystemTime(T0);
-    h = harness({ lateness: (i) => (i === 0 ? 100_000 : 0) });
+    h = harness({ lateness: (i) => (i === 1 ? 100_000 : 0) });
     h.renew.mockResolvedValue({ ok: false, reason: "renew_rate_limited" });
     armWithLeft(h, pair(1), 50);
+    await advance(0);
+    expect(h.timerArgs).toEqual([90_000, 5_000]);
     await advance(105);
     expect(h.onEnded).toHaveBeenCalledTimes(1);
     expect(h.requests).toHaveLength(1);
@@ -1442,10 +1481,15 @@ describe("fold 1: a request in flight, C04 with the cap, and quiesce after dispo
     expect(h.chain.state).toBe("armed");
   });
 
-  // The deadline callback's own guards (self-check C2). Each is reached only by
-  // a timer that fires although the chain cleared it, so these cases use a
-  // clear that does not take. GREEN AT a895dbef TOO (it set no deadline); each
-  // is red only against the deadline code without the guard it names.
+  // The deadline callback's guards (self-check C2). Each is reached only by a
+  // timer that fires although the chain cleared it, so these cases use a clear
+  // that does not take. Two guards stop such a timer: the generation test of
+  // every chain timer (setChainTimer) and the deadline's own state test. The
+  // fold 1 cure removed the deadline's `chain !== c` and `c.ended` tests: the
+  // generation implies the first, and the state test implies the second (see
+  // watchRequest). Mutant check (fold 1 run 7): removing the state test turns
+  // the 429-wait case red; removing the generation test turns the stale-retry
+  // case red. GREEN AT a895dbef TOO (it set no deadline).
   it("MF1 guard: a deadline that fires during a 429 retry wait changes nothing (state is not renewing)", async () => {
     const h = harness({ leakyClear: true });
     const signIn = pair(1, 300, { userExpiresIn: 900 });
@@ -1477,7 +1521,7 @@ describe("fold 1: a request in flight, C04 with the cap, and quiesce after dispo
     expect(h.onEnded).not.toHaveBeenCalled();
   });
 
-  it("MF1 guard: a deadline that fires after the chain ended moves nothing (the chain has ended)", async () => {
+  it("MF1 guard: a deadline that fires after the chain ended moves nothing (state is ended, not renewing)", async () => {
     const h = harness({ leakyClear: true });
     h.renew.mockImplementationOnce(
       () =>
@@ -1497,7 +1541,7 @@ describe("fold 1: a request in flight, C04 with the cap, and quiesce after dispo
     expect(h.renew).toHaveBeenCalledTimes(1);
   });
 
-  it("MF1 guard: a deadline that fires after dispose changes nothing (generation and chain)", async () => {
+  it("MF1 guard: a deadline that fires after dispose changes nothing (generation, and state idle)", async () => {
     const h = harness({ leakyClear: true });
     h.renew.mockImplementation(() => new Promise(() => undefined));
     h.chain.arm(pair(1), livesOf(pair(1)), at(0), at(0));
@@ -1509,5 +1553,29 @@ describe("fold 1: a request in flight, C04 with the cap, and quiesce after dispo
     expect(h.onEnded, "the disposed chain's deadline (301 s) reaches nobody").not.toHaveBeenCalled();
     expect(h.chain.state).toBe("idle");
     expect(h.chain.generation).toBe(generation);
+  });
+
+  it("MF1 guard: a stale retry timer of a replaced chain changes nothing (the generation)", async () => {
+    const h = harness({ leakyClear: true });
+    h.renew.mockResolvedValueOnce({ ok: false, reason: "renew_rate_limited" });
+    h.renew.mockImplementation(() => new Promise(() => undefined));
+    armWithLeft(h, pair(1), 50);
+    await advance(0);
+    expect(h.chain.state, "the 429 at 0 s waits 5 s").toBe("retry_wait");
+    await advance(1);
+    // A new sign-in at 1 s replaces the chain; its first renewal is due at
+    // A + 210 s = 211 s. The old chain's retry timer (5 s) and deadline
+    // (90 s) still fire, because the clear does not take.
+    h.chain.arm(pair(2), livesOf(pair(2)), Date.now(), Date.now());
+    expect(h.chain.state).toBe("armed");
+    await advanceTo(210.999);
+    expect(h.requests.map((r) => r.at), "no retry request on the new chain").toEqual([0]);
+    expect(h.chain.state).toBe("armed");
+    await advanceTo(211);
+    expect(h.requests.map((r) => [r.at, r.presented.userToken])).toEqual([
+      [0, "cwu_1"],
+      [211, "cwu_2"],
+    ]);
+    expect(h.onEnded).not.toHaveBeenCalled();
   });
 });

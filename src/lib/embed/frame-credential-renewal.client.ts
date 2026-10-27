@@ -431,10 +431,16 @@ export function createFrameCredentialRenewal(
 
   /** The one timer of a chain whose renewal is in flight. At the deadline a
    *  request still unanswered is given up and the chain ends; a fire before it
-   *  (the chunk) sets the timer again. */
+   *  (the chunk) sets the timer again.
+   *
+   *  Its callback runs only in the generation it was set in (setChainTimer).
+   *  Every change of `chain` moves the generation (armChain, dispose), so the
+   *  chain is still `c` here; and `c` ended sets state "ended" in the same call
+   *  (end), which nothing changes while `c` is the chain. So the state test
+   *  below is the only guard this callback needs. */
   function watchRequest(c: Chain, armedGeneration: number, deadline: number): void {
     setChainTimer(armedGeneration, deadline - now(), () => {
-      if (chain !== c || c.ended || state !== "renewing") return;
+      if (state !== "renewing") return;
       if (now() < deadline) {
         watchRequest(c, armedGeneration, deadline);
         return;

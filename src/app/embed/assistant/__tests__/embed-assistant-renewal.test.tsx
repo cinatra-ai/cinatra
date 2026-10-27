@@ -1023,10 +1023,15 @@ describe("EmbedAssistantClient — the renewal chain, wired (cinatra#4217)", () 
   it("(xix) MF4 cap: a restore that two renewals overtake is read at most three times, then settles empty", async () => {
     const firstRead = deferred<unknown[] | null>();
     const secondRead = deferred<unknown[] | null>();
+    // Each successor's user token lives 900 s, as the server's do. A successor
+    // whose user token ends no later than the one it replaced (pair(n) alone:
+    // 300 s, so 280 + 300 < 900) would count as the cap with no
+    // sessionExpiresIn (spec v3, C26), and the chain would renew no more.
+    const renewed = (n: number) => ({ ...pair(n), userExpiresIn: 900 });
     renewFrameCredential
-      .mockResolvedValueOnce({ ok: true, credential: pair(2) }) // at the release, 280 s
-      .mockResolvedValueOnce({ ok: true, credential: pair(3) }) // A' 280 + 210 = 490 s
-      .mockResolvedValueOnce({ ok: true, credential: pair(4) }); // 490 + 210 = 700 s
+      .mockResolvedValueOnce({ ok: true, credential: renewed(2) }) // at the release, 280 s
+      .mockResolvedValueOnce({ ok: true, credential: renewed(3) }) // A' 280 + 210 = 490 s
+      .mockResolvedValueOnce({ ok: true, credential: renewed(4) }); // 490 + 210 = 700 s
     const { signIn, reads } = await restoreAcrossRenewal(firstRead.promise, [], {
       later: (n) => (n === 2 ? secondRead.promise : Promise.resolve(null)),
     });
