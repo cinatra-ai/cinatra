@@ -2104,6 +2104,71 @@ async function withActionOwner<T>(action: GuardedActionOwner, effect: () => Prom
   finally { actionOwners.delete(frame); }
 }
 
+/** cinatra#4315: the owner of the WordPress freshness read that a core restore
+ * or freshness tool makes on a run outside any guarded leaf. It serves one read
+ * ability of the `wordpress` connector on one instance, and nothing else. Only
+ * `withWordPressFreshnessReadOwner` mints it: the connector is fixed, the
+ * ability comes from a closed list of read abilities, and the proof that this
+ * module minted it is a module-private set that no other code can reach. It is
+ * an unpinned owner, so an outward call refuses under it. */
+export type HostReadActionOwner = UnpinnedActionOwner & {
+  readonly hostRead: { readonly connectorKey: "wordpress"; readonly instanceId: string; readonly toolName: string };
+};
+/** The read abilities of the freshness read, by post type. Closed: no caller
+ * supplies a connector or an ability name. */
+export type WordPressFreshnessReadKind = "post" | "page";
+function wordPressFreshnessReadAbility(kind: unknown): string | undefined {
+  if (kind === "post") return "ewpa/get-post";
+  if (kind === "page") return "ewpa/get-page";
+  return undefined;
+}
+// Module-private on purpose: not under a registered symbol and not exported,
+// so no other code can add an owner to it. A second instance of this module
+// has its own set, so an owner minted there serves nothing here (fails closed).
+const hostReadOwners = new WeakSet<object>();
+/** Run the WordPress freshness read under a host read owner. `effect` gets the
+ * read ability for `kind` and makes the invoker call with it. A kind outside the
+ * closed list or an empty instance refuses before `effect`, on or off a run.
+ * Off a run it runs `effect` as it is: the invoker makes the wire call as on main. */
+export async function withWordPressFreshnessReadOwner<T>(read: {
+  readonly instanceId: string; readonly kind: WordPressFreshnessReadKind;
+}, effect: (toolName: string) => Promise<T>): Promise<T> {
+  const toolName = wordPressFreshnessReadAbility(read.kind);
+  const instanceId = read.instanceId;
+  if (!toolName || typeof instanceId !== "string" || !instanceId) throw new OutwardActionRefusal("action_host_read_not_allowed");
+  const frame = mcpRequestContextStorage.getStore();
+  if (!frame?.runId) return effect(toolName);
+  // The owner's frame is a copy, which does not carry the declared-outward mark,
+  // so a declared-outward frame refuses here, as the guard refuses an outward
+  // call under an unpinned owner.
+  if (isDeclaredOutwardRunFrame(frame)) throw new OutwardActionRefusal("action_loaded_identity_missing_or_stale");
+  const hostRead = Object.freeze({ connectorKey: "wordpress" as const, instanceId, toolName });
+  const owner: HostReadActionOwner = Object.freeze({ unpinned: true as const, toolName: "wordpress_freshness_check",
+    wrapper: "instance_tool" as const, connectorKey: "wordpress", instanceId, hostRead });
+  hostReadOwners.add(owner);
+  return withActionOwner(owner, () => effect(toolName));
+}
+/** Whether a guarded owner serves this connector instance call. An owner this
+ * module minted serves only its own connector, instance and read ability. Any
+ * other owner is a leaf's owner and serves any call (the guard then reads it),
+ * unless it answers `hostRead` in any way (own, inherited or through a Proxy):
+ * that is an owner-shaped object this module did not mint, and it serves nothing. */
+export function guardedOwnerServesInstanceCall(owner: GuardedActionOwner,
+  call: { readonly connectorKey: string; readonly instanceId: string; readonly toolName: string }): boolean {
+  if (typeof owner !== "object" || owner === null) return false;
+  if (hostReadOwners.has(owner)) {
+    const { hostRead } = owner as HostReadActionOwner;
+    return hostRead.connectorKey === call.connectorKey && hostRead.instanceId === call.instanceId &&
+      hostRead.toolName === call.toolName;
+  }
+  try {
+    return !("hostRead" in owner) && Reflect.get(owner, "hostRead") === undefined &&
+      Reflect.getOwnPropertyDescriptor(owner, "hostRead") === undefined;
+  } catch {
+    return false;
+  }
+}
+
 import { isDeclaredOutwardRunFrame, markGuardedRunDispatch, markGuardedRunLeaf } from "./extension-capabilities-registry";
 import { readDeclaredOutward } from "@cinatra-ai/mcp-server/capability-plan";
 /** A registration's outward declaration. No registration (a legacy binding)

@@ -208,7 +208,7 @@ async function fetchPostStatus(
   trustedActor: InvokerTrustedActor,
   causation: string,
 ): Promise<ProbeResult> {
-  const toolName = postType === "page" ? "ewpa/get-page" : "ewpa/get-post";
+  const kind = postType === "page" ? "page" : "post";
   // `post_id` matches the ONE fully-captured single-post-targeting ability
   // schema this fixture evidences (`ewpa/delete-post`: `{post_id: integer}`,
   // tests/e2e/wp-mcp-gateway/captures/annotations-d-eafm-coverage.json) —
@@ -217,19 +217,35 @@ async function fetchPostStatus(
   const args = { post_id: Number(remoteId) };
 
   let raw: unknown;
+  // The read ability the host named for this post type (for the reason below).
+  let calledAbility = "";
   try {
-    raw = await stack.invokeConnectorInstanceTool(
-      {
-        connectorKey: "wordpress",
-        instanceId,
-        toolName,
-        args,
-        actor: trustedActor,
-        primitiveName: "wordpress_freshness_check",
-        sourceType: "freshness_sweep",
-        causation,
+    // cinatra#4315: on an agent run this read is made by a core tool
+    // (change_set_undo, object_version_restore, freshness_check_for_change_set),
+    // outside any guarded leaf, so the invoker finds no guarded owner and
+    // refuses it. The host pins the owner for exactly this read: the WordPress
+    // connector, this instance and the one read ability for this post type,
+    // which the host names (the effect gets it). The owner never comes from
+    // the invoker input (sourceType, primitiveName and causation are caller
+    // fields). Off a run the read runs as before.
+    raw = await stack.withWordPressFreshnessReadOwner(
+      { instanceId, kind },
+      (toolName) => {
+        calledAbility = toolName;
+        return stack.invokeConnectorInstanceTool(
+          {
+            connectorKey: "wordpress",
+            instanceId,
+            toolName,
+            args,
+            actor: trustedActor,
+            primitiveName: "wordpress_freshness_check",
+            sourceType: "freshness_sweep",
+            causation,
+          },
+          stack.buildConnectorInstanceInvokerDeps("wordpress"),
+        );
       },
-      stack.buildConnectorInstanceInvokerDeps("wordpress"),
     );
   } catch (e) {
     if (e instanceof stack.InvokerError) {
@@ -250,7 +266,7 @@ async function fetchPostStatus(
         return {
           ok: false,
           kind: "unknown",
-          reason: `ability "${toolName}" is not present in this instance's catalog`,
+          reason: `ability "${calledAbility}" is not present in this instance's catalog`,
         };
       }
       // Every other InvokerError (network_error, timeout, session_required,
