@@ -1231,9 +1231,10 @@ export function consumeUserWidgetToken(input: {
 //     renewable, because the claim demands more life than the grace window. It
 //     NARROWS, and does not remove, the swap race: the frame builds its headers
 //     when a request starts and a review decision has no retry, so a request
-//     that left with the old bearer still lands if the server verifies it
-//     within the grace window after the renewal committed. One that reaches
-//     the verifier later than that is refused as any expired bearer is,
+//     that left with the old bearer can still land only if the server verifies
+//     it within the grace window after the renewal committed AND while the old
+//     pair's transport token still lives (it may end first). One that reaches
+//     the verifier later than either is refused as any expired bearer is,
 //     although its bearer alone would have lived longer. The frame stays
 //     signed in: a refused review decision shows the card's existing
 //     "could not be recorded" text, and sending it again builds the request

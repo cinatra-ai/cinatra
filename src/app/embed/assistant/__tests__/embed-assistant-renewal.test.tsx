@@ -47,7 +47,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type Pair = { userToken: string; transportToken: string; expiresIn: number; userExpiresIn?: number; sessionExpiresIn?: number };
-type BridgeOptions = { onContext: (context: unknown) => void };
+type BridgeOptions = { onContext: (context: unknown) => void; onReject?: (reason: string) => void };
 
 const bridges: BridgeOptions[] = [];
 vi.mock("@/lib/embed/embed-bridge.client", () => ({
@@ -68,13 +68,19 @@ vi.mock("@/lib/embed/embed-bridge.client", () => ({
 
 type SignedIn = { ok: true; credential: Pair; mintedAt: number; receivedAt: number };
 const runFrameSignIn = vi.fn<(selectors: unknown) => Promise<SignedIn | { ok: false; reason: string }>>();
+type RenewEnv = { signal?: AbortSignal };
 const renewFrameCredential = vi.fn<
-  (selectors: unknown, current: Pair) => Promise<{ ok: true; credential: Pair } | { ok: false; reason: string }>
+  (
+    selectors: unknown,
+    current: Pair,
+    env?: RenewEnv,
+  ) => Promise<{ ok: true; credential: Pair } | { ok: false; reason: string }>
 >();
 vi.mock("@/lib/embed/frame-widget-session.client", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   runFrameSignIn: (selectors: unknown) => runFrameSignIn(selectors),
-  renewFrameCredential: (selectors: unknown, current: Pair) => renewFrameCredential(selectors, current),
+  renewFrameCredential: (selectors: unknown, current: Pair, env?: RenewEnv) =>
+    renewFrameCredential(selectors, current, env),
 }));
 
 let frameHeaders: (() => Record<string, string>) | null = null;
@@ -868,5 +874,230 @@ describe("EmbedAssistantClient — the renewal chain, wired (cinatra#4217)", () 
     expect(decision).toEqual(requestHeaders());
     expect(decision).not.toEqual(headersOf(first));
     expect(server.accepts(decision!), "the decision is accepted with the current pair").toBe(true);
+  });
+
+  // -------------------------------------------------------------------------
+  // cinatra#4217 fold 1 (pre-1 review). RED AT a895dbef: a renewal that never
+  // answered kept the frame active for ever; an obsolete renewal held the
+  // next same-instance sign-in back; a restore that a renewal overtook
+  // settled as an empty history; a rejected context left the chain running.
+  // -------------------------------------------------------------------------
+
+  /** The env the frame passed to renewal call `i`. */
+  const renewEnv = (i: number): RenewEnv | undefined => renewFrameCredential.mock.calls[i]?.[2];
+
+  it("(xvii) MF1: a renewal that never answers returns the frame to its sign-in card at the pair's upper bound", async () => {
+    await render();
+    await signedIn(pair(1));
+    renewFrameCredential.mockReturnValueOnce(new Promise(() => undefined));
+    await wait(RENEW_AT_MS);
+    expect(renewFrameCredential).toHaveBeenCalledTimes(1);
+    await wait(300_000 - RENEW_AT_MS);
+    expect(phase(), "the held pair lives to E_hi = 301 s").toBe("active");
+    await wait(1_000);
+    expect(phase(), "the request given up at its deadline ends the sign-in").toBe("signin");
+    expect(container.querySelector("[data-embed-signin]")).not.toBeNull();
+    expect(requestHeaders(), "no pair is held").toEqual({});
+    expect(renewEnv(0)?.signal?.aborted, "the request given up is aborted").toBe(true);
+    await wait(30 * 60_000);
+    expect(renewFrameCredential).toHaveBeenCalledTimes(1);
+  });
+
+  it("(xviii) MF3: a renewal in flight when a new context arrives for the same instance never holds the next sign-in back", async () => {
+    await render("inst-1", "wordpress");
+    await signedIn(pair(1), "t-1");
+    renewFrameCredential.mockReturnValueOnce(new Promise(() => undefined)); // never answers
+    await wait(RENEW_AT_MS);
+    expect(renewFrameCredential).toHaveBeenCalledTimes(1);
+
+    // Same instance, another assistant: onContext disposes the chain while its
+    // renewal is still in flight; then the person signs in again.
+    await render("inst-1", "drupal");
+    await deliverContext("t-2");
+    expect(phase()).toBe("signin");
+    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(3), mintedAt: Date.now(), receivedAt: Date.now() });
+    negotiate.mockResolvedValueOnce({ ok: true });
+    fetchThreadMessages.mockResolvedValueOnce([]);
+    await clickSignIn();
+    expect(negotiate, "the new sign-in negotiates at once").toHaveBeenCalledTimes(2);
+    expect(phase()).toBe("active");
+    expect(requestHeaders()).toEqual(headersOf(pair(3)));
+    expect(renewEnv(0)?.signal?.aborted, "the obsolete request was aborted").toBe(true);
+  });
+
+  /** Sign in with a 300 s pair whose user token lives 900 s, under a
+   *  negotiation that answers at +280 s; every transcript read records the
+   *  pair it carries, and the first one answers through `firstRead`. Read n
+   *  (1-based, n > 1) answers `later(n)` when given, else `transcript`. With a
+   *  parity seam the reads are the seed's, not the restore's. */
+  async function restoreAcrossRenewal(
+    firstRead: Promise<unknown[] | null>,
+    transcript: unknown[],
+    options: { later?: (n: number) => Promise<unknown[] | null>; paritySeam?: { threadId: string } } = {},
+  ) {
+    await render("inst-1", "wordpress", options.paritySeam ?? null);
+    await deliverContext("t-1");
+    const signIn = { ...pair(1), userExpiresIn: 900 };
+    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: signIn, mintedAt: Date.now(), receivedAt: Date.now() });
+    const slow = deferred<{ ok: boolean }>();
+    negotiate.mockReturnValueOnce(slow.promise);
+    const reads: Array<Record<string, string>> = [];
+    fetchThreadMessages.mockImplementation(() => {
+      reads.push(requestHeaders());
+      if (reads.length === 1) return firstRead;
+      return options.later ? options.later(reads.length) : Promise.resolve(transcript);
+    });
+    await clickSignIn();
+    await wait(280_000); // the renewal fell due at 210 s and waits for the lease
+    expect(renewFrameCredential).not.toHaveBeenCalled();
+    await act(async () => {
+      slow.resolve({ ok: true });
+      await drain();
+    });
+    expect(renewFrameCredential, "the renewal goes out at the release").toHaveBeenCalledTimes(1);
+    expect(reads, "the restore left with the first pair").toEqual([headersOf(signIn)]);
+    expect(shown(), "waiting for its restore").toBe("waiting");
+    return { signIn, reads };
+  }
+
+  it("(xix) MF4: a restore refused after a renewal replaced its pair is read again with the renewed pair", async () => {
+    const firstRead = deferred<unknown[] | null>();
+    const transcript = [{ id: "m-1", role: "user", content: "the pending review" }];
+    renewFrameCredential.mockResolvedValueOnce({ ok: true, credential: pair(2) });
+    const { signIn, reads } = await restoreAcrossRenewal(firstRead.promise, transcript);
+    // The first read reaches the server at 301 s, after the first pair's
+    // transport token ran out: refused, which the reader answers as null.
+    await wait(21_000);
+    await act(async () => {
+      firstRead.resolve(null);
+      await drain();
+    });
+    expect(reads, "read again with the renewed pair").toEqual([headersOf(signIn), headersOf(pair(2))]);
+    expect(shown(), "the restore settled the history").toBe("active");
+    expect(columnSeeds[0], "seeded with the restored transcript").toEqual(transcript);
+  });
+
+  it("(xix) MF4: a refusal that answers while the renewal is still in flight waits for it, then reads with the renewed pair", async () => {
+    const firstRead = deferred<unknown[] | null>();
+    const transcript = [{ id: "m-2", role: "user", content: "the earlier turn" }];
+    const renewing = deferred<{ ok: true; credential: Pair }>();
+    renewFrameCredential.mockReturnValueOnce(renewing.promise);
+    const { signIn, reads } = await restoreAcrossRenewal(firstRead.promise, transcript);
+    await act(async () => {
+      firstRead.resolve(null);
+      await drain();
+    });
+    expect(reads, "no second read before the renewal answered").toEqual([headersOf(signIn)]);
+    expect(shown(), "and no settle").toBe("waiting");
+    await act(async () => {
+      renewing.resolve({ ok: true, credential: pair(2) });
+      await drain();
+    });
+    expect(reads).toEqual([headersOf(signIn), headersOf(pair(2))]);
+    expect(shown()).toBe("active");
+    expect(columnSeeds[0]).toEqual(transcript);
+  });
+
+  it("(xix) MF4: a new context while the restore waits for a renewal ends that restore: no second read, no settle", async () => {
+    const firstRead = deferred<unknown[] | null>();
+    const renewing = deferred<{ ok: true; credential: Pair }>();
+    renewFrameCredential.mockReturnValueOnce(renewing.promise);
+    const { reads } = await restoreAcrossRenewal(firstRead.promise, [{ id: "m-3", role: "user", content: "x" }]);
+    await act(async () => {
+      firstRead.resolve(null);
+      await drain();
+    });
+    // The page sends a new context: the chain is disposed (its request
+    // aborted), the ticket moves on, and the waiting restore lets go.
+    await deliverContext("t-2");
+    expect(phase()).toBe("signin");
+    await act(async () => {
+      renewing.resolve({ ok: true, credential: pair(2) });
+      await drain();
+    });
+    expect(reads, "no second read for the old sign-in").toHaveLength(1);
+    expect(columnSeeds, "no column mounts").toEqual([]);
+    expect(requestHeaders(), "and no pair is held").toEqual({});
+  });
+
+  it("(xix) MF4 cap: a restore that two renewals overtake is read at most three times, then settles empty", async () => {
+    const firstRead = deferred<unknown[] | null>();
+    const secondRead = deferred<unknown[] | null>();
+    renewFrameCredential
+      .mockResolvedValueOnce({ ok: true, credential: pair(2) }) // at the release, 280 s
+      .mockResolvedValueOnce({ ok: true, credential: pair(3) }) // A' 280 + 210 = 490 s
+      .mockResolvedValueOnce({ ok: true, credential: pair(4) }); // 490 + 210 = 700 s
+    const { signIn, reads } = await restoreAcrossRenewal(firstRead.promise, [], {
+      later: (n) => (n === 2 ? secondRead.promise : Promise.resolve(null)),
+    });
+    await act(async () => {
+      firstRead.resolve(null);
+      await drain();
+    });
+    expect(reads, "read 2 leaves with the renewed pair").toEqual([headersOf(signIn), headersOf(pair(2))]);
+    await wait(210_000); // 490 s: the next renewal replaces pair 2 while read 2 is on its way
+    expect(renewFrameCredential).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      secondRead.resolve(null);
+      await drain();
+    });
+    expect(reads, "read 3, the last, with pair 3").toEqual([
+      headersOf(signIn),
+      headersOf(pair(2)),
+      headersOf(pair(3)),
+    ]);
+    expect(shown(), "after the third null the restore settles empty").toBe("active");
+    expect(columnSeeds[0]).toBeUndefined();
+    await wait(220_000); // 710 s: a third renewal (pair 4) starts no fourth read
+    expect(renewFrameCredential).toHaveBeenCalledTimes(3);
+    expect(requestHeaders()).toEqual(headersOf(pair(4)));
+    expect(reads, "THREAD_READ_ATTEMPTS = 3").toHaveLength(3);
+  });
+
+  it("(xix) MF4 parity seed: a seed read refused after a renewal replaced its pair is read again and seeds the column", async () => {
+    const firstRead = deferred<unknown[] | null>();
+    renewFrameCredential.mockResolvedValueOnce({ ok: true, credential: pair(2) });
+    const { signIn, reads } = await restoreAcrossRenewal(
+      firstRead.promise,
+      [{ id: "a-1", role: "assistant", content: "the seeded answer" }],
+      { paritySeam: { threadId: "seed-1" } },
+    );
+    await act(async () => {
+      firstRead.resolve(null);
+      await drain();
+    });
+    expect(reads, "the seed is read again with the renewed pair").toEqual([headersOf(signIn), headersOf(pair(2))]);
+    expect(fetchThreadMessages.mock.calls.map((c) => c[0]), "both reads are the seed's").toEqual(["seed-1", "seed-1"]);
+    expect(shown(), "the seed settled the history").toBe("active");
+    expect(columnSeeds[0]).toEqual([{ id: "parity-seed", role: "assistant", content: "the seeded answer" }]);
+  });
+
+  it("(xix) MF4 control: a restore answered null with no renewal in between settles empty after one read", async () => {
+    await render();
+    await deliverContext("t-1");
+    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(1), mintedAt: Date.now(), receivedAt: Date.now() });
+    negotiate.mockResolvedValueOnce({ ok: true });
+    fetchThreadMessages.mockResolvedValueOnce(null);
+    await clickSignIn();
+    expect(shown()).toBe("active");
+    expect(columnSeeds[0]).toBeUndefined();
+    expect(fetchThreadMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it("(xx) NOTE 8: a rejected replacement context drops the pair and stops the chain behind the error card", async () => {
+    await render("inst-1", "wordpress");
+    await signedIn(pair(1));
+    renewFrameCredential.mockResolvedValue({ ok: true, credential: pair(2) });
+    // Same instance, another assistant: the bridge re-installs, and the
+    // replacement context it receives is malformed.
+    await render("inst-1", "drupal");
+    await act(async () => {
+      bridges[bridges.length - 1]!.onReject?.("schema");
+      await drain();
+    });
+    expect(phase()).toBe("error");
+    expect(requestHeaders(), "no pair behind the error card").toEqual({});
+    await wait(10 * 60_000);
+    expect(renewFrameCredential, "no chain renews behind the error card").not.toHaveBeenCalled();
   });
 });

@@ -167,6 +167,14 @@ function classifyStatus(status: number): LoadFailureReason {
 // credentials. The rules are unchanged and are documented at the definition.
 const seedRequest = runSeedRequest;
 
+/** cinatra#4217 — the headers of a request as one comparable value, so the
+ *  seed can tell whether the credential changed since a look was sent. It
+ *  lives only for that comparison and is never stored or logged. */
+function headerKey(init: RequestInit): string {
+  const headers = (init.headers ?? {}) as Record<string, string>;
+  return JSON.stringify(Object.keys(headers).sort().map((name) => [name, headers[name]]));
+}
+
 /**
  * THE SLOT READER THIS SURFACE ASKS WITH (cinatra#2997).
  *
@@ -294,6 +302,17 @@ export function InlineAgentRunCard({
     // of a transient read race: 2 attempts with 250ms/750ms backoff.
     const RETRY_DELAYS_MS = [250, 750];
     let attempt = 0;
+    // cinatra#4217 (pre-1 MF5): the site widget's frame renews its credential
+    // while it stays open. Every look builds its request again, so a retry
+    // carries the credential held NOW, never the one of the first look. A look
+    // refused as forbidden is terminal, unless the request built now carries
+    // other headers than the refused one did: then the credential was renewed
+    // while the look was on its way, and the look is made once more with it.
+    // At most RENEWED_LOOKS such looks, and each needs new headers, so this
+    // cannot loop; a cookie host's headers never change, so its refusal stays
+    // terminal exactly as before.
+    const RENEWED_LOOKS = 2;
+    let renewedLooks = 0;
 
     const request = seedRequest(credential, runId);
     if (!request) {
@@ -306,11 +325,20 @@ export function InlineAgentRunCard({
     }
 
     const load = async (): Promise<void> => {
+      const sent = seedRequest(credential, runId) ?? request;
       try {
-        const res = await fetch(request.url, request.init);
+        const res = await fetch(sent.url, sent.init);
         if (cancelled) return;
         if (!res.ok) {
           const reason = classifyStatus(res.status);
+          if (reason === "forbidden" && renewedLooks < RENEWED_LOOKS) {
+            const now = seedRequest(credential, runId);
+            if (now && headerKey(now.init) !== headerKey(sent.init)) {
+              renewedLooks += 1;
+              void load();
+              return;
+            }
+          }
           if (reason !== "forbidden" && attempt < RETRY_DELAYS_MS.length) {
             const delay = RETRY_DELAYS_MS[attempt];
             attempt += 1;

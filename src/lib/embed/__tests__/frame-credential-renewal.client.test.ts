@@ -42,10 +42,14 @@ const livesOf = (p: Pair): FrameCredentialLives => ({
 type HarnessOptions = {
   /** Extra delay added to timer number i (0-based) — a suspended tab. */
   lateness?: (index: number, ms: number) => number;
+  /** A clear that does not take: a cleared timer still fires (fold 1, the
+   *  deadline callback's own guards; the generation guard is the only other
+   *  stop). */
+  leakyClear?: boolean;
 };
 
 function harness(options: HarnessOptions = {}) {
-  const renew = vi.fn<(c: Pair) => Promise<FrameRenewalOutcome>>();
+  const renew = vi.fn<(c: Pair, signal?: AbortSignal) => Promise<FrameRenewalOutcome>>();
   const onRenewed = vi.fn<(c: Pair) => void>();
   const onEnded = vi.fn<() => void>();
   const timerArgs: number[] = [];
@@ -53,13 +57,16 @@ function harness(options: HarnessOptions = {}) {
   let maxLive = 0;
   const handles = new Set<unknown>();
   const requests: Array<{ at: number; presented: Pair }> = [];
+  /** The signal each request was given (pre-1 MF1, MF3). */
+  const signals: Array<AbortSignal | undefined> = [];
   renew.mockImplementation(async () => {
     throw new Error("no answer arranged");
   });
   const chain = createFrameCredentialRenewal({
-    renew: (c) => {
+    renew: (c, signal) => {
       requests.push({ at: rel(), presented: c });
-      return renew(c);
+      signals.push(signal);
+      return renew(c, signal);
     },
     onRenewed,
     onEnded,
@@ -77,6 +84,7 @@ function harness(options: HarnessOptions = {}) {
       return handle;
     },
     clearTimer: (handle) => {
+      if (options.leakyClear) return;
       if (handles.delete(handle)) live -= 1;
       clearTimeout(handle as ReturnType<typeof setTimeout>);
     },
@@ -88,6 +96,7 @@ function harness(options: HarnessOptions = {}) {
     onEnded,
     timerArgs,
     requests,
+    signals,
     get liveTimers() {
       return live;
     },
@@ -511,23 +520,30 @@ describe("anchors and bounds", () => {
     ).toEqual([]);
   });
 
-  it("C08: an answer that ARRIVES late (read at +600 s) is held to its hi bound, never ended early", async () => {
+  // Restated in fold 1 (pre-1 MF1): the answer of the old case arrived at
+  // +600 s, 299 s after the held pair's E_hi (301 s). A request is now awaited
+  // only to its deadline, max(E_hi, start + 90 s) = 301 s, so that answer is
+  // given up there (the case "a renewal that never answers" below). The hold
+  // on a late R' is kept with an answer read before the deadline.
+  it("C08: an answer READ late (+80 s, before the held pair's E_hi) is held to its own hi bound, never ended early", async () => {
     const h = harness();
     h.renew.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
-          setTimeout(() => resolve({ ok: true, credential: pair(2) }), 390_000);
+          setTimeout(() => resolve({ ok: true, credential: pair(2, 60) }), 80_000);
         }),
     );
     h.renew.mockImplementation(() => new Promise(() => undefined));
     h.chain.arm(pair(1), livesOf(pair(1)), at(0), at(0));
-    await advanceTo(600);
-    // A' = 210, R' = 600: the user token's lo bound (510) is gone, so HOLD to
-    // E'_hi = 600 + 301 = 901 (the server may have minted as late as 600).
+    await advanceTo(290);
+    // A' = 210, R' = 290: the successor's user lo bound (210 + 60 = 270) is
+    // gone, so HOLD to E'_hi = 290 + 61 = 351 (the server may have minted as
+    // late as 290).
+    expect(h.onRenewed).toHaveBeenCalledTimes(1);
     expect(h.chain.state).toBe("holding");
-    await advanceTo(900.999);
+    await advanceTo(350.999);
     expect(h.onEnded).not.toHaveBeenCalled();
-    await advanceTo(901);
+    await advanceTo(351);
     expect(h.onEnded).toHaveBeenCalledTimes(1);
     expect(h.requests).toHaveLength(1);
   });
@@ -1265,4 +1281,233 @@ describe("C46: P1-P4 over a grid of lives, latency, leases and timer lateness", 
     }
     expect(failures).toEqual([]);
   }, 120_000);
+});
+
+// ===========================================================================
+// Fold 1 of the pre-1 review (cinatra#4217 rebuild). RED AT a895dbef: the chain
+// set no timer while a renewal was in flight, read the cap before the C04
+// rule, and kept an obsolete request in quiesce() after dispose().
+// ===========================================================================
+
+describe("fold 1: a request in flight, C04 with the cap, and quiesce after dispose", () => {
+  it("MF1: a renewal that never answers is given up at E_hi: the chain ends once, its signal aborts, and a later answer changes nothing", async () => {
+    const h = harness();
+    let answer!: (o: FrameRenewalOutcome) => void;
+    h.renew.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    h.chain.arm(pair(1), livesOf(pair(1)), at(0), at(0));
+    await advanceTo(210);
+    expect(h.renew).toHaveBeenCalledTimes(1);
+    expect(h.chain.state).toBe("renewing");
+    await advanceTo(300.999);
+    expect(h.onEnded, "the held pair lives to E_hi = 301 s").not.toHaveBeenCalled();
+    expect(h.chain.state).toBe("renewing");
+    await advanceTo(301);
+    expect(h.onEnded, "deadline max(E_hi 301, 210 + 90) = 301 s").toHaveBeenCalledTimes(1);
+    expect(h.chain.state).toBe("ended");
+    expect(h.signals[0], "the request carries a signal").toBeInstanceOf(AbortSignal);
+    expect(h.signals[0]!.aborted, "the request given up is aborted").toBe(true);
+    // The old C08 answer: read at +600 s, after the deadline. It reaches nobody.
+    await advanceTo(600);
+    answer({ ok: true, credential: pair(2) });
+    await advance(3600);
+    expect(h.onRenewed).not.toHaveBeenCalled();
+    expect(h.onEnded).toHaveBeenCalledTimes(1);
+    expect(h.renew).toHaveBeenCalledTimes(1);
+    expect(h.liveTimers).toBe(0);
+  });
+
+  it("MF1: a late wake that renews after E_hi waits 90 s for its answer, then ends", async () => {
+    // The 210 s timer fires 110 s late (a suspended tab): t = 320, the pair is
+    // past E_hi (301) but the user token has 580 s left, so the chain renews.
+    const h = harness({ lateness: (i) => (i === 0 ? 110_000 : 0) });
+    h.renew.mockImplementation(() => new Promise(() => undefined));
+    const signIn = pair(1, 300, { userExpiresIn: 900 });
+    h.chain.arm(signIn, livesOf(signIn), at(0), at(0));
+    await advanceTo(320);
+    expect(h.requests).toEqual([{ at: 320, presented: signIn }]);
+    await advanceTo(409.999);
+    expect(h.onEnded, "not cut at the old E_hi already behind it").not.toHaveBeenCalled();
+    expect(h.chain.state).toBe("renewing");
+    await advanceTo(410);
+    expect(h.onEnded, "deadline max(301, 320 + 90) = 410 s").toHaveBeenCalledTimes(1);
+    expect(h.signals[0]!.aborted).toBe(true);
+    expect(h.renew).toHaveBeenCalledTimes(1);
+  });
+
+  it("MF1: an answer before the deadline replaces its timer; the next renewal keeps the schedule", async () => {
+    const h = harness();
+    h.renew.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve({ ok: true, credential: pair(2) }), 60_000);
+        }),
+    );
+    h.renew.mockImplementation(() => new Promise(() => undefined));
+    h.chain.arm(pair(1), livesOf(pair(1)), at(0), at(0));
+    await advanceTo(300);
+    expect(h.onRenewed).toHaveBeenCalledTimes(1);
+    expect(h.signals[0]?.aborted, "an answered request is not aborted").not.toBe(true);
+    await advanceTo(420);
+    expect(h.requests.map((r) => r.at), "re-armed from A' = 210").toEqual([210, 420]);
+    expect(h.onEnded).not.toHaveBeenCalled();
+    expect(h.maxLiveTimers).toBe(1);
+  });
+
+  it("MF1: a deadline 8 h away is set in 1-hour chunks and ends once at E_hi", async () => {
+    // A not finite: the single attempt goes out at arm, 8 h before E_hi.
+    const h = harness();
+    h.renew.mockImplementation(() => new Promise(() => undefined));
+    const day = pair(1, 28_800, { userExpiresIn: 28_800 });
+    h.chain.arm(day, livesOf(day), Number.NaN, at(0));
+    expect(h.renew).toHaveBeenCalledTimes(1);
+    await advanceTo(28_800.999);
+    expect(h.onEnded).not.toHaveBeenCalled();
+    expect(h.chain.state).toBe("renewing");
+    await advanceTo(28_801);
+    expect(h.onEnded, "END at E_hi = R + 28,801 s").toHaveBeenCalledTimes(1);
+    expect(Math.max(...h.timerArgs), "no setTimeout argument above CHUNK").toBeLessThanOrEqual(FRAME_TIMER_CHUNK_MS);
+    expect(h.timerArgs.filter((ms) => ms === FRAME_TIMER_CHUNK_MS)).toHaveLength(8);
+    expect(h.maxLiveTimers).toBe(1);
+  });
+
+  it("MF2: C04 with the cap reached in the same answer: one attempt at once; a refusal holds to E_hi and ends", async () => {
+    const h = harness();
+    h.renew.mockResolvedValue({ ok: false, reason: "renew_not_renewable" });
+    const capped = pair(1, 300, { userExpiresIn: 300, sessionExpiresIn: 300 });
+    h.chain.arm(capped, livesOf(capped), Number.NaN, at(0));
+    expect(h.renew, "C04: exactly one request at once, even with capReached").toHaveBeenCalledTimes(1);
+    await advance(0);
+    expect(h.chain.state).toBe("holding");
+    await advanceTo(300.999);
+    expect(h.onEnded).not.toHaveBeenCalled();
+    await advanceTo(301);
+    expect(h.onEnded, "END at E_hi = R + 301 s").toHaveBeenCalledTimes(1);
+    expect(h.renew).toHaveBeenCalledTimes(1);
+  });
+
+  it("MF2: C04 with the cap reached in the same answer: a success re-anchors on A'", async () => {
+    const h = harness();
+    h.renew.mockResolvedValueOnce({ ok: true, credential: pair(2), receivedAt: at(0) });
+    h.renew.mockImplementation(() => new Promise(() => undefined));
+    const capped = pair(1, 300, { userExpiresIn: 300, sessionExpiresIn: 300 });
+    h.chain.arm(capped, livesOf(capped), Number.NaN, at(0));
+    expect(h.renew).toHaveBeenCalledTimes(1);
+    await advance(0);
+    expect(h.onRenewed).toHaveBeenCalledWith(pair(2));
+    await advanceTo(209.999);
+    expect(h.renew).toHaveBeenCalledTimes(1);
+    await advanceTo(210);
+    expect(h.renew, "re-anchored on A' = 0: next at 210").toHaveBeenCalledTimes(2);
+  });
+
+  it("MF3: dispose aborts the renewal in flight, and quiesce no longer waits for it", async () => {
+    const h = harness();
+    h.renew.mockImplementation(() => new Promise(() => undefined)); // never answers
+    armWithLeft(h, pair(1), 60);
+    expect(h.chain.state).toBe("renewing");
+    let early = false;
+    void h.chain.quiesce().then(() => {
+      early = true;
+    });
+    await advance(0);
+    expect(early, "control: quiesce waits while the request is the chain's own").toBe(false);
+    h.chain.dispose();
+    await advance(0);
+    expect(early, "a quiesce already waiting settles at the dispose").toBe(true);
+    expect(h.signals[0]!.aborted, "dispose aborts it").toBe(true);
+    // A new sign-in on the same instance: its quiesce settles at once.
+    h.chain.arm(pair(3), livesOf(pair(3)), Date.now(), Date.now());
+    let quick = false;
+    void h.chain.quiesce().then(() => {
+      quick = true;
+    });
+    await advance(0);
+    expect(quick, "the obsolete request never holds the new sign-in back").toBe(true);
+    expect(h.onEnded).not.toHaveBeenCalled();
+  });
+
+  it("MF3: a new arm() gives up the request of the chain it replaces", async () => {
+    const h = harness();
+    h.renew.mockImplementation(() => new Promise(() => undefined));
+    armWithLeft(h, pair(1), 60);
+    expect(h.chain.state).toBe("renewing");
+    h.chain.arm(pair(5), livesOf(pair(5)), Date.now(), Date.now());
+    let quick = false;
+    void h.chain.quiesce().then(() => {
+      quick = true;
+    });
+    await advance(0);
+    expect(quick, "quiesce does not wait for the replaced chain's request").toBe(true);
+    expect(h.signals[0]!.aborted).toBe(true);
+    expect(h.chain.state).toBe("armed");
+  });
+
+  // The deadline callback's own guards (self-check C2). Each is reached only by
+  // a timer that fires although the chain cleared it, so these cases use a
+  // clear that does not take. GREEN AT a895dbef TOO (it set no deadline); each
+  // is red only against the deadline code without the guard it names.
+  it("MF1 guard: a deadline that fires during a 429 retry wait changes nothing (state is not renewing)", async () => {
+    const h = harness({ leakyClear: true });
+    const signIn = pair(1, 300, { userExpiresIn: 900 });
+    h.renew.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve({ ok: false, reason: "renew_rate_limited" }), 90_000);
+        }),
+    );
+    h.renew.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve({ ok: true, credential: pair(2) }), 1_000);
+        }),
+    );
+    h.renew.mockImplementation(() => new Promise(() => undefined));
+    h.chain.arm(signIn, livesOf(signIn), at(0), at(0));
+    await advanceTo(300);
+    expect(h.requests.map((r) => r.at)).toEqual([210]);
+    expect(h.chain.state, "the 429 at 300 s waits 5 s").toBe("retry_wait");
+    const generation = h.chain.generation;
+    await advanceTo(301);
+    expect(h.onEnded, "the old deadline (301 s) fired in the retry wait: dropped").not.toHaveBeenCalled();
+    expect(h.chain.generation).toBe(generation);
+    expect(h.chain.state).toBe("retry_wait");
+    await advanceTo(306);
+    expect(h.requests.map((r) => r.at), "the retry goes out at 305 s").toEqual([210, 305]);
+    expect(h.onRenewed).toHaveBeenCalledWith(pair(2));
+    expect(h.onEnded).not.toHaveBeenCalled();
+  });
+
+  it("MF1 guard: a deadline that fires after the chain ended moves nothing (the chain has ended)", async () => {
+    const h = harness({ leakyClear: true });
+    h.renew.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve({ ok: false, reason: "renew_failed" }), 10_000);
+        }),
+    );
+    h.chain.arm(pair(1), livesOf(pair(1)), at(0), at(0));
+    await advanceTo(220);
+    expect(h.onEnded, "C14: renew_failed ends at once").toHaveBeenCalledTimes(1);
+    expect(h.chain.state).toBe("ended");
+    const generation = h.chain.generation;
+    await advanceTo(400);
+    expect(h.chain.generation, "the stale deadline (301 s) moved no generation").toBe(generation);
+    expect(h.onEnded).toHaveBeenCalledTimes(1);
+    expect(h.chain.state).toBe("ended");
+    expect(h.renew).toHaveBeenCalledTimes(1);
+  });
+
+  it("MF1 guard: a deadline that fires after dispose changes nothing (generation and chain)", async () => {
+    const h = harness({ leakyClear: true });
+    h.renew.mockImplementation(() => new Promise(() => undefined));
+    h.chain.arm(pair(1), livesOf(pair(1)), at(0), at(0));
+    await advanceTo(210);
+    expect(h.chain.state).toBe("renewing");
+    h.chain.dispose();
+    const generation = h.chain.generation;
+    await advanceTo(400);
+    expect(h.onEnded, "the disposed chain's deadline (301 s) reaches nobody").not.toHaveBeenCalled();
+    expect(h.chain.state).toBe("idle");
+    expect(h.chain.generation).toBe(generation);
+  });
 });

@@ -46,8 +46,8 @@
 // frame-credential-renewal.client.ts), presenting the current user token
 // same-origin and replacing the pair in memory. The server caps a renewed session
 // at a maximum lifetime. A refusal that leaves the pair valid keeps it until its
-// end; every other refusal returns the frame to its sign-in card, exactly like a
-// reload does.
+// end; every other refusal, and a renewal request still unanswered at its
+// deadline, returns the frame to its sign-in card, exactly like a reload does.
 // ---------------------------------------------------------------------------
 
 /** The public selectors the frame sends. Not authority — the server re-derives
@@ -141,6 +141,12 @@ export const FRAME_RENEW_SAFETY_SECONDS = 5;
 /** A scheduled renewal fires at least this long before the last moment that
  *  is still renewable, so it fires as a request, never as a hold. */
 export const FRAME_RENEW_FIRE_MARGIN_SECONDS = 1;
+/** cinatra#4217 (pre-1 MF1) — a renewal request is awaited until the later of
+ *  the held pair's upper bound and its own start plus this. A request still
+ *  unanswered then is aborted and the frame returns to sign-in, so it never
+ *  stays active on a pair that has run out. 90 s matches the renewal margin: a
+ *  renewal sent on schedule is awaited to the pair's upper bound. */
+export const FRAME_RENEW_REQUEST_WAIT_SECONDS = 90;
 /** The longest life the frame accepts (the server's session cap). */
 export const FRAME_LIFE_MAX_SECONDS = 8 * 60 * 60;
 /** The server's grace window (USER_TOKEN_RENEW_GRACE_SECONDS in
@@ -408,7 +414,9 @@ function isNotRenewableBody(raw: unknown): boolean {
  * a neutral failure. The presented token is spent by a successful renewal, so
  * the caller must replace the pair it holds with the result. The answer carries
  * this document's clock read just before the request (`requestedAt`) and once
- * its answer was read (`receivedAt`).
+ * its answer was read (`receivedAt`). `env.signal` is passed to the request:
+ * the renewal chain aborts it when it gives the request up (pre-1 MF1, MF3),
+ * and an aborted request answers renew_failed.
  *
  * The failures the renewal chain tells apart:
  *   - 429: renew_rate_limited (refused before anything was verified or spent);
@@ -420,7 +428,7 @@ function isNotRenewableBody(raw: unknown): boolean {
 export async function renewFrameCredential(
   selectors: FrameSignInSelectors,
   current: FrameWidgetCredential,
-  env: Pick<FrameSignInEnvironment, "fetchImpl" | "now"> = {},
+  env: Pick<FrameSignInEnvironment, "fetchImpl" | "now"> & { signal?: AbortSignal } = {},
 ): Promise<FrameRenewResult> {
   const doFetch = env.fetchImpl ?? fetch;
   const now = env.now ?? ((): number => Date.now());
@@ -444,6 +452,7 @@ export async function renewFrameCredential(
         instanceId: selectors.instanceId,
         ...(selectors.siteId ? { siteId: selectors.siteId } : {}),
       }),
+      ...(env.signal ? { signal: env.signal } : {}),
     });
     if (response.status === 429) return failed("renew_rate_limited");
     if (response.status === 409) {

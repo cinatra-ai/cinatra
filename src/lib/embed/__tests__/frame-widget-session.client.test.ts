@@ -533,3 +533,34 @@ describe("renewFrameCredential (cinatra#4217)", () => {
     }
   });
 });
+
+// cinatra#4217 fold 1 (pre-1 MF1, MF3). RED AT a895dbef: the renew call took
+// no signal, so the renewal chain could not abort a request it gave up.
+describe("renewFrameCredential: the caller's signal (cinatra#4217 fold 1)", () => {
+  it("passes the signal to the request, and an aborted request is renew_failed", async () => {
+    const controller = new AbortController();
+    const seen: RequestInit[] = [];
+    const aborting = vi.fn(async (_url: string, options: RequestInit) => {
+      seen.push(options);
+      controller.abort();
+      throw new DOMException("The operation was aborted.", "AbortError");
+    });
+    const got = await frameSession.renewFrameCredential(SELECTORS, CURRENT, {
+      fetchImpl: aborting as unknown as typeof fetch,
+      signal: controller.signal,
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.signal, "the request carries the caller's signal").toBe(controller.signal);
+    expect(!got.ok && got.reason).toBe("renew_failed");
+
+    // Without a signal, the request carries none (the init is unchanged).
+    const plain: RequestInit[] = [];
+    await frameSession.renewFrameCredential(SELECTORS, CURRENT, {
+      fetchImpl: vi.fn(async (_url: string, options: RequestInit) => {
+        plain.push(options);
+        return { ok: false, status: 400, json: async () => ({}) } as unknown as Response;
+      }) as unknown as typeof fetch,
+    });
+    expect("signal" in plain[0]!).toBe(false);
+  });
+});

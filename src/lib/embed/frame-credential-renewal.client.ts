@@ -17,8 +17,11 @@
 // each deadline (the pair E, the user token U) that gives two bounds:
 //   - lo = A + life: never later than the real end. Every RENEWAL decision
 //     uses it, so a renewal is never late.
-//   - hi = R + life + 1 s: never earlier than the real end. Every END decision
-//     uses it, so the frame never drops a pair the server still accepts.
+//   - hi = R + life + 1 s: never earlier than the real end, while this
+//     document's clock runs at the server's rate. Every END decision uses it,
+//     so the frame does not drop a pair the server still accepts, except in
+//     the fail-closed cases below (a lost answer, a request given up at its
+//     deadline) and by up to a forward step of this document's clock.
 // A and R are clamped to the clock at arm time (a future anchor is not
 // trusted), and A to R.
 //
@@ -36,11 +39,14 @@
 //     timer fires there and the same function holds instead of renewing.
 //   - RENEW NOW, when the pair is renewable and fireAt has come. Deferred while
 //     a lease is held (see lease()).
-// "Renewable" is: the pair does not already reach the session cap (with the
-// session's life unknown, a successor whose user token ends no later than the
-// one it replaced counts as reaching it: that renewal gained nothing), the USER
-// token has more than the server's grace window plus the request latency left
-// at this document's clock, and no refusal put the chain on hold. A timer set
+// "Renewable" is: no refusal put the chain on hold, and then either A was not
+// a finite number (the lo bounds are unknown: the chain has exactly one
+// attempt, at once, even when the same answer reports the session cap, C04),
+// or the pair does not already reach the session cap (with the session's life
+// unknown, a successor whose user token ends no later than the one it replaced
+// counts as reaching it: that renewal gained nothing) and the USER token has
+// more than the server's grace window plus the request latency left at this
+// document's clock. A timer set
 // for fireAt therefore fires as a request: at fireAt the user token still has
 // one fire margin more than that. A timer that fires late (a suspended tab) is
 // decided again like any other, and holds or ends instead.
@@ -51,14 +57,26 @@
 // "not_renewable" verified the token without renewing it: the chain holds to the
 // earlier of E_hi and the answer's arrival plus the grace window plus 1 s (the
 // server leaves the presented token at most the grace window from its claim
-// instant), then ends. Every other refusal ends the chain at once.
+// instant), then ends. Every other refusal ends the chain at once, except the
+// single attempt of a chain whose A was not finite (C04): any refusal of it
+// holds to E_hi, then ends.
+//
+// A REQUEST IS AWAITED ONLY SO LONG (pre-1 MF1). While a renewal is in flight
+// the chain keeps one timer, for the later of the held pair's E_hi and the
+// request's start plus FRAME_RENEW_REQUEST_WAIT_SECONDS. A request still
+// unanswered then is given up: its signal aborts, its answer reaches nobody,
+// and the chain ends, so the frame returns to sign-in instead of staying
+// active on a pair that has run out. Like a lost answer (K3), this is
+// fail-closed: the presented token may have been spent.
 //
 // GENERATIONS. Every arm(), dispose() and new hold starts a new generation. A
 // timer callback, or a renew() answer, of an older generation is DROPPED
 // silently: no onRenewed, no onEnded, no new timer. That is the cancellation
 // story: the caller may dispose at any moment, even while a renewal is in
-// flight; the request cannot be recalled, but its answer reaches nobody. A
-// dropped success leaves a spent token behind on the server, which is harmless.
+// flight. dispose(), a new arm() and the deadline above abort the request's
+// signal, and quiesce() no longer waits for it; if it reached the server, its
+// answer reaches nobody. A dropped success leaves a spent token behind on the
+// server, which is harmless.
 //
 // TIMERS are saturated to FRAME_TIMER_CHUNK_MS. A fire before its moment simply
 // decides again, so no timer argument can overflow the platform timer. At most
@@ -72,6 +90,7 @@ import {
   FRAME_RENEW_FIRE_MARGIN_SECONDS,
   FRAME_RENEW_MARGIN_SECONDS,
   FRAME_RENEW_MIN_SPACING_SECONDS,
+  FRAME_RENEW_REQUEST_WAIT_SECONDS,
   FRAME_RENEW_SAFETY_SECONDS,
   FRAME_SERVER_RENEW_GRACE_SECONDS,
   isValidFrameLife,
@@ -112,8 +131,13 @@ export type FrameRenewalState =
 
 export type FrameCredentialRenewalDeps = {
   /** Renew the pair. Presents `credential` and resolves with its replacement or
-   *  a refusal. A rejection counts as a refusal that ends the chain. */
-  renew: (credential: FrameWidgetCredential) => Promise<FrameRenewalOutcome>;
+   *  a refusal. A rejection counts as a refusal that ends the chain. `signal`
+   *  (absent where the platform has no AbortController) aborts when the chain
+   *  gives the request up: dispose(), a new arm() or the request's deadline. */
+  renew: (
+    credential: FrameWidgetCredential,
+    signal?: AbortSignal,
+  ) => Promise<FrameRenewalOutcome>;
   /** The chain produced a new pair. The caller replaces the one it holds. */
   onRenewed: (credential: FrameWidgetCredential) => void;
   /** The chain ended. Called once per chain; nothing re-arms. */
@@ -139,10 +163,12 @@ export type FrameCredentialRenewal = {
    *  deferred (no request), and HOLD and END still apply. Returns an idempotent
    *  release; the release of the last lease decides again at once. */
   lease: () => () => void;
-  /** Settles when no renewal request is in flight. */
+  /** Settles when no renewal request is in flight. A request that dispose(), a
+   *  new arm() or its deadline gave up no longer counts as in flight. */
   quiesce: () => Promise<void>;
-  /** Cancel the pending timer, invalidate any renewal in flight and drop every
-   *  lease and deferred renewal. Not terminal: a later arm() starts afresh. */
+  /** Cancel the pending timer, invalidate and abort any renewal in flight and
+   *  drop every lease and deferred renewal. Not terminal: a later arm() starts
+   *  afresh. */
   dispose: () => void;
   /** The current generation. Changes on every arm(), dispose() and new hold. */
   readonly generation: number;
@@ -156,6 +182,15 @@ const S_MS = FRAME_RENEW_SAFETY_SECONDS * 1000;
 const FIRE_MS = FRAME_RENEW_FIRE_MARGIN_SECONDS * 1000;
 const MARGIN_MS = FRAME_RENEW_MARGIN_SECONDS * 1000;
 const SPACING_MS = FRAME_RENEW_MIN_SPACING_SECONDS * 1000;
+const REQUEST_WAIT_MS = FRAME_RENEW_REQUEST_WAIT_SECONDS * 1000;
+
+/** The renewal request in flight: `done` settles when its answer was handled
+ *  or when the chain gave it up (`cut`); `controller` aborts its signal. */
+type Inflight = {
+  done: Promise<void>;
+  cut: () => void;
+  controller: AbortController | null;
+};
 
 type Chain = {
   credential: FrameWidgetCredential;
@@ -195,7 +230,18 @@ export function createFrameCredentialRenewal(
   let leaseEpoch = 0;
   let deferred = false;
   let deferredRetry = false;
-  let inflight: Promise<void> | null = null;
+  let inflight: Inflight | null = null;
+
+  /** Give up the request in flight: abort its signal and stop quiesce() from
+   *  waiting for it. Its answer is dropped by the generation that the caller
+   *  moves on. */
+  function cutInflight(): void {
+    const entry = inflight;
+    if (!entry) return;
+    inflight = null;
+    entry.controller?.abort();
+    entry.cut();
+  }
 
   function cancelTimer(): void {
     if (timer) {
@@ -231,10 +277,13 @@ export function createFrameCredentialRenewal(
   }
 
   function renewable(c: Chain, t: number): boolean {
-    if (c.capReached || c.holdByRefusal) return false;
+    if (c.holdByRefusal) return false;
     // A chain with unknown lo bounds (A was not a finite number) has exactly
-    // one attempt; its refusal sets holdByRefusal.
+    // one attempt; its refusal sets holdByRefusal. It is made even when the
+    // same answer reports the session cap (C04, pre-1 MF2): the cap is read
+    // only on a known anchor.
     if (!c.loKnown) return true;
+    if (c.capReached) return false;
     return c.uLo - t > G_MS + S_MS;
   }
 
@@ -302,10 +351,15 @@ export function createFrameCredentialRenewal(
     const requestedAt = now();
     lastAttempt = requestedAt;
     const presented = c.credential;
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    let cut!: () => void;
+    const givenUp = new Promise<void>((resolve) => {
+      cut = resolve;
+    });
     const run = (async (): Promise<void> => {
       let outcome: FrameRenewalOutcome;
       try {
-        outcome = await deps.renew(presented);
+        outcome = await deps.renew(presented, controller?.signal);
       } catch {
         outcome = { ok: false };
       }
@@ -357,9 +411,38 @@ export function createFrameCredentialRenewal(
       }
       end(c);
     })();
-    inflight = run;
+    const entry: Inflight = {
+      done: Promise.race([run, givenUp]).then(
+        () => undefined,
+        () => undefined,
+      ),
+      cut,
+      controller,
+    };
+    inflight = entry;
     void run.finally(() => {
-      if (inflight === run) inflight = null;
+      if (inflight === entry) inflight = null;
+    });
+    // The request's deadline (pre-1 MF1): the later of the held pair's E_hi
+    // and the request's start plus the request wait. Its answer, or a re-arm,
+    // a hold or an end, replaces this timer; nothing else does.
+    watchRequest(c, armedGeneration, Math.max(c.eHi, requestedAt + REQUEST_WAIT_MS));
+  }
+
+  /** The one timer of a chain whose renewal is in flight. At the deadline a
+   *  request still unanswered is given up and the chain ends; a fire before it
+   *  (the chunk) sets the timer again. */
+  function watchRequest(c: Chain, armedGeneration: number, deadline: number): void {
+    setChainTimer(armedGeneration, deadline - now(), () => {
+      if (chain !== c || c.ended || state !== "renewing") return;
+      if (now() < deadline) {
+        watchRequest(c, armedGeneration, deadline);
+        return;
+      }
+      // The answer of the request given up reaches nobody.
+      generation += 1;
+      cutInflight();
+      end(c);
     });
   }
 
@@ -379,6 +462,9 @@ export function createFrameCredentialRenewal(
     mintedAt: number,
     receivedAt: number,
   ): void {
+    // A new chain gives up the request of the one it replaces (its answer is
+    // dropped by the generation armChain moves on).
+    cutInflight();
     armChain(credential, lives, mintedAt, receivedAt, null);
   }
 
@@ -467,14 +553,18 @@ export function createFrameCredentialRenewal(
   }
 
   async function quiesce(): Promise<void> {
+    // A request given up (dispose, a new arm, its deadline) is no longer in
+    // flight: its `done` settles at the cut, so an obsolete request never
+    // holds a new sign-in back (pre-1 MF3).
     while (inflight) {
-      await inflight.catch(() => undefined);
+      await inflight.done;
     }
   }
 
   function dispose(): void {
     cancelTimer();
     generation += 1;
+    cutInflight();
     chain = null;
     state = "idle";
     lastAttempt = null;

@@ -131,6 +131,10 @@ type Phase =
  *  the credential: the tokens stay in the ref closure and never enter state. */
 type MountedSession = { threadId: string; assistant: string };
 
+/** cinatra#4217 (pre-1 MF4) — the most reads one transcript restore makes: the
+ *  first, and one more for each renewal that overtook the read before. */
+const THREAD_READ_ATTEMPTS = 3;
+
 export type EmbedAssistantClientProps = {
   /** Server-resolved expected parent origin (§7). Empty when unresolvable — then
    *  the bridge posts nothing and the shell shows the neutral error card. */
@@ -296,6 +300,41 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
     [lifecycleCardAuth, props.assistant, props.instanceId],
   );
 
+  // cinatra#4217 (pre-1 MF4) — A READ THAT CROSSED A RENEWAL IS READ AGAIN.
+  // The transcript read takes its headers once, when it is sent. If a renewal
+  // replaced that pair while the read was on its way, the server can refuse
+  // the old pair (its grace has passed, or its transport token has run out),
+  // and the shared reader answers that refusal as `null`, the same as "no
+  // transcript". So a `null` answer waits for any renewal in flight and, when
+  // the frame now holds another pair than the one the read carried, the read
+  // is made again with the pair held now. It is bounded: each repeat needs a
+  // pair the read has not carried yet, and there are at most
+  // THREAD_READ_ATTEMPTS reads. Nothing about the outcome is reported to the
+  // page.
+  const readThreadAcrossRenewal = useCallback(
+    async (threadId: string, isCurrent: () => boolean): Promise<UiMessage[] | null> => {
+      let carried = credentialRef.current;
+      let messages = await fetchThreadMessages(threadId, {
+        authHeaders,
+        credentialsMode: "omit",
+      });
+      for (let attempt = 1; messages === null && attempt < THREAD_READ_ATTEMPTS; attempt += 1) {
+        if (!isCurrent()) return null;
+        await renewalRef.current?.quiesce();
+        if (!isCurrent()) return null;
+        const held = credentialRef.current;
+        if (!held || held === carried) break;
+        carried = held;
+        messages = await fetchThreadMessages(threadId, {
+          authHeaders,
+          credentialsMode: "omit",
+        });
+      }
+      return messages;
+    },
+    [authHeaders],
+  );
+
   // cinatra#1998 (b) TEST-ONLY seam: load a seeded thread's assistant message and
   // render it deterministically through the mounted column (no live LLM turn).
   // Gated OFF in prod (`paritySeam` is null unless the server env is set), so
@@ -316,10 +355,7 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
       // contain. It now reads the SAME route through the SAME shared function
       // with the SAME transport, so "every widget request omits credentials" is
       // a property of the file rather than a property of a gate.
-      const messages = await fetchThreadMessages(threadId, {
-        authHeaders,
-        credentialsMode: "omit",
-      });
+      const messages = await readThreadAcrossRenewal(threadId, isCurrent);
       if (!isCurrent()) return;
       const assistantMsg = messages?.find((m) => m.role === "assistant");
       setSeededMessages([
@@ -327,7 +363,7 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
       ]);
       setTurnStatus("finished");
     },
-    [authHeaders],
+    [readThreadAcrossRenewal],
   );
 
   // The broker-authenticated transcript read (cinatra#2683 item 1). Built from
@@ -337,20 +373,18 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   // cinatra#4217 — bound to the sign-in attempt that started it, like the
   // negotiation: a stale answer neither restores nor settles anything. The
   // chain is armed while this read is still on its way; that does not make
-  // it stale.
+  // it stale. A read that a renewal overtook is read again with the renewed
+  // pair (readThreadAcrossRenewal, pre-1 MF4).
   const restoreThread = useCallback(
     async (threadId: string, isCurrent: () => boolean) => {
-      const messages = await fetchThreadMessages(threadId, {
-        authHeaders,
-        credentialsMode: "omit",
-      });
+      const messages = await readThreadAcrossRenewal(threadId, isCurrent);
       if (!isCurrent()) return;
       if (messages && messages.length > 0) setRestoredMessages(messages);
       // A new thread, a denied read and a transport failure all SETTLE — the
       // column must open for every one of them, with whatever there was.
       setHistorySettled(true);
     },
-    [authHeaders],
+    [readThreadAcrossRenewal],
   );
 
   // §8 client-side handshake, then the COLUMN mount — only on `ok`, else the
@@ -421,9 +455,10 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   // lifecycle card's per-request headers), so replacing the ref is the whole
   // hand-over. The pair presented is spent by the renewal. A refusal that leaves
   // the pair valid (the session cap, a rate limit) keeps it until its end; at
-  // that end, and at once on any other refusal (a sign-out, a revoked site),
-  // the chain ends: the pair is dropped and the frame returns to the same
-  // neutral sign-in card a reload shows.
+  // that end, at once on any other refusal (a sign-out, a revoked site), and
+  // when a renewal request is still unanswered at its deadline, the chain
+  // ends: the pair is dropped and the frame returns to the same neutral
+  // sign-in card a reload shows.
   //
   // ONE chain per mount. The scheduler drops every timer and every renewal
   // answer of a chain that was disposed or re-armed, so this effect's cleanup
@@ -432,7 +467,7 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   // pair, nor change the phase, nor start another timer.
   useEffect(() => {
     const renewal = createFrameCredentialRenewal({
-      renew: async (current) => {
+      renew: async (current, signal) => {
         const ctx = contextRef.current;
         if (!ctx) return { ok: false };
         return renewFrameCredential(
@@ -442,6 +477,9 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
             siteId: ctx.site?.siteId ?? null,
           },
           current,
+          // The chain aborts the request when it gives it up (a dispose, a new
+          // sign-in, or the request's deadline; pre-1 MF1, MF3).
+          { signal },
         );
       },
       onRenewed: (credential) => {
@@ -586,7 +624,16 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
       expectedAssistant: props.assistant,
       expectedInstanceId: props.instanceId,
       onContext,
-      onReject: () => setPhase({ kind: "error" }),
+      // cinatra#4217 (pre-1 NOTE 8): the error card mounts no column, so the
+      // pair and the chain of an earlier context serve nothing behind it. They
+      // are dropped, like a new context drops them: no renewal runs behind the
+      // error card.
+      onReject: () => {
+        renewalRef.current?.dispose();
+        signInTicketRef.current += 1;
+        credentialRef.current = null;
+        setPhase({ kind: "error" });
+      },
     });
     bridgeRef.current = bridge;
     bridge.postReady();

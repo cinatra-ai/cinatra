@@ -299,3 +299,127 @@ describe("the review-slot reader asks with the host's own credential", () => {
     expect(fetchCalls).toHaveLength(0);
   });
 });
+
+// cinatra#4217 fold 1 (pre-1 MF5) — the panel's FIRST read and its retries.
+// The site widget's frame renews its credential while it stays open, so a
+// first read can leave with one pair and reach the server after a renewal
+// replaced it. RED AT a895dbef: the seed built its request once, outside its
+// load, so a retry carried the first pair again, and a refusal of the first
+// pair was terminal ("You do not have access") although the renewed pair was
+// valid.
+describe("the seed read across a renewal (cinatra#4217 fold 1)", () => {
+  /** A broker credential whose tokens the frame replaces in place. */
+  function renewingHost() {
+    const tokens = { user: "cwu_first", transport: "cit_first" };
+    const auth = {
+      headers: () => ({
+        Authorization: `Bearer ${tokens.transport}`,
+        "X-Cinatra-Widget-User-Token": tokens.user,
+        "X-Cinatra-Widget-Assistant": "wordpress",
+        "X-Cinatra-Widget-Origin": "https://blog.example.com",
+      }),
+      credentials: "omit" as const,
+    };
+    const renew = () => {
+      tokens.user = "cwu_renewed";
+      tokens.transport = "cit_renewed";
+    };
+    const host = (children: ReactNode) => (
+      <LifecycleCardSurfaceProvider host="site_widget" auth={auth} frame={BROKER_FRAME}>
+        {children}
+      </LifecycleCardSurfaceProvider>
+    );
+    return { host, renew };
+  }
+
+  /** fetch answers `first` to the first read (running `during` while it is on
+   *  its way) and the seed to every later one. */
+  function firstAnswer(status: number, during: () => void = () => undefined) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit = {}) => {
+        fetchCalls.push({ url: String(url), init });
+        if (fetchCalls.length === 1) {
+          during();
+          return { ok: false, status, json: async () => ({}) } as unknown as Response;
+        }
+        return { ok: true, status: 200, json: async () => SEED_BODY } as unknown as Response;
+      }),
+    );
+  }
+
+  it("BROKER: a first read refused after a renewal is read once more with the renewed token", async () => {
+    const { host, renew } = renewingHost();
+    firstAnswer(401, renew);
+    render(host(<InlineAgentRunCard runId={RUN_ID} />));
+    await screen.findByTestId("run-panel-stub");
+    expect(screen.queryByText(/do not have access/i)).toBeNull();
+    expect(fetchCalls).toHaveLength(2);
+    expect(headersOf(fetchCalls[0].init)["x-cinatra-widget-user-token"]).toBe("cwu_first");
+    const again = headersOf(fetchCalls[1].init);
+    expect(again["x-cinatra-widget-user-token"]).toBe("cwu_renewed");
+    expect(again["authorization"]).toBe("Bearer cit_renewed");
+    expect(fetchCalls[1].init.credentials).toBe("omit");
+  });
+
+  it("BROKER: the retry of a transient first answer carries the renewed token", async () => {
+    const { host, renew } = renewingHost();
+    firstAnswer(503, renew);
+    render(host(<InlineAgentRunCard runId={RUN_ID} />));
+    await screen.findByTestId("run-panel-stub");
+    expect(fetchCalls).toHaveLength(2);
+    expect(headersOf(fetchCalls[1].init)["x-cinatra-widget-user-token"]).toBe("cwu_renewed");
+    expect(headersOf(fetchCalls[1].init)["authorization"]).toBe("Bearer cit_renewed");
+  });
+
+  it("BROKER cap: refusals that each cross a renewal end after two renewed looks (RENEWED_LOOKS = 2)", async () => {
+    const tokens = { n: 0 };
+    const auth = {
+      headers: () => ({
+        Authorization: `Bearer cit_${tokens.n}`,
+        "X-Cinatra-Widget-User-Token": `cwu_${tokens.n}`,
+        "X-Cinatra-Widget-Assistant": "wordpress",
+        "X-Cinatra-Widget-Origin": "https://blog.example.com",
+      }),
+      credentials: "omit" as const,
+    };
+    // Every look is refused, and the frame renews while each is on its way, so
+    // each refused look sees new headers.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit = {}) => {
+        fetchCalls.push({ url: String(url), init });
+        tokens.n += 1;
+        return { ok: false, status: 401, json: async () => ({}) } as unknown as Response;
+      }),
+    );
+    render(
+      <LifecycleCardSurfaceProvider host="site_widget" auth={auth} frame={BROKER_FRAME}>
+        <InlineAgentRunCard runId={RUN_ID} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await waitFor(() => expect(screen.getByText(/do not have access/i)).toBeTruthy());
+    expect(fetchCalls, "the first look and two renewed looks").toHaveLength(3);
+    expect(fetchCalls.map((c) => headersOf(c.init)["x-cinatra-widget-user-token"])).toEqual([
+      "cwu_0",
+      "cwu_1",
+      "cwu_2",
+    ]);
+    expect(screen.queryByTestId("run-panel-stub")).toBeNull();
+  });
+
+  it("BROKER control: a refusal whose headers did not change stays terminal after one read", async () => {
+    firstAnswer(401);
+    render(brokerHost(<InlineAgentRunCard runId={RUN_ID} />));
+    await waitFor(() => expect(screen.getByText(/do not have access/i)).toBeTruthy());
+    expect(fetchCalls).toHaveLength(1);
+    expect(screen.queryByTestId("run-panel-stub")).toBeNull();
+  });
+
+  it("COOKIE control: a first-party refusal stays terminal after one read", async () => {
+    firstAnswer(403);
+    render(cookieHost(<InlineAgentRunCard runId={RUN_ID} />));
+    await waitFor(() => expect(screen.getByText(/do not have access/i)).toBeTruthy());
+    expect(fetchCalls).toHaveLength(1);
+  });
+});
