@@ -9,11 +9,12 @@
 // of another type. These readers accept a well-formed value only; anything
 // else means "not stuck" or "no count", never a guess.
 //
-//   stuck    = `repair_stuck_at` is a timestamp string: a calendar date first,
-//              optionally a time, that Date.parse reads, and whose written
-//              fields name a real date and time (Date.parse rolls 2026-02-30
-//              over to March 2; that is not a timestamp). Missing, null, empty,
-//              invalid, calendar-invalid or a non-string all mean NOT stuck.
+//   stuck    = `repair_stuck_at` is a timestamp string: a calendar date,
+//              optionally a time with its offset, that Date.parse reads as the
+//              same written year, month, day, hour and minute (Date.parse rolls
+//              2026-02-30 over to March 2, and reads 0001-01-01 00:00:00+00:00
+//              as 2001; neither is a timestamp). Missing, null, empty, invalid,
+//              calendar-invalid or a non-string all mean NOT stuck.
 //   attempts = `recovery_attempts` is a non-negative safe integer of type
 //              number. A fraction, a string, NaN, an infinity or an unsafe
 //              integer means no count; the flag still stands without one.
@@ -30,32 +31,44 @@ export type RepairStuck = {
   attempts?: number;
 };
 
-// A calendar date (year, month, day), then the end of the text, or a time part
-// that starts with hours and minutes.
-const DATE_FIRST = /^(\d{4})-(\d{2})-(\d{2})(?:$|[T ](\d{2}):\d{2})/;
+// The written stamp: a calendar date, then optionally a time (T or a space,
+// hours and minutes, optional seconds and fraction) that must carry its offset
+// (Z, +hh, +hhmm or +hh:mm, or the same with -). Nothing else may follow.
+const STAMP =
+  /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d{1,9})?)?(Z|[+-]\d{2}(?::?\d{2})?))?$/;
 
-/**
- * True when the written year, month and day name a real calendar day: built
- * back as a UTC date, they give the same three fields. 2026-02-30, 2025-02-29
- * and 2026-04-31 roll over to another day, so they are not calendar days.
- */
-function isCalendarDay(year: number, month: number, day: number): boolean {
-  const d = new Date(0);
-  d.setUTCFullYear(year, month - 1, day);
-  return d.getUTCFullYear() === year && d.getUTCMonth() === month - 1 && d.getUTCDate() === day;
+/** The written offset in minutes east of UTC. */
+function offsetMinutes(offset: string): number {
+  if (offset === "Z") return 0;
+  const digits = offset.slice(1).replace(":", "");
+  const minutes = Number(digits.slice(0, 2)) * 60 + Number(digits.slice(2) || "0");
+  return offset[0] === "-" ? -minutes : minutes;
 }
 
 /**
- * True only for a timestamp string the stuck flag can mean. Date.parse itself
- * refuses a minute or a second of 60, but it reads hour 24 as midnight of the
- * next day, so an hour above 23 is refused here.
+ * True only for a timestamp string the stuck flag can mean: it has the written
+ * form above, Date.parse reads it, and the instant Date.parse reads, moved by
+ * the written offset (a date alone is UTC midnight), gives back exactly the
+ * written year, month, day, hour and minute. Date.parse rolls a day that does
+ * not exist (2026-02-30) and hour 24 over to another day, and reads a year
+ * 0000-0099 written before a space as a year of 1950-2049; none of these
+ * round-trips, so none is a stamp.
  */
 export function isRepairStuckStamp(value: unknown): value is string {
   if (typeof value !== "string") return false;
-  const m = DATE_FIRST.exec(value);
-  if (m === null || !Number.isFinite(Date.parse(value))) return false;
-  if (m[4] !== undefined && Number(m[4]) > 23) return false;
-  return isCalendarDay(Number(m[1]), Number(m[2]), Number(m[3]));
+  const m = STAMP.exec(value);
+  if (m === null) return false;
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return false;
+  const [, year, month, day, hour = "00", minute = "00", offset = "Z"] = m;
+  const read = new Date(time + offsetMinutes(offset) * 60_000);
+  return (
+    read.getUTCFullYear() === Number(year) &&
+    read.getUTCMonth() + 1 === Number(month) &&
+    read.getUTCDate() === Number(day) &&
+    read.getUTCHours() === Number(hour) &&
+    read.getUTCMinutes() === Number(minute)
+  );
 }
 
 /** A worker-incremented counter: a non-negative safe integer of type number. */
