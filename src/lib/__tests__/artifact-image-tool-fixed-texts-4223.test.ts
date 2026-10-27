@@ -5,9 +5,10 @@
  *
  *   1. NO EXCEPTION TEXT IN A REFUSAL. A provider's or a store's exception can
  *      name a credential, a schema, a table or a connection. The refusal that
- *      reaches the calling node is a fixed sentence. The server log carries the
- *      error's class and code, never its text, and a log that throws or a value
- *      that cannot be turned into text never changes the answer.
+ *      reaches the calling node is a fixed sentence. The server log carries a
+ *      word for the error's class from a fixed list, never its text and never a
+ *      code, and a log that throws or a value that cannot be turned into text
+ *      never changes the answer.
  *   2. A RE-DRIVE REPORTS THE FACTS OF THE REVISION IT RETURNS. The ledger key
  *      is the run, the node and the bytes, so a re-drive that gets the same
  *      bytes from another provider or model is served by the revision the

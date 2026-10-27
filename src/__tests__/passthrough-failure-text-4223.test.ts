@@ -6,9 +6,10 @@
  * provider's answer, to the flow and through it to the run's tool results.
  * Only a primitive's stated refusal and an input-schema error keep their text;
  * every other throw answers a fixed sentence, and the actor-context catch
- * answers its fixed sentence for every error. The server log carries the
- * error's class and code, never its text, and a failing log never changes
- * the answer. Tests named "guard:" pass on the base too.
+ * answers its fixed sentence for every error. The server log carries a word
+ * for the error's class from a fixed list, never its text and never a code,
+ * and a failing log never changes the answer. Tests named "guard:" pass on
+ * the base too.
  *
  *   npx vitest run src/__tests__/passthrough-failure-text-4223.test.ts
  */
