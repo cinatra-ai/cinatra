@@ -439,6 +439,29 @@ describe("bindEvidenceCells", () => {
   });
 });
 
+// The capture index's sentence that says what it holds, and the next one, word
+// for word, up to the first words of the sentence after them (cinatra#4392).
+const INDEX_HOLDS =
+  "WHAT IS ACTUALLY IN IT, read off the records below rather than remembered: records on all four hosts. " +
+  "No sentence here keeps their total; the census ratchet of the record-contract suite counts them. " +
+  "Each group is ONE run of the recorder";
+function indexProse() {
+  return JSON.parse(readFileSync(CAPTURE_INDEX_PATH, "utf8")).$comment.join(" ");
+}
+function indexProseProblems(prose) {
+  if (prose.split("WHAT IS ACTUALLY IN IT").length !== 2) return ["the index's prose does not say once what it holds"];
+  if (prose.split(INDEX_HOLDS).length !== 2) return ["the sentence that says what the index holds is not its text"];
+  return [];
+}
+const onceIn = (re, to) => (text) =>
+  (text.match(new RegExp(re.source, "g")) ?? []).length === 1 ? text.replace(re, to) : null;
+const INDEX_PROSE_MUTANTS = [
+  ["the old total put back", onceIn(/remembered: records on all/, "remembered: SEVENTY-NINE records on all")],
+  ["a total with a word between number and records",
+    onceIn(/remembered: records on all/, "remembered: 79 indexed records on all")],
+  ["a total in the next sentence", onceIn(/on all four hosts\. /, "on all four hosts. The index holds 79 records. ")],
+];
+
 describe("the advisory state — one kind's vocabulary, not every kind's", () => {
   // §VII's audit card resolves `advisory` and nothing else that DRAWS:
   // "TWO STATES DRAW, AND ONLY TWO … `advisory` — the reading — or `absent`,
@@ -690,15 +713,18 @@ describe("the advisory state — one kind's vocabulary, not every kind's", () =>
     // while the array held 101: a hand-kept total that no capture batch moved.
     // The count lives in the ratchet above, so the prose names none. Counts of
     // one group of records elsewhere in the prose are not totals and stay.
-    const index = JSON.parse(readFileSync(CAPTURE_INDEX_PATH, "utf8"));
-    const prose = index.$comment.join(" ");
-    const said = prose.match(/WHAT IS ACTUALLY IN IT,[^.]*\./);
-    expect(said, "the sentence that says what the index holds").not.toBeNull();
-    const words =
-      "zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|" +
-      "sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred";
-    const total = new RegExp(`\\b(?:\\d+|(?:${words})(?:-(?:${words}))?)\\s+records\\b`, "i");
-    expect(said[0]).not.toMatch(total);
+    // A pattern for "a number before records" misses a total in other words or
+    // in the next sentence, so the two sentences are pinned WHOLE, with the
+    // first words of the sentence after them: nothing can be added between.
+    expect(indexProseProblems(indexProse())).toEqual([]);
+  });
+
+  it.each(INDEX_PROSE_MUTANTS)("the index's prose refuses %s", (name, mutate) => {
+    const prose = indexProse();
+    const mutated = mutate(prose);
+    expect(mutated, `${name}: the anchor is not in the prose exactly once; re-aim the mutant`).not.toBeNull();
+    expect(mutated).not.toBe(prose);
+    expect(indexProseProblems(mutated), name).not.toEqual([]);
   });
 });
 

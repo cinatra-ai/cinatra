@@ -221,26 +221,53 @@ describe("--strict means DONE, not merely 'no false claim'", () => {
 // a state the capture vocabulary does not have, and any text after a count.
 // The bucket set is the vocabulary's own (every kind x every host it may be
 // photographed on x every state it resolves), not the set the index happens
-// to hold. The numbers of clauses (a), (c) and (d) are held too: each count to
-// the index, and every other number of those clauses word for word. Clauses
-// (b) and (e) are not read here. It returns its problems instead of asserting,
-// so each mutant below is held to it on its own.
+// to hold. Clauses (a), (c) and (d) are held WHOLE, word for word, with each
+// count in them taken from the index (or, for the walk's cells, from the walk
+// plan): a reader that looks for numbers in prose misses the number forms it
+// does not know ("dozen", "thousand", Roman numerals, non-ASCII digits), so
+// none is looked for. Clauses (b) and (e) are not read here, except that
+// clause (d)'s pair of counts, in any decimal digits, must be in the whole gap
+// exactly once. It returns its problems instead of asserting, so each mutant
+// below is held to it on its own.
 // ---------------------------------------------------------------------------
 const NUMBER_WORDS = [
   "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
   "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen",
-  "nineteen", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety", "hundred",
+  "nineteen", "twenty",
 ];
 const numberWord = (n) => (n <= 20 ? NUMBER_WORDS[n] : String(n));
-const WORD = `(?:${NUMBER_WORDS.join("|")})`;
-// A number in prose: any token with a digit in it, or a number word.
-const NUMBER_TOKEN = new RegExp(`[^\\s(),;:'"\`]*\\d[^\\s(),;:'"\`]*|\\b${WORD}(?:-${WORD})?\\b`, "gi");
-const numbersIn = (text) => (text.match(NUMBER_TOKEN) ?? []).map((t) => t.toLowerCase());
 // The two hosts the census calls "the two page hosts".
 const PAGE_HOSTS = ["site_widget", "page_gate_region"];
 const CENSUS_OPEN = "per kind x host x state: ";
 const CENSUS_CLOSE = " STILL ABSENT, with the exact obstacle: ";
-const CLAUSE_D_PAIR = /chat_thread (\d+) pending \/ (\d+) decided, site_widget (\d+) pending \/ (\d+) decided/g;
+// `\p{Nd}` is every decimal digit Unicode has, so a pair written in other digits is still counted.
+const CLAUSE_D_PAIR =
+  /chat_thread (\p{Nd}+) pending \/ (\p{Nd}+) decided, site_widget (\p{Nd}+) pending \/ (\p{Nd}+) decided/gu;
+// The whole text of clauses (a), (c) and (d), each up to the next clause's "(x) " and with its trailing space; every
+// count is a parameter, taken from the index or the walk plan by the reader below.
+const CLAUSE_TEXT = {
+  a: ({ schedule, walkCells }) =>
+    `(a) trigger_schedule_proposal on every host in every state — ${schedule} records. The card is drawn and ` +
+    "dispatched on main (packages/chat/src/renderable-views/registry.tsx maps the kind to ScheduleProposalCard, " +
+    `cinatra#2788), so what is owed here is the picture, not the card. The ${walkCells} records of the S9d rework ` +
+    "walk on chat_thread and run_card counted the card's earlier Confirm value, not the " +
+    '`[data-action="confirm-schedule -> scheduled"]` that §VI draws, and were withdrawn on 2026-10-27; their ' +
+    "re-shoot is the open item of cinatra#4390 (row 3's gap). site_widget and page_gate_region in every state, and " +
+    "the run_card PENDING reading, had no record before that either. ",
+  c: ({ siteDecided, runDecided, pageDecided }) =>
+    `(c) artifact_review_gate DECIDED on site_widget — ${siteDecided} records. The run_card DECIDED reading is ` +
+    `answered by ${runDecided} records (cinatra#2936 W6 part 2b batch 2), and the settled card on ` +
+    `page_gate_region is DELIVERED, ${pageDecided} records, so the route no longer blocks before the card mounts. ` +
+    "On site_widget a real widget-started run opened its review gate and the widget drew no review card, live or " +
+    "after a reload (cinatra#2936 W6 part 2b batch 3, recorded in the census ratchet of " +
+    "scripts/ci/__tests__/capture-record-contract.test.mjs). ",
+  d: ([chatPending, chatDecided, widgetPending, widgetDecided]) =>
+    "(d) recommendation_hold — the 'RATCHETED AS OWED … those cells must NOT be observed yet' this clause carried " +
+    "is WITHDRAWN: both mounts landed (cinatra#2786 S9b for chat_thread, cinatra#2790/#2890 S9f for site_widget) " +
+    `and both are photographed in both states (chat_thread ${chatPending} pending / ${chatDecided} decided, ` +
+    `site_widget ${widgetPending} pending / ${widgetDecided} decided). What is absent on this kind is the PENDING ` +
+    "reading on page_gate_region, which carries decided records only. ",
+};
 
 function row15CensusProblems(gap, index, walkPlan) {
   const problems = [];
@@ -328,6 +355,7 @@ function row15CensusProblems(gap, index, walkPlan) {
         break;
       }
       rest = rest.slice(sep[0].length);
+      if (!rest.length) problems.push(`${kind}: a separator after "${hit[0][0]}" leads to no item`);
     }
   }
   for (const kind of Object.keys(CARD_KINDS)) {
@@ -359,8 +387,11 @@ function row15CensusProblems(gap, index, walkPlan) {
     return absent.slice(at[i], at[i + 1] ?? absent.length);
   };
   const held = (l, want) => {
-    const got = numbersIn(clause(l));
-    if (String(got) !== String(want)) problems.push(`clause (${l})'s numbers are [${got}], not [${want}]`);
+    const got = clause(l);
+    if (got === want) return;
+    let i = 0;
+    while (got[i] === want[i]) i += 1;
+    problems.push(`clause (${l}) is not its text: at ${i} it reads "${got.slice(i, i + 40)}", not "${want.slice(i, i + 40)}"`);
   };
   const ARG = "artifact_review_gate";
   const HOLD = "recommendation_hold";
@@ -368,17 +399,15 @@ function row15CensusProblems(gap, index, walkPlan) {
     .filter((k) => k.startsWith("trigger_schedule_proposal | "))
     .reduce((n, k) => n + actual[k], 0);
   const walkCells = walkPlan.steps.flatMap((s) => s.cells ?? []).length;
-  held("a", [numberWord(schedule), "cinatra#2788", numberWord(walkCells), "s9d", "2026-10-27", "cinatra#4390", "3"]);
-  held("c", [
-    numberWord(count(`${ARG} | site_widget | decided`)),
-    numberWord(count(`${ARG} | run_card | decided`)),
-    "cinatra#2936", "w6", "2b", "2",
-    numberWord(count(`${ARG} | page_gate_region | decided`)),
-    "cinatra#2936", "w6", "2b", "3",
-  ]);
+  held("a", CLAUSE_TEXT.a({ schedule: numberWord(schedule), walkCells: numberWord(walkCells) }));
+  held("c", CLAUSE_TEXT.c({
+    siteDecided: numberWord(count(`${ARG} | site_widget | decided`)),
+    runDecided: numberWord(count(`${ARG} | run_card | decided`)),
+    pageDecided: numberWord(count(`${ARG} | page_gate_region | decided`)),
+  }));
   const holdCounts = ["chat_thread | pending", "chat_thread | decided", "site_widget | pending", "site_widget | decided"]
     .map((hs) => String(count(`${HOLD} | ${hs}`)));
-  held("d", ["cinatra#2786", "s9b", "cinatra#2790/#2890", "s9f", ...holdCounts]);
+  held("d", CLAUSE_TEXT.d(holdCounts));
   const pairs = [...gap.matchAll(CLAUSE_D_PAIR)];
   if (pairs.length !== 1) problems.push(`clause (d)'s pair of counts is stated ${pairs.length} times, not once`);
   else if (String(pairs[0].slice(1)) !== String(holdCounts)) {
@@ -389,9 +418,13 @@ function row15CensusProblems(gap, index, walkPlan) {
 }
 
 // Each mutant puts a stale number into the gap in a form the pre-2 review of
-// cinatra#4392 found the earlier reader passing (the last two it already
-// refused). Each returns the mutated gap, or null when its anchor is not in the
-// gap exactly once: then the census has moved and the mutant must be re-aimed.
+// cinatra#4392 found the earlier reader passing (the ninth and the eighth it
+// already refused), and the last five in a form the pre-3 review found the
+// next reader passing: a number word it did not know ("dozen") in clauses (a),
+// (c) and (d), a second clause (d) pair in non-ASCII digits, and a census
+// separator that leads to no item. Each returns the mutated gap, or null when
+// its anchor is not in the gap exactly once: then the census has moved and the
+// mutant must be re-aimed.
 const once = (re, to) => (gap) => {
   const all = gap.match(new RegExp(re.source, "g")) ?? [];
   return all.length === 1 ? gap.replace(re, to) : null;
@@ -414,6 +447,16 @@ const ROW15_MUTANTS = [
     once(/(chat-hitl-capture-index\.json, )(\d+)( records\))/, (m, a, n, b) => `${a}${Number(n) - 1}${b}`)],
   ["one census count moved by one",
     first(/(run_card pending \d+ \/ decided )(\d+)/, (m, a, n) => `${a}${Number(n) + 1}`)],
+  ["a dozen-fold count in clause (a)",
+    once(/\bThe (\w+) records of the S9d rework walk/, (m, w) => `The ${w} dozen records of the S9d rework walk`)],
+  ["a dozen-fold count in clause (c)", once(/answered by (\w+) records/, (m, w) => `answered by ${w} dozen records`)],
+  ["older records added after clause (d)'s pair",
+    once(/(site_widget \d+ pending \/ \d+ decided\))/, "$1 plus a dozen older records")],
+  ["a second clause (d) pair in non-ASCII digits",
+    once(/does not re-open them\.$/,
+      "does not re-open them. Before: chat_thread ٥ pending / ٤ decided, site_widget ٥ pending / ٢ decided.")],
+  ["a census separator that leads to no item",
+    once(/(page_gate_region pending \d+ \/ decided \d+)(; recommendation_hold)/, "$1, $2")],
 ];
 
 const captureIndex = () => JSON.parse(readFileSync(CAPTURE_INDEX_PATH, "utf8"));
@@ -669,14 +712,15 @@ describe("the REAL manifest", () => {
     // The gap says its census is COUNTED, not recited, and strict mode prints
     // it. cinatra#4390 (2026-10-27) withdrew ten schedule records and the gap
     // went on counting them, beside counts of an index of 93 records. The
-    // reader above holds the whole census sentence and the numbers of clauses
-    // (a), (c) and (d) to the index as it stands.
+    // reader above holds the whole census sentence and the whole text of
+    // clauses (a), (c) and (d) to the index as it stands.
     expect(row15CensusProblems(manifest().rows[14].gap, captureIndex(), walkPlan())).toEqual([]);
   });
 
   it.each(ROW15_MUTANTS)("row 15's census reader refuses %s", (name, mutate) => {
     // A reader is only as good as the stale numbers it refuses (pre-2 of
-    // cinatra#4392 found seven forms the earlier reader passed).
+    // cinatra#4392 found seven forms the earlier reader passed, pre-3 five
+    // more that the next one passed).
     const gap = manifest().rows[14].gap;
     const mutated = mutate(gap);
     expect(mutated, `${name}: the anchor is not in the gap exactly once; re-aim the mutant`).not.toBeNull();
