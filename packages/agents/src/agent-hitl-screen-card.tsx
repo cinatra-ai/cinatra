@@ -119,6 +119,7 @@ import { Button } from "@/components/ui/button";
 import {
   LIFECYCLE_HITL_SCREEN_PATH,
   LIFECYCLE_HITL_SCREEN_SUBMIT_PATH,
+  useAnsweredHitlQuestionRegister,
   useCookieSessionSurface,
   useLifecycleCardAuth,
   useLifecycleCardHost,
@@ -1000,6 +1001,7 @@ export function AgentHitlScreenCard({
   const host = useLifecycleCardHost();
   const auth = useLifecycleCardAuth();
   const cookieSession = useCookieSessionSurface();
+  const answeredRegister = useAnsweredHitlQuestionRegister();
   const rendererContext = useFieldRendererContext(runId, cookieSession);
   const present = host !== null;
 
@@ -1146,9 +1148,15 @@ export function AgentHitlScreenCard({
       if (!auth && !cookieSession) return;
       setSubmitting(true);
       let landed: boolean;
+      // ACCEPTED, as opposed to LANDED (cinatra#4375): only this submit's own
+      // accepted answer. "Already resolved" and "no longer pending" settle the
+      // screen as landings, but they say the gate was answered elsewhere or has
+      // moved on, so they tell the run panel nothing.
+      let accepted = false;
       if (auth) {
         // THE BROKER DOOR. The reader's own credential, and never the ambient
-        // cookie of a frame that is same-origin to the app.
+        // cookie of a frame that is same-origin to the app. Its landing is
+        // already only an accepted outcome (`outcome.ok === true`).
         landed = await submitHitlScreenThroughBroker({
           runId,
           reviewTaskId: gate.reviewTaskId,
@@ -1156,6 +1164,7 @@ export function AgentHitlScreenCard({
           fieldName: payloadFieldName,
           auth,
         });
+        accepted = landed;
       } else {
         // THE COOKIE DOOR, unchanged.
         landed = true;
@@ -1171,6 +1180,7 @@ export function AgentHitlScreenCard({
           // run moved past it), so the screen settles and re-reads rather than
           // holding an answer for a gate that is gone.
           landed = outcome.ok || outcome.blocked === "no-longer-pending";
+          accepted = outcome.ok === true;
         } catch (error) {
           // "already resolved" is the expected race (a double press, the same
           // gate answered on another surface). Every other failure leaves the
@@ -1181,6 +1191,17 @@ export function AgentHitlScreenCard({
         }
       }
       setSubmitting(false);
+      // THE RUN PANEL BESIDE THIS CARD IS TOLD (cinatra#4375). Inside a
+      // conversation this card owns the question and its Continue, so the panel
+      // learns of an accepted answer only here; it then holds its working slot
+      // until the server resumes, exactly as after its own Continue.
+      if (accepted) {
+        answeredRegister?.announceAnswered(runId, {
+          reviewTaskId: gate.reviewTaskId,
+          xRenderer: gate.xRenderer,
+          fieldName: gate.fieldName,
+        });
+      }
       // WHAT WAS TYPED SURVIVES A REFUSAL and is cleared by a landing. A
       // refusal leaves the screen exactly as it was, with the answer in hand.
       if (landed) setBuffered(EMPTY_BUFFER);
@@ -1195,7 +1216,7 @@ export function AgentHitlScreenCard({
       // outcome of one request.
       setReloadToken((n) => n + 1);
     },
-    [gate, auth, cookieSession, runId],
+    [gate, auth, cookieSession, runId, answeredRegister],
   );
 
   const onContinue = useCallback(

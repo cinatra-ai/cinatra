@@ -222,6 +222,104 @@ const LifecycleCardCookieSessionContext = createContext<boolean>(false);
 // must not recover the identity that an enclosing broker declaration refused.
 const LifecycleCardDeclarationRefusedContext = createContext<boolean>(false);
 
+// ---------------------------------------------------------------------------
+// THE ANSWERED QUESTION, TOLD BY THE CARD THAT TOOK THE ANSWER (cinatra#4375).
+//
+// Inside a conversation (`chat_thread`, `site_widget`) the run's question and
+// its Continue belong to the conversation's own HITL screen card, a SIBLING of
+// the run panel (`runCardOwnsLifecycleCopy`). The panel holds its working slot
+// from an accepted Continue until the server resumes by matching the question
+// on file against the one the person answered (cinatra#3739, fix leg 19), but it
+// learned that only from its OWN submit. A Continue pressed on the sibling card
+// never reached it, so on the widget the panel drew its "pending approval"
+// progress plate over a run that was working.
+//
+// So the sibling card says it here, and only this: "on this run, the question
+// with this review task, renderer and field was accepted". It says it only on
+// an accepted submit (`outcome.ok === true`); a refusal, a throw, an "already
+// resolved" race and a gate that moved on say nothing. The panel only ever
+// compares what is on file against it, so a question with any other review
+// task, renderer or field still counts as open. It carries no credential and
+// no answer, and it authorizes nothing.
+//
+// ONE REGISTER PER CONVERSATION. The provider below declares one, and a nested
+// declaration (the run panel's own `run_card`) inherits the enclosing one, so
+// the card and the panel that share a conversation share its register.
+// ---------------------------------------------------------------------------
+
+/** What the sibling card tells the panel: the accepted question's identity. */
+export type AnsweredHitlQuestion = {
+  reviewTaskId: string;
+  xRenderer: string;
+  fieldName: string | null;
+};
+
+/** One accepted question per run, compared BY VALUE as a string key. */
+export type AnsweredHitlQuestionRegister = {
+  subscribe: (listener: () => void) => () => void;
+  /** The last accepted question's key on this run, or `null`. */
+  answeredOn: (runId: string) => string | null;
+  /** Record that this run's question was accepted. */
+  announceAnswered: (runId: string, question: AnsweredHitlQuestion) => void;
+};
+
+/** The key a question is matched on: its review task, renderer and field. */
+export function answeredHitlQuestionKey(question: {
+  reviewTaskId: string;
+  xRenderer: string;
+  fieldName?: string | null;
+}): string {
+  return JSON.stringify([question.reviewTaskId, question.xRenderer, question.fieldName ?? ""]);
+}
+
+export function createAnsweredHitlQuestionRegister(): AnsweredHitlQuestionRegister {
+  const answered = new Map<string, string>();
+  const listeners = new Set<() => void>();
+  return {
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    answeredOn(runId) {
+      return answered.get(runId) ?? null;
+    },
+    announceAnswered(runId, question) {
+      // A run and a question with a review task and a renderer, or nothing.
+      if (typeof runId !== "string" || runId.length === 0) return;
+      if (typeof question?.reviewTaskId !== "string" || question.reviewTaskId.length === 0) return;
+      if (typeof question.xRenderer !== "string" || question.xRenderer.length === 0) return;
+      const key = answeredHitlQuestionKey(question);
+      if (answered.get(runId) === key) return;
+      answered.set(runId, key);
+      for (const listener of listeners) listener();
+    },
+  };
+}
+
+const AnsweredHitlQuestionContext = createContext<AnsweredHitlQuestionRegister | null>(null);
+
+/** The conversation's register, or `null` outside any host declaration. */
+export function useAnsweredHitlQuestionRegister(): AnsweredHitlQuestionRegister | null {
+  return useContext(AnsweredHitlQuestionContext);
+}
+
+const noAnsweredQuestion = (): string | null => null;
+
+/**
+ * The key of the last question accepted on this run through the conversation's
+ * card, or `null`. Always `null` with no register.
+ */
+export function useAnsweredHitlQuestionKey(runId: string): string | null {
+  const register = useAnsweredHitlQuestionRegister();
+  const read = useCallback(
+    () => (register ? register.answeredOn(runId) : null),
+    [register, runId],
+  );
+  return useSyncExternalStore(register?.subscribe ?? noopSubscribe, read, noAnsweredQuestion);
+}
+
 /**
  * The hosts whose identity travels by COOKIE. Every other host must declare a
  * credential, and the provider refuses to mount without one.
@@ -272,6 +370,11 @@ export function LifecycleCardSurfaceProvider({
   // is drawn in (cinatra#3481).
   const outerInsideConversation = useContext(InsideConversationContext);
   const outerDeclarationRefused = useContext(LifecycleCardDeclarationRefusedContext);
+  // The conversation's answered-question register (cinatra#4375): inherited
+  // when an enclosing declaration made one, so the card and the panel share it.
+  const outerAnsweredRegister = useContext(AnsweredHitlQuestionContext);
+  const [ownAnsweredRegister] = useState(createAnsweredHitlQuestionRegister);
+  const answeredRegister = outerAnsweredRegister ?? ownAnsweredRegister;
   const cookieHost = COOKIE_SESSION_HOSTS.has(host);
   // A broker declaration is checked for its SHAPE here; whether it holds a
   // widget user token is asked at each request (`lifecycleRequestCredential`),
@@ -304,7 +407,9 @@ export function LifecycleCardSurfaceProvider({
               value={outerInsideConversation || (credentialOk && host === "chat_thread")}
             >
               <LifecycleCardDeclarationRefusedContext.Provider value={!credentialOk}>
-                {children}
+                <AnsweredHitlQuestionContext.Provider value={answeredRegister}>
+                  {children}
+                </AnsweredHitlQuestionContext.Provider>
               </LifecycleCardDeclarationRefusedContext.Provider>
             </InsideConversationContext.Provider>
           </LifecycleCardCookieSessionContext.Provider>
