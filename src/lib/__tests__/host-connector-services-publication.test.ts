@@ -1326,9 +1326,21 @@ describe("drupal-mcp dev writers bind the dev owner host-side (cinatra#4387)", (
   });
 
   it("an owner holder with only one id binds nothing (never half a binding)", async () => {
-    devBoot({ userId: "dev-admin-1", organizationId: "" });
-    await drupal().devPersistLocalInstanceUnvalidated!({ name: "Local", siteUrl: "http://localhost:8082" });
-    expect(drupalApiCalls.devPersist.at(-1)).toEqual([{ name: "Local", siteUrl: "http://localhost:8082" }]);
+    // Each half on its own, and both ids whitespace only (trimmed to empty).
+    const halves = [
+      { userId: "dev-admin-1", organizationId: "" },
+      { userId: "", organizationId: "dev-org-1" },
+      { userId: "   ", organizationId: "dev-org-1" },
+      { userId: "dev-admin-1", organizationId: "   " },
+      { userId: "  ", organizationId: "\t " },
+    ];
+    for (const half of halves) {
+      devBoot(half);
+      await drupal().devPersistLocalInstanceUnvalidated!({ name: "Local", siteUrl: "http://localhost:8082" });
+      expect(drupalApiCalls.devPersist.at(-1)).toEqual([{ name: "Local", siteUrl: "http://localhost:8082" }]);
+      await drupal().devSaveInstance!({ id: "i-1", name: "Local", siteUrl: "http://localhost:8082" });
+      expect(drupalApiCalls.save.at(-1)).toEqual([{ id: "i-1", name: "Local", siteUrl: "http://localhost:8082" }]);
+    }
   });
 
   it("production boot: both dev writers refuse and nothing reaches the connector", async () => {
