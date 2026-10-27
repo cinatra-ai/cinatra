@@ -42,6 +42,7 @@ import {
   listExternalMcpServers,
   resolveExternalMcpServerBearer,
   devAttachTwentyBearerFromMintedKey,
+  getDevInstallConnectionOwner,
   EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY,
 } from "@/lib/external-mcp-registry";
 // Connector setup-page server actions for @cinatra-ai/mcp-server-connector
@@ -362,6 +363,43 @@ function assertDevSetupHostOnly(member: string): void {
   if (!isAppDevelopmentMode() && !isPreviewInstanceEnv(process.env)) {
     throw new Error(`${member} is a dev-only devSetup provisioning member; refused outside development.`);
   }
+}
+
+/**
+ * cinatra#4387: the install→org binding (cinatra#274) a dev-hook instance save
+ * carries. The HOST binds it — the hook never sees a user id (the
+ * `reownRefusedFixtureConnection` rule of the devSetup contract). The pair is
+ * the owner of the install-made connections the dev-boot shell pushed on this
+ * boot (`getDevInstallConnectionOwner`: the fixture account, or the first
+ * administrator and that administrator's organisation, cinatra#4112), as the
+ * Twenty dev attach reads it. Only on a development or a preview boot, and only
+ * with BOTH ids; otherwise nothing (the row keeps its existing binding).
+ */
+function devInstallOwnerBinding(): { orgId: string; runBy: string } | undefined {
+  if (!isAppDevelopmentMode() && !isPreviewInstanceEnv(process.env)) return undefined;
+  const owner = getDevInstallConnectionOwner();
+  const orgId = owner?.organizationId?.trim() ?? "";
+  const runBy = owner?.userId?.trim() ?? "";
+  return orgId && runBy ? { orgId, runBy } : undefined;
+}
+
+/**
+ * The dev-hook input with the host-bound binding. A caller-supplied
+ * `orgId`/`runBy` is DROPPED first: on these dev members only the host names
+ * the owner.
+ */
+function withDevInstallOwnerBinding<T extends object>(input: T): Omit<T, "orgId" | "runBy"> & {
+  orgId?: string;
+  runBy?: string;
+} {
+  const rest = { ...input } as T & { orgId?: unknown; runBy?: unknown };
+  delete rest.orgId;
+  delete rest.runBy;
+  const binding = devInstallOwnerBinding();
+  return (binding ? { ...rest, ...binding } : rest) as Omit<T, "orgId" | "runBy"> & {
+    orgId?: string;
+    runBy?: string;
+  };
 }
 
 // Host-LOCAL extension of the SDK `HostExternalMcpRegistryService` for the
@@ -1140,10 +1178,19 @@ export function registerHostConnectorServices(): void {
     // strictly dev-gated `dev-auto-setup` shell. The dev-MODE guard is
     // host-side defense-in-depth; the relocated persist helper keeps its
     // intrinsic loopback-only hard-gate (and its own runtime-mode refusal).
+    // cinatra#4387: both dev writers bind the dev owner's org + user host-side
+    // (withDevInstallOwnerBinding), so the write-authority gate's per-instance
+    // org check can admit the dev administrator; with no owner, none is passed.
     devPersistLocalInstanceUnvalidated: async (input) => {
       assertDevSetupHostOnly("drupal-mcp.devPersistLocalInstanceUnvalidated");
-      const persisted = await requireDrupalInstanceAdmin().devPersistLocalInstanceUnvalidated(input);
+      const persisted = await requireDrupalInstanceAdmin().devPersistLocalInstanceUnvalidated(
+        withDevInstallOwnerBinding(input),
+      );
       return { id: persisted.id };
+    },
+    devSaveInstance: async (input) => {
+      assertDevSetupHostOnly("drupal-mcp.devSaveInstance");
+      return requireDrupalInstanceAdmin().saveInstance(withDevInstallOwnerBinding(input));
     },
     devProbeWithBearer: probeDrupalMcpWithBearer,
     devInvalidateProbeCache: invalidateDrupalMcpProbeCache,

@@ -1,6 +1,11 @@
-import { describe, it, expect, vi, beforeAll } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
+
+import * as auditModule from "@/lib/authz/audit";
+import * as actorModule from "@/lib/extension-host-actor";
+import * as authorityModule from "@/lib/connector-authority";
+import { POLICY_VERSION } from "@/lib/authz/actor-context";
 
 // Host per-concern service publication (register-host-connector-services):
 // pins (a) the `@cinatra-ai/host:connector-config` PHYSICAL `delete` member
@@ -51,6 +56,13 @@ const EXT_MCP_ROW = {
   updatedAt: "2026-01-02T00:00:00Z",
 };
 const extMcpCalls: Record<string, unknown[][]> = { resolveBearer: [], devAttachTwentyBearerFromMintedKey: [] };
+// cinatra#4387: the dev-boot state the Drupal dev-owner binding reads. Defaults
+// (production runtime, no owner, no membership) keep every other case as it was.
+const devBootState: {
+  dev: boolean;
+  owner: { userId: string; organizationId: string } | null;
+  orgRole: string | undefined;
+} = { dev: false, owner: null, orgRole: undefined };
 vi.mock("@/lib/external-mcp-registry", () => ({
   EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY: "cinatra-external-mcp",
   upsertExternalMcpServer: async () => ({}),
@@ -65,6 +77,8 @@ vi.mock("@/lib/external-mcp-registry", () => ({
     extMcpCalls.devAttachTwentyBearerFromMintedKey.push(args);
     return { resolved: true, connectionId: "unit-connection" };
   },
+  // cinatra#4387: the boot's install-connection owner holder (null by default).
+  getDevInstallConnectionOwner: () => devBootState.owner,
 }));
 // mcp-server-connector setup-page surface (cinatra#612): the host binds the
 // create/delete server actions, the viewer-context resolver, the Nango
@@ -101,13 +115,13 @@ vi.mock("@/lib/auth-session", () => ({
   // role through this. undefined = non-member ⇒ the gate denies fail-closed
   // (this suite only asserts member PRESENCE; behavior is pinned in
   // connector-instance-native-injection-consent.test.ts).
-  resolveOrgRoleForUser: async () => undefined,
+  resolveOrgRoleForUser: async () => devBootState.orgRole,
 }));
 vi.mock("@/lib/nango-system", () => ({ getNangoStatus: () => ({ status: "connected" }) }));
 vi.mock("@/lib/instance-secrets", () => ({ encryptSecret: (v: string) => v, decryptSecret: (v: string) => v }));
 vi.mock("@/lib/mcp-self-client", () => ({ buildAppMcpSelfClientHeaders: () => ({}) }));
 vi.mock("@/lib/instance-identity-store", () => ({ readInstanceIdentity: () => null }));
-vi.mock("@/lib/runtime-mode", () => ({ isAppDevelopmentMode: () => false }));
+vi.mock("@/lib/runtime-mode", () => ({ isAppDevelopmentMode: () => devBootState.dev }));
 vi.mock("@/lib/notifications", () => ({ createNotification: async () => {} }));
 vi.mock("@/lib/openai-connection-store", () => ({
   readOpenAIConnection: () => ({}),
@@ -258,8 +272,10 @@ const drupalApiCalls: Record<string, unknown[][]> = { save: [], delete: [], devP
 // The relocated Drupal instance client the drupal-mcp-connector registers
 // under `@cinatra-ai/host:drupal-mcp` (cinatra#975 Wave 3) — the host
 // publication DELEGATES its client-backed members here.
+// cinatra#4387: the rows the connector would hold (empty unless a case adds one).
+const drupalRows: Array<Record<string, unknown>> = [];
 const drupalConnectorClient = {
-  listInstances: () => [] as unknown[],
+  listInstances: () => drupalRows as unknown[],
   getAPIStatus: async () => ({ instanceCount: 0, instances: [] }),
   saveInstance: async (...args: unknown[]) => {
     drupalApiCalls.save.push(args);
@@ -1218,5 +1234,168 @@ describe("dev-only devSetup writers on a preview instance (cinatra#4098)", () =>
       await expect(attachUnder(values)).rejects.toThrow(/refused outside development/);
     }
     expect(extMcpCalls.devAttachTwentyBearerFromMintedKey.length).toBe(before);
+  });
+});
+
+describe("drupal-mcp dev writers bind the dev owner host-side (cinatra#4387)", () => {
+  const DEV_OWNER = { userId: "dev-admin-1", organizationId: "dev-org-1" };
+  const PREVIEW_ENV = ["CINATRA_RUNTIME_MODE", "CINATRA_INSTALL_PROFILE"] as const;
+  const savedEnv: Record<string, string | undefined> = {};
+
+  function drupal(): HostDrupalMcpService {
+    return resolveSingle<HostDrupalMcpService>(HOST_CONNECTOR_SERVICE_CAPABILITIES.drupalMcp);
+  }
+  function devBoot(owner: typeof DEV_OWNER | null) {
+    devBootState.dev = true;
+    devBootState.owner = owner;
+  }
+  function previewBoot(owner: typeof DEV_OWNER | null) {
+    devBootState.dev = false;
+    devBootState.owner = owner;
+    for (const k of PREVIEW_ENV) savedEnv[k] = process.env[k];
+    process.env.CINATRA_RUNTIME_MODE = "production";
+    process.env.CINATRA_INSTALL_PROFILE = "preview";
+  }
+
+  afterEach(() => {
+    devBootState.dev = false;
+    devBootState.owner = null;
+    devBootState.orgRole = undefined;
+    drupalRows.length = 0;
+    for (const k of PREVIEW_ENV) {
+      if (k in savedEnv) {
+        if (savedEnv[k] === undefined) delete process.env[k];
+        else process.env[k] = savedEnv[k];
+        delete savedEnv[k];
+      }
+    }
+    vi.restoreAllMocks();
+  });
+
+  it("dev boot with an owner: the persist wrapper hands the connector the owner's orgId and runBy", async () => {
+    devBoot(DEV_OWNER);
+    await expect(
+      drupal().devPersistLocalInstanceUnvalidated!({ name: "Local", siteUrl: "http://localhost:8082" }),
+    ).resolves.toEqual({ id: "i-1" });
+    expect(drupalApiCalls.devPersist.at(-1)).toEqual([
+      { name: "Local", siteUrl: "http://localhost:8082", orgId: "dev-org-1", runBy: "dev-admin-1" },
+    ]);
+  });
+
+  it("dev boot with an owner: devSaveInstance is bound and hands the validated save the same binding", async () => {
+    devBoot(DEV_OWNER);
+    const service = drupal();
+    expect(typeof service.devSaveInstance).toBe("function");
+    await expect(
+      service.devSaveInstance!({ name: "Local", siteUrl: "http://localhost:8082", mcpApiKey: "k".repeat(12) }),
+    ).resolves.toEqual({ id: "i-1" });
+    expect(drupalApiCalls.save.at(-1)).toEqual([
+      {
+        name: "Local",
+        siteUrl: "http://localhost:8082",
+        mcpApiKey: "k".repeat(12),
+        orgId: "dev-org-1",
+        runBy: "dev-admin-1",
+      },
+    ]);
+  });
+
+  it("preview boot with an owner: both dev writers hand the same binding", async () => {
+    previewBoot(DEV_OWNER);
+    await drupal().devPersistLocalInstanceUnvalidated!({ id: "i-1", name: "Local", siteUrl: "http://localhost:8082" });
+    expect(drupalApiCalls.devPersist.at(-1)).toEqual([
+      { id: "i-1", name: "Local", siteUrl: "http://localhost:8082", orgId: "dev-org-1", runBy: "dev-admin-1" },
+    ]);
+    await drupal().devSaveInstance!({ id: "i-1", name: "Local", siteUrl: "http://localhost:8082" });
+    expect(drupalApiCalls.save.at(-1)).toEqual([
+      { id: "i-1", name: "Local", siteUrl: "http://localhost:8082", orgId: "dev-org-1", runBy: "dev-admin-1" },
+    ]);
+  });
+
+  it("no owner on the boot: no orgId and no runBy reach the connector", async () => {
+    devBoot(null);
+    await drupal().devPersistLocalInstanceUnvalidated!({ name: "Local", siteUrl: "http://localhost:8082" });
+    expect(drupalApiCalls.devPersist.at(-1)).toEqual([{ name: "Local", siteUrl: "http://localhost:8082" }]);
+    await drupal().devSaveInstance!({ id: "i-1", name: "Local", siteUrl: "http://localhost:8082" });
+    expect(drupalApiCalls.save.at(-1)).toEqual([{ id: "i-1", name: "Local", siteUrl: "http://localhost:8082" }]);
+  });
+
+  it("an owner holder with only one id binds nothing (never half a binding)", async () => {
+    devBoot({ userId: "dev-admin-1", organizationId: "" });
+    await drupal().devPersistLocalInstanceUnvalidated!({ name: "Local", siteUrl: "http://localhost:8082" });
+    expect(drupalApiCalls.devPersist.at(-1)).toEqual([{ name: "Local", siteUrl: "http://localhost:8082" }]);
+  });
+
+  it("production boot: both dev writers refuse and nothing reaches the connector", async () => {
+    devBootState.dev = false;
+    devBootState.owner = DEV_OWNER;
+    const persists = drupalApiCalls.devPersist.length;
+    const saves = drupalApiCalls.save.length;
+    await expect(
+      drupal().devPersistLocalInstanceUnvalidated!({ name: "Local", siteUrl: "http://localhost:8082" }),
+    ).rejects.toThrow(/dev-only devSetup provisioning member/);
+    await expect(
+      drupal().devSaveInstance!({ name: "Local", siteUrl: "http://localhost:8082" }),
+    ).rejects.toThrow(/drupal-mcp\.devSaveInstance is a dev-only devSetup provisioning member/);
+    expect(drupalApiCalls.devPersist).toHaveLength(persists);
+    expect(drupalApiCalls.save).toHaveLength(saves);
+  });
+
+  it("a caller-supplied orgId and runBy never reach the connector (only the host names the owner)", async () => {
+    const forged = { name: "Local", siteUrl: "http://localhost:8082", orgId: "evil-org", runBy: "evil-user" };
+    devBoot(DEV_OWNER);
+    await drupal().devSaveInstance!(forged as never);
+    expect(drupalApiCalls.save.at(-1)).toEqual([
+      { name: "Local", siteUrl: "http://localhost:8082", orgId: "dev-org-1", runBy: "dev-admin-1" },
+    ]);
+    devBoot(null);
+    await drupal().devPersistLocalInstanceUnvalidated!(forged as never);
+    expect(drupalApiCalls.devPersist.at(-1)).toEqual([{ name: "Local", siteUrl: "http://localhost:8082" }]);
+  });
+
+  it("the row the wrapper binds passes the write-authority gate for the dev admin; the same row unbound is denied instance_unbound", async () => {
+    devBoot(DEV_OWNER);
+    await drupal().devPersistLocalInstanceUnvalidated!({ id: "dev-row", name: "Local", siteUrl: "http://localhost:8082" });
+    // The connector persists the input it is handed (drupal-mcp-connector#101 pins that side).
+    const handed = drupalApiCalls.devPersist.at(-1)![0] as Record<string, unknown>;
+    drupalRows.push({ ...handed, nangoConnectionId: "dev-row", providerConfigKey: "cinatra-drupal" });
+
+    const devAdmin = {
+      principalType: "HumanUser",
+      principalId: DEV_OWNER.userId,
+      authSource: "mcp",
+      policyVersion: POLICY_VERSION,
+      organizationId: DEV_OWNER.organizationId,
+      orgRole: "owner",
+    };
+    vi.spyOn(auditModule, "logAuditEvent").mockResolvedValue(undefined);
+    vi.spyOn(actorModule, "resolveExtensionActorContext").mockResolvedValue(devAdmin as never);
+    vi.spyOn(actorModule, "resolveExtensionActorSummary").mockResolvedValue({
+      userId: DEV_OWNER.userId,
+      organizationId: DEV_OWNER.organizationId,
+      orgRole: "owner",
+    } as never);
+    const authority = vi.spyOn(authorityModule, "requireConnectorAuthority").mockResolvedValue({ allowed: true } as never);
+    devBootState.orgRole = "owner";
+
+    const guard = resolveSingle<HostInstanceWriteAuthorityService>(
+      HOST_CONNECTOR_SERVICE_CAPABILITIES.instanceWriteAuthority,
+    ).selectForConnector("drupal").requireWrite;
+    await expect(
+      guard({ instanceId: "dev-row", primitiveName: "drupal_node_create_draft_revision" }),
+    ).resolves.toBeUndefined();
+    expect(authority).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ principalId: DEV_OWNER.userId, organizationId: DEV_OWNER.organizationId }),
+      expect.objectContaining({ instanceId: "dev-row" }),
+    );
+
+    // The same row without the binding (what the wrapper handed before #4387).
+    drupalRows.length = 0;
+    const { orgId: _o, runBy: _r, ...unbound } = handed;
+    drupalRows.push({ ...unbound, nangoConnectionId: "dev-row", providerConfigKey: "cinatra-drupal" });
+    await expect(
+      guard({ instanceId: "dev-row", primitiveName: "drupal_node_create_draft_revision" }),
+    ).rejects.toMatchObject({ reason: "instance_unbound" });
   });
 });
