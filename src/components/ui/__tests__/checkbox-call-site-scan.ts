@@ -19,7 +19,9 @@
 //      road): every tracked or new, not-ignored .ts, .tsx, .mts, .cts, .js,
 //      .jsx, .mjs or .cjs file, and never a node_modules tree. A git failure, an
 //      empty listing or a listed file that cannot be read throws; it is never an
-//      empty result. A file that does not parse is a problem no reading clears.
+//      empty result. A file that does not parse is a problem no reading clears,
+//      and a root `tsconfig.json` that does not parse, or whose `paths` are no
+//      map of string lists, throws (no tsconfig.json is no path alias).
 //   2. ANY REFERENCE COUNTS. A file is in scope when its text holds any
 //      checkbox token (`CHECKBOX_TOKEN`): an identifier that contains
 //      `Checkbox` from a capital C in any letter case after it (`CheckBox`,
@@ -43,8 +45,13 @@
 //      (`export { Tick }`, `export { Checkbox as Tick }`, `export const Tick =
 //      Checkbox`) is a checkbox in every file, followed until no new name
 //      appears. A checkbox exported as a default export (`export default
-//      Checkbox`, `export default function Checkbox`, `export { X as default }`)
-//      cannot be followed by name, so it is a problem no reading clears. A
+//      Checkbox`, `export default function Checkbox`, `export { X as default }`,
+//      and a default re-export from a module that names a checkbox: `export {
+//      Root as default } from "@radix-ui/react-checkbox"`, `export { default }
+//      from`, `export * as default from`) cannot be followed by name, so it is a
+//      problem no reading clears. So is a whole re-export of a module that
+//      names a checkbox (`export * from "@radix-ui/react-checkbox"`, `export *
+//      from "./checkbox"`): which names it hands on no name follows. A
 //      member key the syntax settles is a name like `R.Checkbox`, on any value:
 //      `R["Check" + "box"]`, a template of strings, a choice of strings, a
 //      number, and the same as a destructured key (`{ ["Check" + "box"]: B }`).
@@ -85,7 +92,9 @@
 //      the tree's value, `useContext(OutsideCtx)` is from outside). A computed
 //      member or a computed destructuring key of such a value is a site. A load
 //      of a module outside the tree that binds no name (`() => import("@x/y")`,
-//      `[import("x")]`, `import("x").then(...)`), and every load whose
+//      `[import("x")]`, `import("x").then(...)`, an element access on a load,
+//      `import("x")["then"]` and `require("x")["a"]` too, as no element access
+//      names an export; `module.require` loads like `require`), and every load whose
 //      specifier is no string (`import(url)`, bound or not), hands a module on
 //      that no name follows: the file's reading names those loads (their
 //      number, a pattern each matches, a sentence), so a new one fails until
@@ -110,16 +119,26 @@
 //      in exactly one found site of its file, with the same tag; so removing one
 //      checkbox and adding another in the same file fails even though the count
 //      of sites is unchanged. Every change handler (`on…`) and every spread of
-//      an element must be named by the reading.
+//      an element must be named by the reading, of a call site of a shared
+//      component too.
 //   7. NO EMPTY READING. Every text a reading holds must hold more than white
 //      space; a reading and a reason are sentences of 20 characters at least. A
 //      pinned text must stand in the CODE of its file: not only in a comment and
 //      not only inside a string or template. A switch counts as drawn only as a
-//      JSX element inside the site's element.
+//      JSX element inside the site's element that is drawn whenever the element
+//      is: one under a choice (`? :`, `&&`, `||`, `??`) or in a function (`rows.map`,
+//      a render prop) may be drawn, so neither a switch nor a checkbox is claimed.
+//
+// LIMIT of the whole scan: the files are listed and read once, with no snapshot
+// or lock, so a file added or changed while a run reads the tree may be missed
+// or read in two states by that run; the next run reads it.
 //
 // Callers (`COMPONENT_CALLERS` in the readings): a shared component whose box
 // is read at its callers is resolved by the same rules under its own name, and
-// each of its call sites (one JSX element) needs its own reading.
+// each of its call sites (one JSX element) needs its own reading, which names
+// the call site's handlers and spreads (`tagIncludes`). When only some elements
+// are callers (`callerWhen`), an element without the attribute is no caller only
+// by the component's default, which the reading pins (`callerWhen.absent`).
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -293,13 +312,20 @@ function hasModifier(node: ts.Node, kind: ts.SyntaxKind): boolean {
   return ts.canHaveModifiers(node) && (ts.getModifiers(node) ?? []).some((m) => m.kind === kind);
 }
 
-/** The module a call imports, when it is `require("x")` or `import("x")` (awaited or not). */
+/** Whether a callee loads a module: `import`, `require` or `module.require` (pre-3 MF4). */
+function isLoadCallee(callee: ts.Expression): boolean {
+  if (callee.kind === ts.SyntaxKind.ImportKeyword) return true;
+  const c = unwrap(callee);
+  if (ts.isIdentifier(c)) return c.text === "require";
+  return ts.isPropertyAccessExpression(c) && c.name.text === "require" && ts.isIdentifier(c.expression) && c.expression.text === "module";
+}
+
+/** The module a call imports, when it is `require("x")`, `module.require("x")` or `import("x")` (awaited or not). */
 function importedModule(expr: ts.Expression): string | undefined {
   let e = unwrap(expr);
   if (ts.isAwaitExpression(e)) e = unwrap(e.expression);
   if (!ts.isCallExpression(e) || e.arguments.length === 0 || !isStringLike(e.arguments[0])) return undefined;
-  const callee = e.expression;
-  if (callee.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(callee) && callee.text === "require")) return e.arguments[0].text;
+  if (isLoadCallee(e.expression)) return e.arguments[0].text;
   return undefined;
 }
 
@@ -310,7 +336,7 @@ function dynamicLoad(expr: ts.Expression): string | undefined {
   if (!ts.isCallExpression(e) || e.arguments.length === 0 || isStringLike(e.arguments[0])) return undefined;
   const callee = e.expression;
   if (callee.kind === ts.SyntaxKind.ImportKeyword) return `import(${e.arguments[0].getText().replace(/\s+/g, " ")})`;
-  if (ts.isIdentifier(callee) && callee.text === "require") return `require(${e.arguments[0].getText().replace(/\s+/g, " ")})`;
+  if (isLoadCallee(callee)) return `require(${e.arguments[0].getText().replace(/\s+/g, " ")})`;
   return undefined;
 }
 
@@ -386,8 +412,8 @@ export type FileBindings = {
   imports: [string, string][];
   /** An exported name and the local names it is taken from. */
   exports: [string, string[]][];
-  /** Each default export and the names it is taken from. */
-  defaults: { line: number; from: string[] }[];
+  /** Each default export, the names it is taken from and, for a re-export, its module (pre-3 MF3). */
+  defaults: { line: number; from: string[]; spec?: string }[];
   /** A name exported straight from another module (`export { X as Y } from "m"`, `export * as Y from "m"`) and that module. */
   reexports: [string, string][];
   /**
@@ -442,7 +468,7 @@ export function collectBindings(sf: ts.SourceFile): FileBindings {
       const spec = node.moduleSpecifier && isStringLike(node.moduleSpecifier) ? node.moduleSpecifier.text : undefined;
       for (const s of node.exportClause.elements) {
         const local = (s.propertyName ?? s.name).text;
-        if (s.name.text === "default") b.defaults.push({ line: lineOf(sf, s.getStart(sf)), from: [local] });
+        if (s.name.text === "default") b.defaults.push({ line: lineOf(sf, s.getStart(sf)), from: [local], spec });
         else b.exports.push([s.name.text, [local]]);
         if (spec !== undefined) b.reexports.push([s.name.text, spec]);
       }
@@ -450,6 +476,8 @@ export function collectBindings(sf: ts.SourceFile): FileBindings {
       b.stars.push(node.moduleSpecifier.text);
     } else if (ts.isExportDeclaration(node) && node.exportClause && ts.isNamespaceExport(node.exportClause) && node.moduleSpecifier && isStringLike(node.moduleSpecifier)) {
       b.reexports.push([node.exportClause.name.text, node.moduleSpecifier.text]);
+      // `export * as default from "m"` is a default export of the whole module (pre-3 MF3).
+      if (node.exportClause.name.text === "default") b.defaults.push({ line: lineOf(sf, node.getStart(sf)), from: [], spec: node.moduleSpecifier.text });
     } else if (ts.isExportAssignment(node)) {
       const src = aliasSources(node.expression);
       if (src) b.defaults.push({ line: lineOf(sf, node.getStart(sf)), from: src.names });
@@ -506,6 +534,11 @@ export type NameScope = {
   exported: Set<string>;
   /** Default exports of the target: `file:line`. */
   defaults: string[];
+  /**
+   * Whole re-exports of a module that names the target (`export * from "@radix-ui/react-checkbox"`): `file:line`.
+   * Which names such a file hands on no name follows, so each is a problem no reading clears (pre-3 MF2).
+   */
+  stars: string[];
   /** Whether `name` is the target in `file`. */
   isName: (file: string, name: string) => boolean;
 };
@@ -547,9 +580,17 @@ export function resolveNames(
   const isName = (file: string, name: string) => target(name) || exported.has(name) || (local.get(file)?.has(name) ?? false);
   const defaults: string[] = [];
   for (const [file, b] of bindings) {
-    for (const d of b.defaults) if (d.from.some((n) => isName(file, n))) defaults.push(`${file}:${d.line}`);
+    for (const d of b.defaults) if (d.from.some((n) => isName(file, n)) || (d.spec !== undefined && targetModule(d.spec))) defaults.push(`${file}:${d.line}`);
   }
-  return { exported, defaults: defaults.sort(), isName };
+  const stars: string[] = [];
+  for (const [file, sf] of sources) {
+    for (const st of sf.statements) {
+      if (ts.isExportDeclaration(st) && !st.exportClause && st.moduleSpecifier && isStringLike(st.moduleSpecifier) && targetModule(st.moduleSpecifier.text)) {
+        stars.push(`${file}:${lineOf(sf, st.getStart(sf))}`);
+      }
+    }
+  }
+  return { exported, defaults: defaults.sort(), stars: stars.sort(), isName };
 }
 
 // ---------------------------------------------------------------------------
@@ -671,23 +712,42 @@ export type FoundSite = {
   line: number;
   /** The opening tag's text from `<` to its `>`, or for a use the text of the expression around it. */
   openingTag: string;
-  /** The tags of the JSX elements drawn among its children (empty when self-closing, or for a use). */
+  /** The tags of the JSX elements among its children, drawn or not (empty when self-closing, or for a use). */
   childTags: string[];
+  /**
+   * The tags of those elements that are drawn whenever the element is: none inside a choice (`? :`, `&&`, `||`,
+   * `??`) or a function (`rows.map((r) => <X />)`, a render prop), which may draw nothing (pre-3 NOTE).
+   */
+  drawnTags: string[];
   /** The texts of its change handlers (`on…` attributes) and spreads, each of which a reading must name. */
   mustName: string[];
   /** Why the scan cannot tell whether it draws a checkbox (rules 4 and 5), when it cannot. */
   unresolved?: string;
 };
 
-function childTagsOf(el: ts.JsxOpeningLikeElement, sf: ts.SourceFile): string[] {
-  if (!ts.isJsxOpeningElement(el) || !ts.isJsxElement(el.parent)) return [];
-  const out: string[] = [];
-  const visit = (n: ts.Node) => {
-    if (ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) out.push(n.tagName.getText(sf));
-    ts.forEachChild(n, visit);
+/** Whether a node draws its JSX only under a condition: a choice or a function. */
+function mayDrawNothing(n: ts.Node): boolean {
+  if (ts.isConditionalExpression(n) || ts.isFunctionLike(n)) return true;
+  return (
+    ts.isBinaryExpression(n) &&
+    [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken].includes(n.operatorToken.kind)
+  );
+}
+
+function childTagsOf(el: ts.JsxOpeningLikeElement, sf: ts.SourceFile): { all: string[]; drawn: string[] } {
+  const all: string[] = [];
+  const drawn: string[] = [];
+  if (!ts.isJsxOpeningElement(el) || !ts.isJsxElement(el.parent)) return { all, drawn };
+  const visit = (n: ts.Node, sure: boolean) => {
+    const here = sure && !mayDrawNothing(n);
+    if (ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) {
+      all.push(n.tagName.getText(sf));
+      if (here) drawn.push(n.tagName.getText(sf));
+    }
+    ts.forEachChild(n, (c) => visit(c, here));
   };
-  for (const child of el.parent.children) visit(child);
-  return out;
+  for (const child of el.parent.children) visit(child, true);
+  return { all, drawn };
 }
 
 function mustNameOf(el: ts.JsxOpeningLikeElement, sf: ts.SourceFile): string[] {
@@ -764,11 +824,16 @@ export function packageEntriesOf(dir: string, packageJson: string): PackageEntri
 
 /** The path aliases of a `tsconfig.json` (`compilerOptions.paths`, comments allowed), each target repo-relative; empty when none. */
 export function pathAliasesOf(tsconfig: string): PackageEntries {
-  const { config } = ts.parseConfigFileTextToJson("tsconfig.json", tsconfig);
-  const paths = (config as { compilerOptions?: { paths?: Record<string, unknown> } } | undefined)?.compilerOptions?.paths ?? {};
+  const { config, error } = ts.parseConfigFileTextToJson("tsconfig.json", tsconfig);
+  // A root config that does not parse, or whose paths are no map of string lists, throws: never no aliases (pre-3 NOTE).
+  // The compiler gives an error for every root that is no object (`[]`, a string, `null`), so `config` is one here.
+  if (error !== undefined) throw new Error("tsconfig.json does not parse");
+  const paths: unknown = (config as { compilerOptions?: { paths?: unknown } }).compilerOptions?.paths ?? {};
+  if (typeof paths !== "object" || paths === null || Array.isArray(paths)) throw new Error("tsconfig.json: compilerOptions.paths is no object");
   const out: PackageEntries = new Map();
   for (const [k, v] of Object.entries(paths)) {
-    if (Array.isArray(v)) out.set(k, v.filter((t): t is string => typeof t === "string").map((t) => path.posix.normalize(t)));
+    if (!Array.isArray(v) || !v.every((x) => typeof x === "string")) throw new Error(`tsconfig.json: the path alias ${k} is no list of strings`);
+    out.set(k, v.map((x) => path.posix.normalize(x)));
   }
   return out;
 }
@@ -973,6 +1038,7 @@ export function findSites(
       line: lineOf(sf, node.getStart(sf)),
       openingTag: opening,
       childTags: [],
+      drawnTags: [],
       mustName: [],
       unresolved: why ?? `a use of ${node.getText(sf)} that is no JSX tag, import, export, declaration, type or alias`,
     });
@@ -982,11 +1048,13 @@ export function findSites(
     const byName = tag.split(".").some(tagSegment);
     const byAttributes = checkboxByAttributes(tag, el);
     if (!byName && byAttributes === null) return;
+    const children = childTagsOf(el, sf);
     const site: FoundSite = {
       tag,
       line: lineOf(sf, el.getStart(sf)),
       openingTag: el.getText(sf),
-      childTags: childTagsOf(el, sf),
+      childTags: children.all,
+      drawnTags: children.drawn,
       mustName: mustNameOf(el, sf),
     };
     if (!byName && byAttributes !== "checkbox" && byAttributes !== null) site.unresolved = byAttributes;
@@ -1228,9 +1296,9 @@ export function externalLoadsOf(sf: ts.SourceFile, isExternal: (spec: string) =>
         }
         const p = up.parent;
         const bound = ts.isVariableDeclaration(p) && p.initializer === up;
-        const named =
-          (ts.isPropertyAccessExpression(p) && p.expression === up && !["then", "catch", "finally"].includes(p.name.text)) ||
-          (ts.isElementAccessExpression(p) && p.expression === up && keyStrings(p.argumentExpression) !== null);
+        // An element access on a load (`import("x")["then"]`, `require("x")["a"]`) is read like `.then`: it names no
+        // export, so the load is recorded (pre-3 MF4); only a member read by name but then, catch and finally is one.
+        const named = ts.isPropertyAccessExpression(p) && p.expression === up && !["then", "catch", "finally"].includes(p.name.text);
         if (!bound && !named) out.push(spec);
       }
     }
@@ -1246,6 +1314,8 @@ export type ScannedTree = {
   exported: Set<string>;
   /** Default exports of a checkbox (`file:line`): a problem no reading clears. */
   defaultExports: string[];
+  /** Whole re-exports of a module that names a checkbox (`file:line`): a problem no reading clears (pre-3 MF2). */
+  starExports: string[];
   /** Parse errors of any scanned file: a problem no reading clears. */
   parseErrors: string[];
 };
@@ -1296,7 +1366,7 @@ export function scanSources(
     if (tokens === 0 && sites.length === 0 && loads.length === 0 && !exportsName) continue;
     out.push({ file, tokens, sites, loads });
   }
-  return { files: out, exported: scope.exported, defaultExports: scope.defaults, parseErrors: errors };
+  return { files: out, exported: scope.exported, defaultExports: scope.defaults, starExports: scope.stars, parseErrors: errors };
 }
 
 /** The in-scope files of the tree (rule 2) with their tokens and sites. */
@@ -1459,6 +1529,9 @@ export function readingProblems(readings: FileReading[], tree: ScannedTree, file
   for (const at of tree.defaultExports) {
     problems.push(`${at}: exports a checkbox as its default export, which no name follows: export it by name`);
   }
+  for (const at of tree.starExports) {
+    problems.push(`${at}: re-exports a module that names a checkbox whole (export *), whose names no name follows: re-export them by name`);
+  }
   const byFile = new Map(tree.files.map((s) => [s.file, s]));
   const recorded = new Map<string, FileReading>();
   for (const r of readings) {
@@ -1535,9 +1608,18 @@ export function readingProblems(readings: FileReading[], tree: ScannedTree, file
       problems.push(
         ...pinProblems(at, [...site.fileIncludes.map((text) => ({ file: r.file, text })), ...(site.evidence ?? [])], fileText),
       );
-      const drawsSwitch = found.childTags.some((t) => SWITCH_TAG.test(t));
-      if (site.drawn === "switch" && !drawsSwitch) problems.push(`${at}: the reading says a switch is drawn, the element draws none`);
-      if (site.drawn === "checkbox" && drawsSwitch) problems.push(`${at}: the element draws a switch, the reading says a checkbox`);
+      // A switch is drawn only when it is drawn whenever the element is; one under a choice or a function may be
+      // drawn, so a checkbox cannot be claimed either (pre-3 NOTE).
+      const drawsSwitch = found.drawnTags.some((t) => SWITCH_TAG.test(t));
+      const mayDrawSwitch = found.childTags.some((t) => SWITCH_TAG.test(t));
+      if (site.drawn === "switch" && !drawsSwitch) {
+        problems.push(
+          mayDrawSwitch
+            ? `${at}: the reading says a switch is drawn, the element draws one only under a condition or in a function`
+            : `${at}: the reading says a switch is drawn, the element draws none`,
+        );
+      }
+      if (site.drawn === "checkbox" && mayDrawSwitch) problems.push(`${at}: the element draws a switch, the reading says a checkbox`);
       if (site.drawn === "no checkbox" && found.unresolved === undefined) {
         problems.push(`${at}: the element is a checkbox by name or attribute; "no checkbox" is only for an unresolved site`);
       }
@@ -1566,6 +1648,8 @@ export type CallerReading = {
   anchor: string;
   effect: Effect;
   reading: string;
+  /** Texts that must stand in the call site's opening tag: each change handler and each spread, at least (pre-3 MF1). */
+  tagIncludes: string[];
   fileIncludes: string[];
   evidence?: { file: string; text: string }[];
   staysBecause?: string;
@@ -1577,15 +1661,23 @@ export type ComponentCallers = {
   /**
    * When set, an element is a caller only when this attribute, read in source
    * order, is one of `values`; an expression, or a spread that may set it,
-   * makes it a caller too. Without it, every element is one.
+   * makes it a caller too. Without it, every element is one. An element without the attribute is no caller only
+   * by the component's own default, so `absent` pins the code of the component that makes it so (pre-3 NOTE).
    */
-  callerWhen?: { attribute: string; values: string[] };
+  callerWhen?: { attribute: string; values: string[]; absent?: { file: string; text: string } };
   /** Why these are the callers, in a sentence. */
   why: string;
   callers: CallerReading[];
 };
 
-export type CallerSite = { file: string; line: number; tag: string; openingTag: string };
+export type CallerSite = {
+  file: string;
+  line: number;
+  tag: string;
+  openingTag: string;
+  /** The texts of its change handlers (`on…` attributes) and spreads, each of which its reading must name (pre-3 MF1). */
+  mustName: string[];
+};
 
 export type CallerScan = {
   /** Names the component is exported under beyond its own. */
@@ -1645,7 +1737,9 @@ export function findCallers(
     }
     const visit = (n: ts.Node) => {
       if ((ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) && n.tagName.getText(sf).split(".").some(isName)) {
-        if (isCallerElement(n, callerWhen)) sites.push({ file, line: lineOf(sf, n.getStart(sf)), tag: n.tagName.getText(sf), openingTag: n.getText(sf) });
+        if (isCallerElement(n, callerWhen)) {
+          sites.push({ file, line: lineOf(sf, n.getStart(sf)), tag: n.tagName.getText(sf), openingTag: n.getText(sf), mustName: mustNameOf(n, sf) });
+        }
       }
       ts.forEachChild(n, visit);
     };
@@ -1659,6 +1753,11 @@ export function callerProblems(set: ComponentCallers, found: CallerScan, fileTex
   const problems: string[] = [...found.unresolved];
   const { component, callers } = set;
   if (shortSentence(set.why)) problems.push(`${component}: say in a sentence why these are its callers`);
+  if (set.callerWhen !== undefined) {
+    const absent = set.callerWhen.absent;
+    if (absent === undefined) problems.push(`${component}: an element without ${set.callerWhen.attribute} is no caller only by a pinned default (callerWhen.absent)`);
+    else problems.push(...pinProblems(`${component} (the default of ${set.callerWhen.attribute})`, [absent], fileText));
+  }
   const used = new Set<number>();
   for (const c of callers) {
     const at = `${c.file} (caller of ${component})`;
@@ -1679,6 +1778,18 @@ export function callerProblems(set: ComponentCallers, found: CallerScan, fileTex
     if (used.has(index)) problems.push(`${c.file}:${site.line}: two readings name this call site of ${component}`);
     used.add(index);
     if (!EFFECTS.includes(c.effect)) problems.push(`${at}: the effect ${JSON.stringify(c.effect)} is not one of ${EFFECTS.join(", ")}`);
+    const tagIncludes: unknown[] = Array.isArray(c.tagIncludes) ? c.tagIncludes : [];
+    if (!Array.isArray(c.tagIncludes)) problems.push(`${c.file}:${site.line}: a caller reading has no tagIncludes`);
+    for (const t of tagIncludes) {
+      if (blankText(t)) problems.push(`${c.file}:${site.line}: a tagIncludes text is empty`);
+      else if (!site.openingTag.includes(t as string)) problems.push(`${c.file}:${site.line}: the call site's opening tag no longer holds ${JSON.stringify(t)}`);
+    }
+    for (const attribute of site.mustName) {
+      if (!tagIncludes.some((t) => typeof t === "string" && namesAttribute(t, attribute))) {
+        const label = attribute.startsWith("{") ? attribute.replace(/\s+/g, " ").slice(0, 80) : attribute.split(/\s*=/)[0];
+        problems.push(`${c.file}:${site.line}: the call site has ${label}, which the reading must name in tagIncludes`);
+      }
+    }
     problems.push(...pinProblems(at, [...c.fileIncludes.map((text) => ({ file: c.file, text })), ...(c.evidence ?? [])], fileText));
     if (c.effect === "confirmed" && c.fileIncludes.length + (c.evidence ?? []).length === 0) {
       problems.push(`${at}: a confirmed reading must pin its confirm`);

@@ -762,7 +762,11 @@ const MULTI_SELECT =
 export const COMPONENT_CALLERS: ComponentCallers[] = [
   {
     component: "AccessCombobox",
-    callerWhen: { attribute: "selectionMode", values: ["multiple"] },
+    callerWhen: {
+      attribute: "selectionMode",
+      values: ["multiple"],
+      absent: { file: "packages/sdk-ui/src/access-combobox.tsx", text: 'if (props.selectionMode === "multiple") {' },
+    },
     why: "an element that sets selectionMode to multiple, sets it by an expression the syntax cannot settle or spreads props that may set it is a call site of the multi-select picker; the default mode is single (packages/sdk-ui/src/access-combobox.tsx)",
     callers: [
       {
@@ -770,6 +774,7 @@ export const COMPONENT_CALLERS: ComponentCallers[] = [
         anchor: 'id="extension-access-picker"',
         effect: "confirmed",
         reading: "an extension's access: a change sets local state, and the Save button beneath it writes it",
+        tagIncludes: ["onChange={(next) => {\n          setValue(next);\n          setStatus(null);\n        }}"],
         fileIncludes: ["const result = await save(value);", '{pending ? "Saving…" : "Save"}'],
       },
       {
@@ -777,6 +782,7 @@ export const COMPONENT_CALLERS: ComponentCallers[] = [
         anchor: "value={f.value}",
         effect: "confirmed",
         reading: "the access field of the permissions form: a change sets the form value, and the form's submit writes it",
+        tagIncludes: ["onChange={f.onChange}"],
         fileIncludes: ["onSubmit={handleSubmit(onSubmit)}", '<Button type="submit" disabled={isSavingPolicy}>'],
       },
       {
@@ -785,6 +791,7 @@ export const COMPONENT_CALLERS: ComponentCallers[] = [
         effect: "none",
         reading:
           "the upload-time access draft's picker: PermissionsFormDraft is rendered by no file of the tree (its caller list below is empty), so its picker applies nothing today",
+        tagIncludes: ["onChange={setAccess}"],
         fileIncludes: ["onChange={setAccess}"],
       },
       {
@@ -792,6 +799,7 @@ export const COMPONENT_CALLERS: ComponentCallers[] = [
         anchor: 'id="skills-scope-filter"',
         effect: "immediate",
         reading: "the scope filter of the skills list: a change narrows the list at once by its URL",
+        tagIncludes: ["onChange={selectScope}"],
         fileIncludes: ["onChange={selectScope}", "router.push(qs ? `${pathname}?${qs}` : pathname);"],
         staysBecause: MULTI_SELECT,
       },
@@ -800,21 +808,23 @@ export const COMPONENT_CALLERS: ComponentCallers[] = [
         anchor: "onChange={handleChange}",
         effect: "immediate",
         reading: "the shared scope filter of the list pages: a change narrows the list at once by its URL",
+        tagIncludes: ["onChange={handleChange}"],
         fileIncludes: ["onChange={handleChange}", "router.push(query ? `${pathname}?${query}` : pathname);"],
         staysBecause: MULTI_SELECT,
       },
       ...[
-        ["value={live}", "the interactive multi-select fixture: a change only sets the fixture's local state, nothing is saved"],
-        ['value={["owner"]} onChange={() => {}} scopes={SEED_SCOPES} />', "the closed Personal trigger fixture: its change handler does nothing, nothing is saved"],
-        ['value={["team:team-rev"]}', "the closed single-team trigger fixture: its change handler does nothing, nothing is saved"],
-        ['value={["team:team-rev", "org:org-beta", "project:proj-atlas"]}', "the closed multi-scope trigger fixture: its change handler does nothing, nothing is saved"],
-        ['value={["workspace"]}', "the closed Workspace trigger fixture: its change handler does nothing, nothing is saved"],
-        ['parentScope={{ kind: "org", id: "org-acme" }}', "the parent-scope fixture: its change handler does nothing, nothing is saved"],
-      ].map(([anchor, reading]) => ({
+        ["value={live}", "the interactive multi-select fixture: a change only sets the fixture's local state, nothing is saved", "onChange={setLive}"],
+        ['value={["owner"]} onChange={() => {}} scopes={SEED_SCOPES} />', "the closed Personal trigger fixture: its change handler does nothing, nothing is saved", "onChange={() => {}}"],
+        ['value={["team:team-rev"]}', "the closed single-team trigger fixture: its change handler does nothing, nothing is saved", "onChange={() => {}}"],
+        ['value={["team:team-rev", "org:org-beta", "project:proj-atlas"]}', "the closed multi-scope trigger fixture: its change handler does nothing, nothing is saved", "onChange={() => {}}"],
+        ['value={["workspace"]}', "the closed Workspace trigger fixture: its change handler does nothing, nothing is saved", "onChange={() => {}}"],
+        ['parentScope={{ kind: "org", id: "org-acme" }}', "the parent-scope fixture: its change handler does nothing, nothing is saved", "onChange={() => {}}"],
+      ].map(([anchor, reading, handler]) => ({
         file: "src/app/design-fixtures/access-picker/access-picker-fixture.tsx",
         anchor,
         effect: "none" as const,
         reading,
+        tagIncludes: [handler],
         fileIncludes: [],
       })),
     ],
@@ -828,6 +838,7 @@ export const COMPONENT_CALLERS: ComponentCallers[] = [
         anchor: "onCheckedChange={setConsentChecked}",
         effect: "confirmed",
         reading: "the archive upload's consent: a tick sets the form's state, and the install action sends it with the install the panel's Install button starts",
+        tagIncludes: ["onCheckedChange={setConsentChecked}"],
         fileIncludes: [
           "onCheckedChange={setConsentChecked}",
           "const consent = consentPayload(consentPrompt, consentChecked);",
@@ -844,6 +855,7 @@ export const COMPONENT_CALLERS: ComponentCallers[] = [
         anchor: "onCheckedChange={setConsentChecked}",
         effect: "confirmed",
         reading: "the repository-link upload's consent: a tick sets the form's state, and the install action sends it with the install the panel's Install button starts",
+        tagIncludes: ["onCheckedChange={setConsentChecked}"],
         fileIncludes: [
           "onCheckedChange={setConsentChecked}",
           "const consent = consentPayload(consentPrompt, consentChecked);",

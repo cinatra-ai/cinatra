@@ -511,7 +511,8 @@ describe("computed keys and module objects: no value hands a checkbox on unread 
       'const computed = require("some-kit/j")[k];',
     ].join("\n");
     const tree = treeOf({ "a.ts": text, "local.ts": "export const z = 1;\n" });
-    expect(tree.files.find((f) => f.file === "a.ts")?.loads).toEqual(["some-kit/a", "some-kit/b", "some-kit/c", "some-kit/j"]);
+    // An element access on a load names no export, settled or not (pre-3 MF4), so require("some-kit/h")["i"] is one.
+    expect(tree.files.find((f) => f.file === "a.ts")?.loads).toEqual(["some-kit/a", "some-kit/b", "some-kit/c", "some-kit/h", "some-kit/j"]);
     expect(tree.files.some((f) => f.file === "local.ts")).toBe(false);
   });
 
@@ -862,7 +863,9 @@ describe("the check refuses every reading that is not true (rules 6 and 7)", () 
 });
 
 describe("callers: each call site is found under every name, and every reading of one is true (MF1)", () => {
-  const MULTIPLE = { attribute: "selectionMode", values: ["multiple"] };
+  // The picker's own default: an element without selectionMode is single (pre-3 NOTE, callerWhen.absent).
+  const PICKER = { "p.tsx": 'export function AccessCombobox(props: Props) {\n  if (props.selectionMode === "multiple") return <Multi />;\n  return <Single />;\n}\n' };
+  const MULTIPLE = { attribute: "selectionMode", values: ["multiple"], absent: { file: "p.tsx", text: 'if (props.selectionMode === "multiple")' } };
   const set = (callers: CallerReading[], why = "the callers of the picker in its multi-select mode"): ComponentCallers => ({
     component: "AccessCombobox",
     callerWhen: MULTIPLE,
@@ -874,6 +877,7 @@ describe("callers: each call site is found under every name, and every reading o
     anchor: 'id="one"',
     effect: "confirmed",
     reading: "a picker whose change the form's Save writes",
+    tagIncludes: [],
     fileIncludes: ["<Save />"],
     ...extra,
   });
@@ -929,7 +933,7 @@ describe("callers: each call site is found under every name, and every reading o
       `e.tsx:1: ${use}`,
     ]);
     expect(found.unresolved.some((u) => u.startsWith("g.tsx:1: ") && u.endsWith("the file does not parse"))).toBe(true);
-    expect(callerProblems(set([]), found, reader(texts)).join("\n")).toContain(`a.tsx:2: ${use}`);
+    expect(callerProblems(set([]), found, reader({ ...PICKER, ...texts })).join("\n")).toContain(`a.tsx:2: ${use}`);
   });
 
   it("needs one reading per call site: two calls in one file are two readings (MF1)", () => {
@@ -938,13 +942,16 @@ describe("callers: each call site is found under every name, and every reading o
     };
     const found = findCallers(["a.tsx"], reader(texts), "AccessCombobox", MULTIPLE);
     expect(found.sites.map((s) => s.line)).toEqual([1, 2]);
-    expect(callerProblems(set([caller("a.tsx")]), found, reader(texts)).join("\n")).toContain("a.tsx:2: a call site of AccessCombobox with no recorded reading");
-    const both = [caller("a.tsx"), caller("a.tsx", { anchor: 'id="two"', effect: "immediate", reading: "a filter that applies at once", staysBecause: "a stated reason, long enough to be one" })];
-    expect(callerProblems(set(both), found, reader(texts))).toEqual([]);
-    expect(callerProblems(set([caller("a.tsx"), caller("a.tsx", { anchor: "one" })]), found, reader(texts)).join("\n")).toContain(
+    expect(callerProblems(set([caller("a.tsx")]), found, reader({ ...PICKER, ...texts })).join("\n")).toContain("a.tsx:2: a call site of AccessCombobox with no recorded reading");
+    const both = [
+      caller("a.tsx"),
+      caller("a.tsx", { anchor: 'id="two"', effect: "immediate", reading: "a filter that applies at once", tagIncludes: ["onChange={saveNow}"], staysBecause: "a stated reason, long enough to be one" }),
+    ];
+    expect(callerProblems(set(both), found, reader({ ...PICKER, ...texts }))).toEqual([]);
+    expect(callerProblems(set([caller("a.tsx"), caller("a.tsx", { anchor: "one" })]), found, reader({ ...PICKER, ...texts })).join("\n")).toContain(
       "a.tsx:1: two readings name this call site of AccessCombobox",
     );
-    expect(callerProblems(set([caller("a.tsx", { anchor: "selectionMode" })]), found, reader(texts)).join("\n")).toContain("stands in 2 call site(s), not one");
+    expect(callerProblems(set([caller("a.tsx", { anchor: "selectionMode" })]), found, reader({ ...PICKER, ...texts })).join("\n")).toContain("stands in 2 call site(s), not one");
   });
 
   it("refuses an unread call site, a recorded non-caller and every empty or false caller reading", () => {
@@ -954,12 +961,12 @@ describe("callers: each call site is found under every name, and every reading o
       "c.tsx": "<Save />",
     };
     const found = findCallers(Object.keys(texts), reader(texts), "AccessCombobox", MULTIPLE);
-    const problems = callerProblems(set([caller("a.tsx", { reading: "" }), caller("c.tsx")]), found, reader(texts)).join("\n");
+    const problems = callerProblems(set([caller("a.tsx", { reading: "" }), caller("c.tsx")]), found, reader({ ...PICKER, ...texts })).join("\n");
     expect(problems).toContain("b.tsx:1: a call site of AccessCombobox with no recorded reading");
     expect(problems).toContain("c.tsx (caller of AccessCombobox): recorded as a caller, but it is not one");
     expect(problems).toContain("a.tsx (caller of AccessCombobox): the reading is not a sentence");
 
-    const one = (c: CallerReading) => callerProblems(set([c]), findCallers(["a.tsx"], reader(texts), "AccessCombobox", MULTIPLE), reader(texts)).join("\n");
+    const one = (c: CallerReading) => callerProblems(set([c]), findCallers(["a.tsx"], reader(texts), "AccessCombobox", MULTIPLE), reader({ ...PICKER, ...texts })).join("\n");
     expect(one(caller("a.tsx"))).toBe("");
     expect(one(caller("a.tsx", { anchor: " " }))).toContain("a caller reading has an empty anchor");
     expect(one(caller("a.tsx", { anchor: 'id="gone"' }))).toContain("stands in 0 call site(s), not one");
@@ -971,8 +978,139 @@ describe("callers: each call site is found under every name, and every reading o
     expect(one(caller("a.tsx", { effect: "immediate", reading: "a filter that applies at once", staysBecause: " " }))).toContain(
       "no recorded reason the box stays",
     );
-    expect(callerProblems(set([caller("a.tsx")], "short"), findCallers(["a.tsx"], reader(texts), "AccessCombobox", MULTIPLE), reader(texts)).join("\n")).toContain(
+    expect(callerProblems(set([caller("a.tsx")], "short"), findCallers(["a.tsx"], reader(texts), "AccessCombobox", MULTIPLE), reader({ ...PICKER, ...texts })).join("\n")).toContain(
       "say in a sentence why these are its callers",
     );
+  });
+});
+
+describe("fail closed: what no name follows is refused, not skipped (pre-3)", () => {
+  const PICKER = { "p.tsx": 'export function AccessCombobox(props: Props) {\n  if (props.selectionMode === "multiple") return <Multi />;\n  return <Single />;\n}\n' };
+  const MULTIPLE = { attribute: "selectionMode", values: ["multiple"], absent: { file: "p.tsx", text: 'if (props.selectionMode === "multiple")' } };
+  const callerSet = (callers: CallerReading[], callerWhen: ComponentCallers["callerWhen"] = MULTIPLE): ComponentCallers => ({
+    component: "AccessCombobox",
+    callerWhen,
+    why: "the callers of the picker in its multi-select mode",
+    callers,
+  });
+  const callerOf = (extra: Partial<CallerReading> = {}): CallerReading => ({
+    file: "a.tsx",
+    anchor: 'id="one"',
+    effect: "confirmed",
+    reading: "a picker whose change the form's Save writes",
+    tagIncludes: ["onChange={stage}", "{...rest}"],
+    fileIncludes: ["<Save />"],
+    ...extra,
+  });
+  const callerProblemsOf = (c: CallerReading | Record<string, unknown>, callerWhen: ComponentCallers["callerWhen"] = MULTIPLE, picker = PICKER) => {
+    const texts = { "a.tsx": '<AccessCombobox selectionMode="multiple" id="one" onChange={stage} {...rest} />;\n<Save />' };
+    const found = findCallers(["a.tsx"], reader(texts), "AccessCombobox", callerWhen);
+    return callerProblems(callerSet([c as CallerReading], callerWhen), found, reader({ ...picker, ...texts })).join("\n");
+  };
+
+  it("holds each call site's handlers and spreads to its caller reading, as a site's (MF1)", () => {
+    expect(callerProblemsOf(callerOf())).toBe("");
+    const none = callerProblemsOf(callerOf({ tagIncludes: [] }));
+    expect(none).toContain("a.tsx:1: the call site has onChange, which the reading must name in tagIncludes");
+    expect(none).toContain("a.tsx:1: the call site has {...rest}, which the reading must name in tagIncludes");
+    expect(callerProblemsOf(callerOf({ tagIncludes: ["onChange={saveNow}", "{...rest}"] }))).toContain(
+      'a.tsx:1: the call site\'s opening tag no longer holds "onChange={saveNow}"',
+    );
+    expect(callerProblemsOf(callerOf({ tagIncludes: [" ", "onChange={stage}", "{...rest}"] }))).toContain("a.tsx:1: a tagIncludes text is empty");
+    const { tagIncludes: _dropped, ...without } = callerOf();
+    expect(callerProblemsOf(without)).toContain("a.tsx:1: a caller reading has no tagIncludes");
+  });
+
+  it("pins the component's default for an element without the caller attribute, or refuses (NOTE)", () => {
+    expect(callerProblemsOf(callerOf(), { attribute: "selectionMode", values: ["multiple"] })).toContain(
+      "AccessCombobox: an element without selectionMode is no caller only by a pinned default (callerWhen.absent)",
+    );
+    expect(callerProblemsOf(callerOf(), MULTIPLE, { "p.tsx": 'export function AccessCombobox(props: Props) {\n  if (props.selectionMode !== "single") return <Multi />;\n}\n' })).toContain(
+      'p.tsx no longer holds "if (props.selectionMode === \\"multiple\\")"',
+    );
+  });
+
+  it("refuses every whole re-export of a module that names a checkbox, so no name it hands on is skipped (MF2)", () => {
+    const tree = treeOf({
+      "barrel.ts": 'export * from "@radix-ui/react-checkbox";\n',
+      "a.tsx": 'import { Root as Tick } from "./barrel";\nexport const X = () => <Tick />;\n',
+      "tree-barrel.ts": 'export * from "./checkbox";\n',
+      "plain.ts": 'export * from "./utils";\nexport * as Kit from "./kit";\n',
+    });
+    expect(tree.starExports).toEqual(["barrel.ts:1", "tree-barrel.ts:1"]);
+    const problems = readingProblems([], tree, reader({})).join("\n");
+    expect(problems).toContain("barrel.ts:1: re-exports a module that names a checkbox whole (export *), whose names no name follows: re-export them by name");
+    expect(problems).toContain("tree-barrel.ts:1: re-exports a module that names a checkbox whole (export *)");
+    expect(problems.includes("plain.ts")).toBe(false);
+  });
+
+  it("refuses a default re-export from a module that names a checkbox, in every form (MF3)", () => {
+    const tree = treeOf({
+      "a.ts": 'export { Root as default } from "@radix-ui/react-checkbox";\n',
+      "b.ts": 'export { default } from "./checkbox";\n',
+      "c.ts": 'export * as default from "@radix-ui/react-checkbox";\n',
+      "d.ts": 'export { Panel as default } from "./panel";\n',
+    });
+    expect(tree.defaultExports).toEqual(["a.ts:1", "b.ts:1", "c.ts:1"]);
+    expect(readingProblems([], tree, reader({})).join("\n")).toContain("a.ts:1: exports a checkbox as its default export");
+  });
+
+  it("records a load read by an element access, ['then'] included, and a module.require load; another .require is none (MF4)", () => {
+    const text = [
+      'import("some-kit/a")["then"]((m) => m[k]);',
+      'const x = require("some-kit/b")["named"];',
+      'const y = module.require("some-kit/c")[k];',
+      'const z = _slot.require("not a module");',
+      'const w = module.require("some-kit/d").named;',
+    ].join("\n");
+    const tree = treeOf({ "a.ts": text });
+    expect(tree.files.find((f) => f.file === "a.ts")?.loads).toEqual(["some-kit/a", "some-kit/b", "some-kit/c"]);
+    const held = treeOf({ "b.tsx": 'const P = module.require("@x/ui");\nexport const X = (k: string) => P[k];\n' });
+    expect(sitesOf(held, "b.tsx")).toEqual([["P[k]", "a use of a computed member of the module object P, which no name follows"]]);
+    const box = treeOf({ "c.tsx": 'export const B = () => module.require("./checkbox");\n' });
+    expect(sitesOf(box, "c.tsx")).toEqual([['module.require("./checkbox")', "a load of the module ./checkbox, which no name follows"]]);
+  });
+
+  it("counts a switch as drawn only outside a choice or a function among the children (NOTE)", () => {
+    const row = (inner: string) =>
+      `<DropdownMenuCheckboxItem checked={on} onCheckedChange={(c) => toggle(c)}>${inner}Row</DropdownMenuCheckboxItem>`;
+    const site: SiteReading = {
+      anchor: "onCheckedChange={(c) => toggle(c)}",
+      tag: "DropdownMenuCheckboxItem",
+      drawn: "switch",
+      effect: "immediate",
+      reading: "a menu row whose change applies at once",
+      tagIncludes: ["onCheckedChange={(c) => toggle(c)}"],
+      fileIncludes: [],
+    };
+    expect(problemsOf(row("<Switch checked={on} />"), [site])).toBe("");
+    for (const inner of ["{false && <Switch checked={on} />}", "{on ? <Switch checked={on} /> : null}", "{rows.map(() => <Switch checked={on} />)}", "{fallback ?? <Switch />}"]) {
+      expect(problemsOf(row(inner), [site])).toContain("the reading says a switch is drawn, the element draws one only under a condition or in a function");
+      expect(problemsOf(row(inner), [{ ...site, drawn: "checkbox", staysBecause: "a reason that is long enough" }])).toContain(
+        "the element draws a switch, the reading says a checkbox",
+      );
+    }
+    const [conditional] = findCheckboxSites(`const X = () => ${row("{on && <Switch />}<Icon />")};\n`);
+    expect(conditional.childTags).toEqual(["Switch", "Icon"]);
+    expect(conditional.drawnTags).toEqual(["Icon"]);
+  });
+
+  it("lists a .js, .jsx, .mjs and .cjs file, and throws on a root tsconfig that does not parse or whose paths are malformed (NOTE)", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "cinatra-4297-pre3-"));
+    try {
+      execFileSync("git", ["init", "-q"], { cwd: root, stdio: "ignore" });
+      mkdirSync(path.join(root, "src"), { recursive: true });
+      for (const f of ["a.js", "b.jsx", "c.mjs", "d.cjs", "e.json", "f.d.ts"]) writeFileSync(path.join(root, "src", f), "export const Tick = Checkbox;\n");
+      expect(listSourceFiles(root)).toEqual(["src/a.js", "src/b.jsx", "src/c.mjs", "src/d.cjs", "src/f.d.ts"]);
+      expect(scanTree(root).files.map((f) => f.file)).toEqual(["src/a.js", "src/b.jsx", "src/c.mjs", "src/d.cjs", "src/f.d.ts"]);
+      writeFileSync(path.join(root, "tsconfig.json"), '{ "compilerOptions": { "paths": { "@/*": ["src/*"] }\n');
+      expect(() => scanTree(root)).toThrow("tsconfig.json does not parse");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+    expect(() => pathAliasesOf('{ "compilerOptions": { "paths": { "@/*": "src/*" } } }')).toThrow("the path alias @/* is no list of strings");
+    expect(() => pathAliasesOf('{ "compilerOptions": { "paths": ["src/*"] } }')).toThrow("compilerOptions.paths is no object");
+    expect(() => pathAliasesOf("[]")).toThrow("tsconfig.json does not parse");
+    expect(pathAliasesOf('{ "compilerOptions": {} }')).toEqual(new Map());
   });
 });
