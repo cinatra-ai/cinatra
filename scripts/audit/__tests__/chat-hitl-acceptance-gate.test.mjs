@@ -448,6 +448,63 @@ describe("the REAL manifest", () => {
     expect(row.gap.length).toBeGreaterThan(200);
   });
 
+  it("row 15's census is the capture index's census, count for count", () => {
+    // The gap says its census is COUNTED, not recited, and strict mode prints
+    // it. cinatra#4390 (2026-10-27) withdrew ten schedule records and the gap
+    // went on counting them, beside counts of an index of 93 records, so this
+    // holds every number of that sentence to the index as it stands.
+    const gap = manifest().rows[14].gap;
+    const index = JSON.parse(
+      readFileSync(join(REPO_ROOT, "scripts", "ci", "chat-hitl-capture-index.json"), "utf8"),
+    );
+    const actual = {};
+    for (const r of index.records) {
+      const k = `${r.declaredKind} | ${r.declaredHost} | ${r.declaredState}`;
+      actual[k] = (actual[k] ?? 0) + 1;
+    }
+    const total = gap.match(/chat-hitl-capture-index\.json, (\d+) records\)/);
+    expect(total, "the census names the index's record count").not.toBeNull();
+    expect(Number(total[1])).toBe(index.records.length);
+    const census = gap.match(/per kind x host x state: ([^]*?) STILL ABSENT/);
+    expect(census, "the census sentence").not.toBeNull();
+    const stated = {};
+    for (const clause of census[1].split("; ")) {
+      const [kind, rest] = clause.split(" — ");
+      expect(rest, clause).toBeDefined();
+      for (const [, host, p, d] of rest.matchAll(/(\w+) pending (\d+) \/ decided (\d+)/g)) {
+        stated[`${kind} | ${host} | pending`] = Number(p);
+        stated[`${kind} | ${host} | decided`] = Number(d);
+      }
+      for (const [, host] of rest.matchAll(/(?:^|, )(\w+) none\b/g)) {
+        stated[`${kind} | ${host} | pending`] = 0;
+        stated[`${kind} | ${host} | decided`] = 0;
+      }
+      for (const [, host, n] of rest.matchAll(/(?:advisory|and) on (\w+) (\d+)/g)) {
+        stated[`${kind} | ${host} | advisory`] = Number(n);
+      }
+      // `none on <host>` is said only of the verification summary, whose one
+      // drawn state is `advisory`.
+      for (const [, host] of rest.matchAll(/none on (\w+)/g)) {
+        stated[`${kind} | ${host} | advisory`] = 0;
+      }
+    }
+    // Every bucket the index holds is stated, and every stated count is the
+    // index's count (a stated zero is a bucket the index does not hold).
+    for (const [k, n] of Object.entries(actual)) expect(stated[k], k).toBe(n);
+    for (const [k, n] of Object.entries(stated)) expect(actual[k] ?? 0, k).toBe(n);
+    expect(stated["trigger_schedule_proposal | chat_thread | pending"]).toBe(0);
+    // The recommendation hold's two hosts are counted again in clause (d).
+    const d = gap.match(/chat_thread (\d+) pending \/ (\d+) decided, site_widget (\d+) pending \/ (\d+) decided/);
+    expect(d, "clause (d)'s counts").not.toBeNull();
+    expect(d.slice(1).map(Number)).toEqual([
+      actual["recommendation_hold | chat_thread | pending"] ?? 0,
+      actual["recommendation_hold | chat_thread | decided"] ?? 0,
+      actual["recommendation_hold | site_widget | pending"] ?? 0,
+      actual["recommendation_hold | site_widget | decided"] ?? 0,
+    ]);
+    expect(gap).not.toMatch(/records are in the index/);
+  });
+
   it("row 3 is MAPPED and partial: every transaction proof stands, and the withdrawn picture proofs are named in its gap", () => {
     // The mirror of the test above, and the rule holds in both directions: no
     // proof already earned is thrown away. The transaction proofs cinatra#2573's
