@@ -47,6 +47,7 @@ import { RUN_FOLDER_TOOLS } from "@/lib/run-folder-tools";
 import {
   PASSTHROUGH_ACTOR_CONTEXT_ERROR,
   passthroughFailureText,
+  passthroughFixedFailureText,
 } from "./passthrough-refusal";
 
 /**
@@ -461,11 +462,13 @@ export async function POST(req: Request): Promise<Response> {
       platformRole: actorContext.platformRole,
     };
   } catch (err) {
-    // cinatra#4223: a fixed sentence, never the exception's own text (it can
-    // name a table or a connection); the detail is logged on the server.
+    // cinatra#4223: a fixed sentence for every error, never the exception's
+    // own text (it can name a table or a connection): building the actor
+    // context is never the caller's own refusal. The failure is logged
+    // without its text.
     return NextResponse.json(
       {
-        error: passthroughFailureText(
+        error: passthroughFixedFailureText(
           err,
           { tool, runId: agentRunId, stage: "actor context" },
           PASSTHROUGH_ACTOR_CONTEXT_ERROR,
@@ -889,7 +892,7 @@ export async function POST(req: Request): Promise<Response> {
   } catch (err) {
     // cinatra#4223: a primitive's stated refusal and an input-schema error keep
     // their text (the caller acts on it); every other throw answers one fixed
-    // sentence, with the detail logged on the server.
+    // sentence, with the failure logged without its text.
     return NextResponse.json(
       { error: passthroughFailureText(err, { tool, runId: agentRunId, stage: "tool call" }) },
       { status: 500 },

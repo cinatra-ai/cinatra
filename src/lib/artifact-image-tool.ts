@@ -12,6 +12,7 @@ import {
   postgresSchema,
 } from "@/lib/database";
 import { runPostgresQueriesAsync } from "@/lib/postgres-async";
+import { logFailure, logFixedLine } from "@/lib/failure-log";
 import { registerAllObjectTypes } from "@/lib/register-all-object-types";
 import { createSemanticArtifact } from "@/lib/artifacts/artifact-creation";
 import { isArtifactExtensionWriteAllowed } from "@/lib/artifacts/artifact-extension-access";
@@ -71,8 +72,9 @@ import {
 // NO EXCEPTION TEXT IN A REFUSAL (cinatra#4223). A refusal reaches the calling
 // node, and through the passthrough the flow. A provider's or a store's
 // exception can name a credential, a schema, a table or a connection, so a
-// failure that comes from a throw answers a fixed sentence and its detail is
-// logged on the server, against the run and the node, and nowhere else.
+// failure that comes from a throw answers a fixed sentence. The server log
+// records the run, the node and the error's class and code, never its text
+// (src/lib/failure-log.ts), and logging never throws or changes the answer.
 // ---------------------------------------------------------------------------
 
 /**
@@ -570,12 +572,12 @@ export async function generateArtifactImage(
           });
         }
       }
-      const message = err instanceof Error ? err.message : String(err);
+      const schemaRefusal = isSchemaRefusal(err);
       logFilingFailure("artifact_image_generate", input, err);
       // A payload the type's schema rejects is a DIFFERENT answer from a write
       // that failed: the caller sent data the picture's type does not declare,
       // and restating it correctly is the fix. Both answers are fixed texts.
-      return /does not satisfy the declared schema/.test(message)
+      return schemaRefusal
         ? { ok: false, reason: "data_rejected", error: FILING_DATA_REJECTED_ERROR }
         : { ok: false, reason: "write_refused", error: FILING_WRITE_FAILED_ERROR };
     }
@@ -612,7 +614,7 @@ export async function generateArtifactImage(
 
 /** The fixed second half of a provider failure's sentence. */
 export const PROVIDER_FAILED_DETAIL =
-  "the detail is logged on the server, and no picture was made";
+  "the failure is logged on the server, and no picture was made";
 
 /**
  * THE FIXED REFUSAL TEXTS OF A FAILED FILING (cinatra#4223).
@@ -632,7 +634,7 @@ export const FILING_WRITE_FAILED_ERROR =
 
 /** The fixed text of a tool that stopped on an error outside the write itself. */
 export const FILING_UNEXPECTED_ERROR =
-  "filing the picture failed on an unexpected error; the detail is logged on the server";
+  "filing the picture failed on an unexpected error; the failure is logged on the server";
 
 /** The fixed text of a filing whose typed data the target type's schema refused. */
 export const FILING_DATA_REJECTED_ERROR =
@@ -654,40 +656,83 @@ export const FILING_STORED_FACTS_UNREADABLE_ERROR =
 export function installStateUnresolvedError(extension: string): string {
   return (
     `no artifact-safe claim resolved for extension "${extension}" in this organisation: its ` +
-    "install state is incomplete or could not be read; the detail is logged on the server, " +
+    "install state is incomplete or could not be read; the failure is logged on the server, " +
     "and no picture was made"
   );
 }
 
-/** The explainer seam of the shared resolver, answered with the fixed sentence. */
+/**
+ * The explainer seam of the shared resolver, answered with the fixed sentence.
+ * The explanation quotes the store's read errors, so its text is never logged:
+ * the log says the install state was incomplete or unreadable, or, when the
+ * explainer throws, the error's class and code. The seam never throws, so the
+ * resolver's own catch, which quotes an exception's text, is not reached.
+ */
 async function explainAbsentClaimsFixed(
   input: { orgId: string; runId: string; nodeId: string; extension: string },
   arg: { orgId: string; extension: string; declaredObjectTypeIds?: readonly string[] },
 ): Promise<string> {
+  // input.extension equals one of the run package's declared extension strings
+  // (the declared check above runs before the resolver).
+  const sentence = installStateUnresolvedError(input.extension);
   try {
     const { explainAbsentArtifactSafeClaims } = await import("@/lib/extension-install-anchor");
-    logFilingFailure(
-      "artifact_image_generate",
-      input,
-      new Error(await explainAbsentArtifactSafeClaims(arg)),
+    await explainAbsentArtifactSafeClaims(arg);
+    logFixedLine(
+      "[artifact_image_generate] the install state is incomplete or unreadable; " +
+        "the explanation is not logged",
+      filingLogFields(input),
     );
   } catch (err) {
-    logFilingFailure("artifact_image_generate", input, err);
+    logFailure(
+      "[artifact_image_generate] reading the install state failed; the error's own text is not logged",
+      filingLogFields(input),
+      err,
+    );
   }
-  return installStateUnresolvedError(arg.extension);
+  return sentence;
 }
 
-/** Log a failure's own detail on the server, never in the refusal. */
+/** The caller's own identifiers a failure's log line carries. Never a throw. */
+function filingLogFields(input: {
+  orgId: string;
+  runId: string;
+  nodeId: string;
+  extension: string;
+}): Record<string, string> {
+  try {
+    return {
+      orgId: input.orgId,
+      runId: input.runId,
+      nodeId: input.nodeId,
+      extension: input.extension,
+    };
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Log a failure on the server: the tool, the run, the node and the error's
+ * class and code, never its text. Never a throw (src/lib/failure-log.ts).
+ */
 export function logFilingFailure(
   tool: string,
   input: { orgId: string; runId: string; nodeId: string; extension: string },
   err: unknown,
 ): void {
-  console.error(
-    `[${tool}] failed`,
-    { orgId: input.orgId, runId: input.runId, nodeId: input.nodeId, extension: input.extension },
-    err instanceof Error ? err.message : String(err),
-  );
+  logFailure(`[${tool}] failed; the error's own text is not logged`, filingLogFields(input), err);
+}
+
+/** A writer's schema refusal, read from a plain message only. Never a throw. */
+function isSchemaRefusal(err: unknown): boolean {
+  try {
+    const message: unknown =
+      typeof err === "string" ? err : err instanceof Error ? err.message : undefined;
+    return typeof message === "string" && /does not satisfy the declared schema/.test(message);
+  } catch {
+    return false;
+  }
 }
 
 /**

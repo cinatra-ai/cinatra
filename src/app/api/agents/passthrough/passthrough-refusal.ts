@@ -11,21 +11,24 @@
 //   - a ZodError: the input did not parse against the primitive's schema; the
 //     text names the caller's own fields.
 //
-// Every other throw is answered with one fixed sentence. Its detail is logged
-// on the server, against the tool and the run, and nowhere else.
+// Every other throw is answered with one fixed sentence. The server log records
+// that sentence's stage, the tool, the run and the error's class and code,
+// never its text (src/lib/failure-log.ts). Reading the error and writing the
+// log can never throw out of this module or change the answer.
 //
-// Pure module apart from its one runtime import, so it is unit-testable in
+// Pure module apart from its runtime imports, so it is unit-testable in
 // isolation, the same posture as the other passthrough seams.
 
 import { PrimitiveInvocationError } from "@cinatra-ai/mcp-client";
+import { logFailure } from "@/lib/failure-log";
 
 /** The body of a tool call that stopped on an error outside the allow-list. */
 export const PASSTHROUGH_UNEXPECTED_ERROR =
-  "the tool call failed on an unexpected error; the detail is logged on the server";
+  "the tool call failed on an unexpected error; the failure is logged on the server";
 
 /** The body of a call whose actor context could not be built. */
 export const PASSTHROUGH_ACTOR_CONTEXT_ERROR =
-  "failed to build actor context; the detail is logged on the server";
+  "failed to build actor context; the failure is logged on the server";
 
 /**
  * A zod error, recognised by the trait zod writes on every error it builds.
@@ -51,20 +54,45 @@ export function isCallerFacingError(err: unknown): err is Error {
   return err instanceof PrimitiveInvocationError || isZodError(err);
 }
 
+/** The caller-facing refusal's own message, or null. Never a throw. */
+function callerFacingText(err: unknown): string | null {
+  try {
+    if (!isCallerFacingError(err)) return null;
+    const message: unknown = err.message;
+    return typeof message === "string" ? message : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The text a failure answers with: the caller-facing refusal's own message,
- * or the fixed sentence `fixed` with the detail logged on the server.
+ * or the fixed sentence `fixed`, with the stage, the tool, the run and the
+ * error's class logged on the server.
  */
 export function passthroughFailureText(
   err: unknown,
   context: { tool: string; runId: string; stage: string },
   fixed: string = PASSTHROUGH_UNEXPECTED_ERROR,
 ): string {
-  if (isCallerFacingError(err)) return err.message;
-  console.error(
-    `[agents-passthrough] ${context.stage} failed`,
+  const own = callerFacingText(err);
+  if (own !== null) return own;
+  return passthroughFixedFailureText(err, context, fixed);
+}
+
+/**
+ * The fixed sentence `fixed` for every error, caller-facing or not: for a
+ * stage whose failure is never the caller's own refusal (the actor context).
+ */
+export function passthroughFixedFailureText(
+  err: unknown,
+  context: { tool: string; runId: string; stage: string },
+  fixed: string,
+): string {
+  logFailure(
+    `[agents-passthrough] ${context.stage} failed; the error's own text is not logged`,
     { tool: context.tool, runId: context.runId },
-    err instanceof Error ? err.message : String(err),
+    err,
   );
   return fixed;
 }
