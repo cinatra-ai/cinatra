@@ -35,6 +35,10 @@ import {
   type ExtensionOwnType,
   type PromotableRow,
 } from "@/lib/artifacts/typed-promotion";
+import {
+  buildPromotionAppendQueries,
+  promotionRetypeKey,
+} from "@/lib/artifacts/typed-promotion-store";
 
 const BASE_TYPE = "@cinatra-ai/text-artifact:text";
 const OWN_TYPE = "@cinatra-ai/brand-voice-artifact:voice";
@@ -286,5 +290,96 @@ describe("0.14 — the retype goes through the canonical history-aware writer", 
   it("maps a lost compare-and-set to row-moved and a missing authority to not-authorized", () => {
     expect(source).toContain('return { ok: false, reason: "row-moved" }');
     expect(source).toContain('return { ok: false, reason: "not-authorized" }');
+  });
+});
+
+describe("3319 — the promotion intent names its source, and the append re-checks it under the lock", () => {
+  const STORE = path.join(process.cwd(), "src/lib/artifacts/typed-promotion-store.ts");
+  const source = readFileSync(STORE, "utf8");
+  const KEY = {
+    artifactId: "art-1",
+    extension: "@cinatra-ai/linkedin-artifacts",
+    toType: "@cinatra-ai/linkedin-artifacts:post-draft",
+    baseVersion: 3,
+    sourceRevisionId: "rev-base",
+  };
+  const FACTS = {
+    orgId: "org-1",
+    artifactId: "art-1",
+    representationRevisionId: "rep_abc123",
+    sharedResourceId: "res-1",
+    form: "file" as const,
+    createdBy: "user-1",
+    toType: KEY.toType,
+    mime: "text/markdown",
+  };
+  const HEAD = { type: KEY.toType, version: 4, headRepresentationId: "rev-base" };
+
+  it("3319 T7 promotionRetypeKey is deterministic and changes with the extension, the base version and the source revision", () => {
+    const key = promotionRetypeKey(KEY);
+    expect(promotionRetypeKey({ ...KEY })).toBe(key);
+    expect(key).toBe(
+      "typed-promotion:art-1:@cinatra-ai/linkedin-artifacts:@cinatra-ai/linkedin-artifacts:post-draft:v3:rev-base",
+    );
+    expect(promotionRetypeKey({ ...KEY, extension: "@other/pack" })).not.toBe(key);
+    expect(promotionRetypeKey({ ...KEY, baseVersion: 4 })).not.toBe(key);
+    expect(promotionRetypeKey({ ...KEY, sourceRevisionId: "rev-edit" })).not.toBe(key);
+  });
+
+  it("3319 T7 the retype records the key in the canonical writer's change event as its idempotencyKey", () => {
+    expect(source).toContain("idempotencyKey: input.idempotencyKey,");
+    // The road names the source the plan read: the base version and the base
+    // revision whose resource the promotion shares.
+    const road = source.slice(source.indexOf("// 1. THE RETYPE"), source.indexOf("// 2. THE APPEND"));
+    expect(road).toContain("idempotencyKey: promotionRetypeKey({");
+    expect(road).toContain("baseVersion: plan.expectedVersion,");
+    expect(road).toContain("sourceRevisionId: plan.baseRevisionId,");
+  });
+
+  it("3319 T7 the converging branch passes the snapshot it decided on as expectHead, and the first append does not", () => {
+    const branch = source.slice(source.indexOf("THE CONVERGING BRANCH"), source.indexOf("// 1. THE RETYPE"));
+    expect(branch).toContain("expectHead: {");
+    expect(branch).toContain("version: row.version,");
+    expect(branch).toContain("headRepresentationId: row.latestRevision.representationRevisionId,");
+    expect(branch).toContain('if (landed.moved) return { ok: false, reason: "row-moved" };');
+    // The event is the THIRD authority, read only after the other two fail.
+    expect(branch.indexOf("personAsserted ||")).toBeGreaterThan(-1);
+    expect(branch.indexOf("await readPromotionRetypeEvent(")).toBeGreaterThan(
+      branch.indexOf("personAsserted ||"),
+    );
+    const firstAppend = source.slice(source.indexOf("// 2. THE APPEND"), source.indexOf("/** The retype half, as a port. */"));
+    expect(firstAppend).toContain("appendPromotionRevision({");
+    expect(firstAppend).not.toContain("expectHead");
+  });
+
+  it("3319 T7 buildPromotionAppendQueries with expectHead gives four queries, the re-check second", () => {
+    const plain = buildPromotionAppendQueries("cinatra_test", FACTS);
+    const queries = buildPromotionAppendQueries("cinatra_test", { ...FACTS, expectHead: HEAD });
+    expect(queries).toHaveLength(4);
+    expect(queries[0]).toEqual(plain[0]);
+    expect(queries[1]!.text).toContain("SELECT 1 / COUNT(*)::int AS head_unmoved");
+    expect(queries[1]!.text).toContain('FROM "cinatra_test"."objects" o');
+    expect(queries[1]!.text).toContain(
+      'AND (SELECT id FROM "cinatra_test"."representation" WHERE org_id = $2 AND artifact_id = $1 ORDER BY revision DESC LIMIT 1) = $5',
+    );
+    expect(queries[1]!.values).toEqual([
+      FACTS.artifactId,
+      FACTS.orgId,
+      HEAD.type,
+      HEAD.version,
+      HEAD.headRepresentationId,
+    ]);
+    // The insert and the witness follow the re-check, unchanged.
+    expect(queries[2]).toEqual(plain[1]);
+    expect(queries[3]).toEqual(plain[2]);
+  });
+
+  it("3319 T7 buildPromotionAppendQueries without expectHead gives main's three queries", () => {
+    const queries = buildPromotionAppendQueries("cinatra_test", FACTS);
+    expect(queries).toHaveLength(3);
+    expect(queries[0]!.text).toBe("SELECT pg_advisory_xact_lock(hashtext($1))");
+    expect(queries[1]!.text).toContain('INSERT INTO "cinatra_test"."representation"');
+    expect(queries[2]!.text).toContain('"cinatra_test"."artifact_audit"');
+    expect(queries.some((q) => q.text.includes("head_unmoved"))).toBe(false);
   });
 });

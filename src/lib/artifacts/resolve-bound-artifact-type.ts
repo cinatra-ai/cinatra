@@ -10,8 +10,10 @@ import {
   resolveArtifactBindingObjectType,
   type ResolveArtifactBindingObjectTypeResult,
 } from "@cinatra-ai/agents/artifact-binding";
+import { isExactVersion } from "@cinatra-ai/registries/src/version-compare";
 import { readArtifactTypeClaimsForOrg } from "@/lib/objects/artifact-claim-store";
 import { ensureArtifactTypesRegistered } from "./ensure-artifact-registry";
+import type { ClaimBackedMeaningType } from "./installed-type-picker";
 
 // ---------------------------------------------------------------------------
 // Bound-artifact-type resolution seam (cinatra#1454).
@@ -70,11 +72,12 @@ export type ResolveBoundArtifactTargetDeps = {
   }) => Promise<string>;
 };
 
-/** One artifact-safe claim WINNER: the type it is over, and the package that
- *  won it. */
+/** One artifact-safe claim WINNER: the type it is over, the package that won
+ *  it, and that package's version the claim was activated at. */
 type ArtifactSafeClaimWinner = {
   objectTypeId: string;
   extensionPackage: string;
+  extensionVersion: string;
 };
 
 /**
@@ -112,7 +115,11 @@ function readArtifactSafeClaimWinners(
     // Intersect with a currently-registered host type — a claim over a type this
     // process never registered cannot be materialized here.
     if (objectTypeRegistry.resolve(objectTypeId) === null) continue;
-    out.push({ objectTypeId, extensionPackage: winner.extensionPackage });
+    out.push({
+      objectTypeId,
+      extensionPackage: winner.extensionPackage,
+      extensionVersion: winner.extensionVersion,
+    });
   }
   return out;
 }
@@ -200,6 +207,63 @@ export function readAdmissibleArtifactTypeIdsForOrg(
 }
 
 /**
+ * The CLAIM-BACKED meaning surfaces of an org's upload picker (cinatra#3319).
+ * From THE ONE arbitration (`readArtifactSafeClaimWinners`), grouped by the
+ * winning extension, keep an extension only when all six hold:
+ *   0. its winner's `extensionVersion` is an exact version (not `"0.0.0"`);
+ *   1. it registered no type with `isArtifact`;
+ *   2. that version's manifest declares no `skills.matchers`;
+ *   3. it won exactly one type;
+ *   4. that type is host-registered (no registering package);
+ *   5. that version's manifest `accepts` is non-empty.
+ * Rules 0, 1, 3 and 4 read the claims and the registry only; the manifest is
+ * read, at the winner's own version, only for an extension that passes them.
+ * The caller warms the registry. Both reads are injectable for unit tests.
+ */
+export async function readClaimBackedMeaningTypesForOrg(
+  orgId: string,
+  deps?: {
+    readClaimsForOrg?: (orgId: string) => readonly ArbitrableClaim[];
+    readManifestFields?: (
+      extension: string,
+      extensionVersion: string,
+    ) => Promise<{ accepts: string[]; objectTypeIds: string[]; matchers: string[] } | null>;
+  },
+): Promise<ClaimBackedMeaningType[]> {
+  const readManifestFields =
+    deps?.readManifestFields ??
+    ((extension: string, extensionVersion: string) =>
+      readInstalledPackManifestFields(extension, { exactVersion: extensionVersion }));
+  const byExtension = new Map<string, ArtifactSafeClaimWinner[]>();
+  for (const winner of readArtifactSafeClaimWinners(orgId, deps?.readClaimsForOrg)) {
+    const group = byExtension.get(winner.extensionPackage);
+    if (group) group.push(winner);
+    else byExtension.set(winner.extensionPackage, [winner]);
+  }
+  const out: ClaimBackedMeaningType[] = [];
+  for (const [extension, winners] of byExtension) {
+    // 3. exactly one winning type, so exactly one version.
+    if (winners.length !== 1) continue;
+    const { objectTypeId, extensionVersion } = winners[0];
+    // 0. a versionless claim has no manifest version to bind to.
+    if (extensionVersion === "0.0.0" || !isExactVersion(extensionVersion)) continue;
+    // 1. the pack mints no own artifact type.
+    const ownsArtifactType = objectTypeRegistry
+      .getTypesForPackage(extension)
+      .some((typeId) => objectTypeRegistry.resolve(typeId)?.isArtifact != null);
+    if (ownsArtifactType) continue;
+    // 4. the claimed type is host-registered.
+    if (objectTypeRegistry.getRegisteringPackage(objectTypeId) !== null) continue;
+    const fields = await readManifestFields(extension, extensionVersion);
+    // 2. no matchers, read from the manifest (not the mutable matcher registry);
+    // 5. the manifest accepts something.
+    if (!fields || fields.matchers.length > 0 || fields.accepts.length === 0) continue;
+    out.push({ objectTypeId, extension, acceptMimes: fields.accepts });
+  }
+  return out;
+}
+
+/**
  * Read the installed artifact pack's pack-level accepted file MIME types from
  * the SRI-vetted store manifest (version-preferred) or the bundled extension
  * dir (dev/verify). Reads `package.json` only — never imports package code.
@@ -223,17 +287,27 @@ export async function readInstalledPackDeclaredObjectTypeIds(
   return (await readInstalledPackManifestFields(extension))?.objectTypeIds ?? null;
 }
 
+type InstalledPackManifestFields = {
+  accepts: string[];
+  objectTypeIds: string[];
+  matchers: string[];
+  /** The manifest's own `version`, or null when it is not a string. */
+  version: string | null;
+};
+
 /** ONE read of the pack manifest yielding every field the callers above need.
  *  Same discovery order as before: SRI-vetted store records first, then the
- *  bundled/in-tree extension dir (dev/verify). Reads `package.json` only. */
+ *  bundled/in-tree extension dir (dev/verify). Reads `package.json` only.
+ *  With `exactVersion` (cinatra#3319) only a manifest of that version answers. */
 async function readInstalledPackManifestFields(
   extension: string,
-): Promise<{ accepts: string[]; objectTypeIds: string[] } | null> {
+  opts?: { exactVersion?: string },
+): Promise<InstalledPackManifestFields | null> {
   const { readFile } = await import("node:fs/promises");
   const path = await import("node:path");
 
-  const parseAccepts = (raw: string): { accepts: string[]; objectTypeIds: string[] } | null => {
-    let pkg: { cinatra?: { kind?: unknown; artifact?: unknown } };
+  const parseAccepts = (raw: string): InstalledPackManifestFields | null => {
+    let pkg: { version?: unknown; cinatra?: { kind?: unknown; artifact?: unknown } };
     try {
       pkg = JSON.parse(raw);
     } catch {
@@ -245,13 +319,16 @@ async function readInstalledPackManifestFields(
     return {
       accepts: parsed.manifest.accepts?.file?.mimeTypes ?? [],
       objectTypeIds: (parsed.manifest.objectTypes ?? []).map((c) => c.type),
+      matchers: parsed.manifest.skills?.matchers ?? [],
+      version: typeof pkg.version === "string" ? pkg.version : null,
     };
   };
 
   // 1. Store records (production): prefer any readable materialized record for
   //    this package (a version-matched select would need the run's pinned
   //    version; the pack-level accepts is version-stable within a published
-  //    line, and a mismatch fails closed at the accepts check below).
+  //    line, and a mismatch fails closed at the accepts check below). With
+  //    `exactVersion`, only a record whose own version is that one answers.
   try {
     const { resolveExtensionDataRoot } = await import("@/lib/extension-data-root");
     const { discoverStoreRecordsV2 } = await import("@/lib/extension-store-io");
@@ -260,7 +337,7 @@ async function readInstalledPackManifestFields(
       if (rec.packageName !== extension) continue;
       try {
         const accepts = parseAccepts(await readFile(path.join(rec.storeDir, "package.json"), "utf8"));
-        if (accepts) return accepts;
+        if (accepts && (opts?.exactVersion === undefined || accepts.version === opts.exactVersion)) return accepts;
       } catch {
         // next record
       }
@@ -283,7 +360,7 @@ async function readInstalledPackManifestFields(
     for (const cand of candidates) {
       try {
         const accepts = parseAccepts(await readFile(cand, "utf8"));
-        if (accepts) return accepts;
+        if (accepts && (opts?.exactVersion === undefined || accepts.version === opts.exactVersion)) return accepts;
       } catch {
         // next candidate
       }
