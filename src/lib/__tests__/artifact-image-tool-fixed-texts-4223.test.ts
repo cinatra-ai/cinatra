@@ -5,8 +5,9 @@
  *
  *   1. NO EXCEPTION TEXT IN A REFUSAL. A provider's or a store's exception can
  *      name a credential, a schema, a table or a connection. The refusal that
- *      reaches the calling node is a fixed sentence, and the detail is logged
- *      on the server.
+ *      reaches the calling node is a fixed sentence. The server log carries the
+ *      error's class and code, never its text, and a log that throws or a value
+ *      that cannot be turned into text never changes the answer.
  *   2. A RE-DRIVE REPORTS THE FACTS OF THE REVISION IT RETURNS. The ledger key
  *      is the run, the node and the bytes, so a re-drive that gets the same
  *      bytes from another provider or model is served by the revision the
@@ -115,7 +116,9 @@ const regeneration = {
   baseRepresentationRevisionId: "rep-1",
 };
 
+const CONSOLE_METHODS = ["error", "warn", "log", "info", "debug"] as const;
 let logged: MockInstance<typeof console.error>;
+let spies: MockInstance[] = [];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -136,11 +139,12 @@ beforeEach(() => {
     provider: "first-provider",
     model: "first-model",
   });
-  logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  spies = CONSOLE_METHODS.map((name) => vi.spyOn(console, name).mockImplementation(() => {}));
+  logged = spies[0] as MockInstance<typeof console.error>;
 });
 
 afterEach(() => {
-  logged.mockRestore();
+  for (const spy of spies) spy.mockRestore();
 });
 
 function expectNoDetail(text: string) {
@@ -149,13 +153,26 @@ function expectNoDetail(text: string) {
   }
 }
 
-function expectDetailLogged() {
+/** The failure is logged, and no part of the exception's text reaches any console call. */
+function expectLoggedWithoutText() {
   expect(logged).toHaveBeenCalled();
-  expect(JSON.stringify(logged.mock.calls)).toContain("ECONNREFUSED");
+  expectNoDetail(JSON.stringify(spies.map((spy) => spy.mock.calls)));
+}
+
+/** A thrown value whose every conversion to text throws an Error that carries the detail. */
+function unprintable(): object {
+  return {
+    [Symbol.toPrimitive]() {
+      throw new Error(SECRET_DETAIL);
+    },
+    toString() {
+      throw new Error(SECRET_DETAIL);
+    },
+  };
 }
 
 describe("cinatra#4223 — a refusal that comes from a throw is a fixed sentence", () => {
-  it("a provider that throws is answered with the fixed provider sentence, its detail logged", async () => {
+  it("a provider that throws is answered with the fixed provider sentence, logged without its text", async () => {
     const outcome = await generateArtifactImage(
       call,
       deps({
@@ -174,7 +191,7 @@ describe("cinatra#4223 — a refusal that comes from a throw is a fixed sentence
       `the second-provider image provider failed; ${tool.PROVIDER_FAILED_DETAIL}`,
     );
     expectNoDetail(outcome.error);
-    expectDetailLogged();
+    expectLoggedWithoutText();
   });
 
   it("a provider that throws a non-Error value is answered with the same fixed sentence", async () => {
@@ -193,7 +210,7 @@ describe("cinatra#4223 — a refusal that comes from a throw is a fixed sentence
     if (outcome.ok) throw new Error("unreachable");
     expect(outcome.reason).toBe("provider_failed");
     expectNoDetail(outcome.error);
-    expectDetailLogged();
+    expectLoggedWithoutText();
   });
 
   it("a write that throws is answered with the fixed write sentence that says what is kept", async () => {
@@ -203,7 +220,7 @@ describe("cinatra#4223 — a refusal that comes from a throw is a fixed sentence
     if (outcome.ok) throw new Error("unreachable");
     expect(outcome.reason).toBe("write_refused");
     expect(outcome.error).toBe(tool.FILING_WRITE_FAILED_ERROR);
-    expectDetailLogged();
+    expectLoggedWithoutText();
   });
 
   it("a schema refusal keeps its own reason and answers the fixed data sentence", async () => {
@@ -225,7 +242,7 @@ describe("cinatra#4223 — a refusal that comes from a throw is a fixed sentence
     if (outcome.ok) throw new Error("unreachable");
     expect(outcome.reason).toBe("write_refused");
     expect(outcome.error).toBe(tool.FILING_UNEXPECTED_ERROR);
-    expectDetailLogged();
+    expectLoggedWithoutText();
   });
 
   it("a throw on the regeneration road is answered with the fixed unexpected sentence", async () => {
@@ -234,7 +251,7 @@ describe("cinatra#4223 — a refusal that comes from a throw is a fixed sentence
     expect(outcome.ok).toBe(false);
     if (outcome.ok) throw new Error("unreachable");
     expect(outcome.error).toBe(tool.FILING_UNEXPECTED_ERROR);
-    expectDetailLogged();
+    expectLoggedWithoutText();
   });
 });
 
@@ -307,7 +324,7 @@ describe("cinatra#4223 — a re-drive reports the facts stored with the revision
     expect(outcome.ok).toBe(false);
     if (outcome.ok) throw new Error("unreachable");
     expect(outcome.error).toBe(tool.FILING_STORED_FACTS_UNREADABLE_ERROR);
-    expectDetailLogged();
+    expectLoggedWithoutText();
   });
 
   it("the loser of a concurrent double drive reports the winner's stored facts", async () => {
@@ -392,7 +409,7 @@ describe("cinatra#4223 — the unreadable stored facts refuse on every re-drive 
     expect(outcome.error).toBe(tool.FILING_STORED_FACTS_UNREADABLE_ERROR);
   });
 
-  it("the loser whose stored-facts read throws refuses with the fixed sentence, its detail logged", async () => {
+  it("the loser whose stored-facts read throws refuses with the fixed sentence, logged without its text", async () => {
     m.createSemanticArtifact.mockRejectedValue(
       new Error(`invalid input syntax: ${MATERIALIZATION_FINALIZE_CONFLICT_MARKER}`),
     );
@@ -405,7 +422,7 @@ describe("cinatra#4223 — the unreadable stored facts refuse on every re-drive 
     expect(outcome.ok).toBe(false);
     if (outcome.ok) throw new Error("unreachable");
     expect(outcome.error).toBe(tool.FILING_STORED_FACTS_UNREADABLE_ERROR);
-    expectDetailLogged();
+    expectLoggedWithoutText();
   });
 
   it("a deduped append whose stored facts are missing refuses with the fixed sentence", async () => {
@@ -424,7 +441,7 @@ describe("cinatra#4223 — the unreadable stored facts refuse on every re-drive 
     expect(outcome.error).toBe(tool.FILING_STORED_FACTS_UNREADABLE_ERROR);
   });
 
-  it("a deduped append whose stored-facts read throws refuses with the fixed sentence, its detail logged", async () => {
+  it("a deduped append whose stored-facts read throws refuses with the fixed sentence, logged without its text", async () => {
     m.appendArtifactRevision.mockResolvedValue({
       ok: true,
       artifactId: "art-1",
@@ -437,7 +454,7 @@ describe("cinatra#4223 — the unreadable stored facts refuse on every re-drive 
     expect(outcome.ok).toBe(false);
     if (outcome.ok) throw new Error("unreachable");
     expect(outcome.error).toBe(tool.FILING_STORED_FACTS_UNREADABLE_ERROR);
-    expectDetailLogged();
+    expectLoggedWithoutText();
   });
 
   it("a re-drive whose stored model is null reports a null model, never this attempt's", async () => {
@@ -471,7 +488,7 @@ describe("cinatra#4223 — the install-state explanation reaches the result as a
     );
   }
 
-  it("an explanation that carries a read error's text is answered with the fixed install-state sentence, its detail logged", async () => {
+  it("an explanation that carries a read error's text is answered with the fixed install-state sentence, logged without its text", async () => {
     resolverThatExplains();
     m.explainAbsentArtifactSafeClaims.mockResolvedValue(
       `no artifact-safe claim resolved and its install state could not be read (${SECRET_DETAIL})`,
@@ -482,10 +499,10 @@ describe("cinatra#4223 — the install-state explanation reaches the result as a
     expect(outcome.reason).toBe("type_unresolved");
     expect(outcome.error).toBe(tool.installStateUnresolvedError(call.extension));
     expectNoDetail(outcome.error);
-    expectDetailLogged();
+    expectLoggedWithoutText();
   });
 
-  it("an explainer that throws is answered with the same fixed sentence, its detail logged", async () => {
+  it("an explainer that throws is answered with the same fixed sentence, logged without its text", async () => {
     resolverThatExplains();
     m.explainAbsentArtifactSafeClaims.mockRejectedValue(new Error(SECRET_DETAIL));
     const outcome = await generateArtifactImage(call, deps());
@@ -493,7 +510,7 @@ describe("cinatra#4223 — the install-state explanation reaches the result as a
     if (outcome.ok) throw new Error("unreachable");
     expect(outcome.reason).toBe("type_unresolved");
     expect(outcome.error).toBe(tool.installStateUnresolvedError(call.extension));
-    expectDetailLogged();
+    expectLoggedWithoutText();
   });
 
   it("guard: a resolver refusal that is not an install-state explanation keeps its own sentence", async () => {
@@ -508,5 +525,103 @@ describe("cinatra#4223 — the install-state explanation reaches the result as a
     expect(outcome.error).toBe(
       'extension "@cinatra-ai/picture-artifact" declares more than one artifact-safe object type',
     );
+  });
+});
+
+describe("cinatra#4223 — a failure that cannot be logged or printed never changes the answer", () => {
+  /** The resolver hands back the explainer's text as its refusal, as it does for a zero-claim extension. */
+  function resolverThatExplains() {
+    m.resolveBoundArtifactTarget.mockImplementation(
+      async (i: {
+        orgId: string;
+        extension: string;
+        deps?: { explainAbsentClaims?: (a: { orgId: string; extension: string }) => Promise<string> };
+      }) => ({
+        ok: false,
+        error: await i.deps!.explainAbsentClaims!({ orgId: i.orgId, extension: i.extension }),
+      }),
+    );
+  }
+
+  it("an explainer that rejects with a value whose conversion to text throws is answered with the fixed install-state sentence", async () => {
+    resolverThatExplains();
+    m.explainAbsentArtifactSafeClaims.mockRejectedValue(unprintable());
+    const outcome = await generateArtifactImage(call, deps());
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("unreachable");
+    expect(outcome.reason).toBe("type_unresolved");
+    expect(outcome.error).toBe(tool.installStateUnresolvedError(call.extension));
+    expectLoggedWithoutText();
+  });
+
+  it("a console that throws never changes the install-state answer", async () => {
+    resolverThatExplains();
+    logged.mockImplementation(() => {
+      throw new Error(SECRET_DETAIL);
+    });
+    m.explainAbsentArtifactSafeClaims.mockRejectedValue(new Error(SECRET_DETAIL));
+    const outcome = await generateArtifactImage(call, deps());
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("unreachable");
+    expect(outcome.reason).toBe("type_unresolved");
+    expect(outcome.error).toBe(tool.installStateUnresolvedError(call.extension));
+  });
+
+  it("a console that throws never changes a provider failure's answer", async () => {
+    logged.mockImplementation(() => {
+      throw new Error(SECRET_DETAIL);
+    });
+    const outcome = await generateArtifactImage(
+      call,
+      deps({
+        resolveImageProvider: async () => ({
+          provider: "second-provider",
+          generateImage: async () => {
+            throw new Error(SECRET_DETAIL);
+          },
+        }),
+      }),
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("unreachable");
+    expect(outcome.reason).toBe("provider_failed");
+    expect(outcome.error).toBe(`the second-provider image provider failed; ${tool.PROVIDER_FAILED_DETAIL}`);
+  });
+
+  it("a write that throws a value whose conversion to text throws is answered with the fixed write sentence", async () => {
+    m.createSemanticArtifact.mockRejectedValue(unprintable());
+    const outcome = await generateArtifactImage(call, deps());
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("unreachable");
+    expect(outcome.reason).toBe("write_refused");
+    expect(outcome.error).toBe(tool.FILING_WRITE_FAILED_ERROR);
+    expectLoggedWithoutText();
+  });
+
+  it("the loser of a double drive whose winner does not read is answered with the fixed write sentence", async () => {
+    m.createSemanticArtifact.mockRejectedValue(
+      new Error(`${SECRET_DETAIL} ${MATERIALIZATION_FINALIZE_CONFLICT_MARKER}`),
+    );
+    m.readFinalizedMaterialization.mockResolvedValue(null);
+    const outcome = await generateArtifactImage(call, deps());
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("unreachable");
+    expect(outcome.reason).toBe("write_refused");
+    expect(outcome.error).toBe(tool.FILING_WRITE_FAILED_ERROR);
+    expect(m.readRevisionImageProvenance).not.toHaveBeenCalled();
+    expectLoggedWithoutText();
+  });
+
+  it("the loser of a double drive whose winner read throws is answered with the fixed unexpected sentence", async () => {
+    m.createSemanticArtifact.mockRejectedValue(
+      new Error(`${SECRET_DETAIL} ${MATERIALIZATION_FINALIZE_CONFLICT_MARKER}`),
+    );
+    m.readFinalizedMaterialization.mockRejectedValue(new Error(SECRET_DETAIL));
+    const outcome = await generateArtifactImage(call, deps());
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("unreachable");
+    expect(outcome.reason).toBe("write_refused");
+    expect(outcome.error).toBe(tool.FILING_UNEXPECTED_ERROR);
+    expectLoggedWithoutText();
   });
 });

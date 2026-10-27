@@ -5,8 +5,10 @@
  * exception's own message, which can name a table, a connection or a
  * provider's answer, to the flow and through it to the run's tool results.
  * Only a primitive's stated refusal and an input-schema error keep their text;
- * every other throw answers a fixed sentence and its detail is logged on the
- * server. Tests named "guard:" pass on the base too.
+ * every other throw answers a fixed sentence, and the actor-context catch
+ * answers its fixed sentence for every error. The server log carries the
+ * error's class and code, never its text, and a failing log never changes
+ * the answer. Tests named "guard:" pass on the base too.
  *
  *   npx vitest run src/__tests__/passthrough-failure-text-4223.test.ts
  */
@@ -65,9 +67,9 @@ import { POST } from "../app/api/agents/passthrough/route";
 // The public sentences, written out: they are the route's contract with the
 // flow, so this file pins their text rather than importing it.
 const PASSTHROUGH_UNEXPECTED_ERROR =
-  "the tool call failed on an unexpected error; the detail is logged on the server";
+  "the tool call failed on an unexpected error; the failure is logged on the server";
 const PASSTHROUGH_ACTOR_CONTEXT_ERROR =
-  "failed to build actor context; the detail is logged on the server";
+  "failed to build actor context; the failure is logged on the server";
 
 const RUN = {
   id: "run-1",
@@ -97,22 +99,45 @@ const SAVE = {
   input: { rawData: { title: "x" }, typeHint: "@cinatra-ai/x:y" },
 };
 
+const CONSOLE_METHODS = ["error", "warn", "log", "info", "debug"] as const;
 let logged: MockInstance<typeof console.error>;
+let spies: MockInstance[] = [];
 
 beforeEach(() => {
   vi.clearAllMocks();
   isAuthorizedMock.mockReturnValue(true);
   bindBridgeRunIdMock.mockResolvedValue({ ok: true });
   readAgentRunByIdMock.mockResolvedValue(RUN);
-  logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  spies = CONSOLE_METHODS.map((name) => vi.spyOn(console, name).mockImplementation(() => {}));
+  logged = spies[0] as MockInstance<typeof console.error>;
 });
 
 afterEach(() => {
-  logged.mockRestore();
+  for (const spy of spies) spy.mockRestore();
 });
 
+/** No part of the secret reaches any console call. */
+function expectNoSecretLogged() {
+  const text = JSON.stringify(spies.map((spy) => spy.mock.calls));
+  for (const part of ["hunter2", "db.internal", '"objects"', "postgres:"]) {
+    expect(text).not.toContain(part);
+  }
+}
+
+/** A thrown value whose every conversion to text throws an Error that carries the secret. */
+function unprintable(): object {
+  return {
+    [Symbol.toPrimitive]() {
+      throw new Error(SECRET);
+    },
+    toString() {
+      throw new Error(SECRET);
+    },
+  };
+}
+
 describe("cinatra#4223 — the passthrough's failure texts", () => {
-  it("a handler that throws a plain Error is answered 500 with the fixed sentence, its detail logged", async () => {
+  it("a handler that throws a plain Error is answered 500 with the fixed sentence, logged without its text", async () => {
     collectAllPrimitiveHandlersMock.mockResolvedValue({
       objects_save: async () => {
         throw new Error(SECRET);
@@ -124,7 +149,8 @@ describe("cinatra#4223 — the passthrough's failure texts", () => {
     expect(text).not.toContain("hunter2");
     expect(text).not.toContain("db.internal");
     expect(JSON.parse(text)).toEqual({ error: PASSTHROUGH_UNEXPECTED_ERROR });
-    expect(JSON.stringify(logged.mock.calls)).toContain("hunter2");
+    expect(logged).toHaveBeenCalled();
+    expectNoSecretLogged();
   });
 
   it("a handler that throws a non-Error value is answered 500 with the fixed sentence", async () => {
@@ -136,6 +162,7 @@ describe("cinatra#4223 — the passthrough's failure texts", () => {
     const res = await POST(post(SAVE));
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: PASSTHROUGH_UNEXPECTED_ERROR });
+    expectNoSecretLogged();
   });
 
   it("a deterministic tool road that throws is answered 500 with the fixed sentence", async () => {
@@ -176,6 +203,43 @@ describe("cinatra#4223 — the passthrough's failure texts", () => {
     const res = await POST(post(SAVE));
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: PASSTHROUGH_ACTOR_CONTEXT_ERROR });
-    expect(JSON.stringify(logged.mock.calls)).toContain("hunter2");
+    expect(logged).toHaveBeenCalled();
+    expectNoSecretLogged();
+  });
+
+  it("an actor context that fails with a primitive's refusal is answered 500 with its fixed sentence", async () => {
+    buildActorContextFromRunMock.mockRejectedValueOnce(
+      new PrimitiveInvocationError({ code: "ACTOR_CONTEXT", message: SECRET, retryable: false }),
+    );
+    const res = await POST(post(SAVE));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: PASSTHROUGH_ACTOR_CONTEXT_ERROR });
+    expectNoSecretLogged();
+  });
+
+  it("a handler whose thrown value cannot be turned into text is answered 500 with the fixed sentence", async () => {
+    collectAllPrimitiveHandlersMock.mockResolvedValue({
+      objects_save: async () => {
+        throw unprintable();
+      },
+    });
+    const res = await POST(post(SAVE));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: PASSTHROUGH_UNEXPECTED_ERROR });
+    expectNoSecretLogged();
+  });
+
+  it("a console that throws never changes the 500 answer", async () => {
+    logged.mockImplementation(() => {
+      throw new Error(SECRET);
+    });
+    collectAllPrimitiveHandlersMock.mockResolvedValue({
+      objects_save: async () => {
+        throw new Error(SECRET);
+      },
+    });
+    const res = await POST(post(SAVE));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: PASSTHROUGH_UNEXPECTED_ERROR });
   });
 });
