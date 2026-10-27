@@ -114,7 +114,11 @@ describe("design-visual-verify.yml pixel-diff: the runner-local build cache", ()
     expect(stepText(BUILD)).toMatch(
       /^ {10}CINATRA_TURBOPACK_BUILD_FS_CACHE: \$\{\{ steps\.build-cache\.outputs\.fs-cache \}\}$/m,
     );
-    expect(runLine(BUILD)).toBe('pnpm build || bash scripts/ci/design-build-cache.sh rebuild "$?"');
+    // The build and its rebuild run under the machine's design build lock
+    // (design-build-host-lock.test.mjs), which these run cases leave unused.
+    expect(runLine(BUILD)).toBe(
+      "bash scripts/ci/design-build-host-lock.sh bash -c 'pnpm build || bash scripts/ci/design-build-cache.sh rebuild \"$?\"'",
+    );
   });
 
   it("keeps the cache only after a build that succeeded with it on", () => {
@@ -180,6 +184,10 @@ function makeRunner() {
   mkdirSync(path.join(checkout, "scripts", "ci"), { recursive: true });
   mkdirSync(bin);
   copyFileSync(SCRIPT, path.join(checkout, "scripts", "ci", "design-build-cache.sh"));
+  copyFileSync(
+    path.join(REPO_ROOT, "scripts", "ci", "design-build-host-lock.sh"),
+    path.join(checkout, "scripts", "ci", "design-build-host-lock.sh"),
+  );
   writeFileSync(path.join(checkout, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
   writeFileSync(path.join(checkout, "next.config.ts"), "export default {};\n");
   writeFileSync(path.join(bin, "pnpm"), FAKE_PNPM);
