@@ -5,9 +5,21 @@
 // finite Date.parse alone does not make a timestamp: the instant it reads, moved
 // by the written offset, must give back the written year, month, day, hour and
 // minute. A time must carry its offset, and nothing may follow it.
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { isRepairStuckStamp, toRepairStuck } from "../repair-stuck";
+
+// A time without an offset is read in local time. Pin the zone to UTC, so the
+// cases without an offset test the offset rule itself on every host: in UTC,
+// an offset-optional rule would accept them, and these tests would fail.
+const TZ_BEFORE = process.env.TZ;
+beforeAll(() => {
+  process.env.TZ = "UTC";
+});
+afterAll(() => {
+  if (TZ_BEFORE === undefined) delete process.env.TZ;
+  else process.env.TZ = TZ_BEFORE;
+});
 
 describe("isRepairStuckStamp: a timestamp that round-trips is a stamp", () => {
   it.each([
@@ -76,6 +88,18 @@ describe("isRepairStuckStamp: a time without an offset, or with text after it, i
   ])("%s is not a stamp, and is not stuck", (_name, value) => {
     // The premise: Date.parse reads it (as local time, or by its zone name).
     expect(Number.isFinite(Date.parse(value))).toBe(true);
+    expect(isRepairStuckStamp(value)).toBe(false);
+    expect(toRepairStuck(value, 3)).toBeUndefined();
+  });
+});
+
+describe("isRepairStuckStamp: an offset that is not a real offset is not a stamp", () => {
+  it.each([
+    ["an offset hour 24 after a space", "2026-05-15 07:00:00+24:00"],
+    ["an offset hour 99 after a space", "2026-05-15 07:00:00-99:00"],
+    ["an offset minute 60", "2026-05-15 07:00:00+2360"],
+    ["a two-digit offset after T", "2026-05-15T07:00:00+05"],
+  ])("%s is not a stamp, and is not stuck", (_name, value) => {
     expect(isRepairStuckStamp(value)).toBe(false);
     expect(toRepairStuck(value, 3)).toBeUndefined();
   });

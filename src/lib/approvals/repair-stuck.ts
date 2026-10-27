@@ -10,11 +10,12 @@
 // else means "not stuck" or "no count", never a guess.
 //
 //   stuck    = `repair_stuck_at` is a timestamp string: a calendar date,
-//              optionally a time with its offset, that Date.parse reads as the
-//              same written year, month, day, hour and minute (Date.parse rolls
-//              2026-02-30 over to March 2, and reads 0001-01-01 00:00:00+00:00
-//              as 2001; neither is a timestamp). Missing, null, empty, invalid,
-//              calendar-invalid or a non-string all mean NOT stuck.
+//              optionally a time with its offset (offset hours 00-23), that
+//              Date.parse reads as the same written year, month, day, hour and
+//              minute (Date.parse rolls 2026-02-30 over to March 2, and reads
+//              0001-01-01 00:00:00+00:00 as 2001; neither is a timestamp).
+//              Missing, null, empty, invalid, calendar-invalid or a non-string
+//              all mean NOT stuck.
 //   attempts = `recovery_attempts` is a non-negative safe integer of type
 //              number. A fraction, a string, NaN, an infinity or an unsafe
 //              integer means no count; the flag still stands without one.
@@ -33,9 +34,12 @@ export type RepairStuck = {
 
 // The written stamp: a calendar date, then optionally a time (T or a space,
 // hours and minutes, optional seconds and fraction) that must carry its offset
-// (Z, +hh, +hhmm or +hh:mm, or the same with -). Nothing else may follow.
+// (Z, +hh, +hhmm or +hh:mm, or the same with -; offset hours 00-23, minutes
+// 00-59). Nothing else may follow. Date.parse reads +hh only after a space:
+// after T it returns NaN, so such a stamp is refused below. After a space it
+// would read an offset hour of 24-99 as hours, so the grammar bounds them.
 const STAMP =
-  /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d{1,9})?)?(Z|[+-]\d{2}(?::?\d{2})?))?$/;
+  /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d{1,9})?)?(Z|[+-](?:[01]\d|2[0-3])(?::?[0-5]\d)?))?$/;
 
 /** The written offset in minutes east of UTC. */
 function offsetMinutes(offset: string): number {
