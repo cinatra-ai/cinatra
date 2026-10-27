@@ -162,6 +162,62 @@ export function signInLifeMs(expiresIn: unknown): number | null {
   return Math.min(expiresIn * 1000, MAX_TIMER_DELAY_MS);
 }
 
+/**
+ * The refs the end of a sign-in reads (cinatra#4357): the current sign-in's
+ * ticket, the one armed end timer, and the current arm of that timer.
+ */
+export type SignInEndRefs = {
+  ticket: { current: number };
+  timer: { current: ReturnType<typeof setTimeout> | null };
+  arm: { current: number };
+};
+
+/**
+ * Retire every end timer armed so far, and cancel the armed one. The arm moves
+ * on even when no timer is armed, so a callback that is already queued finds
+ * its arm retired and changes nothing.
+ */
+export function clearSignInEnd(refs: Pick<SignInEndRefs, "timer" | "arm">): void {
+  refs.arm.current += 1;
+  if (refs.timer.current !== null) {
+    clearTimeout(refs.timer.current);
+    refs.timer.current = null;
+  }
+}
+
+/**
+ * Arm the one timer that ends the sign-in of `ticket` after `lifeLeftMs`, and
+ * retire every earlier arm. Each arm has its own identity: its callback acts
+ * only while its ticket is the current sign-in's AND its arm is the current
+ * arm. So an earlier arm's callback that still runs (cleared, but already
+ * queued) changes nothing, not even under the same ticket, and leaves the
+ * timer ref alone, which holds the current arm's timer and must stay
+ * clearable.
+ *
+ * The delay is held at `MAX_TIMER_DELAY_MS` HERE, after the clock reading that
+ * gave `lifeLeftMs`: a clock set back after the sign-in answered can leave more
+ * life than the cap, and a longer delay fires at once.
+ */
+export function armSignInEnd(
+  refs: SignInEndRefs,
+  ticket: number,
+  lifeLeftMs: number,
+  end: () => void,
+): void {
+  clearSignInEnd(refs);
+  const arm = refs.arm.current;
+  refs.timer.current = setTimeout(
+    () => {
+      // The ticket and the arm first, before the timer ref is touched.
+      if (ticket !== refs.ticket.current) return;
+      if (arm !== refs.arm.current) return;
+      refs.timer.current = null;
+      end();
+    },
+    Math.min(lifeLeftMs, MAX_TIMER_DELAY_MS),
+  );
+}
+
 type Phase =
   | { kind: "waiting" } // pre-context: neutral "waiting for host"
   // context in hand, no credential — the person signs in; `reading` picks the
@@ -273,12 +329,12 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   const signInTicketRef = useRef(0);
   // The one timer that ends the current sign-in when its pair's life runs out.
   const signInEndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The current arm of that timer: every clear and every arm moves it on, so a
+  // callback of an earlier arm changes nothing (`armSignInEnd`).
+  const signInEndArmRef = useRef(0);
 
   const clearSignInEndTimer = useCallback(() => {
-    if (signInEndTimerRef.current !== null) {
-      clearTimeout(signInEndTimerRef.current);
-      signInEndTimerRef.current = null;
-    }
+    clearSignInEnd({ timer: signInEndTimerRef, arm: signInEndArmRef });
   }, []);
 
   // Drop the current sign-in: its timer, its ticket, its pair and everything the
@@ -484,18 +540,13 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
         setPhase({ kind: "active" });
         if (lifeLeftMs !== null) {
           // The life runs from the mint, so a slow negotiation shortens the
-          // wait. `lifeLeftMs` is positive here.
-          clearSignInEndTimer();
-          signInEndTimerRef.current = setTimeout(
-            () => {
-              // The ticket first: a timer of an older sign-in touches nothing,
-              // not even the timer ref, which now holds the current sign-in's
-              // timer and must stay clearable.
-              if (ticket !== signInTicketRef.current) return;
-              signInEndTimerRef.current = null;
-              dropSignIn("again");
-            },
+          // wait. `lifeLeftMs` is positive here. The arm retires every earlier
+          // arm and holds the delay at the timer cap.
+          armSignInEnd(
+            { ticket: signInTicketRef, timer: signInEndTimerRef, arm: signInEndArmRef },
+            ticket,
             lifeLeftMs,
+            () => dropSignIn("again"),
           );
         }
         // TEST-ONLY seam (gated OFF in prod): render the seeded corpus here in
@@ -524,7 +575,6 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
       props.paritySeam,
       loadParitySeed,
       restoreThread,
-      clearSignInEndTimer,
       dropSignIn,
     ],
   );

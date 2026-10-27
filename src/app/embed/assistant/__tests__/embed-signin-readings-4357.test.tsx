@@ -110,7 +110,13 @@ vi.mock("@/components/ui/button", () => ({
   },
 }));
 
-import { EmbedAssistantClient, signInLifeMs } from "../embed-assistant-client";
+import {
+  EmbedAssistantClient,
+  armSignInEnd,
+  clearSignInEnd,
+  signInLifeMs,
+  type SignInEndRefs,
+} from "../embed-assistant-client";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
@@ -127,6 +133,8 @@ const DRAWN_ACTION = "start-sign-in -> sign-in-window-opened";
 const PARENT = "https://wp.signin.test";
 const LIFE_S = 600;
 const LIFE_MS = LIFE_S * 1000;
+/** The longest delay a browser timer holds (2^31 - 1 ms). */
+const MAX_DELAY = 2_147_483_647;
 const pair = (n: number, expiresIn = LIFE_S): Pair => ({
   userToken: `cwu_secret_${n}`,
   transportToken: `cit_secret_${n}`,
@@ -561,6 +569,44 @@ describe("reading 2: the sign-in-again card (embed-signin-again)", () => {
     expect(signInCard().id, "the end comes at the 1 ms the reading left").toBe("embed-signin-again");
   });
 
+  it("the clock set back 1 ms after the sign-in answer, with the longest life, still arms no end at once: the delay is held at the cap", async () => {
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    try {
+      await render();
+      await deliverContext();
+      // The longest life a timer holds: at the sign-in answer's reading, the
+      // life left is exactly the cap.
+      runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(1, 2_147_483.647) });
+      const slow = deferred<{ ok: boolean }>();
+      negotiate.mockReturnValueOnce(slow.promise);
+      fetchThreadMessages.mockResolvedValueOnce([]);
+      await clickSignIn();
+      // The clock is set back 1 ms before the negotiation answers: the life
+      // left now reads 1 ms over the cap.
+      const t0 = Date.now();
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => t0 - 1);
+      try {
+        await act(async () => {
+          slow.resolve({ ok: true });
+          await drain();
+        });
+      } finally {
+        clock.mockRestore();
+      }
+      const delays = (timers.mock.calls as unknown as Array<[() => void, number?]>).map(([, delay]) => delay ?? 0);
+      expect(delays, "the end is armed at the cap").toContain(MAX_DELAY);
+      expect(Math.max(...delays), "no timer is armed over the cap").toBeLessThanOrEqual(MAX_DELAY);
+      await wait(1);
+      expect(shown(), "no end at once").toBe("active");
+      await wait(MAX_DELAY - 2);
+      expect(shown(), "no end before the cap").toBe("active");
+      await wait(1);
+      expect(signInCard().id, "the end comes at the cap, early and never at once").toBe("embed-signin-again");
+    } finally {
+      timers.mockRestore();
+    }
+  });
+
   it("a restore that answers after the sign-in ended neither settles nor seeds the next sign-in", async () => {
     await render();
     await deliverContext();
@@ -796,4 +842,49 @@ describe("the sign-in ticket: each check and each move, tried on its own (cinatr
     expect(fetchThreadMessages, "no restore for a failed negotiation").not.toHaveBeenCalled();
     expect(vi.getTimerCount(), "no end armed for a failed negotiation").toBe(0);
   });
+});
+
+describe("the end timer: each arm is its own, under the same sign-in ticket too (cinatra#4357)", () => {
+  // A renewal keeps the sign-in's ticket and arms the end again for the renewed
+  // pair. The frame on this branch never arms twice under one ticket, so these
+  // tests drive the arm itself, with the refs the frame passes it. The ticket
+  // move without a clear is not a road of the frame (each of its ticket moves
+  // clears the timer first); it tries the arm's ticket check on its own.
+  it.each([["a re-arm under the same ticket"], ["a clear under the same ticket"], ["a ticket move without a clear"]])(
+    "after %s, an earlier arm's callback that still runs ends nothing and leaves the timer ref alone",
+    (then) => {
+      const timers = vi.spyOn(globalThis, "setTimeout");
+      try {
+        const refs: SignInEndRefs = { ticket: { current: 7 }, timer: { current: null }, arm: { current: 0 } };
+        const end = vi.fn();
+        armSignInEnd(refs, 7, LIFE_MS, end);
+        const calls = timers.mock.calls as unknown as Array<[() => void, number?]>;
+        const firstEnd = calls.find(([, delay]) => delay === LIFE_MS)?.[0];
+        expect(firstEnd, "the first arm's timer was armed").toBeTypeOf("function");
+        if (then === "a re-arm under the same ticket") {
+          armSignInEnd(refs, 7, 2 * LIFE_MS, end);
+        } else if (then === "a clear under the same ticket") {
+          clearSignInEnd(refs);
+        } else {
+          refs.ticket.current = 8;
+        }
+        const current = refs.timer.current;
+        expect(vi.getTimerCount(), "the timers still armed").toBe(then === "a clear under the same ticket" ? 0 : 1);
+        // The callback of the first arm runs now: cleared but already queued,
+        // or (after a ticket move alone) still armed.
+        firstEnd?.();
+        expect(end, "the earlier arm ends nothing").not.toHaveBeenCalled();
+        expect(refs.timer.current, "the earlier arm leaves the timer ref alone").toBe(current);
+        if (then === "a re-arm under the same ticket") {
+          expect(refs.ticket.current, "the ticket did not move").toBe(7);
+          expect(current, "the timer ref holds the current arm's timer").not.toBeNull();
+          vi.advanceTimersByTime(2 * LIFE_MS);
+          expect(end, "the current arm still ends the sign-in at its own end").toHaveBeenCalledTimes(1);
+          expect(refs.timer.current).toBeNull();
+        }
+      } finally {
+        timers.mockRestore();
+      }
+    },
+  );
 });
