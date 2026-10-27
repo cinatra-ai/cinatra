@@ -963,9 +963,13 @@ function ProposalPhase({
         durationCopy={body.durationCopy}
       />
 
-      {/* The floor — Confirm and nothing else (plan (A) §7.2). */}
+      {/* The floor — Confirm and nothing else (plan (A) §7.2). The drawing puts
+          the floor's action on the FLOOR, not on the button
+          (specs/app-lifecycle-cards.html §VI, `schedule-card-confirm-floor`),
+          and carries it as the full drawn value (cinatra#3678). */}
       <div
         data-conformance-id="schedule-proposal-floor"
+        data-action="confirm-schedule -> scheduled"
         className="flex flex-wrap items-center justify-end gap-2 border-t border-line pt-3"
       >
         {reason ? (
@@ -988,7 +992,6 @@ function ProposalPhase({
         <Button
           type="button"
           size="sm"
-          data-action="confirm-schedule-proposal"
           disabled={!canConfirm || pending}
           onClick={confirm}
         >
@@ -1049,8 +1052,11 @@ function ExpiredPhase({
         onChange={setDraft}
         durationCopy={durationCopy}
       />
+      {/* The same drawn action as the live floor
+          (specs/app-lifecycle-cards.html §VI, `schedule-card-expired-floor`). */}
       <div
         data-conformance-id="schedule-proposal-floor"
+        data-action="confirm-schedule -> scheduled"
         className="flex flex-wrap items-center justify-end gap-2 border-t border-line pt-3"
       >
         {refusal ? (
@@ -1065,7 +1071,6 @@ function ExpiredPhase({
         <Button
           type="button"
           size="sm"
-          data-action="confirm-schedule-proposal"
           disabled={pending}
           onClick={repropose}
         >

@@ -228,7 +228,13 @@ export const CARD_KINDS = {
     // control the plan puts on it. What a settled capture owes is graded by the
     // anchor set instead, where `[data-action="save-schedule-changes"]` is a
     // ratified member.
-    decisionControls: ['[data-action="confirm-schedule-proposal"]'],
+    //
+    // THE DRAWN VALUE (cinatra#3678): §VI draws the action on the floor, as
+    // `confirm-schedule -> scheduled`, on both undecided floors
+    // (specs/app-lifecycle-cards.html at the pin, `schedule-card-confirm-floor`
+    // and `schedule-card-expired-floor`). The value the card shipped before is
+    // retired, with no alias.
+    decisionControls: ['[data-action="confirm-schedule -> scheduled"]'],
   },
   verification_summary: {
     cellTokens: ["verification-card", "audit-card", "verification"],

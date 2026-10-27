@@ -239,7 +239,7 @@ describe("the recurring-minute control on the schedule card", () => {
       expect(container.querySelector('[data-field="recurring-minute"]')?.textContent).toBe("47"),
     );
 
-    fireEvent.click(container.querySelector('[data-action="confirm-schedule-proposal"]')!);
+    fireEvent.click(container.querySelector('[data-action="confirm-schedule -> scheduled"] button')!);
 
     const sent = await waitFor(() => {
       const decisions = fetchMock.mock.calls
