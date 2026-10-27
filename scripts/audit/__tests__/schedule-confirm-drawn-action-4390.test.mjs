@@ -92,6 +92,21 @@ describe("cinatra#4390: the conformance driver and the walk press the drawn cont
   });
 });
 
+describe("cinatra#4390: the capture index holds no observation of the old value", () => {
+  it("no committed record counted the old selector", () => {
+    // A record that counted the old selector never looked for the drawn one,
+    // and the contract now requires the drawn one; such a record is not
+    // evidence for the card that ships. The ten S9d-rework records were that
+    // case and are withdrawn rather than edited by hand.
+    const index = readJson("scripts/ci/chat-hitl-capture-index.json");
+    const counted = index.records
+      .filter((r) => (r.assertions ?? []).some((a) => a.selector === RETIRED_SELECTOR))
+      .map((r) => r.cell);
+    expect(counted).toEqual([]);
+    expect(JSON.stringify(index.records)).not.toContain(RETIRED);
+  });
+});
+
 describe("cinatra#4390: no product file, test or conformance driver names the old value", () => {
   it("git grep finds the old value in none of them", () => {
     const pathspecs = [

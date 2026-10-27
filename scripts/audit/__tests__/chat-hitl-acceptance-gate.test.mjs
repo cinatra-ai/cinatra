@@ -37,6 +37,10 @@
 //      absent, so that row is MAPPED again. The conformance-matrix row is
 //      UNTOUCHED by this round and stays MISSING: it asks for the S0 spec-
 //      matrix capture sweep specifically, which is a different round's work.
+//      cinatra#4390 (2026-10-27) then gave the schedule card's Confirm the
+//      value the drawing names. The ten S9d records counted the earlier value
+//      and never observed the drawn one, so they are withdrawn and AC-3 stays
+//      MAPPED but `partial`, its gap naming the re-shoot #4390 still owes.
 //
 //      THE EVIDENCE HALF. The manifest's chat_thread cells point at screenshots
 //      the canonical capture index never validated, and an unindexed screenshot
@@ -255,7 +259,7 @@ describe("the REAL manifest", () => {
     ).toBe(0);
   });
 
-  it("the criteria half reports the program NOT READY — one proof gap and one partial row, named", () => {
+  it("the criteria half reports the program NOT READY — one proof gap and two partial rows, named", () => {
     // The honest state of the program at this commit, and the THIRD time this
     // expectation has been inverted. It read NOT READY until the finisher round
     // flipped it, a code-grounded audit flipped it back for two rows, and this
@@ -274,7 +278,12 @@ describe("the REAL manifest", () => {
     expect(violations).toEqual([]);
     expect(total).toBe(CANONICAL_CRITERIA.length);
     expect(unproven).toHaveLength(1);
-    expect(partial).toHaveLength(1);
+    // The second partial row is AC-3 (cinatra#4390): its ten picture proofs
+    // were withdrawn with the records that never observed the drawn Confirm,
+    // and its gap names the re-shoot. The first is the one-implementation row.
+    expect(partial).toHaveLength(2);
+    expect(partial.map((r) => r.criterion)).toContain(CANONICAL_CRITERIA[2]);
+    expect(partial.find((r) => r.criterion === CANONICAL_CRITERIA[2]).gap).toMatch(/cinatra#4390/);
     // "CARD AXIS MISSING" became "CARD AXIS PARTIAL" with cinatra#2791 (S9g):
     // six cells landed — the review gate on chat_thread pending AND decided, the
     // review gate on the page gate region, the audit card on two hosts, the chip
@@ -292,7 +301,7 @@ describe("the REAL manifest", () => {
     // The line the CLI would print, spelled out here so a regression in either
     // count is still legible as the sentence a reader sees.
     expect(`${total - unproven.length}/${total} criteria proven, ${unproven.length} MISSING, ${partial.length} partial`).toBe(
-      "15/16 criteria proven, 1 MISSING, 1 partial",
+      "15/16 criteria proven, 1 MISSING, 2 partial",
     );
   });
 
@@ -439,31 +448,28 @@ describe("the REAL manifest", () => {
     expect(row.gap.length).toBeGreaterThan(200);
   });
 
-  it("row 3 is MAPPED again and kept every proof it had before the UI gap existed", () => {
-    // The mirror of the test above: this flip runs the OTHER way, and the same
-    // rule holds regardless of direction. The transaction proofs cinatra#2573's
+  it("row 3 is MAPPED and partial: every transaction proof stands, and the withdrawn picture proofs are named in its gap", () => {
+    // The mirror of the test above, and the rule holds in both directions: no
+    // proof already earned is thrown away. The transaction proofs cinatra#2573's
     // acceptance round wrote are untouched below — mint/consume identity,
     // arm-before-expose, single-use, replay, the concurrent double-Confirm and
-    // drain reconciliation — and cinatra#2788 (PR #2939) adds the UI proof
-    // beside them rather than replacing anything.
+    // drain reconciliation. cinatra#2788 (PR #2939) added ten S9d picture
+    // proofs beside them. cinatra#4390 (2026-10-27) gave the card's Confirm
+    // the value the drawing names; the ten records counted the earlier value
+    // and never observed the drawn one, so the capture contract no longer
+    // accepts them and they are withdrawn, from the index and from this row.
+    // The row says so in `partial` and `gap` rather than rounding itself up.
     const row = manifest().rows[2];
     expect(row.disposition).toBe("MAPPED");
-    expect(row.partial).toBeUndefined();
-    expect(row.gap).toBeUndefined();
+    expect(row.partial).toBe(true);
+    expect(row.gap).toMatch(/cinatra#4390/);
+    expect(row.gap).toContain('[data-action="confirm-schedule -> scheduled"]');
+    expect(row.gap).toMatch(/re-shoot/);
     expect(row.unitProofs).toHaveLength(3);
     expect(row.integrationProofs).toHaveLength(6);
-    // The S9d rework round produced exactly ten records (five cells, light +
-    // dark) and this row cites all ten — pinned exactly, not merely "some",
-    // so a future citation dropped or silently added is caught here.
-    expect(row.e2eProofs).toHaveLength(10);
-    expect(row.e2eProofs.every((p) => p.file === "https://github.com/cinatra-ai/cinatra/blob/35e369ed68a6446b0125cfecaee6aa993742a961/evidence/2788-s9d-rework/README.md")).toBe(
-      true,
-    );
-    expect(new Set(row.e2eProofs.map((p) => p.testName)).size).toBe(10);
-    for (const stem of ["C1", "C2", "C3", "C5", "C6"]) {
-      const cell = row.e2eProofs.filter((p) => p.testName.startsWith(`S9d-${stem}__`));
-      expect(cell, stem).toHaveLength(2); // light + dark
-    }
+    // No picture proof is cited until the re-shoot lands: a citation of a
+    // withdrawn record is the unindexed screenshot the binding refuses.
+    expect(row.e2eProofs).toBeUndefined();
   });
 
   it("every row carries the ruling that moved it, wherever one did", () => {

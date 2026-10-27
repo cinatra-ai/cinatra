@@ -666,13 +666,23 @@ describe("the advisory state — one kind's vocabulary, not every kind's", () =>
       // measurements and the code facts.
       "recommendation_hold | site_widget | decided": 6,
       "recommendation_hold | site_widget | pending": 7,
-      "trigger_schedule_proposal | chat_thread | decided": 4,
-      "trigger_schedule_proposal | chat_thread | pending": 4,
-      "trigger_schedule_proposal | run_card | decided": 2,
+      // MOVED 2026-10-27 by cinatra#4390 (-10): the schedule card's one
+      // decision control now carries the drawn
+      // `[data-action="confirm-schedule -> scheduled"]`. The ten S9d-rework
+      // records counted the earlier value and never looked for the drawn one,
+      // so they are withdrawn from the index rather than edited by hand:
+      //
+      //   trigger_schedule_proposal | chat_thread | decided   4 -> 0
+      //   trigger_schedule_proposal | chat_thread | pending   4 -> 0
+      //   trigger_schedule_proposal | run_card | decided      2 -> 0
+      //
+      // The re-shoot that brings these three buckets back is the open item of
+      // cinatra#4390; the acceptance manifest's schedule row is `partial` until
+      // it lands.
       "verification_summary | page_gate_region | advisory": 1,
       "verification_summary | run_card | advisory": 1,
     });
-    expect(index.records.length).toBe(111);
+    expect(index.records.length).toBe(101);
   });
 });
 
