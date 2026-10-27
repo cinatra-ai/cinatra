@@ -2178,16 +2178,28 @@ export type RecurrenceFrequencySelection = Pick<
 >;
 
 /**
+ * A day of the month the select offers as a NEW choice: an integer from 1 to
+ * 28 (§VI.2: "the day of the month — 1 to 28"), the same bound the bound
+ * screen's schema gives `dayOfMonth`. An assistant fill may set only such a day
+ * (cinatra#4377); `0`, `32`, `NaN`, a fraction, a string or a day 29-31 is not
+ * one, and the selection keeps the day it has.
+ */
+export function isOfferedDayOfMonth(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 28;
+}
+
+/**
  * The day-of-month options for a stated value: 1-28, as the in-flow step has
- * always offered. The wire admits up to 31, so a stated value outside the list
- * is ADDED as one more option and drawn, never blanked — the rule cinatra#3278
- * set for the minute: the value the schedule holds has to be one the control
- * can draw.
+ * always offered. The wire admits up to 31, so a SAVED day 29-31 is ADDED as
+ * one more option and drawn, never blanked — the rule cinatra#3278 set for the
+ * minute: the value the schedule holds has to be one the control can draw.
+ * Nothing else is added (cinatra#4377): `0`, `32`, a fraction or `NaN` is not a
+ * day of any month and never becomes an option.
  */
 export function dayOfMonthOptions(stated: number): number[] {
   const days = Array.from({ length: 28 }, (_, i) => i + 1);
-  if (!Number.isInteger(stated) || days.includes(stated)) return days;
-  return [...days, stated].sort((a, b) => a - b);
+  if (!Number.isInteger(stated) || stated < 29 || stated > 31) return days;
+  return [...days, stated];
 }
 
 /**

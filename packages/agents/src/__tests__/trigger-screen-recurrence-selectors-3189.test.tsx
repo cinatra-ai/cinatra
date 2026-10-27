@@ -9,6 +9,11 @@
 // the form submits. One clause is new — a stated day of month past 28 is drawn,
 // never blanked, the rule cinatra#3278 set for the minute.
 //
+// THE DAY OF MONTH AN ASSISTANT FILL MAY SET (cinatra#4377). A fill sets only a
+// day the select offers as a new choice, 1-28; 0, 32, NaN, a fraction, a string
+// and a day 29-31 leave the select and the cron as they were, and none of them
+// becomes an option. A saved day 29-31 (the stated schedule) is still drawn.
+//
 //   pnpm --filter @cinatra-ai/agents exec vitest run \
 //     src/__tests__/trigger-screen-recurrence-selectors-3189.test.tsx
 
@@ -36,6 +41,7 @@ import {
   TriggerScreenClient,
   type TriggerScreenClientProps,
 } from "../trigger-screen-client";
+import { dayOfMonthOptions } from "../schedule-proposal-card";
 
 const ORIGINAL_RESIZE_OBSERVER = (globalThis as { ResizeObserver?: unknown }).ResizeObserver;
 const ORIGINAL_ELEMENT_SHIMS = {
@@ -225,5 +231,114 @@ describe("the scheduling step's frequency selectors (cinatra#3189)", () => {
     await waitFor(() => expect(byLabel(container, "Day of month")).not.toBeNull());
     expect(byLabel(container, "Day of month")!.textContent).toBe("31");
     expect(storedCron(container)).toBe("0 9 31 * *");
+  });
+});
+
+const DAYS_1_TO_28 = Array.from({ length: 28 }, (_, i) => String(i + 1));
+
+function propsFor(statedSchedule: ProposedSchedule): TriggerScreenClientProps {
+  return {
+    agentId: "demo-agent",
+    instanceId: "run-abc",
+    templateId: "tpl-test",
+    durationEstimate: undefined,
+    inputParams: {},
+    requiredFields: [],
+    properties: {},
+    setupComplete: true,
+    statedSchedule,
+    embeddedAsRenderer: true,
+  };
+}
+
+/** The step as the HITL renderer mounts it, on a stated day; then one assistant fill. */
+async function renderThenFill(day: number, fill: Record<string, unknown>) {
+  installSelectShims();
+  const props = propsFor(stated({ frequency: "monthly", dayOfMonth: day }));
+  const view = render(<TriggerScreenClient {...props} />);
+  await waitFor(() => expect(byLabel(view.container, "Day of month")).not.toBeNull());
+  expect(storedCron(view.container)).toBe(`0 9 ${day} * *`);
+  view.rerender(<TriggerScreenClient {...props} aiSuggestions={fill} />);
+  return view.container;
+}
+
+/** The texts of the options the open Day of month select draws. */
+async function dayOptions(container: HTMLElement): Promise<string[]> {
+  fireEvent.pointerDown(byLabel(container, "Day of month")!, {
+    button: 0,
+    ctrlKey: false,
+    pointerType: "mouse",
+  });
+  await waitFor(() =>
+    expect(document.querySelectorAll('[role="option"]').length).toBeGreaterThan(0),
+  );
+  return Array.from(document.querySelectorAll('[role="option"]')).map((o) => o.textContent ?? "");
+}
+
+describe("the day of month an assistant fill may set (cinatra#4377)", () => {
+  for (const [name, value] of [
+    ["0", 0],
+    ["32", 32],
+    ["NaN", Number.NaN],
+    ["the fraction 1.5", 1.5],
+  ] as const) {
+    it(`a filled day of ${name} keeps the select and the cron, and is never an option`, async () => {
+      const container = await renderThenFill(10, { dayOfMonth: value });
+      expect(byLabel(container, "Day of month")!.textContent).toBe("10");
+      expect(storedCron(container)).toBe("0 9 10 * *");
+      expect(await dayOptions(container)).toEqual(DAYS_1_TO_28);
+    });
+  }
+
+  it("a filled day of 31 is not a new choice: the select and the cron keep their day", async () => {
+    const container = await renderThenFill(10, { dayOfMonth: 31 });
+    expect(byLabel(container, "Day of month")!.textContent).toBe("10");
+    expect(storedCron(container)).toBe("0 9 10 * *");
+    expect(await dayOptions(container)).toEqual(DAYS_1_TO_28);
+  });
+
+  it("a filled day given as the string \"15\" is not a day: the select and the cron keep theirs", async () => {
+    const container = await renderThenFill(10, { dayOfMonth: "15" });
+    expect(byLabel(container, "Day of month")!.textContent).toBe("10");
+    expect(storedCron(container)).toBe("0 9 10 * *");
+  });
+
+  it("a filled day of 15 moves the select and the cron (the fill road itself)", async () => {
+    const container = await renderThenFill(10, { dayOfMonth: 15 });
+    await waitFor(() => expect(storedCron(container)).toBe("0 9 15 * *"));
+    expect(byLabel(container, "Day of month")!.textContent).toBe("15");
+  });
+
+  it("a saved day of 31 stays drawn and stored when a fill names day 0", async () => {
+    const container = await renderThenFill(31, { dayOfMonth: 0 });
+    expect(byLabel(container, "Day of month")!.textContent).toBe("31");
+    expect(storedCron(container)).toBe("0 9 31 * *");
+    expect(await dayOptions(container)).toEqual([...DAYS_1_TO_28, "31"]);
+  });
+
+  it("a refused day leaves the fill's other rows applied", async () => {
+    const container = await renderThenFill(10, { dayOfMonth: 32, hour: 14 });
+    await waitFor(() => expect(storedCron(container)).toBe("0 14 10 * *"));
+    expect(byLabel(container, "Day of month")!.textContent).toBe("10");
+  });
+});
+
+describe("dayOfMonthOptions adds a saved day 29-31 and nothing else (cinatra#4377)", () => {
+  const plain = Array.from({ length: 28 }, (_, i) => i + 1);
+
+  for (const value of [0, 32, -1, Number.NaN, 1.5, Number.POSITIVE_INFINITY]) {
+    it(`${value} is not added: the options stay 1-28`, () => {
+      expect(dayOfMonthOptions(value)).toEqual(plain);
+    });
+  }
+
+  for (const value of [29, 30, 31]) {
+    it(`a saved day of ${value} is added after 28`, () => {
+      expect(dayOfMonthOptions(value)).toEqual([...plain, value]);
+    });
+  }
+
+  it("a day in 1-28 adds nothing", () => {
+    expect(dayOfMonthOptions(15)).toEqual(plain);
   });
 });

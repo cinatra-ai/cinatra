@@ -41,7 +41,7 @@ import {
   resolveTimezoneField,
 } from "./trigger-timezone";
 import { TimezoneField } from "./timezone-field";
-import { RecurrenceFrequencySelectors } from "./schedule-proposal-card";
+import { isOfferedDayOfMonth, RecurrenceFrequencySelectors } from "./schedule-proposal-card";
 import { declaredDurationEstimate } from "./duration-declared";
 // THE SCHEDULE DEFAULT IS THE RUNNER'S, NOT THIS FORM'S (cinatra#2936).
 // `scheduleScreenSelection` applies `scheduleDefaultForLaunch` — the decision
@@ -561,9 +561,17 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
       // THE REPEAT ROWS THEMSELVES. The same write the form's own controls make
       // (`updateRecurring`): the selections move and the cron is rebuilt from
       // them, so what is armed later is what the person can read now.
+      //
+      // THE DAY OF MONTH A FILL MAY SET (cinatra#4377): only a day the select
+      // offers as a new choice, 1-28. Any other value is dropped from the patch,
+      // so the select and the cron keep the day they hold — a saved day 29-31
+      // included, which reaches the selection through the stated schedule or a
+      // saved cron, never through this row.
       const patch: Record<string, unknown> = {};
       for (const row of SCHEDULE_RECURRENCE_ROWS) {
-        if (values[row] !== undefined) patch[row] = values[row];
+        if (values[row] === undefined) continue;
+        if (row === "dayOfMonth" && !isOfferedDayOfMonth(values[row])) continue;
+        patch[row] = values[row];
       }
       if (Object.keys(patch).length > 0) {
         setRecurring((prev) => {
