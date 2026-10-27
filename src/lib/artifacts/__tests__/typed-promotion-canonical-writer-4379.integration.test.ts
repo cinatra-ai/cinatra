@@ -34,10 +34,14 @@
  * columns, indexes and triggers on the Better Auth tables) is left out. That
  * leave-out is LEXICAL, over the canonical DDL as it is today. The boundary is
  * SEMANTIC: the catalog of every schema but the run's own (and the system
- * schemas) is read before setup and compared, entry by entry and counted, after
- * setup, after the cases and after teardown, and an added or removed entry fails
- * the run. Runs of this tier hold one advisory lock across that window, so they
- * run one after another and another run's schema is read like any other.
+ * schemas) is read once, after the tier lock is taken and the Better Auth tables
+ * are checked and before setup creates anything, and compared, entry by entry
+ * and counted, after setup, after the cases and after teardown; an entry added
+ * or removed at one of those three reads fails the run. A change made before the
+ * first read is part of what it compares against, and a change undone before the
+ * next read is not seen. Runs of this tier hold one advisory lock from before the
+ * first read until after the last, so, while that lock's connection stays open,
+ * they run one after another; another run's schema is read like any other.
  * It reads schemas, relations, columns, constraints, indexes, triggers,
  * functions and types; a change of any other kind (a column default, a
  * privilege, row security or a policy, a comment, an extension, a row), and of
@@ -416,11 +420,13 @@ async function assertCatalogUnchanged(phase: string): Promise<void> {
 /**
  * Runs of this tier against one database wait for each other: each run holds a
  * session advisory lock (key 4379, 1) on a connection of its own from before its
- * first catalog read until after its last, so no other run of this tier creates
- * or drops its schema inside this run's checked window, and the check need not
- * leave other runs' schemas out. A run that cannot take the lock within 600 s
- * fails its setup. A killed run's connection closes, and Postgres releases its
- * lock.
+ * first catalog read until after its last, so, while that connection stays open,
+ * no other run of this tier that takes the lock creates or drops its schema
+ * inside this run's checked window, and the check need not leave other runs'
+ * schemas out. A run of an earlier version of this tier takes no lock. A run
+ * that cannot take the lock within 600 s fails its setup. A killed run's
+ * connection closes, and Postgres releases its lock; a lock connection lost
+ * while the run goes on releases the lock too, and nothing checks for that.
  */
 const TIER_LOCK_WAIT_S = 600;
 let tierLock: Client | undefined;
