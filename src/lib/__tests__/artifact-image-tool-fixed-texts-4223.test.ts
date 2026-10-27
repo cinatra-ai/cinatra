@@ -28,6 +28,7 @@ const m = vi.hoisted(() => ({
   readRevisionImageProvenance: vi.fn(),
   createSemanticArtifact: vi.fn(),
   appendArtifactRevision: vi.fn(),
+  explainAbsentArtifactSafeClaims: vi.fn(),
 }));
 
 vi.mock("@/lib/artifacts/resolve-bound-artifact-type", () => ({
@@ -50,6 +51,9 @@ vi.mock("@/lib/artifacts/artifact-creation", () => ({
 }));
 vi.mock("@/lib/artifacts/artifact-revision-append", () => ({
   appendArtifactRevision: m.appendArtifactRevision,
+}));
+vi.mock("@/lib/extension-install-anchor", () => ({
+  explainAbsentArtifactSafeClaims: m.explainAbsentArtifactSafeClaims,
 }));
 vi.mock("@/lib/artifacts/matcher-enqueue", () => ({
   enqueueArtifactMatchRun: async () => undefined,
@@ -368,5 +372,141 @@ describe("cinatra#4223 — a re-drive reports the facts stored with the revision
     expect(outcome.model).toBe("second-model");
     expect(outcome.deduped).toBe(false);
     expect(m.readRevisionImageProvenance).not.toHaveBeenCalled();
+  });
+});
+
+describe("cinatra#4223 — the unreadable stored facts refuse on every re-drive road", () => {
+  it("the loser of a double drive whose winner's stored facts are missing refuses with the fixed sentence", async () => {
+    m.createSemanticArtifact.mockRejectedValue(
+      new Error(`invalid input syntax: ${MATERIALIZATION_FINALIZE_CONFLICT_MARKER}`),
+    );
+    m.readFinalizedMaterialization.mockResolvedValue({
+      artifactId: "art-win",
+      representationRevisionId: "rep-win",
+    });
+    m.readRevisionImageProvenance.mockResolvedValue(null);
+    const outcome = await generateArtifactImage(call, deps());
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("unreachable");
+    expect(outcome.reason).toBe("write_refused");
+    expect(outcome.error).toBe(tool.FILING_STORED_FACTS_UNREADABLE_ERROR);
+  });
+
+  it("the loser whose stored-facts read throws refuses with the fixed sentence, its detail logged", async () => {
+    m.createSemanticArtifact.mockRejectedValue(
+      new Error(`invalid input syntax: ${MATERIALIZATION_FINALIZE_CONFLICT_MARKER}`),
+    );
+    m.readFinalizedMaterialization.mockResolvedValue({
+      artifactId: "art-win",
+      representationRevisionId: "rep-win",
+    });
+    m.readRevisionImageProvenance.mockRejectedValue(new Error(SECRET_DETAIL));
+    const outcome = await generateArtifactImage(call, deps());
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("unreachable");
+    expect(outcome.error).toBe(tool.FILING_STORED_FACTS_UNREADABLE_ERROR);
+    expectDetailLogged();
+  });
+
+  it("a deduped append whose stored facts are missing refuses with the fixed sentence", async () => {
+    m.appendArtifactRevision.mockResolvedValue({
+      ok: true,
+      artifactId: "art-1",
+      representationRevisionId: "rep-2",
+      revision: 2,
+      deduped: true,
+    });
+    m.readRevisionImageProvenance.mockResolvedValue(null);
+    const outcome = await generateArtifactImage(regeneration, deps());
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("unreachable");
+    expect(outcome.reason).toBe("write_refused");
+    expect(outcome.error).toBe(tool.FILING_STORED_FACTS_UNREADABLE_ERROR);
+  });
+
+  it("a deduped append whose stored-facts read throws refuses with the fixed sentence, its detail logged", async () => {
+    m.appendArtifactRevision.mockResolvedValue({
+      ok: true,
+      artifactId: "art-1",
+      representationRevisionId: "rep-2",
+      revision: 2,
+      deduped: true,
+    });
+    m.readRevisionImageProvenance.mockRejectedValue(new Error(SECRET_DETAIL));
+    const outcome = await generateArtifactImage(regeneration, deps());
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("unreachable");
+    expect(outcome.error).toBe(tool.FILING_STORED_FACTS_UNREADABLE_ERROR);
+    expectDetailLogged();
+  });
+
+  it("a re-drive whose stored model is null reports a null model, never this attempt's", async () => {
+    m.claimMaterialization.mockResolvedValue({
+      kind: "finalized",
+      artifactId: "art-1",
+      representationRevisionId: "rep-1",
+      path: "materialize_tool",
+    });
+    m.readRevisionImageProvenance.mockResolvedValue({ provider: "first-provider", model: null });
+    const outcome = await generateArtifactImage(call, deps());
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error(outcome.error);
+    expect(outcome.provider).toBe("first-provider");
+    expect(outcome.model).toBeNull();
+  });
+});
+
+describe("cinatra#4223 — the install-state explanation reaches the result as a fixed sentence", () => {
+  /** The resolver hands back the explainer's text as its refusal, as it does for a zero-claim extension. */
+  function resolverThatExplains() {
+    m.resolveBoundArtifactTarget.mockImplementation(
+      async (i: {
+        orgId: string;
+        extension: string;
+        deps?: { explainAbsentClaims?: (a: { orgId: string; extension: string }) => Promise<string> };
+      }) => ({
+        ok: false,
+        error: await i.deps!.explainAbsentClaims!({ orgId: i.orgId, extension: i.extension }),
+      }),
+    );
+  }
+
+  it("an explanation that carries a read error's text is answered with the fixed install-state sentence, its detail logged", async () => {
+    resolverThatExplains();
+    m.explainAbsentArtifactSafeClaims.mockResolvedValue(
+      `no artifact-safe claim resolved and its install state could not be read (${SECRET_DETAIL})`,
+    );
+    const outcome = await generateArtifactImage(call, deps());
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("unreachable");
+    expect(outcome.reason).toBe("type_unresolved");
+    expect(outcome.error).toBe(tool.installStateUnresolvedError(call.extension));
+    expectNoDetail(outcome.error);
+    expectDetailLogged();
+  });
+
+  it("an explainer that throws is answered with the same fixed sentence, its detail logged", async () => {
+    resolverThatExplains();
+    m.explainAbsentArtifactSafeClaims.mockRejectedValue(new Error(SECRET_DETAIL));
+    const outcome = await generateArtifactImage(call, deps());
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("unreachable");
+    expect(outcome.reason).toBe("type_unresolved");
+    expect(outcome.error).toBe(tool.installStateUnresolvedError(call.extension));
+    expectDetailLogged();
+  });
+
+  it("guard: a resolver refusal that is not an install-state explanation keeps its own sentence", async () => {
+    m.resolveBoundArtifactTarget.mockResolvedValue({
+      ok: false,
+      error: 'extension "@cinatra-ai/picture-artifact" declares more than one artifact-safe object type',
+    });
+    const outcome = await generateArtifactImage(call, deps());
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("unreachable");
+    expect(outcome.reason).toBe("type_unresolved");
+    expect(outcome.error).toBe(
+      'extension "@cinatra-ai/picture-artifact" declares more than one artifact-safe object type',
+    );
   });
 });
