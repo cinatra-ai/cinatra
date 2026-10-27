@@ -64,13 +64,13 @@ function frame(options: { stuck?: boolean } = {}) {
   let gate: { promise: Promise<void>; resolve: () => void } | null = null;
   const settled = vi.fn((): Promise<void> => (gate ? gate.promise : Promise.resolve()));
   const auth: LifecycleCardAuth = {
-    headers: () =>
-      state.dropped
-        ? {}
-        : {
-            Authorization: `Bearer cit_${state.n}`,
-            "X-Cinatra-Widget-User-Token": `cwu_${state.n}`,
-          },
+    headers: (): Record<string, string> => {
+      if (state.dropped) return {};
+      return {
+        Authorization: `Bearer cit_${state.n}`,
+        "X-Cinatra-Widget-User-Token": `cwu_${state.n}`,
+      };
+    },
     credentials: "omit",
     renewal: { pending: () => state.pending, settled },
   };

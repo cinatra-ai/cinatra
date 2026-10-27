@@ -498,15 +498,22 @@ describe("the seed read across a renewal (cinatra#4217 fold 1)", () => {
   });
 
   // cinatra#4217 fold 3 (pre-3 untested branches): a renewal that ENDS the
-  // chain, and an unmount while the read waits for the renewal.
+  // chain, and an unmount while the read waits for the renewal. The first is
+  // red at 749d92f2 (fold 2 sent one more read with the emptied headers); the
+  // second is green there too.
   it("BROKER: a renewal that ends the chain leaves the refusal terminal and sends nothing without a token", async () => {
     const { host, drop, settled } = renewalOnItsWay();
     firstAnswer(401);
     render(host(<InlineAgentRunCard runId={RUN_ID} />));
     await waitFor(() => expect(settled).toHaveBeenCalled());
     drop();
-    await waitFor(() => expect(screen.getByText(/do not have access/i)).toBeTruthy());
+    // One macrotask turn drains every promise the drop settles. RED AT
+    // 749d92f2: the fold-2 rule saw the headers change (to empty values) and
+    // read once more without a user token.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(fetchCalls, "no tokenless read").toHaveLength(1);
+    await waitFor(() => expect(screen.getByText(/do not have access/i)).toBeTruthy());
+    expect(fetchCalls).toHaveLength(1);
     expect(screen.queryByTestId("run-panel-stub")).toBeNull();
   });
 

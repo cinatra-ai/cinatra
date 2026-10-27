@@ -267,9 +267,6 @@ function renewalSeam() {
     renewal: { pending: () => seam.pending, settled },
   });
 }
-/** One macrotask turn: lets anything already started run to its end. */
-const drain = () => new Promise((resolve) => setTimeout(resolve, 0));
-
 afterEach(() => {
   cleanup();
   delete (WIDGET_LIFECYCLE_SURFACE.auth as { renewal?: unknown }).renewal;
@@ -319,11 +316,23 @@ describe("the run's moment reader on the widget (cinatra#4217)", () => {
   // cinatra#4217 fold 3 (pre-3 MUST-FIX 1): the server committed the renewed
   // pair and spent the first one, but the renewal's answer is held back, so the
   // frame still sends the first pair and a look in that gap is refused. The
-  // watch counts that look as neither answer nor miss and does not look again,
-  // not even on a focus, until the renewal settles; however long that takes is
-  // the renewal request's own bound. RED AT 749d92f2: the fold-2 watch went on
-  // looking through the gap (and charged it after 180 s), it never waited for
-  // the renewal, so the wait below never began.
+  // watch counts that look as neither answer nor miss and waits for the
+  // renewal to settle; however long that takes is the renewal request's own
+  // bound. RED AT 749d92f2: the fold-2 watch never waited for the renewal (it
+  // only counted RENEWING looks for 180 s), so the wait below never began.
+  //
+  // THIS IS THE WIRING TEST, AND IT ASSERTS NO COUNT AND NO QUIET PERIOD
+  // (fold 3b: an exact count of one was red in 4 of 5 runs alone). How many
+  // looks meet the gap before the watch waits depends on the surface's own
+  // start-up under real timers: two run-route looks met the gap in most runs
+  // where one watch, by its own code path, sends one. So this test pins only
+  // what the wiring must do in every order: the watch on the widget waits on
+  // the frame's renewal, every look in the gap carries the held pair, and
+  // after the renewal every look carries the renewed pair and the card
+  // reaches the open page. The exact
+  // count, and that neither the cadence nor a focus looks during the wait, are
+  // pinned under fake timers in packages/agents/src/__tests__/
+  // readers-across-renewal-4217.test.tsx.
   it("fold 3: a look refused while a renewal answer is on its way waits for the renewal; the next look carries the renewed pair and the open page draws the schedule card", async () => {
     let userToken = "cwu_first";
     const spent = new Set<string>();
@@ -347,24 +356,29 @@ describe("the run's moment reader on the widget (cinatra#4217)", () => {
     spent.add("cwu_first");
     const before = runLooks().length;
     window.dispatchEvent(new Event("focus"));
-    // The look that meets the gap (the focus, or the cadence when the focus
-    // came while the first look was still out) puts the watch on the renewal.
-    await waitFor(() => {
-      if (seam.settledCalls === 0) throw new Error("the watch never waited for the renewal");
-    });
+    // A look that meets the gap (the focus, or the cadence when the focus came
+    // while the first look was still out) puts the watch on the renewal.
+    // The cadence look comes 2 s after the first answer, so the wait has the
+    // same 10 s bound as the drawing below, not waitFor's 1 s default.
+    await waitFor(
+      () => {
+        if (seam.settledCalls === 0) throw new Error("the watch never waited for the renewal");
+      },
+      { timeout: 10_000 },
+    );
     const gap = runLooks().slice(before);
-    expect(gap.length, "exactly one look met the gap").toBe(1);
-    expect(userTokenOf(gap[0]!.init)).toBe("cwu_first");
-    // While it waits nothing looks, whatever the person does.
-    for (let i = 0; i < 5; i += 1) window.dispatchEvent(new Event("focus"));
-    await drain();
-    expect(runLooks().length, "no look while the renewal is on its way").toBe(before + 1);
+    expect(gap.length, "a look met the gap").toBeGreaterThan(0);
+    for (const call of gap) expect(userTokenOf(call.init)).toBe("cwu_first");
+    expect(container.querySelector(CARD), "nothing drawn from a refused look").toBeNull();
 
     // The renewal answers: the renewed pair is installed first, then the
     // request stops counting as in flight. Then the run parks.
     userToken = "cwu_renewed";
     seam.pending = false;
     runReading = RUN_AT_SCHEDULE;
+    // Every look recorded from here on was sent with the renewed pair: a look
+    // is recorded when it is sent, and the pair is installed before this line.
+    const opened = runLooks().length;
     seam.open();
     await waitFor(
       () => {
@@ -375,9 +389,9 @@ describe("the run's moment reader on the widget (cinatra#4217)", () => {
       { timeout: 10_000 },
     );
     expect(container.querySelectorAll(CARD).length).toBe(1);
-    for (const call of runLooks().slice(before + 1)) {
-      expect(userTokenOf(call.init)).toBe("cwu_renewed");
-    }
+    const renewed = runLooks().slice(opened);
+    expect(renewed.length, "a look after the renewal").toBeGreaterThan(0);
+    for (const call of renewed) expect(userTokenOf(call.init)).toBe("cwu_renewed");
   }, 30_000);
 
   // cinatra#4217 (R76 MUST-FIX 1): what the renewed look CHANGES ON SCREEN. The
