@@ -1023,6 +1023,39 @@ other pin moved.
 | `app-connectors` | `match` | nothing — the published body is still the pinned artifact | none |
 | `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
 
+## Reconciliation record — 2026-10-27 (app-components)
+
+Measured 2026-10-27 against the manifest published under `publishedBaseUrl`,
+for the `app-components` pin after the docs mirror published version 0.7.2 of
+the components spec (cinatra-ai/docs PR 255: the toast chip and description
+now say that a toast offers Copy by default when copy text is available). The
+published `app-components` body was fetched with one anonymous `curl -sS` into
+a scratch directory outside every repository tree, and its bytes equal the file
+on the docs main branch at that PR's merge. It hashes to
+`sha256:9de4ae113d47599f8864a544c1835cb12aa57381a84d6899ea3b4d8a70ec05e8`,
+and the `contentHash` read back out of its own body is
+`sha256:7aceaf73557962256eb36cc308e9f7a814bf4c5c2b7841c566ccc724b35dbc4a`; the
+pin named `54b4bd7b…` and `a194bc10…` before. The other four published bodies
+were fetched the same way and still hash to their pins. The published body was
+compared, as parsed JSON, with the committed copy under
+`tests/e2e/design/conformance/manifests/` that it replaces: `schemaVersion`,
+`spec` and the whole `surfaces` array (the same 37 surfaces, with their fields,
+actions and states) compare equal, and the only top-level key that differs is
+`contentHash`. This is the case "Why a hash-only re-pin is refused" names: the
+spec source changed under an unchanged surface list, so no driver, harness
+mount or allowlist entry moves with the pin. The committed artifact is now the
+verbatim published body, and both hashes of the entry in
+`conformance-pins.json` were re-derived from the adopted bytes, never typed. No
+other pin moved.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-components` | `drift` | **hashes only** — byte-identical surface declarations (37 surfaces); `contentHash` moved with the toast chip and description text (prose, version 0.7.2) | re-pin |
+| `app-extensions` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-connectors` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
+
 ## Running it locally
 
 ```sh
