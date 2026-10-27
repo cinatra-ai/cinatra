@@ -21,10 +21,13 @@
 //      empty listing or a listed file that cannot be read throws; it is never an
 //      empty result. A file that does not parse is a problem no reading clears,
 //      and a root `tsconfig.json` that does not parse, or whose `paths` are no
-//      map of string lists, throws, and so does a workspace `package.json`
-//      that is no JSON object or has malformed `exports` or `main`. Only an
-//      absent root `tsconfig.json` or `package.json` (ENOENT) is none; every
-//      other read error throws.
+//      map of string lists, throws, as does one with `extends` or
+//      `compilerOptions.baseUrl` (which the scan does not read) or whose
+//      `compilerOptions` or `paths` is null or no object; so does a workspace
+//      `package.json` that is no JSON object or has a malformed `exports` or a
+//      malformed `main`, with or without `exports`. Only an absent root
+//      `tsconfig.json` or `package.json` (ENOENT) is none; every other read
+//      error throws.
 //   2. ANY REFERENCE COUNTS. A file is in scope when its text holds any
 //      checkbox token (`CHECKBOX_TOKEN`): an identifier that contains
 //      `Checkbox` from a capital C in any letter case after it (`CheckBox`,
@@ -147,11 +150,14 @@
 //      neither a switch nor a checkbox is claimed. A module is resolved as in
 //      rule 3: it surely names a switch only when every file its path aliases or
 //      workspace entries resolve it to (its spelling when none) names one; it
-//      may name one when any does. A tag with a segment that is a checkbox name
-//      (a name from a module that names a checkbox is one) draws no sure switch. A name that may
+//      may name one when any does. A name is surely a switch only by what its
+//      file binds itself: a name another file exports a switch under may be a
+//      switch, never surely. A tag with a segment that is a checkbox name (a
+//      name from a module that names a checkbox is one) draws no sure switch. A name that may
 //      be a switch is enough to refuse a checkbox claim, and not enough for a
 //      switch claim. A name spelled `Switch` counts wherever it comes from,
-//      unless it is a checkbox name too (a stated limit, K13).
+//      unless rule 3 resolves it as a checkbox name too, so a local `Switch`
+//      component or `const Switch = memo(Checkbox)` counts (a stated limit, K13).
 //
 // LIMIT of the whole scan: the files are listed and read once, with no snapshot
 // or lock, so a file added or changed while a run reads the tree may be missed
@@ -574,12 +580,16 @@ export type NameScope = {
 
 /**
  * Resolves the target's names over every file: `target` says which spellings
- * are the target, `targetModule` which imported modules bind it.
+ * are the target, `targetModule` which imported modules bind it. Without
+ * `followExports`, a file's names are only what it binds itself (its spelling,
+ * its imports from a target module and its own aliases of them), never a name
+ * another file exports the target under (fold 6).
  */
 export function resolveNames(
   sources: ReadonlyMap<string, ts.SourceFile>,
   target: (name: string) => boolean,
   targetModule: (spec: string) => boolean = () => false,
+  followExports = true,
 ): NameScope {
   const bindings = new Map([...sources].map(([file, sf]) => [file, collectBindings(sf)] as const));
   const exported = new Set<string>();
@@ -600,6 +610,7 @@ export function resolveNames(
     size = exported.size;
     for (const [file, b] of bindings) {
       const set = localOf(file, b);
+      if (!followExports) continue;
       for (const [name, from] of b.exports) {
         if (!target(name) && from.some((n) => target(n) || exported.has(n) || set.has(n))) exported.add(name);
       }
@@ -838,7 +849,7 @@ export type PackageEntries = Map<string, string[]>;
 
 /**
  * The entry points of `packages/<dir>/package.json` (`exports`, else `main`): every string an entry's
- * conditions hold, as a repo-relative file. Null when the text is no JSON object.
+ * conditions hold, as a repo-relative file. Null when the text is no JSON object, or its `exports` or `main` is malformed.
  */
 export function packageEntriesOf(dir: string, packageJson: string): PackageEntries | null {
   let json: unknown;
@@ -847,11 +858,12 @@ export function packageEntriesOf(dir: string, packageJson: string): PackageEntri
   } catch {
     return null;
   }
-  // A root that is no object, or `exports` or `main` of the wrong kind, leaves the entries unknown (pre-4 NOTE).
+  // A root that is no object, or `exports` or `main` of the wrong kind (with or without the other, fold 6), gives null,
+  // which workspaceEntries refuses (pre-4 NOTE, fold 5).
   if (typeof json !== "object" || json === null || Array.isArray(json)) return null;
   const { exports, main } = json as { exports?: unknown; main?: unknown };
   if (exports !== undefined && typeof exports !== "string" && (typeof exports !== "object" || exports === null)) return null;
-  if (exports === undefined && main !== undefined && typeof main !== "string") return null;
+  if (main !== undefined && typeof main !== "string") return null;
   const leaves = (v: unknown): string[] =>
     typeof v === "string" ? [v] : typeof v === "object" && v !== null ? Object.values(v).flatMap(leaves) : [];
   const file = (t: string) => path.posix.normalize(`packages/${dir}/${t}`);
@@ -863,13 +875,22 @@ export function packageEntriesOf(dir: string, packageJson: string): PackageEntri
   return out;
 }
 
-/** The path aliases of a `tsconfig.json` (`compilerOptions.paths`, comments allowed), each target repo-relative; empty when none. */
+/**
+ * The path aliases of a `tsconfig.json` (`compilerOptions.paths`, comments allowed), each target repo-relative; empty
+ * only when `compilerOptions` or `paths` is absent.
+ */
 export function pathAliasesOf(tsconfig: string): PackageEntries {
   const { config, error } = ts.parseConfigFileTextToJson("tsconfig.json", tsconfig);
   // A root config that does not parse, or whose paths are no map of string lists, throws: never no aliases (pre-3 NOTE).
   // The compiler gives an error for every root that is no object (`[]`, a string, `null`), so `config` is one here.
   if (error !== undefined) throw new Error("tsconfig.json does not parse");
-  const paths: unknown = (config as { compilerOptions?: { paths?: unknown } }).compilerOptions?.paths ?? {};
+  const root = config as { extends?: unknown; compilerOptions?: unknown };
+  // `extends` and `baseUrl` change what an alias resolves to and the scan reads neither, so either refuses (fold 6).
+  if (root.extends !== undefined) throw new Error("tsconfig.json: extends is not read by the scan");
+  const options: unknown = root.compilerOptions === undefined ? {} : root.compilerOptions;
+  if (typeof options !== "object" || options === null || Array.isArray(options)) throw new Error("tsconfig.json: compilerOptions is no object");
+  const { baseUrl, paths = {} } = options as { baseUrl?: unknown; paths?: unknown };
+  if (baseUrl !== undefined) throw new Error("tsconfig.json: compilerOptions.baseUrl is not read by the scan");
   if (typeof paths !== "object" || paths === null || Array.isArray(paths)) throw new Error("tsconfig.json: compilerOptions.paths is no object");
   const out: PackageEntries = new Map();
   for (const [k, v] of Object.entries(paths)) {
@@ -1438,10 +1459,11 @@ export function scanSources(
   const modules = moduleObjectsOf(bindings, scope.isName, boxModule, entries, aliases);
   // A switch by name, through the same resolution (pre-4 NOTE, fold 5): Switch, a name bound to it, or a name imported
   // from a module that names a switch. It MAY be one when the specifier or any file it resolves to names a switch; it
-  // is SURELY one only when every file it resolves to (its spelling when it resolves to none) names a switch. A name
-  // from a module that names a checkbox is a checkbox name, which findSites never takes as a sure switch.
+  // is SURELY one only when every file it resolves to (its spelling when it resolves to none) names a switch, and only
+  // by what the file binds itself: a name another file exports a switch under is a possible switch, never a sure one
+  // (fold 6). A name from a module that names a checkbox is a checkbox name, which findSites never takes as a sure switch.
   const mayBeSwitch = resolveNames(sources, (n) => n === "Switch", (spec) => isSwitchModule(spec) || (targets(spec) ?? []).some(isSwitchModule));
-  const sureSwitch = resolveNames(sources, (n) => n === "Switch", (spec) => (targets(spec) ?? [spec]).every(isSwitchModule));
+  const sureSwitch = resolveNames(sources, (n) => n === "Switch", (spec) => (targets(spec) ?? [spec]).every(isSwitchModule), false);
   const out: ScannedFile[] = [];
   for (const [file, sf] of sources) {
     const isName = (n: string) => scope.isName(file, n);

@@ -1310,3 +1310,52 @@ describe("the switch rule takes the same resolution, and a malformed manifest re
     expect(workspaceEntries(["packages/kit/src/a.ts"], reader({}))).toEqual(new Map());
   });
 });
+
+describe("a sure switch is bound in its own file, and every unread config refuses (fold 6)", () => {
+  const ROW: SiteReading = {
+    anchor: "onCheckedChange={(c) => toggle(c)}",
+    tag: "DropdownMenuCheckboxItem",
+    drawn: "switch",
+    effect: "immediate",
+    reading: "a menu row whose change applies at once",
+    tagIncludes: ["onCheckedChange={(c) => toggle(c)}"],
+    fileIncludes: [],
+  };
+  const row = (head: string) =>
+    `${head}\nexport const R = () => <DropdownMenuCheckboxItem checked={on} onCheckedChange={(c) => toggle(c)}><Toggle checked={on} />Row</DropdownMenuCheckboxItem>;\n`;
+
+  it("takes no sure switch from a name another file exports a switch under (GAP 1)", () => {
+    const kit = 'import { Switch } from "./ui/switch";\nexport { Switch as Toggle };\n';
+    for (const head of ['import { Toggle } from "@radix-ui/react-slider";', 'import { Toggle } from "./k";']) {
+      const text = row(head);
+      const tree = scanSources(new Map([["f.tsx", text], ["k.ts", kit]]));
+      const file = tree.files.find((f) => f.file === "f.tsx")!;
+      expect(file.sites.find((s) => s.tag === "DropdownMenuCheckboxItem")!.switches).toEqual({ drawn: false, any: true, byName: true });
+      const problems = readingProblems([reading("f.tsx", countCheckboxTokens(text), [ROW])], { ...tree, files: [file] }, reader({ "f.tsx": text, "k.ts": kit })).join("\n");
+      expect(problems).toContain("the element draws one only by a name that may not be a switch");
+    }
+  });
+
+  it("refuses a root tsconfig with extends or baseUrl, or with a null or non-object compilerOptions or paths (GAP 2)", () => {
+    for (const json of [
+      '{ "extends": "./tsconfig.base.json" }',
+      '{ "extends": "./base.json", "compilerOptions": { "paths": {} } }',
+      '{ "compilerOptions": { "baseUrl": "." } }',
+      '{ "compilerOptions": null }',
+      '{ "compilerOptions": 7 }',
+      '{ "compilerOptions": { "paths": null } }',
+    ]) {
+      expect(() => pathAliasesOf(json)).toThrow("tsconfig.json");
+      expect(() => rootAliases(reader({ "tsconfig.json": json }))).toThrow("tsconfig.json");
+    }
+    expect(pathAliasesOf("{}")).toEqual(new Map());
+    expect(pathAliasesOf('{ "compilerOptions": {} }')).toEqual(new Map());
+  });
+
+  it("refuses a malformed main with exports as without (GAP 3)", () => {
+    const json = '{ "exports": { ".": "./src/index.ts" }, "main": 7 }';
+    expect(packageEntriesOf("kit", json)).toBe(null);
+    expect(() => workspaceEntries(["packages/kit/src/a.ts"], reader({ "packages/kit/package.json": json }))).toThrow("packages/kit/package.json");
+    expect(packageEntriesOf("kit", '{ "exports": { ".": "./src/index.ts" }, "main": "./dist/index.js" }')).toEqual(new Map([[".", ["packages/kit/src/index.ts"]]]));
+  });
+});
