@@ -100,7 +100,16 @@ vi.mock("@cinatra-ai/chat/conversation-services", () => ({
 }));
 
 const columnSeeds: unknown[] = [];
-type ColumnProps = { host?: { lifecycleSurface?: { auth?: { headers?: () => Record<string, string> } } } };
+type ColumnProps = {
+  host?: {
+    lifecycleSurface?: {
+      auth?: {
+        headers?: () => Record<string, string>;
+        renewal?: { pending: () => boolean; settled: () => Promise<void> };
+      };
+    };
+  };
+};
 const columnProps: ColumnProps[] = [];
 vi.mock("@cinatra-ai/chat/conversation-column", () => ({
   ConversationColumn: (props: ColumnProps) => {
@@ -1087,6 +1096,40 @@ describe("EmbedAssistantClient — the renewal chain, wired (cinatra#4217)", () 
     expect(shown()).toBe("active");
     expect(columnSeeds[0]).toBeUndefined();
     expect(fetchThreadMessages).toHaveBeenCalledTimes(1);
+  });
+
+  // cinatra#4217 fold 2 (pre-2 MUST-FIX 1 and 2): the conversation's readers
+  // learn from the declaration they ask with whether a renewal is on its way,
+  // and can wait until its answer is installed. RED AT 2c98c0e4: the column's
+  // declaration carried no renewal seam, so a refusal that came back before
+  // the renewed pair was installed looked final to every reader.
+  it("(xxi) fold 2: the column's declaration says a renewal is on its way and settles only after the renewed pair is installed", async () => {
+    await render();
+    await signedIn(pair(1));
+    const seam = () => columnProps[columnProps.length - 1]?.host?.lifecycleSurface?.auth?.renewal;
+    expect(seam(), "the column's declaration carries the renewal seam").toBeDefined();
+    expect(seam()!.pending(), "nothing on its way before the schedule").toBe(false);
+    const renewing = deferred<{ ok: true; credential: Pair }>();
+    renewFrameCredential.mockReturnValueOnce(renewing.promise);
+    await wait(RENEW_AT_MS);
+    expect(renewFrameCredential).toHaveBeenCalledTimes(1);
+    expect(seam()!.pending(), "pending while the renewal answer is on its way").toBe(true);
+    let settled = false;
+    void seam()!.settled().then(() => {
+      settled = true;
+    });
+    await act(async () => {
+      await drain();
+    });
+    expect(settled, "not settled before the answer").toBe(false);
+    expect(decisionHeaders(), "the first pair is still the one held").toEqual(headersOf(pair(1)));
+    await act(async () => {
+      renewing.resolve({ ok: true, credential: pair(2) });
+      await drain();
+    });
+    expect(settled).toBe(true);
+    expect(seam()!.pending()).toBe(false);
+    expect(decisionHeaders(), "the renewed pair was installed when it settled").toEqual(headersOf(pair(2)));
   });
 
   it("(xx) NOTE 8: a rejected replacement context drops the pair and stops the chain behind the error card", async () => {

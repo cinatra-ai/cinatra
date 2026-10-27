@@ -166,6 +166,21 @@ export function useInsideConversation(): boolean {
 export type LifecycleCardAuth = {
   headers: () => Record<string, string>;
   credentials: RequestCredentials;
+  /** cinatra#4217: the host's credential RENEWAL, for a host that replaces its
+   *  pair while it stays open (the site widget's frame). The server commits a
+   *  renewed pair before its answer reaches the frame, so for that gap a
+   *  refusal of the pair the frame still holds is not final. Absent on every
+   *  other host, whose refusals stay final exactly as before. */
+  renewal?: LifecycleCardAuthRenewal;
+};
+
+export type LifecycleCardAuthRenewal = {
+  /** True while a renewal request is on its way. */
+  pending: () => boolean;
+  /** Settles when no renewal request is on its way. After a renewal that
+   *  succeeded, `headers()` already carries the renewed pair when this settles.
+   *  Bounded by the renewal request's own deadline. */
+  settled: () => Promise<void>;
 };
 
 /**
@@ -1403,7 +1418,18 @@ export const RUN_MOMENT_UNREAD: RunMomentCard = Object.freeze({
  */
 export type RunMomentCardReader = (
   signal: AbortSignal,
-) => Promise<RunMomentCard | null>;
+) => Promise<RunMomentCard | null | typeof RUN_MOMENT_CREDENTIAL_RENEWING>;
+
+/**
+ * cinatra#4217 — what a reader answers for a look REFUSED WHILE THE SURFACE'S
+ * CREDENTIAL IS BEING RENEWED: the server has committed the renewed pair and
+ * no longer accepts the one the look carried, but the renewed pair has not
+ * reached the surface yet. That look is neither an answer nor a miss; the
+ * watch looks again on its cadence, and the next look carries the renewed pair.
+ */
+export const RUN_MOMENT_CREDENTIAL_RENEWING: unique symbol = Symbol(
+  "run-moment-credential-renewing",
+);
 
 /** Parse the run route's answer. Shared, so a surface cannot invent a shape the
  *  route does not send. */
@@ -1540,6 +1566,16 @@ function runMomentAwaitsAPerson(card: RunMomentCard): boolean {
 const MOMENT_UNANSWERED_LIMIT = 20;
 const MOMENT_MISS_LIMIT = 10;
 const MOMENT_READ_TIMEOUT_MS = 8000;
+/**
+ * HOW LONG A RENEWAL GAP IS FORGIVEN (cinatra#4217). Looks answered
+ * RUN_MOMENT_CREDENTIAL_RENEWING do not count as misses for this long, counted
+ * from the first such look in a row. A renewal request ends at its own deadline
+ * (the later of the pair's upper end of life and its start plus 90 s, and it
+ * starts about 90 s before the pair's lower end), and the reader stops answering
+ * RENEWING then; this window is only the belt for a host whose renewal never
+ * settles. Past it, such looks are misses again, so the watch still ends.
+ */
+const MOMENT_RENEWAL_WAIT_MS = 180_000;
 
 /**
  * AND IT IS BRISK WHILE THE RUN IS STANDING AT THE MOMENT. That is the one
@@ -1577,7 +1613,11 @@ export function useRunMomentCard({
     answered: boolean;
     reads: number;
     misses: number;
-  }>({ answered: false, reads: 0, misses: 0 });
+    /** Looks in a row answered RENEWING (cinatra#4217), and when the first of
+     *  them landed. Neither counts toward the two belts inside the window. */
+    waits: number;
+    renewingSince: number | null;
+  }>({ answered: false, reads: 0, misses: 0, waits: 0, renewingSince: null });
   // A DIFFERENT READER IS A DIFFERENT SUBJECT — another run, or the same run
   // asked for with another credential — and the previous answer says nothing
   // about it. Adjusted during render (React's documented "adjust state when a
@@ -1593,7 +1633,7 @@ export function useRunMomentCard({
   if (seenRead.read !== read) {
     setSeenRead({ read });
     setCard(RUN_MOMENT_UNREAD);
-    setProbe({ answered: false, reads: 0, misses: 0 });
+    setProbe({ answered: false, reads: 0, misses: 0, waits: 0, renewingSince: null });
   }
 
   const watchEnded =
@@ -1628,10 +1668,13 @@ export function useRunMomentCard({
           MOMENT_READ_TIMEOUT_MS,
         );
         let landed = false;
+        let renewing = false;
         try {
           const next = await read(abort.signal);
           if (cancelled) return;
-          if (next) {
+          if (next === RUN_MOMENT_CREDENTIAL_RENEWING) {
+            renewing = true;
+          } else if (next) {
             setCard(next);
             landed = true;
           }
@@ -1643,20 +1686,37 @@ export function useRunMomentCard({
           window.clearTimeout(deadline);
           inFlight = false;
           if (!cancelled) {
-            setProbe((prev) => ({
-              answered: prev.answered || landed,
-              reads: prev.reads + 1,
-              // CONSECUTIVE misses, reset by any answer: what this ends is a
-              // transport that has stopped answering, not one that hiccupped.
-              misses: landed ? 0 : prev.misses + 1,
-            }));
+            const at = Date.now();
+            setProbe((prev) => {
+              // A LOOK REFUSED IN A RENEWAL GAP (cinatra#4217) is neither an
+              // answer nor a miss while the gap is inside its window. The
+              // window is NOT reset past its end, so a renewal that never
+              // settles counts as misses from then on and the watch still ends.
+              const since = renewing ? (prev.renewingSince ?? at) : null;
+              if (since !== null && at - since < MOMENT_RENEWAL_WAIT_MS) {
+                return { ...prev, waits: prev.waits + 1, renewingSince: since };
+              }
+              return {
+                answered: prev.answered || landed,
+                reads: prev.reads + 1,
+                // CONSECUTIVE misses, reset by any answer: what this ends is a
+                // transport that has stopped answering, not one that hiccupped.
+                misses: landed ? 0 : prev.misses + 1,
+                waits: 0,
+                renewingSince: since,
+              };
+            });
           }
         }
       })();
     };
     const timer = window.setTimeout(
       look,
-      probe.reads === 0 ? 0 : momentReadDelay(probe.reads, runMomentAwaitsAPerson(card)),
+      // Only the very first look is immediate: a look answered RENEWING waits
+      // the ordinary cadence too, so a renewal gap never spins.
+      probe.reads === 0 && probe.waits === 0
+        ? 0
+        : momentReadDelay(probe.reads, runMomentAwaitsAPerson(card)),
     );
     // THE PERSON COMING BACK TO THE TAB is the cheap stand-in for "something
     // may have happened while nobody was looking" — the same signal the card
@@ -1672,7 +1732,7 @@ export function useRunMomentCard({
       window.clearTimeout(timer);
       window.removeEventListener("focus", onFocus);
     };
-  }, [read, probe.answered, probe.reads, probe.misses, watchEnded, card]);
+  }, [read, probe.answered, probe.reads, probe.misses, probe.waits, watchEnded, card]);
 
   return {
     card,

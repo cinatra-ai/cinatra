@@ -311,6 +311,13 @@ export function InlineAgentRunCard({
     // At most RENEWED_LOOKS such looks, and each needs new headers, so this
     // cannot loop; a cookie host's headers never change, so its refusal stays
     // terminal exactly as before.
+    //
+    // FOLD 2 (pre-2 MUST-FIX 1): the server commits the renewed pair before its
+    // answer reaches the frame, so the refusal can come back BEFORE the renewed
+    // pair is installed, while the headers built now are still the refused
+    // ones. A refusal therefore first waits for the host's renewal to settle
+    // (bounded by the renewal request's own deadline; at once when none is on
+    // its way), and only then compares the headers.
     const RENEWED_LOOKS = 2;
     let renewedLooks = 0;
 
@@ -332,6 +339,10 @@ export function InlineAgentRunCard({
         if (!res.ok) {
           const reason = classifyStatus(res.status);
           if (reason === "forbidden" && renewedLooks < RENEWED_LOOKS) {
+            if (credential.kind === "broker" && credential.auth.renewal) {
+              await credential.auth.renewal.settled();
+              if (cancelled) return;
+            }
             const now = seedRequest(credential, runId);
             if (now && headerKey(now.init) !== headerKey(sent.init)) {
               renewedLooks += 1;

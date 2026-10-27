@@ -1130,6 +1130,37 @@ describe("lease, quiesce and generations", () => {
     expect(quick).toBe(true);
   });
 
+  // cinatra#4217 fold 2: the conversation's readers ask whether a renewal is
+  // on its way (pre-2 MUST-FIX 1 and 2). RED AT 2c98c0e4: no such reading.
+  it("fold 2: inFlight is true only while a request is in flight; its answer, a dispose or its deadline ends it", async () => {
+    const h = harness();
+    let answer!: (o: FrameRenewalOutcome) => void;
+    h.renew.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    h.renew.mockImplementation(() => new Promise(() => undefined));
+    expect(h.chain.inFlight, "nothing armed").toBe(false);
+    armWithLeft(h, pair(1), 60); // D4 at once: in flight
+    expect(h.chain.inFlight, "the request is on its way").toBe(true);
+    answer({ ok: true, credential: pair(2) });
+    await advance(0);
+    expect(h.onRenewed).toHaveBeenCalledWith(pair(2));
+    expect(h.chain.inFlight, "answered").toBe(false);
+
+    const d = harness();
+    d.renew.mockImplementation(() => new Promise(() => undefined));
+    armWithLeft(d, pair(3), 60);
+    expect(d.chain.inFlight).toBe(true);
+    d.chain.dispose();
+    expect(d.chain.inFlight, "a dispose gave it up").toBe(false);
+
+    const t = harness();
+    t.renew.mockImplementation(() => new Promise(() => undefined));
+    armWithLeft(t, pair(4), 60);
+    expect(t.chain.inFlight).toBe(true);
+    await advance(120); // past max(E_hi, start + 90 s)
+    expect(t.onEnded).toHaveBeenCalledTimes(1);
+    expect(t.chain.inFlight, "its deadline gave it up").toBe(false);
+  });
+
   it("C33: dispose, re-arm and a new hold drop the answers and timers of the older generation", async () => {
     // In RENEWING: the answer reaches nobody.
     let h = harness();

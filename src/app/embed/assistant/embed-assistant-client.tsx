@@ -273,8 +273,25 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   // the shape the card runtime reads. The runtime REFUSES to declare a host when
   // the credential is wrong for it, so a dropped field here means no card DOM and
   // no request, never a cookie-borne resolve.
+  //
+  // cinatra#4217 fold 2 — and the RENEWAL the readers must know about. The
+  // server commits a renewed pair before its answer reaches this frame, so a
+  // reader's request that left with the pair held now can be refused before the
+  // renewed pair is installed. `pending` says a renewal is on its way and
+  // `settled` waits for it; the chain installs a renewed pair (onRenewed) before
+  // it stops counting the request in flight, so a reader that waited builds its
+  // next request with the renewed pair. Both read the chain at call time.
   const lifecycleCardAuth = useMemo<LifecycleCardAuth>(
-    () => ({ headers: authHeaders, credentials: "omit" }),
+    () => ({
+      headers: authHeaders,
+      credentials: "omit",
+      renewal: {
+        pending: () => renewalRef.current?.inFlight === true,
+        settled: async () => {
+          await renewalRef.current?.quiesce();
+        },
+      },
+    }),
     [authHeaders],
   );
 

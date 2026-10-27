@@ -166,6 +166,11 @@ export type FrameCredentialRenewal = {
   /** Settles when no renewal request is in flight. A request that dispose(), a
    *  new arm() or its deadline gave up no longer counts as in flight. */
   quiesce: () => Promise<void>;
+  /** True while a renewal request is in flight, i.e. exactly while quiesce()
+   *  would wait. The conversation's readers ask it (cinatra#4217 fold 2): the
+   *  server commits a renewed pair before its answer arrives here, so for that
+   *  gap a refusal of the pair held now is not final. */
+  readonly inFlight: boolean;
   /** Cancel the pending timer, invalidate and abort any renewal in flight and
    *  drop every lease and deferred renewal. Not terminal: a later arm() starts
    *  afresh. */
@@ -587,6 +592,9 @@ export function createFrameCredentialRenewal(
     dispose,
     get generation() {
       return generation;
+    },
+    get inFlight() {
+      return inflight !== null;
     },
     get state() {
       return state;
