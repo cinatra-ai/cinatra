@@ -38,6 +38,8 @@ describe("isRepairStuckStamp: a timestamp that round-trips is a stamp", () => {
     ["the smallest offset after a space, -23:59", "2026-05-15 07:00:00-23:59"],
     ["an offset hour 19 after a space", "2026-05-15 07:00:00+19:00"],
     ["a two-digit offset after a space, with microseconds", "2026-05-15 07:00:00.123456+00"],
+    ["a one-digit fraction, the shortest", "2026-05-15T07:00:00.1Z"],
+    ["a nine-digit fraction, the longest", "2026-05-15T07:00:00.123456789Z"],
     ["a year 0001 in the T form with Z", "0001-01-01T00:00:00Z"],
     ["a year 0001 in the T form with +00:00", "0001-01-01T00:00:00+00:00"],
     ["a year 0099 in the T form with +0000", "0099-12-31T23:00:00+0000"],
@@ -90,6 +92,17 @@ describe("isRepairStuckStamp: a time without an offset, or with text after it, i
     ["a zone name after the time", "2026-05-15 07:00:00 GMT"],
   ])("%s is not a stamp, and is not stuck", (_name, value) => {
     // The premise: Date.parse reads it (as local time, or by its zone name).
+    expect(Number.isFinite(Date.parse(value))).toBe(true);
+    expect(isRepairStuckStamp(value)).toBe(false);
+    expect(toRepairStuck(value, 3)).toBeUndefined();
+  });
+});
+
+describe("isRepairStuckStamp: a fraction longer than nine digits is not a stamp", () => {
+  it.each([
+    ["a ten-digit fraction", "2026-05-15T07:00:00.1234567890Z"],
+  ])("%s is not a stamp, and is not stuck", (_name, value) => {
+    // The premise: Date.parse reads it, so only the grammar refuses it.
     expect(Number.isFinite(Date.parse(value))).toBe(true);
     expect(isRepairStuckStamp(value)).toBe(false);
     expect(toRepairStuck(value, 3)).toBeUndefined();
