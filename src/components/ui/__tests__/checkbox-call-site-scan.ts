@@ -21,7 +21,8 @@
 //      empty listing or a listed file that cannot be read throws; it is never an
 //      empty result. A file that does not parse is a problem no reading clears,
 //      and a root `tsconfig.json` that does not parse, or whose `paths` are no
-//      map of string lists, throws (no tsconfig.json is no path alias).
+//      map of string lists, throws. Only an absent root `tsconfig.json` or
+//      `package.json` (ENOENT) is none; every other read error throws.
 //   2. ANY REFERENCE COUNTS. A file is in scope when its text holds any
 //      checkbox token (`CHECKBOX_TOKEN`): an identifier that contains
 //      `Checkbox` from a capital C in any letter case after it (`CheckBox`,
@@ -52,6 +53,12 @@
 //      problem no reading clears. So is a whole re-export of a module that
 //      names a checkbox (`export * from "@radix-ui/react-checkbox"`, `export *
 //      from "./checkbox"`): which names it hands on no name follows. A
+//      type-only re-export (`export type * from`) renders nothing and is not
+//      refused. A module NAMES A CHECKBOX by one resolution that feeds every rule:
+//      its specifier, every target of the root `tsconfig.json` path aliases it
+//      matches and every file of a workspace package's entries it matches,
+//      where a match is the UNION of the exact entry and every `*` entry, never
+//      the first one alone. A
 //      member key the syntax settles is a name like `R.Checkbox`, on any value:
 //      `R["Check" + "box"]`, a template of strings, a choice of strings, a
 //      number, and the same as a destructured key (`{ ["Check" + "box"]: B }`).
@@ -64,7 +71,10 @@
 //      later spread may set; and an `input` or `Input`-named wrapper whose
 //      `type` is an expression or that has a spread after its last literal type
 //      (a spread before a literal is overridden by it). Attributes are read in
-//      source order, an object-literal spread by its own keys. An element the
+//      source order, an object-literal spread by its own keys (a computed key
+//      by the strings it settles to), and a `+` or a template of strings by its
+//      strings. A package.json whose root, `exports` or `main` is malformed
+//      leaves its entries unknown. An element the
 //      scan cannot settle is UNRESOLVED and must be read.
 //   5. EVERY OTHER USE IS A SITE. A checkbox name used as a value anywhere but
 //      a JSX tag, an import or export, a declaration, a type or an alias of rule
@@ -94,7 +104,8 @@
 //      of a module outside the tree that binds no name (`() => import("@x/y")`,
 //      `[import("x")]`, `import("x").then(...)`, an element access on a load,
 //      `import("x")["then"]` and `require("x")["a"]` too, as no element access
-//      names an export; `module.require` loads like `require`), and every load whose
+//      names an export; `module.require` and `module["require"]` load like
+//      `require`), and every load whose
 //      specifier is no string (`import(url)`, bound or not), hands a module on
 //      that no name follows: the file's reading names those loads (their
 //      number, a pattern each matches, a sentence), so a new one fails until
@@ -120,12 +131,16 @@
 //      checkbox and adding another in the same file fails even though the count
 //      of sites is unchanged. Every change handler (`on…`) and every spread of
 //      an element must be named by the reading, of a call site of a shared
-//      component too.
+//      component too: by its whole text or by a prefix of it that reaches past
+//      its `=` or `{...`, so what a handler does after a pinned prefix is not
+//      held (a stated limit).
 //   7. NO EMPTY READING. Every text a reading holds must hold more than white
 //      space; a reading and a reason are sentences of 20 characters at least. A
 //      pinned text must stand in the CODE of its file: not only in a comment and
 //      not only inside a string or template. A switch counts as drawn only as a
-//      JSX element inside the site's element that is drawn whenever the element
+//      JSX element inside the site's element, by name (a tag segment `Switch`,
+//      a name bound to it, or one imported from a module whose specifier ends
+//      in switch), that is drawn whenever the element
 //      is: one under a choice (`? :`, `&&`, `||`, `??`) or in a function (`rows.map`,
 //      a render prop) may be drawn, so neither a switch nor a checkbox is claimed.
 //
@@ -317,7 +332,10 @@ function isLoadCallee(callee: ts.Expression): boolean {
   if (callee.kind === ts.SyntaxKind.ImportKeyword) return true;
   const c = unwrap(callee);
   if (ts.isIdentifier(c)) return c.text === "require";
-  return ts.isPropertyAccessExpression(c) && c.name.text === "require" && ts.isIdentifier(c.expression) && c.expression.text === "module";
+  if (ts.isPropertyAccessExpression(c)) return c.name.text === "require" && ts.isIdentifier(c.expression) && c.expression.text === "module";
+  // `module["require"]` and any key that settles to require (pre-4 NOTE).
+  if (ts.isElementAccessExpression(c)) return ts.isIdentifier(c.expression) && c.expression.text === "module" && (keyStrings(c.argumentExpression) ?? []).includes("require");
+  return false;
 }
 
 /** The module a call imports, when it is `require("x")`, `module.require("x")` or `import("x")` (awaited or not). */
@@ -468,16 +486,18 @@ export function collectBindings(sf: ts.SourceFile): FileBindings {
       const spec = node.moduleSpecifier && isStringLike(node.moduleSpecifier) ? node.moduleSpecifier.text : undefined;
       for (const s of node.exportClause.elements) {
         const local = (s.propertyName ?? s.name).text;
-        if (s.name.text === "default") b.defaults.push({ line: lineOf(sf, s.getStart(sf)), from: [local], spec });
+        // A type-only export renders nothing, so it is no default export of a checkbox (pre-4 NOTE).
+        if (s.name.text === "default" && !node.isTypeOnly && !s.isTypeOnly) b.defaults.push({ line: lineOf(sf, s.getStart(sf)), from: [local], spec });
+        else if (s.name.text === "default") continue;
         else b.exports.push([s.name.text, [local]]);
         if (spec !== undefined) b.reexports.push([s.name.text, spec]);
       }
     } else if (ts.isExportDeclaration(node) && !node.exportClause && node.moduleSpecifier && isStringLike(node.moduleSpecifier)) {
-      b.stars.push(node.moduleSpecifier.text);
+      if (!node.isTypeOnly) b.stars.push(node.moduleSpecifier.text);
     } else if (ts.isExportDeclaration(node) && node.exportClause && ts.isNamespaceExport(node.exportClause) && node.moduleSpecifier && isStringLike(node.moduleSpecifier)) {
       b.reexports.push([node.exportClause.name.text, node.moduleSpecifier.text]);
       // `export * as default from "m"` is a default export of the whole module (pre-3 MF3).
-      if (node.exportClause.name.text === "default") b.defaults.push({ line: lineOf(sf, node.getStart(sf)), from: [], spec: node.moduleSpecifier.text });
+      if (node.exportClause.name.text === "default" && !node.isTypeOnly) b.defaults.push({ line: lineOf(sf, node.getStart(sf)), from: [], spec: node.moduleSpecifier.text });
     } else if (ts.isExportAssignment(node)) {
       const src = aliasSources(node.expression);
       if (src) b.defaults.push({ line: lineOf(sf, node.getStart(sf)), from: src.names });
@@ -585,7 +605,7 @@ export function resolveNames(
   const stars: string[] = [];
   for (const [file, sf] of sources) {
     for (const st of sf.statements) {
-      if (ts.isExportDeclaration(st) && !st.exportClause && st.moduleSpecifier && isStringLike(st.moduleSpecifier) && targetModule(st.moduleSpecifier.text)) {
+      if (ts.isExportDeclaration(st) && !st.isTypeOnly && !st.exportClause && st.moduleSpecifier && isStringLike(st.moduleSpecifier) && targetModule(st.moduleSpecifier.text)) {
         stars.push(`${file}:${lineOf(sf, st.getStart(sf))}`);
       }
     }
@@ -634,6 +654,8 @@ export function stringValues(expr: ts.Expression): string[] | null {
     const b = stringValues(e.right);
     return a && b && [...a, ...b];
   }
+  // A `+` or a template of settled parts (`"check" + "box"`) takes the strings it settles to (pre-4 NOTE).
+  if (ts.isTemplateExpression(e) || (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.PlusToken)) return keyStrings(e);
   // `a && "x"` is `"x"` or the falsy `a` (no string but ""), so only its right side can name a role or type.
   if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) return stringValues(e.right);
   return null;
@@ -646,9 +668,11 @@ function valueOf(e: ts.Expression | undefined, sf: ts.SourceFile): AttributeValu
   return { kind: "expression", text: e.getText(sf), values: stringValues(e), literals: literalsIn(e) };
 }
 
-function keyText(name: ts.PropertyName): string | undefined {
-  if (ts.isIdentifier(name) || isStringLike(name) || ts.isNumericLiteral(name)) return name.text;
-  return undefined;
+/** The keys a property name settles to: its text, or the strings a computed key settles to (pre-4 NOTE); null when unsettled. */
+function keyTexts(name: ts.PropertyName): string[] | null {
+  if (ts.isIdentifier(name) || isStringLike(name) || ts.isNumericLiteral(name)) return [name.text];
+  if (ts.isComputedPropertyName(name)) return keyStrings(name.expression);
+  return null;
 }
 
 export function resolveAttribute(el: ts.JsxOpeningLikeElement, name: string): AttributeValue {
@@ -672,8 +696,8 @@ export function resolveAttribute(el: ts.JsxOpeningLikeElement, name: string): At
     }
     for (const prop of e.properties) {
       if (ts.isSpreadAssignment(prop)) v = spread(prop.getText(sf));
-      else if (prop.name === undefined || keyText(prop.name) === undefined) v = spread(prop.getText(sf));
-      else if (keyText(prop.name)?.toLowerCase() !== name) continue;
+      else if (prop.name === undefined || keyTexts(prop.name) === null) v = spread(prop.getText(sf));
+      else if (!keyTexts(prop.name)!.some((k) => k.toLowerCase() === name)) continue;
       else if (ts.isPropertyAssignment(prop)) v = valueOf(prop.initializer, sf);
       else v = { kind: "expression", text: prop.getText(sf), values: null, literals: [] };
     }
@@ -693,7 +717,7 @@ function checkboxByAttributes(tag: string, el: ts.JsxOpeningLikeElement): "check
   const role = resolveAttribute(el, "role");
   for (const v of [type, role]) {
     if (v.kind === "literal" && CHECKBOX_WORD.test(v.value.trim())) return "checkbox";
-    if (v.kind === "expression" && v.literals.some((l) => CHECKBOX_WORD.test(l.trim()))) return "checkbox";
+    if (v.kind === "expression" && [...v.literals, ...(v.values ?? [])].some((l) => CHECKBOX_WORD.test(l.trim()))) return "checkbox";
   }
   if (role.kind === "expression" && role.values === null) return `its role is the expression {${role.text}}`;
   if (role.kind === "spread" && role.over !== "absent") return `the spread ${role.text} after its role may set it`;
@@ -719,6 +743,8 @@ export type FoundSite = {
    * `??`) or a function (`rows.map((r) => <X />)`, a render prop), which may draw nothing (pre-3 NOTE).
    */
   drawnTags: string[];
+  /** Whether a child is a switch by name (any segment `Switch` or bound to it, pre-4 NOTE): drawn whenever the element is, or at all. */
+  switches: { drawn: boolean; any: boolean };
   /** The texts of its change handlers (`on…` attributes) and spreads, each of which a reading must name. */
   mustName: string[];
   /** Why the scan cannot tell whether it draws a checkbox (rules 4 and 5), when it cannot. */
@@ -809,8 +835,11 @@ export function packageEntriesOf(dir: string, packageJson: string): PackageEntri
   } catch {
     return null;
   }
-  if (typeof json !== "object" || json === null) return null;
+  // A root that is no object, or `exports` or `main` of the wrong kind, leaves the entries unknown (pre-4 NOTE).
+  if (typeof json !== "object" || json === null || Array.isArray(json)) return null;
   const { exports, main } = json as { exports?: unknown; main?: unknown };
+  if (exports !== undefined && typeof exports !== "string" && (typeof exports !== "object" || exports === null)) return null;
+  if (exports === undefined && main !== undefined && typeof main !== "string") return null;
   const leaves = (v: unknown): string[] =>
     typeof v === "string" ? [v] : typeof v === "object" && v !== null ? Object.values(v).flatMap(leaves) : [];
   const file = (t: string) => path.posix.normalize(`packages/${dir}/${t}`);
@@ -838,20 +867,45 @@ export function pathAliasesOf(tsconfig: string): PackageEntries {
   return out;
 }
 
-/** The files a workspace subpath names in a package's entries (a `*` entry by substitution), or null when none does. */
+/**
+ * The files a specifier or a workspace subpath names in a map of entries or path aliases: the UNION of every entry it
+ * matches, the exact one and each `*` one by substitution, never the first match alone (pre-4 MF2); null when none
+ * matches.
+ */
 function entryFiles(entries: PackageEntries, subpath: string): string[] | null {
+  const out: string[] = [];
+  let matched = false;
   const exact = entries.get(subpath);
-  if (exact !== undefined) return exact;
+  if (exact !== undefined) {
+    matched = true;
+    out.push(...exact);
+  }
   for (const [k, files] of entries) {
     const star = k.indexOf("*");
     if (star < 0) continue;
     const [pre, post] = [k.slice(0, star), k.slice(star + 1)];
     if (subpath.startsWith(pre) && subpath.endsWith(post) && subpath.length >= pre.length + post.length) {
       const hit = subpath.slice(pre.length, subpath.length - post.length);
-      return files.map((f) => f.replace("*", hit));
+      matched = true;
+      out.push(...files.map((f) => f.split("*").join(hit)));
     }
   }
-  return null;
+  return matched ? [...new Set(out)] : null;
+}
+
+/**
+ * Whether a specifier names a checkbox module through the one resolution every rule uses (pre-4 MF1): its own
+ * spelling, every target of the root `tsconfig.json` path aliases it matches, and, for a workspace specifier
+ * (`@cinatra-ai/<folder>[/<subpath>]`), every file of the package's entries it matches.
+ */
+function checkboxModuleThrough(entries: ReadonlyMap<string, PackageEntries>, aliases: PackageEntries): (spec: string) => boolean {
+  return (spec) => {
+    if (isCheckboxModule(spec)) return true;
+    if ((entryFiles(aliases, spec) ?? []).some(isCheckboxModule)) return true;
+    const m = /^@cinatra-ai\/([^/]+)(.*)$/.exec(spec);
+    const known = m === null ? undefined : entries.get(m[1]);
+    return known !== undefined && (entryFiles(known, `.${m![2]}`) ?? []).some(isCheckboxModule);
+  };
 }
 
 /**
@@ -1012,6 +1066,7 @@ export function findSites(
   isModule: (spec: string) => boolean = () => false,
   readsWords = false,
   objects: ModuleObjects = NO_MODULE_OBJECTS,
+  isSwitch: (name: string) => boolean = (n) => n === "Switch",
 ): FoundSite[] {
   const sites: FoundSite[] = [];
   const siteElements = new Set<ts.Node>();
@@ -1039,6 +1094,7 @@ export function findSites(
       openingTag: opening,
       childTags: [],
       drawnTags: [],
+      switches: { drawn: false, any: false },
       mustName: [],
       unresolved: why ?? `a use of ${node.getText(sf)} that is no JSX tag, import, export, declaration, type or alias`,
     });
@@ -1055,6 +1111,10 @@ export function findSites(
       openingTag: el.getText(sf),
       childTags: children.all,
       drawnTags: children.drawn,
+      switches: {
+        drawn: children.drawn.some((t) => t.split(".").some(isSwitch)),
+        any: children.all.some((t) => t.split(".").some(isSwitch)),
+      },
       mustName: mustNameOf(el, sf),
     };
     if (!byName && byAttributes !== "checkbox" && byAttributes !== null) site.unresolved = byAttributes;
@@ -1350,15 +1410,19 @@ export function scanSources(
     errors.push(...parseErrors(sf));
     sources.set(file, sf);
   }
-  const scope = resolveNames(sources, isCheckboxSpelling, isCheckboxModule);
+  // One resolution of a specifier (its spelling, the path aliases, the workspace entries) feeds every rule (pre-4 MF1).
+  const boxModule = checkboxModuleThrough(entries, aliases);
+  const scope = resolveNames(sources, isCheckboxSpelling, boxModule);
   const bindings = new Map([...sources].map(([file, sf]) => [file, collectBindings(sf)] as const));
-  const modules = moduleObjectsOf(bindings, scope.isName, isCheckboxModule, entries, aliases);
+  const modules = moduleObjectsOf(bindings, scope.isName, boxModule, entries, aliases);
+  // A switch by name: Switch, or any name bound to it or imported from a module that names a switch (pre-4 NOTE).
+  const switches = resolveNames(sources, (n) => n === "Switch", (spec) => /(?:^|[/-])switch$/i.test(spec));
   const out: ScannedFile[] = [];
   for (const [file, sf] of sources) {
     const isName = (n: string) => scope.isName(file, n);
     const tokens = countCheckboxTokens(sf.getFullText());
     // A tag segment is a checkbox by the name test, which takes checkbox in any letter case (G2, GAP 2).
-    const sites = findSites(sf, isName, isName, modules.mayExport, true, modules.objectsIn(file));
+    const sites = findSites(sf, isName, isName, modules.mayExport, true, modules.objectsIn(file), (n) => switches.isName(file, n));
     const loads = externalLoadsOf(sf, (spec) => modules.isObjectModule(spec) && !modules.mayExport(spec));
     // GAP 2 (Q7): a file that exports a checkbox name is in scope even when no token spells it (`export const checkbox`).
     const b = bindings.get(file)!;
@@ -1380,13 +1444,22 @@ export function scanTree(repoRoot: string, files: string[] = listSourceFiles(rep
   return scanSources(texts, workspaceEntries([...texts.keys()], read), rootAliases(read));
 }
 
-/** The path aliases of the root `tsconfig.json`; empty when there is none. */
+/** Whether a read failed only because the file does not exist (ENOENT). */
+function isAbsent(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "ENOENT";
+}
+
+/**
+ * The path aliases of the root `tsconfig.json`; empty only when there is none (ENOENT). Any other read error
+ * (EACCES, EIO, EISDIR) throws, as does a config that does not parse (pre-4 MF3).
+ */
 export function rootAliases(fileText: (file: string) => string): PackageEntries {
   let text: string;
   try {
     text = fileText("tsconfig.json");
-  } catch {
-    return new Map();
+  } catch (error) {
+    if (isAbsent(error)) return new Map();
+    throw error;
   }
   return pathAliasesOf(text);
 }
@@ -1398,8 +1471,10 @@ export function workspaceEntries(files: string[], fileText: (file: string) => st
     let text: string;
     try {
       text = fileText(`packages/${dir}/package.json`);
-    } catch {
-      continue;
+    } catch (error) {
+      // Only an absent package.json leaves the package's entries unknown; any other read error throws (pre-4 MF3).
+      if (isAbsent(error)) continue;
+      throw error;
     }
     const e = packageEntriesOf(dir, text);
     if (e !== null) out.set(dir, e);
@@ -1518,7 +1593,6 @@ function namesAttribute(t: string, attribute: string): boolean {
   return reach > 0 && attribute.startsWith(t) && t.length > reach;
 }
 
-const SWITCH_TAG = /^Switch(?:\.|$)/;
 
 /**
  * The problems between the recorded readings and the scanned tree; [] means
@@ -1610,8 +1684,8 @@ export function readingProblems(readings: FileReading[], tree: ScannedTree, file
       );
       // A switch is drawn only when it is drawn whenever the element is; one under a choice or a function may be
       // drawn, so a checkbox cannot be claimed either (pre-3 NOTE).
-      const drawsSwitch = found.drawnTags.some((t) => SWITCH_TAG.test(t));
-      const mayDrawSwitch = found.childTags.some((t) => SWITCH_TAG.test(t));
+      const drawsSwitch = found.switches.drawn;
+      const mayDrawSwitch = found.switches.any;
       if (site.drawn === "switch" && !drawsSwitch) {
         problems.push(
           mayDrawSwitch

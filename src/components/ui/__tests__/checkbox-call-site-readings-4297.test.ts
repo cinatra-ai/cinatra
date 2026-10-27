@@ -27,9 +27,11 @@ import {
   parseSource,
   pathAliasesOf,
   readingProblems,
+  rootAliases,
   scanSources,
   scanTree,
   standsInCode,
+  workspaceEntries,
   type CallerReading,
   type ComponentCallers,
   type FileReading,
@@ -100,9 +102,10 @@ function treeOf(texts: Record<string, string>): ScannedTree {
   return scanSources(new Map(Object.entries(texts)));
 }
 
+/** Reads the given texts; a file not among them is absent (ENOENT), as a missing file of the tree is. */
 function reader(texts: Record<string, string>) {
   return (file: string) => {
-    if (!(file in texts)) throw new Error(`no such file ${file}`);
+    if (!(file in texts)) throw Object.assign(new Error(`no such file ${file}`), { code: "ENOENT" });
     return texts[file];
   };
 }
@@ -1112,5 +1115,131 @@ describe("fail closed: what no name follows is refused, not skipped (pre-3)", ()
     expect(() => pathAliasesOf('{ "compilerOptions": { "paths": ["src/*"] } }')).toThrow("compilerOptions.paths is no object");
     expect(() => pathAliasesOf("[]")).toThrow("tsconfig.json does not parse");
     expect(pathAliasesOf('{ "compilerOptions": {} }')).toEqual(new Map());
+  });
+});
+
+describe("one resolution for every rule, and refusal where it is unsure (pre-4)", () => {
+  const aliasTree = (paths: Record<string, string[]>, texts: Record<string, string>, entries = new Map()) =>
+    scanSources(new Map(Object.entries(texts)), entries, pathAliasesOf(JSON.stringify({ compilerOptions: { paths } })));
+  const sitesIn = (tree: ScannedTree, file: string) => tree.files.find((f) => f.file === file)?.sites.map((s) => s.tag) ?? [];
+
+  it("resolves a specifier through the path aliases and the workspace entries before every checkbox and re-export rule (MF1)", () => {
+    const tree = aliasTree(
+      { "@box": ["node_modules/@radix-ui/react-checkbox"], "@tb": ["src/ui/checkbox.ts"] },
+      {
+        "src/a.tsx": 'import { Root as Tick } from "@box";\nexport const X = () => <Tick />;\n',
+        "src/b.ts": 'export { Root as default } from "@box";\n',
+        "src/c.ts": 'export * from "@box";\n',
+        "src/d.tsx": 'import { Root as Box } from "@cinatra-ai/kit/box";\nexport const Y = () => <Box />;\n',
+        "src/e.tsx": 'import { Root as Plain } from "@cinatra-ai/kit/plain";\nexport const Z = () => <Plain />;\n',
+        "packages/kit/src/checkbox.ts": "export const Root = 1;\n",
+        "packages/kit/src/plain.ts": "export const Root = 2;\n",
+        "src/ui/checkbox.ts": "export const Root = 3;\n",
+        "src/g.tsx": 'export const L = () => import("@tb");\n',
+      },
+      new Map([["kit", packageEntriesOf("kit", '{ "exports": { "./box": "./src/checkbox.ts", "./plain": "./src/plain.ts" } }')!]]),
+    );
+    expect(sitesIn(tree, "src/a.tsx")).toEqual(["Tick"]);
+    expect(tree.defaultExports).toEqual(["src/b.ts:1"]);
+    expect(tree.starExports).toEqual(["src/c.ts:1"]);
+    expect(sitesIn(tree, "src/d.tsx")).toEqual(["Box"]);
+    expect(sitesIn(tree, "src/e.tsx")).toEqual([]);
+    // A load of a tree file that names a checkbox only through its alias is a site, as one by its spelling is.
+    expect(sitesIn(tree, "src/g.tsx")).toEqual(['import("@tb")']);
+  });
+
+  it("takes the union of every alias a specifier matches, the exact one and each wildcard, never the first (MF2)", () => {
+    const texts = {
+      "src/ui/toggle.ts": 'export { Root as Tick } from "@radix-ui/react-checkbox";\n',
+      "src/plain/ui/toggle.ts": "export const other = 1;\n",
+      "src/a.tsx": 'import * as P from "@lib/ui/toggle";\nexport const X = (k: string) => { const C = P[k]; return <C />; };\n',
+    };
+    const broadFirst = aliasTree({ "@lib/*": ["src/plain/*"], "@lib/ui/*": ["src/ui/*"] }, texts);
+    expect(sitesIn(broadFirst, "src/a.tsx")).toEqual(["P[k]"]);
+    const narrowFirst = aliasTree({ "@lib/ui/*": ["src/ui/*"], "@lib/*": ["src/plain/*"] }, texts);
+    expect(sitesIn(narrowFirst, "src/a.tsx")).toEqual(["P[k]"]);
+    const exactAndWild = aliasTree({ "@lib/*": ["src/*"], "@lib/plain": ["src/plain/ui/toggle.ts"] }, {
+      ...texts,
+      "src/a.tsx": 'import * as P from "@lib/plain";\nexport const X = (k: string) => { const C = P[k]; return <C />; };\n',
+      "src/plain.ts": 'export { Root as Tick } from "@radix-ui/react-checkbox";\n',
+    });
+    expect(sitesIn(exactAndWild, "src/a.tsx")).toEqual(["P[k]"]);
+  });
+
+  it("reads an absent root config or package.json as none, and refuses every other read error (MF3)", () => {
+    const failing = (code: string) => (file: string): string => {
+      throw Object.assign(new Error(`cannot read ${file}`), { code });
+    };
+    expect(rootAliases(failing("ENOENT"))).toEqual(new Map());
+    for (const code of ["EACCES", "EIO", "EISDIR"]) {
+      expect(() => rootAliases(failing(code))).toThrow(`cannot read tsconfig.json`);
+      expect(() => workspaceEntries(["packages/kit/src/a.ts"], failing(code))).toThrow("cannot read packages/kit/package.json");
+    }
+    expect(() => rootAliases(() => { throw new Error("no code"); })).toThrow("no code");
+    expect(workspaceEntries(["packages/kit/src/a.ts"], failing("ENOENT"))).toEqual(new Map());
+    const root = mkdtempSync(path.join(tmpdir(), "cinatra-4297-pre4-"));
+    try {
+      execFileSync("git", ["init", "-q"], { cwd: root, stdio: "ignore" });
+      mkdirSync(path.join(root, "src"), { recursive: true });
+      writeFileSync(path.join(root, "src/a.tsx"), "export const X = () => <Checkbox />;\n");
+      mkdirSync(path.join(root, "tsconfig.json"));
+      expect(() => scanTree(root)).toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a package's entries unknown when its manifest is malformed (NOTE)", () => {
+    for (const json of ["[]", '{ "exports": 42 }', '{ "exports": null }', '{ "main": 7 }', '{ "exports": true }']) {
+      expect(packageEntriesOf("kit", json)).toBe(null);
+    }
+    expect(packageEntriesOf("kit", '{ "main": "./src/index.ts" }')).toEqual(new Map([[".", ["packages/kit/src/index.ts"]]]));
+    expect(packageEntriesOf("kit", '{ "exports": ["./a.js", "./b.js"] }')).toEqual(new Map([[".", ["packages/kit/a.js", "packages/kit/b.js"]]]));
+  });
+
+  it("reads a computed key of an object spread and a + or template of strings as the strings they settle to (NOTE)", () => {
+    const tagOf = (text: string) => findCheckboxSites(`const X = () => ${text};\n`).map((s) => [s.tag, s.unresolved ?? "checkbox"]);
+    expect(tagOf('<div {...{ ["role"]: "check" + "box" }} />')).toEqual([["div", "checkbox"]]);
+    expect(tagOf('<div {...{ ["ro" + "le"]: `checkbox` }} />')).toEqual([["div", "checkbox"]]);
+    expect(tagOf('<input type={"check" + "box"} />')).toEqual([["input", "checkbox"]]);
+    expect(tagOf('<div {...{ ["ro" + "le"]: r }} />')).toEqual([["div", "its role is the expression {r}"]]);
+    expect(tagOf('<div {...{ ["title"]: "check" + "box" }} />')).toEqual([]);
+  });
+
+  it("takes a switch renamed on import or from a switch module as a switch among the children (NOTE)", () => {
+    const row = (head: string, inner: string) =>
+      `${head}\nexport const R = () => <DropdownMenuCheckboxItem checked={on} onCheckedChange={(c) => toggle(c)}>${inner}Row</DropdownMenuCheckboxItem>;\n`;
+    const site: SiteReading = {
+      anchor: "onCheckedChange={(c) => toggle(c)}",
+      tag: "DropdownMenuCheckboxItem",
+      drawn: "switch",
+      effect: "immediate",
+      reading: "a menu row whose change applies at once",
+      tagIncludes: ["onCheckedChange={(c) => toggle(c)}"],
+      fileIncludes: [],
+    };
+    for (const [head, inner] of [
+      ['import { Switch as Toggle } from "@/components/ui/switch";', "<Toggle checked={on} />"],
+      ['import { Root as Thumb } from "@radix-ui/react-switch";', "<Thumb checked={on} />"],
+      ['import * as UI from "./kit";', "<UI.Switch checked={on} />"],
+    ]) {
+      expect(problemsOf(row(head, inner), [site])).toBe("");
+      expect(problemsOf(row(head, inner), [{ ...site, drawn: "checkbox", staysBecause: "a reason that is long enough" }])).toContain(
+        "the element draws a switch, the reading says a checkbox",
+      );
+    }
+    expect(problemsOf(row('import { Toggle } from "./toggle";', "<Toggle checked={on} />"), [site])).toContain("the reading says a switch is drawn, the element draws none");
+  });
+
+  it("refuses no type-only re-export, and reads module[\"require\"] as a load (NOTE)", () => {
+    const tree = treeOf({
+      "a.ts": 'export type * from "@radix-ui/react-checkbox";\n',
+      "b.ts": 'export type { Root as default } from "@radix-ui/react-checkbox";\n',
+      "c.ts": 'export { type Root as default } from "@radix-ui/react-checkbox";\n',
+      "d.ts": 'const y = module["require"]("some-kit/c")[k];\nconst z = module[k]("some-kit/d");\n',
+    });
+    expect(tree.starExports).toEqual([]);
+    expect(tree.defaultExports).toEqual([]);
+    expect(tree.files.find((f) => f.file === "d.ts")?.loads).toEqual(["some-kit/c"]);
   });
 });
