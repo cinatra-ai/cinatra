@@ -37,7 +37,8 @@ export type RepairStuck = {
 // (Z, +hh, +hhmm or +hh:mm, or the same with -; offset hours 00-23, minutes
 // 00-59). Nothing else may follow. Date.parse reads +hh only after a space:
 // after T it returns NaN, so such a stamp is refused below. After a space it
-// would read an offset hour of 24-99 as hours, so the grammar bounds them.
+// reads an offset hour of 24-99, and offset minutes 60-99 without a colon, as a
+// length of time, so the grammar bounds both.
 const STAMP =
   /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d{1,9})?)?(Z|[+-](?:[01]\d|2[0-3])(?::?[0-5]\d)?))?$/;
 
