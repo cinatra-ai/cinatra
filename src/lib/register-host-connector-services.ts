@@ -292,6 +292,7 @@ import {
   resolveDrupalInstanceAdmin,
   resolveWordPressInstanceAdmin,
   resolveYouTubeConnectionClient,
+  type DrupalInstanceRow,
 } from "@/lib/connector-client-providers";
 // External-MCP toolbox surfaces — instance settings, the cached reachability
 // probes, endpoint resolution, and the private-URL policy stay host-side and
@@ -401,6 +402,21 @@ function withDevInstallOwnerBinding<T extends object>(input: T): Omit<T, "orgId"
     runBy?: string;
   };
 }
+
+// Host-LOCAL extension of the SDK `HostDrupalMcpService` (cinatra#4387; the
+// `HostExternalMcpRegistrySetupSurface` precedent below). Kept host-side, NOT in
+// the SDK contract: only the Drupal connector's dev hook resolves it, and the
+// hook declares the member structurally in its own deps type and probes it with
+// `typeof … === "function"`. WRITER (dev/preview): the validated `saveInstance`
+// with the install→org binding bound host-side (`withDevInstallOwnerBinding`).
+type HostDrupalMcpDevSaveSurface = HostDrupalMcpService & {
+  devSaveInstance(input: {
+    id?: string;
+    name: string;
+    siteUrl: string;
+    mcpApiKey?: string;
+  }): Promise<DrupalInstanceRow>;
+};
 
 // Host-LOCAL extension of the SDK `HostExternalMcpRegistryService` for the
 // "MCP Servers" connector setup-page surface (cinatra#612). Kept host-side
@@ -1194,7 +1210,7 @@ export function registerHostConnectorServices(): void {
     },
     devProbeWithBearer: probeDrupalMcpWithBearer,
     devInvalidateProbeCache: invalidateDrupalMcpProbeCache,
-  } satisfies HostDrupalMcpService);
+  } satisfies HostDrupalMcpDevSaveSurface);
 
   // The drupal widget auth-config store INVERTED to the drupal-mcp-connector
   // (cinatra#975 Wave 2): it now registers `@cinatra-ai/host:drupal-widget-auth`

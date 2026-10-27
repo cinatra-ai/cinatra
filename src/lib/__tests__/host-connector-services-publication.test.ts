@@ -1242,8 +1242,13 @@ describe("drupal-mcp dev writers bind the dev owner host-side (cinatra#4387)", (
   const PREVIEW_ENV = ["CINATRA_RUNTIME_MODE", "CINATRA_INSTALL_PROFILE"] as const;
   const savedEnv: Record<string, string | undefined> = {};
 
-  function drupal(): HostDrupalMcpService {
-    return resolveSingle<HostDrupalMcpService>(HOST_CONNECTOR_SERVICE_CAPABILITIES.drupalMcp);
+  // `devSaveInstance` is host-local (not in the SDK contract): the dev hook
+  // reads it structurally, as this shape does.
+  type DrupalDevSurface = HostDrupalMcpService & {
+    devSaveInstance?(input: { id?: string; name: string; siteUrl: string; mcpApiKey?: string }): Promise<unknown>;
+  };
+  function drupal(): DrupalDevSurface {
+    return resolveSingle<DrupalDevSurface>(HOST_CONNECTOR_SERVICE_CAPABILITIES.drupalMcp);
   }
   function devBoot(owner: typeof DEV_OWNER | null) {
     devBootState.dev = true;

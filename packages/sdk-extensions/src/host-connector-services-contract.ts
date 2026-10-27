@@ -327,22 +327,6 @@ export type HostDrupalMcpService = {
     name: string;
     siteUrl: string;
   }): Promise<{ id: string }>;
-  /** WRITER (dev/preview) — the validated `saveInstance` (Nango import +
-   * readback when a key is given; name/URL/binding only without one) with the
-   * install→org binding bound HOST-side: the owner of this boot's install-made
-   * connections (cinatra#4387, #4112). The hook never passes or sees a user id;
-   * with no owner the row keeps its existing binding. Both dev writers bind the
-   * same way. */
-  devSaveInstance?(input: { id?: string; name: string; siteUrl: string; mcpApiKey?: string }): Promise<{
-    id: string;
-    name: string;
-    siteUrl: string;
-    nangoConnectionId: string;
-    providerConfigKey: string;
-    lastValidatedAt?: string;
-    createdAt: string;
-    updatedAt: string;
-  }>;
   /** Probe `/_mcp_tools` with an explicit stored Bearer, cache-bypassing (the
    * reconcile's reuse-vs-rotate decision keys on this). */
   devProbeWithBearer?(
