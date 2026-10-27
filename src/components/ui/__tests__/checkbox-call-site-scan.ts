@@ -864,6 +864,11 @@ export function packageEntriesOf(dir: string, packageJson: string): PackageEntri
   const { exports, main } = json as { exports?: unknown; main?: unknown };
   if (exports !== undefined && typeof exports !== "string" && (typeof exports !== "object" || exports === null)) return null;
   if (main !== undefined && typeof main !== "string") return null;
+  // Every value of `exports`, at any depth, is a string, an object or array of them, or null (a subpath it excludes);
+  // anything else (a number, a boolean) refuses the manifest as a malformed top-level value does (pre-5 MF2).
+  const wellFormed = (v: unknown): boolean =>
+    typeof v === "string" || v === null || (typeof v === "object" && Object.values(v as object).every(wellFormed));
+  if (exports !== undefined && !wellFormed(exports)) return null;
   const leaves = (v: unknown): string[] =>
     typeof v === "string" ? [v] : typeof v === "object" && v !== null ? Object.values(v).flatMap(leaves) : [];
   const file = (t: string) => path.posix.normalize(`packages/${dir}/${t}`);
@@ -895,6 +900,8 @@ export function pathAliasesOf(tsconfig: string): PackageEntries {
   const out: PackageEntries = new Map();
   for (const [k, v] of Object.entries(paths)) {
     if (!Array.isArray(v) || !v.every((x) => typeof x === "string")) throw new Error(`tsconfig.json: the path alias ${k} is no list of strings`);
+    // An empty list resolves to nothing, which must never fall back to the alias's spelling (pre-5 MF3).
+    if (v.length === 0) throw new Error(`tsconfig.json: the path alias ${k} has no target`);
     out.set(k, v.map((x) => path.posix.normalize(x)));
   }
   return out;
@@ -931,36 +938,58 @@ function entryFiles(entries: PackageEntries, subpath: string): string[] | null {
  * `tsconfig.json` path aliases it matches and, for a workspace specifier (`@cinatra-ai/<folder>[/<subpath>]`), every
  * file of the package's entries it matches; null when nothing matches, so only its own spelling names it.
  */
-function moduleTargets(entries: ReadonlyMap<string, PackageEntries>, aliases: PackageEntries): (spec: string) => string[] | null {
+function moduleTargets(resolve: SpecTargets): (spec: string) => string[] | null {
   return (spec) => {
-    const out = [...(entryFiles(aliases, spec) ?? [])];
+    const out = resolve(spec);
+    return out !== null && out.length > 0 ? out : null;
+  };
+}
+
+/**
+ * The same resolution, keeping a match with no target apart from no match (pre-5 MF1): the UNION of every target of
+ * the path aliases the specifier matches and every file of the workspace entries it matches, never one map's answer
+ * alone; `[]` when it matches only entries that name no file (an `exports` subpath set to null); null when nothing
+ * matches.
+ */
+export type SpecTargets = (spec: string) => string[] | null;
+export function specTargets(entries: ReadonlyMap<string, PackageEntries>, aliases: PackageEntries): SpecTargets {
+  return (spec) => {
+    const aliased = entryFiles(aliases, spec);
     const m = /^@cinatra-ai\/([^/]+)(.*)$/.exec(spec);
     const known = m === null ? undefined : entries.get(m[1]);
-    if (known !== undefined) out.push(...(entryFiles(known, `.${m![2]}`) ?? []));
-    return out.length > 0 ? out : null;
+    const entry = known === undefined ? null : entryFiles(known, `.${m![2]}`);
+    if (aliased === null && entry === null) return null;
+    return [...new Set([...(aliased ?? []), ...(entry ?? [])])];
   };
+}
+
+/** The resolution moduleObjectsOf reads: the one resolution of a specifier, and the packages whose entries are known. */
+function resolutionOf(entries: ReadonlyMap<string, PackageEntries>, aliases: PackageEntries): [SpecTargets, ReadonlySet<string>] {
+  return [specTargets(entries, aliases), new Set(entries.keys())];
 }
 
 /**
  * Which modules may export a checkbox, over the scanned tree (G1). A scanned file exports one when it exports a
  * checkbox name (rule 3) or re-exports such a module whole (`export * from`), followed until no new file appears.
  * A specifier of the tree (`./x`, `../x`, `@/x`, `~/x`, `#x`) may name such a file when its last segment is that
- * file's `moduleKey` (or is `.` or `..`). A specifier a path alias of the root `tsconfig.json` matches (`aliases`,
- * exact or with `*`) is resolved to its targets first: it may name such a file when a target does, and a target
+ * file's `moduleKey` (or is `.` or `..`). A specifier a path alias of the root `tsconfig.json` matches (exact or
+ * with `*`) is resolved to its targets first: it may name such a file when a target does, and a target
  * outside `src/` and `packages/` is a module outside the tree. A workspace specifier (`@cinatra-ai/<folder>[/<subpath>]`, a folder
- * under `packages/`) is resolved through the package's entries (`entries`): it may name such a file when an entry
+ * under `packages/`) is resolved through the package's entries: it may name such a file when an entry
  * it matches names one (a file without its extension, or an `index` under a folder it names, counts too); a
  * subpath no entry matches falls back to the `moduleKey` test; and any specifier of a package whose entries are
  * unknown (no `package.json` read) may name any such file of its package. Any other
  * specifier but a Node built-in names a module outside the tree, which the scan does not read, so it may export a
- * checkbox: its module object is followed as one.
+ * checkbox: its module object is followed as one. The alias targets and the entry files are those of `resolve`,
+ * the one resolution the caller built, which takes their union when a specifier matches both (pre-5 MF1);
+ * `knownPackages` are the packages whose entries were read.
  */
 export function moduleObjectsOf(
   bindings: ReadonlyMap<string, FileBindings>,
   isName: (file: string, name: string) => boolean,
   isTargetModule: (spec: string) => boolean,
-  entries: ReadonlyMap<string, PackageEntries> = new Map(),
-  aliases: PackageEntries = new Map(),
+  resolve: SpecTargets = () => null,
+  knownPackages: ReadonlySet<string> = new Set(),
 ): {
   mayExport: (spec: string) => boolean;
   isObjectModule: (spec: string) => boolean;
@@ -999,16 +1028,15 @@ export function moduleObjectsOf(
   const ofTree = (f: string) => /^(src|packages)\//.test(f);
   /** Whether a specifier may name a file of the set (the resolution of the doc comment above). */
   const mayName = (set: FileSet, spec: string): boolean => {
-    const aliased = entryFiles(aliases, spec);
-    if (aliased !== null) return aliased.filter(ofTree).some((t) => names(set, t));
+    // The one resolution scanSources built (pre-5 MF1): every alias target and workspace entry file the specifier
+    // matches, together; it may name a file of the set when any of them of the tree does.
+    const resolved = resolve(spec);
+    if (resolved !== null) return resolved.filter(ofTree).some((t) => names(set, t));
     if (inTree(spec)) return byKey(set, spec);
     const dir = workspace(spec);
     if (dir === undefined || !set.packages.has(dir)) return false;
-    const subpath = `.${spec.slice(`@cinatra-ai/${dir}`.length)}`;
-    const known = entries.get(dir);
-    const files = known === undefined ? null : entryFiles(known, subpath);
-    if (files !== null) return files.some((t) => names(set, t));
-    return known === undefined || byKey(set, spec);
+    // A subpath no entry matches falls back to the file name; a package whose entries are unknown may name any file of its own.
+    return !knownPackages.has(dir) || byKey(set, spec);
   };
   const mayExport = (spec: string): boolean => isTargetModule(spec) || mayName(exporting, spec);
   for (const [file, b] of bindings) {
@@ -1018,8 +1046,8 @@ export function moduleObjectsOf(
   }
   /** A module outside the tree but a Node built-in, which the scan does not read. */
   const outsideOf = (spec: string) => {
-    const aliased = entryFiles(aliases, spec);
-    if (aliased !== null) return aliased.some((f) => !ofTree(f));
+    const resolved = resolve(spec);
+    if (resolved !== null) return resolved.some((f) => !ofTree(f));
     return !inTree(spec) && workspace(spec) === undefined && !spec.startsWith("node:") && !BUILTINS.has(spec);
   };
   const isObjectModule = (spec: string) => mayExport(spec) || outsideOf(spec);
@@ -1452,11 +1480,12 @@ export function scanSources(
     sources.set(file, sf);
   }
   // One resolution of a specifier (its spelling, the path aliases, the workspace entries) feeds every rule (pre-4 MF1).
-  const targets = moduleTargets(entries, aliases);
+  const resolve = specTargets(entries, aliases);
+  const targets = moduleTargets(resolve);
   const boxModule = (spec: string) => isCheckboxModule(spec) || (targets(spec) ?? []).some(isCheckboxModule);
   const scope = resolveNames(sources, isCheckboxSpelling, boxModule);
   const bindings = new Map([...sources].map(([file, sf]) => [file, collectBindings(sf)] as const));
-  const modules = moduleObjectsOf(bindings, scope.isName, boxModule, entries, aliases);
+  const modules = moduleObjectsOf(bindings, scope.isName, boxModule, resolve, new Set(entries.keys()));
   // A switch by name, through the same resolution (pre-4 NOTE, fold 5): Switch, a name bound to it, or a name imported
   // from a module that names a switch. It MAY be one when the specifier or any file it resolves to names a switch; it
   // is SURELY one only when every file it resolves to (its spelling when it resolves to none) names a switch, and only
@@ -1850,8 +1879,7 @@ export function findCallers(
     new Map([...sources].map(([file, sf]) => [file, collectBindings(sf)] as const)),
     scope.isName,
     () => false,
-    workspaceEntries([...sources.keys()], fileText),
-    rootAliases(fileText),
+    ...resolutionOf(workspaceEntries([...sources.keys()], fileText), rootAliases(fileText)),
   );
   const sites: CallerSite[] = [];
   for (const [file, sf] of sources) {

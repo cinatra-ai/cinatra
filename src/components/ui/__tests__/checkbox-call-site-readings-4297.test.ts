@@ -1362,3 +1362,43 @@ describe("a sure switch is bound in its own file, and every unread config refuse
     expect(packageEntriesOf("kit", '{ "exports": { ".": "./src/index.ts" }, "main": "./dist/index.js" }')).toEqual(new Map([[".", ["packages/kit/src/index.ts"]]]));
   });
 });
+
+describe("one resolution for module objects, and no malformed exports or empty alias list passes (pre-5)", () => {
+  const sitesIn = (tree: ScannedTree, file: string) => tree.files.find((f) => f.file === file)?.sites.map((s) => s.tag) ?? [];
+
+  it("unions an alias and a workspace entry the same specifier matches for module objects (MF1)", () => {
+    const texts = {
+      "src/plain.ts": "export const other = 1;\n",
+      "packages/kit/src/control.ts": 'export { Root as Tick } from "@radix-ui/react-checkbox";\n',
+      "src/a.tsx": 'import * as P from "@cinatra-ai/kit/control";\nexport const X = (k: string) => { const C = P[k]; return <C />; };\n',
+    };
+    const entries = new Map([["kit", packageEntriesOf("kit", '{ "exports": { "./control": "./src/control.ts" } }')!]]);
+    const both = scanSources(new Map(Object.entries(texts)), entries, pathAliasesOf('{ "compilerOptions": { "paths": { "@cinatra-ai/kit/control": ["src/plain.ts"] } } }'));
+    expect(sitesIn(both, "src/a.tsx")).toEqual(["P[k]"]);
+    // Each map alone gives the answer it gave before: the workspace entry alone finds the site, the plain alias alone none.
+    expect(sitesIn(scanSources(new Map(Object.entries(texts)), entries), "src/a.tsx")).toEqual(["P[k]"]);
+    const aliasOnly = scanSources(new Map(Object.entries(texts)), new Map(), pathAliasesOf('{ "compilerOptions": { "paths": { "@cinatra-ai/kit/control": ["src/plain.ts"] } } }'));
+    expect(sitesIn(aliasOnly, "src/a.tsx")).toEqual([]);
+  });
+
+  it("refuses an exports value holding a number or a boolean at any depth (MF2)", () => {
+    for (const json of [
+      '{ "exports": { ".": { "default": 42 } } }',
+      '{ "exports": { "./a": { "import": { "node": false } } } }',
+      '{ "exports": ["./a.js", 7] }',
+      '{ "exports": { "./a": [true, "./a.js"] } }',
+    ]) {
+      expect(packageEntriesOf("kit", json)).toBe(null);
+      expect(() => workspaceEntries(["packages/kit/src/a.ts"], reader({ "packages/kit/package.json": json }))).toThrow("packages/kit/package.json");
+    }
+    expect(packageEntriesOf("kit", '{ "exports": { ".": { "import": "./a.js", "default": null }, "./x": null } }')).toEqual(
+      new Map([[".", ["packages/kit/a.js"]], ["./x", []]]),
+    );
+  });
+
+  it("refuses a path alias with no target, so it never falls back to its spelling (MF3)", () => {
+    const json = '{ "compilerOptions": { "paths": { "@ui/switch": [] } } }';
+    expect(() => pathAliasesOf(json)).toThrow("tsconfig.json: the path alias @ui/switch has no target");
+    expect(() => rootAliases(reader({ "tsconfig.json": json }))).toThrow("tsconfig.json");
+  });
+});
