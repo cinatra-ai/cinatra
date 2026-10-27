@@ -1497,4 +1497,168 @@ describe("drupal-mcp dev writers bind the dev owner host-side (cinatra#4387)", (
     expect(Object.getPrototypeOf(bound)).toBe(Object.prototype);
     expect(bound).toMatchObject({ orgId: "dev-org-1", runBy: "dev-admin-1" });
   });
+
+  // Object.prototype is shared by the whole test process: each case that can
+  // put orgId/runBy on it saves the previous state and restores it in
+  // `finally`, and reads what it asserts BEFORE the restore, asserting after.
+  const PAIR = ["orgId", "runBy"] as const;
+  function saveObjectPrototypePair() {
+    return PAIR.map((key) => [key, Object.getOwnPropertyDescriptor(Object.prototype, key)] as const);
+  }
+  function restoreObjectPrototypePair(saved: ReturnType<typeof saveObjectPrototypePair>) {
+    for (const [key, field] of saved) {
+      if (field) Object.defineProperty(Object.prototype, key, field);
+      else Reflect.deleteProperty(Object.prototype, key);
+    }
+  }
+  function plantInheritedEvilPair() {
+    for (const [key, value] of [
+      ["orgId", "evil-org"],
+      ["runBy", "evil-user"],
+    ]) {
+      Object.defineProperty(Object.prototype, key, {
+        configurable: true,
+        get: () => value,
+        set() {}, // would swallow an ordinary assignment of the host's value
+      });
+    }
+  }
+
+  it("an accessor field of the caller's input is never run: a getter that defines an inherited orgId/runBy is refused, with and without an owner", async () => {
+    const saved = saveObjectPrototypePair();
+    let getterRuns = 0;
+    const outcomes: Array<{ owner: boolean; save: string; persist: string; saves: number; persists: number }> = [];
+    let planted: Array<PropertyDescriptor | undefined> = [];
+    try {
+      for (const owner of [DEV_OWNER, null]) {
+        const input = {
+          get name() {
+            getterRuns += 1;
+            for (const [key, value] of [
+              ["orgId", "evil-org"],
+              ["runBy", "evil-user"],
+            ]) {
+              Object.defineProperty(Object.prototype, key, {
+                configurable: true,
+                get: () => value,
+                set() {}, // suppresses out[key] = hostValue
+              });
+            }
+            return "Local";
+          },
+          siteUrl: "http://localhost:8082",
+          mcpApiKey: "valid-key-123",
+        };
+        devBoot(owner);
+        const saves = drupalApiCalls.save.length;
+        const persists = drupalApiCalls.devPersist.length;
+        const settle = (p: Promise<unknown>) =>
+          p.then(
+            () => "resolved",
+            (e: unknown) => `rejected: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        const save = await settle(drupal().devSaveInstance!(input));
+        const persist = await settle(drupal().devPersistLocalInstanceUnvalidated!(input));
+        outcomes.push({
+          owner: owner !== null,
+          save,
+          persist,
+          saves: drupalApiCalls.save.length - saves,
+          persists: drupalApiCalls.devPersist.length - persists,
+        });
+      }
+      planted = PAIR.map((key) => Object.getOwnPropertyDescriptor(Object.prototype, key));
+    } finally {
+      restoreObjectPrototypePair(saved);
+    }
+    const refused = "rejected: A drupal-mcp dev instance save takes data fields only; the accessor field name is refused.";
+    expect(outcomes).toEqual([
+      { owner: true, save: refused, persist: refused, saves: 0, persists: 0 },
+      { owner: false, save: refused, persist: refused, saves: 0, persists: 0 },
+    ]);
+    expect(getterRuns).toBe(0);
+    expect(planted).toEqual([undefined, undefined]);
+  });
+
+  it("an inherited orgId/runBy setter and getter defined before the call cannot drop or replace the host's pair (dev owner)", async () => {
+    const saved = saveObjectPrototypePair();
+    const seen: Array<{ own: Array<PropertyDescriptor | undefined>; read: unknown[] }> = [];
+    try {
+      plantInheritedEvilPair();
+      devBoot(DEV_OWNER);
+      await drupal().devSaveInstance!({ name: "Local", siteUrl: "http://localhost:8082" });
+      await drupal().devPersistLocalInstanceUnvalidated!({ name: "Local", siteUrl: "http://localhost:8082" });
+      for (const handed of [drupalApiCalls.save.at(-1)![0], drupalApiCalls.devPersist.at(-1)![0]] as Array<
+        Record<string, unknown>
+      >) {
+        seen.push({
+          own: PAIR.map((key) => Object.getOwnPropertyDescriptor(handed, key)),
+          read: PAIR.map((key) => handed[key]),
+        });
+      }
+    } finally {
+      restoreObjectPrototypePair(saved);
+    }
+    const own = (value: string) => ({ value, enumerable: true, writable: true, configurable: true });
+    expect(seen).toEqual([
+      { own: [own("dev-org-1"), own("dev-admin-1")], read: ["dev-org-1", "dev-admin-1"] },
+      { own: [own("dev-org-1"), own("dev-admin-1")], read: ["dev-org-1", "dev-admin-1"] },
+    ]);
+  });
+
+  it("an inherited orgId/runBy getter defined before the call is not read through the copy (no owner: both are own and undefined)", async () => {
+    const saved = saveObjectPrototypePair();
+    const seen: Array<{ own: boolean[]; read: unknown[] }> = [];
+    try {
+      plantInheritedEvilPair();
+      devBoot(null);
+      await drupal().devSaveInstance!({ id: "i-1", name: "Local", siteUrl: "http://localhost:8082" });
+      await drupal().devPersistLocalInstanceUnvalidated!({ name: "Local", siteUrl: "http://localhost:8082" });
+      for (const handed of [drupalApiCalls.save.at(-1)![0], drupalApiCalls.devPersist.at(-1)![0]] as Array<
+        Record<string, unknown>
+      >) {
+        seen.push({
+          own: PAIR.map((key) => Object.prototype.hasOwnProperty.call(handed, key)),
+          read: PAIR.map((key) => handed[key]),
+        });
+      }
+    } finally {
+      restoreObjectPrototypePair(saved);
+    }
+    expect(seen).toEqual([
+      { own: [true, true], read: [undefined, undefined] },
+      { own: [true, true], read: [undefined, undefined] },
+    ]);
+  });
+
+  it("a Proxy input is refused before any of its traps runs, and nothing reaches the connector", async () => {
+    const trapped: string[] = [];
+    const input = new Proxy(
+      { name: "Local", siteUrl: "http://localhost:8082" },
+      {
+        ownKeys(target) {
+          trapped.push("ownKeys");
+          return Reflect.ownKeys(target);
+        },
+        getOwnPropertyDescriptor(target, key) {
+          trapped.push("getOwnPropertyDescriptor");
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+        get(target, key, receiver) {
+          trapped.push("get");
+          return Reflect.get(target, key, receiver);
+        },
+      },
+    );
+    for (const owner of [DEV_OWNER, null]) {
+      devBoot(owner);
+      const saves = drupalApiCalls.save.length;
+      const persists = drupalApiCalls.devPersist.length;
+      await expect(drupal().devSaveInstance!(input)).rejects.toThrow(/a Proxy is refused/);
+      await expect(drupal().devPersistLocalInstanceUnvalidated!(input)).rejects.toThrow(/a Proxy is refused/);
+      expect(drupalApiCalls.save).toHaveLength(saves);
+      expect(drupalApiCalls.devPersist).toHaveLength(persists);
+    }
+    expect(trapped).toEqual([]);
+  });
 });

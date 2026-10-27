@@ -274,6 +274,7 @@ import { isKnownDestructiveToolName } from "@cinatra-ai/mcp-server/known-destruc
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context";
 import { logAuditEvent } from "@/lib/authz/audit";
 import { Buffer } from "node:buffer";
+import { types as nodeUtilTypes } from "node:util";
 // The vendor connection/instance CLIENTS are GONE from core (cinatra#975
 // Wave 3 CORE EVICTION, epic #978): each owning connector registers its
 // relocated client under the SAME capability id from its `register(ctx)`.
@@ -386,35 +387,49 @@ function devInstallOwnerBinding(): { orgId: string; runBy: string } | undefined 
 
 /**
  * The dev-hook input with the host-bound binding, as a NEW plain object. The
- * input is a plain object (the connector's dev hook passes object literals):
- * its OWN ENUMERABLE fields are copied one by one, except `orgId` and `runBy`,
- * which are never read (on these dev members only the host names the owner).
- * A field the input only inherits (for example a getter on a class prototype)
- * is NOT copied, and the caller's object is never changed. Each field is
- * DEFINED as an own data property (never assigned), so an own `__proto__` key
- * (for example from `JSON.parse`) is copied as an ordinary field and cannot
- * change the copy's prototype: the copy's `orgId`/`runBy` are only the host's.
- * The result type holds for a plain-object input.
+ * input is a plain object of data fields (the connector's dev hook passes
+ * object literals). The copy NEVER runs caller code: a Proxy input is refused
+ * before any key is read, and each field is read from its own property
+ * descriptor, so no getter is called. Its OWN ENUMERABLE DATA fields are
+ * copied one by one, except `orgId` and `runBy`, which are never read (on
+ * these dev members only the host names the owner). An own enumerable
+ * ACCESSOR field (a getter or a setter) is refused: the member throws and
+ * nothing reaches the connector. A field the input only inherits (for example
+ * a getter on a class prototype) is NOT copied, and the caller's object is
+ * never changed. Each field is DEFINED as an own data property (never
+ * assigned), so an own `__proto__` key (for example from `JSON.parse`) is
+ * copied as an ordinary field and cannot change the copy's prototype.
+ * `orgId` and `runBy` are then ALWAYS defined as own data properties of the
+ * copy: the host's pair on a bound boot, else `undefined`. So no setter or
+ * getter the copy would inherit (for example one defined on
+ * `Object.prototype`) can drop the host's pair or put another pair in its
+ * place. The result type holds for a plain-object input.
  */
 function withDevInstallOwnerBinding<T extends object>(input: T): Omit<T, "orgId" | "runBy"> & {
   orgId?: string;
   runBy?: string;
 } {
+  if (nodeUtilTypes.isProxy(input)) {
+    throw new Error("A drupal-mcp dev instance save takes a plain object of data fields; a Proxy is refused.");
+  }
   const out: Record<PropertyKey, unknown> = {};
   for (const key of Reflect.ownKeys(input)) {
     if (key === "orgId" || key === "runBy") continue;
-    if (!Object.prototype.propertyIsEnumerable.call(input, key)) continue;
-    Object.defineProperty(out, key, {
-      value: (input as Record<PropertyKey, unknown>)[key],
-      enumerable: true,
-      writable: true,
-      configurable: true,
-    });
+    const field = Reflect.getOwnPropertyDescriptor(input, key);
+    if (!field || !field.enumerable) continue;
+    if (!("value" in field)) {
+      throw new Error(
+        `A drupal-mcp dev instance save takes data fields only; the accessor field ${String(key)} is refused.`,
+      );
+    }
+    Object.defineProperty(out, key, { value: field.value, enumerable: true, writable: true, configurable: true });
   }
   const binding = devInstallOwnerBinding();
-  if (binding) {
-    out.orgId = binding.orgId;
-    out.runBy = binding.runBy;
+  for (const [key, value] of [
+    ["orgId", binding?.orgId],
+    ["runBy", binding?.runBy],
+  ] as const) {
+    Object.defineProperty(out, key, { value, enumerable: true, writable: true, configurable: true });
   }
   return out as Omit<T, "orgId" | "runBy"> & { orgId?: string; runBy?: string };
 }
@@ -1212,7 +1227,8 @@ export function registerHostConnectorServices(): void {
     // intrinsic loopback-only hard-gate (and its own runtime-mode refusal).
     // cinatra#4387: both dev writers bind the dev owner's org + user host-side
     // (withDevInstallOwnerBinding), so the write-authority gate's per-instance
-    // org check can admit the dev administrator; with no owner, none is passed.
+    // org check can admit the dev administrator; with no owner, both are
+    // undefined (own fields of the copy, so nothing inherited is read).
     devPersistLocalInstanceUnvalidated: async (input) => {
       assertDevSetupHostOnly("drupal-mcp.devPersistLocalInstanceUnvalidated");
       const persisted = await requireDrupalInstanceAdmin().devPersistLocalInstanceUnvalidated(
