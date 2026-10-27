@@ -33,13 +33,17 @@
  * the run's schema only, and a statement whose text names `public` (the slug
  * columns, indexes and triggers on the Better Auth tables) is left out. That
  * leave-out is LEXICAL, over the canonical DDL as it is today. The boundary is
- * SEMANTIC: the catalog of every schema outside the run (except the system
- * schemas and other runs of this tier) is read before setup and compared after
- * setup, after the cases and after teardown, and a change there fails the run.
+ * SEMANTIC: the catalog of every schema but the run's own (and the system
+ * schemas) is read before setup and compared, entry by entry and counted, after
+ * setup, after the cases and after teardown, and an added or removed entry fails
+ * the run. Runs of this tier hold one advisory lock across that window, so they
+ * run one after another and another run's schema is read like any other.
  * It reads schemas, relations, columns, constraints, indexes, triggers,
  * functions and types; a change of any other kind (a column default, a
- * privilege, row security or a policy, a comment, an extension, a row) is not
- * seen. The check detects a change; it does not prevent one. The Better Auth tables the
+ * privilege, row security or a policy, a comment, an extension, a row), and of
+ * the kinds read a trigger's timing, events or WHEN condition, a function's
+ * language or volatility, a view's body or a sequence's options, is not seen.
+ * The check detects a change; it does not prevent one. The Better Auth tables the
  * DDL names must already exist (scripts/apply-public-schema.mjs, as CI
  * provisions them). Because `postgresSchema` is a module-load
  * const, every app module is dynamically imported in `beforeAll` AFTER the env
@@ -308,43 +312,50 @@ async function cleanUpOwned(): Promise<void> {
 const namesPublic = (text: string): boolean => /(^|[^\w$".\/:@-])"?public"?\s*\./i.test(text);
 
 /**
- * The catalog of every schema outside this run: schemas, relations (tables,
+ * The catalog of every schema but this run's own: schemas, relations (tables,
  * indexes, sequences, views), columns, constraints, indexes, triggers, functions
- * and types. Left out: the system schemas (`pg_*`, `information_schema`) and the
- * schemas of runs of this tier (`cinatra_test_tpw4379_*`, this run's included),
- * which concurrent runs create and drop. Read on a connection whose search path
- * is `pg_catalog` only, so every printed name is schema-qualified the same way.
+ * and types. Left out: the system schemas (`pg_*`, `information_schema`) and
+ * THIS run's schema (`$1`) only; the schemas of other runs of this tier are read
+ * like any other schema. Every name is printed by `format('%I')` or by the
+ * `regclass` / `regtype` / `regprocedure` output (quoted where a name needs it,
+ * schema-qualified because the search path is `pg_catalog` only), so a name
+ * holding a dot, a space or a quote cannot read as another entry. A constraint
+ * names the relation or domain it belongs to, a trigger its table and function,
+ * an index its definition (which names its table).
  * Not read: column defaults, privileges, row security and policies, comments,
- * extensions and rows. The `"char"` columns are cast to text (`text || "char"`
- * is ambiguous in Postgres).
+ * extensions and rows; and of the kinds read, a trigger's timing, events and
+ * WHEN condition, a function's language and volatility, a view's body and a
+ * sequence's options are not compared.
  */
 const CATALOG_OUTSIDE_RUN = `
   WITH ns AS (
     SELECT oid, nspname FROM pg_namespace
-     WHERE nspname NOT LIKE 'pg\\_%' AND nspname <> 'information_schema'
-       AND nspname NOT LIKE 'cinatra\\_test\\_tpw4379\\_%'
+     WHERE nspname NOT LIKE 'pg\\_%' AND nspname <> 'information_schema' AND nspname <> $1
   )
   SELECT x FROM (
-    SELECT 'schema ' || ns.nspname AS x FROM ns
-    UNION ALL SELECT 'rel ' || ns.nspname || '.' || c.relname || ' ' || c.relkind::text
+    SELECT format('schema %I', ns.nspname) AS x FROM ns
+    UNION ALL SELECT format('rel %I.%I %s', ns.nspname, c.relname, c.relkind)
       FROM pg_class c JOIN ns ON ns.oid = c.relnamespace
-    UNION ALL SELECT 'col ' || ns.nspname || '.' || c.relname || '.' || a.attname || ' ' ||
-        format_type(a.atttypid, a.atttypmod) || CASE WHEN a.attnotnull THEN ' not null' ELSE '' END
+    UNION ALL SELECT format('col %I.%I.%I %s%s', ns.nspname, c.relname, a.attname,
+        format_type(a.atttypid, a.atttypmod), CASE WHEN a.attnotnull THEN ' not null' ELSE '' END)
       FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN ns ON ns.oid = c.relnamespace
      WHERE a.attnum > 0 AND NOT a.attisdropped
-    UNION ALL SELECT 'con ' || ns.nspname || '.' || co.conname || ' ' || pg_get_constraintdef(co.oid)
+    UNION ALL SELECT format('con %I.%I on %s %s', ns.nspname, co.conname,
+        CASE WHEN co.conrelid <> 0 THEN 'table ' || co.conrelid::regclass::text
+             WHEN co.contypid <> 0 THEN 'type ' || co.contypid::regtype::text
+             ELSE 'nothing' END,
+        pg_get_constraintdef(co.oid))
       FROM pg_constraint co JOIN ns ON ns.oid = co.connamespace
-    UNION ALL SELECT 'idx ' || ns.nspname || '.' || c.relname || ' ' || pg_get_indexdef(c.oid)
+    UNION ALL SELECT format('idx %I.%I %s', ns.nspname, c.relname, pg_get_indexdef(c.oid))
       FROM pg_class c JOIN ns ON ns.oid = c.relnamespace WHERE c.relkind IN ('i', 'I')
-    UNION ALL SELECT 'trg ' || ns.nspname || '.' || c.relname || '.' || t.tgname || ' ' ||
-        pn.nspname || '.' || p.proname || ' ' || t.tgenabled::text
+    UNION ALL SELECT format('trg %I.%I.%I %s %s', ns.nspname, c.relname, t.tgname,
+        t.tgfoid::regprocedure::text, t.tgenabled)
       FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN ns ON ns.oid = c.relnamespace
-      JOIN pg_proc p ON p.oid = t.tgfoid JOIN pg_namespace pn ON pn.oid = p.pronamespace
      WHERE NOT t.tgisinternal
-    UNION ALL SELECT 'fn ' || ns.nspname || '.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) ||
-        ') ' || md5(coalesce(p.prosrc, ''))
+    UNION ALL SELECT format('fn %I.%I(%s) %s', ns.nspname, p.proname,
+        pg_get_function_identity_arguments(p.oid), md5(coalesce(p.prosrc, '')))
       FROM pg_proc p JOIN ns ON ns.oid = p.pronamespace
-    UNION ALL SELECT 'type ' || ns.nspname || '.' || ty.typname || ' ' || ty.typtype::text
+    UNION ALL SELECT format('type %I.%I %s', ns.nspname, ty.typname, ty.typtype)
       FROM pg_type ty JOIN ns ON ns.oid = ty.typnamespace
   ) s ORDER BY x`;
 
@@ -356,7 +367,7 @@ async function catalogOutsideRun(): Promise<string[]> {
   let failure: unknown;
   try {
     await client.query("SET search_path TO pg_catalog");
-    rows = (await client.query(CATALOG_OUTSIDE_RUN)).rows.map((r) => (r as { x: string }).x);
+    rows = (await client.query(CATALOG_OUTSIDE_RUN, [TEST_SCHEMA])).rows.map((r) => (r as { x: string }).x);
   } catch (err) {
     failure = err;
   }
@@ -373,15 +384,26 @@ async function catalogOutsideRun(): Promise<string[]> {
 /** The catalog outside this run before setup created anything; unset until then. */
 let catalogBefore: string[] | undefined;
 
-/** Fail loudly when anything outside this run's schema was added or removed since setup began. */
+/** Each entry of `a` as many times as it occurs in `a` more often than in `b`. */
+function surplus(a: string[], b: string[]): string[] {
+  const left = new Map<string, number>();
+  for (const x of b) left.set(x, (left.get(x) ?? 0) + 1);
+  const out: string[] = [];
+  for (const x of a) {
+    const n = left.get(x) ?? 0;
+    if (n > 0) left.set(x, n - 1);
+    else out.push(x);
+  }
+  return out;
+}
+
+/** Fail loudly when an entry outside this run's schema was added or removed (counted, not set membership) since setup began. */
 async function assertCatalogUnchanged(phase: string): Promise<void> {
   if (catalogBefore === undefined) return;
   const before = catalogBefore;
   const now = await catalogOutsideRun();
-  const had = new Set(before);
-  const has = new Set(now);
-  const added = now.filter((x) => !had.has(x));
-  const removed = before.filter((x) => !has.has(x));
+  const added = surplus(now, before);
+  const removed = surplus(before, now);
   if (added.length === 0 && removed.length === 0) return;
   const show = (xs: string[]): string =>
     xs.slice(0, 40).join(" ; ") + (xs.length > 40 ? ` ; ... ${xs.length - 40} more` : "");
@@ -391,10 +413,60 @@ async function assertCatalogUnchanged(phase: string): Promise<void> {
   );
 }
 
+/**
+ * Runs of this tier against one database wait for each other: each run holds a
+ * session advisory lock (key 4379, 1) on a connection of its own from before its
+ * first catalog read until after its last, so no other run of this tier creates
+ * or drops its schema inside this run's checked window, and the check need not
+ * leave other runs' schemas out. A run that cannot take the lock within 600 s
+ * fails its setup. A killed run's connection closes, and Postgres releases its
+ * lock.
+ */
+const TIER_LOCK_WAIT_S = 600;
+let tierLock: Client | undefined;
+
+async function takeTierLock(): Promise<void> {
+  const client = new Client({ connectionString: DB_URL });
+  await client.connect();
+  tierLock = client;
+  await client.query(`SET statement_timeout = '${TIER_LOCK_WAIT_S}s'`);
+  try {
+    await client.query("SELECT pg_advisory_lock(4379, 1)");
+  } catch (err) {
+    throw new Error(
+      `cinatra#4379 could not take the tier lock (another run of this tier held it for ${TIER_LOCK_WAIT_S} s, ` +
+        `or the wait failed): ${errText(err)}`,
+    );
+  }
+  await client.query("SET statement_timeout = 0");
+}
+
+/** Release the tier lock and close its connection; both failures are reported. */
+async function releaseTierLock(): Promise<void> {
+  const client = tierLock;
+  tierLock = undefined;
+  if (client === undefined) return;
+  let failure: unknown;
+  try {
+    await client.query("SELECT pg_advisory_unlock(4379, 1)");
+  } catch (err) {
+    failure = err;
+  }
+  try {
+    await client.end();
+  } catch (closeErr) {
+    if (failure !== undefined) throw new AggregateError([failure, closeErr], "cinatra#4379 tier lock release failed, and so did its close");
+    throw closeErr;
+  }
+  if (failure !== undefined) throw failure;
+}
+
 beforeAll(async () => {
   if (!HAS_REAL_DB) return;
   // MUST precede every app-module import (module-load schema const).
   process.env.SUPABASE_SCHEMA = TEST_SCHEMA;
+  // Wait for every other run of this tier first; afterAll releases the lock.
+  await takeTierLock();
 
   const client = new Client({ connectionString: DB_URL });
   await client.connect();
@@ -498,7 +570,7 @@ beforeAll(async () => {
   promotionMod = await import("@/lib/artifacts/typed-promotion");
   promotionStore = await import("@/lib/artifacts/typed-promotion-store");
   writerMod = await import("@/lib/object-history/canonical-writer");
-}, 120_000);
+}, (TIER_LOCK_WAIT_S + 120) * 1000);
 
 // On every exit road the runner reaches (cases passed, failed or skipped after a
 // failed setup) this checks the catalog outside the run, removes what the run
@@ -510,13 +582,14 @@ afterAll(async () => {
   if (!HAS_REAL_DB) return;
   delete (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized;
   // The catalog outside the run after the cases, then the cleanup, then the
-  // catalog again (a CASCADE drop must not reach outside the run either). Every
-  // step is tried; every failure is reported.
+  // catalog again (a CASCADE drop must not reach outside the run either), then
+  // the tier lock is released. Every step is tried; every failure is reported.
   const failures: unknown[] = [];
   const steps: Array<() => Promise<void>> = [
     () => assertCatalogUnchanged("the cases"),
     cleanUpOwned,
     () => assertCatalogUnchanged("the teardown"),
+    releaseTierLock,
   ];
   for (const step of steps) {
     try {
