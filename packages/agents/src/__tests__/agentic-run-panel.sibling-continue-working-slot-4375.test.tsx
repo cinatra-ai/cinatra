@@ -17,6 +17,11 @@
  * question at the press and takes the record back unless its submit is
  * accepted, as the panel's own Continue arms and releases its key.
  *
+ * EACH PRESS IS ONE ATTEMPT (cinatra#4011, fold 1). Two overlapping submits of
+ * the same question (a card that moved and was pressed again) settle only
+ * themselves: a refusal of one never erases the other's accepted answer, in
+ * either order.
+ *
  * Mounted as the conversation view mounts them (`chat-messages-view.tsx`): the
  * real `AgentHitlScreenCard` and the real `AgenticRunPanel` side by side under
  * one host declaration. Only the server, stream and slot-reader ports are
@@ -41,7 +46,7 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.f
 
 /** The cookie door's answer (`chat_thread`), held until the arm releases it. */
 const cookieDoor = vi.hoisted(() => ({
-  answer: { ok: true } as { ok: boolean; blocked?: string } | "throw",
+  answer: { ok: true } as { ok: boolean; blocked?: string } | "throw" | "already-resolved",
   held: null as Promise<void> | null,
 }));
 const { approveReviewTask } = vi.hoisted(() => ({
@@ -192,7 +197,27 @@ function rowWith(q: Question): () => Response {
 }
 
 /** The broker door's answer (`site_widget`), held until the arm releases it. */
-let brokerSubmit: "accepted" | "refused" | "http-refused" | "throw";
+type BrokerAnswer = "accepted" | "refused" | "http-refused" | "throw";
+let brokerSubmit: BrokerAnswer;
+/**
+ * Per-submit answers, in request order, each held until its own release (the
+ * overlapping-attempt arms). `null`: every submit takes `brokerSubmit`.
+ */
+type QueuedSubmit = { answer: BrokerAnswer; held: Promise<void>; release: () => void };
+let brokerQueue: QueuedSubmit[] | null;
+let brokerSent: number;
+function queued(answer: BrokerAnswer): QueuedSubmit {
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((done) => {
+    release = done;
+  });
+  return { answer, held, release: () => release() };
+}
+function brokerReply(answer: BrokerAnswer): Response {
+  if (answer === "throw") throw new TypeError("network down");
+  if (answer === "http-refused") return json({ error: "forbidden" }, 403);
+  return json({ outcome: answer === "accepted" ? { ok: true } : { ok: false, blocked: "refused" } });
+}
 let submitHeld: Promise<void> | null;
 let releaseSubmit: () => void;
 let cardQuestion: Question;
@@ -223,6 +248,8 @@ beforeEach(() => {
   rowAnswer = rowWith(ANSWERED);
   cardQuestion = ANSWERED;
   brokerSubmit = "accepted";
+  brokerQueue = null;
+  brokerSent = 0;
   cookieDoor.answer = { ok: true };
   requests = [];
   hold();
@@ -230,6 +257,7 @@ beforeEach(() => {
   approveReviewTask.mockImplementation(async () => {
     await cookieDoor.held;
     if (cookieDoor.answer === "throw") throw new Error("the decision road refused this");
+    if (cookieDoor.answer === "already-resolved") throw new Error("Review task already resolved");
     return cookieDoor.answer;
   });
   vi.stubGlobal(
@@ -238,10 +266,16 @@ beforeEach(() => {
       const url = String(input);
       requests.push(url);
       if (url.endsWith("/hitl-screen/submit")) {
+        if (brokerQueue) {
+          const entry = brokerQueue[brokerSent];
+          brokerSent += 1;
+          if (!entry) throw new Error("a submit the arm did not plan");
+          await entry.held;
+          return brokerReply(entry.answer);
+        }
+        brokerSent += 1;
         await submitHeld;
-        if (brokerSubmit === "throw") throw new TypeError("network down");
-        if (brokerSubmit === "http-refused") return json({ error: "forbidden" }, 403);
-        return json({ outcome: brokerSubmit === "accepted" ? { ok: true } : { ok: false, blocked: "refused" } });
+        return brokerReply(brokerSubmit);
       }
       if (url.includes("/hitl-screen")) return json(asking(cardQuestion));
       if (url.includes("/api/agents/runs/")) return rowAnswer();
@@ -289,9 +323,17 @@ function panel(seedQuestion: Question = ANSWERED) {
   );
 }
 
-/** The card and the panel side by side, as the conversation view mounts them. */
-function mountConversation(host: "site_widget" | "chat_thread", seedQuestion: Question = ANSWERED) {
-  return render(
+/**
+ * The card and the panel side by side, as the conversation view mounts them. A
+ * new `cardKey` unmounts the card and mounts it again (the card moved), while
+ * the panel stays mounted.
+ */
+function conversation(
+  host: "site_widget" | "chat_thread",
+  seedQuestion: Question = ANSWERED,
+  cardKey = "card",
+) {
+  return (
     <LifecycleCardSurfaceProvider
       host={host}
       auth={host === "site_widget" ? WIDGET_AUTH : undefined}
@@ -300,11 +342,14 @@ function mountConversation(host: "site_widget" | "chat_thread", seedQuestion: Qu
       <div data-agent-run-slot={RUN_ID}>
         {panel(seedQuestion)}
         <div data-agent-run-screen-slot={RUN_ID}>
-          <AgentHitlScreenCard runId={RUN_ID} wireRef={TASK} />
+          <AgentHitlScreenCard key={cardKey} runId={RUN_ID} wireRef={TASK} />
         </div>
       </div>
-    </LifecycleCardSurfaceProvider>,
+    </LifecycleCardSurfaceProvider>
   );
+}
+function mountConversation(host: "site_widget" | "chat_thread", seedQuestion: Question = ANSWERED) {
+  return render(conversation(host, seedQuestion));
 }
 
 type Reading = { placeholder: boolean; plate: boolean; slot: string | null };
@@ -477,7 +522,7 @@ describe("AC 2: refusals stay blocked", () => {
     }, 60_000);
   }
 
-  for (const answer of [{ ok: false, blocked: "no-longer-pending" }, "throw"] as const) {
+  for (const answer of [{ ok: false, blocked: "no-longer-pending" }, "throw", "already-resolved"] as const) {
     it(`chat_thread: a sibling submit answered ${JSON.stringify(answer)} leaves the panel on the plate`, async () => {
       // "no longer pending" settles the CARD as a landing, but it is not this
       // submit's accepted answer, so it tells the panel nothing.
@@ -619,6 +664,69 @@ describe("AC 5: the working slot stands while the sibling's submit is in flight 
   }
 });
 
+describe("the attempt is the unit: the card moves mid-flight and is pressed again (cinatra#4011, fold 1)", () => {
+  // The first press's submit is still in flight when the card is unmounted and
+  // mounted again (it moved), and the moved card's Continue is pressed. One of
+  // the two submits is accepted and the other refused; whichever settles first,
+  // the refusal must not take the accepted answer's record with it.
+  for (const order of ["the accepted one first", "the refused one first"] as const) {
+    it(`site_widget: two overlapping submits of one question, ${order}: the working slot stands throughout`, async () => {
+      const first = queued("accepted");
+      const second = queued("refused");
+      brokerQueue = [first, second];
+      const view = render(conversation("site_widget", ANSWERED, "card-a"));
+      const button = await blockedOnTheQuestion();
+      await act(async () => {
+        button.click();
+        await flush();
+      });
+      await waitFor(() => {
+        if (brokerSent < 1) throw new Error("the first press issued no submit");
+      });
+      const readings: Reading[] = [readColumn()];
+      view.rerender(conversation("site_widget", ANSWERED, "card-b"));
+      const again = await waitFor(
+        () => {
+          const b = document.querySelector<HTMLButtonElement>(CARD_CONTINUE);
+          if (!b || b.disabled || (b.textContent ?? "").includes("Continuing")) {
+            throw new Error("the moved card's Continue is not standing");
+          }
+          return b;
+        },
+        { timeout: 20_000 },
+      );
+      await act(async () => {
+        again.click();
+        await flush();
+      });
+      await waitFor(() => {
+        if (brokerSent < 2) throw new Error("the second press issued no submit");
+      });
+      readings.push(readColumn());
+      const [early, late] = order === "the accepted one first" ? [first, second] : [second, first];
+      await act(async () => {
+        early.release();
+        await flush();
+      });
+      readings.push(readColumn());
+      await act(async () => {
+        late.release();
+        await flush();
+      });
+      for (let i = 0; i < 4; i += 1) {
+        await act(async () => {
+          await new Promise((r) => setTimeout(r, 700));
+        });
+        readings.push(readColumn());
+      }
+      expect(
+        readings.filter((r) => !isWorking(r)).length,
+        `a reading left the working slot while an accepted answer stood (${told(readings)})`,
+      ).toBe(0);
+    }, 60_000);
+  }
+});
+
 describe("the conversation's answered-question register", () => {
   it("records only a run and a question with a review task and a renderer, keyed on task, renderer and field", () => {
     const register = createAnsweredHitlQuestionRegister();
@@ -640,22 +748,65 @@ describe("the conversation's answered-question register", () => {
     expect(heard).toHaveBeenCalledTimes(1);
   });
 
-  it("a withdrawal takes back only the question it names, and is heard only when it changes the record", () => {
+  it("a withdrawal takes back only its own attempt, and is heard only when it changes the record", () => {
     const register = createAnsweredHitlQuestionRegister();
     const heard = vi.fn();
     register.subscribe(heard);
-    register.announceAnswered(RUN_ID, ANSWERED);
+    const attempt = register.announceAnswered(RUN_ID, ANSWERED);
+    expect(attempt, "the press returned no attempt").toBeTruthy();
     expect(heard).toHaveBeenCalledTimes(1);
-    // Another question, another run, or nothing on file: the record stands.
-    register.withdrawAnswered(RUN_ID, { ...ANSWERED, fieldName: "destination" });
-    register.withdrawAnswered("run-other", ANSWERED);
+    // No attempt, an attempt of another question or another run: the record stands.
+    register.withdrawAnswered(null);
+    register.withdrawAnswered({ runId: RUN_ID, key: answeredHitlQuestionKey({ ...ANSWERED, fieldName: "destination" }), id: attempt!.id });
+    register.withdrawAnswered({ runId: "run-other", key: attempt!.key, id: attempt!.id });
     expect(register.answeredOn(RUN_ID)).toBe(answeredHitlQuestionKey(ANSWERED));
     expect(heard).toHaveBeenCalledTimes(1);
-    register.withdrawAnswered(RUN_ID, ANSWERED);
+    register.withdrawAnswered(attempt);
     expect(register.answeredOn(RUN_ID)).toBeNull();
     expect(heard).toHaveBeenCalledTimes(2);
-    register.withdrawAnswered(RUN_ID, ANSWERED);
+    register.withdrawAnswered(attempt);
     expect(heard).toHaveBeenCalledTimes(2);
+  });
+
+  for (const order of ["accepted, then refused", "refused, then accepted"] as const) {
+    it(`two overlapping attempts of one question, settled ${order}: the record survives`, () => {
+      const register = createAnsweredHitlQuestionRegister();
+      const heard = vi.fn();
+      register.subscribe(heard);
+      const first = register.announceAnswered(RUN_ID, ANSWERED);
+      const second = register.announceAnswered(RUN_ID, ANSWERED);
+      expect(first && second, "a press returned no attempt").toBeTruthy();
+      expect(first!.id).not.toBe(second!.id);
+      if (order === "accepted, then refused") {
+        register.acceptAnswered(first);
+        register.withdrawAnswered(second);
+      } else {
+        register.withdrawAnswered(second);
+        // The first attempt is still in flight: the refusal took back only itself.
+        expect(register.answeredOn(RUN_ID)).toBe(answeredHitlQuestionKey(ANSWERED));
+        register.acceptAnswered(first);
+      }
+      expect(register.answeredOn(RUN_ID)).toBe(answeredHitlQuestionKey(ANSWERED));
+      expect(heard).toHaveBeenCalledTimes(1);
+      // A later press of the same question that is refused leaves the accepted answer.
+      register.withdrawAnswered(register.announceAnswered(RUN_ID, ANSWERED));
+      expect(register.answeredOn(RUN_ID)).toBe(answeredHitlQuestionKey(ANSWERED));
+    });
+  }
+
+  it("an attempt whose record a newer press replaced settles nothing", () => {
+    const register = createAnsweredHitlQuestionRegister();
+    const other: Question = { ...ANSWERED, fieldName: "destination" };
+    const older = register.announceAnswered(RUN_ID, ANSWERED);
+    const newer = register.announceAnswered(RUN_ID, other);
+    expect(older && newer, "a press returned no attempt").toBeTruthy();
+    expect(register.answeredOn(RUN_ID)).toBe(answeredHitlQuestionKey(other));
+    register.withdrawAnswered(older);
+    expect(register.answeredOn(RUN_ID)).toBe(answeredHitlQuestionKey(other));
+    register.acceptAnswered(older);
+    register.withdrawAnswered(newer);
+    // The older acceptance did not take over the newer press's record.
+    expect(register.answeredOn(RUN_ID)).toBeNull();
   });
 
   it("a nested host declaration shares the enclosing conversation's register", () => {

@@ -1153,19 +1153,22 @@ export function AgentHitlScreenCard({
       // told BEFORE the request, exactly as the panel's own Continue arms its
       // key before its own request: the request can stay in flight until the
       // run has reached its next gate (32 s on the widget), and the panel must
-      // hold its working slot for all of that, not only after the answer. A
-      // submit that is not accepted takes it back below.
-      const answeredQuestion = {
-        reviewTaskId: gate.reviewTaskId,
-        xRenderer: gate.xRenderer,
-        fieldName: gate.fieldName,
-      };
-      answeredRegister?.announceAnswered(runId, answeredQuestion);
+      // hold its working slot for all of that, not only after the answer. This
+      // press is ONE ATTEMPT: below, it settles only itself, so a second press
+      // of the same question (a double press, a card that moved and was pressed
+      // again) can never erase the other's answer.
+      const attempt =
+        answeredRegister?.announceAnswered(runId, {
+          reviewTaskId: gate.reviewTaskId,
+          xRenderer: gate.xRenderer,
+          fieldName: gate.fieldName,
+        }) ?? null;
       let landed: boolean;
       // ACCEPTED, as opposed to LANDED (cinatra#4375): only this submit's own
-      // accepted answer. "Already resolved" and "no longer pending" settle the
-      // screen as landings, but they say the gate was answered elsewhere or has
-      // moved on, so they tell the run panel nothing.
+      // accepted answer. On the cookie door "already resolved" and "no longer
+      // pending" settle the screen as landings, but they say the gate was
+      // answered elsewhere or has moved on, so they are not accepted. (The
+      // broker door's server already answers "already resolved" as accepted.)
       let accepted = false;
       if (auth) {
         // THE BROKER DOOR. The reader's own credential, and never the ambient
@@ -1204,11 +1207,14 @@ export function AgentHitlScreenCard({
           );
         }
       }
-      // NOT ACCEPTED, NOT ANSWERED: the record the press made is taken back
-      // before the card draws its Continue again, so the panel returns to the
-      // question. An accepted answer keeps it, and the panel holds its working
-      // slot until the server resumes, exactly as after its own Continue.
-      if (!accepted) answeredRegister?.withdrawAnswered(runId, answeredQuestion);
+      // NOT ACCEPTED, NOT ANSWERED: this press's attempt is taken back before
+      // the card draws its Continue again; the record goes only if no other
+      // attempt for it is in flight and none was accepted, and then the panel
+      // returns to the question. An accepted answer keeps it, and the panel
+      // holds its working slot until the server resumes, exactly as after its
+      // own Continue.
+      if (accepted) answeredRegister?.acceptAnswered(attempt);
+      else answeredRegister?.withdrawAnswered(attempt);
       setSubmitting(false);
       // WHAT WAS TYPED SURVIVES A REFUSAL and is cleared by a landing. A
       // refusal leaves the screen exactly as it was, with the answer in hand.
