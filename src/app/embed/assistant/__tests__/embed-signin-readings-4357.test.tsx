@@ -531,6 +531,36 @@ describe("reading 2: the sign-in-again card (embed-signin-again)", () => {
     },
   );
 
+  it("the clock moving on right after the spent check arms no zero-delay end: the end comes at the life that one reading left", async () => {
+    await render();
+    await deliverContext();
+    // A life of 1 ms; the negotiation answers ok while the clock still reads
+    // the moment of the sign-in answer.
+    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(1, 0.001) });
+    const slow = deferred<{ ok: boolean }>();
+    negotiate.mockReturnValueOnce(slow.promise);
+    fetchThreadMessages.mockResolvedValueOnce([]);
+    await clickSignIn();
+    // From the first clock reading on, the clock reads 1 ms later: the life is
+    // left at the first reading and gone at any later one.
+    const t0 = Date.now();
+    let reads = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => (reads++ === 0 ? t0 : t0 + 1));
+    try {
+      await act(async () => {
+        slow.resolve({ ok: true });
+        await drain();
+      });
+    } finally {
+      clock.mockRestore();
+    }
+    expect(reads, "the frame read the clock").toBeGreaterThan(0);
+    await wait(0);
+    expect(shown(), "no end armed with a zero delay").toBe("active");
+    await wait(1);
+    expect(signInCard().id, "the end comes at the 1 ms the reading left").toBe("embed-signin-again");
+  });
+
   it("a restore that answers after the sign-in ended neither settles nor seeds the next sign-in", async () => {
     await render();
     await deliverContext();
@@ -700,6 +730,43 @@ describe("the sign-in ticket: each check and each move, tried on its own (cinatr
       timers.mockRestore();
     }
   });
+
+  it.each([["an unmount"], ["a new context"]])(
+    "after an end timer of an earlier pair ran, %s still cancels the current pair's end timer",
+    async (then) => {
+      const timers = vi.spyOn(globalThis, "setTimeout");
+      try {
+        await render();
+        await signedIn(pair(1));
+        const calls = timers.mock.calls as unknown as Array<[() => void, number?]>;
+        const firstEnd = calls.find(([, delay]) => delay === LIFE_MS)?.[0];
+        expect(firstEnd, "the first pair's end timer was armed").toBeTypeOf("function");
+        await deliverContext("t-2");
+        runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(2) });
+        negotiate.mockResolvedValueOnce({ ok: true });
+        fetchThreadMessages.mockResolvedValueOnce([]);
+        await clickSignIn();
+        expect(shown()).toBe("active");
+        expect(vi.getTimerCount(), "the second pair's end timer is armed").toBe(1);
+        await act(async () => {
+          firstEnd?.();
+          await drain();
+        });
+        expect(shown(), "the stale end drops nothing").toBe("active");
+        if (then === "an unmount") {
+          act(() => root.unmount());
+          // afterEach unmounts again; a fresh root keeps that harmless.
+          root = createRoot(container);
+        } else {
+          await deliverContext("t-3");
+          expect(signInCard().id).toBe("embed-signin-first");
+        }
+        expect(vi.getTimerCount(), "the second pair's end timer was cancelled").toBe(0);
+      } finally {
+        timers.mockRestore();
+      }
+    },
+  );
 
   it("a sign-in that answers after the frame unmounted lands nothing", async () => {
     await render();

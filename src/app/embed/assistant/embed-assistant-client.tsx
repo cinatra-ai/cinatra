@@ -269,7 +269,7 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   // move the ticket on, so an answer that belongs to an older sign-in (the
   // sign-in itself, its negotiation, its end timer, its restore, its parity
   // seed or its column's turn status) finds the ticket moved and changes
-  // nothing: no credential, no phase, no history, no turn status.
+  // nothing: no credential, no phase, no history, no turn status, no timer.
   const signInTicketRef = useRef(0);
   // The one timer that ends the current sign-in when its pair's life runs out.
   const signInEndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -470,23 +470,32 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
         // is not enough: the restore's answer is a promise, and promises settle
         // before any timer runs, so the conversation would mount with the dead
         // pair until the timer fired.
-        if (endsAt !== null && endsAt <= Date.now()) {
+        //
+        // The clock is read ONCE: the check and the timer both take the life
+        // left at that one reading. A second reading could see the life run out
+        // after the check passed and arm a zero-delay end behind an `active`
+        // frame, which is the same window again, only narrower.
+        const lifeLeftMs = endsAt === null ? null : endsAt - Date.now();
+        if (lifeLeftMs !== null && lifeLeftMs <= 0) {
           dropSignIn("again");
           return;
         }
         setSession({ ...session, ticket });
         setPhase({ kind: "active" });
-        if (endsAt !== null) {
+        if (lifeLeftMs !== null) {
           // The life runs from the mint, so a slow negotiation shortens the
-          // wait.
+          // wait. `lifeLeftMs` is positive here.
           clearSignInEndTimer();
           signInEndTimerRef.current = setTimeout(
             () => {
-              signInEndTimerRef.current = null;
+              // The ticket first: a timer of an older sign-in touches nothing,
+              // not even the timer ref, which now holds the current sign-in's
+              // timer and must stay clearable.
               if (ticket !== signInTicketRef.current) return;
+              signInEndTimerRef.current = null;
               dropSignIn("again");
             },
-            Math.max(0, endsAt - Date.now()),
+            lifeLeftMs,
           );
         }
         // TEST-ONLY seam (gated OFF in prod): render the seeded corpus here in
