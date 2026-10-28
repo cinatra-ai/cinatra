@@ -16,7 +16,7 @@ import {
 } from "./ui/dropdown-menu";
 import { Label } from "./ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
-import { Switch } from "./ui/switch";
+import { Switch } from "./ui/checkbox";
 import { cn } from "./lib/utils";
 import { LoadingSpinner } from "./loading-spinner";
 
