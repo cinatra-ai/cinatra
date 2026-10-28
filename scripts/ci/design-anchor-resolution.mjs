@@ -53,14 +53,18 @@
 // EVERY OTHER SELECTOR FORM IS A HARD FAILURE, never a silent pass and never an
 // approximated match — a descendant combinator, a tag or id selector, a
 // compound of classes, a class beside an attribute predicate, an operator other
-// than `=`, an unquoted value. It is REPORTED, by name, as `refused`, and the
-// run exits 2 — the "could not run honestly" convention — because a selector
-// this matcher cannot decide is one it may not certify in either direction.
-// Outside `--print-unresolved`, a recorded `anchorsUnresolvedAtPin` that
-// disagrees with what the run finds is compared first and exits 1, so such a
-// run with both exits 1, not 2. The
-// rest of the set is still read and still printed, so a refusal names itself
-// instead of hiding what the run did decide, and its suite pins that.
+// than `=`, an unquoted value, an empty selector. The matcher marks it
+// `refused`, because a selector it cannot decide is one it may not certify in
+// either direction. A run that reaches the refusal exit prints the report of
+// the whole set, with the refused selector named in it, and exits 2 — the
+// "could not run honestly" convention — so a refusal names itself instead of
+// hiding what the run did decide; its suite pins that. Besides a read
+// failure, two runs with a refused selector end before that report. Outside
+// `--print-unresolved`, a recorded `anchorsUnresolvedAtPin`
+// that disagrees with what the run finds is compared first and exits 1, so
+// such a run with a refused selector exits 1, not 2, and does not name the
+// refusal. Under `--print-unresolved` a refused selector exits 2 with an error
+// that names it, and no unresolved set is printed.
 //
 // WHAT IT PRINTS. Kind names, origins, the selectors it was given, and which
 // GOVERNED DRAWING (by its position in the pin's own set) resolved each one.
