@@ -4,7 +4,7 @@ This file records the keyboard reading for #3773: on the blog pipeline's idea st
 
 ## The reading
 
-Walk 2026-10-28T08:00:36Z to 08:07:58Z on a keyless development boot, head 8b747b678eb3. Pipeline run 78bb6753-2a1a-4143-a87d-c5bf88a35966 drew the idea group 'Select one blog idea to draft' with five radios in the order items 5, 4, 3, 2, 1 (R3 REACHED). Keys through the kit's pressKey at 08:07:34Z to 08:07:48Z: ArrowDown from the first radio checked the second; ArrowUp went back to the first; a second ArrowUp wrapped to the last; Home checked the first; End checked the last; Home checked the first again. Each press moved focus and choice, and exactly one radio read checked after each. 3773-KEYS: MET.
+Walk 2026-10-28T08:00:36Z to 08:07:58Z on a keyless development boot, head 8b747b678eb3. Pipeline run 78bb6753-2a1a-4143-a87d-c5bf88a35966 drew the idea group 'Select one blog idea to draft' with five radios in the order items 5, 4, 3, 2, 1 (R3 REACHED). Keys through the kit's pressKey at 08:07:34Z to 08:07:48Z: ArrowDown from the first radio checked the second; ArrowUp went back to the first; a second ArrowUp wrapped to the last; Home checked the first; End checked the last; Home checked the first again. Each press moved the focus to the expected radio, and after each press that radio read checked and exactly one radio read checked. Before the first press only the focused first radio was read (unchecked) and no checked count was taken, so the first press is not read as moving an earlier choice; each later press moved the choice from the radio the press before it had left checked. 3773-KEYS: MET.
 
 ## The six key presses
 
