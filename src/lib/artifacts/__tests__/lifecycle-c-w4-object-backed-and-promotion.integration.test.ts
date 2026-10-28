@@ -29,6 +29,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Client } from "pg";
 import * as zod from "zod";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
+import { replayStoreSchema } from "@/lib/test-support/store-schema-replay";
 import { promotionRevisionId } from "@/lib/artifacts/typed-promotion";
 
 vi.mock("@/lib/database", async () => {
@@ -56,6 +57,20 @@ vi.mock("@/lib/register-all-object-types", () => ({ registerAllObjectTypes: () =
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
+
+// cinatra#4404: the refusal is at module scope, not in a hook. Without a usable
+// database URL, `describe.skipIf` skips every suite in the file and a file with
+// nothing left to run never runs its hooks, so the dedicated config's run
+// (`vitest/integration/3028.config.ts`, which sets the flag) would pass by
+// running nothing.
+if (process.env.CINATRA_LIFECYCLE_C_W4_REALDB === "1" && !HAS_REAL_DB) {
+  throw new Error(
+    "cinatra#4404 W4: CINATRA_LIFECYCLE_C_W4_REALDB=1 asks this tier to run against a real Postgres, " +
+      "but SUPABASE_DB_URL is unset, empty or a placeholder: set it to a scratch database. " +
+      "The tier builds and drops its own schema, so any throwaway database will do.",
+  );
+}
+
 const TEST_SCHEMA = "cinatra_test_w4_object_backed_3028";
 const ORG = "org-3028-w4";
 const EXT = "@cinatra-ai/campaigns-artifact";
@@ -303,25 +318,103 @@ function typeOf(objectId: string): string {
   );
 }
 
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * cinatra#4404 — the application's slug-move triggers on the SHARED `public`
+ * tables. Every schema in the database shares these tables, so this tier must
+ * leave the triggers exactly as it found them: the store builder emits a
+ * `DROP TRIGGER` / `CREATE TRIGGER` pair for each, bound to the functions of
+ * the schema it builds, and a replay of those pairs into this throwaway schema
+ * would rebind them here and lose them at the `DROP SCHEMA ... CASCADE`.
+ * `replayStoreSchema` skips them. This reading checks that for these three
+ * named triggers only, on each run whose setup reaches the reading.
+ */
+const SHARED_SLUG_TRIGGERS_SQL = `
+  SELECT c.relname AS table_name, t.tgname AS trigger_name, t.tgenabled AS enabled,
+         pg_get_triggerdef(t.oid) AS definition
+    FROM pg_trigger t
+    JOIN pg_class c ON c.oid = t.tgrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public' AND NOT t.tgisinternal
+     AND (c.relname, t.tgname) IN (('user', 'user_slug_move_trg'),
+                                   ('team', 'team_slug_move_trg'),
+                                   ('organization', 'org_slug_move_trg'))
+   ORDER BY c.relname, t.tgname`;
+
+/** The definitions read before setup; undefined until setup has read them. */
+let sharedSlugTriggersBefore: string[] | undefined;
+
+async function readSharedSlugTriggers(client: Client): Promise<string[]> {
+  const res = await client.query<{
+    table_name: string;
+    trigger_name: string;
+    enabled: string;
+    definition: string;
+  }>(SHARED_SLUG_TRIGGERS_SQL);
+  return res.rows.map(
+    (r) => `public."${r.table_name}" ${r.trigger_name} enabled=${r.enabled}: ${r.definition}`,
+  );
+}
+
+/**
+ * Fail when the definitions now differ from the reading before setup. Read
+ * after setup too: a database that holds none of these triggers (the CI seed)
+ * would read "none" again after a rebind-then-CASCADE, so only the reading
+ * between the replay and the cases shows a rebind there.
+ */
+async function assertSharedSlugTriggersUnchanged(client: Client, when: string): Promise<void> {
+  const before = sharedSlugTriggersBefore;
+  // A silent return: no reading exists only when setup threw before or in its
+  // first reading, and that setup failure fails the run itself.
+  if (before === undefined) return;
+  const now = await readSharedSlugTriggers(client);
+  if (JSON.stringify(now) !== JSON.stringify(before)) {
+    throw new Error(
+      `cinatra#4404: the slug-move triggers on public."user", public."team" and public."organization" changed ${when}; ` +
+        `before: [${before.join(" | ")}]; now: [${now.join(" | ")}]`,
+    );
+  }
+}
+
+/**
+ * The blob root this file created; undefined until `mkdtempSync` has returned.
+ * Teardown removes this directory only, never a root it did not create.
+ */
+let createdBlobRoot: string | undefined;
+
 beforeAll(async () => {
   if (!HAS_REAL_DB) return;
   process.env.SUPABASE_SCHEMA = TEST_SCHEMA;
-  process.env.CINATRA_ARTIFACT_DATA_ROOT = mkdtempSync(path.join(tmpdir(), "cin-3028-"));
+  createdBlobRoot = mkdtempSync(path.join(tmpdir(), "cin-3028-"));
+  process.env.CINATRA_ARTIFACT_DATA_ROOT = createdBlobRoot;
 
   const client = new Client({ connectionString: DB_URL });
   await client.connect();
-  await client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`);
-  await client.query(`CREATE SCHEMA "${TEST_SCHEMA}"`);
-  const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
-  for (const qy of buildCreateStoreSchemaQueries(TEST_SCHEMA)) {
-    const head = qy.text.trim().slice(0, 6).toUpperCase();
-    if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S") continue;
-    try {
-      await client.query(qy.text, (qy as { values?: unknown[] }).values as never[]);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!msg.includes("does not exist")) throw err;
-    }
+  try {
+    sharedSlugTriggersBefore = await readSharedSlugTriggers(client);
+    await client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`);
+    await client.query(`CREATE SCHEMA "${TEST_SCHEMA}"`);
+    const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
+    // The shared replay: of the statements with its four default heads, it skips
+    // each one whose own target it reads as a shared `public` table written with a
+    // quoted table name (`public."x"` or `"public"."x"`), the form the builder
+    // writes (the slug-move trigger pairs among them).
+    await replayStoreSchema(client, buildCreateStoreSchemaQueries(TEST_SCHEMA));
+    await assertSharedSlugTriggersUnchanged(client, "during this tier's setup");
+  } catch (err) {
+    // On a throw after the connect, this client is closed before the error is
+    // thrown again. A failed close is thrown together with the setup failure in
+    // an AggregateError, not in its place.
+    await client.end().catch((endErr: unknown) => {
+      throw new AggregateError(
+        [err, endErr],
+        `cinatra#4404 W4 setup failed: ${errText(err)}; its client close failed too: ${errText(endErr)}`,
+      );
+    });
+    throw err;
   }
   await client.end();
   (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized = true;
@@ -358,15 +451,55 @@ function registerObjectBackedType(typeId: string) {
   );
 }
 
+// After a successful connect, the three database steps (the schema drop, the
+// trigger check, the client close) are each tried whatever an earlier one did.
+// A failed connect skips those three steps; the connect failure is collected
+// and the blob root removal still runs. Each failure of a step that runs is
+// collected under that step's name, and the failures are thrown together. A
+// swallowed failure would go unreported; a swallowed drop failure would also
+// leave the schema behind.
 afterAll(async () => {
   if (!HAS_REAL_DB) return;
+  const failures: Error[] = [];
+  const step = async (label: string, run: () => Promise<unknown> | unknown): Promise<boolean> => {
+    try {
+      await run();
+      return true;
+    } catch (err) {
+      failures.push(new Error(`cinatra#3028 W4 teardown: ${label} failed: ${errText(err)}`, { cause: err }));
+      return false;
+    }
+  };
+
   const client = new Client({ connectionString: DB_URL });
-  await client.connect();
-  await client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`).catch(() => {});
-  await client.end().catch(() => {});
-  const root = process.env.CINATRA_ARTIFACT_DATA_ROOT;
-  if (root) rmSync(root, { recursive: true, force: true });
+  if (await step("connect", () => client.connect())) {
+    await step(`DROP SCHEMA "${TEST_SCHEMA}"`, () =>
+      client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`),
+    );
+    // Read after the drop. It shows a difference the drop leaves behind, such
+    // as a trigger that was there before and was dropped, or was rebound to this
+    // schema's functions and removed with them. A trigger that setup created
+    // where none was before is removed again by the drop and reads as no
+    // difference here; only the reading after setup shows that case.
+    await step("the shared public slug-move trigger check", () =>
+      assertSharedSlugTriggersUnchanged(client, "across this tier (read after its teardown)"),
+    );
+    await step("client close", () => client.end());
+  }
+  // Only the root this file created: when setup threw before its mkdtemp, the
+  // environment may still name a directory this file did not create.
+  await step("remove the blob root", () => {
+    if (createdBlobRoot) rmSync(createdBlobRoot, { recursive: true, force: true });
+  });
   delete (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized;
+
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(
+      failures,
+      `cinatra#3028 W4 teardown found ${failures.length} failures: ${failures.map((e) => e.message).join(" | ")}`,
+    );
+  }
 });
 
 describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.13 the object-backed contract (real DB + disk)", () => {
