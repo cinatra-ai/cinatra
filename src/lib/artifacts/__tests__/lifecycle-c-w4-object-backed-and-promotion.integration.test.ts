@@ -298,16 +298,29 @@ beforeAll(async () => {
 
   const client = new Client({ connectionString: DB_URL });
   await client.connect();
-  sharedSlugTriggersBefore = await readSharedSlugTriggers(client);
-  await client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`);
-  await client.query(`CREATE SCHEMA "${TEST_SCHEMA}"`);
-  const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
-  // The shared replay: of the statements with its four default heads, it skips
-  // each one whose own target it reads as a shared `public` table written with a
-  // quoted table name (`public."x"` or `"public"."x"`), the form the builder
-  // writes (the slug-move trigger pairs among them).
-  await replayStoreSchema(client, buildCreateStoreSchemaQueries(TEST_SCHEMA));
-  await assertSharedSlugTriggersUnchanged(client, "during this tier's setup");
+  try {
+    sharedSlugTriggersBefore = await readSharedSlugTriggers(client);
+    await client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`);
+    await client.query(`CREATE SCHEMA "${TEST_SCHEMA}"`);
+    const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
+    // The shared replay: of the statements with its four default heads, it skips
+    // each one whose own target it reads as a shared `public` table written with a
+    // quoted table name (`public."x"` or `"public"."x"`), the form the builder
+    // writes (the slug-move trigger pairs among them).
+    await replayStoreSchema(client, buildCreateStoreSchemaQueries(TEST_SCHEMA));
+    await assertSharedSlugTriggersUnchanged(client, "during this tier's setup");
+  } catch (err) {
+    // On a throw after the connect, this client is closed before the error is
+    // thrown again. A failed close is thrown together with the setup failure in
+    // an AggregateError, not in its place.
+    await client.end().catch((endErr: unknown) => {
+      throw new AggregateError(
+        [err, endErr],
+        `cinatra#4404 W4 setup failed: ${errText(err)}; its client close failed too: ${errText(endErr)}`,
+      );
+    });
+    throw err;
+  }
   await client.end();
   (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized = true;
 
@@ -347,9 +360,9 @@ function registerObjectBackedType(typeId: string) {
 // trigger check, the client close) are each tried whatever an earlier one did.
 // A failed connect skips those three steps; the connect failure is collected
 // and the blob root removal still runs. Each failure of a step that runs is
-// collected under that step's name, and the failures are thrown together: a
-// teardown that swallowed one would report green while leaving the schema
-// behind.
+// collected under that step's name, and the failures are thrown together. A
+// swallowed failure would go unreported; a swallowed drop failure would also
+// leave the schema behind.
 afterAll(async () => {
   if (!HAS_REAL_DB) return;
   const failures: Error[] = [];
@@ -368,9 +381,11 @@ afterAll(async () => {
     await step(`DROP SCHEMA "${TEST_SCHEMA}"`, () =>
       client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`),
     );
-    // Read after the drop: once the drop has run, a trigger rebound to this
-    // schema's functions is gone, so a rebind and a drop both read as a
-    // difference here.
+    // Read after the drop. It shows a difference the drop leaves behind, such
+    // as a trigger that was there before and was dropped, or was rebound to this
+    // schema's functions and removed with them. A trigger that setup created
+    // where none was before is removed again by the drop and reads as no
+    // difference here; only the reading after setup shows that case.
     await step("the shared public slug-move trigger check", () =>
       assertSharedSlugTriggersUnchanged(client, "across this tier (read after its teardown)"),
     );
