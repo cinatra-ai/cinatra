@@ -1,3 +1,7 @@
 # cinatra#2960 — run reading
 
 This file records the development-instance reading for the first criterion of #2960: on a development runtime that holds no model-provider key, a blog pipeline run passes its selection save with no `objects_save` refusal, reaches materialization, and the `artifact_produced_outbox` and `artifact_review_gates` tables gain rows for that run through the shipped pipeline.
+
+## The reading
+
+cinatra#2960 run reading: a scout walk on a development boot with the scripted LLM provider and no model-provider key. Walk 2026-10-28T12:13:15Z to 12:26:45Z. Runs: Blog Idea Generator 44ade49e-3ed2-4a44-a89e-1bf639d382e7 (completed) and Blog Pipeline 8b151967-8f39-4d9c-b19d-b21336eca3cd (pending_approval at 'Review blog draft', left undecided). R4 REACHED: the first idea was picked and one idea_drafts row reads reserved. Each of the four refusal strings (blog_pipeline_selected_idea, is not a parseable BlogIdea, is not on the deterministic-passthrough allowlist, no installed artifact extension defines) counts 0 in the app and runtime logs, the same as the baseline, so the selection save made no refusal. R6 REACHED: write_draft materialized blog post artifact 7fd60c8f-5382-4089-aa21-2c7dd89fbf2d at 12:21:51Z (phase finalized). R8: artifact_produced_outbox holds 2 rows of the pipeline run (status processed) and artifact_review_gates holds 3 rows of the run (status pending). Verdict: 2960-ROWS: MET (outbox 2, gates 3).
