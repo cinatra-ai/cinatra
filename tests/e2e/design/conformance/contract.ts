@@ -107,6 +107,7 @@ import { reviewTargetRowFacts } from "../../../../src/lib/artifacts/review-targe
 import {
   ARTIFACT_KIND_DISPLAY_ROWS,
   type ArtifactKindDisplay,
+  type ArtifactKindDisplayField,
   type ArtifactKindDisplaySurfaceId,
 } from "./artifact-review-displays";
 import {
@@ -3032,7 +3033,9 @@ function kindDisplayKindState(surface: string, kind: string): StateAssert {
  *     shipped review target already carries — so a display bound to the wrong
  *     source cannot resolve the locator at all. A field the drawing binds only
  *     once the review is continued is read on the continued mount, and its
- *     absence on the open one (`continuedOnlyField`).
+ *     absence on the open one (`continuedOnlyField`). A field the drawing binds
+ *     in several readings gets one driver, from all of its declarations
+ *     (`kindDisplayFieldReading`).
  *   - the one action the manifest declares, pressed on the control that declares
  *     exactly that action AND that outcome (`declaredAction`), so a driver
  *     cannot press one control and report another one's outcome.
@@ -3063,18 +3066,31 @@ function artifactKindDisplayDriver(row: ArtifactKindDisplay): SurfaceDriver {
     states: {},
   };
 
+  const declarations = new Map<string, ArtifactKindDisplayField[]>();
   for (const field of row.fields) {
-    const binding = `[data-field="${field.name}=${field.source}"]`;
-    driver.fields[field.name] = {
-      source: field.source,
+    declarations.set(field.name, [...(declarations.get(field.name) ?? []), field]);
+  }
+  for (const [name, fields] of declarations) {
+    const { source } = fields[0];
+    const binding = `[data-field="${name}=${source}"]`;
+    const reading = kindDisplayFieldReading(row.surface, fields);
+    driver.fields[name] = {
+      source,
       assert:
-        field.reading === "continued"
+        reading === "continued"
           ? continuedOnlyField(row.surface, binding)
-          : async (_page, root) => {
-              const bound = kindDisplayPanel(root, row.surface).locator(binding);
-              await expect(bound).toHaveCount(1);
-              await expect(bound).toBeVisible();
-            },
+          : reading === "open"
+            ? async (_page, root) => {
+                const bound = kindDisplayPanel(root, row.surface).locator(binding);
+                await expect(bound).toHaveCount(1);
+                await expect(bound).toBeVisible();
+              }
+            : async () => {
+                test.skip(
+                  true,
+                  `${row.surface}: "${name}" is drawn only where no review stands, a reading the review harness does not mount`,
+                );
+              },
     };
   }
 
@@ -3090,6 +3106,32 @@ function artifactKindDisplayDriver(row: ArtifactKindDisplay): SurfaceDriver {
   }
 
   return driver;
+}
+
+/**
+ * The one reading a field's driver reads it in, from every declaration the row
+ * records for that field (a drawing binds a field once per reading that draws
+ * it). "open": a declaration with no reading, so the field is drawn while the
+ * review is open. "continued": no declaration is open and one is continued, so
+ * the field is absent while the review is open and drawn once it is continued.
+ * "no-review": every declaration is drawn where no review stands, which the
+ * review harness does not mount. A field bound to two sources, or declared both
+ * open and continued, is a row the drivers cannot read, so it stops the build.
+ */
+function kindDisplayFieldReading(
+  surface: string,
+  fields: readonly ArtifactKindDisplayField[],
+): "open" | "continued" | "no-review" {
+  const sources = new Set(fields.map((field) => field.source));
+  const readings = new Set(fields.map((field) => field.reading ?? "open"));
+  if (sources.size !== 1 || (readings.has("open") && readings.has("continued"))) {
+    throw new Error(
+      `${surface}: "${fields[0].name}" is declared with sources ${[...sources].join(", ")} in readings ${[...readings].join(", ")} — reconcile the row with the manifest`,
+    );
+  }
+  if (readings.has("open")) return "open";
+  if (readings.has("continued")) return "continued";
+  return "no-review";
 }
 
 /**

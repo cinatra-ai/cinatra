@@ -80,6 +80,40 @@ describe("the wave covers the artifact-kind display surfaces of the staged drawi
     }
   });
 
+  // A drawing binds a field once per reading that draws it, so one field name
+  // can carry several declarations. contract.ts builds ONE driver per name from
+  // all of them (kindDisplayFieldReading), which reads a name only if every
+  // declaration binds the same source and the field is not both drawn while the
+  // review is open and drawn only once it is continued.
+  it("declares each repeated field with one source and readings one driver can read", () => {
+    const unreadable = [];
+    for (const row of ARTIFACT_KIND_DISPLAY_ROWS) {
+      const byName = new Map();
+      for (const f of row.fields) byName.set(f.name, [...(byName.get(f.name) ?? []), f]);
+      for (const [name, fields] of byName) {
+        const sources = new Set(fields.map((f) => f.source));
+        const readings = new Set(fields.map((f) => f.reading ?? "open"));
+        if (sources.size !== 1 || (readings.has("open") && readings.has("continued"))) {
+          unreadable.push(`${row.surface}.${name}`);
+        }
+      }
+    }
+    expect(
+      unreadable,
+      `${unreadable.join(", ")} is declared with two sources, or both open and continued — no one driver can read it.`,
+    ).toEqual([]);
+  });
+
+  it("records the dashboard display's Open live dashboard in each reading that draws it (design@67ecd66d)", () => {
+    // §XI.5 draws six readings: the review open, the review continued and no
+    // review standing, each with the numbers read and with no data capability.
+    // The link is drawn in four of them, in this order.
+    const row = ARTIFACT_KIND_DISPLAY_ROWS.find((r) => r.surface === "dashboard-display");
+    expect(
+      row.fields.filter((f) => f.name === "open-live").map((f) => f.reading),
+    ).toEqual(["continued", "no-review", "continued", "no-review"]);
+  });
+
   it("names, for every surface, what its display is waiting for", () => {
     const silent = ARTIFACT_KIND_DISPLAY_ROWS.filter(
       (row) => typeof row.readiness !== "string" || row.readiness.trim().length < 40,
