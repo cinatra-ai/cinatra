@@ -502,15 +502,28 @@ export const SKIP_RECOMMENDATION_SOURCE = "user_skipped" as const;
  * store keeps out (see that set). Every statement after it carries the same
  * predicate: the scoped clear of the run's selection rows, the per-skill rows and
  * the marker. So a run that is `queued`, running, paused mid-flight or settled
- * gets NOTHING written, and the answer is `"run_started"`, never `true` and never
- * `false`: the caller refuses with the run-started sentence, and no retry will
- * make the write land. The row lock keeps the dispatch CAS from moving the run
- * between the question and the writes. Without `beforeStart` the write is the
- * unguarded one it always was; the decision path never calls it that way.
+ * gets NOTHING written, and the answer is `{ outcome: "run_started" }`: the
+ * caller refuses with the run-started sentence, and no retry will make the write
+ * land. The row lock keeps the dispatch CAS from moving the run between the
+ * question and the writes. Without `beforeStart` the write is the unguarded one
+ * it always was, and it answers a boolean; the decision path never calls it that
+ * way.
  */
 export const RECOMMENDATION_SKIP_RUN_STARTED = "run_started" as const;
 
-export function writeRunRecommendationSkip(input: {
+/**
+ * The answer of the GUARDED skip write (`beforeStart`). A named outcome, so a
+ * caller reads `outcome` and cannot take a refusal for a landing by a truthiness
+ * test: `"recorded"` (the marker reads back), `"not_recorded"` (the run was
+ * before its start and the marker does not read back) or `"run_started"` (the
+ * run was not before its start, or has no row).
+ */
+export type RecommendationSkipBeforeStartResult =
+  | { readonly outcome: "recorded" }
+  | { readonly outcome: "not_recorded" }
+  | { readonly outcome: typeof RECOMMENDATION_SKIP_RUN_STARTED };
+
+type RecommendationSkipWriteInput = {
   runId: string;
   /** The principal whose decision this was — the fail-closed owner guard has
    * already proved it is the run's `runBy`. */
@@ -521,10 +534,21 @@ export function writeRunRecommendationSkip(input: {
   /** The per-skill efficacy half, committed IN THE SAME TRANSACTION as the
    * marker. Empty or absent under drift — a legitimate state, and still a skip. */
   rejected?: ReadonlyArray<RunRejectedRecommendationInput>;
-  /** The pre-start guard (see above) and the selection rows this decision clears
-   * in the same transaction: the hold's offered set. */
-  beforeStart?: { clearSkillIds: readonly string[] };
-}): boolean | typeof RECOMMENDATION_SKIP_RUN_STARTED {
+};
+
+export function writeRunRecommendationSkip(
+  input: RecommendationSkipWriteInput & {
+    /** The pre-start guard (see above) and the selection rows this decision
+     * clears in the same transaction: the hold's offered set. */
+    beforeStart: { clearSkillIds: readonly string[] };
+  },
+): RecommendationSkipBeforeStartResult;
+export function writeRunRecommendationSkip(
+  input: RecommendationSkipWriteInput & { beforeStart?: undefined },
+): boolean;
+export function writeRunRecommendationSkip(
+  input: RecommendationSkipWriteInput & { beforeStart?: { clearSkillIds: readonly string[] } },
+): boolean | RecommendationSkipBeforeStartResult {
   const connectionString = getPostgresConnectionString();
   const schema = postgresSchema;
   const table = `"${schema.replaceAll('"', '""')}"."run_recommendation_skips"`;
@@ -551,11 +575,12 @@ export function writeRunRecommendationSkip(input: {
     },
   ];
   const results = runPostgresQueriesSync({ connectionString, queries, transaction: true });
+  const markerReadsBack = (results[results.length - 1]?.rows?.length ?? 0) > 0;
+  if (!guarded) return markerReadsBack;
   // The guarded form asks its question first: no row there means the run is
   // not before its start, and nothing was written.
-  if (guarded && (results[0]?.rows?.length ?? 0) === 0) return RECOMMENDATION_SKIP_RUN_STARTED;
-  const verified = results[results.length - 1];
-  return (verified?.rows?.length ?? 0) > 0;
+  if ((results[0]?.rows?.length ?? 0) === 0) return { outcome: RECOMMENDATION_SKIP_RUN_STARTED };
+  return { outcome: markerReadsBack ? "recorded" : "not_recorded" };
 }
 
 /**

@@ -1103,21 +1103,22 @@ export async function skipRecommendationForActor(input: {
       }
     }
 
-    const recorded = writeRunRecommendationSkip({
+    const written = writeRunRecommendationSkip({
       runId: input.runId,
       skippedBy: userId,
       candidateCount: rejectedRows.length,
       rejected: rejectedRows,
       beforeStart: { clearSkillIds: [...clearedSkillIds] },
     });
-    if (recorded === "run_started") {
+    if (written.outcome === "run_started") {
       return {
         ok: false,
         error: RECOMMENDATION_RUN_STARTED_REFUSAL,
         code: RECOMMENDATION_RUN_STARTED_CODE,
       };
     }
-    if (!recorded) {
+    // Released only on the named landing; any other answer refuses.
+    if (written.outcome !== "recorded") {
       console.error(
         "[skipRecommendationForActor] skip marker did not read back for run",
         input.runId,

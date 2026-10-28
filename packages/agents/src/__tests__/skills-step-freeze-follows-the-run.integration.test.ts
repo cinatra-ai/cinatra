@@ -365,7 +365,11 @@ function reload(runId: string, host: "chat_thread" | "run_card") {
     initialState: null,
   } as never);
   return render(
-    React.createElement(runtimeMod.LifecycleCardSurfaceProvider, { host, children: card }),
+    React.createElement(
+      runtimeMod.LifecycleCardSurfaceProvider,
+      { host } as React.ComponentProps<typeof runtimeMod.LifecycleCardSurfaceProvider>,
+      card,
+    ),
   );
 }
 
@@ -1006,7 +1010,7 @@ describe.skipIf(!HAS_DB)("cinatra#3062 — an all-clear Continue in the queued w
       rejected: guardedRows,
       beforeStart: { clearSkillIds: ["skill-kept", "skill-cleared"] },
     });
-    expect(out).toBe(true);
+    expect(out).toEqual({ outcome: "recorded" });
     expect(selectionStore.readRunRejectedRecommendations(runId)).toEqual([
       // On file before the skip, so ON CONFLICT (run_id, skill_id) DO NOTHING keeps it.
       {
@@ -1036,10 +1040,11 @@ describe.skipIf(!HAS_DB)("cinatra#3062 — an all-clear Continue in the queued w
       rejected: guardedRows,
       beforeStart: { clearSkillIds: ["skill-kept", "skill-cleared"] },
     });
-    expect(out).toBe(selectionStore.RECOMMENDATION_SKIP_RUN_STARTED);
+    expect(out).toEqual({ outcome: selectionStore.RECOMMENDATION_SKIP_RUN_STARTED });
     expect(selectionStore.readRunRejectedRecommendations(runId)).toEqual(rejectedBefore);
     expect(rejectedOf(runId)).not.toContain("skill-kept");
     expect(selectionOf(runId)).toEqual(["skill-kept"]);
     expect(await skipMarkers(runId)).toBe(0);
   }, 120_000);
+
 });

@@ -150,8 +150,8 @@ beforeEach(() => {
   getRunRecommendations.mockResolvedValue(CANDIDATES);
   triggerAgentRun.mockResolvedValue({ ok: true });
   writeRunRejectedRecommendations.mockReturnValue(undefined);
-  // The store VERIFIES the marker and returns whether it read back.
-  writeRunRecommendationSkip.mockReturnValue(true);
+  // The store VERIFIES the marker and names the outcome of the guarded write.
+  writeRunRecommendationSkip.mockReturnValue({ outcome: "recorded" });
   clearRunSelectedSkillRevisionsBeforeStart.mockReturnValue(0);
   readRunRecommendationOfferedSet.mockResolvedValue([]);
 });
@@ -348,7 +348,7 @@ describe("the evidence write is not best-effort", () => {
     // The writer is ON CONFLICT DO NOTHING, so "the statement did not throw" is
     // not the same fact as "the marker is on record". The store reads it back;
     // an unverified marker leaves the park LIVE and returns the typed code.
-    writeRunRecommendationSkip.mockReturnValue(false);
+    writeRunRecommendationSkip.mockReturnValue({ outcome: "not_recorded" });
 
     const result = await skipRunRecommendationAction({ runId: RUN_ID });
 
@@ -386,7 +386,7 @@ describe("the evidence write is not best-effort", () => {
     // call, the per-skill rows rode INSIDE it, and no separate write exists that
     // could have committed on its own. The ROLLBACK itself is proved against
     // real rows in the integration sibling named in this file's header.
-    writeRunRecommendationSkip.mockReturnValue(false);
+    writeRunRecommendationSkip.mockReturnValue({ outcome: "not_recorded" });
 
     const result = await skipRunRecommendationAction({ runId: RUN_ID });
 
@@ -452,7 +452,7 @@ describe("the evidence write is not best-effort", () => {
       resolveRecommendationCandidateSkillIds.mockResolvedValue(["skill-ranked", "skill-forced"]);
       getRunRecommendations.mockResolvedValue(CANDIDATES);
       triggerAgentRun.mockResolvedValue({ ok: true });
-      writeRunRecommendationSkip.mockReturnValue(true);
+      writeRunRecommendationSkip.mockReturnValue({ outcome: "recorded" });
       drift();
 
       const result = await skipRunRecommendationAction({ runId: RUN_ID });
@@ -547,9 +547,9 @@ describe("skip is a runBy-owner decision, fail-closed", () => {
 
 describe("a skip the store refuses because the run is not before its start (cinatra#3062)", () => {
   it("asks the store for the guarded write and refuses with the run-started sentence, releasing nothing", async () => {
-    // The store answers "run_started" when its own pre-start question fails in
-    // the skip's transaction: the run is queued, running or settled.
-    writeRunRecommendationSkip.mockReturnValue("run_started");
+    // The store answers { outcome: "run_started" } when the run row it locked in
+    // the skip's transaction is not before its start: queued, running or settled.
+    writeRunRecommendationSkip.mockReturnValue({ outcome: "run_started" });
 
     const out = await skipRunRecommendationAction({ runId: RUN_ID });
 

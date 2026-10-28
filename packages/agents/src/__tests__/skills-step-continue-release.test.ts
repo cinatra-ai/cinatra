@@ -154,7 +154,7 @@ beforeEach(() => {
   readRunSelectedSkillRevisions.mockReturnValue([]);
   readRunRejectedRecommendations.mockReturnValue([]);
   hasRunRecommendationSkip.mockReturnValue(false);
-  writeRunRecommendationSkip.mockReturnValue(true);
+  writeRunRecommendationSkip.mockReturnValue({ outcome: "recorded" });
   readRunRecommendationOfferedSet.mockResolvedValue([]);
 });
 
