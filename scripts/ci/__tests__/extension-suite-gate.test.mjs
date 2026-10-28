@@ -1,26 +1,37 @@
 // The pure core of scripts/ci/extension-suite-gate.mjs (cinatra#2288 slice 2):
 // classification, report parsing, run planning, shape matching and the finding
 // rules. Every input is data, so the whole rule set is exercised without
-// spawning a single vitest process.
+// spawning a single vitest process. The node:test runner cases start node on
+// small files written to a temporary folder, with short bounds.
 //
 // The cases below are not hypotheticals — each one is a shape observed on the
 // materialized tree at the pins this gate landed against, named in the test
 // title so a future reader can tell a real regression from a fixture edit.
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-import {
+import { afterAll, describe, expect, it } from "vitest";
+
+import nodeTopLevelReporter, {
   classifyPackage,
   fenceWorkflowCommands,
   foldNodeRuns,
   isFirstPartyMirror,
   isHostRunNodeTest,
   judge,
+  NODE_FILE_TIMEOUT_MS,
+  NODE_TEST_TIMEOUT_MS,
+  nodeTestArgs,
   observedShape,
   parseNodeTap,
   parseReport,
   planRun,
+  readTopLevel,
   renderManifest,
   resolveMaterializedSha,
+  runNodeSuites,
+  runNodeTest,
   runNodeTestFile,
   shapeMatches,
   skipsStandaloneTests,
@@ -696,12 +707,28 @@ describe("parseNodeTap — the top-level summary, or none", () => {
     expect(parseNodeTap(tapFileOnly("test/x.test.mjs").replace("# suites 0", "# suites 1"), "test/x.test.mjs").fileOnly).toBe(false);
   });
 
+  it("tells node's report of the file from a real test of the same name by the top-level record's location", () => {
+    const f = "test/own-type.test.mjs";
+    const tap = tapFileOnly(f);
+    expect(parseNodeTap(tap, f, [{ name: f, line: 1, column: 1 }]).fileOnly).toBe(true);
+    expect(parseNodeTap(tap, f, [{ name: f, line: 2, column: 1 }]).fileOnly).toBe(false);
+    expect(parseNodeTap(tap, f, [{ name: f, line: 1, column: 22 }]).fileOnly).toBe(false);
+    // no record, or a record of another name, reads in the safe direction: file-only
+    expect(parseNodeTap(tap, f, []).fileOnly).toBe(true);
+    expect(parseNodeTap(tap, f, [{ name: "other", line: 2, column: 1 }]).fileOnly).toBe(true);
+  });
+
   it("reads only TOP-LEVEL summary lines and names failing tests, not TODO ones", () => {
     const t = parseNodeTap(TAP_RED);
     expect(t.tests).toBe(3);
     expect(t.fail).toBe(1);
     expect(t.todo).toBe(1);
     expect(t.failedNames).toEqual(["inner", "outer"]);
+  });
+
+  it("does not name a skipped `not ok` line as a failure", () => {
+    const tap = ["TAP version 13", "not ok 1 - flaky # SKIP not today", "not ok 2 - real", "1..2", "# tests 2", "# fail 1", "# skipped 1"].join("\n");
+    expect(parseNodeTap(tap).failedNames).toEqual(["real"]);
   });
 
   it("returns summary:false when no top-level `# tests` line was printed (fail-closed)", () => {
@@ -769,6 +796,24 @@ describe("foldNodeRuns — per-file node:test runs as one suite result", () => {
     expect(r).toMatchObject({ ok: false, exitCode: 0, reportOk: true, numFailedTests: 1 });
   });
 
+  it("counts skipped and todo tests as pending, across files", () => {
+    const tap = TAP_GREEN.replace("# skipped 0", "# skipped 1").replace("# todo 0", "# todo 2");
+    const r = foldNodeRuns([
+      { file: "test/a.test.mjs", exitCode: 0, tap },
+      { file: "test/b.test.mjs", exitCode: 0, tap: TAP_GREEN.replace("# todo 0", "# todo 1") },
+    ]);
+    expect(r).toMatchObject({ ok: true, numPendingTests: 4 });
+  });
+
+  it("a run killed at the file bound loses the report and runs no file, even after a green summary", () => {
+    const r = foldNodeRuns([
+      { file: "test/a.test.mjs", exitCode: 0, tap: TAP_GREEN },
+      { file: "test/b.test.mjs", exitCode: -1, tap: TAP_GREEN, timedOut: true },
+    ]);
+    expect(r).toMatchObject({ ok: false, reportOk: false, exitCode: -1, timedOutFiles: ["test/b.test.mjs"] });
+    expect(r.executedFiles).toEqual(["test/a.test.mjs"]);
+  });
+
   it("a run killed by a signal (exit code null) is not ok and reads as exit -1", () => {
     const r = foldNodeRuns([{ file: "test/a.test.mjs", exitCode: null, tap: TAP_GREEN }]);
     expect(r).toMatchObject({ ok: false, exitCode: -1 });
@@ -780,6 +825,160 @@ describe("runNodeTestFile — a child that cannot start", () => {
     const run = await runNodeTestFile({ cwd: "/nonexistent-extension-suite-gate-dir", file: "test/a.test.mjs" });
     expect(run).toMatchObject({ file: "test/a.test.mjs", exitCode: -1, tap: "" });
     expect(foldNodeRuns([run])).toMatchObject({ ok: false, reportOk: false, exitCode: -1 });
+  });
+});
+
+// Small node:test files for the runner cases, written to one temporary folder.
+const NODE_FIXTURES = {
+  "t/two.test.mjs": `import { test } from "node:test";\ntest("one", () => {});\ntest("two", () => {});\n`,
+  "t/empty.test.mjs": `import "node:test";\n`,
+  "t/same.test.mjs": `import { test } from "node:test";\ntest("t/same.test.mjs", () => {});\n`,
+  "t/loaderr.test.mjs": `import { test } from "node:test";\ntest("never", () => {});\nthrow new Error("boom at load");\n`,
+  "t/hang.test.mjs": `import { test } from "node:test";\ntest("hang", async () => { setInterval(() => {}, 1000); await new Promise(() => {}); });\n`,
+  "t/spin.test.mjs": `import { test } from "node:test";\ntest("spin", () => { for (;;) {} });\n`,
+  "t/loud.test.mjs": `import { test } from "node:test";\nprocess.stdout.write("x".repeat(450000) + "\\n");\ntest("after the noise", () => {});\n`,
+};
+const nodeDir = fs.mkdtempSync(path.join(os.tmpdir(), "esg-node-"));
+for (const [file, src] of Object.entries(NODE_FIXTURES)) {
+  fs.mkdirSync(path.dirname(path.join(nodeDir, file)), { recursive: true });
+  fs.writeFileSync(path.join(nodeDir, file), src);
+}
+afterAll(() => fs.rmSync(nodeDir, { recursive: true, force: true }));
+const runFixture = (file, bounds = {}) => runNodeTestFile({ cwd: nodeDir, file, testTimeoutMs: 2000, fileTimeoutMs: 20_000, ...bounds });
+
+describe("nodeTopLevelReporter and readTopLevel — one record per top-level test", () => {
+  it("writes the name and location of each top-level pass or fail, and nothing else", async () => {
+    async function* events() {
+      yield { type: "test:start", data: { nesting: 0, name: "a", line: 2, column: 1 } };
+      yield { type: "test:pass", data: { nesting: 1, name: "inner", line: 3, column: 3 } };
+      yield { type: "test:pass", data: { nesting: 0, name: "a", line: 2, column: 1 } };
+      yield { type: "test:fail", data: { nesting: 0, name: "b", line: 5, column: 1 } };
+      yield { type: "test:stdout", data: { nesting: 0, message: '{"name":"spoof","line":9,"column":9}' } };
+    }
+    const lines = [];
+    for await (const l of nodeTopLevelReporter(events())) lines.push(l);
+    expect(lines).toEqual(['{"name":"a","line":2,"column":1}\n', '{"name":"b","line":5,"column":1}\n']);
+    expect(readTopLevel(lines.join(""))).toEqual([
+      { name: "a", line: 2, column: 1 },
+      { name: "b", line: 5, column: 1 },
+    ]);
+  });
+
+  it("reads nothing from a missing file or a line that is not a record", () => {
+    expect(readTopLevel(undefined)).toEqual([]);
+    expect(readTopLevel('not json\n{"line":1}\n')).toEqual([]);
+  });
+});
+
+describe("runNodeTestFile — the real node runner, with short bounds", () => {
+  it("bounds each test, ends the file with its tests, and writes the top-level records to their own file", () => {
+    const args = nodeTestArgs("t/a.test.mjs", "/tmp/rec.jsonl", 1234);
+    expect(args).toEqual([
+      "--test",
+      "--test-reporter=tap",
+      "--test-reporter-destination=stdout",
+      expect.stringMatching(/^--test-reporter=file:\/\/.*\/scripts\/ci\/extension-suite-gate\.mjs$/),
+      "--test-reporter-destination=/tmp/rec.jsonl",
+      "--test-timeout=1234",
+      "--test-force-exit",
+      "t/a.test.mjs",
+    ]);
+    expect(nodeTestArgs("t/a.test.mjs", "/tmp/rec.jsonl")).toContain(`--test-timeout=${NODE_TEST_TIMEOUT_MS}`);
+    expect(NODE_TEST_TIMEOUT_MS).toBe(30_000);
+    expect(NODE_FILE_TIMEOUT_MS).toBe(300_000);
+  });
+
+  it("a green file exits 0 with its summary and folds as executed", async () => {
+    const run = await runFixture("t/two.test.mjs");
+    expect(run).toMatchObject({ file: "t/two.test.mjs", exitCode: 0 });
+    expect(run.timedOut).toBeUndefined();
+    expect(parseNodeTap(run.tap)).toMatchObject({ summary: true, tests: 2, pass: 2, fail: 0 });
+    expect(foldNodeRuns([run])).toMatchObject({ ok: true, reportOk: true, executedFiles: ["t/two.test.mjs"], numTotalTests: 2 });
+  });
+
+  it("a file that registers no test runs none, and a real test named by the file's path is a test", async () => {
+    const empty = await runFixture("t/empty.test.mjs");
+    const same = await runFixture("t/same.test.mjs");
+    expect(empty.topLevel).toEqual([{ name: "t/empty.test.mjs", line: 1, column: 1 }]);
+    expect(same.topLevel).toEqual([{ name: "t/same.test.mjs", line: 2, column: 1 }]);
+    expect(parseNodeTap(empty.tap, empty.file, empty.topLevel)).toMatchObject({ summary: true, tests: 1, fileOnly: true });
+    expect(parseNodeTap(same.tap, same.file, same.topLevel)).toMatchObject({ summary: true, tests: 1, pass: 1, fileOnly: false });
+    const r = foldNodeRuns([empty, same]);
+    expect(r).toMatchObject({ ok: true, executedFiles: ["t/same.test.mjs"], numTotalTests: 1 });
+  });
+
+  it("a file that throws at load is not ok", async () => {
+    const run = await runFixture("t/loaderr.test.mjs");
+    expect(run.exitCode).not.toBe(0);
+    expect(foldNodeRuns([run]).ok).toBe(false);
+  });
+
+  it("a test that hangs is ended at the per-test timeout, named as failed, and its file still exits", async () => {
+    const run = await runFixture("t/hang.test.mjs", { testTimeoutMs: 300 });
+    expect(run.timedOut).toBeUndefined();
+    expect(run.exitCode).not.toBe(0);
+    const r = foldNodeRuns([run]);
+    expect(r).toMatchObject({ ok: false, reportOk: true });
+    expect(r.failedTestNames).toEqual(["t/hang.test.mjs › hang"]);
+  });
+
+  it("a file still running at the file bound is killed, and its run reads as a lost report", async () => {
+    const started = Date.now();
+    const run = await runFixture("t/spin.test.mjs", { fileTimeoutMs: 1500 });
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(run).toMatchObject({ file: "t/spin.test.mjs", exitCode: -1, timedOut: true });
+    expect(run.detail).toContain("was still running after 1500 ms and was killed");
+    // the process group is gone, not only the wait for it
+    await new Promise((r) => setTimeout(r, 500));
+    expect(() => process.kill(run.pid, 0)).toThrow();
+    const res = foldNodeRuns([run]);
+    expect(res).toMatchObject({ ok: false, reportOk: false, exitCode: -1, timedOutFiles: ["t/spin.test.mjs"], executedFiles: [] });
+    const packages = [pkg({ slug: "gated", testFiles: ["x.test.ts"] }), brandVoice({ testFiles: ["t/spin.test.mjs"] })];
+    const results = resultsFor([
+      ["gated", green(["x.test.ts"])],
+      ["brand-voice-artifact", res],
+    ]);
+    const f = judge({ packages, results, carveOuts: [] }).findings;
+    expect(f.map((x) => x.kind)).toEqual(["no-report"]);
+    expect(f[0].message).toContain("killed for t/spin.test.mjs");
+    expect(renderManifest({ packages, results, carveOuts: [] })).toMatch(/brand-voice-artifact .* node:test here — TIMED OUT \(1 file\(s\) killed\)$/m);
+  }, 15_000);
+
+  it("keeps the tail of a long output, where the summary is", async () => {
+    const run = await runFixture("t/loud.test.mjs");
+    expect(run.tap.length).toBeLessThanOrEqual(400_000);
+    expect(parseNodeTap(run.tap)).toMatchObject({ summary: true, tests: 1, pass: 1 });
+  });
+});
+
+describe("runNodeTest and runNodeSuites — every file of a package, into the shared results map", () => {
+  const nodePkg = { id: "cinatra-ai/node-pack", dir: ".", testFiles: ["t/two.test.mjs", "t/empty.test.mjs"] };
+
+  it("runs every file of the package and names each run in the detail", async () => {
+    const res = await runNodeTest({ repoRoot: nodeDir, pkg: nodePkg, testTimeoutMs: 2000, fileTimeoutMs: 20_000 });
+    expect(res).toMatchObject({ ok: true, executedFiles: ["t/two.test.mjs"], numTotalTests: 2 });
+    expect(res.detail).toMatch(/^--- node --test t\/two\.test\.mjs \(exit 0\)$/m);
+    expect(res.detail).toMatch(/^--- node --test t\/empty\.test\.mjs \(exit 0\)$/m);
+  });
+
+  it("adds each node:test result to the vitest results map by its id, keeping the vitest entries", async () => {
+    const vitestRes = green(["x.test.ts"]);
+    const results = new Map([["cinatra-ai/gated", vitestRes]]);
+    const lines = [];
+    const out = await runNodeSuites({ repoRoot: nodeDir, nodeRun: [nodePkg], jobs: 2, results, log: (l) => lines.push(l), testTimeoutMs: 2000, fileTimeoutMs: 20_000 });
+    expect(out).toBe(results);
+    expect([...results.keys()].sort()).toEqual(["cinatra-ai/gated", "cinatra-ai/node-pack"]);
+    expect(results.get("cinatra-ai/gated")).toBe(vitestRes);
+    expect(results.get("cinatra-ai/node-pack")).toMatchObject({ ok: true, executedFiles: ["t/two.test.mjs"] });
+    expect(lines.some((l) => l.startsWith("::group::PASS cinatra-ai/node-pack [node:test]"))).toBe(true);
+  });
+
+  it("does nothing and prints nothing when no package is on the node:test road", async () => {
+    const results = new Map();
+    const lines = [];
+    await runNodeSuites({ repoRoot: nodeDir, nodeRun: [], jobs: 2, results, log: (l) => lines.push(l) });
+    expect(results.size).toBe(0);
+    expect(lines).toEqual([]);
   });
 });
 
@@ -867,12 +1066,25 @@ describe("the node:test road — a skipping node:test package is RUN here", () =
     expect(judge({ packages, results, carveOuts: [] }).findings.map((f) => f.kind)).toEqual(["no-report"]);
   });
 
-  it("a ledger entry never exempts a node:test package", () => {
+  it("a ledger entry never exempts a node:test package, and is reported as stale", () => {
     const packages = [pkg({ slug: "gated", testFiles: ["x.test.ts"] }), brandVoice()];
     const results = resultsFor([["gated", green(["x.test.ts"])]]);
     const out = judge({ packages, results, carveOuts: [carve("brand-voice-artifact")] });
     expect(out.carved).toEqual([]);
     expect(out.findings.map((f) => f.kind)).toContain("not-run");
+    expect(out.notices.map((n) => [n.kind, n.slug])).toEqual([["stale-carve-out", "cinatra-ai/brand-voice-artifact"]]);
+    expect(out.notices[0].message).toContain("no longer a vitest suite (runner=other)");
+  });
+
+  it("a checkout with local modifications stays on the road and is judged", () => {
+    const bv = brandVoice({ dirty: true });
+    expect(planRun({ packages: [bv], carveOuts: [] }).nodeRun.map((p) => p.id)).toEqual(["cinatra-ai/brand-voice-artifact"]);
+    const packages = [pkg({ slug: "gated", testFiles: ["x.test.ts"] }), bv];
+    const results = resultsFor([
+      ["gated", green(["x.test.ts"])],
+      ["brand-voice-artifact", foldNodeRuns([{ file: "test/own-type.test.mjs", exitCode: 1, tap: TAP_RED }])],
+    ]);
+    expect(judge({ packages, results, carveOuts: [] }).findings.map((f) => f.kind)).toEqual(["suite-red"]);
   });
 
   it("shows on the manifest as run here, with its own status", () => {
@@ -890,6 +1102,12 @@ describe("the node:test road — a skipping node:test package is RUN here", () =
       carveOuts: [],
     });
     expect(red).toMatch(/brand-voice-artifact .* node:test here — RED \(exit 1\)$/m);
+    const lost = renderManifest({
+      packages: [brandVoice()],
+      results: resultsFor([["brand-voice-artifact", foldNodeRuns([{ file: "test/own-type.test.mjs", exitCode: 0, tap: "" }])]]),
+      carveOuts: [],
+    });
+    expect(lost).toMatch(/brand-voice-artifact .* node:test here — NO REPORT \(exit 0\)$/m);
     const files = ["test/empty.test.mjs", "test/own-type.test.mjs"];
     const incomplete = renderManifest({
       packages: [brandVoice({ testFiles: files })],

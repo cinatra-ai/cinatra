@@ -49,7 +49,7 @@
 //      sources name `node:test` (the fleet's one other runner) is therefore RUN
 //      here with `node --test`, one file at a time, and enforced like a vitest
 //      suite: green, and every on-disk test file executed with at least one
-//      test. Its own ci.yml skips it, so this gate is the only place it runs.
+//      test. Its own ci.yml skips it, so in CI this gate is where it runs.
 //   4. CARVE-OUTS ARE PIN- AND SHAPE-SCOPED, AND SELF-RETIRING. An entry
 //      tolerates ONE documented failure, at ONE pinned sha, in a CLEAN
 //      checkout of it. It is still RUN. If the observed shape differs from the
@@ -478,7 +478,7 @@ export function planRun({ packages, carveOuts = CARVE_OUTS }) {
 }
 
 /**
- * Is this a node:test package that only this gate can run? Its tests are not
+ * Is this a node:test package that, in CI, only this gate runs? Its tests are not
  * vitest, its test sources name `node:test`, and its own ci.yml skips them on
  * the "the cinatra monorepo runs these" grounds. Without this road the gate
  * could only name such a package (check 3) and never satisfy the claim.
@@ -499,11 +499,15 @@ export function isHostRunNodeTest(p) {
  *
  * A file that registers no test is not reported as zero tests: node reports
  * the FILE ITSELF as one test, named by the path it was given (`ok 1 -
- * test/x.test.mjs`, `# tests 1`, `# suites 0`). Given that path, `fileOnly` is
- * true when the run's only top-level result is that one and no suite ran, so
- * the caller does not count the file as executed.
+ * test/x.test.mjs`, `# tests 1`, `# suites 0`), at line 1, column 1 of the
+ * file. Given that path, `fileOnly` is true when the run's only top-level
+ * result is that one, no suite ran, and the top-level records (`topLevel`, from
+ * nodeTopLevelReporter) do not place a test of that name elsewhere in the
+ * file; the caller then does not count the file as executed. Without a record,
+ * such a run reads as file-only, so a lost record makes the file uncollected,
+ * not executed.
  */
-export function parseNodeTap(text, file) {
+export function parseNodeTap(text, file, topLevel = []) {
   const counts = {};
   const failedNames = [];
   const topNames = [];
@@ -515,7 +519,8 @@ export function parseNodeTap(text, file) {
     const top = /^(?:not )?ok \d+ - (.*?)(?:\s+#\s+(?:SKIP|TODO)\b.*)?$/.exec(line);
     if (top) topNames.push(top[1]);
   }
-  const fileOnly = typeof file === "string" && topNames.length === 1 && topNames[0] === file && (counts.suites ?? 0) === 0;
+  const realTest = topLevel.some((r) => r.name === file && !(r.line === 1 && r.column === 1));
+  const fileOnly = typeof file === "string" && topNames.length === 1 && topNames[0] === file && (counts.suites ?? 0) === 0 && !realTest;
   return {
     summary: Object.prototype.hasOwnProperty.call(counts, "tests"),
     tests: counts.tests ?? 0,
@@ -536,23 +541,26 @@ export function parseNodeTap(text, file) {
  * own: a file node ran that registered nothing (reported as zero tests, or as
  * the file itself, see parseNodeTap) is uncollected, as a vitest file collected
  * by nothing is, and node's report of the file is not counted as a test. A
- * file whose run printed no summary makes the report lost.
+ * file whose run printed no summary makes the report lost, and so does a file
+ * killed at the file bound (runNodeTestFile), whatever TAP it printed first.
  *
- * files: Array<{ file, exitCode, tap }>
+ * files: Array<{ file, exitCode, tap, timedOut?, topLevel? }>
  */
 export function foldNodeRuns(files) {
   const executedFiles = [];
   const failedTestNames = [];
+  const timedOutFiles = [];
   let total = 0;
   let failed = 0;
   let pending = 0;
   let reportOk = files.length > 0;
   let exitCode = 0;
   let ok = files.length > 0;
-  for (const { file, exitCode: code, tap } of files) {
-    const t = parseNodeTap(tap, file);
-    if (!t.summary) reportOk = false;
-    if (t.summary && t.tests > 0 && !t.fileOnly) executedFiles.push(file);
+  for (const { file, exitCode: code, tap, timedOut, topLevel } of files) {
+    const t = parseNodeTap(tap, file, topLevel);
+    if (timedOut) timedOutFiles.push(file);
+    if (!t.summary || timedOut) reportOk = false;
+    if (t.summary && t.tests > 0 && !t.fileOnly && !timedOut) executedFiles.push(file);
     if (!t.fileOnly) total += t.tests;
     failed += t.fail + t.cancelled;
     pending += t.skipped + t.todo;
@@ -569,6 +577,7 @@ export function foldNodeRuns(files) {
     numFailedTests: failed,
     numPendingTests: pending,
     failedTestNames: failedTestNames.sort(),
+    timedOutFiles: timedOutFiles.sort(),
   };
 }
 
@@ -725,10 +734,13 @@ export function judge({ packages, results, carveOuts = CARVE_OUTS }) {
   for (const pkg of nodeRun) {
     const res = results.get(pkg.id);
     if (res && res.reportOk === false) {
+      const killed = res.timedOutFiles ?? [];
       findings.push({
         kind: "no-report",
         slug: pkg.slug,
-        message: `${pkg.id}: a \`node --test\` run printed no TAP summary (exit ${res.exitCode}) — the run cannot be judged, and an absent summary must never read as zero failures.`,
+        message: killed.length
+          ? `${pkg.id}: \`node --test\` was still running at the per-file bound and was killed for ${killed.join(", ")} — the run did not finish, so it cannot be judged.`
+          : `${pkg.id}: a \`node --test\` run printed no TAP summary (exit ${res.exitCode}) — the run cannot be judged, and an absent summary must never read as zero failures.`,
       });
     }
   }
@@ -881,6 +893,8 @@ export function renderManifest({ packages, results, carveOuts = CARVE_OUTS }) {
     else if (nodeRunIds.has(p.id)) {
       // Its repo skips its tests, so this gate runs them with node --test.
       if (!res) status = "node:test here — NOT RUN";
+      else if (res.timedOutFiles?.length) status = `node:test here — TIMED OUT (${res.timedOutFiles.length} file(s) killed)`;
+      else if (res.reportOk === false) status = `node:test here — NO REPORT (exit ${res.exitCode})`;
       else if (!res.ok) status = `node:test here — RED (exit ${res.exitCode})`;
       else {
         const executed = new Set(res.executedFiles);
@@ -1143,49 +1157,159 @@ function runVitest({ repoRoot, pkg, reportDir, slot }) {
   });
 }
 
-// One `node --test` process per test file, in the package's own directory, so
-// a file that registers nothing is visible as such (node 24 reports the file
-// itself as its one test, which parseNodeTap reads as `fileOnly`) instead of
-// being hidden in a package total. The TAP reporter is what parseNodeTap reads;
+// The bounds of one `node --test` file run. A test is cancelled after the same
+// 30 s the vitest road grants (`--testTimeout=30000` above), and node exits once
+// the file's tests have ended even when the file left a timer or a socket open
+// (`--test-force-exit`). The file bound is this
+// gate's own: a file still running after it (a synchronous loop, which no test
+// timeout can interrupt) has its process group killed and is reported as timed
+// out, so a hung file is ended after the bound instead of holding the job until
+// the workflow's own timeout.
+export const NODE_TEST_TIMEOUT_MS = 30_000;
+export const NODE_FILE_TIMEOUT_MS = 300_000;
+const NODE_STDOUT_CAP = 400_000;
+const NODE_STDERR_CAP = 100_000;
+
+// The TAP goes to stdout. A second reporter, this script's default export,
+// writes one JSON line per top-level test to `topLevelFile`: node reports a
+// file that registers no test as one test named by the file's path, and the
+// TAP of that report is the same as the TAP of a real test of that name. What
+// differs is the location node gives it: line 1, column 1 of the file, where a
+// real test is reported at the place of its call. A file written by the reporter is not
+// mixed with what the tests print, which reaches the TAP as comments.
+export function nodeTestArgs(file, topLevelFile, testTimeoutMs = NODE_TEST_TIMEOUT_MS) {
+  return [
+    "--test",
+    "--test-reporter=tap",
+    "--test-reporter-destination=stdout",
+    `--test-reporter=${import.meta.url}`,
+    `--test-reporter-destination=${topLevelFile}`,
+    `--test-timeout=${testTimeoutMs}`,
+    "--test-force-exit",
+    file,
+  ];
+}
+
+// The second reporter (see nodeTestArgs): node loads this script as a module
+// and uses its default export; `main` below runs only when the script is the
+// program itself.
+export default async function* nodeTopLevelReporter(source) {
+  for await (const event of source) {
+    if ((event.type === "test:pass" || event.type === "test:fail") && event.data.nesting === 0) {
+      yield `${JSON.stringify({ name: event.data.name, line: event.data.line ?? null, column: event.data.column ?? null })}\n`;
+    }
+  }
+}
+
+// The lines nodeTopLevelReporter wrote; a missing file or a line that is not
+// such a record gives nothing, which parseNodeTap reads in the safe direction.
+export function readTopLevel(text) {
+  const out = [];
+  for (const line of String(text ?? "").split("\n")) {
+    try {
+      const r = JSON.parse(line);
+      if (r && typeof r.name === "string") out.push({ name: r.name, line: r.line, column: r.column });
+    } catch {
+      // not a record
+    }
+  }
+  return out;
+}
+
+// One `node --test` process per test file, in the package's own directory, so a
+// file that registers nothing is visible as such instead of being hidden in a
+// package total. The TAP and the top-level records are what parseNodeTap reads;
 // the package's `test` script is not used, for the same reason runVitest does
-// not use it. A child that cannot start resolves as exit -1 with no TAP, which
-// foldNodeRuns reads as a lost report. Exported for its test.
-export function runNodeTestFile({ cwd, file }) {
+// not use it. A child that cannot start resolves as exit -1 with no TAP, and a
+// child killed at the file bound resolves as exit -1 with `timedOut: true`;
+// foldNodeRuns reads both as a lost report. Exported for its test, with the two
+// bounds as parameters so the test can use short ones.
+export function runNodeTestFile({ cwd, file, testTimeoutMs = NODE_TEST_TIMEOUT_MS, fileTimeoutMs = NODE_FILE_TIMEOUT_MS }) {
   return new Promise((resolve) => {
     // NODE_TEST_CONTEXT would make the child report to a parent test runner
     // instead of printing its own TAP; it is dropped so the summary is printed.
     const env = { ...process.env, CI: "1", FORCE_COLOR: "0" };
     delete env.NODE_TEST_CONTEXT;
-    const child = spawn(process.execPath, ["--test", "--test-reporter=tap", file], {
+    let out = "";
+    let err = "";
+    let timer;
+    let settled = false;
+    const recDir = fs.mkdtempSync(path.join(os.tmpdir(), "ext-suite-node-"));
+    const recFile = path.join(recDir, "top-level.jsonl");
+    const finish = (run) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      let rec = "";
+      try {
+        rec = fs.readFileSync(recFile, "utf8");
+      } catch {
+        // no record file: the run wrote none
+      }
+      fs.rmSync(recDir, { recursive: true, force: true });
+      resolve({ ...run, topLevel: readTopLevel(rec) });
+    };
+    // Its own process group, so the kill below also reaches the processes a test
+    // started in that group.
+    const child = spawn(process.execPath, nodeTestArgs(file, recFile, testTimeoutMs), {
       cwd,
       env,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
     });
-    let out = "";
-    let err = "";
     child.stdout.on("data", (c) => {
       out += c;
-      if (out.length > 400_000) out = out.slice(-400_000);
+      if (out.length > NODE_STDOUT_CAP) out = out.slice(-NODE_STDOUT_CAP);
     });
     child.stderr.on("data", (c) => {
       err += c;
-      if (err.length > 100_000) err = err.slice(-100_000);
+      if (err.length > NODE_STDERR_CAP) err = err.slice(-NODE_STDERR_CAP);
     });
-    child.on("error", (e) => resolve({ file, exitCode: -1, tap: "", detail: String(e) }));
-    child.on("close", (code) => resolve({ file, exitCode: code, tap: out, detail: out + err }));
+    timer = setTimeout(() => {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        child.kill("SIGKILL");
+      }
+      const note = `[extension-suite-gate] ${file} was still running after ${fileTimeoutMs} ms and was killed`;
+      finish({ file, exitCode: -1, tap: out, timedOut: true, pid: child.pid, detail: `${out}${err}\n${note}` });
+    }, fileTimeoutMs);
+    child.on("error", (e) => finish({ file, exitCode: -1, tap: "", detail: String(e) }));
+    child.on("close", (code) => finish({ file, exitCode: code, tap: out, detail: out + err }));
   });
 }
 
-async function runNodeTest({ repoRoot, pkg }) {
+// The files of one package, one after another, folded into one result. Exported
+// for its test.
+export async function runNodeTest({ repoRoot, pkg, testTimeoutMs, fileTimeoutMs }) {
   const started = Date.now();
   const cwd = path.join(repoRoot, pkg.dir);
   const files = [];
-  for (const file of pkg.testFiles) files.push(await runNodeTestFile({ cwd, file }));
+  for (const file of pkg.testFiles) files.push(await runNodeTestFile({ cwd, file, testTimeoutMs, fileTimeoutMs }));
   return {
     ...foldNodeRuns(files),
     durationMs: Date.now() - started,
-    detail: files.map((f) => `--- node --test ${f.file} (exit ${f.exitCode})\n${f.detail}`).join("\n"),
+    detail: files.map((f) => `--- node --test ${f.file} (exit ${f.exitCode}${f.timedOut ? ", killed at the file bound" : ""})\n${f.detail}`).join("\n"),
   };
+}
+
+// Run the node:test packages and add their results to the vitest results map,
+// keyed by the same scope-qualified id. Exported for its test.
+export async function runNodeSuites({ repoRoot, nodeRun, jobs, results, log = console.log, testTimeoutMs, fileTimeoutMs }) {
+  if (nodeRun.length === 0) return results;
+  log(`\n[extension-suite-gate] running ${nodeRun.length} node:test suite(s) whose own CI skips them...\n`);
+  const nodeResults = await pool(nodeRun, jobs, async (pkg) => {
+    const res = await runNodeTest({ repoRoot, pkg, testTimeoutMs, fileTimeoutMs });
+    log(
+      `::group::${res.ok ? "PASS" : "FAIL"} ${pkg.id} [node:test] (${(res.durationMs / 1000).toFixed(1)}s, ` +
+        `${res.executedFiles.length}/${pkg.testFiles.length} file(s))`,
+    );
+    log(fenceWorkflowCommands(res.detail).trimEnd());
+    log("::endgroup::");
+    return res;
+  });
+  for (const [id, res] of nodeResults) results.set(id, res);
+  return results;
 }
 
 async function pool(items, limit, worker) {
@@ -1244,20 +1368,7 @@ async function main() {
       return res;
     });
     fs.rmSync(reportDir, { recursive: true, force: true });
-    if (nodeRun.length > 0) {
-      console.log(`\n[extension-suite-gate] running ${nodeRun.length} node:test suite(s) whose own CI skips them...\n`);
-      const nodeResults = await pool(nodeRun, jobs, async (pkg) => {
-        const res = await runNodeTest({ repoRoot, pkg });
-        console.log(
-          `::group::${res.ok ? "PASS" : "FAIL"} ${pkg.id} [node:test] (${(res.durationMs / 1000).toFixed(1)}s, ` +
-            `${res.executedFiles.length}/${pkg.testFiles.length} file(s))`,
-        );
-        console.log(fenceWorkflowCommands(res.detail).trimEnd());
-        console.log("::endgroup::");
-        return res;
-      });
-      for (const [id, res] of nodeResults) results.set(id, res);
-    }
+    await runNodeSuites({ repoRoot, nodeRun, jobs, results });
   }
 
   console.log("\n[extension-suite-gate] MANIFEST (every materialized package; nothing here is silent)\n");
