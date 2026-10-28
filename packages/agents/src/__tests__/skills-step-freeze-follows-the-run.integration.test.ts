@@ -1047,4 +1047,63 @@ describe.skipIf(!HAS_DB)("cinatra#3062 — an all-clear Continue in the queued w
     expect(await skipMarkers(runId)).toBe(0);
   }, 120_000);
 
+  // THE INTERLEAVING THE ROW LOCK CLOSES (queued -> pending_approval). The run
+  // sits `queued` with no stamp when the reader presses the all-clear Continue,
+  // and the worker's setup interrupt moves it to `pending_approval` (no stamp,
+  // no wait marker), which IS in the store's pre-start set, while the skip's
+  // transaction runs. A second connection plays that interrupt: it moves the
+  // row and holds its transaction open. The SHARE lock it also takes on the
+  // selection table stands in for the timing: a probe that does not wait for
+  // the row then reaches the clear only after the interrupt has committed. A
+  // probe that locked only a row passing its WHERE answered "run_started" there
+  // while the clear and the marker landed. A probe that locks the row by id
+  // waits for the interrupt, reads `pending_approval` and lands the skip. Either
+  // way the answer has to match what is on record.
+  it("a run the setup interrupt moves to pending_approval during the skip is answered by what was written", async () => {
+    const runId = await queuedAfterContinue();
+    const tag = `freeze3062-${randomUUID().slice(0, 8)}`;
+    const interrupt = new Client({ connectionString: DB_URL, application_name: tag });
+    const watch = new Client({ connectionString: DB_URL });
+    await interrupt.connect();
+    await watch.connect();
+    const held = interrupt.query(
+      `BEGIN;
+       UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status = 'pending_approval'
+         WHERE id = '${runId}' AND status = 'queued';
+       LOCK TABLE "${q(TEST_SCHEMA)}"."run_selected_skill_revisions" IN SHARE MODE;
+       SELECT pg_sleep(3);
+       COMMIT;`,
+    );
+    let out: unknown;
+    try {
+      // The interrupt has moved the row and holds both locks once it sleeps.
+      for (let i = 0; ; i += 1) {
+        const { rows } = await watch.query(
+          `SELECT count(*)::int AS n FROM pg_stat_activity
+            WHERE application_name = $1 AND wait_event = 'PgSleep'`,
+          [tag],
+        );
+        if (rows[0].n === 1) break;
+        if (i >= 200) throw new Error("the interrupt connection never reached its sleep");
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      out = selectionStore.writeRunRecommendationSkip({
+        runId,
+        skippedBy: USER_ID,
+        candidateCount: 0,
+        beforeStart: { clearSkillIds: ["skill-kept", "skill-cleared"] },
+      });
+    } finally {
+      await held.catch(() => {});
+      await interrupt.end().catch(() => {});
+      await watch.end().catch(() => {});
+    }
+    const row = await readRunRow(runId);
+    expect(row.status).toBe("pending_approval");
+    expect(row.started_at).toBeNull();
+    // The skip landed whole, and the answer says so.
+    expect(selectionOf(runId)).toEqual([]);
+    expect(await skipMarkers(runId)).toBe(1);
+    expect(out).toEqual({ outcome: "recorded" });
+  }, 120_000);
 });

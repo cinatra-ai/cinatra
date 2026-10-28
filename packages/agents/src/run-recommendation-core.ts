@@ -1080,10 +1080,12 @@ export async function skipRecommendationForActor(input: {
     //
     // The store's own guard is the other half, and it now covers the WHOLE skip
     // (cinatra#3062). The clear rides the skip's own transaction, and that
-    // transaction first asks the run row the store's pre-start question with the
-    // row locked. A run that is `queued`, running, paused mid-flight or settled
-    // gets nothing written: no clear, no per-skill row, no marker. The skip is
-    // then refused with the run-started sentence, as a confirm is.
+    // transaction first locks the run row by id, whatever its state, and reads
+    // the store's pre-start question from the locked row. A run that is `queued`,
+    // running, paused mid-flight or settled when the row is locked gets none of
+    // the writes: no clear, no per-skill row, no marker. The skip is then refused
+    // with the run-started sentence, as a confirm is. A writer of the run row
+    // that comes after the lock waits for this transaction's COMMIT.
     //
     // THE WINDOW THIS CLOSES. After a first Continue the run can sit `queued`
     // with no start stamp, and the card offers its boxes and one Continue there.

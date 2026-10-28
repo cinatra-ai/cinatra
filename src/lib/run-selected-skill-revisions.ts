@@ -493,21 +493,24 @@ export const SKIP_RECOMMENDATION_SOURCE = "user_skipped" as const;
  * tables, and the count is read as "how many rows this DECISION named", not as a
  * live row count.
  *
- * ONLY BEFORE THE RUN STARTS, WHEN `beforeStart` IS GIVEN (cinatra#3062). The
- * decision path passes it, and then the same transaction first takes the run row
- * with `FOR UPDATE` and asks it the store's own pre-start question:
- * `started_at IS NULL AND human_wait_attempt_id IS NULL AND status =
- * ANY(PRE_START_RUN_STATUSES_WITHOUT_A_START_STAMP)`, the SQL form of
- * `recommendationRunHasStartedForRow` negated except for `queued`, which the
- * store keeps out (see that set). Every statement after it carries the same
- * predicate: the scoped clear of the run's selection rows, the per-skill rows and
- * the marker. So a run that is `queued`, running, paused mid-flight or settled
- * gets NOTHING written, and the answer is `{ outcome: "run_started" }`: the
- * caller refuses with the run-started sentence, and no retry will make the write
- * land. The row lock keeps the dispatch CAS from moving the run between the
- * question and the writes. Without `beforeStart` the write is the unguarded one
- * it always was, and it answers a boolean; the decision path never calls it that
- * way.
+ * BEFORE THE RUN STARTS, WHEN `beforeStart` IS GIVEN (cinatra#3062). The
+ * decision path passes it, and then the same transaction first locks the run row
+ * BY ID, whatever its state, with `FOR UPDATE`, and reads the store's own
+ * pre-start question as a column: `started_at IS NULL AND human_wait_attempt_id
+ * IS NULL AND status = ANY(PRE_START_RUN_STATUSES_WITHOUT_A_START_STAMP)`, the
+ * SQL form of `recommendationRunHasStartedForRow` negated except for `queued`,
+ * which the store keeps out (see that set). The lock holds the row until COMMIT
+ * whatever the answer, so a writer of that row (the dispatch CAS, the worker's
+ * setup interrupt, the enqueue compensation) waits for this transaction, and a
+ * writer that committed first is read by the lock. Every statement after it
+ * carries the same predicate (the scoped clear of the run's selection rows, the
+ * per-skill rows and the marker) and reads the same locked row. So a run that is
+ * not before its start when the row is locked (`queued`, running, paused
+ * mid-flight or settled), or a run id with no row, gets none of these writes,
+ * and the answer is `{ outcome: "run_started" }`: the caller refuses with the
+ * run-started sentence, and a retry while the run stays so will not make the
+ * write land. Without `beforeStart` the write is the unguarded one it always
+ * was, and it answers a boolean; the decision path does not call it that way.
  */
 export const RECOMMENDATION_SKIP_RUN_STARTED = "run_started" as const;
 
@@ -516,7 +519,7 @@ export const RECOMMENDATION_SKIP_RUN_STARTED = "run_started" as const;
  * caller reads `outcome` and cannot take a refusal for a landing by a truthiness
  * test: `"recorded"` (the marker reads back), `"not_recorded"` (the run was
  * before its start and the marker does not read back) or `"run_started"` (the
- * run was not before its start, or has no row).
+ * run was not before its start when its row was locked, or has no row).
  */
 export type RecommendationSkipBeforeStartResult =
   | { readonly outcome: "recorded" }
@@ -577,18 +580,20 @@ export function writeRunRecommendationSkip(
   const results = runPostgresQueriesSync({ connectionString, queries, transaction: true });
   const markerReadsBack = (results[results.length - 1]?.rows?.length ?? 0) > 0;
   if (!guarded) return markerReadsBack;
-  // The guarded form asks its question first: no row there means the run is
-  // not before its start, and nothing was written.
-  if ((results[0]?.rows?.length ?? 0) === 0) return { outcome: RECOMMENDATION_SKIP_RUN_STARTED };
+  // The guarded form's first statement locked the run row by id and answered
+  // the question as `pre_start`. Anything but `true` (the run is not before its
+  // start, or there is no row) is the refusal; the writes after it asked the
+  // same locked row and wrote nothing.
+  if (results[0]?.rows?.[0]?.pre_start !== true) return { outcome: RECOMMENDATION_SKIP_RUN_STARTED };
   return { outcome: markerReadsBack ? "recorded" : "not_recorded" };
 }
 
 /**
  * The statements of the guarded skip write (cinatra#3062), run by
- * `writeRunRecommendationSkip` in one transaction: the run row locked and asked
- * first, and every write carrying the same pre-start predicate, so a refusal
- * writes nothing at all. The first statement's rows answer the question; the
- * last statement is the marker's read-back.
+ * `writeRunRecommendationSkip` in one transaction: the run row locked by id and
+ * asked first, the answer read as the column `pre_start`, and every write
+ * carrying the same pre-start predicate over the same locked row, so a refusal
+ * gets none of the writes. The last statement is the marker's read-back.
  */
 function buildGuardedRecommendationSkipQueries(
   input: {
@@ -606,8 +611,9 @@ function buildGuardedRecommendationSkipQueries(
   const skips = `"${q}"."run_recommendation_skips"`;
   const preStart = [...PRE_START_RUN_STATUSES_WITHOUT_A_START_STAMP];
   const rejected = input.rejected ?? [];
-  // The predicate every statement repeats. `$1` is the run id and `$2` the
-  // pre-start status set in each statement that uses it.
+  // The predicate every write repeats. `$1` is the run id and `$2` the
+  // pre-start status set in each statement that uses it. It reads the row that
+  // statement 1 holds locked, so it gives statement 1's answer.
   const isPreStart = `EXISTS (
     SELECT 1 FROM ${runs} r
     WHERE r.id = $1
@@ -616,13 +622,17 @@ function buildGuardedRecommendationSkipQueries(
       AND r.status = ANY($2::text[])
   )`;
   const queries: Array<{ text: string; values: unknown[] }> = [
-    // 1. THE QUESTION, with the row held until COMMIT.
+    // 1. THE QUESTION. The row is locked BY ID, whatever its state, and held
+    // until COMMIT; the answer is a column. A WHERE that asked the question
+    // would lock only a row that passes it, and a run that moved into the set
+    // between this statement and the writes would get the writes after a
+    // refusal (`queued -> pending_approval` by the setup interrupt).
     {
-      text: `SELECT 1 FROM ${runs}
+      text: `SELECT (started_at IS NULL
+                     AND human_wait_attempt_id IS NULL
+                     AND status = ANY($2::text[])) AS pre_start
+             FROM ${runs}
              WHERE id = $1
-               AND started_at IS NULL
-               AND human_wait_attempt_id IS NULL
-               AND status = ANY($2::text[])
              FOR UPDATE`,
       values: [input.runId, preStart],
     },
