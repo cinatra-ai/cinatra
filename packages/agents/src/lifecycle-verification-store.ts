@@ -295,8 +295,9 @@ export async function recordVerificationForRepair(input: {
   // Regenerate) pins its successor in a gate the person reviews next, on the same
   // revision a reopen would pin. The verdict is recorded on that successor gate;
   // a second pending gate on the same revision is not opened (one new pending
-  // gate per Regenerate). A lineage root that cannot be read throws (the caller's
-  // best-effort trigger swallows it): no reopen is minted on an unread lineage.
+  // gate per Regenerate). A lineage root that is missing or not bound to the
+  // lineage throws (the caller's best-effort trigger swallows it): no reopen is
+  // minted on such a lineage.
   const { isDeclaredReviewLineage } = await import("./lifecycle-repair-store");
   const withholdReopen = await isDeclaredReviewLineage(repair.lineageId);
 
