@@ -56,6 +56,20 @@ vi.mock("@/lib/register-all-object-types", () => ({ registerAllObjectTypes: () =
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
+
+// cinatra#4404: the refusal is at module scope, not in a hook. Without a usable
+// database URL, `describe.skipIf` skips every suite in the file and a file with
+// nothing left to run never runs its hooks, so the dedicated config's run
+// (`vitest/integration/3028.config.ts`, which sets the flag) would pass by
+// running nothing.
+if (process.env.CINATRA_LIFECYCLE_C_W4_REALDB === "1" && !HAS_REAL_DB) {
+  throw new Error(
+    "cinatra#4404 W4: CINATRA_LIFECYCLE_C_W4_REALDB=1 asks this tier to run against a real Postgres, " +
+      "but SUPABASE_DB_URL is unset, empty or a placeholder: set it to a scratch database. " +
+      "The tier builds and drops its own schema, so any throwaway database will do.",
+  );
+}
+
 const TEST_SCHEMA = "cinatra_test_w4_object_backed_3028";
 const ORG = "org-3028-w4";
 const EXT = "@cinatra-ai/campaigns-artifact";
@@ -279,8 +293,8 @@ async function readSharedSlugTriggers(client: Client): Promise<string[]> {
  */
 async function assertSharedSlugTriggersUnchanged(client: Client, when: string): Promise<void> {
   const before = sharedSlugTriggersBefore;
-  // A silent return: setup is expected to have failed before its reading and
-  // to fail the run itself. No test drives this branch.
+  // A silent return: no reading exists only when setup threw before or in its
+  // first reading, and that setup failure fails the run itself.
   if (before === undefined) return;
   const now = await readSharedSlugTriggers(client);
   if (JSON.stringify(now) !== JSON.stringify(before)) {
@@ -291,10 +305,17 @@ async function assertSharedSlugTriggersUnchanged(client: Client, when: string): 
   }
 }
 
+/**
+ * The blob root this file created; undefined until `mkdtempSync` has returned.
+ * Teardown removes this directory only, never a root it did not create.
+ */
+let createdBlobRoot: string | undefined;
+
 beforeAll(async () => {
   if (!HAS_REAL_DB) return;
   process.env.SUPABASE_SCHEMA = TEST_SCHEMA;
-  process.env.CINATRA_ARTIFACT_DATA_ROOT = mkdtempSync(path.join(tmpdir(), "cin-3028-"));
+  createdBlobRoot = mkdtempSync(path.join(tmpdir(), "cin-3028-"));
+  process.env.CINATRA_ARTIFACT_DATA_ROOT = createdBlobRoot;
 
   const client = new Client({ connectionString: DB_URL });
   await client.connect();
@@ -391,9 +412,10 @@ afterAll(async () => {
     );
     await step("client close", () => client.end());
   }
+  // Only the root this file created: when setup threw before its mkdtemp, the
+  // environment may still name a directory this file did not create.
   await step("remove the blob root", () => {
-    const root = process.env.CINATRA_ARTIFACT_DATA_ROOT;
-    if (root) rmSync(root, { recursive: true, force: true });
+    if (createdBlobRoot) rmSync(createdBlobRoot, { recursive: true, force: true });
   });
   delete (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized;
 
