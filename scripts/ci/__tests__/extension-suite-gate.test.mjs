@@ -636,6 +636,30 @@ const TAP_RED = [
 
 const TAP_EMPTY = ["TAP version 13", "1..0", "# tests 0", "# pass 0", "# fail 0", "# cancelled 0", "# skipped 0", "# todo 0"].join("\n");
 
+// What node 24 prints for `node --test --test-reporter=tap <file>` when the
+// file registers no test (read on a lane host with node v24.20.0): the runner
+// reports the FILE ITSELF as one passing test, named by the path it was given,
+// so the summary says `# tests 1` although no test ran.
+const tapFileOnly = (file) =>
+  [
+    "TAP version 13",
+    `# Subtest: ${file}`,
+    `ok 1 - ${file}`,
+    "  ---",
+    "  duration_ms: 38.1",
+    "  type: 'test'",
+    "  ...",
+    "1..1",
+    "# tests 1",
+    "# suites 0",
+    "# pass 1",
+    "# fail 0",
+    "# cancelled 0",
+    "# skipped 0",
+    "# todo 0",
+    "# duration_ms 44.0",
+  ].join("\n");
+
 const BRAND_VOICE_SOURCE = `import { test } from "node:test";\nimport assert from "node:assert/strict";\ntest("x", () => assert.ok(true));\n`;
 
 const brandVoice = (over = {}) =>
@@ -657,7 +681,18 @@ const nodeGreen = (files) => foldNodeRuns(files.map((file) => ({ file, exitCode:
 
 describe("parseNodeTap — the top-level summary, or none", () => {
   it("reads the counts of a green run", () => {
-    expect(parseNodeTap(TAP_GREEN)).toEqual({ summary: true, tests: 3, pass: 3, fail: 0, cancelled: 0, skipped: 0, todo: 0, failedNames: [] });
+    expect(parseNodeTap(TAP_GREEN)).toEqual({ summary: true, tests: 3, pass: 3, fail: 0, cancelled: 0, skipped: 0, todo: 0, failedNames: [], fileOnly: false });
+  });
+
+  it("reads node's report of the file itself as the one test as a file that ran no test", () => {
+    expect(parseNodeTap(tapFileOnly("test/empty.test.mjs"), "test/empty.test.mjs").fileOnly).toBe(true);
+    // the same report for another path, or a real test of that name next to others, is a test
+    expect(parseNodeTap(tapFileOnly("test/empty.test.mjs"), "test/own-type.test.mjs").fileOnly).toBe(false);
+    expect(parseNodeTap(TAP_GREEN, "test/own-type.test.mjs").fileOnly).toBe(false);
+    const twoTop = tapFileOnly("test/x.test.mjs").replace("1..1", "ok 2 - another\n1..2");
+    expect(parseNodeTap(twoTop, "test/x.test.mjs").fileOnly).toBe(false);
+    // a describe block counts as a suite, so a file of that name with a suite is not file-only
+    expect(parseNodeTap(tapFileOnly("test/x.test.mjs").replace("# suites 0", "# suites 1"), "test/x.test.mjs").fileOnly).toBe(false);
   });
 
   it("reads only TOP-LEVEL summary lines and names failing tests, not TODO ones", () => {
@@ -700,6 +735,16 @@ describe("foldNodeRuns — per-file node:test runs as one suite result", () => {
     ]);
     expect(r.ok).toBe(true);
     expect(r.executedFiles).toEqual(["test/a.test.mjs"]);
+  });
+
+  it("a file node reports as its own one test is NOT executed, and that pseudo-test is not counted", () => {
+    const r = foldNodeRuns([
+      { file: "test/a.test.mjs", exitCode: 0, tap: TAP_GREEN },
+      { file: "test/empty.test.mjs", exitCode: 0, tap: tapFileOnly("test/empty.test.mjs") },
+    ]);
+    expect(r.ok).toBe(true);
+    expect(r.executedFiles).toEqual(["test/a.test.mjs"]);
+    expect(r.numTotalTests).toBe(3);
   });
 
   it("a run without a summary loses the report and is not ok, even at exit 0", () => {
@@ -768,6 +813,23 @@ describe("the node:test road — a skipping node:test package is RUN here", () =
     const f = judge({ packages, results, carveOuts: [] }).findings;
     expect(f.map((x) => x.kind)).toEqual(["uncollected-files"]);
     expect(f[0].message).toContain("test/a.test.mjs");
+  });
+
+  it("a file that node reports as its own one passing test FAILS as uncollected (what node 24 prints for an empty file)", () => {
+    const packages = [pkg({ slug: "gated", testFiles: ["x.test.ts"] }), brandVoice({ testFiles: ["test/empty.test.mjs", "test/own-type.test.mjs"] })];
+    const results = resultsFor([
+      ["gated", green(["x.test.ts"])],
+      [
+        "brand-voice-artifact",
+        foldNodeRuns([
+          { file: "test/empty.test.mjs", exitCode: 0, tap: tapFileOnly("test/empty.test.mjs") },
+          { file: "test/own-type.test.mjs", exitCode: 0, tap: TAP_GREEN },
+        ]),
+      ],
+    ]);
+    const f = judge({ packages, results, carveOuts: [] }).findings;
+    expect(f.map((x) => x.kind)).toEqual(["uncollected-files"]);
+    expect(f[0].message).toContain("test/empty.test.mjs");
   });
 
   it("a lost TAP summary FAILS as no-report and is not also judged as red", () => {

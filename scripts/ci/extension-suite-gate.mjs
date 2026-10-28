@@ -496,16 +496,26 @@ export function isHostRunNodeTest(p) {
  * indented line belongs to a subtest and is never read as the summary. No
  * `# tests` line at top level returns `summary: false`, which the caller treats
  * as a lost report (fail-closed), never as zero failures.
+ *
+ * A file that registers no test is not reported as zero tests: node reports
+ * the FILE ITSELF as one test, named by the path it was given (`ok 1 -
+ * test/x.test.mjs`, `# tests 1`, `# suites 0`). Given that path, `fileOnly` is
+ * true when the run's only top-level result is that one and no suite ran, so
+ * the caller does not count the file as executed.
  */
-export function parseNodeTap(text) {
+export function parseNodeTap(text, file) {
   const counts = {};
   const failedNames = [];
+  const topNames = [];
   for (const line of String(text ?? "").split(/\r?\n/)) {
-    const c = /^# (tests|pass|fail|cancelled|skipped|todo) (\d+)$/.exec(line);
+    const c = /^# (tests|suites|pass|fail|cancelled|skipped|todo) (\d+)$/.exec(line);
     if (c) counts[c[1]] = Number(c[2]);
     const f = /^\s*not ok \d+ - (.*?)(?:\s+#\s+(?:SKIP|TODO)\b.*)?$/.exec(line);
     if (f && !/#\s+(?:SKIP|TODO)\b/.test(line)) failedNames.push(f[1]);
+    const top = /^(?:not )?ok \d+ - (.*?)(?:\s+#\s+(?:SKIP|TODO)\b.*)?$/.exec(line);
+    if (top) topNames.push(top[1]);
   }
+  const fileOnly = typeof file === "string" && topNames.length === 1 && topNames[0] === file && (counts.suites ?? 0) === 0;
   return {
     summary: Object.prototype.hasOwnProperty.call(counts, "tests"),
     tests: counts.tests ?? 0,
@@ -515,15 +525,18 @@ export function parseNodeTap(text) {
     skipped: counts.skipped ?? 0,
     todo: counts.todo ?? 0,
     failedNames,
+    fileOnly,
   };
 }
 
 /**
  * Fold the per-file node:test runs of one package into the result shape the
  * vitest road produces, so the same rules judge both. A file counts as
- * EXECUTED only when its run printed a summary with at least one test: a file
- * node ran that registered nothing is uncollected, as a vitest file collected
- * by nothing is. A file whose run printed no summary makes the report lost.
+ * EXECUTED only when its run printed a summary with at least one test of its
+ * own: a file node ran that registered nothing (reported as zero tests, or as
+ * the file itself, see parseNodeTap) is uncollected, as a vitest file collected
+ * by nothing is, and node's report of the file is not counted as a test. A
+ * file whose run printed no summary makes the report lost.
  *
  * files: Array<{ file, exitCode, tap }>
  */
@@ -537,10 +550,10 @@ export function foldNodeRuns(files) {
   let exitCode = 0;
   let ok = files.length > 0;
   for (const { file, exitCode: code, tap } of files) {
-    const t = parseNodeTap(tap);
+    const t = parseNodeTap(tap, file);
     if (!t.summary) reportOk = false;
-    if (t.summary && t.tests > 0) executedFiles.push(file);
-    total += t.tests;
+    if (t.summary && t.tests > 0 && !t.fileOnly) executedFiles.push(file);
+    if (!t.fileOnly) total += t.tests;
     failed += t.fail + t.cancelled;
     pending += t.skipped + t.todo;
     for (const n of t.failedNames) failedTestNames.push(`${file} › ${n}`);
