@@ -825,6 +825,41 @@ describe.skipIf(!HAS_DB)("cinatra#3062 — a pre-deploy run paused mid-flight (n
         .sort(),
     ).toEqual(rejectedBefore);
   }, 120_000);
+
+  it("the skip road refuses that row too and writes nothing: selection kept, no skip marker, no new rejected row", async () => {
+    const runId = await pausedMidFlightBeforeTheStamp();
+    const rejectedBefore = selectionStore
+      .readRunRejectedRecommendations(runId)
+      .map((r: { skillId: string }) => r.skillId)
+      .sort();
+    const out = (await core.skipRecommendationForActor({ runId, who: WHO })) as {
+      ok: boolean;
+      error?: string;
+      code?: string;
+    };
+    expect(out).toEqual({
+      ok: false,
+      error: hold.RECOMMENDATION_RUN_STARTED_REFUSAL,
+      code: hold.RECOMMENDATION_RUN_STARTED_CODE,
+    });
+    expect(
+      selectionStore.readRunSelectedSkillRevisions(runId).map((r) => r.skillId).sort(),
+    ).toEqual(["skill-kept"]);
+    const c = new Client({ connectionString: DB_URL });
+    await c.connect();
+    const { rows } = await c.query(
+      `SELECT count(*)::int AS n FROM "${q(TEST_SCHEMA)}"."run_recommendation_skips" WHERE run_id = $1`,
+      [runId],
+    );
+    await c.end();
+    expect(rows[0].n).toBe(0);
+    expect(
+      selectionStore
+        .readRunRejectedRecommendations(runId)
+        .map((r: { skillId: string }) => r.skillId)
+        .sort(),
+    ).toEqual(rejectedBefore);
+  }, 120_000);
 });
 
 // THE QUEUED WINDOW: AN ALL-CLEAR CONTINUE IS REFUSED, NOT ACCEPTED AND DROPPED
@@ -939,5 +974,72 @@ describe.skipIf(!HAS_DB)("cinatra#3062 — an all-clear Continue in the queued w
     // The all-clear drops the earlier answer, and the decision is on record.
     expect(selectionOf(runId)).toEqual([]);
     expect(await skipMarkers(runId)).toBe(1);
+  }, 120_000);
+
+  // THE PER-SKILL ROWS ON THE GUARDED WRITE. The core arms above reach the
+  // store with whatever the scorer returns, and a test process has no installed
+  // catalog, so they never hand the guarded write a per-skill row. These two
+  // arms hand it rows directly: before the start they land with the same values
+  // and the same conflict rule as the shared rejected-rows statement (first
+  // write wins); in the queued window none of them lands.
+  const guardedRows = [
+    {
+      skillId: "skill-cleared",
+      skillRevisionId: "skill-cleared@2",
+      recommendationSource: "user_skipped",
+      recommendedRank: 5,
+    },
+    {
+      skillId: "skill-kept",
+      skillRevisionId: "skill-kept@1",
+      recommendationSource: "user_skipped",
+      recommendedRank: 1,
+    },
+  ];
+
+  it("before the start the guarded store write lands its per-skill rows, the first write winning", async () => {
+    const runId = await decidedButNotStarted();
+    const out = selectionStore.writeRunRecommendationSkip({
+      runId,
+      skippedBy: USER_ID,
+      candidateCount: guardedRows.length,
+      rejected: guardedRows,
+      beforeStart: { clearSkillIds: ["skill-kept", "skill-cleared"] },
+    });
+    expect(out).toBe(true);
+    expect(selectionStore.readRunRejectedRecommendations(runId)).toEqual([
+      // On file before the skip, so ON CONFLICT (run_id, skill_id) DO NOTHING keeps it.
+      {
+        skillId: "skill-cleared",
+        skillRevisionId: "skill-cleared@1",
+        recommendationSource: "user_skipped",
+        recommendedRank: 2,
+      },
+      {
+        skillId: "skill-kept",
+        skillRevisionId: "skill-kept@1",
+        recommendationSource: "user_skipped",
+        recommendedRank: 1,
+      },
+    ]);
+    expect(selectionOf(runId)).toEqual([]);
+    expect(await skipMarkers(runId)).toBe(1);
+  }, 120_000);
+
+  it("in the queued window the guarded store write lands none of its per-skill rows", async () => {
+    const runId = await queuedAfterContinue();
+    const rejectedBefore = selectionStore.readRunRejectedRecommendations(runId);
+    const out = selectionStore.writeRunRecommendationSkip({
+      runId,
+      skippedBy: USER_ID,
+      candidateCount: guardedRows.length,
+      rejected: guardedRows,
+      beforeStart: { clearSkillIds: ["skill-kept", "skill-cleared"] },
+    });
+    expect(out).toBe(selectionStore.RECOMMENDATION_SKIP_RUN_STARTED);
+    expect(selectionStore.readRunRejectedRecommendations(runId)).toEqual(rejectedBefore);
+    expect(rejectedOf(runId)).not.toContain("skill-kept");
+    expect(selectionOf(runId)).toEqual(["skill-kept"]);
+    expect(await skipMarkers(runId)).toBe(0);
   }, 120_000);
 });
