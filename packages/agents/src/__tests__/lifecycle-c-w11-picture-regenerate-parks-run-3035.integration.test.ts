@@ -823,11 +823,21 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — the wake and a concurrent worker cann
 
     const terminal = await openSession();
     expect(await staleAndWake(terminal, pressed.repairId, pressed.settledGateId)).toBe(post!.id);
-    // The worker's sweep runs while the stale write is not committed yet.
-    await sweep();
+    // The worker's sweep runs while the stale write is not committed yet. The wake
+    // holds the post's intent row, so the claim skips it and the sweep returns
+    // without a wait on the open write. A sweep that claims the intent instead
+    // waits on the run row the wake holds; the case then commits the write to let
+    // that sweep return, and fails on `waited`.
+    let settled = false;
+    let committed = false;
+    const sweeping = sweep().finally(() => { settled = true; });
+    const waited = await waitForLockWait(() => settled);
+    if (waited) { await terminal.commit(); committed = true; }
+    await sweeping;
+    expect(waited).toBe(false);
     expect(sendTaskSpy).not.toHaveBeenCalled();
     expect(await intentStatusOf(post!.id)).toBe("pending");
-    await terminal.commit();
+    if (!committed) await terminal.commit();
 
     await sweep();
     expectResumedWith(p, text);
@@ -1060,5 +1070,42 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — a refused resume dead-letters once it
     const claimed = await gateStore.claimPendingResumeIntents({ limit: 200, leaseMs: 300_000 });
     expect(claimed.some((c) => c.gateId === gateId)).toBe(false);
     expect(await intentRow(gateId)).toMatchObject({ status: "pending", dead_lettered_at: null });
+  });
+});
+
+describe.skipIf(!HAS_DB)("cinatra#4312 — the attempts bound counts every claim, not only a refusal (review 3, finding 1)", () => {
+  it("a delivery that returns retryable without a throw (a run with no a2aContextId) also uses an attempt per claim and is dead-lettered at the next sweep after max_attempts; the run stays parked", async () => {
+    const p = await pausedPipeline();
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET a2a_context_id=NULL WHERE id=$1`, [p.runId]);
+    await approve(p.runId, p.step);
+    const post = await gateStore.readReviewGate(p.runId, p.step);
+    await setIntent(post!.id, "max_attempts=2");
+    const warn = vi.spyOn(console, "warn");
+    const error = vi.spyOn(console, "error");
+    try {
+      for (const attempt of [1, 2]) {
+        warn.mockClear();
+        error.mockClear();
+        await sweep();
+        // This intent took the retryable road, not the throw road.
+        const lines = (spy: typeof warn) => spy.mock.calls.map((c) => c.map(String).join(" "));
+        expect(lines(warn).some((l) => l.includes(`gate=${post!.id}`) && l.includes("has no a2aContextId yet"))).toBe(true);
+        expect(lines(error).some((l) => l.includes(`gate=${post!.id}`))).toBe(false);
+        expect(await intentRow(post!.id)).toMatchObject({ status: "delivering", attempts: attempt, dead_lettered_at: null });
+        await setIntent(post!.id, "lease_expires_at = now() - interval '1 second'");
+      }
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+    }
+    await sweep();
+    const row = await intentRow(post!.id);
+    expect(row.attempts).toBe(2);
+    expect(row.dead_lettered_at).not.toBeNull();
+    expect(row.last_error).toBe("resume delivery attempts exhausted");
+    await sweep();
+    expect((await intentRow(post!.id)).attempts).toBe(2);
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(await runStatus(p.runId)).toBe("pending_approval");
   });
 });
