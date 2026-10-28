@@ -123,9 +123,9 @@ const ALLOWED_API_URLS = new Set([
  *
  * Matched EXACTLY — URL, method and the whole request body — and at most once
  * per leaf: any other passthrough body, tool, tool name, binding source or URL,
- * a toolbox on the node, or a second such read still fails (d). The body is
- * refused on every other node, so it fails (d) at any other URL or method,
- * an allowlisted URL too.
+ * a toolbox on the node, or a second such read still fails (d). Any other
+ * component, of any type, whose `data` is the read's body fails (d): at any
+ * other URL or method, an allowlisted URL too.
  */
 const BRAND_VOICE_READ = {
   url: `${BASE_URL}/api/agents/passthrough`,
@@ -154,17 +154,22 @@ function endpointProblems(components: Ref[]): string[] {
   const problems: string[] = [];
   let reads = 0;
   for (const c of components) {
-    if (c.component_type !== "ApiNode") continue;
     const where = `${c.component_type} ${c.id ?? c.name ?? "<anon>"}`;
     if (isBrandVoiceRead(c)) {
       reads += 1;
       continue;
     }
-    // The read's body is matched with its URL and method, never alone: at an
-    // allowlisted URL it would still be the tool call.
+    // The read's body is matched with its URL, method and node type, never
+    // alone: at an allowlisted URL, or on another node type, it would still
+    // be the tool call.
     if (isDeepStrictEqual(c.data, BRAND_VOICE_READ.data)) {
-      problems.push(`${where} carries the brand-voice read's body outside its exact URL and method`);
+      problems.push(
+        c.component_type === "ApiNode"
+          ? `${where} carries the brand-voice read's body outside its exact URL and method`
+          : `${where} carries the brand-voice read's body, which only the exact ApiNode read may carry`,
+      );
     }
+    if (c.component_type !== "ApiNode") continue;
     // `typeof === "string"` before the Set lookup, never String(c.url): the
     // coercion would let a malformed `"url": ["…/api/context-resolve"]`
     // stringify into an allowlisted value.
@@ -503,6 +508,17 @@ describe("blog-text parity (d): the brand-voice read is the only added call shap
       refused("read_brand_voice", passthrough),
     ]);
     expect(endpointProblems([read({ http_method: undefined })])).toContain(misplaced("read_brand_voice"));
+  });
+
+  it("refuses the read's body on a node that is not an ApiNode", () => {
+    const branch = { ...read(), component_type: "BranchingNode", id: "branch" };
+    expect(endpointProblems([bridgeNode, branch])).toEqual([
+      "BranchingNode branch carries the brand-voice read's body, which only the exact ApiNode read may carry",
+    ]);
+    const other = { ...read({ url: LLM_BRIDGE_URL }), component_type: "ToolNode", id: "other" };
+    expect(endpointProblems([bridgeNode, other])).toEqual([
+      "ToolNode other carries the brand-voice read's body, which only the exact ApiNode read may carry",
+    ]);
   });
 
   it("refuses an allowlisted URL that is not a string", () => {

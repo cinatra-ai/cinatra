@@ -93,7 +93,13 @@
  *     control edge (:1007-1016); and no id the injection adds
  *     (`context-<slotId>-subflow`, `context_<slotId>`, `ctx-<slotId>-<kind>`,
  *     :185-201) is already an id or a `$referenced_components` key anywhere
- *     in the document (:370-391, :1018-1027).
+ *     in the document (:370-391, :1018-1027); and the hidden inputs the
+ *     loader adds for each such slot (`cinatra_run_id`, `projectId`,
+ *     `<slotId>ParentPackageName`, `<slotId>SlotId`) fit the definition and
+ *     its StartNode: `inputs`, where present, is an array, and an input of
+ *     the same title is a string, whose default is the owner package or the
+ *     slot id for the last two (`_ensure_input`, :541-591, called at
+ *     :1054-1063).
  * The anti-stub hitlScreen case below accepts such a covered slot as the
  * renderer's backing, as it accepts a context FlowNode.
  *
@@ -106,11 +112,18 @@
  * duplicate; a non-empty array of non-empty `acceptedArtifactExtensions`; a
  * `selectionMode` and a `resolutionMode` from their sets; an integral
  * `minItems` >= 0 and `maxItems` >= 1 that are in order; a boolean
- * `readableOnly`. This gate refuses the same, on every road.
+ * `readableOnly`. This gate refuses the same, on every road. It reads a
+ * count as a JavaScript number, so it refuses a count outside the safe
+ * integer range, which the loader, reading the JSON's exact integers, may
+ * accept: there this gate is stricter than the loader.
  *
  * WHAT THIS GATE DOES NOT MODEL. It reads the root definition only, and it
  * does not model `parentSatisfiedContextSlots` (:309-362, :709-913): a slot a
- * parent satisfies is checked here as if the loader injected it.
+ * parent satisfies is checked here as if the loader injected it. The
+ * refusals it models are those of the root definition's own injection
+ * (`_validate_declared_slots` and `_inject_into_definition` with the
+ * functions it calls); a nested definition's own slots and the
+ * parent-satisfied hand-down are not read.
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
@@ -258,6 +271,15 @@ function slotDeclarationProblems(oas: Ref): string[] {
     }
     if (!SELECTION_MODES.has(entry.selectionMode as string)) return refused("invalid selectionMode");
     if (!RESOLUTION_MODES.has(entry.resolutionMode as string)) return refused("invalid resolutionMode");
+    // The loader compares the JSON's integers exactly; outside the safe
+    // integer range a JavaScript number is not the JSON's value, so such a
+    // count is refused here, where the loader may accept it.
+    for (const key of ["minItems", "maxItems"]) {
+      const v = entry[key];
+      if (typeof v === "number" && Number.isInteger(v) && !Number.isSafeInteger(v)) {
+        return [`${loc}: ${key} is outside the safe integer range, which this gate cannot read exactly`];
+      }
+    }
     const min = entry.minItems;
     const max = entry.maxItems;
     if ("minItems" in entry && (!isIntegral(min) || min < 0)) return refused("invalid minItems");
@@ -353,8 +375,10 @@ function injectedIds(slotId: string): string[] {
 /** Why the loader cannot inject the declaration-only slots `pending` into this
  *  definition at all (`_inject_into_definition`, :975-1027): no owner package
  *  (:978, `_resolve_owner_package` :475-526), an unsupported shape (:980-1005),
- *  no outgoing control edge from the StartNode (:1007-1016), or an injected id
- *  that is already taken (:1018-1027). Empty means it can inject. */
+ *  no outgoing control edge from the StartNode (:1007-1016), an injected id
+ *  that is already taken (:1018-1027), or a hidden input it cannot add
+ *  (`_ensure_input`, :541-591, called at :1054-1063). Empty means it can
+ *  inject. */
 function injectionProblems(oas: Ref, pending: string[]): string[] {
   if (pending.length === 0) return [];
   const problems: string[] = [];
@@ -400,6 +424,38 @@ function injectionProblems(oas: Ref, pending: string[]): string[] {
     for (const id of injectedIds(slotId)) {
       if (taken.has(id) || added.has(id)) problems.push(`injected component id ${id} collides with an existing id in the document`);
       added.add(id);
+    }
+  }
+  // The hidden inputs the loader adds for each pending slot, on the
+  // definition and on its StartNode (`_ensure_input`). It reaches them only
+  // with one owner package and a defined StartNode.
+  const startDef = all[startRef];
+  if (owners.size === 1 && isObject(startDef)) {
+    const owner = [...owners][0];
+    const holders: Array<[string, Ref]> = [["the definition", oas], [`start node ${startRef}`, startDef]];
+    for (const [where, holder] of holders) {
+      if ("inputs" in holder && !Array.isArray(holder.inputs)) {
+        problems.push(`${where}: inputs is not an array; the loader refuses the injection`);
+        continue;
+      }
+      const inputs = (holder.inputs ?? []) as unknown[];
+      for (const slotId of pending) {
+        const wanted: Array<[string, string | undefined]> = [
+          ["cinatra_run_id", undefined],
+          ["projectId", undefined],
+          [`${slotId}ParentPackageName`, owner],
+          [`${slotId}SlotId`, slotId],
+        ];
+        for (const [title, want] of wanted) {
+          const existing = inputs.find((e): e is Ref => isObject(e) && e.title === title);
+          if (existing === undefined) continue;
+          if (existing.type !== "string") {
+            problems.push(`${where}: input ${title} has type ${JSON.stringify(existing.type) ?? "none"}; the loader needs a string`);
+          } else if (want !== undefined && existing.default !== want) {
+            problems.push(`${where}: input ${title} has default ${JSON.stringify(existing.default) ?? "none"}; the loader needs ${JSON.stringify(want)}`);
+          }
+        }
+      }
     }
   }
   return problems;
@@ -929,6 +985,56 @@ describe("the gate refuses what the loader refuses (cinatra#4314)", () => {
     const nullEdges = agent(["a"], {});
     nullEdges.data_flow_connections = null;
     expect(wiringProblems(nullEdges, CTX_PKG)).toContain("data_flow_connections is not an array");
+  });
+
+  it("refuses a slot count it cannot read exactly", () => {
+    const unsafe = agent(["a"], {});
+    Object.assign(slot(unsafe)[0], JSON.parse('{"minItems": 9007199254740993, "maxItems": 9007199254740992}'));
+    expect(wiringProblems(unsafe, CTX_PKG)).toContain(
+      "contextSlots[0]: minItems is outside the safe integer range, which this gate cannot read exactly",
+    );
+    expect(hasContextResolution(unsafe, CTX_PKG)).toBe(false);
+    const big = agent(["a"], {});
+    slot(big)[0].maxItems = Number.MAX_SAFE_INTEGER + 1;
+    expect(wiringProblems(big, CTX_PKG)).toContain(
+      "contextSlots[0]: maxItems is outside the safe integer range, which this gate cannot read exactly",
+    );
+    const edge = agent(["a"], {});
+    slot(edge)[0].minItems = 0;
+    slot(edge)[0].maxItems = Number.MAX_SAFE_INTEGER;
+    expect(wiringProblems(edge, CTX_PKG)).toEqual([]);
+  });
+
+  it("refuses a hidden input the loader cannot add", () => {
+    const cases: Array<[(doc: Ref) => void, string]> = [
+      [(d) => { d.inputs = {}; }, "the definition: inputs is not an array; the loader refuses the injection"],
+      [(d) => { components(d).start.inputs = null; }, "start node start: inputs is not an array; the loader refuses the injection"],
+      [(d) => { d.inputs = [{ title: "cinatra_run_id", type: "integer" }]; }, 'the definition: input cinatra_run_id has type "integer"; the loader needs a string'],
+      [(d) => { components(d).start.inputs = [{ title: "projectId" }]; }, "start node start: input projectId has type none; the loader needs a string"],
+      [(d) => { d.inputs = [{ title: "aParentPackageName", type: "string", default: "@cinatra-ai/other-agent" }]; }, 'the definition: input aParentPackageName has default "@cinatra-ai/other-agent"; the loader needs "@cinatra-ai/synthetic-agent"'],
+      [(d) => { components(d).start.inputs = [{ title: "aSlotId", type: "string" }]; }, 'start node start: input aSlotId has default none; the loader needs "a"'],
+    ];
+    for (const [change, problem] of cases) {
+      const doc = agent(["a"], {});
+      change(doc);
+      expect(wiringProblems(doc, CTX_PKG)).toContain(problem);
+      expect(hasContextResolution(doc, CTX_PKG)).toBe(false);
+    }
+    // Compatible inputs are reused as they are.
+    const fits = agent(["a"], {});
+    const compatible = [
+      { title: "cinatra_run_id", type: "string", default: "run" },
+      { title: "projectId", type: "string" },
+      { title: "aParentPackageName", type: "string", default: "@cinatra-ai/synthetic-agent" },
+      { title: "aSlotId", type: "string", default: "a" },
+    ];
+    fits.inputs = structuredClone(compatible);
+    components(fits).start.inputs = structuredClone(compatible);
+    expect(wiringProblems(fits, CTX_PKG)).toEqual([]);
+    // The loader adds no input for an author-placed slot, so it reads none.
+    const placed = agent(["a"], { a: "contextSlotBindings" });
+    placed.inputs = {};
+    expect(wiringProblems(placed, CTX_PKG)).toEqual([]);
   });
 
   it("reads a component reference given as a plain string", () => {
