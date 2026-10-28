@@ -34,8 +34,10 @@ import {
 // The brand-voice read that blog-draft-writer-agent#50 and
 // blog-image-generator-agent#6 add (cinatra#4314): one more ApiNode, the typed
 // extension-tool read of the brand voice picked for the run. Its URL, method and
-// body are the one shape the text-leaf parity gate admits besides the bridge
-// (packages/extensions/src/__tests__/blog-text-parity.test.ts, BRAND_VOICE_READ).
+// body are the one further call shape that the text-leaf parity gate admits
+// beside its allowlisted endpoints (the bridge, /api/context-resolve and
+// /api/context-finalize): packages/extensions/src/__tests__/blog-text-parity.test.ts,
+// ALLOWED_API_URLS and BRAND_VOICE_READ.
 const BRIDGE_URL = "{{CINATRA_BASE_URL}}/api/llm-bridge";
 const BRAND_VOICE_READ_URL = "{{CINATRA_BASE_URL}}/api/agents/passthrough";
 const BRAND_VOICE_READ_DATA = {
