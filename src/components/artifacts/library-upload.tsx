@@ -58,6 +58,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  Command,
+  CommandDialog,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
   assertUploadMeaning,
   installArtifactPackInline,
   listArtifactMarketplacePacks,
@@ -478,14 +484,33 @@ function UploadRefusedPanel() {
 
 function UploadDialogs() {
   const { dialog, closeDialog } = useUpload();
+  // The type picker is a CommandDialog of its own (spec §Command menu: "<Command
+  // />, <CommandDialog />"), so only the marketplace tab keeps the plain Dialog.
   return (
-    <Dialog open={dialog !== null} onOpenChange={(o) => (o ? null : closeDialog())}>
-      <DialogContent className="max-w-xl gap-0 p-0">
-        {dialog === "picker" ? <TypePickerPanel /> : null}
-        {dialog === "marketplace" ? <MarketplaceTabPanel /> : null}
-      </DialogContent>
-    </Dialog>
+    <>
+      {dialog === "picker" ? <TypePickerPanel /> : null}
+      <Dialog
+        open={dialog === "marketplace"}
+        onOpenChange={(o) => (o ? null : closeDialog())}
+      >
+        <DialogContent className="max-w-xl gap-0 p-0">
+          {dialog === "marketplace" ? <MarketplaceTabPanel /> : null}
+        </DialogContent>
+      </Dialog>
+    </>
   );
+}
+
+/** cmdk's controlled value while no row is chosen. cmdk highlights its FIRST
+ *  row by itself whenever its value is empty, and the picker ties the highlight
+ *  to the choice, so an empty value would choose a type nobody chose. No row
+ *  carries this value, so nothing is highlighted until a person chooses. */
+const NO_CHOICE = "__artifacts-picker-no-choice__";
+
+/** A row's own identity in the list: its object type id, or the extension of a
+ *  matcher-manifest surface that mints no type. */
+function rowKey(t: InstalledMeaningType): string {
+  return t.objectTypeId ?? t.extension;
 }
 
 function TypePickerPanel() {
@@ -494,6 +519,7 @@ function TypePickerPanel() {
   const [types, setTypes] = useState<InstalledMeaningType[] | null>(null);
   const [serverMime, setServerMime] = useState<string>("");
   const [error, setError] = useState(false);
+  // The chosen ROW (its rowKey); Confirm asserts that row's extension.
   const [selected, setSelected] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<PickerMeaningSuggestion[]>([]);
   const [busy, setBusy] = useState(false);
@@ -519,8 +545,11 @@ function TypePickerPanel() {
           // picker pre-selected on it — only when it is an offered type, and
           // never over a choice the person already made.
           const preselect = r.meaning?.preselect ?? null;
-          if (preselect && r.types.some((t) => t.extension === preselect)) {
-            setSelected((current) => current ?? preselect);
+          const preselected = preselect
+            ? r.types.find((t) => t.extension === preselect)
+            : undefined;
+          if (preselected) {
+            setSelected((current) => current ?? rowKey(preselected));
           }
           setSuggestions(
             (r.meaning?.suggestions ?? []).filter((s) =>
@@ -537,10 +566,12 @@ function TypePickerPanel() {
     };
   }, [artifactId]);
 
+  const chosenExtension =
+    types?.find((t) => rowKey(t) === selected)?.extension ?? null;
   // Confirms the list's choice, or — from a suggestion chip — the chip's own
   // extension: either way a USER-sourced meaning (§VI.1), never the draft.
   const confirm = useCallback(async (chosen?: string) => {
-    const extension = chosen ?? selected;
+    const extension = chosen ?? chosenExtension;
     if (!extension || !artifactId || busy) return;
     setBusy(true);
     let r: Awaited<ReturnType<typeof assertUploadMeaning>>;
@@ -567,124 +598,172 @@ function TypePickerPanel() {
     } else {
       toast.error(r.message);
     }
-  }, [selected, artifactId, busy, closeDialog, router]);
+  }, [chosenExtension, artifactId, busy, closeDialog, router]);
+
+  // The dialog's accessible name and description are CommandDialog's own
+  // (screen-reader only); the drawn header below repeats them for the eye.
+  const description = `Assert what ${filename} means. This sets its meaning, not its file kind${
+    mime ? ` (${mime})` : ""
+  }.`;
 
   return (
-    <div
-      data-conformance-id="artifacts-type-picker"
-      data-field="type=installedTypes.accepting-mime"
-      data-action="assert-meaning -> meaning-asserted"
-      data-state={error ? "error" : types === null ? "loading" : undefined}
+    <CommandDialog
+      open
+      onOpenChange={(o) => (o ? null : closeDialog())}
+      title="What is this?"
+      description={description}
+      showCloseButton
+      // The palette's own placement and radius give way to the picker's
+      // drawing: centred like every other dialog, 8px corners (§VI.1).
+      className="top-1/2 -translate-y-1/2 rounded-[8px]! max-w-xl gap-0"
     >
-      <DialogHeader className="border-b border-line px-3.5 py-3 text-left">
-        <DialogTitle className="text-sm font-bold">What is this?</DialogTitle>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          Assert what <b className="text-foreground">{filename}</b> means. This sets its
-          meaning, not its file kind
-          {mime ? (
-            <>
-              {" "}
-              (
-              <span className="rounded-full border border-line bg-surface-muted px-1.5 py-0.5 font-mono text-badge-2xs">
-                {mime}
-              </span>
-              )
-            </>
-          ) : null}
-          .
-        </p>
-      </DialogHeader>
-      <div className="px-3.5 py-3">
-        {/* Suggested (§VI.1) — the matcher drafts that did not auto-surface,
-            each confirmable as a user-sourced meaning. Rendered only when the
-            row carries one. */}
-        <SuggestedMeaningChips
-          suggestions={suggestions}
-          disabled={busy}
-          onConfirm={(extension) => void confirm(extension)}
-        />
+      <div
+        data-conformance-id="artifacts-type-picker"
+        data-field="type=installedTypes.accepting-mime"
+        data-action="assert-meaning -> meaning-asserted"
+        data-state={error ? "error" : types === null ? "loading" : undefined}
+      >
+        <DialogHeader
+          aria-hidden="true"
+          className="border-b border-line px-3.5 py-3 text-left"
+        >
+          <div className="text-sm leading-none font-bold">What is this?</div>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Assert what <b className="text-foreground">{filename}</b> means. This sets its
+            meaning, not its file kind
+            {mime ? (
+              <>
+                {" "}
+                (
+                <span className="rounded-full border border-line bg-surface-muted px-1.5 py-0.5 font-mono text-badge-2xs">
+                  {mime}
+                </span>
+                )
+              </>
+            ) : null}
+            .
+          </p>
+        </DialogHeader>
+        <div className="px-3.5 py-3">
+          {/* Suggested (§VI.1) — the matcher drafts that did not auto-surface,
+              each confirmable as a user-sourced meaning. Rendered only when the
+              row carries one. */}
+          <SuggestedMeaningChips
+            suggestions={suggestions}
+            disabled={busy}
+            onConfirm={(extension) => void confirm(extension)}
+          />
 
-        <div className="mb-2 font-mono text-badge-2xs uppercase tracking-kicker-wide text-muted-foreground">
-          Installed types that accept {mimeShortLabel(mime)}
-        </div>
-        {error ? (
-          <p className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-4 text-xs text-destructive">
-            Couldn&apos;t load installed types. Close and try again.
-          </p>
-        ) : types === null ? (
-          <p className="rounded-lg border border-line px-3 py-4 text-xs text-muted-foreground">
-            Loading installed types…
-          </p>
-        ) : types.length === 0 ? (
-          <p className="rounded-lg border border-line px-3 py-4 text-xs text-muted-foreground">
-            No installed type accepts this file. Find one in the marketplace.
-          </p>
-        ) : (
-          // The list carries every installed type that accepts the file, so on
-          // an instance with many of them it is the picker's tallest region. It
-          // scrolls inside its own box so the action row below it stays inside
-          // the window and the admin can always confirm the meaning.
-          <ul
-            className="max-h-[45vh] overflow-y-auto rounded-lg border border-line"
-            role="radiogroup"
-            aria-label="What is this?"
-          >
-            {types.map((t, i) => (
-              <li
-                key={t.objectTypeId ?? t.extension}
-                role="radio"
-                aria-checked={selected === t.extension}
-                aria-label={`${t.displayName} ${t.objectTypeId ?? t.extension} ${t.extensionLabel}`}
-                className={
-                  "flex cursor-pointer items-center gap-2.5 px-3 py-2.5 " +
-                  (i === types.length - 1 ? "" : "border-b border-line ") +
-                  (selected === t.extension ? "bg-primary/5" : "")
-                }
-                onClick={() => setSelected(t.extension)}
-                data-testid="artifacts-picker-type"
-                data-selected={selected === t.extension ? "true" : "false"}
-              >
-                <span className="flex-1 font-sans text-xs text-foreground">
-                  {t.displayName}{" "}
-                  <span className="font-mono text-badge-2xs text-muted-foreground">
-                    {t.objectTypeId ?? t.extension}
-                  </span>
-                </span>
-                <span className="rounded border border-line bg-surface-muted px-1.5 py-0.5 text-badge-2xs text-muted-foreground">
-                  {t.extensionLabel}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-        <div className="mt-3.5 flex items-center justify-between gap-2.5">
-          <Button
-            type="button"
-            variant="link"
-            className="h-auto p-0 text-xs"
-            onClick={() => openMarketplace("picker")}
-            data-action="open-marketplace-tab -> marketplace-open"
-            data-testid="artifacts-picker-none-of-these"
-          >
-            None of these — find a type…
-          </Button>
-          <div className="flex gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={closeDialog}>
-              Keep as file
-            </Button>
+          {/* Section labels in 10px mono (§Command menu). */}
+          <div className="mb-2 font-mono text-badge-xs uppercase tracking-kicker-wide text-muted-foreground">
+            Installed types that accept {mimeShortLabel(mime)}
+          </div>
+          {error ? (
+            <p className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-4 text-xs text-destructive">
+              Couldn&apos;t load installed types. Close and try again.
+            </p>
+          ) : types === null ? (
+            <p className="rounded-lg border border-line px-3 py-4 text-xs text-muted-foreground">
+              Loading installed types…
+            </p>
+          ) : types.length === 0 ? (
+            <p className="rounded-lg border border-line px-3 py-4 text-xs text-muted-foreground">
+              No installed type accepts this file. Find one in the marketplace.
+            </p>
+          ) : (
+            // The Command menu's inline picker (§Command menu). The highlighted
+            // row IS the chosen row: the value is controlled by the choice, the
+            // arrow keys move it, a press chooses, and a passing pointer does
+            // not (disablePointerSelection). No search: the list is the
+            // drawing's whole offer. The root takes the keyboard focus; the
+            // foot's buttons stay OUTSIDE it, because cmdk's root keeps Enter
+            // for its own rows.
+            //
+            // The list carries every installed type that accepts the file, so on
+            // an instance with many of them it is the picker's tallest region. It
+            // scrolls inside its own box so the action row below it stays inside
+            // the window and the admin can always confirm the meaning.
+            <Command
+              value={selected ?? NO_CHOICE}
+              onValueChange={(v) => {
+                if (types.some((t) => rowKey(t) === v)) setSelected(v);
+              }}
+              shouldFilter={false}
+              disablePointerSelection
+              tabIndex={0}
+              className="rounded-lg! border border-line bg-transparent p-0 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            >
+              <CommandList label="What is this?" className="max-h-[45vh]">
+                {types.map((t) => {
+                  const key = rowKey(t);
+                  const chosen = selected === key;
+                  return (
+                    <CommandItem
+                      key={key}
+                      value={key}
+                      onSelect={() => setSelected(key)}
+                      aria-checked={chosen}
+                      aria-label={`${t.displayName} ${t.objectTypeId ?? t.extension} ${t.extensionLabel}`}
+                      data-testid="artifacts-picker-type"
+                      // One row in the soft indigo tint, the chosen one, and no
+                      // border (§Command menu). cmdk stamps data-selected on
+                      // EVERY row ("false" on the others), and the shared item
+                      // tints on the attribute's presence, so the row clears that
+                      // tint and keys its own on "true". The rows keep the
+                      // drawing's rules between them and its square corners; the
+                      // item's trailing check is not part of this drawing.
+                      className={
+                        "cursor-pointer gap-2.5 rounded-none! border-b border-line px-3 py-2.5 last:border-b-0 " +
+                        "in-data-[slot=dialog-content]:rounded-none! " +
+                        "data-selected:bg-transparent data-[selected=true]:bg-primary/5! " +
+                        "[&>svg:last-child]:hidden"
+                      }
+                    >
+                      {/* Rows at 13px (§Command menu). */}
+                      <span className="flex-1 font-sans text-row-title text-foreground">
+                        {t.displayName}{" "}
+                        <span className="font-mono text-badge-2xs text-muted-foreground">
+                          {t.objectTypeId ?? t.extension}
+                        </span>
+                      </span>
+                      <span className="rounded border border-line bg-surface-muted px-1.5 py-0.5 text-badge-2xs text-muted-foreground">
+                        {t.extensionLabel}
+                      </span>
+                    </CommandItem>
+                  );
+                })}
+              </CommandList>
+            </Command>
+          )}
+          <div className="mt-3.5 flex items-center justify-between gap-2.5">
             <Button
               type="button"
-              size="sm"
-              disabled={!selected || busy}
-              onClick={() => void confirm()}
-              data-testid="artifacts-picker-confirm"
+              variant="link"
+              className="h-auto p-0 text-xs"
+              onClick={() => openMarketplace("picker")}
+              data-action="open-marketplace-tab -> marketplace-open"
+              data-testid="artifacts-picker-none-of-these"
             >
-              Confirm
+              None of these — find a type…
             </Button>
+            <div className="flex gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={closeDialog}>
+                Keep as file
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={!chosenExtension || busy}
+                onClick={() => void confirm()}
+                data-testid="artifacts-picker-confirm"
+              >
+                Confirm
+              </Button>
+            </div>
           </div>
         </div>
       </div>
-    </div>
+    </CommandDialog>
   );
 }
 
@@ -700,7 +779,8 @@ function SuggestedMeaningChips({
   if (suggestions.length === 0) return null;
   return (
     <>
-      <div className="mb-2 font-mono text-badge-2xs uppercase tracking-kicker-wide text-muted-foreground">
+      {/* Section labels in 10px mono (§Command menu). */}
+      <div className="mb-2 font-mono text-badge-xs uppercase tracking-kicker-wide text-muted-foreground">
         Suggested
       </div>
       <div className="mb-3.5 flex flex-wrap gap-2">
