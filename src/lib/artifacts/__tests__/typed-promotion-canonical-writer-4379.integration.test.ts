@@ -319,9 +319,11 @@ async function cleanUpOwned(): Promise<void> {
 /**
  * Whether SQL text names `public` as a qualifier (`public.x` or `"public".x`).
  * LEXICAL, and used only to leave statements out: a form it misses (a comment
- * between the tokens, for one) runs, and the catalog check below fails the run
- * only if that statement changed a kind of object the check reads. A qualifier
- * never follows a dot, slash, colon, `@` or hyphen.
+ * between the tokens, for one) runs when the statement begins with one of the
+ * four heads setup runs, and the catalog check below then fails the run if that
+ * statement changed an entry the check reads and the change is in place at a
+ * later read. The matcher takes no qualifier that follows a dot, slash, colon,
+ * `@` or hyphen.
  */
 const namesPublic = (text: string): boolean => /(^|[^\w$".\/:@-])"?public"?\s*\./i.test(text);
 
@@ -531,7 +533,9 @@ beforeAll(async () => {
       const head = qy.text.trim().slice(0, 6).toUpperCase();
       if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S") continue;
       // The slug columns, indexes and triggers on the Better Auth tables: shared
-      // objects of every run and of the application. Never run here.
+      // objects of every run and of the application. A statement whose text
+      // names `public` in a form `namesPublic` matches is not run here; one that
+      // names it in a form the match misses runs (see `namesPublic`).
       if (namesPublic(qy.text)) {
         leftOut.push(qy.text.trim().split("\n")[0]);
         continue;
@@ -600,10 +604,11 @@ afterAll(async () => {
   if (!HAS_REAL_DB) return;
   delete (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized;
   // The catalog outside the run after the cases, then the cleanup, then the
-  // catalog again (it reports what a CASCADE drop removed outside the run when
-  // that was in place at an earlier read; an object made after the read after
-  // the cases and dropped by the CASCADE is not seen), then the tier lock is
-  // released. Each step is tried; each step's failure is reported.
+  // catalog again (it cannot report an object that the CASCADE drop removed
+  // outside the run: the read after setup or after the cases reports such an
+  // object if it was in place then, and one made after the read after the cases
+  // and dropped by the CASCADE is not seen), then the tier lock is released.
+  // Each step is tried; each step's failure is reported.
   const failures: unknown[] = [];
   const steps: Array<() => Promise<void>> = [
     () => assertCatalogUnchanged("the cases"),
