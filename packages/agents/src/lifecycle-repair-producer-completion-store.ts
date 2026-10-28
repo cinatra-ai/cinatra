@@ -26,18 +26,23 @@ import "server-only";
 // other producer core repairs. Those repairs sat `dispatched` forever with their
 // production unclaimed, which is precisely the reading the capture photographed.
 //
-// This drain is the generic completer. It mirrors the CMS one exactly — same
-// bounded, per-row-isolated, best-effort shape; same live re-authorization of
-// the originating human; same refusal to finalize on nothing — and differs in
-// one way only: it claims the production by the REPAIR RUN's own id rather than
-// by a resource identity, because a producer that is not writing into a CMS has
-// no second identity to match on. What the repair run produced IS the answer to
-// the repair, for the same reason the run was minted at all.
+// This drain is the generic completer. It follows the CMS one in its bounded,
+// per-row-isolated, best-effort shape, in the live re-authorization of the
+// originating human, and in its refusal to finalize on nothing. It differs
+// from the CMS one in how it claims the production: by the REPAIR RUN's own id
+// rather than by a resource identity, because a producer that is not writing
+// into a CMS has no second identity to match on. What the repair run produced
+// IS the answer to the repair, for the same reason the run was minted at all.
+// The CMS completer also differed in other ways: it took the matching capture
+// itself as the successor instead of re-filing an answer onto the base, it
+// attempted the repaired-picture capture and counted its outcomes, and it read
+// the settled repair again to verify that picture's successor binding.
 //
-// THE ONLY COMPLETER (cinatra#3862 leg 7). It used to leave a repair whose base
-// target was a captured CMS snapshot to the CMS bridge's completer. That
-// completer is retired, so this drain completes every dispatched repair, a
-// captured CMS snapshot's included, on the one rule above. (The dispatch drain
+// THE ONE COMPLETER THE SWEEP RUNS (cinatra#3862 leg 7). It used to leave a
+// repair whose base target was a captured CMS snapshot to the CMS bridge's
+// completer. The maintenance sweep no longer runs that completer, so this drain
+// takes every dispatched repair into its candidates, a captured CMS snapshot's
+// included, on the one rule above. (The dispatch drain
 // still asks the bridge for a CMS base's `instructions`, the reviewer's findings;
 // that stays until each producer declares its own projection.)
 //
@@ -218,11 +223,15 @@ async function resolveCurrentBaseRevisionId(
 }
 
 /**
- * Complete every DISPATCHED `producer_repair` repair whose repair run has done
- * its work — opening the successor gate the drawing requires.
+ * Complete the DISPATCHED `producer_repair` repairs, within the candidate window
+ * below, whose repair run has done its work — opening the successor gate the
+ * drawing requires.
  *
- * Best-effort and per-row isolated, exactly like the dispatch drain it follows:
- * one row's failure never blocks the rest, and this function never throws.
+ * Best-effort and per-row isolated, like the dispatch drain it follows: one
+ * row's failure does not block the rest, and no error from a row's own work
+ * leaves this function. The candidate queries run outside that per-row guard,
+ * so a rejection of theirs does reach the caller; the maintenance sweep catches
+ * it.
  */
 export async function completeDispatchedProducerRepairs(opts?: {
   limit?: number;
