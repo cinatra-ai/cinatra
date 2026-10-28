@@ -545,15 +545,16 @@ describe("the drivers of a row's fields, one per name from every declaration", (
     }
   });
 
-  it("reads a name continued wherever its only continued declaration stands among three of that name", () => {
-    for (const fields of [
-      [d("a", "x.a", "no-review"), d("a", "x.a", "continued"), d("a", "x.a", "no-review")],
-      [d("a", "x.a", "continued"), d("a", "x.a", "no-review"), d("a", "x.a", "no-review")],
-      [d("a", "x.a", "no-review"), d("a", "x.a", "no-review"), d("a", "x.a", "continued")],
-    ]) {
-      expect(kindDisplayFieldDrivers("s", fields, tagged)).toEqual({
-        a: { source: "x.a", assert: ["continuedOnly", '[data-field="a=x.a"]'] },
-      });
+  it("reads a name continued wherever its one continued declaration stands among two to six of that name", () => {
+    for (let count = 2; count <= 6; count += 1) {
+      for (let at = 0; at < count; at += 1) {
+        const fields = Array.from({ length: count }, (_, i) =>
+          d("a", "x.a", i === at ? "continued" : "no-review"),
+        );
+        expect(kindDisplayFieldDrivers("s", fields, tagged), `continued at ${at} of ${count}`).toEqual({
+          a: { source: "x.a", assert: ["continuedOnly", '[data-field="a=x.a"]'] },
+        });
+      }
     }
   });
 
