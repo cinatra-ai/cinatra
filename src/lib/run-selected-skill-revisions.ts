@@ -339,10 +339,17 @@ export type RunRejectedRecommendationInput = {
 };
 
 /**
- * The ONE rejected-rows INSERT, as a statement rather than as a call. Shared by
- * the standalone writer below and by the transactional skip write further down,
- * so both halves of the efficacy split speak exactly the same SQL and neither
- * can drift into a different conflict rule.
+ * The rejected-rows INSERT, as a statement rather than as a call. Shared by the
+ * standalone writer below and by the UNGUARDED form of the transactional skip
+ * write further down, so both speak exactly the same SQL.
+ *
+ * The GUARDED skip write (`beforeStart`, cinatra#3062) does not use it: each of
+ * its statements must repeat the pre-start predicate, so it carries its own
+ * `INSERT ... SELECT ... FROM (VALUES ...) WHERE <pre-start>` with the same
+ * columns and the same `ON CONFLICT (run_id, skill_id) DO NOTHING`. A change to
+ * either statement must be made to both. The integration arms in
+ * skills-step-freeze-follows-the-run.integration.test.ts hold the guarded form
+ * to the same values and the same first-write-wins rule.
  */
 function buildRejectedRecommendationsInsert(
   schema: string,
