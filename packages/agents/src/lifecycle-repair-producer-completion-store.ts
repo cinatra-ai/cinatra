@@ -37,7 +37,9 @@ import "server-only";
 // THE ONLY COMPLETER (cinatra#3862 leg 7). It used to leave a repair whose base
 // target was a captured CMS snapshot to the CMS bridge's completer. That
 // completer is retired, so this drain completes every dispatched repair, a
-// captured CMS snapshot's included, on the one rule above.
+// captured CMS snapshot's included, on the one rule above. (The dispatch drain
+// still asks the bridge for a CMS base's `instructions`, the reviewer's findings;
+// that stays until each producer declares its own projection.)
 //
 // NOTHING SILENTLY DROPS, and nothing silently finalizes. A repair run still
 // working is `pending` and re-checked next pass. A run that reached a terminal
@@ -63,8 +65,8 @@ import {
 } from "@/lib/artifacts/artifact-revision-append";
 
 /** The CMS-snapshot capture emitter, the one emitter this drain does not claim.
- * Its rows were the answers the retired CMS bridge matched on a resource
- * identity; this drain claims by run id only and keeps them out of that claim,
+ * Its rows were the answers the CMS bridge's retired completer matched on a
+ * resource identity; this drain claims by run id only and keeps them out of that claim,
  * so a host capture is never re-filed as a run's answer. The literal mirrors the
  * host's `CMS_SNAPSHOT_EMITTER`: an agents-package leaf must not pull the host's
  * blob-store-backed capture writer into its graph for one string. */

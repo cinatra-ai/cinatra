@@ -5,8 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // and its three counters are gone. Every collaborator of the sweep is replaced:
 // the database answers every read and write with an empty list, the earlier
 // steps find nothing to do, and the generic completer only records that it ran
-// (in a shared order list) and answers fixed counts. The retired CMS bridge is
-// mocked only as a witness: loading it records "cms". No database.
+// (in a shared order list) and answers fixed counts. The CMS bridge is mocked
+// only as a witness: loading it records "cms". The dispatch step, the one road
+// that still loads the bridge, is mocked above, so only a completion step could
+// load it here. No database.
 //
 // The sweep is imported INSIDE the case; the mocks are registered per case
 // (vi.doMock) and removed after it (vi.doUnmock + resetModules), so nothing this

@@ -7,8 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // are spies. No database, no run, no queue.
 //
 // cinatra#3862 leg 7 (slice 2): the completer takes EVERY dispatched repair. The
-// retired CMS bridge stays mocked here only as a witness: its ownership read is
-// never asked, and in the second case the module refuses to load at all.
+// CMS bridge (its completer is retired) stays mocked here only as a witness: its
+// ownership read is never asked, and in the second case the module refuses to
+// load at all.
 //
 // The completer is imported INSIDE each case, so a module that does not exist
 // fails the case rather than the file's collection. The mocks are registered

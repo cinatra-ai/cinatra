@@ -25,8 +25,8 @@
  * (`lifecycle-repair-cms-production-bridge.ts`), so re-driving those rungs under
  * a Drupal name would duplicate a proof rather than add one. What is genuinely
  * Drupal-specific — and what the pin is FOR — is everything up to and including
- * the dispatch. That is exactly this suite's scope. (The CMS task text naming
- * the Drupal node left the dispatch in cinatra#3862 leg 7, slice 2.)
+ * the dispatch, plus the CMS task text naming the Drupal node the repair must
+ * re-drive. That is exactly this suite's scope.
  *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided.
  */
@@ -330,7 +330,7 @@ describe.skipIf(!HAS_DB)("cinatra#2046 — the Drupal repair producer (pin activ
   });
 
   it("PINNED: with the release's declared lifecycle block, the SAME drive routes producer_repair and dispatches to the drupal-agent template", async () => {
-    const { cr, base } = await driveDrupalChangesRequest(DRUPAL_AGENT_LIFECYCLE);
+    const { cr, resourceId } = await driveDrupalChangesRequest(DRUPAL_AGENT_LIFECYCLE);
     if (!cr.ok) throw new Error("unreachable");
 
     // THE PIN'S WHOLE POINT: the route flips off the manifest declaration alone.
@@ -356,15 +356,14 @@ describe.skipIf(!HAS_DB)("cinatra#2046 — the Drupal repair producer (pin activ
     expect(run.template_id).toBe(drupalTemplateId);
     expect(run.source_type).toBe("lifecycle_repair");
 
-    // The dispatched run carries the delivered request. It carries no CMS task
-    // text naming the node any more (cinatra#3862 leg 7, slice 2: the dispatch
-    // drain no longer projects it); the request names the reviewed base.
+    // The dispatched run carries the delivered request, and the CMS task text
+    // names the DRUPAL node the repair has to re-drive.
     const inputParams = JSON.parse(run.input_params) as {
       task?: string;
-      lifecycleRepairRequest?: { baseTarget?: { artifactId?: string } };
+      lifecycleRepairRequest?: unknown;
     };
-    expect(inputParams.lifecycleRepairRequest?.baseTarget?.artifactId).toBe(base.artifactId);
-    expect(inputParams.task).toBeUndefined();
+    expect(inputParams.lifecycleRepairRequest).toBeDefined();
+    expect(inputParams.task).toContain(resourceId);
 
     const row = await repairRow(cr.repairId);
     expect(row!.route).toBe("producer_repair");

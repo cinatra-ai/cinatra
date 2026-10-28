@@ -455,8 +455,7 @@ describe.skipIf(!HAS_DB)("cinatra#2286 S10 PR4 — the WordPress CMS repair roun
   it("ROUND TRIP: request-changes → producer repair → repaired capture → re-review → approve → apply released → read-back binding", async () => {
     const ctx = await driveToDispatchedWordPressRepair();
 
-    // The dispatched run carries the delivered request, and no CMS task text
-    // (cinatra#3862 leg 7, slice 2: the dispatch drain no longer projects it).
+    // The dispatched run carries the delivered request + the CMS task text.
     const runRow = await pool(
       `SELECT input_params FROM "${q(TEST_SCHEMA)}"."agent_runs" WHERE id=$1`,
       [ctx.repairRunId],
@@ -466,7 +465,7 @@ describe.skipIf(!HAS_DB)("cinatra#2286 S10 PR4 — the WordPress CMS repair roun
       lifecycleRepairRequest?: unknown;
     };
     expect(inputParams.lifecycleRepairRequest).toBeDefined();
-    expect(inputParams.task).toBeUndefined();
+    expect(inputParams.task).toContain(ctx.resourceId);
 
     // The producer answers: a fresh re-staged capture on the same CMS resource.
     const repaired = await mintRepairedProduction(ctx);
