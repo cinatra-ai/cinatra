@@ -3,10 +3,11 @@
 // contract.ts builds one driver per field name of an artifact-kind display row.
 // This module groups a row's declarations by field name (kindDisplayFieldDrivers),
 // decides which reading each name's driver reads (kindDisplayFieldReading) and
-// which of the three assertions it gets for that reading (kindDisplayFieldDriver). It has no Playwright import, so that the wave test
+// which of the three assertions it gets for that reading (kindDisplayFieldDriver).
+// It has no Playwright import, so that the wave test
 // (scripts/design/__tests__/conformance-artifact-review-wave.test.mjs) can call
-// both on every branch without a browser; contract.ts supplies the three
-// assertions themselves.
+// all three functions on every branch without a browser; contract.ts supplies
+// the three assertions themselves.
 
 import type { ArtifactKindDisplayField } from "./artifact-review-displays";
 

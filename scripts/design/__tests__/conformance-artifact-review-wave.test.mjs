@@ -179,6 +179,12 @@ describe("the row check refuses each row no one driver can read", () => {
     expect(unreadableFieldNames(row(d("  ", "continued")))).toEqual(["s.open-live"]);
   });
 
+  it("refuses a field whose source is not a string", () => {
+    expect(unreadableFieldNames(row(d(undefined, "continued")))).toEqual(["s.open-live"]);
+    expect(unreadableFieldNames(row({ name: "open-live", reading: "continued" }))).toEqual(["s.open-live"]);
+    expect(unreadableFieldNames(row(d(42, "continued")))).toEqual(["s.open-live"]);
+  });
+
   it("reads a field declared continued and where no review stands, bound to one source", () => {
     expect(
       unreadableFieldNames(
