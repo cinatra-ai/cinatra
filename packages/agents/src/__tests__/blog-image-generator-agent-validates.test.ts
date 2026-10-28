@@ -10,7 +10,9 @@
  * Additionally enforces the shape wave P3 of cinatra#3034 gives this agent: it
  * takes the draft post and nothing that asks for more than one picture, its
  * placement is the featured image and is fixed by schema, it returns ONE image
- * record rather than a list, and its bridge node attaches no toolbox. The
+ * record rather than a list, and its bridge node attaches no toolbox. Beside
+ * the bridge node it has exactly one other ApiNode: the brand-voice read
+ * `read_brand_voice` of blog-image-generator-agent#6. The
  * predecessor of this package — `blog-image-prompt-agent` — wrote LISTS of
  * prompts; it is retired from the blog flow, and stays pinned only until the
  * pipeline package that still requires it is re-pinned.
@@ -28,6 +30,31 @@ import {
   scanOasForStartNodeInputsWithoutRequired,
   validateOasAgentJson,
 } from "../validate-agent-json";
+
+// The brand-voice read that blog-draft-writer-agent#50 and
+// blog-image-generator-agent#6 add (cinatra#4314): one more ApiNode, the typed
+// extension-tool read of the brand voice picked for the run. Its URL, method and
+// body are the one shape the text-leaf parity gate admits besides the bridge
+// (packages/extensions/src/__tests__/blog-text-parity.test.ts, BRAND_VOICE_READ).
+const BRIDGE_URL = "{{CINATRA_BASE_URL}}/api/llm-bridge";
+const BRAND_VOICE_READ_URL = "{{CINATRA_BASE_URL}}/api/agents/passthrough";
+const BRAND_VOICE_READ_DATA = {
+  tool: "extension_tool",
+  input: { name: "brand_voice_text", input: { bindings: "{{ brandVoiceContextSlotBindings }}" } },
+  agent_run_id: "{{ cinatra_run_id }}",
+};
+
+const expectBrandVoiceRead = (node: Record<string, unknown>): void => {
+  expect(node.id).toBe("read_brand_voice");
+  expect(node.url).toBe(BRAND_VOICE_READ_URL);
+  expect(node.http_method).toBe("POST");
+  // The exact body: the one read-only tool, its bindings from the brand-voice
+  // slot, and no toolbox_ids key (no toolbox joins a passthrough read).
+  expect(node.data).toEqual(BRAND_VOICE_READ_DATA);
+  expect(node).not.toHaveProperty("toolbox_ids");
+  const inputs = (node.inputs as Array<Record<string, unknown>>).map((i) => i.title);
+  expect(inputs).toContain("brandVoiceContextSlotBindings");
+};
 
 const oasPath = path.resolve(
   __dirname,
@@ -87,11 +114,16 @@ describe("blog-image-generator-agent OAS validates against agent schema and meta
     ]);
   });
 
-  it("has exactly one ApiNode targeting templated /api/llm-bridge, with an empty toolbox list", () => {
+  it("has exactly two ApiNodes: the brand-voice read and one targeting templated /api/llm-bridge, with an empty toolbox list", () => {
     const apiNodes = Object.values(refs).filter((c) => c.component_type === "ApiNode");
-    expect(apiNodes).toHaveLength(1);
-    const apiNode = apiNodes[0]!;
-    expect(apiNode.url).toBe("{{CINATRA_BASE_URL}}/api/llm-bridge");
+    expect(apiNodes).toHaveLength(2);
+    const bridgeNodes = apiNodes.filter((c) => c.url === BRIDGE_URL);
+    const otherNodes = apiNodes.filter((c) => c.url !== BRIDGE_URL);
+    expect(bridgeNodes).toHaveLength(1);
+    expect(otherNodes).toHaveLength(1);
+    expectBrandVoiceRead(otherNodes[0]!);
+    const apiNode = bridgeNodes[0]!;
+    expect(apiNode.url).toBe(BRIDGE_URL);
     expect(apiNode.http_method).toBe("POST");
     const data = apiNode.data as Record<string, unknown>;
     expect(data.agent_id).toBe("blog-image-generator-agent");
