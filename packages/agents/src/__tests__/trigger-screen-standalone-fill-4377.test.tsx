@@ -36,12 +36,19 @@ vi.mock("../use-run-window-conversation", () => ({
 }));
 
 // The window's panel stands in as one control that sends a message, the way
-// the drawn panel calls `onSubmit` with what the person typed.
+// the drawn panel calls `onSubmit` with what the person typed. A span, because
+// the design-system gate forbids the bare element in favour of the shadcn
+// control (run-window-fill-reaches-setup-field-2934's stand-in).
 vi.mock("../hitl-conversation-panel", () => ({
   HitlConversationPanel: (props: { onSubmit: (prompt: string) => unknown }) => (
-    <button type="button" data-testid="send-in-window" onClick={() => void props.onSubmit("change the day")}>
+    <span
+      role="button"
+      tabIndex={0}
+      data-testid="send-in-window"
+      onClick={() => void props.onSubmit("change the day")}
+    >
       send
-    </button>
+    </span>
   ),
 }));
 
