@@ -603,10 +603,13 @@ export function PermissionsPanel({
                   >
                     {/* `size-9` is pinned here because this package's Avatar
                         defaults to `size-8` while the app's defaults to
-                        `size-9`. Stating it keeps the merged class SET
-                        identical to the one the app produced before the
-                        extraction, so the row is unchanged for a person. */}
-                    <Avatar className="size-9 h-8 w-8 rounded-full">
+                        `size-9`. Stating it keeps the merged class set of
+                        this Avatar's root equal to the one the app's
+                        resource ownership panel draws for its Avatar root
+                        (src/components/resource-ownership-panel.tsx;
+                        src/components/ui/__tests__/avatar-corners-4294.test.tsx
+                        pins it). The fallbacks differ. */}
+                    <Avatar className="size-9 h-8 w-8">
                       <AvatarImage src={c.image ?? undefined} alt={c.name} />
                       <AvatarFallback
                         accent={userAvatarAccent({ id: c.userId, accentColor: c.accentColor })}
