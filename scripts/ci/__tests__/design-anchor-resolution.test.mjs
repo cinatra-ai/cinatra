@@ -1008,7 +1008,22 @@ describe("the adoption road refuses to answer while a selector is refused", () =
     expect(r.code).toBe(2);
     expect(r.out.trim()).toBe("");
     expect(r.err).toContain("could not run");
-    expect(r.err).toContain('[data-a="b"] [data-c="d"]');
+    // The error prints a refused selector as a JSON string.
+    expect(r.err).toContain(JSON.stringify('[data-a="b"] [data-c="d"]'));
+  });
+
+  it("names an empty selector as \"\" in its refusal error, and prints NO array", async () => {
+    // An empty selector is refused like every other form it does not decide.
+    // Printed bare, it would end the error in a blank that names nothing.
+    const dir = drawingsDir();
+    write(dir, "one.html", drawingWith('[data-other="x"]'));
+    const r = await printUnresolved({
+      dir,
+      anchors: [anchor('[data-lifecycle-card="verification_summary"]'), anchor("")],
+    });
+    expect(r.code).toBe(2);
+    expect(r.out.trim()).toBe("");
+    expect(r.err).toContain('the unresolved set is incomplete and is not printed: "".');
   });
 
   it("PRINTS the array for a recorded set carrying the two forms it now decides", async () => {
@@ -1188,6 +1203,23 @@ describe("a recorded anchorsUnresolvedAtPin is compared with what this check fin
     expect(r.code).toBe(1);
     expect(r.all).toContain("is not what this check finds");
     expect(r.all).not.toContain("could not run");
+  });
+
+  it("names an empty selector as \"\" in the report and in the refusal error, and exits 2", async () => {
+    // A run that reaches the refusal exit prints the report of the whole set
+    // with the refused selector named in it. The empty selector is named as
+    // `""`; printed bare, its report line and its error would show a blank.
+    const dir = drawingsDir();
+    write(dir, "one.html", drawingWith('[data-lifecycle-card="verification_summary"]'));
+    const r = await run({
+      dir,
+      anchors: [anchor('[data-lifecycle-card="verification_summary"]'), anchor("")],
+      recordedUnresolved: [],
+    });
+    expect(r.code).toBe(2);
+    expect(r.all).not.toContain("is not what this check finds");
+    expect(r.all).toContain('    ""  [ownerAnchors]  REFUSED');
+    expect(r.all).toContain('refuses to approximate: "". Every other anchor is reported above.');
   });
 
   it("has a recorded set to compare against, and it is EMPTY at this pin, which is this repository's state today", () => {

@@ -121,7 +121,9 @@ authenticated reader at the contract's own pinned revision — and says so.
   `2`, unless a recorded `anchorsUnresolvedAtPin` disagrees with what the run
   finds: outside `--print-unresolved` that comparison comes first and exits
   `1`. A refused form is never approximated and never counted in either
-  direction.
+  direction. The report line and both refusal errors (the run's and the one of
+  `--print-unresolved`) print a refused selector as a JSON string, so the empty
+  selector reads `""` instead of a blank.
   The suite pins that refusal. In the live recorded set the one class selector,
   `.cw-frame` (a frame-wide capture requirement), is a passive capture marker,
   which the report lists and does not match against a drawing. `--print-unresolved`

@@ -55,15 +55,17 @@
 // compound of classes, a class beside an attribute predicate, an operator other
 // than `=`, an unquoted value, an empty selector. The matcher marks it
 // `refused`, because a selector it cannot decide is one it may not certify in
-// either direction. A run that reaches the refusal exit prints the report of
-// the whole set, with the refused selector named in it, and exits 2 — the
-// "could not run honestly" convention — so a refusal names itself instead of
-// hiding what the run did decide; its suite pins that. Besides a read
-// failure, two runs with a refused selector end before that report. Outside
-// `--print-unresolved`, a recorded `anchorsUnresolvedAtPin`
-// that disagrees with what the run finds is compared first and exits 1, so
-// such a run with a refused selector exits 1, not 2, and does not name the
-// refusal. Under `--print-unresolved` a refused selector exits 2 with an error
+// either direction. The report line and both refusal errors print a refused
+// selector as a JSON string (`quoteSelector`), so the empty selector reads
+// `""` instead of a blank. A run that reaches the refusal exit prints the
+// report of the whole set, with the refused selector named in it, and exits
+// 2 — the "could not run honestly" convention — so a refusal names itself
+// instead of hiding what the run did decide; its suite pins that. Besides a
+// read failure, two runs with a refused selector end before that report.
+// Outside `--print-unresolved`, a recorded `anchorsUnresolvedAtPin` that
+// disagrees with what the run finds is compared first and exits 1, so such a
+// run with a refused selector exits 1, not 2, and does not print the refusal
+// report. Under `--print-unresolved` a refused selector exits 2 with an error
 // that names it, and no unresolved set is printed.
 //
 // WHAT IT PRINTS. Kind names, origins, the selectors it was given, and which
@@ -471,6 +473,11 @@ export function checkAnchorResolution({ pin, anchors, governed, others = [], sib
   };
 }
 
+/** A refused selector as the diagnostics print it: a JSON string, so `""` is the empty selector. */
+export function quoteSelector(selector) {
+  return JSON.stringify(String(selector));
+}
+
 /** The report. Kinds, origins, selectors, positions — no drawing text. */
 export function formatReport(report) {
   const captureHooks = report.captureHooks ?? [];
@@ -496,7 +503,11 @@ export function formatReport(report) {
                 ? "UNRESOLVED — no governed drawing draws it (the sibling drawings were not read, " +
                   "so this run cannot say whether one of them does)"
                 : "UNRESOLVED — no governed drawing draws it";
-      lines.push(`    ${r.selector}  [${r.origin}]  ${where}`);
+      // A refused selector is printed as a JSON string, so every refused form,
+      // the empty selector among them, is named in the report: `""` reads as
+      // the empty selector, where a bare blank would name nothing.
+      const shown = r.status === "refused" ? quoteSelector(r.selector) : r.selector;
+      lines.push(`    ${shown}  [${r.origin}]  ${where}`);
     }
   }
   for (const hook of captureHooks) {
@@ -679,7 +690,7 @@ export async function runCli({
       return cannotRun(
         "the recorded set carries a selector form this matcher refuses to approximate, so the " +
           "unresolved set is incomplete and is not printed: " +
-          `${merged.refused.map((r) => r.selector).join(", ")}.`,
+          `${merged.refused.map((r) => quoteSelector(r.selector)).join(", ")}.`,
       );
     }
     log(JSON.stringify([...new Set(merged.unresolved.map((r) => r.selector))].sort()));
@@ -722,7 +733,7 @@ export async function runCli({
     logError(text);
     return cannotRun(
       "the recorded set carries a selector form this matcher refuses to approximate: " +
-        `${merged.refused.map((r) => r.selector).join(", ")}. Every other anchor is reported above.`,
+        `${merged.refused.map((r) => quoteSelector(r.selector)).join(", ")}. Every other anchor is reported above.`,
     );
   }
 
