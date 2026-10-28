@@ -86,13 +86,13 @@
  *   - the loader can inject into the definition at all (:975-1027): an owner
  *     package is found, from the definition's own
  *     `metadata.cinatra.packageName` and every FlowNode whose subflow names
- *     it, and exactly one (:475-531); the definition has
+ *     it, and exactly one (:475-526); the definition has
  *     `$referenced_components`, `nodes`, `control_flow_connections` and a
  *     `start_node` that is defined (:980-1000); `data_flow_connections`, if
  *     present, is an array (:1001-1005); the StartNode has an outgoing
  *     control edge (:1007-1016); and no id the injection adds
  *     (`context-<slotId>-subflow`, `context_<slotId>`, `ctx-<slotId>-<kind>`,
- *     :185-207) is already an id or a `$referenced_components` key anywhere
+ *     :185-201) is already an id or a `$referenced_components` key anywhere
  *     in the document (:370-391, :1018-1027).
  * The anti-stub hitlScreen case below accepts such a covered slot as the
  * renderer's backing, as it accepts a context FlowNode.
@@ -109,7 +109,7 @@
  * `readableOnly`. This gate refuses the same, on every road.
  *
  * WHAT THIS GATE DOES NOT MODEL. It reads the root definition only, and it
- * does not model `parentSatisfiedContextSlots` (:309-367, :709-913): a slot a
+ * does not model `parentSatisfiedContextSlots` (:309-362, :709-913): a slot a
  * parent satisfies is checked here as if the loader injected it.
  */
 import { describe, it, expect } from "vitest";
@@ -335,7 +335,7 @@ function allIds(doc: unknown): Set<string> {
   walk(doc);
   return ids;
 }
-/** Every id the injection of `slotId` adds (`_injected_component_ids`, :185-207). */
+/** Every id the injection of `slotId` adds (`_injected_component_ids`, :185-201). */
 const INJECTED_KINDS = [
   "start",
   "resolve_context",
@@ -352,7 +352,7 @@ function injectedIds(slotId: string): string[] {
 
 /** Why the loader cannot inject the declaration-only slots `pending` into this
  *  definition at all (`_inject_into_definition`, :975-1027): no owner package
- *  (:978, `_resolve_owner_package` :475-531), an unsupported shape (:980-1005),
+ *  (:978, `_resolve_owner_package` :475-526), an unsupported shape (:980-1005),
  *  no outgoing control edge from the StartNode (:1007-1016), or an injected id
  *  that is already taken (:1018-1027). Empty means it can inject. */
 function injectionProblems(oas: Ref, pending: string[]): string[] {
