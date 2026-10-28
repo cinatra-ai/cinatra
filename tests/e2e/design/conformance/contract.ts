@@ -110,6 +110,7 @@ import {
   type ArtifactKindDisplayField,
   type ArtifactKindDisplaySurfaceId,
 } from "./artifact-review-displays";
+import { kindDisplayFieldReading } from "./artifact-review-display-readings";
 import {
   LIFECYCLE_CHAT_COMPOSER_MOUNT,
   type LifecycleComposerRowMount,
@@ -3106,32 +3107,6 @@ function artifactKindDisplayDriver(row: ArtifactKindDisplay): SurfaceDriver {
   }
 
   return driver;
-}
-
-/**
- * The one reading a field's driver reads it in, from every declaration the row
- * records for that field (a drawing binds a field once per reading that draws
- * it). "open": a declaration with no reading, so the field is drawn while the
- * review is open. "continued": no declaration is open and one is continued, so
- * the field is absent while the review is open and drawn once it is continued.
- * "no-review": every declaration is drawn where no review stands, which the
- * review harness does not mount. A field bound to two sources, or declared both
- * open and continued, is a row the drivers cannot read, so it stops the build.
- */
-function kindDisplayFieldReading(
-  surface: string,
-  fields: readonly ArtifactKindDisplayField[],
-): "open" | "continued" | "no-review" {
-  const sources = new Set(fields.map((field) => field.source));
-  const readings = new Set(fields.map((field) => field.reading ?? "open"));
-  if (sources.size !== 1 || (readings.has("open") && readings.has("continued"))) {
-    throw new Error(
-      `${surface}: "${fields[0].name}" is declared with sources ${[...sources].join(", ")} in readings ${[...readings].join(", ")} — reconcile the row with the manifest`,
-    );
-  }
-  if (readings.has("open")) return "open";
-  if (readings.has("continued")) return "continued";
-  return "no-review";
 }
 
 /**

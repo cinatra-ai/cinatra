@@ -33,6 +33,7 @@ import {
   ARTIFACT_KIND_DISPLAY_ROWS,
   ARTIFACT_KIND_DISPLAY_SURFACES,
 } from "../../../tests/e2e/design/conformance/artifact-review-displays.ts";
+import { kindDisplayFieldReading } from "../../../tests/e2e/design/conformance/artifact-review-display-readings.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..", "..", "..");
@@ -40,6 +41,9 @@ const CONF_DIR = path.join(REPO_ROOT, "tests", "e2e", "design", "conformance");
 const MANIFEST_FILE = path.join(CONF_DIR, "manifests", "app-artifact-review.json");
 
 const readJson = (p) => JSON.parse(readFileSync(p, "utf8"));
+
+/** The readings a row may declare; a declaration with no reading is "open". */
+const READINGS = ["open", "continued", "no-review"];
 
 /** The three the wave rides on one factory (cinatra#3158's own wording). */
 const FACTORY_ONLY = ["markdown-display-tabs", "binary-download-card", "chart-display-only"];
@@ -83,8 +87,10 @@ describe("the wave covers the artifact-kind display surfaces of the staged drawi
   // A drawing binds a field once per reading that draws it, so one field name
   // can carry several declarations. contract.ts builds ONE driver per name from
   // all of them (kindDisplayFieldReading), which reads a name only if every
-  // declaration binds the same source and the field is not both drawn while the
-  // review is open and drawn only once it is continued.
+  // declaration binds the same source, every reading is open, continued or
+  // no-review, and the field is not both drawn while the review is open and
+  // drawn only once it is continued. This test checks the same three conditions
+  // on the rows without calling that function.
   it("declares each repeated field with one source and readings one driver can read", () => {
     const unreadable = [];
     for (const row of ARTIFACT_KIND_DISPLAY_ROWS) {
@@ -93,14 +99,18 @@ describe("the wave covers the artifact-kind display surfaces of the staged drawi
       for (const [name, fields] of byName) {
         const sources = new Set(fields.map((f) => f.source));
         const readings = new Set(fields.map((f) => f.reading ?? "open"));
-        if (sources.size !== 1 || (readings.has("open") && readings.has("continued"))) {
+        if (
+          sources.size !== 1 ||
+          [...readings].some((r) => !READINGS.includes(r)) ||
+          (readings.has("open") && readings.has("continued"))
+        ) {
           unreadable.push(`${row.surface}.${name}`);
         }
       }
     }
     expect(
       unreadable,
-      `${unreadable.join(", ")} is declared with two sources, or both open and continued — no one driver can read it.`,
+      `${unreadable.join(", ")} is declared with two sources, with a reading other than ${READINGS.join(", ")}, or both open and continued — no one driver can read it.`,
     ).toEqual([]);
   });
 
@@ -122,6 +132,86 @@ describe("the wave covers the artifact-kind display surfaces of the staged drawi
       silent,
       `${silent.join(", ")} carries no readiness sentence — a driver whose surface the branch does not have must say what it is waiting for, never skip silently.`,
     ).toEqual([]);
+  });
+});
+
+// contract.ts asserts a field in the one reading kindDisplayFieldReading returns
+// (presence for "open", continuedOnlyField for "continued", a named skip for
+// "no-review"), and the function throws for a row no one driver can read. Each
+// branch and each throw is pinned here, without a browser.
+describe("the reading a kind-display field's driver reads", () => {
+  const f = (reading, source = "artifact.sourceUrl") =>
+    reading === undefined ? { name: "open-live", source } : { name: "open-live", source, reading };
+
+  it("reads a field with no reading as open", () => {
+    expect(kindDisplayFieldReading("s", [f(undefined)])).toBe("open");
+  });
+
+  it("reads a field declared only continued as continued", () => {
+    expect(kindDisplayFieldReading("s", [f("continued")])).toBe("continued");
+  });
+
+  it("reads a field declared only where no review stands as no-review", () => {
+    expect(kindDisplayFieldReading("s", [f("no-review"), f("no-review")])).toBe("no-review");
+  });
+
+  it("reads continued over no-review, in either order", () => {
+    expect(kindDisplayFieldReading("s", [f("continued"), f("no-review")])).toBe("continued");
+    expect(kindDisplayFieldReading("s", [f("no-review"), f("continued")])).toBe("continued");
+  });
+
+  it("reads open over no-review, in either order", () => {
+    expect(kindDisplayFieldReading("s", [f(undefined), f("no-review")])).toBe("open");
+    expect(kindDisplayFieldReading("s", [f("no-review"), f(undefined)])).toBe("open");
+  });
+
+  it("reads the dashboard display's open-live declarations as continued", () => {
+    const row = ARTIFACT_KIND_DISPLAY_ROWS.find((r) => r.surface === "dashboard-display");
+    const openLive = row.fields.filter((d) => d.name === "open-live");
+    expect(kindDisplayFieldReading(row.surface, openLive)).toBe("continued");
+  });
+
+  it("throws for a field bound to two sources", () => {
+    expect(() =>
+      kindDisplayFieldReading("s", [f("continued"), f("continued", "artifact.url")]),
+    ).toThrow(/declared with sources artifact\.sourceUrl, artifact\.url/);
+  });
+
+  it("throws for a field declared both open and continued", () => {
+    expect(() => kindDisplayFieldReading("s", [f(undefined), f("continued")])).toThrow(
+      /in readings open, continued/,
+    );
+  });
+
+  it("throws for a reading other than open, continued and no-review", () => {
+    expect(() => kindDisplayFieldReading("s", [f("archived")])).toThrow(/in readings archived/);
+    expect(() => kindDisplayFieldReading("s", [f("no-review"), f("closed")])).toThrow(
+      /in readings no-review, closed/,
+    );
+    expect(() => kindDisplayFieldReading("s", [f("open")])).not.toThrow();
+  });
+
+  it("throws for a field with no declaration", () => {
+    expect(() => kindDisplayFieldReading("s", [])).toThrow(/\(no declaration\)/);
+  });
+
+  it("reads every row of the wave without a throw", () => {
+    for (const row of ARTIFACT_KIND_DISPLAY_ROWS) {
+      const byName = new Map();
+      for (const d of row.fields) byName.set(d.name, [...(byName.get(d.name) ?? []), d]);
+      for (const fields of byName.values()) {
+        expect(() => kindDisplayFieldReading(row.surface, fields)).not.toThrow();
+      }
+    }
+  });
+
+  it("is the function contract.ts calls, with no second copy there", () => {
+    const contract = readFileSync(path.join(CONF_DIR, "contract.ts"), "utf8");
+    expect(contract).toMatch(
+      /import \{ kindDisplayFieldReading \} from "\.\/artifact-review-display-readings";/,
+    );
+    expect(contract).not.toMatch(/function kindDisplayFieldReading\b/);
+    expect(contract).toMatch(/const reading = kindDisplayFieldReading\(row\.surface, fields\);/);
   });
 });
 

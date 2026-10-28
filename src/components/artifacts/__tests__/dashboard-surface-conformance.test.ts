@@ -12,8 +12,10 @@
  * dashboard's artifact page draws the dashboard extension's own display, so the
  * drawing no longer declares the two surfaces of the core pointer (the pointer
  * detail and its scope chips), and nothing below asserts them. The core pointer
- * component and its wiring stay until cinatra#4311 deletes them; the routing
- * test below holds that wiring until then.
+ * component and its wiring stay until cinatra#4311: its done-when deletes
+ * `src/app/artifacts/[id]/dashboard-pointer-detail.tsx` and leaves no
+ * production source under `src` that names `DashboardPointerDetail`. The
+ * routing test below holds that wiring until then.
  * The repo runs vitest in node without @testing-library/react,
  * so server-component wiring is pinned via source assertions (the established
  * pattern — see `surface-conformance.test.ts`); the live bidirectional
@@ -90,8 +92,11 @@ describe("§VIII routing — library rows render as dashboard pointers, dual-aut
 
   it("the detail route opens a dashboard artifact as a POINTER, not the renderer", () => {
     // The core pointer wiring the 0.12.0 drawing drew. Version 0.13.0 draws the
-    // dashboard extension's own display here instead; cinatra#4311 makes that
-    // change and replaces this test.
+    // dashboard extension's own display here instead. The done-when of
+    // cinatra#4311 deletes `src/app/artifacts/[id]/dashboard-pointer-detail.tsx`
+    // and leaves no production source under `src` that names
+    // `DashboardPointerDetail`, so the `<DashboardPointerDetail` assertion
+    // below cannot hold after that change.
     expect(DETAIL).toMatch(/isDashboardArtifactType\(artifact\.objectType\)/);
     expect(DETAIL).toMatch(/resolveDashboardArtifactPointer/);
     expect(DETAIL).toMatch(/<DashboardPointerDetail/);
