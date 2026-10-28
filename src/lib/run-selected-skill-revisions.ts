@@ -502,15 +502,18 @@ export const SKIP_RECOMMENDATION_SOURCE = "user_skipped" as const;
  * which the store keeps out (see that set). The lock holds the row until COMMIT
  * whatever the answer, so a writer of that row (the dispatch CAS, the worker's
  * setup interrupt, the enqueue compensation) waits for this transaction, and a
- * writer that committed first is read by the lock. Every statement after it
- * carries the same predicate (the scoped clear of the run's selection rows, the
- * per-skill rows and the marker) and reads the same locked row. So a run that is
- * not before its start when the row is locked (`queued`, running, paused
- * mid-flight or settled), or a run id with no row, gets none of these writes,
- * and the answer is `{ outcome: "run_started" }`: the caller refuses with the
- * run-started sentence, and a retry while the run stays so will not make the
- * write land. Without `beforeStart` the write is the unguarded one it always
- * was, and it answers a boolean; the decision path does not call it that way.
+ * writer that committed first is read by the lock. Each of the three writes
+ * after it (the scoped clear of the run's selection rows, the per-skill rows and
+ * the marker) carries the same predicate and reads the same locked row; the
+ * marker's read-back after them does not need it. So a run that is not before
+ * its start when the row is locked (`queued`, running, paused mid-flight or
+ * settled) gets none of these writes, and the answer is
+ * `{ outcome: "run_started" }`: the caller refuses with the run-started
+ * sentence, and a retry while the run stays so will not make the write land. A
+ * run id with no row is answered the same way; with no row there is nothing to
+ * lock, and the decision path reads the run before it asks. Without
+ * `beforeStart` the write is the unguarded one, as on main, and it answers a
+ * boolean; the decision path does not call it that way.
  */
 export const RECOMMENDATION_SKIP_RUN_STARTED = "run_started" as const;
 
@@ -583,7 +586,7 @@ export function writeRunRecommendationSkip(
   // The guarded form's first statement locked the run row by id and answered
   // the question as `pre_start`. Anything but `true` (the run is not before its
   // start, or there is no row) is the refusal; the writes after it asked the
-  // same locked row and wrote nothing.
+  // same locked row the same question, so they did not land.
   if (results[0]?.rows?.[0]?.pre_start !== true) return { outcome: RECOMMENDATION_SKIP_RUN_STARTED };
   return { outcome: markerReadsBack ? "recorded" : "not_recorded" };
 }

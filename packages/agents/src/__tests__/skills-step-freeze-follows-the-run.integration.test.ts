@@ -1084,7 +1084,7 @@ describe.skipIf(!HAS_DB)("cinatra#3062 — an all-clear Continue in the queued w
           [tag],
         );
         if (rows[0].n === 1) break;
-        if (i >= 200) throw new Error("the interrupt connection never reached its sleep");
+        if (i >= 200) throw new Error("the interrupt connection did not reach its sleep within 10 s");
         await new Promise((r) => setTimeout(r, 50));
       }
       out = selectionStore.writeRunRecommendationSkip({
