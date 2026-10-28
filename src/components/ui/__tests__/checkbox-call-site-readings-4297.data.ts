@@ -57,7 +57,7 @@ export const CHECKBOX_CALL_SITE_READINGS: FileReading[] = [
   // ---- the row of #4297 itself --------------------------------------------------------------------------------------
   {
     file: "packages/sdk-ui/src/prompt-field.tsx",
-    tokens: 3,
+    tokens: 4,
     sites: [
       {
         anchor: "onCheckedChange={(checked) => autosave.onToggle?.(checked === true)}",

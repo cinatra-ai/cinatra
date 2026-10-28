@@ -1465,6 +1465,44 @@ export function isSwitchModule(spec: string): boolean {
   return /(?:^|[/-])switch(?:\/index)?(?:\.[cm]?[jt]sx?)?$/i.test(spec);
 }
 
+/**
+ * Whether a file declares a function named Switch itself and exports it under that name (cinatra#4334 cure, the
+ * ruling that the Switch lives in the module the row already imported). All must hold: a top-level function
+ * declaration `function Switch` with a body; exported by `export function Switch` or by `export { Switch }` with no
+ * module specifier and no rename; and no import binding the name Switch in the file. A re-export (`export { Switch }
+ * from "m"`), an alias in either direction (`export { Box as Switch }`, `export { Switch as Tick }`), a local that is
+ * not exported, a name imported from elsewhere and exported on, a `const Switch`, a default export and an ambient
+ * declaration are none of these.
+ */
+export function declaresAndExportsSwitch(sf: ts.SourceFile): boolean {
+  let declared = false;
+  let exported = false;
+  for (const st of sf.statements) {
+    if (ts.isFunctionDeclaration(st) && st.name?.text === "Switch" && st.body !== undefined) {
+      declared = true;
+      if (hasModifier(st, ts.SyntaxKind.ExportKeyword) && !hasModifier(st, ts.SyntaxKind.DefaultKeyword)) exported = true;
+    } else if (ts.isExportDeclaration(st) && !st.isTypeOnly && st.moduleSpecifier === undefined && st.exportClause && ts.isNamedExports(st.exportClause)) {
+      for (const e of st.exportClause.elements) {
+        if (!e.isTypeOnly && e.name.text === "Switch" && (e.propertyName ?? e.name).text === "Switch") exported = true;
+      }
+    }
+  }
+  return declared && exported && !collectBindings(sf).imports.some(([name]) => name === "Switch");
+}
+
+/** The specifiers a file imports the plain name Switch from (`import { Switch } from "m"`; not renamed, not type-only). */
+export function plainSwitchImports(sf: ts.SourceFile): string[] {
+  const out: string[] = [];
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st) || !isStringLike(st.moduleSpecifier) || st.importClause?.isTypeOnly) continue;
+    const nb = st.importClause?.namedBindings;
+    if (nb && ts.isNamedImports(nb) && nb.elements.some((e) => !e.isTypeOnly && e.propertyName === undefined && e.name.text === "Switch")) {
+      out.push(st.moduleSpecifier.text);
+    }
+  }
+  return out;
+}
+
 /** The in-scope files of the given texts (rule 2) with their tokens and sites; test files are left out. */
 export function scanSources(
   texts: ReadonlyMap<string, string>,
@@ -1493,9 +1531,32 @@ export function scanSources(
   // (fold 6). A name from a module that names a checkbox is a checkbox name, which findSites never takes as a sure switch.
   const mayBeSwitch = resolveNames(sources, (n) => n === "Switch", (spec) => isSwitchModule(spec) || (targets(spec) ?? []).some(isSwitchModule));
   const sureSwitch = resolveNames(sources, (n) => n === "Switch", (spec) => (targets(spec) ?? [spec]).every(isSwitchModule), false);
+  // A Switch a file imports by that plain name from a module the file's resolved source declares and exports itself is
+  // a switch even when the module names a checkbox (cinatra#4334 cure). Every module file the specifier resolves to
+  // (a relative path, or a path alias or workspace entry) must be in the scan and must declare and export Switch; a
+  // specifier that resolves to nothing in the scan, a re-export, an alias, a rename and a name derived from the import
+  // (`const Toggle = Switch`) keep the name a checkbox name, which findSites never takes as a sure switch.
+  const switchModuleFiles = (from: string, spec: string): string[] => {
+    if (spec.startsWith(".")) {
+      const base = path.posix.normalize(path.posix.join(path.posix.dirname(from), spec));
+      return [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`].filter((p) => sources.has(p));
+    }
+    const hit = targets(spec) ?? [];
+    return hit.every((p) => sources.has(p)) ? hit : [];
+  };
+  const ownSwitchFiles = new Set<string>();
+  for (const [file, sf] of sources) {
+    const specs = plainSwitchImports(sf);
+    if (specs.length === 0) continue;
+    const ok = specs.every((spec) => {
+      const files = switchModuleFiles(file, spec);
+      return files.length > 0 && files.every((f) => declaresAndExportsSwitch(sources.get(f)!));
+    });
+    if (ok) ownSwitchFiles.add(file);
+  }
   const out: ScannedFile[] = [];
   for (const [file, sf] of sources) {
-    const isName = (n: string) => scope.isName(file, n);
+    const isName = (n: string) => scope.isName(file, n) && !(n === "Switch" && ownSwitchFiles.has(file));
     const tokens = countCheckboxTokens(sf.getFullText());
     // A tag segment is a checkbox by the name test, which takes checkbox in any letter case (G2, GAP 2).
     const sites = findSites(sf, isName, isName, modules.mayExport, true, modules.objectsIn(file), (n) => sureSwitch.isName(file, n), (n) => mayBeSwitch.isName(file, n));
