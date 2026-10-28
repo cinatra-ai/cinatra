@@ -10,9 +10,12 @@
  * is the decision floor's Comment with a typed note; the decision action is the
  * code under test. The gate ports are an in-memory gate table: a plain comment
  * leaves its gate pending, and the S2 changes_requested road settles the gate
- * and pins the successor over the regenerated revision of the same artifact
- * (the contract of recordChangesRequested + submitRepairResponse, which the
- * lifecycle-repair integration tests own against a real database).
+ * and pins the successor over the regenerated revision of the same artifact.
+ * Against a real database: recordChangesRequested settles the leg and opens the
+ * repair (lifecycle-repair.integration.test.ts), and submitRepairResponse refuses
+ * a successor on another artifact for a declared review leg's lineage
+ * (lifecycle-c-w11-picture-regenerate-parks-run-3035.integration.test.ts). This
+ * file reads gate rows only; the run's state is that DB file's.
  *
  *   pnpm exec vitest run src/__tests__/lifecycle-c-w11-picture-regenerate-successor-gate-3035.test.ts
  */
@@ -104,7 +107,7 @@ describe("#3035 picture regeneration — Regenerate on the featured image mints 
     expect(p.changes.mock.calls[0][0]).toMatchObject({ runId: RUN, reviewTaskId: `${STEP}#2`, baseTarget: FEATURED });
   });
 
-  it("keeps the run parked at the successor until that gate is continued", async () => {
+  it("leaves only the successor pending until that gate is continued (gate rows only)", async () => {
     await submitReviewDecisionAction(RUN, STEP, "continue", null);
     await submitReviewDecisionAction(RUN, `${STEP}#2`, "comment", "Make the sky darker");
     const successorId = repairSuccessorReviewTaskId("repair-1", 1);

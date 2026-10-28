@@ -158,6 +158,27 @@ describe("S2: repair-response lineage + base-revision CAS validation", () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.code).toBe("successor-equals-base");
   });
+  // cinatra#4312 (review 1 of cinatra#4339, finding 3): the repair of a declared
+  // review leg must answer with a new revision of the reviewed artifact itself.
+  it("with requireSameArtifact, rejects a successor on another artifact", () => {
+    const r = validateRepairLineage({
+      request,
+      response: mkResponse({ successorTarget: { artifactId: "art-post", representationRevisionId: "rev-post-2" } }),
+      currentBaseRevisionId: "rev-1",
+      requireSameArtifact: true,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("successor-other-artifact");
+    expect(validateRepairLineage({ request, response: mkResponse(), currentBaseRevisionId: "rev-1", requireSameArtifact: true }).ok).toBe(true);
+  });
+  it("without requireSameArtifact, a successor on another artifact stays accepted (a CMS repair answers with a fresh snapshot)", () => {
+    const r = validateRepairLineage({
+      request,
+      response: mkResponse({ successorTarget: { artifactId: "art-snapshot-2", representationRevisionId: "rev-s-1" } }),
+      currentBaseRevisionId: "rev-1",
+    });
+    expect(r.ok).toBe(true);
+  });
   it("rejects an unmapped finding (missing outcome)", () => {
     const r = validateRepairLineage({
       request,

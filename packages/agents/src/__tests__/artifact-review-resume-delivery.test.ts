@@ -85,8 +85,11 @@ vi.mock("@cinatra-ai/a2a", () => ({
 vi.mock("../execution", () => ({ handleWayflowTaskState: handleWayflowTaskStateSpy }));
 // cinatra#4312 — the repair-lineage reads the worker takes for a Regenerate on a
 // declared picture leg. Real-store proofs: lifecycle-c-w11-picture-regenerate-parks-run-3035.integration.test.ts.
+const lineageStateError = (code: string) => Object.assign(new Error(`${code}: lineage state`), { name: "RepairLineageStateError", code });
 const repairStoreMock = vi.hoisted(() => ({
-  readRepairLineageRootGate: vi.fn<(taskId: string) => Promise<unknown>>(async () => null),
+  readRepairLineageRootGate: vi.fn<(taskId: string, gateId: string) => Promise<unknown>>(async () => {
+    throw Object.assign(new Error("unknown-repair: not seeded"), { name: "RepairLineageStateError", code: "unknown-repair" });
+  }),
   isRepairLineageOpen: vi.fn<(gateId: string) => Promise<boolean>>(async () => false),
 }));
 vi.mock("../lifecycle-repair-store", () => repairStoreMock);
@@ -414,7 +417,7 @@ describe("cinatra#4312 — Regenerate on a declared picture leg keeps the pause 
     gateStoreMock.listReviewGatesForRun.mockResolvedValue(regeneratedFamily());
     sendTaskSpy.mockResolvedValue({ id: "task-x", status: { state: "completed" } });
     resolveLatestSpy.mockResolvedValue("task-1");
-    repairStoreMock.readRepairLineageRootGate.mockResolvedValue(null);
+    repairStoreMock.readRepairLineageRootGate.mockRejectedValue(lineageStateError("unknown-repair"));
     repairStoreMock.isRepairLineageOpen.mockResolvedValue(false);
   });
 
@@ -443,7 +446,7 @@ describe("cinatra#4312 — Regenerate on a declared picture leg keeps the pause 
     const responseText = JSON.stringify(buildReviewApproveEnvelope({ reviewTaskId: SUCCESSOR, comment: null, targets: [] }));
     const outcome = await deliverArtifactReviewResumeIntent(intent({ gateId: "gate-succ", reviewTaskId: SUCCESSOR, responseText }));
     expect(outcome).toBe("delivered");
-    expect(repairStoreMock.readRepairLineageRootGate).toHaveBeenCalledWith(SUCCESSOR);
+    expect(repairStoreMock.readRepairLineageRootGate).toHaveBeenCalledWith(SUCCESSOR, "gate-succ");
     expect(storeMock.readAgentRunByTaskId).toHaveBeenCalledWith("task-1");
     expect(sendTaskSpy).toHaveBeenCalledTimes(1);
     const sent = sendTaskSpy.mock.calls[0]![0] as { message: { contextId: string; parts: Array<{ text: string }> } };
@@ -495,9 +498,19 @@ describe("cinatra#4312 — Regenerate on a declared picture leg keeps the pause 
     expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
   });
 
-  it("a successor of an unknown repair keeps the automatic-gate road", async () => {
-    const outcome = await deliverArtifactReviewResumeIntent(intent({ gateId: "gate-succ", reviewTaskId: SUCCESSOR }));
-    expect(outcome).toBe("already-advanced");
-    expect(sendTaskSpy).not.toHaveBeenCalled();
-  });
+  // Review 1 of cinatra#4339, finding 4: an unknown repair, another attempt, a
+  // repair that does not name this gate, a malformed task id and a missing root
+  // gate are named errors, never "no lineage" (real store:
+  // lifecycle-c-w11-picture-regenerate-parks-run-3035.integration.test.ts).
+  it.each(["unknown-repair", "attempt-mismatch", "successor-mismatch", "malformed-successor-task", "missing-root-gate"])(
+    "a successor whose lineage reads %s fails closed: nothing is resumed and the intent is not marked done",
+    async (code) => {
+      repairStoreMock.readRepairLineageRootGate.mockRejectedValue(lineageStateError(code));
+      await expect(deliverArtifactReviewResumeIntent(intent({ gateId: "gate-succ", reviewTaskId: SUCCESSOR })))
+        .rejects.toMatchObject({ code });
+      expect(repairStoreMock.readRepairLineageRootGate).toHaveBeenCalledWith(SUCCESSOR, "gate-succ");
+      expect(sendTaskSpy).not.toHaveBeenCalled();
+      expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+    },
+  );
 });
