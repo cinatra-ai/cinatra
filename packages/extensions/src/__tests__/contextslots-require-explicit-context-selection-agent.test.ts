@@ -22,10 +22,14 @@
  *   - NO top-level `start.contextSlotBindings → consumer` bypass on any
  *     contextSlots leaf.
  *   - NO `start.contextRefs → end.contextRefs` pass-through stub on any agent.
- *   Both read an edge's ends in either component-reference form (see "THE
- *   SLOT A NODE RESOLVES"), and "start" is the definition's own StartNode:
- *   its `start_node` reference or any StartNode component, whatever its id;
- *   "end" is any EndNode component (cinatra#4417).
+ *   Both read an edge's source in either component-reference form (see "THE
+ *   SLOT A NODE RESOLVES"), and the stub check also reads its destination so;
+ *   the bypass check reads no destination node. "start" is the definition's
+ *   own StartNode: its `start_node` reference or any StartNode component,
+ *   whatever its id; the stub's "end" is any EndNode component (cinatra#4417).
+ *   So an edge from a component with the id `start` that is not the StartNode,
+ *   or a stub into a component with the id `end` that is not an EndNode, is
+ *   no longer reported.
  *   - a present `contextSlots` value the loader refuses is refused here too
  *     (see "WHAT THE LOADER REFUSES" below).
  *   - INTERACTIVE selectors that list `context-selector` in `hitlScreens`
@@ -639,8 +643,8 @@ function endNodeIds(oas: Ref): Set<string> {
   );
 }
 /** Top-level `start.contextSlotBindings → <consumer>.contextSlotBindings`
- *  edges: the inert bypass of the context FlowNode. Both ends are read in
- *  either reference form. */
+ *  edges: the inert bypass of the context FlowNode. Only the source is read,
+ *  in either reference form; the destination may be any node, as on main. */
 function startBindingBypassEdges(oas: Ref): Ref[] {
   const starts = startNodeIds(oas);
   return dfes(oas).filter((e) => {
@@ -1283,6 +1287,92 @@ describe("the anti-stub checks read both reference forms and the definition's ow
     expect(contextRefsStubEdges(doc)).toEqual([objectStub]);
     expect(startBindingBypassEdges(doc)).toEqual([objectBypass]);
   });
+
+  // Each of the two sources of startNodeIds alone.
+  it("finds the edges from a plain-string start_node that names a component of another type", () => {
+    const doc = agent(["a"], {});
+    components(doc).begin = { component_type: "ApiNode", id: "begin", url: "{{CINATRA_BASE_URL}}/api/llm-bridge", inputs: [] };
+    doc.start_node = "begin";
+    const stub = edge("begin", "contextRefs", "end", "contextRefs");
+    const bypass = edge("begin", "contextSlotBindings", "work", "contextSlotBindings");
+    (doc.data_flow_connections as Ref[]).push(stub, bypass);
+    expect(contextRefsStubEdges(doc)).toEqual([stub]);
+    expect(startBindingBypassEdges(doc)).toEqual([bypass]);
+  });
+
+  it("finds the edges from a StartNode-typed component when start_node is absent", () => {
+    const doc = renamed();
+    delete doc.start_node;
+    const stub = edge(ref("begin"), "contextRefs", ref("finish"), "contextRefs");
+    const bypass = edge(ref("begin"), "contextSlotBindings", ref("work"), "contextSlotBindings");
+    (doc.data_flow_connections as Ref[]).push(stub, bypass);
+    expect(contextRefsStubEdges(doc)).toEqual([stub]);
+    expect(startBindingBypassEdges(doc)).toEqual([bypass]);
+  });
+
+  it("finds the edges from a StartNode-typed component that start_node does not name", () => {
+    const doc = agent(["a"], {});
+    components(doc).entry = { component_type: "StartNode", id: "entry", inputs: [] };
+    const stub = edge(ref("entry"), "contextRefs", ref("end"), "contextRefs");
+    const bypass = edge(ref("entry"), "contextSlotBindings", ref("work"), "contextSlotBindings");
+    (doc.data_flow_connections as Ref[]).push(stub, bypass);
+    expect(contextRefsStubEdges(doc)).toEqual([stub]);
+    expect(startBindingBypassEdges(doc)).toEqual([bypass]);
+  });
+
+  it("finds the stub with a plain-string start and an object-form end", () => {
+    const doc = agent(["a"], {});
+    const stub = edge("start", "contextRefs", ref("end"), "contextRefs");
+    (doc.data_flow_connections as Ref[]).push(stub);
+    expect(contextRefsStubEdges(doc)).toEqual([stub]);
+  });
+
+  it("reports no edge whose source or stub destination it cannot read", () => {
+    const doc = agent(["a"], {});
+    (doc.data_flow_connections as Ref[]).push(
+      edge({}, "contextSlotBindings", ref("work"), "contextSlotBindings"),
+      edge(42, "contextSlotBindings", ref("work"), "contextSlotBindings"),
+      edge({}, "contextRefs", ref("end"), "contextRefs"),
+      edge(ref("start"), "contextRefs", {}, "contextRefs"),
+      edge(ref("start"), "contextRefs", null, "contextRefs"),
+    );
+    expect(startBindingBypassEdges(doc)).toEqual([]);
+    expect(contextRefsStubEdges(doc)).toEqual([]);
+  });
+
+  it("reports no edge with another destination input", () => {
+    const doc = agent(["a"], {});
+    (doc.data_flow_connections as Ref[]).push(
+      edge(ref("start"), "contextSlotBindings", ref("work"), "aContextSlotBindings"),
+      edge("start", "contextSlotBindings", "work", "selection"),
+      edge(ref("start"), "contextRefs", ref("end"), "selection"),
+      edge("start", "contextRefs", "end", "contextSlotBindings"),
+    );
+    expect(startBindingBypassEdges(doc)).toEqual([]);
+    expect(contextRefsStubEdges(doc)).toEqual([]);
+  });
+
+  // The two loosenings against main, which compared the literal ids.
+  it("no longer reports a stub into a component with the id end that is not an EndNode", () => {
+    const doc = agent(["a"], {});
+    components(doc).end.component_type = "ApiNode";
+    (doc.data_flow_connections as Ref[]).push(dfe("start", "contextRefs", "end", "contextRefs"));
+    expect(contextRefsStubEdges(doc)).toEqual([]);
+  });
+
+  it("no longer reports an edge from a component with the id start that is not the StartNode", () => {
+    const doc = agent(["a"], {});
+    const all = components(doc);
+    all.begin = { ...all.start, id: "begin" };
+    all.start = { component_type: "ApiNode", id: "start", url: "{{CINATRA_BASE_URL}}/api/llm-bridge", inputs: [] };
+    doc.start_node = ref("begin");
+    (doc.data_flow_connections as Ref[]).push(
+      dfe("start", "contextRefs", "end", "contextRefs"),
+      dfe("start", "contextSlotBindings", "work", "contextSlotBindings"),
+    );
+    expect(contextRefsStubEdges(doc)).toEqual([]);
+    expect(startBindingBypassEdges(doc)).toEqual([]);
+  });
 });
 
 describe("a context-resolution marker counts only on a context FlowNode (cinatra#4418)", () => {
@@ -1300,6 +1390,12 @@ describe("a context-resolution marker counts only on a context FlowNode (cinatra
     const multi = agent(["a", "b"], { a: "aContextSlotBindings" });
     components(multi).work.metadata = marker("b");
     expect(wiringProblems(multi, CTX_PKG)).toEqual([unresolved("b")]);
+  });
+
+  it("refuses the loader-injected- marker on an ordinary node", () => {
+    const doc = agent(["a"], {});
+    components(doc).work.metadata = { cinatra: { purpose: "loader-injected-context-resolution-for-a" } };
+    expect(wiringProblems(doc, CTX_PKG)).toEqual([unresolved("a")]);
   });
 
   it("refuses a marker on the definition itself", () => {
