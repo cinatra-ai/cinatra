@@ -265,6 +265,7 @@ export type RepairLineageCode =
   | "stale-base"
   | "successor-invalid"
   | "successor-equals-base"
+  | "successor-other-artifact"
   | "finding-unknown"
   | "finding-duplicate"
   | "finding-unmapped";
@@ -287,6 +288,12 @@ export type RepairLineageResult =
  *                            rejected by CAS").
  *   - `successor-invalid`  — the successor names no artifact/revision.
  *   - `successor-equals-base` — a repair MUST produce a NEW revision.
+ *   - `successor-other-artifact` — with `requireSameArtifact`, the successor must
+ *                            be a new revision of the reviewed artifact itself
+ *                            (cinatra#4312: the repair of a declared review leg —
+ *                            the featured image's — may not pin another artifact,
+ *                            the post's included). Off by default: a CMS repair
+ *                            answers with a fresh snapshot artifact.
  *   - `finding-*`          — the per-finding outcome map must key EXACTLY the
  *                            request's findings (no unknown, no duplicate, none
  *                            missing) so the successor's applied/skipped is total.
@@ -295,6 +302,7 @@ export function validateRepairLineage(input: {
   request: ChangesRequestedRequest;
   response: RepairResponse;
   currentBaseRevisionId: string | null;
+  requireSameArtifact?: boolean;
 }): RepairLineageResult {
   const { request, response, currentBaseRevisionId } = input;
 
@@ -325,6 +333,13 @@ export function validateRepairLineage(input: {
       ok: false,
       code: "successor-equals-base",
       error: "successor revision must differ from the base (a repair produces a NEW revision)",
+    };
+  }
+  if (input.requireSameArtifact === true && response.successorTarget.artifactId !== request.baseTarget.artifactId) {
+    return {
+      ok: false,
+      code: "successor-other-artifact",
+      error: "successor must be a new revision of the reviewed artifact, not another artifact",
     };
   }
 

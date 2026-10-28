@@ -139,10 +139,12 @@ export async function submitReviewDecisionAction(
   //
   // The PICTURE's leg of a per-artifact DECLARED review (cinatra#3035 W11) takes the
   // same road: a produced revision a declared gate pins opens no automatic gate
-  // (cinatra#4225), so that leg is the only review Regenerate can be pressed on. The
-  // post's own leg (the step's own task id) keeps the plain annotation, exactly as
-  // before. Only the store can read the family witness on the gate's pin; a
-  // flow-authored gate it refuses as no lifecycle gate keeps the plain annotation.
+  // (cinatra#4225), so until it is regenerated that leg is the picture's only review
+  // (a regenerated picture is then reviewed on its repair's successor, an automatic
+  // gate, above). The post's own leg (the step's own task id) keeps the plain
+  // annotation, exactly as before. Only the store can read the family witness on
+  // the gate's pin; a flow-authored gate it refuses as no lifecycle gate keeps the
+  // plain annotation.
   const trimmedComment = comment?.trim() ?? "";
   const declaredGate = isDeclaredReviewTaskId(reviewTaskId) && baseReviewTaskId(reviewTaskId) !== reviewTaskId;
   if (

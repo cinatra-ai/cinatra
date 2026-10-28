@@ -40,13 +40,15 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { createHash, randomUUID } from "node:crypto";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import { db } from "./db";
 import {
+  agentRuns,
   artifactReviewGates,
   artifactReviewAudit,
   artifactProducedOutbox,
+  artifactReviewResumeOutbox,
   lifecycleRepair,
   lifecycleBatchEpoch,
   lifecycleBatchDisposition,
@@ -79,6 +81,12 @@ import {
   isRepairSuccessorTaskId,
   repairSuccessorReviewTaskId,
 } from "@/lib/lifecycle/lifecycle-orchestration";
+import { baseReviewTaskId, isDeclaredReviewLeg } from "@/lib/artifacts/artifact-review-target";
+
+/** The store's executor: the pool, or the caller's open transaction. */
+type RepairStoreExecutor =
+  | typeof db
+  | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 // ---------------------------------------------------------------------------
 // changes_requested — close the review attempt, open the repair.
@@ -314,7 +322,13 @@ export async function recordChangesRequested(
       })
       .onConflictDoNothing({ target: [lifecycleRepair.gateId] })
       .returning();
-    if (ins[0]) return { row: ins[0], fresh: true as const };
+    if (ins[0]) {
+      // cinatra#4312 — an escalated lineage has no successor to decide. If the
+      // settled gate is a declared review leg whose run is still paused, wake the
+      // decision the resume worker set aside for it, in this same commit.
+      if (status === "escalated") await wakeDeclaredReviewAfterTerminalRepair(tx, lineageId);
+      return { row: ins[0], fresh: true as const };
+    }
     // A CONCURRENT identical call won the (gate) UNIQUE — read the durable winner
     // so we never return a repairId that was never persisted.
     const [won] = await tx
@@ -477,19 +491,37 @@ export async function submitRepairResponse(
     continuationAddress: repair.continuationAddress,
   };
 
+  // cinatra#4312 — a lineage that started on a declared review leg (the featured
+  // image's) repairs THAT artifact: its successor must be a new revision of the
+  // reviewed artifact, never another one (the post's included). An unreadable
+  // lineage root refuses the response; it never widens what may be pinned.
+  let declaredLineage: boolean;
+  try {
+    declaredLineage = await isDeclaredReviewLineage(repair.lineageId);
+  } catch (err) {
+    if (err instanceof RepairLineageStateError) return { ok: false, code: err.code, error: err.message };
+    throw err;
+  }
   const lineage = validateRepairLineage({
     request,
     response: input.response,
     currentBaseRevisionId: input.currentBaseRevisionId,
+    requireSameArtifact: declaredLineage,
   });
   if (!lineage.ok) {
     // A stale/tombstoned base marks the repair STALE (a moved target the review no
     // longer applies to); a producer-shape error leaves the repair open to retry.
+    // cinatra#4312 — a stale lineage has no successor to decide, so the same commit
+    // wakes a declared review's paused run (see wakeDeclaredReviewAfterTerminalRepair).
     if (lineage.code === "stale-base" || lineage.code === "tombstoned-base") {
-      await db
-        .update(lifecycleRepair)
-        .set({ status: "stale", updatedAt: sql`now()` })
-        .where(and(eq(lifecycleRepair.id, repair.id), eq(lifecycleRepair.status, repair.status)));
+      await db.transaction(async (tx) => {
+        const moved = await tx
+          .update(lifecycleRepair)
+          .set({ status: "stale", updatedAt: sql`now()` })
+          .where(and(eq(lifecycleRepair.id, repair.id), eq(lifecycleRepair.status, repair.status)))
+          .returning({ lineageId: lifecycleRepair.lineageId });
+        if (moved[0]) await wakeDeclaredReviewAfterTerminalRepair(tx, moved[0].lineageId);
+      });
     }
     return { ok: false, code: lineage.code, error: lineage.error };
   }
@@ -724,20 +756,36 @@ export async function readRepairLineage(lineageId: string): Promise<RepairRow[]>
   return rows.map(toRepairRow);
 }
 
-/** The gate a repair-SUCCESSOR gate's lineage started on (the gate that first
- * received `changes_requested`), or null for any other task id or an unknown
- * repair. cinatra#4312: the resume worker reads it to find the declared review
- * leg a regenerated picture's successor gate answers. */
-export async function readRepairLineageRootGate(successorReviewTaskId: string): Promise<{
-  id: string; runId: string; orgId: string; reviewTaskId: string; pinnedTargets: unknown;
-} | null> {
-  if (!isRepairSuccessorTaskId(successorReviewTaskId)) return null;
-  // `${PREFIX}${repairId}:${attempt}`; the repair id is a UUID (no colon).
-  const repairId = successorReviewTaskId.slice(REPAIR_SUCCESSOR_TASK_PREFIX.length).split(":")[0];
-  if (!repairId) return null;
-  const repair = await readRepair(repairId);
-  if (!repair) return null;
-  const [root] = await db
+/** A repair lineage the cinatra#4312 readers cannot read as open or closed: a
+ * missing, malformed or unknown state. The readers THROW it rather than answer,
+ * so a caller can never resume a run, or acknowledge a resume, on such a state
+ * (the resume sweep leaves the intent for re-claim, and in the end dead-letters
+ * it where ops see it). */
+export type RepairLineageStateCode =
+  | "malformed-successor-task"
+  | "unknown-repair"
+  | "attempt-mismatch"
+  | "successor-mismatch"
+  | "missing-root-gate"
+  | "missing-repair"
+  | "unknown-repair-status"
+  | "repaired-without-successor"
+  | "missing-successor-gate"
+  | "unknown-gate-status";
+
+export class RepairLineageStateError extends Error {
+  readonly code: RepairLineageStateCode;
+  constructor(code: RepairLineageStateCode, message: string) {
+    super(`${code}: ${message}`);
+    this.name = "RepairLineageStateError";
+    this.code = code;
+  }
+}
+
+type LineageRootGate = { id: string; runId: string; orgId: string; reviewTaskId: string; pinnedTargets: unknown };
+
+async function readLineageRootGate(lineageId: string, executor: RepairStoreExecutor = db): Promise<LineageRootGate | null> {
+  const [root] = await executor
     .select({
       id: artifactReviewGates.id,
       runId: artifactReviewGates.runId,
@@ -746,30 +794,168 @@ export async function readRepairLineageRootGate(successorReviewTaskId: string): 
       pinnedTargets: artifactReviewGates.pinnedTargets,
     })
     .from(artifactReviewGates)
-    .where(eq(artifactReviewGates.id, repair.lineageId))
+    .where(eq(artifactReviewGates.id, lineageId))
     .limit(1);
   return root ?? null;
 }
 
-/** Is the repair lineage that `gateId` started still open (cinatra#4312)? Open
- * while its latest attempt waits for the producer (`requested` / `dispatched`),
- * or has pinned a successor gate that is not decided yet (or cannot be read).
- * An escalated or stale attempt has no successor to wait for, so it is not open.
- * A successor that itself received `changes_requested` opened the next attempt of
- * the same lineage, so the latest attempt is always the one to read. */
+function isDeclaredRoot(root: LineageRootGate): boolean {
+  return isDeclaredReviewLeg({
+    runId: root.runId, orgId: root.orgId, reviewTaskId: root.reviewTaskId, pinnedTargets: root.pinnedTargets,
+  });
+}
+
+/** Did this repair lineage start on a later leg of a per-artifact DECLARED
+ * review (cinatra#4312: the featured image's)? Throws `missing-root-gate` when the
+ * gate the lineage started on cannot be read. */
+export async function isDeclaredReviewLineage(lineageId: string, executor: RepairStoreExecutor = db): Promise<boolean> {
+  const root = await readLineageRootGate(lineageId, executor);
+  if (!root) throw new RepairLineageStateError("missing-root-gate", `lineage ${lineageId} has no root gate`);
+  return isDeclaredRoot(root);
+}
+
+const SUCCESSOR_TASK_TAIL = /^([^:]+):([1-9][0-9]*)$/;
+
+/** The gate a repair-SUCCESSOR gate's lineage started on (the gate that first
+ * received `changes_requested`). cinatra#4312: the resume worker reads it to find
+ * the declared review leg a regenerated picture's successor gate answers.
+ *
+ * Strict: the task id must be `${PREFIX}<repairId>:<attempt>`, the repair must
+ * exist, carry that attempt, be `repaired` and name THIS gate (`successorGateId`)
+ * as its successor, and the root gate must exist. Any other state throws a
+ * `RepairLineageStateError` naming it; nothing collapses into "no lineage". */
+export async function readRepairLineageRootGate(
+  successorReviewTaskId: string,
+  successorGateId: string,
+): Promise<LineageRootGate> {
+  const tail = isRepairSuccessorTaskId(successorReviewTaskId)
+    ? SUCCESSOR_TASK_TAIL.exec(successorReviewTaskId.slice(REPAIR_SUCCESSOR_TASK_PREFIX.length))
+    : null;
+  if (!tail) {
+    throw new RepairLineageStateError("malformed-successor-task", `not a repair successor task id: ${successorReviewTaskId}`);
+  }
+  const [, repairId, attempt] = tail;
+  const repair = await readRepair(repairId);
+  if (!repair) throw new RepairLineageStateError("unknown-repair", `repair ${repairId} not found`);
+  if (String(repair.attempt) !== attempt) {
+    throw new RepairLineageStateError("attempt-mismatch", `repair ${repairId} is attempt ${repair.attempt}, the task names ${attempt}`);
+  }
+  if (repair.status !== "repaired" || repair.successorGateId !== successorGateId) {
+    throw new RepairLineageStateError("successor-mismatch", `repair ${repairId} does not name gate ${successorGateId} as its successor`);
+  }
+  const root = await readLineageRootGate(repair.lineageId);
+  if (!root) throw new RepairLineageStateError("missing-root-gate", `lineage ${repair.lineageId} has no root gate`);
+  return root;
+}
+
+/** Is the repair lineage that `gateId` started still open (cinatra#4312)? An
+ * allow-list over the LATEST attempt (a successor that itself received
+ * `changes_requested` opened the next attempt of the same lineage):
+ *   - `requested` / `dispatched` — the producer has not answered: open;
+ *   - `repaired` — open while its successor gate is `pending`, closed once it is
+ *     `resolved`;
+ *   - `escalated` / `stale` — no successor to wait for: closed.
+ * Every other state throws a `RepairLineageStateError`: no repair row for a gate
+ * settled as changes requested, an unknown status, a `repaired` attempt without a
+ * successor id, a successor gate that is missing or in an unknown status. */
 export async function isRepairLineageOpen(gateId: string): Promise<boolean> {
   const chain = await readRepairLineage(gateId);
   const latest = chain[chain.length - 1];
-  if (!latest) return false;
-  if (latest.status === "requested" || latest.status === "dispatched") return true;
-  if (latest.status !== "repaired") return false;
-  if (!latest.successorGateId) return true;
+  if (!latest) throw new RepairLineageStateError("missing-repair", `gate ${gateId} has no repair lineage`);
+  switch (latest.status) {
+    case "requested":
+    case "dispatched":
+      return true;
+    case "escalated":
+    case "stale":
+      return false;
+    case "repaired":
+      break;
+    default:
+      throw new RepairLineageStateError("unknown-repair-status", `repair ${latest.id} has status ${latest.status}`);
+  }
+  if (!latest.successorGateId) {
+    throw new RepairLineageStateError("repaired-without-successor", `repair ${latest.id} is repaired with no successor gate`);
+  }
   const [successor] = await db
     .select({ status: artifactReviewGates.status })
     .from(artifactReviewGates)
     .where(eq(artifactReviewGates.id, latest.successorGateId))
     .limit(1);
-  return successor?.status !== "resolved";
+  if (!successor) {
+    throw new RepairLineageStateError("missing-successor-gate", `successor gate ${latest.successorGateId} not found`);
+  }
+  if (successor.status === "pending") return true;
+  if (successor.status === "resolved") return false;
+  throw new RepairLineageStateError("unknown-gate-status", `successor gate ${latest.successorGateId} has status ${successor.status}`);
+}
+
+/**
+ * cinatra#4312 — WAKE a declared review's paused run once a lineage that one of
+ * its legs started closes WITHOUT a successor to decide (`escalated` at record
+ * time or by the dispatch drain, `stale` on a moved base). Runs inside the
+ * caller's transaction, so the terminal write and the wake commit together.
+ *
+ * While the lineage was open, the resume worker acknowledged every decision of
+ * the family without sending it (the run stays parked), and a leg settled as
+ * changes requested writes no resume intent. With no successor left, nothing
+ * would ever resume the run. So one intent of the family goes back to
+ * `pending`: the worker re-reads the family and the lineage and resumes the run
+ * with that decision, as it would have had the lineage been closed already. While
+ * a lineage of the family is open no intent of it is sent (the worker parks
+ * first), so the woken intent is one that was, or is being, set aside.
+ *
+ * Which one: an intent a worker holds right now (`delivering`) first, else the
+ * most recently acknowledged (`done`). Taking the held one closes the race with a
+ * worker that read the lineage as open before this commit: its lease-guarded
+ * `markResumeIntentDelivered` no longer matches (`lease-lost`), so the row stays
+ * `pending` for the next sweep instead of being acknowledged after the wake.
+ *
+ * Nothing to wake: the root is no declared review leg (or cannot be read), the
+ * run is no longer `pending_approval`, or no decision of the family was
+ * acknowledged yet (the family's next decision writes its own intent).
+ */
+export async function wakeDeclaredReviewAfterTerminalRepair(
+  executor: RepairStoreExecutor,
+  lineageId: string,
+): Promise<string | null> {
+  const root = await readLineageRootGate(lineageId, executor);
+  if (!root || !isDeclaredRoot(root)) return null;
+  const [run] = await executor
+    .select({ status: agentRuns.status })
+    .from(agentRuns)
+    .where(eq(agentRuns.id, root.runId))
+    .limit(1);
+  if (run?.status !== "pending_approval") return null;
+  const base = baseReviewTaskId(root.reviewTaskId);
+  const legIds = (
+    await executor
+      .select({ id: artifactReviewGates.id, reviewTaskId: artifactReviewGates.reviewTaskId })
+      .from(artifactReviewGates)
+      .where(eq(artifactReviewGates.runId, root.runId))
+  )
+    .filter((g) => baseReviewTaskId(g.reviewTaskId) === base)
+    .map((g) => g.id);
+  if (legIds.length === 0) return null;
+  const candidates = await executor
+    .select({ gateId: artifactReviewResumeOutbox.gateId, status: artifactReviewResumeOutbox.status })
+    .from(artifactReviewResumeOutbox)
+    .where(
+      and(
+        inArray(artifactReviewResumeOutbox.gateId, legIds),
+        inArray(artifactReviewResumeOutbox.status, ["delivering", "done"]),
+        isNull(artifactReviewResumeOutbox.deadLetteredAt),
+      ),
+    )
+    .orderBy(desc(artifactReviewResumeOutbox.updatedAt));
+  const chosen = candidates.find((c) => c.status === "delivering") ?? candidates[0];
+  if (!chosen) return null;
+  const woken = await executor
+    .update(artifactReviewResumeOutbox)
+    .set({ status: "pending", leaseToken: null, leaseExpiresAt: null, updatedAt: sql`now()` })
+    .where(and(eq(artifactReviewResumeOutbox.gateId, chosen.gateId), eq(artifactReviewResumeOutbox.status, chosen.status)))
+    .returning({ gateId: artifactReviewResumeOutbox.gateId });
+  return woken[0]?.gateId ?? null;
 }
 
 function toRepairRow(r: typeof lifecycleRepair.$inferSelect): RepairRow {

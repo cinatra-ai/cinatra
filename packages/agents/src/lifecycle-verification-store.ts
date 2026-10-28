@@ -102,6 +102,9 @@ export type VerificationRecordResult =
       reopenedGateId: string | null;
       /** True when a failure was NOT reopened because the cycle bound was reached. */
       escalated: boolean;
+      /** cinatra#4312 — true when a failure was NOT reopened because the successor
+       * gate of a declared review leg's repair already reviews this revision. */
+      reopenWithheld?: boolean;
     }
   | { ok: false; code: string; error: string };
 
@@ -131,6 +134,8 @@ interface WriteVerificationInput {
   attempt: number;
   maxCycles?: number;
   expiresAt?: Date | null;
+  /** cinatra#4312 — record the verdict but reopen no gate (see recordVerificationForRepair). */
+  withholdReopen?: boolean;
 }
 
 /** Compute the verdict, persist the record, and reopen exactly one bounded gate on
@@ -203,6 +208,9 @@ async function writeVerificationRecordAndMaybeReopen(
   // re-drive. `submitRepairResponse`'s idempotent-replay branch RE-RUNS this exact
   // trigger for precisely that reason. Fail-closed either way (an unwritten reopen
   // leaves the effect HELD, never released).
+  if (input.withholdReopen === true) {
+    return { ok: true, verificationId: id, gateId: input.gateId, verdict, idempotent, reopenedGateId: null, escalated: false, reopenWithheld: true };
+  }
   const maxCycles = input.maxCycles ?? MAX_REPAIR_CYCLES;
   if (input.attempt >= maxCycles) {
     return { ok: true, verificationId: id, gateId: input.gateId, verdict, idempotent, reopenedGateId: null, escalated: true };
@@ -283,6 +291,15 @@ export async function recordVerificationForRepair(input: {
 
   const findings = ((repair.findings as RepairFinding[]) ?? []).map((f) => ({ id: f.id, path: f.path ?? null }));
 
+  // cinatra#4312 — the repair of a declared review leg (the featured image's
+  // Regenerate) pins its successor in a gate the person reviews next, on the same
+  // revision a reopen would pin. The verdict is recorded on that successor gate;
+  // a second pending gate on the same revision is not opened (one new pending
+  // gate per Regenerate). A lineage root that cannot be read throws (the caller's
+  // best-effort trigger swallows it): no reopen is minted on an unread lineage.
+  const { isDeclaredReviewLineage } = await import("./lifecycle-repair-store");
+  const withholdReopen = await isDeclaredReviewLineage(repair.lineageId);
+
   return writeVerificationRecordAndMaybeReopen({
     gateId: repair.successorGateId,
     orgId: repair.orgId,
@@ -298,6 +315,7 @@ export async function recordVerificationForRepair(input: {
     attempt: repair.attempt,
     maxCycles: input.maxCycles,
     expiresAt: input.expiresAt,
+    withholdReopen,
   });
 }
 

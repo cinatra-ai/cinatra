@@ -136,10 +136,15 @@ export async function deliverArtifactReviewResumeIntent(
     // (the featured image's) settled that leg and opened this successor gate on
     // its repair lineage. The run the leg paused waits for THIS decision, so the
     // intent takes that leg's WayFlow road below (with this gate's own decision).
+    // The lineage read is strict: a malformed task id, an unknown repair, another
+    // attempt, a repair that does not name this gate, or a missing root gate
+    // THROWS (RepairLineageStateError), and the sweep leaves the intent for
+    // re-claim. A successor whose lineage started on any other gate keeps the
+    // automatic-gate road.
     if (isRepairSuccessorTaskId(reviewTaskId)) {
       const { readRepairLineageRootGate } = await import("./lifecycle-repair-store");
-      const leg = await readRepairLineageRootGate(reviewTaskId);
-      if (leg && isDeclaredReviewLeg({ runId: leg.runId, orgId: leg.orgId,
+      const leg = await readRepairLineageRootGate(reviewTaskId, gateId);
+      if (isDeclaredReviewLeg({ runId: leg.runId, orgId: leg.orgId,
         reviewTaskId: leg.reviewTaskId, pinnedTargets: leg.pinnedTargets })) {
         return deliverArtifactReviewResumeIntent({ ...intent, reviewTaskId: leg.reviewTaskId });
       }
@@ -414,8 +419,12 @@ export async function deliverArtifactReviewResumeIntent(
  * cinatra#4312 — is a regenerated artifact of this pause still under review? A
  * leg settled as `changes_requested` (Regenerate) is resolved, so the family can
  * read complete while the successor gate of its repair lineage is still open.
- * The run stays parked until that lineage is decided. A failed read propagates,
- * like the sibling read above: it never authorizes a resume.
+ * The run stays parked until that lineage is decided. A failed read, and a
+ * lineage in a missing, malformed or unknown state (RepairLineageStateError),
+ * propagates like the sibling read above: it never authorizes a resume and never
+ * acknowledges this intent. A lineage that closes with no successor (escalated,
+ * stale) wakes the family's last acknowledged intent in the same commit
+ * (lifecycle-repair-store `wakeDeclaredReviewAfterTerminalRepair`).
  */
 async function regenerationOpen(
   legs: readonly { id: string; reviewTaskId: string; disposition: string | null }[],
