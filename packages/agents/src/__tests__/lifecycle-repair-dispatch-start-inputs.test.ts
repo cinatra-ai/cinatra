@@ -2,8 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PgDialect } from "drizzle-orm/pg-core";
 
 // Only external persistence, queue and identity-reading ports are replaced.
-// The real dispatcher, coordinator, system authority mint, ActorContext
-// builder and current CMS task projection execute. No run or queue job exists.
+// The real dispatcher, coordinator, system authority mint and ActorContext
+// builder execute. No run or queue job exists.
+//
+// cinatra#3862 leg 7 (slice 2): the dispatch no longer overlays CMS task text.
+// The CMS snapshot target read stays mocked as a witness that nothing asks it.
 const ports = vi.hoisted(() => ({
   reads: [] as unknown[][],
   readConditions: [] as unknown[],
@@ -14,6 +17,7 @@ const ports = vi.hoisted(() => ({
   role: "member" as "member" | undefined,
   createFailure: null as Error | null,
   queued: vi.fn(),
+  readTarget: vi.fn(),
 }));
 vi.mock("server-only", () => ({}));
 vi.mock("../db", () => ({
@@ -82,7 +86,7 @@ vi.mock("@/lib/agent-run-enqueue", () => ({
   enqueueAgentRun: ports.queued,
 }));
 vi.mock("../cms-snapshot-readback-store", () => ({
-  readCmsSnapshotTargetByArtifact: async () => ports.target,
+  readCmsSnapshotTargetByArtifact: ports.readTarget,
   readCmsSnapshotTargetByArtifactAndRevision: () => { throw new Error("Unexpected completion read"); },
 }));
 vi.mock("../cms-repaired-capture-port", () => ({
@@ -122,6 +126,7 @@ beforeEach(() => {
   ports.reads = []; ports.readConditions = []; ports.updateResults = []; ports.writes = []; ports.created = [];
   ports.target = null; ports.role = "member"; ports.createFailure = null;
   vi.clearAllMocks();
+  ports.readTarget.mockImplementation(async () => ports.target);
 });
 
 describe("generic producing-run input inheritance", () => {
@@ -138,17 +143,13 @@ describe("generic producing-run input inheritance", () => {
     expect(query.params).toEqual(["producer-original", "repair-org"]);
   });
 
-  it("overlays the current CMS task without dropping inherited root inputs or borrowing the old task", async () => {
-    arrangeProducer({ instanceId: "site-42", contentId: "content-42", instructions: "Original input", task: "Stale task", lifecycleRepairRequest: { repairId: "old" } });
+  it("overlays no CMS task on a captured CMS base: the inherited inputs stay, with the current typed request", async () => {
+    arrangeProducer({ instanceId: "site-42", contentId: "content-42", instructions: "Original input", task: "Own task", lifecycleRepairRequest: { repairId: "old" } });
     ports.target = cmsTarget();
     await dispatchPendingProducerRepairs();
-    expect(inputParams()).toMatchObject({ instanceId: "site-42", contentId: "content-42",
-      lifecycleRepairRequest: { repairId: "repair-current", findings: [currentFinding] } });
-    expect(inputParams().instructions).toContain(currentFinding.message);
-    expect(inputParams().instructions).not.toContain("Original input");
-    expect(inputParams().task).toBe(inputParams().instructions);
-    expect(inputParams().task).toContain(currentFinding.message);
-    expect(inputParams().task).not.toContain("Stale task");
+    expect(ports.readTarget).not.toHaveBeenCalled();
+    expect(inputParams()).toEqual({ instanceId: "site-42", contentId: "content-42", instructions: "Original input", task: "Own task",
+      lifecycleRepairRequest: expect.objectContaining({ repairId: "repair-current", findings: [currentFinding] }) });
   });
 
   it("does not read inputs or launch a child from a producing run in another organization", async () => {

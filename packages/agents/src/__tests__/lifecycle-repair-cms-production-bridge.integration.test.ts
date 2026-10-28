@@ -270,7 +270,9 @@ async function driveToDispatchedCmsRepair(): Promise<{
 }
 
 describe.skipIf(!HAS_DB)("cinatra#2286 S10 PR2 — the delivered-repair execution bridge", () => {
-  it("TASK CONSTRUCTION: a CMS base target projects a task onto the dispatched run's inputParams", async () => {
+  // cinatra#3862 leg 7 (slice 2): the dispatch drain no longer asks this bridge
+  // for task text, so a CMS base is dispatched like every other base.
+  it("TASK CONSTRUCTION (leg 7): a CMS base target projects NO task; the run carries the delivered request only", async () => {
     const ctx = await driveToDispatchedCmsRepair();
     const runRow = await pool(
       `SELECT input_params FROM "${q(TEST_SCHEMA)}"."agent_runs" WHERE id=$1`,
@@ -278,11 +280,11 @@ describe.skipIf(!HAS_DB)("cinatra#2286 S10 PR2 — the delivered-repair executio
     );
     const inputParams = JSON.parse((runRow.rows[0] as { input_params: string }).input_params) as {
       task?: string;
+      instructions?: string;
       lifecycleRepairRequest?: unknown;
     };
-    expect(inputParams.task).toBeDefined();
-    expect(inputParams.task).toContain(ctx.resourceType);
-    expect(inputParams.task).toContain(ctx.connectorInstance);
+    expect(inputParams.task).toBeUndefined();
+    expect(inputParams.instructions).toBeUndefined();
     expect(inputParams.lifecycleRepairRequest).toBeDefined();
   });
 

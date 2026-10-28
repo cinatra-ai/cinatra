@@ -3,8 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // cinatra#3862 leg 1 — the generic repair completer, read with its ports
 // replaced: the database is a queue of read results (each `db.select()` chain
 // ending in `.limit()` takes the next one; an unexpected read throws), and the
-// repair store, the dispatch store, the CMS bridge's ownership read, the
-// membership read and the revision door are spies. No database, no run, no queue.
+// repair store, the dispatch store, the membership read and the revision door
+// are spies. No database, no run, no queue.
+//
+// cinatra#3862 leg 7 (slice 2): the completer takes EVERY dispatched repair. The
+// retired CMS bridge stays mocked here only as a witness: its ownership read is
+// never asked, and in the second case the module refuses to load at all.
 //
 // The completer is imported INSIDE each case, so a module that does not exist
 // fails the case rather than the file's collection. The mocks are registered
@@ -118,7 +122,7 @@ describe("cinatra#3862 leg 1 — the generic repair completer", () => {
     const summary = await completeDispatchedProducerRepairs();
 
     expect(summary).toEqual({
-      scanned: 1, completed: 1, pending: 0, unresolved: 0, skipped: 0, skippedUnknownOwner: 0, failed: 0,
+      scanned: 1, completed: 1, pending: 0, unresolved: 0, failed: 0,
     });
     expect(ports.submitRepairResponse).toHaveBeenCalledTimes(1);
     expect(ports.submitRepairResponse).toHaveBeenCalledWith(expect.objectContaining({
@@ -138,25 +142,59 @@ describe("cinatra#3862 leg 1 — the generic repair completer", () => {
     expect(ports.reads).toHaveLength(0);
   });
 
-  it("a repair whose base is a CMS snapshot is left to the bridge", async () => {
-    ports.readRepair.mockResolvedValue(dispatchedRepair("art-cms", "rev-cms"));
+  // The base below HAS a cms_snapshot_targets row (the bridge's resolver finds
+  // one). Before leg 7 the completer skipped such a repair and left it to the
+  // CMS bridge; now the generic completer finishes it like any other repair.
+  function finishedRunOnBase(base: string, rev: string) {
+    ports.readRepair.mockResolvedValue(dispatchedRepair(base, rev));
+    ports.reads = [
+      [{ id: "repair-1" }],
+      [{ status: "completed" }],
+      [{ artifactId: "art-run", representationRevisionId: "rev-run" }],
+      [{ deletedAt: null }],
+    ];
+    ports.readDeliveredRepairRequest.mockResolvedValue({ originatingRunBy: "user-1" });
+    ports.resolveOrgRoleForUser.mockResolvedValue("member");
+    ports.refileRevisionOntoArtifact.mockReturnValue({ artifactId: base, representationRevisionId: "rev-refiled" });
+    ports.submitRepairResponse.mockResolvedValue({ ok: true });
+  }
+
+  it("a repair whose base is a captured CMS snapshot is completed by the generic completer, not left to the bridge", async () => {
+    finishedRunOnBase("art-cms", "rev-cms");
     ports.resolveCmsRepairBaseTarget.mockResolvedValue({
       artifactId: "art-cms", snapshotRevisionId: "rev-cms", connectorInstance: "cms-1",
       resourceType: "page", resourceId: "page-1", scopeManifest: { paths: ["title"] },
     });
-    ports.reads = [[{ id: "repair-1" }]];
 
     const { completeDispatchedProducerRepairs } = await import("../lifecycle-repair-producer-completion-store");
     const summary = await completeDispatchedProducerRepairs();
 
-    expect(summary.skipped).toBe(1);
-    expect(summary.completed).toBe(0);
-    expect(summary.unresolved).toBe(0);
-    expect(ports.resolveCmsRepairBaseTarget).toHaveBeenCalledWith({
-      baseTarget: { artifactId: "art-cms", representationRevisionId: "rev-cms" },
-    });
+    expect(summary).toEqual({ scanned: 1, completed: 1, pending: 0, unresolved: 0, failed: 0 });
+    expect(ports.resolveCmsRepairBaseTarget).not.toHaveBeenCalled();
+    expect(ports.submitRepairResponse).toHaveBeenCalledTimes(1);
+    expect(ports.submitRepairResponse).toHaveBeenCalledWith(expect.objectContaining({
+      repairId: "repair-1",
+      response: expect.objectContaining({
+        baseTarget: { artifactId: "art-cms", representationRevisionId: "rev-cms" },
+        successorTarget: { artifactId: "art-cms", representationRevisionId: "rev-refiled" },
+      }),
+    }));
     expect(ports.reads).toHaveLength(0);
-    expect(ports.submitRepairResponse).not.toHaveBeenCalled();
-    expect(ports.refileRevisionOntoArtifact).not.toHaveBeenCalled();
+  });
+
+  it("the completer never loads the CMS bridge: a bridge that cannot load changes nothing", async () => {
+    finishedRunOnBase("art-cms", "rev-cms");
+    vi.doMock("../lifecycle-repair-cms-production-bridge", () => {
+      throw new Error("the generic completer must not load the CMS bridge");
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { completeDispatchedProducerRepairs } = await import("../lifecycle-repair-producer-completion-store");
+    const summary = await completeDispatchedProducerRepairs();
+
+    expect(summary).toEqual({ scanned: 1, completed: 1, pending: 0, unresolved: 0, failed: 0 });
+    expect(ports.submitRepairResponse).toHaveBeenCalledTimes(1);
+    expect(error).not.toHaveBeenCalled();
+    expect(ports.reads).toHaveLength(0);
   });
 });

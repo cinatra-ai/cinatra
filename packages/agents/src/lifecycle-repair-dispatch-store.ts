@@ -57,9 +57,9 @@ import "server-only";
 //   • actually ENQUEUES the repair run (`enqueueAgentRun`, `jobId: runId` for
 //     BullMQ-level dedup across a re-drain) so a `dispatched` repair genuinely
 //     runs, dispatched exactly like any other agent run;
-//   • projects an optional CMS-generic task/`inputParams` addition (see
-//     `./lifecycle-repair-cms-production-bridge`) when the base target is a
-//     captured CMS snapshot — a no-op for every other producer (e.g. blog);
+//   • (it also projected a CMS-generic task/`inputParams` addition when the
+//     base target was a captured CMS snapshot; cinatra#3862 leg 7 removed that
+//     projection, so every producer's repair run starts from the same inputs);
 //   • THE SECURITY FIX: the dispatched run's ActorContext is the ORIGINATING
 //     producing run's own `runBy`, re-verified LIVE at dispatch time via
 //     `resolveOrgRoleForUser` (never trusted from whatever the producing run
@@ -306,17 +306,9 @@ export async function dispatchPendingProducerRepairs(opts?: {
 
       const runId = repairRunId(row.id);
 
-      // CMS-generic task-construction (cinatra#2286 S10 PR2 — the execution
-      // bridge). Dynamically imported so a non-CMS repairing producer (e.g.
-      // the blog pipeline) never pulls this module's DB reads into the common
-      // dispatch path; it resolves to `{}` (no-op) whenever the base target is
-      // not itself a captured CMS snapshot, so dispatch stays byte-identical
-      // for every other producer.
-      const { projectCmsRepairInputParams } = await import(
-        "./lifecycle-repair-cms-production-bridge"
-      );
-      const cmsInputParams = await projectCmsRepairInputParams(request);
-
+      // ONE INPUT SHAPE FOR EVERY PRODUCER (cinatra#3862 leg 7). The repair run
+      // starts from the producing run's own inputs plus the typed request; no
+      // base type adds a task of its own here.
       const [already] = await db
         .select({ id: agentRuns.id })
         .from(agentRuns)
@@ -349,7 +341,6 @@ export async function dispatchPendingProducerRepairs(opts?: {
               orgId: row.orgId,
               inputParams: {
                 ...producer.originatingInputParams,
-                ...cmsInputParams,
                 lifecycleRepairRequest: request,
               },
               sourceType: "lifecycle_repair",
