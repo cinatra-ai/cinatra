@@ -107,10 +107,9 @@ import { reviewTargetRowFacts } from "../../../../src/lib/artifacts/review-targe
 import {
   ARTIFACT_KIND_DISPLAY_ROWS,
   type ArtifactKindDisplay,
-  type ArtifactKindDisplayField,
   type ArtifactKindDisplaySurfaceId,
 } from "./artifact-review-displays";
-import { kindDisplayFieldDriver } from "./artifact-review-display-readings";
+import { kindDisplayFieldDrivers } from "./artifact-review-display-readings";
 import {
   LIFECYCLE_CHAT_COMPOSER_MOUNT,
   type LifecycleComposerRowMount,
@@ -3036,7 +3035,7 @@ function kindDisplayKindState(surface: string, kind: string): StateAssert {
  *     once the review is continued is read on the continued mount, and its
  *     absence on the open one (`continuedOnlyField`). A field the drawing binds
  *     in several readings gets one driver, from all of its declarations
- *     (`kindDisplayFieldDriver` in artifact-review-display-readings.ts).
+ *     (`kindDisplayFieldDrivers` in artifact-review-display-readings.ts).
  *   - the one action the manifest declares, pressed on the control that declares
  *     exactly that action AND that outcome (`declaredAction`), so a driver
  *     cannot press one control and report another one's outcome.
@@ -3067,25 +3066,20 @@ function artifactKindDisplayDriver(row: ArtifactKindDisplay): SurfaceDriver {
     states: {},
   };
 
-  const declarations = new Map<string, ArtifactKindDisplayField[]>();
-  for (const field of row.fields) {
-    declarations.set(field.name, [...(declarations.get(field.name) ?? []), field]);
-  }
-  // artifact-review-display-readings.ts picks the assertion for each name's
-  // reading; this map only says what each of the three assertions does.
-  for (const [name, fields] of declarations) {
-    driver.fields[name] = kindDisplayFieldDriver(row.surface, fields, {
-      present: (binding) => async (_page: Page, root: Locator) => {
-        const bound = kindDisplayPanel(root, row.surface).locator(binding);
-        await expect(bound).toHaveCount(1);
-        await expect(bound).toBeVisible();
-      },
-      continuedOnly: (binding) => continuedOnlyField(row.surface, binding),
-      skip: (reason) => async () => {
-        test.skip(true, reason);
-      },
-    });
-  }
+  // artifact-review-display-readings.ts groups the row's declarations by name
+  // and picks the assertion for each name's reading; this map only says what
+  // each of the three assertions does.
+  driver.fields = kindDisplayFieldDrivers(row.surface, row.fields, {
+    present: (binding) => async (_page: Page, root: Locator) => {
+      const bound = kindDisplayPanel(root, row.surface).locator(binding);
+      await expect(bound).toHaveCount(1);
+      await expect(bound).toBeVisible();
+    },
+    continuedOnly: (binding) => continuedOnlyField(row.surface, binding),
+    skip: (reason) => async () => {
+      test.skip(true, reason);
+    },
+  });
 
   const action = row.action;
   if (action !== null) {

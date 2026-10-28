@@ -35,6 +35,7 @@ import {
 } from "../../../tests/e2e/design/conformance/artifact-review-displays.ts";
 import {
   kindDisplayFieldDriver,
+  kindDisplayFieldDrivers,
   kindDisplayFieldReading,
 } from "../../../tests/e2e/design/conformance/artifact-review-display-readings.ts";
 
@@ -47,6 +48,32 @@ const readJson = (p) => JSON.parse(readFileSync(p, "utf8"));
 
 /** The readings a row may declare; a declaration with no reading is "open". */
 const READINGS = ["open", "continued", "no-review"];
+
+/**
+ * The "<surface>.<name>" of every field no one driver can read, by the row
+ * check's own conditions (it does not call the reading module): a blank
+ * source, two sources, a reading outside READINGS, or open with continued.
+ */
+function unreadableFieldNames(rows) {
+  const unreadable = [];
+  for (const row of rows) {
+    const byName = new Map();
+    for (const f of row.fields) byName.set(f.name, [...(byName.get(f.name) ?? []), f]);
+    for (const [name, fields] of byName) {
+      const sources = new Set(fields.map((f) => f.source));
+      const readings = new Set(fields.map((f) => f.reading ?? "open"));
+      if (
+        fields.some((f) => typeof f.source !== "string" || f.source.trim() === "") ||
+        sources.size !== 1 ||
+        [...readings].some((r) => !READINGS.includes(r)) ||
+        (readings.has("open") && readings.has("continued"))
+      ) {
+        unreadable.push(`${row.surface}.${name}`);
+      }
+    }
+  }
+  return unreadable;
+}
 
 /** The three the wave rides on one factory (cinatra#3158's own wording). */
 const FACTORY_ONLY = ["markdown-display-tabs", "binary-download-card", "chart-display-only"];
@@ -89,29 +116,15 @@ describe("the wave covers the artifact-kind display surfaces of the staged drawi
 
   // A drawing binds a field once per reading that draws it, so one field name
   // can carry several declarations. contract.ts builds ONE driver per name from
-  // all of them (kindDisplayFieldDriver, through kindDisplayFieldReading), which
+  // all of them (kindDisplayFieldDrivers, through kindDisplayFieldReading), which
   // reads a name only if every declaration binds the same non-blank source,
   // every reading is open, continued or no-review, and the field is not both
   // drawn while the review is open and drawn only once it is continued. This
-  // test checks the same conditions on the rows without calling that function.
+  // test checks the same conditions on the rows without calling that function
+  // (unreadableFieldNames); the describe "the row check refuses" below gives it
+  // one adverse row per condition.
   it("declares each repeated field with one source and readings one driver can read", () => {
-    const unreadable = [];
-    for (const row of ARTIFACT_KIND_DISPLAY_ROWS) {
-      const byName = new Map();
-      for (const f of row.fields) byName.set(f.name, [...(byName.get(f.name) ?? []), f]);
-      for (const [name, fields] of byName) {
-        const sources = new Set(fields.map((f) => f.source));
-        const readings = new Set(fields.map((f) => f.reading ?? "open"));
-        if (
-          fields.some((f) => typeof f.source !== "string" || f.source.trim() === "") ||
-          sources.size !== 1 ||
-          [...readings].some((r) => !READINGS.includes(r)) ||
-          (readings.has("open") && readings.has("continued"))
-        ) {
-          unreadable.push(`${row.surface}.${name}`);
-        }
-      }
-    }
+    const unreadable = unreadableFieldNames(ARTIFACT_KIND_DISPLAY_ROWS);
     expect(
       unreadable,
       `${unreadable.join(", ")} is declared with a blank source, with two sources, with a reading other than ${READINGS.join(", ")}, or both open and continued — no one driver can read it.`,
@@ -135,6 +148,42 @@ describe("the wave covers the artifact-kind display surfaces of the staged drawi
     expect(
       silent,
       `${silent.join(", ")} carries no readiness sentence — a driver whose surface the branch does not have must say what it is waiting for, never skip silently.`,
+    ).toEqual([]);
+  });
+});
+
+// unreadableFieldNames on one adverse row per condition it checks, and on a
+// row it must read. Each fixture is one surface with one field name.
+describe("the row check refuses each row no one driver can read", () => {
+  const row = (...fields) => [{ surface: "s", fields }];
+  const d = (source, reading) =>
+    reading === undefined ? { name: "open-live", source } : { name: "open-live", source, reading };
+
+  it("refuses a field bound to two sources", () => {
+    expect(
+      unreadableFieldNames(row(d("artifact.sourceUrl", "continued"), d("artifact.url", "continued"))),
+    ).toEqual(["s.open-live"]);
+  });
+
+  it("refuses a field declared both open and continued", () => {
+    expect(
+      unreadableFieldNames(row(d("artifact.sourceUrl"), d("artifact.sourceUrl", "continued"))),
+    ).toEqual(["s.open-live"]);
+  });
+
+  it("refuses a field with a reading outside the closed set", () => {
+    expect(unreadableFieldNames(row(d("artifact.sourceUrl", "archived")))).toEqual(["s.open-live"]);
+  });
+
+  it("refuses a field with a blank source", () => {
+    expect(unreadableFieldNames(row(d("  ", "continued")))).toEqual(["s.open-live"]);
+  });
+
+  it("reads a field declared continued and where no review stands, bound to one source", () => {
+    expect(
+      unreadableFieldNames(
+        row(d("artifact.sourceUrl", "continued"), d("artifact.sourceUrl", "no-review")),
+      ),
     ).toEqual([]);
   });
 });
@@ -308,11 +357,13 @@ describe("the assertion a kind-display field's driver gets", () => {
   it("is what contract.ts builds every field from, each assertion under its own name", () => {
     const contract = readFileSync(path.join(CONF_DIR, "contract.ts"), "utf8");
     expect(contract).toMatch(
-      /import \{ kindDisplayFieldDriver \} from "\.\/artifact-review-display-readings";/,
+      /import \{ kindDisplayFieldDrivers \} from "\.\/artifact-review-display-readings";/,
     );
-    expect(contract).not.toMatch(/function kindDisplayField(Reading|Driver)\b/);
+    expect(contract).not.toMatch(/function kindDisplayField(Reading|Driver|Drivers)\b/);
+    // No grouping of its own: the module groups the declarations by name.
+    expect(contract).not.toMatch(/declarations\.set\(/);
     expect(contract).toMatch(
-      /driver\.fields\[name\] = kindDisplayFieldDriver\(row\.surface, fields, \{/,
+      /driver\.fields = kindDisplayFieldDrivers\(row\.surface, row\.fields, \{/,
     );
     // The presence assertion: the binding inside this display, once and visible.
     expect(contract).toMatch(
@@ -446,5 +497,61 @@ describe("the shrink-only ratchet gains nothing from this wave", () => {
       pins.manifests.some((m) => m.file === "app-artifact-review.json"),
       "the pin lands once EVERY wave for this drawing is green (epic cinatra#3155, independent pinning) — W2 covers eleven of its forty surfaces, so it must not pin it.",
     ).toBe(false);
+  });
+});
+
+// kindDisplayFieldDrivers groups a row's declarations by field name and builds
+// each name's driver from ALL of them. A grouping that kept only one
+// declaration per name would read the dashboard display's open-live by its last
+// declaration ("no-review") and skip it instead of reading it continued.
+describe("the drivers of a row's fields, one per name from every declaration", () => {
+  const tagged = {
+    present: (binding) => ["present", binding],
+    continuedOnly: (binding) => ["continuedOnly", binding],
+    skip: (reason) => ["skip", reason],
+  };
+  const d = (name, source, reading) =>
+    reading === undefined ? { name, source } : { name, source, reading };
+
+  it("reads the dashboard display's layout open and its open-live from all four declarations, continued", () => {
+    const row = ARTIFACT_KIND_DISPLAY_ROWS.find((r) => r.surface === "dashboard-display");
+    expect(kindDisplayFieldDrivers(row.surface, row.fields, tagged)).toEqual({
+      layout: {
+        source: "representation.pinned-configuration",
+        assert: ["present", '[data-field="layout=representation.pinned-configuration"]'],
+      },
+      "open-live": {
+        source: "artifact.sourceUrl",
+        assert: ["continuedOnly", '[data-field="open-live=artifact.sourceUrl"]'],
+      },
+    });
+  });
+
+  it("reads a name continued when its continued declaration comes first or last, between other names", () => {
+    for (const fields of [
+      [d("a", "x.a", "continued"), d("b", "x.b"), d("a", "x.a", "no-review")],
+      [d("a", "x.a", "no-review"), d("b", "x.b"), d("a", "x.a", "continued")],
+    ]) {
+      expect(kindDisplayFieldDrivers("s", fields, tagged)).toEqual({
+        a: { source: "x.a", assert: ["continuedOnly", '[data-field="a=x.a"]'] },
+        b: { source: "x.b", assert: ["present", '[data-field="b=x.b"]'] },
+      });
+    }
+  });
+
+  it("refuses a name whose declarations conflict, even when they are not adjacent", () => {
+    expect(() =>
+      kindDisplayFieldDrivers("s", [d("a", "x.a"), d("b", "x.b"), d("a", "x.a", "continued")], tagged),
+    ).toThrow(/s: "a" is declared with sources x\.a in readings open, continued/);
+    expect(() =>
+      kindDisplayFieldDrivers("s", [d("a", "x.a", "continued"), d("a", "x.other", "continued")], tagged),
+    ).toThrow(/declared with sources x\.a, x\.other/);
+  });
+
+  it("builds a driver for every name of every row of the wave", () => {
+    for (const row of ARTIFACT_KIND_DISPLAY_ROWS) {
+      const names = [...new Set(row.fields.map((f) => f.name))];
+      expect(Object.keys(kindDisplayFieldDrivers(row.surface, row.fields, tagged))).toEqual(names);
+    }
   });
 });

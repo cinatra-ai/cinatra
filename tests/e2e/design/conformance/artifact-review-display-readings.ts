@@ -1,9 +1,9 @@
 // The driver of a kind-display field (cinatra#4388).
 //
 // contract.ts builds one driver per field name of an artifact-kind display row.
-// This module decides which reading that driver reads (kindDisplayFieldReading)
-// and which of the three assertions it gets for that reading
-// (kindDisplayFieldDriver). It has no Playwright import, so that the wave test
+// This module groups a row's declarations by field name (kindDisplayFieldDrivers),
+// decides which reading each name's driver reads (kindDisplayFieldReading) and
+// which of the three assertions it gets for that reading (kindDisplayFieldDriver). It has no Playwright import, so that the wave test
 // (scripts/design/__tests__/conformance-artifact-review-wave.test.mjs) can call
 // both on every branch without a browser; contract.ts supplies the three
 // assertions themselves.
@@ -90,4 +90,25 @@ export function kindDisplayFieldDriver<A>(
         ),
       };
   }
+}
+
+/**
+ * The drivers of every field a row declares, one per field name, each built by
+ * kindDisplayFieldDriver from ALL of that name's declarations in the row's
+ * order (a drawing binds a field once per reading that draws it).
+ */
+export function kindDisplayFieldDrivers<A>(
+  surface: string,
+  fields: readonly ArtifactKindDisplayField[],
+  assertions: KindDisplayFieldAssertions<A>,
+): Record<string, { source: string; assert: A }> {
+  const declarations = new Map<string, ArtifactKindDisplayField[]>();
+  for (const field of fields) {
+    declarations.set(field.name, [...(declarations.get(field.name) ?? []), field]);
+  }
+  const drivers: Record<string, { source: string; assert: A }> = {};
+  for (const [name, named] of declarations) {
+    drivers[name] = kindDisplayFieldDriver(surface, named, assertions);
+  }
+  return drivers;
 }
