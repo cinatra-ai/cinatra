@@ -112,11 +112,14 @@ const ALLOWED_API_URLS = new Set([
 
 /**
  * The ONE further call shape a text leaf may carry (cinatra#4314): a read of the
- * text of the brand voice picked for the run, through the read-only
- * `brand_voice_text` extension tool. That is the typed content read cinatra#4402
- * put on the host (src/lib/extension-scoped-tools.ts); a slot binding is only a
- * reference, and the bridge does not resolve it. It writes nothing to the
- * project store, and it attaches no toolbox to the model's turn.
+ * text of the brand voice picked for the run, through `brand_voice_text`. That
+ * is a tool module the agent's pack declares; the host runs it on its generic
+ * `extension_tool` road (src/lib/extension-scoped-tools.ts:61, :111;
+ * src/app/api/agents/passthrough/route.ts:788), and the artifact reads it makes
+ * are typed by cinatra#4402. A slot binding is only a reference, and the bridge
+ * does not resolve it. The pack describes the module as a read; this gate
+ * matches the call shape only, and the node attaches no toolbox to the model's
+ * turn.
  *
  * Matched EXACTLY — URL, method and the whole request body — and at most once
  * per leaf: any other passthrough body, tool, tool name, binding source or URL,
@@ -135,7 +138,7 @@ const BRAND_VOICE_READ = {
   },
 };
 
-function isBrandVoiceRead(c: Record<string, any>): boolean {
+function isBrandVoiceRead(c: Ref): boolean {
   return (
     c.component_type === "ApiNode" &&
     c.url === BRAND_VOICE_READ.url &&
@@ -145,7 +148,7 @@ function isBrandVoiceRead(c: Record<string, any>): boolean {
 }
 
 /** Every endpoint problem of (d) over a leaf's components; empty means clean. */
-function endpointProblems(components: Array<Record<string, any>>): string[] {
+function endpointProblems(components: Ref[]): string[] {
   const problems: string[] = [];
   let reads = 0;
   for (const c of components) {
@@ -424,7 +427,7 @@ for (const p of PRODUCTS) {
  * pins.
  * ------------------------------------------------------------------------- */
 describe("blog-text parity (d): the brand-voice read is the only added call shape", () => {
-  const read = (over: Record<string, any> = {}, data: Record<string, any> = {}) => ({
+  const read = (over: Ref = {}, data: Ref = {}) => ({
     component_type: "ApiNode",
     id: "read_brand_voice",
     url: BRAND_VOICE_READ.url,
@@ -463,7 +466,7 @@ describe("blog-text parity (d): the brand-voice read is the only added call shap
       expect(endpointProblems([bridgeNode, c])).toContain(refused("read_brand_voice", passthrough));
     }
     const noTool = read();
-    delete (noTool.data as Record<string, any>).tool;
+    delete (noTool.data as Ref).tool;
     expect(endpointProblems([noTool])).toContain(refused("read_brand_voice", passthrough));
   });
 
@@ -476,6 +479,13 @@ describe("blog-text parity (d): the brand-voice read is the only added call shap
     ]) {
       expect(endpointProblems([read({ url })])).toEqual([refused("read_brand_voice", url)]);
     }
+  });
+
+  it("refuses an allowlisted URL that is not a string", () => {
+    const url = [LLM_BRIDGE_URL];
+    expect(endpointProblems([{ ...bridgeNode, url }])).toEqual([
+      `ApiNode write calls a non-allowlisted endpoint: ${JSON.stringify(url)}`,
+    ]);
   });
 
   it("keeps refusing a non-empty toolbox on any other node", () => {
