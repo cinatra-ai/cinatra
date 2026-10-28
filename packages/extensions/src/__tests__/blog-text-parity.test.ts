@@ -115,7 +115,7 @@ const ALLOWED_API_URLS = new Set([
  * text of the brand voice picked for the run, through `brand_voice_text`. That
  * is a tool module the agent's pack declares; the host runs it on its generic
  * `extension_tool` road (src/lib/extension-scoped-tools.ts:61, :111;
- * src/app/api/agents/passthrough/route.ts:788), and the artifact reads it makes
+ * src/app/api/agents/passthrough/route.ts:636-659), and the artifact reads it makes
  * are typed by cinatra#4402. A slot binding is only a reference, and the bridge
  * does not resolve it. The pack describes the module as a read; this gate
  * matches the call shape only, and the node attaches no toolbox to the model's
