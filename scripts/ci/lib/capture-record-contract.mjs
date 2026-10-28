@@ -228,7 +228,7 @@ export const CARD_KINDS = {
     // control the plan puts on it. What a settled capture owes is graded by the
     // anchor set instead, where `[data-action="save-schedule-changes"]` is a
     // ratified member.
-    decisionControls: ['[data-action="confirm-schedule-proposal"]'],
+    decisionControls: ['[data-action="confirm-schedule -> scheduled"]'],
   },
   verification_summary: {
     cellTokens: ["verification-card", "audit-card", "verification"],

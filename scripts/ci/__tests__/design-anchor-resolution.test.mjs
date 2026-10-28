@@ -256,7 +256,7 @@ describe("passive capture markers are accounted for separately from drawn parts"
       '[data-lifecycle-card="unknown_card"]',
       '[data-embed-assistant][data-phase="starting"]',
       '[data-conformance-id="hitl-screen-fields"]',
-      '[data-action="confirm-schedule-proposal"]',
+      '[data-action="confirm-schedule -> scheduled"]',
       '[data-skill-action="confirm"]',
       '[data-skill-action="adjust"]',
       '[data-skill-action="skip"]',
@@ -604,8 +604,15 @@ describe("the report", () => {
     expect(capture.length).toBeGreaterThan(0);
     for (const a of capture) {
       expect(a.selector).not.toContain("composition-only");
-      expect(a.selector).not.toContain(" ");
+      // No field boundary inside a selector: a space OUTSIDE a quoted attribute
+      // literal would be the scope / expect / within / tier tail left behind.
+      // A space INSIDE a quoted literal belongs to the selector, as
+      // captureAssertionOf documents — the drawn schedule Confirm,
+      // `confirm-schedule -> scheduled` (cinatra#4390), carries two.
+      expect(a.selector.replace(/"[^"]*"|'[^']*'/g, '""')).not.toContain(" ");
     }
+    // ...and that selector is collected whole, quoted spaces and all.
+    expect(capture.map((a) => a.selector)).toContain('[data-action="confirm-schedule -> scheduled"]');
   });
 
   it("DECIDES every selector the live recorded set carries today, refusing none", () => {

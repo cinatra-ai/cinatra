@@ -439,6 +439,29 @@ describe("bindEvidenceCells", () => {
   });
 });
 
+// The capture index's sentence that says what it holds, and the next one, word
+// for word, up to the first words of the sentence after them (cinatra#4392).
+const INDEX_HOLDS =
+  "WHAT IS ACTUALLY IN IT, read off the records below rather than remembered: records on all four hosts. " +
+  "No sentence here keeps their total; the census ratchet of the record-contract suite counts them. " +
+  "Each group is ONE run of the recorder";
+function indexProse() {
+  return JSON.parse(readFileSync(CAPTURE_INDEX_PATH, "utf8")).$comment.join(" ");
+}
+function indexProseProblems(prose) {
+  if (prose.split("WHAT IS ACTUALLY IN IT").length !== 2) return ["the index's prose does not say once what it holds"];
+  if (prose.split(INDEX_HOLDS).length !== 2) return ["the sentence that says what the index holds is not its text"];
+  return [];
+}
+const onceIn = (re, to) => (text) =>
+  (text.match(new RegExp(re.source, "g")) ?? []).length === 1 ? text.replace(re, to) : null;
+const INDEX_PROSE_MUTANTS = [
+  ["the old total put back", onceIn(/remembered: records on all/, "remembered: SEVENTY-NINE records on all")],
+  ["a total with a word between number and records",
+    onceIn(/remembered: records on all/, "remembered: 79 indexed records on all")],
+  ["a total in the next sentence", onceIn(/on all four hosts\. /, "on all four hosts. The index holds 79 records. ")],
+];
+
 describe("the advisory state — one kind's vocabulary, not every kind's", () => {
   // §VII's audit card resolves `advisory` and nothing else that DRAWS:
   // "TWO STATES DRAW, AND ONLY TWO … `advisory` — the reading — or `absent`,
@@ -666,13 +689,42 @@ describe("the advisory state — one kind's vocabulary, not every kind's", () =>
       // measurements and the code facts.
       "recommendation_hold | site_widget | decided": 6,
       "recommendation_hold | site_widget | pending": 7,
-      "trigger_schedule_proposal | chat_thread | decided": 4,
-      "trigger_schedule_proposal | chat_thread | pending": 4,
-      "trigger_schedule_proposal | run_card | decided": 2,
+      // MOVED 2026-10-27 by cinatra#4390 (-10): the schedule card's one
+      // decision control now carries the drawn
+      // `[data-action="confirm-schedule -> scheduled"]`. The ten S9d-rework
+      // records counted the earlier value and never looked for the drawn one,
+      // so they are withdrawn from the index rather than edited by hand:
+      //
+      //   trigger_schedule_proposal | chat_thread | decided   4 -> 0
+      //   trigger_schedule_proposal | chat_thread | pending   4 -> 0
+      //   trigger_schedule_proposal | run_card | decided      2 -> 0
+      //
+      // The re-shoot that brings these three buckets back is the open item of
+      // cinatra#4390; the acceptance manifest's schedule row is `partial` until
+      // it lands.
       "verification_summary | page_gate_region | advisory": 1,
       "verification_summary | run_card | advisory": 1,
     });
-    expect(index.records.length).toBe(111);
+    expect(index.records.length).toBe(101);
+  });
+
+  it("the index's own prose keeps no record total: the census above is the one count", () => {
+    // The paragraph that says what the index holds said "SEVENTY-NINE records"
+    // while the array held 101: a hand-kept total that no capture batch moved.
+    // The count lives in the ratchet above, so the prose names none. Counts of
+    // one group of records elsewhere in the prose are not totals and stay.
+    // A pattern for "a number before records" misses a total in other words or
+    // in the next sentence, so the two sentences are pinned WHOLE, with the
+    // first words of the sentence after them: nothing can be added between.
+    expect(indexProseProblems(indexProse())).toEqual([]);
+  });
+
+  it.each(INDEX_PROSE_MUTANTS)("the index's prose refuses %s", (name, mutate) => {
+    const prose = indexProse();
+    const mutated = mutate(prose);
+    expect(mutated, `${name}: the anchor is not in the prose exactly once; re-aim the mutant`).not.toBeNull();
+    expect(mutated).not.toBe(prose);
+    expect(indexProseProblems(mutated), name).not.toEqual([]);
   });
 });
 
