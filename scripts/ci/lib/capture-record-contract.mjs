@@ -744,8 +744,12 @@ export function requiredAssertionsFor({ host, kind, state, cell = null }) {
    * The host's own group where the kind names one — a kind whose reading
    * differs by host cannot be graded from one list. A cell named on the kind's
    * frozen pre-redraw list is a picture of the reading that host drew BEFORE the
-   * redraw, so it is graded against that reading instead, and the shipped
-   * control is forbidden on it so the name cannot be reused for a re-shoot.
+   * redraw, so it is graded against that reading instead. Such a cell owes the
+   * whole retired trio, so a re-shoot of the SHIPPED card under an old name is
+   * refused. The shipped control is NOT forbidden on it: a picture of the trio
+   * plus Continue under an old name is admitted here. Forbidding it would make
+   * the strict tier refuse all 26 records on file, which never measured
+   * Continue. The list only shrinks, so the gap closes as cells leave it.
    */
   const preRedraw =
     cell !== null && (spec?.preChecklistPendingCells ?? []).includes(cell) && state === "pending";
