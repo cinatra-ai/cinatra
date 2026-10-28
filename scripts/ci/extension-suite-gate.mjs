@@ -1144,11 +1144,13 @@ function runVitest({ repoRoot, pkg, reportDir, slot }) {
 }
 
 // One `node --test` process per test file, in the package's own directory, so
-// a file that registers nothing is visible as such (its own summary reads
-// `# tests 0`) instead of being hidden in a package total. The TAP reporter is
-// what parseNodeTap reads; the package's `test` script is not used, for the
-// same reason runVitest does not use it.
-function runNodeTestFile({ cwd, file }) {
+// a file that registers nothing is visible as such (node 24 reports the file
+// itself as its one test, which parseNodeTap reads as `fileOnly`) instead of
+// being hidden in a package total. The TAP reporter is what parseNodeTap reads;
+// the package's `test` script is not used, for the same reason runVitest does
+// not use it. A child that cannot start resolves as exit -1 with no TAP, which
+// foldNodeRuns reads as a lost report. Exported for its test.
+export function runNodeTestFile({ cwd, file }) {
   return new Promise((resolve) => {
     // NODE_TEST_CONTEXT would make the child report to a parent test runner
     // instead of printing its own TAP; it is dropped so the summary is printed.

@@ -21,6 +21,7 @@ import {
   planRun,
   renderManifest,
   resolveMaterializedSha,
+  runNodeTestFile,
   shapeMatches,
   skipsStandaloneTests,
   TEST_FILE_RE,
@@ -755,6 +756,31 @@ describe("foldNodeRuns — per-file node:test runs as one suite result", () => {
   it("no files at all is never ok", () => {
     expect(foldNodeRuns([])).toMatchObject({ ok: false, reportOk: false });
   });
+
+  it("a non-zero exit is not ok even when the TAP summary reads green", () => {
+    const r = foldNodeRuns([{ file: "test/a.test.mjs", exitCode: 1, tap: TAP_GREEN }]);
+    expect(r).toMatchObject({ ok: false, exitCode: 1, reportOk: true, numFailedTests: 0 });
+    expect(r.executedFiles).toEqual(["test/a.test.mjs"]);
+  });
+
+  it("a cancelled test is not ok and counts as failed, even at exit 0", () => {
+    const tap = TAP_GREEN.replace("# pass 3", "# pass 2").replace("# cancelled 0", "# cancelled 1");
+    const r = foldNodeRuns([{ file: "test/a.test.mjs", exitCode: 0, tap }]);
+    expect(r).toMatchObject({ ok: false, exitCode: 0, reportOk: true, numFailedTests: 1 });
+  });
+
+  it("a run killed by a signal (exit code null) is not ok and reads as exit -1", () => {
+    const r = foldNodeRuns([{ file: "test/a.test.mjs", exitCode: null, tap: TAP_GREEN }]);
+    expect(r).toMatchObject({ ok: false, exitCode: -1 });
+  });
+});
+
+describe("runNodeTestFile — a child that cannot start", () => {
+  it("resolves as exit -1 with no TAP, which folds into a lost report", async () => {
+    const run = await runNodeTestFile({ cwd: "/nonexistent-extension-suite-gate-dir", file: "test/a.test.mjs" });
+    expect(run).toMatchObject({ file: "test/a.test.mjs", exitCode: -1, tap: "" });
+    expect(foldNodeRuns([run])).toMatchObject({ ok: false, reportOk: false, exitCode: -1 });
+  });
 });
 
 describe("the node:test road — a skipping node:test package is RUN here", () => {
@@ -855,6 +881,30 @@ describe("the node:test road — a skipping node:test package is RUN here", () =
     expect(ok).toMatch(/brand-voice-artifact .* node:test here — ok$/m);
     const notRun = renderManifest({ packages, results: new Map(), carveOuts: [] });
     expect(notRun).toMatch(/brand-voice-artifact .* node:test here — NOT RUN$/m);
+  });
+
+  it("shows a red run as RED with its exit code, and a file that ran no test as INCOMPLETE", () => {
+    const red = renderManifest({
+      packages: [brandVoice()],
+      results: resultsFor([["brand-voice-artifact", foldNodeRuns([{ file: "test/own-type.test.mjs", exitCode: 1, tap: TAP_RED }])]]),
+      carveOuts: [],
+    });
+    expect(red).toMatch(/brand-voice-artifact .* node:test here — RED \(exit 1\)$/m);
+    const files = ["test/empty.test.mjs", "test/own-type.test.mjs"];
+    const incomplete = renderManifest({
+      packages: [brandVoice({ testFiles: files })],
+      results: resultsFor([
+        [
+          "brand-voice-artifact",
+          foldNodeRuns([
+            { file: files[0], exitCode: 0, tap: tapFileOnly(files[0]) },
+            { file: files[1], exitCode: 0, tap: TAP_GREEN },
+          ]),
+        ],
+      ]),
+      carveOuts: [],
+    });
+    expect(incomplete).toMatch(/brand-voice-artifact .* node:test here — INCOMPLETE \(1 file\(s\) ran no test\)$/m);
   });
 });
 
