@@ -92,19 +92,20 @@ export function canonicalJson(value) {
  * (cinatra#3677, re-ratified 2026-10-23).
  *
  * The drawings this contract is pinned to draw the core lifecycle screens and
- * the one generic input card. They never draw an agent's own buttons, text or
- * steps. So a capture requirement that names a control one agent card draws for
- * itself can never resolve in a governed drawing, and recording it here kept
+ * the one generic input card, not an agent card's own buttons, text or steps.
+ * Four capture requirements named a card's own control that no governed drawing
+ * draws under the recorded value, and recording them here kept
  * `design-anchor-resolution` red on main with nothing in a drawing to fix.
- * Each selector below is such a control, named under the kind that owns it:
+ * Each selector below is one of them, named under the kind that owns it:
  *
  *   · recommendation_hold — the per-skill Confirm / Adjust / Skip that
  *     packages/agents/src/run-recommendation-chip-row.tsx draws on each pill
  *     (`data-skill-action`); the drawing retired them;
  *   · trigger_schedule_proposal — the schedule card's own Confirm in
  *     packages/agents/src/schedule-proposal-card.tsx
- *     (`data-action="confirm-schedule-proposal"`), which no governed drawing
- *     draws under that value.
+ *     (`data-action="confirm-schedule-proposal"`). The governed drawing draws
+ *     that floor under another value, `confirm-schedule -> scheduled`; the
+ *     product's value is tracked in cinatra#3678.
  *
  * WHAT THIS DOES NOT DO. It removes no product control and no requirement from
  * the recorder: scripts/ci/lib/capture-record-contract.mjs and

@@ -345,8 +345,10 @@ describe("the fifth kind is covered by the same alarm", () => {
 // ---------------------------------------------------------------------------
 //
 // The governed drawings draw the core lifecycle screens and the one generic
-// input card, never an agent card's own buttons. Four capture requirements
-// named such buttons and could never resolve in a governed drawing, which kept
+// input card, not an agent card's own buttons. Four capture requirements named
+// a card's own control that no governed drawing draws under the recorded value
+// (three the drawing retired, and the schedule card's Confirm, whose floor it
+// draws as `confirm-schedule -> scheduled`), which kept
 // design-anchor-resolution red on main. The contract leaves exactly those four
 // out of the cells of the kind that owns each, and records everything else the
 // recorder computes, unchanged.

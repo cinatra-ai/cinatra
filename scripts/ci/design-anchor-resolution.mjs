@@ -68,8 +68,11 @@
 //
 // WHAT IT READS GREEN ON (cinatra#3677): all five recorded owner anchors
 // resolve at the pin the contract names. The four capture-origin controls that
-// stayed unresolved were an agent card's own buttons, which a core drawing
-// never draws; the anchor contract no longer records them
+// stayed unresolved were a card's own buttons that no governed drawing draws
+// under the recorded value: the per-skill Confirm, Adjust and Skip, which the
+// drawing retired, and the schedule card's Confirm, whose floor the drawing
+// draws under another value (cinatra#3678). The anchor contract no longer
+// records them
 // (`AGENT_OWNED_CAPTURE_CONTROLS` in scripts/audit/lib/anchor-contract.mjs),
 // while the capture recorder still grades pictures against them. A visible
 // control is still never excused HERE: anything the contract records goes
@@ -671,8 +674,8 @@ export async function runCli({
   // G0 records `anchorsUnresolvedAtPin` as the set THIS check reports at the
   // pin, and the digest binds it — but a digest only proves the array was not
   // edited afterwards, never that it was true when it was written. So while the
-  // key is present, this is the script that compares the two. It is absent
-  // today, so this decides nothing yet and cannot.
+  // key is present, this is the script that compares the two. The contract
+  // records it (as the empty array), so this comparison runs on every run.
   if (Array.isArray(recordedUnresolved)) {
     const found = [...new Set(merged.unresolved.map((r) => r.selector))].sort();
     const recorded = [...new Set(recordedUnresolved)].sort();

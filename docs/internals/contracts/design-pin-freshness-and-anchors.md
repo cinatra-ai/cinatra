@@ -132,12 +132,17 @@ authenticated reader at the contract's own pinned revision — and says so.
 
 - **An agent card's own controls are not anchors of the contract.** The
   governed drawings draw only the core lifecycle screens and the one generic
-  input card, never an agent card's own buttons, text or steps. So the anchor
+  input card, not an agent card's own buttons, text or steps. So the anchor
   contract leaves those controls out of the capture requirements it records
   (`AGENT_OWNED_CAPTURE_CONTROLS` in `scripts/audit/lib/anchor-contract.mjs`,
-  a closed list per kind). The capture recorder still grades pictures against
-  them; only the contract's digest and this check stop asking a drawing to
-  draw them (cinatra#3677).
+  a closed list per kind): the skills card's per-skill Confirm, Adjust and
+  Skip, which the drawing retired. The same list holds the schedule card's own
+  Confirm, `[data-action="confirm-schedule-proposal"]`, for another reason: the
+  governed drawing draws that floor under another value,
+  `confirm-schedule -> scheduled`, and the product's value is tracked in
+  cinatra#3678. The capture recorder still grades pictures against all four;
+  only the contract's digest and this check stop asking a drawing to draw them
+  (cinatra#3677).
 
 With those controls out, every recorded owner anchor and capture requirement
 resolves in a governed drawing or is a passive capture marker, and
@@ -223,9 +228,10 @@ node scripts/audit/adopt-design-pin.mjs --pin "design@<40-hex> specs/<drawing>.h
   claim a person makes about what they re-examined, and the script has
   re-examined nothing. It prints where the note goes.
 
-While `anchorsUnresolvedAtPin` is absent — as it is today — the digest is taken
-over the original three inputs and stands exactly where it stood. That is what
-lets these checks land before the adoption that writes it.
+While `anchorsUnresolvedAtPin` is absent, the digest is taken over the original
+three inputs and stands exactly where it stood. That is what let these checks
+land before the adoption that writes it. The contract now records the key (as
+the empty array), so the digest takes it as its fourth input.
 
 ## Rollout
 

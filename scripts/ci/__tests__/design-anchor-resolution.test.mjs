@@ -24,8 +24,8 @@
 //   5. The printed output carries no drawing text beyond the selector.
 //   6. The sibling binding suite and --print-anchor-digest still agree — held
 //      here for the DIGEST SCHEMA half: `anchorsUnresolvedAtPin` is a fourth
-//      digest input the moment it is recorded, and its absence today leaves the
-//      recorded digest exactly where it stands.
+//      digest input the moment it is recorded, and while it is absent the
+//      recorded digest stands exactly where it stood.
 
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -144,10 +144,12 @@ describe("serialized capture assertions retain selector and observation provenan
   });
 
   // cinatra#3677: the governed drawings draw the core lifecycle screens and the
-  // one generic input card, never an agent card's own buttons. The live contract
-  // therefore records none of the four agent-owned controls that kept this
-  // check red on main — in either polarity, as an owner anchor, a drawing claim
-  // or a passive marker — and the record of what is unresolved is empty.
+  // one generic input card, not an agent card's own buttons. The live contract
+  // records none of the four controls that kept this check red on main (the
+  // per-skill Confirm, Adjust and Skip, which the drawing retired, and the
+  // schedule card's Confirm, whose floor it draws under another value) — in
+  // either polarity, as an owner anchor, a drawing claim or a passive marker —
+  // and the record of what is unresolved is empty.
   it("records none of an agent card's own controls as a drawing claim of the live contract", () => {
     const agentOwned = [...retired, '[data-action="confirm-schedule-proposal"]'];
     const captureAnchors = captureAnchorExpectations();
