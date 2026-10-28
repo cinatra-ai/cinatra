@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // The artifacts library's type picker (the "What is this?" dialog of the
-// upload road) offers its types as a radio group (cinatra#3783).
+// upload road) offers its types by role (cinatra#3783).
 //
 // The issue's reading: "None of them carries an option, radio or button role,
 // and the list carries no listbox or radiogroup role, so assistive technology
@@ -12,8 +12,13 @@
 // other pickers."
 //
 // The test drives the product's own road: upload a file through the provider's
-// input, press "Set meaning", and read the dialog by role. The last case pins
-// the drawn markup, which this change leaves as it was.
+// input, press "Set meaning", and read the dialog by role.
+//
+// cinatra#4265 rebuilt the picker on the Command menu primitives (spec
+// `specs/app-components.html` §Command menu), so the issue's second road holds:
+// the list is a listbox with one option per type (cmdk's own roles), and the
+// chosen entry reads checked (aria-checked) and selected (aria-selected). The
+// last case pins the drawn markup of that build.
 //
 //   pnpm exec vitest run src/components/artifacts/__tests__/library-upload-type-picker-roles.test.tsx
 import "../../__tests__/access-picker-jsdom-shims";
@@ -126,49 +131,56 @@ afterAll(() => {
 });
 
 describe("cinatra#3783 — the type picker's entries are selectable by role", () => {
-  it("T-a: the list is one radio group named by the dialog's own question", async () => {
+  it("T-a: the list is one listbox named by the dialog's own question", async () => {
     const dialog = await openPicker();
-    const groups = within(dialog).getAllByRole("radiogroup");
-    expect(groups).toHaveLength(1);
+    const lists = within(dialog).getAllByRole("listbox");
+    expect(lists).toHaveLength(1);
     // Named exactly as the dialog itself is named ("What is this?").
-    expect(within(dialog).getByRole("radiogroup", { name: "What is this?" })).toBe(groups[0]);
+    expect(within(dialog).getByRole("listbox", { name: "What is this?" })).toBe(lists[0]);
   });
 
-  it("T-b: one radio per offered type, named by its visible texts, none checked yet", async () => {
+  it("T-b: one option per offered type, named by its visible texts, none checked yet", async () => {
     const dialog = await openPicker();
-    const group = within(dialog).getByRole("radiogroup");
-    const radios = within(group).getAllByRole("radio");
-    expect(radios).toHaveLength(2);
-    expect(within(group).getByRole("radio", { name: IDEA_NAME })).toBe(radios[0]);
-    expect(within(group).getByRole("radio", { name: POST_NAME })).toBe(radios[1]);
-    expect(radios.map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "false"]);
+    const list = within(dialog).getByRole("listbox");
+    const options = within(list).getAllByRole("option");
+    expect(options).toHaveLength(2);
+    expect(within(list).getByRole("option", { name: IDEA_NAME })).toBe(options[0]);
+    expect(within(list).getByRole("option", { name: POST_NAME })).toBe(options[1]);
+    expect(options.map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "false"]);
+    expect(options.map((r) => r.getAttribute("aria-selected"))).toEqual(["false", "false"]);
   });
 
-  it("T-c: the chosen entry reads checked and Confirm becomes available", async () => {
+  it("T-c: the chosen entry reads checked and selected, and Confirm becomes available", async () => {
     const dialog = await openPicker();
-    const post = within(dialog).getByRole("radio", { name: POST_NAME });
+    const post = within(dialog).getByRole("option", { name: POST_NAME });
     fireEvent.click(post);
     expect(post.getAttribute("aria-checked")).toBe("true");
-    expect(
-      within(dialog).getByRole("radio", { name: IDEA_NAME }).getAttribute("aria-checked"),
-    ).toBe("false");
+    expect(post.getAttribute("aria-selected")).toBe("true");
+    const idea = within(dialog).getByRole("option", { name: IDEA_NAME });
+    expect(idea.getAttribute("aria-checked")).toBe("false");
+    expect(idea.getAttribute("aria-selected")).toBe("false");
     const confirm = within(dialog).getByRole("button", { name: "Confirm" }) as HTMLButtonElement;
     expect(confirm.disabled).toBe(false);
   });
 
-  it("T-d: nothing a person sees changes — the drawn list, entries and heading", async () => {
+  it("T-d: the drawn list, entries and heading of the Command build", async () => {
     const dialog = await openPicker();
     const entries = within(dialog).getAllByTestId("artifacts-picker-type");
     expect(entries).toHaveLength(2);
-    const list = entries[0].parentElement as HTMLElement;
-    expect(list.tagName).toBe("UL");
-    expect(list.className).toBe("max-h-[45vh] overflow-y-auto rounded-lg border border-line");
-    expect(entries.map((e) => e.tagName)).toEqual(["LI", "LI"]);
-    expect(entries.map((e) => e.parentElement)).toEqual([list, list]);
+    const list = within(dialog).getByRole("listbox");
+    expect(list.getAttribute("data-slot")).toBe("command-list");
+    expect(list.closest('[data-slot="command"]')).not.toBeNull();
+    expect(entries.map((e) => e.getAttribute("data-slot"))).toEqual(["command-item", "command-item"]);
+    expect(entries.every((e) => list.contains(e))).toBe(true);
     expect(entries.map((e) => e.textContent)).toEqual([
       "Blog idea @cinatra-ai/blog-idea-artifact:blog-ideaBlog Idea Artifact",
       "Post @cinatra-ai/blog-post-artifact:postBlog Post Artifact",
     ]);
-    expect(within(dialog).getByRole("heading").textContent).toBe("What is this?");
+    // The dialog is named by its own title, a heading (CommandDialog draws it
+    // for screen readers; the drawn header repeats it for the eye).
+    const titleId = dialog.getAttribute("aria-labelledby");
+    const title = titleId ? document.getElementById(titleId) : null;
+    expect(title?.tagName).toBe("H2");
+    expect(title?.textContent).toBe("What is this?");
   });
 });

@@ -123,9 +123,10 @@ async function openPicker(): Promise<HTMLElement> {
   return dialog;
 }
 
+// The list is the Command menu's listbox of options (cinatra#4265).
 function checkedStates(dialog: HTMLElement): Array<string | null> {
-  return within(within(dialog).getByRole("radiogroup"))
-    .getAllByRole("radio")
+  return within(within(dialog).getByRole("listbox"))
+    .getAllByRole("option")
     .map((r) => r.getAttribute("aria-checked"));
 }
 
@@ -155,7 +156,7 @@ describe("cinatra#3319 — the picker draws the derived meaning (§VI.1)", () =>
   it("R1: a meaning at or above threshold opens the picker pre-selected on it, before any press", async () => {
     answer({ preselect: IDEA_EXT, suggestions: [] });
     const dialog = await openPicker();
-    expect(within(dialog).getByRole("radio", { name: IDEA_NAME }).getAttribute("aria-checked")).toBe(
+    expect(within(dialog).getByRole("option", { name: IDEA_NAME }).getAttribute("aria-checked")).toBe(
       "true",
     );
     expect(checkedStates(dialog)).toEqual(["true", "false"]);
@@ -315,7 +316,7 @@ describe("cinatra#3319 — the picker draws the derived meaning (§VI.1)", () =>
   it("G3: the person's own press replaces the pre-selection", async () => {
     answer({ preselect: IDEA_EXT, suggestions: [] });
     const dialog = await openPicker();
-    fireEvent.click(within(dialog).getByRole("radio", { name: POST_NAME }));
+    fireEvent.click(within(dialog).getByRole("option", { name: POST_NAME }));
     expect(checkedStates(dialog)).toEqual(["false", "true"]);
     fireEvent.click(confirmButton(dialog));
     await waitFor(() => expect(actions.assertUploadMeaning).toHaveBeenCalledTimes(1));
