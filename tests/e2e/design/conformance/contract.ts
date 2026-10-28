@@ -110,7 +110,7 @@ import {
   type ArtifactKindDisplayField,
   type ArtifactKindDisplaySurfaceId,
 } from "./artifact-review-displays";
-import { kindDisplayFieldReading } from "./artifact-review-display-readings";
+import { kindDisplayFieldDriver } from "./artifact-review-display-readings";
 import {
   LIFECYCLE_CHAT_COMPOSER_MOUNT,
   type LifecycleComposerRowMount,
@@ -3036,7 +3036,7 @@ function kindDisplayKindState(surface: string, kind: string): StateAssert {
  *     once the review is continued is read on the continued mount, and its
  *     absence on the open one (`continuedOnlyField`). A field the drawing binds
  *     in several readings gets one driver, from all of its declarations
- *     (`kindDisplayFieldReading`).
+ *     (`kindDisplayFieldDriver` in artifact-review-display-readings.ts).
  *   - the one action the manifest declares, pressed on the control that declares
  *     exactly that action AND that outcome (`declaredAction`), so a driver
  *     cannot press one control and report another one's outcome.
@@ -3071,28 +3071,20 @@ function artifactKindDisplayDriver(row: ArtifactKindDisplay): SurfaceDriver {
   for (const field of row.fields) {
     declarations.set(field.name, [...(declarations.get(field.name) ?? []), field]);
   }
+  // artifact-review-display-readings.ts picks the assertion for each name's
+  // reading; this map only says what each of the three assertions does.
   for (const [name, fields] of declarations) {
-    const { source } = fields[0];
-    const binding = `[data-field="${name}=${source}"]`;
-    const reading = kindDisplayFieldReading(row.surface, fields);
-    driver.fields[name] = {
-      source,
-      assert:
-        reading === "continued"
-          ? continuedOnlyField(row.surface, binding)
-          : reading === "open"
-            ? async (_page, root) => {
-                const bound = kindDisplayPanel(root, row.surface).locator(binding);
-                await expect(bound).toHaveCount(1);
-                await expect(bound).toBeVisible();
-              }
-            : async () => {
-                test.skip(
-                  true,
-                  `${row.surface}: "${name}" is drawn only where no review stands, a reading the review harness does not mount`,
-                );
-              },
-    };
+    driver.fields[name] = kindDisplayFieldDriver(row.surface, fields, {
+      present: (binding) => async (_page: Page, root: Locator) => {
+        const bound = kindDisplayPanel(root, row.surface).locator(binding);
+        await expect(bound).toHaveCount(1);
+        await expect(bound).toBeVisible();
+      },
+      continuedOnly: (binding) => continuedOnlyField(row.surface, binding),
+      skip: (reason) => async () => {
+        test.skip(true, reason);
+      },
+    });
   }
 
   const action = row.action;
