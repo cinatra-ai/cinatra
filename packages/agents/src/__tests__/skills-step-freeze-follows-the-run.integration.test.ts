@@ -710,14 +710,14 @@ describe.skipIf(!HAS_DB)(
 );
 
 // A RUN DISPATCHED BEFORE THE START STAMP EXISTED, PAUSED MID-FLIGHT AT A GATE
-// (cinatra#3062, merge-1 MUST-FIX 1). Every dispatch before this change left
+// (cinatra#3062). Every dispatch before this change left
 // `started_at` NULL, and no backfill writes it. Such a row that went
 // running->pending_approval reads exactly like the hold's own pre-execution
 // park — status `pending_approval`, no stamp — except for ONE column: the
 // in-attempt wait marker `human_wait_attempt_id` (cinatra#1938), which the CAS
 // stamps only on running->pending_approval. That run HAS executed: the card must
 // read it as started, and the store must refuse to rewrite its selection.
-describe.skipIf(!HAS_DB)("cinatra#3062 merge-1 MF1 — a pre-deploy run paused mid-flight reads as STARTED", () => {
+describe.skipIf(!HAS_DB)("cinatra#3062 — a pre-deploy run paused mid-flight (no stamp, wait marker set) reads as STARTED", () => {
   async function pausedMidFlightBeforeTheStamp(): Promise<string> {
     const runId = await decidedButNotStarted();
     const attempt = `attempt-${randomUUID()}`;

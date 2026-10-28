@@ -370,7 +370,7 @@ describe("the boundary, asked of the row, over every status", () => {
     expect(recommendationRunHasStartedForRow(null)).toBe(false);
   });
 
-  it("a pending_approval row with NO stamp but the in-attempt wait marker HAS started (merge-1 MF1)", () => {
+  it("a pending_approval row with NO stamp but the in-attempt wait marker HAS started (a run dispatched before the stamp existed, paused mid-flight)", () => {
     // A run dispatched before the stamp existed (its `started_at` was left NULL)
     // and paused mid-flight at a gate: running->pending_approval stamps
     // `humanWaitAttemptId` (cinatra#1938), and only that edge does. It executed.
