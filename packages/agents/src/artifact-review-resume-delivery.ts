@@ -111,7 +111,9 @@ export interface ResumeSweepSummary {
  * delivery outcome; THROWS only on an unexpected fault (the caller tallies it as
  * `failed` and leaves the intent pending for lease re-claim). Marks the intent
  * delivered on `delivered` / `already-advanced`; leaves it pending on
- * `retryable`.
+ * `retryable`. A `retryable`, a `lease-lost` and a throw each leave the intent
+ * for a re-claim after its lease, and each claim uses one of its attempts
+ * (cinatra#4312): see `sweepArtifactReviewResumeIntents`.
  */
 export async function deliverArtifactReviewResumeIntent(
   intent: ResumeIntentRow,
@@ -528,7 +530,9 @@ async function releaseDecidedProducedReviewParks(
  * Drain a batch of deliverable resume intents. Per-intent failures are TALLIED
  * (never rethrown) so one broken row can never poison the queue — the row stays
  * pending and the next cycle (after lease expiry) re-claims it (the sweep is the
- * durable backstop for a lost/crashed one-shot delivery).
+ * durable backstop for a lost/crashed one-shot delivery) until its attempts are
+ * used; the sweep after that dead-letters it (cinatra#4312, the comment above
+ * the dead-letter pass below).
  */
 export async function sweepArtifactReviewResumeIntents(opts?: {
   limit?: number;
@@ -565,10 +569,34 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
   // cinatra#4312 — an intent that used its attempts (`attempts >= max_attempts`,
   // no live lease) is dead-lettered here, where ops read it, before the claim
   // below (which leaves such an intent out). Before cinatra#4312 no production
-  // code ran this pass and the claim had no attempts bound, so an intent whose
-  // delivery threw on each attempt (a lineage the reader refuses) was re-claimed
-  // after each lease expiry without a bound. A failed pass is tallied; the claim
-  // still leaves exhausted intents out.
+  // code ran this pass and the claim had no attempts bound, so an intent that
+  // was not delivered was re-claimed after each lease expiry without a bound.
+  //
+  // The bound counts CLAIMS, whatever their outcome: the claim adds one to
+  // `attempts` before the delivery runs. Every outcome that leaves the intent
+  // for a re-claim uses an attempt: a throw (a lineage the reader refuses, a
+  // send that fails), `lease-lost`, and each `retryable` road of
+  // `deliverArtifactReviewResumeIntent` (no lease token, a review task id that
+  // is not `wayflow-`, a run not resolvable, a run with no a2aContextId, a
+  // refusal whose terminal transition did not land, an unreadable scope check,
+  // an incomplete declared family). With the default `max_attempts` of 20 and
+  // the default 5-minute lease, an intent that is never closed is
+  // dead-lettered no sooner than about 100 minutes after its first claim (20
+  // claims, each after the lease of the claim before it expired). That is
+  // intended (the #2038 ceiling, artifact-review-gate-store, above
+  // `deadLetterExhaustedResumeIntents`): no retryable road waits for a step
+  // that comes after the decision. The run's context is persisted right after
+  // its initial send (the a2aContextId road above), the legs of a declared
+  // family are inserted in one transaction (`emitDeclaredReviewGateFamily`),
+  // and an outcome that repeats on 20 claims is a fault for ops. A
+  // dead-lettered intent is not claimed and not woken
+  // again, so it resumes nothing; ops read it (`readDeadLetteredResumeIntents`).
+  // Only `delivered`, `already-advanced` and `refused-out-of-scope` close an
+  // intent. A wake of a declared review (lifecycle-repair-store
+  // `wakeDeclaredReviewAfterTerminalRepair`) puts a delivering or done intent
+  // that is not dead-lettered back to pending with `attempts` at 0 and leaves a
+  // pending one as it is. A failed pass is tallied; the claim still leaves
+  // exhausted intents out.
   try {
     const dead = await deadLetterExhaustedResumeIntents();
     if (dead > 0) console.warn(`[artifact-review-resume] dead-lettered ${dead} exhausted resume intent(s)`);

@@ -1131,6 +1131,9 @@ export async function claimPendingResumeIntents(opts?: {
           // cinatra#4312 — nor an intent that has used its attempts but is not
           // dead-lettered yet: the sweep dead-letters it
           // (deadLetterExhaustedResumeIntents) instead of a further attempt.
+          // Each claim uses an attempt (the update below), whatever the
+          // delivery then returns, a `retryable` outcome included
+          // (artifact-review-resume-delivery `sweepArtifactReviewResumeIntents`).
           lt(artifactReviewResumeOutbox.attempts, artifactReviewResumeOutbox.maxAttempts),
           or(
             eq(artifactReviewResumeOutbox.status, "pending"),
