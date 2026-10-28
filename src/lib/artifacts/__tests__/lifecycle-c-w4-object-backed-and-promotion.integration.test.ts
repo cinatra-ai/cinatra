@@ -241,7 +241,8 @@ function errText(err: unknown): string {
  * `DROP TRIGGER` / `CREATE TRIGGER` pair for each, bound to the functions of
  * the schema it builds, and a replay of those pairs into this throwaway schema
  * would rebind them here and lose them at the `DROP SCHEMA ... CASCADE`.
- * `replayStoreSchema` skips them; this reading proves it on every run.
+ * `replayStoreSchema` skips them. This reading checks that for these three
+ * named triggers only, on each run whose setup reaches the reading.
  */
 const SHARED_SLUG_TRIGGERS_SQL = `
   SELECT c.relname AS table_name, t.tgname AS trigger_name, t.tgenabled AS enabled,
@@ -278,7 +279,9 @@ async function readSharedSlugTriggers(client: Client): Promise<string[]> {
  */
 async function assertSharedSlugTriggersUnchanged(client: Client, when: string): Promise<void> {
   const before = sharedSlugTriggersBefore;
-  if (before === undefined) return; // setup failed before its reading, and says so itself
+  // A silent return: setup is expected to have failed before its reading and
+  // to fail the run itself. No test drives this branch.
+  if (before === undefined) return;
   const now = await readSharedSlugTriggers(client);
   if (JSON.stringify(now) !== JSON.stringify(before)) {
     throw new Error(
@@ -299,8 +302,10 @@ beforeAll(async () => {
   await client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`);
   await client.query(`CREATE SCHEMA "${TEST_SCHEMA}"`);
   const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
-  // The shared replay: it skips every statement whose own target is a shared
-  // `public` table (the slug-move trigger pairs among them).
+  // The shared replay: of the statements with its four default heads, it skips
+  // each one whose own target it reads as a shared `public` table written with a
+  // quoted table name (`public."x"` or `"public"."x"`), the form the builder
+  // writes (the slug-move trigger pairs among them).
   await replayStoreSchema(client, buildCreateStoreSchemaQueries(TEST_SCHEMA));
   await assertSharedSlugTriggersUnchanged(client, "during this tier's setup");
   await client.end();
@@ -338,9 +343,13 @@ function registerObjectBackedType(typeId: string) {
   );
 }
 
-// Every teardown step is tried, whatever an earlier one did, and every failure
-// is collected and thrown together, each naming its step: a teardown that
-// swallowed one would report green while leaving the schema behind.
+// After a successful connect, the three database steps (the schema drop, the
+// trigger check, the client close) are each tried whatever an earlier one did.
+// A failed connect skips those three steps; the connect failure is collected
+// and the blob root removal still runs. Each failure of a step that runs is
+// collected under that step's name, and the failures are thrown together: a
+// teardown that swallowed one would report green while leaving the schema
+// behind.
 afterAll(async () => {
   if (!HAS_REAL_DB) return;
   const failures: Error[] = [];
@@ -359,8 +368,9 @@ afterAll(async () => {
     await step(`DROP SCHEMA "${TEST_SCHEMA}"`, () =>
       client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`),
     );
-    // Read after the drop: a trigger rebound to this schema's functions would
-    // be gone by now, so a difference shows either kind of damage.
+    // Read after the drop: once the drop has run, a trigger rebound to this
+    // schema's functions is gone, so a rebind and a drop both read as a
+    // difference here.
     await step("the shared public slug-move trigger check", () =>
       assertSharedSlugTriggersUnchanged(client, "across this tier (read after its teardown)"),
     );
