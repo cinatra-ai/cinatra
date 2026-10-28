@@ -56,3 +56,8 @@ the scout's step and not the driver's. The match above was checked against Twent
 Result. D1, D2, D3, D4, D4b, D5, U1 and U2 were all reached on this one boot, so item 1 of #4112 reads REACHED at the
 heads above. This record covers item 1 only. It does not read item 2 (a preview installation) and it is not the tests of
 item 3, so it does not close #4112.
+
+## Item 2: the preview-installation reading
+
+This section is for the reading of the second criterion of #4112: the same database and product readings as item 1, taken
+on a preview installation. It holds no result yet. The reading is written into this section once it is taken.
