@@ -143,7 +143,7 @@ describe("#3035 picture regeneration — only a witnessed leg of a declared revi
   });
 });
 
-describe("#3035 picture regeneration — the witness reader refuses every malformed pin (C2)", () => {
+describe("#3035 picture regeneration — the witness reader refuses malformed pins (C2)", () => {
   const plan = declaredReviewPlan({ runId: RUN, orgId: "org-1", reviewTaskId: STEP, targets: [POST, FEATURED] })!;
   const leg2 = (pinnedTargets: unknown) =>
     isDeclaredReviewLeg({ runId: RUN, orgId: "org-1", reviewTaskId: `${STEP}#2`, pinnedTargets });

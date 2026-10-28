@@ -16,7 +16,7 @@
  *   CINATRA_TEST_DB_URL=postgres://… \
  *     pnpm --filter @cinatra-ai/agents test:integration lifecycle-c-w11-picture-regenerate-parks-run-3035
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 
@@ -492,8 +492,9 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — the wake also reaches a decision a wo
       },
     });
     expect(rr).toMatchObject({ ok: false, code: "stale-base" });
-    // The holder read the lineage as open before the stale commit and now tries to
-    // acknowledge without sending: the wake took its lease, so that write misses.
+    // A holder that read the lineage as open before the stale commit would now
+    // acknowledge without sending. This case makes that acknowledgement directly
+    // (no worker read runs here): the wake cleared the lease, so the write misses.
     expect(await gateStore.markResumeIntentDelivered(post!.id, held!.leaseToken!)).toBe(false);
     expect(await intentStatusOf(post!.id)).toBe("pending");
 
@@ -713,5 +714,351 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — the roads that stay as they were, aga
     const text = await approve(p.runId, p.step);
     await sweep();
     expectResumedWith(p, text);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4312, review 2 of cinatra#4339 — the wake against a concurrent worker,
+// the lineage bound to the decided gate, malformed terminal rows, dead-letter.
+// ---------------------------------------------------------------------------
+
+/** A second database session with its own open transaction: the terminal repair
+ * write and its wake, held uncommitted so a case orders the other session's
+ * steps around it. */
+const openSessions = new Set<Client>();
+
+/** A case that fails before its commit must not leave a session holding row
+ * locks for the next case or for the schema drop: roll it back. */
+afterEach(async () => {
+  for (const client of openSessions) {
+    await client.query("ROLLBACK").catch(() => {});
+    await client.end().catch(() => {});
+  }
+  openSessions.clear();
+});
+
+async function openSession() {
+  const client = new Client({ connectionString: DB_URL });
+  await client.connect();
+  openSessions.add(client);
+  await client.query("BEGIN");
+  const { drizzle } = await import("drizzle-orm/node-postgres");
+  const schemaMod = await import("../schema");
+  const tx = drizzle(client, { schema: schemaMod });
+  return {
+    client,
+    tx: tx as unknown as Parameters<typeof repairStore.wakeDeclaredReviewAfterTerminalRepair>[0],
+    commit: async () => { await client.query("COMMIT"); openSessions.delete(client); await client.end(); },
+  };
+}
+
+/** The terminal write of a stale repair and its wake, as `submitRepairResponse`
+ * makes them, in `session`'s open transaction. */
+async function staleAndWake(session: Awaited<ReturnType<typeof openSession>>, repairId: string, lineageId: string) {
+  await session.client.query(
+    `UPDATE "${q(TEST_SCHEMA)}"."lifecycle_repair" SET status='stale', updated_at=now() WHERE id=$1`,
+    [repairId],
+  );
+  return repairStore.wakeDeclaredReviewAfterTerminalRepair(session.tx, lineageId);
+}
+
+/** Wait until another session waits on a row lock, or `settled` turns true. */
+async function waitForLockWait(settled: () => boolean): Promise<boolean> {
+  for (let i = 0; i < 200; i++) {
+    const r = await pool(
+      `SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`,
+    );
+    if ((r.rows[0] as { n: number }).n > 0) return true;
+    if (settled()) return false;
+    await new Promise((res) => setTimeout(res, 50));
+  }
+  return false;
+}
+
+async function intentRow(gateId: string) {
+  const r = await pool(
+    `SELECT status, attempts, max_attempts, dead_lettered_at, last_error, lease_token
+       FROM "${q(TEST_SCHEMA)}"."artifact_review_resume_outbox" WHERE gate_id=$1`,
+    [gateId],
+  );
+  return r.rows[0] as { status: string; attempts: number; max_attempts: number; dead_lettered_at: Date | null; last_error: string | null; lease_token: string | null };
+}
+
+async function setIntent(gateId: string, assignment: string) {
+  await pool(`UPDATE "${q(TEST_SCHEMA)}"."artifact_review_resume_outbox" SET ${assignment} WHERE gate_id=$1`, [gateId]);
+}
+
+/** An ordinary automatic review gate on its own artifact, in `runId`. */
+async function ordinaryGate(runId: string) {
+  const pin = { artifactId: `art-auto-${randomUUID()}`, representationRevisionId: `rev-auto-${randomUUID()}` };
+  await pool(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."objects" (id, type, data, org_id) VALUES ($1, 'document', '{}'::jsonb, $2)`,
+    [pin.artifactId, ORG],
+  );
+  const taskId = autoReviewTaskId(`ev-${randomUUID()}`);
+  const emitted = await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: taskId, targets: [pin] });
+  return { taskId, gateId: emitted.gateId, pin };
+}
+
+function changesRequestedOn(gateId: string, base: Pin) {
+  const key = `k-${randomUUID()}`;
+  return {
+    gateId,
+    decisionId: key,
+    idempotencyKey: key,
+    baseTarget: base,
+    expectedBaseRevisionId: base.representationRevisionId,
+    findings: [{ id: "prompt-window", message: "Make the sky darker" }],
+    continuationMode: "async_effects_gated" as const,
+    continuationAddress: null,
+  };
+}
+
+describe.skipIf(!HAS_DB)("cinatra#4312 — the wake and a concurrent worker cannot strand the run (review 2, finding 1)", () => {
+  it("PENDING: the post's intent is pending when the lineage goes stale; a sweep before that commit neither sends nor acknowledges the post's decision, and the next sweep lets the run go on", async () => {
+    const p = await pausedPipeline();
+    const pressed = await pressRegenerate(p.runId, p.leg2, p.picture);
+    const text = await approve(p.runId, p.step);
+    const post = await gateStore.readReviewGate(p.runId, p.step);
+
+    const terminal = await openSession();
+    expect(await staleAndWake(terminal, pressed.repairId, pressed.settledGateId)).toBe(post!.id);
+    // The worker's sweep runs while the stale write is not committed yet.
+    await sweep();
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(await intentStatusOf(post!.id)).toBe("pending");
+    await terminal.commit();
+
+    await sweep();
+    expectResumedWith(p, text);
+    expect(await intentStatusOf(post!.id)).toBe("done");
+  });
+
+  it("WRITTEN AFTER THE WAKE'S READ: the post is continued while the stale write is open; the worker's acknowledgement waits for that commit, re-reads the lineage closed and lets the run go on", async () => {
+    const p = await pausedPipeline();
+    const pressed = await pressRegenerate(p.runId, p.leg2, p.picture);
+
+    const terminal = await openSession();
+    expect(await staleAndWake(terminal, pressed.repairId, pressed.settledGateId)).toBeNull();
+    const text = await approve(p.runId, p.step);
+    let settled = false;
+    const sweeping = sweep().finally(() => { settled = true; });
+    expect(await waitForLockWait(() => settled)).toBe(true);
+    expect(settled).toBe(false);
+    await terminal.commit();
+    await sweeping;
+
+    expectResumedWith(p, text);
+    const post = await gateStore.readReviewGate(p.runId, p.step);
+    expect(await intentStatusOf(post!.id)).toBe("done");
+  });
+
+  it("DELIVERING: a worker's acknowledgement lands between the wake's read and its write; the wake still puts the intent back to pending and the next sweep lets the run go on", async () => {
+    const p = await pausedPipeline();
+    const pressed = await pressRegenerate(p.runId, p.leg2, p.picture);
+    const text = await approve(p.runId, p.step);
+    const post = await gateStore.readReviewGate(p.runId, p.step);
+    const held = (await gateStore.claimPendingResumeIntents({ limit: 50, leaseMs: 300_000 })).find((c) => c.gateId === post!.id);
+    expect(held?.status).toBe("delivering");
+
+    // The worker's acknowledgement (markResumeIntentDelivered's write), in its own
+    // open transaction: it holds the row when the wake reaches it.
+    const worker = await openSession();
+    const acked = await worker.client.query(
+      `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_resume_outbox" SET status='done', updated_at=now()
+        WHERE gate_id=$1 AND lease_token=$2 AND status='delivering' RETURNING gate_id`,
+      [post!.id, held!.leaseToken],
+    );
+    expect(acked.rowCount).toBe(1);
+
+    const terminal = await openSession();
+    let settled = false;
+    const waking = staleAndWake(terminal, pressed.repairId, pressed.settledGateId).finally(() => { settled = true; });
+    expect(await waitForLockWait(() => settled)).toBe(true);
+    await worker.commit();
+    expect(await waking).toBe(post!.id);
+    await terminal.commit();
+    expect(await intentRow(post!.id)).toMatchObject({ status: "pending", attempts: 0, lease_token: null });
+
+    await sweep();
+    expectResumedWith(p, text);
+  });
+});
+
+describe.skipIf(!HAS_DB)("cinatra#4312 — the store derives the lineage from the decided gate, never from the caller (review 2, finding 2)", () => {
+  it("a declared picture leg recorded with an ordinary gate's id as lineage keeps its own lineage: another artifact's successor is refused", async () => {
+    const p = await pausedPipeline();
+    const ordinary = await ordinaryGate(p.runId);
+    const leg = await gateStore.readReviewGate(p.runId, p.leg2);
+    const cr = await repairStore.recordChangesRequested({
+      runId: p.runId,
+      reviewTaskId: p.leg2,
+      orgId: ORG,
+      request: changesRequestedOn(leg!.id, p.picture),
+      repairCapable: true,
+      producerRunId: p.runId,
+      currentBaseRevisionId: p.picture.representationRevisionId,
+      lineageId: ordinary.gateId,
+    } as Parameters<typeof repairStore.recordChangesRequested>[0]);
+    if (!cr.ok) throw new Error(`changes_requested refused: ${cr.code}`);
+    expect((await repairOf(cr.repairId)).lineage_id).toBe(leg!.id);
+    expect(await repairStore.isDeclaredReviewLineage(leg!.id)).toBe(true);
+
+    const rr = await repairStore.submitRepairResponse({
+      repairId: cr.repairId,
+      currentBaseRevisionId: p.picture.representationRevisionId,
+      reauthorized: true,
+      response: {
+        gateId: leg!.id,
+        baseTarget: p.picture,
+        successorTarget: { artifactId: ordinary.pin.artifactId, representationRevisionId: `rev-other-${randomUUID()}` },
+        findingOutcomes: [{ findingId: "prompt-window", applied: true }],
+        changeSummary: "darker sky",
+        producerProvenance: { runId: p.runId, agentId: null },
+      },
+    });
+    expect(rr).toMatchObject({ ok: false, code: "successor-other-artifact" });
+    expect(await pendingGates(p.runId)).toEqual(expect.not.arrayContaining([expect.stringMatching(/^lifecycle-review:repair:/)]));
+  });
+
+  it("an ordinary gate recorded with another declared run's leg as lineage keeps its own lineage: its escalation does not touch that run's set-aside decision", async () => {
+    const p = await pausedPipeline();
+    const pressed = await pressRegenerate(p.runId, p.leg2, p.picture);
+    await approve(p.runId, p.step);
+    await sweep();
+    await expectParked(p);
+    const post = await gateStore.readReviewGate(p.runId, p.step);
+    expect(await intentStatusOf(post!.id)).toBe("done");
+
+    const otherRun = `run-other-${randomUUID()}`;
+    const ordinary = await ordinaryGate(otherRun);
+    const cr = await repairStore.recordChangesRequested({
+      runId: otherRun,
+      reviewTaskId: ordinary.taskId,
+      orgId: ORG,
+      request: changesRequestedOn(ordinary.gateId, ordinary.pin),
+      repairCapable: false,
+      currentBaseRevisionId: ordinary.pin.representationRevisionId,
+      lineageId: pressed.settledGateId,
+    } as Parameters<typeof repairStore.recordChangesRequested>[0]);
+    expect(cr).toMatchObject({ ok: true, status: "escalated", attempt: 1 });
+    if (!cr.ok) return;
+    expect((await repairOf(cr.repairId)).lineage_id).toBe(ordinary.gateId);
+    expect(await repairStore.isDeclaredReviewLineage(ordinary.gateId)).toBe(false);
+    expect(await intentStatusOf(post!.id)).toBe("done");
+    expect(await repairStore.isRepairLineageOpen(pressed.settledGateId)).toBe(true);
+  });
+
+  it("a gate that carries a real repair's successor task id but is not its successor cannot record changes requested (lineage-unbound)", async () => {
+    const p = await pausedPipeline();
+    const pressed = await pressRegenerate(p.runId, p.leg2, p.picture);
+    await pressed.answer();
+    const otherRun = `run-other-${randomUUID()}`;
+    const task = `${REPAIR_SUCCESSOR_TASK_PREFIX}${pressed.repairId}:1`;
+    const pin = { artifactId: p.picture.artifactId, representationRevisionId: `rev-img-f-${randomUUID()}` };
+    const forged = await gateStore.emitArtifactReviewGate({ runId: otherRun, orgId: ORG, reviewTaskId: task, targets: [pin] });
+    const cr = await repairStore.recordChangesRequested({
+      runId: otherRun,
+      reviewTaskId: task,
+      orgId: ORG,
+      request: changesRequestedOn(forged.gateId, pin),
+      repairCapable: true,
+      currentBaseRevisionId: pin.representationRevisionId,
+    });
+    expect(cr).toMatchObject({ ok: false, code: "lineage-unbound" });
+    expect((await gateStore.readReviewGate(otherRun, task))?.status).toBe("pending");
+  });
+});
+
+describe.skipIf(!HAS_DB)("cinatra#4312 — the malformed lineage rows of review 2 throw instead of reading as closed (finding 3)", () => {
+  it("a stale latest attempt that still names a pending successor: the post's decision resumes nothing (terminal-with-successor)", async () => {
+    const p = await pausedPipeline();
+    const pressed = await pressRegenerate(p.runId, p.leg2, p.picture);
+    const successor = await pressed.answer();
+    await setRepair(pressed.repairId, "status='stale'");
+    expect(await pendingGates(p.runId)).toEqual(expect.arrayContaining([successor.taskId]));
+    await expect(repairStore.isRepairLineageOpen(pressed.settledGateId)).rejects.toMatchObject({ code: "terminal-with-successor" });
+    await approve(p.runId, p.step);
+    const post = await gateStore.readReviewGate(p.runId, p.step);
+    await expectLeftForReclaim(await sweep(), post!.id);
+    expect(await runStatus(p.runId)).toBe("pending_approval");
+  });
+
+  it.each([
+    ["a duplicate attempt", "attempt=1"],
+    ["a gap in the attempts", "attempt=3"],
+    ["an attempt created before the one it follows", "created_at = now() - interval '1 day'"],
+  ])("%s: the lineage reader throws malformed-lineage and the post's decision resumes nothing", async (_name, assignment) => {
+    const p = await pausedPipeline();
+    const first = await regenerate(p.runId, p.leg2, p.picture);
+    const second = await pressRegenerate(p.runId, first.taskId, first.pin);
+    const leg = await gateStore.readReviewGate(p.runId, p.leg2);
+    await setRepair(second.repairId, assignment);
+    await expect(repairStore.isRepairLineageOpen(leg!.id)).rejects.toMatchObject({ code: "malformed-lineage" });
+    await approve(p.runId, p.step);
+    const post = await gateStore.readReviewGate(p.runId, p.step);
+    await expectLeftForReclaim(await sweep(), post!.id);
+  });
+
+  it("a repaired latest attempt whose successor was settled as changes requested with no later attempt: the post's decision resumes nothing (malformed-lineage)", async () => {
+    const p = await pausedPipeline();
+    const successor = await regenerate(p.runId, p.leg2, p.picture);
+    await pool(
+      `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates"
+         SET status='resolved', disposition='changes_requested', fingerprint=$2, resolved_at=now()
+       WHERE id=$1`,
+      [successor.gateId, `fp-${randomUUID()}`],
+    );
+    const leg = await gateStore.readReviewGate(p.runId, p.leg2);
+    await expect(repairStore.isRepairLineageOpen(leg!.id)).rejects.toMatchObject({ code: "malformed-lineage" });
+    await approve(p.runId, p.step);
+    const post = await gateStore.readReviewGate(p.runId, p.step);
+    await expectLeftForReclaim(await sweep(), post!.id);
+  });
+
+  it("a repair whose lineage names another existing gate is refused, never read as that gate's lineage (malformed-lineage)", async () => {
+    const p = await pausedPipeline();
+    const pressed = await pressRegenerate(p.runId, p.leg2, p.picture);
+    const successor = await pressed.answer();
+    const postGate = await gateStore.readReviewGate(p.runId, p.step);
+    await setRepair(pressed.repairId, "lineage_id=$2", [postGate!.id]);
+    await expect(repairStore.readRepairLineageRootGate(successor.taskId, successor.gateId)).rejects.toMatchObject({ code: "malformed-lineage" });
+    await expect(repairStore.isDeclaredReviewLineage(postGate!.id)).rejects.toMatchObject({ code: "malformed-lineage" });
+  });
+});
+
+describe.skipIf(!HAS_DB)("cinatra#4312 — a refused resume dead-letters once its attempts are used (review 2, finding 4)", () => {
+  it("an ordinary successor whose repair names another successor gate is refused on each attempt and dead-lettered at the next sweep after max_attempts", async () => {
+    const p = await pausedPipeline();
+    const ordinary = await ordinaryGate(p.runId);
+    const successor = await regenerate(p.runId, ordinary.taskId, ordinary.pin);
+    await approve(p.runId, successor.taskId);
+    const repairId = successor.taskId.slice(REPAIR_SUCCESSOR_TASK_PREFIX.length).split(":")[0];
+    await setRepair(repairId, "successor_gate_id=$2", [ordinary.gateId]);
+    await setIntent(successor.gateId, "max_attempts=2");
+
+    for (const attempt of [1, 2]) {
+      const summary = await sweep();
+      expect(summary.failed).toBeGreaterThanOrEqual(1);
+      expect(await intentRow(successor.gateId)).toMatchObject({ status: "delivering", attempts: attempt, dead_lettered_at: null });
+      await setIntent(successor.gateId, "lease_expires_at = now() - interval '1 second'");
+    }
+    await sweep();
+    const row = await intentRow(successor.gateId);
+    expect(row.attempts).toBe(2);
+    expect(row.dead_lettered_at).not.toBeNull();
+    expect(row.last_error).toBe("resume delivery attempts exhausted");
+    await sweep();
+    expect((await intentRow(successor.gateId)).attempts).toBe(2);
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+  });
+
+  it("the claim leaves out an intent that used its attempts, even before it is dead-lettered", async () => {
+    const p = await pausedPipeline();
+    const gateId = await decidedGateWithIntent(p.runId, `${p.step}-exhausted`, p.post);
+    await setIntent(gateId, "attempts = max_attempts");
+    const claimed = await gateStore.claimPendingResumeIntents({ limit: 200, leaseMs: 300_000 });
+    expect(claimed.some((c) => c.gateId === gateId)).toBe(false);
+    expect(await intentRow(gateId)).toMatchObject({ status: "pending", dead_lettered_at: null });
   });
 });

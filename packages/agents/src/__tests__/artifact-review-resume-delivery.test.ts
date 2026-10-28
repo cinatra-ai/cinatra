@@ -62,10 +62,15 @@ vi.mock("../wayflow-url", () => ({
   createWayflowFetch: vi.fn(() => globalThis.fetch),
 }));
 
+// cinatra#4312 — the run decision lock's transaction, as the lock hands it to the
+// re-read and the acknowledgement it guards.
+const TX = vi.hoisted(() => ({ tx: "run-decision-lock" }));
 const gateStoreMock = vi.hoisted(() => ({
   claimPendingResumeIntents: vi.fn(),
-  listReviewGatesForRun: vi.fn<(runId: string) => Promise<Array<{ runId?: string; orgId?: string; reviewTaskId: string; status: string; pinnedTargets?: unknown }>>>(async () => []),
+  listReviewGatesForRun: vi.fn<(runId: string, executor?: unknown) => Promise<Array<{ runId?: string; orgId?: string; reviewTaskId: string; status: string; pinnedTargets?: unknown }>>>(async () => []),
   markResumeIntentDelivered: vi.fn(),
+  withRunDecisionLock: vi.fn(async (_runId: string, fn: (tx: unknown) => Promise<unknown>) => fn(TX)),
+  deadLetterExhaustedResumeIntents: vi.fn(async () => 0),
 }));
 vi.mock("../artifact-review-gate-store", () => gateStoreMock);
 
@@ -90,7 +95,7 @@ const repairStoreMock = vi.hoisted(() => ({
   readRepairLineageRootGate: vi.fn<(taskId: string, gateId: string) => Promise<unknown>>(async () => {
     throw Object.assign(new Error("unknown-repair: not seeded"), { name: "RepairLineageStateError", code: "unknown-repair" });
   }),
-  isRepairLineageOpen: vi.fn<(gateId: string) => Promise<boolean>>(async () => false),
+  isRepairLineageOpen: vi.fn<(gateId: string, executor?: unknown) => Promise<boolean>>(async () => false),
 }));
 vi.mock("../lifecycle-repair-store", () => repairStoreMock);
 
@@ -195,7 +200,10 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
     expect(outcome).toBe("already-advanced");
     expect(sendTaskSpy).not.toHaveBeenCalled();
     expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
-    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-1", "lease-abc");
+    // cinatra#4312 — acknowledged under the run decision lock, after a re-read there.
+    expect(gateStoreMock.withRunDecisionLock).toHaveBeenCalledWith("run-1", expect.any(Function));
+    expect(gateStoreMock.listReviewGatesForRun).toHaveBeenCalledWith("run-1", TX);
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-1", "lease-abc", TX);
   });
 
   it("does not let another pause's pending leg hold this original task", async () => {
@@ -309,6 +317,22 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
     expect(summary.delivered).toBe(1);
     expect(summary.alreadyAdvanced).toBe(1);
     expect(summary.failed).toBe(0);
+  });
+
+  it("cinatra#4312: the sweep dead-letters exhausted intents before it claims", async () => {
+    gateStoreMock.claimPendingResumeIntents.mockResolvedValue([]);
+    await sweepArtifactReviewResumeIntents();
+    expect(gateStoreMock.deadLetterExhaustedResumeIntents).toHaveBeenCalledTimes(1);
+    expect(gateStoreMock.deadLetterExhaustedResumeIntents.mock.invocationCallOrder[0])
+      .toBeLessThan(gateStoreMock.claimPendingResumeIntents.mock.invocationCallOrder[0]);
+  });
+
+  it("cinatra#4312: a failed dead-letter pass is tallied and the claim still runs", async () => {
+    gateStoreMock.deadLetterExhaustedResumeIntents.mockRejectedValueOnce(new Error("db blip"));
+    gateStoreMock.claimPendingResumeIntents.mockResolvedValue([]);
+    const summary = await sweepArtifactReviewResumeIntents();
+    expect(summary.failed).toBe(1);
+    expect(gateStoreMock.claimPendingResumeIntents).toHaveBeenCalledTimes(1);
   });
 
   it("a per-intent throw is tallied as failed and never poisons the batch", async () => {
@@ -426,8 +450,19 @@ describe("cinatra#4312 — Regenerate on a declared picture leg keeps the pause 
     const outcome = await deliverArtifactReviewResumeIntent(intent({ gateId: "gate-post" }));
     expect(outcome).toBe("already-advanced");
     expect(repairStoreMock.isRepairLineageOpen).toHaveBeenCalledWith("gate-leg2");
+    expect(repairStoreMock.isRepairLineageOpen).toHaveBeenCalledWith("gate-leg2", TX);
     expect(sendTaskSpy).not.toHaveBeenCalled();
     expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-post", "lease-abc", TX);
+  });
+
+  it("a lineage the re-read under the run decision lock finds closed lets the run go on instead of being acknowledged", async () => {
+    repairStoreMock.isRepairLineageOpen.mockImplementation(async (_gateId: string, executor?: unknown) => executor === undefined);
+    const outcome = await deliverArtifactReviewResumeIntent(intent({ gateId: "gate-post" }));
+    expect(outcome).toBe("delivered");
+    expect(gateStoreMock.withRunDecisionLock).toHaveBeenCalledTimes(1);
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledTimes(1);
     expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-post", "lease-abc");
   });
 
@@ -465,7 +500,7 @@ describe("cinatra#4312 — Regenerate on a declared picture leg keeps the pause 
     const outcome = await deliverArtifactReviewResumeIntent(intent({ gateId: "gate-succ", reviewTaskId: SUCCESSOR }));
     expect(outcome).toBe("already-advanced");
     expect(sendTaskSpy).not.toHaveBeenCalled();
-    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-succ", "lease-abc");
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-succ", "lease-abc", TX);
   });
 
   it.each([

@@ -388,34 +388,62 @@ describe.skipIf(!HAS_DB)("cinatra#2040 — repair loop (real store)", () => {
   });
 
   it("CYCLE: the cycle guard trips at the bound and ESCALATES (no unbounded reopen)", async () => {
-    // A shared lineage; each changes_requested on a fresh gate carries the SAME
-    // lineage id so the cycle guard counts the whole chain.
-    const lineageId = `lineage-${randomUUID()}`;
+    // A repair chain: each changes_requested lands on the SUCCESSOR gate of the
+    // previous repair, so the store derives the SAME lineage from that gate
+    // (cinatra#4312: the lineage is never caller-set) and the cycle guard counts
+    // the whole chain.
     const maxCycles = 3;
+    const ev = await produce("document", { destinationClass: "external_publish" });
+    await orch.sweepReviewOrchestration();
+    const runId = ev.producerRunId!;
+    let taskId = autoReviewTaskId(ev.eventId);
+    let base = { artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId };
     let lastStatus = "";
     let lastRoute = "";
+    let lineage: string | null = null;
     for (let i = 1; i <= maxCycles + 1; i++) {
-      const ev = await produce("document", { destinationClass: "external_publish" });
-      await orch.sweepReviewOrchestration();
-      const taskId = autoReviewTaskId(ev.eventId);
-      const gate = await gateStore.readReviewGate(ev.producerRunId!, taskId);
+      const gate = await gateStore.readReviewGate(runId, taskId);
       const cr = await repairStore.recordChangesRequested({
-        runId: ev.producerRunId!,
+        runId,
         reviewTaskId: taskId,
         orgId: ORG,
-        request: mkChangesRequested(ev, gate!.id),
+        request: mkChangesRequested(ev, gate!.id, { baseTarget: base, expectedBaseRevisionId: base.representationRevisionId }),
         repairCapable: true,
-        currentBaseRevisionId: ev.representationRevisionId,
-        lineageId,
+        producerRunId: runId,
+        currentBaseRevisionId: base.representationRevisionId,
         maxCycles,
       });
       expect(cr.ok).toBe(true);
       if (!cr.ok) return;
       lastStatus = cr.status;
       lastRoute = cr.route.kind;
+      const repair = await repairStore.readRepair(cr.repairId);
+      lineage ??= repair!.lineageId;
+      expect(repair!.lineageId).toBe(lineage);
       if (i <= maxCycles) {
         expect(cr.status).toBe("requested");
         expect(cr.attempt).toBe(i);
+        const next = { artifactId: ev.artifactId, representationRevisionId: `rev-c${i}-${randomUUID()}` };
+        const rr = await repairStore.submitRepairResponse({
+          repairId: cr.repairId,
+          currentBaseRevisionId: base.representationRevisionId,
+          reauthorized: true,
+          response: {
+            gateId: gate!.id,
+            baseTarget: base,
+            successorTarget: next,
+            findingOutcomes: [
+              { findingId: "f1", applied: true },
+              { findingId: "f2", applied: true },
+            ],
+            changeSummary: `cycle ${i}`,
+            producerProvenance: { runId, agentId: null },
+          },
+        });
+        expect(rr.ok).toBe(true);
+        if (!rr.ok) return;
+        taskId = rr.successorTaskId;
+        base = next;
       }
     }
     // The (maxCycles+1)-th attempt escalates — never dispatches another repair.
@@ -1269,7 +1297,7 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — Regenerate on a declared review leg (
     expect((await pendingGates(f.runId)).map((g) => g.reviewTaskId)).toEqual([s.successorTaskId]);
   });
 
-  it("POST FIRST: the post's approval keeps the run parked; #2 then settles changes_requested with one successor, and its approval resumes nothing", async () => {
+  it("POST FIRST: the post's approval keeps the run parked; #2 then settles changes_requested with one successor, whose approval takes the automatic-gate release", async () => {
     const f = await declaredFamily();
     const postGate = await gateStore.readReviewGate(f.runId, f.step);
     await resolveGateApprove(postGate!.id);
