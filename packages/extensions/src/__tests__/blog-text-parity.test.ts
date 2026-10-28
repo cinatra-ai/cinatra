@@ -123,7 +123,9 @@ const ALLOWED_API_URLS = new Set([
  *
  * Matched EXACTLY — URL, method and the whole request body — and at most once
  * per leaf: any other passthrough body, tool, tool name, binding source or URL,
- * a toolbox on the node, or a second such read still fails (d).
+ * a toolbox on the node, or a second such read still fails (d). The body is
+ * refused on every other node, so it fails (d) at any other URL or method,
+ * an allowlisted URL too.
  */
 const BRAND_VOICE_READ = {
   url: `${BASE_URL}/api/agents/passthrough`,
@@ -157,6 +159,11 @@ function endpointProblems(components: Ref[]): string[] {
     if (isBrandVoiceRead(c)) {
       reads += 1;
       continue;
+    }
+    // The read's body is matched with its URL and method, never alone: at an
+    // allowlisted URL it would still be the tool call.
+    if (isDeepStrictEqual(c.data, BRAND_VOICE_READ.data)) {
+      problems.push(`${where} carries the brand-voice read's body outside its exact URL and method`);
     }
     // `typeof === "string"` before the Set lookup, never String(c.url): the
     // coercion would let a malformed `"url": ["…/api/context-resolve"]`
@@ -439,6 +446,8 @@ describe("blog-text parity (d): the brand-voice read is the only added call shap
   const passthrough = `${BASE_URL}/api/agents/passthrough`;
   const refused = (where: string, url: string) =>
     `ApiNode ${where} calls a non-allowlisted endpoint: ${JSON.stringify(url)}`;
+  const misplaced = (where: string) =>
+    `ApiNode ${where} carries the brand-voice read's body outside its exact URL and method`;
 
   it("accepts exactly one brand-voice read beside the bridge", () => {
     expect(endpointProblems([bridgeNode, read()])).toEqual([]);
@@ -477,8 +486,23 @@ describe("blog-text parity (d): the brand-voice read is the only added call shap
       "https://elsewhere/api/agents/passthrough",
       `${BASE_URL}/api/agents/passthrough/`,
     ]) {
-      expect(endpointProblems([read({ url })])).toEqual([refused("read_brand_voice", url)]);
+      expect(endpointProblems([read({ url })])).toEqual([
+        misplaced("read_brand_voice"),
+        refused("read_brand_voice", url),
+      ]);
     }
+  });
+
+  it("refuses the same body at an allowlisted URL, or with another method", () => {
+    for (const url of [...ALLOWED_API_URLS]) {
+      expect(endpointProblems([bridgeNode, read({ url })])).toEqual([misplaced("read_brand_voice")]);
+      expect(endpointProblems([read({ url, http_method: "GET" })])).toEqual([misplaced("read_brand_voice")]);
+    }
+    expect(endpointProblems([read({ http_method: "GET" })])).toEqual([
+      misplaced("read_brand_voice"),
+      refused("read_brand_voice", passthrough),
+    ]);
+    expect(endpointProblems([read({ http_method: undefined })])).toContain(misplaced("read_brand_voice"));
   });
 
   it("refuses an allowlisted URL that is not a string", () => {
