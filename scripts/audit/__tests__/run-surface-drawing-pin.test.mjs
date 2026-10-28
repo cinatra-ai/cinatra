@@ -104,9 +104,9 @@ describe("the run surface's drawing pin is recorded", () => {
  * carried before the forward.
  *
  * Since cinatra#3677 that set is EMPTY at this pin: the selectors it carried
- * were an agent card's own controls, which the anchor contract no longer
- * records. The key stays present, because an absent key would take the set out
- * of the digest.
+ * were four card controls that no governed drawing draws under the recorded
+ * value, which the anchor contract no longer records. The key stays present,
+ * because an absent key would take the set out of the digest.
  */
 describe("the merge-forward keeps both of the file's pins", () => {
   it("carries the adopted anchor set the newer pin was recorded with", () => {

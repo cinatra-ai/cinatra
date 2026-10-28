@@ -341,11 +341,10 @@ describe("the fifth kind is covered by the same alarm", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. An agent card's own controls are not anchors of this contract (cinatra#3677)
+// 6. Four card controls are not anchors of this contract (cinatra#3677)
 // ---------------------------------------------------------------------------
 //
-// The governed drawings draw the core lifecycle screens and the one generic
-// input card, not an agent card's own buttons. Four capture requirements named
+// Four capture requirements named
 // a card's own control that no governed drawing draws under the recorded value
 // (three the drawing retired, and the schedule card's Confirm, whose floor it
 // draws as `confirm-schedule -> scheduled`), which kept

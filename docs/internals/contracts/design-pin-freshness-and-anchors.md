@@ -111,8 +111,9 @@ authenticated reader at the contract's own pinned revision — and says so.
   the second defect, and it is not the same as an anchor drawn nowhere.
 - **A selector form beyond one attribute predicate is refused by name**, and the
   run exits `2`. It is never approximated and never counted in either direction.
-  The live recorded set carries such a form today (a class selector among the
-  frame-wide capture requirements), and the suite pins that. `--print-unresolved`
+  The suite pins that refusal. In the live recorded set the one class selector,
+  `.cw-frame` (a frame-wide capture requirement), is a passive capture marker,
+  which the report lists and does not match against a drawing. `--print-unresolved`
   — the road the adoption script reads — **prints nothing and exits `2`** while
   any selector is refused: a set with a verdict missing from it would otherwise
   be recorded, and digest-bound, as though it were the whole finding.
@@ -130,19 +131,17 @@ authenticated reader at the contract's own pinned revision — and says so.
   proves the array was not edited afterwards; it can never prove it was true
   when it was written, and this is the script that decides that.
 
-- **An agent card's own controls are not anchors of the contract.** The
-  governed drawings draw only the core lifecycle screens and the one generic
-  input card, not an agent card's own buttons, text or steps. So the anchor
-  contract leaves those controls out of the capture requirements it records
-  (`AGENT_OWNED_CAPTURE_CONTROLS` in `scripts/audit/lib/anchor-contract.mjs`,
-  a closed list per kind): the skills card's per-skill Confirm, Adjust and
-  Skip, which the drawing retired. The same list holds the schedule card's own
-  Confirm, `[data-action="confirm-schedule-proposal"]`, for another reason: the
-  governed drawing draws that floor under another value,
-  `confirm-schedule -> scheduled`, and the product's value is tracked in
-  cinatra#3678. The capture recorder still grades pictures against all four;
-  only the contract's digest and this check stop asking a drawing to draw them
-  (cinatra#3677).
+- **Four card controls that no governed drawing draws under the recorded
+  value are not anchors of the contract.** The anchor contract leaves them out
+  of the capture requirements it records (`AGENT_OWNED_CAPTURE_CONTROLS` in
+  `scripts/audit/lib/anchor-contract.mjs`, a closed list per kind), each for its
+  own reason. The skills card's per-skill Confirm, Adjust and Skip: the drawing
+  retired them. The schedule card's own Confirm,
+  `[data-action="confirm-schedule-proposal"]`: the governed drawing draws that
+  floor under another value, `confirm-schedule -> scheduled`, and the product's
+  value is tracked in cinatra#3678. The capture recorder still grades the
+  pictures of each control's own kind against it; only the contract's digest
+  and this check stop asking a drawing to draw them (cinatra#3677).
 
 With those controls out, every recorded owner anchor and capture requirement
 resolves in a governed drawing or is a passive capture marker, and

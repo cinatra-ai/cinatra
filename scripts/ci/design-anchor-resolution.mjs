@@ -75,8 +75,9 @@
 // records them
 // (`AGENT_OWNED_CAPTURE_CONTROLS` in scripts/audit/lib/anchor-contract.mjs),
 // while the capture recorder still grades pictures against them. A visible
-// control is still never excused HERE: anything the contract records goes
-// through the drawing check. It is landed warn-first — its context is not
+// control is still never excused HERE: every recorded owner anchor and every
+// capture selector other than the passive capture markers goes through the
+// drawing check. It is landed warn-first — its context is not
 // required until a separate pull request adds it.
 //
 // Usage:
@@ -86,7 +87,9 @@
 //
 // Exit codes:
 //   0  every drawn anchor resolves, or the finding only warns for this event
-//   1  a recorded anchor resolves in no governed drawing, under a red event
+//   1  a recorded anchor resolves in no governed drawing, under a red event;
+//      or, on any event, a recorded `anchorsUnresolvedAtPin` disagrees with
+//      what this check finds
 //   2  the gate could not run honestly (no drawings, a missing drawing, a
 //      refused selector form, an unreadable pin or contract)
 
@@ -675,7 +678,9 @@ export async function runCli({
   // pin, and the digest binds it — but a digest only proves the array was not
   // edited afterwards, never that it was true when it was written. So while the
   // key is present, this is the script that compares the two. The contract
-  // records it (as the empty array), so this comparison runs on every run.
+  // records it (as the empty array), so every run that reaches this line
+  // compares it; `--print-unresolved` returns above, and a run that cannot run
+  // honestly exits 2 before it.
   if (Array.isArray(recordedUnresolved)) {
     const found = [...new Set(merged.unresolved.map((r) => r.selector))].sort();
     const recorded = [...new Set(recordedUnresolved)].sort();

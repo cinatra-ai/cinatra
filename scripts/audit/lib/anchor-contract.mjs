@@ -88,15 +88,14 @@ export function canonicalJson(value) {
 }
 
 /**
- * AN AGENT CARD'S OWN DECISION CONTROLS ARE NOT ANCHORS OF THIS CONTRACT
- * (cinatra#3677, re-ratified 2026-10-23).
+ * FOUR CARD CONTROLS THAT NO GOVERNED DRAWING DRAWS UNDER THE RECORDED VALUE
+ * ARE NOT ANCHORS OF THIS CONTRACT (cinatra#3677, re-ratified 2026-10-28).
  *
- * The drawings this contract is pinned to draw the core lifecycle screens and
- * the one generic input card, not an agent card's own buttons, text or steps.
  * Four capture requirements named a card's own control that no governed drawing
- * draws under the recorded value, and recording them here kept
+ * draws under the value the product emits, and recording them here kept
  * `design-anchor-resolution` red on main with nothing in a drawing to fix.
- * Each selector below is one of them, named under the kind that owns it:
+ * Each selector below is one of them, named under the kind that owns it, with
+ * its own reason:
  *
  *   · recommendation_hold — the per-skill Confirm / Adjust / Skip that
  *     packages/agents/src/run-recommendation-chip-row.tsx draws on each pill
@@ -109,13 +108,13 @@ export function canonicalJson(value) {
  *
  * WHAT THIS DOES NOT DO. It removes no product control and no requirement from
  * the recorder: scripts/ci/lib/capture-record-contract.mjs and
- * scripts/audit/lib/chat-hitl-capture-recorder.mjs still grade every picture
- * against these controls, and the card suites still pin them. It only stops
- * THIS contract — its digest, and the drawing-resolution check that reads the
- * same set — from recording them as anchors a governed drawing must draw. The
- * list is closed and per kind: a selector is left out only in the cells of the
- * kind that owns it, and every other requirement is recorded exactly as the
- * recorder computes it.
+ * scripts/audit/lib/chat-hitl-capture-recorder.mjs still grade the pictures of
+ * each control's own kind against it, and the card suites still pin them. It
+ * only stops THIS contract — its digest, and the drawing-resolution check that
+ * reads the same set — from recording them as anchors a governed drawing must
+ * draw. The list is closed and per kind: a selector is left out only in the
+ * cells of the kind that owns it, and every other requirement is recorded
+ * exactly as the recorder computes it.
  */
 export const AGENT_OWNED_CAPTURE_CONTROLS = Object.freeze({
   recommendation_hold: Object.freeze([
@@ -126,7 +125,7 @@ export const AGENT_OWNED_CAPTURE_CONTROLS = Object.freeze({
   trigger_schedule_proposal: Object.freeze(['[data-action="confirm-schedule-proposal"]']),
 });
 
-/** Is `selector` an agent card's own control, in a cell of the kind that owns it? */
+/** Is `selector` one of the four listed controls, in a cell of the kind that owns it? */
 export function isAgentOwnedCaptureControl(kind, selector) {
   return (
     typeof kind === "string" &&
@@ -139,9 +138,9 @@ export function isAgentOwnedCaptureControl(kind, selector) {
  * The anchors a CAPTURE is graded against, recomputed live from the recorder
  * contract — one entry per (host, kind, state), plus the host's own frame-wide
  * set. This is the third digest input, and it is never read from the anchor
- * file: a requirement that changed must move the digest. An agent card's own
- * controls (`AGENT_OWNED_CAPTURE_CONTROLS`) are left out of the cells of the
- * kind that owns them, and nothing else is.
+ * file: a requirement that changed must move the digest. The four controls of
+ * `AGENT_OWNED_CAPTURE_CONTROLS` are left out of the cells of the kind that owns
+ * each, and nothing else is.
  */
 export function captureAnchorExpectations() {
   const out = {};
