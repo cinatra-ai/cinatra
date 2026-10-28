@@ -26,7 +26,13 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-type Pair = { userToken: string; transportToken: string; expiresIn: number };
+type Pair = {
+  userToken: string;
+  transportToken: string;
+  expiresIn: number;
+  userExpiresIn?: number;
+  sessionExpiresIn?: number;
+};
 type BridgeOptions = { onContext: (context: unknown) => void };
 
 const bridges: BridgeOptions[] = [];
@@ -48,9 +54,17 @@ vi.mock("@/lib/embed/embed-bridge.client", () => ({
 
 type SignInAnswer = { ok: true; credential: Pair } | { ok: false; reason: string };
 const runFrameSignIn = vi.fn<(selectors: unknown) => Promise<SignInAnswer>>();
+// The real sign-in reads this document's clock just before the request that
+// mints the pair and once its answer is read, and hands both readings to the
+// frame with the pair (cinatra#4217). The double does the same, so the frame's
+// renewal chain is armed exactly as it is after a real sign-in.
 vi.mock("@/lib/embed/frame-widget-session.client", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  runFrameSignIn: (selectors: unknown) => runFrameSignIn(selectors),
+  runFrameSignIn: async (selectors: unknown) => {
+    const mintedAt = Date.now();
+    const answer = await runFrameSignIn(selectors);
+    return answer.ok ? { ...answer, mintedAt, receivedAt: Date.now() } : answer;
+  },
 }));
 
 let frameHeaders: (() => Record<string, string>) | null = null;
@@ -135,10 +149,19 @@ const LIFE_S = 600;
 const LIFE_MS = LIFE_S * 1000;
 /** The longest delay a browser timer holds (2^31 - 1 ms). */
 const MAX_DELAY = 2_147_483_647;
+/**
+ * A pair that has reached its session cap: the user token and the session end
+ * with the pair (cinatra#4217). Nothing renews it, so the sign-in ends when the
+ * pair's own life runs out, which is the end these readings draw. The renewal
+ * itself, and the end that follows a renewed pair, are proven in
+ * embed-assistant-renewal.test.tsx.
+ */
 const pair = (n: number, expiresIn = LIFE_S): Pair => ({
   userToken: `cwu_secret_${n}`,
   transportToken: `cit_secret_${n}`,
   expiresIn,
+  userExpiresIn: expiresIn,
+  sessionExpiresIn: expiresIn,
 });
 const context = (threadId: string) => ({
   session: { assistant: "wordpress", threadId },
@@ -793,7 +816,10 @@ describe("the sign-in ticket: each check and each move, tried on its own (cinatr
         fetchThreadMessages.mockResolvedValueOnce([]);
         await clickSignIn();
         expect(shown()).toBe("active");
-        expect(vi.getTimerCount(), "the second pair's end timer is armed").toBe(1);
+        // Two timers: the second pair's end timer, and the hold timer of its
+        // renewal chain (cinatra#4217), which holds the capped pair to its
+        // upper bound and renews nothing.
+        expect(vi.getTimerCount(), "the second pair's end timer and its chain's hold are armed").toBe(2);
         await act(async () => {
           firstEnd?.();
           await drain();

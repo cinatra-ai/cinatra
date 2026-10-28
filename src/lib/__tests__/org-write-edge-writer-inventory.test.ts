@@ -215,7 +215,12 @@ describe("newly registered stores — writer-set lockstep", () => {
       // parent Better Auth session is DEFINITELY gone, keyed on that one token's
       // hash — the same shape as the expired-row delete beside it. Deliberately
       // re-pinned.
-      "src/lib/widget-user-auth.ts": 12,
+      // 12 -> 15 (cinatra#4217): renewUserWidgetToken's ONE statement claims the
+      // presented token (DELETE FROM ... RETURNING), writes the spent bearer back
+      // for its grace window and writes its successor (two INSERT INTO ...
+      // SELECT ... FROM claimed) — one statement, three verbs. Deliberately
+      // re-pinned.
+      "src/lib/widget-user-auth.ts": 15,
       // 8 -> 9 on main (the suggestion-decision CAS write); kept as main has it.
       // 9 -> 10 (cinatra#2650): bindThreadContainerIfUnbound's ONE conditional
       // set-once UPDATE that records a thread's container at its first persist.
@@ -261,9 +266,42 @@ describe("newly registered stores — writer-set lockstep", () => {
     expect(registryWriters("src/lib/connect-sites-store.ts")).toEqual(detected);
   });
 
+  // The module-private functions of a store whose own body carries raw DML, or
+  // calls another such private function (resolved to a fixed point). An export
+  // that calls one of them executes that DML through it, exactly as if the
+  // statement were written in its own body: the shared expiry sweep, or a
+  // statement kept in its own function (cinatra#4217's renewal claim).
+  function privateDmlHelpers(file: string): string[] {
+    const src = stripComments(readFileSync(file, "utf-8"));
+    const parts = src.split(
+      /^(?:export (?:async )?function \w+|function (\w+)|export const \w+\b[^=\n]*=|const \w+\b[^=\n]*=)/m,
+    );
+    const privates: Array<{ name: string; body: string }> = [];
+    // parts: [prefix, privateFn?, body, ...]
+    for (let i = 1; i < parts.length; i += 2) {
+      const name = parts[i];
+      if (name) privates.push({ name, body: parts[i + 1] ?? "" });
+    }
+    const helpers = new Set(privates.filter((p) => RAW_VERBS.test(p.body)).map((p) => p.name));
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const p of privates) {
+        if (!helpers.has(p.name) && [...helpers].some((h) => new RegExp(`\\b${h}\\(`).test(p.body))) {
+          helpers.add(p.name);
+          grew = true;
+        }
+      }
+    }
+    return [...helpers].sort();
+  }
+
   it("widget-user-auth: exactly the raw-DML / expiry-sweeping executors are registered", () => {
+    const helpers = privateDmlHelpers("src/lib/widget-user-auth.ts");
+    // Pinned: a new private DML helper is a deliberate re-pin, never a silent one.
+    expect(helpers, "the module's private DML helpers").toEqual(["renewClaimStatement", "sweepExpired"]);
+    const callsDmlHelper = (body: string) => helpers.some((h) => new RegExp(`\\b${h}\\(`).test(body));
     const detected = exportedSegments("src/lib/widget-user-auth.ts")
-      .filter((s) => RAW_VERBS.test(s.body) || /\bsweepExpired\(/.test(s.body))
+      .filter((s) => RAW_VERBS.test(s.body) || /\bsweepExpired\(/.test(s.body) || callsDmlHelper(s.body))
       .map((s) => s.name)
       .sort();
     expect(detected).toEqual([
@@ -273,6 +311,7 @@ describe("newly registered stores — writer-set lockstep", () => {
       "loadActiveTransaction",
       "recordDisplayedScopesForTransaction",
       "redeemUserAuthCode",
+      "renewUserWidgetToken",
     ]);
     expect(registryWriters("src/lib/widget-user-auth.ts")).toEqual(detected);
   });

@@ -5,6 +5,7 @@ import { redeemUserAuthCode } from "@/lib/widget-user-auth";
 import { deriveFrameBinding, resolveFrameRequestOrigin } from "@/lib/widget-frame-auth";
 import { mintWidgetStreamToken } from "@/lib/widget-token-broker";
 import { allowConnectTokenRequest } from "@/lib/connect-rate-limit";
+import { rateLimitClientAddress } from "@/lib/rate-limit-client-address";
 import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
 import { sha256Base64Url } from "@/lib/connect-provisioning";
 
@@ -51,18 +52,12 @@ type TokenBody = {
 
 const INVALID_GRANT = { error: "invalid_grant" } as const;
 
-function clientIp(request: Request): string {
-  const fwd = request.headers.get("x-forwarded-for");
-  if (fwd) return fwd.split(",")[0]?.trim() || "unknown";
-  return request.headers.get("x-real-ip")?.trim() || "unknown";
-}
-
 function str(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
 export async function POST(request: Request): Promise<Response> {
-  const ip = clientIp(request);
+  const ip = rateLimitClientAddress(request);
   const ua = request.headers.get("user-agent");
 
   // THE SAME GATE the init route runs, against the same operator-controlled
@@ -195,6 +190,11 @@ export async function POST(request: Request): Promise<Response> {
       transportToken: transport.token,
       tokenType: "Bearer",
       expiresIn: Math.min(redeemed.expiresIn, transport.expiresIn),
+      // cinatra#4217 — the user token's own life and the time to the session
+      // cap. The frame's renewal chain judges renewability on the user token
+      // (the token a renewal presents), and stops renewing at the cap.
+      userExpiresIn: redeemed.expiresIn,
+      sessionExpiresIn: redeemed.sessionExpiresIn,
       scope: redeemed.scope,
     },
     { status: 200 },
