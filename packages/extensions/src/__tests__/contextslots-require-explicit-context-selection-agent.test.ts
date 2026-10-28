@@ -587,10 +587,11 @@ function wiringProblems(oas: Ref, pkg: unknown): string[] {
     if (!(cj > ci)) problems.push(`${fnId} must come before its consumer ${consumer}`);
   }
 
-  // A marker takes its slot off the injection road on any component that
-  // carries it (:394-429), so a marker on an ordinary node leaves the slot with
-  // no resolution at all (cinatra#4418). Only a context FlowNode of this
-  // definition may carry it.
+  // A marker takes its slot off the injection road wherever the definition
+  // carries it (:394-429), so a slot whose marker no context FlowNode carries
+  // has no resolution at all (cinatra#4418). At least one context FlowNode of
+  // this definition must carry the marker; the same marker repeated on an
+  // ordinary node beside that FlowNode is accepted.
   const resolvedByNode = new Set(
     Object.values(all)
       .filter((c) => isObject(c) && isContextFlowNode(oas, c))
