@@ -6,9 +6,13 @@
  * takes every dispatched repair, a captured CMS snapshot's included; the CMS
  * bridge's completer no longer runs. This suite drives a CMS base (an object of
  * the app-owned snapshot type with a `cms_snapshot_targets` row) to a
- * dispatched repair, and reads what the generic completer does with two answers
- * it must not finish:
+ * dispatched repair, and reads what the generic completer does with the answer
+ * it finishes and the two it must not finish:
  *
+ *   ACCEPTED          — the repair run answers with a revision of the base's
+ *                       own type and MIME. The completer re-files it onto the
+ *                       base and the repair completes (`repaired`, with a
+ *                       successor gate on the base).
  *   CAPTURE ONLY      — the repair run's only write is a host capture (emitter
  *                       `object_cms_snapshot_capture`). The completer never
  *                       claims it, so the repair stays OPEN and counts
@@ -20,11 +24,13 @@
  *                       snapshot type does not accept. The revision door
  *                       refuses the re-file (`accepts-mismatch`), nothing is
  *                       written onto the base, and the repair stays OPEN on
- *                       every maintenance sweep.
+ *                       every maintenance sweep. The case reads the refusal's
+ *                       code in the completer's log line, so a fixture that
+ *                       reached another refusal would fail it.
  *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 
@@ -260,15 +266,48 @@ describe.skipIf(!HAS_DB)("cinatra#3862 leg 7 — the generic completer on a capt
     const ctx = await driveToFinishedCmsBaseRepair();
     await seedRunAnswer({ runId: ctx.repairRunId, type: "document", mime: "text/html", emitter: "createSemanticArtifact" });
 
-    for (const pass of [1, 2]) {
-      const summary = await orch.sweepLifecycleGateMaintenance();
-      expect({ pass, completed: summary.producerRepairsCompleted, unresolved: summary.producerRepairsUnresolved }).toEqual({
-        pass,
-        completed: 0,
-        unresolved: 1,
-      });
-      expect(await repairRow(ctx.repairId)).toEqual({ status: "dispatched", successor_gate_id: null });
-      expect(await revisionsOn(ctx.baseArtifactId)).toBe(0);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      for (const pass of [1, 2]) {
+        errors.mockClear();
+        const summary = await orch.sweepLifecycleGateMaintenance();
+        expect({ pass, completed: summary.producerRepairsCompleted, unresolved: summary.producerRepairsUnresolved }).toEqual({
+          pass,
+          completed: 0,
+          unresolved: 1,
+        });
+        // WHICH refusal: the door's accepts-mismatch, not another refusal of the re-file.
+        const refusals = errors.mock.calls
+          .map((args) => String(args[0]))
+          .filter((line) => line.includes(`the answer of repair ${ctx.repairId} was not re-filed`));
+        expect({ pass, refusals: refusals.map((line) => /\(([a-z-]+)\)/.exec(line)?.[1]) }).toEqual({
+          pass,
+          refusals: ["accepts-mismatch"],
+        });
+        expect(await repairRow(ctx.repairId)).toEqual({ status: "dispatched", successor_gate_id: null });
+        expect(await revisionsOn(ctx.baseArtifactId)).toBe(0);
+      }
+    } finally {
+      errors.mockRestore();
     }
+  });
+
+  it("ACCEPTED: an answer of the base's own type and MIME is re-filed onto the base and the repair completes", async () => {
+    const ctx = await driveToFinishedCmsBaseRepair();
+    await seedRunAnswer({ runId: ctx.repairRunId, type: CMS_SNAPSHOT_TYPE, mime: CMS_FIELDS_MIME, emitter: "createSemanticArtifact" });
+
+    const summary = await completion.completeDispatchedProducerRepairs({ limit: 50 });
+
+    expect(summary).toEqual({ scanned: 1, completed: 1, pending: 0, unresolved: 0, failed: 0 });
+    const row = (
+      await pool(
+        `SELECT status, successor_gate_id, successor_artifact_id FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE id=$1`,
+        [ctx.repairId],
+      )
+    ).rows[0] as { status: string; successor_gate_id: string | null; successor_artifact_id: string | null };
+    expect(row.status).toBe("repaired");
+    expect(row.successor_gate_id).not.toBeNull();
+    expect(row.successor_artifact_id).toBe(ctx.baseArtifactId);
+    expect(await revisionsOn(ctx.baseArtifactId)).toBe(1);
   });
 });
