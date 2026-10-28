@@ -88,17 +88,17 @@
 //   node scripts/ci/design-anchor-resolution.mjs --github-annotations
 //   node scripts/ci/design-anchor-resolution.mjs --print-unresolved
 //
-// Exit codes:
+// Exit codes. A run takes the FIRST of these that applies, in this order:
+//   2  the gate could not read its pin, contract, path map, diff base or
+//      drawings ("could not run honestly")
+//   1  a recorded `anchorsUnresolvedAtPin` disagrees with what this check
+//      finds, on any event
+//   2  the recorded set carries a selector form this matcher refuses
+//   1  a recorded anchor resolves in no governed drawing, under a red event
 //   0  every drawn anchor resolves, or the finding only warns for this event
-//   1  a recorded anchor resolves in no governed drawing, under a red event;
-//      or, on any event, a recorded `anchorsUnresolvedAtPin` disagrees with
-//      what this check finds (compared before a refused selector form is
-//      reported, so a run with both exits 1; `--print-unresolved` does not
-//      compare)
-//   2  the gate could not run honestly (no drawings, a missing drawing, an
-//      unreadable pin or contract; or a refused selector form, where no
-//      recorded `anchorsUnresolvedAtPin` disagrees or under
-//      `--print-unresolved`)
+// `--print-unresolved` compares nothing: after the read failures it exits 2
+// on a refused selector form, and otherwise prints the unresolved set and
+// exits 0.
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";

@@ -104,15 +104,23 @@ authenticated reader at the contract's own pinned revision — and says so.
 - **Matching is exact, not substring.** A raw text search would let a selector
   quoted in prose or shown in a code sample "resolve". The checker parses each
   drawing's tags, ignoring comments and the contents of `pre`/`code`/`script`/
-  `style`, and matches an attribute name and value exactly.
+  `style`, and matches attribute names and values element by element (a name
+  case-insensitively, a value exactly; see below).
 - **An anchor that resolves in a governed drawing other than the first is
   resolved**, and the report says which. One that resolves only in a drawing the
   pin does *not* govern is **unresolved**, with that distinction stated — that is
   the second defect, and it is not the same as an anchor drawn nowhere.
-- **A selector form beyond one attribute predicate is refused by name**, and the
-  run exits `2`, unless a recorded `anchorsUnresolvedAtPin` disagrees with what
-  the run finds: outside `--print-unresolved` that comparison comes first and
-  exits `1`. A refused form is never approximated and never counted in either
+- **Three selector forms are decided, and any other form is refused by name.**
+  The decided forms are one attribute predicate (`[a]`, `[a="v"]` or
+  `[a='v']`), a compound of attribute predicates (`[a][b="v"]`), which one
+  element must satisfy as a whole, and one class token (`.frame`). The refused
+  forms include a descendant combinator, a tag or id selector, a compound of
+  classes, a class beside an attribute predicate, an operator other than `=`,
+  an unquoted value and an empty selector (`parseAnchorSelector` in
+  `scripts/ci/design-anchor-resolution.mjs`). A refused form makes the run exit
+  `2`, unless a recorded `anchorsUnresolvedAtPin` disagrees with what the run
+  finds: outside `--print-unresolved` that comparison comes first and exits
+  `1`. A refused form is never approximated and never counted in either
   direction.
   The suite pins that refusal. In the live recorded set the one class selector,
   `.cw-frame` (a frame-wide capture requirement), is a passive capture marker,

@@ -15,7 +15,9 @@
 // Organised by the six acceptance items of cinatra#3144 G4:
 //
 //   1. Every recorded anchor that resolves in NONE of the governed drawings is
-//      reported per kind, and the check exits non-zero when any does not.
+//      reported per kind, and the check exits non-zero when any does not under
+//      a red event (a pull request that touches no mapped path only warns,
+//      unless a recorded `anchorsUnresolvedAtPin` disagrees).
 //   2. An anchor resolving in a governed drawing other than the first is
 //      RESOLVED; one resolving only in a drawing the pin does not govern is
 //      UNRESOLVED, with that distinction stated.
@@ -1153,10 +1155,46 @@ describe("a recorded anchorsUnresolvedAtPin is compared with what this check fin
     expect(r.all).not.toContain("is not what this check finds");
   });
 
+  it("exits 2 on a refused selector when the recorded set agrees with what it finds", async () => {
+    // The comparison runs first and agrees, so the refusal decides: a set with
+    // a selector this matcher did not decide is not a set it may call red or
+    // green, even though another recorded anchor is unresolved.
+    const dir = drawingsDir();
+    write(dir, "one.html", drawingWith('[data-other="x"]'));
+    const r = await run({
+      dir,
+      anchors: [
+        anchor('[data-lifecycle-card="verification_summary"]'),
+        anchor('[data-a="b"] [data-c="d"]'),
+      ],
+      recordedUnresolved: ['[data-lifecycle-card="verification_summary"]'],
+    });
+    expect(r.code).toBe(2);
+    expect(r.all).toContain("could not run");
+    expect(r.all).not.toContain("is not what this check finds");
+  });
+
+  it("exits 1 on a refused selector when the recorded set disagrees, because the comparison comes first", async () => {
+    const dir = drawingsDir();
+    write(dir, "one.html", drawingWith('[data-other="x"]'));
+    const r = await run({
+      dir,
+      anchors: [
+        anchor('[data-lifecycle-card="verification_summary"]'),
+        anchor('[data-a="b"] [data-c="d"]'),
+      ],
+      recordedUnresolved: [],
+    });
+    expect(r.code).toBe(1);
+    expect(r.all).toContain("is not what this check finds");
+    expect(r.all).not.toContain("could not run");
+  });
+
   it("has a recorded set to compare against, and it is EMPTY at this pin, which is this repository's state today", () => {
-    // cinatra#3677: the four selectors this array carried were an agent card's
-    // own controls, which the contract no longer records, so nothing it records
-    // is unresolved at the pin. The array stays PRESENT — an absent key would
+    // cinatra#3677: the four selectors this array carried were four card
+    // controls that no governed drawing draws under the recorded value, which
+    // the contract no longer records, so nothing it records is unresolved at
+    // the pin. The array stays PRESENT — an absent key would
     // take it out of the digest and out of this comparison.
     const recorded = contract().anchorsUnresolvedAtPin;
     expect(Array.isArray(recorded)).toBe(true);
