@@ -108,6 +108,8 @@ vi.mock("../recommendation-hold", () => ({
   recommendationHoldThreadId: (run: { id: string }) => run.id,
   RECOMMENDATION_DECISION_REFUSAL: "refused",
   RECOMMENDATION_SKIP_NOT_RECORDED: "not-recorded",
+  RECOMMENDATION_RUN_STARTED_REFUSAL: "run-started",
+  RECOMMENDATION_RUN_STARTED_CODE: "recommendation_run_started",
 }));
 vi.mock("../recommendation-interception", () => ({
   getRunRecommendations: (...a: unknown[]) => getRunRecommendations(...a),
@@ -168,13 +170,19 @@ describe("an all-clear Continue clears against the HOLD'S OFFER (cinatra#3047)",
 
     await skipRunRecommendationAction({ runId: RUN_ID });
 
-    expect(clearRunSelectedSkillRevisionsBeforeStart).toHaveBeenCalledTimes(1);
-    const cleared = clearRunSelectedSkillRevisionsBeforeStart.mock.calls[0]![0];
-    expect(cleared.runId).toBe(RUN_ID);
+    // The clear rides the skip's OWN guarded transaction (cinatra#3062): there
+    // is no separate clear, so a refused skip can never leave a half-cleared run.
+    expect(clearRunSelectedSkillRevisionsBeforeStart).not.toHaveBeenCalled();
+    expect(writeRunRecommendationSkip).toHaveBeenCalledTimes(1);
+    const written = writeRunRecommendationSkip.mock.calls[0]![0] as {
+      runId: string;
+      beforeStart?: { clearSkillIds: readonly string[] };
+    };
+    expect(written.runId).toBe(RUN_ID);
     // The vanished skill is cleared BECAUSE THE OFFER NAMES IT. Left selected,
     // the resolver's selection-first ladder would read the run back as CONFIRMED
     // while every box on the reader's screen was clear.
-    expect([...cleared.skillIds].sort()).toEqual(
+    expect([...(written.beforeStart?.clearSkillIds ?? [])].sort()).toEqual(
       ["skill-forced", "skill-gone", "skill-ranked"],
     );
   });
@@ -187,8 +195,13 @@ describe("an all-clear Continue clears against the HOLD'S OFFER (cinatra#3047)",
     // An unreadable claim costs SCOPE, never the skip itself.
     expect(out.ok).toBe(true);
     expect(writeRunRecommendationSkip).toHaveBeenCalledTimes(1);
-    const cleared = clearRunSelectedSkillRevisionsBeforeStart.mock.calls[0]![0];
-    expect([...cleared.skillIds].sort()).toEqual(["skill-forced", "skill-ranked"]);
+    const written = writeRunRecommendationSkip.mock.calls[0]![0] as {
+      beforeStart?: { clearSkillIds: readonly string[] };
+    };
+    expect([...(written.beforeStart?.clearSkillIds ?? [])].sort()).toEqual([
+      "skill-forced",
+      "skill-ranked",
+    ]);
   });
 });
 
@@ -529,5 +542,29 @@ describe("skip is a runBy-owner decision, fail-closed", () => {
     ).toHaveLength(2);
     expect(triggerAgentRun).toHaveBeenCalledTimes(1);
     expect(result.ok).toBe(true);
+  });
+});
+
+describe("a skip the store refuses because the run is not before its start (cinatra#3062)", () => {
+  it("asks the store for the guarded write and refuses with the run-started sentence, releasing nothing", async () => {
+    // The store answers "run_started" when its own pre-start question fails in
+    // the skip's transaction: the run is queued, running or settled.
+    writeRunRecommendationSkip.mockReturnValue("run_started");
+
+    const out = await skipRunRecommendationAction({ runId: RUN_ID });
+
+    expect(out).toEqual({
+      ok: false,
+      error: "run-started",
+      code: "recommendation_run_started",
+    });
+    expect(writeRunRecommendationSkip).toHaveBeenCalledTimes(1);
+    expect(
+      (writeRunRecommendationSkip.mock.calls[0]![0] as { beforeStart?: unknown }).beforeStart,
+    ).toBeDefined();
+    // Nothing is released and nothing is dispatched after a refusal.
+    expect(releaseRecommendationParkForRun).not.toHaveBeenCalled();
+    expect(triggerAgentRun).not.toHaveBeenCalled();
+    expect(publishRecommendationHoldResume).not.toHaveBeenCalled();
   });
 });

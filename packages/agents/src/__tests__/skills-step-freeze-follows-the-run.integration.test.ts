@@ -110,6 +110,10 @@ let resolveForTestActor: ((runId: string) => Promise<unknown>) | null = null;
 let confirmForTestActor:
   | ((input: { runId: string; confirmedSkillIds: string[]; holdRef?: string }) => Promise<unknown>)
   | null = null;
+// The card's all-clear Continue: the same "use server" wrapper shape, handed on
+// to the REAL skip core against the real database.
+let skipForTestActor: ((input: { runId: string; holdRef?: string }) => Promise<unknown>) | null =
+  null;
 vi.mock("../run-recommendation-actions", () => ({
   getRunRecommendationHoldStateAction: async (input: { runId: string }) => {
     if (!resolveForTestActor) throw new Error("resolver not wired");
@@ -123,7 +127,10 @@ vi.mock("../run-recommendation-actions", () => ({
     if (!confirmForTestActor) throw new Error("decision path not wired");
     return confirmForTestActor(input);
   },
-  skipRunRecommendationAction: vi.fn(async () => ({ ok: true, dispatched: false })),
+  skipRunRecommendationAction: async (input: { runId: string; holdRef?: string }) => {
+    if (!skipForTestActor) throw new Error("skip path not wired");
+    return skipForTestActor(input);
+  },
 }));
 
 let parkStore: typeof import("../lifecycle-continuation-park-store");
@@ -186,6 +193,12 @@ beforeAll(async () => {
   statusMod = await import("../run-status");
   transitionMod = await import("../run-transition");
 
+  skipForTestActor = (input) =>
+    core.skipRecommendationForActor({
+      runId: input.runId,
+      who: WHO,
+      ...(input.holdRef ? { holdRef: input.holdRef } : {}),
+    }) as Promise<unknown>;
   resolveForTestActor = (runId: string) =>
     core.resolveRecommendationHoldStateForActor({ runId, who: WHO }) as Promise<unknown>;
   confirmForTestActor = (input) =>
@@ -811,5 +824,120 @@ describe.skipIf(!HAS_DB)("cinatra#3062 — a pre-deploy run paused mid-flight (n
         .map((r: { skillId: string }) => r.skillId)
         .sort(),
     ).toEqual(rejectedBefore);
+  }, 120_000);
+});
+
+// THE QUEUED WINDOW: AN ALL-CLEAR CONTINUE IS REFUSED, NOT ACCEPTED AND DROPPED
+// (cinatra#3062, acceptance item 2 and Refinement 2). After a first Continue the
+// run is dispatched and can sit `queued` with no start stamp until its worker
+// takes it. The card reads that row as not started and offers its boxes and one
+// Continue, but the store keeps `queued` out of its pre-start set, so the
+// selection the run will be materialized from can no longer change. A reader who
+// clears every box and presses Continue there used to be answered ok:true: the
+// clear deleted nothing, a skip marker and `user_skipped` rows landed beside the
+// earlier selection, and the run went on with that selection. The skip now asks
+// the store's own pre-start question in its own transaction and is refused with
+// the run-started sentence, on the screen and by the server, writing nothing.
+describe.skipIf(!HAS_DB)("cinatra#3062 — an all-clear Continue in the queued window is refused", () => {
+  async function skipMarkers(runId: string): Promise<number> {
+    const c = new Client({ connectionString: DB_URL });
+    await c.connect();
+    const { rows } = await c.query(
+      `SELECT count(*)::int AS n FROM "${q(TEST_SCHEMA)}"."run_recommendation_skips" WHERE run_id = $1`,
+      [runId],
+    );
+    await c.end();
+    return rows[0].n;
+  }
+  const selectionOf = (runId: string) =>
+    selectionStore.readRunSelectedSkillRevisions(runId).map((r) => r.skillId).sort();
+  const rejectedOf = (runId: string) =>
+    selectionStore
+      .readRunRejectedRecommendations(runId)
+      .map((r: { skillId: string }) => r.skillId)
+      .sort();
+
+  /** Decided with skill-kept checked, released, and dispatched: queued, no stamp. */
+  async function queuedAfterContinue(): Promise<string> {
+    const runId = await insertRun("queued", null);
+    await decideOn(runId);
+    const row = await readRunRow(runId);
+    expect(row.status).toBe("queued");
+    expect(row.started_at).toBeNull();
+    expect(selectionOf(runId)).toEqual(["skill-kept"]);
+    return runId;
+  }
+
+  it("the server refuses the skip and writes nothing: selection kept, no skip marker, no new rejected row", async () => {
+    const runId = await queuedAfterContinue();
+    const rejectedBefore = rejectedOf(runId);
+    const out = (await core.skipRecommendationForActor({ runId, who: WHO })) as {
+      ok: boolean;
+      error?: string;
+      code?: string;
+    };
+    expect(out).toEqual({
+      ok: false,
+      error: hold.RECOMMENDATION_RUN_STARTED_REFUSAL,
+      code: hold.RECOMMENDATION_RUN_STARTED_CODE,
+    });
+    expect(selectionOf(runId)).toEqual(["skill-kept"]);
+    expect(await skipMarkers(runId)).toBe(0);
+    expect(rejectedOf(runId)).toEqual(rejectedBefore);
+    expect(rejectedOf(runId)).not.toContain("skill-kept");
+  }, 120_000);
+
+  it("chat_thread: the reader clears skill-kept and presses Continue, and the card draws the refusal", async () => {
+    const runId = await queuedAfterContinue();
+    const rejectedBefore = rejectedOf(runId);
+    const { container } = reload(runId, "chat_thread");
+    await drawn(container);
+    await waitFor(
+      () => {
+        expect(step(container)?.getAttribute("data-skills-step-editable")).toBe("true");
+      },
+      { timeout: 20_000 },
+    );
+    expect(continues(container)).toHaveLength(1);
+    const checked = boxes(container).filter((b) => b.getAttribute("aria-checked") === "true");
+    expect(checked).toHaveLength(1);
+    fireEvent.click(checked[0]);
+    await waitFor(() => {
+      expect(boxes(container).every((b) => b.getAttribute("aria-checked") === "false")).toBe(true);
+    });
+    fireEvent.click(continues(container)[0]);
+    await waitFor(
+      () => {
+        expect(container.textContent ?? "").toContain(hold.RECOMMENDATION_RUN_STARTED_REFUSAL);
+      },
+      { timeout: 20_000 },
+    );
+    expect(selectionOf(runId)).toEqual(["skill-kept"]);
+    expect(await skipMarkers(runId)).toBe(0);
+    expect(rejectedOf(runId)).toEqual(rejectedBefore);
+  }, 180_000);
+
+  it("a skip sent after the run STARTED is refused the same way and writes nothing", async () => {
+    const runId = await queuedAfterContinue();
+    await stampTheStart(runId);
+    const rejectedBefore = rejectedOf(runId);
+    const out = (await core.skipRecommendationForActor({ runId, who: WHO })) as {
+      ok: boolean;
+      code?: string;
+    };
+    expect(out.ok).toBe(false);
+    expect(out.code).toBe(hold.RECOMMENDATION_RUN_STARTED_CODE);
+    expect(selectionOf(runId)).toEqual(["skill-kept"]);
+    expect(await skipMarkers(runId)).toBe(0);
+    expect(rejectedOf(runId)).toEqual(rejectedBefore);
+  }, 120_000);
+
+  it("before the start (parked at pending_approval, no stamp, no marker) the same skip still lands", async () => {
+    const runId = await decidedButNotStarted();
+    const out = (await core.skipRecommendationForActor({ runId, who: WHO })) as { ok: boolean };
+    expect(out.ok).toBe(true);
+    // The all-clear drops the earlier answer, and the decision is on record.
+    expect(selectionOf(runId)).toEqual([]);
+    expect(await skipMarkers(runId)).toBe(1);
   }, 120_000);
 });

@@ -485,7 +485,24 @@ export const SKIP_RECOMMENDATION_SOURCE = "user_skipped" as const;
  * keeps the first attempt's number. That is the pre-existing behaviour of both
  * tables, and the count is read as "how many rows this DECISION named", not as a
  * live row count.
+ *
+ * ONLY BEFORE THE RUN STARTS, WHEN `beforeStart` IS GIVEN (cinatra#3062). The
+ * decision path passes it, and then the same transaction first takes the run row
+ * with `FOR UPDATE` and asks it the store's own pre-start question:
+ * `started_at IS NULL AND human_wait_attempt_id IS NULL AND status =
+ * ANY(PRE_START_RUN_STATUSES_WITHOUT_A_START_STAMP)`, the SQL form of
+ * `recommendationRunHasStartedForRow` negated except for `queued`, which the
+ * store keeps out (see that set). Every statement after it carries the same
+ * predicate: the scoped clear of the run's selection rows, the per-skill rows and
+ * the marker. So a run that is `queued`, running, paused mid-flight or settled
+ * gets NOTHING written, and the answer is `"run_started"`, never `true` and never
+ * `false`: the caller refuses with the run-started sentence, and no retry will
+ * make the write land. The row lock keeps the dispatch CAS from moving the run
+ * between the question and the writes. Without `beforeStart` the write is the
+ * unguarded one it always was; the decision path never calls it that way.
  */
+export const RECOMMENDATION_SKIP_RUN_STARTED = "run_started" as const;
+
 export function writeRunRecommendationSkip(input: {
   runId: string;
   /** The principal whose decision this was — the fail-closed owner guard has
@@ -497,12 +514,21 @@ export function writeRunRecommendationSkip(input: {
   /** The per-skill efficacy half, committed IN THE SAME TRANSACTION as the
    * marker. Empty or absent under drift — a legitimate state, and still a skip. */
   rejected?: ReadonlyArray<RunRejectedRecommendationInput>;
-}): boolean {
+  /** The pre-start guard (see above) and the selection rows this decision clears
+   * in the same transaction: the hold's offered set. */
+  beforeStart?: { clearSkillIds: readonly string[] };
+}): boolean | typeof RECOMMENDATION_SKIP_RUN_STARTED {
   const connectionString = getPostgresConnectionString();
   const schema = postgresSchema;
   const table = `"${schema.replaceAll('"', '""')}"."run_recommendation_skips"`;
   const rejected = input.rejected ?? [];
-  const queries = [
+  // One transaction and ONE call either way (the sync-bridge inventory counts
+  // call sites, and this file's count does not grow): the guarded statements
+  // when `beforeStart` is given, the unguarded ones otherwise.
+  const guarded = input.beforeStart
+    ? buildGuardedRecommendationSkipQueries(input, input.beforeStart)
+    : null;
+  const queries = guarded ?? [
     ...(rejected.length > 0
       ? [buildRejectedRecommendationsInsert(schema, input.runId, rejected)]
       : []),
@@ -518,8 +544,108 @@ export function writeRunRecommendationSkip(input: {
     },
   ];
   const results = runPostgresQueriesSync({ connectionString, queries, transaction: true });
+  // The guarded form asks its question first: no row there means the run is
+  // not before its start, and nothing was written.
+  if (guarded && (results[0]?.rows?.length ?? 0) === 0) return RECOMMENDATION_SKIP_RUN_STARTED;
   const verified = results[results.length - 1];
   return (verified?.rows?.length ?? 0) > 0;
+}
+
+/**
+ * The statements of the guarded skip write (cinatra#3062), run by
+ * `writeRunRecommendationSkip` in one transaction: the run row locked and asked
+ * first, and every write carrying the same pre-start predicate, so a refusal
+ * writes nothing at all. The first statement's rows answer the question; the
+ * last statement is the marker's read-back.
+ */
+function buildGuardedRecommendationSkipQueries(
+  input: {
+    runId: string;
+    skippedBy: string;
+    candidateCount: number;
+    rejected?: ReadonlyArray<RunRejectedRecommendationInput>;
+  },
+  guard: { clearSkillIds: readonly string[] },
+): Array<{ text: string; values: unknown[] }> {
+  const q = postgresSchema.replaceAll('"', '""');
+  const runs = `"${q}"."agent_runs"`;
+  const selected = `"${q}"."run_selected_skill_revisions"`;
+  const rejectedTable = `"${q}"."run_rejected_recommendations"`;
+  const skips = `"${q}"."run_recommendation_skips"`;
+  const preStart = [...PRE_START_RUN_STATUSES_WITHOUT_A_START_STAMP];
+  const rejected = input.rejected ?? [];
+  // The predicate every statement repeats. `$1` is the run id and `$2` the
+  // pre-start status set in each statement that uses it.
+  const isPreStart = `EXISTS (
+    SELECT 1 FROM ${runs} r
+    WHERE r.id = $1
+      AND r.started_at IS NULL
+      AND r.human_wait_attempt_id IS NULL
+      AND r.status = ANY($2::text[])
+  )`;
+  const queries: Array<{ text: string; values: unknown[] }> = [
+    // 1. THE QUESTION, with the row held until COMMIT.
+    {
+      text: `SELECT 1 FROM ${runs}
+             WHERE id = $1
+               AND started_at IS NULL
+               AND human_wait_attempt_id IS NULL
+               AND status = ANY($2::text[])
+             FOR UPDATE`,
+      values: [input.runId, preStart],
+    },
+  ];
+  // 2. THE SCOPED CLEAR — an all-clear Continue drops the earlier answer.
+  if (guard.clearSkillIds.length > 0) {
+    queries.push({
+      text: `DELETE FROM ${selected} s
+             WHERE s.run_id = $1
+               AND s.skill_id = ANY($3::text[])
+               AND ${isPreStart}`,
+      values: [input.runId, preStart, [...guard.clearSkillIds]],
+    });
+  }
+  // 3. THE PER-SKILL HALF.
+  if (rejected.length > 0) {
+    const rows: string[] = [];
+    const values: unknown[] = [input.runId, preStart];
+    let p = 3;
+    for (const r of rejected) {
+      rows.push(`($${p++}::text, $${p++}::text, $${p++}::text, $${p++}::text, $${p++}::integer)`);
+      values.push(
+        randomUUID(),
+        r.skillId,
+        r.skillRevisionId ?? null,
+        r.recommendationSource,
+        r.recommendedRank ?? null,
+      );
+    }
+    queries.push({
+      text: `INSERT INTO ${rejectedTable}
+               (id, run_id, skill_id, skill_revision_id, recommendation_source, recommended_rank)
+             SELECT v.id, $1, v.skill_id, v.skill_revision_id, v.recommendation_source, v.recommended_rank
+             FROM (VALUES ${rows.join(", ")})
+               AS v(id, skill_id, skill_revision_id, recommendation_source, recommended_rank)
+             WHERE ${isPreStart}
+             ON CONFLICT (run_id, skill_id) DO NOTHING`,
+      values,
+    });
+  }
+  // 4. THE MARKER, and 5. its read-back.
+  queries.push(
+    {
+      text: `INSERT INTO ${skips} (run_id, skipped_by, candidate_count)
+             SELECT $1, $3::text, $4::integer
+             WHERE ${isPreStart}
+             ON CONFLICT (run_id) DO NOTHING`,
+      values: [input.runId, preStart, input.skippedBy, input.candidateCount],
+    },
+    {
+      text: `SELECT 1 FROM ${skips} WHERE run_id = $1 LIMIT 1`,
+      values: [input.runId],
+    },
+  );
+  return queries;
 }
 
 /**

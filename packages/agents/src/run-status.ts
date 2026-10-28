@@ -197,7 +197,10 @@ export function recommendationRunHasStartedForRow(
  * `queued`, BEFORE the `queued->running` CAS, so a selection written in that
  * window could miss the snapshot the run is materialized from. The store stays
  * the conservative authority there, and a change pressed in that window is
- * answered by the row's existing refusal.
+ * refused by the store on BOTH decision roads: a confirm's replace answers
+ * `false`, and a skip (an all-clear Continue) asks the same predicate in its own
+ * transaction and writes nothing. Each is answered with the run-started
+ * refusal, and the card draws it.
  */
 export const PRE_START_RUN_STATUSES_WITHOUT_A_START_STAMP: ReadonlySet<string> = new Set<string>([
   ...PRE_EXECUTION_RUN_STATUSES,

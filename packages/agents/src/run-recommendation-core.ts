@@ -15,7 +15,6 @@ import {
 } from "./run-status";
 import {
   SKIP_RECOMMENDATION_SOURCE,
-  clearRunSelectedSkillRevisionsBeforeStart,
   decidedSkillsFromEvidence,
   hasRunRecommendationSkip,
   hasRunSelectedSkillRevisions,
@@ -1079,9 +1078,20 @@ export async function skipRecommendationForActor(input: {
     // the clear is bounded by; the scored ids are unioned in so a hold with no
     // readable claim still clears what it can.
     //
-    // The store's own guard is the other half: the DELETE tests the run's status
-    // in the statement, so a started run's materialized ledger is untouched
-    // whatever this call asks for.
+    // The store's own guard is the other half, and it now covers the WHOLE skip
+    // (cinatra#3062). The clear rides the skip's own transaction, and that
+    // transaction first asks the run row the store's pre-start question with the
+    // row locked. A run that is `queued`, running, paused mid-flight or settled
+    // gets nothing written: no clear, no per-skill row, no marker. The skip is
+    // then refused with the run-started sentence, as a confirm is.
+    //
+    // THE WINDOW THIS CLOSES. After a first Continue the run can sit `queued`
+    // with no start stamp, and the card offers its boxes and one Continue there.
+    // A reader who clears every box and presses Continue used to be answered
+    // ok:true: the clear deleted nothing (the store keeps `queued` out of its
+    // pre-start set), a skip marker and `user_skipped` rows landed beside the
+    // earlier selection, and the run went on with that selection. A skip sent
+    // after the run started was answered the same way. Both are refused now.
     const clearedSkillIds = new Set(rejectedRows.map((r) => r.skillId));
     if (bound.holdId) {
       try {
@@ -1092,17 +1102,21 @@ export async function skipRecommendationForActor(input: {
         /* an unreadable claim costs SCOPE, never the skip — the scored ids stand */
       }
     }
-    clearRunSelectedSkillRevisionsBeforeStart({
-      runId: input.runId,
-      skillIds: [...clearedSkillIds],
-    });
 
     const recorded = writeRunRecommendationSkip({
       runId: input.runId,
       skippedBy: userId,
       candidateCount: rejectedRows.length,
       rejected: rejectedRows,
+      beforeStart: { clearSkillIds: [...clearedSkillIds] },
     });
+    if (recorded === "run_started") {
+      return {
+        ok: false,
+        error: RECOMMENDATION_RUN_STARTED_REFUSAL,
+        code: RECOMMENDATION_RUN_STARTED_CODE,
+      };
+    }
     if (!recorded) {
       console.error(
         "[skipRecommendationForActor] skip marker did not read back for run",
