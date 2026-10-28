@@ -441,8 +441,10 @@ export const SKIP_RECOMMENDATION_SOURCE = "user_skipped" as const;
 /**
  * Persist a skip's DURABLE EVIDENCE — the run-level marker and, optionally, the
  * per-skill `user_skipped` rows that accompany it — AND VERIFY THE MARKER
- * LANDED. Returns whether the marker is READABLE afterwards; the caller releases
- * the run's park only on `true`.
+ * LANDED. Answers whether the marker is READABLE afterwards: a boolean without
+ * `beforeStart`, and the named outcome `"recorded"` with it (see
+ * `RecommendationSkipBeforeStartResult`). The decision path passes
+ * `beforeStart` and releases the run's park only on `"recorded"`.
  *
  * ONE TRANSACTION, BECAUSE A HALF-COMMITTED SKIP SETTLES THE CARD ON A REFUSED
  * DECISION (cinatra#2794 round-8 finding 2). The two halves used to be two
@@ -460,14 +462,15 @@ export const SKIP_RECOMMENDATION_SOURCE = "user_skipped" as const;
  * that also means the statement reports success both when it inserted and when
  * it silently did nothing. "The write did not throw" is therefore NOT the same
  * fact as "the marker is on record", and the release must turn on the latter:
- * releasing a run while losing the record of its decision is exactly the
+ * releasing a run while losing the record of its decision is the
  * vanishing card this whole path exists to remove.
  *
- * WHAT `true` MEANS UNDER THE TRANSACTION, AND WHAT A REFUSAL DOES NOT MEAN.
+ * WHAT A LANDING (`true`, or `"recorded"`) MEANS UNDER THE TRANSACTION, AND
+ * WHAT A REFUSAL DOES NOT MEAN.
  * The read-back now runs INSIDE the transaction, so it sees this statement's own
  * row rather than a committed one — the durability it used to assert comes from
  * the COMMIT instead. The worker publishes its result only AFTER `COMMIT`
- * resolves, so `true` still means "the marker is durably on record".
+ * resolves, so a landing still means "the marker is durably on record".
  *
  * A refusal is the weaker direction, and the weakness is the sync bridge's, not
  * this write's. A statement error rolls the whole transaction back, so the

@@ -1057,10 +1057,10 @@ export async function skipRecommendationForActor(input: {
     // ending (a COMMIT whose result was lost) leaves BOTH, which is a decision
     // fully on record that the retry converges on.
     //
-    // `writeRunRecommendationSkip` READS THE MARKER BACK and returns whether it
-    // is durably there. A write that quietly did nothing is therefore not
-    // mistaken for a decision on record: the release below is gated on the
-    // verified fact, not on the absence of an exception.
+    // `writeRunRecommendationSkip` READS THE MARKER BACK and answers a named
+    // outcome, `"recorded"` when it is durably there. A write that quietly did
+    // nothing is therefore not mistaken for a decision on record: the release
+    // below is gated on the verified fact, not on the absence of an exception.
     // AN ALL-CLEAR ROW IS A SKIP, AND IT MUST READ BACK AS ONE (cinatra#3047,
     // review point 2). With checkboxes there is no skip ACTION: clearing every
     // box and pressing Continue is what skips, and on a run whose Skills step was
@@ -1072,7 +1072,7 @@ export async function skipRecommendationForActor(input: {
     // finding 4). `rejectedRows` is derived from a scoring taken NOW, and a skill
     // that was selected earlier can be absent from it — unassigned since,
     // uninstalled, or displaced past the candidate cap. Clearing only what the
-    // new scoring returned would leave exactly that skill selected, and the
+    // new scoring returned would leave that skill selected, and the
     // reader would see an all-clear row read back as confirmed. The claimed
     // offer is the durable record of what this hold asked about, so it is what
     // the clear is bounded by; the scored ids are unioned in so a hold with no

@@ -183,8 +183,9 @@ export function recommendationRunHasStartedForRow(
  * dispatch cannot land between a status read and the write. That statement needs
  * the boundary as a VALUE, and this is it: the statuses a run can hold while it
  * has not executed. Paired with `started_at IS NULL` and
- * `human_wait_attempt_id IS NULL` in the same predicate it is exactly
- * `recommendationRunHasStartedForRow` negated, expressed in SQL.
+ * `human_wait_attempt_id IS NULL` in the same predicate it is
+ * `recommendationRunHasStartedForRow` negated, except for `queued` (below),
+ * expressed in SQL.
  *
  * `pending_approval` is in it because the recommendation hold's own park is
  * BEFORE execution — see `START_AMBIGUOUS_RUN_STATUSES` — and leaving it out is
