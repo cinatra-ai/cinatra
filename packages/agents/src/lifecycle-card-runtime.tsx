@@ -222,6 +222,169 @@ const LifecycleCardCookieSessionContext = createContext<boolean>(false);
 // must not recover the identity that an enclosing broker declaration refused.
 const LifecycleCardDeclarationRefusedContext = createContext<boolean>(false);
 
+// ---------------------------------------------------------------------------
+// THE ANSWERED QUESTION, TOLD BY THE CARD THAT TOOK THE ANSWER (cinatra#4375).
+//
+// Inside a conversation (`chat_thread`, `site_widget`) the run's question and
+// its Continue belong to the conversation's own HITL screen card, a SIBLING of
+// the run panel (`runCardOwnsLifecycleCopy`). The panel holds its working slot
+// from an accepted Continue until the server resumes by matching the question
+// on file against the one the person answered (cinatra#3739, fix leg 19), but it
+// learned that only from its OWN submit. A Continue pressed on the sibling card
+// never reached it, so on the widget the panel drew its "pending approval"
+// progress plate over a run that was working.
+//
+// So the sibling card says it here, and only this: "on this run, the question
+// with this review task, renderer and field was answered". It says it AT THE
+// PRESS, before its request, exactly as the panel's own Continue arms its key
+// before its own request (cinatra#4011: on the widget the request stayed
+// in flight until the run had reached its next gate, 32 s later, so a record
+// written on the answer held the working slot only for that one moment). So
+// the record exists FROM THE PRESS, before any outcome, and a later press on
+// the same run for another question replaces it.
+//
+// EACH PRESS IS ONE ATTEMPT. The record keeps the attempts still in flight for
+// its question and whether any of them was accepted (`outcome.ok === true`).
+// An attempt that is not accepted takes back only ITSELF: the record goes only
+// when no attempt for it is still in flight and none was accepted. So two
+// overlapping submits of the same question (a double press, a card that moved
+// and was pressed again) cannot erase each other's answer, in either order, and
+// an attempt whose record was replaced by a newer press changes nothing.
+// Which outcome is "not accepted" is the card's: on the broker door the server
+// already answers "already resolved" as accepted; on the cookie door "already
+// resolved" and "no longer pending" are not this submit's accepted answer.
+// The panel only ever compares what is on file against it, so a question with
+// any other review task, renderer or field still counts as open. It carries no
+// credential and no answer, and it authorizes nothing.
+//
+// ONE REGISTER PER CONVERSATION. The provider below declares one, and a nested
+// declaration (the run panel's own `run_card`) inherits the enclosing one, so
+// the card and the panel that share a conversation share its register.
+// ---------------------------------------------------------------------------
+
+/** What the sibling card tells the panel: the pressed question's identity. */
+export type AnsweredHitlQuestion = {
+  reviewTaskId: string;
+  xRenderer: string;
+  fieldName: string | null;
+};
+
+/** One press of one card: the token its outcome is settled with. */
+export type AnsweredHitlAttempt = {
+  readonly runId: string;
+  readonly key: string;
+  readonly id: number;
+};
+
+/** One answered question per run, compared BY VALUE as a string key. */
+export type AnsweredHitlQuestionRegister = {
+  subscribe: (listener: () => void) => () => void;
+  /** The key of the question on record for this run, or `null`. */
+  answeredOn: (runId: string) => string | null;
+  /**
+   * Record that this run's question was answered, from the press on. Returns
+   * the attempt to settle, or `null` when nothing was recorded.
+   */
+  announceAnswered: (runId: string, question: AnsweredHitlQuestion) => AnsweredHitlAttempt | null;
+  /** This attempt was accepted: the record stands until another question replaces it. */
+  acceptAnswered: (attempt: AnsweredHitlAttempt | null) => void;
+  /** This attempt was not accepted: take back only this attempt. */
+  withdrawAnswered: (attempt: AnsweredHitlAttempt | null) => void;
+};
+
+/** The key a question is matched on: its review task, renderer and field. */
+export function answeredHitlQuestionKey(question: {
+  reviewTaskId: string;
+  xRenderer: string;
+  fieldName?: string | null;
+}): string {
+  return JSON.stringify([question.reviewTaskId, question.xRenderer, question.fieldName ?? ""]);
+}
+
+type AnsweredRecord = { key: string; inFlight: Set<number>; accepted: boolean };
+
+export function createAnsweredHitlQuestionRegister(): AnsweredHitlQuestionRegister {
+  const answered = new Map<string, AnsweredRecord>();
+  const listeners = new Set<() => void>();
+  let lastAttempt = 0;
+  const notify = () => {
+    for (const listener of listeners) listener();
+  };
+  /** The record this attempt belongs to, or `null` if a newer press replaced it. */
+  const recordOf = (attempt: AnsweredHitlAttempt | null): AnsweredRecord | null => {
+    if (!attempt) return null;
+    const record = answered.get(attempt.runId);
+    return record && record.key === attempt.key && record.inFlight.has(attempt.id) ? record : null;
+  };
+  return {
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    answeredOn(runId) {
+      return answered.get(runId)?.key ?? null;
+    },
+    announceAnswered(runId, question) {
+      // A run and a question with a review task and a renderer, or nothing.
+      if (typeof runId !== "string" || runId.length === 0) return null;
+      if (typeof question?.reviewTaskId !== "string" || question.reviewTaskId.length === 0) return null;
+      if (typeof question.xRenderer !== "string" || question.xRenderer.length === 0) return null;
+      const key = answeredHitlQuestionKey(question);
+      const id = (lastAttempt += 1);
+      const record = answered.get(runId);
+      if (record && record.key === key) {
+        // The same question pressed again: one more attempt on the same record.
+        record.inFlight.add(id);
+      } else {
+        // A first press, or a newer press for another question: it replaces.
+        answered.set(runId, { key, inFlight: new Set([id]), accepted: false });
+        notify();
+      }
+      return { runId, key, id };
+    },
+    acceptAnswered(attempt) {
+      const record = recordOf(attempt);
+      if (!record) return;
+      record.inFlight.delete(attempt!.id);
+      record.accepted = true;
+    },
+    withdrawAnswered(attempt) {
+      const record = recordOf(attempt);
+      if (!record) return;
+      record.inFlight.delete(attempt!.id);
+      // Only when no attempt for it is in flight and none was accepted.
+      if (record.inFlight.size > 0 || record.accepted) return;
+      answered.delete(attempt!.runId);
+      notify();
+    },
+  };
+}
+
+const AnsweredHitlQuestionContext = createContext<AnsweredHitlQuestionRegister | null>(null);
+
+/** The conversation's register, or `null` outside any host declaration. */
+export function useAnsweredHitlQuestionRegister(): AnsweredHitlQuestionRegister | null {
+  return useContext(AnsweredHitlQuestionContext);
+}
+
+const noAnsweredQuestion = (): string | null => null;
+
+/**
+ * The key of the question on record for this run through the conversation's
+ * card (pressed and in flight, or accepted), or `null`. Always `null` with no
+ * register.
+ */
+export function useAnsweredHitlQuestionKey(runId: string): string | null {
+  const register = useAnsweredHitlQuestionRegister();
+  const read = useCallback(
+    () => (register ? register.answeredOn(runId) : null),
+    [register, runId],
+  );
+  return useSyncExternalStore(register?.subscribe ?? noopSubscribe, read, noAnsweredQuestion);
+}
+
 /**
  * The hosts whose identity travels by COOKIE. Every other host must declare a
  * credential, and the provider refuses to mount without one.
@@ -272,6 +435,11 @@ export function LifecycleCardSurfaceProvider({
   // is drawn in (cinatra#3481).
   const outerInsideConversation = useContext(InsideConversationContext);
   const outerDeclarationRefused = useContext(LifecycleCardDeclarationRefusedContext);
+  // The conversation's answered-question register (cinatra#4375): inherited
+  // when an enclosing declaration made one, so the card and the panel share it.
+  const outerAnsweredRegister = useContext(AnsweredHitlQuestionContext);
+  const [ownAnsweredRegister] = useState(createAnsweredHitlQuestionRegister);
+  const answeredRegister = outerAnsweredRegister ?? ownAnsweredRegister;
   const cookieHost = COOKIE_SESSION_HOSTS.has(host);
   // A broker declaration is checked for its SHAPE here; whether it holds a
   // widget user token is asked at each request (`lifecycleRequestCredential`),
@@ -304,7 +472,9 @@ export function LifecycleCardSurfaceProvider({
               value={outerInsideConversation || (credentialOk && host === "chat_thread")}
             >
               <LifecycleCardDeclarationRefusedContext.Provider value={!credentialOk}>
-                {children}
+                <AnsweredHitlQuestionContext.Provider value={answeredRegister}>
+                  {children}
+                </AnsweredHitlQuestionContext.Provider>
               </LifecycleCardDeclarationRefusedContext.Provider>
             </InsideConversationContext.Provider>
           </LifecycleCardCookieSessionContext.Provider>
