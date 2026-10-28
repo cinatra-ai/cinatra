@@ -545,6 +545,18 @@ describe("the drivers of a row's fields, one per name from every declaration", (
     }
   });
 
+  it("reads a name continued wherever its only continued declaration stands among three of that name", () => {
+    for (const fields of [
+      [d("a", "x.a", "no-review"), d("a", "x.a", "continued"), d("a", "x.a", "no-review")],
+      [d("a", "x.a", "continued"), d("a", "x.a", "no-review"), d("a", "x.a", "no-review")],
+      [d("a", "x.a", "no-review"), d("a", "x.a", "no-review"), d("a", "x.a", "continued")],
+    ]) {
+      expect(kindDisplayFieldDrivers("s", fields, tagged)).toEqual({
+        a: { source: "x.a", assert: ["continuedOnly", '[data-field="a=x.a"]'] },
+      });
+    }
+  });
+
   it("refuses a name whose declarations conflict, even when they are not adjacent", () => {
     expect(() =>
       kindDisplayFieldDrivers("s", [d("a", "x.a"), d("b", "x.b"), d("a", "x.a", "continued")], tagged),
