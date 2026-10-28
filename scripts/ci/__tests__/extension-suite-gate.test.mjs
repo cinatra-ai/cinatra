@@ -11,9 +11,12 @@ import { describe, expect, it } from "vitest";
 import {
   classifyPackage,
   fenceWorkflowCommands,
+  foldNodeRuns,
   isFirstPartyMirror,
+  isHostRunNodeTest,
   judge,
   observedShape,
+  parseNodeTap,
   parseReport,
   planRun,
   renderManifest,
@@ -553,10 +556,12 @@ describe("judge — a lost JSON report is fatal for enforced AND carved packages
 });
 
 describe("judge — AC6: the companion skip may never outrun what the host does", () => {
-  it("FAILS when a repo skips its tests standalone and this gate does not run them", () => {
+  it("FAILS when a repo skips its tests standalone and this gate cannot run them (no runner named)", () => {
+    // A node:test package that skips is RUN here (the node:test road below);
+    // only a skipping package whose runner cannot be identified stays unrunnable.
     const packages = [
       pkg({ slug: "gated", testFiles: ["x.test.ts"] }),
-      pkg({ slug: "orphan", runner: "other", testFiles: ["tests/a.test.mjs"], standaloneTestsSkipped: true }),
+      pkg({ slug: "orphan", runner: "other", runnerEvidence: "unknown", testFiles: ["tests/a.test.mjs"], standaloneTestsSkipped: true }),
     ];
     const results = resultsFor([["gated", green(["x.test.ts"])]]);
     const f = judge({ packages, results, carveOuts: [] }).findings.find((x) => x.kind === "dishonest-skip");
@@ -580,6 +585,214 @@ describe("judge — AC6: the companion skip may never outrun what the host does"
       ["b", green(["y.test.ts"])],
     ]);
     expect(judge({ packages, results, carveOuts: [carve("a")] }).findings).toEqual([]);
+  });
+});
+
+// The node:test road (cinatra#4314's dev-lock bump): brand-voice-artifact at
+// dec0bb58 added test/own-type.test.mjs, a node:test file, while its own ci.yml
+// keeps skipping tests as run by the host. Check 3 could only name it; nothing
+// ran it. This gate now runs such a package with `node --test`, file by file,
+// and enforces it like a vitest suite.
+const TAP_GREEN = [
+  "TAP version 13",
+  "# Subtest: the pack declares one type, the brand-voice guide, under its own package name",
+  "ok 1 - the pack declares one type, the brand-voice guide, under its own package name",
+  "  ---",
+  "  duration_ms: 0.6",
+  "  type: 'test'",
+  "  ...",
+  "# Subtest: every declared type's namespace is this package, so the host registers it",
+  "ok 2 - every declared type's namespace is this package, so the host registers it",
+  "# Subtest: the typed export declares the same types as package.json",
+  "ok 3 - the typed export declares the same types as package.json",
+  "1..3",
+  "# tests 3",
+  "# suites 0",
+  "# pass 3",
+  "# fail 0",
+  "# cancelled 0",
+  "# skipped 0",
+  "# todo 0",
+  "# duration_ms 41.2",
+].join("\n");
+
+const TAP_RED = [
+  "TAP version 13",
+  "# Subtest: outer",
+  "    # Subtest: inner",
+  "    not ok 1 - inner",
+  "    # tests 9",
+  "not ok 1 - outer",
+  "ok 2 - fine",
+  "not ok 3 - pending one # TODO later",
+  "1..3",
+  "# tests 3",
+  "# pass 1",
+  "# fail 1",
+  "# cancelled 0",
+  "# skipped 0",
+  "# todo 1",
+].join("\n");
+
+const TAP_EMPTY = ["TAP version 13", "1..0", "# tests 0", "# pass 0", "# fail 0", "# cancelled 0", "# skipped 0", "# todo 0"].join("\n");
+
+const BRAND_VOICE_SOURCE = `import { test } from "node:test";\nimport assert from "node:assert/strict";\ntest("x", () => assert.ok(true));\n`;
+
+const brandVoice = (over = {}) =>
+  classifyPackage({
+    slug: "brand-voice-artifact",
+    id: "cinatra-ai/brand-voice-artifact",
+    sha: PIN,
+    dirty: false,
+    dir: "extensions/cinatra-ai/brand-voice-artifact",
+    pkgJson: mirrorPkg({ name: "@cinatra-ai/brand-voice-artifact", type: "module" }),
+    entries: ["package.json", "src", "test", ".github"],
+    testFiles: ["test/own-type.test.mjs"],
+    readTestSource: () => BRAND_VOICE_SOURCE,
+    ciWorkflow: SKIP_CI,
+    ...over,
+  });
+
+const nodeGreen = (files) => foldNodeRuns(files.map((file) => ({ file, exitCode: 0, tap: TAP_GREEN })));
+
+describe("parseNodeTap — the top-level summary, or none", () => {
+  it("reads the counts of a green run", () => {
+    expect(parseNodeTap(TAP_GREEN)).toEqual({ summary: true, tests: 3, pass: 3, fail: 0, cancelled: 0, skipped: 0, todo: 0, failedNames: [] });
+  });
+
+  it("reads only TOP-LEVEL summary lines and names failing tests, not TODO ones", () => {
+    const t = parseNodeTap(TAP_RED);
+    expect(t.tests).toBe(3);
+    expect(t.fail).toBe(1);
+    expect(t.todo).toBe(1);
+    expect(t.failedNames).toEqual(["inner", "outer"]);
+  });
+
+  it("returns summary:false when no top-level `# tests` line was printed (fail-closed)", () => {
+    expect(parseNodeTap("TAP version 13\n    # tests 4\n").summary).toBe(false);
+    expect(parseNodeTap("").summary).toBe(false);
+    expect(parseNodeTap(undefined).summary).toBe(false);
+  });
+});
+
+describe("foldNodeRuns — per-file node:test runs as one suite result", () => {
+  it("a green run of every file is ok, complete and reported", () => {
+    const r = nodeGreen(["test/a.test.mjs", "test/b.test.mjs"]);
+    expect(r).toMatchObject({ ok: true, exitCode: 0, reportOk: true, numTotalTests: 6, numFailedTests: 0 });
+    expect(r.executedFiles).toEqual(["test/a.test.mjs", "test/b.test.mjs"]);
+  });
+
+  it("a failing file makes the suite red and names its failures by file", () => {
+    const r = foldNodeRuns([
+      { file: "test/a.test.mjs", exitCode: 0, tap: TAP_GREEN },
+      { file: "test/b.test.mjs", exitCode: 1, tap: TAP_RED },
+    ]);
+    expect(r.ok).toBe(false);
+    expect(r.exitCode).toBe(1);
+    expect(r.numFailedTests).toBe(1);
+    expect(r.failedTestNames).toEqual(["test/b.test.mjs › inner", "test/b.test.mjs › outer"]);
+  });
+
+  it("a file that registers no test is NOT executed", () => {
+    const r = foldNodeRuns([
+      { file: "test/a.test.mjs", exitCode: 0, tap: TAP_GREEN },
+      { file: "test/empty.test.mjs", exitCode: 0, tap: TAP_EMPTY },
+    ]);
+    expect(r.ok).toBe(true);
+    expect(r.executedFiles).toEqual(["test/a.test.mjs"]);
+  });
+
+  it("a run without a summary loses the report and is not ok, even at exit 0", () => {
+    const r = foldNodeRuns([{ file: "test/a.test.mjs", exitCode: 0, tap: "garbage" }]);
+    expect(r).toMatchObject({ ok: false, reportOk: false, executedFiles: [] });
+  });
+
+  it("no files at all is never ok", () => {
+    expect(foldNodeRuns([])).toMatchObject({ ok: false, reportOk: false });
+  });
+});
+
+describe("the node:test road — a skipping node:test package is RUN here", () => {
+  it("brand-voice-artifact's shape (dec0bb58) classifies as a node:test package only this gate can run", () => {
+    const bv = brandVoice();
+    expect(bv).toMatchObject({ runner: "other", runnerEvidence: "node-test", standaloneTestsSkipped: true });
+    expect(isHostRunNodeTest(bv)).toBe(true);
+    expect(planRun({ packages: [bv], carveOuts: [] }).nodeRun.map((p) => p.id)).toEqual(["cinatra-ai/brand-voice-artifact"]);
+  });
+
+  it("is NOT on the road when its own CI runs it, when no runner is named, or when it has no test file", () => {
+    expect(isHostRunNodeTest(brandVoice({ ciWorkflow: "run: corepack pnpm test" }))).toBe(false);
+    expect(isHostRunNodeTest(brandVoice({ readTestSource: () => "it('x', () => {});" }))).toBe(false);
+    expect(isHostRunNodeTest({ ...brandVoice(), testFiles: [] })).toBe(false);
+    expect(isHostRunNodeTest(pkg({ slug: "v" }))).toBe(false);
+  });
+
+  it("a green, complete run passes and the dishonest-skip finding no longer fires", () => {
+    const packages = [pkg({ slug: "gated", testFiles: ["x.test.ts"] }), brandVoice()];
+    const results = resultsFor([
+      ["gated", green(["x.test.ts"])],
+      ["brand-voice-artifact", nodeGreen(["test/own-type.test.mjs"])],
+    ]);
+    expect(judge({ packages, results, carveOuts: [] }).findings).toEqual([]);
+  });
+
+  it("never executed FAILS as not-run (the claim is still unmet)", () => {
+    const packages = [pkg({ slug: "gated", testFiles: ["x.test.ts"] }), brandVoice()];
+    const results = resultsFor([["gated", green(["x.test.ts"])]]);
+    const kinds = judge({ packages, results, carveOuts: [] }).findings.map((f) => [f.kind, f.slug]);
+    expect(kinds).toEqual([["not-run", "brand-voice-artifact"]]);
+  });
+
+  it("a red run FAILS as suite-red", () => {
+    const packages = [pkg({ slug: "gated", testFiles: ["x.test.ts"] }), brandVoice()];
+    const results = resultsFor([
+      ["gated", green(["x.test.ts"])],
+      ["brand-voice-artifact", foldNodeRuns([{ file: "test/own-type.test.mjs", exitCode: 1, tap: TAP_RED }])],
+    ]);
+    const kinds = judge({ packages, results, carveOuts: [] }).findings.map((f) => f.kind);
+    expect(kinds).toEqual(["suite-red"]);
+  });
+
+  it("a file that ran no test FAILS as uncollected, even when the run is green", () => {
+    const packages = [pkg({ slug: "gated", testFiles: ["x.test.ts"] }), brandVoice({ testFiles: ["test/a.test.mjs", "test/own-type.test.mjs"] })];
+    const results = resultsFor([
+      ["gated", green(["x.test.ts"])],
+      [
+        "brand-voice-artifact",
+        foldNodeRuns([
+          { file: "test/a.test.mjs", exitCode: 0, tap: TAP_EMPTY },
+          { file: "test/own-type.test.mjs", exitCode: 0, tap: TAP_GREEN },
+        ]),
+      ],
+    ]);
+    const f = judge({ packages, results, carveOuts: [] }).findings;
+    expect(f.map((x) => x.kind)).toEqual(["uncollected-files"]);
+    expect(f[0].message).toContain("test/a.test.mjs");
+  });
+
+  it("a lost TAP summary FAILS as no-report and is not also judged as red", () => {
+    const packages = [pkg({ slug: "gated", testFiles: ["x.test.ts"] }), brandVoice()];
+    const results = resultsFor([
+      ["gated", green(["x.test.ts"])],
+      ["brand-voice-artifact", foldNodeRuns([{ file: "test/own-type.test.mjs", exitCode: 0, tap: "" }])],
+    ]);
+    expect(judge({ packages, results, carveOuts: [] }).findings.map((f) => f.kind)).toEqual(["no-report"]);
+  });
+
+  it("a ledger entry never exempts a node:test package", () => {
+    const packages = [pkg({ slug: "gated", testFiles: ["x.test.ts"] }), brandVoice()];
+    const results = resultsFor([["gated", green(["x.test.ts"])]]);
+    const out = judge({ packages, results, carveOuts: [carve("brand-voice-artifact")] });
+    expect(out.carved).toEqual([]);
+    expect(out.findings.map((f) => f.kind)).toContain("not-run");
+  });
+
+  it("shows on the manifest as run here, with its own status", () => {
+    const packages = [brandVoice()];
+    const ok = renderManifest({ packages, results: resultsFor([["brand-voice-artifact", nodeGreen(["test/own-type.test.mjs"])]]), carveOuts: [] });
+    expect(ok).toMatch(/brand-voice-artifact .* node:test here — ok$/m);
+    const notRun = renderManifest({ packages, results: new Map(), carveOuts: [] });
+    expect(notRun).toMatch(/brand-voice-artifact .* node:test here — NOT RUN$/m);
   });
 });
 

@@ -45,7 +45,11 @@
 //      be run here. If one is not — and is not a named carve-out — the gate
 //      fails and says which repo is making a claim the host does not honour.
 //      This is the invariant that keeps the premise true as the fleet grows,
-//      in the only place that can prove it.
+//      in the only place that can prove it. A skipping package whose test
+//      sources name `node:test` (the fleet's one other runner) is therefore RUN
+//      here with `node --test`, one file at a time, and enforced like a vitest
+//      suite: green, and every on-disk test file executed with at least one
+//      test. Its own ci.yml skips it, so this gate is the only place it runs.
 //   4. CARVE-OUTS ARE PIN- AND SHAPE-SCOPED, AND SELF-RETIRING. An entry
 //      tolerates ONE documented failure, at ONE pinned sha, in a CLEAN
 //      checkout of it. It is still RUN. If the observed shape differs from the
@@ -307,8 +311,10 @@ export function skipsStandaloneTests({ pkgJson, ciWorkflow }) {
  *   "vitest" — a vitest suite: this gate runs it.
  *   "other"  — ships test files that are NOT vitest (today: four agent repos
  *              on `node --test`). Recorded in the manifest, never silently
- *              dropped; check 3 fails if such a package ALSO skips its tests
- *              standalone, because then nothing would run them.
+ *              dropped. If such a package ALSO skips its tests standalone,
+ *              nothing else runs them: with "node-test" evidence this gate
+ *              runs them itself (planRun's `nodeRun`); with "unknown"
+ *              evidence check 3 fails, because it cannot.
  *
  * runnerEvidence — WHAT the "other" verdict actually rests on, kept separate
  * from the verdict itself so an ASSUMPTION cannot pass for a finding:
@@ -442,6 +448,10 @@ export function planRun({ packages, carveOuts = CARVE_OUTS }) {
   const run = [];
   const carved = [];
   const stale = [];
+  // node:test suites whose own CI skips them (check 3). They are always
+  // ENFORCED: the ledger is written in vitest's report vocabulary and has no
+  // entry for them, so a carve-out can never apply to one.
+  const nodeRun = packages.filter(isHostRunNodeTest);
   for (const p of packages) {
     if (p.runner !== "vitest") continue;
     const entry = byId.get(p.id);
@@ -464,7 +474,89 @@ export function planRun({ packages, carveOuts = CARVE_OUTS }) {
         why: `the checkout at ${String(p.sha).slice(0, 12)} has LOCAL MODIFICATIONS — the entry documents a defect in that commit's content, not in an edited tree, so the suite is ENFORCED`,
       });
   }
-  return { run, carved, stale };
+  return { run, carved, stale, nodeRun };
+}
+
+/**
+ * Is this a node:test package that only this gate can run? Its tests are not
+ * vitest, its test sources name `node:test`, and its own ci.yml skips them on
+ * the "the cinatra monorepo runs these" grounds. Without this road the gate
+ * could only name such a package (check 3) and never satisfy the claim.
+ */
+export function isHostRunNodeTest(p) {
+  return p.runner === "other" && p.runnerEvidence === "node-test" && p.standaloneTestsSkipped === true && p.testFiles.length > 0;
+}
+
+/**
+ * Read the TAP that `node --test --test-reporter=tap <file>` prints into the
+ * fields the rules use. Pure, so a missing summary is tested, not assumed.
+ *
+ * The summary is the TOP-LEVEL `# tests N` / `# pass N` / `# fail N` /
+ * `# cancelled N` / `# skipped N` / `# todo N` block node prints last; an
+ * indented line belongs to a subtest and is never read as the summary. No
+ * `# tests` line at top level returns `summary: false`, which the caller treats
+ * as a lost report (fail-closed), never as zero failures.
+ */
+export function parseNodeTap(text) {
+  const counts = {};
+  const failedNames = [];
+  for (const line of String(text ?? "").split(/\r?\n/)) {
+    const c = /^# (tests|pass|fail|cancelled|skipped|todo) (\d+)$/.exec(line);
+    if (c) counts[c[1]] = Number(c[2]);
+    const f = /^\s*not ok \d+ - (.*?)(?:\s+#\s+(?:SKIP|TODO)\b.*)?$/.exec(line);
+    if (f && !/#\s+(?:SKIP|TODO)\b/.test(line)) failedNames.push(f[1]);
+  }
+  return {
+    summary: Object.prototype.hasOwnProperty.call(counts, "tests"),
+    tests: counts.tests ?? 0,
+    pass: counts.pass ?? 0,
+    fail: counts.fail ?? 0,
+    cancelled: counts.cancelled ?? 0,
+    skipped: counts.skipped ?? 0,
+    todo: counts.todo ?? 0,
+    failedNames,
+  };
+}
+
+/**
+ * Fold the per-file node:test runs of one package into the result shape the
+ * vitest road produces, so the same rules judge both. A file counts as
+ * EXECUTED only when its run printed a summary with at least one test: a file
+ * node ran that registered nothing is uncollected, as a vitest file collected
+ * by nothing is. A file whose run printed no summary makes the report lost.
+ *
+ * files: Array<{ file, exitCode, tap }>
+ */
+export function foldNodeRuns(files) {
+  const executedFiles = [];
+  const failedTestNames = [];
+  let total = 0;
+  let failed = 0;
+  let pending = 0;
+  let reportOk = files.length > 0;
+  let exitCode = 0;
+  let ok = files.length > 0;
+  for (const { file, exitCode: code, tap } of files) {
+    const t = parseNodeTap(tap);
+    if (!t.summary) reportOk = false;
+    if (t.summary && t.tests > 0) executedFiles.push(file);
+    total += t.tests;
+    failed += t.fail + t.cancelled;
+    pending += t.skipped + t.todo;
+    for (const n of t.failedNames) failedTestNames.push(`${file} › ${n}`);
+    if (code !== 0 && exitCode === 0) exitCode = code ?? -1;
+    if (code !== 0 || !t.summary || t.fail > 0 || t.cancelled > 0) ok = false;
+  }
+  return {
+    ok,
+    exitCode,
+    reportOk,
+    executedFiles: executedFiles.sort(),
+    numTotalTests: total,
+    numFailedTests: failed,
+    numPendingTests: pending,
+    failedTestNames: failedTestNames.sort(),
+  };
 }
 
 /**
@@ -572,7 +664,7 @@ export function parseReport({ report, pkgDir, relativize = (from, to) => to.slic
 export function judge({ packages, results, carveOuts = CARVE_OUTS }) {
   const findings = [];
   const notices = [];
-  const { run, carved, stale } = planRun({ packages, carveOuts });
+  const { run, carved, stale, nodeRun } = planRun({ packages, carveOuts });
 
   // FAIL-CLOSED: a vacuous pass would silently recreate cinatra#2288.
   if (packages.length === 0) {
@@ -580,14 +672,14 @@ export function judge({ packages, results, carveOuts = CARVE_OUTS }) {
       kind: "no-packages",
       message: "no extension packages materialized under extensions/ — clone-back failed; refusing to pass vacuously.",
     });
-    return { findings, notices, run, carved, stale };
+    return { findings, notices, run, carved, stale, nodeRun };
   }
   if (run.length + carved.length === 0) {
     findings.push({
       kind: "no-suites",
       message: `discovered ${packages.length} materialized package(s) but ZERO vitest suites — the classifier or the clone-back is broken; refusing to pass vacuously.`,
     });
-    return { findings, notices, run, carved, stale };
+    return { findings, notices, run, carved, stale, nodeRun };
   }
 
   // A stale entry grants no exemption, so it cannot weaken enforcement — it is
@@ -614,6 +706,16 @@ export function judge({ packages, results, carveOuts = CARVE_OUTS }) {
         kind: "no-report",
         slug: pkg.slug,
         message: `${pkg.id}: vitest produced no parseable JSON report (exit ${res.exitCode}) — the run cannot be judged, and an absent report must never read as an expected result.`,
+      });
+    }
+  }
+  for (const pkg of nodeRun) {
+    const res = results.get(pkg.id);
+    if (res && res.reportOk === false) {
+      findings.push({
+        kind: "no-report",
+        slug: pkg.slug,
+        message: `${pkg.id}: a \`node --test\` run printed no TAP summary (exit ${res.exitCode}) — the run cannot be judged, and an absent summary must never read as zero failures.`,
       });
     }
   }
@@ -673,8 +775,42 @@ export function judge({ packages, results, carveOuts = CARVE_OUTS }) {
     });
   }
 
+  // The node:test suites only this gate runs: enforced like the vitest set —
+  // green, and every on-disk test file executed with at least one test — or it
+  // blocks. No ledger entry applies to them (planRun).
+  for (const pkg of nodeRun) {
+    if (lostReport.has(pkg.slug)) continue;
+    const res = results.get(pkg.id);
+    if (!res) {
+      findings.push({
+        kind: "not-run",
+        slug: pkg.slug,
+        message: `${pkg.id}: its own ci.yml skips its node:test suite as run by the host, and this gate never executed it.`,
+      });
+      continue;
+    }
+    if (!res.ok) {
+      findings.push({
+        kind: "suite-red",
+        slug: pkg.slug,
+        message: `${pkg.id}: node:test suite FAILED (exit ${res.exitCode}, ${res.numFailedTests ?? "?"} failing test(s)).`,
+      });
+      continue;
+    }
+    const missing = observedShape(pkg, res).uncollected;
+    if (missing.length > 0) {
+      findings.push({
+        kind: "uncollected-files",
+        slug: pkg.slug,
+        message:
+          `${pkg.id}: ${missing.length} on-disk test file(s) ran no test under \`node --test\` — ${missing.join(", ")}. ` +
+          `A file that registers nothing proves nothing; name node:test in it or remove it.`,
+      });
+    }
+  }
+
   // AC6: the companion skip may never outrun what the host actually does.
-  const gated = new Set([...run, ...carved].map((p) => p.id));
+  const gated = new Set([...run, ...carved, ...nodeRun].map((p) => p.id));
   for (const pkg of packages) {
     if (pkg.testFiles.length === 0) continue;
     if (!pkg.standaloneTestsSkipped) continue;
@@ -711,13 +847,14 @@ export function judge({ packages, results, carveOuts = CARVE_OUTS }) {
     });
   }
 
-  return { findings, notices, run, carved, stale };
+  return { findings, notices, run, carved, stale, nodeRun };
 }
 
 /** Fixed-width manifest of the WHOLE materialized fleet. */
 export function renderManifest({ packages, results, carveOuts = CARVE_OUTS }) {
-  const { carved } = planRun({ packages, carveOuts });
+  const { carved, nodeRun } = planRun({ packages, carveOuts });
   const carvedIds = new Set(carved.map((p) => p.id));
+  const nodeRunIds = new Set(nodeRun.map((p) => p.id));
   const lines = [];
   const w = Math.max(24, ...packages.map((p) => p.slug.length));
   lines.push(
@@ -728,7 +865,16 @@ export function renderManifest({ packages, results, carveOuts = CARVE_OUTS }) {
     const res = results?.get(p.id);
     let status;
     if (p.runner === "none") status = "no test files";
-    else if (p.runner === "other") {
+    else if (nodeRunIds.has(p.id)) {
+      // Its repo skips its tests, so this gate runs them with node --test.
+      if (!res) status = "node:test here — NOT RUN";
+      else if (!res.ok) status = `node:test here — RED (exit ${res.exitCode})`;
+      else {
+        const executed = new Set(res.executedFiles);
+        const missing = p.testFiles.filter((f) => !executed.has(f)).length;
+        status = missing ? `node:test here — INCOMPLETE (${missing} file(s) ran no test)` : "node:test here — ok";
+      }
+    } else if (p.runner === "other") {
       status = p.standaloneTestsSkipped
         ? "NOT GATED — its repo skips tests too"
         : p.runnerEvidence === "unknown"
@@ -984,6 +1130,49 @@ function runVitest({ repoRoot, pkg, reportDir, slot }) {
   });
 }
 
+// One `node --test` process per test file, in the package's own directory, so
+// a file that registers nothing is visible as such (its own summary reads
+// `# tests 0`) instead of being hidden in a package total. The TAP reporter is
+// what parseNodeTap reads; the package's `test` script is not used, for the
+// same reason runVitest does not use it.
+function runNodeTestFile({ cwd, file }) {
+  return new Promise((resolve) => {
+    // NODE_TEST_CONTEXT would make the child report to a parent test runner
+    // instead of printing its own TAP; it is dropped so the summary is printed.
+    const env = { ...process.env, CI: "1", FORCE_COLOR: "0" };
+    delete env.NODE_TEST_CONTEXT;
+    const child = spawn(process.execPath, ["--test", "--test-reporter=tap", file], {
+      cwd,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (c) => {
+      out += c;
+      if (out.length > 400_000) out = out.slice(-400_000);
+    });
+    child.stderr.on("data", (c) => {
+      err += c;
+      if (err.length > 100_000) err = err.slice(-100_000);
+    });
+    child.on("error", (e) => resolve({ file, exitCode: -1, tap: "", detail: String(e) }));
+    child.on("close", (code) => resolve({ file, exitCode: code, tap: out, detail: out + err }));
+  });
+}
+
+async function runNodeTest({ repoRoot, pkg }) {
+  const started = Date.now();
+  const cwd = path.join(repoRoot, pkg.dir);
+  const files = [];
+  for (const file of pkg.testFiles) files.push(await runNodeTestFile({ cwd, file }));
+  return {
+    ...foldNodeRuns(files),
+    durationMs: Date.now() - started,
+    detail: files.map((f) => `--- node --test ${f.file} (exit ${f.exitCode})\n${f.detail}`).join("\n"),
+  };
+}
+
 async function pool(items, limit, worker) {
   const out = new Map();
   let cursor = 0;
@@ -1014,12 +1203,13 @@ async function main() {
   const jobs = Math.max(1, Number(process.env.EXTENSION_SUITE_JOBS || Math.min(4, os.availableParallelism?.() ?? 4)));
 
   const packages = discover(repoRoot);
-  const { run, carved, stale } = planRun({ packages });
+  const { run, carved, stale, nodeRun } = planRun({ packages });
 
   console.log(
     `[extension-suite-gate] discovered ${packages.length} materialized package(s): ` +
       `${run.length} vitest suite(s) enforced, ${carved.length} carved out (at pin), ` +
-      `${packages.filter((p) => p.runner === "other").length} non-vitest, ` +
+      `${packages.filter((p) => p.runner === "other").length} non-vitest ` +
+      `(${nodeRun.length} of them node:test suites run here because their own CI skips them), ` +
       `${packages.filter((p) => p.runner === "none").length} with no test files.`,
   );
 
@@ -1039,6 +1229,20 @@ async function main() {
       return res;
     });
     fs.rmSync(reportDir, { recursive: true, force: true });
+    if (nodeRun.length > 0) {
+      console.log(`\n[extension-suite-gate] running ${nodeRun.length} node:test suite(s) whose own CI skips them...\n`);
+      const nodeResults = await pool(nodeRun, jobs, async (pkg) => {
+        const res = await runNodeTest({ repoRoot, pkg });
+        console.log(
+          `::group::${res.ok ? "PASS" : "FAIL"} ${pkg.id} [node:test] (${(res.durationMs / 1000).toFixed(1)}s, ` +
+            `${res.executedFiles.length}/${pkg.testFiles.length} file(s))`,
+        );
+        console.log(fenceWorkflowCommands(res.detail).trimEnd());
+        console.log("::endgroup::");
+        return res;
+      });
+      for (const [id, res] of nodeResults) results.set(id, res);
+    }
   }
 
   console.log("\n[extension-suite-gate] MANIFEST (every materialized package; nothing here is silent)\n");
@@ -1065,7 +1269,7 @@ async function main() {
   const totalSecs = [...results.values()].reduce((n, r) => n + r.durationMs, 0) / 1000;
   console.log(
     `\n[extension-suite-gate] ${totalTests} test(s) across ${results.size} suite(s); ` +
-      `${totalSecs.toFixed(1)}s of vitest at ${jobs}-way concurrency.`,
+      `${totalSecs.toFixed(1)}s of suite time at ${jobs}-way concurrency.`,
   );
 
   for (const n of notices) console.log(`::notice title=extension-suite-gate::${n.message}`);
