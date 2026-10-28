@@ -110,7 +110,10 @@ authenticated reader at the contract's own pinned revision — and says so.
   pin does *not* govern is **unresolved**, with that distinction stated — that is
   the second defect, and it is not the same as an anchor drawn nowhere.
 - **A selector form beyond one attribute predicate is refused by name**, and the
-  run exits `2`. It is never approximated and never counted in either direction.
+  run exits `2`, unless a recorded `anchorsUnresolvedAtPin` disagrees with what
+  the run finds: outside `--print-unresolved` that comparison comes first and
+  exits `1`. A refused form is never approximated and never counted in either
+  direction.
   The suite pins that refusal. In the live recorded set the one class selector,
   `.cw-frame` (a frame-wide capture requirement), is a passive capture marker,
   which the report lists and does not match against a drawing. `--print-unresolved`

@@ -55,7 +55,10 @@
 // compound of classes, a class beside an attribute predicate, an operator other
 // than `=`, an unquoted value. It is REPORTED, by name, as `refused`, and the
 // run exits 2 — the "could not run honestly" convention — because a selector
-// this matcher cannot decide is one it may not certify in either direction. The
+// this matcher cannot decide is one it may not certify in either direction.
+// Outside `--print-unresolved`, a recorded `anchorsUnresolvedAtPin` that
+// disagrees with what the run finds is compared first and exits 1, so such a
+// run with both exits 1, not 2. The
 // rest of the set is still read and still printed, so a refusal names itself
 // instead of hiding what the run did decide, and its suite pins that.
 //
@@ -89,9 +92,13 @@
 //   0  every drawn anchor resolves, or the finding only warns for this event
 //   1  a recorded anchor resolves in no governed drawing, under a red event;
 //      or, on any event, a recorded `anchorsUnresolvedAtPin` disagrees with
-//      what this check finds
-//   2  the gate could not run honestly (no drawings, a missing drawing, a
-//      refused selector form, an unreadable pin or contract)
+//      what this check finds (compared before a refused selector form is
+//      reported, so a run with both exits 1; `--print-unresolved` does not
+//      compare)
+//   2  the gate could not run honestly (no drawings, a missing drawing, an
+//      unreadable pin or contract; or a refused selector form, where no
+//      recorded `anchorsUnresolvedAtPin` disagrees or under
+//      `--print-unresolved`)
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -412,7 +419,8 @@ export function collectRecordedAnchors({ anchorContract, captureAnchors = null }
  * A selector this matcher cannot decide is `refused` — never quietly counted as
  * resolved and never counted as unresolved either, because both would be a
  * verdict the matcher did not reach. The caller turns a non-empty `refused`
- * into exit 2.
+ * into exit 2; outside `--print-unresolved` it first compares a recorded
+ * `anchorsUnresolvedAtPin`, and a disagreement there exits 1 instead.
  */
 export function checkAnchorResolution({ pin, anchors, governed, others = [], siblingsKnown = true }) {
   const governedIndexes = governed.map((d) => drawingIndexOf(d.text));
@@ -679,8 +687,11 @@ export async function runCli({
   // edited afterwards, never that it was true when it was written. So while the
   // key is present, this is the script that compares the two. The contract
   // records it (as the empty array), so every run that reaches this line
-  // compares it; `--print-unresolved` returns above, and a run that cannot run
-  // honestly exits 2 before it.
+  // compares it. `--print-unresolved` returns above, and so does a run that
+  // cannot read its pin, contract, path map, diff base or drawings (exit 2).
+  // A run that reaches this line reports a refused selector form only after
+  // it, so a run that carries one and also disagrees with the recorded array
+  // exits 1 here, not 2.
   if (Array.isArray(recordedUnresolved)) {
     const found = [...new Set(merged.unresolved.map((r) => r.selector))].sort();
     const recorded = [...new Set(recordedUnresolved)].sort();
