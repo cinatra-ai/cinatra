@@ -320,10 +320,11 @@ async function cleanUpOwned(): Promise<void> {
  * Whether SQL text names `public` as a qualifier (`public.x` or `"public".x`).
  * LEXICAL, and used only to leave statements out: a form it misses (a comment
  * between the tokens, for one) runs when the statement begins with one of the
- * four heads setup runs, and the catalog check below then fails the run if that
+ * four heads setup runs. The catalog check below then fails the run if that
  * statement changed an entry the check reads and the change is in place at a
- * later read. The matcher takes no qualifier that follows a dot, slash, colon,
- * `@` or hyphen.
+ * later read, and setup fails if the statement throws an error whose text does
+ * not include "does not exist", with or without a change to the catalog. The
+ * matcher takes no qualifier that follows a dot, slash, colon, `@` or hyphen.
  */
 const namesPublic = (text: string): boolean => /(^|[^\w$".\/:@-])"?public"?\s*\./i.test(text);
 
@@ -604,10 +605,16 @@ afterAll(async () => {
   if (!HAS_REAL_DB) return;
   delete (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized;
   // The catalog outside the run after the cases, then the cleanup, then the
-  // catalog again (it cannot report an object that the CASCADE drop removed
-  // outside the run: the read after setup or after the cases reports such an
-  // object if it was in place then, and one made after the read after the cases
-  // and dropped by the CASCADE is not seen), then the tier lock is released.
+  // catalog again, then the tier lock is released. Once the baseline is read,
+  // each of the two reads counts the entries it reads against the baseline and
+  // throws when one was added or removed. So the read after teardown reports a
+  // baseline entry whose object the CASCADE drop removed outside the run (a view
+  // made before the run and redefined during it to read one of the run's tables,
+  // for one: a view's body is not compared, so its entries match the baseline
+  // until the drop). An object made after the baseline read that the drop
+  // removes is reported by the read after setup or after the cases if an entry
+  // the check reads for it is in place at that read; one made after the read
+  // after the cases is not seen.
   // Each step is tried; each step's failure is reported.
   const failures: unknown[] = [];
   const steps: Array<() => Promise<void>> = [
