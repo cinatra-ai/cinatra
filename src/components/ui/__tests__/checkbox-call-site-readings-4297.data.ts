@@ -2,7 +2,7 @@
 // shared packages (cinatra#4297, Done-when 2 and 3).
 //
 // The rule read against each site is the components drawing's sentence
-// (cinatra-ai/design `specs/app-components.html`, "Checkbox / Radio / Switch"):
+// (the design system's `specs/app-components.html`, "Checkbox / Radio / Switch"):
 //
 //   "Single-select (radio), multi-select (checkbox), and instant-binary
 //    (switch). Indigo for active state. Switches are reserved for
