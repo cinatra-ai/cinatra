@@ -151,7 +151,6 @@ describe("0.16 — the passthrough shapers are inside the rule", () => {
   it("every shaper on the passthrough declares the types it saves", () => {
     const ids = PASSTHROUGH_SHAPER_DECLARATIONS.map((d) => d.shaperId);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toContain("blog-pipeline-seam:blog_pipeline_selected_idea");
     expect(ids).toContain("blog-pipeline-seam:blog_pipeline_draft_projection");
     expect(ids).toContain("route:campaigns_context_setup");
     for (const d of PASSTHROUGH_SHAPER_DECLARATIONS) {
@@ -159,17 +158,16 @@ describe("0.16 — the passthrough shapers are inside the rule", () => {
     }
   });
 
-  it("the audit names the two blog-pipeline writes as unowned, with the reason", () => {
+  it("the audit names the blog-pipeline write as unowned, with the reason", () => {
     // The campaigns context type IS owned by an installed extension, so the only
-    // unowned shaper saves left are the two the plan names on the blog
-    // pipeline's road.
+    // unowned shaper save left is the one the plan names on the blog pipeline's
+    // road (the selected-idea save is retired: cinatra#3380).
     const findings = auditPassthroughShaperDeclarations(
       ports({ writable: ["@cinatra-ai/campaigns:context"] }),
     );
     const unowned = findings.filter((f) => f.kind === "unowned-type");
     expect(unowned.map((f) => f.shaperId).sort()).toEqual([
       "blog-pipeline-seam:blog_pipeline_draft_projection",
-      "blog-pipeline-seam:blog_pipeline_selected_idea",
     ]);
     for (const f of unowned) expect(f.reason).toBe("dynamic-namespace");
   });
@@ -183,27 +181,26 @@ describe("0.16 — the passthrough shapers are inside the rule", () => {
       .map((f) => f.shaperId)
       .sort();
     // The plan: "a shaper never persists a transform of a run value — a
-    // projection is a deterministic, non-persisting step". Exactly the two the
+    // projection is a deterministic, non-persisting step". Exactly the one the
     // plan names on the blog pipeline's road.
     expect(persisting).toEqual([
       "blog-pipeline-seam:blog_pipeline_draft_projection",
-      "blog-pipeline-seam:blog_pipeline_selected_idea",
     ]);
   });
 
-  it("the two blog-pipeline writes count down to the wave scheduled to remove them", () => {
+  it("the blog-pipeline write counts down to the wave scheduled to remove it", () => {
     // The countdown is only a countdown while it names a wave that is still to
     // run. W10 (cinatra#3034) closed WITHOUT carrying the removal: its own
     // record puts "the removal of the selected-idea save and the persisted
     // draft projection" in "the pipeline's own wave" — W11, cinatra#3035, which
-    // is open. A countdown pointing at the closed wave misreports the two
-    // writes as already retired while the boundary still refuses them.
+    // is open. A countdown pointing at the closed wave misreports the
+    // projection write as already retired while the boundary still refuses it.
+    // (The selected-idea save is retired: cinatra#3380.)
     const blogWrites = PASSTHROUGH_SHAPER_DECLARATIONS.filter((d) =>
       d.shaperId.startsWith("blog-pipeline-seam:"),
     );
     expect(blogWrites.map((d) => d.shaperId).sort()).toEqual([
       "blog-pipeline-seam:blog_pipeline_draft_projection",
-      "blog-pipeline-seam:blog_pipeline_selected_idea",
     ]);
     // Never the wave that closed without doing the retirement.
     for (const d of blogWrites) {
