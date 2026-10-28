@@ -165,9 +165,14 @@ function confirmButton(dialog: HTMLElement): HTMLButtonElement {
 /** The value a CSS custom property is given in the app's global stylesheet. */
 function cssToken(name: string): string {
   const css = readFileSync(join(process.cwd(), "src/app/globals.css"), "utf8");
-  const match = css.match(new RegExp(`^\\s*${name.replace(/-/g, "\\-")}:\\s*([^;]+);`, "m"));
-  expect(match, `${name} in src/app/globals.css`).not.toBeNull();
-  return (match as RegExpMatchArray)[1].trim();
+  // The first declaration of the property, read as text (no pattern is built
+  // from the name).
+  const line = css
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.startsWith(`${name}:`));
+  expect(line, `${name} in src/app/globals.css`).toBeTruthy();
+  return (line as string).slice(name.length + 1).split(";")[0].trim();
 }
 
 /** The section label whose text starts with `text`, read inside the picker. */
