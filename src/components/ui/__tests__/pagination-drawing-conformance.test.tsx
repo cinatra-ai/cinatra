@@ -15,8 +15,12 @@
 //    mono slate."
 //
 // NO DEPARTURE FOUND.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
+import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { dirname, resolve } from "node:path";
+import { compile } from "tailwindcss";
 
 import {
   Pagination,
@@ -159,4 +163,93 @@ describe('clause: "Always pair with a \'X of N\' caption in mono slate"', () => 
     "not applicable at this primitive: 'always pair with' binds the call site; the component can only offer the caption, which it does",
     () => {},
   );
+});
+
+// §Pagination, approved components drawing: the example's inner flex row has
+// gap:4px. Compile the shipped stylesheet and its real cached imports, then
+// match its generated selectors against actual component DOM. This is native
+// CSS-declaration evidence at a 16px rem base, not browser layout/paint proof;
+// the separate browser guard reads the final live cascade in both palettes.
+let gapRules: { selector: string; value: string }[];
+let spacingPx: number;
+beforeAll(async () => {
+  const stylesheet = resolve(process.cwd(), "src/app/globals.css");
+  const globals = await readFile(stylesheet, "utf8");
+  const require = createRequire(resolve(process.cwd(), "package.json"));
+  const compiled = await compile(globals, {
+    base: dirname(stylesheet),
+    loadStylesheet: async (id, base) => {
+      let path: string;
+      if (id === "tw-animate-css") {
+        const root = resolve(process.cwd(), "node_modules", id);
+        const manifest = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
+        path = resolve(root, manifest.exports["."].style);
+      } else {
+        path = id.startsWith(".") ? resolve(base, id) : require.resolve(id, { paths: [base] });
+      }
+      return { path, base: dirname(path), content: await readFile(path, "utf8") };
+    },
+  });
+  const css = compiled.build(["gap-0.5", "gap-[4px]", "gap-[9px]"]);
+  const spacing = css.match(/--spacing:\s*([\d.]+)(rem|px);/);
+  if (!spacing) throw new Error("Missing shipped spacing token");
+  spacingPx = Number(spacing[1]) * (spacing[2] === "rem" ? 16 : 1);
+  gapRules = [...css.matchAll(/(\.gap[^{}]+)\{([^{}]+)\}/g)].map((rule) => {
+    const value = rule[2].match(/gap:\s*([^;]+);/)?.[1];
+    if (!value) throw new Error(`Missing compiled gap for ${rule[1]}`);
+    return { selector: rule[1].trim(), value };
+  });
+});
+
+function declaredGapPx(element: HTMLElement) {
+  const matching = gapRules.filter((rule) => element.matches(rule.selector));
+  expect(matching).toHaveLength(1);
+  const value = matching[0].value;
+  if (/^[\d.]+px$/.test(value)) return Number.parseFloat(value);
+  const calc = value.match(/^calc\(var\(--spacing\) \* ([\d.]+)\)$/);
+  if (!calc) throw new Error(`Unsupported compiled gap: ${value}`);
+  return spacingPx * Number(calc[1]);
+}
+
+function renderSpacingPagination(palette: "cinatra" | "dark", className?: string) {
+  return render(
+    <div className={palette}>
+      <Pagination aria-label="Results pages">
+        <PaginationContent className={className} id="results-pages" data-example="spacing">
+          <PaginationItem><PaginationPrevious href="#previous" /></PaginationItem>
+          <PaginationItem><PaginationLink href="#page-2" isActive>2</PaginationLink></PaginationItem>
+          <PaginationItem><PaginationNext href="#next" /></PaginationItem>
+        </PaginationContent>
+        <PaginationCaption>2 of 12</PaginationCaption>
+      </Pagination>
+    </div>,
+  );
+}
+
+describe("§Pagination: the example row has a 4px gap", () => {
+  for (const palette of ["cinatra", "dark"] as const) {
+    it(`declares the default 4px gap in ${palette} component DOM`, () => {
+      const { container } = renderSpacingPagination(palette);
+      const content = container.querySelector('[data-slot="pagination-content"]') as HTMLElement;
+      expect(declaredGapPx(content)).toBe(4);
+    });
+    it(`keeps caller gap overrides and navigation semantics in ${palette}`, () => {
+      const { container, getByRole, getByText } = renderSpacingPagination(palette, "gap-[9px]");
+      const content = getByRole("list");
+      expect(declaredGapPx(content)).toBe(9);
+      expect(content.id).toBe("results-pages");
+      expect(content.getAttribute("data-example")).toBe("spacing");
+      expect(getByRole("navigation", { name: "Results pages" }).contains(content)).toBe(true);
+      expect(getByRole("link", { name: "Go to previous page" }).getAttribute("href")).toBe("#previous");
+      expect(getByRole("link", { name: "2" }).getAttribute("aria-current")).toBe("page");
+      expect(getByRole("link", { name: "Go to next page" }).getAttribute("href")).toBe("#next");
+      expect(getByText("2 of 12").getAttribute("data-slot")).toBe("pagination-caption");
+      expect(container.querySelectorAll('[data-slot="pagination-link"]')).toHaveLength(3);
+    });
+  }
+  it("distinguishes the old generated half-step gap", () => {
+    const probe = document.createElement("ul");
+    probe.className = "gap-0.5";
+    expect(declaredGapPx(probe)).toBe(2);
+  });
 });
