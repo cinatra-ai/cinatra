@@ -516,7 +516,12 @@ describe("reading 2: the sign-in-again card (embed-signin-again)", () => {
     expect(signInCard().sentence).toBe(FIRST);
   });
 
-  it("the life runs from the mint: a negotiation slower than the life ends the sign-in at once", async () => {
+  // cinatra#4217: the pair here is at its session cap, so the renewal chain
+  // holds it to its upper bound (the sign-in answer's reading plus the life
+  // plus 1 s) and ends the sign-in there. The negotiation answers inside that
+  // last second, after the pair's own end: the end is then the spent check's
+  // at the negotiation's answer, not the chain's.
+  it("the life runs from the mint: a negotiation slower than the life ends the sign-in at once (the spent check)", async () => {
     await render();
     await deliverContext();
     runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(1) });
@@ -525,13 +530,17 @@ describe("reading 2: the sign-in-again card (embed-signin-again)", () => {
     fetchThreadMessages.mockResolvedValueOnce([]);
     await clickSignIn();
     expect(phase()).toBe("authorizing");
-    await wait(LIFE_MS + 5_000);
+    await wait(LIFE_MS + 500);
+    expect(phase(), "the chain has not ended the sign-in: its bound is 1 s past the life").toBe("authorizing");
     await act(async () => {
       slow.resolve({ ok: true });
       await drain();
     });
-    await wait(0);
+    // No timer step here: the negotiation's answer itself ends the sign-in.
+    expect(columnSeeds, "no conversation mounted with the dead pair").toEqual([]);
+    expect(fetchThreadMessages, "no transcript read with the dead pair").not.toHaveBeenCalled();
     expect(signInCard().id).toBe("embed-signin-again");
+    expect(requestHeaders(), "the dead pair is dropped").toEqual({});
   });
 
   it.each([

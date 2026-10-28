@@ -1288,3 +1288,88 @@ describe("EmbedAssistantClient — the renewal and the sign-in-again card togeth
     expect(phase(), "the error card is never turned into a sign-in card").toBe("error");
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#4217: A RENEWAL SENT LATE, AND THE SPENT CHECK.
+//
+// The end timer ends the sign-in at the end of the pair the frame holds (the
+// answer's reading plus its life). A renewal sent on schedule (210 s for a
+// 300 s pair) that never answers is given up there, 1 s before the chain's own
+// deadline for it (test (xvii)). A renewal sent LATE, here at the release of
+// the negotiation's lease, has its own wait of 90 s from its start, which runs
+// past the pair's end: the end timer still gives it up at the pair's end.
+//
+// The spent check: a negotiation that answers after the held pair's end ends
+// the sign-in with the sign-in-again card when it answers. Under the lease the
+// chain defers the due renewal of a pair whose user token lives longer than
+// the pair (900 s here) until that token stops being renewable (865 s), and
+// does not end the sign-in at the pair's end: for such a pair the spent check
+// is what ends a negotiation that answers between the pair's end (300 s) and
+// that moment.
+// RED AT a frame that turns active with the dead pair at that answer.
+// ---------------------------------------------------------------------------
+describe("EmbedAssistantClient — a renewal sent late and the spent check (cinatra#4217)", () => {
+  it("a renewal sent late, at the release of the negotiation's lease, is given up at the held pair's end, before its own wait ends", async () => {
+    await render();
+    await deliverContext("t-1");
+    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(1), mintedAt: Date.now(), receivedAt: Date.now() });
+    const slow = deferred<{ ok: boolean }>();
+    negotiate.mockReturnValueOnce(slow.promise);
+    fetchThreadMessages.mockResolvedValue([]);
+    renewFrameCredential.mockReturnValueOnce(new Promise(() => undefined)); // never answers
+    await clickSignIn();
+    // The renewal is due at 210 s; the negotiation is on its way until 250 s.
+    await wait(250_000);
+    expect(renewFrameCredential, "the due renewal waits for the negotiation").not.toHaveBeenCalled();
+    await act(async () => {
+      slow.resolve({ ok: true });
+      await drain();
+    });
+    expect(phase()).toBe("active");
+    expect(renewFrameCredential, "the renewal goes at the lease's release, 250 s").toHaveBeenCalledTimes(1);
+    expect(renewEnvOf(0)?.signal?.aborted).toBe(false);
+    // Its own wait runs to 250 + 90 = 340 s; the held pair ends at 300 s.
+    await wait(50_000 - 1);
+    expect(phase(), "the held pair lives to its end at 300 s").toBe("active");
+    await wait(1);
+    expect(phase(), "the pair's end ends the sign-in, 40 s before the renewal's own wait ends").toBe("signin");
+    expect(signInReading()).toBe("embed-signin-again");
+    expect(requestHeaders(), "no pair is held").toEqual({});
+    expect(renewEnvOf(0)?.signal?.aborted, "the late renewal is given up at the pair's end").toBe(true);
+    await wait(10 * 60_000);
+    expect(renewFrameCredential, "nothing renews behind the card").toHaveBeenCalledTimes(1);
+    expect(signInReading()).toBe("embed-signin-again");
+  });
+
+  it("a negotiation that answers after the held pair's end ends a sign-in whose user token is still renewable when it answers, and nothing is renewed at the release (the spent check)", async () => {
+    await render();
+    await deliverContext("t-1");
+    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: { ...pair(1), userExpiresIn: 900 }, mintedAt: Date.now(), receivedAt: Date.now() });
+    const slow = deferred<{ ok: boolean }>();
+    negotiate.mockReturnValueOnce(slow.promise);
+    fetchThreadMessages.mockResolvedValue([]);
+    renewFrameCredential.mockResolvedValue({ ok: true, credential: pair(2) });
+    await clickSignIn();
+    // The held pair ends at 300 s. Under the lease the chain defers the due
+    // renewal until the user token stops being renewable (865 s), and ends
+    // nothing before then.
+    await wait(400_000);
+    expect(phase(), "the chain has not ended the sign-in at 400 s").toBe("authorizing");
+    expect(renewFrameCredential, "the due renewal waited for the negotiation").not.toHaveBeenCalled();
+    await act(async () => {
+      slow.resolve({ ok: true });
+      await drain();
+    });
+    // No timer step here: the negotiation's answer itself ends the sign-in.
+    expect(phase()).toBe("signin");
+    expect(signInReading(), "the sign-in-again card (cinatra#4357)").toBe("embed-signin-again");
+    expect(signInSentence()).toBe(AGAIN);
+    expect(columnSeeds, "no conversation mounted with the dead pair").toEqual([]);
+    expect(fetchThreadMessages, "no transcript read with the dead pair").not.toHaveBeenCalled();
+    expect(requestHeaders(), "the dead pair is dropped").toEqual({});
+    expect(renewFrameCredential, "the dead pair is not renewed at the lease's release").not.toHaveBeenCalled();
+    expect(vi.getTimerCount(), "no end timer and no chain timer left behind the card").toBe(0);
+    await wait(10 * 60_000);
+    expect(renewFrameCredential, "nothing renews behind the card").not.toHaveBeenCalled();
+  });
+});
