@@ -1,18 +1,20 @@
 /**
  * Repo-wide invariant for context resolution.
  *
- * Runtime auto-wiring for context selection is intentionally not used.
  * Every agent OAS that declares a non-empty `metadata.cinatra.contextSlots`
- * MUST carry EXPLICIT, author-placed wiring:
+ * MUST carry real context-resolution wiring for EVERY declared slot:
  *   (1) the package manifest declares an install-blocking runtime dependency on
  *       `@cinatra-ai/context-selection-agent`, read through the host's own
  *       dependency reader (see the vocabulary note below).
- *   (2) The OAS has at least one explicit `context_<slot>` FlowNode whose
- *       inlined subflow is the real context-resolution subflow (an
- *       ApiNode hits `/api/context-resolve`).
- *   (3) The FlowNode's `contextSlotBindings` output is DataFlowEdge-wired
- *       into a downstream node's `contextSlotBindings` input, replacing
- *       the inert `start.contextSlotBindings → consumer` bypass.
+ *   (2) Each slot is resolved either by an explicit, author-placed
+ *       `context_<slot>` FlowNode whose inlined subflow is the real
+ *       context-resolution subflow (an ApiNode hits `/api/context-resolve`),
+ *       or — declaration-only — by the node the loader injects at mount (see
+ *       "DECLARATION-ONLY SLOTS" below).
+ *   (3) An author-placed FlowNode's `contextSlotBindings` output is
+ *       DataFlowEdge-wired into a downstream node's binding input, replacing
+ *       the inert `start.contextSlotBindings → consumer` bypass. The input is
+ *       named as the loader names it (see "THE BINDING INPUT'S NAME" below).
  *   (4) Node order: the context FlowNode is BEFORE its consumer.
  *
  * Plus anti-stub assertions:
@@ -20,8 +22,8 @@
  *     contextSlots leaf.
  *   - NO `start.contextRefs → end.contextRefs` pass-through stub on any agent.
  *   - INTERACTIVE selectors that list `context-selector` in `hitlScreens`
- *     must also have a real context FlowNode (renderer is wired, not just
- *     declared).
+ *     must also have a real context FlowNode, or a declaration-only slot the
+ *     loader-injected node covers (renderer is wired, not just declared).
  *
  * DEPENDENCY VOCABULARY (cinatra#2455). (1) used to read
  * `pkg.cinatra.agentDependencies[...]` directly. That npm-style map is the
@@ -36,6 +38,29 @@
  * `parseManifestDependencyEdges` makes this assert what the HOST resolves rather
  * than which spelling the manifest happens to use, and it tightens the claim
  * from "the key is truthy" to "an install-blocking runtime edge exists".
+ *
+ * THE BINDING INPUT'S NAME (cinatra#4314). This gate used to require the literal
+ * destination `contextSlotBindings` on every agent. The WayFlow loader accepts a
+ * consumer input titled `contextSlotBindings` only when the definition declares
+ * exactly one slot, and `<slotId>ContextSlotBindings` always
+ * (docker/wayflow/context_subflow_injection.py:604-614). It refuses the bare name
+ * in a multi-slot definition (:663-669), and the parent-satisfied hand-down
+ * always writes the qualified name (:832). So a single-slot agent may use either
+ * name, and a multi-slot agent must use the qualified name of the slot the
+ * FlowNode resolves; a multi-slot agent therefore names each FlowNode
+ * `context_<slotId>`, the loader's own id grammar.
+ *
+ * DECLARATION-ONLY SLOTS (cinatra#1194, cinatra#3032, cinatra#4314). Since
+ * cinatra#1194 an author may declare a slot and place no subflow for it: the
+ * loader injects the canonical context-resolution subflow at mount
+ * (context_subflow_injection.py:1-4), and a parent that satisfies the slot hands
+ * its pick down instead (cinatra#3032). The hand-down REQUIRES the parent's slot
+ * to be injected, not author-placed (:954-973). Such a slot counts as covered by
+ * the injected node only when ALL of these hold, and fails otherwise:
+ *   - the agent declares the required runtime context-selection-agent edge of (1);
+ *   - a work node (never the StartNode) declares the input the loader feeds; and
+ *   - no DataFlowEdge already feeds that input (the loader refuses to
+ *     double-wire, :674-680).
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
@@ -115,6 +140,125 @@ function isContextFlowNode(oas: Ref, component: Ref): boolean {
   return false;
 }
 
+type SlotDecl = { slotId: string; selectionMode?: string };
+
+function declaredSlots(oas: Ref): SlotDecl[] {
+  const slots = (oas.metadata as { cinatra?: { contextSlots?: unknown } } | undefined)?.cinatra?.contextSlots;
+  return Array.isArray(slots) ? (slots as SlotDecl[]) : [];
+}
+
+/** The binding input names the loader accepts for `slotId` (see "THE BINDING
+ *  INPUT'S NAME"): the bare name only in a single-slot definition. */
+function bindingInputsFor(slotIds: string[], slotId: string): string[] {
+  const qualified = `${slotId}ContextSlotBindings`;
+  return slotIds.length === 1 ? ["contextSlotBindings", qualified] : [qualified];
+}
+
+function hasRequiredContextSelectionEdge(pkg: unknown): boolean {
+  const edge = contextSelectionEdge(pkg);
+  return !!edge && edge.edgeType === "runtime" && edge.requirement === "required";
+}
+
+/** Why a declaration-only slot is NOT covered by the loader-injected node; an
+ *  empty list means it is covered (see "DECLARATION-ONLY SLOTS"). */
+function injectedCoverageProblems(oas: Ref, pkg: unknown, slotId: string, slotIds: string[]): string[] {
+  const problems: string[] = [];
+  if (!hasRequiredContextSelectionEdge(pkg)) {
+    problems.push(
+      `declaration-only slot ${slotId} counts as covered by the injected node only with a required runtime ${CONTEXT_SELECTION_AGENT} edge`,
+    );
+  }
+  const names = bindingInputsFor(slotIds, slotId);
+  const all = refs(oas);
+  const startRef = (oas.start_node as { "$component_ref"?: string } | undefined)?.["$component_ref"] ?? "start";
+  const consumers: Array<[string, string]> = [];
+  for (const id of nodeOrder(oas)) {
+    const c = all[id];
+    if (!c || id === startRef || c.component_type === "Flow") continue;
+    const titles = ((c.inputs as Array<{ title?: unknown }> | null | undefined) ?? []).map((i) => i.title);
+    for (const n of names) if (titles.includes(n)) consumers.push([id, n]);
+  }
+  if (consumers.length === 0) {
+    problems.push(`declaration-only slot ${slotId} has no consumer: no work node declares ${names.join(" or ")}`);
+  }
+  for (const [id, n] of consumers) {
+    const fed = dfes(oas).some(
+      (e) =>
+        (e.destination_node as { "$component_ref"?: string } | undefined)?.["$component_ref"] === id
+        && e.destination_input === n,
+    );
+    if (fed) problems.push(`${id}.${n} is already fed by a DataFlowEdge; the loader refuses to double-wire it`);
+  }
+  return problems;
+}
+
+/** Every reason the agent's context wiring is not real; empty means it is. */
+function wiringProblems(oas: Ref, pkg: unknown): string[] {
+  const problems: string[] = [];
+  const edge = contextSelectionEdge(pkg);
+  if (!edge) {
+    problems.push(`must declare a ${CONTEXT_SELECTION_AGENT} dependency edge`);
+  } else {
+    // Install-blocking, not merely present: a peer/optional edge would let the
+    // slot resolve against a sub-agent that was never installed.
+    if (edge.edgeType !== "runtime") problems.push(`the ${CONTEXT_SELECTION_AGENT} edge must be runtime, not ${edge.edgeType}`);
+    if (edge.requirement !== "required") problems.push(`the ${CONTEXT_SELECTION_AGENT} edge must be required, not ${edge.requirement}`);
+  }
+
+  const slotIds = declaredSlots(oas).map((s) => s.slotId);
+  const all = refs(oas);
+  const order = nodeOrder(oas);
+  const edges = dfes(oas);
+  const authorPlaced = new Set<string>();
+
+  for (const [fnId, fn] of Object.entries(all).filter(([, c]) => isContextFlowNode(oas, c))) {
+    const subRef = (fn.subflow as { "$component_ref"?: string } | undefined)?.["$component_ref"];
+    const sub = all[subRef!];
+    const subOut = ((sub.outputs as Array<{ title: string }> | null | undefined) ?? []).map((o) => o.title);
+    if (!subOut.includes("contextSlotBindings")) {
+      problems.push(`${fnId}.subflow outputs must include contextSlotBindings (not contextRefs)`);
+    }
+    if (subOut.includes("contextRefs")) problems.push(`${fnId}: the contextRefs stub output is forbidden`);
+
+    const slotId = slotIds.length === 1 ? slotIds[0] : slotIds.find((id) => fnId === `context_${id}`);
+    if (slotId === undefined) {
+      problems.push(`${fnId} resolves no declared slot: a multi-slot agent names each context FlowNode context_<slotId>`);
+      continue;
+    }
+    authorPlaced.add(slotId);
+
+    const names = bindingInputsFor(slotIds, slotId);
+    const bindEdge = edges.find(
+      (e) =>
+        (e.source_node as { "$component_ref"?: string } | undefined)?.["$component_ref"] === fnId
+        && e.source_output === "contextSlotBindings"
+        && names.includes(e.destination_input as string),
+    );
+    if (!bindEdge) {
+      problems.push(`${fnId}.contextSlotBindings must feed a consumer's ${names.join(" or ")}`);
+      continue;
+    }
+    const consumer = (bindEdge.destination_node as { "$component_ref"?: string })["$component_ref"];
+    const ci = order.indexOf(fnId);
+    const cj = order.indexOf(consumer!);
+    if (ci < 0) problems.push(`${fnId} is not in the node order`);
+    if (!(cj > ci)) problems.push(`${fnId} must come before its consumer ${consumer}`);
+  }
+
+  for (const slotId of slotIds) {
+    if (!authorPlaced.has(slotId)) problems.push(...injectedCoverageProblems(oas, pkg, slotId, slotIds));
+  }
+  return problems;
+}
+
+/** A context FlowNode, or a declaration-only slot the injected node covers. */
+function hasContextResolution(oas: Ref, pkg: unknown): boolean {
+  const all = refs(oas);
+  if (Object.values(all).some((c) => isContextFlowNode(oas, c))) return true;
+  const slotIds = declaredSlots(oas).map((s) => s.slotId);
+  return slotIds.some((id) => injectedCoverageProblems(oas, pkg, id, slotIds).length === 0);
+}
+
 describe("every contextSlots agent carries explicit context-resolution wiring", () => {
   it("discovers agent OAS files", () => {
     expect(ALL.length).toBeGreaterThan(0);
@@ -146,44 +290,7 @@ describe("every contextSlots agent carries explicit context-resolution wiring", 
     it(`${f.scope}/${f.agent}: declares dep + explicit context FlowNode + contextSlotBindings producer`, () => {
       const oas = JSON.parse(readFileSync(f.oasPath, "utf8")) as Ref;
       const pkg = JSON.parse(readFileSync(f.pkgPath, "utf8")) as Ref;
-      const edge = contextSelectionEdge(pkg);
-      expect(edge, `must declare a ${CONTEXT_SELECTION_AGENT} dependency edge`)
-        .toBeTruthy();
-      // Install-blocking, not merely present: a peer/optional edge would let the
-      // slot resolve against a sub-agent that was never installed.
-      expect(edge!.edgeType).toBe("runtime");
-      expect(edge!.requirement).toBe("required");
-
-      const all = refs(oas);
-      const ctxFlowNodes = Object.entries(all).filter(([, c]) => isContextFlowNode(oas, c));
-      expect(ctxFlowNodes.length, "≥1 context FlowNode required").toBeGreaterThan(0);
-
-      const order = nodeOrder(oas);
-      const edges = dfes(oas);
-
-      for (const [fnId, fn] of ctxFlowNodes) {
-        const subRef = (fn.subflow as { "$component_ref"?: string } | undefined)?.["$component_ref"];
-        expect(subRef).toBeTruthy();
-        const sub = all[subRef!];
-        const subOut = (sub.outputs as Array<{ title: string }>).map((o) => o.title);
-        expect(subOut, `${fnId}.subflow outputs must include contextSlotBindings (not contextRefs)`)
-          .toContain("contextSlotBindings");
-        expect(subOut, "the contextRefs stub output is forbidden").not.toContain("contextRefs");
-
-        const bindEdge = edges.find(
-          (e) =>
-            (e.source_node as { "$component_ref"?: string } | undefined)?.["$component_ref"] === fnId
-            && e.source_output === "contextSlotBindings"
-            && e.destination_input === "contextSlotBindings",
-        );
-        expect(bindEdge, `${fnId}.contextSlotBindings must feed a consumer's contextSlotBindings`).toBeTruthy();
-
-        const consumer = (bindEdge!.destination_node as { "$component_ref"?: string })["$component_ref"];
-        const ci = order.indexOf(fnId);
-        const cj = order.indexOf(consumer!);
-        expect(ci).toBeGreaterThanOrEqual(0);
-        expect(cj).toBeGreaterThan(ci);
-      }
+      expect(wiringProblems(oas, pkg)).toEqual([]);
     });
   }
 });
@@ -191,6 +298,7 @@ describe("every contextSlots agent carries explicit context-resolution wiring", 
 describe("anti-stub: no inert bypass / no contextRefs stub", () => {
   for (const f of ALL) {
     const oas = JSON.parse(readFileSync(f.oasPath, "utf8")) as Ref;
+    const pkg = JSON.parse(readFileSync(f.pkgPath, "utf8")) as Ref;
     const slots = (oas.metadata as { cinatra?: { contextSlots?: unknown[] } } | undefined)?.cinatra?.contextSlots;
     const hasSlots = Array.isArray(slots) && slots.length > 0;
     const hitlScreens =
@@ -228,10 +336,149 @@ describe("anti-stub: no inert bypass / no contextRefs stub", () => {
       && hitlScreens.includes("@cinatra-ai/context-selection-agent:context-selector");
     if (isInteractiveSelector) {
       it(`${f.scope}/${f.agent}: interactive context-selector hitlScreen must be backed by a context FlowNode`, () => {
-        const all = refs(oas);
-        const hasCtxFn = Object.values(all).some((c) => isContextFlowNode(oas, c));
-        expect(hasCtxFn).toBe(true);
+        // A context FlowNode, or (cinatra#4314) a declaration-only slot that the
+        // loader-injected node covers under the rules of "DECLARATION-ONLY SLOTS".
+        expect(hasContextResolution(oas, pkg)).toBe(true);
       });
     }
   }
+});
+
+/* ------------------------------------------------------------------------- *
+ * The amended rules still refuse (cinatra#4314). Synthetic definitions, so the
+ * refusals do not move with the pins.
+ * ------------------------------------------------------------------------- */
+
+const CTX_PKG = {
+  cinatra: {
+    dependencies: [
+      {
+        packageName: CONTEXT_SELECTION_AGENT,
+        edgeType: "runtime",
+        requirement: "required",
+        kind: "agent",
+        versionConstraint: { kind: "semver-range", range: "^0.1.0" },
+      },
+    ],
+  },
+};
+const NO_CTX_PKG = { cinatra: { dependencies: [] } };
+
+const ref = (id: string) => ({ $component_ref: id });
+const dfe = (src: string, out: string, dst: string, inp: string) => ({
+  component_type: "DataFlowEdge",
+  name: `${src}_${out}_${dst}_${inp}`,
+  source_node: ref(src),
+  source_output: out,
+  destination_node: ref(dst),
+  destination_input: inp,
+});
+const contextSubflow = (slotId: string) => ({
+  component_type: "Flow",
+  id: `context-${slotId}-subflow`,
+  outputs: [{ title: "contextSlotBindings", type: "string" }],
+  $referenced_components: {
+    [`ctx-${slotId}-resolve_context`]: {
+      component_type: "ApiNode",
+      url: CONTEXT_RESOLVE_URL,
+    },
+  },
+});
+
+/** A synthetic agent: `placed` slots get an author-placed context FlowNode
+ *  feeding `work.<input>`; every other slot is declaration-only and is
+ *  consumed by `work.<slotId>ContextSlotBindings`. */
+function agent(slotIds: string[], placed: Record<string, string>): Ref {
+  const components: Record<string, Ref> = {
+    start: { component_type: "StartNode", id: "start", inputs: [] },
+    end: { component_type: "EndNode", id: "end", inputs: [] },
+  };
+  const inputs: Array<{ title: string }> = [];
+  const edges: Ref[] = [];
+  const nodes = ["start"];
+  for (const [slotId, input] of Object.entries(placed)) {
+    components[`context_${slotId}`] = { component_type: "FlowNode", subflow: ref(`context-${slotId}-subflow`) };
+    components[`context-${slotId}-subflow`] = contextSubflow(slotId);
+    nodes.push(`context_${slotId}`);
+    inputs.push({ title: input });
+    edges.push(dfe(`context_${slotId}`, "contextSlotBindings", "work", input));
+  }
+  for (const slotId of slotIds) {
+    if (!(slotId in placed)) inputs.push({ title: `${slotId}ContextSlotBindings` });
+  }
+  components.work = { component_type: "ApiNode", id: "work", url: "{{CINATRA_BASE_URL}}/api/llm-bridge", inputs };
+  nodes.push("work", "end");
+  return {
+    metadata: { cinatra: { contextSlots: slotIds.map((slotId) => ({ slotId, selectionMode: "interactive" })) } },
+    start_node: ref("start"),
+    nodes: nodes.map(ref),
+    $referenced_components: components,
+    data_flow_connections: edges,
+  };
+}
+
+describe("the amended context-wiring rules still refuse (cinatra#4314)", () => {
+  it("accepts the loader's own shapes", () => {
+    expect(wiringProblems(agent(["a"], { a: "contextSlotBindings" }), CTX_PKG)).toEqual([]);
+    expect(wiringProblems(agent(["a"], { a: "aContextSlotBindings" }), CTX_PKG)).toEqual([]);
+    expect(wiringProblems(agent(["a", "b"], { a: "aContextSlotBindings" }), CTX_PKG)).toEqual([]);
+    expect(wiringProblems(agent(["a"], {}), CTX_PKG)).toEqual([]);
+  });
+
+  it("refuses the bare name in a multi-slot agent", () => {
+    expect(wiringProblems(agent(["a", "b"], { a: "contextSlotBindings" }), CTX_PKG)).toEqual([
+      "context_a.contextSlotBindings must feed a consumer's aContextSlotBindings",
+    ]);
+  });
+
+  it("refuses the qualified name of another slot", () => {
+    expect(wiringProblems(agent(["a", "b"], { a: "bContextSlotBindings" }), CTX_PKG)).toContain(
+      "context_a.contextSlotBindings must feed a consumer's aContextSlotBindings",
+    );
+    expect(wiringProblems(agent(["a"], { a: "bContextSlotBindings" }), CTX_PKG)).toEqual([
+      "context_a.contextSlotBindings must feed a consumer's contextSlotBindings or aContextSlotBindings",
+    ]);
+  });
+
+  it("refuses a declaration-only slot without the context-selection edge", () => {
+    expect(wiringProblems(agent(["a"], {}), NO_CTX_PKG)).toEqual([
+      `must declare a ${CONTEXT_SELECTION_AGENT} dependency edge`,
+      `declaration-only slot a counts as covered by the injected node only with a required runtime ${CONTEXT_SELECTION_AGENT} edge`,
+    ]);
+    const optional = {
+      cinatra: { dependencies: [{ ...CTX_PKG.cinatra.dependencies[0], requirement: "optional" }] },
+    };
+    expect(wiringProblems(agent(["a", "b"], { a: "aContextSlotBindings" }), optional)).toContain(
+      `declaration-only slot b counts as covered by the injected node only with a required runtime ${CONTEXT_SELECTION_AGENT} edge`,
+    );
+    expect(hasContextResolution(agent(["a"], {}), NO_CTX_PKG)).toBe(false);
+  });
+
+  it("refuses a declaration-only slot that nothing consumes, or whose input is already fed", () => {
+    const orphan = agent(["a"], {});
+    (orphan.$referenced_components as Record<string, Ref>).work.inputs = [];
+    expect(wiringProblems(orphan, CTX_PKG)).toEqual([
+      "declaration-only slot a has no consumer: no work node declares contextSlotBindings or aContextSlotBindings",
+    ]);
+    expect(hasContextResolution(orphan, CTX_PKG)).toBe(false);
+
+    const fed = agent(["a"], {});
+    (fed.data_flow_connections as Ref[]).push(dfe("start", "aContextSlotBindings", "work", "aContextSlotBindings"));
+    expect(wiringProblems(fed, CTX_PKG)).toEqual([
+      "work.aContextSlotBindings is already fed by a DataFlowEdge; the loader refuses to double-wire it",
+    ]);
+  });
+
+  it("refuses a context FlowNode that names no declared slot in a multi-slot agent", () => {
+    const doc = agent(["a", "b"], { a: "aContextSlotBindings" });
+    const all = doc.$referenced_components as Record<string, Ref>;
+    all.resolve_a = all.context_a;
+    delete all.context_a;
+    doc.nodes = (doc.nodes as Array<{ $component_ref: string }>).map((n) =>
+      n.$component_ref === "context_a" ? ref("resolve_a") : n,
+    );
+    expect(wiringProblems(doc, CTX_PKG)).toContain(
+      "resolve_a resolves no declared slot: a multi-slot agent names each context FlowNode context_<slotId>",
+    );
+  });
 });
