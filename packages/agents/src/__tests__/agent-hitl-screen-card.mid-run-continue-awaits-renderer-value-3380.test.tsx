@@ -7,7 +7,12 @@
  * It applies the rule the run panel and the stepper apply: a gate whose schema
  * declares a property `"x-required": true` keeps the Continue unavailable until
  * the renderer has written that property; a gate that declares none (here the
- * email gates' object-level `required: ["decision"]`) is unchanged.
+ * email gates' object-level `required: ["decision"]`) is unchanged. A gate that
+ * carries a presentation hint is out of the rule: the card draws it through the
+ * generic dispatch renderer, which writes nothing.
+ *
+ * This file renders the control alone with a fixed buffer; the card's mount
+ * passes it the buffer its renderer writes (`activeBuffered`).
  *
  * Run:
  *   cd packages/agents && pnpm exec vitest run \
@@ -54,12 +59,15 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function gateWith(inputSchema: Record<string, unknown>): AgentHitlScreenGate {
+function gateWith(
+  inputSchema: Record<string, unknown>,
+  currentValues: Record<string, unknown> = { ideas: [{ artifactId: "a-1" }, { artifactId: "a-2" }] },
+): AgentHitlScreenGate {
   return {
     reviewTaskId: "wayflow-task-3380",
     xRenderer: "@cinatra-test/pick-agent:pick",
     inputSchema,
-    currentValues: { ideas: [{ artifactId: "a-1" }, { artifactId: "a-2" }] },
+    currentValues,
     fieldName: null,
   };
 }
@@ -113,6 +121,24 @@ describe("AgentHitlScreenContinue — the card's mid-run Continue (cinatra#3380)
     render(
       <AgentHitlScreenContinue
         gate={gateWith(UNDECLARING_SCHEMA)}
+        buffered={{}}
+        submitting={false}
+        blocked={false}
+        onContinue={onContinue}
+      />,
+    );
+    expect(cardContinue()!.disabled).toBe(false);
+    fireEvent.click(cardContinue()!);
+    await waitFor(() => expect(onContinue).toHaveBeenCalledTimes(1));
+  });
+
+  it("keeps a gate with a presentation hint out of the hold: available before any write, and sends", async () => {
+    const onContinue = vi.fn(async () => undefined);
+    render(
+      <AgentHitlScreenContinue
+        gate={gateWith(DECLARING_SCHEMA, {
+          presentation: { type: "card_list", title: "Review ideas", items: [] },
+        })}
         buffered={{}}
         submitting={false}
         blocked={false}

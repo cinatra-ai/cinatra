@@ -893,10 +893,7 @@ function HitlContinueControl({
                 "Continue this run where you are signed in to Cinatra — this surface carries no credential for the decision.",
             }
           : {})}
-        onClick={() => {
-          if (awaitingRendererValue) return;
-          void onPress();
-        }}
+        onClick={() => void onPress()}
       >
         {submitting ? "Continuing…" : "Continue"}
         <ArrowRight className="h-3.5 w-3.5" />
@@ -928,7 +925,11 @@ export function AgentHitlScreenContinue({
       // cinatra#3380 — the same rule the run panel and the stepper apply to
       // their mid-run Continue (`gate-renderer-value.ts`): a gate that declares
       // a value its renderer must produce waits for the renderer to write one.
-      awaitingRendererValue={gateAwaitsRendererValue(gate.inputSchema, buffered)}
+      // A gate that carries a presentation hint is drawn through the generic
+      // dispatch renderer, which writes nothing, so it is out of the rule.
+      awaitingRendererValue={
+        presentationHintOf(gate) === null && gateAwaitsRendererValue(gate.inputSchema, buffered)
+      }
       onPress={async () => {
         let payload: Record<string, unknown> = {
           ...buffered,

@@ -948,7 +948,6 @@ function HitlApprovalCard({
   };
 
   const handleContinue = async () => {
-    if (continueAwaitsRendererValue) return;
     if (!(await checkRunName())) return;
     // Optimistically switch to SpinnerCard right away — before the API call starts.
     // onApproveRejected rolls back if the call fails.

@@ -5,8 +5,8 @@
  * wrote. A property declared `"x-required": true` (with no `default`) is a value
  * the renderer must produce before the Continue may send. The object-level
  * `required` list is not read: the email gates declare `required: ["decision"]`
- * for an answer the Continue's own approval gives, and their renderers write
- * `userResponse`.
+ * for an answer the Continue's own approval gives, and their renderers never
+ * write `decision`.
  *
  * The three surfaces that draw a mid-run Continue (the run panel, the stepper
  * and the conversation card) each read this rule; their own files pin them.
@@ -16,7 +16,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { gateAwaitsRendererValue, gateRequiredRendererKeys } from "../gate-renderer-value";
+import {
+  gateAwaitsRendererValue,
+  gateCarriesPresentationHint,
+  gateRequiredRendererKeys,
+} from "../gate-renderer-value";
 
 const PICKED_JSON = JSON.stringify({ artifactId: "a-2", representationRevisionId: "r-2" });
 
@@ -94,6 +98,38 @@ describe("gateAwaitsRendererValue (cinatra#3380)", () => {
     expect(gateAwaitsRendererValue(two, { a: "x", b: "y" })).toBe(false);
     // a key inherited from the prototype is not a written value.
     expect(gateAwaitsRendererValue({ type: "object", properties: { toString: declared } }, {})).toBe(true);
+  });
+
+  it("reads null properties, a null default, x-required 1 and a nested x-required as no hold; a null buffer holds a declaring gate", () => {
+    const declared = { type: "string", "x-required": true };
+    expect(gateAwaitsRendererValue({ type: "object", properties: null }, {})).toBe(false);
+    // A declared default answers the property, even a blank one, as on the setup road.
+    expect(
+      gateAwaitsRendererValue({ type: "object", properties: { v: { ...declared, default: null } } }, {}),
+    ).toBe(false);
+    expect(
+      gateAwaitsRendererValue({ type: "object", properties: { v: { type: "string", "x-required": 1 } } }, {}),
+    ).toBe(false);
+    // Only the gate's own properties are read; a nested declaration is not.
+    expect(
+      gateAwaitsRendererValue(
+        { type: "object", properties: { v: { type: "object", properties: { w: declared } } } },
+        {},
+      ),
+    ).toBe(false);
+    // A null buffer is nothing written: a declaring gate holds, an undeclaring one does not.
+    expect(gateAwaitsRendererValue(DECLARING_SCHEMA, null)).toBe(true);
+    expect(gateAwaitsRendererValue(UNDECLARING_SCHEMA, null)).toBe(false);
+  });
+
+  it("reads a presentation hint only as an object with a string type", () => {
+    expect(gateCarriesPresentationHint({ presentation: { type: "card_list", items: [] } })).toBe(true);
+    expect(gateCarriesPresentationHint({ presentation: { title: "no type" } })).toBe(false);
+    expect(gateCarriesPresentationHint({ presentation: [{ type: "card_list" }] })).toBe(false);
+    expect(gateCarriesPresentationHint({ presentation: null })).toBe(false);
+    expect(gateCarriesPresentationHint({ ideas: [] })).toBe(false);
+    expect(gateCarriesPresentationHint(null)).toBe(false);
+    expect(gateCarriesPresentationHint(undefined)).toBe(false);
   });
 
   it("does not read the object-level required list", () => {

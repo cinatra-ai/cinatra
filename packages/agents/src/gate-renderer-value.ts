@@ -18,8 +18,10 @@
  *
  * The object-level `required` list is NOT read. Mid-run gates already declare
  * `required: ["decision"]` for an answer the Continue itself gives (the
- * approval), and their renderers write `userResponse`, never `decision`; a rule
- * over that list would leave those gates with a Continue that never comes back.
+ * approval), and their renderers never write `decision` (the drafts and
+ * recipients reviews write `userResponse`, the send confirmation writes
+ * `campaignId`); a rule over that list would leave those gates with a Continue
+ * that never comes back.
  *
  * The same reading of "nothing" as the setup road (`isBlankSubValue` in
  * schema-field-renderer.tsx, `isBlankSetupValue` in review-task-actions.ts):
@@ -33,6 +35,12 @@
  *
  * Generic by construction: it reads a schema and a buffer, never a renderer id
  * or an agent name. A gate that declares nothing is held by nothing.
+ *
+ * A gate that carries a PRESENTATION HINT (`currentValues.presentation`, an
+ * object with a string `type`) is out of the rule on every surface: such a gate
+ * is drawn through the generic dispatch renderer, which writes nothing into the
+ * buffer, so a hold would never be released. `gateCarriesPresentationHint` is
+ * the reading the run panel and the card already apply to choose that branch.
  */
 
 function isBlankRendererValue(value: unknown): boolean {
@@ -77,5 +85,20 @@ export function gateAwaitsRendererValue(
     isBlankRendererValue(
       Object.prototype.hasOwnProperty.call(written, key) ? written[key] : undefined,
     ),
+  );
+}
+
+/**
+ * `true` when a gate's current values carry a presentation hint: an object
+ * `presentation` with a string `type`. Such a gate is out of the rule above.
+ */
+export function gateCarriesPresentationHint(currentValues: unknown): boolean {
+  if (!currentValues || typeof currentValues !== "object") return false;
+  const candidate = (currentValues as { presentation?: unknown }).presentation;
+  return (
+    candidate !== null &&
+    typeof candidate === "object" &&
+    !Array.isArray(candidate) &&
+    typeof (candidate as { type?: unknown }).type === "string"
   );
 }

@@ -21,7 +21,10 @@
  *   - the chat composer's submit for the gate (the descriptor published through
  *     `onActiveGateChange`) is held by the same rule: before the pick it sends
  *     nothing and rejects; after the pick it sends; on a gate that declares
- *     nothing it sends at once.
+ *     nothing it sends at once;
+ *   - a gate that carries a presentation hint is drawn through the generic
+ *     dispatch renderer, which writes nothing, so it is out of the rule: its
+ *     Continue and the composer send at once.
  *
  * The renderer here is a stand-in registered under a test id; the rule names no
  * agent and no renderer.
@@ -142,7 +145,20 @@ function PickRenderer({ onChange }: FieldRendererProps) {
   );
 }
 
-function streamResultFor(schema: Record<string, unknown>) {
+/** The current values of a gate that carries a presentation hint: such a gate is
+ *  drawn through the generic dispatch renderer, which writes nothing. */
+const HINT_VALUES: Record<string, unknown> = {
+  presentation: {
+    type: "card_list",
+    title: "Review ideas",
+    items: [{ title: "Idea one", description: "First" }],
+  },
+};
+
+function streamResultFor(
+  schema: Record<string, unknown>,
+  values: Record<string, unknown> = { ideas: [{ artifactId: "a-1" }, { artifactId: "a-2" }] },
+) {
   return {
     status: "pending_approval",
     error: null,
@@ -151,7 +167,7 @@ function streamResultFor(schema: Record<string, unknown>) {
     interruptContext: {
       schema,
       xRenderer: PICK_RENDERER_ID,
-      values: { ideas: [{ artifactId: "a-1" }, { artifactId: "a-2" }] },
+      values,
       reviewTaskId: REVIEW_TASK_ID,
     },
     streamedText: "",
@@ -164,10 +180,11 @@ type GateSubmit = (value: Record<string, unknown> | string | number | boolean) =
 async function mountGate(
   schema: Record<string, unknown>,
   onActiveGateChange?: (runId: string, gate: { submit: GateSubmit } | null, instanceId: string) => void,
+  values?: Record<string, unknown>,
 ) {
   const { useAgUiRunStream } = await import("../use-ag-ui-run-stream");
   (useAgUiRunStream as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
-    streamResultFor(schema),
+    streamResultFor(schema, values),
   );
   const { AgenticRunPanel } = await import("../agentic-run-panel");
   return render(
@@ -280,6 +297,32 @@ describe("AgenticRunPanel — a mid-run Continue waits for the renderer's declar
     expect(gateContinue()!.disabled).toBe(false);
 
     fireEvent.click(gateContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+  });
+
+  it("keeps a gate with a presentation hint out of the hold: its Continue is available before any write and sends", async () => {
+    await mountGate(DECLARING_SCHEMA, undefined, HINT_VALUES);
+
+    await waitFor(() => expect(gateContinue()).not.toBeNull());
+    expect(document.querySelector('[data-testid="pick-row-2"]')).toBeNull();
+    expect(gateContinue()!.disabled).toBe(false);
+
+    fireEvent.click(gateContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+  });
+
+  it("lets the chat composer submit at once on a gate with a presentation hint", async () => {
+    const composer: { submit: GateSubmit | null } = { submit: null };
+    await mountGate(
+      DECLARING_SCHEMA,
+      (_runId, gate) => {
+        if (gate) composer.submit = gate.submit;
+      },
+      HINT_VALUES,
+    );
+
+    await waitFor(() => expect(composer.submit).not.toBeNull());
+    await composer.submit!("approve");
     await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
   });
 });

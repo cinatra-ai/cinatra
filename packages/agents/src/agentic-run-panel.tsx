@@ -119,7 +119,7 @@ import { agentUIOverrideRegistry } from "./agent-ui-override-registry";
 import { getFieldRendererContextForAgentBuilderAction, getSkillsForAgentAction, type SkillForChip } from "./server-actions";
 import { HitlSkillChips } from "./hitl-skill-chips";
 import { HITL_PLACEHOLDER_FIELD_NAME, resolveFieldLabel } from "./humanize-field-name";
-import { gateAwaitsRendererValue } from "./gate-renderer-value";
+import { gateAwaitsRendererValue, gateCarriesPresentationHint } from "./gate-renderer-value";
 
 // Client-safe serialized form of AgentRunMessageRecord — Date becomes ISO string
 export type SerializedAgentRunMessage = {
@@ -1350,8 +1350,12 @@ export function AgenticRunPanel({
       // as the gate's Continue, so it is held by the same rule: a mid-run gate
       // that declares a value its renderer must produce (`gate-renderer-value.ts`)
       // is not resumed until the payload carries that value. Nothing is sent.
+      // A gate that carries a presentation hint is drawn through the generic
+      // dispatch renderer, which writes nothing, so it is out of the rule, as
+      // on its Continue.
       if (
         (ctx.xRenderer.endsWith(":output") || hasMidRunHitlBinding(ctx.xRenderer)) &&
+        !gateCarriesPresentationHint(ctx.currentValues) &&
         gateAwaitsRendererValue(ctx.inputSchema, payload)
       ) {
         throw new Error("This step is waiting for a choice on its card. Choose one there, then continue.");
@@ -1950,7 +1954,7 @@ export function AgenticRunPanel({
     approvingLabel?: string;
     /** cinatra#3380 — the gate declares a value its renderer must produce
      *  (`gateAwaitsRendererValue`) and the renderer has written none yet: the
-     *  Continue is drawn and unavailable, and a press sends nothing. */
+     *  Continue is drawn disabled, and a disabled button takes no press. */
     awaitingRendererValue?: boolean;
   }): ReactNode => effectiveHitlContext && (
     <div className="flex justify-end items-center gap-2 pt-2 border-t border-line">
@@ -2017,7 +2021,6 @@ export function AgenticRunPanel({
         // anchor there would be reading a control the screen does not offer.
         {...(opts?.withReject ? {} : { "data-action": "submit-hitl-screen" })}
         onClick={async () => {
-          if (opts?.awaitingRendererValue === true) return;
           // The visible Continue may need to wrap the WayFlow `userResponse`
           // with the envelope when paperclip attachments are pending, but must
           // preserve any renderer-authored `userResponse` already on
