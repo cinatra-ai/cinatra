@@ -15,7 +15,9 @@
 // Organised by the six acceptance items of cinatra#3144 G4:
 //
 //   1. Every recorded anchor that resolves in NONE of the governed drawings is
-//      reported per kind, and the check exits non-zero when any does not.
+//      reported per kind, and the check exits non-zero when any does not under
+//      a red event (a pull request that touches no mapped path only warns,
+//      unless a recorded `anchorsUnresolvedAtPin` disagrees).
 //   2. An anchor resolving in a governed drawing other than the first is
 //      RESOLVED; one resolving only in a drawing the pin does not govern is
 //      UNRESOLVED, with that distinction stated.
@@ -24,8 +26,9 @@
 //   5. The printed output carries no drawing text beyond the selector.
 //   6. The sibling binding suite and --print-anchor-digest still agree — held
 //      here for the DIGEST SCHEMA half: `anchorsUnresolvedAtPin` is a fourth
-//      digest input the moment it is recorded, and its absence today leaves the
-//      recorded digest exactly where it stands.
+//      digest input the moment it is recorded, and while it is absent the
+//      recorded digest stands exactly where it stood. The contract now records
+//      it, as the empty array.
 
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,7 +36,6 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { CARD_KINDS } from "../lib/capture-record-contract.mjs";
 import { MANIFEST_PATH } from "../../audit/chat-hitl-acceptance-gate.mjs";
 import {
   anchorDigestInputs,
@@ -144,20 +146,38 @@ describe("serialized capture assertions retain selector and observation provenan
     expect(report.unresolved.map((a) => a.selector)).toEqual([selector]);
   });
 
-  it("keeps the retired three controls and their absences as drawing claims", () => {
+  // cinatra#3677: the live contract records none of the four controls that
+  // kept this check red on main (the per-skill Confirm, Adjust and Skip, which
+  // the drawing retired, and the schedule card's Confirm, whose floor the
+  // drawing draws under another value) — in
+  // either polarity, as an owner anchor, a drawing claim or a passive marker —
+  // and the record of what is unresolved is empty.
+  it("records none of an agent card's own controls as a drawing claim of the live contract", () => {
+    const agentOwned = [...retired, '[data-action="confirm-schedule-proposal"]'];
     const captureAnchors = captureAnchorExpectations();
     const before = JSON.stringify(captureAnchors);
     const inputs = anchorDigestInputs({ specCommit: manifest().specCommit, domExpectations: contract().domExpectations, captureAnchors });
     const digestBefore = computeAnchorDigest(inputs);
-    const report = checked(collectRecordedAnchors({ anchorContract: contract(), captureAnchors }));
-    // cinatra#3062: the drawing at design@06230d4e (specs/app-lifecycle-cards.html:689) gives a pill
-    // nothing to press, so the per-pill trio is RETIRED on every declared host and recorded only as
-    // an absence there.
-    expect(CARD_KINDS.recommendation_hold.retiredDecisionControls).toEqual(retired);
-    expect(report.results.filter((a) => retired.includes(a.selector)).map((a) => a.selector).sort()).toEqual([...retired].sort());
-    expect(report.results.filter((a) => retired.includes(a.selector)).every((a) => a.captureAssertions.length > 0 && a.captureAssertions.every((claim) => claim.expect === "absent"))).toBe(true);
+    const anchors = collectRecordedAnchors({ anchorContract: contract(), captureAnchors });
+    const report = checked(anchors);
+    expect(anchors.filter((a) => agentOwned.includes(a.selector))).toEqual([]);
+    expect(report.results.filter((a) => agentOwned.includes(a.selector))).toEqual([]);
+    expect(report.unresolved.filter((a) => agentOwned.includes(a.selector))).toEqual([]);
+    expect(report.captureHooks.filter((a) => agentOwned.includes(a.selector))).toEqual([]);
+    expect(report.refused).toHaveLength(0);
+    expect(contract().anchorsUnresolvedAtPin).toEqual([]);
     expect(JSON.stringify(captureAnchors)).toBe(before);
     expect(computeAnchorDigest(inputs)).toBe(digestBefore);
+  });
+
+  it("still sends the same controls through the drawing check when something records them", () => {
+    // The contract leaves them out; the checker does not excuse them. A record
+    // that carries one is a drawing claim, red on main while no drawing draws it.
+    const agentOwned = [...retired, '[data-action="confirm-schedule-proposal"]'];
+    const report = checked(agentOwned.map((s) => anchor(s, "recommendation_hold", "capture")));
+    expect(report.unresolved.map((a) => a.selector)).toEqual(agentOwned);
+    expect(report.captureHooks).toHaveLength(0);
+    expect(decide({ event: "push-main", report, touchedPinIds: [] }).exitCode).toBe(1);
   });
 
   it.each(["present", "absent"])("keeps even canonical %s control observations inside the drawing check", (expectation) => {
@@ -886,7 +906,13 @@ describe("anchorsUnresolvedAtPin is a fourth digest input", () => {
     });
     const withEmpty = computeAnchorDigest({ ...base, anchorsUnresolvedAtPin: [] });
     const withOne = computeAnchorDigest({ ...base, anchorsUnresolvedAtPin: ['[data-a="b"]'] });
-    expect(withEmpty).not.toBe(contract().digest);
+    // The contract records the EMPTY set at this pin (cinatra#3677), so the
+    // empty array is the recorded one: recording it moved the digest away from
+    // the absent key, and recording anything else moves it again.
+    expect(contract().anchorsUnresolvedAtPin).toEqual([]);
+    expect(withEmpty).toBe(contract().digest);
+    expect(computeAnchorDigest(base)).not.toBe(withEmpty);
+    expect(withOne).not.toBe(contract().digest);
     expect(withOne).not.toBe(withEmpty);
   });
 
@@ -982,7 +1008,22 @@ describe("the adoption road refuses to answer while a selector is refused", () =
     expect(r.code).toBe(2);
     expect(r.out.trim()).toBe("");
     expect(r.err).toContain("could not run");
-    expect(r.err).toContain('[data-a="b"] [data-c="d"]');
+    // The error prints a refused selector as a JSON string.
+    expect(r.err).toContain(JSON.stringify('[data-a="b"] [data-c="d"]'));
+  });
+
+  it("names an empty selector as \"\" in its refusal error, and prints NO array", async () => {
+    // An empty selector is refused like every other form it does not decide.
+    // Printed bare, it would end the error in a blank that names nothing.
+    const dir = drawingsDir();
+    write(dir, "one.html", drawingWith('[data-other="x"]'));
+    const r = await printUnresolved({
+      dir,
+      anchors: [anchor('[data-lifecycle-card="verification_summary"]'), anchor("")],
+    });
+    expect(r.code).toBe(2);
+    expect(r.out.trim()).toBe("");
+    expect(r.err).toContain('the unresolved set is incomplete and is not printed: "".');
   });
 
   it("PRINTS the array for a recorded set carrying the two forms it now decides", async () => {
@@ -1129,13 +1170,79 @@ describe("a recorded anchorsUnresolvedAtPin is compared with what this check fin
     expect(r.all).not.toContain("is not what this check finds");
   });
 
-  it("has a recorded set to compare against, which is this repository's state today", () => {
+  it("exits 2 on a refused selector when the recorded set agrees with what it finds", async () => {
+    // The comparison runs first and agrees, so the refusal decides: a set with
+    // a selector this matcher did not decide is not a set it may call red or
+    // green, even though another recorded anchor is unresolved.
+    const dir = drawingsDir();
+    write(dir, "one.html", drawingWith('[data-other="x"]'));
+    const r = await run({
+      dir,
+      anchors: [
+        anchor('[data-lifecycle-card="verification_summary"]'),
+        anchor('[data-a="b"] [data-c="d"]'),
+      ],
+      recordedUnresolved: ['[data-lifecycle-card="verification_summary"]'],
+    });
+    expect(r.code).toBe(2);
+    expect(r.all).toContain("could not run");
+    expect(r.all).not.toContain("is not what this check finds");
+  });
+
+  it("exits 1 on a refused selector when the recorded set disagrees, because the comparison comes first", async () => {
+    const dir = drawingsDir();
+    write(dir, "one.html", drawingWith('[data-other="x"]'));
+    const r = await run({
+      dir,
+      anchors: [
+        anchor('[data-lifecycle-card="verification_summary"]'),
+        anchor('[data-a="b"] [data-c="d"]'),
+      ],
+      recordedUnresolved: [],
+    });
+    expect(r.code).toBe(1);
+    expect(r.all).toContain("is not what this check finds");
+    expect(r.all).not.toContain("could not run");
+  });
+
+  it("names an empty selector as \"\" in the report and in the refusal error, and exits 2", async () => {
+    // A run that reaches the refusal exit prints the report of the whole set
+    // with the refused selector named in it. The empty selector is named as
+    // `""`; printed bare, its report line and its error would show a blank.
+    const dir = drawingsDir();
+    write(dir, "one.html", drawingWith('[data-lifecycle-card="verification_summary"]'));
+    const r = await run({
+      dir,
+      anchors: [anchor('[data-lifecycle-card="verification_summary"]'), anchor("")],
+      recordedUnresolved: [],
+    });
+    expect(r.code).toBe(2);
+    expect(r.all).not.toContain("is not what this check finds");
+    expect(r.all).toContain('    ""  [ownerAnchors]  REFUSED');
+    expect(r.all).toContain('refuses to approximate: "". Every other anchor is reported above.');
+  });
+
+  it("has a recorded set to compare against, and it is EMPTY at this pin, which is this repository's state today", () => {
+    // cinatra#3677: the four selectors this array carried were four card
+    // controls that no governed drawing draws under the recorded value, which
+    // the contract no longer records, so nothing it records is unresolved at
+    // the pin. The array stays PRESENT — an absent key would
+    // take it out of the digest and out of this comparison.
     const recorded = contract().anchorsUnresolvedAtPin;
     expect(Array.isArray(recorded)).toBe(true);
-    expect(recorded.length).toBeGreaterThan(0);
-    // sorted and without a repeat — the shape the contract's own audit refuses
-    // in any other form, because a re-examination may not hide behind an order.
-    expect([...recorded]).toEqual([...new Set(recorded)].sort());
+    expect(recorded).toEqual([]);
+  });
+
+  it("goes green on a push to main once every recorded anchor resolves and the recorded set is empty", async () => {
+    const dir = drawingsDir();
+    write(dir, "one.html", drawingWith('[data-lifecycle-card="verification_summary"]'));
+    const r = await run({
+      dir,
+      anchors: [anchor('[data-lifecycle-card="verification_summary"]')],
+      recordedUnresolved: [],
+    });
+    expect(r.code).toBe(0);
+    expect(r.all).not.toContain("is not what this check finds");
   });
 });
 
