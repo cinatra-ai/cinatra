@@ -270,12 +270,23 @@ a **separate** pull request, per that file's own note.
   - a pull request, merge group or branch push that changes **no path the
     checker reads** exits `0` with a `::notice` and certifies nothing, since the
     drawings could not change its verdict. The paths are the files the checker
-    imports (taken transitively) and the files it opens as data, and a test
-    derives that set from the checker itself and fails when one is missing from
-    the map;
+    imports, taken transitively, and the pin carriers. A test derives the imports
+    from the checker (static, relative specifiers only) and adds the carriers
+    named in `COMMIT_BEARING_PINS`; it fails when one is missing from the map. It
+    does not find a dynamic or computed import, a bare or package import, or a
+    new data file the checker opens. The diff is read without rename detection,
+    so a moved file lists its old path too;
   - a run that **changes** such a path, a push to `main`, a dispatch, and a run
     with no diff base (every pin then counts as touched) exit `2` and are red, as
-    does a run that cannot read its pin, contract, path map or diff base.
+    does a run that cannot read its pin, contract, path map or diff base, or whose
+    path map names other pins than the ones the checker reads, and a run under
+    `--print-unresolved`, which promises a printed set on exit `0`.
+
+  A push to `main` stays red during an outage until a dispatch, or the next push
+  once the source reads again, clears it. A fork or Dependabot pull request that
+  changes `.github/workflows/gates.yml` or
+  `.github/workflows/design-record-grammar.yml` stays red without the token: both
+  are global paths, which count as touching every pin.
 
   A re-run does not cure the exit `2` of a run whose diff touches a read path
   while the credential or the design source is unavailable.
@@ -283,5 +294,10 @@ a **separate** pull request, per that file's own note.
   only when it is re-applied with the `gh api -X PUT` command at the top of it,
   a separate administrator step. No workflow in `.github/workflows` applies that
   file, so the re-apply is by hand.
+- **The path map is shared** by the three gates. The two files this change adds
+  to it (`scripts/ci/design-pin-drift.mjs` and the recorder's contract module
+  under `scripts/ci/lib/`) therefore also count as touching `chat-hitl-lifecycle`
+  for `design-pin-freshness` and `design-record-grammar`. Both are not required,
+  so only the colour of their check run changes.
 - **`design-pin-freshness` and `design-record-grammar` stay warn-first.** Each
   becomes required in a pull request of its own.

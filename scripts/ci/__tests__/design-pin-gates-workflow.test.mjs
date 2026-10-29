@@ -284,7 +284,15 @@ describe("every design-pin gate runs as its own job in the workflow", () => {
       expect(block).not.toContain("DESIGN_DRAWINGS_DIR:");
     });
 
-    function runStep({ touchedPath }) {
+    // `event` is the GitHub event the runner would run the step under:
+    //   pull_request: the baseline is `origin/<base.ref>`, a remote-tracking ref;
+    //   merge_group:  the baseline is the event's own `merge_group.base_sha`;
+    //   push:         the baseline is the event's `before` (gates.yml receives a
+    //                 push on main only, which exits 2 on its own; a push to a
+    //                 feature branch is run here for the `before` road).
+    // `renameFrom` commits that file in the base and MOVES it to `touchedPath`
+    // in the change, so the diff carries a rename.
+    function runStep({ touchedPath, event = "push", renameFrom = null }) {
       const root = mkdtempSync(join(tmpdir(), "anchor-job-"));
       const git = (...args) =>
         execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.test", "-c", "commit.gpgsign=false", ...args], {
@@ -314,20 +322,25 @@ describe("every design-pin gate runs as its own job in the workflow", () => {
         mkdirSync(dirname(join(root, rel)), { recursive: true });
         writeFileSync(join(root, rel), read(rel));
       }
+      if (renameFrom) {
+        mkdirSync(dirname(join(root, renameFrom)), { recursive: true });
+        writeFileSync(join(root, renameFrom), "a file the checker reads, with enough text to count as the same file\n".repeat(8));
+      }
       git("init", "-q", "-b", "main");
       git("add", "-A");
       git("commit", "-q", "-m", "base");
       const before = git("rev-parse", "HEAD").trim();
+      if (event === "pull_request") git("update-ref", "refs/remotes/origin/main", before);
       mkdirSync(dirname(join(root, touchedPath)), { recursive: true });
-      writeFileSync(join(root, touchedPath), "changed\n");
+      if (renameFrom) git("mv", renameFrom, touchedPath);
+      else writeFileSync(join(root, touchedPath), "changed\n");
       git("add", "-A");
       git("commit", "-q", "-m", "change");
-      // The expressions the runner would substitute: a push to a feature branch,
-      // so the baseline is the event's `before`.
+      // The expressions the runner would substitute for the event.
       const script = stepRun(jobBlock(), "Design Anchor Resolution")
-        .replaceAll("${{ github.event.pull_request.base.ref }}", "")
-        .replaceAll("${{ github.event.merge_group.base_sha }}", "")
-        .replaceAll("${{ github.event.before }}", before);
+        .replaceAll("${{ github.event.pull_request.base.ref }}", event === "pull_request" ? "main" : "")
+        .replaceAll("${{ github.event.merge_group.base_sha }}", event === "merge_group" ? before : "")
+        .replaceAll("${{ github.event.before }}", event === "push" ? before : "");
       expect(script).not.toContain("${{");
       const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], {
         cwd: root,
@@ -335,8 +348,8 @@ describe("every design-pin gate runs as its own job in the workflow", () => {
         env: {
           PATH: process.env.PATH,
           HOME: root,
-          GITHUB_EVENT_NAME: "push",
-          GITHUB_REF_NAME: "feature/x",
+          GITHUB_EVENT_NAME: event,
+          ...(event === "push" ? { GITHUB_REF_NAME: "feature/x" } : {}),
           DESIGN_SOURCE_TOKEN: "",
         },
       });
@@ -344,14 +357,26 @@ describe("every design-pin gate runs as its own job in the workflow", () => {
       return { code: result.status, out: `${result.stdout}\n${result.stderr}` };
     }
 
-    it("exits 0 with a notice for a diff that changes no path the checker reads", () => {
-      const r = runStep({ touchedPath: "README.md" });
-      expect(r.out).toContain("::notice");
-      expect(r.code).toBe(0);
-    });
+    for (const event of ["pull_request", "merge_group", "push"]) {
+      it(`${event}: exits 0 with a notice for a diff that changes no path the checker reads`, () => {
+        const r = runStep({ touchedPath: "README.md", event });
+        expect(r.out).toContain("::notice");
+        expect(r.code).toBe(0);
+      });
 
-    it("exits 2 for a diff that changes a path the checker reads", () => {
-      const r = runStep({ touchedPath: "src/lib/lifecycle/__tests__/anchor-contract-binding.test.ts" });
+      it(`${event}: exits 2 for a diff that changes a path the checker reads`, () => {
+        const r = runStep({ touchedPath: "src/lib/lifecycle/__tests__/anchor-contract-binding.test.ts", event });
+        expect(r.out).toContain("could not run honestly");
+        expect(r.code).toBe(2);
+      });
+    }
+
+    it("pull_request: exits 2 for a diff that MOVES a path the checker reads (a rename lists its source)", () => {
+      const r = runStep({
+        event: "pull_request",
+        renameFrom: "src/lib/lifecycle/__tests__/anchor-contract-binding.test.ts",
+        touchedPath: "docs/moved-binding.test.ts",
+      });
       expect(r.out).toContain("could not run honestly");
       expect(r.code).toBe(2);
     });

@@ -106,7 +106,8 @@
 // would find, so that run exits 0 with a ::notice and reads no verdict. A run
 // whose diff does change such a path, a push to main, a dispatch, a run with no
 // diff base (every pin then counts as touched) and a run that cannot read its
-// pin, contract, path map or diff base all keep exit 2.
+// pin, contract, path map or diff base all keep exit 2, as does a path map that
+// names other pins than the ones read, and a run under --print-unresolved.
 //
 // Exit codes. A run takes the FIRST of these that applies, in this order:
 //   2  the gate could not read its pin, contract, path map, diff base or
@@ -648,6 +649,18 @@ export async function runCli({
     } catch (err) {
       return cannotRun(err instanceof DesignPinError ? err.message : "the path map could not be read");
     }
+    // The map must name exactly the pins this checker reads. A map that names
+    // fewer (or none) would resolve every diff to "no pin touched", global
+    // paths included, and so open the exit-0 road below for any diff. design-pin-drift
+    // refuses the same disagreement for its own map.
+    const mappedIds = Object.keys(map.pins).sort();
+    const pinIds = pins.map((p) => p.id).sort();
+    if (JSON.stringify(mappedIds) !== JSON.stringify(pinIds)) {
+      return cannotRun(
+        `the path map names [${mappedIds.join(", ")}] but the pins read are [${pinIds.join(", ")}]; ` +
+          "every pin needs a path list before this gate can decide which diffs touch it.",
+      );
+    }
     const base = (env.DESIGN_PIN_DRIFT_DIFF_BASE ?? "").trim();
     if (base === "") {
       log("::notice::no diff base is set — treating every pin as touched (fail-closed).");
@@ -656,7 +669,9 @@ export async function runCli({
       let touchedPaths;
       try {
         runGit(["rev-parse", "--verify", "--quiet", `${base}^{commit}`]);
-        touchedPaths = runGit(["diff", "--name-only", `${base}...HEAD`])
+        // No rename detection: with it, `--name-only` lists only the destination
+        // of a moved file, and the source (a path the checker may read) vanishes.
+        touchedPaths = runGit(["diff", "--name-only", "--no-renames", `${base}...HEAD`])
           .split("\n")
           .map((l) => l.trim())
           .filter(Boolean);
@@ -680,8 +695,10 @@ export async function runCli({
       // A run that could not read the drawings decides nothing about a diff that
       // changes no path this checker reads (see the header): it says so and
       // exits 0. It certifies nothing, and it never takes this road on a push
-      // to main, on dispatch, with no diff base, or when any pin is touched.
-      if (!alwaysRed && touchedPinIds.length === 0) {
+      // to main, on dispatch, with no diff base, or when any pin is touched. It
+      // never takes it under --print-unresolved either: that road promises that
+      // exit 0 means the whole unresolved set was printed.
+      if (!alwaysRed && !printUnresolved && touchedPinIds.length === 0) {
         log(
           `::notice title=design-anchor-resolution::the check did not run: ${why} ` +
             "This diff changes no path the check reads, so the drawings could not change its verdict.",

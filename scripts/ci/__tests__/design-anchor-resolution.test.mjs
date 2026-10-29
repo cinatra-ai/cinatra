@@ -915,17 +915,18 @@ describe("a run that cannot read the drawings", () => {
     revisionsTouching: async () => [],
   });
 
-  async function runBlind({ env = {}, touched = [], createReader = noReader, argv = [] }) {
+  async function runBlind({ env = {}, touched = [], createReader = noReader, argv = [], runGit, repoRoot, pins }) {
     const out = [];
     const err = [];
     const code = await runCli({
       argv,
       env: { DESIGN_PIN_DRIFT_DIFF_BASE: "base", GITHUB_EVENT_NAME: "pull_request", ...env },
-      pins: [pin()],
+      ...(repoRoot ? { repoRoot } : {}),
+      pins: pins ?? [pin()],
       anchors: [anchor('[data-lifecycle-card="verification_summary"]')],
       recordedUnresolved: null,
       createReader,
-      runGit: gitStub(touched),
+      runGit: runGit ?? gitStub(touched),
       log: (l) => out.push(String(l)),
       logError: (l) => err.push(String(l)),
     });
@@ -1018,6 +1019,42 @@ describe("a run that cannot read the drawings", () => {
       logError: () => {},
     });
     expect(code).toBe(2);
+  });
+
+  it("reads the diff without rename detection, so a moved file lists its old path too", async () => {
+    // `git diff --name-only` pairs a rename and lists only its destination; the
+    // source of a moved file the checker reads would then be invisible.
+    const calls = [];
+    const r = await runBlind({
+      runGit: (args) => {
+        calls.push(args);
+        return args[0] === "rev-parse" ? "" : "README.md";
+      },
+    });
+    expect(r.code).toBe(0);
+    const diff = calls.find((a) => a[0] === "diff");
+    expect(diff).toBeDefined();
+    expect(diff).toContain("--no-renames");
+    expect(diff).toContain("--name-only");
+  });
+
+  it("does not take the exit-0 road under --print-unresolved, which promises a printed set on exit 0", async () => {
+    const r = await runBlind({ argv: ["--print-unresolved"], touched: ["README.md"] });
+    expect(r.code).toBe(2);
+    expect(r.all).toContain("could not run");
+    expect(r.all).not.toContain("::notice title=design-anchor-resolution");
+  });
+
+  it("refuses a path map whose pin ids differ from the pins it reads, though the diff is untouched", async () => {
+    const real = JSON.parse(readFileSync(resolvePath(REPO_ROOT, "scripts/ci/design-pin-gates.paths.json"), "utf8"));
+    for (const pinsOfMap of [{}, { "some-other-pin": ["README.md"] }, { ...real.pins, "extra-pin": ["README.md"] }]) {
+      const root = mkdtempSync(join(tmpdir(), "anchor-map-"));
+      mkdirSync(join(root, "scripts/ci"), { recursive: true });
+      writeFileSync(join(root, "scripts/ci/design-pin-gates.paths.json"), JSON.stringify({ ...real, pins: pinsOfMap }));
+      const r = await runBlind({ repoRoot: root, touched: ["README.md"] });
+      expect(r.code, JSON.stringify(Object.keys(pinsOfMap))).toBe(2);
+      expect(r.all, JSON.stringify(Object.keys(pinsOfMap))).toContain("could not run");
+    }
   });
 
   it("keeps exit 2 when the pin or the contract cannot be read, though the diff is untouched", async () => {
