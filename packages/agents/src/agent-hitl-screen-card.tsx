@@ -148,6 +148,7 @@ import {
   wrapPrimitiveSetupPayload,
 } from "./hitl-gate-submit";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
+import { gateAwaitsRendererValue } from "./gate-renderer-value";
 import type { LifecycleCardHost } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
 /**
@@ -868,10 +869,15 @@ export function AgentHitlScreenFields({
 function HitlContinueControl({
   submitting,
   blocked,
+  awaitingRendererValue = false,
   onPress,
 }: {
   submitting: boolean;
   blocked: boolean;
+  /** cinatra#3380 — the gate declares a value its renderer must produce and the
+   *  renderer has written none yet. Unavailable, with no title: `blocked` keeps
+   *  its credential meaning and its sentence. */
+  awaitingRendererValue?: boolean;
   onPress: () => Promise<void>;
 }): ReactElement {
   return (
@@ -880,14 +886,17 @@ function HitlContinueControl({
         size="sm"
         className="gap-1.5"
         data-action="submit-hitl-screen"
-        disabled={submitting || blocked}
+        disabled={submitting || blocked || awaitingRendererValue}
         {...(blocked
           ? {
               title:
                 "Continue this run where you are signed in to Cinatra — this surface carries no credential for the decision.",
             }
           : {})}
-        onClick={() => void onPress()}
+        onClick={() => {
+          if (awaitingRendererValue) return;
+          void onPress();
+        }}
       >
         {submitting ? "Continuing…" : "Continue"}
         <ArrowRight className="h-3.5 w-3.5" />
@@ -916,6 +925,10 @@ export function AgentHitlScreenContinue({
     <HitlContinueControl
       submitting={submitting}
       blocked={blocked}
+      // cinatra#3380 — the same rule the run panel and the stepper apply to
+      // their mid-run Continue (`gate-renderer-value.ts`): a gate that declares
+      // a value its renderer must produce waits for the renderer to write one.
+      awaitingRendererValue={gateAwaitsRendererValue(gate.inputSchema, buffered)}
       onPress={async () => {
         let payload: Record<string, unknown> = {
           ...buffered,

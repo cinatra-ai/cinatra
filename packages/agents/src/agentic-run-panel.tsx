@@ -119,6 +119,7 @@ import { agentUIOverrideRegistry } from "./agent-ui-override-registry";
 import { getFieldRendererContextForAgentBuilderAction, getSkillsForAgentAction, type SkillForChip } from "./server-actions";
 import { HitlSkillChips } from "./hitl-skill-chips";
 import { HITL_PLACEHOLDER_FIELD_NAME, resolveFieldLabel } from "./humanize-field-name";
+import { gateAwaitsRendererValue } from "./gate-renderer-value";
 
 // Client-safe serialized form of AgentRunMessageRecord — Date becomes ISO string
 export type SerializedAgentRunMessage = {
@@ -1345,6 +1346,16 @@ export function AgenticRunPanel({
         buffered: bufferedHitlValueRef.current,
         pendingAttachments: pendingAttachmentsRef.current,
       });
+      // cinatra#3380 — the composer is a second entrance to the same resume
+      // as the gate's Continue, so it is held by the same rule: a mid-run gate
+      // that declares a value its renderer must produce (`gate-renderer-value.ts`)
+      // is not resumed until the payload carries that value. Nothing is sent.
+      if (
+        (ctx.xRenderer.endsWith(":output") || hasMidRunHitlBinding(ctx.xRenderer)) &&
+        gateAwaitsRendererValue(ctx.inputSchema, payload)
+      ) {
+        throw new Error("This step is waiting for a choice on its card. Choose one there, then continue.");
+      }
       await performGateSubmit({
         reviewTaskId: ctx.reviewTaskId,
         xRenderer: ctx.xRenderer,
@@ -1937,6 +1948,10 @@ export function AgenticRunPanel({
     withReject?: boolean;
     approveLabel?: string;
     approvingLabel?: string;
+    /** cinatra#3380 — the gate declares a value its renderer must produce
+     *  (`gateAwaitsRendererValue`) and the renderer has written none yet: the
+     *  Continue is drawn and unavailable, and a press sends nothing. */
+    awaitingRendererValue?: boolean;
   }): ReactNode => effectiveHitlContext && (
     <div className="flex justify-end items-center gap-2 pt-2 border-t border-line">
       {opts?.withReject ? (
@@ -1993,7 +2008,7 @@ export function AgenticRunPanel({
       ) : null}
       <Button
         size="sm"
-        disabled={isApproving}
+        disabled={isApproving || opts?.awaitingRendererValue === true}
         className="gap-1.5"
         // THE HITL SCREEN'S ONE DECISION (cinatra#2930). Named on the row this
         // panel draws INSIDE the screen card, and deliberately not on the
@@ -2002,6 +2017,7 @@ export function AgenticRunPanel({
         // anchor there would be reading a control the screen does not offer.
         {...(opts?.withReject ? {} : { "data-action": "submit-hitl-screen" })}
         onClick={async () => {
+          if (opts?.awaitingRendererValue === true) return;
           // The visible Continue may need to wrap the WayFlow `userResponse`
           // with the envelope when paperclip attachments are pending, but must
           // preserve any renderer-authored `userResponse` already on
@@ -3064,8 +3080,19 @@ export function AgenticRunPanel({
                           : undefined
                       }
                     />
-                    {/* Show the external Continue button only for non-grouped-setup midrun renderers. */}
-                    {isMidRunHitl && !isGroupedSetup && approvalActionsRow}
+                    {/* Show the external Continue button only for non-grouped-setup midrun renderers.
+                        cinatra#3380 — it stays unavailable while the gate declares a
+                        value its renderer must produce and the renderer has written
+                        none (`gate-renderer-value.ts`); a gate that declares none is
+                        drawn exactly as before. */}
+                    {isMidRunHitl &&
+                      !isGroupedSetup &&
+                      renderApprovalActionsRow({
+                        awaitingRendererValue: gateAwaitsRendererValue(
+                          hitlRendererEntry.fieldSchema,
+                          bufferedHitlValue,
+                        ),
+                      })}
                     {/* cinatra#3532 — the product's Continue for a setup field
                         whose renderer declares no submit control of its own:
                         the same control the fallback field's card draws, and it

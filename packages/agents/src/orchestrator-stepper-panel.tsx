@@ -121,6 +121,7 @@ import {
 // the module this file already imports the placeholder token from — no new
 // module edge, for the reason the note above `SetupFieldContinue` gives.
 import { HITL_PLACEHOLDER_FIELD_NAME, resolveFieldLabel } from "./humanize-field-name";
+import { gateAwaitsRendererValue } from "./gate-renderer-value";
 // `HitlGateContext` is the shape the run's own read answers a gate with
 // (cinatra#3532, fix leg 3) — the same one `agentic-run-panel.tsx`'s refetch
 // reads, taken from a module this file already imports so the file's module
@@ -872,6 +873,12 @@ function HitlApprovalCard({
   const isGroupedSetup = isGroupedSetupRenderer(interruptContext.xRenderer, {
     includeSetupFormSuffix: true,
   });
+  // cinatra#3380 — a mid-run gate that declares a value its renderer must
+  // produce (`gate-renderer-value.ts`) keeps its outer Continue unavailable
+  // until the renderer has written one. A gate that declares none is held by
+  // nothing.
+  const continueAwaitsRendererValue =
+    isMidRunHitl && gateAwaitsRendererValue(renderSchema, bufferedHitlValue);
 
   // Bottom-of-page prompt handler. Sends the message on the ONE ROAD and applies
   // the fill that comes back to the
@@ -941,6 +948,7 @@ function HitlApprovalCard({
   };
 
   const handleContinue = async () => {
+    if (continueAwaitsRendererValue) return;
     if (!(await checkRunName())) return;
     // Optimistically switch to SpinnerCard right away — before the API call starts.
     // onApproveRejected rolls back if the call fails.
@@ -1442,7 +1450,12 @@ function HitlApprovalCard({
 
         {showContinueButton && (
           <div className="flex justify-end pt-2 border-t border-line">
-            <Button size="sm" disabled={isApproving} onClick={handleContinue} className="gap-1.5">
+            <Button
+              size="sm"
+              disabled={isApproving || continueAwaitsRendererValue}
+              onClick={handleContinue}
+              className="gap-1.5"
+            >
               {isApproving ? "Continuing…" : "Continue"}
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>
