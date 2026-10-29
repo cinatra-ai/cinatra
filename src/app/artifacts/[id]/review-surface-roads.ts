@@ -37,6 +37,7 @@ import {
   type ArtifactRepresentationForm,
 } from "@/lib/artifacts/artifact-content-channel";
 import { createPinnedSubstanceReader } from "@/lib/artifacts/artifact-content-substance-reader";
+import type { ArtifactRendererDataRoad } from "@/lib/artifacts/artifact-renderer-props";
 import type { PinnedCapturePairView } from "@/lib/artifacts/cms-preview-capture-view";
 import {
   buildIslandArtifactByteMinter,
@@ -103,7 +104,25 @@ export interface ReviewSurfaceRoads {
     artifactId: string;
     representationRevisionId: string;
   }) => PinnedCapturePairView | null;
+  /** Where this surface's displays read live series (props v3, cinatra#3092).
+   *  Absent ⇒ no data road: the display draws its no-series reading. */
+  data?: ArtifactRendererDataRoad;
 }
+
+/**
+ * THE SESSION DATA ROAD (props v3, cinatra#3092) — defined once, handed to every
+ * display on a surface that reads with the reader's session, whatever its type.
+ *
+ * It names the application's one semantic-layer route,
+ * `src/app/api/dashboards/cubejs-api/v1/[...endpoint]/route.ts`, which answers a
+ * signed-in member of the active organization under the session. An address,
+ * never a credential. A reader without a cookie cannot reach it, so the island
+ * hands no data road at all.
+ */
+export const SESSION_DATA_ROAD: ArtifactRendererDataRoad = Object.freeze({
+  road: "session",
+  apiUrl: "/api/dashboards/cubejs-api/v1",
+});
 
 /**
  * The host's content builder — the channel's asynchronous builder bound to the
@@ -130,13 +149,16 @@ export function hostArtifactContentBuilder(): ArtifactContentBuilder {
 }
 
 /**
- * The roads for a FIRST-PARTY surface: the content channel, and nothing else.
+ * The roads for a FIRST-PARTY surface: the content channel and the session
+ * data road.
  *
  * The byte road stays the session routes — they work under a cookie and they
  * are the narrower grant — and the capture pair stays the first-party pair.
+ * The data road is the session one for the same reason: this reader carries a
+ * cookie.
  */
 export function firstPartyReviewSurfaceRoads(): ReviewSurfaceRoads {
-  return { buildContent: hostArtifactContentBuilder() };
+  return { buildContent: hostArtifactContentBuilder(), data: SESSION_DATA_ROAD };
 }
 
 /**
@@ -166,5 +188,8 @@ export function islandReviewSurfaceRoads(road: ReviewIslandRoad): ReviewSurfaceR
         target,
         kind: "review",
       }),
+    // NO DATA ROAD (cinatra#3092): this reader holds a broker bearer and no
+    // cookie, so the session road would refuse it; its displays draw their
+    // no-series reading until a sealed road is built.
   };
 }
