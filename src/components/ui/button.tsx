@@ -10,12 +10,11 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        // Primary button strokes use --line-strong.
-        // Scoped to variant.default only so outline / ghost / destructive
-        // variants keep their own border treatment via the base
-        // `border-transparent` + variant overrides chain below.
+        // The approved roster distinguishes indigo primary from ink-bordered default.
+        primary:
+          "border-primary bg-primary text-primary-foreground [a]:hover:bg-primary/80",
         default:
-          "border-line-strong bg-primary text-primary-foreground [a]:hover:bg-primary/80",
+          "border-line-strong bg-surface-strong text-foreground [a]:hover:bg-surface-strong/80",
         outline:
           "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input-fill/30 dark:hover:bg-input-fill/50",
         secondary:
