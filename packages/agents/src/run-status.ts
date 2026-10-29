@@ -184,8 +184,10 @@ export function recommendationRunHasStartedForRow(
  * the boundary as a VALUE, and this is it: the statuses a run can hold while it
  * has not executed. Paired with `started_at IS NULL` and
  * `human_wait_attempt_id IS NULL` in the same predicate it is
- * `recommendationRunHasStartedForRow` negated, except for `queued` (below),
- * expressed in SQL.
+ * `recommendationRunHasStartedForRow` negated, expressed in SQL, except for
+ * `queued` (below) and for an absent status (NULL or empty), which that
+ * function reads as not started and the predicate refuses (`status = ANY(...)`
+ * is not true for it).
  *
  * `pending_approval` is in it because the recommendation hold's own park is
  * BEFORE execution — see `START_AMBIGUOUS_RUN_STATUSES` — and leaving it out is
@@ -197,11 +199,14 @@ export function recommendationRunHasStartedForRow(
  * selected skill revisions for its ledger snapshot while the row is still
  * `queued`, BEFORE the `queued->running` CAS, so a selection written in that
  * window could miss the snapshot the run is materialized from. The store stays
- * the conservative authority there, and a change pressed in that window is
- * refused by the store on BOTH decision roads: a confirm's replace answers
- * `false`, and a skip (an all-clear Continue) locks the run row and reads the
- * same predicate from it in its own transaction, and gets none of its writes
- * when the locked row is not before its start. Each is answered with the
+ * the conservative authority there. A confirm's replace answers `false` for a
+ * row that is `queued` when its probe reads it, but the probe takes no lock: a
+ * run that moves into the set (the setup interrupt, `queued` to
+ * `pending_approval`) between the probe and the replace's DELETE and INSERT
+ * gets those writes while the answer is `false`. A skip (an all-clear Continue)
+ * locks the run row and reads the same predicate from it in its own
+ * transaction, and gets none of its writes when the locked row is not before
+ * its start. A `false` and a `run_started` are each answered with the
  * run-started refusal, and the card draws it.
  */
 export const PRE_START_RUN_STATUSES_WITHOUT_A_START_STAMP: ReadonlySet<string> = new Set<string>([

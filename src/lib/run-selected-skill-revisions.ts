@@ -502,7 +502,9 @@ export const SKIP_RECOMMENDATION_SOURCE = "user_skipped" as const;
  * pre-start question as a column: `started_at IS NULL AND human_wait_attempt_id
  * IS NULL AND status = ANY(PRE_START_RUN_STATUSES_WITHOUT_A_START_STAMP)`, the
  * SQL form of `recommendationRunHasStartedForRow` negated except for `queued`,
- * which the store keeps out (see that set). The lock holds the row until COMMIT
+ * which the store keeps out (see that set), and for an absent status (NULL or
+ * empty), which that function reads as not started and the predicate refuses.
+ * The lock holds the row until COMMIT
  * whatever the answer, so a writer of that row (the dispatch CAS, the worker's
  * setup interrupt, the enqueue compensation) waits for this transaction, and a
  * writer that committed first is read by the lock. Each of the three writes
