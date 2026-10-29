@@ -92,6 +92,15 @@ const TYPES = [
 ];
 const IDEA_NAME = "Blog idea @cinatra-ai/blog-idea-artifact:blog-idea Blog Idea";
 const POST_NAME = "Post @cinatra-ai/blog-post-artifact:post Blog Post";
+const NOTE_TYPE = {
+  objectTypeId: "@cinatra-ai/note-artifact:note",
+  extension: "@cinatra-ai/note-artifact",
+  displayName: "Note",
+  extensionLabel: "Note",
+};
+
+/** The id the next filed upload answers with (a second upload may file another one). */
+let uploadId = ARTIFACT_ID;
 
 /** The upload answer the real route gives a filed file: 201 with its id. */
 class FiledUploadRequest {
@@ -104,21 +113,36 @@ class FiledUploadRequest {
   setRequestHeader(): void {}
   send(): void {
     this.status = 201;
-    this.responseText = `{"ok":true,"artifactId":"${ARTIFACT_ID}","ref":{"mime":"text/markdown"}}`;
+    this.responseText = `{"ok":true,"artifactId":"${uploadId}","ref":{"mime":"text/markdown"}}`;
     this.onload?.();
   }
 }
 
-function answer(meaning?: unknown): void {
+function answer(meaning?: unknown, types: unknown[] = TYPES): void {
   actions.listInstalledTypesForArtifact.mockResolvedValue({
     ok: true,
     mime: "text/markdown",
-    types: TYPES,
+    types,
     ...(meaning === undefined ? {} : { meaning }),
   });
 }
 
-async function openPicker(): Promise<HTMLElement> {
+function uploadInput(): HTMLInputElement {
+  const input = document.querySelector<HTMLInputElement>(
+    '[data-testid="artifacts-upload-input"]',
+  );
+  expect(input).not.toBeNull();
+  return input as HTMLInputElement;
+}
+
+function upload(name: string): void {
+  fireEvent.change(uploadInput(), {
+    target: { files: [new File(["# Idea"], name, { type: "text/markdown" })] },
+  });
+}
+
+/** Upload a file and open "What is this?"; the offer may still be loading. */
+async function openDialog(): Promise<HTMLElement> {
   render(
     <LibraryUploadProvider>
       <LibraryUploadDropZone>
@@ -126,18 +150,33 @@ async function openPicker(): Promise<HTMLElement> {
       </LibraryUploadDropZone>
     </LibraryUploadProvider>,
   );
-  const input = document.querySelector<HTMLInputElement>(
-    '[data-testid="artifacts-upload-input"]',
-  );
-  expect(input).not.toBeNull();
-  fireEvent.change(input as HTMLInputElement, {
-    target: { files: [new File(["# Idea"], "notes-4265.md", { type: "text/markdown" })] },
-  });
+  upload("notes-4265.md");
   fireEvent.click(await screen.findByRole("button", { name: "Set meaning" }));
-  const dialog = await screen.findByRole("dialog", { name: "What is this?" });
+  return screen.findByRole("dialog", { name: "What is this?" });
+}
+
+async function openPicker(): Promise<HTMLElement> {
+  const dialog = await openDialog();
   // The offer loads after the dialog mounts; wait for its entries.
   await within(dialog).findAllByTestId("artifacts-picker-type");
   return dialog;
+}
+
+function checked(dialog: HTMLElement): (string | null)[] {
+  return rows(dialog).map((r) => r.getAttribute("aria-checked"));
+}
+
+function press(root: HTMLElement, key: string): void {
+  fireEvent.keyDown(root, { key, code: key });
+}
+
+/** A promise the test settles by hand, to hold a server answer in flight. */
+function held<T>(): { promise: Promise<T>; settle: (value: T) => void } {
+  let settle!: (value: T) => void;
+  const promise = new Promise<T>((resolve) => {
+    settle = resolve;
+  });
+  return { promise, settle };
 }
 
 function picker(dialog: HTMLElement): HTMLElement {
@@ -186,6 +225,7 @@ function sectionLabel(dialog: HTMLElement, text: string): HTMLElement {
 
 beforeEach(() => {
   rendered.clear();
+  uploadId = ARTIFACT_ID;
   vi.stubGlobal("XMLHttpRequest", FiledUploadRequest);
   actions.assertUploadMeaning.mockResolvedValue({ ok: true });
 });
@@ -362,5 +402,232 @@ describe("cinatra#4265 — the Command picker keeps the walk's readings and adds
     fireEvent.pointerMove(rows(dialog)[1]);
     expect(rows(dialog).map((r) => r.getAttribute("aria-checked"))).toEqual(["true", "false"]);
     expect(rows(dialog).map((r) => r.getAttribute("data-selected"))).toEqual(["true", "false"]);
+  });
+});
+
+describe("cinatra#4265 — the rest of the keyboard on the Command picker", () => {
+  it("K6: Enter keeps the highlighted row, which is the chosen row, and does not confirm", async () => {
+    answer({ preselect: IDEA_EXT, suggestions: [] });
+    const dialog = await openPicker();
+    const root = commandRoot(dialog);
+    root.focus();
+    press(root, "ArrowDown");
+    await waitFor(() => expect(checked(dialog)).toEqual(["false", "true"]));
+    press(root, "Enter");
+    expect(checked(dialog)).toEqual(["false", "true"]);
+    expect(rows(dialog).map((r) => r.getAttribute("data-selected"))).toEqual(["false", "true"]);
+    expect(actions.assertUploadMeaning).not.toHaveBeenCalled();
+    expect(confirmButton(dialog).disabled).toBe(false);
+  });
+
+  it("K7: with nothing chosen, Enter chooses nothing and Confirm stays disabled", async () => {
+    answer(undefined);
+    const dialog = await openPicker();
+    const root = commandRoot(dialog);
+    root.focus();
+    press(root, "Enter");
+    expect(checked(dialog)).toEqual(["false", "false"]);
+    expect(confirmButton(dialog).disabled).toBe(true);
+    expect(actions.assertUploadMeaning).not.toHaveBeenCalled();
+  });
+
+  it("K8: End chooses the last row and Home the first", async () => {
+    answer({ preselect: IDEA_EXT, suggestions: [] }, [...TYPES, NOTE_TYPE]);
+    const dialog = await openPicker();
+    const root = commandRoot(dialog);
+    root.focus();
+    expect(checked(dialog)).toEqual(["true", "false", "false"]);
+    press(root, "End");
+    await waitFor(() => expect(checked(dialog)).toEqual(["false", "false", "true"]));
+    press(root, "Home");
+    await waitFor(() => expect(checked(dialog)).toEqual(["true", "false", "false"]));
+  });
+
+  it("K9: with nothing chosen, ArrowUp chooses nothing", async () => {
+    answer(undefined);
+    const dialog = await openPicker();
+    const root = commandRoot(dialog);
+    root.focus();
+    press(root, "ArrowUp");
+    expect(checked(dialog)).toEqual(["false", "false"]);
+    expect(confirmButton(dialog).disabled).toBe(true);
+  });
+
+  it("K10: at the ends the list does not wrap: ArrowDown on the last row and ArrowUp on the first keep the choice", async () => {
+    answer({ preselect: POST_EXT, suggestions: [] });
+    const dialog = await openPicker();
+    const root = commandRoot(dialog);
+    root.focus();
+    expect(checked(dialog)).toEqual(["false", "true"]);
+    press(root, "ArrowDown");
+    expect(checked(dialog)).toEqual(["false", "true"]);
+    press(root, "ArrowUp");
+    await waitFor(() => expect(checked(dialog)).toEqual(["true", "false"]));
+    press(root, "ArrowUp");
+    expect(checked(dialog)).toEqual(["true", "false"]);
+  });
+});
+
+describe("cinatra#4265 — the picker's offer states: loading, failed, empty", () => {
+  function noList(dialog: HTMLElement): void {
+    expect(within(dialog).queryAllByRole("listbox")).toHaveLength(0);
+    expect(within(dialog).queryAllByTestId("artifacts-picker-type")).toHaveLength(0);
+    expect(picker(dialog).querySelectorAll('[data-slot="command"]')).toHaveLength(0);
+    expect(confirmButton(dialog).disabled).toBe(true);
+  }
+
+  it("O1: while the offer loads the picker shows the loading text, no list and a disabled Confirm", async () => {
+    const offer = held<unknown>();
+    actions.listInstalledTypesForArtifact.mockReturnValue(offer.promise);
+    const dialog = await openDialog();
+    expect(within(dialog).getByText("Loading installed types…")).toBeTruthy();
+    expect(picker(dialog).getAttribute("data-state")).toBe("loading");
+    noList(dialog);
+    offer.settle({ ok: true, mime: "text/markdown", types: TYPES });
+    await waitFor(() => expect(rows(dialog)).toHaveLength(2));
+    expect(within(dialog).queryByText("Loading installed types…")).toBeNull();
+    expect(picker(dialog).hasAttribute("data-state")).toBe(false);
+  });
+
+  it("O2: a refused read (ok: false) shows the error text, no list and a disabled Confirm", async () => {
+    actions.listInstalledTypesForArtifact.mockResolvedValue({ ok: false });
+    const dialog = await openDialog();
+    expect(await within(dialog).findByText("Couldn't load installed types. Close and try again.")).toBeTruthy();
+    expect(picker(dialog).getAttribute("data-state")).toBe("error");
+    noList(dialog);
+  });
+
+  it("O3: a read that throws shows the same error text, no list and a disabled Confirm", async () => {
+    actions.listInstalledTypesForArtifact.mockRejectedValue(new Error("the read failed"));
+    const dialog = await openDialog();
+    expect(await within(dialog).findByText("Couldn't load installed types. Close and try again.")).toBeTruthy();
+    expect(picker(dialog).getAttribute("data-state")).toBe("error");
+    noList(dialog);
+  });
+
+  it("O4: an empty offer shows the no-type text, no list and a disabled Confirm", async () => {
+    answer({ preselect: IDEA_EXT, suggestions: [] }, []);
+    const dialog = await openDialog();
+    expect(
+      await within(dialog).findByText("No installed type accepts this file. Find one in the marketplace."),
+    ).toBeTruthy();
+    expect(picker(dialog).hasAttribute("data-state")).toBe(false);
+    noList(dialog);
+  });
+});
+
+describe("cinatra#4265 — the choice is kept per row", () => {
+  it("P1: a row with no object type id is keyed by its extension; pressing it chooses it and Confirm asserts that extension", async () => {
+    const MANIFEST_EXT = "@cinatra-ai/meeting-notes-matcher";
+    answer(undefined, [
+      ...TYPES,
+      { objectTypeId: null, extension: MANIFEST_EXT, displayName: "Meeting notes", extensionLabel: "Meeting Notes" },
+    ]);
+    const dialog = await openPicker();
+    expect(rows(dialog)[2].getAttribute("aria-label")).toBe(`Meeting notes ${MANIFEST_EXT} Meeting Notes`);
+    fireEvent.click(rows(dialog)[2]);
+    await waitFor(() => expect(checked(dialog)).toEqual(["false", "false", "true"]));
+    expect(rows(dialog)[2].getAttribute("data-selected")).toBe("true");
+    fireEvent.click(confirmButton(dialog));
+    await waitFor(() => expect(actions.assertUploadMeaning).toHaveBeenCalledTimes(1));
+    expect(actions.assertUploadMeaning).toHaveBeenCalledWith({ artifactId: ARTIFACT_ID, extension: MANIFEST_EXT });
+  });
+
+  it("P2: two rows of one extension: a press checks only the pressed row, and Confirm asserts the shared extension", async () => {
+    const PACK_EXT = "@cinatra-ai/blog-pack";
+    answer({ preselect: PACK_EXT, suggestions: [] }, [
+      { objectTypeId: `${PACK_EXT}:idea`, extension: PACK_EXT, displayName: "Idea", extensionLabel: "Blog Pack" },
+      { objectTypeId: `${PACK_EXT}:post`, extension: PACK_EXT, displayName: "Post", extensionLabel: "Blog Pack" },
+    ]);
+    const dialog = await openPicker();
+    // The pre-selection names an extension; it lands on the first row of it.
+    expect(checked(dialog)).toEqual(["true", "false"]);
+    fireEvent.click(rows(dialog)[1]);
+    await waitFor(() => expect(checked(dialog)).toEqual(["false", "true"]));
+    expect(rows(dialog).map((r) => r.getAttribute("data-selected"))).toEqual(["false", "true"]);
+    fireEvent.click(confirmButton(dialog));
+    await waitFor(() => expect(actions.assertUploadMeaning).toHaveBeenCalledTimes(1));
+    expect(actions.assertUploadMeaning).toHaveBeenCalledWith({ artifactId: ARTIFACT_ID, extension: PACK_EXT });
+  });
+
+  it("P3: a pre-selection that arrives over a standing choice does not replace it", async () => {
+    answer(undefined);
+    const dialog = await openPicker();
+    fireEvent.click(rows(dialog)[1]);
+    await waitFor(() => expect(checked(dialog)).toEqual(["false", "true"]));
+    // A second upload files while the picker is open: the offer is read again
+    // for the new id, and this answer pre-selects the other row and adds a chip.
+    answer({
+      preselect: IDEA_EXT,
+      suggestions: [{ extension: POST_EXT, label: "Post · Blog Post", confidence: 0.55 }],
+    });
+    uploadId = "a-4265-second";
+    upload("second-4265.md");
+    await waitFor(() =>
+      expect(actions.listInstalledTypesForArtifact).toHaveBeenLastCalledWith("a-4265-second"),
+    );
+    // The chip shows that the second answer has landed.
+    await within(dialog).findByTestId("artifacts-picker-suggestion");
+    expect(checked(dialog)).toEqual(["false", "true"]);
+  });
+});
+
+describe("cinatra#4265 — the marketplace road leaves the CommandDialog and comes back to it", () => {
+  it("M1: None of these opens the marketplace Dialog in place of the picker; Back to picker opens the picker again with its offer", async () => {
+    answer({ preselect: IDEA_EXT, suggestions: [] });
+    const dialog = await openPicker();
+    expect(actions.listInstalledTypesForArtifact).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(dialog).getByTestId("artifacts-picker-none-of-these"));
+    const market = await screen.findByRole("dialog", { name: "Marketplace — install an artifact type" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "What is this?" })).toBeNull());
+    expect(document.querySelectorAll('[data-conformance-id="artifacts-type-picker"]')).toHaveLength(0);
+    expect(market.querySelectorAll('[data-conformance-id="artifacts-marketplace-tab"]')).toHaveLength(1);
+    expect(market.querySelectorAll('[data-slot="command"]')).toHaveLength(0);
+
+    fireEvent.click(within(market).getByTestId("artifacts-marketplace-back"));
+    const again = await screen.findByRole("dialog", { name: "What is this?" });
+    await within(again).findAllByTestId("artifacts-picker-type");
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Marketplace — install an artifact type" })).toBeNull(),
+    );
+    // The picker mounted afresh: it read the offer again and is a Command list
+    // with its rows, pre-selected again on the matcher's draft.
+    expect(actions.listInstalledTypesForArtifact).toHaveBeenCalledTimes(2);
+    expect(commandRoot(again).querySelector('[role="listbox"]')).not.toBeNull();
+    expect(checked(again)).toEqual(["true", "false"]);
+    expect(confirmButton(again).disabled).toBe(false);
+  });
+});
+
+describe("cinatra#4265 — the choice holds while a confirmation is in flight", () => {
+  it("B1: a press, the arrow keys, End and Enter do not move the choice while Confirm runs; after a refusal the choice moves again", async () => {
+    answer({ preselect: IDEA_EXT, suggestions: [] });
+    const asserted = held<unknown>();
+    actions.assertUploadMeaning.mockReturnValue(asserted.promise);
+    const dialog = await openPicker();
+    const root = commandRoot(dialog);
+    fireEvent.click(confirmButton(dialog));
+    await waitFor(() => expect(confirmButton(dialog).disabled).toBe(true));
+    expect(actions.assertUploadMeaning).toHaveBeenCalledWith({ artifactId: ARTIFACT_ID, extension: IDEA_EXT });
+    // The rows are disabled while the confirmation runs, as the chips and Confirm are.
+    expect(rows(dialog).map((r) => r.getAttribute("aria-disabled"))).toEqual(["true", "true"]);
+
+    fireEvent.click(rows(dialog)[1]);
+    root.focus();
+    press(root, "ArrowDown");
+    press(root, "End");
+    press(root, "Enter");
+    expect(checked(dialog)).toEqual(["true", "false"]);
+    expect(rows(dialog).map((r) => r.getAttribute("data-selected"))).toEqual(["true", "false"]);
+
+    asserted.settle({ ok: false, message: "The meaning was not set." });
+    await waitFor(() => expect(confirmButton(dialog).disabled).toBe(false));
+    // The dialog stays open on the row it tried to assert, and the rows take a choice again.
+    expect(checked(dialog)).toEqual(["true", "false"]);
+    expect(rows(dialog).map((r) => r.getAttribute("data-selected"))).toEqual(["true", "false"]);
+    expect(rows(dialog).map((r) => r.getAttribute("aria-disabled"))).toEqual(["false", "false"]);
+    fireEvent.click(rows(dialog)[1]);
+    await waitFor(() => expect(checked(dialog)).toEqual(["false", "true"]));
+    expect(actions.assertUploadMeaning).toHaveBeenCalledTimes(1);
   });
 });
