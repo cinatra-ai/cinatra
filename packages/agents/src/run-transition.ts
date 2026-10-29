@@ -16,7 +16,8 @@
 // erased at build) — there is no runtime import of ./store, so no module-init
 // cycle. Every other dependency is imported from its SOURCE module.
 // ---------------------------------------------------------------------------
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, sql, type SQL } from "drizzle-orm";
+import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
 import { expireRunStream } from "@cinatra-ai/a2a";
 import type { OrgWriteAuthority, OrgWriteCapability, OrgWriteDb, OrgWriteTx } from "@cinatra-ai/org-write-kernel";
 // cinatra#1940 P1 (Decision 4): the per-run, epoch-agnostic lease-settle shape,
@@ -38,8 +39,8 @@ import { mintLeaseExpiryFinalizerAuthority } from "@/lib/org-write/lease-expiry-
 import { db } from "./db";
 import { agentRuns } from "./schema";
 import { dispatchRunWaitTransition } from "./run-wait-notifier"; // #1559/E9: zero-dep leaf seam
-import { LEGAL_TRANSITIONS, TERMINAL_RUN_STATUSES, RunTransitionError } from "./run-status";
-import type { AgentRunStatus } from "./run-status";
+import { LEGAL_TRANSITIONS, TERMINAL_RUN_STATUSES, RunTransitionError, PAUSE_SEND_LEASE_SECONDS } from "./run-status";
+import type { AgentRunStatus, PauseFence, PauseEndMark } from "./run-status";
 // cinatra#1939 wave 2 — the agent-run org-write seam. transitionRunStatus runs
 // its CAS + delegated meta write inside guardOrgMutation's org-locked
 // transaction; the required `authority` param is the compile-time ratchet that
@@ -185,7 +186,9 @@ export async function updateAgentRunStatusConditional(
   dispatch: AgentRunDispatchFields | undefined,
   orgId: string,
   tx: GuardedRunTx,
+  pause?: PauseSeamFields,
 ): Promise<boolean> {
+  assertPauseSeamFields(id, expectedStatus, nextStatus, pause);
   // cinatra#1937: a queued→running CAS IS a dispatch — it stamps per-dispatch
   // bookkeeping ATOMICALLY with the status flip at the deepest layer, so no
   // caller can bypass it and `running` rows never carry stale attempt ids.
@@ -224,10 +227,154 @@ export async function updateAgentRunStatusConditional(
       ...(nextStatus === "pending_approval"
         ? { humanWaitAttemptId: expectedStatus === "running" ? sql`${agentRuns.executionAttemptId}` : null }
         : {}),
+      ...pauseClaimSet(nextStatus, pause),
     })
-    .where(and(eq(agentRuns.id, id), eq(agentRuns.status, expectedStatus), eq(agentRuns.orgId, orgId)))
+    .where(
+      and(
+        eq(agentRuns.id, id),
+        eq(agentRuns.status, expectedStatus),
+        eq(agentRuns.orgId, orgId),
+        ...pauseClaimWhere(nextStatus, pause),
+      ),
+    )
     .returning({ id: agentRuns.id });
   return result.length === 1;
+}
+
+// ---------------------------------------------------------------------------
+// THE PAUSE CLAIM RULES OF THE STATUS SEAM (cinatra#4245)
+// ---------------------------------------------------------------------------
+//
+// A run paused at `pending_approval` carries a generation-stamped lease on its
+// own row (core__0116; the claim writers are ./run-pause-claim). The rules sit in
+// the ONE status compare-and-set, so no status writer that goes through it can
+// skip them:
+//   1. every status change clears the claim (token, phase, expiry), except the
+//      fence (rule 3);
+//   2. every entry into `pending_approval` raises `pause_generation` by 1, and
+//      writes `a2a_task_id` when the caller names the pause's task;
+//   3. the fence: `pending_approval → running` with `pauseFence` lands only
+//      under the live `claimed` lease of that token at that generation; it
+//      sets the phase `sending`, raises the generation by 1, keeps the token
+//      and sets the send lease. Without `pauseFence` the edge is the old
+//      status-only compare-and-set (a later change makes the fence required);
+//   4. no `→ stopped` edge lands while a live `sending` lease holds the row
+//      (transitionRunStatus then throws `pause_resume_in_flight`);
+//   5. `pauseEndMark` on `→ stopped` lands only while the pause carries the
+//      change-request end mark at that generation.
+// Every expiry is compared with the database clock (`now()`). The other inline
+// status writers (the setup resume, the derivation-outbox delegate) apply rule
+// 1 themselves.
+
+/** The control fields of the pause claim rules. None is a column. */
+export type PauseSeamFields = {
+  /** Rule 3: legal only on `pending_approval → running`. */
+  readonly pauseFence?: PauseFence;
+  /** Rule 5: legal only on `→ stopped`. */
+  readonly pauseEndMark?: PauseEndMark;
+  /** Rule 2: the pause's A2A task id, legal only on `→ pending_approval`. */
+  readonly pauseTaskId?: string;
+};
+
+/** A misplaced control field is a programmer error, as the dispatch guard's. */
+function assertPauseSeamFields(
+  id: string,
+  expectedStatus: string,
+  nextStatus: string,
+  pause: PauseSeamFields | undefined,
+): void {
+  if (!pause) return;
+  if (pause.pauseFence !== undefined) {
+    if (!(expectedStatus === "pending_approval" && nextStatus === "running")) {
+      throw new Error(
+        `updateAgentRunStatusConditional: pauseFence supplied for ${expectedStatus}→${nextStatus} on run ${id}; it is legal only on pending_approval→running`,
+      );
+    }
+    const { token, generation } = pause.pauseFence;
+    if (typeof token !== "string" || token.length === 0 || !Number.isSafeInteger(generation) || generation < 0) {
+      throw new Error(`updateAgentRunStatusConditional: malformed pauseFence on run ${id}`);
+    }
+  }
+  if (pause.pauseEndMark !== undefined) {
+    if (nextStatus !== "stopped") {
+      throw new Error(
+        `updateAgentRunStatusConditional: pauseEndMark supplied for ${expectedStatus}→${nextStatus} on run ${id}; it is legal only on a →stopped edge`,
+      );
+    }
+    const { generation } = pause.pauseEndMark;
+    if (!Number.isSafeInteger(generation) || generation < 0) {
+      throw new Error(`updateAgentRunStatusConditional: malformed pauseEndMark on run ${id}`);
+    }
+  }
+  if (pause.pauseTaskId !== undefined) {
+    if (nextStatus !== "pending_approval") {
+      throw new Error(
+        `updateAgentRunStatusConditional: pauseTaskId supplied for ${expectedStatus}→${nextStatus} on run ${id}; it is legal only on a →pending_approval edge`,
+      );
+    }
+    if (typeof pause.pauseTaskId !== "string" || pause.pauseTaskId.length === 0) {
+      throw new Error(`updateAgentRunStatusConditional: empty pauseTaskId on run ${id}`);
+    }
+  }
+}
+
+/** Rules 1-3: the claim and generation columns the compare-and-set writes. */
+function pauseClaimSet(
+  nextStatus: string,
+  pause: PauseSeamFields | undefined,
+): PgUpdateSetSource<typeof agentRuns> {
+  if (pause?.pauseFence) {
+    return {
+      pauseClaimPhase: "sending",
+      pauseGeneration: sql`${agentRuns.pauseGeneration} + 1`,
+      pauseClaimExpiresAt: sql`now() + make_interval(secs => ${sql.raw(String(PAUSE_SEND_LEASE_SECONDS))})`,
+    };
+  }
+  return {
+    pauseClaimToken: null,
+    pauseClaimPhase: null,
+    pauseClaimExpiresAt: null,
+    ...(nextStatus === "pending_approval"
+      ? {
+          pauseGeneration: sql`${agentRuns.pauseGeneration} + 1`,
+          ...(pause?.pauseTaskId !== undefined ? { a2aTaskId: pause.pauseTaskId } : {}),
+        }
+      : {}),
+  };
+}
+
+/** Rules 3-5: the claim predicates the compare-and-set adds to its WHERE. */
+function pauseClaimWhere(nextStatus: string, pause: PauseSeamFields | undefined): SQL[] {
+  const where: SQL[] = [];
+  if (pause?.pauseFence) {
+    where.push(
+      sql`${agentRuns.pauseClaimToken} = ${pause.pauseFence.token}`,
+      sql`${agentRuns.pauseClaimPhase} = 'claimed'`,
+      sql`${agentRuns.pauseGeneration} = ${pause.pauseFence.generation}`,
+      sql`${agentRuns.pauseClaimExpiresAt} > now()`,
+    );
+  }
+  if (nextStatus === "stopped") {
+    // NULL-safe: a row with no claim has phase NULL, and `NOT (NULL AND x)`
+    // would be NULL and refuse every ordinary stop.
+    where.push(sql`(${agentRuns.pauseClaimPhase} IS DISTINCT FROM 'sending' OR ${agentRuns.pauseClaimExpiresAt} <= now())`);
+  }
+  if (pause?.pauseEndMark) {
+    where.push(
+      sql`${agentRuns.pauseClaimPhase} = 'changes_requested'`,
+      sql`${agentRuns.pauseGeneration} = ${pause.pauseEndMark.generation}`,
+    );
+  }
+  return where;
+}
+
+/** After a lost `→ stopped` compare-and-set, inside the same transaction: does a
+ *  live `sending` lease hold the row (rule 4)? Any other state is a stale read. */
+async function heldBySend(tx: GuardedRunTx, runId: string, orgId: string): Promise<boolean> {
+  const result = await tx.execute(
+    sql`SELECT (${agentRuns.pauseClaimPhase} = 'sending' AND ${agentRuns.pauseClaimExpiresAt} > now()) AS live FROM ${agentRuns} WHERE ${agentRuns.id} = ${runId} AND ${agentRuns.orgId} = ${orgId}`,
+  );
+  return rowsOf(result)[0]?.live === true;
 }
 
 /** Per-dispatch bookkeeping stamped by the queued→running CAS (cinatra#1937). */
@@ -314,6 +461,12 @@ export async function transitionRunStatus(
         dispatch?: AgentRunDispatchFields;
         /** cinatra#1893 (epic #1883 A5): when present, delegate to transitionRunToCompletedWithDerivationOutbox — terminal CAS + final-output snapshot + derivation-outbox INSERT in ONE transaction (legal ONLY for `to === "completed"`). Absent for every other caller — the historical two-write path is unchanged. */
         derivationOutbox?: DerivationOutboxCapture;
+        /** cinatra#4245 pause claim rule 3 (see PauseSeamFields): `pending_approval → running` only under this live `claimed` lease. Not a DB column. */
+        pauseFence?: PauseFence;
+        /** cinatra#4245 pause claim rule 5: `→ stopped` only while the pause carries the change-request end mark at this generation. Not a DB column. */
+        pauseEndMark?: PauseEndMark;
+        /** cinatra#4245 pause claim rule 2: the pause's A2A task id, written with a `→ pending_approval` edge. Written by the CAS, stripped from the meta write. */
+        pauseTaskId?: string;
       }
     | undefined,
   // cinatra#1939 wave 2 — REQUIRED host-minted authority (the compile-time
@@ -378,6 +531,13 @@ export async function transitionRunStatus(
   // the CAS + final-output snapshot + derivation-outbox INSERT commit as ONE
   // guarded transaction on the guarded tx (org-scoped inside the delegate).
   if (meta?.derivationOutbox) {
+    // cinatra#4245: the pause claim control fields ride only the plain CAS
+    // below; the outbox delegate (→completed) clears the claim itself (rule 1).
+    if (meta.pauseFence || meta.pauseEndMark || meta.pauseTaskId !== undefined) {
+      throw new Error(
+        `transitionRunStatus: pause claim fields supplied with derivationOutbox for ${from}→${to} on run ${runId}`,
+      );
+    }
     const derivationOutbox = meta.derivationOutbox;
     await guardedRunWrite(authority, { orgId, runId, capability }, async (guardedTx) => {
       await transitionRunToCompletedWithDerivationOutbox(
@@ -409,11 +569,19 @@ export async function transitionRunStatus(
   }
 
   await guardedRunWrite(authority, { orgId, runId, capability }, async (guardedTx) => {
-    const won = await updateAgentRunStatusConditional(runId, from, to, meta?.dispatch, orgId, guardedTx);
+    const won = await updateAgentRunStatusConditional(runId, from, to, meta?.dispatch, orgId, guardedTx, {
+      pauseFence: meta?.pauseFence,
+      pauseEndMark: meta?.pauseEndMark,
+      pauseTaskId: meta?.pauseTaskId,
+    });
     if (!won) {
       // Rolls back the guarded tx; the meta write below never runs and the
       // post-commit side-effects never fire (codex #2 — the transition did not
-      // commit, so no waiter wakeup / stream expiry).
+      // commit, so no waiter wakeup / stream expiry). cinatra#4245 rule 4: a stop
+      // refused by a live send says so; every other lost CAS is a stale read.
+      if (to === "stopped" && (await heldBySend(guardedTx, runId, orgId))) {
+        throw new RunTransitionError({ code: "pause_resume_in_flight", runId, from, to });
+      }
       throw new RunTransitionError({ code: "stale_from_status", runId, from, to });
     }
     // Delegate the meta patch to updateAgentRunStatus on the SAME guarded tx. The
@@ -421,7 +589,14 @@ export async function transitionRunStatus(
     // runs the meta-patch logic. The CONTROL keys (`dispatch` — written BY the
     // CAS — and `humanWaitGate` — not a DB column) are stripped first: only
     // genuine DB meta reaches the delegated write.
-    const { dispatch: _dispatch, humanWaitGate: _humanWaitGate, ...dbMeta } = meta ?? {};
+    const {
+      dispatch: _dispatch,
+      humanWaitGate: _humanWaitGate,
+      pauseFence: _pauseFence,
+      pauseEndMark: _pauseEndMark,
+      pauseTaskId: _pauseTaskId,
+      ...dbMeta
+    } = meta ?? {};
     const hasDelegatedMeta =
       dbMeta.error !== undefined ||
       dbMeta.startedAt !== undefined ||
