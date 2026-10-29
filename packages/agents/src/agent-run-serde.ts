@@ -110,12 +110,13 @@ export function parseAuthPolicySafe(raw: string | null): AgentAuthPolicy | null 
 // The pause generation, parsed strictly (cinatra#4245): a safe integer >= 0, or
 // its canonical decimal text (the driver's form for a bigint read outside
 // Drizzle). Anything else is undefined, so a reader of the pause refuses rather
-// than guess a generation; it is never coerced to 0.
+// than guess a generation; it is never coerced to 0. A -0 reads as 0 (`+ 0`), so
+// Object.is and a JSON round trip agree with the stored value.
 export function parsePauseGeneration(raw: unknown): number | undefined {
   const n = typeof raw === "number" ? raw
     : typeof raw === "string" && /^(?:0|[1-9][0-9]{0,15})$/.test(raw) ? Number(raw)
     : Number.NaN;
-  return Number.isSafeInteger(n) && n >= 0 ? n : undefined;
+  return Number.isSafeInteger(n) && n >= 0 ? n + 0 : undefined;
 }
 
 export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunRecord {

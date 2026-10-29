@@ -24,6 +24,13 @@
  * both quote characters boots (C5). No CI job runs this file: every DB job
  * pins literal paths and none names it, so its reading is a recorded host run
  * (C2/C9).
+ *
+ * Pre-2 fold: up and the bootstrap leaf finish from the crash
+ * state the migration header promises to repair (columns added, both CHECKs
+ * present NOT VALID); with both CHECKs absent the two validate statements are
+ * no-ops; an empty phase is refused. Those three pin behaviour 675c2bfc already
+ * has (green there too). Red at 675c2bfc: up waits for a lock past
+ * PAUSE_CLAIM_LOCK_TIMEOUT_MS instead of failing with 55P03.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client } from "pg";
@@ -44,6 +51,9 @@ const UPGRADE = `x4245_up_${suffix}`;
 const FRESH = `x4245_fresh_${suffix}`;
 const LOCKS = `x4245_lk_${suffix}`;
 const QUOTED = `x4245_q"u'o_${suffix}`;
+const CRASH = `x4245_cr_${suffix}`;
+const CRASH_LEAF = `x4245_cl_${suffix}`;
+const WAIT = `x4245_lw_${suffix}`;
 const qi = (name: string) => `"${name.replaceAll('"', '""')}"`;
 const NEW_COLUMNS = ["pause_claim_expires_at", "pause_claim_phase", "pause_claim_token", "pause_generation"];
 const CHECKS = ["agent_runs_pause_claim_phase_chk", "agent_runs_pause_claim_shape_chk"];
@@ -168,7 +178,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!HAS_DB) return;
-  for (const schema of [UPGRADE, FRESH, LOCKS, QUOTED]) await client.query(`DROP SCHEMA IF EXISTS ${qi(schema)} CASCADE`);
+  for (const schema of [UPGRADE, FRESH, LOCKS, QUOTED, CRASH, CRASH_LEAF, WAIT]) await client.query(`DROP SCHEMA IF EXISTS ${qi(schema)} CASCADE`);
   await client.end();
 });
 
@@ -209,6 +219,7 @@ describeDb("core__0116 on a real database (cinatra#4245)", () => {
     ["a phase without a token", null, "claimed", "now()"],
     ["an unknown phase", "tok", "held", "now()"],
     ["a case-varied phase", "tok", "Claimed", "now()"],
+    ["an empty phase", "tok", "", "now()"],
     ["a claim without an expiry", "tok", "claimed", null],
     ["a send without an expiry", "tok", "sending", null],
     ["an end mark with an expiry", "cr:3", "changes_requested", "now()"],
@@ -258,8 +269,8 @@ describeDb("core__0116 on a real database (cinatra#4245)", () => {
     pending = [];
     migration.up(pgm);
     const statements = [...pending];
-    expect(statements).toHaveLength(6);
-    const [columnsAdd, phaseAdd, shapeAdd, phaseValidate, shapeValidate, repairAdd] = statements;
+    expect(statements).toHaveLength(8);
+    const [, columnsAdd, phaseAdd, shapeAdd, phaseValidate, shapeValidate, repairAdd] = statements;
     await client.query(`SET search_path TO ${qi(LOCKS)}`);
 
     // The column add holds ACCESS EXCLUSIVE, and the probe sees it block.
@@ -288,6 +299,73 @@ describeDb("core__0116 on a real database (cinatra#4245)", () => {
     await client.query(repairAdd);
     expect(await validated(LOCKS)).toEqual(CHECKS.map((conname) => ({ conname, convalidated: true })));
     expect(await checks(LOCKS)).toEqual(await checks(UPGRADE));
+  }, 60_000);
+
+  it.each<[string, string, (schema: string) => string[]]>([
+    ["up", CRASH, () => migration.pauseClaimDdlStatements],
+    ["the bootstrap leaf", CRASH_LEAF, (schema) => agentRunPauseClaimSchemaQueries(schema).map((row) => row.text)],
+  ])("%s finishes from the crash state: columns added, both CHECKs present NOT VALID", async (label, schema, ddl) => {
+    await minimalTables(schema);
+    await client.query(`SET search_path TO ${qi(schema)}`);
+    // The crash window: the column add and both NOT VALID adds ran, no VALIDATE.
+    for (const text of ddl(schema).slice(0, 3)) await client.query(text);
+    expect(await validated(schema)).toEqual(CHECKS.map((conname) => ({ conname, convalidated: false })));
+    if (label === "up") await runMigration(migration.up, schema);
+    else for (const text of ddl(schema)) await client.query(text);
+    expect(await validated(schema)).toEqual(CHECKS.map((conname) => ({ conname, convalidated: true })));
+    expect(await checks(schema)).toEqual(await checks(UPGRADE));
+  });
+
+  it.each<[string, string, (schema: string) => string[]]>([
+    ["up", CRASH, () => migration.pauseClaimDdlStatements],
+    ["the bootstrap leaf", CRASH_LEAF, (schema) => agentRunPauseClaimSchemaQueries(schema).map((row) => row.text)],
+  ])("%s: with both CHECKs absent, the two validate statements are no-ops", async (_label, schema, ddl) => {
+    await client.query(`SET search_path TO ${qi(schema)}`);
+    await client.query(
+      `ALTER TABLE ${qi(schema)}."agent_runs" DROP CONSTRAINT ${CHECKS[0]}, DROP CONSTRAINT ${CHECKS[1]}`,
+    );
+    const [, , , validatePhase, validateShape] = ddl(schema);
+    for (const text of [validatePhase, validateShape]) {
+      expect(text).toContain("VALIDATE CONSTRAINT");
+      expect(await sqlState(text)).toBeNull();
+    }
+    expect(await checks(schema)).toEqual([]);
+  });
+
+  it("up fails with 55P03 within lock_timeout behind a long reader, and the replay finishes", async () => {
+    await minimalTables(WAIT);
+    const reader = new Client({ connectionString: DB_URL });
+    await reader.connect();
+    let code: string | null = null;
+    const started = Date.now();
+    // At 675c2bfc up would wait for the reader; the reader gives up its lock
+    // after 15 s, so the old code ends with no error and this test is red.
+    const release = setTimeout(() => {
+      reader.query("COMMIT").catch(() => {});
+    }, 15_000);
+    try {
+      await reader.query("BEGIN");
+      await reader.query(`SELECT count(*) FROM ${qi(WAIT)}."agent_runs"`);
+      try {
+        await runMigration(migration.up, WAIT);
+      } catch (error) {
+        code = (error as { code?: string }).code ?? "unknown";
+      }
+    } finally {
+      clearTimeout(release);
+      await reader.query("COMMIT").catch(() => {});
+      await reader.end();
+    }
+    const waited = Date.now() - started;
+    // The runner's session ends after a failed migration; this harness reuses its client.
+    await client.query("RESET lock_timeout");
+    expect(code).toBe("55P03");
+    expect(waited).toBeLessThan(migration.PAUSE_CLAIM_LOCK_TIMEOUT_MS + 5_000);
+    expect((await columns(WAIT, "agent_runs")).map((row) => row.column_name)).toEqual(["id", "status"]);
+    await runMigration(migration.up, WAIT);
+    expect(await validated(WAIT)).toEqual(CHECKS.map((conname) => ({ conname, convalidated: true })));
+    const { rows } = await client.query("SHOW lock_timeout");
+    expect(rows[0].lock_timeout).toBe("0");
   }, 60_000);
 
   it("boots a schema whose name holds a double quote and a single quote, and replays cleanly", async () => {

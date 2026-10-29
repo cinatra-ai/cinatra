@@ -12,6 +12,9 @@
  * (C1/C6); up runs outside a transaction, adds each CHECK NOT VALID and
  * validates it in its own statement (C4); the regclass text survives a schema
  * name holding a double quote (C5).
+ *
+ * Pre-2 fold (red at 675c2bfc): up bounds every lock wait with lock_timeout,
+ * set first and reset last.
  */
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -36,6 +39,8 @@ const operatorUp = (): string[] => {
   migration.up({ sql, noTransaction: vi.fn() });
   return sql.mock.calls.map((call) => String(call[0]));
 };
+/** The DDL of up, without the lock_timeout SET before it and the RESET after it. */
+const operatorDdl = (): string[] => operatorUp().slice(1, -1);
 const PHASE_CHK = "agent_runs_pause_claim_phase_chk";
 const SHAPE_CHK = "agent_runs_pause_claim_shape_chk";
 const SHAPE_SQL =
@@ -120,7 +125,7 @@ describe("pause claim columns: Drizzle declares what the DDL creates (cinatra#42
 
 describe("pause claim columns: operator upgrade and bootstrap parity (cinatra#4245)", () => {
   it("core__0116 up emits exactly the bootstrap leaf's statements, then the lifecycle_repair column", () => {
-    const operator = operatorUp().map(normalized);
+    const operator = operatorDdl().map(normalized);
     const bootstrap = [
       ...agentRunPauseClaimSchemaQueries(FIXTURE).map((row) => row.text),
       ...repairColumnLine(FIXTURE),
@@ -130,12 +135,12 @@ describe("pause claim columns: operator upgrade and bootstrap parity (cinatra#42
   });
 
   it("adds every column with IF NOT EXISTS and each CHECK only while pg_constraint lacks its name", () => {
-    const [columns, phase, shape, , , repair] = operatorUp();
+    const [columns, phase, shape, , , repair] = operatorDdl();
     for (const name of ["pause_generation bigint NOT NULL DEFAULT 0", "pause_claim_token text", "pause_claim_phase text", "pause_claim_expires_at timestamptz"]) {
       expect(columns).toContain(`ADD COLUMN IF NOT EXISTS ${name}`);
     }
     expect(repair).toBe("ALTER TABLE lifecycle_repair ADD COLUMN IF NOT EXISTS paused_run_generation bigint");
-    const [, , , validatePhase, validateShape] = operatorUp();
+    const [, , , validatePhase, validateShape] = operatorDdl();
     for (const [stmt, name] of [[phase, PHASE_CHK], [shape, SHAPE_CHK]] as const) {
       expect(normalized(stmt)).toMatch(new RegExp(`IF NOT EXISTS \\( SELECT 1 FROM pg_constraint WHERE conname = '${name}' AND conrelid = 'agent_runs'::regclass \\) THEN ALTER TABLE agent_runs ADD CONSTRAINT ${name} CHECK`));
     }
@@ -240,6 +245,29 @@ describe("pause claim columns: no table scan under ACCESS EXCLUSIVE (pre-1 C4)",
       }
     },
   );
+});
+
+describe("pause claim columns: every lock wait is bounded (pre-2 fold)", () => {
+  it("up sets lock_timeout first and resets it last, around exactly the DDL", () => {
+    const all = operatorUp();
+    expect(all).toHaveLength(8);
+    expect(all[0]).toBe(`SET lock_timeout = ${migration.PAUSE_CLAIM_LOCK_TIMEOUT_MS}`);
+    expect(all.at(-1)).toBe("RESET lock_timeout");
+    expect(all.slice(1, -1)).toEqual(migration.pauseClaimDdlStatements);
+    expect(all.filter((stmt) => /lock_timeout/.test(stmt))).toHaveLength(2);
+  });
+
+  it("the bound is 5 s, under a fifth of the application's 27 s server cancel", () => {
+    // src/lib/db/pooled.ts: a pooled transaction's statement is cancelled at
+    // 0.9 x the 30 s POSTGRES_ASYNC_TIMEOUT_MS default.
+    const appServerCancelMs = 0.9 * 30_000;
+    expect(migration.PAUSE_CLAIM_LOCK_TIMEOUT_MS).toBe(5_000);
+    expect(migration.PAUSE_CLAIM_LOCK_TIMEOUT_MS).toBeLessThan(appServerCancelMs / 5);
+  });
+
+  it("the bootstrap leaf sets no lock_timeout of its own", () => {
+    for (const { text } of agentRunPauseClaimSchemaQueries(FIXTURE)) expect(text).not.toMatch(/lock_timeout/);
+  });
 });
 
 describe("pause claim columns: rollback and ledger (cinatra#4245)", () => {
