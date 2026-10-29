@@ -53,6 +53,16 @@
     "pin is adopted. See docs/internals/contracts/design-conformance-pin-drift.md.",
     "Adding a context here does NOT change the live protection: re-apply this file",
     "with the `gh api -X PUT` command at the top once this merges, or the new",
+    "requirement exists only on paper.",
+    "The `design-anchor-resolution` context is the design-anchor-resolution job in",
+    "gates.yml (cinatra#3144 G4, made blocking by cinatra#3555): its own job, not a",
+    "step in `gates`. It landed warn-first behind a job-level continue-on-error and",
+    "carries none now. It runs on every pull_request, merge_group, push to main and",
+    "workflow_dispatch with no paths filter, so the context always reports. It reads",
+    "the drawings through the design-source token, and with no token or drawings",
+    "copy it fails closed (exit 2), so it is red on a run without that credential.",
+    "Adding a context here does NOT change the live protection: re-apply this file",
+    "with the `gh api -X PUT` command at the top once this merges, or the new",
     "requirement exists only on paper."
   ],
   "required_status_checks": {
@@ -74,7 +84,8 @@
       "toast-banner-gate / toast-banner-gate",
       "gates",
       "gates-pnpm",
-      "design-pin-drift"
+      "design-pin-drift",
+      "design-anchor-resolution"
     ]
   },
   "enforce_admins": false,

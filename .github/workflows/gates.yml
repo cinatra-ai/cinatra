@@ -553,14 +553,15 @@ jobs:
   # source moved past the pin", this job asks "do the anchors this repository
   # RECORDS resolve in the drawings the pin governs" — the question the anchor
   # contract's digest cannot ask, because it hashes nothing from the drawings.
-  # It is landed WARN-FIRST: its context is not required until a separate pull
-  # request adds it to .github/branch-protections.json, so the state is visible
-  # without blocking anything. See scripts/ci/design-anchor-resolution.mjs.
+  # It landed WARN-FIRST and is now BLOCKING (cinatra#3555): the job carries no
+  # job-level continue-on-error, so its check run is the finding, and its
+  # context is listed in .github/branch-protections.json. The recorded set is
+  # empty and the check exits 0 on main. See
+  # scripts/ci/design-anchor-resolution.mjs.
   design-anchor-resolution:
     if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 10
-    continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

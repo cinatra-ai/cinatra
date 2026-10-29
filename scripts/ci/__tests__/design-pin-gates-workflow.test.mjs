@@ -7,9 +7,10 @@
 // pin it was graded against). A checker that exists and is never invoked is a
 // gate only on paper: it decides nothing, it turns nothing red, and the state
 // it was built to make visible stays exactly as silent as before it was
-// written. Both G3 and G4 are landed WARN-FIRST, which means the job runs and
-// the context is not required — so the job running is the whole of what
-// "visible" is, and it is pinned here.
+// written. The freshness gate (G3) is landed WARN-FIRST, which means the job
+// runs and the context is not required — so the job running is the whole of
+// what "visible" is, and it is pinned here. The anchor gate (G4) was landed
+// the same way and is now blocking (cinatra#3555), pinned below.
 //
 // The workflow is read LINE-BASED rather than through a yaml dependency: these
 // gate jobs are pure-node and install nothing, the convention
@@ -187,35 +188,45 @@ describe("every design-pin gate runs as its own job in the workflow", () => {
     expect(new Set(jobs).size).toBe(GATES.length);
   });
 
-  // THE ANCHOR GATE REPORTS, IT DOES NOT BLOCK (cinatra#3144 G1 item 6, G4).
-  // Its checker's own header says it is landed WARN-FIRST "so the state is
-  // visible without blocking anything", and this repository offers exactly one
-  // mechanism that makes that sentence true: a JOB-LEVEL `continue-on-error:
-  // true`, which keeps the workflow RUN green while the job's own check run
-  // still carries the finding. The STEP-level key on the token-mint step is a
-  // different thing entirely — it exists so a refused credential cannot abort
-  // the job silently, and the checker still fails CLOSED behind it — so the
-  // INDENT is the assertion here: the job's own indent + 2, never a step's.
+  // THE ANCHOR GATE BLOCKS (cinatra#3555 item 4, cinatra#3144 G4).
+  // It landed WARN-FIRST: a JOB-LEVEL `continue-on-error: true`, which kept the
+  // workflow RUN green while the job's own check run still carried the finding,
+  // with the context in the readiness inventory's `excluded` list as
+  // report-only. The follow-up the checker's header promised makes it blocking,
+  // and three records say so together; the first two are asserted here, the
+  // third (the branch-protection declaration) below.
   //
-  // The readiness inventory is the other half and cannot be left out: its
-  // generator reads that same declaration and drops the context into
-  // `excluded` as report-only. A context still sitting in `expected` is one a
-  // merge waits on, so the disposition would be undone while the workflow key
-  // still looked right.
-  it("reports the anchor-resolution gate without blocking a merge", () => {
+  //   1. the job declares no `continue-on-error` of its own. The STEP-level key
+  //      on the token-mint step is a different thing: it exists so a refused
+  //      credential cannot abort the job silently, and the checker still fails
+  //      CLOSED behind it (exit 2) - so the INDENT is the assertion here: the
+  //      job's own indent + 2, never a step's;
+  //   2. the readiness inventory lists the context as `expected`, so a merge
+  //      waits on it, and no longer as `excluded` as report-only. Its
+  //      generator reads the same declaration, so a context still sitting in
+  //      `excluded` is one the workflow key no longer justifies.
+  it("blocks a merge on the anchor-resolution gate", () => {
     const running = [...jobBlocks(workflow())].filter(([, block]) =>
       block.includes(ANCHOR_RESOLUTION_CHECKER_PATH),
     );
     expect(running).toHaveLength(1);
     const [job, block] = running[0];
 
-    expect(block, `${job} - job-level continue-on-error`).toMatch(/^ {4}continue-on-error: true$/m);
+    expect(block, `${job} - job-level continue-on-error`).not.toMatch(/^ {4}continue-on-error:/m);
 
     const readiness = JSON.parse(readFileSync(resolve(REPO_ROOT, INVENTORY_PATH), "utf8"));
-    expect(readiness.expected.map((row) => row.context), `${job} - expected`).not.toContain(job);
-    const dropped = readiness.excluded.find((row) => row.context === job);
-    expect(dropped, `${job} - excluded row`).toBeDefined();
-    expect(dropped.reason, `${job} - exclusion reason`).toMatch(/^report-only:/);
+    expect(readiness.expected.map((row) => row.context), `${job} - expected`).toContain(job);
+    expect(
+      readiness.excluded.find((row) => row.context === job),
+      `${job} - excluded row`,
+    ).toBeUndefined();
+  });
+
+  it("lists the anchor-resolution gate as a required branch-protection context", () => {
+    const protections = JSON.parse(
+      readFileSync(resolve(REPO_ROOT, ".github/branch-protections.json"), "utf8"),
+    );
+    expect(protections.required_status_checks.contexts).toContain("design-anchor-resolution");
   });
 });
 

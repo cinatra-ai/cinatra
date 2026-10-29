@@ -15,7 +15,7 @@ They refuse silence.
 | | what it compares | red when | warn-first |
 | --- | --- | --- | --- |
 | [`design-pin-freshness`](../../../scripts/ci/design-pin-freshness.mjs) | the pin against the design source's default branch | a governed drawing moved past the pinned revision | yes |
-| [`design-anchor-resolution`](../../../scripts/ci/design-anchor-resolution.mjs) | the recorded anchors against the drawings the pin governs | a recorded anchor resolves in no governed drawing | yes |
+| [`design-anchor-resolution`](../../../scripts/ci/design-anchor-resolution.mjs) | the recorded anchors against the drawings the pin governs | a recorded anchor resolves in no governed drawing | no, blocking (cinatra#3555) |
 | [`design-record-grammar`](../../../scripts/ci/design-record-grammar.mjs) | a pull request body against the pin on its branch | a graded section names no pin, or the wrong one | yes |
 
 Everything the three share — the pin grammar, the reader, the trigger rule —
@@ -247,6 +247,22 @@ the empty array), so the digest takes it as its fourth input.
 
 ## Rollout
 
-All three follow the pin-drift check's rollout: **warn-first**, with the
+The gates follow the pin-drift check's rollout: **warn-first**, with the
 `.github/branch-protections.json` edit that makes a context required landing as
 a **separate** pull request, per that file's own note.
+
+- **`design-anchor-resolution` is blocking** (cinatra#3555). Its job in
+  `.github/workflows/gates.yml` has no job-level `continue-on-error`. Its context
+  is listed in `.github/branch-protections.json` and mirrored in
+  `scripts/ci/merge-group-coverage-guard.mjs`, and
+  `.github/merge-readiness.json` lists it as an expected context (regenerated
+  with `node scripts/ci/merge-readiness-inventory.mjs --write`) instead of
+  excluding it as report-only. The recorded `anchorsUnresolvedAtPin` is the empty
+  array, and the check exits `0` on `main`. It reads the drawings through the
+  design-source token, so a run without that credential, or without a
+  `DESIGN_DRAWINGS_DIR` copy, fails closed (exit `2`) and is red.
+  `.github/branch-protections.json` is a declaration: the live protection changes
+  only when it is re-applied with the `gh api -X PUT` command at the top of it,
+  a separate administrator step.
+- **`design-pin-freshness` and `design-record-grammar` stay warn-first.** Each
+  becomes required in a pull request of its own.

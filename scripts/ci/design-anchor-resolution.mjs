@@ -86,8 +86,9 @@
 // while the capture recorder still grades pictures against them. A visible
 // control is still never excused HERE: every recorded owner anchor and every
 // capture selector other than the passive capture markers goes through the
-// drawing check. It is landed warn-first — its context is not
-// required until a separate pull request adds it.
+// drawing check. It landed warn-first and is now blocking (cinatra#3555): the
+// job has no job-level continue-on-error and its context is listed in
+// .github/branch-protections.json.
 //
 // Usage:
 //   node scripts/ci/design-anchor-resolution.mjs
