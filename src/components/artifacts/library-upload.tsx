@@ -683,6 +683,13 @@ function TypePickerPanel() {
             // an instance with many of them it is the picker's tallest region. It
             // scrolls inside its own box so the action row below it stays inside
             // the window and the admin can always confirm the meaning.
+            //
+            // While a confirmation is in flight the rows are disabled, so no
+            // key, press or Enter moves the choice and the highlighted row stays
+            // the row whose extension is being asserted, also when that
+            // confirmation fails. The rows are disabled in cmdk itself, not by
+            // refusing its value change: cmdk stores a moved value before it
+            // reports it, so a refusal would move the highlight off the choice.
             <Command
               value={selected ?? NO_CHOICE}
               onValueChange={(v) => {
@@ -701,6 +708,7 @@ function TypePickerPanel() {
                     <CommandItem
                       key={key}
                       value={key}
+                      disabled={busy}
                       onSelect={() => setSelected(key)}
                       aria-checked={chosen}
                       aria-label={`${t.displayName} ${t.objectTypeId ?? t.extension} ${t.extensionLabel}`}
