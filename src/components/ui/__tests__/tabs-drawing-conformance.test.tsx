@@ -17,7 +17,11 @@
 //    last tab and stretches to the page edge — the tablist takes the left
 //    portion of the row, the rule the right."
 //
-// NO DEPARTURE FOUND.
+// ONE DEPARTURE FOUND AND FIXED (cinatra#3189, G4): the face. In the drawing's
+// own vocabulary "sans" is its `--font-sans`, Archivo, commented "UI chrome",
+// and every drawn tab sets `font-family: var(--font-sans)`. The application's
+// Archivo token is `--font-display`, so the label carries `font-display`, in
+// the application's copy and in the SDK's copy (packages/sdk-ui).
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 
@@ -28,6 +32,11 @@ import {
   TabsListRow,
   TabsTrigger,
 } from "@/components/ui/tabs";
+import {
+  Tabs as SdkTabs,
+  TabsList as SdkTabsList,
+  TabsTrigger as SdkTabsTrigger,
+} from "../../../../packages/sdk-ui/src/ui/tabs";
 
 afterEach(cleanup);
 
@@ -53,10 +62,25 @@ describe('clause: "Tab labels are 13px sans"', () => {
     expect(renderTabs().triggers[0].className).toContain("text-[13px]");
   });
 
-  it("leaves the label in the sans face rather than the display or mono one", () => {
-    const cls = renderTabs().triggers[0].className;
+  it("sets the label in the drawing's sans face, Archivo (the app's font-display), never mono", () => {
+    const cls = renderTabs().triggers[0].className.split(/\s+/);
+    expect(cls).toContain("font-display");
     expect(cls).not.toContain("font-mono");
-    expect(cls).not.toContain("font-display");
+    expect(cls).not.toContain("font-sans");
+  });
+
+  it("sets the SDK copy's label in the same face", () => {
+    const { container } = render(
+      <SdkTabs defaultValue="all">
+        <SdkTabsList>
+          <SdkTabsTrigger value="all">All</SdkTabsTrigger>
+        </SdkTabsList>
+      </SdkTabs>,
+    );
+    const cls = (container.querySelector('[data-slot="tabs-trigger"]') as HTMLElement).className.split(/\s+/);
+    expect(cls).toContain("font-display");
+    expect(cls).toContain("text-[13px]");
+    expect(cls).not.toContain("font-mono");
   });
 });
 
