@@ -95,9 +95,22 @@
 //   node scripts/ci/design-anchor-resolution.mjs --github-annotations
 //   node scripts/ci/design-anchor-resolution.mjs --print-unresolved
 //
+// WHEN THE DRAWINGS CANNOT BE READ (cinatra#3555). This check is a required
+// context and it reads the drawings through a credential. A fork pull request
+// has no Actions secrets, a Dependabot-triggered run gets a secret store of its
+// own, and the App credential or the design source can be refused or down: in
+// each the read fails. A pull request, merge group or branch push whose diff
+// changes no path this checker reads (the touched-path rule of design-pin-drift, over
+// scripts/ci/design-pin-gates.paths.json, whose pin paths include every
+// file the checker imports or opens as data) cannot change what the check
+// would find, so that run exits 0 with a ::notice and reads no verdict. A run
+// whose diff does change such a path, a push to main, a dispatch, a run with no
+// diff base (every pin then counts as touched) and a run that cannot read its
+// pin, contract, path map or diff base all keep exit 2.
+//
 // Exit codes. A run takes the FIRST of these that applies, in this order:
 //   2  the gate could not read its pin, contract, path map, diff base or
-//      drawings ("could not run honestly")
+//      drawings ("could not run honestly"), except the untouched-diff run above
 //   1  a recorded `anchorsUnresolvedAtPin` disagrees with what this check
 //      finds, on any event
 //   2  the recorded set carries a selector form this matcher refuses
@@ -660,10 +673,22 @@ export async function runCli({
     try {
       drawings = await loadDrawings({ pin, env, createReader });
     } catch (err) {
-      if (err instanceof DesignSourceError) return cannotRun(`${err.message}.`);
-      return cannotRun(
-        err instanceof DesignPinError ? `${err.message}.` : "the drawings could not be read.",
-      );
+      const why =
+        err instanceof DesignSourceError || err instanceof DesignPinError
+          ? `${err.message}.`
+          : "the drawings could not be read.";
+      // A run that could not read the drawings decides nothing about a diff that
+      // changes no path this checker reads (see the header): it says so and
+      // exits 0. It certifies nothing, and it never takes this road on a push
+      // to main, on dispatch, with no diff base, or when any pin is touched.
+      if (!alwaysRed && touchedPinIds.length === 0) {
+        log(
+          `::notice title=design-anchor-resolution::the check did not run: ${why} ` +
+            "This diff changes no path the check reads, so the drawings could not change its verdict.",
+        );
+        return 0;
+      }
+      return cannotRun(why);
     }
     const pinAnchors = anchors.filter((a) => a.pinId === undefined || a.pinId === pin.id);
     reports.push(

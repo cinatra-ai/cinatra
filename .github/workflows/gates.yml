@@ -556,7 +556,10 @@ jobs:
   # It landed WARN-FIRST and is now BLOCKING (cinatra#3555): the job carries no
   # job-level continue-on-error, so its check run is the finding, and its
   # context is listed in .github/branch-protections.json. The recorded set is
-  # empty and the check exits 0 on main. See
+  # empty and the check exits 0 on main. A run that cannot read the drawings
+  # (a fork pull request, a Dependabot-triggered run, a refused App credential,
+  # an outage of the design source) exits 0 with a notice when its diff changes
+  # no path the checker reads, and 2 when it does. See
   # scripts/ci/design-anchor-resolution.mjs.
   design-anchor-resolution:
     if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
@@ -580,7 +583,9 @@ jobs:
       # carries there: a missing or refused credential must not abort the job
       # silently. It falls through to the checker, which fails CLOSED (exit 2,
       # "the gate could not run honestly") rather than certifying anchors it
-      # never compared.
+      # never compared. The one exception is a diff that changes no path the
+      # checker reads: there the drawings cannot change the verdict, so the
+      # checker exits 0 with a notice and certifies nothing.
       - name: Mint the design-source read token
         id: design-token
         continue-on-error: true

@@ -28,8 +28,10 @@
 //      costs a runner slot and nothing else;
 //   3. the three jobs are three DIFFERENT jobs.
 
-import { readFileSync, readdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -38,8 +40,10 @@ import { parseTriggers } from "../merge-group-coverage-guard.mjs";
 import { INVENTORY_PATH } from "../merge-readiness.mjs";
 import {
   ANCHOR_RESOLUTION_CHECKER_PATH,
+  COMMIT_BEARING_PINS,
   FRESHNESS_CHECKER_PATH,
   GLOBAL_PATHS,
+  MAP_PATH,
   RECORD_GRAMMAR_CHECKER_PATH,
   RECORD_GRAMMAR_WORKFLOW_PATH,
   WORKFLOW_PATH,
@@ -227,6 +231,130 @@ describe("every design-pin gate runs as its own job in the workflow", () => {
       readFileSync(resolve(REPO_ROOT, ".github/branch-protections.json"), "utf8"),
     );
     expect(protections.required_status_checks.contexts).toContain("design-anchor-resolution");
+  });
+
+  // A REQUIRED GATE THAT NEEDS A SECRET MUST NOT BLOCK A RUN THAT HAS NONE
+  // (cinatra#3555). The job reads the drawings through a credential minted in
+  // its own mint step. A fork pull request has no Actions secrets, a
+  // Dependabot-triggered run gets its own secret store instead, and the design
+  // source or the App installation can be down: in each the token is empty. The
+  // checker then exits 0 with a notice when the pull request changes no path it
+  // reads, and 2 when it does. The unit suite drives the checker; these tests
+  // drive the JOB'S OWN step text (the shell the runner runs) against the real
+  // checker in a throwaway git repository, so the base the step computes, the
+  // environment it passes and the checker's verdict are read together.
+  //
+  //   1. the checkout has the history the diff base needs (fetch-depth: 0);
+  //   2. the mint step keeps its STEP-level continue-on-error (an empty token
+  //      reaches the checker instead of aborting the job), and the job itself
+  //      sets no DESIGN_DRAWINGS_DIR (a pull request cannot point the checker
+  //      at its own drawings);
+  //   3. the step run with no credential and an untouched diff exits 0 with a
+  //      notice, and with a touched mapped path exits 2.
+  describe("the anchor-resolution job with no credential", () => {
+    const jobBlock = () => {
+      const running = [...jobBlocks(workflow())].filter(([, block]) =>
+        block.includes(ANCHOR_RESOLUTION_CHECKER_PATH),
+      );
+      expect(running).toHaveLength(1);
+      return running[0][1];
+    };
+
+    /** The `run:` text of the step named `name`, with its indentation removed. */
+    function stepRun(block, name) {
+      const lines = block.split("\n");
+      const at = lines.findIndex((l) => l.trim() === `- name: ${name}`);
+      expect(at, `${name} - step`).toBeGreaterThan(-1);
+      const run = lines.findIndex((l, i) => i > at && /^ {8}run: \|\s*$/.test(l));
+      expect(run, `${name} - run`).toBeGreaterThan(at);
+      const out = [];
+      for (let i = run + 1; i < lines.length; i++) {
+        if (lines[i].trim() !== "" && !/^ {10}/.test(lines[i])) break;
+        out.push(lines[i].replace(/^ {10}/, ""));
+      }
+      return out.join("\n");
+    }
+
+    it("has the history its diff base needs and keeps the mint step non-fatal", () => {
+      const block = jobBlock();
+      expect(block).toMatch(/^ {10}fetch-depth: 0$/m);
+      const mint = /- name: Mint the design-source read token\n((?: {8,}.*\n?)+)/.exec(block);
+      expect(mint, "mint step").not.toBeNull();
+      expect(mint[1]).toMatch(/^ {8}continue-on-error: true$/m);
+      expect(block).not.toContain("DESIGN_DRAWINGS_DIR:");
+    });
+
+    function runStep({ touchedPath }) {
+      const root = mkdtempSync(join(tmpdir(), "anchor-job-"));
+      const git = (...args) =>
+        execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.test", "-c", "commit.gpgsign=false", ...args], {
+          cwd: root,
+          encoding: "utf8",
+          env: { PATH: process.env.PATH, HOME: root, GIT_CONFIG_NOSYSTEM: "1" },
+        });
+      // The checker, its imports taken transitively, and the files it reads as data.
+      const files = new Set([ANCHOR_RESOLUTION_CHECKER_PATH, MAP_PATH]);
+      const todo = [ANCHOR_RESOLUTION_CHECKER_PATH];
+      while (todo.length) {
+        const rel = todo.pop();
+        const text = read(rel);
+        for (const m of text.matchAll(/(?:from|import)\s*\(?\s*["'](\.[^"']+)["']/g)) {
+          const dep = normalize(join(dirname(rel), m[1])).split("\\").join("/");
+          if (!files.has(dep)) {
+            files.add(dep);
+            todo.push(dep);
+          }
+        }
+      }
+      for (const p of COMMIT_BEARING_PINS) {
+        files.add(p.authority);
+        files.add(p.mirror);
+      }
+      for (const rel of files) {
+        mkdirSync(dirname(join(root, rel)), { recursive: true });
+        writeFileSync(join(root, rel), read(rel));
+      }
+      git("init", "-q", "-b", "main");
+      git("add", "-A");
+      git("commit", "-q", "-m", "base");
+      const before = git("rev-parse", "HEAD").trim();
+      mkdirSync(dirname(join(root, touchedPath)), { recursive: true });
+      writeFileSync(join(root, touchedPath), "changed\n");
+      git("add", "-A");
+      git("commit", "-q", "-m", "change");
+      // The expressions the runner would substitute: a push to a feature branch,
+      // so the baseline is the event's `before`.
+      const script = stepRun(jobBlock(), "Design Anchor Resolution")
+        .replaceAll("${{ github.event.pull_request.base.ref }}", "")
+        .replaceAll("${{ github.event.merge_group.base_sha }}", "")
+        .replaceAll("${{ github.event.before }}", before);
+      expect(script).not.toContain("${{");
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH,
+          HOME: root,
+          GITHUB_EVENT_NAME: "push",
+          GITHUB_REF_NAME: "feature/x",
+          DESIGN_SOURCE_TOKEN: "",
+        },
+      });
+      rmSync(root, { recursive: true, force: true });
+      return { code: result.status, out: `${result.stdout}\n${result.stderr}` };
+    }
+
+    it("exits 0 with a notice for a diff that changes no path the checker reads", () => {
+      const r = runStep({ touchedPath: "README.md" });
+      expect(r.out).toContain("::notice");
+      expect(r.code).toBe(0);
+    });
+
+    it("exits 2 for a diff that changes a path the checker reads", () => {
+      const r = runStep({ touchedPath: "src/lib/lifecycle/__tests__/anchor-contract-binding.test.ts" });
+      expect(r.out).toContain("could not run honestly");
+      expect(r.code).toBe(2);
+    });
   });
 });
 

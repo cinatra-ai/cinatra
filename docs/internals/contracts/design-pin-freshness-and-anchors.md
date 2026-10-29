@@ -23,7 +23,8 @@ lives in [`scripts/ci/lib/design-pin.mjs`](../../../scripts/ci/lib/design-pin.mj
 and the paths they trigger on are in
 [`scripts/ci/design-pin-gates.paths.json`](../../../scripts/ci/design-pin-gates.paths.json).
 Their unit suites ride the root Vitest include, so a failure in one reds a
-required check even while the gate jobs themselves are warn-first.
+required check even while the freshness and record-grammar gate jobs are
+warn-first.
 
 This page does not replace
 [the pin-drift check](./design-conformance-pin-drift.md), which compares the
@@ -259,10 +260,28 @@ a **separate** pull request, per that file's own note.
   with `node scripts/ci/merge-readiness-inventory.mjs --write`) instead of
   excluding it as report-only. The recorded `anchorsUnresolvedAtPin` is the empty
   array, and the check exits `0` on `main`. It reads the drawings through the
-  design-source token, so a run without that credential, or without a
-  `DESIGN_DRAWINGS_DIR` copy, fails closed (exit `2`) and is red.
+  design-source token, which some runs do not have, and the design source can be
+  down. Three classes of run are affected: a **fork** pull request (a fork run
+  has no Actions secrets), a **Dependabot**-triggered run (Dependabot runs get a
+  secret store of their own, not the Actions one) and an **outage** (the App
+  credential is refused, or the design source cannot be read with a credential
+  present). For such a run the checker decides by the diff, with the touched-path
+  rule of `design-pin-drift` over `scripts/ci/design-pin-gates.paths.json`:
+  - a pull request, merge group or branch push that changes **no path the
+    checker reads** exits `0` with a `::notice` and certifies nothing, since the
+    drawings could not change its verdict. The paths are the files the checker
+    imports (taken transitively) and the files it opens as data, and a test
+    derives that set from the checker itself and fails when one is missing from
+    the map;
+  - a run that **changes** such a path, a push to `main`, a dispatch, and a run
+    with no diff base (every pin then counts as touched) exit `2` and are red, as
+    does a run that cannot read its pin, contract, path map or diff base.
+
+  A re-run does not cure the exit `2` of a run whose diff touches a read path
+  while the credential or the design source is unavailable.
   `.github/branch-protections.json` is a declaration: the live protection changes
   only when it is re-applied with the `gh api -X PUT` command at the top of it,
-  a separate administrator step.
+  a separate administrator step. No workflow in `.github/workflows` applies that
+  file, so the re-apply is by hand.
 - **`design-pin-freshness` and `design-record-grammar` stay warn-first.** Each
   becomes required in a pull request of its own.

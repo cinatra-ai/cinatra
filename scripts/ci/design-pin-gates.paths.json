@@ -15,6 +15,8 @@
       "scripts/audit/chat-hitl-anchor-contract.json",
       "scripts/audit/lib/anchor-contract.mjs",
       "scripts/audit/lib/chat-hitl-capture-recorder.mjs",
+      "scripts/ci/lib/capture-record-contract.mjs",
+      "scripts/ci/design-pin-drift.mjs",
       "scripts/audit/chat-hitl-acceptance-gate.mjs",
       "src/lib/lifecycle/__tests__/anchor-contract-binding.test.ts"
     ]
