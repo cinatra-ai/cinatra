@@ -952,7 +952,8 @@ describe("runNodeTestFile — the real node runner, with short bounds", () => {
 });
 
 describe("runNodeTest and runNodeSuites — every file of a package, into the shared results map", () => {
-  const nodePkg = { id: "cinatra-ai/node-pack", dir: ".", testFiles: ["t/two.test.mjs", "t/empty.test.mjs"] };
+  // Any string is a results-map key; these ids are not of the owner/name form of a repository name.
+  const nodePkg = { id: "fixture:node-pack", dir: ".", testFiles: ["t/two.test.mjs", "t/empty.test.mjs"] };
 
   it("runs every file of the package and names each run in the detail", async () => {
     const res = await runNodeTest({ repoRoot: nodeDir, pkg: nodePkg, testTimeoutMs: 2000, fileTimeoutMs: 20_000 });
@@ -963,14 +964,14 @@ describe("runNodeTest and runNodeSuites — every file of a package, into the sh
 
   it("adds each node:test result to the vitest results map by its id, keeping the vitest entries", async () => {
     const vitestRes = green(["x.test.ts"]);
-    const results = new Map([["cinatra-ai/gated", vitestRes]]);
+    const results = new Map([["fixture:gated", vitestRes]]);
     const lines = [];
     const out = await runNodeSuites({ repoRoot: nodeDir, nodeRun: [nodePkg], jobs: 2, results, log: (l) => lines.push(l), testTimeoutMs: 2000, fileTimeoutMs: 20_000 });
     expect(out).toBe(results);
-    expect([...results.keys()].sort()).toEqual(["cinatra-ai/gated", "cinatra-ai/node-pack"]);
-    expect(results.get("cinatra-ai/gated")).toBe(vitestRes);
-    expect(results.get("cinatra-ai/node-pack")).toMatchObject({ ok: true, executedFiles: ["t/two.test.mjs"] });
-    expect(lines.some((l) => l.startsWith("::group::PASS cinatra-ai/node-pack [node:test]"))).toBe(true);
+    expect([...results.keys()].sort()).toEqual(["fixture:gated", "fixture:node-pack"]);
+    expect(results.get("fixture:gated")).toBe(vitestRes);
+    expect(results.get("fixture:node-pack")).toMatchObject({ ok: true, executedFiles: ["t/two.test.mjs"] });
+    expect(lines.some((l) => l.startsWith("::group::PASS fixture:node-pack [node:test]"))).toBe(true);
   });
 
   it("does nothing and prints nothing when no package is on the node:test road", async () => {
