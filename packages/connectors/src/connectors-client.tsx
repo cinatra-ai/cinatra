@@ -23,11 +23,11 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   Toolbar,
   ToolbarGroup,
+  ToolbarSearchInput,
   ToolbarSeparator,
 } from "@/components/ui/toolbar";
 import { iconForSlug } from "@/components/connector-brand-icons";
@@ -270,11 +270,17 @@ export function ConnectorsClient({
         <ToolbarSeparator />
         <ToolbarGroup>
           {/* Search field (§VII): renamed placeholder + a small ✕ that clears
-              the query, shown only while the field holds text. */}
-          <div className="relative">
-            <Input
+              the query, shown only while the field holds text. It is the
+              toolbar's own search pill (app-components.html §Toolbar:
+              "embedded controls: borderless"; the search field keeps its white
+              surface), not a standalone bordered Input. `type="text"` keeps
+              the browser's own search clear glyph off, so only this ✕ shows. */}
+          <div className="relative w-[180px] lg:w-[260px]">
+            <ToolbarSearchInput
+              type="text"
               placeholder="Search connectors"
-              className="h-8 w-[180px] pr-7 lg:w-[260px]"
+              aria-label="Search connectors"
+              className="pr-4"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
