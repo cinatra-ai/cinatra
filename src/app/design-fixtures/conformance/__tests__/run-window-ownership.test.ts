@@ -5,6 +5,9 @@ import { runWindowOwnershipHost, RUN_WINDOW_OWNERSHIP_HOSTS } from "../run-windo
 function root(markup: string): Element {
   const root = document.createElement("section"); root.innerHTML = markup; return root;
 }
+function marked(marker: string, markup: string): Element {
+  const wrap = document.createElement("div"); wrap.innerHTML = "<section " + marker + ">" + markup + "</section>"; return wrap.firstElementChild!;
+}
 const card = '<section data-lifecycle-card-host="run_card"><textarea data-testid="review-rationale" data-conformance-id="review-note-field-subordinate"></textarea><input name="subject"></section>';
 // The page window as the chrome draws it (cinatra#3487 item 3): §VI's
 // `review-prompt-window` around the page window's own `run-window` anchor.
@@ -142,6 +145,56 @@ describe("#3487 positive ownership guard", () => {
     const node = root(card + window.replace('</div></div></div>', '</div></div><button data-conformance-id="schedule-window-over">Over</button></div>'));
     expect(readRunWindowOwnership(node)).toMatchObject({ windows: 1, ownedWindows: 1, pageNotices: 1, interactiveNotices: 1 });
     expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "run")).toThrow(/interactive/);
+  });
+  // cinatra#3487 item 3, the SC of pre-review 2: the root element's own markers
+  // are read, and nothing above the root is. A real root is a plain wrapper.
+  it.each(["div", "section"])("accepts a plain <%s> root attached to the document", (tag) => {
+    const node = document.createElement(tag);
+    node.innerHTML = card + window;
+    document.body.append(node);
+    expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "run")).not.toThrow();
+    node.remove();
+  });
+  it("refuses a root that itself carries the composer marker", () => {
+    const node = marked("data-conversation-composer", card + window);
+    expect(readRunWindowOwnership(node)).toMatchObject({ composers: 1 });
+    for (const host of ["run", "review"] as const)
+      expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), host)).toThrow(/exactly one/);
+  });
+  it("refuses a root that itself carries the run-window anchor", () => {
+    const composer = '<div data-conversation-composer></div>';
+    const chat = marked('data-conformance-id="run-window"', card + composer);
+    expect(readRunWindowOwnership(chat)).toMatchObject({ windows: 1, composers: 1 });
+    expect(() => assertRunWindowOwnership(readRunWindowOwnership(chat), "chat")).toThrow(/Chat/);
+    const page = marked('data-conformance-id="run-window"', card);
+    expect(readRunWindowOwnership(page)).toMatchObject({ windows: 1, ownedWindows: 0 });
+    expect(() => assertRunWindowOwnership(readRunWindowOwnership(page), "run")).toThrow(/chrome/);
+  });
+  it("refuses a root that itself carries the field marker", () => {
+    const node = marked("data-run-window-field", card + window);
+    expect(readRunWindowOwnership(node)).toMatchObject({ windows: 2, ownedWindows: 1, unownedPrompts: 1 });
+    expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "run")).toThrow(/exactly one/);
+  });
+  it("refuses a root that itself carries the card marker around a window", () => {
+    const node = marked('data-lifecycle-card-host="run_card"', card + window);
+    expect(readRunWindowOwnership(node).promptsInCards).toBeGreaterThan(0);
+    expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "run")).toThrow(/inside/);
+  });
+  it("does not own a window by a page chrome above the root", () => {
+    const outer = document.createElement("div");
+    outer.setAttribute("data-run-window-host", "page-chrome");
+    outer.innerHTML = '<section>' + card + '<div data-conformance-id="run-window"><p data-conformance-id="schedule-window-over"></p></div></section>';
+    const reading = readRunWindowOwnership(outer.firstElementChild);
+    expect(reading).toMatchObject({ windows: 1, ownedWindows: 0, pageNotices: 0 });
+    expect(() => assertRunWindowOwnership(reading, "run")).toThrow(/chrome/);
+  });
+  it("counts an unanchored prompt control although a card stands above the root", () => {
+    const outer = document.createElement("div");
+    outer.setAttribute("data-lifecycle-card-host", "run_card");
+    outer.innerHTML = '<section>' + card + window + '<textarea></textarea></section>';
+    const reading = readRunWindowOwnership(outer.firstElementChild);
+    expect(reading).toMatchObject({ windows: 2, ownedWindows: 1, unownedPrompts: 1 });
+    expect(() => assertRunWindowOwnership(reading, "run")).toThrow(/exactly one/);
   });
   it("refuses chat's duplicate composer or run window", () => {
     for (const markup of [card + '<div data-conversation-composer></div><div data-conversation-composer></div>', card + window + '<div data-conversation-composer></div>'])
