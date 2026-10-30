@@ -77,3 +77,10 @@ export function agentRunStartedBySchemaQueries(schemaName: string): { text: stri
     { text: `CREATE INDEX IF NOT EXISTS agent_runs_started_by_run_id_idx ON "${s}"."agent_runs" (started_by_run_id, org_id, created_at) WHERE started_by_run_id IS NOT NULL` },
   ];
 }
+
+// cinatra#4220: the run's connector-instance binding. Operator-upgrade twin of
+// core__0114. Additive, nullable, no backfill, index or constraint.
+export function agentRunConnectorInstanceBindingSchemaQueries(schemaName: string): { text: string }[] {
+  const s = schemaName.replaceAll('"', '""');
+  return [{ text: `ALTER TABLE "${s}"."agent_runs" ADD COLUMN IF NOT EXISTS connector_instance_binding text` }];
+}

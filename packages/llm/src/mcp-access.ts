@@ -248,6 +248,12 @@ export type AgentRunMcpActor = {
    * Optional; mirrors the app-layer type.
    */
   verifiedStepId?: string;
+  /**
+   * The run's host-derived connector-instance binding (cinatra#4220), signed as
+   * the token's `pin` claim. Set by the bridge only from the run row.
+   * Optional; mirrors the app-layer type.
+   */
+  connectorInstancePin?: { connectorKey: string; instanceId: string };
 };
 
 export type AgentRunMcpActorTokenIssuer = (actor: AgentRunMcpActor) => string;

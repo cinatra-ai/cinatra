@@ -79,6 +79,13 @@ vi.mock("@/lib/content-editor-run-identity", () => ({
     resolveContentEditorIdentityForInstance(...a),
 }));
 
+// cinatra#4220 — the carrier run's connector-instance derivation (pinned by
+// host-content-editor-dispatch-binding-4220.test.ts); here it finds no binding,
+// so this suite's dispatch behaves as before.
+vi.mock("@/lib/connector-instance-write-authority", () => ({
+  deriveAgentRunConnectorInstanceBinding: async () => null,
+}));
+
 import { dispatchContentEditorViaA2A } from "@/lib/host-content-editor-dispatch";
 // Real (unmocked) — used to construct the exact rejection shape the guarded
 // createCarrierRun throws under an archived org, and to assert the typed

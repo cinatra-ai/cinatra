@@ -425,6 +425,12 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // Migration: see src/lib/drizzle-store.ts run_token_hash entry + core__0020
   //   (ALTER TABLE cinatra.agent_runs ADD COLUMN IF NOT EXISTS run_token_hash text).
   runTokenHash: text("run_token_hash"),
+  // cinatra#4220: the run's host-derived connector-instance binding, JSON-as-text
+  // {connectorKey, instanceId}. Set ONLY by the dispatcher
+  // (setAgentRunConnectorInstanceBinding) after the per-instance use gate;
+  // write-once; never a run-creation input. Signed into the run's MCP actor
+  // token as its pin. Migration core__0114 + agentRunConnectorInstanceBindingSchemaQueries.
+  connectorInstanceBinding: text("connector_instance_binding"),
   // dependent_install_id: the installed_extension row id a run executes AS
   // (cinatra#1392 Gap 2). Threaded onto the signed run lineage (ActorContext)
   // so the A2A dispatch seam resolves edge-bound serving against a TRUSTED

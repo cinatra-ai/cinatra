@@ -1,0 +1,7 @@
+{
+  "seq": "0114",
+  "file": "core/core__0114_agent-run-connector-instance-binding.mjs",
+  "summary": "An agent run records its host-derived connector-instance binding (cinatra#4220). Add nullable connector_instance_binding (JSON-as-text {connectorKey, instanceId}), written once by the dispatcher after the per-instance use check and signed into the run's MCP actor token as its pin. Fresh-install bootstrap twin in agentRunConnectorInstanceBindingSchemaQueries ships in the same change. No backfill, index, constraint or data rewrite. Historical rows stay null and run unpinned, as today. Idempotent up with ADD COLUMN IF NOT EXISTS; down drops only the new column.",
+  "destructive": false,
+  "tables": ["agent_runs"]
+}

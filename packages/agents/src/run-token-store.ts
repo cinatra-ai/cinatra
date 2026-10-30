@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
 import { db } from "./db";
 import { agentRuns, agentRunTokens } from "./schema";
 
@@ -117,4 +117,33 @@ export async function readAgentRunTokenHashById(
     .where(eq(agentRuns.id, runId))
     .limit(1);
   return row?.runTokenHash ?? null;
+}
+
+/**
+ * cinatra#4220 — record a run's host-derived connector-instance binding. Called
+ * ONLY by the dispatcher, after the per-instance use gate allowed it. WRITE-ONCE:
+ * an equal value is a no-op; a different value, or a missing run, throws. Never
+ * part of any run-creation input, so a cloned/child/resumed run never inherits it.
+ */
+export async function setAgentRunConnectorInstanceBinding(
+  runId: string,
+  binding: { connectorKey: string; instanceId: string },
+): Promise<void> {
+  if (!runId || !binding?.connectorKey || !binding?.instanceId) {
+    throw new Error("setAgentRunConnectorInstanceBinding requires a non-empty runId, connectorKey and instanceId.");
+  }
+  const value = JSON.stringify({ connectorKey: binding.connectorKey, instanceId: binding.instanceId });
+  const updated = await db
+    .update(agentRuns)
+    .set({ connectorInstanceBinding: value })
+    .where(
+      and(
+        eq(agentRuns.id, runId),
+        or(isNull(agentRuns.connectorInstanceBinding), eq(agentRuns.connectorInstanceBinding, value)),
+      ),
+    )
+    .returning({ id: agentRuns.id });
+  if (updated.length !== 1) {
+    throw new Error(`setAgentRunConnectorInstanceBinding: run ${runId} is missing or already bound to another connector instance.`);
+  }
 }
