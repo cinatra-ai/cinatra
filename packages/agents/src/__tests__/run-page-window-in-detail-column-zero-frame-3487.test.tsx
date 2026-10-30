@@ -293,7 +293,7 @@ vi.mock("../run-recommendation-core", () => ({
 
 import { SetupScreen } from "../instance-screens";
 import { RUN_WINDOW_HOST_ATTRIBUTE, RUN_WINDOW_HOST_VALUE } from "../run-page-chrome";
-import { readRunWindowOwnership } from "../../../../tests/e2e/design/conformance/run-window-ownership";
+import { assertRunWindowOwnership, readRunWindowOwnership } from "../../../../tests/e2e/design/conformance/run-window-ownership";
 
 /** The run page's own event stream, stubbed and taken away again. */
 class StubEventSource {
@@ -395,12 +395,37 @@ describe("cinatra#3487 item 3 -- the design-conformance reading of the real run 
     // The anchor is the window itself: the field the person types into is in it.
     expect(anchor.querySelector("[data-run-window-field]")).not.toBeNull();
 
-    expect(readRunWindowOwnership(container)).toMatchObject({
+    const reading = readRunWindowOwnership(container);
+    expect(reading).toMatchObject({
       windows: 1,
       ownedWindows: 1,
       promptsInCards: 0,
       composersInCards: 0,
       noticesInCards: 0,
+      unownedPrompts: 0,
+      composers: 0,
     });
+    expect(reading.cards).toBeGreaterThan(0);
+    // The run host's own assertion, as the fixtures route's reading applies it.
+    expect(() => assertRunWindowOwnership(reading, "run")).not.toThrow();
+  });
+
+  // The same real page plus one sibling outside every card and every window
+  // anchor: a second prompt is refused. The siblings are added to a copy of the
+  // rendered tree, so React's own nodes are not touched.
+  it.each<[string, string, Record<string, number>]>([
+    ["a composer", '<div data-conversation-composer></div>', { windows: 1, composers: 1 }],
+    ["an unanchored field with its send control", '<div data-run-window-field><button aria-label="Apply AI suggestion"></button></div>', { windows: 2, unownedPrompts: 1 }],
+    ["a bare textarea", '<textarea></textarea>', { windows: 2, unownedPrompts: 1 }],
+  ])("refuses the real page plus %s outside every card", async (_name, sibling, counts) => {
+    const { container } = render(await serverTree());
+    await waitFor(() => {
+      expect(container.querySelector(`${HOST} [data-run-window-field]`)).not.toBeNull();
+    });
+    const page = container.cloneNode(true) as HTMLElement;
+    page.insertAdjacentHTML("beforeend", sibling);
+    const reading = readRunWindowOwnership(page);
+    expect(reading).toMatchObject({ ownedWindows: 1, promptsInCards: 0, ...counts });
+    expect(() => assertRunWindowOwnership(reading, "run")).toThrow(/exactly one/);
   });
 });

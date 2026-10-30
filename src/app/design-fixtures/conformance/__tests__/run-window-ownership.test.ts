@@ -81,6 +81,68 @@ describe("#3487 positive ownership guard", () => {
     const contained = root('<section data-lifecycle-card-host="run_card">' + notice + '</section>' + window);
     expect(() => assertRunWindowOwnership(readRunWindowOwnership(contained), "run")).toThrow(/inside/);
   });
+  // cinatra#3487 item 3, pre-review 1: a prompt field, a textarea or the
+  // window's send control that no window anchor, lifecycle card or composer
+  // holds is a window of its own, so one page window plus such a sibling is two.
+  it.each([
+    '<div data-run-window-field></div>', '<textarea></textarea>', '<button aria-label="Apply AI suggestion"></button>',
+    '<div data-testid="chat-prompt-input" contenteditable="true"></div>', '<textarea data-conformance-id="chat-composer-primary"></textarea>',
+  ])("refuses an unanchored prompt control beside the page's own window: %s", (stray) => {
+    for (const host of ["run", "review"] as const) {
+      const reading = readRunWindowOwnership(root(card + window + '<div>' + stray + '</div>'));
+      expect(reading).toMatchObject({ windows: 2, ownedWindows: 1, unownedPrompts: 1 });
+      expect(() => assertRunWindowOwnership(reading, host)).toThrow(/exactly one/);
+    }
+  });
+  it("counts each unanchored prompt control once, and a field with its own send control as one", () => {
+    const loose = '<div><div data-run-window-field></div><textarea></textarea><button aria-label="Apply AI suggestion"></button></div>';
+    expect(readRunWindowOwnership(root(card + window + loose))).toMatchObject({ windows: 4, ownedWindows: 1, unownedPrompts: 3 });
+    const field = '<div data-run-window-field><textarea></textarea><button aria-label="Apply AI suggestion"></button></div>';
+    const reading = readRunWindowOwnership(root(card + window + field));
+    expect(reading).toMatchObject({ windows: 2, ownedWindows: 1, unownedPrompts: 1 });
+    for (const host of ["run", "review"] as const) expect(() => assertRunWindowOwnership(reading, host)).toThrow(/exactly one/);
+  });
+  it("keeps a subordinate field in a card and the page window's own field out of the unanchored count", () => {
+    expect(readRunWindowOwnership(root(card + window))).toMatchObject({ windows: 1, ownedWindows: 1, unownedPrompts: 0 });
+  });
+  it("refuses a composer beside the run or review page's own window", () => {
+    const node = root(card + window + '<div data-conversation-composer><textarea data-testid="chat-prompt-input"></textarea></div>');
+    expect(readRunWindowOwnership(node)).toMatchObject({ windows: 1, composers: 1, unownedPrompts: 0 });
+    for (const host of ["run", "review"] as const)
+      expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), host)).toThrow(/exactly one/);
+  });
+  it("refuses an unanchored prompt control beside chat's own composer", () => {
+    const composer = '<div data-conversation-composer><textarea data-testid="chat-prompt-input"></textarea></div>';
+    for (const stray of ['<textarea></textarea>', '<div data-run-window-field></div>', '<button aria-label="Apply AI suggestion"></button>']) {
+      const reading = readRunWindowOwnership(root(card + composer + stray));
+      expect(reading).toMatchObject({ windows: 1, composers: 1, unownedPrompts: 1 });
+      expect(() => assertRunWindowOwnership(reading, "chat")).toThrow(/Chat/);
+    }
+  });
+  // An anchor is read on the right node: the window is a strict descendant of the
+  // page chrome, and a card's own root node is inside the card.
+  it("refuses a run-window anchor drawn on the page chrome node itself", () => {
+    const node = root(card + '<div data-run-window-host="page-chrome" data-conformance-id="run-window"><div data-run-window-field></div></div>');
+    expect(readRunWindowOwnership(node)).toMatchObject({ windows: 1, ownedWindows: 0 });
+    for (const host of ["run", "review"] as const)
+      expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), host)).toThrow(/chrome/);
+  });
+  it("refuses a lifecycle card whose own root node carries the run-window anchor and the field", () => {
+    const node = root('<div data-run-window-host="page-chrome"><section data-lifecycle-card-host="run_card" data-conformance-id="run-window" data-run-window-field></section></div>');
+    expect(readRunWindowOwnership(node)).toMatchObject({ cards: 1, promptsInCards: 1 });
+    expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "run")).toThrow(/inside/);
+  });
+  it.each([
+    'data-conformance-id="run-window"', 'data-run-window-field', 'data-conversation-composer', 'data-conformance-id="schedule-window-over"',
+  ])("refuses a prompt marker on a lifecycle card's own root node: %s", (marker) => {
+    const node = root('<section data-lifecycle-card-host="run_card" ' + marker + '></section>' + window);
+    expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "run")).toThrow(/inside/);
+  });
+  it("refuses a read-only notice that is itself an interactive control", () => {
+    const node = root(card + window.replace('</div></div></div>', '</div></div><button data-conformance-id="schedule-window-over">Over</button></div>'));
+    expect(readRunWindowOwnership(node)).toMatchObject({ windows: 1, ownedWindows: 1, pageNotices: 1, interactiveNotices: 1 });
+    expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "run")).toThrow(/interactive/);
+  });
   it("refuses chat's duplicate composer or run window", () => {
     for (const markup of [card + '<div data-conversation-composer></div><div data-conversation-composer></div>', card + window + '<div data-conversation-composer></div>'])
       expect(() => assertRunWindowOwnership(readRunWindowOwnership(root(markup)), "chat")).toThrow(/Chat/);
