@@ -26,7 +26,13 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-type Pair = { userToken: string; transportToken: string; expiresIn: number };
+type Pair = {
+  userToken: string;
+  transportToken: string;
+  expiresIn: number;
+  userExpiresIn?: number;
+  sessionExpiresIn?: number;
+};
 type BridgeOptions = { onContext: (context: unknown) => void };
 
 const bridges: BridgeOptions[] = [];
@@ -48,9 +54,17 @@ vi.mock("@/lib/embed/embed-bridge.client", () => ({
 
 type SignInAnswer = { ok: true; credential: Pair } | { ok: false; reason: string };
 const runFrameSignIn = vi.fn<(selectors: unknown) => Promise<SignInAnswer>>();
+// The real sign-in reads this document's clock just before the request that
+// mints the pair and once its answer is read, and hands both readings to the
+// frame with the pair (cinatra#4217). The double does the same, so the frame's
+// renewal chain is armed exactly as it is after a real sign-in.
 vi.mock("@/lib/embed/frame-widget-session.client", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  runFrameSignIn: (selectors: unknown) => runFrameSignIn(selectors),
+  runFrameSignIn: async (selectors: unknown) => {
+    const mintedAt = Date.now();
+    const answer = await runFrameSignIn(selectors);
+    return answer.ok ? { ...answer, mintedAt, receivedAt: Date.now() } : answer;
+  },
 }));
 
 let frameHeaders: (() => Record<string, string>) | null = null;
@@ -135,10 +149,19 @@ const LIFE_S = 600;
 const LIFE_MS = LIFE_S * 1000;
 /** The longest delay a browser timer holds (2^31 - 1 ms). */
 const MAX_DELAY = 2_147_483_647;
+/**
+ * A pair that has reached its session cap: the user token and the session end
+ * with the pair (cinatra#4217). Nothing renews it, so the sign-in ends when the
+ * pair's own life runs out, which is the end these readings draw. The renewal
+ * itself, and the end that follows a renewed pair, are proven in
+ * embed-assistant-renewal.test.tsx.
+ */
 const pair = (n: number, expiresIn = LIFE_S): Pair => ({
   userToken: `cwu_secret_${n}`,
   transportToken: `cit_secret_${n}`,
   expiresIn,
+  userExpiresIn: expiresIn,
+  sessionExpiresIn: expiresIn,
 });
 const context = (threadId: string) => ({
   session: { assistant: "wordpress", threadId },
@@ -493,7 +516,12 @@ describe("reading 2: the sign-in-again card (embed-signin-again)", () => {
     expect(signInCard().sentence).toBe(FIRST);
   });
 
-  it("the life runs from the mint: a negotiation slower than the life ends the sign-in at once", async () => {
+  // cinatra#4217: the pair here is at its session cap, so the renewal chain
+  // holds it to its upper bound (the sign-in answer's reading plus the life
+  // plus 1 s) and ends the sign-in there. The negotiation answers inside that
+  // last second, after the pair's own end: the end is then the spent check's
+  // at the negotiation's answer, not the chain's.
+  it("the life runs from the mint: a negotiation slower than the life ends the sign-in at once (the spent check)", async () => {
     await render();
     await deliverContext();
     runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(1) });
@@ -502,13 +530,17 @@ describe("reading 2: the sign-in-again card (embed-signin-again)", () => {
     fetchThreadMessages.mockResolvedValueOnce([]);
     await clickSignIn();
     expect(phase()).toBe("authorizing");
-    await wait(LIFE_MS + 5_000);
+    await wait(LIFE_MS + 500);
+    expect(phase(), "the chain has not ended the sign-in: its bound is 1 s past the life").toBe("authorizing");
     await act(async () => {
       slow.resolve({ ok: true });
       await drain();
     });
-    await wait(0);
+    // No timer step here: the negotiation's answer itself ends the sign-in.
+    expect(columnSeeds, "no conversation mounted with the dead pair").toEqual([]);
+    expect(fetchThreadMessages, "no transcript read with the dead pair").not.toHaveBeenCalled();
     expect(signInCard().id).toBe("embed-signin-again");
+    expect(requestHeaders(), "the dead pair is dropped").toEqual({});
   });
 
   it.each([
@@ -793,7 +825,10 @@ describe("the sign-in ticket: each check and each move, tried on its own (cinatr
         fetchThreadMessages.mockResolvedValueOnce([]);
         await clickSignIn();
         expect(shown()).toBe("active");
-        expect(vi.getTimerCount(), "the second pair's end timer is armed").toBe(1);
+        // Two timers: the second pair's end timer, and the hold timer of its
+        // renewal chain (cinatra#4217), which holds the capped pair to its
+        // upper bound and renews nothing.
+        expect(vi.getTimerCount(), "the second pair's end timer and its chain's hold are armed").toBe(2);
         await act(async () => {
           firstEnd?.();
           await drain();

@@ -27,6 +27,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { sendAcrossRenewal } from "@cinatra-ai/agents/lifecycle-card-runtime";
 import {
   AgenticRunPanel,
   type SerializedAgentRunMessage,
@@ -193,7 +194,10 @@ function reviewSlotReader(
   const request = seedRequest(credential, runId);
   if (!request) return undefined;
   return async (signal) => {
-    const res = await fetch(request.url, { ...request.init, signal });
+    // cinatra#4217: the frame renews its credential while it stays open, so the
+    // headers are built again for every look, never kept from the first one.
+    const current = seedRequest(credential, runId) ?? request;
+    const res = await fetch(current.url, { ...current.init, signal });
     if (!res.ok) return null;
     const data = (await res.json()) as {
       reviewGate?: {
@@ -291,6 +295,27 @@ export function InlineAgentRunCard({
     // of a transient read race: 2 attempts with 250ms/750ms backoff.
     const RETRY_DELAYS_MS = [250, 750];
     let attempt = 0;
+    // cinatra#4217 (pre-1 MF5): the site widget's frame renews its credential
+    // while it stays open. Every look builds its request again, so a retry
+    // carries the credential held NOW, never the one of the first look. A look
+    // refused as forbidden is terminal, unless the request built now carries
+    // other headers than the refused one did: then the credential was renewed
+    // while the look was on its way, and the look is made once more with it.
+    // At most two such looks (RENEWED_SENDS), and each needs new headers, so this
+    // cannot loop; a cookie host's headers never change, so its refusal stays
+    // terminal exactly as before.
+    //
+    // FOLD 2 (pre-2 MUST-FIX 1): the server commits the renewed pair before its
+    // answer reaches the frame, so the refusal can come back BEFORE the renewed
+    // pair is installed, while the headers built now are still the refused
+    // ones. A refusal therefore first waits for the host's renewal to settle
+    // (bounded by the renewal request's own deadline; at once when none is on
+    // its way), and only then compares the headers.
+    //
+    // FOLD 3: that rule is now the lifecycle runtime's `sendAcrossRenewal`, the
+    // one every read of this surface takes (at most two renewed looks, none
+    // without a widget user token). An unmount ends its wait.
+    const ended = new AbortController();
 
     const request = seedRequest(credential, runId);
     if (!request) {
@@ -304,8 +329,15 @@ export function InlineAgentRunCard({
 
     const load = async (): Promise<void> => {
       try {
-        const res = await fetch(request.url, request.init);
-        if (cancelled) return;
+        const res = await sendAcrossRenewal(
+          credential.kind === "broker" ? credential.auth : null,
+          () => {
+            const sent = seedRequest(credential, runId) ?? request;
+            return fetch(sent.url, sent.init);
+          },
+          ended.signal,
+        );
+        if (cancelled || res === null) return;
         if (!res.ok) {
           const reason = classifyStatus(res.status);
           if (reason !== "forbidden" && attempt < RETRY_DELAYS_MS.length) {
@@ -339,6 +371,7 @@ export function InlineAgentRunCard({
     void load();
     return () => {
       cancelled = true;
+      ended.abort();
     };
   }, [runId, credential]);
 

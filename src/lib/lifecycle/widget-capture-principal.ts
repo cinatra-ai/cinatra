@@ -110,12 +110,15 @@ export function readLiveWidgetCapturePrincipal(
       connectionString: getPostgresConnectionString(),
       queries: [
         {
+          // cinatra#4217: for a renewal's grace window the spent row sits beside its
+          // successor (same jti, identical claims), and an expired one can linger
+          // until it is consumed or swept. The row with the latest expiry is read.
           text:
             `SELECT user_id, org_id, site_id, client, instance_id, site_origin, ` +
             `agent_slug, aud, scope, credential_version, ` +
             `${WIDGET_AUTH_SESSION_COLUMN}, ` +
             `(expires_at > now()) AS not_expired ` +
-            `FROM ${qTable(USER_TOKEN_TABLE)} WHERE jti = $1 LIMIT 1`,
+            `FROM ${qTable(USER_TOKEN_TABLE)} WHERE jti = $1 ORDER BY expires_at DESC LIMIT 1`,
           values: [jti],
         },
       ],

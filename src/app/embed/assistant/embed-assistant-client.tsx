@@ -97,9 +97,17 @@ import type { EmbedContext } from "@/lib/embed/bridge-protocol";
 // widget where a credential is ever created, and it is created HERE, inside the
 // Cinatra-served document, from a PKCE verifier no other party sees.
 import {
+  isValidFrameLife,
+  renewFrameCredential,
   runFrameSignIn,
   type FrameWidgetCredential,
 } from "@/lib/embed/frame-widget-session.client";
+// cinatra#4217 — the renewal chain that keeps that credential alive while the
+// frame stays open.
+import {
+  createFrameCredentialRenewal,
+  type FrameCredentialRenewal,
+} from "@/lib/embed/frame-credential-renewal.client";
 import { Button } from "@/components/ui/button";
 import { negotiateEmbedChatContract } from "./embed-chat-negotiate";
 // cinatra#2577 (epic #2564 S8d) — the host declaration that turns lifecycle
@@ -237,6 +245,10 @@ type MountedSession = { threadId: string; assistant: string };
  *  older sign-in find that its sign-in has ended. */
 type TicketedSession = MountedSession & { ticket: number };
 
+/** cinatra#4217 (pre-1 MF4) — the most reads one transcript restore makes: the
+ *  first, and one more for each renewal that overtook the read before. */
+const THREAD_READ_ATTEMPTS = 3;
+
 export type EmbedAssistantClientProps = {
   /** Server-resolved expected parent origin (§7). Empty when unresolvable — then
    *  the bridge posts nothing and the shell shows the neutral error card. */
@@ -307,7 +319,7 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   // So the conversation waits: the frame keeps its neutral waiting card for the
   // one round trip, and the column is mounted ONCE, already seeded. `false` only
   // between reaching `active` and the read answering (or failing) — both of
-  // which settle it.
+  // which settle it. A new sign-in sets it back to `false` (cinatra#4217).
   const [historySettled, setHistorySettled] = useState(false);
 
   // Session context (PUBLIC SELECTORS) and the CREDENTIAL, held ONLY here —
@@ -317,34 +329,52 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   // comes from this frame's own sign-in and never leaves it.
   const contextRef = useRef<EmbedContext | null>(null);
   const credentialRef = useRef<FrameWidgetCredential | null>(null);
+  const renewalRef = useRef<FrameCredentialRenewal | null>(null);
   const bridgeRef = useRef<EmbedBridge | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   // THE SIGN-IN'S END (cinatra#4357). Every sign-in takes a ticket. An END (the
-  // pair's life ran out), a NEW CONTEXT, a NEWER sign-in and an UNMOUNT each
-  // move the ticket on, so an answer that belongs to an older sign-in (the
-  // sign-in itself, its negotiation, its end timer, its restore, its parity
-  // seed or its column's turn status) finds the ticket moved and changes
-  // nothing: no credential, no phase, no history, no turn status, no timer.
+  // pair's life ran out, or the renewal chain ended), a NEW CONTEXT, a NEWER
+  // sign-in and an UNMOUNT each move the ticket on, so an answer that belongs
+  // to an older sign-in (the sign-in itself, its negotiation, its end timer,
+  // its restore, its parity seed or its column's turn status) finds the ticket
+  // moved and changes nothing: no credential, no phase, no history, no turn
+  // status, no timer.
+  //
+  // cinatra#4217 — the ticket is its own counter, NOT the renewal chain's
+  // generation: the chain's re-arms and holds must not make the negotiation,
+  // the restore or the parity seed that the same sign-in started look stale.
+  // A successful renewal keeps the ticket.
   const signInTicketRef = useRef(0);
   // The one timer that ends the current sign-in when its pair's life runs out.
   const signInEndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The current arm of that timer: every clear and every arm moves it on, so a
   // callback of an earlier arm changes nothing (`armSignInEnd`).
   const signInEndArmRef = useRef(0);
+  // cinatra#4217 with cinatra#4357 — the moment the pair the frame holds runs
+  // out (`null`: no usable life was named). The sign-in sets it at the mint
+  // and every renewal moves it to the renewed pair's end, so the check the
+  // negotiation's answer makes and the end timer read the pair held NOW.
+  const signInEndsAtRef = useRef<number | null>(null);
 
   const clearSignInEndTimer = useCallback(() => {
     clearSignInEnd({ timer: signInEndTimerRef, arm: signInEndArmRef });
   }, []);
 
-  // Drop the current sign-in: its timer, its ticket, its pair and everything the
-  // mounted conversation held. Then show the sign-in card in the given reading.
-  // The column unmounts because the phase leaves `active`; the history is reset
-  // so the NEXT sign-in mounts its column only after its OWN restore settles,
-  // never with this sign-in's transcript.
+  // Drop the current sign-in: its renewal chain, its timer, its ticket, its
+  // pair and everything the mounted conversation held. Then show the sign-in
+  // card in the given reading. The column unmounts because the phase leaves
+  // `active`; the history is reset so the NEXT sign-in mounts its column only
+  // after its OWN restore settles, never with this sign-in's transcript.
+  //
+  // cinatra#4217 — the chain is disposed FIRST, so no renewal runs behind
+  // either card and an answer still on its way reaches nobody. The chain's own
+  // END calls this too: disposing a chain that has just ended changes nothing.
   const dropSignIn = useCallback(
     (reading: SignInReading) => {
+      renewalRef.current?.dispose();
       clearSignInEndTimer();
+      signInEndsAtRef.current = null;
       signInTicketRef.current += 1;
       credentialRef.current = null;
       setSession(null);
@@ -416,8 +446,25 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   // the shape the card runtime reads. The runtime REFUSES to declare a host when
   // the credential is wrong for it, so a dropped field here means no card DOM and
   // no request, never a cookie-borne resolve.
+  //
+  // cinatra#4217 fold 2 — and the RENEWAL the readers must know about. The
+  // server commits a renewed pair before its answer reaches this frame, so a
+  // reader's request that left with the pair held now can be refused before the
+  // renewed pair is installed. `pending` says a renewal is on its way and
+  // `settled` waits for it; the chain installs a renewed pair (onRenewed) before
+  // it stops counting the request in flight, so a reader that waited builds its
+  // next request with the renewed pair. Both read the chain at call time.
   const lifecycleCardAuth = useMemo<LifecycleCardAuth>(
-    () => ({ headers: authHeaders, credentials: "omit" }),
+    () => ({
+      headers: authHeaders,
+      credentials: "omit",
+      renewal: {
+        pending: () => renewalRef.current?.inFlight === true,
+        settled: async () => {
+          await renewalRef.current?.quiesce();
+        },
+      },
+    }),
     [authHeaders],
   );
 
@@ -443,14 +490,53 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
     [lifecycleCardAuth, props.assistant, props.instanceId],
   );
 
+  // cinatra#4217 (pre-1 MF4) — A READ THAT CROSSED A RENEWAL IS READ AGAIN.
+  // The transcript read takes its headers once, when it is sent. If a renewal
+  // replaced that pair while the read was on its way, the server can refuse
+  // the old pair (its grace has passed, or its transport token has run out),
+  // and the shared reader answers that refusal as `null`, the same as "no
+  // transcript". So a `null` answer waits for any renewal in flight and, when
+  // the frame now holds another pair than the one the read carried, the read
+  // is made again with the pair held now. It is bounded: each repeat needs a
+  // pair the read has not carried yet, and there are at most
+  // THREAD_READ_ATTEMPTS reads. Nothing about the outcome is reported to the
+  // page.
+  const readThreadAcrossRenewal = useCallback(
+    async (threadId: string, isCurrent: () => boolean): Promise<UiMessage[] | null> => {
+      let carried = credentialRef.current;
+      let messages = await fetchThreadMessages(threadId, {
+        authHeaders,
+        credentialsMode: "omit",
+      });
+      for (let attempt = 1; messages === null && attempt < THREAD_READ_ATTEMPTS; attempt += 1) {
+        if (!isCurrent()) return null;
+        await renewalRef.current?.quiesce();
+        if (!isCurrent()) return null;
+        const held = credentialRef.current;
+        if (!held || held === carried) break;
+        carried = held;
+        messages = await fetchThreadMessages(threadId, {
+          authHeaders,
+          credentialsMode: "omit",
+        });
+      }
+      return messages;
+    },
+    [authHeaders],
+  );
+
   // cinatra#1998 (b) TEST-ONLY seam: load a seeded thread's assistant message and
   // render it deterministically through the mounted column (no live LLM turn).
   // Gated OFF in prod (`paritySeam` is null unless the server env is set), so
   // this fetch never runs for a real user. It cannot bypass auth — it runs only
   // AFTER the real handshake + frame sign-in + broker negotiation reached
   // `active`.
+  //
+  // cinatra#4217 — `isCurrent` is the sign-in attempt's ticket: an answer that
+  // arrives after a new context, a new sign-in, an ended chain or an unmount
+  // writes nothing. Arming the renewal chain does not move the ticket.
   const loadParitySeed = useCallback(
-    async (threadId: string, ticket: number) => {
+    async (threadId: string, isCurrent: () => boolean) => {
       // THROUGH THE BROKER, like everything else this surface asks (codex round
       // 1, finding 1 on the client). This used to be the file's one
       // `credentials: "include"` fetch — inert in production behind the server
@@ -459,39 +545,39 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
       // contain. It now reads the SAME route through the SAME shared function
       // with the SAME transport, so "every widget request omits credentials" is
       // a property of the file rather than a property of a gate.
-      const messages = await fetchThreadMessages(threadId, {
-        authHeaders,
-        credentialsMode: "omit",
-      });
+      const messages = await readThreadAcrossRenewal(threadId, isCurrent);
       // A seed that answers after its sign-in ended seeds nothing.
-      if (ticket !== signInTicketRef.current) return;
+      if (!isCurrent()) return;
       const assistantMsg = messages?.find((m) => m.role === "assistant");
       setSeededMessages([
         { id: "parity-seed", role: "assistant", content: assistantMsg?.content ?? "" },
       ]);
       setTurnStatus("finished");
     },
-    [authHeaders],
+    [readThreadAcrossRenewal],
   );
 
   // The broker-authenticated transcript read (cinatra#2683 item 1). Built from
   // the closure-held tokens at call time, exactly like every other request this
   // surface makes — the tokens never enter state, a prop, a log or the DOM.
+  //
+  // cinatra#4217 — bound to the sign-in attempt that started it, like the
+  // negotiation: a stale answer neither restores nor settles anything. The
+  // chain is armed while this read is still on its way; that does not make
+  // it stale. A read that a renewal overtook is read again with the renewed
+  // pair (readThreadAcrossRenewal, pre-1 MF4).
   const restoreThread = useCallback(
-    async (threadId: string, ticket: number) => {
-      const messages = await fetchThreadMessages(threadId, {
-        authHeaders,
-        credentialsMode: "omit",
-      });
+    async (threadId: string, isCurrent: () => boolean) => {
+      const messages = await readThreadAcrossRenewal(threadId, isCurrent);
       // A restore that answers after its sign-in ended neither seeds nor
       // settles: the next sign-in waits for its own (cinatra#4357).
-      if (ticket !== signInTicketRef.current) return;
+      if (!isCurrent()) return;
       if (messages && messages.length > 0) setRestoredMessages(messages);
       // A new thread, a denied read and a transport failure all SETTLE — the
       // column must open for every one of them, with whatever there was.
       setHistorySettled(true);
     },
-    [authHeaders],
+    [readThreadAcrossRenewal],
   );
 
   // §8 client-side handshake, then the COLUMN mount — only on `ok`, else the
@@ -504,22 +590,35 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   // mounts. The sign-in changed WHERE the credential comes from, and nothing
   // about what a reader then sees.
   //
-  // cinatra#4357: `ticket` is the sign-in this negotiation serves and `endsAt`
-  // the moment its pair's life runs out (`null`: no usable life was named). An
-  // answer for an older sign-in changes nothing. The end is armed only when the
-  // frame turns `active`: a gated frame mounts no conversation, so there is no
-  // sign-in to end there, and its card stays the gated card.
+  // cinatra#4357: `ticket` is the sign-in this negotiation serves. The moment
+  // its pair's life runs out is read from `signInEndsAtRef` when the
+  // negotiation answers (`null`: no usable life was named). The end is armed
+  // only when the frame turns `active`: a gated frame mounts no conversation,
+  // so there is no sign-in to end there, and its card stays the gated card.
+  //
+  // cinatra#4217 — resolves `true` only when it brought the phase to `active`;
+  // on `false` the caller drops the pair and the chain it armed, so no chain
+  // ever renews behind a gated card. `isCurrent` is the caller's sign-in
+  // ticket, read after the negotiation answers and BEFORE any state is touched:
+  // an answer that arrives after a new context, a newer sign-in, an ended chain
+  // or an unmount changes nothing — no phase, no session, no restore — and
+  // resolves `false`. The negotiation builds its headers from the pair the
+  // frame holds when it is sent, under the caller's renewal lease.
   const negotiateAndMount = useCallback(
-    async (session: MountedSession, ticket: number, endsAt: number | null) => {
+    async (
+      session: MountedSession,
+      ticket: number,
+      isCurrent: () => boolean,
+    ): Promise<boolean> => {
       try {
         const negotiation = await negotiateEmbedChatContract(authHeaders, {
           assistant: session.assistant, // "wordpress" | "drupal"
           parentOrigin: props.expectedParentOrigin, // the CMS origin the pair binds
         });
-        if (ticket !== signInTicketRef.current) return;
+        if (!isCurrent()) return false;
         if (!negotiation.ok) {
           setPhase({ kind: "gated", reason: negotiation.reason });
-          return;
+          return false;
         }
         // A pair whose life ran out while the negotiation was on its way ends
         // the sign-in HERE, before the frame turns `active`. A zero-delay timer
@@ -531,10 +630,17 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
         // left at that one reading. A second reading could see the life run out
         // after the check passed and arm a zero-delay end behind an `active`
         // frame, which is the same window again, only narrower.
+        //
+        // cinatra#4217: the chain defers every renewal while the negotiation
+        // is on its way (the lease), so the end read here is that of the pair
+        // the frame held when the negotiation was sent. A negotiation that
+        // outlasts that pair therefore ends the sign-in here; the pair is not
+        // renewed at the lease's release.
+        const endsAt = signInEndsAtRef.current;
         const lifeLeftMs = endsAt === null ? null : endsAt - Date.now();
         if (lifeLeftMs !== null && lifeLeftMs <= 0) {
           dropSignIn("again");
-          return;
+          return false;
         }
         setSession({ ...session, ticket });
         setPhase({ kind: "active" });
@@ -553,8 +659,8 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
         // place of a live turn, through the same mounted column.
         if (props.paritySeam) {
           // The seam supplies the transcript, so it settles the history too.
-          void loadParitySeed(props.paritySeam.threadId, ticket).finally(() => {
-            if (ticket === signInTicketRef.current) setHistorySettled(true);
+          void loadParitySeed(props.paritySeam.threadId, isCurrent).finally(() => {
+            if (isCurrent()) setHistorySettled(true);
           });
         } else {
           // The REAL restore. Best-effort by design: a new thread, a denied
@@ -562,11 +668,13 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
           // three leave the reader in the empty conversation they would have
           // had anyway. Nothing is reported to the page — a restore that told
           // the host whether a thread exists would be an oracle.
-          void restoreThread(session.threadId, ticket);
+          void restoreThread(session.threadId, isCurrent);
         }
+        return true;
       } catch {
-        if (ticket !== signInTicketRef.current) return;
+        if (!isCurrent()) return false;
         setPhase({ kind: "gated", reason: "handshake_failed" });
+        return false;
       }
     },
     [
@@ -579,6 +687,83 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
     ],
   );
 
+  // cinatra#4217 — KEEP THE PAIR ALIVE while the frame is open. Every consumer
+  // reads `credentialRef.current` at call time (authHeaders above, and the
+  // lifecycle card's per-request headers), so replacing the ref is the whole
+  // hand-over. The pair presented is spent by the renewal. A refusal that leaves
+  // the pair valid (the session cap, a rate limit) keeps it until its end; at
+  // that end, at once on any other refusal (a sign-out, a revoked site), and
+  // when a renewal request is still unanswered at its deadline, the chain
+  // ends: the pair is dropped and the frame shows the sign-in-again card
+  // (cinatra#4357). The end timer stays armed beside the chain and follows the
+  // pair the frame holds (onRenewed), so the sign-in ends at the earlier of
+  // that pair's end and the chain's own end; either one drops the chain and
+  // the pair together (dropSignIn).
+  //
+  // ONE chain per mount. The scheduler drops every timer and every renewal
+  // answer of a chain that was disposed or re-armed, so this effect's cleanup
+  // (an unmount), a new context and a new sign-in each cut the old chain off even
+  // while one of its renewals is in flight: its answer can neither replace the
+  // pair, nor change the phase, nor start another timer.
+  useEffect(() => {
+    const renewal = createFrameCredentialRenewal({
+      renew: async (current, signal) => {
+        const ctx = contextRef.current;
+        if (!ctx) return { ok: false };
+        return renewFrameCredential(
+          {
+            assistant: ctx.session.assistant,
+            instanceId: props.instanceId,
+            siteId: ctx.site?.siteId ?? null,
+          },
+          current,
+          // The chain aborts the request when it gives it up (a dispose, a new
+          // sign-in, or the request's deadline; pre-1 MF1, MF3).
+          { signal },
+        );
+      },
+      onRenewed: (credential) => {
+        credentialRef.current = credential;
+        // cinatra#4217 with cinatra#4357 — a renewal keeps the sign-in's
+        // ticket and moves its end to the renewed pair's life, counted from
+        // this answer like the sign-in's. While the end timer is armed (the
+        // frame is active), it is armed again for the renewed pair; that arm
+        // retires every earlier one, so the first pair's end never shows the
+        // sign-in-again card on a renewed session. Before `active` nothing is
+        // armed yet: the negotiation's answer reads the moved end.
+        const lifeMs = signInLifeMs(credential.expiresIn);
+        signInEndsAtRef.current = lifeMs === null ? null : Date.now() + lifeMs;
+        if (signInEndTimerRef.current === null) return;
+        if (lifeMs === null) {
+          clearSignInEndTimer();
+          return;
+        }
+        armSignInEnd(
+          { ticket: signInTicketRef, timer: signInEndTimerRef, arm: signInEndArmRef },
+          signInTicketRef.current,
+          lifeMs,
+          () => dropSignIn("again"),
+        );
+      },
+      onEnded: () => {
+        // The sign-in this chain served is over (a refused renewal, the
+        // session cap, a renewal given up at its deadline): the frame shows
+        // the sign-in-again card (cinatra#4357). dropSignIn moves the ticket,
+        // so a restore of it that is still on its way does not settle the
+        // next sign-in's history.
+        dropSignIn("again");
+      },
+    });
+    renewalRef.current = renewal;
+    return () => {
+      // An unmount or a new instance drops the chain AND the pair it kept.
+      renewal.dispose();
+      signInTicketRef.current += 1;
+      credentialRef.current = null;
+      if (renewalRef.current === renewal) renewalRef.current = null;
+    };
+  }, [props.instanceId, dropSignIn, clearSignInEndTimer]);
+
   // THE SIGN-IN THIS FRAME OWNS (cinatra#2674). Started by an explicit gesture,
   // because opening the hosted window is a navigation a person must have asked
   // for — a popup opened without a click is blocked by every browser, and a
@@ -589,12 +774,53 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   // timer, so it never inherits the end of an earlier pair. A failed or
   // cancelled sign-in shows the FIRST sign-in card, as the drawing draws it,
   // whichever card the person started from.
+  //
+  // cinatra#4217 — a new sign-in never inherits the old chain: it disposes it
+  // and drops the old pair FIRST. It then takes the next sign-in ticket: a
+  // newer sign-in, a new context, an ended chain or an unmount moves the
+  // ticket on, and this attempt's answer (success or failure) is then dropped
+  // instead of overwriting the newer state. The negotiation reads the same
+  // ticket before it touches any state, and so do the restore and the parity
+  // seed it starts.
+  //
+  // THE CHAIN IS ARMED AT THE MINT, at once, with the pair's two clock
+  // readings (result.mintedAt before the token request, result.receivedAt after
+  // its answer), so the pair's life is counted from its mint however long the
+  // negotiation then takes. The negotiation runs under a RENEWAL LEASE: while
+  // it is in flight the chain sends no renewal (one that falls due waits for the
+  // release), so the bearer the negotiation carries is never spent and replaced
+  // underneath it; the chain still holds and ends on time. The lease is released
+  // in `finally`, whatever the negotiation answers; a renewal that waited goes
+  // out at once then. A negotiation that ends gated disposes the chain and drops
+  // the pair, so nothing renews behind a gated card.
+  //
+  // The chain is armed only for a life it accepts (isValidFrameLife). The
+  // sign-in's own reader never hands the frame another one
+  // (credentialPairFrom); a pair whose life the chain does not accept is not
+  // renewed, and its end stays the end timer's alone (cinatra#4357), so the
+  // frame does not end such a sign-in at once.
+  //
+  // The dispose here is defence in depth: the sign-in card that calls this is
+  // reachable only after a new context (which disposed the chain), an ended
+  // chain or a failed sign-in (which armed nothing).
   const startSignIn = useCallback(() => {
     const ctx = contextRef.current;
-    if (!ctx) return;
+    const renewal = renewalRef.current;
+    if (!ctx || !renewal) return;
+    renewal.dispose();
     clearSignInEndTimer();
+    signInEndsAtRef.current = null;
+    credentialRef.current = null;
     signInTicketRef.current += 1;
     const ticket = signInTicketRef.current;
+    const isCurrent = () => renewalRef.current === renewal && signInTicketRef.current === ticket;
+    // A sign-in again (after an ended chain or a new context) waits for its
+    // OWN restore: the history the previous sign-in settled, and the transcript
+    // it restored or seeded, must not mount the column at once. Every road to
+    // `active` starts here, so this is the one place to forget them.
+    setHistorySettled(false);
+    setRestoredMessages(undefined);
+    setSeededMessages(undefined);
     setPhase({ kind: "authorizing" });
     void (async () => {
       const result = await runFrameSignIn({
@@ -607,7 +833,7 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
       });
       // A sign-in that answers after the frame moved on (a new context, a newer
       // sign-in, an unmount) lands nothing.
-      if (ticket !== signInTicketRef.current) return;
+      if (!isCurrent()) return;
       if (!result.ok) {
         // Neutral: the person may try again. No reason is surfaced and none is
         // sent anywhere — a failed sign-in must not become an oracle about which
@@ -619,16 +845,43 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
       // the mint is the last step of the sign-in, so this is its mint time to
       // within one network answer, and the server re-checks every use anyway.
       const lifeMs = signInLifeMs(result.credential.expiresIn);
-      const endsAt = lifeMs === null ? null : Date.now() + lifeMs;
+      signInEndsAtRef.current = lifeMs === null ? null : Date.now() + lifeMs;
       credentialRef.current = result.credential;
-      await negotiateAndMount(
-        {
-          threadId: ctx.session.threadId,
-          assistant: ctx.session.assistant,
-        },
-        ticket,
-        endsAt,
-      );
+      if (isValidFrameLife(result.credential.expiresIn)) {
+        renewal.arm(
+          result.credential,
+          {
+            expiresIn: result.credential.expiresIn,
+            userExpiresIn: result.credential.userExpiresIn,
+            sessionExpiresIn: result.credential.sessionExpiresIn,
+          },
+          result.mintedAt,
+          result.receivedAt,
+        );
+      }
+      // No renewal is in flight on a fresh chain, so this settles at once; it
+      // keeps the lease from ever being taken over a request already sent.
+      await renewal.quiesce();
+      if (!isCurrent()) return;
+      const release = renewal.lease();
+      let active = false;
+      try {
+        active = await negotiateAndMount(
+          {
+            threadId: ctx.session.threadId,
+            assistant: ctx.session.assistant,
+          },
+          ticket,
+          isCurrent,
+        );
+      } finally {
+        release();
+      }
+      if (!isCurrent()) return;
+      if (!active) {
+        renewal.dispose();
+        credentialRef.current = null;
+      }
     })();
   }, [props.instanceId, negotiateAndMount, clearSignInEndTimer]);
 
@@ -638,6 +891,10 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
       // a credential, and it goes and gets one itself. A new context is a new
       // start: whatever sign-in the frame held is dropped, and the person sees
       // the first sign-in card (cinatra#4357).
+      //
+      // cinatra#4217 — a new context never inherits the old chain or the old
+      // pair (dropSignIn disposes the chain and drops the pair), and an answer
+      // of a sign-in under the old context is stale.
       contextRef.current = context;
       dropSignIn("first");
     },
@@ -654,14 +911,32 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
       expectedAssistant: props.assistant,
       expectedInstanceId: props.instanceId,
       onContext,
-      onReject: () => setPhase({ kind: "error" }),
+      // cinatra#4217 (pre-1 NOTE 8): the error card mounts no column, so the
+      // pair and the chain of an earlier context serve nothing behind it. They
+      // are dropped, like a new context drops them: no renewal runs behind the
+      // error card. The sign-in's end timer is cleared with them, so it never
+      // turns the error card into the sign-in-again card (cinatra#4357).
+      onReject: () => {
+        renewalRef.current?.dispose();
+        clearSignInEndTimer();
+        signInEndsAtRef.current = null;
+        signInTicketRef.current += 1;
+        credentialRef.current = null;
+        setPhase({ kind: "error" });
+      },
     });
     bridgeRef.current = bridge;
     bridge.postReady();
     return () => {
       bridge.dispose();
     };
-  }, [props.expectedParentOrigin, props.assistant, props.instanceId, onContext]);
+  }, [
+    props.expectedParentOrigin,
+    props.assistant,
+    props.instanceId,
+    onContext,
+    clearSignInEndTimer,
+  ]);
 
   // §5 resize uplink: mirror the content height to the parent so it can size the
   // panel (the parent additionally CLAMPS to its cap). Observed, not polled — a
