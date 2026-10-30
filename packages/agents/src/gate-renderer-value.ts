@@ -16,12 +16,12 @@
  * verbatim, so a pack declares it in its step's `inputMessageSchema` and no
  * other place has to change.
  *
- * The object-level `required` list is NOT read. Mid-run gates already declare
- * `required: ["decision"]` for an answer the Continue itself gives (the
- * approval), and their renderers never write `decision` (the drafts and
- * recipients reviews write `userResponse`, the send confirmation writes
- * `campaignId`); a rule over that list would leave those gates with a Continue
- * that never comes back.
+ * The object-level `required` list is NOT read. Three mid-run gates of the
+ * email packs declare `required: ["decision"]`, and no renderer of theirs writes
+ * `decision` (the drafts and recipients reviews write `userResponse`, the send
+ * confirmation writes `campaignId`). The Continue's payload carries `approved`
+ * and `approvedAt` beside what the renderer wrote, so a rule over that list
+ * would hold those gates with a Continue that never comes back.
  *
  * The same reading of "nothing" as the setup road (`isBlankSubValue` in
  * schema-field-renderer.tsx, `isBlankSetupValue` in review-task-actions.ts):
@@ -40,7 +40,8 @@
  * object with a string `type`) is out of the rule on every surface: such a gate
  * is drawn through the generic dispatch renderer, which writes nothing into the
  * buffer, so a hold would never be released. `gateCarriesPresentationHint` is
- * the reading the run panel and the card already apply to choose that branch.
+ * that reading; the run panel and the card apply identical inline copies of it
+ * to choose that branch.
  */
 
 function isBlankRendererValue(value: unknown): boolean {

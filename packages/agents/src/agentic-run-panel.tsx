@@ -1346,13 +1346,13 @@ export function AgenticRunPanel({
         buffered: bufferedHitlValueRef.current,
         pendingAttachments: pendingAttachmentsRef.current,
       });
-      // cinatra#3380 — the composer is a second entrance to the same resume
-      // as the gate's Continue, so it is held by the same rule: a mid-run gate
-      // that declares a value its renderer must produce (`gate-renderer-value.ts`)
-      // is not resumed until the payload carries that value. Nothing is sent.
-      // A gate that carries a presentation hint is drawn through the generic
-      // dispatch renderer, which writes nothing, so it is out of the rule, as
-      // on its Continue.
+      // cinatra#3380 — a caller of the published submit is a second entrance
+      // to the same resume as the gate's Continue, so it is held by the same
+      // rule: a mid-run gate that declares a value its renderer must produce
+      // (`gate-renderer-value.ts`) is not resumed until the payload carries that
+      // value. Nothing is sent. A gate that carries a presentation hint is drawn
+      // through the generic dispatch renderer, which writes nothing, so it is out
+      // of the rule, as on its Continue.
       if (
         (ctx.xRenderer.endsWith(":output") || hasMidRunHitlBinding(ctx.xRenderer)) &&
         !gateCarriesPresentationHint(ctx.currentValues) &&

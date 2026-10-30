@@ -16,15 +16,18 @@
  *   - once the renderer writes it, the Continue is available and sends the
  *     renderer's value;
  *   - a gate that declares no such property (here with the object-level
- *     `required: ["decision"]` the email gates carry, which the Continue's own
- *     approval answers) keeps its Continue available before any write;
+ *     `required: ["decision"]` the email gates carry; no renderer writes
+ *     `decision`) keeps its Continue available before any write;
  *   - the chat composer's submit for the gate (the descriptor published through
  *     `onActiveGateChange`) is held by the same rule: before the pick it sends
  *     nothing and rejects; after the pick it sends; on a gate that declares
  *     nothing it sends at once;
  *   - a gate that carries a presentation hint is drawn through the generic
  *     dispatch renderer, which writes nothing, so it is out of the rule: its
- *     Continue and the composer send at once.
+ *     Continue and the composer send at once;
+ *   - a gate on a renderer that is not a mid-run binding (no `:output` suffix,
+ *     no `midRunHitl` entry) is out of the rule even when its schema declares a
+ *     value: the composer sends at once without that value, as on main.
  *
  * The renderer here is a stand-in registered under a test id; the rule names no
  * agent and no renderer.
@@ -108,6 +111,8 @@ vi.mock("../use-ag-ui-run-stream", () => ({
 const PICK_RENDERER_ID = "@cinatra-test/pick-agent:pick";
 const REVIEW_TASK_ID = "wayflow-task-3380";
 const PICKED_JSON = JSON.stringify({ artifactId: "a-2", representationRevisionId: "r-2" });
+/** A renderer id with no `:output` suffix and no `midRunHitl` registry entry. */
+const NOT_MID_RUN_RENDERER_ID = "@cinatra-test/plain-agent:plain";
 
 /** The gate declares that its renderer must produce `selectedIdeaJson`. */
 const DECLARING_SCHEMA: Record<string, unknown> = {
@@ -118,7 +123,7 @@ const DECLARING_SCHEMA: Record<string, unknown> = {
 };
 
 /** A gate that declares no renderer value: the email gates' object-level
- *  `required`, which the Continue's own approval answers. */
+ *  `required`, which no renderer writes and the rule does not read. */
 const UNDECLARING_SCHEMA: Record<string, unknown> = {
   type: "object",
   properties: {
@@ -158,6 +163,7 @@ const HINT_VALUES: Record<string, unknown> = {
 function streamResultFor(
   schema: Record<string, unknown>,
   values: Record<string, unknown> = { ideas: [{ artifactId: "a-1" }, { artifactId: "a-2" }] },
+  xRenderer: string = PICK_RENDERER_ID,
 ) {
   return {
     status: "pending_approval",
@@ -166,7 +172,7 @@ function streamResultFor(
     isLive: true,
     interruptContext: {
       schema,
-      xRenderer: PICK_RENDERER_ID,
+      xRenderer,
       values,
       reviewTaskId: REVIEW_TASK_ID,
     },
@@ -181,10 +187,11 @@ async function mountGate(
   schema: Record<string, unknown>,
   onActiveGateChange?: (runId: string, gate: { submit: GateSubmit } | null, instanceId: string) => void,
   values?: Record<string, unknown>,
+  xRenderer?: string,
 ) {
   const { useAgUiRunStream } = await import("../use-ag-ui-run-stream");
   (useAgUiRunStream as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
-    streamResultFor(schema, values),
+    streamResultFor(schema, values, xRenderer),
   );
   const { AgenticRunPanel } = await import("../agentic-run-panel");
   return render(
@@ -324,5 +331,27 @@ describe("AgenticRunPanel — a mid-run Continue waits for the renderer's declar
     await waitFor(() => expect(composer.submit).not.toBeNull());
     await composer.submit!("approve");
     await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+  });
+
+  it("lets the chat composer submit at once, without the value, on a declaring gate whose renderer is not a mid-run binding", async () => {
+    const composer: { submit: GateSubmit | null } = { submit: null };
+    await mountGate(
+      DECLARING_SCHEMA,
+      (_runId, gate) => {
+        if (gate) composer.submit = gate.submit;
+      },
+      undefined,
+      NOT_MID_RUN_RENDERER_ID,
+    );
+
+    await waitFor(() => expect(composer.submit).not.toBeNull());
+    await composer.submit!("approve");
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe(REVIEW_TASK_ID);
+    expect(payload.selectedIdeaJson).toBeUndefined();
   });
 });

@@ -4,9 +4,9 @@
  * `gate-renderer-value.ts` reads a gate's schema and the buffer its renderer
  * wrote. A property declared `"x-required": true` (with no `default`) is a value
  * the renderer must produce before the Continue may send. The object-level
- * `required` list is not read: the email gates declare `required: ["decision"]`
- * for an answer the Continue's own approval gives, and their renderers never
- * write `decision`.
+ * `required` list is not read: the email gates declare `required: ["decision"]`,
+ * no renderer of theirs writes `decision`, and the Continue's payload carries
+ * `approved`, so a rule over that list would hold those gates.
  *
  * The three surfaces that draw a mid-run Continue (the run panel, the stepper
  * and the conversation card) each read this rule; their own files pin them.

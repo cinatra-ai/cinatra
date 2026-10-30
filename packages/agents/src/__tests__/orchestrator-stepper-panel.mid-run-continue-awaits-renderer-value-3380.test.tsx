@@ -126,7 +126,7 @@ const DECLARING_SCHEMA: Record<string, unknown> = {
 };
 
 /** A gate that declares no renderer value: the email gates' object-level
- *  `required`, which the Continue's own approval answers. */
+ *  `required`, which no renderer writes and the rule does not read. */
 const UNDECLARING_SCHEMA: Record<string, unknown> = {
   type: "object",
   properties: {
