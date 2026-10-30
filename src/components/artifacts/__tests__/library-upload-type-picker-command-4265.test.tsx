@@ -630,4 +630,38 @@ describe("cinatra#4265 — the choice holds while a confirmation is in flight", 
     await waitFor(() => expect(checked(dialog)).toEqual(["false", "true"]));
     expect(actions.assertUploadMeaning).toHaveBeenCalledTimes(1);
   });
+
+  it("B2: while a Suggested chip's confirmation runs, the rows are disabled and hold the choice that stood; the chip asserts its own extension", async () => {
+    answer({
+      preselect: IDEA_EXT,
+      suggestions: [{ extension: POST_EXT, label: "Post · Blog Post", confidence: 0.55 }],
+    });
+    const asserted = held<unknown>();
+    actions.assertUploadMeaning.mockReturnValue(asserted.promise);
+    const dialog = await openPicker();
+    const root = commandRoot(dialog);
+    const chip = (await within(dialog).findByTestId("artifacts-picker-suggestion")) as HTMLButtonElement;
+    expect(checked(dialog)).toEqual(["true", "false"]);
+
+    fireEvent.click(chip);
+    await waitFor(() => expect(chip.disabled).toBe(true));
+    // The chip asserts its own extension, not the highlighted row's.
+    expect(actions.assertUploadMeaning).toHaveBeenCalledWith({ artifactId: ARTIFACT_ID, extension: POST_EXT });
+    expect(confirmButton(dialog).disabled).toBe(true);
+    expect(rows(dialog).map((r) => r.getAttribute("aria-disabled"))).toEqual(["true", "true"]);
+
+    fireEvent.click(rows(dialog)[1]);
+    root.focus();
+    press(root, "ArrowDown");
+    press(root, "Enter");
+    expect(checked(dialog)).toEqual(["true", "false"]);
+    expect(rows(dialog).map((r) => r.getAttribute("data-selected"))).toEqual(["true", "false"]);
+
+    asserted.settle({ ok: false, message: "The meaning was not set." });
+    await waitFor(() => expect(chip.disabled).toBe(false));
+    expect(checked(dialog)).toEqual(["true", "false"]);
+    expect(rows(dialog).map((r) => r.getAttribute("aria-disabled"))).toEqual(["false", "false"]);
+    expect(confirmButton(dialog).disabled).toBe(false);
+    expect(actions.assertUploadMeaning).toHaveBeenCalledTimes(1);
+  });
 });

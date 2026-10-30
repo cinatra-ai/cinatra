@@ -685,11 +685,13 @@ function TypePickerPanel() {
             // the window and the admin can always confirm the meaning.
             //
             // While a confirmation is in flight the rows are disabled, so no
-            // key, press or Enter moves the choice and the highlighted row stays
-            // the row whose extension is being asserted, also when that
-            // confirmation fails. The rows are disabled in cmdk itself, not by
-            // refusing its value change: cmdk stores a moved value before it
-            // reports it, so a refusal would move the highlight off the choice.
+            // key, press or Enter moves the choice: the rows hold the choice
+            // that stood when the confirmation began, also when it fails.
+            // Confirm asserts that row; a Suggested chip asserts its own
+            // extension, which need not be the highlighted row's. The rows are
+            // disabled in cmdk itself, not by refusing its value change: cmdk
+            // stores a moved value before it reports it, so a refusal would
+            // move the highlight off the choice.
             <Command
               value={selected ?? NO_CHOICE}
               onValueChange={(v) => {
