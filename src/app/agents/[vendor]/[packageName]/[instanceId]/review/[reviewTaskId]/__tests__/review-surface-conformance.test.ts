@@ -589,7 +589,8 @@ describe("§IV — LIFECYCLE prompt-window wiring (owner ruling 2026-07-25, cina
 
 describe("§I–III — run-embedded anchors: the revised spec's closed set is rendered bidirectionally", () => {
   // The run-embedded surface (design@5e5c53aff) added five anchors beyond
-  // the review-route chrome. This block asserts the CLOSED set of run-embedded
+  // the review-route chrome, and the run page's window drawing adds a sixth,
+  // `run-window` (cinatra#3487 item 3). This block asserts the CLOSED set of run-embedded
   // anchors bidirectionally: every spec anchor has a render site, and each render
   // site carries only spec anchors. `run-gate-notification` has NO DOM home (it is
   // a notification) — it is asserted BEHAVIORALLY against its builder.
@@ -648,7 +649,7 @@ describe("§I–III — run-embedded anchors: the revised spec's closed set is r
 
   it("render→spec: every run-embedded render site carries ONLY anchors in the revised spec's closed set (no invented affordance)", () => {
     // The full closed set the spec annotates at design@5e5c53aff (review-route
-    // anchors + the five run-embedded anchors + the documented host-standard panel).
+    // anchors + the six run-embedded anchors + the documented host-standard panel).
     // The window keeps the drawing's own id through cinatra#3487 — the window
     // moved out of the card and into the run page's chrome, its anchor did not.
     const RUN_EMBEDDED_IDS = ["run-surface", "run-step-rail", "run-chip-row", "run-gate-notification", "review-prompt-window", "run-window"];

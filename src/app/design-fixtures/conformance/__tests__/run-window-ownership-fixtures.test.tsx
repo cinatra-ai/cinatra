@@ -41,7 +41,11 @@ vi.mock("@/lib/generated/extensions.server", () => ({
   get STATIC_EXTENSION_MANIFEST() { throw new Error("Unexpected runtime install catalog read in static ownership fixture"); },
 }));
 import { RunWindowOwnershipFixture } from "../run-window-ownership-fixtures";
-import { OWNERSHIP_INPUT, OWNERSHIP_REVIEW_ANSWER } from "../run-window-ownership-fixture-data";
+import { OWNERSHIP_INPUT, OWNERSHIP_REVIEW_ANSWER, OWNERSHIP_REVIEW_VIEW } from "../run-window-ownership-fixture-data";
+import { ConversationColumn, CHAT_THREAD_HOST } from "@cinatra-ai/chat/conversation-column";
+import type { PromptFieldHandle } from "@cinatra-ai/sdk-ui/prompt-field";
+import type { WidgetSubmitHandle } from "@cinatra-ai/sdk-ui/widget";
+import { createChatWidgetRuntime } from "../../../../../packages/chat/src/widget-runtime";
 import { readRunWindowOwnership, assertRunWindowOwnership } from "../../../../../tests/e2e/design/conformance/run-window-ownership";
 import { sendRunWindowTurn } from "../../../../../packages/agents/src/run-window-actions";
 
@@ -70,6 +74,42 @@ describe("#3487 required static fixtures mount the shipped hosts", () => {
       expect(root?.querySelector('[data-testid="review-rationale"]')).not.toBeNull();
     }
     expect(sendRunWindowTurn).not.toHaveBeenCalled();
+  });
+});
+
+// The real chat column with a user message under edit (`requestEditMessageId`):
+// its editor is a textarea outside the composer and every card, and the one
+// declared exception to the reader's default-deny (cinatra#3487 item 3).
+function ChatEditing() {
+  const runtime = React.useMemo(() => createChatWidgetRuntime([], []), []);
+  const promptRef = React.useRef<PromptFieldHandle | null>(null);
+  const widgetSubmitRef = React.useRef<WidgetSubmitHandle | null>(null);
+  return <section data-run-window-ownership-host="chat"><ConversationColumn
+    host={CHAT_THREAD_HOST}
+    messages={[{ id: "ownership-user-turn", role: "user", content: "Edit this" },
+      { id: "ownership-turn", role: "assistant", content: "", dataParts: [OWNERSHIP_REVIEW_VIEW] }]}
+    isSlackMode animating={false} theme="github-light"
+    activeThreadId="ownership-thread" assistantHandleMap={new Map()}
+    taggedAssistantUserIds={[]} mentionables={[]} pausedParticipants={[]}
+    onTogglePause={() => {}} requestEditMessageId="ownership-user-turn"
+    onRequestEditMessage={() => {}} onEditStarted={() => {}}
+    streamingCount={0} isStreaming={() => false} onEditAndResend={() => {}}
+    onActivateResource={() => {}} widgetRuntime={runtime} widgetSubmitRef={widgetSubmitRef}
+    widgetRefreshKey={0} onActiveGateChange={() => {}} pendingExternalHandle={null}
+    typingIndicators={new Map()} chatViews={{}} promptRef={promptRef}
+    placeholder="Type a message..." promptStorageKey="conformance-window-chat-edit"
+    onSubmit={() => { throw new Error("This ownership reading never sends a turn"); }}
+    submitAriaLabel="Send message" onStop={() => {}}
+  /></section>;
+}
+describe("#3487 the real chat message editor", () => {
+  it("is drawn under its declared anchor, and chat's reading stays clean", async () => {
+    const { container } = render(<ChatEditing />);
+    const root = container.querySelector<HTMLElement>('[data-run-window-ownership-host="chat"]')!;
+    await waitFor(() => expect(root.querySelector("textarea[class*='resize-none']")).not.toBeNull(), { timeout: 10000 });
+    await waitFor(() => assertRunWindowOwnership(readRunWindowOwnership(root), "chat"), { timeout: 10000 });
+    expect(readRunWindowOwnership(root)).toMatchObject({ messageEditors: 1, unownedPrompts: 0, overfullHolders: 0, composers: 1 });
+    expect(root.querySelectorAll("[data-chat-message-editor] > textarea")).toHaveLength(1);
   });
 });
 

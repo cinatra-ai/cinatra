@@ -26,6 +26,7 @@ import {
   type RunWindowScreenRegistration,
 } from "../run-window-screen-context";
 
+import { assertRunWindowOwnership, readRunWindowOwnership } from "../../../../tests/e2e/design/conformance/run-window-ownership";
 afterEach(cleanup);
 beforeEach(() => {
   ports.submit = null;
@@ -109,6 +110,25 @@ describe("3487 — the page owns the existing disabled schedule notice", () => {
     </EmptyOuterScreen></RunPageChrome>);
     await waitFor(() => expect(container.querySelector(`${chrome} ${notice}`)).not.toBeNull());
     expect(container.querySelectorAll(notice)).toHaveLength(1);
+  });
+
+  it("draws the spent window's run-window anchor on the window node, and the reader's run assertion passes", async () => {
+    const { container } = render(<RunPageChrome>
+      <section data-lifecycle-card-host="run_card">
+        <SchedulePromptWindow {...scheduleProps} readOnly />
+      </section>
+    </RunPageChrome>);
+    await waitFor(() => expect(container.querySelector(`${chrome} ${notice}`)).not.toBeNull());
+    const anchors = container.querySelectorAll('[data-conformance-id="run-window"]');
+    expect(anchors).toHaveLength(1);
+    const anchor = anchors[0]!;
+    expect(anchor.matches(chrome)).toBe(false);
+    expect(anchor.matches('[data-conformance-id="schedule-prompt-window"]')).toBe(false);
+    expect(anchor.closest('[data-conformance-id="schedule-prompt-window"]')).not.toBeNull();
+    expect(anchor.querySelector(`[data-run-window-field][aria-disabled="true"] ${notice}`)).not.toBeNull();
+    const reading = readRunWindowOwnership(container);
+    expect(reading).toMatchObject({ windows: 1, ownedWindows: 1, pageNotices: 1, interactiveNotices: 0 });
+    expect(() => assertRunWindowOwnership(reading, "run")).not.toThrow();
   });
 
   it("notice changes publish a new drawn signature even when manipulation stays false", () => {
