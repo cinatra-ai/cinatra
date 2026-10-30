@@ -1839,7 +1839,7 @@ function UserMessageBubble({
 
   if (editing) {
     return (
-      <div className="mb-4 w-full rounded-control bg-surface-muted/60 px-4 py-3 shadow-sm">
+      <div data-chat-message-editor="" className="mb-4 w-full rounded-control bg-surface-muted/60 px-4 py-3 shadow-sm">
         <Textarea
           ref={textareaRef}
           value={draft}
