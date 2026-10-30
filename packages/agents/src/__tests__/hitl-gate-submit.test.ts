@@ -272,6 +272,50 @@ describe("liftRendererApprovalNote", () => {
     });
   });
 
+  it(":list-picker with several picks lifts every ticked id in tick order, each once, with its name (cinatra#3562)", () => {
+    const lift = liftRendererApprovalNote(
+      "@cinatra-ai/x:list-picker",
+      {
+        type: "list",
+        listIds: ["v2", "v1", "v2", "", 7],
+        listNames: ["Second view", "First list", "Second view", "Blank", "Number"],
+      },
+      NOW,
+    );
+    expect(JSON.parse(lift!.approvalNote)).toEqual({
+      type: "list",
+      listIds: ["v2", "v1"],
+      listNames: ["Second view", "First list"],
+      snapshotAt: NOW,
+    });
+    const unnamed = liftRendererApprovalNote(
+      "@cinatra-ai/x:list-picker",
+      { listIds: ["v3"] },
+      NOW,
+    );
+    expect(JSON.parse(unnamed!.approvalNote)).toEqual({
+      type: "list",
+      listIds: ["v3"],
+      listNames: [""],
+      snapshotAt: NOW,
+    });
+  });
+
+  it(":list-picker with an empty pick array keeps the one-pick snapshot (cinatra#3562)", () => {
+    const lift = liftRendererApprovalNote(
+      "@cinatra-ai/x:list-picker",
+      { listIds: [], listId: "l1", listName: "My list", memberCount: 5 },
+      NOW,
+    );
+    expect(JSON.parse(lift!.approvalNote)).toEqual({
+      type: "list",
+      listId: "l1",
+      listName: "My list",
+      memberCount: 5,
+      snapshotAt: NOW,
+    });
+  });
+
   it(":setup-form lifts the three sender fields (undefined keys dropped by JSON)", () => {
     const lift = liftRendererApprovalNote(
       "@cinatra-ai/x:setup-form",
