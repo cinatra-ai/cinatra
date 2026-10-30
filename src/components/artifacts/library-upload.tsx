@@ -686,12 +686,18 @@ function TypePickerPanel() {
             //
             // While a confirmation is in flight the rows are disabled, so no
             // key, press or Enter moves the choice: the rows hold the choice
-            // that stood when the confirmation began, also when it fails.
-            // Confirm asserts that row; a Suggested chip asserts its own
-            // extension, which need not be the highlighted row's. The rows are
-            // disabled in cmdk itself, not by refusing its value change: cmdk
-            // stores a moved value before it reports it, so a refusal would
-            // move the highlight off the choice.
+            // that stood when the confirmation began, also when it fails. One
+            // exception: when no row stood, a pre-selection that answers while
+            // the confirmation runs (a second upload re-reads the offer) fills
+            // the empty choice. Confirm asserts the chosen row; a Suggested
+            // chip asserts its own extension, which need not be the highlighted
+            // row's. The rows are disabled in cmdk itself, not by refusing its
+            // value change: cmdk stores a moved value before it reports it, so
+            // a refusal would move the highlight off the choice.
+            //
+            // The chosen row reads aria-selected, cmdk's own state of an
+            // option; it carries no aria-checked beside it, because the
+            // highlight and the choice are one state, not two.
             <Command
               value={selected ?? NO_CHOICE}
               onValueChange={(v) => {
@@ -705,14 +711,12 @@ function TypePickerPanel() {
               <CommandList label="What is this?" className="max-h-[45vh]">
                 {types.map((t) => {
                   const key = rowKey(t);
-                  const chosen = selected === key;
                   return (
                     <CommandItem
                       key={key}
                       value={key}
                       disabled={busy}
                       onSelect={() => setSelected(key)}
-                      aria-checked={chosen}
                       aria-label={`${t.displayName} ${t.objectTypeId ?? t.extension} ${t.extensionLabel}`}
                       data-testid="artifacts-picker-type"
                       // One row in the soft indigo tint, the chosen one, and no

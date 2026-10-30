@@ -17,8 +17,9 @@
 // cinatra#4265 rebuilt the picker on the Command menu primitives (spec
 // `specs/app-components.html` §Command menu), so the issue's second road holds:
 // the list is a listbox with one option per type (cmdk's own roles), and the
-// chosen entry reads checked (aria-checked) and selected (aria-selected). The
-// last case pins the drawn markup of that build.
+// chosen entry reads selected (aria-selected), with no aria-checked beside it:
+// the highlight and the choice are one state. The last case pins the drawn
+// markup of that build.
 //
 //   pnpm exec vitest run src/components/artifacts/__tests__/library-upload-type-picker-roles.test.tsx
 import "../../__tests__/access-picker-jsdom-shims";
@@ -139,25 +140,25 @@ describe("cinatra#3783 — the type picker's entries are selectable by role", ()
     expect(within(dialog).getByRole("listbox", { name: "What is this?" })).toBe(lists[0]);
   });
 
-  it("T-b: one option per offered type, named by its visible texts, none checked yet", async () => {
+  it("T-b: one option per offered type, named by its visible texts, none selected yet and none carrying aria-checked", async () => {
     const dialog = await openPicker();
     const list = within(dialog).getByRole("listbox");
     const options = within(list).getAllByRole("option");
     expect(options).toHaveLength(2);
     expect(within(list).getByRole("option", { name: IDEA_NAME })).toBe(options[0]);
     expect(within(list).getByRole("option", { name: POST_NAME })).toBe(options[1]);
-    expect(options.map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "false"]);
+    expect(options.map((r) => r.getAttribute("aria-checked"))).toEqual([null, null]);
     expect(options.map((r) => r.getAttribute("aria-selected"))).toEqual(["false", "false"]);
   });
 
-  it("T-c: the chosen entry reads checked and selected, and Confirm becomes available", async () => {
+  it("T-c: the chosen entry reads selected, with no aria-checked, and Confirm becomes available", async () => {
     const dialog = await openPicker();
     const post = within(dialog).getByRole("option", { name: POST_NAME });
     fireEvent.click(post);
-    expect(post.getAttribute("aria-checked")).toBe("true");
+    expect(post.hasAttribute("aria-checked")).toBe(false);
     expect(post.getAttribute("aria-selected")).toBe("true");
     const idea = within(dialog).getByRole("option", { name: IDEA_NAME });
-    expect(idea.getAttribute("aria-checked")).toBe("false");
+    expect(idea.hasAttribute("aria-checked")).toBe(false);
     expect(idea.getAttribute("aria-selected")).toBe("false");
     const confirm = within(dialog).getByRole("button", { name: "Confirm" }) as HTMLButtonElement;
     expect(confirm.disabled).toBe(false);

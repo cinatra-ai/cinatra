@@ -162,8 +162,12 @@ async function openPicker(): Promise<HTMLElement> {
   return dialog;
 }
 
-function checked(dialog: HTMLElement): (string | null)[] {
-  return rows(dialog).map((r) => r.getAttribute("aria-checked"));
+/** The choice per row: aria-selected, cmdk's own option state. No row carries
+ *  aria-checked beside it (the highlight and the choice are one state). */
+function chosen(dialog: HTMLElement): (string | null)[] {
+  const all = rows(dialog);
+  expect(all.map((r) => r.getAttribute("aria-checked"))).toEqual(all.map(() => null));
+  return all.map((r) => r.getAttribute("aria-selected"));
 }
 
 function press(root: HTMLElement, key: string): void {
@@ -336,14 +340,15 @@ describe("cinatra#4265 — the picker's rows at 13px and section labels in 10px 
 });
 
 describe("cinatra#4265 — the Command picker keeps the walk's readings and adds the keyboard", () => {
-  it("K1: pre-selected on the matcher's draft: one row data-selected=true and aria-checked=true, Confirm live", async () => {
+  it("K1: pre-selected on the matcher's draft: one row data-selected=true and aria-selected=true, no aria-checked, Confirm live", async () => {
     answer({ preselect: POST_EXT, suggestions: [] });
     const dialog = await openPicker();
-    const chosen = dialog.querySelectorAll('[data-testid="artifacts-picker-type"][data-selected="true"]');
-    expect(chosen).toHaveLength(1);
-    expect(chosen[0].getAttribute("aria-checked")).toBe("true");
-    expect(chosen[0].getAttribute("aria-selected")).toBe("true");
-    expect(chosen[0].getAttribute("aria-label")).toBe(POST_NAME);
+    const picked = dialog.querySelectorAll('[data-testid="artifacts-picker-type"][data-selected="true"]');
+    expect(picked).toHaveLength(1);
+    expect(picked[0].getAttribute("aria-selected")).toBe("true");
+    expect(picked[0].hasAttribute("aria-checked")).toBe(false);
+    expect(picked[0].getAttribute("aria-label")).toBe(POST_NAME);
+    expect(chosen(dialog)).toEqual(["false", "true"]);
     expect(dialog.querySelectorAll('[data-testid="artifacts-picker-confirm"]:not([disabled])')).toHaveLength(1);
     expect(within(dialog).queryAllByTestId("artifacts-picker-suggestion")).toHaveLength(0);
   });
@@ -353,7 +358,7 @@ describe("cinatra#4265 — the Command picker keeps the walk's readings and adds
     const dialog = await openPicker();
     await waitFor(() => expect(rows(dialog)).toHaveLength(2));
     expect(rows(dialog).map((r) => r.getAttribute("data-selected"))).toEqual(["false", "false"]);
-    expect(rows(dialog).map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "false"]);
+    expect(chosen(dialog)).toEqual(["false", "false"]);
     expect(confirmButton(dialog).disabled).toBe(true);
   });
 
@@ -365,16 +370,16 @@ describe("cinatra#4265 — the Command picker keeps the walk's readings and adds
     root.focus();
     fireEvent.keyDown(root, { key: "ArrowDown", code: "ArrowDown" });
     await waitFor(() =>
-      expect(rows(dialog).map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "true"]),
+      expect(chosen(dialog)).toEqual(["false", "true"]),
     );
     expect(rows(dialog).map((r) => r.getAttribute("data-selected"))).toEqual(["false", "true"]);
     fireEvent.keyDown(root, { key: "ArrowUp", code: "ArrowUp" });
     await waitFor(() =>
-      expect(rows(dialog).map((r) => r.getAttribute("aria-checked"))).toEqual(["true", "false"]),
+      expect(chosen(dialog)).toEqual(["true", "false"]),
     );
     fireEvent.keyDown(root, { key: "ArrowDown", code: "ArrowDown" });
     await waitFor(() =>
-      expect(rows(dialog).map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "true"]),
+      expect(chosen(dialog)).toEqual(["false", "true"]),
     );
     fireEvent.click(confirmButton(dialog));
     await waitFor(() => expect(actions.assertUploadMeaning).toHaveBeenCalledTimes(1));
@@ -391,7 +396,7 @@ describe("cinatra#4265 — the Command picker keeps the walk's readings and adds
     root.focus();
     fireEvent.keyDown(root, { key: "ArrowDown", code: "ArrowDown" });
     await waitFor(() =>
-      expect(rows(dialog).map((r) => r.getAttribute("aria-checked"))).toEqual(["true", "false"]),
+      expect(chosen(dialog)).toEqual(["true", "false"]),
     );
     expect(confirmButton(dialog).disabled).toBe(false);
   });
@@ -400,7 +405,7 @@ describe("cinatra#4265 — the Command picker keeps the walk's readings and adds
     answer({ preselect: IDEA_EXT, suggestions: [] });
     const dialog = await openPicker();
     fireEvent.pointerMove(rows(dialog)[1]);
-    expect(rows(dialog).map((r) => r.getAttribute("aria-checked"))).toEqual(["true", "false"]);
+    expect(chosen(dialog)).toEqual(["true", "false"]);
     expect(rows(dialog).map((r) => r.getAttribute("data-selected"))).toEqual(["true", "false"]);
   });
 });
@@ -412,9 +417,9 @@ describe("cinatra#4265 — the rest of the keyboard on the Command picker", () =
     const root = commandRoot(dialog);
     root.focus();
     press(root, "ArrowDown");
-    await waitFor(() => expect(checked(dialog)).toEqual(["false", "true"]));
+    await waitFor(() => expect(chosen(dialog)).toEqual(["false", "true"]));
     press(root, "Enter");
-    expect(checked(dialog)).toEqual(["false", "true"]);
+    expect(chosen(dialog)).toEqual(["false", "true"]);
     expect(rows(dialog).map((r) => r.getAttribute("data-selected"))).toEqual(["false", "true"]);
     expect(actions.assertUploadMeaning).not.toHaveBeenCalled();
     expect(confirmButton(dialog).disabled).toBe(false);
@@ -426,7 +431,7 @@ describe("cinatra#4265 — the rest of the keyboard on the Command picker", () =
     const root = commandRoot(dialog);
     root.focus();
     press(root, "Enter");
-    expect(checked(dialog)).toEqual(["false", "false"]);
+    expect(chosen(dialog)).toEqual(["false", "false"]);
     expect(confirmButton(dialog).disabled).toBe(true);
     expect(actions.assertUploadMeaning).not.toHaveBeenCalled();
   });
@@ -436,11 +441,11 @@ describe("cinatra#4265 — the rest of the keyboard on the Command picker", () =
     const dialog = await openPicker();
     const root = commandRoot(dialog);
     root.focus();
-    expect(checked(dialog)).toEqual(["true", "false", "false"]);
+    expect(chosen(dialog)).toEqual(["true", "false", "false"]);
     press(root, "End");
-    await waitFor(() => expect(checked(dialog)).toEqual(["false", "false", "true"]));
+    await waitFor(() => expect(chosen(dialog)).toEqual(["false", "false", "true"]));
     press(root, "Home");
-    await waitFor(() => expect(checked(dialog)).toEqual(["true", "false", "false"]));
+    await waitFor(() => expect(chosen(dialog)).toEqual(["true", "false", "false"]));
   });
 
   it("K9: with nothing chosen, ArrowUp chooses nothing", async () => {
@@ -449,7 +454,7 @@ describe("cinatra#4265 — the rest of the keyboard on the Command picker", () =
     const root = commandRoot(dialog);
     root.focus();
     press(root, "ArrowUp");
-    expect(checked(dialog)).toEqual(["false", "false"]);
+    expect(chosen(dialog)).toEqual(["false", "false"]);
     expect(confirmButton(dialog).disabled).toBe(true);
   });
 
@@ -458,13 +463,13 @@ describe("cinatra#4265 — the rest of the keyboard on the Command picker", () =
     const dialog = await openPicker();
     const root = commandRoot(dialog);
     root.focus();
-    expect(checked(dialog)).toEqual(["false", "true"]);
+    expect(chosen(dialog)).toEqual(["false", "true"]);
     press(root, "ArrowDown");
-    expect(checked(dialog)).toEqual(["false", "true"]);
+    expect(chosen(dialog)).toEqual(["false", "true"]);
     press(root, "ArrowUp");
-    await waitFor(() => expect(checked(dialog)).toEqual(["true", "false"]));
+    await waitFor(() => expect(chosen(dialog)).toEqual(["true", "false"]));
     press(root, "ArrowUp");
-    expect(checked(dialog)).toEqual(["true", "false"]);
+    expect(chosen(dialog)).toEqual(["true", "false"]);
   });
 });
 
@@ -526,7 +531,7 @@ describe("cinatra#4265 — the choice is kept per row", () => {
     const dialog = await openPicker();
     expect(rows(dialog)[2].getAttribute("aria-label")).toBe(`Meeting notes ${MANIFEST_EXT} Meeting Notes`);
     fireEvent.click(rows(dialog)[2]);
-    await waitFor(() => expect(checked(dialog)).toEqual(["false", "false", "true"]));
+    await waitFor(() => expect(chosen(dialog)).toEqual(["false", "false", "true"]));
     expect(rows(dialog)[2].getAttribute("data-selected")).toBe("true");
     fireEvent.click(confirmButton(dialog));
     await waitFor(() => expect(actions.assertUploadMeaning).toHaveBeenCalledTimes(1));
@@ -541,9 +546,9 @@ describe("cinatra#4265 — the choice is kept per row", () => {
     ]);
     const dialog = await openPicker();
     // The pre-selection names an extension; it lands on the first row of it.
-    expect(checked(dialog)).toEqual(["true", "false"]);
+    expect(chosen(dialog)).toEqual(["true", "false"]);
     fireEvent.click(rows(dialog)[1]);
-    await waitFor(() => expect(checked(dialog)).toEqual(["false", "true"]));
+    await waitFor(() => expect(chosen(dialog)).toEqual(["false", "true"]));
     expect(rows(dialog).map((r) => r.getAttribute("data-selected"))).toEqual(["false", "true"]);
     fireEvent.click(confirmButton(dialog));
     await waitFor(() => expect(actions.assertUploadMeaning).toHaveBeenCalledTimes(1));
@@ -554,7 +559,7 @@ describe("cinatra#4265 — the choice is kept per row", () => {
     answer(undefined);
     const dialog = await openPicker();
     fireEvent.click(rows(dialog)[1]);
-    await waitFor(() => expect(checked(dialog)).toEqual(["false", "true"]));
+    await waitFor(() => expect(chosen(dialog)).toEqual(["false", "true"]));
     // A second upload files while the picker is open: the offer is read again
     // for the new id, and this answer pre-selects the other row and adds a chip.
     answer({
@@ -568,7 +573,7 @@ describe("cinatra#4265 — the choice is kept per row", () => {
     );
     // The chip shows that the second answer has landed.
     await within(dialog).findByTestId("artifacts-picker-suggestion");
-    expect(checked(dialog)).toEqual(["false", "true"]);
+    expect(chosen(dialog)).toEqual(["false", "true"]);
   });
 });
 
@@ -594,7 +599,7 @@ describe("cinatra#4265 — the marketplace road leaves the CommandDialog and com
     // with its rows, pre-selected again on the matcher's draft.
     expect(actions.listInstalledTypesForArtifact).toHaveBeenCalledTimes(2);
     expect(commandRoot(again).querySelector('[role="listbox"]')).not.toBeNull();
-    expect(checked(again)).toEqual(["true", "false"]);
+    expect(chosen(again)).toEqual(["true", "false"]);
     expect(confirmButton(again).disabled).toBe(false);
   });
 });
@@ -617,17 +622,17 @@ describe("cinatra#4265 — the choice holds while a confirmation is in flight", 
     press(root, "ArrowDown");
     press(root, "End");
     press(root, "Enter");
-    expect(checked(dialog)).toEqual(["true", "false"]);
+    expect(chosen(dialog)).toEqual(["true", "false"]);
     expect(rows(dialog).map((r) => r.getAttribute("data-selected"))).toEqual(["true", "false"]);
 
     asserted.settle({ ok: false, message: "The meaning was not set." });
     await waitFor(() => expect(confirmButton(dialog).disabled).toBe(false));
     // The dialog stays open on the row it tried to assert, and the rows take a choice again.
-    expect(checked(dialog)).toEqual(["true", "false"]);
+    expect(chosen(dialog)).toEqual(["true", "false"]);
     expect(rows(dialog).map((r) => r.getAttribute("data-selected"))).toEqual(["true", "false"]);
     expect(rows(dialog).map((r) => r.getAttribute("aria-disabled"))).toEqual(["false", "false"]);
     fireEvent.click(rows(dialog)[1]);
-    await waitFor(() => expect(checked(dialog)).toEqual(["false", "true"]));
+    await waitFor(() => expect(chosen(dialog)).toEqual(["false", "true"]));
     expect(actions.assertUploadMeaning).toHaveBeenCalledTimes(1);
   });
 
@@ -641,7 +646,7 @@ describe("cinatra#4265 — the choice holds while a confirmation is in flight", 
     const dialog = await openPicker();
     const root = commandRoot(dialog);
     const chip = (await within(dialog).findByTestId("artifacts-picker-suggestion")) as HTMLButtonElement;
-    expect(checked(dialog)).toEqual(["true", "false"]);
+    expect(chosen(dialog)).toEqual(["true", "false"]);
 
     fireEvent.click(chip);
     await waitFor(() => expect(chip.disabled).toBe(true));
@@ -654,12 +659,12 @@ describe("cinatra#4265 — the choice holds while a confirmation is in flight", 
     root.focus();
     press(root, "ArrowDown");
     press(root, "Enter");
-    expect(checked(dialog)).toEqual(["true", "false"]);
+    expect(chosen(dialog)).toEqual(["true", "false"]);
     expect(rows(dialog).map((r) => r.getAttribute("data-selected"))).toEqual(["true", "false"]);
 
     asserted.settle({ ok: false, message: "The meaning was not set." });
     await waitFor(() => expect(chip.disabled).toBe(false));
-    expect(checked(dialog)).toEqual(["true", "false"]);
+    expect(chosen(dialog)).toEqual(["true", "false"]);
     expect(rows(dialog).map((r) => r.getAttribute("aria-disabled"))).toEqual(["false", "false"]);
     expect(confirmButton(dialog).disabled).toBe(false);
     expect(actions.assertUploadMeaning).toHaveBeenCalledTimes(1);

@@ -123,11 +123,12 @@ async function openPicker(): Promise<HTMLElement> {
   return dialog;
 }
 
-// The list is the Command menu's listbox of options (cinatra#4265).
-function checkedStates(dialog: HTMLElement): Array<string | null> {
-  return within(within(dialog).getByRole("listbox"))
-    .getAllByRole("option")
-    .map((r) => r.getAttribute("aria-checked"));
+// The list is the Command menu's listbox of options (cinatra#4265). The choice
+// reads aria-selected, cmdk's own option state; no option carries aria-checked.
+function chosenStates(dialog: HTMLElement): Array<string | null> {
+  const options = within(within(dialog).getByRole("listbox")).getAllByRole("option");
+  expect(options.map((r) => r.getAttribute("aria-checked"))).toEqual(options.map(() => null));
+  return options.map((r) => r.getAttribute("aria-selected"));
 }
 
 function confirmButton(dialog: HTMLElement): HTMLButtonElement {
@@ -156,10 +157,10 @@ describe("cinatra#3319 — the picker draws the derived meaning (§VI.1)", () =>
   it("R1: a meaning at or above threshold opens the picker pre-selected on it, before any press", async () => {
     answer({ preselect: IDEA_EXT, suggestions: [] });
     const dialog = await openPicker();
-    expect(within(dialog).getByRole("option", { name: IDEA_NAME }).getAttribute("aria-checked")).toBe(
+    expect(within(dialog).getByRole("option", { name: IDEA_NAME }).getAttribute("aria-selected")).toBe(
       "true",
     );
-    expect(checkedStates(dialog)).toEqual(["true", "false"]);
+    expect(chosenStates(dialog)).toEqual(["true", "false"]);
     expect(confirmButton(dialog).disabled).toBe(false);
   });
 
@@ -183,7 +184,7 @@ describe("cinatra#3319 — the picker draws the derived meaning (§VI.1)", () =>
     expect(within(dialog).getByText("Suggested")).toBeTruthy();
     const chip = within(dialog).getByRole("button", { name: /^Post · Blog Post\s+0\.61$/ });
     expect(chip.getAttribute("data-action")).toBe("confirm-suggestion -> meaning-asserted");
-    expect(checkedStates(dialog)).toEqual(["false", "false"]);
+    expect(chosenStates(dialog)).toEqual(["false", "false"]);
     expect(confirmButton(dialog).disabled).toBe(true);
   });
 
@@ -207,8 +208,8 @@ describe("cinatra#3319 — the picker draws the derived meaning (§VI.1)", () =>
       suggestions: [{ extension: POST_EXT, label: "Post · Blog Post", confidence: 0.55 }],
     });
     const dialog = await openPicker();
-    // Both draw together: the pre-selection checked, the other draft a chip.
-    expect(checkedStates(dialog)).toEqual(["true", "false"]);
+    // Both draw together: the pre-selection chosen, the other draft a chip.
+    expect(chosenStates(dialog)).toEqual(["true", "false"]);
     expect(within(dialog).getAllByTestId("artifacts-picker-suggestion")).toHaveLength(1);
     fireEvent.click(within(dialog).getByRole("button", { name: /^Post · Blog Post\s+0\.55$/ }));
     await waitFor(() => expect(actions.assertUploadMeaning).toHaveBeenCalledTimes(1));
@@ -295,7 +296,7 @@ describe("cinatra#3319 — the picker draws the derived meaning (§VI.1)", () =>
   it("G1: no meaning in the answer (today's server) leaves the picker as it was", async () => {
     answer(undefined);
     const dialog = await openPicker();
-    expect(checkedStates(dialog)).toEqual(["false", "false"]);
+    expect(chosenStates(dialog)).toEqual(["false", "false"]);
     expect(within(dialog).queryByText("Suggested")).toBeNull();
     expect(confirmButton(dialog).disabled).toBe(true);
   });
@@ -308,7 +309,7 @@ describe("cinatra#3319 — the picker draws the derived meaning (§VI.1)", () =>
       ],
     });
     const dialog = await openPicker();
-    expect(checkedStates(dialog)).toEqual(["false", "false"]);
+    expect(chosenStates(dialog)).toEqual(["false", "false"]);
     expect(within(dialog).queryByText("Suggested")).toBeNull();
     expect(confirmButton(dialog).disabled).toBe(true);
   });
@@ -317,7 +318,7 @@ describe("cinatra#3319 — the picker draws the derived meaning (§VI.1)", () =>
     answer({ preselect: IDEA_EXT, suggestions: [] });
     const dialog = await openPicker();
     fireEvent.click(within(dialog).getByRole("option", { name: POST_NAME }));
-    expect(checkedStates(dialog)).toEqual(["false", "true"]);
+    expect(chosenStates(dialog)).toEqual(["false", "true"]);
     fireEvent.click(confirmButton(dialog));
     await waitFor(() => expect(actions.assertUploadMeaning).toHaveBeenCalledTimes(1));
     expect(actions.assertUploadMeaning).toHaveBeenCalledWith({
