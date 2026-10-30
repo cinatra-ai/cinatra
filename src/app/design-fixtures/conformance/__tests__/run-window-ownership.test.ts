@@ -52,6 +52,12 @@ describe("#3487 positive ownership guard", () => {
       expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "review")).toThrow(/exactly one/);
     }
   });
+  it.each(["review-prompt-window", "schedule-prompt-window"])("refuses a second window anchor (%s) drawn inside the page's own run-window", (id) => {
+    const nested = '<div data-run-window-host="page-chrome"><div data-conformance-id="review-prompt-window"><div data-conformance-id="run-window"><div data-run-window-field></div><div data-conformance-id="' + id + '"></div></div></div></div>';
+    const reading = readRunWindowOwnership(root(card + nested));
+    expect(reading).toMatchObject({ windows: 2, ownedWindows: 1 });
+    expect(() => assertRunWindowOwnership(reading, "review")).toThrow(/exactly one/);
+  });
   it("refuses a run-window anchor inside a lifecycle card", () => {
     const node = root('<section data-lifecycle-card-host="run_card"><div data-conformance-id="run-window"></div></section>' + window);
     expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "run")).toThrow(/inside/);
