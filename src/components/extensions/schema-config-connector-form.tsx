@@ -72,7 +72,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import { StatusPill, type StatusPillStatus } from "@/components/ui/status-pill";
 import { Tabs, TabsContent, TabsListRow, TabsTrigger } from "@/components/ui/tabs";
 import { HELP_TAB_ID } from "@/lib/extension-schema-config";
@@ -1629,20 +1629,25 @@ function DynamicSelectRow({
 }
 
 /**
- * A boolean toggle (Switch). Only the HIDDEN input carries a `name`, serializing
- * `"true"`/`"false"` into `collectFormInputs` (the visible Switch is nameless);
- * the host write handler parses the exact string, not truthiness.
+ * An on / off choice, drawn as a checkbox (design: app-connectors §II, the
+ * config tab's on / off rows; app-components, "Switches are reserved for
+ * immediate-effect settings; checkboxes for confirmable form choices"). The
+ * value is written only when one of the form's own action buttons runs, so it
+ * is a form choice, never a switch. Only the HIDDEN input carries a `name`,
+ * serializing `"true"`/`"false"` into `collectFormInputs` (the visible
+ * checkbox is nameless); the host write handler parses the exact string, not
+ * truthiness. The box comes first and its label sits beside it.
  */
 function BooleanRow({ field, initialValue }: { field: BooleanField; initialValue?: string }) {
   const initial = initialValue !== undefined ? initialValue === "true" : field.defaultValue ?? false;
   const [checked, setChecked] = useState<boolean>(initial);
   return (
     <Field orientation="horizontal">
-      <FieldLabel htmlFor={`${field.key}-toggle`}>{field.label}</FieldLabel>
+      <Checkbox id={`${field.key}-toggle`} checked={checked} onCheckedChange={(next) => setChecked(next === true)} />
       <FieldContent>
         {/* Hidden input is the ONLY named element — collectFormInputs reads it. */}
         <Input type="hidden" name={field.key} value={checked ? "true" : "false"} readOnly />
-        <Switch id={`${field.key}-toggle`} checked={checked} onCheckedChange={setChecked} aria-label={field.label} />
+        <FieldLabel htmlFor={`${field.key}-toggle`}>{field.label}</FieldLabel>
         {field.description ? <FieldDescription>{field.description}</FieldDescription> : null}
       </FieldContent>
     </Field>

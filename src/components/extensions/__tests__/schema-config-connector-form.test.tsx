@@ -468,11 +468,11 @@ describe("SchemaConfigConnectorForm — field-kind expansion (#782)", () => {
     await renderForm({ installId: "i1", packageName: "@x/y", surface });
     const hidden = container.querySelector<HTMLInputElement>('input[name="allowNetwork"]');
     expect(hidden?.value).toBe("true");
-    // Only the hidden input carries a name — the visible Switch must be nameless.
+    // Only the hidden input carries a name — the visible checkbox must be nameless.
     const named = container.querySelectorAll('[name="allowNetwork"]');
     expect(named.length).toBe(1);
     expect(named.item(0)?.getAttribute("type")).toBe("hidden");
-    // Toggle the switch → hidden flips to "false".
+    // Untick the checkbox → hidden flips to "false".
     const toggle = container.querySelector<HTMLButtonElement>("#allowNetwork-toggle");
     expect(toggle).toBeTruthy();
     await act(async () => {
