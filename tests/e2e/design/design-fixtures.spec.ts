@@ -35,6 +35,25 @@ async function setTheme(page: import("@playwright/test").Page, theme: "cinatra" 
   await page.reload({ waitUntil: "networkidle" });
   // 4. Wait for fonts to settle so AA hinting is stable across runs.
   await page.evaluate(() => document.fonts?.ready ?? Promise.resolve());
+  // 5. Wait until the pairs card's two islands both read `timed-out`
+  //    (cinatra#4188), in ONE reading inside the page: an empty, partial or
+  //    otherwise-settled card never passes. They reach their failed-body plate
+  //    at once when the frame serves the island's denial, or at their
+  //    12-second bound.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() =>
+          Array.from(
+            document.querySelectorAll(
+              '[data-fixture="review-target-pairs"] [data-conformance-id="review-target-island"]',
+            ),
+            (island) => island.getAttribute("data-island-load-state"),
+          ),
+        ),
+      { timeout: 30_000 },
+    )
+    .toEqual(["timed-out", "timed-out"]);
 }
 
 async function expectAxeClean(page: import("@playwright/test").Page, label: string) {
