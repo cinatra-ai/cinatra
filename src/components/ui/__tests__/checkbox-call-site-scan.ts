@@ -1465,42 +1465,150 @@ export function isSwitchModule(spec: string): boolean {
   return /(?:^|[/-])switch(?:\/index)?(?:\.[cm]?[jt]sx?)?$/i.test(spec);
 }
 
-/**
- * Whether a file declares a function named Switch itself and exports it under that name (cinatra#4334 cure, the
- * ruling that the Switch lives in the module the row already imported). All must hold: a top-level function
- * declaration `function Switch` with a body; exported by `export function Switch` or by `export { Switch }` with no
- * module specifier and no rename; and no import binding the name Switch in the file. A re-export (`export { Switch }
- * from "m"`), an alias in either direction (`export { Box as Switch }`, `export { Switch as Tick }`), a local that is
- * not exported, a name imported from elsewhere and exported on, a `const Switch`, a default export and an ambient
- * declaration are none of these.
- */
-export function declaresAndExportsSwitch(sf: ts.SourceFile): boolean {
-  let declared = false;
-  let exported = false;
-  for (const st of sf.statements) {
-    if (ts.isFunctionDeclaration(st) && st.name?.text === "Switch" && st.body !== undefined) {
-      declared = true;
-      if (hasModifier(st, ts.SyntaxKind.ExportKeyword) && !hasModifier(st, ts.SyntaxKind.DefaultKeyword)) exported = true;
-    } else if (ts.isExportDeclaration(st) && !st.isTypeOnly && st.moduleSpecifier === undefined && st.exportClause && ts.isNamedExports(st.exportClause)) {
-      for (const e of st.exportClause.elements) {
-        if (!e.isTypeOnly && e.name.text === "Switch" && (e.propertyName ?? e.name).text === "Switch") exported = true;
-      }
-    }
-  }
-  return declared && exported && !collectBindings(sf).imports.some(([name]) => name === "Switch");
+const SWITCH_NAME = "Switch";
+
+/** An assignment operator (`=`, `+=`, ..., `||=`, `&&=`, `??=`). */
+function isAssignmentKind(kind: ts.SyntaxKind): boolean {
+  return kind >= ts.SyntaxKind.FirstAssignment && kind <= ts.SyntaxKind.LastAssignment;
 }
 
-/** The specifiers a file imports the plain name Switch from (`import { Switch } from "m"`; not renamed, not type-only). */
-export function plainSwitchImports(sf: ts.SourceFile): string[] {
-  const out: string[] = [];
-  for (const st of sf.statements) {
-    if (!ts.isImportDeclaration(st) || !isStringLike(st.moduleSpecifier) || st.importClause?.isTypeOnly) continue;
-    const nb = st.importClause?.namedBindings;
-    if (nb && ts.isNamedImports(nb) && nb.elements.some((e) => !e.isTypeOnly && e.propertyName === undefined && e.name.text === "Switch")) {
-      out.push(st.moduleSpecifier.text);
+/**
+ * Whether the identifier is written to: the target of an assignment or compound assignment, of `++` or `--`, the
+ * variable of a `for (x in y)` or `for (x of y)`, or a name inside a destructuring assignment pattern
+ * (`[x] = a`, `({ x } = a)`, `({ k: x } = a)`, `[...x] = a`, `[x = 1] = a`).
+ */
+function isWriteTarget(n: ts.Node): boolean {
+  let cur: ts.Node = n;
+  for (;;) {
+    const p = cur.parent;
+    if (p === undefined) return false;
+    if (
+      ts.isParenthesizedExpression(p) || ts.isNonNullExpression(p) || ts.isAsExpression(p) || ts.isTypeAssertionExpression(p) ||
+      ts.isSatisfiesExpression(p) || ts.isSpreadElement(p) || ts.isSpreadAssignment(p) || ts.isArrayLiteralExpression(p) || ts.isObjectLiteralExpression(p)
+    ) {
+      cur = p;
+      continue;
     }
+    if (ts.isPropertyAssignment(p) && p.initializer === cur) {
+      cur = p;
+      continue;
+    }
+    if (ts.isShorthandPropertyAssignment(p)) {
+      if (p.name !== cur) return false;
+      cur = p;
+      continue;
+    }
+    if (ts.isBinaryExpression(p)) return isAssignmentKind(p.operatorToken.kind) && p.left === cur;
+    if (ts.isPrefixUnaryExpression(p) || ts.isPostfixUnaryExpression(p)) {
+      return p.operator === ts.SyntaxKind.PlusPlusToken || p.operator === ts.SyntaxKind.MinusMinusToken;
+    }
+    if (ts.isForInStatement(p) || ts.isForOfStatement(p)) return p.initializer === cur;
+    return false;
   }
-  return out;
+}
+
+/**
+ * Whether a file declares a function named Switch itself and exports it under that name (cinatra#4334 cure, the
+ * ruling that the Switch lives in the module the row already imported), and nothing in the file can make the exported
+ * binding anything else. Every occurrence of the identifier Switch is read, and the file is refused (false) as soon as
+ * one is none of these: the name of the one top-level `function Switch` with a body (bodiless overloads of it are
+ * allowed), the plain `export { Switch }` with no module specifier, no rename and no `type`, the property name of a
+ * member or a key (`x.Switch`, `{ Switch: v }`, `import { Switch as X }`, `const { Switch: v } = o`), a type name, or a
+ * read of the binding. Refused: any other binding of the name (import, parameter, variable, class, enum, namespace,
+ * function expression, destructuring, catch variable, a nested or second function), any write to it (`Switch = x`, a
+ * compound assignment, `++`, `for (Switch of x)`, a destructuring assignment), any default export of it
+ * (`export default Switch`, `export { Switch as default }`, `export = Switch`, `export default function Switch`, also
+ * beside a named export), a re-export (`export { Switch } from "m"`), an alias in either direction, a type-only export
+ * and an ambient declaration alone. A file with no body for Switch, or one that does not export it, is none of these.
+ */
+export function declaresAndExportsSwitch(sf: ts.SourceFile): boolean {
+  let bodies = 0;
+  let exportedByModifier = false;
+  let exportedByList = false;
+  let ok = true;
+  const occurrence = (n: ts.Identifier): boolean => {
+    const p = n.parent;
+    if (ts.isFunctionDeclaration(p) && p.name === n) {
+      if (!ts.isSourceFile(p.parent) || hasModifier(p, ts.SyntaxKind.DefaultKeyword)) return false;
+      if (p.body !== undefined) {
+        bodies++;
+        if (hasModifier(p, ts.SyntaxKind.ExportKeyword)) exportedByModifier = true;
+      }
+      return true;
+    }
+    if (ts.isExportSpecifier(p)) {
+      const decl = p.parent.parent;
+      if (p.name === n && p.propertyName === undefined && !p.isTypeOnly && !decl.isTypeOnly && decl.moduleSpecifier === undefined) {
+        exportedByList = true;
+        return true;
+      }
+      return false;
+    }
+    if (ts.isExportAssignment(p)) return false;
+    if (ts.isImportSpecifier(p) && p.propertyName === n) return true;
+    if (ts.isBindingElement(p) && p.propertyName === n) return true;
+    if (ts.isPropertyAccessExpression(p) && p.name === n) return true;
+    if (ts.isQualifiedName(p) && p.right === n) return true;
+    if (
+      (ts.isPropertyAssignment(p) || ts.isPropertySignature(p) || ts.isPropertyDeclaration(p) || ts.isMethodDeclaration(p) || ts.isMethodSignature(p) ||
+        ts.isGetAccessorDeclaration(p) || ts.isSetAccessorDeclaration(p) || ts.isJsxAttribute(p) || ts.isEnumMember(p) ||
+        ts.isInterfaceDeclaration(p) || ts.isTypeAliasDeclaration(p) || ts.isTypeParameterDeclaration(p)) &&
+      p.name === n
+    ) {
+      return true;
+    }
+    if (ts.isShorthandPropertyAssignment(p) && p.name === n) return !isWriteTarget(n);
+    if ((p as { name?: ts.Node }).name === n) return false;
+    return !isWriteTarget(n);
+  };
+  const visit = (n: ts.Node): void => {
+    if (!ok) return;
+    if (ts.isIdentifier(n) && n.text === SWITCH_NAME && !occurrence(n)) {
+      ok = false;
+      return;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return ok && bodies === 1 && (exportedByModifier || exportedByList);
+}
+
+/**
+ * The module specifier of the one plain import of Switch (`import { Switch } from "m"`, not renamed, not type-only, in a
+ * value import) when the name Switch is used bare in the file, else null. Bare: the name has exactly that one binding and
+ * its other occurrences are bare JSX tags (`<Switch />`, `<Switch>`, `</Switch>`). Any other occurrence of the identifier
+ * Switch - a local declaration of any kind (const, let, var, function, class, parameter, destructuring, catch variable,
+ * import alias), a member access (`Other.Switch`, `<Other.Switch />`), a second import, a `typeof Switch`, an export of
+ * it - makes the file ambiguous, and the exemption does not apply to it.
+ */
+export function bareSwitchImport(sf: ts.SourceFile): string | null {
+  let spec: string | null = null;
+  let imports = 0;
+  let ok = true;
+  const visit = (n: ts.Node): void => {
+    if (!ok) return;
+    if (ts.isIdentifier(n) && n.text === SWITCH_NAME) {
+      const p = n.parent;
+      if (ts.isImportSpecifier(p) && p.name === n && p.propertyName === undefined && !p.isTypeOnly && !p.parent.parent.isTypeOnly) {
+        const decl = p.parent.parent.parent;
+        if (ts.isImportDeclaration(decl) && isStringLike(decl.moduleSpecifier)) {
+          imports++;
+          spec = decl.moduleSpecifier.text;
+        } else {
+          ok = false;
+          return;
+        }
+      } else if ((ts.isJsxOpeningElement(p) || ts.isJsxSelfClosingElement(p) || ts.isJsxClosingElement(p)) && p.tagName === n) {
+        // a bare JSX tag
+      } else {
+        ok = false;
+        return;
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return ok && imports === 1 ? spec : null;
 }
 
 /** The in-scope files of the given texts (rule 2) with their tokens and sites; test files are left out. */
@@ -1539,20 +1647,20 @@ export function scanSources(
   const switchModuleFiles = (from: string, spec: string): string[] => {
     if (spec.startsWith(".")) {
       const base = path.posix.normalize(path.posix.join(path.posix.dirname(from), spec));
-      return [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`].filter((p) => sources.has(p));
+      // The specifier as written counts only when it ends in .ts or .tsx; every other written extension (.js, .jsx, .mts,
+      // .cts, .mjs, .cjs) and a query refuse. Otherwise .ts, .tsx, /index.ts and /index.tsx are tried (MF4, #4430 pre-3).
+      const asWritten = /\.tsx?$/.test(base) ? [base] : [];
+      return [...asWritten, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`].filter((p) => sources.has(p));
     }
     const hit = targets(spec) ?? [];
     return hit.every((p) => sources.has(p)) ? hit : [];
   };
   const ownSwitchFiles = new Set<string>();
   for (const [file, sf] of sources) {
-    const specs = plainSwitchImports(sf);
-    if (specs.length === 0) continue;
-    const ok = specs.every((spec) => {
-      const files = switchModuleFiles(file, spec);
-      return files.length > 0 && files.every((f) => declaresAndExportsSwitch(sources.get(f)!));
-    });
-    if (ok) ownSwitchFiles.add(file);
+    const spec = bareSwitchImport(sf);
+    if (spec === null) continue;
+    const files = switchModuleFiles(file, spec);
+    if (files.length > 0 && files.every((f) => declaresAndExportsSwitch(sources.get(f)!))) ownSwitchFiles.add(file);
   }
   const out: ScannedFile[] = [];
   for (const [file, sf] of sources) {

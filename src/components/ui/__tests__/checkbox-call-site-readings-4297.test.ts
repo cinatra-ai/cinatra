@@ -19,6 +19,7 @@ import { describe, expect, it } from "vitest";
 import {
   callerProblems,
   countCheckboxTokens,
+  bareSwitchImport,
   declaresAndExportsSwitch,
   findCallers,
   findCheckboxSites,
@@ -36,6 +37,7 @@ import {
   type CallerReading,
   type ComponentCallers,
   type FileReading,
+  type PackageEntries,
   type ScannedTree,
   type SiteReading,
 } from "./checkbox-call-site-scan.ts";
@@ -1529,6 +1531,231 @@ describe("a Switch the resolved file declares and exports is a sure switch, even
       "const Switch = () => 1;\nexport { Switch };",
       "namespace N { export function Switch() { return 1; } }",
       "if (true) { function Switch() { return 1; } }\nexport { Switch };",
+    ];
+    for (const t of yes) expect([t, declaresAndExportsSwitch(parseSource("m.tsx", t))]).toEqual([t, true]);
+    for (const t of no) expect([t, declaresAndExportsSwitch(parseSource("m.tsx", t))]).toEqual([t, false]);
+  });
+});
+
+describe("the switch rule refuses what is ambiguous or can change, and takes only a bare use of a sound module (cinatra#4430 pre-3, MF1-MF4)", () => {
+  const ROW: SiteReading = {
+    anchor: "onCheckedChange={(c) => toggle(c)}",
+    tag: "DropdownMenuCheckboxItem",
+    drawn: "switch",
+    effect: "immediate",
+    reading: "a menu row whose change applies at once",
+    tagIncludes: ["onCheckedChange={(c) => toggle(c)}"],
+    fileIncludes: [],
+  };
+  const MAY_NOT = "the element draws one only by a name that may not be a switch";
+  const ITEM = (inner: string) => `<DropdownMenuCheckboxItem checked={on} onCheckedChange={(c) => toggle(c)}>${inner}Row</DropdownMenuCheckboxItem>`;
+  const IMPORT = 'import { Switch } from "./ui/checkbox";';
+  const KIT = "src/ui/checkbox.tsx";
+  const OK = "export function Checkbox() { return null; }\nexport function Switch() { return null; }\n";
+  // problems of the readings of src/f.tsx (one row, drawn switch) and the sites it has; entries and aliases as given.
+  const run = (text: string, extra: Record<string, string>, entries: ReadonlyMap<string, PackageEntries> = new Map(), aliasJson = "") => {
+    const texts: Record<string, string> = { "src/f.tsx": text, ...extra };
+    const aliases = aliasJson === "" ? new Map() : pathAliasesOf(aliasJson);
+    const tree = scanSources(new Map(Object.entries(texts)), entries, aliases);
+    const file = tree.files.find((f) => f.file === "src/f.tsx");
+    const problems = file === undefined ? "NOT IN SCOPE" : readingProblems([reading("src/f.tsx", countCheckboxTokens(text), [ROW])], { ...tree, files: [file] }, reader(texts)).join("\n");
+    return { tree, file, problems };
+  };
+  const passes = (text: string, extra: Record<string, string>, entries?: ReadonlyMap<string, PackageEntries>, aliasJson = "") => {
+    const r = run(text, extra, entries, aliasJson);
+    return r.problems === "" && r.file !== undefined && r.file.sites.length === 1;
+  };
+  const refused = (text: string, extra: Record<string, string>, entries?: ReadonlyMap<string, PackageEntries>, aliasJson = "") => run(text, extra, entries, aliasJson).problems.includes(MAY_NOT);
+
+  it("MF1: the file takes the exemption only when Switch has no other binding or use than the plain import and bare tags", () => {
+    expect(passes(`${IMPORT}\nexport const R = () => ${ITEM("<Switch checked={on} />")};\n`, { [KIT]: OK })).toBe(true);
+    expect(passes(`${IMPORT}\nexport const R = () => ${ITEM("<Switch checked={on}>x</Switch>")};\n`, { [KIT]: OK })).toBe(true);
+    const row = `export const R = () => ${ITEM("<Switch checked={on} />")};`;
+    const ambiguous: Record<string, string> = {
+      "a scoped const": `${IMPORT}\nexport const R = () => { const Switch = Checkbox; return ${ITEM("<Switch checked={on} />")}; };\n`,
+      "a scoped let": `${IMPORT}\nexport const R = () => { let Switch = Checkbox; return ${ITEM("<Switch checked={on} />")}; };\n`,
+      "a scoped var": `${IMPORT}\nexport const R = () => { var Switch = Checkbox; return ${ITEM("<Switch checked={on} />")}; };\n`,
+      "a parameter": `${IMPORT}\nexport const R = (Switch: unknown) => ${ITEM("<Switch checked={on} />")};\n`,
+      "a destructured name": `${IMPORT}\nexport const R = ({ Switch }: { Switch: unknown }) => ${ITEM("<Switch checked={on} />")};\n`,
+      "a catch variable": `${IMPORT}\n${row}\ntry { run(); } catch (Switch) { log(Switch); }\n`,
+      "a class": `${IMPORT}\n${row}\nexport function make() { class Switch {} return Switch; }\n`,
+      "a nested function": `${IMPORT}\n${row}\nexport function make() { function Switch() { return null; } return Switch; }\n`,
+      "an import alias of another name": `${IMPORT}\nimport { Tick as Switch } from "./ui/other";\n${row}\n`,
+      "a second plain import": `${IMPORT}\nimport { Switch } from "./ui/box";\n${row}\n`,
+      "a member access": `${IMPORT}\nimport { Other } from "./o";\n${row}\nexport const Q = () => <Other.Switch />;\n`,
+      "a member value": `${IMPORT}\nimport { Other } from "./o";\n${row}\nexport const Q = Other.Switch;\n`,
+      "a typeof": `${IMPORT}\n${row}\nexport type T = typeof Switch;\n`,
+      "an export of it": `${IMPORT}\n${row}\nexport { Switch };\n`,
+      "a JSX attribute of that name": `${IMPORT}\n${row}\nexport const Q = () => <Foo Switch />;\n`,
+    };
+    for (const [what, text] of Object.entries(ambiguous)) {
+      const r = run(text, { [KIT]: OK, "src/ui/other.tsx": OK, "src/ui/box.tsx": OK });
+      expect([what, r.problems.includes(MAY_NOT)]).toEqual([what, true]);
+    }
+  });
+
+  it("MF2: a module that writes to Switch anywhere is refused, and a read of it is not", () => {
+    const head = "export function Checkbox() { return null; }\nexport function Switch() { return null; }\n";
+    const writes: Record<string, string> = {
+      assignment: "Switch = Checkbox;",
+      "compound assignment": "Switch += 1;",
+      "logical assignment": "Switch ||= Checkbox;",
+      increment: "Switch++;",
+      "prefix decrement": "--Switch;",
+      "array destructuring": "[Switch] = list;",
+      "object destructuring": "({ Switch } = obj);",
+      "renamed destructuring": "({ k: Switch } = obj);",
+      "rest destructuring": "[...Switch] = list;",
+      "destructuring with a default": "[Switch = 1] = list;",
+      "for of": "for (Switch of list) {}",
+      "for in": "for (Switch in obj) {}",
+      parenthesized: "(Switch) = Checkbox;",
+      "as expression": "(Switch as unknown) = Checkbox;",
+      "inside a function": "export function reset() { Switch = Checkbox; }",
+    };
+    for (const [what, w] of Object.entries(writes)) {
+      const m = `${head}${w}\n`;
+      expect([what, declaresAndExportsSwitch(parseSource("m.tsx", m))]).toEqual([what, false]);
+      expect([what, refused(`${IMPORT}\nexport const R = () => ${ITEM("<Switch checked={on} />")};\n`, { [KIT]: m })]).toEqual([what, true]);
+    }
+    // a JavaScript-family module is read the same way: a later reassignment and a var of the name refuse
+    for (const m of [`${head}Switch = Checkbox;\n`, "export function Checkbox() { return null; }\nexport function Switch() { return null; }\nvar Switch = Checkbox;\n"]) {
+      expect(refused('import { Switch } from "@ui/box";\nexport const R = () => ' + ITEM("<Switch checked={on} />") + ";\n", { "src/ui/checkbox.js": m }, undefined, '{ "compilerOptions": { "paths": { "@ui/box": ["src/ui/checkbox.js"] } } }')).toBe(true);
+    }
+    expect(passes('import { Switch } from "@ui/box";\nexport const R = () => ' + ITEM("<Switch checked={on} />") + ";\n", { "src/ui/checkbox.js": head }, undefined, '{ "compilerOptions": { "paths": { "@ui/box": ["src/ui/checkbox.js"] } } }')).toBe(true);
+    const reads = [
+      `${head}Switch.displayName = "S";\n`,
+      `${head}export const Alias = Switch;\nexport const kind = typeof Switch;\n`,
+      `${head}let x;\nx = Switch;\n`,
+      `${head}export const o = { Switch };\nexport const p = { k: Switch };\n`,
+      `${head}export const el = <Switch />;\n`,
+      "export function Checkbox() { return null; }\nexport function Switch(): null;\nexport function Switch(): null { return null; }\n",
+      `import { Switch as SwitchPrimitive } from "radix-ui";\n${head}export const prim = SwitchPrimitive;\n`,
+      `${head}export const get = (o: { Switch: unknown }) => o.Switch;\nexport const { Switch: s } = obj;\n`,
+      "export function Checkbox() { return null; }\nfunction Switch() { return null; }\nexport { Checkbox, Switch };\n",
+    ];
+    for (const m of reads) expect([m, declaresAndExportsSwitch(parseSource("m.tsx", m))]).toEqual([m, true]);
+  });
+
+  it("MF3: any default export of Switch refuses, also beside a named export", () => {
+    const refusedModules: Record<string, string> = {
+      "default beside export list": "function Switch() { return null; }\nexport { Switch };\nexport default Switch;\n",
+      "default beside export function": "export function Switch() { return null; }\nexport default Switch;\n",
+      "default as an export alias": "function Switch() { return null; }\nexport { Switch, Switch as default };\n",
+      "default alias only": "function Switch() { return null; }\nexport { Switch as default };\n",
+      "export equals": "function Switch() { return null; }\nexport { Switch };\nexport = Switch;\n",
+      "export default function": "export default function Switch() { return null; }\nexport { Switch };\n",
+    };
+    for (const [what, m] of Object.entries(refusedModules)) {
+      expect([what, declaresAndExportsSwitch(parseSource("m.tsx", m))]).toEqual([what, false]);
+      expect([what, refused(`${IMPORT}\nexport const R = () => ${ITEM("<Switch checked={on} />")};\n`, { [KIT]: `export function Checkbox() { return null; }\n${m}` })]).toEqual([what, true]);
+    }
+  });
+
+  it("MF4: a relative specifier takes the file as written only when it ends in .ts or .tsx", () => {
+    const usage = (spec: string) => `import { Switch } from "${spec}";\nexport const R = () => ${ITEM("<Switch checked={on} />")};\n`;
+    for (const ext of [".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"]) {
+      expect([ext, refused(usage(`./ui/checkbox${ext}`), { [`src/ui/checkbox${ext}`]: OK })]).toEqual([ext, true]);
+    }
+    expect(refused(usage("./ui/checkbox?x=1"), { [KIT]: OK })).toBe(true);
+    expect(refused(usage("./ui/checkbox.tsold.js"), { "src/ui/checkbox.tsold.js": OK })).toBe(true);
+    expect(passes(usage("./ui/checkbox.tsx"), { [KIT]: OK })).toBe(true);
+    expect(passes(usage("./ui/checkbox.ts"), { "src/ui/checkbox.ts": OK })).toBe(true);
+    expect(passes(usage("./ui/checkbox"), { "src/ui/checkbox/index.ts": OK })).toBe(true);
+    expect(passes(usage("./ui/checkbox"), { "src/ui/checkbox/index.tsx": OK })).toBe(true);
+    // the extensionless specifier still tries .ts and .tsx, and a .mjs next to it is not tried
+    expect(passes(usage("./ui/checkbox"), { "src/ui/checkbox.ts": OK })).toBe(true);
+    expect(refused(usage("./ui/checkbox"), { "src/ui/checkbox.mjs": OK })).toBe(true);
+    // a test file is never the module: it is not in the scan
+    expect(refused(usage("./ui/checkbox.test"), { "src/ui/checkbox.test.tsx": OK })).toBe(true);
+    // a relative specifier never consults the path aliases: a key spelled like it changes nothing
+    const alias = '{ "compilerOptions": { "paths": { "./ui/checkbox": ["src/ui/other.tsx"] } } }';
+    expect(passes(usage("./ui/checkbox"), { [KIT]: OK, "src/ui/other.tsx": "export function Other() { return null; }\n" }, undefined, alias)).toBe(true);
+    expect(refused(usage("./ui/checkbox"), { [KIT]: "export function Checkbox() { return null; }\n", "src/ui/other.tsx": OK }, undefined, alias)).toBe(true);
+  });
+
+  it("resolves through path aliases, workspace entries and both, and takes a module only if every target is sound", () => {
+    const box = 'import { Switch } from "@ui/box";\nexport const R = () => ' + ITEM("<Switch checked={on} />") + ";\n";
+    const two = '{ "compilerOptions": { "paths": { "@ui/box": ["src/ui/checkbox.tsx", "src/ui/other.tsx"] } } }';
+    expect(passes(box, { [KIT]: OK, "src/ui/other.tsx": OK }, undefined, two)).toBe(true);
+    expect(refused(box, { [KIT]: OK, "src/ui/other.tsx": "export function Other() { return null; }\n" }, undefined, two)).toBe(true);
+    expect(refused(box, { [KIT]: OK, "src/ui/other.tsx": `${OK}Switch = Other;\n` }, undefined, two)).toBe(true);
+    // a workspace entry alone: the package maps ./control to a checkbox-named file
+    const ws = 'import { Switch } from "@cinatra-ai/kit/control";\nexport const R = () => ' + ITEM("<Switch checked={on} />") + ";\n";
+    const entries = new Map([["kit", packageEntriesOf("kit", '{ "exports": { "./control": "./src/checkbox.tsx" } }')!]]);
+    expect(passes(ws, { "packages/kit/src/checkbox.tsx": OK }, entries)).toBe(true);
+    expect(refused(ws, { "packages/kit/src/checkbox.tsx": `${OK}Switch = Checkbox;\n` }, entries)).toBe(true);
+    expect(refused(ws, { "packages/kit/src/checkbox.tsx": "export function Checkbox() { return null; }\nexport default function Switch() { return null; }\n" }, entries)).toBe(true);
+    // an alias and a workspace entry for the same specifier: the union of both targets must be sound
+    const both = '{ "compilerOptions": { "paths": { "@cinatra-ai/kit/control": ["src/ui/checkbox.tsx"] } } }';
+    expect(passes(ws, { "packages/kit/src/checkbox.tsx": OK, [KIT]: OK }, entries, both)).toBe(true);
+    expect(refused(ws, { "packages/kit/src/checkbox.tsx": OK, [KIT]: "export function Checkbox() { return null; }\n" }, entries, both)).toBe(true);
+    expect(refused(ws, { "packages/kit/src/checkbox.tsx": `${OK}Switch = Checkbox;\n`, [KIT]: OK }, entries, both)).toBe(true);
+  });
+
+  it("a module with no body for Switch refuses, also when the export list names it", () => {
+    const row = `${IMPORT}\nexport const R = () => ${ITEM("<Switch checked={on} />")};\n`;
+    for (const m of ["declare function Switch(): void;\nexport { Switch };\n", "function Switch(): void;\nexport { Switch };\n", "export declare function Switch(): void;\n"]) {
+      expect([m, refused(row, { [KIT]: `export function Checkbox() { return null; }\n${m}` })]).toEqual([m, true]);
+    }
+  });
+
+  it("reads bareSwitchImport on one file: the one plain import and bare tags give the specifier, anything else gives null", () => {
+    const yes: Record<string, string> = {
+      'import { Switch } from "./a";\nexport const R = () => <Switch />;': "./a",
+      'import { Switch } from "./a";\nexport const R = () => <Switch>x</Switch>;': "./a",
+      'import { Checkbox, Switch } from "./a";\nexport const R = () => <Switch />;': "./a",
+      'import { Switch } from "./a";\nexport const R = () => <Switch />;\nexport const Q = () => <Switch checked />;': "./a",
+    };
+    const no = [
+      'import { Switch as Toggle } from "./a";\nexport const R = () => <Toggle />;',
+      'import { Tick as Switch } from "./a";\nexport const R = () => <Switch />;',
+      'import type { Switch } from "./a";\nexport const R = () => null;',
+      'import { type Switch } from "./a";\nexport const R = () => null;',
+      'import { Switch } from "./a";\nimport { Switch as S2 } from "./b";\nexport const R = () => <Switch />;',
+      'import { Switch } from "./a";\nimport { Switch } from "./b";\nexport const R = () => <Switch />;',
+      'import Switch from "./a";\nexport const R = () => <Switch />;',
+      'import * as Switch from "./a";\nexport const R = () => <Switch.Root />;',
+      'const Switch = 1;\nexport const R = () => <Switch />;',
+      'export const R = () => <Switch />;',
+      'import { Switch } from "./a";\nexport const R = () => <Other.Switch />;',
+      'import { Switch } from "./a";\nexport { Switch };',
+      'import { Switch } from "./a";\nexport const R = () => { const Switch = 1; return <Switch />; };',
+      'import { Switch } from 5;\nexport const R = () => <Switch />;',
+    ];
+    for (const [t, spec] of Object.entries(yes)) expect([t, bareSwitchImport(parseSource("f.tsx", t))]).toEqual([t, spec]);
+    for (const t of no) expect([t, bareSwitchImport(parseSource("f.tsx", t))]).toEqual([t, null]);
+  });
+
+  it("a file that imports Switch and exports it on stays in the scan, since it is not a bare use", () => {
+    const alias = '{ "compilerOptions": { "paths": { "@ui/box": ["src/ui/checkbox.tsx"] } } }';
+    const tree = scanSources(new Map(Object.entries({ "src/b.tsx": 'import { Switch } from "@ui/box";\nexport { Switch };\n', [KIT]: OK })), new Map(), pathAliasesOf(alias));
+    expect(tree.files.map((f) => f.file).sort()).toEqual(["src/b.tsx", KIT]);
+  });
+
+  it("reads declaresAndExportsSwitch on one module: sound ones and the ones that can change", () => {
+    const yes = [
+      "export function Switch() { return Switch.displayName; }\nSwitch.displayName = 'S';",
+      "function Switch() { return 1; }\nexport { Switch };\nexport const Alias = Switch;",
+      "export function Switch() { return o.Switch; }\nexport const { Switch: kept } = o;",
+      'import { Switch as Primitive } from "radix-ui";\nexport function Switch() { return Primitive; }',
+      "export function Switch() { return 1; }\nexport type T = NS.Switch;",
+    ];
+    const no = [
+      "export function Switch() { return 1; }\nSwitch = other;",
+      "export function Switch() { return 1; }\nvar Switch = other;",
+      "export function Switch() { return 1; }\nexport function Switch() { return 2; }",
+      "export function Switch() { return 1; }\nclass Switch {}",
+      "export function Switch() { return 1; }\nexport const f = (Switch) => Switch;",
+      "export function Switch() { return 1; }\nexport const f = function Switch() { return 2; };",
+      "export function Switch() { return 1; }\nenum Switch { A }",
+      "export function Switch() { return 1; }\nnamespace Switch { export const a = 1; }",
+      'export function Switch() { return 1; }\nexport * as Switch from "m";',
+      "export function Switch() { return 1; }\nexport default Switch;",
+      "export function Switch() { return 1; }\nexport function other() { return 2; }\nexport { Switch as Tick };",
+      "declare function Switch(): void;\nexport { Switch };",
+      "function Switch(): void;\nexport { Switch };",
+      "function Switch(a: string): void;\nfunction Switch(a: number): void;\nexport { Switch };",
     ];
     for (const t of yes) expect([t, declaresAndExportsSwitch(parseSource("m.tsx", t))]).toEqual([t, true]);
     for (const t of no) expect([t, declaresAndExportsSwitch(parseSource("m.tsx", t))]).toEqual([t, false]);
