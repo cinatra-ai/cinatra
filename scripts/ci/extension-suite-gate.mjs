@@ -500,16 +500,19 @@ export function isHostRunNodeTest(p) {
  * A file that registers no test is not reported as zero tests: node reports
  * the FILE ITSELF as one test, named by the path it was given (`ok 1 -
  * test/x.test.mjs`, `# tests 1`, `# suites 0`), at line 1, column 1 of the
- * file. The TAP name is not read for this: node escapes and a ` # SKIP` or
+ * file (read on node v24.20.0 and v24.22.1, for .mjs, .js and .cjs files with
+ * and without content). The TAP name is not read for this: node escapes and a ` # SKIP` or
  * ` # TODO` directive can change how a path reads in TAP. A run whose TAP has
  * exactly one top-level result and no suite is therefore `fileOnly` unless a
  * top-level record (`topLevel`, from nodeTopLevelReporter) gives a location
  * that proves a real test: a line and a column that are both positive
  * integers and are not line 1, column 1. A missing record, a null or unknown
  * location, and 1:1 all read as file-only; the caller then does not count the
- * file as executed. The cost is a false red, never a false green: a real lone
+ * file as executed. On the versions read, the cost is a false red: a real lone
  * test whose call starts at line 1, column 1, or whose record was lost, also
- * reads as file-only.
+ * reads as file-only. A node version that gave its report of such a file another
+ * positive location would read that file as a test; the job's `node-version: '24'`
+ * floats, and this rule was not read on other versions.
  */
 // A top-level record proves a real test only by a location node gives a test
 // call: a positive-integer line and column, other than node's 1:1 for the file.
@@ -1272,6 +1275,15 @@ export function listLiveNodeRuns() {
   return [...liveNodeRuns.entries()].map(([pid, { recDir }]) => ({ pid, recDir }));
 }
 
+// The children whose run ended after a kill without a close: a process of the
+// group may have outlived the kill, so a signal to the gate kills the group
+// again (stopLiveNodeRuns). A process that a test moved out of the group (its
+// own session) is not in it and is not reached. Exported for its test.
+const survivingNodeGroups = new Map();
+export function listSurvivingNodeGroups() {
+  return [...survivingNodeGroups.keys()];
+}
+
 // Kill the process group of a child that was started with `detached: true`; if
 // the group kill fails, kill the child alone. Returns what was done, for the
 // detail line: "group", "leader", or "failed".
@@ -1289,7 +1301,9 @@ function killNodeGroup(child) {
 }
 
 // End every running node:test child (its whole process group) and remove its
-// record folder. Returns one entry per child. Exported for its test.
+// record folder, and kill again the group of each run that ended without a
+// close (its folder is already removed: `recDir: null`). Returns one entry per
+// child. Exported for its test.
 export function stopLiveNodeRuns() {
   const out = [];
   for (const [pid, run] of liveNodeRuns) {
@@ -1297,6 +1311,8 @@ export function stopLiveNodeRuns() {
     fs.rmSync(run.recDir, { recursive: true, force: true });
   }
   liveNodeRuns.clear();
+  for (const [pid, child] of survivingNodeGroups) out.push({ pid, kill: killNodeGroup(child), recDir: null });
+  survivingNodeGroups.clear();
   return out;
 }
 
@@ -1322,9 +1338,14 @@ export function installNodeRunCleanup(proc = process) {
 // not use it. A child that cannot start resolves as exit -1 with no TAP. A child
 // still running at the file bound, or at `deadlineAt` when that comes first, has
 // its process group killed; the run resolves as exit -1 with `timedOut: true`
-// after the child's close (or after NODE_KILL_GRACE_MS without one, noted in the
-// detail), and only then are the records read and their folder removed.
-// foldNodeRuns reads both endings as a lost report. Exported for its test, with
+// after the child's close, or after NODE_KILL_GRACE_MS without one (noted in the
+// detail). On every ending the records are read, their folder is removed, and
+// the child's output pipes are destroyed and the child is unref'd, so a process
+// that still holds the pipes (one a test moved out of the group) cannot keep
+// the gate from exiting. That process is not killed: the gate does not know it.
+// After a kill without a close, the group stays under the signal cleanup
+// (survivingNodeGroups). foldNodeRuns reads both kill endings as a lost report.
+// Exported for its test, with
 // the bounds as parameters so the test can use short ones, and the spawn as one
 // so the test can give a child that never closes or cannot be killed.
 export function runNodeTestFile({
@@ -1356,6 +1377,12 @@ export function runNodeTestFile({
       clearTimeout(timer);
       clearTimeout(graceTimer);
       if (child?.pid) liveNodeRuns.delete(child.pid);
+      if (child?.pid && killed && run.closed === false) survivingNodeGroups.set(child.pid, child);
+      // A process outside the group may still hold the pipes: stop reading them
+      // and drop the child's hold on the event loop, so the gate can exit.
+      child?.stdout?.destroy?.();
+      child?.stderr?.destroy?.();
+      child?.unref?.();
       let rec = "";
       try {
         rec = fs.readFileSync(recFile, "utf8");

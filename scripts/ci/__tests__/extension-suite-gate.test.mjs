@@ -19,10 +19,12 @@ import nodeTopLevelReporter, {
   classifyPackage,
   fenceWorkflowCommands,
   foldNodeRuns,
+  installNodeRunCleanup,
   isFirstPartyMirror,
   isHostRunNodeTest,
   judge,
   listLiveNodeRuns,
+  listSurvivingNodeGroups,
   NODE_FILE_TIMEOUT_MS,
   NODE_GATE_DEADLINE_MS,
   NODE_KILL_GRACE_MS,
@@ -41,6 +43,7 @@ import nodeTopLevelReporter, {
   runNodeTestFile,
   shapeMatches,
   skipsStandaloneTests,
+  stopLiveNodeRuns,
   TEST_FILE_RE,
 } from "../extension-suite-gate.mjs";
 
@@ -868,6 +871,28 @@ describe("foldNodeRuns — per-file node:test runs as one suite result", () => {
     );
   });
 
+  it("a package with a killed file and files not started names both kinds in one finding and one manifest row", () => {
+    const res = foldNodeRuns([
+      { file: "test/a.test.mjs", exitCode: -1, tap: "", timedOut: true },
+      { file: "test/b.test.mjs", exitCode: -1, tap: "", notStarted: true },
+      { file: "test/c.test.mjs", exitCode: -1, tap: "", notStarted: true },
+    ]);
+    expect(res).toMatchObject({ ok: false, reportOk: false, timedOutFiles: ["test/a.test.mjs"], notStartedFiles: ["test/b.test.mjs", "test/c.test.mjs"], executedFiles: [] });
+    const packages = [pkg({ slug: "gated", testFiles: ["x.test.ts"] }), brandVoice({ testFiles: ["test/a.test.mjs", "test/b.test.mjs", "test/c.test.mjs"] })];
+    const results = resultsFor([
+      ["gated", green(["x.test.ts"])],
+      ["brand-voice-artifact", res],
+    ]);
+    const f = judge({ packages, results, carveOuts: [] }).findings;
+    expect(f.map((x) => x.kind)).toEqual(["no-report"]);
+    expect(f[0].message).toContain(
+      "`node --test` was still running at its bound and was killed for test/a.test.mjs; it was not started before the gate's node:test deadline for test/b.test.mjs, test/c.test.mjs — the run did not finish",
+    );
+    expect(renderManifest({ packages, results, carveOuts: [] })).toMatch(
+      /brand-voice-artifact .* node:test here — TIMED OUT \(1 file\(s\) killed, 2 not started before the deadline\)$/m,
+    );
+  });
+
   it("a run killed by a signal (exit code null) is not ok and reads as exit -1", () => {
     const r = foldNodeRuns([{ file: "test/a.test.mjs", exitCode: null, tap: TAP_GREEN }]);
     expect(r).toMatchObject({ ok: false, exitCode: -1 });
@@ -1081,7 +1106,133 @@ describe("runNodeTestFile — the real node runner, with short bounds", () => {
     expect(await groupGone(sleeper.pid)).toBe(true);
     expect(fs.existsSync(run.recDir)).toBe(false);
     expect(listLiveNodeRuns()).toEqual([]);
+    // the group of a run that ended without a close stays under the signal cleanup
+    expect(listSurvivingNodeGroups()).toContain(sleeper.pid);
+    expect(stopLiveNodeRuns()).toContainEqual({ pid: sleeper.pid, kill: expect.any(String), recDir: null });
+    expect(listSurvivingNodeGroups()).toEqual([]);
   }, 20_000);
+
+  it("records a kill that reached only the child as leader", async () => {
+    const c = silentChild(2 ** 22 + 12345);
+    c.kill = () => true;
+    const run = await runNodeTestFile({ cwd: nodeDir, file: "t/x.test.mjs", fileTimeoutMs: 100, killGraceMs: 100, spawnChild: () => c });
+    expect(run).toMatchObject({ exitCode: -1, timedOut: true, kill: "leader", closed: false });
+    expect(run.detail).toContain("(kill: leader, no close within 100 ms)");
+    stopLiveNodeRuns();
+  });
+
+  it("records a child kill that throws as failed", async () => {
+    const c = silentChild(2 ** 22 + 12345);
+    c.kill = () => {
+      throw new Error("kill refused");
+    };
+    const run = await runNodeTestFile({ cwd: nodeDir, file: "t/x.test.mjs", fileTimeoutMs: 100, killGraceMs: 100, spawnChild: () => c });
+    expect(run).toMatchObject({ exitCode: -1, timedOut: true, kill: "failed", closed: false });
+    expect(stopLiveNodeRuns()).toEqual([{ pid: 2 ** 22 + 12345, kill: "failed", recDir: null }]);
+  });
+
+  it("lets the gate exit when a process outside the killed group still holds the output pipes", async () => {
+    // A real child in its own group, as the gate starts node --test; it starts a holder in a session of its own that
+    // inherits the gate's pipes, so the group kill does not reach it and no close comes.
+    const pidFile = path.join(nodeDir, "holder.pid");
+    const holder = [
+      'const { spawn } = require("node:child_process");',
+      'const h = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "inherit", detached: true });',
+      'require("node:fs").writeFileSync(process.env.ESG_HOLDER_PID_FILE, String(h.pid));',
+      "for (;;) {}",
+    ].join("\n");
+    const gateUrl = new URL("../extension-suite-gate.mjs", import.meta.url).href;
+    const script = [
+      'import { spawn } from "node:child_process";',
+      `const g = await import(${JSON.stringify(gateUrl)});`,
+      `const r = await g.runNodeTestFile({ cwd: ${JSON.stringify(nodeDir)}, file: "t/x.test.mjs", fileTimeoutMs: 1500, killGraceMs: 300, spawnChild: (cmd, args, opts) => spawn(cmd, ["-e", ${JSON.stringify(holder)}], opts) });`,
+      'console.log(JSON.stringify({ kill: r.kill, closed: r.closed, timedOut: r.timedOut, surviving: typeof g.listSurvivingNodeGroups === "function" ? g.listSurvivingNodeGroups().length : null }));',
+    ].join("\n");
+    const gate = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ESG_HOLDER_PID_FILE: pidFile } });
+    let out = "";
+    gate.stdout.on("data", (c) => (out += c));
+    const exited = new Promise((r) => gate.on("exit", (code, sig) => r({ code, sig })));
+    const within = await Promise.race([exited, new Promise((r) => setTimeout(() => r("still running after 8 s"), 8000))]);
+    let holderPid = 0;
+    try {
+      holderPid = Number(fs.readFileSync(pidFile, "utf8"));
+    } catch {
+      // no holder started
+    }
+    try {
+      expect(holderPid).toBeGreaterThan(0);
+      expect(within).toEqual({ code: 0, sig: null });
+      expect(JSON.parse(out.trim().split("\n").pop())).toEqual({ kill: "group", closed: false, timedOut: true, surviving: 1 });
+      // the holder was real and outlived the kill of the group
+      expect(() => process.kill(holderPid, 0)).not.toThrow();
+    } finally {
+      gate.kill("SIGKILL");
+      if (holderPid > 0) {
+        try {
+          process.kill(holderPid, "SIGKILL");
+        } catch {
+          // already gone
+        }
+      }
+    }
+  }, 20_000);
+
+  it("lets the gate exit when the kill reached nothing and the child still runs", async () => {
+    // A real child outside any group of its own, whose kill the stand-in refuses: the group kill and the child kill
+    // both fail, the child keeps running, and the gate must still be free to exit.
+    const pidFile = path.join(nodeDir, "unkilled.pid");
+    const gateUrl = new URL("../extension-suite-gate.mjs", import.meta.url).href;
+    const script = [
+      'import { spawn } from "node:child_process";',
+      'import fs from "node:fs";',
+      `const g = await import(${JSON.stringify(gateUrl)});`,
+      "const spawnChild = (cmd, args, opts) => {",
+      '  const c = spawn(cmd, ["-e", "setTimeout(() => {}, 30000)"], { ...opts, detached: false });',
+      "  c.kill = () => false;",
+      `  fs.writeFileSync(${JSON.stringify(pidFile)}, String(c.pid));`,
+      "  return c;",
+      "};",
+      `const r = await g.runNodeTestFile({ cwd: ${JSON.stringify(nodeDir)}, file: "t/x.test.mjs", fileTimeoutMs: 1000, killGraceMs: 300, spawnChild });`,
+      "console.log(JSON.stringify({ kill: r.kill, closed: r.closed, timedOut: r.timedOut }));",
+    ].join("\n");
+    const gate = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    gate.stdout.on("data", (c) => (out += c));
+    const exited = new Promise((r) => gate.on("exit", (code, sig) => r({ code, sig })));
+    const within = await Promise.race([exited, new Promise((r) => setTimeout(() => r("still running after 8 s"), 8000))]);
+    let childPid = 0;
+    try {
+      childPid = Number(fs.readFileSync(pidFile, "utf8"));
+    } catch {
+      // no child started
+    }
+    try {
+      expect(childPid).toBeGreaterThan(0);
+      expect(within).toEqual({ code: 0, sig: null });
+      expect(JSON.parse(out.trim().split("\n").pop())).toEqual({ kill: "failed", closed: false, timedOut: true });
+      expect(() => process.kill(childPid, 0)).not.toThrow();
+    } finally {
+      gate.kill("SIGKILL");
+      if (childPid > 0) {
+        try {
+          process.kill(childPid, "SIGKILL");
+        } catch {
+          // already gone
+        }
+      }
+    }
+  }, 20_000);
+
+  it("installs the cleanup for SIGTERM and SIGINT, which exit with 143 and 130", () => {
+    const proc = new EventEmitter();
+    const codes = [];
+    proc.exit = (code) => codes.push(code);
+    installNodeRunCleanup(proc);
+    proc.emit("SIGINT");
+    proc.emit("SIGTERM");
+    expect(codes).toEqual([130, 143]);
+    expect(proc.listenerCount("SIGINT") + proc.listenerCount("SIGTERM")).toBe(0);
+  });
 
   it("records a kill that reached nothing as failed", async () => {
     const run = await runNodeTestFile({ cwd: nodeDir, file: "t/x.test.mjs", fileTimeoutMs: 100, killGraceMs: 100, spawnChild: () => silentChild(2 ** 22 + 12345) });
