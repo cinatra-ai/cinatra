@@ -67,10 +67,14 @@ const phaseList = PAUSE_CLAIM_PHASES.map((p) => `'${p}'`).join(",");
 /** The CHECKs, by name; the bootstrap leaf carries the same two. */
 export const pauseClaimPhaseCheckSql = `pause_claim_phase IS NULL OR pause_claim_phase IN (${phaseList})`;
 // No claim: token, phase and expiry are all NULL (pre-1 MUST-FIX C1/C6: an
-// expiry alone is refused). A claim: token and phase are set, and only the
-// changes_requested end mark has no expiry.
+// expiry alone is refused). A claim: the token is set, the phase is one of
+// PAUSE_CLAIM_PHASES, and only the changes_requested end mark has no expiry.
+// So the shape CHECK alone admits exactly the four lease shapes; it does not
+// lean on the phase CHECK to refuse an unknown, empty or case-varied phase.
+// The phase IS NOT NULL test stays: for a NULL phase the IN test is NULL, and
+// a claim branch that reads NULL would let the CHECK pass.
 export const pauseClaimShapeCheckSql =
-  `(pause_claim_token IS NULL AND pause_claim_phase IS NULL AND pause_claim_expires_at IS NULL) OR (pause_claim_token IS NOT NULL AND pause_claim_phase IS NOT NULL AND (pause_claim_phase = 'changes_requested') = (pause_claim_expires_at IS NULL))`;
+  `(pause_claim_token IS NULL AND pause_claim_phase IS NULL AND pause_claim_expires_at IS NULL) OR (pause_claim_token IS NOT NULL AND pause_claim_phase IS NOT NULL AND pause_claim_phase IN (${phaseList}) AND (pause_claim_phase = 'changes_requested') = (pause_claim_expires_at IS NULL))`;
 
 const guardedCheck = (name, body) => `DO $$
 BEGIN

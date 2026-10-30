@@ -31,6 +31,10 @@
  * no-ops; an empty phase is refused. Those three pin behaviour 675c2bfc already
  * has (green there too). Red at 675c2bfc: up waits for a lock past
  * PAUSE_CLAIM_LOCK_TIMEOUT_MS instead of failing with 55P03.
+ *
+ * Red at 07f5d27b: with the phase CHECK dropped, the shape CHECK alone
+ * admitted a claim with an unknown, an empty or a case-varied phase and an
+ * expiry. Its claim branch now requires one of the three phases.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client } from "pg";
@@ -54,6 +58,8 @@ const QUOTED = `x4245_q"u'o_${suffix}`;
 const CRASH = `x4245_cr_${suffix}`;
 const CRASH_LEAF = `x4245_cl_${suffix}`;
 const WAIT = `x4245_lw_${suffix}`;
+const SHAPE_UP = `x4245_su_${suffix}`;
+const SHAPE_LEAF = `x4245_sl_${suffix}`;
 const qi = (name: string) => `"${name.replaceAll('"', '""')}"`;
 const NEW_COLUMNS = ["pause_claim_expires_at", "pause_claim_phase", "pause_claim_token", "pause_generation"];
 const CHECKS = ["agent_runs_pause_claim_phase_chk", "agent_runs_pause_claim_shape_chk"];
@@ -178,7 +184,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!HAS_DB) return;
-  for (const schema of [UPGRADE, FRESH, LOCKS, QUOTED, CRASH, CRASH_LEAF, WAIT]) await client.query(`DROP SCHEMA IF EXISTS ${qi(schema)} CASCADE`);
+  for (const schema of [UPGRADE, FRESH, LOCKS, QUOTED, CRASH, CRASH_LEAF, WAIT, SHAPE_UP, SHAPE_LEAF]) await client.query(`DROP SCHEMA IF EXISTS ${qi(schema)} CASCADE`);
   await client.end();
 });
 
@@ -367,6 +373,48 @@ describeDb("core__0116 on a real database (cinatra#4245)", () => {
     const { rows } = await client.query("SHOW lock_timeout");
     expect(rows[0].lock_timeout).toBe("0");
   }, 60_000);
+
+  // The shape CHECK ALONE: each arm applies its DDL, then drops the phase
+  // CHECK, so only the shape CHECK stands between a row and the table.
+  const SHAPE_ARMS: [string, string][] = [["up", SHAPE_UP], ["the bootstrap leaf", SHAPE_LEAF]];
+  it.each(SHAPE_ARMS)("%s with its phase CHECK dropped: the shape CHECK alone still admits the four lease shapes", async (label, schema) => {
+    await minimalTables(schema);
+    if (label === "up") await runMigration(migration.up, schema);
+    else for (const { text } of agentRunPauseClaimSchemaQueries(schema)) await client.query(text);
+    await client.query(`ALTER TABLE ${qi(schema)}."agent_runs" DROP CONSTRAINT ${CHECKS[0]}`);
+    expect((await checks(schema)).map((row) => row.conname)).toEqual([CHECKS[1]]);
+    for (const [id, token, phase, expiry] of [
+      ["ok-none", null, null, "NULL"],
+      ["ok-claimed", "tok-a", "claimed", "now()"],
+      ["ok-sending", "tok-b", "sending", "now()"],
+      ["ok-cr", "cr:3", "changes_requested", "NULL"],
+    ] as const) {
+      expect(await sqlState(
+        `INSERT INTO ${qi(schema)}."agent_runs" (id, status, pause_claim_token, pause_claim_phase, pause_claim_expires_at)
+         VALUES ($1, 'pending_approval', $2, $3, ${expiry})`,
+        [id, token, phase],
+      ), id).toBeNull();
+    }
+  });
+
+  const SHAPE_OUTSIDE: [string, string][] = [
+    ["an unknown phase", "held"],
+    ["an empty phase", ""],
+    ["a case-varied claim", "Claimed"],
+    ["an upper-case send", "SENDING"],
+    ["a case-varied end mark", "Changes_Requested"],
+  ];
+  it.each<[string, string, string, string]>(
+    SHAPE_ARMS.flatMap(([label, schema]) =>
+      SHAPE_OUTSIDE.map(([what, phase]): [string, string, string, string] => [label, what, schema, phase])),
+  )("%s with its phase CHECK dropped: the shape CHECK alone refuses %s with an expiry", async (_label, what, schema, phase) => {
+    const state = await sqlState(
+      `INSERT INTO ${qi(schema)}."agent_runs" (id, status, pause_claim_token, pause_claim_phase, pause_claim_expires_at)
+       VALUES ($1, 'pending_approval', 'tok', $2, now())`,
+      [`bad-${what}`, phase],
+    );
+    expect(state).toBe("23514");
+  });
 
   it("boots a schema whose name holds a double quote and a single quote, and replays cleanly", async () => {
     await minimalTables(QUOTED);

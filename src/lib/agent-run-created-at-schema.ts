@@ -80,7 +80,7 @@ export function agentRunStartedBySchemaQueries(schemaName: string): { text: stri
 
 // The PAUSE CLAIM columns (cinatra#4245): a generation-stamped lease on a paused
 // run's own row. Migration twin core__0116, which carries the same statements
-// and explains them. Inert until a later change reads them: no backfill. Each
+// and explains them. No decision reads them yet, and there is no backfill. Each
 // statement runs on its own (the bootstrap runs no transaction), so the table
 // scan happens only in VALIDATE CONSTRAINT under SHARE UPDATE EXCLUSIVE; each
 // CHECK is added NOT VALID while pg_constraint lacks its name and validated
@@ -116,7 +116,7 @@ END $$`;
   return [
     { text: `ALTER TABLE "${s}"."agent_runs" ADD COLUMN IF NOT EXISTS pause_generation bigint NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS pause_claim_token text, ADD COLUMN IF NOT EXISTS pause_claim_phase text, ADD COLUMN IF NOT EXISTS pause_claim_expires_at timestamptz` },
     { text: guardedCheck("agent_runs_pause_claim_phase_chk", "pause_claim_phase IS NULL OR pause_claim_phase IN ('claimed','sending','changes_requested')") },
-    { text: guardedCheck("agent_runs_pause_claim_shape_chk", "(pause_claim_token IS NULL AND pause_claim_phase IS NULL AND pause_claim_expires_at IS NULL) OR (pause_claim_token IS NOT NULL AND pause_claim_phase IS NOT NULL AND (pause_claim_phase = 'changes_requested') = (pause_claim_expires_at IS NULL))") },
+    { text: guardedCheck("agent_runs_pause_claim_shape_chk", "(pause_claim_token IS NULL AND pause_claim_phase IS NULL AND pause_claim_expires_at IS NULL) OR (pause_claim_token IS NOT NULL AND pause_claim_phase IS NOT NULL AND pause_claim_phase IN ('claimed','sending','changes_requested') AND (pause_claim_phase = 'changes_requested') = (pause_claim_expires_at IS NULL))") },
     { text: guardedValidate("agent_runs_pause_claim_phase_chk") },
     { text: guardedValidate("agent_runs_pause_claim_shape_chk") },
   ];

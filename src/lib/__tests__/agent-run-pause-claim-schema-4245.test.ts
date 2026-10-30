@@ -15,6 +15,10 @@
  *
  * Pre-2 fold (red at 675c2bfc): up bounds every lock wait with lock_timeout,
  * set first and reset last.
+ *
+ * Red at 07f5d27b: the shape CHECK alone, read without the phase CHECK,
+ * admitted a claim with an unknown, an empty or a case-varied phase and an
+ * expiry. Its claim branch now requires one of the three phases.
  */
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -44,16 +48,17 @@ const operatorDdl = (): string[] => operatorUp().slice(1, -1);
 const PHASE_CHK = "agent_runs_pause_claim_phase_chk";
 const SHAPE_CHK = "agent_runs_pause_claim_shape_chk";
 const SHAPE_SQL =
-  "(pause_claim_token IS NULL AND pause_claim_phase IS NULL AND pause_claim_expires_at IS NULL) OR (pause_claim_token IS NOT NULL AND pause_claim_phase IS NOT NULL AND (pause_claim_phase = 'changes_requested') = (pause_claim_expires_at IS NULL))";
+  "(pause_claim_token IS NULL AND pause_claim_phase IS NULL AND pause_claim_expires_at IS NULL) OR (pause_claim_token IS NOT NULL AND pause_claim_phase IS NOT NULL AND pause_claim_phase IN ('claimed','sending','changes_requested') AND (pause_claim_phase = 'changes_requested') = (pause_claim_expires_at IS NULL))";
 
 // Evaluates the shape CHECK text over one row without a database, in SQL's
 // three-valued logic (NULL is `null`), for the subset the CHECK uses: OR, AND,
-// boolean `=`, `col IS [NOT] NULL` and `col = 'literal'`. A CHECK admits a row
-// unless the expression is FALSE. The DB tier beside this file proves the same
+// boolean `=`, `col IS [NOT] NULL`, `col = 'literal'` and `col IN ('a', ...)`
+// over non-NULL literals (NULL IN (...) is NULL; a case-sensitive match). A
+// CHECK admits a row unless the expression is FALSE. The DB tier beside this file proves the same
 // matrix on a real Postgres.
 type Tri = boolean | null;
 function shapeAdmits(checkSql: string, row: Record<string, string | null>): boolean {
-  const tokens = checkSql.match(/\(|\)|=|'[^']*'|[A-Za-z_]+/g) ?? [];
+  const tokens = checkSql.match(/\(|\)|=|,|'[^']*'|[A-Za-z_]+/g) ?? [];
   expect(tokens.join("")).toBe(checkSql.replaceAll(/\s+/g, ""));
   let at = 0;
   const take = (want?: string): string => {
@@ -89,6 +94,20 @@ function shapeAdmits(checkSql: string, row: Record<string, string | null>): bool
       if (negated) take();
       take("NULL");
       return negated ? value !== null : value === null;
+    }
+    if (tokens[at] === "IN") {
+      take();
+      take("(");
+      const list: string[] = [];
+      for (;;) {
+        const literal = take();
+        expect(literal).toMatch(/^'[^']*'$/);
+        list.push(literal.slice(1, -1));
+        if (tokens[at] !== ",") break;
+        take();
+      }
+      take(")");
+      return value === null ? null : list.includes(value);
     }
     take("=");
     const literal = take();
@@ -214,6 +233,30 @@ describe("pause claim columns: the shape CHECK admits exactly the lease shapes (
       }
       expect(verdicts.sort()).toEqual([...ADMITTED].sort());
       expect(shapeAdmits(read(), lease(null, null, "ts"))).toBe(false);
+    },
+  );
+
+  // The shape CHECK ALONE, without the phase CHECK: a phase outside the three
+  // (unknown, empty, case-varied) is refused with or without an expiry and
+  // with or without a token, so the matrix over that wider domain admits
+  // exactly the four lease shapes.
+  const OUTSIDE = ["held", "", "Claimed", "SENDING", "Changes_Requested"];
+  it.each<[string, () => string]>([["the operator upgrade", () => migration.pauseClaimShapeCheckSql], ["the bootstrap", leafShape]])(
+    "%s, read alone, refuses an unknown, an empty and a case-varied phase with an expiry",
+    (_label, read) => {
+      for (const phase of OUTSIDE) {
+        expect(shapeAdmits(read(), lease("tok", phase, "ts")), `tok|${phase}|ts`).toBe(false);
+        expect(shapeAdmits(read(), lease("tok", phase, null)), `tok|${phase}|-`).toBe(false);
+      }
+      const verdicts: string[] = [];
+      for (const token of [null, "tok"]) {
+        for (const phase of [null, ...migration.PAUSE_CLAIM_PHASES, ...OUTSIDE]) {
+          for (const expiry of [null, "ts"]) {
+            if (shapeAdmits(read(), lease(token, phase, expiry))) verdicts.push(`${token ?? "-"}|${phase ?? "-"}|${expiry ?? "-"}`);
+          }
+        }
+      }
+      expect(verdicts.sort()).toEqual([...ADMITTED].sort());
     },
   );
 });
