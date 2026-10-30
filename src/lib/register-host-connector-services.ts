@@ -26,6 +26,7 @@ import {
   readAnthropicConnectionFromDatabase,
   readAnthropicSkillSyncEnabledFromDatabase,
 } from "@/lib/database";
+import { updateConnectorConfigInDatabase } from "@/lib/connector-config-update";
 import {
   decodeCursor,
   buildListPage,
@@ -989,6 +990,13 @@ export function registerHostConnectorServices(): void {
     // preserving the actor-free webhook-verify secret read (see the note above
     // this function).
     resolveEnvOverrides: resolveConnectorConfigEnvOverrides,
+    // ADDITIVE member, like `resolveEnvOverrides`: the frozen SDK contract is
+    // unchanged and consumers resolve `update` structurally. It applies the
+    // caller's updater to the stored row ATOMICALLY (a byte-equal
+    // compare-and-swap, or an insert-if-absent that reports its result), so a
+    // concurrent change to the row is never overwritten. Its errors are
+    // value-free (fixed text, the key only, no `cause`).
+    update: updateConnectorConfigInDatabase,
   });
 
   // The Anthropic "Skills" opt-in (`anthropic_skill_sync_enabled`) is migrating

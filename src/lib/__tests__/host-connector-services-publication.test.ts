@@ -39,6 +39,14 @@ vi.mock("@/lib/database", () => ({
   readOpenAIConnectionFromDatabase: () => ({}),
   readAnthropicConnectionFromDatabase: () => ({}),
 }));
+// The atomic `update` member's live binding (its own tests cover the loop and
+// the Postgres binding); recorded here to pin the provider wiring only.
+const updateCalls: unknown[][] = [];
+vi.mock("@/lib/connector-config-update", () => ({
+  updateConnectorConfigInDatabase: (...args: unknown[]) => {
+    updateCalls.push(args);
+  },
+}));
 vi.mock("@/lib/mcp-pagination", () => ({ decodeCursor: () => null, buildListPage: () => ({}) }));
 const EXT_MCP_ROW = {
   id: "twenty-workspace",
@@ -420,6 +428,24 @@ describe("host connector-config service (Stage-0 delete member)", () => {
     expect(dbCalls.read.at(-1)).toEqual(["some-id", { a: 1 }]);
     expect(dbCalls.write.at(-1)).toEqual(["some-id", { b: 2 }]);
     expect(dbCalls.delete.at(-1)).toEqual(["dead-key"]);
+  });
+
+  it("H-reg: publishes the ADDITIVE atomic update member beside read/write/delete/resolveEnvOverrides", () => {
+    const svc = resolveSingle<
+      HostConnectorConfigService & {
+        resolveEnvOverrides?: unknown;
+        update?: (connectorId: string, updater: (current: unknown) => unknown) => void;
+      }
+    >(HOST_CONNECTOR_SERVICE_CAPABILITIES.connectorConfig);
+    for (const member of ["read", "write", "delete", "resolveEnvOverrides"] as const) {
+      expect(typeof svc[member]).toBe("function");
+    }
+    expect(typeof svc.update).toBe("function");
+
+    const updater = (current: unknown) => current;
+    svc.update?.("linkedin", updater);
+    expect(updateCalls.at(-1)).toEqual(["linkedin", updater]);
+    expect(dbCalls.write.at(-1)).not.toEqual(["linkedin", expect.anything()]);
   });
 });
 

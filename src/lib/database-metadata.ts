@@ -99,6 +99,27 @@ export function writeMetadataValueIfAbsentInternal(key: string, value: unknown) 
   });
 }
 
+// INSERT-IF-ABSENT that REPORTS its result: true only when THIS statement
+// inserted the row (`RETURNING key` yields no row on a conflict). It stores
+// `raw` byte for byte (no re-stringify), so the caller's compare-and-swap
+// version is exactly the text it computed. The connector-config `update`
+// relies on the result: an insert that lands is done at once, with no reread.
+// Raw SQL kept here for the same reason as the statement above.
+export function insertRawMetadataValueIfAbsentInternal(key: string, raw: string): boolean {
+  ensurePostgresSchema();
+  const table = `"${postgresSchema.replaceAll('"', '""')}"."metadata"`;
+  const [result] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `INSERT INTO ${table} (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING RETURNING key`,
+        values: [key, raw],
+      },
+    ],
+  });
+  return (result?.rows?.length ?? 0) > 0;
+}
+
 // Atomically update a metadata row's value to `newValue` ONLY when the stored
 // value is byte-equal to `expectedRaw`. Returns true when the swap landed (a
 // row was affected). A concurrent write that changed the stored value makes the
