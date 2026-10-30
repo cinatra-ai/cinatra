@@ -1128,6 +1128,17 @@ async function reopenShapedGateInAnotherRun(successorGateId: string, pin: Pin) {
 }
 
 describe.skipIf(!HAS_DB)("cinatra#4312 — a verification-reopen-shaped gate of another run is no lineage proof (review 3, finding 1)", () => {
+  // Each case judges only its own run: the file shares one database and `sweep()`
+  // claims every outstanding intent, so an intent an earlier case left pending or
+  // delivering (for example after a failed assertion) is set aside first.
+  beforeEach(async () => {
+    await pool(
+      `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_resume_outbox"
+          SET dead_lettered_at = now(), last_error = 'set aside by the test: left by an earlier case'
+        WHERE dead_lettered_at IS NULL AND status IN ('pending', 'delivering')`,
+    );
+  });
+
   it("run B in the same org emits a gate with the reopen task id of run A's pending successor and records changes requested on it: refused (lineage-unbound); run A stays parked and its lineage open", async () => {
     // Run A: declared root G (the picture's leg), attempt 1 repaired to the
     // pending successor S, the post's decision delivered (`done`) and set aside.

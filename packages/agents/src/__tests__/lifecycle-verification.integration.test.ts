@@ -360,6 +360,102 @@ describe.skipIf(!HAS_DB)("cinatra#2042 — post-change verification (real store)
     expect(await repairStore.isRepairLineageOpen(original!.lineageId)).toBe(true);
   });
 
+  /** A landed ordinary repair whose verification failed: its canonical reopen gate
+   * on the producing run, and the verification record `verify:<successor>` bound to
+   * the successor gate (cinatra#4312). */
+  async function failedVerificationOfLandedRepair() {
+    const landed = await landRepair();
+    const res = await verifStore.recordVerificationForRepair({
+      repairId: landed.repairId,
+      projectFields: () => ({ subject: "old", body: "old" }), // nothing changed vs base ⇒ findings unmet
+    });
+    if (!res.ok || !res.reopenedGateId) throw new Error("the verification opened no reopen gate");
+    const reopenTask = verificationReopenReviewTaskId(`verify:${landed.successorGateId}`);
+    const pin = { artifactId: landed.ev.artifactId, representationRevisionId: landed.successorRev };
+    return { ...landed, reopenTask, reopenGateId: res.reopenedGateId, pin };
+  }
+
+  /** `recordChangesRequested` on gate `gateId` of run `runId` with task `reviewTaskId`. */
+  async function changesRequestedOnReopenShaped(
+    v: Awaited<ReturnType<typeof failedVerificationOfLandedRepair>>,
+    runId: string,
+    gateId: string,
+  ) {
+    return repairStore.recordChangesRequested({
+      runId,
+      reviewTaskId: v.reopenTask,
+      orgId: ORG,
+      request: { ...mkChangesRequested(v.ev, gateId), baseTarget: v.pin, expectedBaseRevisionId: v.successorRev },
+      repairCapable: true,
+      producerRunId: v.ev.producerRunId,
+      currentBaseRevisionId: v.successorRev,
+    });
+  }
+
+  async function attemptsOf(lineageId: string): Promise<number> {
+    const r = await pool(`SELECT count(*)::int AS n FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE lineage_id=$1`, [lineageId]);
+    return (r.rows[0] as { n: number }).n;
+  }
+
+  it("FORGED RUN (cinatra#4312): on an ordinary lineage, a gate of another run with the reopen task id of the successor is refused by the run check alone (lineage-unbound); the canonical reopen is still accepted", async () => {
+    const v = await failedVerificationOfLandedRepair();
+    const original = await repairStore.readRepair(v.repairId);
+    // Every other check holds for F: the repair is repaired, F carries exactly the
+    // reopen task id, F is in the repair's org, the lineage is not a declared leg's,
+    // and `verify:S` exists bound to S. Only F's run differs.
+    const runB = `run-other-${randomUUID()}`;
+    const forged = await gateStore.emitArtifactReviewGate({ runId: runB, orgId: ORG, reviewTaskId: v.reopenTask, targets: [v.pin] });
+    const cr = await changesRequestedOnReopenShaped(v, runB, forged.gateId);
+    expect(cr).toMatchObject({ ok: false, code: "lineage-unbound" });
+    expect(await attemptsOf(original!.lineageId)).toBe(1);
+    expect((await gateStore.readReviewGate(runB, v.reopenTask))?.status).toBe("pending");
+
+    const honest = await changesRequestedOnReopenShaped(v, v.ev.producerRunId!, v.reopenGateId);
+    expect(honest).toMatchObject({ ok: true, attempt: 2 });
+    if (!honest.ok) return;
+    expect((await repairStore.readRepair(honest.repairId))!.lineageId).toBe(original!.lineageId);
+  });
+
+  it("FORGED RUN, ALREADY WRITTEN (cinatra#4312): on an ordinary lineage, an attempt 2 already written on a gate of another run with the reopen task id does not read as the lineage's next attempt: the reader throws malformed-lineage", async () => {
+    const v = await failedVerificationOfLandedRepair();
+    const original = await repairStore.readRepair(v.repairId);
+    const runB = `run-other-${randomUUID()}`;
+    const forged = await gateStore.emitArtifactReviewGate({ runId: runB, orgId: ORG, reviewTaskId: v.reopenTask, targets: [v.pin] });
+    // The attempt-2 row a record on F would have written: escalated, no successor.
+    await pool(
+      `INSERT INTO "${q(TEST_SCHEMA)}"."lifecycle_repair"
+         (id, lineage_id, gate_id, org_id, base_artifact_id, base_representation_revision_id, expected_base_revision_id,
+          findings, continuation_mode, continuation_address, attempt, route, status, idempotency_key)
+       SELECT $2, lineage_id, $3, org_id, $4, $5, $5, findings, continuation_mode, continuation_address, 2, route, 'escalated', $6
+         FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE id=$1`,
+      [v.repairId, randomUUID(), forged.gateId, v.pin.artifactId, v.pin.representationRevisionId, `k-${randomUUID()}`],
+    );
+    await expect(repairStore.isRepairLineageOpen(original!.lineageId)).rejects.toMatchObject({ code: "malformed-lineage" });
+  });
+
+  it("NOT REPAIRED (cinatra#4312): the canonical reopen of a successor whose repair row no longer reads `repaired` is refused by the status check (lineage-unbound)", async () => {
+    const v = await failedVerificationOfLandedRepair();
+    const original = await repairStore.readRepair(v.repairId);
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."lifecycle_repair" SET status='stale' WHERE id=$1`, [v.repairId]);
+    const cr = await changesRequestedOnReopenShaped(v, v.ev.producerRunId!, v.reopenGateId);
+    expect(cr).toMatchObject({ ok: false, code: "lineage-unbound" });
+    expect(await attemptsOf(original!.lineageId)).toBe(1);
+  });
+
+  it("RECORD ON ANOTHER GATE (cinatra#4312): the canonical reopen whose verification record `verify:S` is bound to another gate than S is refused by the record check (lineage-unbound)", async () => {
+    const v = await failedVerificationOfLandedRepair();
+    const original = await repairStore.readRepair(v.repairId);
+    const baseGate = await gateStore.readReviewGate(v.ev.producerRunId!, autoReviewTaskId(v.ev.eventId));
+    expect(baseGate).not.toBeNull();
+    await pool(
+      `UPDATE "${q(TEST_SCHEMA)}"."artifact_verification_records" SET gate_id=$2 WHERE id=$1`,
+      [`verify:${v.successorGateId}`, baseGate!.id],
+    );
+    const cr = await changesRequestedOnReopenShaped(v, v.ev.producerRunId!, v.reopenGateId);
+    expect(cr).toMatchObject({ ok: false, code: "lineage-unbound" });
+    expect(await attemptsOf(original!.lineageId)).toBe(1);
+  });
+
   it("ADVISOR LANE: the Audit lane writes a provenance-stamped advisory comment on a gate (idempotent), readable by the run view", async () => {
     const runId = `run-${randomUUID()}`;
     const artifactId = `art-${randomUUID()}`;
