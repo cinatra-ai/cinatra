@@ -21,6 +21,10 @@ export type WindowOwnershipReading = {
 // EVERY ANCHOR IS READ ON ITS OWN NODE: an owned window sits strictly inside
 // the page chrome (an anchor on the chrome node itself is not owned), and a
 // lifecycle card's own root node counts as inside the card.
+//
+// THE READING STOPS AT THE ROOT: the root element's own markers are read like
+// any other node's, and nothing above the root is read, so a page chrome or a
+// card above it neither owns a window nor holds a prompt.
 export function readRunWindowOwnership(root: Element | null): WindowOwnershipReading {
   if (root === null) return { rootPresent: false, windows: 0, ownedWindows: 0, unownedPrompts: 0,
     cards: 0, promptsInCards: 0, composers: 0, composersInCards: 0,
@@ -36,28 +40,39 @@ export function readRunWindowOwnership(root: Element | null): WindowOwnershipRea
   const promptControls = ['[data-run-window-field]', 'textarea', '[aria-label="Apply AI suggestion"]',
     '[data-testid="chat-prompt-input"]', '[data-conformance-id="chat-composer-primary"]'].join(',');
   const holders = [runWindow, otherWindows, card, composer].join(',');
+  const top: Element = root;
+  const all = (selector: string): Element[] =>
+    [...(top.matches(selector) ? [top] : []), ...Array.from(top.querySelectorAll(selector))];
+  // The nearest match from the node up to the root, both included.
+  const closestInRoot = (node: Element, selector: string): Element | null => {
+    for (let at: Element | null = node; at !== null; at = at === top ? null : at.parentElement) if (at.matches(selector)) return at;
+    return null;
+  };
+  // Strictly inside the page chrome, within the root.
+  const inChrome = (node: Element): boolean =>
+    node !== top && node.parentElement !== null && closestInRoot(node.parentElement, pageChrome) !== null;
   // The node itself and every descendant that matches.
   const within = (node: Element, selector: string): number =>
     (node.matches(selector) ? 1 : 0) + node.querySelectorAll(selector).length;
-  const cards = Array.from(root.querySelectorAll(card));
+  const cards = all(card);
   const notice = '[data-conformance-id="schedule-window-over"]';
-  const anchored = Array.from(root.querySelectorAll(runWindow));
-  const unanchored = Array.from(root.querySelectorAll(otherWindows))
+  const anchored = all(runWindow);
+  const unanchored = all(otherWindows)
     .filter((node) => node.querySelector(runWindow) === null);
-  const loose = Array.from(root.querySelectorAll(promptControls)).filter((node) => node.closest(holders) === null);
+  const loose = all(promptControls).filter((node) => closestInRoot(node, holders) === null);
   const unownedPrompts = loose.filter((node) => !loose.some((other) => other !== node && other.contains(node))).length;
   return {
     rootPresent: true, windows: anchored.length + unanchored.length + unownedPrompts,
-    ownedWindows: anchored.filter((node) => node.parentElement?.closest(pageChrome) != null).length,
+    ownedWindows: anchored.filter(inChrome).length,
     unownedPrompts,
     cards: cards.length,
     promptsInCards: cards.reduce((total, node) => total + within(node, promptMarkers), 0),
-    composers: root.querySelectorAll(composer).length,
+    composers: all(composer).length,
     composersInCards: cards.reduce((total, node) => total + within(node, composer), 0),
-    pageNotices: root.querySelectorAll(pageChrome + ' ' + notice).length,
+    pageNotices: all(notice).filter(inChrome).length,
     noticesInCards: cards.reduce((total, node) => total + within(node, notice), 0),
-    interactiveNotices: Array.from(root.querySelectorAll(notice)).reduce((total, node) =>
-      total + within(node.closest('[data-conformance-id="schedule-prompt-window"]') ?? node, 'input, textarea, button, [contenteditable="true"]'), 0),
+    interactiveNotices: all(notice).reduce((total, node) =>
+      total + within(closestInRoot(node, '[data-conformance-id="schedule-prompt-window"]') ?? node, 'input, textarea, button, [contenteditable="true"]'), 0),
   };
 }
 export function assertRunWindowOwnership(reading: WindowOwnershipReading, host: "run" | "review" | "chat"): void {
