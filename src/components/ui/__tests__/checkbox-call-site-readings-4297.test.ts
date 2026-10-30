@@ -1611,6 +1611,9 @@ describe("the switch rule refuses what is ambiguous or can change, and takes onl
       "for in": "for (Switch in obj) {}",
       parenthesized: "(Switch) = Checkbox;",
       "as expression": "(Switch as unknown) = Checkbox;",
+      "non-null target": "Switch! = Checkbox;",
+      "satisfies target": "(Switch satisfies unknown) = Checkbox;",
+      "object rest target": "({ ...Switch } = obj);",
       "inside a function": "export function reset() { Switch = Checkbox; }",
     };
     for (const [what, w] of Object.entries(writes)) {
@@ -1618,6 +1621,12 @@ describe("the switch rule refuses what is ambiguous or can change, and takes onl
       expect([what, declaresAndExportsSwitch(parseSource("m.tsx", m))]).toEqual([what, false]);
       expect([what, refused(`${IMPORT}\nexport const R = () => ${ITEM("<Switch checked={on} />")};\n`, { [KIT]: m })]).toEqual([what, true]);
     }
+    // an angle-bracket assertion is a write target only in a .ts module (in .tsx it parses as a tag)
+    const angle = `${head}(<unknown>Switch) = Checkbox;\n`;
+    expect(declaresAndExportsSwitch(parseSource("m.ts", angle))).toBe(false);
+    expect(declaresAndExportsSwitch(parseSource("m.ts", `${head}export const read = <unknown>Switch;\n`))).toBe(true);
+    expect(refused(`${IMPORT}\nexport const R = () => ${ITEM("<Switch checked={on} />")};\n`, { "src/ui/checkbox.ts": angle })).toBe(true);
+    expect(passes(`${IMPORT}\nexport const R = () => ${ITEM("<Switch checked={on} />")};\n`, { "src/ui/checkbox.ts": `${head}export const read = <unknown>Switch;\n` })).toBe(true);
     // a JavaScript-family module is read the same way: a later reassignment and a var of the name refuse
     for (const m of [`${head}Switch = Checkbox;\n`, "export function Checkbox() { return null; }\nexport function Switch() { return null; }\nvar Switch = Checkbox;\n"]) {
       expect(refused('import { Switch } from "@ui/box";\nexport const R = () => ' + ITEM("<Switch checked={on} />") + ";\n", { "src/ui/checkbox.js": m }, undefined, '{ "compilerOptions": { "paths": { "@ui/box": ["src/ui/checkbox.js"] } } }')).toBe(true);
