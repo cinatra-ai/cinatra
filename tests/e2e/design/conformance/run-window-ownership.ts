@@ -5,21 +5,33 @@ export type WindowOwnershipReading = {
   pageNotices: number; noticesInCards: number; interactiveNotices: number;
 };
 // Self-contained so Playwright evaluates this exact reader in the page. Native
-// tests run it on DOM produced by the real components, and adversarial DOM.
+// tests run it on DOM produced by the real components — the fixtures route's
+// hosts and the real route modules (cinatra#3487 item 3) — and adversarial DOM.
+//
+// THE WINDOW IS READ BY ITS OWN ANCHOR, `run-window` (cinatra#3487 item 3): the
+// drawing of the run page's window (`app-artifact-review.html` §I.6) anchors it
+// so, inside `[data-run-window-host="page-chrome"]`. A window is that anchor,
+// or a window drawn under another window anchor with no `run-window` inside it
+// — so a second window is counted whatever it is called, and a page window that
+// lost its own anchor is not owned.
 export function readRunWindowOwnership(root: Element | null): WindowOwnershipReading {
   if (root === null) return { rootPresent: false, windows: 0, ownedWindows: 0,
     cards: 0, promptsInCards: 0, composers: 0, composersInCards: 0,
     pageNotices: 0, noticesInCards: 0, interactiveNotices: 0 };
-  const windows = '[data-conformance-id="review-prompt-window"], [data-conformance-id="schedule-prompt-window"]';
+  const runWindow = '[data-conformance-id="run-window"]';
+  const otherWindows = '[data-conformance-id="review-prompt-window"], [data-conformance-id="schedule-prompt-window"]';
   const composer = '[data-conversation-composer]';
-  const promptMarkers = [windows, '[data-conformance-id="schedule-window-over"]', '[data-run-window-field]',
+  const promptMarkers = [runWindow, otherWindows, '[data-conformance-id="schedule-window-over"]', '[data-run-window-field]',
     '[data-conformance-id="chat-composer-primary"]', composer,
     '[data-testid="chat-prompt-input"]', '[aria-label="Apply AI suggestion"]'].join(',');
   const cards = Array.from(root.querySelectorAll('[data-lifecycle-card-host]'));
   const notice = '[data-conformance-id="schedule-window-over"]';
+  const anchored = Array.from(root.querySelectorAll(runWindow));
+  const unanchored = Array.from(root.querySelectorAll(otherWindows))
+    .filter((node) => node.querySelector(runWindow) === null && node.closest(runWindow) === null);
   return {
-    rootPresent: true, windows: root.querySelectorAll(windows).length,
-    ownedWindows: Array.from(root.querySelectorAll(windows)).filter((node) => node.closest('[data-run-window-host="page-chrome"]') !== null).length,
+    rootPresent: true, windows: anchored.length + unanchored.length,
+    ownedWindows: anchored.filter((node) => node.closest('[data-run-window-host="page-chrome"]') !== null).length,
     cards: cards.length,
     promptsInCards: cards.reduce((total, card) => total + card.querySelectorAll(promptMarkers).length, 0),
     composers: root.querySelectorAll(composer).length,

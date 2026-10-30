@@ -6,7 +6,9 @@ function root(markup: string): Element {
   const root = document.createElement("section"); root.innerHTML = markup; return root;
 }
 const card = '<section data-lifecycle-card-host="run_card"><textarea data-testid="review-rationale" data-conformance-id="review-note-field-subordinate"></textarea><input name="subject"></section>';
-const window = '<div data-run-window-host="page-chrome"><div data-conformance-id="review-prompt-window"><div data-run-window-field></div><button aria-label="Apply AI suggestion"></button></div></div>';
+// The page window as the chrome draws it (cinatra#3487 item 3): §VI's
+// `review-prompt-window` around the page window's own `run-window` anchor.
+const window = '<div data-run-window-host="page-chrome"><div data-conformance-id="review-prompt-window"><div data-conformance-id="run-window"><div data-run-window-field></div><button aria-label="Apply AI suggestion"></button></div></div></div>';
 describe("#3487 positive ownership guard", () => {
   it("declares only the three static query hosts and preserves the default route", () => {
     expect(RUN_WINDOW_OWNERSHIP_HOSTS).toEqual(["run", "review", "chat"]);
@@ -31,6 +33,29 @@ describe("#3487 positive ownership guard", () => {
     const node = root(card + '<div data-conformance-id="review-prompt-window"></div>');
     expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "review")).toThrow(/chrome/);
   });
+  // cinatra#3487 item 3: the window is read by its own anchor, `run-window`.
+  it.each(["run", "review"] as const)("refuses a %s page window in the chrome that carries no run-window anchor", (host) => {
+    const legacy = '<div data-run-window-host="page-chrome"><div data-conformance-id="review-prompt-window"><div data-run-window-field></div></div></div>';
+    const reading = readRunWindowOwnership(root(card + legacy));
+    expect(reading).toMatchObject({ windows: 1, ownedWindows: 0 });
+    expect(() => assertRunWindowOwnership(reading, host)).toThrow(/exactly one/);
+  });
+  it("refuses a run-window anchor outside page chrome", () => {
+    const node = root(card + '<div data-conformance-id="run-window"><div data-run-window-field></div></div>');
+    expect(readRunWindowOwnership(node)).toMatchObject({ windows: 1, ownedWindows: 0 });
+    expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "run")).toThrow(/chrome/);
+  });
+  it("refuses a second window of another anchor beside the page's own", () => {
+    for (const stray of ['<div data-conformance-id="review-prompt-window"></div>', '<div data-conformance-id="schedule-prompt-window"></div>']) {
+      const node = root(card + window + stray);
+      expect(readRunWindowOwnership(node)).toMatchObject({ windows: 2, ownedWindows: 1 });
+      expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "review")).toThrow(/exactly one/);
+    }
+  });
+  it("refuses a run-window anchor inside a lifecycle card", () => {
+    const node = root('<section data-lifecycle-card-host="run_card"><div data-conformance-id="run-window"></div></section>' + window);
+    expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "run")).toThrow(/inside/);
+  });
   it.each([
     '<div data-conformance-id="review-prompt-window"></div>', '<div data-conformance-id="schedule-prompt-window"></div>', '<p data-conformance-id="schedule-window-over"></p>', '<div data-run-window-field></div>',
     '<textarea data-conformance-id="chat-composer-primary"></textarea>',
@@ -41,7 +66,7 @@ describe("#3487 positive ownership guard", () => {
     expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "run")).toThrow(/inside/);
   });
   it("accepts a page-owned read-only schedule notice but refuses interactive or card-owned notice", () => {
-    const notice = '<div data-conformance-id="schedule-prompt-window"><div data-run-window-field aria-disabled="true"><p data-conformance-id="schedule-window-over">Over</p></div></div>';
+    const notice = '<div data-conformance-id="schedule-prompt-window"><div data-conformance-id="run-window"><div data-run-window-field aria-disabled="true"><p data-conformance-id="schedule-window-over">Over</p></div></div></div>';
     const page = root(card + '<div data-run-window-host="page-chrome">' + notice + '</div>');
     expect(readRunWindowOwnership(page)).toMatchObject({ pageNotices: 1, interactiveNotices: 0 });
     expect(() => assertRunWindowOwnership(readRunWindowOwnership(page), "run")).not.toThrow();

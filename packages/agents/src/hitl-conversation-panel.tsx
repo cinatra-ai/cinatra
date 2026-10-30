@@ -327,7 +327,13 @@ export function HitlConversationPanel({
       data-run-window-placement={placement}
       className="px-5 pb-4 pt-6"
     >
-      <div ref={convContainerRef} className="mx-auto max-w-3xl">
+      {/* THE RUN PAGE'S WINDOW ANCHOR (cinatra#3487 item 3). The drawing of the
+          run page's own window (`app-artifact-review.html` §I.6) anchors it as
+          `run-window`, inside the page chrome node. It rides the window itself —
+          the field and the exchange above it, the node a click outside of closes
+          — so it, too, exists exactly when a window is drawn. The outer
+          `review-prompt-window` anchor stays: §VI's reading of the same window. */}
+      <div ref={convContainerRef} data-conformance-id="run-window" className="mx-auto max-w-3xl">
         {(conversation.length > 0 || promptPending) && convOpen && (
           <div className="mb-3 rounded-panel border border-line bg-surface p-3 shadow-sm">
             <div

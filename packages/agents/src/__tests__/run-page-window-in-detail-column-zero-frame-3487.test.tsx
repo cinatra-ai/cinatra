@@ -293,6 +293,7 @@ vi.mock("../run-recommendation-core", () => ({
 
 import { SetupScreen } from "../instance-screens";
 import { RUN_WINDOW_HOST_ATTRIBUTE, RUN_WINDOW_HOST_VALUE } from "../run-page-chrome";
+import { readRunWindowOwnership } from "../../../../tests/e2e/design/conformance/run-window-ownership";
 
 /** The run page's own event stream, stubbed and taken away again. */
 class StubEventSource {
@@ -370,5 +371,36 @@ describe("cinatra#3487 -- a run page with no rail frame keeps its window in the 
     expect(column).toBeDefined();
     expect(column!.contains(rail)).toBe(false);
     expect(rail!.contains(host)).toBe(false);
+  });
+});
+
+// cinatra#3487 item 3: THE DESIGN-CONFORMANCE READING ON THE REAL RUN PAGE. The
+// conformance suite's own reader (`tests/e2e/design/conformance/
+// run-window-ownership.ts`) is run on the run page ROUTE's own tree
+// (`SetupScreen`): the window's anchor is the drawing's `run-window`
+// (`app-artifact-review.html` §I.6), it is a descendant of the page chrome and
+// never of `[data-lifecycle-card-host]`, and the page carries no second window.
+describe("cinatra#3487 item 3 -- the design-conformance reading of the real run page", () => {
+  it("one run-window anchor, in the page chrome, none in a card, and no second window", async () => {
+    const { container } = render(await serverTree());
+    await waitFor(() => {
+      expect(container.querySelector(`${HOST} [data-run-window-field]`)).not.toBeNull();
+    });
+
+    const anchors = container.querySelectorAll<HTMLElement>('[data-conformance-id="run-window"]');
+    expect(anchors.length).toBe(1);
+    const anchor = anchors[0]!;
+    expect(anchor.closest(HOST)).not.toBeNull();
+    expect(anchor.closest("[data-lifecycle-card-host]")).toBeNull();
+    // The anchor is the window itself: the field the person types into is in it.
+    expect(anchor.querySelector("[data-run-window-field]")).not.toBeNull();
+
+    expect(readRunWindowOwnership(container)).toMatchObject({
+      windows: 1,
+      ownedWindows: 1,
+      promptsInCards: 0,
+      composersInCards: 0,
+      noticesInCards: 0,
+    });
   });
 });

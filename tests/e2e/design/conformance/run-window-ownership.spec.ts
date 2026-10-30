@@ -6,6 +6,12 @@ import { assertRunWindowOwnership, readRunWindowOwnership } from "./run-window-o
 
 // Required design-conformance-functional already discovers this spec. The
 // existing allowlisted static harness query is used, not authenticated pages.
+// The window is read by its own anchor, `run-window` (cinatra#3487 item 3,
+// `app-artifact-review.html` §I.6). The same reader runs on the real route
+// modules — the review route (`review-page-zero-gate-window-3487.test.tsx`)
+// and the run page's `SetupScreen`
+// (`run-page-window-in-detail-column-zero-frame-3487.test.tsx`) — so the
+// reading these hosts pass is the reading the real pages pass.
 for (const palette of ["cinatra", "dark"] as const) {
   for (const host of RUN_WINDOW_OWNERSHIP_HOSTS) {
     test(`run-window ownership — ${host} — ${palette}`, async ({ page }) => {

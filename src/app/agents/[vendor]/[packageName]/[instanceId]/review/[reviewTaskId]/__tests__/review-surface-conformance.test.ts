@@ -598,7 +598,16 @@ describe("§I–III — run-embedded anchors: the revised spec's closed set is r
     "run-step-rail": RUN_STEP_RAIL,
     "run-chip-row": RUN_CHIP_ROW,
     "review-prompt-window": RUN_WINDOW_PANEL,
+    // cinatra#3487 item 3 — the run page's own window, anchored as the drawing
+    // anchors it (`app-artifact-review.html` §I.6), inside the page chrome. The
+    // live window draws it in the panel; the spent schedule's disabled window
+    // draws it in the chrome.
+    "run-window": RUN_WINDOW_PANEL,
   };
+
+  it('spec→render: the spent schedule\'s disabled window carries the "run-window" anchor in the chrome (spec §I.6)', () => {
+    expect(RUN_WINDOW_CHROME.includes('data-conformance-id="run-window"')).toBe(true);
+  });
 
   for (const [id, src] of Object.entries(RUN_EMBEDDED_DOM_ANCHORS)) {
     it(`spec→render: the "${id}" anchor is rendered at its run-embedded site`, () => {
@@ -642,7 +651,7 @@ describe("§I–III — run-embedded anchors: the revised spec's closed set is r
     // anchors + the five run-embedded anchors + the documented host-standard panel).
     // The window keeps the drawing's own id through cinatra#3487 — the window
     // moved out of the card and into the run page's chrome, its anchor did not.
-    const RUN_EMBEDDED_IDS = ["run-surface", "run-step-rail", "run-chip-row", "run-gate-notification", "review-prompt-window"];
+    const RUN_EMBEDDED_IDS = ["run-surface", "run-step-rail", "run-chip-row", "run-gate-notification", "review-prompt-window", "run-window"];
     const closed = new Set<string>([...SPEC_IDS, ...RUN_EMBEDDED_IDS, ...HOST_STANDARD_IDS]);
     // THE SCHEDULE STEP'S OWN WINDOW ANCHORS. The chrome also draws the schedule
     // screen's closed window once its run is over (cinatra#2972, #2934; plan (A)

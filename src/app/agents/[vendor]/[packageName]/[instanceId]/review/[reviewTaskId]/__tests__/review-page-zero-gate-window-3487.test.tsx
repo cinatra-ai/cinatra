@@ -142,6 +142,10 @@ vi.mock("@/components/page-header-title-sync", () => ({ PageHeaderTitleSync: () 
 vi.mock("@/components/crumb-contributions", () => ({ CrumbContributions: () => null }));
 
 import AgentRunReviewPage from "../page";
+import {
+  assertRunWindowOwnership,
+  readRunWindowOwnership,
+} from "../../../../../../../../../tests/e2e/design/conformance/run-window-ownership";
 
 const READY = {
   kind: "ready",
@@ -214,5 +218,31 @@ describe("a run with no gate step keeps the window in the detail column (cinatra
     expect(host.parentElement!.contains(rail)).toBe(false);
     // Under the decision bar: the host follows the card in document order.
     expect(card.compareDocumentPosition(host) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
+// cinatra#3487 item 3: THE DESIGN-CONFORMANCE READING ON THE REAL PAGE. The
+// conformance suite's own reader (`tests/e2e/design/conformance/
+// run-window-ownership.ts`, the one the Playwright reading of the fixtures route
+// evaluates) is run here on the review ROUTE MODULE's own tree: the window's
+// anchor is the drawing's `run-window` (`app-artifact-review.html` §I.6), it is
+// a descendant of the page chrome, never of `[data-lifecycle-card-host]`, and
+// the page carries no second window.
+describe("the design-conformance reading of the real review page (cinatra#3487 item 3)", () => {
+  it("one run-window anchor, in the page chrome, none in a card, and no second window", async () => {
+    const { container } = await mountPage();
+    await settle();
+
+    const anchors = container.querySelectorAll<HTMLElement>('[data-conformance-id="run-window"]');
+    expect(anchors.length).toBe(1);
+    const anchor = anchors[0]!;
+    expect(anchor.closest('[data-run-window-host="page-chrome"]')).not.toBeNull();
+    expect(anchor.closest("[data-lifecycle-card-host]")).toBeNull();
+    // The anchor is the window itself: the field the person types into is in it.
+    expect(anchor.contains(screen.getByTestId("run-window-prompt"))).toBe(true);
+
+    const reading = readRunWindowOwnership(container);
+    expect(reading).toMatchObject({ windows: 1, ownedWindows: 1, promptsInCards: 0 });
+    expect(() => assertRunWindowOwnership(reading, "review")).not.toThrow();
   });
 });

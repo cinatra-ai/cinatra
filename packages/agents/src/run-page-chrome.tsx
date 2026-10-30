@@ -100,7 +100,10 @@ export function RunPageChrome({ children }: { children: ReactNode }) {
               data-schedule-prompt-window=""
             >
               <div data-run-window-placement="floating" className="px-5 pb-4 pt-6">
-                <div className="mx-auto max-w-3xl">
+                {/* The same window, drawn disabled: the drawing's §I.6 "the
+                    page's window still stands beneath it, in the same place", so
+                    it carries the page window's own `run-window` anchor too. */}
+                <div data-conformance-id="run-window" className="mx-auto max-w-3xl">
                   <div
                     data-run-window-field=""
                     aria-disabled="true"
