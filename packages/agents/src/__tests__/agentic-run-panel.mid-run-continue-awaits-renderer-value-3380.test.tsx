@@ -18,16 +18,20 @@
  *   - a gate that declares no such property (here with the object-level
  *     `required: ["decision"]` the email gates carry; no renderer writes
  *     `decision`) keeps its Continue available before any write;
- *   - the chat composer's submit for the gate (the descriptor published through
- *     `onActiveGateChange`) is held by the same rule: before the pick it sends
+ *   - the published submit for the gate (the descriptor published through
+ *     `onActiveGateChange`; no application code calls it at this writing, so the
+ *     tests capture and call it) is held by the same rule: before the pick it sends
  *     nothing and rejects; after the pick it sends; on a gate that declares
  *     nothing it sends at once;
  *   - a gate that carries a presentation hint is drawn through the generic
  *     dispatch renderer, which writes nothing, so it is out of the rule: its
- *     Continue and the composer send at once;
+ *     Continue and the published submit send at once;
  *   - a gate on a renderer that is not a mid-run binding (no `:output` suffix,
  *     no `midRunHitl` entry) is out of the rule even when its schema declares a
- *     value: the composer sends at once without that value, as on main.
+ *     value: the published submit sends at once without that value, as on main;
+ *   - neither is a setup gate, even on a renderer that reads as mid-run;
+ *   - a later gate on the same renderer starts with nothing: what the earlier
+ *     gate's renderer wrote is not the later gate's answer.
  *
  * The renderer here is a stand-in registered under a test id; the rule names no
  * agent and no renderer.
@@ -137,12 +141,17 @@ const UNDECLARING_SCHEMA: Record<string, unknown> = {
  * into both keys when a row is pressed — the shape a pack's chooser commits.
  */
 function PickRenderer({ onChange }: FieldRendererProps) {
+  const [picked, setPicked] = React.useState(false);
   return (
     <div>
       <Button
         type="button"
         data-testid="pick-row-2"
-        onClick={() => void onChange({ selectedIdeaJson: PICKED_JSON, userResponse: PICKED_JSON })}
+        data-picked={picked ? "yes" : "no"}
+        onClick={() => {
+          setPicked(true);
+          void onChange({ selectedIdeaJson: PICKED_JSON, userResponse: PICKED_JSON });
+        }}
       >
         Idea two
       </Button>
@@ -164,6 +173,7 @@ function streamResultFor(
   schema: Record<string, unknown>,
   values: Record<string, unknown> = { ideas: [{ artifactId: "a-1" }, { artifactId: "a-2" }] },
   xRenderer: string = PICK_RENDERER_ID,
+  gate: { reviewTaskId?: string; fieldName?: string } = {},
 ) {
   return {
     status: "pending_approval",
@@ -174,7 +184,8 @@ function streamResultFor(
       schema,
       xRenderer,
       values,
-      reviewTaskId: REVIEW_TASK_ID,
+      reviewTaskId: gate.reviewTaskId ?? REVIEW_TASK_ID,
+      ...(gate.fieldName ? { fieldName: gate.fieldName } : {}),
     },
     streamedText: "",
     dataPartFrames: [],
@@ -188,13 +199,14 @@ async function mountGate(
   onActiveGateChange?: (runId: string, gate: { submit: GateSubmit } | null, instanceId: string) => void,
   values?: Record<string, unknown>,
   xRenderer?: string,
+  gate?: { reviewTaskId?: string; fieldName?: string },
 ) {
   const { useAgUiRunStream } = await import("../use-ag-ui-run-stream");
   (useAgUiRunStream as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
-    streamResultFor(schema, values, xRenderer),
+    streamResultFor(schema, values, xRenderer, gate),
   );
   const { AgenticRunPanel } = await import("../agentic-run-panel");
-  return render(
+  const panel = () => (
     <AgenticRunPanel
       runId="run-3380"
       initialStatus="pending_approval"
@@ -203,8 +215,17 @@ async function mountGate(
       agUiEnabled={true}
       templateId="tmpl-3380"
       {...(onActiveGateChange ? { onActiveGateChange } : {})}
-    />,
+    />
   );
+  const view = render(panel());
+  /** The run moves to another gate with the SAME renderer and no field name. */
+  const moveToGate = async (reviewTaskId: string) => {
+    (useAgUiRunStream as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
+      streamResultFor(schema, values, xRenderer, { reviewTaskId }),
+    );
+    view.rerender(panel());
+  };
+  return { ...view, moveToGate };
 }
 
 function gateContinue(): HTMLButtonElement | null {
@@ -264,20 +285,20 @@ describe("AgenticRunPanel — a mid-run Continue waits for the renderer's declar
     expect(payload.approved).toBe(true);
   });
 
-  it("holds the chat composer's submit by the same rule: nothing is sent before the pick, the pick's value after it", async () => {
-    const composer: { submit: GateSubmit | null } = { submit: null };
+  it("holds the published submit by the same rule: nothing is sent before the pick, the pick's value after it", async () => {
+    const published: { submit: GateSubmit | null } = { submit: null };
     await mountGate(DECLARING_SCHEMA, (_runId, gate) => {
-      if (gate) composer.submit = gate.submit;
+      if (gate) published.submit = gate.submit;
     });
 
-    await waitFor(() => expect(composer.submit).not.toBeNull());
+    await waitFor(() => expect(published.submit).not.toBeNull());
     await waitFor(() => expect(document.querySelector('[data-testid="pick-row-2"]')).not.toBeNull());
-    await expect(composer.submit!("Use the second idea")).rejects.toThrow(/waiting for a choice/);
+    await expect(published.submit!("Use the second idea")).rejects.toThrow(/waiting for a choice/);
     expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
 
     fireEvent.click(document.querySelector('[data-testid="pick-row-2"]')!);
     await waitFor(() => expect(gateContinue()!.disabled).toBe(false));
-    await composer.submit!("Use the second idea");
+    await published.submit!("Use the second idea");
     await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
     const [, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
       string,
@@ -286,14 +307,14 @@ describe("AgenticRunPanel — a mid-run Continue waits for the renderer's declar
     expect(payload.selectedIdeaJson).toBe(PICKED_JSON);
   });
 
-  it("lets the chat composer submit at once on a gate that declares no renderer value", async () => {
-    const composer: { submit: GateSubmit | null } = { submit: null };
+  it("lets the published submit send at once on a gate that declares no renderer value", async () => {
+    const published: { submit: GateSubmit | null } = { submit: null };
     await mountGate(UNDECLARING_SCHEMA, (_runId, gate) => {
-      if (gate) composer.submit = gate.submit;
+      if (gate) published.submit = gate.submit;
     });
 
-    await waitFor(() => expect(composer.submit).not.toBeNull());
-    await composer.submit!("approve");
+    await waitFor(() => expect(published.submit).not.toBeNull());
+    await published.submit!("approve");
     await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
   });
 
@@ -318,34 +339,34 @@ describe("AgenticRunPanel — a mid-run Continue waits for the renderer's declar
     await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
   });
 
-  it("lets the chat composer submit at once on a gate with a presentation hint", async () => {
-    const composer: { submit: GateSubmit | null } = { submit: null };
+  it("lets the published submit send at once on a gate with a presentation hint", async () => {
+    const published: { submit: GateSubmit | null } = { submit: null };
     await mountGate(
       DECLARING_SCHEMA,
       (_runId, gate) => {
-        if (gate) composer.submit = gate.submit;
+        if (gate) published.submit = gate.submit;
       },
       HINT_VALUES,
     );
 
-    await waitFor(() => expect(composer.submit).not.toBeNull());
-    await composer.submit!("approve");
+    await waitFor(() => expect(published.submit).not.toBeNull());
+    await published.submit!("approve");
     await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
   });
 
-  it("lets the chat composer submit at once, without the value, on a declaring gate whose renderer is not a mid-run binding", async () => {
-    const composer: { submit: GateSubmit | null } = { submit: null };
+  it("lets the published submit send at once, without the value, on a declaring gate whose renderer is not a mid-run binding", async () => {
+    const published: { submit: GateSubmit | null } = { submit: null };
     await mountGate(
       DECLARING_SCHEMA,
       (_runId, gate) => {
-        if (gate) composer.submit = gate.submit;
+        if (gate) published.submit = gate.submit;
       },
       undefined,
       NOT_MID_RUN_RENDERER_ID,
     );
 
-    await waitFor(() => expect(composer.submit).not.toBeNull());
-    await composer.submit!("approve");
+    await waitFor(() => expect(published.submit).not.toBeNull());
+    await published.submit!("approve");
     await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
     const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
       string,
@@ -353,5 +374,74 @@ describe("AgenticRunPanel — a mid-run Continue waits for the renderer's declar
     ];
     expect(taskId).toBe(REVIEW_TASK_ID);
     expect(payload.selectedIdeaJson).toBeUndefined();
+  });
+
+  it("holds the published submit on a gate whose renderer has the :output suffix and no binding", async () => {
+    const published: { submit: GateSubmit | null } = { submit: null };
+    await mountGate(
+      DECLARING_SCHEMA,
+      (_runId, gate) => {
+        if (gate) published.submit = gate.submit;
+      },
+      undefined,
+      "@cinatra-test/plain-agent:output",
+    );
+
+    await waitFor(() => expect(published.submit).not.toBeNull());
+    await expect(published.submit!("approve")).rejects.toThrow(/waiting for a choice/);
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
+
+  it("does not hold the published submit on a setup gate, even on a renderer that reads as mid-run", async () => {
+    const published: { submit: GateSubmit | null } = { submit: null };
+    await mountGate(
+      DECLARING_SCHEMA,
+      (_runId, gate) => {
+        if (gate) published.submit = gate.submit;
+      },
+      undefined,
+      "@cinatra-test/plain-agent:output",
+      { reviewTaskId: "setup-run-3380", fieldName: "config" },
+    );
+
+    await waitFor(() => expect(published.submit).not.toBeNull());
+    await published.submit!({ config: {} });
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("setup-run-3380");
+    expect(payload.selectedIdeaJson).toBeUndefined();
+  });
+
+  it("starts a later gate on the same renderer with nothing: the Continue and the published submit are held again, and the later pick is sent for the later gate", async () => {
+    const published: { submit: GateSubmit | null } = { submit: null };
+    const view = await mountGate(DECLARING_SCHEMA, (_runId, gate) => {
+      if (gate) published.submit = gate.submit;
+    });
+
+    await waitFor(() => expect(document.querySelector('[data-testid="pick-row-2"]')).not.toBeNull());
+    fireEvent.click(document.querySelector('[data-testid="pick-row-2"]')!);
+    await waitFor(() => expect(gateContinue()!.disabled).toBe(false));
+
+    await view.moveToGate("wayflow-task-3380-next");
+
+    await waitFor(() => expect(gateContinue()!.disabled).toBe(true));
+    expect(document.querySelector('[data-testid="pick-row-2"]')!.getAttribute("data-picked")).toBe("no");
+    fireEvent.click(gateContinue()!);
+    await expect(published.submit!("Use the second idea")).rejects.toThrow(/waiting for a choice/);
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    fireEvent.click(document.querySelector('[data-testid="pick-row-2"]')!);
+    await waitFor(() => expect(gateContinue()!.disabled).toBe(false));
+    fireEvent.click(gateContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("wayflow-task-3380-next");
+    expect(payload.selectedIdeaJson).toBe(PICKED_JSON);
   });
 });

@@ -37,7 +37,8 @@
  * or an agent name. A gate that declares nothing is held by nothing.
  *
  * A gate that carries a PRESENTATION HINT (`currentValues.presentation`, an
- * object with a string `type`) is out of the rule on every surface: such a gate
+ * object with a string `type`) is out of the rule on the run panel, the card and
+ * the published submit (the stepper draws no presentation-hint branch): such a gate
  * is drawn through the generic dispatch renderer, which writes nothing into the
  * buffer, so a hold would never be released. `gateCarriesPresentationHint` is
  * that reading; the run panel and the card apply identical inline copies of it

@@ -138,11 +138,16 @@ const UNDECLARING_SCHEMA: Record<string, unknown> = {
 /** A PICK RENDERER: it picks nothing for anyone and writes the pick into both
  *  keys when a row is pressed. */
 function PickRenderer({ onChange }: FieldRendererProps) {
+  const [picked, setPicked] = React.useState(false);
   return (
     <Button
       type="button"
       data-testid="pick-row-2"
-      onClick={() => void onChange({ selectedIdeaJson: PICKED_JSON, userResponse: PICKED_JSON })}
+      data-picked={picked ? "yes" : "no"}
+      onClick={() => {
+        setPicked(true);
+        void onChange({ selectedIdeaJson: PICKED_JSON, userResponse: PICKED_JSON });
+      }}
     >
       Idea two
     </Button>
@@ -169,16 +174,25 @@ function baseProps(): PanelProps {
   };
 }
 
-async function mountGate(schema: Record<string, unknown>) {
+async function mountGate(
+  schema: Record<string, unknown>,
+  values: Record<string, unknown> = { ideas: [{ artifactId: "a-1" }, { artifactId: "a-2" }] },
+) {
   INTERRUPT = {
     schema,
     xRenderer: PICK_RENDERER_ID,
-    values: { ideas: [{ artifactId: "a-1" }, { artifactId: "a-2" }] },
+    values,
     reviewTaskId: REVIEW_TASK_ID,
     // A mid-run interrupt carries no field name (the field is undefined).
   };
   const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
-  return render(<OrchestratorStepperPanel {...baseProps()} />);
+  const view = render(<OrchestratorStepperPanel {...baseProps()} />);
+  /** The run moves to another gate with the SAME renderer and no field name. */
+  const moveToGate = (reviewTaskId: string) => {
+    INTERRUPT = { ...INTERRUPT, reviewTaskId };
+    view.rerender(<OrchestratorStepperPanel {...baseProps()} />);
+  };
+  return { ...view, moveToGate };
 }
 
 /** The gate's outer Continue: the one button that reads "Continue". */
@@ -260,5 +274,39 @@ describe("OrchestratorStepperPanel — a mid-run Continue waits for the renderer
 
     fireEvent.click(outerContinue()!);
     await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+  });
+
+  it("holds a declaring gate that carries a presentation hint: this surface draws no presentation-hint branch", async () => {
+    await mountGate(DECLARING_SCHEMA, { presentation: { type: "card_list" } });
+
+    await waitFor(() => expect(outerContinue()).not.toBeNull());
+    expect(outerContinue()!.disabled).toBe(true);
+  });
+
+  it("starts a later gate on the same renderer with nothing: the Continue is held again, and the later pick is sent for the later gate", async () => {
+    const view = await mountGate(DECLARING_SCHEMA);
+
+    await waitFor(() => expect(pickRow()).not.toBeNull());
+    fireEvent.click(pickRow()!);
+    await waitFor(() => expect(outerContinue()!.disabled).toBe(false));
+
+    view.moveToGate("wayflow-task-3380-next");
+
+    await waitFor(() => expect(outerContinue()!.disabled).toBe(true));
+    expect(pickRow()!.getAttribute("data-picked")).toBe("no");
+    fireEvent.click(outerContinue()!);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    fireEvent.click(pickRow()!);
+    await waitFor(() => expect(outerContinue()!.disabled).toBe(false));
+    fireEvent.click(outerContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("wayflow-task-3380-next");
+    expect(payload.selectedIdeaJson).toBe(PICKED_JSON);
   });
 });

@@ -21,6 +21,7 @@ import {
   gateCarriesPresentationHint,
   gateRequiredRendererKeys,
 } from "../gate-renderer-value";
+import { hitlGateIdentityKey } from "../hitl-gate-submit";
 
 const PICKED_JSON = JSON.stringify({ artifactId: "a-2", representationRevisionId: "r-2" });
 
@@ -139,6 +140,30 @@ describe("gateAwaitsRendererValue (cinatra#3380)", () => {
       required: ["selectedIdeaJson"],
     };
     expect(gateAwaitsRendererValue(schema, {})).toBe(false);
+  });
+
+  it("reads an object or NaN as an answer, an own undefined default as answered, and a root x-required as no declaration", () => {
+    expect(gateAwaitsRendererValue(DECLARING_SCHEMA, { selectedIdeaJson: {} })).toBe(false);
+    expect(gateAwaitsRendererValue(DECLARING_SCHEMA, { selectedIdeaJson: { x: 1 } })).toBe(false);
+    expect(gateAwaitsRendererValue(DECLARING_SCHEMA, { selectedIdeaJson: Number.NaN })).toBe(false);
+    expect(
+      gateRequiredRendererKeys({
+        type: "object",
+        properties: { pick: { type: "string", "x-required": true, default: undefined } },
+      }),
+    ).toEqual([]);
+    expect(gateRequiredRendererKeys({ type: "string", "x-required": true })).toEqual([]);
+  });
+});
+
+describe("hitlGateIdentityKey (cinatra#3380)", () => {
+  it("tells two gates apart by their review task alone, and carries the boundaries of its parts", () => {
+    const gate = { reviewTaskId: "task-1", xRenderer: "@pack:pick" };
+    expect(hitlGateIdentityKey(gate)).toBe(hitlGateIdentityKey({ ...gate, fieldName: null }));
+    expect(hitlGateIdentityKey(gate)).not.toBe(hitlGateIdentityKey({ ...gate, reviewTaskId: "task-2" }));
+    expect(hitlGateIdentityKey({ reviewTaskId: "a::", xRenderer: "b" })).not.toBe(
+      hitlGateIdentityKey({ reviewTaskId: "a", xRenderer: "::b" }),
+    );
   });
 });
 

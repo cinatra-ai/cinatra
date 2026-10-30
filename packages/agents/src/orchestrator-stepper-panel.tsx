@@ -109,6 +109,7 @@ import { applyAttachmentEnvelope } from "./attachment-envelope-payload";
 import {
   hitlRendererFieldName,
   isAlreadyResolvedError,
+  hitlGateIdentityKey,
   isGroupedSetupRenderer,
   isSetupGateTaskId,
   liftRendererApprovalNote,
@@ -711,13 +712,12 @@ function HitlApprovalCard({
   // sequential per-field setup gates all reuse the SAME xRenderer
   // (schema-field-fallback), so an xRenderer-only key never fires on a
   // field→field advance (postTitle → blogPostUrl) and field 1's buffered
-  // value bleeds into field 2. fieldName is undefined outside the setup loop,
-  // so non-setup gate transitions keep their existing xRenderer-only behavior.
+  // value bleeds into field 2. The review task is part of the key (cinatra#3380):
+  // a mid-run gate carries no fieldName and can repeat its renderer, and a value
+  // written for one gate must not read as the next gate's answer.
   const prevBufferKeyRef = useRef<string | null>(null);
   const bufferKey =
-    interruptContext != null
-      ? `${interruptContext.xRenderer}::${interruptContext.fieldName ?? ""}`
-      : null;
+    interruptContext != null ? hitlGateIdentityKey(interruptContext) : null;
   if (
     bufferKey !== null &&
     prevBufferKeyRef.current !== null &&
@@ -735,8 +735,8 @@ function HitlApprovalCard({
   }
 
   // The block belongs to ONE gate, so it is released on GATE IDENTITY — the
-  // review-task id — and not on the buffer key above (cinatra#3219 convergence).
-  // The buffer key is `xRenderer::fieldName`, which a following gate can repeat
+  // review-task id alone (cinatra#3219 convergence). An
+  // `xRenderer::fieldName` key is one a following gate can repeat
   // exactly: a mid-run WayFlow gate carries no fieldName and often reuses its
   // renderer, so a blocked panel keyed that way would cover a gate that is
   // genuinely open, with no way back but a full reload.
@@ -1284,9 +1284,9 @@ function HitlApprovalCard({
             // unmounts. Without fieldName in the key the renderer (and its
             // internal input state, e.g. SchemaFieldRenderer's localValue)
             // survives the field advance and the previous field's typed text
-            // pre-fills the next field. fieldName is undefined for non-setup
-            // interrupts, so those keep the existing xRenderer-keyed identity.
-            key={`${interruptContext.xRenderer}::${interruptContext.fieldName ?? ""}`}
+            // pre-fills the next field. The review task is in the key too
+            // (cinatra#3380): a mid-run gate can repeat its renderer.
+            key={hitlGateIdentityKey(interruptContext)}
             // The gate's REAL field identity (cinatra#2541). `fieldName` is what
             // the renderer labels itself from (resolveFieldLabel) and ids its
             // input with, so the hardcoded placeholder that used to sit here

@@ -139,6 +139,7 @@ import { approveReviewTask } from "./hitl-actions";
 import { getFieldRendererContextForAgentBuilderAction } from "./server-actions";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
+  hitlGateIdentityKey,
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
@@ -256,7 +257,7 @@ type SetupAnswer = { payload: unknown; fieldName: string | undefined };
  * encoding carries the boundaries rather than a chosen separator.
  */
 export function hitlGateKey(gate: AgentHitlScreenGate): string {
-  return JSON.stringify([gate.reviewTaskId, gate.xRenderer, gate.fieldName ?? null]);
+  return hitlGateIdentityKey(gate);
 }
 
 /**

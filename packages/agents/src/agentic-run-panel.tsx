@@ -80,6 +80,7 @@ import {
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
+  hitlGateIdentityKey,
   isSetupGateTaskId,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
@@ -1346,7 +1347,7 @@ export function AgenticRunPanel({
         buffered: bufferedHitlValueRef.current,
         pendingAttachments: pendingAttachmentsRef.current,
       });
-      // cinatra#3380 — a caller of the published submit is a second entrance
+      // cinatra#3380 — a caller of the published submit (none yet) is a second entrance
       // to the same resume as the gate's Continue, so it is held by the same
       // rule: a mid-run gate that declares a value its renderer must produce
       // (`gate-renderer-value.ts`) is not resumed until the payload carries that
@@ -1355,6 +1356,7 @@ export function AgenticRunPanel({
       // of the rule, as on its Continue.
       if (
         (ctx.xRenderer.endsWith(":output") || hasMidRunHitlBinding(ctx.xRenderer)) &&
+        !isSetupGateTaskId(ctx.reviewTaskId) &&
         !gateCarriesPresentationHint(ctx.currentValues) &&
         gateAwaitsRendererValue(ctx.inputSchema, payload)
       ) {
@@ -1568,12 +1570,12 @@ export function AgenticRunPanel({
   // state was already fixed by the composite React `key` (cinatra#2541/#2556);
   // this is the analogous fix for the panel-level buffer.
   //
-  // The key collapses to `${xRenderer}::` for mid-run gates (no fieldName),
-  // so those keep resetting on xRenderer change alone — unchanged from today.
-  const bufferedHitlValueKey =
-    currentXRenderer !== null
-      ? `${currentXRenderer}::${effectiveHitlContext?.fieldName ?? ""}`
-      : null;
+  // The review task is part of the key (cinatra#3380): a mid-run gate carries no
+  // fieldName and can repeat its renderer, and a value written for one gate must
+  // not read as the next gate's answer.
+  const bufferedHitlValueKey = effectiveHitlContext
+    ? hitlGateIdentityKey(effectiveHitlContext)
+    : null;
   const [prevBufferedHitlValueKey, setPrevBufferedHitlValueKey] = useState<string | null>(null);
   if (
     bufferedHitlValueKey !== null &&
@@ -2957,19 +2959,17 @@ export function AgenticRunPanel({
                 return (
                   <>
                     <RendererComponent
-                      // Keyed by xRenderer AND fieldName — the identity the
-                      // orchestrator stepper already uses (#810), adopted here
-                      // in cinatra#2541 because this surface now passes a
+                      // Keyed by the gate's identity: the review task (cinatra#3380,
+                      // a mid-run gate can repeat its renderer), xRenderer and
+                      // fieldName (#810, adopted here in cinatra#2541) because this surface now passes a
                       // fieldName that CHANGES between gates. Sequential
                       // per-field setup gates share one xRenderer and arrive
                       // with no RUN_STARTED/RESUME frame between them, so an
                       // xRenderer-only key would mutate `fieldName` on a LIVE
                       // renderer instance: field 1's typed text (SchemaFieldRenderer's
                       // localValue, which a non-string next value does not clear)
-                      // would pre-fill field 2 under field 2's label. fieldName is
-                      // undefined for mid-run gates, so those keep their existing
-                      // xRenderer-keyed identity exactly.
-                      key={`${effectiveHitlContext.xRenderer}::${effectiveHitlContext.fieldName ?? ""}`}
+                      // would pre-fill field 2 under field 2's label.
+                      key={hitlGateIdentityKey(effectiveHitlContext)}
                       // The gate's REAL field identity (cinatra#2541) — the same
                       // seam the orchestrator stepper regressed at, with the
                       // same consequence: `fieldName` is what the renderer
