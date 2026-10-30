@@ -25,6 +25,7 @@ import {
   REPAIR_SUCCESSOR_TASK_PREFIX,
   autoReviewTaskId,
   isRepairSuccessorTaskId,
+  verificationReopenReviewTaskId,
 } from "@/lib/lifecycle/lifecycle-orchestration";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
@@ -1107,5 +1108,109 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — the attempts bound counts every claim
     expect((await intentRow(post!.id)).attempts).toBe(2);
     expect(sendTaskSpy).not.toHaveBeenCalled();
     expect(await runStatus(p.runId)).toBe("pending_approval");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4312, review 3 of cinatra#4339 (finding 1): a gate shaped as a
+// verification reopen joins a repair's lineage only when it is that repair's
+// canonical reopen.
+// ---------------------------------------------------------------------------
+
+/** A gate in another run of the same org, with the verification reopen task id
+ * of `successorGateId` (`verificationReopenReviewTaskId("verify:" + S)`), pinning
+ * the successor's own revision. It is not the reopen of that successor. */
+async function reopenShapedGateInAnotherRun(successorGateId: string, pin: Pin) {
+  const runB = `run-other-${randomUUID()}`;
+  const task = verificationReopenReviewTaskId(`verify:${successorGateId}`);
+  const emitted = await gateStore.emitArtifactReviewGate({ runId: runB, orgId: ORG, reviewTaskId: task, targets: [pin] });
+  return { runId: runB, taskId: task, gateId: emitted.gateId };
+}
+
+describe.skipIf(!HAS_DB)("cinatra#4312 — a verification-reopen-shaped gate of another run is no lineage proof (review 3, finding 1)", () => {
+  it("run B in the same org emits a gate with the reopen task id of run A's pending successor and records changes requested on it: refused (lineage-unbound); run A stays parked and its lineage open", async () => {
+    // Run A: declared root G (the picture's leg), attempt 1 repaired to the
+    // pending successor S, the post's decision delivered (`done`) and set aside.
+    const p = await pausedPipeline();
+    const pressed = await pressRegenerate(p.runId, p.leg2, p.picture);
+    const successor = await pressed.answer();
+    await approve(p.runId, p.step);
+    await sweep();
+    await expectParked(p);
+    const post = await gateStore.readReviewGate(p.runId, p.step);
+    expect(await intentStatusOf(post!.id)).toBe("done");
+    expect(await repairStore.isRepairLineageOpen(pressed.settledGateId)).toBe(true);
+
+    // Run B: gate F with task verificationReopenReviewTaskId("verify:" + S).
+    const forged = await reopenShapedGateInAnotherRun(successor.gateId, successor.pin);
+    const cr = await repairStore.recordChangesRequested({
+      runId: forged.runId,
+      reviewTaskId: forged.taskId,
+      orgId: ORG,
+      request: changesRequestedOn(forged.gateId, successor.pin),
+      repairCapable: false,
+      currentBaseRevisionId: successor.pin.representationRevisionId,
+    });
+    expect(cr).toMatchObject({ ok: false, code: "lineage-unbound" });
+    expect((await gateStore.readReviewGate(forged.runId, forged.taskId))?.status).toBe("pending");
+    const attempts = await pool(
+      `SELECT count(*)::int AS n FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE lineage_id=$1`,
+      [pressed.settledGateId],
+    );
+    expect((attempts.rows[0] as { n: number }).n).toBe(1);
+    expect(await repairStore.isRepairLineageOpen(pressed.settledGateId)).toBe(true);
+    expect(await intentStatusOf(post!.id)).toBe("done");
+
+    await sweep();
+    await expectParked(p);
+    expect(await pendingGates(p.runId)).toEqual([successor.taskId]);
+  });
+
+  it("a gate on run A itself with the reopen task id of its pending successor cannot record changes requested either: a declared leg's verification opens no reopen gate (lineage-unbound)", async () => {
+    const p = await pausedPipeline();
+    const pressed = await pressRegenerate(p.runId, p.leg2, p.picture);
+    const successor = await pressed.answer();
+    await approve(p.runId, p.step);
+    await sweep();
+    await expectParked(p);
+    const post = await gateStore.readReviewGate(p.runId, p.step);
+    const task = verificationReopenReviewTaskId(`verify:${successor.gateId}`);
+    const forged = await gateStore.emitArtifactReviewGate({ runId: p.runId, orgId: ORG, reviewTaskId: task, targets: [successor.pin] });
+    const cr = await repairStore.recordChangesRequested({
+      runId: p.runId,
+      reviewTaskId: task,
+      orgId: ORG,
+      request: changesRequestedOn(forged.gateId, successor.pin),
+      repairCapable: false,
+      currentBaseRevisionId: successor.pin.representationRevisionId,
+    });
+    expect(cr).toMatchObject({ ok: false, code: "lineage-unbound" });
+    expect((await gateStore.readReviewGate(p.runId, task))?.status).toBe("pending");
+    expect(await repairStore.isRepairLineageOpen(pressed.settledGateId)).toBe(true);
+    expect(await intentStatusOf(post!.id)).toBe("done");
+    await sweep();
+    await expectParked(p);
+  });
+
+  it("a later attempt already written on such a gate does not close the lineage: the reader throws malformed-lineage and the post's decision resumes nothing", async () => {
+    const p = await pausedPipeline();
+    const pressed = await pressRegenerate(p.runId, p.leg2, p.picture);
+    const successor = await pressed.answer();
+    const forged = await reopenShapedGateInAnotherRun(successor.gateId, successor.pin);
+    // The attempt-2 row a record on F would have written: escalated, no successor.
+    await pool(
+      `INSERT INTO "${q(TEST_SCHEMA)}"."lifecycle_repair"
+         (id, lineage_id, gate_id, org_id, base_artifact_id, base_representation_revision_id, expected_base_revision_id,
+          findings, continuation_mode, continuation_address, attempt, route, status, idempotency_key)
+       SELECT $2, lineage_id, $3, org_id, $4, $5, $5, findings, continuation_mode, continuation_address, 2, route, 'escalated', $6
+         FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE id=$1`,
+      [pressed.repairId, randomUUID(), forged.gateId, successor.pin.artifactId, successor.pin.representationRevisionId, `k-${randomUUID()}`],
+    );
+    await expect(repairStore.isRepairLineageOpen(pressed.settledGateId)).rejects.toMatchObject({ code: "malformed-lineage" });
+    await approve(p.runId, p.step);
+    const post = await gateStore.readReviewGate(p.runId, p.step);
+    await expectLeftForReclaim(await sweep(), post!.id);
+    expect(await runStatus(p.runId)).toBe("pending_approval");
+    expect(await pendingGates(p.runId)).toEqual([successor.taskId]);
   });
 });

@@ -26,7 +26,7 @@ import {
   producedEventId,
   type ArtifactProducedEvent,
 } from "@/lib/lifecycle/lifecycle-produced-event";
-import { autoReviewTaskId, isVerificationReopenTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
+import { autoReviewTaskId, isVerificationReopenTaskId, verificationReopenReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
 import type { ChangesRequestedRequest } from "@/lib/lifecycle/lifecycle-repair";
 import type { VerificationFieldProjector, VerificationTargetRef } from "../lifecycle-verification-store";
@@ -325,6 +325,39 @@ describe.skipIf(!HAS_DB)("cinatra#2042 — post-change verification (real store)
     expect(viaSuccessor).not.toBeNull();
     expect(viaSuccessor!.id).toBe(repairId);
     expect(viaSuccessor!.lineageId).toBe(original!.lineageId);
+  });
+
+  it("REOPEN-CHAIN (cinatra#4312): changes requested on the canonical verification reopen joins the repair's lineage at attempt 2, and the lineage reader accepts that chain", async () => {
+    const { ev, repairId, successorRev, successorGateId } = await landRepair();
+    const original = await repairStore.readRepair(repairId);
+    expect(original).not.toBeNull();
+    const res = await verifStore.recordVerificationForRepair({
+      repairId,
+      projectFields: () => ({ subject: "old", body: "old" }), // nothing changed vs base ⇒ findings unmet
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.reopenedGateId).not.toBeNull();
+    const reopenTask = verificationReopenReviewTaskId(`verify:${successorGateId}`);
+    const reopen = await gateStore.readReviewGate(ev.producerRunId!, reopenTask);
+    expect(reopen?.id).toBe(res.reopenedGateId);
+
+    const pin = { artifactId: ev.artifactId, representationRevisionId: successorRev };
+    const cr = await repairStore.recordChangesRequested({
+      runId: ev.producerRunId!,
+      reviewTaskId: reopenTask,
+      orgId: ORG,
+      request: { ...mkChangesRequested(ev, reopen!.id), baseTarget: pin, expectedBaseRevisionId: successorRev },
+      repairCapable: true,
+      producerRunId: ev.producerRunId,
+      currentBaseRevisionId: successorRev,
+    });
+    expect(cr).toMatchObject({ ok: true, attempt: 2, status: "requested" });
+    if (!cr.ok) return;
+    const next = await repairStore.readRepair(cr.repairId);
+    expect(next!.lineageId).toBe(original!.lineageId);
+    expect(next!.gateId).toBe(reopen!.id);
+    expect(await repairStore.isRepairLineageOpen(original!.lineageId)).toBe(true);
   });
 
   it("ADVISOR LANE: the Audit lane writes a provenance-stamped advisory comment on a gate (idempotent), readable by the run view", async () => {
