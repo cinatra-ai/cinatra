@@ -104,15 +104,29 @@ authenticated reader at the contract's own pinned revision — and says so.
 - **Matching is exact, not substring.** A raw text search would let a selector
   quoted in prose or shown in a code sample "resolve". The checker parses each
   drawing's tags, ignoring comments and the contents of `pre`/`code`/`script`/
-  `style`, and matches an attribute name and value exactly.
+  `style`, and matches attribute names and values element by element (a name
+  case-insensitively, a value exactly; see below).
 - **An anchor that resolves in a governed drawing other than the first is
   resolved**, and the report says which. One that resolves only in a drawing the
   pin does *not* govern is **unresolved**, with that distinction stated — that is
   the second defect, and it is not the same as an anchor drawn nowhere.
-- **A selector form beyond one attribute predicate is refused by name**, and the
-  run exits `2`. It is never approximated and never counted in either direction.
-  The live recorded set carries such a form today (a class selector among the
-  frame-wide capture requirements), and the suite pins that. `--print-unresolved`
+- **Three selector forms are decided, and any other form is refused by name.**
+  The decided forms are one attribute predicate (`[a]`, `[a="v"]` or
+  `[a='v']`), a compound of attribute predicates (`[a][b="v"]`), which one
+  element must satisfy as a whole, and one class token (`.frame`). The refused
+  forms include a descendant combinator, a tag or id selector, a compound of
+  classes, a class beside an attribute predicate, an operator other than `=`,
+  an unquoted value and an empty selector (`parseAnchorSelector` in
+  `scripts/ci/design-anchor-resolution.mjs`). A refused form makes the run exit
+  `2`, unless a recorded `anchorsUnresolvedAtPin` disagrees with what the run
+  finds: outside `--print-unresolved` that comparison comes first and exits
+  `1`. A refused form is never approximated and never counted in either
+  direction. The report line and both refusal errors (the run's and the one of
+  `--print-unresolved`) print a refused selector as a JSON string, so the empty
+  selector reads `""` instead of a blank.
+  The suite pins that refusal. In the live recorded set the one class selector,
+  `.cw-frame` (a frame-wide capture requirement), is a passive capture marker,
+  which the report lists and does not match against a drawing. `--print-unresolved`
   — the road the adoption script reads — **prints nothing and exits `2`** while
   any selector is refused: a set with a verdict missing from it would otherwise
   be recorded, and digest-bound, as though it were the whole finding.
@@ -130,9 +144,22 @@ authenticated reader at the contract's own pinned revision — and says so.
   proves the array was not edited afterwards; it can never prove it was true
   when it was written, and this is the script that decides that.
 
-It reports what is true today: the recorded owner anchors do not resolve at the
-pin the contract names. That is the state the check exists to make visible
-rather than digest-passable, and it stays until the anchor content itself moves.
+- **Four card controls that no governed drawing draws under the recorded
+  value are not anchors of the contract.** The anchor contract leaves them out
+  of the capture requirements it records (`AGENT_OWNED_CAPTURE_CONTROLS` in
+  `scripts/audit/lib/anchor-contract.mjs`, a closed list per kind), each for its
+  own reason. The skills card's per-skill Confirm, Adjust and Skip: the drawing
+  retired them. The schedule card's own Confirm,
+  `[data-action="confirm-schedule-proposal"]`: the governed drawing draws that
+  floor under another value, `confirm-schedule -> scheduled`, and the product's
+  value is tracked in cinatra#3678. The capture recorder still grades the
+  pictures of each control's own kind against it; only the contract's digest
+  and this check stop asking a drawing to draw them (cinatra#3677).
+
+With those controls out, every recorded owner anchor and capture requirement
+resolves in a governed drawing or is a passive capture marker, and
+`anchorsUnresolvedAtPin` is empty. A recorded anchor that a later pin stops
+drawing turns the check red again.
 
 ## `design-record-grammar` — does a graded record name its pin?
 
@@ -213,9 +240,10 @@ node scripts/audit/adopt-design-pin.mjs --pin "design@<40-hex> specs/<drawing>.h
   claim a person makes about what they re-examined, and the script has
   re-examined nothing. It prints where the note goes.
 
-While `anchorsUnresolvedAtPin` is absent — as it is today — the digest is taken
-over the original three inputs and stands exactly where it stood. That is what
-lets these checks land before the adoption that writes it.
+While `anchorsUnresolvedAtPin` is absent, the digest is taken over the original
+three inputs and stands exactly where it stood. That is what let these checks
+land before the adoption that writes it. The contract now records the key (as
+the empty array), so the digest takes it as its fourth input.
 
 ## Rollout
 
