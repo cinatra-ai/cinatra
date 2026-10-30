@@ -436,6 +436,14 @@ async function settleLeaseInTx(
 // the narrow meta-only case handled by updateAgentRunMeta below (now tx-scoped).
 
 /**
+ * The CONTROL keys of transitionRunStatus's meta: `dispatch` and `pauseTaskId`
+ * are written BY the status compare-and-set, `pauseFence` and `pauseEndMark`
+ * only guard it, and `humanWaitGate` only feeds the wait notifier. None is a
+ * meta column, so the delegated meta write never receives them.
+ */
+const CONTROL_META_KEYS = ["dispatch", "humanWaitGate", "pauseFence", "pauseEndMark", "pauseTaskId"] as const;
+
+/**
  * single canonical entry point for agent_runs.status changes.
  *
  * @throws {RunTransitionError} code="illegal_transition" when (from, to) ∉ LEGAL_TRANSITIONS (pre-guard)
@@ -588,15 +596,10 @@ export async function transitionRunStatus(
     // CAS already wrote the status column; re-writing it is a no-op that still
     // runs the meta-patch logic. The CONTROL keys (`dispatch` — written BY the
     // CAS — and `humanWaitGate` — not a DB column) are stripped first: only
-    // genuine DB meta reaches the delegated write.
-    const {
-      dispatch: _dispatch,
-      humanWaitGate: _humanWaitGate,
-      pauseFence: _pauseFence,
-      pauseEndMark: _pauseEndMark,
-      pauseTaskId: _pauseTaskId,
-      ...dbMeta
-    } = meta ?? {};
+    // genuine DB meta reaches the delegated write (cinatra#4245 adds the three
+    // pause keys: the CAS reads or writes them, none is a meta column).
+    const dbMeta: NonNullable<typeof meta> = { ...(meta ?? {}) };
+    for (const key of CONTROL_META_KEYS) delete dbMeta[key];
     const hasDelegatedMeta =
       dbMeta.error !== undefined ||
       dbMeta.startedAt !== undefined ||

@@ -8,7 +8,7 @@
  * are in run-pause-claim.integration.test.ts.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { PgDialect } from "drizzle-orm/pg-core";
+import { PgDialect, getTableConfig } from "drizzle-orm/pg-core";
 import { SQL } from "drizzle-orm";
 import {
   wrapTxWithOrgWriteKernel,
@@ -81,11 +81,18 @@ import { PAUSE_CLAIM_LEASE_SECONDS, PAUSE_SEND_LEASE_SECONDS } from "../run-stat
 import { WAYFLOW_A2A_TIMEOUT_MS } from "../wayflow-url";
 import { PauseClaimReleaseError } from "../run-pause-claim";
 import { resumeRunFromSetupApproval } from "../resume-run-from-setup-approval";
+import { agentRuns } from "../schema";
 
 const ORG = "org-1";
 const RUN = "run-1";
 const SESSION = { orgId: ORG, can: () => true };
 const dialect = new PgDialect();
+/**
+ * agent_runs as the dialect names it. The table lives in a pgSchema whose name is
+ * SUPABASE_SCHEMA (default "cinatra"), so every column renders schema-qualified;
+ * the expectations take the schema from the table, never a literal.
+ */
+const RUNS = `"${getTableConfig(agentRuns).schema}"."agent_runs"`;
 
 /** Render a WHERE condition the way the database receives it. */
 function render(cond: unknown): { sql: string; params: unknown[] } {
@@ -173,7 +180,7 @@ describe("rule 2: every entry into pending_approval raises the generation", () =
   it("raises pause_generation by 1 and clears the claim", async () => {
     const { tx, rec } = casTx();
     await updateAgentRunStatusConditional(RUN, "running", "pending_approval", undefined, ORG, tx);
-    expect(setValue(rec.set[0]!, "pauseGeneration")).toBe('"agent_runs"."pause_generation" + 1');
+    expect(setValue(rec.set[0]!, "pauseGeneration")).toBe(`${RUNS}."pause_generation" + 1`);
     expect(rec.set[0]).toMatchObject({ pauseClaimToken: null, pauseClaimPhase: null, pauseClaimExpiresAt: null });
     expect(rec.set[0]).not.toHaveProperty("a2aTaskId");
   });
@@ -204,10 +211,10 @@ describe("rule 3: the fence", () => {
       pauseFence: { token: "tok-1", generation: 4 },
     });
     const where = render(rec.where[0]);
-    expect(where.sql).toContain('"agent_runs"."pause_claim_token" = $');
-    expect(where.sql).toContain(`"agent_runs"."pause_claim_phase" = 'claimed'`);
-    expect(where.sql).toContain('"agent_runs"."pause_generation" = $');
-    expect(where.sql).toContain('"agent_runs"."pause_claim_expires_at" > now()');
+    expect(where.sql).toContain(`${RUNS}."pause_claim_token" = $`);
+    expect(where.sql).toContain(`${RUNS}."pause_claim_phase" = 'claimed'`);
+    expect(where.sql).toContain(`${RUNS}."pause_generation" = $`);
+    expect(where.sql).toContain(`${RUNS}."pause_claim_expires_at" > now()`);
     expect(where.params).toEqual(expect.arrayContaining(["tok-1", 4]));
   });
 
@@ -220,7 +227,7 @@ describe("rule 3: the fence", () => {
     expect(set).toHaveProperty("status", "running");
     expect(set).toHaveProperty("pauseClaimPhase", "sending");
     expect(set).not.toHaveProperty("pauseClaimToken");
-    expect(setValue(set, "pauseGeneration")).toBe('"agent_runs"."pause_generation" + 1');
+    expect(setValue(set, "pauseGeneration")).toBe(`${RUNS}."pause_generation" + 1`);
     expect(setValue(set, "pauseClaimExpiresAt")).toBe(`now() + make_interval(secs => ${PAUSE_SEND_LEASE_SECONDS})`);
   });
 
@@ -257,7 +264,7 @@ describe("rule 4: no stop under a live send", () => {
     const { tx, rec } = casTx();
     await updateAgentRunStatusConditional(RUN, "pending_approval", "stopped", undefined, ORG, tx);
     expect(render(rec.where[0]).sql).toContain(
-      `("agent_runs"."pause_claim_phase" IS DISTINCT FROM 'sending' OR "agent_runs"."pause_claim_expires_at" <= now())`,
+      `(${RUNS}."pause_claim_phase" IS DISTINCT FROM 'sending' OR ${RUNS}."pause_claim_expires_at" <= now())`,
     );
   });
 
@@ -300,7 +307,7 @@ describe("rule 5: the change-request end mark", () => {
       pauseEndMark: { generation: 6 },
     });
     const where = render(rec.where[0]);
-    expect(where.sql).toContain(`"agent_runs"."pause_claim_phase" = 'changes_requested'`);
+    expect(where.sql).toContain(`${RUNS}."pause_claim_phase" = 'changes_requested'`);
     expect(where.params).toContain(6);
   });
 
@@ -386,7 +393,7 @@ describe("the setup resume (a direct status writer)", () => {
       pauseClaimExpiresAt: null,
     });
     expect(render(rec.where[0]).sql).toContain(
-      `("agent_runs"."pause_claim_token" IS NULL OR ("agent_runs"."pause_claim_phase" IN ('claimed', 'sending') AND "agent_runs"."pause_claim_expires_at" <= now()))`,
+      `(${RUNS}."pause_claim_token" IS NULL OR (${RUNS}."pause_claim_phase" IN ('claimed', 'sending') AND ${RUNS}."pause_claim_expires_at" <= now()))`,
     );
   });
 });
