@@ -87,6 +87,13 @@ describe("cinatra#4291 — /connectors: the toolbar search is the borderless too
     expect(c.filter((t) => BORDER_TOKEN.test(t))).toEqual([]);
   });
 
+  it("the pill draws the keyboard focus ring: --ring, at the toolbar buttons' strength", () => {
+    const { field } = renderSearch();
+    expect(classes(pillOf(field))).toEqual(
+      expect.arrayContaining(["focus-within:ring-2", "focus-within:ring-ring/40"]),
+    );
+  });
+
   it("the pill leads with the search glyph, hidden from assistive technology", () => {
     const { field } = renderSearch();
     const glyph = pillOf(field).querySelector('svg[class~="lucide-search"]');
