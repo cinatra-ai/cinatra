@@ -49,6 +49,7 @@ import {
   artifactReviewAudit,
   artifactProducedOutbox,
   artifactReviewResumeOutbox,
+  artifactVerificationRecords,
   lifecycleRepair,
   lifecycleBatchEpoch,
   lifecycleBatchDisposition,
@@ -82,6 +83,7 @@ import {
   isRepairSuccessorTaskId,
   isVerificationReopenTaskId,
   repairSuccessorReviewTaskId,
+  verificationReopenReviewTaskId,
 } from "@/lib/lifecycle/lifecycle-orchestration";
 import { baseReviewTaskId, isDeclaredReviewLeg } from "@/lib/artifacts/artifact-review-target";
 
@@ -154,6 +156,55 @@ export interface RecordChangesRequestedInput {
   decidedBy?: string | null;
 }
 
+/** The gate fields the verification-reopen binding reads. */
+type ReopenCandidateGate = { id: string; runId: string; orgId: string; reviewTaskId: string };
+
+/**
+ * cinatra#4312 — is `gate` the canonical verification reopen of `repair`'s
+ * successor, the gate `lifecycle-verification-store` reopens for it? All of:
+ *   - the repair is `repaired` with a successor gate;
+ *   - the verification record `verify:<successor>` exists and is bound to that
+ *     successor gate (the reopen is minted only after that record is written);
+ *   - the gate carries exactly the reopen task id of that record
+ *     (`verificationReopenReviewTaskId`), on the run the verification reopens on
+ *     (the repair's producing run, or its orphan run id, the successor gate's
+ *     run), in the repair's org;
+ *   - the repair's lineage is not a declared review leg's: the verification of
+ *     such a repair records its verdict and opens no reopen gate
+ *     (`withholdReopen`, lifecycle-verification-store), so a gate on its run
+ *     with the reopen task id is not its reopen. (A CMS read-back reopen bound
+ *     to such a successor is refused as well; a declared leg could not take
+ *     `changes_requested` before cinatra#4312.) A lineage whose root cannot
+ *     be read (`readBoundLineageRoot` throws) has no canonical reopen either.
+ * One gate per (run, task) exists, so at most one gate passes for a repair. A
+ * gate with the same task id on another run or in another org is not the
+ * reopen and does not join the repair's lineage. The pinned revision is not
+ * compared: a CMS read-back verification bound to the successor gate reopens
+ * on its read-back revision, and that gate is still the successor's reopen.
+ */
+async function isCanonicalVerificationReopen(
+  gate: ReopenCandidateGate,
+  repair: LineageAttemptRow,
+  executor: RepairStoreExecutor = db,
+): Promise<boolean> {
+  if (repair.status !== "repaired" || !repair.successorGateId) return false;
+  const recordId = `verify:${repair.successorGateId}`;
+  if (gate.reviewTaskId !== verificationReopenReviewTaskId(recordId)) return false;
+  if (gate.runId !== (repair.producerRunId ?? orphanRepairRunId(repair.id))) return false;
+  if (gate.orgId !== repair.orgId) return false;
+  try {
+    if (await isDeclaredReviewLineage(repair.lineageId, executor)) return false;
+  } catch {
+    return false;
+  }
+  const [record] = await executor
+    .select({ gateId: artifactVerificationRecords.gateId })
+    .from(artifactVerificationRecords)
+    .where(eq(artifactVerificationRecords.id, recordId))
+    .limit(1);
+  return record?.gateId === repair.successorGateId;
+}
+
 /**
  * cinatra#4312 — the repair lineage a `changes_requested` on gate `gateId` joins,
  * read from the decided gate's OWN persisted task id (never from the caller):
@@ -162,9 +213,14 @@ export interface RecordChangesRequestedInput {
  *     the gate's org; any other state refuses (`lineage-unbound`);
  *   - a post-change VERIFICATION-REOPEN gate (cinatra#2042) joins the lineage of
  *     the repair whose successor its verification read, so the cycle bound
- *     counts the verify→reopen→repair loop (an external-change verification has
- *     no repair: a fresh lineage); a repair in another org refuses
- *     (`lineage-unbound`);
+ *     counts the verify→reopen→repair loop, but only when the gate IS that
+ *     verification's reopen (`isCanonicalVerificationReopen`: the verification
+ *     record of the successor exists, and the gate is on the repair's run, in
+ *     its org, with the exact reopen task id); a reopen-shaped gate that names a repair's successor in any
+ *     other way refuses (`lineage-unbound`), as does more than one repair
+ *     naming that successor. A reopen-shaped gate whose encoded gate is no
+ *     repair's successor (an external-change verification) starts a fresh
+ *     lineage;
  *   - every other gate starts a fresh lineage: its own id.
  * A gate that does not exist starts a fresh lineage here; the gate CAS of the
  * record refuses it.
@@ -173,7 +229,12 @@ async function deriveDecidedGateLineage(
   gateId: string,
 ): Promise<{ ok: true; lineageId: string } | { ok: false; code: "lineage-unbound"; error: string }> {
   const [gate] = await db
-    .select({ reviewTaskId: artifactReviewGates.reviewTaskId, orgId: artifactReviewGates.orgId })
+    .select({
+      id: artifactReviewGates.id,
+      runId: artifactReviewGates.runId,
+      reviewTaskId: artifactReviewGates.reviewTaskId,
+      orgId: artifactReviewGates.orgId,
+    })
     .from(artifactReviewGates)
     .where(eq(artifactReviewGates.id, gateId))
     .limit(1);
@@ -193,9 +254,16 @@ async function deriveDecidedGateLineage(
     // The reopen task encodes the verification id `verify:<successorGateId>`.
     const verificationId = gate.reviewTaskId.slice(VERIFICATION_REOPEN_TASK_PREFIX.length);
     const successorGateId = verificationId.startsWith("verify:") ? verificationId.slice("verify:".length) : verificationId;
-    const repair = successorGateId ? await readRepairBySuccessorGateId(successorGateId) : null;
-    if (!repair) return { ok: true, lineageId: gateId };
+    const repairs = successorGateId
+      ? await db.select().from(lifecycleRepair).where(eq(lifecycleRepair.successorGateId, successorGateId)).limit(2)
+      : [];
+    if (repairs.length === 0) return { ok: true, lineageId: gateId };
+    if (repairs.length > 1) return unbound(`more than one repair names gate ${successorGateId} as its successor`);
+    const [repair] = repairs;
     if (repair.orgId !== gate.orgId) return unbound(`repair ${repair.id} is in another org`);
+    if (!(await isCanonicalVerificationReopen(gate, repair))) {
+      return unbound(`not the verification reopen of repair ${repair.id}'s successor ${successorGateId}`);
+    }
     return { ok: true, lineageId: repair.lineageId };
   }
   return { ok: true, lineageId: gateId };
@@ -789,7 +857,9 @@ export async function readRepair(repairId: string): Promise<RepairRow | null> {
 /** Recover the repair whose SUCCESSOR gate is `gateId` — the anchor a post-change
  * verification-reopen gate uses to thread the ORIGINAL repair lineage (so the cycle
  * bound counts the verify→reopen→repair loop, cinatra#2042). Null for a gate that is
- * not a repair successor (e.g. an external-change verification). */
+ * not a repair successor (e.g. an external-change verification). A read only: the
+ * lineage derivation (`deriveDecidedGateLineage`) also binds the reopen gate to
+ * that repair (`isCanonicalVerificationReopen`) before it joins the lineage. */
 export async function readRepairBySuccessorGateId(gateId: string): Promise<RepairRow | null> {
   const [r] = await db
     .select()
@@ -923,10 +993,17 @@ type LineageAttemptRow = typeof lifecycleRepair.$inferSelect;
 
 /** Structural checks of a lineage chain (oldest attempt first), cinatra#4312:
  * attempt 1 is a repair of the root gate; the attempts are 1..n with no
- * duplicate or gap, created in attempt order; one org; and every attempt before
- * the latest is `repaired` with a successor (a lineage goes on only from a
- * successor or from its verification reopen). Throws `malformed-lineage`. */
-function assertWellFormedLineage(lineageId: string, chain: readonly LineageAttemptRow[]): void {
+ * duplicate or gap, created in attempt order; one org; every attempt before
+ * the latest is `repaired` with a successor; and every later attempt is a
+ * repair of the attempt before it: of that attempt's successor gate, or of
+ * the canonical verification reopen of that successor
+ * (`isCanonicalVerificationReopen`). A lineage goes on only from those two
+ * gates. Throws `malformed-lineage`. */
+async function assertWellFormedLineage(
+  lineageId: string,
+  chain: readonly LineageAttemptRow[],
+  executor: RepairStoreExecutor,
+): Promise<void> {
   const fail = (why: string): never => {
     throw new RepairLineageStateError("malformed-lineage", `lineage ${lineageId}: ${why}`);
   };
@@ -939,6 +1016,26 @@ function assertWellFormedLineage(lineageId: string, chain: readonly LineageAttem
       fail(`attempt ${row.attempt} is followed by another attempt but is ${row.status}`);
     }
   });
+  for (let i = 1; i < chain.length; i++) {
+    const prev = chain[i - 1];
+    const row = chain[i];
+    if (row.gateId === prev.successorGateId) continue;
+    const [gate] = await executor
+      .select({
+        id: artifactReviewGates.id,
+        runId: artifactReviewGates.runId,
+        orgId: artifactReviewGates.orgId,
+        reviewTaskId: artifactReviewGates.reviewTaskId,
+      })
+      .from(artifactReviewGates)
+      .where(eq(artifactReviewGates.id, row.gateId))
+      .limit(1);
+    if (!gate || !(await isCanonicalVerificationReopen(gate, prev, executor))) {
+      fail(
+        `attempt ${row.attempt} repairs gate ${row.gateId}, which is neither the successor of attempt ${prev.attempt} nor its verification reopen`,
+      );
+    }
+  }
 }
 
 const hasSuccessorFields = (row: LineageAttemptRow): boolean =>
@@ -971,7 +1068,7 @@ export async function isRepairLineageOpen(gateId: string, executor: RepairStoreE
     .orderBy(asc(lifecycleRepair.attempt), asc(lifecycleRepair.createdAt));
   const latest = chain[chain.length - 1];
   if (!latest) throw new RepairLineageStateError("missing-repair", `gate ${gateId} has no repair lineage`);
-  assertWellFormedLineage(gateId, chain);
+  await assertWellFormedLineage(gateId, chain, executor);
   switch (latest.status) {
     case "requested":
     case "dispatched":
