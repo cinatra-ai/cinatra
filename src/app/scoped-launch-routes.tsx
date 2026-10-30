@@ -28,7 +28,7 @@ import {
   resolveScopedAgentRoute,
   resolveScopedAssistantRoute,
 } from "@/lib/scoped-launch-route";
-import { AGENT_LAUNCH_SEGMENT } from "@/lib/agent-url";
+import { AGENT_LAUNCH_SEGMENT, readAgentInstanceIdFromSegment } from "@/lib/agent-url";
 import type { ScopeSurfaceSettingsSubject } from "@/components/scope-surface-settings-shell";
 import type { ScopeSurfaceRef } from "@/lib/scope-surfaces";
 import { scopeSurfaceBase } from "@/lib/scope-surfaces";
@@ -243,7 +243,15 @@ export async function ScopedAgentsRoute({
       : "instanceSetup";
   if (!screenKey) notFound();
 
-  const instanceId = route.kind === "launch" ? AGENT_LAUNCH_SEGMENT : route.instanceId;
+  // THE SCREEN IS HANDED THE RUN'S ID, NOT ITS SEGMENT (cinatra#3080). The
+  // catch-all hands this shell the segment still percent-encoded, and on this
+  // road the registry screen is mounted directly, so it is read back HERE, once.
+  // The review and skills page modules above read their own `instanceId` back
+  // themselves, so they are handed the segment as it came.
+  const instanceId =
+    route.kind === "launch"
+      ? AGENT_LAUNCH_SEGMENT
+      : readAgentInstanceIdFromSegment(route.instanceId);
   const { resolveAgentScreensWithA2AFallback } = await import("@/app/plugins-registry");
   const screens = await resolveAgentScreensWithA2AFallback(route.agentId);
   if (!screens) notFound();

@@ -184,7 +184,7 @@ describe("the instance surface decides the canonical home", () => {
   });
 
   it("routes the post-create redirect through the path helper, never a hand-written route", () => {
-    expect(screens).toContain("buildAgentInstancePath(agentId, encodeURIComponent(result.runId)");
+    expect(screens).toContain("buildAgentInstancePath(agentId, result.runId");
     expect(screens).not.toContain("redirect(`/agents/${agentId}/${encodeURIComponent(result.runId)}`)");
   });
 
