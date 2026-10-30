@@ -37,7 +37,9 @@ describe("app-shell tab title wiring (cinatra#2809)", () => {
   });
 
   it("still leaves an id-bearing route's title to the route itself when no label resolves", () => {
-    expect(APP_SHELL).toMatch(/segments\.some\(\(seg\) => isIdLikeSegment\(seg\)\)/);
+    expect(APP_SHELL).toMatch(
+      /segments\.some\(\(_seg, i\) => isIdLikeSegmentAt\(segments, i\)\)/,
+    );
     expect(APP_SHELL).toMatch(/resolved = null;/);
     expect(APP_SHELL).toMatch(/if \(!resolved\) return;/);
   });

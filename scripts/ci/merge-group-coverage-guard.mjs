@@ -68,6 +68,7 @@ export const REQUIRED_CONTEXTS = [
   "proof",
   "secrets-required-gate / secrets-required-gate",
   "design-pin-drift",
+  "design-anchor-resolution",
 ];
 
 const KEY_RE = /^(\s*)(['"]?)([A-Za-z_][\w-]*)\2:\s*(.*?)\s*$/;

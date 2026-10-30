@@ -44,12 +44,14 @@ import { ArrowRight } from "lucide-react";
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
 import {
   LifecycleCardSurfaceProvider,
+  answeredHitlQuestionKey,
   runCardOwnsLifecycleCopy,
   defaultRunReviewSlotReader,
   lifecycleRequestCredential,
   parseRunReviewSlot,
   useComposerFocusStore,
   useComposerTarget,
+  useAnsweredHitlQuestionKey,
   useLifecycleCardHost,
   useLifecycleCardAuth,
   useLifecycleCardDeclarationRefused,
@@ -729,11 +731,27 @@ export function AgenticRunPanel({
   // question, on the stream or the row, counts exactly as before. Armed beside
   // the key above; released with it, since nothing matches a released key.
   const [answeredQuestionShape, setAnsweredQuestionShape] = useState<string | null>(null);
+  // AND THE SIBLING CARD'S CONTINUE COUNTS TOO (cinatra#4375). Inside a
+  // conversation the question and its Continue are the conversation's own card
+  // (`runCardOwnsLifecycleCopy`), so this panel's own submit never runs there
+  // and the key above was never armed: on the widget the panel drew its
+  // "pending approval" plate over a run that was working. That card now records
+  // the question in the conversation's register at the press, and each press
+  // takes back only its own attempt unless its submit is accepted, as the key
+  // above is armed and released; it counts here exactly as the key above does: the same review task, renderer
+  // and field, or nothing. Only where the sibling owns the Continue; the run
+  // page keeps its own submit as the one source.
+  const siblingAnsweredKeyOnFile = useAnsweredHitlQuestionKey(runId);
+  const siblingAnsweredKey = runCardOwnsLifecycleCopy(ambientLifecycleHost)
+    ? null
+    : siblingAnsweredKeyOnFile;
+  const anyQuestionAnswered = answeredReviewTaskId !== null || siblingAnsweredKey !== null;
   const isAnsweredQuestion = (question: HitlContext | null): boolean =>
     question !== null &&
-    answeredReviewTaskId !== null &&
-    question.reviewTaskId === answeredReviewTaskId &&
-    `${question.xRenderer}::${question.fieldName ?? ""}` === answeredQuestionShape;
+    ((answeredReviewTaskId !== null &&
+      question.reviewTaskId === answeredReviewTaskId &&
+      `${question.xRenderer}::${question.fieldName ?? ""}` === answeredQuestionShape) ||
+      (siblingAnsweredKey !== null && answeredHitlQuestionKey(question) === siblingAnsweredKey));
 
   // Load connectedApps + gmailAliases once on mount so the HITL field renderer
   // registry can evaluate conditions like `context.connectedApps.includes("gmail")`.
@@ -853,8 +871,9 @@ export function AgenticRunPanel({
       Boolean(
         streamEnabled &&
           streamResult.interruptContext &&
-          (streamResult.interruptContext.reviewTaskId !== answeredReviewTaskId ||
-            !isAnsweredQuestion(streamQuestionOnFile)),
+          // The answered match already requires the review task (cinatra#4375:
+          // the sibling card's question on record is matched here too).
+          !isAnsweredQuestion(streamQuestionOnFile),
       ) ||
       (hitlContext !== null && !isAnsweredQuestion(hitlContext)),
   });
@@ -2317,7 +2336,7 @@ export function AgenticRunPanel({
   // releases the key), a marked gate and a park all read exactly as before.
   const onlyTheAnsweredQuestionOnFile =
     isPendingApproval &&
-    answeredReviewTaskId !== null &&
+    anyQuestionAnswered &&
     (streamQuestionOnFile === null || isAnsweredQuestion(streamQuestionOnFile)) &&
     (hitlContext === null || isAnsweredQuestion(hitlContext));
   const blockedOnInputGate =

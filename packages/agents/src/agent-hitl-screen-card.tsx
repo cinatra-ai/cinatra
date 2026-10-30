@@ -119,6 +119,7 @@ import { Button } from "@/components/ui/button";
 import {
   LIFECYCLE_HITL_SCREEN_PATH,
   LIFECYCLE_HITL_SCREEN_SUBMIT_PATH,
+  useAnsweredHitlQuestionRegister,
   useCookieSessionSurface,
   useLifecycleCardAuth,
   useLifecycleCardHost,
@@ -1000,6 +1001,7 @@ export function AgentHitlScreenCard({
   const host = useLifecycleCardHost();
   const auth = useLifecycleCardAuth();
   const cookieSession = useCookieSessionSurface();
+  const answeredRegister = useAnsweredHitlQuestionRegister();
   const rendererContext = useFieldRendererContext(runId, cookieSession);
   const present = host !== null;
 
@@ -1152,10 +1154,33 @@ export function AgentHitlScreenCard({
       // same silence the Continue's `blocked` state draws.
       if (!auth && !cookieSession) return;
       setSubmitting(true);
+      // THE RUN PANEL BESIDE THIS CARD IS TOLD AT THE PRESS (cinatra#4375,
+      // cinatra#4011). Inside a conversation this card owns the question
+      // and its Continue, so the panel learns of the answer only here. It is
+      // told BEFORE the request, exactly as the panel's own Continue arms its
+      // key before its own request: the request can stay in flight until the
+      // run has reached its next gate (32 s on the widget), and the panel must
+      // hold its working slot for all of that, not only after the answer. This
+      // press is ONE ATTEMPT: below, it settles only itself, so a second press
+      // of the same question (a double press, a card that moved and was pressed
+      // again) can never erase the other's answer.
+      const attempt =
+        answeredRegister?.announceAnswered(runId, {
+          reviewTaskId: gate.reviewTaskId,
+          xRenderer: gate.xRenderer,
+          fieldName: gate.fieldName,
+        }) ?? null;
       let landed: boolean;
+      // ACCEPTED, as opposed to LANDED (cinatra#4375): only this submit's own
+      // accepted answer. On the cookie door "already resolved" and "no longer
+      // pending" settle the screen as landings, but they say the gate was
+      // answered elsewhere or has moved on, so they are not accepted. (The
+      // broker door's server already answers "already resolved" as accepted.)
+      let accepted = false;
       if (auth) {
         // THE BROKER DOOR. The reader's own credential, and never the ambient
-        // cookie of a frame that is same-origin to the app.
+        // cookie of a frame that is same-origin to the app. Its landing is
+        // already only an accepted outcome (`outcome.ok === true`).
         landed = await submitHitlScreenThroughBroker({
           runId,
           reviewTaskId: gate.reviewTaskId,
@@ -1163,6 +1188,7 @@ export function AgentHitlScreenCard({
           fieldName: payloadFieldName,
           auth,
         });
+        accepted = landed;
       } else {
         // THE COOKIE DOOR, unchanged.
         landed = true;
@@ -1178,6 +1204,7 @@ export function AgentHitlScreenCard({
           // run moved past it), so the screen settles and re-reads rather than
           // holding an answer for a gate that is gone.
           landed = outcome.ok || outcome.blocked === "no-longer-pending";
+          accepted = outcome.ok === true;
         } catch (error) {
           // "already resolved" is the expected race (a double press, the same
           // gate answered on another surface). Every other failure leaves the
@@ -1187,6 +1214,14 @@ export function AgentHitlScreenCard({
           );
         }
       }
+      // NOT ACCEPTED, NOT ANSWERED: this press's attempt is taken back before
+      // the card draws its Continue again; the record goes only if no other
+      // attempt for it is in flight and none was accepted, and then the panel
+      // returns to the question. An accepted answer keeps it, and the panel
+      // holds its working slot until the server resumes, exactly as after its
+      // own Continue.
+      if (accepted) answeredRegister?.acceptAnswered(attempt);
+      else answeredRegister?.withdrawAnswered(attempt);
       setSubmitting(false);
       // WHAT WAS TYPED SURVIVES A REFUSAL and is cleared by a landing. A
       // refusal leaves the screen exactly as it was, with the answer in hand.
@@ -1202,7 +1237,7 @@ export function AgentHitlScreenCard({
       // outcome of one request.
       setReloadToken((n) => n + 1);
     },
-    [gate, auth, cookieSession, runId],
+    [gate, auth, cookieSession, runId, answeredRegister],
   );
 
   const onContinue = useCallback(

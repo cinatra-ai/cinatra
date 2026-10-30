@@ -33,6 +33,11 @@ import {
   ARTIFACT_KIND_DISPLAY_ROWS,
   ARTIFACT_KIND_DISPLAY_SURFACES,
 } from "../../../tests/e2e/design/conformance/artifact-review-displays.ts";
+import {
+  kindDisplayFieldDriver,
+  kindDisplayFieldDrivers,
+  kindDisplayFieldReading,
+} from "../../../tests/e2e/design/conformance/artifact-review-display-readings.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..", "..", "..");
@@ -40,6 +45,35 @@ const CONF_DIR = path.join(REPO_ROOT, "tests", "e2e", "design", "conformance");
 const MANIFEST_FILE = path.join(CONF_DIR, "manifests", "app-artifact-review.json");
 
 const readJson = (p) => JSON.parse(readFileSync(p, "utf8"));
+
+/** The readings a row may declare; a declaration with no reading is "open". */
+const READINGS = ["open", "continued", "no-review"];
+
+/**
+ * The "<surface>.<name>" of every field no one driver can read, by the row
+ * check's own conditions (it does not call the reading module): a blank
+ * source, two sources, a reading outside READINGS, or open with continued.
+ */
+function unreadableFieldNames(rows) {
+  const unreadable = [];
+  for (const row of rows) {
+    const byName = new Map();
+    for (const f of row.fields) byName.set(f.name, [...(byName.get(f.name) ?? []), f]);
+    for (const [name, fields] of byName) {
+      const sources = new Set(fields.map((f) => f.source));
+      const readings = new Set(fields.map((f) => f.reading ?? "open"));
+      if (
+        fields.some((f) => typeof f.source !== "string" || f.source.trim() === "") ||
+        sources.size !== 1 ||
+        [...readings].some((r) => !READINGS.includes(r)) ||
+        (readings.has("open") && readings.has("continued"))
+      ) {
+        unreadable.push(`${row.surface}.${name}`);
+      }
+    }
+  }
+  return unreadable;
+}
 
 /** The three the wave rides on one factory (cinatra#3158's own wording). */
 const FACTORY_ONLY = ["markdown-display-tabs", "binary-download-card", "chart-display-only"];
@@ -80,6 +114,33 @@ describe("the wave covers the artifact-kind display surfaces of the staged drawi
     }
   });
 
+  // A drawing binds a field once per reading that draws it, so one field name
+  // can carry several declarations. contract.ts builds ONE driver per name from
+  // all of them (kindDisplayFieldDrivers, through kindDisplayFieldReading), which
+  // reads a name only if every declaration binds the same non-blank source,
+  // every reading is open, continued or no-review, and the field is not both
+  // drawn while the review is open and drawn only once it is continued. This
+  // test checks the same conditions on the rows without calling that function
+  // (unreadableFieldNames); the describe "the row check refuses" below gives it
+  // one adverse row per condition.
+  it("declares each repeated field with one source and readings one driver can read", () => {
+    const unreadable = unreadableFieldNames(ARTIFACT_KIND_DISPLAY_ROWS);
+    expect(
+      unreadable,
+      `${unreadable.join(", ")} is declared with a blank source, with two sources, with a reading other than ${READINGS.join(", ")}, or both open and continued — no one driver can read it.`,
+    ).toEqual([]);
+  });
+
+  it("records the dashboard display's Open live dashboard in each reading that draws it (design@67ecd66d)", () => {
+    // §XI.5 draws six readings: the review open, the review continued and no
+    // review standing, each with the numbers read and with no data capability.
+    // The link is drawn in four of them, in this order.
+    const row = ARTIFACT_KIND_DISPLAY_ROWS.find((r) => r.surface === "dashboard-display");
+    expect(
+      row.fields.filter((f) => f.name === "open-live").map((f) => f.reading),
+    ).toEqual(["continued", "no-review", "continued", "no-review"]);
+  });
+
   it("names, for every surface, what its display is waiting for", () => {
     const silent = ARTIFACT_KIND_DISPLAY_ROWS.filter(
       (row) => typeof row.readiness !== "string" || row.readiness.trim().length < 40,
@@ -88,6 +149,234 @@ describe("the wave covers the artifact-kind display surfaces of the staged drawi
       silent,
       `${silent.join(", ")} carries no readiness sentence — a driver whose surface the branch does not have must say what it is waiting for, never skip silently.`,
     ).toEqual([]);
+  });
+});
+
+// unreadableFieldNames on one adverse row per condition it checks, and on a
+// row it must read. Each fixture is one surface with one field name.
+describe("the row check refuses each row no one driver can read", () => {
+  const row = (...fields) => [{ surface: "s", fields }];
+  const d = (source, reading) =>
+    reading === undefined ? { name: "open-live", source } : { name: "open-live", source, reading };
+
+  it("refuses a field bound to two sources", () => {
+    expect(
+      unreadableFieldNames(row(d("artifact.sourceUrl", "continued"), d("artifact.url", "continued"))),
+    ).toEqual(["s.open-live"]);
+  });
+
+  it("refuses a field declared both open and continued", () => {
+    expect(
+      unreadableFieldNames(row(d("artifact.sourceUrl"), d("artifact.sourceUrl", "continued"))),
+    ).toEqual(["s.open-live"]);
+  });
+
+  it("refuses a field with a reading outside the closed set", () => {
+    expect(unreadableFieldNames(row(d("artifact.sourceUrl", "archived")))).toEqual(["s.open-live"]);
+  });
+
+  it("refuses a field with a blank source", () => {
+    expect(unreadableFieldNames(row(d("  ", "continued")))).toEqual(["s.open-live"]);
+  });
+
+  it("refuses a field whose source is not a string", () => {
+    expect(unreadableFieldNames(row(d(undefined, "continued")))).toEqual(["s.open-live"]);
+    expect(unreadableFieldNames(row({ name: "open-live", reading: "continued" }))).toEqual(["s.open-live"]);
+    expect(unreadableFieldNames(row(d(42, "continued")))).toEqual(["s.open-live"]);
+  });
+
+  it("reads a field declared continued and where no review stands, bound to one source", () => {
+    expect(
+      unreadableFieldNames(
+        row(d("artifact.sourceUrl", "continued"), d("artifact.sourceUrl", "no-review")),
+      ),
+    ).toEqual([]);
+  });
+});
+
+// kindDisplayFieldReading returns the one reading a field's driver reads
+// ("open", "continued" or "no-review"), and throws for a row no one driver can
+// read. Each branch and each throw is pinned here, without a browser.
+describe("the reading a kind-display field's driver reads", () => {
+  const f = (reading, source = "artifact.sourceUrl") =>
+    reading === undefined ? { name: "open-live", source } : { name: "open-live", source, reading };
+
+  it("reads a field with no reading as open", () => {
+    expect(kindDisplayFieldReading("s", [f(undefined)])).toBe("open");
+  });
+
+  it("reads a field declared only continued as continued", () => {
+    expect(kindDisplayFieldReading("s", [f("continued")])).toBe("continued");
+  });
+
+  it("reads a field declared only where no review stands as no-review", () => {
+    expect(kindDisplayFieldReading("s", [f("no-review"), f("no-review")])).toBe("no-review");
+  });
+
+  it("reads continued over no-review, in either order", () => {
+    expect(kindDisplayFieldReading("s", [f("continued"), f("no-review")])).toBe("continued");
+    expect(kindDisplayFieldReading("s", [f("no-review"), f("continued")])).toBe("continued");
+  });
+
+  it("reads open over no-review, in either order", () => {
+    expect(kindDisplayFieldReading("s", [f(undefined), f("no-review")])).toBe("open");
+    expect(kindDisplayFieldReading("s", [f("no-review"), f(undefined)])).toBe("open");
+  });
+
+  it("reads the dashboard display's open-live declarations as continued", () => {
+    const row = ARTIFACT_KIND_DISPLAY_ROWS.find((r) => r.surface === "dashboard-display");
+    const openLive = row.fields.filter((d) => d.name === "open-live");
+    expect(kindDisplayFieldReading(row.surface, openLive)).toBe("continued");
+  });
+
+  it("throws for a field bound to two sources", () => {
+    expect(() =>
+      kindDisplayFieldReading("s", [f("continued"), f("continued", "artifact.url")]),
+    ).toThrow(/declared with sources artifact\.sourceUrl, artifact\.url/);
+  });
+
+  it("throws for a field declared both open and continued", () => {
+    expect(() => kindDisplayFieldReading("s", [f(undefined), f("continued")])).toThrow(
+      /in readings open, continued/,
+    );
+  });
+
+  it("throws for a reading other than open, continued and no-review", () => {
+    expect(() => kindDisplayFieldReading("s", [f("archived")])).toThrow(/in readings archived/);
+    expect(() => kindDisplayFieldReading("s", [f("no-review"), f("closed")])).toThrow(
+      /in readings no-review, closed/,
+    );
+    expect(() => kindDisplayFieldReading("s", [f("open")])).not.toThrow();
+  });
+
+  it("throws for a field with no declaration", () => {
+    expect(() => kindDisplayFieldReading("s", [])).toThrow(/\(no declaration\)/);
+  });
+
+  it("throws for a declaration whose source is undefined, empty or blank", () => {
+    expect(() => kindDisplayFieldReading("s", [f("continued", "")])).toThrow(
+      /declared with sources {2}in readings continued/,
+    );
+    expect(() => kindDisplayFieldReading("s", [f("continued", "   ")])).toThrow(/reconcile the row/);
+    expect(() =>
+      kindDisplayFieldReading("s", [{ name: "open-live", reading: "continued" }]),
+    ).toThrow(/reconcile the row/);
+    expect(() =>
+      kindDisplayFieldReading("s", [f("continued"), { name: "open-live", source: undefined, reading: "continued" }]),
+    ).toThrow(/reconcile the row/);
+  });
+
+  it("reads every row of the wave without a throw", () => {
+    for (const row of ARTIFACT_KIND_DISPLAY_ROWS) {
+      const byName = new Map();
+      for (const d of row.fields) byName.set(d.name, [...(byName.get(d.name) ?? []), d]);
+      for (const fields of byName.values()) {
+        expect(() => kindDisplayFieldReading(row.surface, fields)).not.toThrow();
+      }
+    }
+  });
+
+});
+
+// kindDisplayFieldDriver picks, for each field name, the one of the three
+// assertions contract.ts supplies that the name's reading gets. Tagged stand-ins
+// for the three assertions show which one each reading gets, with which
+// binding or skip reason.
+describe("the assertion a kind-display field's driver gets", () => {
+  const f = (reading, source = "artifact.sourceUrl", name = "open-live") =>
+    reading === undefined ? { name, source } : { name, source, reading };
+  const tagged = {
+    present: (binding) => ["present", binding],
+    continuedOnly: (binding) => ["continuedOnly", binding],
+    skip: (reason) => ["skip", reason],
+  };
+  const BINDING = '[data-field="open-live=artifact.sourceUrl"]';
+
+  it("gives an open field the presence assertion on its binding", () => {
+    expect(kindDisplayFieldDriver("s", [f(undefined)], tagged)).toEqual({
+      source: "artifact.sourceUrl",
+      assert: ["present", BINDING],
+    });
+  });
+
+  it("gives a continued field the continued-only assertion on its binding", () => {
+    expect(kindDisplayFieldDriver("s", [f("continued")], tagged)).toEqual({
+      source: "artifact.sourceUrl",
+      assert: ["continuedOnly", BINDING],
+    });
+  });
+
+  it("gives a field drawn only where no review stands a skip that names the surface and the field", () => {
+    expect(kindDisplayFieldDriver("dashboard-display", [f("no-review")], tagged)).toEqual({
+      source: "artifact.sourceUrl",
+      assert: [
+        "skip",
+        'dashboard-display: "open-live" is drawn only where no review stands, a reading the review harness does not mount',
+      ],
+    });
+  });
+
+  it("gives continued over no-review and open over no-review, as the reading does", () => {
+    expect(kindDisplayFieldDriver("s", [f("no-review"), f("continued")], tagged).assert).toEqual([
+      "continuedOnly",
+      BINDING,
+    ]);
+    expect(kindDisplayFieldDriver("s", [f("no-review"), f(undefined)], tagged).assert).toEqual([
+      "present",
+      BINDING,
+    ]);
+  });
+
+  it("binds the field by its own name and source", () => {
+    expect(
+      kindDisplayFieldDriver("s", [f(undefined, "representation.pinned-configuration", "layout")], tagged),
+    ).toEqual({
+      source: "representation.pinned-configuration",
+      assert: ["present", '[data-field="layout=representation.pinned-configuration"]'],
+    });
+  });
+
+  it("builds no assertion for a row the reading refuses", () => {
+    const built = [];
+    const counting = {
+      present: (b) => built.push(b),
+      continuedOnly: (b) => built.push(b),
+      skip: (r) => built.push(r),
+    };
+    expect(() => kindDisplayFieldDriver("s", [f("continued", "")], counting)).toThrow(/reconcile the row/);
+    expect(() => kindDisplayFieldDriver("s", [f(undefined), f("continued")], counting)).toThrow(
+      /in readings open, continued/,
+    );
+    expect(built).toEqual([]);
+  });
+
+  it("gives the dashboard display's layout the presence assertion and its open-live the continued-only one", () => {
+    const row = ARTIFACT_KIND_DISPLAY_ROWS.find((r) => r.surface === "dashboard-display");
+    const byName = (n) => row.fields.filter((d) => d.name === n);
+    expect(kindDisplayFieldDriver(row.surface, byName("layout"), tagged).assert[0]).toBe("present");
+    expect(kindDisplayFieldDriver(row.surface, byName("open-live"), tagged).assert).toEqual([
+      "continuedOnly",
+      BINDING,
+    ]);
+  });
+
+  it("is what contract.ts builds every field from, each assertion under its own name", () => {
+    const contract = readFileSync(path.join(CONF_DIR, "contract.ts"), "utf8");
+    expect(contract).toMatch(
+      /import \{ kindDisplayFieldDrivers \} from "\.\/artifact-review-display-readings";/,
+    );
+    expect(contract).not.toMatch(/function kindDisplayField(Reading|Driver|Drivers)\b/);
+    // No grouping of its own: the module groups the declarations by name.
+    expect(contract).not.toMatch(/declarations\.set\(/);
+    expect(contract).toMatch(
+      /driver\.fields = kindDisplayFieldDrivers\(row\.surface, row\.fields, \{/,
+    );
+    // The presence assertion: the binding inside this display, once and visible.
+    expect(contract).toMatch(
+      /present: \(binding\) => async \(_page: Page, root: Locator\) => \{\n\s+const bound = kindDisplayPanel\(root, row\.surface\)\.locator\(binding\);\n\s+await expect\(bound\)\.toHaveCount\(1\);\n\s+await expect\(bound\)\.toBeVisible\(\);/,
+    );
+    expect(contract).toMatch(/continuedOnly: \(binding\) => continuedOnlyField\(row\.surface, binding\),/);
+    expect(contract).toMatch(/skip: \(reason\) => async \(\) => \{\n\s+test\.skip\(true, reason\);/);
   });
 });
 
@@ -214,5 +503,74 @@ describe("the shrink-only ratchet gains nothing from this wave", () => {
       pins.manifests.some((m) => m.file === "app-artifact-review.json"),
       "the pin lands once EVERY wave for this drawing is green (epic cinatra#3155, independent pinning) — W2 covers eleven of its forty surfaces, so it must not pin it.",
     ).toBe(false);
+  });
+});
+
+// kindDisplayFieldDrivers groups a row's declarations by field name and builds
+// each name's driver from ALL of them. A grouping that kept only one
+// declaration per name would read the dashboard display's open-live by its last
+// declaration ("no-review") and skip it instead of reading it continued.
+describe("the drivers of a row's fields, one per name from every declaration", () => {
+  const tagged = {
+    present: (binding) => ["present", binding],
+    continuedOnly: (binding) => ["continuedOnly", binding],
+    skip: (reason) => ["skip", reason],
+  };
+  const d = (name, source, reading) =>
+    reading === undefined ? { name, source } : { name, source, reading };
+
+  it("reads the dashboard display's layout open and its open-live from all four declarations, continued", () => {
+    const row = ARTIFACT_KIND_DISPLAY_ROWS.find((r) => r.surface === "dashboard-display");
+    expect(kindDisplayFieldDrivers(row.surface, row.fields, tagged)).toEqual({
+      layout: {
+        source: "representation.pinned-configuration",
+        assert: ["present", '[data-field="layout=representation.pinned-configuration"]'],
+      },
+      "open-live": {
+        source: "artifact.sourceUrl",
+        assert: ["continuedOnly", '[data-field="open-live=artifact.sourceUrl"]'],
+      },
+    });
+  });
+
+  it("reads a name continued when its continued declaration comes first or last, between other names", () => {
+    for (const fields of [
+      [d("a", "x.a", "continued"), d("b", "x.b"), d("a", "x.a", "no-review")],
+      [d("a", "x.a", "no-review"), d("b", "x.b"), d("a", "x.a", "continued")],
+    ]) {
+      expect(kindDisplayFieldDrivers("s", fields, tagged)).toEqual({
+        a: { source: "x.a", assert: ["continuedOnly", '[data-field="a=x.a"]'] },
+        b: { source: "x.b", assert: ["present", '[data-field="b=x.b"]'] },
+      });
+    }
+  });
+
+  it("reads a name continued wherever its one continued declaration stands among two to six of that name", () => {
+    for (let count = 2; count <= 6; count += 1) {
+      for (let at = 0; at < count; at += 1) {
+        const fields = Array.from({ length: count }, (_, i) =>
+          d("a", "x.a", i === at ? "continued" : "no-review"),
+        );
+        expect(kindDisplayFieldDrivers("s", fields, tagged), `continued at ${at} of ${count}`).toEqual({
+          a: { source: "x.a", assert: ["continuedOnly", '[data-field="a=x.a"]'] },
+        });
+      }
+    }
+  });
+
+  it("refuses a name whose declarations conflict, even when they are not adjacent", () => {
+    expect(() =>
+      kindDisplayFieldDrivers("s", [d("a", "x.a"), d("b", "x.b"), d("a", "x.a", "continued")], tagged),
+    ).toThrow(/s: "a" is declared with sources x\.a in readings open, continued/);
+    expect(() =>
+      kindDisplayFieldDrivers("s", [d("a", "x.a", "continued"), d("a", "x.other", "continued")], tagged),
+    ).toThrow(/declared with sources x\.a, x\.other/);
+  });
+
+  it("builds a driver for every name of every row of the wave", () => {
+    for (const row of ARTIFACT_KIND_DISPLAY_ROWS) {
+      const names = [...new Set(row.fields.map((f) => f.name))];
+      expect(Object.keys(kindDisplayFieldDrivers(row.surface, row.fields, tagged))).toEqual(names);
+    }
   });
 });
