@@ -437,37 +437,30 @@ for (const { name: palette, theme } of PALETTES) {
       expect(await style(chip, "background-color")).not.toBe("rgba(0, 0, 0, 0)");
     });
 
-    test('"line border": the neutral chip strokes the hairline', async ({
+    test('"neutral borders": Secondary is transparent and Outline uses the strong hairline', async ({
       page,
     }) => {
-      // RECORDED DEPARTURE RETIRED — the road this file named has been taken.
-      // Leg 1 measured the clause and could not repair it: the 1px border box
-      // was reserved on every variant and painted fully transparent, and
-      // `badge.tsx` is vendored verbatim into extension packages held in their
-      // own repositories behind a provenance gate, so spelling a border colour
-      // in the primitive's class string was a coordinated cross-repository
-      // change and not a host edit. The record said, in as many words, that the
-      // day the follow-up landed this case would pass unexpectedly and the
-      // record would have to be retired.
-      //
-      // It landed in leg 2, on the DOM seam rather than in the primitive: the
-      // scope at the end of src/app/globals.css colours the stroke of the chip
-      // that still carries the primitive's own `border-transparent` token, so
-      // the host copy and every vendored copy alike paint it and no file the
-      // provenance gate reads changed. The reading below is the one this case
-      // always took, in both palettes, now stated as the clause states it.
       await open(page, theme);
       const chip = page.locator(`${seam("badge")} [data-wave-variant="secondary"]`);
       await expect(chip).toBeVisible();
-      // The box is unchanged — the repair was a colour, never a reflow.
+      // Transparency changes the border color, never the reserved 1px box.
       expect(await style(chip, "border-top-width")).toBe("1px");
-      const stroke = await style(chip, "border-top-color");
-      expect(
-        alphaOf(stroke),
-        `${palette}: the neutral chip strokes the hairline the chrome line states`,
-      ).toBeGreaterThan(0);
-      // …and it is the drawing's line, not a near colour.
-      expect(stroke).toBe(await token(page, "--line"));
+      expect(alphaOf(await style(chip, "border-top-color"))).toBe(0);
+
+      // Reuse the existing catalog's real Outline Badge, not a test-created
+      // element. The seeded theme is applied again on navigation and checked
+      // before either palette's token probe is read.
+      await page.goto("/design-fixtures", { waitUntil: "domcontentloaded" });
+      await expect.poll(() => page.evaluate(
+        (value) => document.documentElement.classList.contains("dark") === (value === "dark"),
+        theme,
+      )).toBe(true);
+      const outline = page.locator('[data-slot="badge"][data-variant="outline"]')
+        .filter({ hasText: /^Outline$/ });
+      await expect(outline).toHaveCount(1);
+      await expect(outline).toBeVisible();
+      expect(await style(outline, "border-top-width")).toBe("1px");
+      expect(await style(outline, "border-top-color")).toBe(await token(page, "--line-strong"));
     });
 
     test('"border at higher alpha" is graded on the STATUS PILL, not on the chip', async ({
