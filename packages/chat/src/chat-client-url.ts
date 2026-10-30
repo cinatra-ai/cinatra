@@ -10,7 +10,7 @@
 // are the pure decision cores for the `useChatUrlSync` hook's effectful seams
 // (push on selection, replace on slug-mint) at the foot — kept here, out of
 // the page hub, and unit-testable without mounting a component.
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   DEFAULT_ASSISTANT_PACKAGE,
   DEFAULT_CHAT_PATH,
@@ -315,4 +315,67 @@ export function useChatUrlSync<T extends ThreadUrlFields & { id: string }>(
   );
 
   return { pushChatUrl, pushNewChatUrl, restoreActiveThread, adoptThreadBinding, newThreadSummary, chatTurnContainer };
+}
+
+// ---------------------------------------------------------------------------
+// THE TRANSCRIPT A MOUNTED CHAT PAGE HOLDS (cinatra#3062).
+//
+// The page pushes a thread's URL itself (`pushChatUrl`), so a later render of
+// the /chat route at that URL — the router applying a server action's answer,
+// for one — can carry a different catch-all value than the tree the page was
+// mounted under, and the page is then mounted AFRESH. A fresh page starts with
+// an empty list and draws its thread only when its own read answers, so every
+// turn — the skills card in it too — would leave the transcript for that read
+// and come back. §V: "A row the reader did see keeps its place in the turn".
+//
+// So each mounted page keeps the transcript it has committed in this slot, by
+// viewer and thread, and clears it again when it unmounts. A fresh mount reads
+// the slot ONCE, while the page it replaces is still committed, and draws that
+// transcript until its own list is filled. Written only from a client effect:
+// a server render, or a later separate mount, reads nothing.
+// ---------------------------------------------------------------------------
+// The slot is published only for the thread whose data the page has LOADED
+// (`ownerThreadRef`, the page's own loaded-thread mark), so a list carried over
+// from the thread being left is never held under the thread being opened. The
+// fresh mount's hold is fenced to the viewer and thread it was read for, and it
+// ends for good when the page's own first thread read settles (`release`) —
+// whatever that read answered, a refused or empty thread included.
+const heldTranscripts = new Map<string, { messages: readonly unknown[] }>();
+const heldTranscriptKey = (viewer: string | undefined, threadId: string) => `${viewer ?? ""}|${threadId}`;
+
+type HeldTranscript<M> = { viewer: string | undefined; threadId: string; messages: M[] };
+
+/** The list the page draws: its own, or — while its own is still empty on the
+ *  thread it was mounted for, by the same viewer, and its own first read has
+ *  not settled — the transcript the page it replaces held. */
+export function useHeldChatTranscript<M>(
+  viewer: string | undefined,
+  activeThreadId: string | null,
+  initialThreadId: string | null | undefined,
+  messages: M[],
+  ownerThreadRef: { readonly current: string | null },
+): { shownMessages: M[]; releaseHeldTranscript: () => void } {
+  const [held, setHeld] = useState<HeldTranscript<M> | null>(() => {
+    if (!initialThreadId) return null;
+    const entry = heldTranscripts.get(heldTranscriptKey(viewer, initialThreadId));
+    return entry && entry.messages.length > 0
+      ? { viewer, threadId: initialThreadId, messages: entry.messages as M[] }
+      : null;
+  });
+  const releaseHeldTranscript = useCallback(() => setHeld(null), []);
+  useEffect(() => {
+    if (!activeThreadId || messages.length === 0) return;
+    if (ownerThreadRef.current !== activeThreadId) return;
+    const key = heldTranscriptKey(viewer, activeThreadId);
+    const entry = { messages };
+    heldTranscripts.set(key, entry);
+    return () => {
+      if (heldTranscripts.get(key) === entry) heldTranscripts.delete(key);
+    };
+  }, [viewer, activeThreadId, messages, ownerThreadRef]);
+  const shownMessages =
+    messages.length === 0 && held !== null && held.viewer === viewer && held.threadId === activeThreadId
+      ? held.messages
+      : messages;
+  return { shownMessages, releaseHeldTranscript };
 }

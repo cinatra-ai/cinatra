@@ -100,6 +100,120 @@ export function recommendationRunHasStarted(status: string | null | undefined): 
   return !PRE_EXECUTION_RUN_STATUSES.has(status);
 }
 
+/**
+ * THE ONE STATUS THAT CANNOT ANSWER THE QUESTION ON ITS OWN (cinatra#3062).
+ *
+ * `pending_approval` has TWO producers in the transition table below, and that
+ * table's own comments name them: `queued->pending_approval` is "the setup
+ * interrupt, nothing has executed", and `running->pending_approval` is "an
+ * interrupt raised mid-flight". One of those moments is BEFORE the run has
+ * executed and the other is AFTER it, and the status string is byte-identical in
+ * both. `RUN_START_AWAITING_APPROVAL_CLAUSE` below already says so in words: its
+ * sentence "does not claim the run has yet to start" precisely because the
+ * status alone cannot tell.
+ *
+ * The skills recommendation hold parks the run on the FIRST of the two, so the
+ * status-only boundary above read a run held at the very question the card is
+ * asking as "started" — and the card then drew the once-it-has-started reading
+ * over a run that had not started.
+ *
+ * The ROW settles it. `started_at` is stamped inside the `queued->running`
+ * dispatch CAS and nowhere else, so a `pending_approval` row with no stamp has
+ * not executed and one with a stamp has.
+ */
+export const START_AMBIGUOUS_RUN_STATUSES: ReadonlySet<string> = new Set<AgentRunStatus>([
+  "pending_approval",
+]);
+
+/**
+ * HAS THIS RUN STARTED RUNNING — ASKED OF THE ROW (cinatra#3062).
+ *
+ * THE AUTHORITY IS THE RUN'S OWN `started_at`, never a status string alone and
+ * never a local flag a screen kept across a reload. The stamp is written once,
+ * inside the `queued->running` dispatch CAS, so its presence is the fact "this
+ * run has executed".
+ *
+ * The status is still read, for the two things the stamp cannot answer by
+ * itself:
+ *
+ *   - a status in `START_AMBIGUOUS_RUN_STATUSES` with NO stamp has NOT started
+ *     — the case the card was getting wrong;
+ *   - `queued` with NO stamp has NOT started either (cinatra#3062, fix leg 5).
+ *     `queued` is the dispatch waiting for its worker, and the stamp is written
+ *     in the `queued->running` CAS that ends it — so until that CAS no work step
+ *     has run, which is what §V calls "before the run starts". The status-only
+ *     answer calls it started, and the card drew the read-only reading with no
+ *     Continue for as long as the row sat there right after the one Continue;
+ *   - a row that carries the in-attempt wait marker `humanWaitAttemptId`
+ *     (cinatra#1938) HAS started, whatever its stamp says. The marker is set
+ *     only on `running->pending_approval`, the interrupt raised mid-flight, so
+ *     its presence is the fact "this run executed". It tells a run dispatched
+ *     BEFORE the stamp existed (its `started_at` was left NULL) and paused
+ *     mid-flight at a gate apart from a run parked before it ever ran: both
+ *     read `pending_approval` with no stamp;
+ *   - anything else with no stamp keeps the status-only answer
+ *     `recommendationRunHasStarted` gives, so a row whose stamp is missing for
+ *     any other reason never becomes editable on that account.
+ *
+ * `recommendationRunHasStarted` is unchanged and is still the boundary for a
+ * caller holding nothing but a status. This is THE SAME BOUNDARY asked of a
+ * caller that holds the row — which is what the resolver holds, on every read
+ * and therefore on every reload.
+ */
+export function recommendationRunHasStartedForRow(
+  run:
+    | { status?: string | null; startedAt?: Date | string | null; humanWaitAttemptId?: string | null }
+    | null
+    | undefined,
+): boolean {
+  if (!run) return false;
+  if (run.startedAt !== null && run.startedAt !== undefined) return true;
+  if (run.humanWaitAttemptId !== null && run.humanWaitAttemptId !== undefined) return true;
+  const status = run.status;
+  if (typeof status === "string" && START_AMBIGUOUS_RUN_STATUSES.has(status)) return false;
+  if (status === "queued") return false;
+  return recommendationRunHasStarted(status);
+}
+
+/**
+ * THE SAME BOUNDARY, FOR A GUARD THAT LIVES IN SQL (cinatra#3062).
+ *
+ * A statement cannot call the function above, and the pre-start selection write
+ * puts its status test INSIDE the DELETE and the INSERT on purpose — so a
+ * dispatch cannot land between a status read and the write. That statement needs
+ * the boundary as a VALUE, and this is it: the statuses a run can hold while it
+ * has not executed. Paired with `started_at IS NULL` and
+ * `human_wait_attempt_id IS NULL` in the same predicate it is
+ * `recommendationRunHasStartedForRow` negated, expressed in SQL, except for
+ * `queued` (below) and for an absent status (NULL or empty), which that
+ * function reads as not started and the predicate refuses (`status = ANY(...)`
+ * is not true for it).
+ *
+ * `pending_approval` is in it because the recommendation hold's own park is
+ * BEFORE execution — see `START_AMBIGUOUS_RUN_STATUSES` — and leaving it out is
+ * what refused a returning reader's change on a run that had not started, while
+ * the screen was offering them the box to make it with.
+ *
+ * `queued` IS DELIBERATELY NOT IN IT, although an unstamped queued row reads as
+ * not started above (cinatra#3062, fix leg 5). The dispatch reads the run's
+ * selected skill revisions for its ledger snapshot while the row is still
+ * `queued`, BEFORE the `queued->running` CAS, so a selection written in that
+ * window could miss the snapshot the run is materialized from. The store stays
+ * the conservative authority there. A confirm's replace answers `false` for a
+ * row that is `queued` when its probe reads it, but the probe takes no lock: a
+ * run that moves into the set (the setup interrupt, `queued` to
+ * `pending_approval`) between the probe and the replace's DELETE and INSERT
+ * gets those writes while the answer is `false`. A skip (an all-clear Continue)
+ * locks the run row and reads the same predicate from it in its own
+ * transaction, and gets none of its writes when the locked row is not before
+ * its start. A `false` and a `run_started` are each answered with the
+ * run-started refusal, and the card draws it.
+ */
+export const PRE_START_RUN_STATUSES_WITHOUT_A_START_STAMP: ReadonlySet<string> = new Set<string>([
+  ...PRE_EXECUTION_RUN_STATUSES,
+  ...START_AMBIGUOUS_RUN_STATUSES,
+]);
+
 // Derived from exhaustive grep of existing updateAgentRunStatus* callsites
 // Transition table includes cancel/reject edges from any live state so
 // user-cancel works consistently.
