@@ -1,6 +1,6 @@
 /** Positive prompt-marker guard shared by native controls and required conformance. */
 export type WindowOwnershipReading = {
-  rootPresent: boolean; windows: number; ownedWindows: number;
+  rootPresent: boolean; windows: number; ownedWindows: number; unownedPrompts: number;
   cards: number; promptsInCards: number; composers: number; composersInCards: number;
   pageNotices: number; noticesInCards: number; interactiveNotices: number;
 };
@@ -11,37 +11,53 @@ export type WindowOwnershipReading = {
 //
 // THE WINDOW IS READ BY ITS OWN ANCHOR, `run-window` (cinatra#3487 item 3): the
 // drawing of the run page's window (`app-artifact-review.html` §I.6) anchors it
-// so, inside `[data-run-window-host="page-chrome"]`. A window is that anchor,
-// or a window drawn under another window anchor with no `run-window` inside it
-// — so a second window is counted whatever it is called, also when it is drawn
-// inside the page's own `run-window`, and a page window that lost its own anchor
-// is not owned.
+// so, inside `[data-run-window-host="page-chrome"]`. A window is that anchor;
+// or a window drawn under another window anchor with no `run-window` inside it,
+// also when it is drawn inside the page's own `run-window`; or a prompt field,
+// a textarea or the window's send control that no window anchor, lifecycle card
+// or composer holds (`unownedPrompts`, each outermost one counted once). A page
+// window that lost its own anchor is not owned.
+//
+// EVERY ANCHOR IS READ ON ITS OWN NODE: an owned window sits strictly inside
+// the page chrome (an anchor on the chrome node itself is not owned), and a
+// lifecycle card's own root node counts as inside the card.
 export function readRunWindowOwnership(root: Element | null): WindowOwnershipReading {
-  if (root === null) return { rootPresent: false, windows: 0, ownedWindows: 0,
+  if (root === null) return { rootPresent: false, windows: 0, ownedWindows: 0, unownedPrompts: 0,
     cards: 0, promptsInCards: 0, composers: 0, composersInCards: 0,
     pageNotices: 0, noticesInCards: 0, interactiveNotices: 0 };
   const runWindow = '[data-conformance-id="run-window"]';
   const otherWindows = '[data-conformance-id="review-prompt-window"], [data-conformance-id="schedule-prompt-window"]';
   const composer = '[data-conversation-composer]';
+  const card = '[data-lifecycle-card-host]';
+  const pageChrome = '[data-run-window-host="page-chrome"]';
   const promptMarkers = [runWindow, otherWindows, '[data-conformance-id="schedule-window-over"]', '[data-run-window-field]',
     '[data-conformance-id="chat-composer-primary"]', composer,
     '[data-testid="chat-prompt-input"]', '[aria-label="Apply AI suggestion"]'].join(',');
-  const cards = Array.from(root.querySelectorAll('[data-lifecycle-card-host]'));
+  const promptControls = ['[data-run-window-field]', 'textarea', '[aria-label="Apply AI suggestion"]',
+    '[data-testid="chat-prompt-input"]', '[data-conformance-id="chat-composer-primary"]'].join(',');
+  const holders = [runWindow, otherWindows, card, composer].join(',');
+  // The node itself and every descendant that matches.
+  const within = (node: Element, selector: string): number =>
+    (node.matches(selector) ? 1 : 0) + node.querySelectorAll(selector).length;
+  const cards = Array.from(root.querySelectorAll(card));
   const notice = '[data-conformance-id="schedule-window-over"]';
   const anchored = Array.from(root.querySelectorAll(runWindow));
   const unanchored = Array.from(root.querySelectorAll(otherWindows))
     .filter((node) => node.querySelector(runWindow) === null);
+  const loose = Array.from(root.querySelectorAll(promptControls)).filter((node) => node.closest(holders) === null);
+  const unownedPrompts = loose.filter((node) => !loose.some((other) => other !== node && other.contains(node))).length;
   return {
-    rootPresent: true, windows: anchored.length + unanchored.length,
-    ownedWindows: anchored.filter((node) => node.closest('[data-run-window-host="page-chrome"]') !== null).length,
+    rootPresent: true, windows: anchored.length + unanchored.length + unownedPrompts,
+    ownedWindows: anchored.filter((node) => node.parentElement?.closest(pageChrome) != null).length,
+    unownedPrompts,
     cards: cards.length,
-    promptsInCards: cards.reduce((total, card) => total + card.querySelectorAll(promptMarkers).length, 0),
+    promptsInCards: cards.reduce((total, node) => total + within(node, promptMarkers), 0),
     composers: root.querySelectorAll(composer).length,
-    composersInCards: cards.reduce((total, card) => total + card.querySelectorAll(composer).length, 0),
-    pageNotices: root.querySelectorAll('[data-run-window-host="page-chrome"] ' + notice).length,
-    noticesInCards: cards.reduce((total, card) => total + card.querySelectorAll(notice).length, 0),
+    composersInCards: cards.reduce((total, node) => total + within(node, composer), 0),
+    pageNotices: root.querySelectorAll(pageChrome + ' ' + notice).length,
+    noticesInCards: cards.reduce((total, node) => total + within(node, notice), 0),
     interactiveNotices: Array.from(root.querySelectorAll(notice)).reduce((total, node) =>
-      total + (node.closest('[data-conformance-id="schedule-prompt-window"]') ?? node).querySelectorAll('input, textarea, button, [contenteditable="true"]').length, 0),
+      total + within(node.closest('[data-conformance-id="schedule-prompt-window"]') ?? node, 'input, textarea, button, [contenteditable="true"]'), 0),
   };
 }
 export function assertRunWindowOwnership(reading: WindowOwnershipReading, host: "run" | "review" | "chat"): void {
