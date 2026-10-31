@@ -1636,20 +1636,21 @@ function DynamicSelectRow({
  * is a form choice, never a switch. Only the HIDDEN input carries a `name`,
  * serializing `"true"`/`"false"` into `collectFormInputs` (the visible
  * checkbox is nameless); the host write handler parses the exact string, not
- * truthiness. The box comes first and its label sits beside it.
+ * truthiness. The box comes first with its label beside it, and the description
+ * sits below that line at the row's left edge.
  */
 function BooleanRow({ field, initialValue }: { field: BooleanField; initialValue?: string }) {
   const initial = initialValue !== undefined ? initialValue === "true" : field.defaultValue ?? false;
   const [checked, setChecked] = useState<boolean>(initial);
   return (
-    <Field orientation="horizontal">
-      <Checkbox id={`${field.key}-toggle`} checked={checked} onCheckedChange={(next) => setChecked(next === true)} />
-      <FieldContent>
-        {/* Hidden input is the ONLY named element — collectFormInputs reads it. */}
-        <Input type="hidden" name={field.key} value={checked ? "true" : "false"} readOnly />
+    <Field className="gap-1">
+      {/* Hidden input is the ONLY named element — collectFormInputs reads it. */}
+      <Input type="hidden" name={field.key} value={checked ? "true" : "false"} readOnly />
+      <div className="flex items-center gap-2">
+        <Checkbox id={`${field.key}-toggle`} checked={checked} onCheckedChange={(next) => setChecked(next === true)} />
         <FieldLabel htmlFor={`${field.key}-toggle`}>{field.label}</FieldLabel>
-        {field.description ? <FieldDescription>{field.description}</FieldDescription> : null}
-      </FieldContent>
+      </div>
+      {field.description ? <FieldDescription>{field.description}</FieldDescription> : null}
     </Field>
   );
 }

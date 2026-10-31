@@ -78,8 +78,8 @@ function booleanSurface(defaultValue: boolean | undefined, withSave = false) {
 }
 
 function stubFetch() {
-  const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
-    new Response(JSON.stringify({ result: {} }), { status: 200 }),
+  const fetchMock = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(
+    async () => new Response(JSON.stringify({ result: {} }), { status: 200 }),
   );
   vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
   return fetchMock;
@@ -145,6 +145,31 @@ describe("schema-config form: the boolean row is a checkbox", () => {
     expect(hiddenValues(none.container)).toEqual(["hidden=false"]);
   });
 
+  it("sets the description at the row's left edge, below the line of the box and its label", async () => {
+    const { container } = await renderForm(true);
+    const control = screen.getByRole("checkbox", { name: LABEL });
+    const label = container.querySelector<HTMLLabelElement>(`label[for="${control.id}"]`)!;
+    const description = screen.getByText(DESCRIPTION);
+    // The box and its label share one line, and the description is not on it.
+    expect(label.parentElement).toBe(control.parentElement);
+    expect(control.parentElement?.contains(description)).toBe(false);
+    // The line and the description are both direct children of the row, so the
+    // description starts at the row's edge and not under the label text.
+    const row = control.closest('[data-slot="field"]');
+    expect(control.parentElement?.parentElement).toBe(row);
+    expect(description.parentElement).toBe(row);
+    expect(description.closest('[data-slot="field-content"]')).toBeNull();
+  });
+
+  it("reads a stored value other than exactly \"true\" as false, over a declared default of true", async () => {
+    for (const stored of ["TRUE", ""]) {
+      const { container } = await renderForm(true, { allowNetwork: stored });
+      expect(screen.getByRole("checkbox", { name: LABEL }).getAttribute("aria-checked")).toBe("false");
+      expect(hiddenValues(container)).toEqual(["hidden=false"]);
+      cleanup();
+    }
+  });
+
   it("ticking and unticking, by the box or by its label, flips the hidden input between exactly \"true\" and \"false\" and writes nothing", async () => {
     const fetchMock = stubFetch();
     const { container } = await renderForm(false, {}, { withSave: true });
@@ -164,6 +189,9 @@ describe("schema-config form: the boolean row is a checkbox", () => {
     fireEvent.click(label);
     expect(control.getAttribute("aria-checked")).toBe("true");
     expect(hiddenValues(container)).toEqual(["hidden=true"]);
+    fireEvent.click(label);
+    expect(control.getAttribute("aria-checked")).toBe("false");
+    expect(hiddenValues(container)).toEqual(["hidden=false"]);
 
     expect(fetchMock).not.toHaveBeenCalled();
   });
