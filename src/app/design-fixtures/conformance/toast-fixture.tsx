@@ -24,8 +24,10 @@ export function ToastConformanceFixture() {
       >
         Show conformance toast
       </Button>
-      {/* No product page raises an untyped toast, so the drawn default toast is
-          raised here for the independent grade (cinatra#4291). */}
+      {/* The application's one untyped call is the auth provider's fallback branch
+          (src/app/providers.tsx). better-auth-ui 3.4.0 sends that provider only
+          error and success, so no page reaches the branch, and the drawn default
+          toast is raised here for the independent grade (cinatra#4291). */}
       <Button
         variant="outline"
         data-testid="show-conformance-default-toast"
