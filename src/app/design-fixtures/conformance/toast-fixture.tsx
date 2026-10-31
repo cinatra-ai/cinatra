@@ -12,7 +12,9 @@ import {
 /** The product's global Toaster draws this; no controls or outcomes are imitated. */
 export function ToastConformanceFixture() {
   return (
-    <>
+    // The kit's press reads at most 400 controls, and this page draws more, so
+    // the grade's press names this one part of the page.
+    <section aria-label="Toast conformance" className="flex flex-col gap-8">
       <Button
         variant="outline"
         data-testid="show-conformance-toast"
@@ -38,6 +40,6 @@ export function ToastConformanceFixture() {
       >
         Show conformance default toast
       </Button>
-    </>
+    </section>
   );
 }
