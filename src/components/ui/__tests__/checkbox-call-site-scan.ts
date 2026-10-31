@@ -1475,9 +1475,10 @@ const SWITCH_NAME = "Switch";
  *   module specifier, no rename, not type-only), or the imported name of an aliased import (`import { Switch as Primitive }`);
  *   any other occurrence refuses the module: a read, a write, a call, a member or a key, a type, a tag, a second or bodiless
  *   declaration, an overload, an alias in either direction, a re-export, an ambient or nested declaration;
+ * - an export name written as the string "Switch" (`export { Other as "Switch" }`, `export * as "Switch" from "m"`) refuses too;
  * - the file has no export assignment of any kind (`export default x`, `export = x`);
  * - the file spells none of the identifiers `exports`, `module` and `eval`;
- * - there is exactly one function with a body, and exactly one export of it, by the `export` modifier or by one export specifier.
+ * - there is exactly one function named Switch with a body, and exactly one export of it, by the `export` modifier or by one export specifier.
  * What the rule does not read: the function body (a function named Switch that draws a checkbox counts), a `require` of the
  * module's own path, `arguments`, a string key, and a top-level `this` in a file the build compiles to CommonJS.
  */
@@ -1507,6 +1508,10 @@ export function declaresAndExportsSwitch(sf: ts.SourceFile): boolean {
   const visit = (n: ts.Node): void => {
     if (!ok) return;
     if (ts.isExportAssignment(n)) {
+      ok = false;
+      return;
+    }
+    if (ts.isStringLiteral(n) && n.text === SWITCH_NAME && (ts.isExportSpecifier(n.parent) || ts.isNamespaceExport(n.parent))) {
       ok = false;
       return;
     }

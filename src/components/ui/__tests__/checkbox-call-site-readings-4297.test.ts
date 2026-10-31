@@ -1669,6 +1669,7 @@ describe("the switch rule refuses what is ambiguous or can change, and takes onl
       "default an object with a key Switch": "function Switch() { return null; }\nexport { Switch };\nexport default ({ Switch: Checkbox });\n",
       "default a comma expression": "function Switch() { return null; }\nexport { Switch };\nexport default (0, Switch);\n",
       "default another value": "function Switch() { return null; }\nexport { Switch };\nexport default other;\n",
+      "default an instantiation": "function Switch() { return null; }\nexport { Switch };\nexport default Switch<unknown>;\n",
     };
     for (const [what, m] of Object.entries(refusedModules)) {
       expect([what, declaresAndExportsSwitch(parseSource("m.tsx", m))]).toEqual([what, false]);
@@ -1824,6 +1825,8 @@ describe("the switch rule refuses what is ambiguous or can change, and takes onl
       "export { Switch };",
       "function Other() { return 1; }\nexport { Switch };",
       "function Switch() { return 1; }\nexport function Switch() { return 2; }",
+      'export function Switch() { return 1; }\nfunction Other() { return 2; }\nexport { Other as "Switch" };',
+      'export function Switch() { return 1; }\nexport * as "Switch" from "m";',
     ];
     for (const t of yes) expect([t, declaresAndExportsSwitch(parseSource("m.tsx", t))]).toEqual([t, true]);
     for (const t of no) expect([t, declaresAndExportsSwitch(parseSource("m.tsx", t))]).toEqual([t, false]);
