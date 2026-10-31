@@ -30,6 +30,7 @@ import { Client } from "pg";
 import * as zod from "zod";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 import { replayStoreSchema } from "@/lib/test-support/store-schema-replay";
+import { promotionRevisionId } from "@/lib/artifacts/typed-promotion";
 
 vi.mock("@/lib/database", async () => {
   const cfg = await import("@/lib/postgres-config");
@@ -109,25 +110,98 @@ const AUTHORITY = {
  * connector registry) — which a node tier that provisions neither must not pull
  * in. What this tier is here to prove is the promotion's DATA effects, so it
  * substitutes the SAME compare-and-set the canonical writer performs — anchored
- * on the row's own version, writing nothing when it misses — and the road's use
- * of the canonical writer is pinned by the unit tier instead.
+ * on the row's own version, writing nothing when it misses — and recording the
+ * change event with the key it is handed, in the same statement, as the
+ * canonical writer does (cinatra#3319: the road appends only when that keyed
+ * event is the row's latest type change). The road's use of the canonical writer
+ * itself is not run here: the real writer's module graph is the boot graph this
+ * tier must not pull in (the CI command's config aliases only `server-only`,
+ * none of the root config's other stubs). The unit tier pins that the production
+ * retype hands the road's key to the canonical writer (the CANON case of
+ * `typed-promotion-proof-3319.test.ts`), with a substituted store; no test here
+ * runs the real writer against the real change-event row.
  */
-const RETYPE = async (input: {
+type RetypeInput = {
   orgId: string;
   artifactId: string;
   toType: string;
   expectedVersion: number;
-}) => {
-  const res = sql(
-    `UPDATE "${S()}"."objects" SET type = $3, version = version + 1, updated_at = now()
-     WHERE id = $1 AND org_id = $2 AND version = $4 AND deleted_at IS NULL
-     RETURNING id`,
-    [input.artifactId, input.orgId, input.toType, input.expectedVersion],
-  );
-  return (res?.rows?.length ?? 0) > 0
-    ? ({ ok: true } as const)
-    : ({ ok: false, reason: "row-moved" } as const);
+  /** Always set by the store at this head; absent on the tree before it. */
+  idempotencyKey?: string;
 };
+function retypeRecording(keyOf: (input: RetypeInput) => string) {
+  return async (input: RetypeInput) => {
+    const res = sql(
+      `WITH prev AS (
+         SELECT type FROM "${S()}"."objects"
+         WHERE id = $1 AND org_id = $2 AND version = $4 AND deleted_at IS NULL
+       ), upd AS (
+         UPDATE "${S()}"."objects" SET type = $3, version = version + 1, updated_at = now()
+         WHERE id = $1 AND org_id = $2 AND version = $4 AND deleted_at IS NULL
+         RETURNING id, type, version
+       )
+       INSERT INTO "${S()}"."object_change_event"
+         (id, change_set_id, sequence, object_id, object_type, operation, history_effect,
+          before_snapshot, after_snapshot, base_version, result_version, org_id,
+          idempotency_key, event_checksum)
+       SELECT $5, $5, 1, upd.id, upd.type, 'update', 'reversible-internal',
+              jsonb_build_object('type', prev.type), jsonb_build_object('type', upd.type),
+              $4, upd.version, $2, $6, 'stub'
+       FROM upd, prev
+       RETURNING object_id`,
+      [
+        input.artifactId,
+        input.orgId,
+        input.toType,
+        input.expectedVersion,
+        nextId("evt"),
+        keyOf(input),
+      ],
+    );
+    return (res?.rows?.length ?? 0) > 0
+      ? ({ ok: true } as const)
+      : ({ ok: false, reason: "row-moved" } as const);
+  };
+}
+// A store that hands no key (the tree before cinatra#3319) gets a generic one,
+// as the canonical writer generates it; such an event is never a proof.
+const RETYPE = retypeRecording((input) => input.idempotencyKey ?? nextId("evt-generated"));
+
+/** The key a promotion's own retype records (`typed-promotion-store.ts`). */
+function promotionKey(objectId: string, resourceId: string, toType: string, base: number) {
+  return `typed-promotion:${promotionRevisionId({ artifactId: objectId, sharedResourceId: resourceId, toType })}:${base}`;
+}
+
+/** One change event of the row, as a writer of a type change records it. */
+function seedChangeEvent(input: {
+  objectId: string;
+  type: string;
+  beforeType: string | null;
+  base: number | null;
+  result: number;
+  key: string;
+}) {
+  sql(
+    `INSERT INTO "${S()}"."object_change_event"
+       (id, change_set_id, sequence, object_id, object_type, operation, history_effect,
+        before_snapshot, after_snapshot, base_version, result_version, org_id,
+        idempotency_key, event_checksum)
+     VALUES ($1, $1, 1, $2, $3, $4, 'reversible-internal',
+             CASE WHEN $5::text IS NULL THEN NULL ELSE jsonb_build_object('type', $5::text) END,
+             jsonb_build_object('type', $3::text), $6::int, $7::int, $8, $9, 'stub')`,
+    [
+      nextId("evt"),
+      input.objectId,
+      input.type,
+      input.beforeType === null ? "create" : "update",
+      input.beforeType,
+      input.base,
+      input.result,
+      ORG,
+      input.key,
+    ],
+  );
+}
 
 const S = () => TEST_SCHEMA;
 
@@ -660,8 +734,17 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.14 the typed promotion road
     // and the matcher's assertion is still on the row. A later confirmation
     // CONVERGES it rather than stranding it.
     const objectId = nextId("obj-interrupted");
-    seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
+    const seeded = seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
     seedMatcherAssertion({ objectId, extension: EXT, confidence: 0.9 });
+    // The interrupted promotion's own retype, keyed, is the row's latest type change.
+    seedChangeEvent({
+      objectId,
+      type: OWN_TYPE,
+      beforeType: BASE_TYPE,
+      base: 0,
+      result: 1,
+      key: promotionKey(objectId, seeded.resourceId, OWN_TYPE, 0),
+    });
     const out = await promotionStore.promoteMatchedArtifactType({
       orgId: ORG,
       artifactId: objectId,
@@ -764,10 +847,18 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.14 the typed promotion road
     expect(representationsOf(objectId)).toHaveLength(1);
   });
 
-  it("COMPLETES the converging append for the person who asserted, once confirmed", async () => {
+  it("COMPLETES the converging append for the person who asserted, once confirmed, on the keyed retype", async () => {
     const objectId = nextId("obj-carries-own-person");
-    seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
+    const seeded = seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
     seedPersonAssertion({ objectId, extension: EXT, principal: "principal-alice" });
+    seedChangeEvent({
+      objectId,
+      type: OWN_TYPE,
+      beforeType: BASE_TYPE,
+      base: 0,
+      result: 1,
+      key: promotionKey(objectId, seeded.resourceId, OWN_TYPE, 0),
+    });
     const out = await promotionStore.promoteMatchedArtifactType({
       orgId: ORG,
       artifactId: objectId,
@@ -801,5 +892,138 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.14 the typed promotion road
     });
     expect(out).toEqual({ ok: false, reason: "not-confirmed" });
     expect(typeOf(objectId)).toBe(BASE_TYPE);
+  });
+
+  // THE PROVEN-PROMOTION GUARD (cinatra#3319, cinatra#4266), on the real proof
+  // read: the store appends only when the promotion's own keyed retype is the
+  // row's latest type change.
+  const OTHER_TYPE = "@cinatra-ai/campaigns:other";
+  function personArgs(objectId: string, principal: string) {
+    return {
+      orgId: ORG,
+      artifactId: objectId,
+      extension: EXT,
+      ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
+      threshold: null,
+      confirmed: true,
+      principal,
+      actor: ACTOR,
+      authority: AUTHORITY,
+      retype: RETYPE,
+    };
+  }
+
+  it("4266: a row typed from upload, the person's own meaning confirmed twice, keeps its one revision", async () => {
+    const objectId = nextId("obj-4266-native");
+    seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
+    seedPersonAssertion({ objectId, extension: EXT, principal: "principal-4266" });
+    seedChangeEvent({ objectId, type: OWN_TYPE, beforeType: null, base: null, result: 1, key: nextId("evt-create") });
+    for (let i = 0; i < 2; i += 1) {
+      expect(await promotionStore.promoteMatchedArtifactType(personArgs(objectId, "principal-4266"))).toEqual({
+        ok: false,
+        reason: "already-promoted",
+      });
+    }
+    expect(representationsOf(objectId)).toHaveLength(1);
+  });
+
+  it("R12-MF2: a restore back into the type (a generic key) is no proof, so nothing is appended", async () => {
+    const objectId = nextId("obj-restored");
+    seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
+    seedPersonAssertion({ objectId, extension: EXT, principal: "principal-restore" });
+    seedChangeEvent({ objectId, type: OWN_TYPE, beforeType: null, base: null, result: 1, key: nextId("evt-create") });
+    seedChangeEvent({ objectId, type: OTHER_TYPE, beforeType: OWN_TYPE, base: 1, result: 2, key: nextId("evt-move") });
+    seedChangeEvent({ objectId, type: OWN_TYPE, beforeType: OTHER_TYPE, base: 2, result: 3, key: nextId("restore") });
+    expect(await promotionStore.promoteMatchedArtifactType(personArgs(objectId, "principal-restore"))).toEqual({
+      ok: false,
+      reason: "already-promoted",
+    });
+    expect(representationsOf(objectId)).toHaveLength(1);
+  });
+
+  it("R11: a keyed retype that a later move away and back overwrote is no proof", async () => {
+    const objectId = nextId("obj-overwritten");
+    const seeded = seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
+    seedPersonAssertion({ objectId, extension: EXT, principal: "principal-overwritten" });
+    seedChangeEvent({
+      objectId,
+      type: OWN_TYPE,
+      beforeType: BASE_TYPE,
+      base: 0,
+      result: 1,
+      key: promotionKey(objectId, seeded.resourceId, OWN_TYPE, 0),
+    });
+    seedChangeEvent({ objectId, type: OTHER_TYPE, beforeType: OWN_TYPE, base: 1, result: 2, key: nextId("evt-move") });
+    seedChangeEvent({ objectId, type: OWN_TYPE, beforeType: OTHER_TYPE, base: 2, result: 3, key: nextId("restore") });
+    expect(await promotionStore.promoteMatchedArtifactType(personArgs(objectId, "principal-overwritten"))).toEqual({
+      ok: false,
+      reason: "already-promoted",
+    });
+    expect(representationsOf(objectId)).toHaveLength(1);
+  });
+
+  it("a fresh retype whose event carries another key appends nothing and answers promotion-unproven", async () => {
+    const objectId = nextId("obj-unkeyed");
+    seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });
+    seedMatcherAssertion({ objectId, extension: EXT, confidence: 0.9 });
+    const out = await promotionStore.promoteMatchedArtifactType({
+      orgId: ORG,
+      artifactId: objectId,
+      extension: EXT,
+      ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
+      threshold: 0.8,
+      confirmed: true,
+      actor: ACTOR,
+      authority: AUTHORITY,
+      retype: retypeRecording(() => nextId("evt-generic")),
+    });
+    expect(out).toEqual({ ok: false, reason: "promotion-unproven" });
+    // The retype committed; the revision did not.
+    expect(typeOf(objectId)).toBe(OWN_TYPE);
+    expect(representationsOf(objectId)).toHaveLength(1);
+  });
+
+  it("C4: a real editor append between the retype and the append is never superseded: nothing appended, representation-moved", async () => {
+    const objectId = nextId("obj-editor-race");
+    const seeded = seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });
+    seedMatcherAssertion({ objectId, extension: EXT, confidence: 0.9 });
+    const editorResource = nextId("res-editor");
+    sql(
+      `INSERT INTO "${S()}"."resource" (id, org_id, kind, substance_key, mime, size_bytes, created_by, metadata)
+       VALUES ($1,$2,'blob',$3,'text/markdown',10,NULL,'{}'::jsonb)`,
+      [editorResource, ORG, nextId("sub")],
+    );
+    const { appendRepresentationWithExpectedBase } = await import("@/lib/artifacts/representation-store");
+    let edited: unknown = null;
+    const out = await promotionStore.promoteMatchedArtifactType({
+      orgId: ORG,
+      artifactId: objectId,
+      extension: EXT,
+      ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
+      threshold: 0.8,
+      confirmed: true,
+      actor: ACTOR,
+      authority: AUTHORITY,
+      retype: async (input) => {
+        const retyped = await RETYPE(input);
+        // The editor saves on the revision it read, under its own lock.
+        edited = await appendRepresentationWithExpectedBase({
+          orgId: ORG,
+          artifactId: objectId,
+          baseRevisionId: seeded.revisionId,
+          resourceId: editorResource,
+          form: "file",
+        });
+        return retyped;
+      },
+    });
+    expect(edited).toMatchObject({ kind: "appended" });
+    expect(out).toEqual({ ok: false, reason: "representation-moved" });
+    expect(typeOf(objectId)).toBe(OWN_TYPE);
+    // The editor's revision stays the latest; the stale resource is not re-appended.
+    expect(representationsOf(objectId).map((r) => r.resource_id)).toEqual([
+      seeded.resourceId,
+      editorResource,
+    ]);
   });
 });

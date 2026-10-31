@@ -83,12 +83,24 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 // action. Mocked here so the ACTION's wiring is what these cases prove — the
 // road's own decisions are proved in its two suites.
 const promoteMatchedArtifactType = vi.fn();
+// The person's own assertion and the row's change events, read by the action's
+// row-own check before the converging road (cinatra#3319).
+const readPersonAssertion = vi.fn();
 vi.mock("@/lib/artifacts/typed-promotion-store", () => ({
   promoteMatchedArtifactType: (...a: unknown[]) => promoteMatchedArtifactType(...a),
+  readPersonAssertion: (...a: unknown[]) => readPersonAssertion(...a),
+}));
+const listEventsForObject = vi.fn();
+vi.mock("@/lib/object-history/eligibility", () => ({
+  listEventsForObject: (...a: unknown[]) => listEventsForObject(...a),
 }));
 const verifySessionAuthority = vi.fn();
 vi.mock("@/lib/org-write/authority", () => ({
   verifySessionAuthority: (...a: unknown[]) => verifySessionAuthority(...a),
+}));
+// The pack whose claim wins the row's type (cinatra#3319): none in this suite.
+vi.mock("@/lib/artifacts/resolve-bound-artifact-type", () => ({
+  readArtifactSafeClaimWinnerForType: () => null,
 }));
 
 // `@/lib/artifacts/type-install-request` is deliberately NOT mocked: the real
@@ -126,6 +138,8 @@ describe("assertUploadMeaning — the converging re-confirmation (cinatra#3028, 
   // is why the road's convergence has to be reachable from HERE or from nowhere.
   const PACK = "@acme/voice";
   const OWN_TYPE = "@acme/voice:brief";
+  /** The base type the row carried before the promotion retyped it. */
+  const BASE_TYPE = "@cinatra-ai/markdown-artifact:artifact";
 
   beforeEach(() => {
     objectTypeRegistry._clearForTests();
@@ -152,6 +166,23 @@ describe("assertUploadMeaning — the converging re-confirmation (cinatra#3028, 
     // …so the picker's own exclusion leaves nothing to pick.
     listInstalledMeaningTypesAcceptingMime.mockReturnValue([]);
     verifySessionAuthority.mockResolvedValue({ kind: "org-write" });
+    // The confirmation that retyped the row wrote the person's assertion, and
+    // the row's history holds that retype (newest first).
+    readPersonAssertion.mockReturnValue(true);
+    listEventsForObject.mockReturnValue([
+      {
+        objectType: OWN_TYPE,
+        operation: "update",
+        beforeSnapshot: { payload: { type: BASE_TYPE } },
+        afterSnapshot: { payload: { type: OWN_TYPE } },
+      },
+      {
+        objectType: BASE_TYPE,
+        operation: "create",
+        beforeSnapshot: null,
+        afterSnapshot: { payload: { type: BASE_TYPE } },
+      },
+    ]);
   });
   afterEach(() => {
     objectTypeRegistry._clearForTests();
@@ -182,8 +213,33 @@ describe("assertUploadMeaning — the converging re-confirmation (cinatra#3028, 
     expect(assertSemanticType).not.toHaveBeenCalled();
   });
 
-  it("still answers invalid-type when the road refuses — a row that merely CARRIES the type is not converged", async () => {
+  // THE REPEAT (cinatra#3319, cinatra#4266): the store appends nothing on a row
+  // it holds no promotion of, and answers `already-promoted`.
+  it("a repeat while the person's own meaning stands answers ok and writes nothing", async () => {
     promoteMatchedArtifactType.mockResolvedValue({ ok: false, reason: "already-promoted" });
+    const { assertUploadMeaning } = await import("../upload-typing-actions");
+    const res = await assertUploadMeaning({ artifactId: "a1", extension: PACK });
+    expect(res).toEqual({ ok: true });
+    expect(assertSemanticType).not.toHaveBeenCalled();
+    expect(readPersonAssertion).toHaveBeenCalledWith({
+      orgId: "org-1",
+      artifactId: "a1",
+      extension: PACK,
+      principal: "u1",
+    });
+  });
+
+  it("still answers invalid-type when the road refuses and no meaning of the person stands — a row that merely CARRIES the type is not converged", async () => {
+    promoteMatchedArtifactType.mockResolvedValue({ ok: false, reason: "already-promoted" });
+    readPersonAssertion.mockReturnValue(false);
+    const { assertUploadMeaning } = await import("../upload-typing-actions");
+    const res = await assertUploadMeaning({ artifactId: "a1", extension: PACK });
+    expect(res).toMatchObject({ ok: false, reason: "invalid-type" });
+    expect(assertSemanticType).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the store fails, although the person's meaning stands", async () => {
+    promoteMatchedArtifactType.mockRejectedValue(new Error("history read failed"));
     const { assertUploadMeaning } = await import("../upload-typing-actions");
     const res = await assertUploadMeaning({ artifactId: "a1", extension: PACK });
     expect(res).toMatchObject({ ok: false, reason: "invalid-type" });
@@ -195,6 +251,66 @@ describe("assertUploadMeaning — the converging re-confirmation (cinatra#3028, 
     const res = await assertUploadMeaning({ artifactId: "a1", extension: "@acme/unrelated" });
     expect(res).toMatchObject({ ok: false, reason: "invalid-type" });
     expect(promoteMatchedArtifactType).not.toHaveBeenCalled();
+  });
+});
+
+describe("assertUploadMeaning — the fresh promotion whose retype the store cannot prove (cinatra#3319)", () => {
+  const PACK = "@acme/voice";
+  const OWN_TYPE = "@acme/voice:brief";
+  const BASE_TYPE = "@cinatra-ai/markdown-artifact:artifact";
+
+  beforeEach(() => {
+    objectTypeRegistry._clearForTests();
+    objectTypeRegistry.register(
+      {
+        type: OWN_TYPE,
+        category: "data",
+        isArtifact: { accepts: { file: { mimeTypes: ["text/markdown"] } } },
+      } as never,
+      PACK,
+    );
+    matcherManifestRegistry._clearForTests();
+    matcherManifestRegistry.register({
+      packageName: PACK,
+      matcherSkillIds: ["@acme/voice:match"],
+      matcherConfidenceThreshold: 0.7,
+      fileMimeTypes: ["text/markdown"],
+    });
+    // A natively typed base row, and the pack offered for it: the ordinary road.
+    readArtifactForMeaningWrite.mockReturnValue({
+      kind: "ok",
+      artifact: { mime: "text/markdown", objectType: BASE_TYPE },
+    });
+    listInstalledMeaningTypesAcceptingMime.mockReturnValue([
+      { objectTypeId: OWN_TYPE, extension: PACK, displayName: "Brief", extensionLabel: "Voice" },
+    ]);
+    isSystemExtension.mockReturnValue(true);
+    isArtifactExtensionWriteAllowed.mockResolvedValue(true);
+    assertSemanticType.mockReturnValue({ blockedByPrecedence: false });
+    verifySessionAuthority.mockResolvedValue({ kind: "org-write" });
+  });
+  afterEach(() => {
+    objectTypeRegistry._clearForTests();
+    matcherManifestRegistry._clearForTests();
+  });
+
+  it("C2h: a retype the store committed but could not prove answers ok with the refusal named, after the person's meaning was written", async () => {
+    promoteMatchedArtifactType.mockResolvedValue({ ok: false, reason: "promotion-unproven" });
+    const { assertUploadMeaning } = await import("../upload-typing-actions");
+    const res = await assertUploadMeaning({ artifactId: "a1", extension: PACK });
+    expect(res).toEqual({
+      ok: true,
+      promotion: { promoted: false, reason: "promotion-unproven" },
+    });
+    // The person's own meaning stands; the road appended nothing it cannot prove.
+    expect(assertSemanticType).toHaveBeenCalledTimes(1);
+    expect(promoteMatchedArtifactType).toHaveBeenCalledTimes(1);
+    expect(promoteMatchedArtifactType.mock.calls[0]![0]).toMatchObject({
+      orgId: "org-1",
+      artifactId: "a1",
+      extension: PACK,
+      confirmed: true,
+    });
   });
 });
 
