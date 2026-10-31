@@ -166,6 +166,7 @@ import {
 import { RecommendationHoldCard } from "@cinatra-ai/agents/run-recommendation-card";
 
 import {
+  FIXTURE_THREAD_ID,
   installWidgetServiceStub,
   mountSurface,
   surfaceElement,
@@ -816,5 +817,119 @@ describe("the agentic run progress card waits for the skills decision", () => {
     const { container } = await mountHeldTurn();
     expect(container.querySelector("[data-chat-thread-recommendation-hold]")).not.toBeNull();
     expect(container.querySelector('[data-testid="inline-run-panel"]')).toBeNull();
+  });
+});
+
+describe("settled recommendation history survives a terminal stream error", () => {
+  it.each([false, true])("retains the decided card and original slot when slackMode=%s", async (slackMode) => {
+    holdState.current = { state: "confirmed", runId: RUN_ID, skillNames: ["blog-content"] };
+    const messages = dispatchTurn();
+    const assistant = messages[1]!;
+    // A non-lifecycle predecessor proves filtering must retain the original slot.
+    assistant.parts!.unshift({ kind: "text", content: "The earlier dispatch context." });
+    const result = await mountSurface("chat", { messages, slackMode });
+    const selector = '[data-lifecycle-card="recommendation_hold"][data-run-recommendation-decision="confirmed"]';
+    await waitFor(() => expect(result.container.querySelector(selector)).not.toBeNull());
+    const settled = result.container.querySelector(selector)!;
+    const slot = settled.closest("[data-transcript-slot]")!;
+    expect(slot.getAttribute("data-transcript-slot")).toBe("1");
+    const readsBeforeError = holdState.calls.length;
+    // The decision on screen does not tell fixed from unfixed code: a remounted
+    // card would redraw it from the run's remembered answer (see the note above
+    // the first beforeEach). The assertions below do: the SAME card element, the
+    // original slot "1" (not "0"), and no new authority read. This read hangs so
+    // that a remount could not settle from the server either.
+    holdState.pending = new Promise(() => {});
+    const { agUiReduce, initialConversationState } = await import("../renderer/ag-ui-reducer");
+    const initial = initialConversationState();
+    const failed = agUiReduce({
+      ...initial,
+      message: { ...initial.message, ...assistant, role: "assistant", parts: assistant.parts! },
+    }, { type: "RUN_ERROR", threadId: FIXTURE_THREAD_ID, runId: RUN_ID, message: "connect ECONNREFUSED" });
+    expect(failed.status).toBe("error");
+    await act(async () => {
+      result.rerender(surfaceElement("chat", {
+        messages: [messages[0]!, { ...assistant, ...failed.message }], slackMode,
+      }));
+    });
+    const roots = result.container.querySelectorAll(selector);
+    expect(roots).toHaveLength(1);
+    expect(roots[0]).toBe(settled);
+    expect(roots[0]!.closest("[data-transcript-slot]")).toBe(slot);
+    expect(holdState.calls).toHaveLength(readsBeforeError);
+    const errors = result.container.querySelectorAll("[data-chat-error-card]");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.compareDocumentPosition(settled) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(roots[0]!.querySelector("[data-skill-action]")).toBeNull();
+    expect(result.container.querySelectorAll('[data-testid="inline-run-panel"]')).toHaveLength(1);
+    expect(result.container.textContent).not.toContain("The earlier dispatch context.");
+  });
+
+  it.each([false, true])("keeps the decided card when every later read is refused, slackMode=%s", async (slackMode) => {
+    // The visible failure a remount still causes: a rebuilt card seeds the
+    // remembered answer, and when its own reads are all REFUSED it drops that
+    // answer and draws nothing. The card that obtained the answer itself keeps it.
+    holdState.current = { state: "confirmed", runId: RUN_ID, skillNames: ["blog-content"] };
+    const messages = dispatchTurn();
+    const assistant = messages[1]!;
+    const result = await mountSurface("chat", { messages, slackMode });
+    const selector = '[data-lifecycle-card="recommendation_hold"][data-run-recommendation-decision="confirmed"]';
+    await waitFor(() => expect(result.container.querySelector(selector)).not.toBeNull());
+    vi.useFakeTimers();
+    try {
+      // Every read from here on FAILS (an answer of nothing is a failed read).
+      holdState.current = null;
+      await act(async () => {
+        result.rerender(surfaceElement("chat", {
+          messages: [messages[0]!, { ...assistant, error: "connect ECONNREFUSED" }], slackMode,
+        }));
+      });
+      // Past the card's whole failure budget (400ms, 1.5s, 4s) and its read deadline.
+      await act(async () => {
+        for (let i = 0; i < 15; i += 1) {
+          await vi.advanceTimersByTimeAsync(1_000);
+        }
+      });
+      expect(result.container.querySelectorAll("[data-chat-error-card]")).toHaveLength(1);
+      expect(
+        result.container.querySelector(selector),
+        "a stream error blanked the decided recommendation card",
+      ).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([false, true])("draws the thought-group summary above the error card, slackMode=%s", async (slackMode) => {
+    // An error turn with a parts trace keeps the summary of the tools it used, in
+    // the order the flat layout draws it: the summary, then the error card.
+    const messages: UiMessage[] = [
+      { id: "u1", role: "user", content: "look this up" },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "",
+        parts: [
+          { kind: "tool_call", id: "t1", name: "web_search", status: "completed" },
+          { kind: "text", content: "Searching for the answer." },
+          { kind: "tool_call", id: "t2", name: "fetch_page", status: "completed" },
+        ],
+        thoughtGroups: [{
+          id: "g1",
+          toolCalls: [
+            { id: "t1", name: "web_search", status: "completed" },
+            { id: "t2", name: "fetch_page", status: "completed" },
+          ],
+        }],
+        error: "connect ECONNREFUSED",
+      } as unknown as UiMessage,
+    ];
+    const { container } = await mountSurface("chat", { messages, slackMode });
+    const errors = container.querySelectorAll("[data-chat-error-card]");
+    expect(errors).toHaveLength(1);
+    const summaries = Array.from(container.querySelectorAll("span")).filter((el) => el.textContent === "Used 2 tools");
+    expect(summaries, "the error turn lost its thought-group summary").toHaveLength(1);
+    expect(errors[0]!.compareDocumentPosition(summaries[0]!) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+    expect(container.textContent).not.toContain("Searching for the answer.");
   });
 });
