@@ -45,6 +45,7 @@ import {
 import { PaginatedTable } from "@/components/ui/paginated-table";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { userAvatarAccent } from "@/lib/user-avatar";
 import {
   Card,
   CardContent,
@@ -486,7 +487,7 @@ function UsersTab(props: {
                       >
                         <Avatar className="size-8">
                           {member.image && <AvatarImage src={member.image} alt={member.name ?? ""} />}
-                          <AvatarFallback className="text-xs">
+                          <AvatarFallback className="text-xs" accent={userAvatarAccent({ id: member.userId })}>
                             {getInitials(member.name, member.email)}
                           </AvatarFallback>
                         </Avatar>
