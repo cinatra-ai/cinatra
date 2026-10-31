@@ -1654,10 +1654,35 @@ describe("the switch rule refuses what is ambiguous or can change, and takes onl
       "default alias only": "function Switch() { return null; }\nexport { Switch as default };\n",
       "export equals": "function Switch() { return null; }\nexport { Switch };\nexport = Switch;\n",
       "export default function": "export default function Switch() { return null; }\nexport { Switch };\n",
+      "default in parentheses": "function Switch() { return null; }\nexport { Switch };\nexport default (Switch);\n",
+      "default through as": "function Switch() { return null; }\nexport { Switch };\nexport default Switch as unknown;\n",
+      "default through non-null": "function Switch() { return null; }\nexport { Switch };\nexport default Switch!;\n",
+      "default through satisfies": "function Switch() { return null; }\nexport { Switch };\nexport default Switch satisfies unknown;\n",
+      "export equals in parentheses": "function Switch() { return null; }\nexport { Switch };\nexport = (Switch);\n",
     };
     for (const [what, m] of Object.entries(refusedModules)) {
       expect([what, declaresAndExportsSwitch(parseSource("m.tsx", m))]).toEqual([what, false]);
       expect([what, refused(`${IMPORT}\nexport const R = () => ${ITEM("<Switch checked={on} />")};\n`, { [KIT]: `export function Checkbox() { return null; }\n${m}` })]).toEqual([what, true]);
+    }
+  });
+
+  it("MF3b: an angle-bracket assertion on a default export refuses in a .ts module, and a module that spells exports, module or eval is refused", () => {
+    const base = "export function Checkbox() { return null; }\nfunction Switch() { return null; }\nexport { Switch };\n";
+    const usage = `${IMPORT}\nexport const R = () => ${ITEM("<Switch checked={on} />")};\n`;
+    expect(declaresAndExportsSwitch(parseSource("m.ts", `${base}export default <unknown>Switch;\n`))).toBe(false);
+    expect(refused(usage, { "src/ui/checkbox.ts": `${base}export default <unknown>Switch;\n` })).toBe(true);
+    expect(declaresAndExportsSwitch(parseSource("m.ts", base))).toBe(true);
+    const changing: Record<string, string> = {
+      "exports property": "exports.Switch = Checkbox;",
+      "module exports": "module.exports = { Switch: Checkbox };",
+      "defineProperty on exports": 'Object.defineProperty(exports, "Switch", { value: Checkbox });',
+      "eval of an assignment": 'eval("Switch = Checkbox");',
+      "module alone": "export const host = module;",
+    };
+    for (const [what, w] of Object.entries(changing)) {
+      const m = `${base}${w}\n`;
+      expect([what, declaresAndExportsSwitch(parseSource("m.tsx", m))]).toEqual([what, false]);
+      expect([what, refused(usage, { [KIT]: m })]).toEqual([what, true]);
     }
   });
 

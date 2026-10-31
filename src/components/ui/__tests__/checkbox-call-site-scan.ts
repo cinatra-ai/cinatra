@@ -1519,7 +1519,9 @@ function isWriteTarget(n: ts.Node): boolean {
  * compound assignment, `++`, `for (Switch of x)`, a destructuring assignment), any default export of it
  * (`export default Switch`, `export { Switch as default }`, `export = Switch`, `export default function Switch`, also
  * beside a named export), a re-export (`export { Switch } from "m"`), an alias in either direction, a type-only export
- * and an ambient declaration alone. A file with no body for Switch, or one that does not export it, is none of these.
+ * and an ambient declaration alone; the default export is found through parentheses, `!`, `as`, an angle-bracket assertion and
+ * `satisfies`. A module that spells `exports`, `module` or `eval` is refused. A file with no body for Switch, or one that does not
+ * export it, is none of these.
  */
 export function declaresAndExportsSwitch(sf: ts.SourceFile): boolean {
   let bodies = 0;
@@ -1544,7 +1546,17 @@ export function declaresAndExportsSwitch(sf: ts.SourceFile): boolean {
       }
       return false;
     }
-    if (ts.isExportAssignment(p)) return false;
+    // An export assignment through parentheses, `!`, `as`, an angle-bracket assertion or `satisfies` still exports the binding
+    // (`export default (Switch)`, `export = Switch!`): climb them before the test (review 4 MF1).
+    let up: ts.Node = n;
+    while (
+      up.parent !== undefined &&
+      (ts.isParenthesizedExpression(up.parent) || ts.isNonNullExpression(up.parent) || ts.isAsExpression(up.parent) ||
+        ts.isTypeAssertionExpression(up.parent) || ts.isSatisfiesExpression(up.parent))
+    ) {
+      up = up.parent;
+    }
+    if (up.parent !== undefined && ts.isExportAssignment(up.parent)) return false;
     if (ts.isImportSpecifier(p) && p.propertyName === n) return true;
     if (ts.isBindingElement(p) && p.propertyName === n) return true;
     if (ts.isPropertyAccessExpression(p) && p.name === n) return true;
@@ -1564,6 +1576,12 @@ export function declaresAndExportsSwitch(sf: ts.SourceFile): boolean {
   const visit = (n: ts.Node): void => {
     if (!ok) return;
     if (ts.isIdentifier(n) && n.text === SWITCH_NAME && !occurrence(n)) {
+      ok = false;
+      return;
+    }
+    // A module that spells `exports`, `module` or `eval` can change its exported names after the declaration
+    // (`exports.Switch = x`, `module.exports = ...`, `Object.defineProperty(exports, ...)`, `eval("Switch = x")`): refused (review 4 MF2).
+    if (ts.isIdentifier(n) && (n.text === "exports" || n.text === "module" || n.text === "eval")) {
       ok = false;
       return;
     }
