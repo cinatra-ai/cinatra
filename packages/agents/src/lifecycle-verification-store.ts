@@ -29,7 +29,8 @@ import "server-only";
 // call from `submitRepairResponse`.
 // ---------------------------------------------------------------------------
 
-import { eq } from "drizzle-orm";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
+import { getTableConfig } from "drizzle-orm/pg-core";
 
 import { db } from "./db";
 import { artifactVerificationRecords, lifecycleRepair } from "./schema";
@@ -107,6 +108,45 @@ export type VerificationRecordResult =
       reopenWithheld?: boolean;
     }
   | { ok: false; code: string; error: string };
+
+/**
+ * cinatra#4312 — the backfill of core__0117, equal to the migration's frozen statement
+ * (a test pins the two). The old application can still serve after the migration ran,
+ * and it can write a note on an unnamed reopen gate. The new code writes no repair row
+ * on an unnamed gate, so this names only what an old writer or a manual write joined.
+ */
+export const verificationReopenNamesSql = `
+  UPDATE artifact_verification_records AS r
+     SET reopened_gate_id = reopen.id
+    FROM artifact_review_gates AS verified, artifact_review_gates AS reopen
+   WHERE r.reopened_gate_id IS NULL
+     AND verified.id = r.gate_id
+     AND reopen.review_task_id = 'lifecycle-review:verify:' || r.id
+     AND reopen.run_id = verified.run_id
+     AND reopen.org_id = verified.org_id
+     AND reopen.created_at >= r.created_at
+     AND EXISTS (
+       SELECT 1 FROM lifecycle_repair AS attempt
+        WHERE attempt.gate_id = reopen.id AND attempt.attempt >= 2
+     );
+`;
+
+/** Run `verificationReopenNamesSql` on the store's schema. The statement holds no schema name. */
+export async function nameVerificationReopensThatRepairRowsRestOn(): Promise<void> {
+  const schema = getTableConfig(artifactVerificationRecords).schema ?? "cinatra";
+  await db.transaction(async (tx) => {
+    await tx.execute(sql.raw(`SET LOCAL search_path TO "${schema.replace(/"/g, '""')}"`));
+    await tx.execute(sql.raw(verificationReopenNamesSql));
+  });
+}
+
+/** Carries a refused name out of the writer's transaction, so that it rolls back. */
+class ReopenNameTaken extends Error {
+  constructor(recordId: string) {
+    super(`Verification record ${recordId} already names another reopen gate`);
+    this.name = "ReopenNameTaken";
+  }
+}
 
 /** The deterministic verification record id — one verification per gate, so a
  * re-drive is idempotent and the reopen gate is stable. */
@@ -210,7 +250,10 @@ async function writeVerificationRecordAndMaybeReopen(
   // already names it (a re-drive, which `submitRepairResponse`'s idempotent-replay
   // branch runs); any other occupant, with the same pin or another, is a
   // `reopen-conflict`, and the record stays with no name. A failed gate insert
-  // rolls the record back, and the next verification writes both.
+  // rolls the record back, and the next verification writes both. A record that
+  // already names a gate keeps it: a verification on another run that inserts its
+  // own gate answers `reopen-conflict`, and its gate rolls back. If that verification
+  // comes first, it holds the name, and the later one answers `reopen-conflict`.
   if (input.withholdReopen === true) {
     const idempotent = await writeRecord(db);
     return { ok: true, verificationId: id, gateId: input.gateId, verdict, idempotent, reopenedGateId: null, escalated: false, reopenWithheld: true };
@@ -243,10 +286,23 @@ async function writeVerificationRecordAndMaybeReopen(
       throw err;
     }
     if (!emitted.idempotent) {
-      await tx
+      // A record names one gate. A verification on another run has a slot of its own
+      // and inserts a gate there; it must not take the name from the gate already
+      // named. The throw rolls back the gate it inserted.
+      const named = await tx
         .update(artifactVerificationRecords)
         .set({ reopenedGateId: emitted.gateId })
-        .where(eq(artifactVerificationRecords.id, id));
+        .where(
+          and(
+            eq(artifactVerificationRecords.id, id),
+            or(
+              isNull(artifactVerificationRecords.reopenedGateId),
+              eq(artifactVerificationRecords.reopenedGateId, emitted.gateId),
+            ),
+          ),
+        )
+        .returning({ id: artifactVerificationRecords.id });
+      if (named.length !== 1) throw new ReopenNameTaken(id);
       return { idempotent, reopenedGateId: emitted.gateId, inserted: true };
     }
     // Read after the emit: a concurrent verification that inserted the gate has
@@ -260,6 +316,9 @@ async function writeVerificationRecordAndMaybeReopen(
       return { conflict: `Review gate ${reopenTaskId} on run ${input.runId} was not opened by this verification.` };
     }
     return { idempotent, reopenedGateId: emitted.gateId, inserted: false };
+  }).catch((err: unknown) => {
+    if (err instanceof ReopenNameTaken) return { conflict: err.message };
+    throw err;
   });
   if (written.conflict !== undefined) {
     return { ok: false, code: "reopen-conflict", error: written.conflict };

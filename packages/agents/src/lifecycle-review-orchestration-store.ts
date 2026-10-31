@@ -1125,6 +1125,18 @@ export async function sweepReviewOrchestration(opts?: {
 
   const limit = Math.max(1, Math.min(opts?.limit ?? 50, 200));
 
+  // cinatra#4312 — an old application that still serves after core__0117 can write a
+  // note on an unnamed reopen gate; name such a gate here. A failure stops nothing else.
+  try {
+    const { nameVerificationReopensThatRepairRowsRestOn } = await import("./lifecycle-verification-store");
+    await nameVerificationReopensThatRepairRowsRestOn();
+  } catch (err) {
+    console.warn(
+      "[lifecycle-review-orchestration] the verification reopen names were not written:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+
   // 1. Run-backed PRODUCTIONS with pending events (oldest production first, bounded
   //    by the pass budget). Grouping in SQL means the coalescing membership never
   //    depends on a raw-event fetch window.

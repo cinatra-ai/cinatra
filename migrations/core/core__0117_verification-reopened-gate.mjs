@@ -20,12 +20,17 @@
 // THE COST. A reopen gate the old writer opened that is pending at the upgrade with
 // no note on it carries no repair row, so it stays unnamed, as does a caller's gate
 // with no row: the data cannot tell them apart. A re-drive of its verification answers
-// `reopen-conflict`, and a changes-requested note on it is refused (`lineage-unbound`).
-// Continue still resolves it. The lineage stays readable, because no attempt rests on
-// that gate.
+// `reopen-conflict`, and a changes-requested note the new code receives on it is
+// refused (`lineage-unbound`). Continue still resolves such a gate.
 //
-// This runs once, in this migration; the bootstrap never repeats it, because after
-// the upgrade only the writer names a gate.
+// OLD WRITERS. The deploy runs this migration while the old application still serves,
+// so the old code can write a note on an unnamed gate after this statement ran. Its
+// lineage reads as malformed until the review orchestration sweep runs the same
+// statement (`verificationReopenNamesSql`, pinned equal by a test). The new code writes
+// no repair row on an unnamed gate, so such a row is the old code's or was written by
+// hand. The sweep names the gate either way.
+//
+// The bootstrap never repeats this statement.
 //
 // DOWN drops the column; the names are not restorable, and the code that reads
 // them goes with the same revert.

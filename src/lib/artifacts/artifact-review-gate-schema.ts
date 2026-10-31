@@ -453,7 +453,7 @@ export function lifecycleInterceptionsSchemaQueries(schemaName: string): QueryIn
     { text: `ALTER TABLE "${q}"."artifact_review_resume_outbox" ADD COLUMN IF NOT EXISTS dead_lettered_at timestamptz` },
     { text: `ALTER TABLE "${q}"."artifact_review_resume_outbox" ADD COLUMN IF NOT EXISTS last_error text` },
     // cinatra#4312 — the gate this verification reopened (core__0117). No backfill here:
-    // this bootstrap runs on every boot, and only the writer names a gate after the upgrade.
+    // the writer names a gate, and the review orchestration sweep names what an old writer left.
     {
       text: `ALTER TABLE "${q}"."artifact_verification_records"
   ADD COLUMN IF NOT EXISTS reopened_gate_id text
