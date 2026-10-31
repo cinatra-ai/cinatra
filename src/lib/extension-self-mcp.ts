@@ -1,3 +1,4 @@
+import { isGuardedRunDispatch, isGuardedRunLeaf, markDeclaredOutwardRunFrame, markGuardedRunDispatch } from "@/lib/extension-capabilities-registry";
 import "server-only";
 
 // Host self-primitive invoker for `ctx.mcp.callPrimitive`.
@@ -271,22 +272,42 @@ export async function callHostPrimitive(
         const { dispatchAuthorizedExtensionPrimitive } = await import(
           "@/lib/extension-authorized-dispatch"
         );
-        handler = (pinnedInput: unknown) =>
-          dispatchAuthorizedExtensionPrimitive(pinned, pinnedInput);
+        if (ctx.runId && pinned.kind === "extension-default") {
+          const { listExtensionMcpTools, UNRESOLVED_EXTENSION_VERSION } = await import("@/lib/extension-mcp-registry");
+          const tool = listExtensionMcpTools().find(t => t.packageName === pinned.packageName && t.name.toLowerCase() === pinned.name);
+          if (!tool || (tool.resolvedVersion ?? UNRESOLVED_EXTENSION_VERSION) !== pinned.version || !isGuardedRunLeaf(tool.handler)) {
+            throw new Error("action_self_resolved_handler_unavailable");
+          }
+          const { dispatchPlannedExtensionMcpTool, wrapExtensionToolResult } = await import("@/lib/extension-edge-bound-serving");
+          handler = markGuardedRunDispatch(async (frozenInput: unknown) => wrapExtensionToolResult(
+            await dispatchPlannedExtensionMcpTool({ expected: "default", tool }, frozenInput)));
+        } else {
+          handler = markGuardedRunDispatch((pinnedInput: unknown) => dispatchAuthorizedExtensionPrimitive(pinned, pinnedInput));
+        }
       }
     }
     // (b) Deny-by-default MCP boundary — identical gate to the live transport.
     // Fail CLOSED on a deny OR any boundary error.
     let decision: { allowed: boolean; shouldBlock?: boolean; reason?: string };
+    // Set only for a guarded leaf whose planned entry declares outward.
+    let heldDeclaredOutward = false;
     try {
       const { enforceMcpBoundary } = await import("@/lib/authz/mcp-boundary");
-      decision = await enforceMcpBoundary({
-        primitiveName,
-        ctx,
-        delegatedRestricted: !!ctx?.delegatedRestricted,
-        // The outward declaration of the captured primitive's planned entry.
-        declaresOutward: captured.planned.declaredOutward !== null,
-      });
+      const { prepareDeclaredRunToolArguments } = await import("@/lib/extension-host-context");
+      input = await prepareDeclaredRunToolArguments(primitiveName, input);
+      // The outward declaration of the captured primitive's planned entry. The
+      // union is keyed by name, so the bridge may serve a caller-pinned retained
+      // version instead: that version's guarded leaf adds its OWN declaration
+      // (bindArtifactGuardedMcpHandler), so this reading can only add a hold.
+      const declaresOutward = captured.planned.declaredOutward !== null;
+      // A guarded leaf decides itself; the frame it runs in carries the
+      // planned declaration (cinatra#3745).
+      const guarded = !!ctx?.runId && isGuardedRunDispatch(handler);
+      heldDeclaredOutward = guarded && declaresOutward;
+      decision = guarded
+        ? { allowed: true }
+        : await enforceMcpBoundary({ primitiveName, arguments: input, ctx,
+            delegatedRestricted: !!ctx?.delegatedRestricted, declaresOutward });
     } catch (err) {
       throw new Error(
         `[extension-self-mcp] authorization unavailable for "${primitiveName}" (boundary_error): ` +
@@ -303,7 +324,9 @@ export async function callHostPrimitive(
     // runtimes, so re-run under `ctx` exactly as policedRegisterTool does, or the
     // handler would see a missing request context.
     const runHandler = () => handler(input, makeMinimalExtra());
-    const result = (await (ctx ? mcpRequestContextStorage.run(ctx, runHandler) : runHandler())) as
+    // A fresh frame for each held call, so the mark never reaches a sibling call.
+    const runFrame = ctx && heldDeclaredOutward ? markDeclaredOutwardRunFrame({ ...ctx }) : ctx;
+    const result = (await (runFrame ? mcpRequestContextStorage.run(runFrame, runHandler) : runHandler())) as
       | { structuredContent?: unknown; content?: Array<{ type?: string; text?: string }> }
       | undefined;
     return unwrapCallToolResult(result);

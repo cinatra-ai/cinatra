@@ -24,6 +24,8 @@ import * as auditModule from "@/lib/authz/audit";
 import * as augmentModule from "@/lib/authz/inventory-augment";
 import * as extensionRegistryModule from "@/lib/extension-mcp-registry";
 import { callHostPrimitive, __resetHostSelfPrimitiveHandlers } from "@/lib/extension-self-mcp";
+import { bindArtifactGuardedMcpHandler } from "@/lib/extension-host-context";
+import { recordLoadedExtensionIdentity } from "@/lib/extension-capabilities-registry";
 import { mcpRequestContextStorage, type McpRequestContext } from "@cinatra-ai/mcp-server";
 import type { ExtensionMcpToolConfig } from "@cinatra-ai/sdk-extensions/mcp-contract";
 
@@ -35,6 +37,18 @@ import type { ExtensionMcpToolConfig } from "@cinatra-ai/sdk-extensions/mcp-cont
 const selfInvoker = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }));
 vi.mock("@/lib/mcp-server", () => ({
   buildHostSelfPrimitiveHandlers: async () => selfInvoker.handlers,
+}));
+// cinatra#3745: a run's frame carries the executed-run source the host's loader
+// verified, and the step's declared tools are read before the boundary decides;
+// the run store answers that source as current and the step as declaring nothing.
+vi.mock("@cinatra-ai/agents/store", () => ({
+  isRunExecutedSourceCurrent: async () => true,
+  readRunStepToolPolicy: async () => ({}),
+  assertRunStepToolAllowed: () => ({ kind: "undeclared" }),
+  parseRunStepToolPolicy: (policy: unknown) => policy,
+  withRunActionPolicyTransaction: async () => {
+    throw new Error("no person-gate consumption in these cases");
+  },
 }));
 
 // ---------------------------------------------------------------------------
@@ -315,8 +329,15 @@ describe("the retained-version self-invoker road holds a declared outward tool o
   const VERSION = "2.0.0";
   const REASON = "outward_effect_requires_recorded_decision";
   const FIXTURE_CLASSIFICATION = { resourceType: "agent_run", action: "execute", status: "enforced" } as const;
+  const executedSource = {
+    contextId: "ctx-1", stepId: "step-1", executionAttemptId: "attempt-1",
+    sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: "c".repeat(64),
+  };
   const runMemberFrame = (): McpRequestContext =>
-    ({ orgId: "org-1", userId: "user-1", runId: "run-1" }) as McpRequestContext;
+    ({
+      orgId: "org-1", userId: "user-1", runId: "run-1",
+      verifiedStepId: "step-1", verifiedExecutedSource: executedSource,
+    }) as McpRequestContext;
 
   let auditSpy: ReturnType<typeof vi.spyOn>;
   let classificationSpy: ReturnType<typeof vi.spyOn>;
@@ -348,19 +369,30 @@ describe("the retained-version self-invoker road holds a declared outward tool o
    * replay builder and the real recording server with the provenance the
    * self-invoker build writes. The captured map becomes the host's primitive
    * map. Returns the captured entry and the record of the registration's
-   * handler calls.
+   * handler calls. `hostBound` binds the handler the way the host's retention
+   * sink does for a digest-pinned install whose registration declares the read
+   * class: a run's frame reaches only a host-bound guarded leaf (cinatra#3745).
    */
-  function captureRetained(outward?: ExtensionMcpToolConfig["outward"]) {
+  function captureRetained(outward?: ExtensionMcpToolConfig["outward"], hostBound = false) {
     const handled: string[] = [];
     const sink = beginVersionKeyedRegistration(PKG, VERSION);
-    sink.retainMcpTool({
+    const registration = {
       name: TOOL,
-      packageName: PKG,
-      handler: async () => {
-        handled.push(TOOL);
-        return { served: true };
-      },
       ...(outward === undefined ? {} : { outward }),
+      ...(hostBound ? { delegatedChat: "read" as const } : {}),
+    };
+    const effect = async () => {
+      handled.push(TOOL);
+      return { served: true };
+    };
+    sink.retainMcpTool({
+      ...registration,
+      packageName: PKG,
+      handler: hostBound
+        ? bindArtifactGuardedMcpHandler(TOOL, effect, recordLoadedExtensionIdentity({
+            packageName: PKG, version: VERSION, installId: "install-1", digest: "f".repeat(64),
+          }), registration)
+        : effect,
     });
     sink.commit();
 
@@ -422,7 +454,7 @@ describe("the retained-version self-invoker road holds a declared outward tool o
   });
 
   it("serves a retained registration without the declaration on a run's frame", async () => {
-    const { captured, handled } = captureRetained();
+    const { captured, handled } = captureRetained(undefined, true);
     expect(captured.planned.declaredOutward).toBeNull();
     await expect(
       mcpRequestContextStorage.run(runMemberFrame(), () => callHostPrimitive(TOOL, {})),

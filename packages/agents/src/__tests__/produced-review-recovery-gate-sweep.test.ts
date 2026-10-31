@@ -37,6 +37,9 @@ const storeMock = vi.hoisted(() => ({
   updateAgentRunA2AContextId: vi.fn(async () => undefined),
 }));
 vi.mock("../store", () => storeMock);
+// cinatra#3745: the delivery's own pending_approval -> running claim before its
+// send. Kept apart from the store's transition, which carries the terminal write.
+vi.mock("../run-transition", () => ({ transitionRunStatus: vi.fn(async () => undefined) }));
 
 const holdSpy = vi.hoisted(() =>
   vi.fn(async () => ({ held: true, reason: "hold-unpersisted" }) as {

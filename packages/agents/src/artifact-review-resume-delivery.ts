@@ -360,34 +360,67 @@ export async function deliverArtifactReviewResumeIntent(
   // matters most on THIS path — delivery is at-least-once by design, so a lease
   // that lapses mid-send can redeliver while the first accepted task is still
   // executing. An overwrite-in-place rotation would 403 that live task.
-  const { mintResumeRunTokenMetadata } = await import("./wayflow-run-token-carrier");
-  const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
-  const task = await client.sendTask({
-    message: {
-      role: "user",
-      kind: "message",
-      metadata: resumeMetadata,
-      // DETERMINISTIC per-gate messageId (not random): a gate resumes exactly
-      // once, so a stable id lets a dedup-aware receiver drop a duplicate re-send
-      // (the at-least-once redelivery of the SAME gate's intent). Harmless if the
-      // receiver does not dedup — the guards above already suppress the common
-      // redelivery cases.
-      messageId: `artifact-review-resume-${gateId}`,
-      contextId: run.a2aContextId,
-      parts: [{ kind: "text", text: responseText }],
-    },
-    configuration: { acceptedOutputModes: ["text"] },
-  });
+  //
+  // THE DELIVERY CLAIMS THE RUN BEFORE IT DISPATCHES (cinatra#3745). The resumed
+  // leg's callbacks are admitted only while the run is `running` under the attempt
+  // its step policy is bound to, so the paused run moves `pending_approval ->
+  // running` (the resume edge, which keeps the attempt) before the message leaves,
+  // exactly as the human approve path does. One conditional write: a lost claim
+  // means another delivery already took this gate, so the intent closes without
+  // a re-send. A failure up to and including the send puts the gate back, so the
+  // lease re-claim redelivers as it did before.
+  const authority = mintAgentRunExecutionAuthority(run.orgId);
+  const { transitionRunStatus } = await import("./run-transition");
+  try {
+    await transitionRunStatus(run.id, "pending_approval", "running", undefined, authority);
+  } catch (claimErr: unknown) {
+    if ((claimErr as { code?: string } | null)?.code !== "stale_from_status") throw claimErr;
+    const ok = await markResumeIntentDelivered(gateId, leaseToken);
+    console.log(
+      `[artifact-review-resume] gate=${gateId} run=${run.id} was claimed by another delivery — marked ${ok ? "done" : "LEASE-LOST"}`,
+    );
+    return ok ? "already-advanced" : "lease-lost";
+  }
+  let task: Awaited<ReturnType<typeof client.sendTask>>;
+  try {
+    const { mintResumeRunTokenMetadata } = await import("./wayflow-run-token-carrier");
+    const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
+    task = await client.sendTask({
+      message: {
+        role: "user",
+        kind: "message",
+        metadata: resumeMetadata,
+        // DETERMINISTIC per-gate messageId (not random): a gate resumes exactly
+        // once, so a stable id lets a dedup-aware receiver drop a duplicate re-send
+        // (the at-least-once redelivery of the SAME gate's intent). Harmless if the
+        // receiver does not dedup — the guards above already suppress the common
+        // redelivery cases.
+        messageId: `artifact-review-resume-${gateId}`,
+        contextId: run.a2aContextId,
+        parts: [{ kind: "text", text: responseText }],
+      },
+      configuration: { acceptedOutputModes: ["text"] },
+    });
+  } catch (sendErr) {
+    await transitionRunStatus(run.id, "running", "pending_approval", undefined, authority).catch((releaseErr) => {
+      console.warn(
+        `[artifact-review-resume] gate=${gateId} run=${run.id} could not release the claim after a failed send`,
+        releaseErr,
+      );
+    });
+    throw sendErr;
+  }
 
   // Drive the returned Task through the canonical state machine (advances the
   // run past the gate — to the next gate or to terminal). fromStatus is the
-  // literal "pending_approval" (guarded above), matching the human resume path.
+  // literal "running": the claim above moved the row off `pending_approval`,
+  // matching the human resume path.
   const { handleWayflowTaskState } = await import("./execution");
   // cinatra#1939 wave 2: the delivery worker advances the run with no session in
-  // scope — it grounds the transition on the system dispatch mint, scoped to the
-  // run's org (the human approval already happened when the intent row was written).
-  const authority = mintAgentRunExecutionAuthority(run.orgId);
-  await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task, authority });
+  // scope — it grounds the transition on the system dispatch mint (`authority`
+  // above), scoped to the run's org (the human approval already happened when the
+  // intent row was written).
+  await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task, authority });
 
   const marked = await markResumeIntentDelivered(gateId, leaseToken);
   console.log(

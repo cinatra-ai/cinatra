@@ -3,6 +3,8 @@ import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
 import semver from "semver";
 import {
   readAgentRunById,
+  selectWayflowRunStepToolPolicy,
+  bindRunStepToolPolicy,
   readAgentTemplateById,
   readAgentTemplates,
   readAgentTemplateVersionBySemver,
@@ -4812,6 +4814,11 @@ async function runAgentBuilderExecutionJobInner(
       if (dispatchContextId !== run.a2aContextId) {
         await updateAgentRunA2AContextId(runId, dispatchContextId);
       }
+      const policy = await selectWayflowRunStepToolPolicy({ agentUrl: wayflowUrl, contextId: dispatchContextId });
+      const currentDispatchRun = await readAgentRunById(runId);
+      if (!currentDispatchRun?.executionAttemptId) throw new Error("step_tool_dispatch_attempt_missing");
+      await bindRunStepToolPolicy({ runId, orgId: run.orgId,
+        executionAttemptId: currentDispatchRun.executionAttemptId, policy, authority: executionAuthority });
       const task = await client.sendTask({
         message: {
           role: "user",
