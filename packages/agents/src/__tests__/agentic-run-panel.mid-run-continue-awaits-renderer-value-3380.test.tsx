@@ -114,6 +114,7 @@ vi.mock("../use-ag-ui-run-stream", () => ({
 /** A manifest-flagged mid-run binding id, as a pack declares one. */
 const PICK_RENDERER_ID = "@cinatra-test/pick-agent:pick";
 const REVIEW_TASK_ID = "wayflow-task-3380";
+const NO_PICK_JSON = JSON.stringify({ noPick: true });
 const PICKED_JSON = JSON.stringify({ artifactId: "a-2", representationRevisionId: "r-2" });
 /** A renderer id with no `:output` suffix and no `midRunHitl` registry entry. */
 const NOT_MID_RUN_RENDERER_ID = "@cinatra-test/plain-agent:plain";
@@ -140,8 +141,16 @@ const UNDECLARING_SCHEMA: Record<string, unknown> = {
  * A PICK RENDERER: it offers rows, picks nothing for anyone, and writes the pick
  * into both keys when a row is pressed — the shape a pack's chooser commits.
  */
-function PickRenderer({ onChange }: FieldRendererProps) {
+function PickRenderer({ onChange, value }: FieldRendererProps) {
   const [picked, setPicked] = React.useState(false);
+  // The real pipeline renderer's shape: a list with nothing to pick answers with
+  // a no-pick value from a layout effect when it mounts.
+  const emptyOffer = Array.isArray((value as { ideas?: unknown } | null)?.ideas)
+    && (value as { ideas: unknown[] }).ideas.length === 0;
+  React.useLayoutEffect(() => {
+    if (emptyOffer) void onChange({ selectedIdeaJson: NO_PICK_JSON, userResponse: NO_PICK_JSON });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [emptyOffer]);
   return (
     <div>
       <Button
@@ -219,9 +228,9 @@ async function mountGate(
   );
   const view = render(panel());
   /** The run moves to another gate with the SAME renderer and no field name. */
-  const moveToGate = async (reviewTaskId: string) => {
+  const moveToGate = async (reviewTaskId: string, nextValues?: Record<string, unknown>) => {
     (useAgUiRunStream as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
-      streamResultFor(schema, values, xRenderer, { reviewTaskId }),
+      streamResultFor(schema, nextValues ?? values, xRenderer, { reviewTaskId }),
     );
     view.rerender(panel());
   };
@@ -443,5 +452,26 @@ describe("AgenticRunPanel — a mid-run Continue waits for the renderer's declar
     ];
     expect(taskId).toBe("wayflow-task-3380-next");
     expect(payload.selectedIdeaJson).toBe(PICKED_JSON);
+  });
+
+  it("keeps what a later gate's renderer writes when it mounts: a list with nothing to pick is answered, and the Continue sends that answer", async () => {
+    const view = await mountGate(DECLARING_SCHEMA);
+
+    await waitFor(() => expect(document.querySelector('[data-testid="pick-row-2"]')).not.toBeNull());
+    fireEvent.click(document.querySelector('[data-testid="pick-row-2"]')!);
+    await waitFor(() => expect(gateContinue()!.disabled).toBe(false));
+
+    await view.moveToGate("wayflow-task-3380-empty", { ideas: [] });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitFor(() => expect(gateContinue()!.disabled).toBe(false));
+    fireEvent.click(gateContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("wayflow-task-3380-empty");
+    expect(payload.selectedIdeaJson).toBe(NO_PICK_JSON);
   });
 });

@@ -715,23 +715,28 @@ function HitlApprovalCard({
   // value bleeds into field 2. The review task is part of the key (cinatra#3380):
   // a mid-run gate carries no fieldName and can repeat its renderer, and a value
   // written for one gate must not read as the next gate's answer.
-  const prevBufferKeyRef = useRef<string | null>(null);
+  //
+  // THE RESET IS DONE IN RENDER, not after it (cinatra#3380). The next gate's
+  // renderer can write its answer from a layout effect when it mounts (a list
+  // with nothing to pick answers with a no-pick value), and a reset after the
+  // commit would wipe that write and hold the Continue with nothing to press.
+  const [prevBufferKey, setPrevBufferKey] = useState<string | null>(null);
   const bufferKey =
     interruptContext != null ? hitlGateIdentityKey(interruptContext) : null;
   if (
     bufferKey !== null &&
-    prevBufferKeyRef.current !== null &&
-    prevBufferKeyRef.current !== bufferKey
+    prevBufferKey !== null &&
+    prevBufferKey !== bufferKey
   ) {
     // Real gate→gate transition — clear the previous gate's buffer.
     if (Object.keys(bufferedHitlValue).length > 0) {
-      queueMicrotask(() => setBufferedHitlValue({}));
+      setBufferedHitlValue({});
     }
   }
-  // Advance the ref only on non-null keys so a transient null doesn't
+  // Advance the key only on non-null keys so a transient null doesn't
   // poison the next real comparison.
-  if (bufferKey !== null) {
-    prevBufferKeyRef.current = bufferKey;
+  if (bufferKey !== null && bufferKey !== prevBufferKey) {
+    setPrevBufferKey(bufferKey);
   }
 
   // The block belongs to ONE gate, so it is released on GATE IDENTITY — the

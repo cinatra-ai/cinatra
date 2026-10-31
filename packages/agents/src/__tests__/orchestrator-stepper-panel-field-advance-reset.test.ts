@@ -61,7 +61,7 @@ describe("orchestrator-stepper-panel — per-field setup advance resets input st
     // and the composite key must collapse to null when the context is null.
     expect(SRC).toMatch(/interruptContext != null\s*\?/);
     expect(SRC).toMatch(
-      /bufferKey !== null &&\s*prevBufferKeyRef\.current !== null &&\s*prevBufferKeyRef\.current !== bufferKey/,
+      /bufferKey !== null &&\s*prevBufferKey !== null &&\s*prevBufferKey !== bufferKey/,
     );
   });
 });
