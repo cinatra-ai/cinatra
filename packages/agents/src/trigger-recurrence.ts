@@ -137,6 +137,21 @@ export function buildCron(c: RecurringConfig): string {
   }
 }
 
+/**
+ * The day of month that a date cron's day field names (cinatra#4377). A day
+ * written in digits is read as it is. Any other field (a list, a range or a
+ * step) keeps the earlier approximate reading: the number it starts with, or
+ * the 1st when that is missing or 0 (the every-N-days limit the tests pin).
+ * Either way the day must be one that some month has, 1 to 31: `0`, `32`,
+ * `99` or a list such as `32,33` is no selection the form can draw, so the
+ * cron is not read back (null), rather than drawn as a day with no option. A
+ * saved day 29-31 is read back as it is.
+ */
+function dateCronDay(domStr: string): number | null {
+  const day = /^\d+$/.test(domStr) ? Number(domStr) : parseInt(domStr, 10) || 1;
+  return day >= 1 && day <= 31 ? day : null;
+}
+
 /** Cron → the selections that would have produced it (best effort). */
 export function parseCronToRecurring(cron: string): Partial<RecurringConfig> | null {
   const parts = cron.trim().split(/\s+/);
@@ -171,11 +186,13 @@ export function parseCronToRecurring(cron: string): Partial<RecurringConfig> | n
     (monthStr === Q_START_MONTHS || monthStr === Q_END_MONTHS) &&
     dowStr === "*"
   ) {
+    const dayOfMonth = dateCronDay(domStr);
+    if (dayOfMonth === null) return null;
     return {
       frequency: "quarterly",
       quarterAnchor: monthStr === Q_END_MONTHS ? "end" : "start",
       monthlyMode: "date",
-      dayOfMonth: parseInt(domStr, 10) || 1,
+      dayOfMonth,
       hour,
       minute,
       weekdays: [],
@@ -199,11 +216,13 @@ export function parseCronToRecurring(cron: string): Partial<RecurringConfig> | n
   }
   // Yearly date: "25 12 *"
   if (domStr !== "*" && !isNaN(singleMonth) && dowStr === "*") {
+    const dayOfMonth = dateCronDay(domStr);
+    if (dayOfMonth === null) return null;
     return {
       frequency: "yearly",
       yearlyMonth: singleMonth,
       monthlyMode: "date",
-      dayOfMonth: parseInt(domStr, 10) || 1,
+      dayOfMonth,
       hour,
       minute,
       weekdays: [],
@@ -226,11 +245,13 @@ export function parseCronToRecurring(cron: string): Partial<RecurringConfig> | n
   // Monthly date: "3 * *" or "3 */2 *"
   if (domStr !== "*" && dowStr === "*") {
     const mMatch = /^\*\/(\d+)$/.exec(monthStr);
+    const dayOfMonth = dateCronDay(domStr);
+    if (dayOfMonth === null) return null;
     return {
       frequency: "monthly",
       monthlyMode: "date",
       interval: mMatch ? parseInt(mMatch[1], 10) : 1,
-      dayOfMonth: parseInt(domStr, 10) || 1,
+      dayOfMonth,
       hour,
       minute,
       weekdays: [],
