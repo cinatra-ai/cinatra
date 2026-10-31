@@ -125,6 +125,8 @@ describe("3487 — the page owns the existing disabled schedule notice", () => {
     expect(anchor.matches(chrome)).toBe(false);
     expect(anchor.matches('[data-conformance-id="schedule-prompt-window"]')).toBe(false);
     expect(anchor.closest('[data-conformance-id="schedule-prompt-window"]')).not.toBeNull();
+    expect(anchor.matches("[data-run-window-placement]")).toBe(false);
+    expect(anchor.firstElementChild!.matches("[data-run-window-field]")).toBe(true);
     expect(anchor.querySelector(`[data-run-window-field][aria-disabled="true"] ${notice}`)).not.toBeNull();
     const reading = readRunWindowOwnership(container);
     expect(reading).toMatchObject({ windows: 1, ownedWindows: 1, pageNotices: 1, interactiveNotices: 0 });

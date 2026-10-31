@@ -215,7 +215,8 @@ describe("#3487 positive ownership guard", () => {
   // text-entry control that no declared holder holds is a prompt, whatever its label.
   it.each([
     '<input aria-label="Ask Cinatra">', '<input type="search">', '<input type="TEXT">', '<input type="email">', '<input type="number">',
-    '<div contenteditable="true"></div>', '<div contenteditable=""></div>', '<div role="textbox"></div>',
+    '<div contenteditable="true"></div>', '<div contenteditable=""></div>', '<div contenteditable="plaintext-only"></div>', '<div role="textbox"></div>',
+    '<div role="searchbox" tabindex="0"></div>', '<div role="textbox searchbox" tabindex="0"></div>', '<div role="TextBox"></div>',
   ])("counts a text-entry control outside every holder as a prompt: %s", (control) => {
     const reading = readRunWindowOwnership(root(card + window + '<aside>' + control + '<button aria-label="Send message">Send</button></aside>'));
     expect(reading).toMatchObject({ windows: 2, ownedWindows: 1, unownedPrompts: 1 });
@@ -236,6 +237,56 @@ describe("#3487 positive ownership guard", () => {
   it("names the limit: a lone send button with another label is not read", () => {
     const reading = readRunWindowOwnership(root(card + window + '<aside><button aria-label="Send message">Send</button></aside>'));
     expect(reading).toMatchObject({ windows: 1, unownedPrompts: 0 });
+  });
+  // The roles named in the reader's limits are not read as text entry.
+  it.each(["combobox", "spinbutton"])("names the limit: role=%s on a node that is no input is not read", (role) => {
+    const reading = readRunWindowOwnership(root(card + window + '<aside><div role="' + role + '"></div></aside>'));
+    expect(reading).toMatchObject({ windows: 1, unownedPrompts: 0 });
+  });
+  // Pre-review 3, finding 1: raw controls are counted before any collapse, so a
+  // marker holds no second control unseen.
+  it("refuses two text-entry controls hidden under one field marker in the page's run-window", () => {
+    const node = root(card + '<div data-run-window-host="page-chrome"><div data-conformance-id="run-window"><div data-run-window-field><textarea></textarea><input aria-label="second prompt"></div></div></div>');
+    expect(readRunWindowOwnership(node)).toMatchObject({ windows: 1, ownedWindows: 1, overfullHolders: 1 });
+    expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "run")).toThrow(/more than one/);
+  });
+  it("refuses two text-entry controls hidden under one marker in chat's composer", () => {
+    const node = root(card + '<div data-conversation-composer><div data-testid="chat-prompt-input"><textarea></textarea><input></div></div>');
+    expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "chat")).toThrow(/more than one/);
+  });
+  it("counts each text-entry control under a marker that no holder holds", () => {
+    const node = root(card + window + '<aside><div data-run-window-field><textarea></textarea><input></div></aside>');
+    expect(readRunWindowOwnership(node)).toMatchObject({ windows: 3, ownedWindows: 1, unownedPrompts: 2 });
+  });
+  it("counts a field marker around one control, with its send button, once", () => {
+    const node = root(card + window + '<aside><div data-run-window-field><textarea></textarea><button aria-label="Apply AI suggestion"></button></div></aside>');
+    expect(readRunWindowOwnership(node)).toMatchObject({ windows: 2, unownedPrompts: 1 });
+  });
+  it("takes one control under a field marker in the page's run-window", () => {
+    const node = root(card + '<div data-run-window-host="page-chrome"><div data-conformance-id="run-window"><div data-run-window-field><div role="textbox" contenteditable="true"></div><button aria-label="Apply AI suggestion"></button></div></div></div>');
+    expect(readRunWindowOwnership(node)).toMatchObject({ windows: 1, unownedPrompts: 0, overfullHolders: 0 });
+    expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "run")).not.toThrow();
+  });
+  // Pre-review 3, finding 3: an editable notice is interactive, by the same text-entry rule.
+  it.each(['contenteditable=""', 'contenteditable="plaintext-only"', 'role="searchbox"'])("refuses a read-only notice that is itself editable: %s", (attribute) => {
+    const node = root(card + '<div data-run-window-host="page-chrome"><div data-conformance-id="schedule-prompt-window"><div data-conformance-id="run-window"><div data-run-window-field data-conformance-id="schedule-window-over" ' + attribute + '></div></div></div></div>');
+    expect(readRunWindowOwnership(node).interactiveNotices).toBeGreaterThan(0);
+    expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "run")).toThrow(/interactive/);
+  });
+  // Pre-review 3, finding 4: a card above the root counts the root's prompt
+  // markers, composers and notices. An unmarked field there stays an unowned prompt.
+  it("reads an unmarked field under a card above the root as unowned, not as inside a card", () => {
+    const outer = document.createElement("section");
+    outer.setAttribute("data-lifecycle-card-host", "outer");
+    outer.innerHTML = '<div>' + card + '<input></div>';
+    expect(readRunWindowOwnership(outer.firstElementChild)).toMatchObject({ promptsInCards: 0, unownedPrompts: 1 });
+  });
+  // Pre-review 3, note: named in the body's limits.
+  it("names the limit: chat takes more than one well-formed message editor", () => {
+    const editors = '<div data-chat-message-editor><textarea></textarea></div>';
+    const reading = readRunWindowOwnership(root(card + '<div data-conversation-composer><div role="textbox"></div></div>' + editors + editors));
+    expect(reading).toMatchObject({ messageEditors: 2, overfullHolders: 0 });
+    expect(() => assertRunWindowOwnership(reading, "chat")).not.toThrow();
   });
   // Pre-review 2, finding 2: a holder takes one prompt control.
   it("refuses a second prompt control inside the legacy anchor around the page's window", () => {

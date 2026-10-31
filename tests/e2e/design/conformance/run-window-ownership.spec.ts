@@ -11,8 +11,9 @@ import { assertRunWindowOwnership, readRunWindowOwnership } from "./run-window-o
 // the review route module (`review-page-zero-gate-window-3487.test.tsx`) and
 // on the run page's `SetupScreen`
 // (`run-page-window-in-detail-column-zero-frame-3487.test.tsx`). It does not
-// run on the other `RunPageChrome` mounts of `instance-screens.tsx`, and the
-// spent schedule's disabled window is read by a source-text check only.
+// run on the other `RunPageChrome` mounts of `instance-screens.tsx`. The spent
+// schedule's disabled window is read in jsdom by
+// `run-page-notice-ownership-3487.test.tsx` and by a source-text check.
 for (const palette of ["cinatra", "dark"] as const) {
   for (const host of RUN_WINDOW_OWNERSHIP_HOSTS) {
     test(`run-window ownership — ${host} — ${palette}`, async ({ page }) => {

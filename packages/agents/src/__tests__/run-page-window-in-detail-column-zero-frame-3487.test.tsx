@@ -394,6 +394,8 @@ describe("cinatra#3487 item 3 -- the design-conformance reading of the real run 
     expect(anchor.closest("[data-lifecycle-card-host]")).toBeNull();
     // The anchor is the window itself: the field the person types into is in it.
     expect(anchor.querySelector("[data-run-window-field]")).not.toBeNull();
+    // The anchor rides the window node, inside the outer `review-prompt-window` wrapper.
+    expect(anchor.parentElement!.closest('[data-conformance-id="review-prompt-window"]')).not.toBeNull();
 
     const reading = readRunWindowOwnership(container);
     expect(reading).toMatchObject({
