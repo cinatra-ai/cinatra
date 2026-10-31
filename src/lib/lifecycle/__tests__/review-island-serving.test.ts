@@ -321,3 +321,53 @@ describe("LIVE ORG STANDING", () => {
     expect(resolveActorGrantsForUserInOrg).toHaveBeenCalledWith(PAYLOAD.userId, PAYLOAD.orgId);
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#4217 r5 — a renewal leaves its spent row beside its successor: the same
+// jti and identical claims, the spent one expiring first and possibly lingering
+// expired until it is consumed or swept. This store answers the reader's own
+// statement the way Postgres would: every row with the jti in the order they
+// were written, ordered by expiry ONLY when the statement says so, then LIMIT 1.
+// The spent row is written FIRST, so a statement without the ordering reads it.
+// Any other statement shape is refused and recorded.
+// ---------------------------------------------------------------------------
+type JtiRow = Record<string, unknown> & { jti: string; expires_at_ms: number };
+function jtiStore(stored: JtiRow[]) {
+  const unread: string[] = [];
+  const run = (input: unknown) => {
+    const q = (input as { queries: Array<{ text: string; values?: unknown[] }> }).queries[0];
+    const m = q.text.match(/ WHERE jti = \$1( ORDER BY expires_at DESC)? LIMIT 1$/);
+    if (!m) {
+      unread.push(q.text);
+      throw new Error("jti store: unsupported statement");
+    }
+    let found = stored.filter((r) => r.jti === q.values?.[0]);
+    if (m[1]) found = [...found].sort((a, b) => b.expires_at_ms - a.expires_at_ms);
+    return [{ rows: found.slice(0, 1) }];
+  };
+  return { run, unread };
+}
+
+describe("cinatra#4217 — a renewal's spent row beside its live successor", () => {
+  // RED AT MAIN: the read had no ORDER BY, so it took the first row written for
+  // the jti, the expired spent bearer, and refused an island whose successor
+  // is live.
+  it("reads the live successor, never the expired spent row that lingers", async () => {
+    const store = jtiStore([
+      { ...tokenRow({ not_expired: false }), jti: PAYLOAD.jti, expires_at_ms: 1_000 },
+      { ...tokenRow(), jti: PAYLOAD.jti, expires_at_ms: 2_000 },
+    ]);
+    rows.mockImplementation(store.run);
+    const reader = await resolveIslandCredentialReader({ credential: credential(), ref: ref() });
+    expect(store.unread, "the store read the reader's statement").toEqual([]);
+    expect(reader, "the live successor answers").not.toBeNull();
+    expect(reader!.actorCtx.actor.userId).toBe(PAYLOAD.userId);
+  });
+
+  it("control: with only the expired spent row the island is refused", async () => {
+    const store = jtiStore([{ ...tokenRow({ not_expired: false }), jti: PAYLOAD.jti, expires_at_ms: 1_000 }]);
+    rows.mockImplementation(store.run);
+    expect(await resolveIslandCredentialReader({ credential: credential(), ref: ref() })).toBeNull();
+    expect(store.unread).toEqual([]);
+  });
+});

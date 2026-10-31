@@ -119,6 +119,8 @@ import { Button } from "@/components/ui/button";
 import {
   LIFECYCLE_HITL_SCREEN_PATH,
   LIFECYCLE_HITL_SCREEN_SUBMIT_PATH,
+  sendAcrossRenewal,
+  useAnsweredHitlQuestionRegister,
   useCookieSessionSurface,
   useLifecycleCardAuth,
   useLifecycleCardHost,
@@ -318,14 +320,27 @@ const EMPTY_BUFFER: Record<string, unknown> = Object.freeze({});
 async function readHitlScreenThroughBroker(
   runId: string,
   auth: LifecycleCardAuth,
+  ended?: AbortSignal,
 ): Promise<AgentHitlScreenState | null> {
   try {
-    const response = await fetch(LIFECYCLE_HITL_SCREEN_PATH, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...auth.headers() },
-      body: JSON.stringify({ runId }),
-      credentials: auth.credentials,
-    });
+    // cinatra#4217 fold 3: a read refused while the host's renewal was on its
+    // way, or after it replaced the credential, is sent once more with the
+    // renewed credential before its refusal is believed (`sendAcrossRenewal`).
+    // Without it the card was taken away below for a refusal that said nothing
+    // about the reader. `ended` (the card's read went stale) ends the wait, and
+    // nothing more is sent.
+    const response = await sendAcrossRenewal(
+      auth,
+      () =>
+        fetch(LIFECYCLE_HITL_SCREEN_PATH, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...auth.headers() },
+          body: JSON.stringify({ runId }),
+          credentials: auth.credentials,
+        }),
+      ended,
+    );
+    if (response === null) return null;
     // A REFUSAL IS AN ANSWER, NOT A FAILURE (convergence finding). The read
     // caches the last authorized answer so a transient 5xx does not blank a
     // question mid-edit — but a credential that was revoked or replaced while
@@ -464,9 +479,12 @@ export function useAgentHitlScreenState(params: {
   useEffect(() => {
     if (!runId) return;
     let live = true;
+    // Ends a broker read's wait across the host's renewal (cinatra#4217 fold 3)
+    // when this read goes stale.
+    const ended = new AbortController();
     void (async () => {
       const state = auth
-        ? await readHitlScreenThroughBroker(runId, auth)
+        ? await readHitlScreenThroughBroker(runId, auth, ended.signal)
         : await getAgentHitlScreenStateAction({ runId }).catch(() => null);
       // A read that could not be completed is a FAILURE, not a state: the last
       // authorized answer stands, and an unread card stays silent.
@@ -476,6 +494,7 @@ export function useAgentHitlScreenState(params: {
     })();
     return () => {
       live = false;
+      ended.abort();
     };
     // `onResolved` is deliberately NOT a dependency: it is a write-through into
     // the host's box, and re-issuing an authorized read because a callback
@@ -1000,6 +1019,7 @@ export function AgentHitlScreenCard({
   const host = useLifecycleCardHost();
   const auth = useLifecycleCardAuth();
   const cookieSession = useCookieSessionSurface();
+  const answeredRegister = useAnsweredHitlQuestionRegister();
   const rendererContext = useFieldRendererContext(runId, cookieSession);
   const present = host !== null;
 
@@ -1145,10 +1165,33 @@ export function AgentHitlScreenCard({
       // same silence the Continue's `blocked` state draws.
       if (!auth && !cookieSession) return;
       setSubmitting(true);
+      // THE RUN PANEL BESIDE THIS CARD IS TOLD AT THE PRESS (cinatra#4375,
+      // cinatra#4011). Inside a conversation this card owns the question
+      // and its Continue, so the panel learns of the answer only here. It is
+      // told BEFORE the request, exactly as the panel's own Continue arms its
+      // key before its own request: the request can stay in flight until the
+      // run has reached its next gate (32 s on the widget), and the panel must
+      // hold its working slot for all of that, not only after the answer. This
+      // press is ONE ATTEMPT: below, it settles only itself, so a second press
+      // of the same question (a double press, a card that moved and was pressed
+      // again) can never erase the other's answer.
+      const attempt =
+        answeredRegister?.announceAnswered(runId, {
+          reviewTaskId: gate.reviewTaskId,
+          xRenderer: gate.xRenderer,
+          fieldName: gate.fieldName,
+        }) ?? null;
       let landed: boolean;
+      // ACCEPTED, as opposed to LANDED (cinatra#4375): only this submit's own
+      // accepted answer. On the cookie door "already resolved" and "no longer
+      // pending" settle the screen as landings, but they say the gate was
+      // answered elsewhere or has moved on, so they are not accepted. (The
+      // broker door's server already answers "already resolved" as accepted.)
+      let accepted = false;
       if (auth) {
         // THE BROKER DOOR. The reader's own credential, and never the ambient
-        // cookie of a frame that is same-origin to the app.
+        // cookie of a frame that is same-origin to the app. Its landing is
+        // already only an accepted outcome (`outcome.ok === true`).
         landed = await submitHitlScreenThroughBroker({
           runId,
           reviewTaskId: gate.reviewTaskId,
@@ -1156,6 +1199,7 @@ export function AgentHitlScreenCard({
           fieldName: payloadFieldName,
           auth,
         });
+        accepted = landed;
       } else {
         // THE COOKIE DOOR, unchanged.
         landed = true;
@@ -1171,6 +1215,7 @@ export function AgentHitlScreenCard({
           // run moved past it), so the screen settles and re-reads rather than
           // holding an answer for a gate that is gone.
           landed = outcome.ok || outcome.blocked === "no-longer-pending";
+          accepted = outcome.ok === true;
         } catch (error) {
           // "already resolved" is the expected race (a double press, the same
           // gate answered on another surface). Every other failure leaves the
@@ -1180,6 +1225,14 @@ export function AgentHitlScreenCard({
           );
         }
       }
+      // NOT ACCEPTED, NOT ANSWERED: this press's attempt is taken back before
+      // the card draws its Continue again; the record goes only if no other
+      // attempt for it is in flight and none was accepted, and then the panel
+      // returns to the question. An accepted answer keeps it, and the panel
+      // holds its working slot until the server resumes, exactly as after its
+      // own Continue.
+      if (accepted) answeredRegister?.acceptAnswered(attempt);
+      else answeredRegister?.withdrawAnswered(attempt);
       setSubmitting(false);
       // WHAT WAS TYPED SURVIVES A REFUSAL and is cleared by a landing. A
       // refusal leaves the screen exactly as it was, with the answer in hand.
@@ -1195,7 +1248,7 @@ export function AgentHitlScreenCard({
       // outcome of one request.
       setReloadToken((n) => n + 1);
     },
-    [gate, auth, cookieSession, runId],
+    [gate, auth, cookieSession, runId, answeredRegister],
   );
 
   const onContinue = useCallback(

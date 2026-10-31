@@ -31,6 +31,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  AGENT_OWNED_CAPTURE_CONTROLS,
   ANCHOR_CONTRACT_PATH,
   ANCHOR_CONTRACT_KINDS,
   anchorDigestInputs,
@@ -38,8 +39,16 @@ import {
   canonicalJson,
   captureAnchorExpectations,
   computeAnchorDigest,
+  isAgentOwnedCaptureControl,
   loadAnchorContract,
 } from "../lib/anchor-contract.mjs";
+import {
+  CAPTURE_HOSTS,
+  CAPTURE_STATES,
+  captureHostAdmissibility,
+  captureRequirementsFor,
+} from "../lib/chat-hitl-capture-recorder.mjs";
+import { CARD_KINDS } from "../../ci/lib/capture-record-contract.mjs";
 import { MANIFEST_PATH } from "../chat-hitl-acceptance-gate.mjs";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -328,5 +337,99 @@ describe("the fifth kind is covered by the same alarm", () => {
     const decided = anchors.chat_thread[`${KIND}|decided`].join("\n");
     expect(decided).toContain(`[data-lifecycle-card="${KIND}"] frame absent`);
     expect(decided).not.toContain(`[data-lifecycle-card="${KIND}"] frame present`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. Four card controls are not anchors of this contract (cinatra#3677)
+// ---------------------------------------------------------------------------
+//
+// Four capture requirements named
+// a card's own control that no governed drawing draws under the recorded value
+// (three the drawing retired, and the schedule card's Confirm, whose floor it
+// draws as `confirm-schedule -> scheduled`), which kept
+// design-anchor-resolution red on main. The contract leaves exactly those four
+// out of the cells of the kind that owns each, and records everything else the
+// recorder computes, unchanged.
+
+describe("an agent card's own controls are not anchors of this contract", () => {
+  const SKILL_CONTROLS = [
+    '[data-skill-action="confirm"]',
+    '[data-skill-action="adjust"]',
+    '[data-skill-action="skip"]',
+  ];
+  const SCHEDULE_CONFIRM = '[data-action="confirm-schedule-proposal"]';
+  const FOUR = [...SKILL_CONTROLS, SCHEDULE_CONFIRM];
+  // The serialized shape `captureAnchorExpectations` records, spelled here so
+  // the comparison below does not borrow the code it checks.
+  const serialized = (spec) =>
+    [spec.selector, spec.scope ?? "frame", spec.expect ?? "present", spec.within ?? "", spec.tier ?? "canonical"].join(" ");
+
+  it("names exactly the four controls, each under the kind that owns it, as a frozen list", () => {
+    expect(AGENT_OWNED_CAPTURE_CONTROLS).toEqual({
+      recommendation_hold: SKILL_CONTROLS,
+      trigger_schedule_proposal: [SCHEDULE_CONFIRM],
+    });
+    expect(Object.isFrozen(AGENT_OWNED_CAPTURE_CONTROLS)).toBe(true);
+    for (const list of Object.values(AGENT_OWNED_CAPTURE_CONTROLS)) expect(Object.isFrozen(list)).toBe(true);
+  });
+
+  it("records none of the four in any cell of the live capture anchors", () => {
+    const anchors = captureAnchorExpectations();
+    for (const [host, cells] of Object.entries(anchors)) {
+      for (const [cell, entries] of Object.entries(cells)) {
+        for (const entry of entries) {
+          for (const selector of FOUR) {
+            expect(entry.startsWith(`${selector} `), `${host} ${cell}: ${entry}`).toBe(false);
+          }
+        }
+      }
+    }
+  });
+
+  it("leaves out only those, and records every other requirement exactly as the recorder computes it", () => {
+    const anchors = captureAnchorExpectations();
+    expect(Object.keys(anchors).sort()).toEqual([...CAPTURE_HOSTS].sort());
+    for (const host of CAPTURE_HOSTS) {
+      expect(anchors[host]["*"]).toEqual(captureRequirementsFor(host).map(serialized));
+      for (const kind of ANCHOR_CONTRACT_KINDS) {
+        if (!captureHostAdmissibility(kind, host).capturable) continue;
+        const owned = AGENT_OWNED_CAPTURE_CONTROLS[kind] ?? [];
+        for (const state of CAPTURE_STATES) {
+          const expected = captureRequirementsFor(host, kind, state)
+            .filter((spec) => !owned.includes(spec.selector))
+            .map(serialized);
+          expect(anchors[host][`${kind}|${state}`], `${host} ${kind}|${state}`).toEqual(expected);
+        }
+      }
+    }
+  });
+
+  it("excuses a control only in the cells of the kind that owns it", () => {
+    for (const selector of SKILL_CONTROLS) {
+      expect(isAgentOwnedCaptureControl("recommendation_hold", selector)).toBe(true);
+      expect(isAgentOwnedCaptureControl("trigger_schedule_proposal", selector)).toBe(false);
+    }
+    expect(isAgentOwnedCaptureControl("trigger_schedule_proposal", SCHEDULE_CONFIRM)).toBe(true);
+    expect(isAgentOwnedCaptureControl("recommendation_hold", SCHEDULE_CONFIRM)).toBe(false);
+    for (const kind of ["artifact_review_gate", "verification_summary", "agent_hitl_screen", "constructor", "__proto__", null]) {
+      for (const selector of FOUR) expect(isAgentOwnedCaptureControl(kind, selector)).toBe(false);
+    }
+  });
+
+  it("never excuses an owner anchor, a ruled root, a card root or a host or state marker", () => {
+    const carriage = contract().domExpectations.carriage;
+    const recorded = Object.values(carriage).flatMap((row) => [...row.ownerAnchors, ...row.ruledRootAnchors]);
+    const roots = Object.values(CARD_KINDS).map((spec) => spec.root);
+    for (const selector of Object.values(AGENT_OWNED_CAPTURE_CONTROLS).flat()) {
+      expect(recorded).not.toContain(selector);
+      expect(roots).not.toContain(selector);
+      expect(selector.startsWith("[data-lifecycle-card")).toBe(false);
+      expect(selector.startsWith("[data-conformance-id")).toBe(false);
+    }
+  });
+
+  it("records the unresolved set as EMPTY at the pin, present rather than absent", () => {
+    expect(contract().anchorsUnresolvedAtPin).toEqual([]);
   });
 });

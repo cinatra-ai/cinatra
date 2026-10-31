@@ -43,13 +43,20 @@ export type ArtifactKindDisplayField = {
   readonly name: string;
   readonly source: string;
   /**
-   * Set only where the drawing binds the field in ONE reading of the display.
+   * Set only where the drawing binds the field in a reading other than the open
+   * one. A drawing that binds the same field in several readings declares it once
+   * per reading, and the row records each declaration in the manifest's order.
    * "continued": the field is drawn once the review is continued and not while
    * it is open — §XI.5 and §XI.6 draw the Open live dashboard link, bound to
-   * artifact.sourceUrl, only in the continued reading. Absent: the field is
-   * drawn in the open (populated) reading.
+   * artifact.sourceUrl, only once the review is continued.
+   * "no-review": the field is drawn where no review stands — §XI.5 draws the
+   * Open live dashboard link on the artifact page of a dashboard no gate has
+   * pinned, "because no decision is open". The review harness has no mount
+   * where no review stands, so a "no-review" declaration adds no assertion to
+   * the driver.
+   * Absent: the field is drawn in the open (populated) reading.
    */
-  readonly reading?: "continued";
+  readonly reading?: "continued" | "no-review";
 };
 export type ArtifactKindDisplayAction = { readonly name: string; readonly outcome: string };
 
@@ -127,9 +134,17 @@ export const ARTIFACT_KIND_DISPLAYS: Readonly<
     surface: "dashboard-display",
     section: "XI.5",
     factoryOnly: false,
+    // Six readings since design@67ecd66d (cinatra#4388): the review open, the
+    // review continued and no review standing, each with the numbers read and
+    // with no data capability. Four of them draw Open live dashboard, in this
+    // order: continued, no review, continued with no data capability, no review
+    // with no data capability.
     fields: [
       { name: "layout", source: "representation.pinned-configuration" },
       { name: "open-live", source: "artifact.sourceUrl", reading: "continued" },
+      { name: "open-live", source: "artifact.sourceUrl", reading: "no-review" },
+      { name: "open-live", source: "artifact.sourceUrl", reading: "continued" },
+      { name: "open-live", source: "artifact.sourceUrl", reading: "no-review" },
     ],
     action: { name: "open-live-dashboard", outcome: "dashboard-canonical" },
     states: ["error", "kind:artifact", "loading"],
