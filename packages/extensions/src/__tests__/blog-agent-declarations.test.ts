@@ -24,6 +24,7 @@ const POST = "@cinatra-ai/blog-post-artifact";
 const IMAGE = "@cinatra-ai/blog-image-artifact";
 const PICTURE = "@cinatra-ai/image-artifact";
 const LINKEDIN = "@cinatra-ai/linkedin-artifacts";
+const BRAND_VOICE = "@cinatra-ai/brand-voice-artifact";
 
 const IDEA_TYPE = "@cinatra-ai/blog-idea-artifact:blog-idea";
 const POST_TYPE = "@cinatra-ai/blog-post-artifact:post";
@@ -67,8 +68,10 @@ const TABLE: Array<{
   },
   {
     agent: "blog-draft-writer-agent",
+    // blog-draft-writer-agent#50 added the brand-voice edge: the writer reads
+    // the picked brand voice through its brand-voice context slot.
     produces: [{ extension: POST, objectTypeId: POST_TYPE }],
-    edges: [IDEA, POST].sort(),
+    edges: [IDEA, POST, BRAND_VOICE].sort(),
   },
   {
     agent: "blog-image-generator-agent",
@@ -79,9 +82,12 @@ const TABLE: Array<{
     // produces entry no recognised road reaches. (The host does file picture
     // bytes on its own campaigns road; that road is neither recognised by the
     // gate nor reachable from an agent.) Its entry waits with the pipeline's
-    // two. BOTH EDGES stay: they say what the run touches, which is true today.
+    // two. blog-image-generator-agent#5 dropped the blog-image edge: the
+    // pipeline that embeds this agent files the picture as
+    // `@cinatra-ai/image-artifact:image`. blog-image-generator-agent#6 added
+    // the brand-voice edge for the brand-voice context slot it reads.
     produces: [],
-    edges: [IMAGE, POST].sort(),
+    edges: [POST, BRAND_VOICE].sort(),
   },
   {
     agent: "blog-linkedin-writer-agent",
@@ -112,12 +118,15 @@ const TABLE: Array<{
     // image artifact. Only its ideas entry still waits for a write road — the
     // fleet's adoption gate refuses a declared production nothing
     // materializes. All four EDGES stay: they say what the run touches.
+    // blog-pipeline-agent#77 added a fifth, the brand-voice edge: the pipeline
+    // asks once for one stored brand voice and hands it to the writer and the
+    // image generator.
     produces: [
       { extension: POST, objectTypeId: POST_TYPE },
       { extension: PICTURE, objectTypeId: PICTURE_TYPE },
       { extension: LINKEDIN, objectTypeId: LINKEDIN_TYPE },
     ],
-    edges: [IDEA, POST, PICTURE, LINKEDIN].sort(),
+    edges: [IDEA, POST, PICTURE, LINKEDIN, BRAND_VOICE].sort(),
   },
 ];
 
@@ -134,11 +143,16 @@ describe("the blog agents' declarations (plan section 5.3.2)", () => {
     });
   }
 
-  it("declares the fourteen dependency edges section 5.3.2 counts", () => {
-    // All fourteen. The last two arrived with the image agent's own package,
-    // which replaces the retired prompt writer.
-    const total = TABLE.reduce((n, row) => n + row.edges.length, 0);
-    expect(total).toBe(14);
+  it("declares sixteen artifact-kind dependency edges, counted from the manifests", () => {
+    // Section 5.3.2 counted fourteen; the image agent's own package, which
+    // replaces the retired prompt writer, brought the last two of them. The
+    // brand-voice slot (cinatra#4314) then added three brand-voice edges (the
+    // writer, the image generator and the pipeline) and dropped the image
+    // generator's blog-image edge. The total is read from the pinned manifests,
+    // not summed from the table above, so a stale row cannot hide behind its
+    // own sum.
+    const total = TABLE.reduce((n, row) => n + edges(row.agent).length, 0);
+    expect(total).toBe(16);
   });
 
   it("declares six of the nine typed produces entries", () => {
