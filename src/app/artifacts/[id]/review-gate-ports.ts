@@ -154,6 +154,8 @@ export async function beginReviewTargets(args: {
     // content; every other caller passes nothing and keeps exactly what it had.
     byteMinter: args.roads?.byteMinter,
     buildContent: args.roads?.buildContent,
+    // cinatra#4311: the data road this surface named, if any.
+    dataRoad: args.roads?.dataRoad,
   });
 }
 

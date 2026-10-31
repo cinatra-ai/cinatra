@@ -101,6 +101,23 @@ export type ArtifactRendererDataRoad = {
 };
 
 /**
+ * THE SESSION DATA ROAD a first-party surface hands its displays (cinatra#4311,
+ * the core slice): the application's own cube route — the address the
+ * dashboards shell itself uses — reached with the reader's session cookie.
+ *
+ * AN ADDRESS, NEVER A CREDENTIAL. Handing it out grants nothing: every series
+ * request is authorized again by that route, from the reader's own session,
+ * fail closed. A surface whose reader holds no cookie (the island) hands NONE,
+ * and its display draws its own no-series reading.
+ *
+ * Named HERE, beside the type, because every surface that builds a snapshot
+ * already imports this module: naming the address costs no route graph a
+ * module.
+ */
+export const ARTIFACT_RENDERER_SESSION_DATA_ROAD: Readonly<ArtifactRendererDataRoad> =
+  Object.freeze({ road: "session", apiUrl: "/api/dashboards/cubejs-api/v1" });
+
+/**
  * The CONTENT-CHANNEL ABI version (enabler 0.3 of `PLAN: Agents Lifecycle (C)`,
  * cinatra#3027), mirrored here.
  *

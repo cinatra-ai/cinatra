@@ -38,6 +38,7 @@ import {
 import { resolveArtifactVersionForServe } from "@/lib/artifacts/artifact-read";
 import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
 import {
+  ARTIFACT_RENDERER_SESSION_DATA_ROAD,
   absentArtifactContent,
   buildArtifactRendererProps,
   grantArtifactEdit,
@@ -272,6 +273,11 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
     downloadHref,
     content,
     edit,
+    // THE DATA ROAD (props v3, cinatra#4311): this page is a cookie surface, so
+    // its displays read live series from the application's own route with the
+    // reader's session. An address, never a credential; the builder drops it
+    // for a display that declared a version below 3.
+    data: ARTIFACT_RENDERER_SESSION_DATA_ROAD,
   });
 
   // THE NEVER-BLANK FLOOR, and the drawing says what stands in it. §III's third
