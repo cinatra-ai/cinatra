@@ -13,9 +13,7 @@ vi.mock("next/navigation", () => ({
   },
 }));
 vi.mock("next/link", () => ({
-  default: ({ children, href }: { children: React.ReactNode; href: string }) => (
-    <a href={href}>{children}</a>
-  ),
+  default: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
 }));
 vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: vi.fn(async () => ({
