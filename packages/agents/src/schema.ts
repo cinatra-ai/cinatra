@@ -863,6 +863,9 @@ export const artifactVerificationRecords = cinatraSchema.table("artifact_verific
   fieldDiff:                       jsonb("field_diff").notNull().default(sql`'[]'::jsonb`),
   visualDiff:                      jsonb("visual_diff"),
   outcome:                         text("outcome").notNull(), // verified | drifted | unmet
+  // cinatra#4312 — the gate this verification inserted as its reopen; written in that
+  // gate's insert transaction. Null when it reopened none.
+  reopenedGateId:                  text("reopened_gate_id").references(() => artifactReviewGates.id, { onDelete: "set null" }),
   createdAt:                       timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   gateIdx: index("artifact_verification_records_gate_idx").on(t.gateId),

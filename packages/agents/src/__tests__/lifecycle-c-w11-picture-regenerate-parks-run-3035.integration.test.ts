@@ -1203,6 +1203,36 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — a verification-reopen-shaped gate of 
     await expectParked(p);
   });
 
+  it("a gate an external-change verification of the pending successor opened and named on run A cannot record changes requested either: the declared-lineage check refuses it (lineage-unbound)", async () => {
+    const p = await pausedPipeline();
+    const pressed = await pressRegenerate(p.runId, p.leg2, p.picture);
+    const successor = await pressed.answer();
+    const { recordVerificationForExternalChange } = await import("../lifecycle-verification-store");
+    const res = await recordVerificationForExternalChange({
+      gateId: successor.gateId,
+      orgId: ORG,
+      runId: p.runId,
+      reviewedTarget: p.picture,
+      repairedTarget: successor.pin,
+      acceptedFindings: [{ id: "f1", path: "subject" }],
+      projectFields: () => ({ subject: "same" }), // nothing changed ⇒ the finding is unmet
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok || !res.reopenedGateId) throw new Error("the external-change verification opened no reopen gate");
+    const task = verificationReopenReviewTaskId(`verify:${successor.gateId}`);
+    const cr = await repairStore.recordChangesRequested({
+      runId: p.runId,
+      reviewTaskId: task,
+      orgId: ORG,
+      request: changesRequestedOn(res.reopenedGateId, successor.pin),
+      repairCapable: false,
+      currentBaseRevisionId: successor.pin.representationRevisionId,
+    });
+    expect(cr).toMatchObject({ ok: false, code: "lineage-unbound" });
+    expect((await gateStore.readReviewGate(p.runId, task))?.status).toBe("pending");
+    expect(await repairStore.isRepairLineageOpen(pressed.settledGateId)).toBe(true);
+  });
+
   it("a later attempt already written on such a gate does not close the lineage: the reader throws malformed-lineage and the post's decision resumes nothing", async () => {
     const p = await pausedPipeline();
     const pressed = await pressRegenerate(p.runId, p.leg2, p.picture);
