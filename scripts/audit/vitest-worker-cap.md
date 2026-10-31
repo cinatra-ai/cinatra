@@ -99,8 +99,8 @@ the cap's effect on that hosted job is unmeasured here.
 ## The inventory
 
 18 workflow files carry a test-runner step;
-11 of them are governed. 140 invocations:
-97 governed, 14 hosted-pinned,
+11 of them are governed. 141 invocations:
+97 governed, 15 hosted-pinned,
 20 node:test, 8 playwright,
 1 extension-suite-gate.
 
@@ -226,6 +226,7 @@ workflow-level one unless a job-level or step-level assignment narrows it, and
 | build-image.yml | chat-hitl-held-turn-e2e | name%3AThe%20image%20tool%20%E2%80%94%20real-DB%20tier%20(cinatra%233032%2C%20lifecycle-c%20W8) | 3951 | ubuntu-latest | vitest | hosted-pinned | 1 |
 | build-image.yml | chat-hitl-held-turn-e2e | name%3AWidget%20schedule%20grant%20%E2%80%94%20real-DB%20tier%20(cinatra%233052) | 3965 | ubuntu-latest | vitest | hosted-pinned | 1 |
 | build-image.yml | chat-hitl-held-turn-e2e | name%3ATyped%20schedule%20adjust%20%E2%80%94%20real-DB%20tier%20(cinatra%232853) | 3979 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3AEmail%20fan-out%20history%20byte-identical%20-%20real-DB%20tier%20(cinatra%233089%2C%20item%205) | 4066 | ubuntu-latest | vitest | hosted-pinned | 1 |
 | build-image.yml | presence-degraded-build | name%3ADegradation%20suites%20(guard%20%2B%20consumers%20%2B%20generated%20classification%20%2B%20readiness%20fail-soft) | 4902 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | crm-migration-gate.yml | gate | name%3AOAS%20banned-primitives%20gate%20tests | 153 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | crm-migration-gate.yml | gate | name%3ACRM%20pointer-row%20gate%20tests | 156 | CI_RUNNER_HEAVY | node:test | node:test | 3 |
