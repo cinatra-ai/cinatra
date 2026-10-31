@@ -8,7 +8,15 @@
  * the detail Open both navigate to the dashboard's canonical surface.
  *
  * This is the conformance CHECKLIST: every §VIII conformance id maps to an
- * assertion below. The repo runs vitest in node without @testing-library/react,
+ * assertion below. Since version 0.13.0 (design@67ecd66d, cinatra#4388) the
+ * dashboard's artifact page draws the dashboard extension's own display, so the
+ * drawing no longer declares the two surfaces of the core pointer (the pointer
+ * detail and its scope chips), and nothing below asserts them. The core pointer
+ * component and its wiring stay until cinatra#4311: its done-when deletes
+ * `src/app/artifacts/[id]/dashboard-pointer-detail.tsx` and leaves no
+ * production source under `src` that names `DashboardPointerDetail`. The
+ * routing test below holds that wiring until then.
+ * The repo runs vitest in node without @testing-library/react,
  * so server-component wiring is pinned via source assertions (the established
  * pattern — see `surface-conformance.test.ts`); the live bidirectional
  * Playwright walk on a production-equivalent build is the proof-at-close.
@@ -25,7 +33,6 @@ const code = (s: string) =>
   s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
 
 const ROW = read("src/components/artifacts/dashboard-library-row.tsx");
-const POINTER = read("src/app/artifacts/[id]/dashboard-pointer-detail.tsx");
 const LIB = read("src/components/artifacts/library-mode.tsx");
 const DETAIL = read("src/app/artifacts/[id]/page.tsx");
 const SURFACE = read("src/lib/dashboards/dashboard-artifact-surface.ts");
@@ -57,52 +64,11 @@ describe("§VIII conformance id: artifacts-dashboard-row (the library row)", () 
   });
 });
 
-// ── artifact-dashboard-pointer (conformance/app-artifacts.json) ─────────────
-// field name=identity.displayName · action open-dashboard -> dashboard-canonical
-// · states loading, error · (spec: NO inline render, NO grid, NO portlet).
-describe("§VIII conformance id: artifact-dashboard-pointer (the /artifacts/[id] detail)", () => {
-  it("carries the conformance id + the name field", () => {
-    expect(POINTER).toContain('data-conformance-id="artifact-dashboard-pointer"');
-    expect(POINTER).toContain('data-field="name=identity.displayName"');
-  });
-
-  it("the primary affordance opens the dashboard's canonical surface", () => {
-    expect(POINTER).toContain('data-action="open-dashboard -> dashboard-canonical"');
-    expect(POINTER).toMatch(/href=\{pointer\.canonicalHref\}/);
-    expect(POINTER).toMatch(/Open dashboard/);
-  });
-
-  it("covers the closed data-state set for the pointer surface (ready/loading/error)", () => {
-    expect(POINTER).toContain('data-state="ready"');
-    expect(POINTER).toContain('data-state="loading"');
-    expect(POINTER).toContain('data-state="error"');
-  });
-
-  it("is a POINTER, never a renderer: no inline dashboard render is wired in", () => {
-    // render→spec: no read-only grid, no embedded portlet, no renderer dispatch.
-    expect(POINTER).not.toMatch(/PortletHost/);
-    expect(POINTER).not.toMatch(/ExtensionRendererMount/);
-    expect(POINTER).not.toMatch(/pickArtifactRenderer/);
-    expect(POINTER).not.toMatch(/renderer-dispatch/);
-    expect(code(POINTER)).not.toMatch(/Download/i);
-  });
-});
-
-// ── artifact-dashboard-scope-chips (conformance/app-artifacts.json) ─────────
-// action open-scope -> scope-view.
-describe("§VIII conformance id: artifact-dashboard-scope-chips (D9 listings)", () => {
-  it("renders the scope-chips group whose chips open the scope's view", () => {
-    expect(POINTER).toContain('data-conformance-id="artifact-dashboard-scope-chips"');
-    expect(POINTER).toContain('data-action="open-scope -> scope-view"');
-  });
-});
-
 // ── artifacts-axes-state (the shared §IX axes id) ──────────────────────────
-// The closed data-state set carried on the §VIII surfaces.
+// The closed data-state set carried on the §VIII surfaces. Since version 0.13.0
+// the state table draws no pointer row, so only the library row is held here.
 describe("§IX shared axes id: artifacts-axes-state (state coverage on the new surfaces)", () => {
-  it("the pointer surface carries loading + error; the row carries kind:artifact", () => {
-    expect(POINTER).toContain('data-state="loading"');
-    expect(POINTER).toContain('data-state="error"');
+  it("the row carries kind:artifact", () => {
     expect(ROW).toContain('data-state="kind:artifact"');
   });
 });
@@ -125,6 +91,12 @@ describe("§VIII routing — library rows render as dashboard pointers, dual-aut
   });
 
   it("the detail route opens a dashboard artifact as a POINTER, not the renderer", () => {
+    // The core pointer wiring the 0.12.0 drawing drew. Version 0.13.0 draws the
+    // dashboard extension's own display here instead. The done-when of
+    // cinatra#4311 deletes `src/app/artifacts/[id]/dashboard-pointer-detail.tsx`
+    // and leaves no production source under `src` that names
+    // `DashboardPointerDetail`, so the `<DashboardPointerDetail` assertion
+    // below cannot hold after that change.
     expect(DETAIL).toMatch(/isDashboardArtifactType\(artifact\.objectType\)/);
     expect(DETAIL).toMatch(/resolveDashboardArtifactPointer/);
     expect(DETAIL).toMatch(/<DashboardPointerDetail/);

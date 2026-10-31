@@ -35,6 +35,7 @@ import {
   PENDING_CONFIRMATION_RESULT_PREFIX,
 } from "./pending-tool-confirmation-card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { userAvatarAccent, userInitials } from "@cinatra-ai/sdk-ui/lib/user-avatar";
 // Direct per-icon imports — avoid Turbopack processing the full simple-icons barrel (see apis-page.tsx note)
 import SiAnthropic from "@icons-pack/react-simple-icons/icons/SiAnthropic.mjs";
 import SiGooglegemini from "@icons-pack/react-simple-icons/icons/SiGooglegemini.mjs";
@@ -371,7 +372,14 @@ function AgentRunTurnSlot({
     // exactly the reading it drew before this rule existed.
     if (!request) return null;
     return async (signal) => {
-      const response = await fetch(request.url, { ...request.init, signal });
+      // cinatra#4217: the frame renews its credential while it stays open, so the
+      // headers are built again for every look, never kept from the first one.
+      const current = runSeedRequest(credential, runId) ?? request;
+      const response = await fetch(current.url, { ...current.init, signal });
+      // A refusal is no answer. A look refused while the frame's renewal was on
+      // its way, or after it replaced the credential, is not a miss either: the
+      // watch itself reads the host's renewal and waits for it (cinatra#4217
+      // fold 3, `useRunMomentCard`).
       if (!response.ok) return null;
       return parseRunMomentCard(await response.json());
     };
@@ -2503,7 +2511,7 @@ export type ChatMessagesViewProps = {
   theme: ThemeName;
   /** Signed-in user's id + display fields (from authClient.useSession()). */
   userId?: string;
-  sessionUser?: { name?: string | null; image?: string | null } | null;
+  sessionUser?: { name?: string | null; image?: string | null; email?: string | null; accentColor?: string | null } | null;
   activeThreadId: string | null;
   activeAssistantHandle?: string;
   /** assistantUserId → @handle map scanned from user-message mentions. */
@@ -2661,6 +2669,15 @@ export function ChatMessagesView({
     }
   }, []);
 
+  // The signed-in person's avatar ground (cinatra#4292): their persisted
+  // accent, else one derived from their stable id. Assistants keep their own.
+  const sessionUserAccent = userAvatarAccent({
+    id: userId,
+    accentColor: sessionUser?.accentColor,
+    name: sessionUser?.name,
+    email: sessionUser?.email,
+  });
+
   return (
     /* cinatra#2565 — the surface DECLARES itself as a lifecycle-card host. The
        declaration is opt-in with no default: a surface that has not been
@@ -2678,16 +2695,14 @@ export function ChatMessagesView({
       {messages.map((message) => {
         const isUser = message.role === "user";
         if (isSlackMode) {
-          const userInitials = sessionUser?.name
-            ? sessionUser.name.split(" ").map((n: string) => n[0]).filter(Boolean).join("").toUpperCase().slice(0, 2)
-            : "Me";
+          const sessionUserInitials = userInitials(sessionUser ?? {}, "Me");
           // Resolve per-message handle: authorUserId → handle map, fallback to "cinatra"
           const messageHandle = !isUser
             ? (message.authorUserId
                 ? (assistantHandleMap.get(message.authorUserId) ?? activeAssistantHandle ?? "cinatra")
                 : "cinatra")
             : null;
-          const initials = isUser ? userInitials : getParticipantInitials(messageHandle ?? undefined);
+          const initials = isUser ? sessionUserInitials : getParticipantInitials(messageHandle ?? undefined);
           const displayName = isUser
             ? (sessionUser?.name ?? "You")
             : resolveAssistantDisplayName(messageHandle);
@@ -2711,7 +2726,7 @@ export function ChatMessagesView({
                   const avatarEl = (
                     <Avatar size="sm">
                       {isUser && sessionUser?.image && <AvatarImage src={sessionUser.image} />}
-                      <AvatarFallback>{assistantIcon ?? initials}</AvatarFallback>
+                      <AvatarFallback accent={isUser ? sessionUserAccent : undefined}>{assistantIcon ?? initials}</AvatarFallback>
                     </Avatar>
                   );
                   return (
@@ -2930,9 +2945,7 @@ export function ChatMessagesView({
         }
         // ChatGPT branch — preserve byte-identical render behavior.
         const showParticipantHeaders = true;
-        const nmUserInitials = sessionUser?.name
-          ? sessionUser.name.split(" ").map((n: string) => n[0]).filter(Boolean).join("").toUpperCase().slice(0, 2)
-          : "Me";
+        const nmUserInitials = userInitials(sessionUser ?? {}, "Me");
         const nmUserName = sessionUser?.name ?? "You";
         const nmThreadHasMention = taggedAssistantUserIds.length >= 1
           || messages.some((m) => m.role === "user" && /@[a-z0-9_-]+/i.test(m.content));
@@ -2953,7 +2966,7 @@ export function ChatMessagesView({
                   <span className="text-xs font-medium text-muted-foreground">{nmUserName}</span>
                   <Avatar size="sm">
                     {sessionUser?.image && <AvatarImage src={sessionUser.image} />}
-                    <AvatarFallback>{nmUserInitials}</AvatarFallback>
+                    <AvatarFallback accent={sessionUserAccent}>{nmUserInitials}</AvatarFallback>
                   </Avatar>
                 </div>
               ) : (

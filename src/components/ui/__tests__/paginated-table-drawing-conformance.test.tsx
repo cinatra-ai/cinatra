@@ -8,8 +8,8 @@
 //
 // The clauses this primitive is answerable for, quoted verbatim:
 //
-//   "PaginatedTable handles offset, sort, and selection; Table is the dumb DOM
-//    primitive."
+//   "PaginatedTable pages by offset only; it has no sort and no row selection;
+//    Table is the dumb DOM primitive."
 //   "Always pair with a 'X of N' caption in mono slate."
 //   "prev/next chevrons"
 //
@@ -19,7 +19,7 @@
 // table-drawing-conformance.test.tsx — including the cell-padding departure
 // recorded there.
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render } from "@testing-library/react";
 
 import { PaginatedTable } from "@/components/ui/paginated-table";
 import {
@@ -65,7 +65,7 @@ function renderPaginated(pageSize = 1) {
   };
 }
 
-describe('clause: "PaginatedTable handles offset ..."', () => {
+describe('clause: "PaginatedTable pages by offset only"', () => {
   it("renders the paging controls the plain Table does not have", () => {
     const { footer } = renderPaginated();
     expect(footer).not.toBeNull();
@@ -77,6 +77,26 @@ describe('clause: "PaginatedTable handles offset ..."', () => {
     // itself rather than leaving it to the call site.
     const { footer } = renderPaginated(25);
     expect(footer).toBeNull();
+  });
+
+  it("shows one offset slice of the rows at a time, and the next control moves to the next slice", () => {
+    const { container, footer } = renderPaginated();
+    const rows = () =>
+      Array.from(
+        container.querySelectorAll<HTMLTableRowElement>(
+          '[data-slot="table-body"] > [data-slot="table-row"]',
+        ),
+      );
+    expect(rows()).toHaveLength(2);
+    expect(rows().map((row) => row.hidden)).toEqual([false, true]);
+    expect(footer!.textContent).toContain("1–1 of 2");
+
+    fireEvent.click(footer!.querySelector('[aria-label="Go to next page"]')!);
+
+    expect(rows().map((row) => row.hidden)).toEqual([true, false]);
+    expect(
+      container.querySelector('[data-slot="table-pagination"]')!.textContent,
+    ).toContain("2–2 of 2");
   });
 });
 
@@ -144,14 +164,79 @@ describe("the composed surface reads as one panel", () => {
   });
 });
 
-describe('clause: "... sort, and selection"', () => {
-  // NOT APPLICABLE at this primitive, with the reason: this component
-  // implements OFFSET only. Sort and selection are supplied by the call site's
-  // own header cells and row controls — there is no sort or selection API on
-  // PaginatedTable to grade. Recorded rather than asserted so leg 2 can put
-  // the gap between the clause and the component to the drawing.
-  it.skip(
-    "not applicable at this primitive: the component implements offset only; sort and selection have no API here — recorded for leg 2 rather than asserted",
-    () => {},
+// The two clauses below deny a behaviour, so each is read in both states the
+// component has: paging (more rows than fit) and not paging (a short list).
+const BOTH_STATES = [
+  { state: "paging", pageSize: 1 },
+  { state: "not paging", pageSize: 25 },
+] as const;
+
+describe('clause: "it has no sort"', () => {
+  it.each(BOTH_STATES)(
+    "draws no sort state or sort control, and a header click leaves the row order as given ($state)",
+    ({ pageSize }) => {
+      // Sort belongs to the call site: the component owns no sort state, so it
+      // marks no element with aria-sort, puts no control into a header cell and
+      // does not reorder the rows the call site passes.
+      const { container } = renderPaginated(pageSize);
+      const bodyText = () =>
+        Array.from(
+          container.querySelectorAll(
+            '[data-slot="table-body"] > [data-slot="table-row"]',
+          ),
+        ).map((row) => row.textContent);
+      const given = ["Outreach #2,31814:21", "Enricher #2,31714:08"];
+      expect(bodyText()).toEqual(given);
+
+      expect(container.querySelectorAll("[aria-sort]")).toHaveLength(0);
+      const heads = Array.from(
+        container.querySelectorAll('[data-slot="table-head"]'),
+      );
+      expect(heads).toHaveLength(2);
+      for (const head of heads) {
+        expect(head.querySelector('button, a, [role="button"]')).toBeNull();
+      }
+
+      // The order is read after each click: a two-state sort would reorder
+      // the rows on the first click and restore them on the second.
+      fireEvent.click(heads[0]);
+      expect(bodyText()).toEqual(given);
+      expect(container.querySelectorAll("[aria-sort]")).toHaveLength(0);
+
+      fireEvent.click(heads[0]);
+      expect(bodyText()).toEqual(given);
+      expect(container.querySelectorAll("[aria-sort]")).toHaveLength(0);
+    },
+  );
+});
+
+describe('clause: "and no row selection"', () => {
+  it.each(BOTH_STATES)(
+    "draws no selection column or selection state, and a row click selects nothing ($state)",
+    ({ pageSize }) => {
+      // Selection belongs to the call site: the component adds no selection
+      // column, marks no row or table as selectable, and a click on a row
+      // leaves it unselected.
+      const { container } = renderPaginated(pageSize);
+      const selectionMarks =
+        'input[type="checkbox"], [role="checkbox"], [aria-selected], [aria-multiselectable]';
+
+      expect(container.querySelectorAll(selectionMarks)).toHaveLength(0);
+      const rows = Array.from(
+        container.querySelectorAll('[data-slot="table-row"]'),
+      );
+      expect(rows).toHaveLength(3);
+      for (const row of rows) {
+        expect(row.children).toHaveLength(2);
+      }
+
+      const firstBodyRow = container.querySelector(
+        '[data-slot="table-body"] > [data-slot="table-row"]',
+      ) as HTMLElement;
+      fireEvent.click(firstBodyRow);
+
+      expect(firstBodyRow.getAttribute("data-state")).toBeNull();
+      expect(container.querySelectorAll(selectionMarks)).toHaveLength(0);
+    },
   );
 });
