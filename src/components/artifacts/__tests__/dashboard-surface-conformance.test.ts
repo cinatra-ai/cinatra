@@ -90,23 +90,15 @@ describe("§VIII routing — library rows render as dashboard pointers, dual-aut
     expect(LIB).not.toMatch(/buildFacetOptions\(all\)/);
   });
 
-  it("the detail route opens a dashboard artifact as a POINTER, not the renderer", () => {
-    // The core pointer wiring the 0.12.0 drawing drew. Version 0.13.0 draws the
-    // dashboard extension's own display here instead. The done-when of
-    // cinatra#4311 deletes `src/app/artifacts/[id]/dashboard-pointer-detail.tsx`
-    // and leaves no production source under `src` that names
-    // `DashboardPointerDetail`, so the `<DashboardPointerDetail` assertion
-    // below cannot hold after that change.
-    expect(DETAIL).toMatch(/isDashboardArtifactType\(artifact\.objectType\)/);
-    expect(DETAIL).toMatch(/resolveDashboardArtifactPointer/);
-    expect(DETAIL).toMatch(/<DashboardPointerDetail/);
-    // The dashboard branch returns BEFORE the renderer-dispatch body runs — so
-    // a dashboard artifact never reaches `pickArtifactRenderer(...)` (the CALL,
-    // not the import).
-    const branchIdx = DETAIL.indexOf("isDashboardArtifactType(artifact.objectType)");
-    const dispatchCallIdx = DETAIL.indexOf("resolveArtifactDisplayMount(");
-    expect(branchIdx).toBeGreaterThan(-1);
-    expect(dispatchCallIdx).toBeGreaterThan(branchIdx);
+  it("the detail route dispatches every row, whatever its type, through the one display dispatch", () => {
+    // cinatra#3092 acceptance 2: "the page's pre-dispatch interception of the
+    // dashboard row is gone". The page carries no branch on the type, no
+    // pointer resolver and no pointer element, so a dashboard row reaches
+    // `resolveArtifactDisplayMount(...)` (the CALL, not the import) like every other.
+    expect(DETAIL).not.toMatch(/isDashboardArtifactType/);
+    expect(DETAIL).not.toMatch(/resolveDashboardArtifactPointer/);
+    expect(DETAIL).not.toMatch(/<DashboardPointerDetail/);
+    expect(DETAIL.indexOf("resolveArtifactDisplayMount(")).toBeGreaterThan(-1);
   });
 });
 

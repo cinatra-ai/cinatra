@@ -26,7 +26,8 @@ const mocks = vi.hoisted(() => ({
     throw new Error("NOT_FOUND");
   }),
   readArtifactForDetail: vi.fn(),
-  resolveArtifactVersionForServe: vi.fn(() => null),
+  resolveArtifactVersionForServe: vi.fn(() => null as { mime: string; sizeBytes: number } | null),
+  resolveNonFileArtifactRevision: vi.fn(() => null as { mime: string } | null),
   resolveEditorRevisionId: vi.fn(async () => null),
   getRepresentationByIdForReplay: vi.fn(() => null),
   hostArtifactContentBuilder: vi.fn(() => async () => ({ kind: "none" })),
@@ -50,6 +51,7 @@ vi.mock("@/lib/artifacts/artifact-service", () => ({
 }));
 vi.mock("@/lib/artifacts/artifact-read", () => ({
   resolveArtifactVersionForServe: mocks.resolveArtifactVersionForServe,
+  resolveNonFileArtifactRevision: mocks.resolveNonFileArtifactRevision,
 }));
 vi.mock("@/lib/artifacts/representation-store", () => ({
   resolveEditorRevisionId: mocks.resolveEditorRevisionId,
@@ -153,5 +155,34 @@ describe("the artifact page hands its display the session data road", () => {
   it("the page draws no backend address of its own", async () => {
     const html = await renderPage();
     expect(html).not.toContain(ROAD.apiUrl);
+  });
+});
+
+describe("the head revision the artifact page opens on (cinatra#3092)", () => {
+  const DASHBOARD_MIME = "application/vnd.cinatra.dashboard+json";
+
+  function mountedProps() {
+    return mocks.mounted[0]?.props as {
+      representation?: unknown;
+      bytes?: { preview: string | null; download: string | null };
+    };
+  }
+
+  it("a head revision that is not a file hands its recorded mime and no byte address", async () => {
+    mocks.resolveEditorRevisionId.mockResolvedValue("rev-1");
+    mocks.resolveNonFileArtifactRevision.mockReturnValueOnce({ mime: DASHBOARD_MIME });
+    await renderPage();
+    expect(mountedProps().representation).toEqual({ revisionId: "rev-1", mime: DASHBOARD_MIME });
+    expect(mountedProps().bytes).toBeUndefined();
+  });
+
+  it("a file head revision keeps its byte addresses and never asks the non-file reader", async () => {
+    mocks.resolveEditorRevisionId.mockResolvedValue("rev-1");
+    mocks.resolveArtifactVersionForServe.mockReturnValueOnce({ mime: "text/markdown", sizeBytes: 128 });
+    await renderPage();
+    expect(mocks.resolveNonFileArtifactRevision).not.toHaveBeenCalled();
+    expect(mountedProps().representation).toEqual({ revisionId: "rev-1", mime: "text/markdown" });
+    expect(mountedProps().bytes?.preview).toBe("/api/artifacts/a-1/versions/rev-1/preview");
+    expect(mountedProps().bytes?.download).toBe("/api/artifacts/a-1/versions/rev-1/content");
   });
 });
