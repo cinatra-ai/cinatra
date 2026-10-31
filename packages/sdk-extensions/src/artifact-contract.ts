@@ -431,7 +431,6 @@ export type ArtifactUiRegistryItemType = (typeof ARTIFACT_UI_REGISTRY_ITEM_TYPES
 /**
  * The roads by which extension code makes the application create an artifact
  * (cinatra#3821): the host capabilities whose services store an artifact (the
- * CMS review seam's staged-write snapshot, the
  * sent-mail and received-reply records of the mail routing) and the tools that
  * author or materialize one. An agent extension's flow may reach them; a
  * connector must not — a connector gives an agent its connection and its
@@ -441,7 +440,6 @@ export type ArtifactUiRegistryItemType = (typeof ARTIFACT_UI_REGISTRY_ITEM_TYPES
  * (`scripts/extensions/lib/conformance-rules.mjs`) — never a re-listed copy.
  */
 export const ARTIFACT_CREATING_ROADS = [
-  "@cinatra-ai/host:cms-review",
   "@cinatra-ai/host:email-routing",
   "artifact_materialize",
   "artifact_authoring_emit",

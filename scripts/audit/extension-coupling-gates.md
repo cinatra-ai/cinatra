@@ -393,11 +393,7 @@ module that faces connectors to a module that creates an artifact.
   reaches its work through a `globalThis` slot, `entries` (the modules that
   bind the slot). A published id missing from it, a declared id no longer
   published, a `createsArtifact` that disagrees with the reach, and an impl
-  that reads a `globalThis` property with no `entries` each fail. The review
-  seam for staged CMS writes (`@cinatra-ai/host:cms-review`) reaches its
-  capture only through such a slot, which
-  `src/lib/register-cms-review-host-seam-runtime.ts` binds; no import edge
-  leads there from the registration, so the declaration names it.
+  that reads a `globalThis` property with no `entries` each fail.
 - When `packages/sdk-extensions/src/artifact-contract.ts` exports
   `ARTIFACT_CREATING_ROADS`, its members under the application's provider
   identity must equal the ids declared `createsArtifact: true`; while it is
