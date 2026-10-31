@@ -111,12 +111,14 @@ describe("the scoped agent settings shell (issue #2809 item 3)", () => {
     ]);
   });
 
-  it("falls back to the id's first eight characters plus an ellipsis while the name is genuinely unavailable", () => {
+  // The name read answers nothing on a refusal, so the fixed word stands in
+  // (cinatra#4453): "never any part of the id".
+  it("shows the scope's fixed word, with no part of the id, when no name was read", () => {
     const teamPath = `/teams/${TEAM_ID}/agents/cinatra-ai/author-agent/settings`;
     renderShell({ kind: "team", id: TEAM_ID }, teamPath, null);
     const labels = trailOn(teamPath).map((c) => c.label);
-    expect(labels).toEqual([`${TEAM_ID.slice(0, 8)}…`, "Agents", "Settings"]);
-    expect(labels[0]).not.toContain("-1b7a");
+    expect(labels).toEqual(["Team", "Agents", "Settings"]);
+    expect(labels[0]).not.toContain(TEAM_ID.slice(0, 8));
   });
 
   it("names the workspace and the personal scope by their own word", () => {

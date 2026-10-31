@@ -50,6 +50,7 @@ vi.mock("@/lib/auth-session", () => ({
 
 vi.mock("@cinatra-ai/agents/store", () => ({
   readAgentRunById: mocks.readAgentRunById,
+  readAgentTemplateById: vi.fn(async () => null),
 }));
 
 vi.mock("@/lib/agent-run-skills-used", () => ({

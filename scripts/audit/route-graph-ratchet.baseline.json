@@ -3,7 +3,7 @@
   "routes": {
     "/sign-in": 165,
     "/api/mcp": 1309,
-    "/chat": 1409,
+    "/chat": 1410,
     "/api/a2a": 1317,
     "/api/llm-bridge": 1327
   },
@@ -27,10 +27,10 @@
       "pr": 4335
     },
     "/chat": {
-      "from": 1408,
-      "to": 1409,
-      "reason": "This pull request's one new core module, packages/sdk-ui/src/lib/user-avatar.ts (the shared user avatar helper of cinatra#4292), reached through one or more of the three call sites this pull request changes: packages/sdk-ui/src/permissions-panel.tsx, packages/sdk-ui/src/prompt-field.tsx and packages/chat/src/chat-messages-view.tsx.",
-      "pr": 4335
+      "from": 1409,
+      "to": 1410,
+      "reason": "This pull request's one new core module on the route, src/lib/chat-thread-access.ts (the pure reader decision the thread read route already uses), reached through src/lib/chat-route-resolver.ts: the route's server render now reads the thread's name for the breadcrumb under the same reader rule (cinatra#4453).",
+      "pr": 4456
     },
     "/sign-in": {
       "from": 164,

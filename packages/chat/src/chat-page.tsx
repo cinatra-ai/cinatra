@@ -134,7 +134,7 @@ import { ConversationColumn, CHAT_THREAD_HOST } from "./conversation-column";
 // above.
 // ---------------------------------------------------------------------------
 
-export function ChatPage({ initialThreadId, initialAssistantPackage, initialInstanceId, remoteChat, userId, initialMention, initialMode, initialPrompt, widgets = EMPTY_WIDGETS, widgetManifests = EMPTY_WIDGET_MANIFESTS, chatViews = EMPTY_CHAT_VIEWS }: ChatPageProps = {}) {
+export function ChatPage({ initialThreadId, initialThreadTitle, initialAssistantPackage, initialInstanceId, remoteChat, userId, initialMention, initialMode, initialPrompt, widgets = EMPTY_WIDGETS, widgetManifests = EMPTY_WIDGET_MANIFESTS, chatViews = EMPTY_CHAT_VIEWS }: ChatPageProps = {}) {
   const { resolvedTheme } = useTheme();
   const theme: ThemeName = resolvedTheme === "dark" ? "github-dark" : "github-light";
   // Manifest-driven widget runtime — registries/detectors/wizard helpers
@@ -591,9 +591,10 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
 
   // Emit active thread title so AppShell can show it in the breadcrumb.
   useEffect(() => {
-    const title = threads.find((t) => t.id === activeThreadId)?.title ?? null;
-    publishChatThreadTitle(title);
-  }, [activeThreadId, threads]);
+    const listed = threads.find((t) => t.id === activeThreadId)?.title;
+    const fromServer = activeThreadId === (initialThreadId ?? null) ? initialThreadTitle : null;
+    publishChatThreadTitle(listed ?? fromServer ?? null);
+  }, [activeThreadId, threads, initialThreadId, initialThreadTitle]);
 
   // Acquired immediately before streamResponse's try, so the finally is sure.
   // `anchorMessageId` is the PROMPT this turn answers — how the intent tells a turn BELOW an edit point from one above it.

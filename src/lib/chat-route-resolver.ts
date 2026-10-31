@@ -484,6 +484,42 @@ export function resolveChatContainerForCurrentActor(
   return resolveChatContainer(assertion, DEFAULT_CHAT_ROUTE_RESOLVER_DEPS);
 }
 
+/**
+ * The thread's name for the breadcrumb, read in the /chat route's server render
+ * (cinatra#4453). The drawing: "Names come from the owning page's server render,
+ * strictly after its access checks".
+ *
+ * The route guard proves only that the thread lives in the addressed container.
+ * A title is a disclosure, so this repeats the reader rule the thread read route
+ * applies (`readAssistantThreadForActor`). A refusal, a missing thread and any
+ * failure all answer `null`: the crumb then draws no thread name.
+ */
+export async function readChatThreadTitleForCurrentActor(threadId: string): Promise<string | null> {
+  try {
+    const { getAuthSession, isPlatformAdmin } = await import("@/lib/auth-session");
+    const session = await getAuthSession();
+    const actorUserId = session?.user?.id ?? "";
+    if (!session || !actorUserId) return null;
+    const admin = isPlatformAdmin(session);
+    const { loadChatThreadForActorAccess } = await import("@/lib/chat-thread-store");
+    const { evaluateChatThreadAccess } = await import("@/lib/chat-thread-access");
+    const access = loadChatThreadForActorAccess({ threadId, actorUserId, isPlatformAdmin: admin });
+    if (!access) return null;
+    const allowed = evaluateChatThreadAccess({
+      ownerUserId: access.ownerUserId,
+      teamId: access.teamId,
+      actorUserId,
+      isPlatformAdmin: admin,
+      isActorTeamMember: access.isActorTeamMember,
+    });
+    if (!allowed) return null;
+    const { getAssistantThread } = await import("@/lib/assistant-thread-store");
+    return getAssistantThread(threadId)?.title?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 /** Resolve using the production deps — the entry the /chat route calls. */
 export function resolveChatRouteForCurrentActor(
   segments: readonly (string | undefined)[] | undefined,
