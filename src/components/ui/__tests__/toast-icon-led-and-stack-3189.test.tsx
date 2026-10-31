@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * Toast: every toast is icon led, and the stack keeps the newest on top, in a
+ * Toast: toasts are icon led, and the stack keeps the newest on top, in a
  * REAL rendered `<Toaster>` (cinatra#3189, G4 toast).
  *
  *   pnpm exec vitest run src/components/ui/__tests__/toast-icon-led-and-stack-3189.test.tsx
@@ -13,7 +13,7 @@
  * check, warning the triangle, error the cross (stroke 2.4), each 14px. They
  * draw no info glyph, so the info toast keeps the library's own.
  *
- * The toast library draws an icon only for a typed toast, and its own icons
+ * With no caller icon, the toast library draws an icon only for a typed toast, and its own icons
  * are filled discs. The product's Toaster (src/components/ui/sonner.tsx) hands
  * the library the drawn typed glyphs; the toast wrapper
  * (packages/sdk-ui/src/toast.ts) hands the untyped toast (the bare call and
@@ -114,7 +114,7 @@ describe('"an icon on the left identifies the type": the default toast', () => {
     expect(glyphOf(await rendered("Draft saved."))).toEqual(DEFAULT_GLYPH);
   });
 
-  it("keeps the glyph when a caller passes icon: null, because every toast is icon led", async () => {
+  it("keeps the glyph when a caller passes icon: null, because a toast is icon led", async () => {
     mountToaster();
     act(() => {
       toast("Export queued.", { icon: null });

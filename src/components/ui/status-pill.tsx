@@ -41,8 +41,8 @@ const pillVariants = cva(
         "needs-review":"border-warning/40 bg-warning/15 text-warning",
         // Scheduled and Queued take the families the roster draws them in
         // (specs/app.html, the status-pills roster: Scheduled is `pill
-        // approved` on a 6% ground, Queued is `pill running` on an 8% ground),
-        // so one state is never drawn two ways (cinatra#3189).
+        // approved` on a 6% ground, Queued is `pill running` on an 8% ground)
+        // (cinatra#3189).
         scheduled:    "border-success/30 bg-success/6 text-success",
         queued:       "border-primary/30 bg-primary/8 text-primary",
         idle:         "border-line bg-transparent text-muted-foreground",

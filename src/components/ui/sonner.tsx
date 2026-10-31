@@ -16,8 +16,8 @@ function resolveSonnerTheme(theme: string | undefined): SonnerTheme {
 }
 
 // The typed toasts' glyphs, as the components drawing (Toast / Sonner) draws
-// them: a 14px stroked mark in the toast's own status colour, never the
-// library's filled discs. Success is the check, warning the triangle and error
+// them: a 14px stroked mark in the toast's own status colour, in place of
+// the library's filled discs. Success is the check, warning the triangle and error
 // the cross. Info has no drawn glyph there, so it keeps the library's own. The
 // default toast's glyph is added by the toast wrapper
 // (packages/sdk-ui/src/toast.ts), because the library keeps no slot for an

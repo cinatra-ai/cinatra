@@ -18,7 +18,7 @@
 //    Never block on a toast; use Dialog when the user must acknowledge. Stack
 //    vertically, newest on top."
 //
-// ONE DEPARTURE FOUND AND FIXED (cinatra#3189, G4): the default toast's border
+// A DEPARTURE FOUND AND FIXED (cinatra#3189, G4): the default toast's border
 // was the row hairline, while "each" of the five has a border that matches
 // its text, and the drawn default draws `border: 1px solid var(--line-strong)`,
 // the ink of its text. The icon and the stack are read in a rendered Toaster

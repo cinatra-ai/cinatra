@@ -122,8 +122,8 @@ export function buildOptions(
   const next: ExternalToast = { ...rest };
   let ghostCopyAction = false;
 
-  // Every toast is icon led ("an icon on the left identifies the type"), so a
-  // falsy `icon` (null, false, 0, an empty string) is no icon and does not take
+  // The drawing makes a toast icon led ("an icon on the left identifies the
+  // type"), so a falsy `icon` (null, false, 0, an empty string) is no icon and does not take
   // the glyph away: the toast keeps its type's glyph, and a caller's own icon
   // element still replaces it (cinatra#3189).
   if (!next.icon) delete next.icon;
@@ -197,8 +197,8 @@ export function buildOptions(
 
 /**
  * The default toast's glyph, as the components drawing draws it (Toast /
- * Sonner, the first example): a muted circled alert, 14px, stroke 2.2. The
- * library draws an icon only for a typed toast, so the wrapper hands the
+ * Sonner, the first example): a muted circled alert, 14px, stroke 2.2. With no
+ * caller icon, the library draws an icon only for a typed toast, so the wrapper hands the
  * untyped toast (the bare call and `.message`) this one (cinatra#3189).
  */
 function defaultToastIcon() {

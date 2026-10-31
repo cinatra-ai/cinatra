@@ -96,10 +96,10 @@ describe("the SDK's StatusPill: Declined and Failed are drawn apart", () => {
   });
 });
 
-// The SDK copy's other eight states keep their families: only Scheduled and
-// Queued move. (The application copy's other states are graded by
-// status-pill-drawing-conformance.test.tsx.)
-describe("the SDK's StatusPill: the eight states this change does not touch", () => {
+// These eight states of the SDK copy keep their colour families; of the
+// families, only Scheduled and Queued move. (The application copy's other states
+// are graded by status-pill-drawing-conformance.test.tsx.)
+describe("the SDK's StatusPill: eight other states keep their colour families", () => {
   const KEPT: Array<[string, string[]]> = [
     ["running", ["text-primary", "bg-primary/10", "border-primary/30"]],
     ["approved", ["text-success", "bg-success/10", "border-success/30"]],
