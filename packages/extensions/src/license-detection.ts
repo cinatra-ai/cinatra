@@ -139,7 +139,7 @@ export async function detectSpdxLicense(packageDir: string): Promise<LicenseDete
   // Source 2: LICENSE / LICENSE.md / COPYING with SPDX header
   // ---------------------------------------------------------------------------
   for (const fileName of ["LICENSE", "LICENSE.md", "COPYING"]) {
-    const content = await tryReadFile(join(packageDir, fileName));
+    const content = await tryReadFile(join(/* turbopackIgnore: true */ packageDir, fileName));
     if (content) {
       const result = extractSpdxFromContent(content);
       if (result) return result;

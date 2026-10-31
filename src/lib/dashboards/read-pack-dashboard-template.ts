@@ -23,7 +23,7 @@ import path from "node:path";
 function packDir(sourceDir: string): string {
   // `sourceDir` is repo-root-relative; resolve against the process cwd (the
   // deployed/dev convention shared by required-in-prod / purge-deps).
-  return path.resolve(process.cwd(), sourceDir);
+  return path.resolve(/* turbopackIgnore: true */ process.cwd(), sourceDir);
 }
 
 type ArtifactTemplateEntry = {

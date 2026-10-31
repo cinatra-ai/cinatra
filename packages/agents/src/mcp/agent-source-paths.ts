@@ -119,7 +119,7 @@ export function resolveAgentJsonPathForRead(packageSlug: string): {
   }
   // Rung 3 — legacy: explicit map for renamed slugs, otherwise keep slug as-is
   const legacySlug = LEGACY_SLUG_MAP[packageSlug] ?? packageSlug;
-  const legacyRoot = join(root, legacySlug);
+  const legacyRoot = join(/* turbopackIgnore: true */ root, legacySlug);
   const rung3 = join(legacyRoot, "cinatra", "agent.json");
   if (existsSync(rung3)) return { path: rung3, relPath: relative(process.cwd(), rung3), rootDir: legacyRoot };
   // Rung 4 — legacy (older layout)
