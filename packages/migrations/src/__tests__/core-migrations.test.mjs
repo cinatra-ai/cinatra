@@ -235,3 +235,41 @@ describe("assertDownTargetsInNamespace (#118 per-extension down fence)", () => {
     }
   });
 });
+
+describe("core__0116 pause claim columns (cinatra#4245)", () => {
+  it("the runner accepts it, its up only adds (so a re-up is a no-op) and its down removes only what up added", async () => {
+    const files = await validateCoreMigrationsDir(path.join(REPO_ROOT, CORE_MIGRATIONS_DIR));
+    expect(files.filter((name) => name.startsWith("core__0116_"))).toEqual(["core__0116_agent-run-pause-claim.mjs"]);
+    const mod = await import(path.join(REPO_ROOT, CORE_MIGRATIONS_DIR, "core__0116_agent-run-pause-claim.mjs"));
+    const noTx = [];
+    const record = (fn) => { const calls = []; fn({ sql: (text) => calls.push(String(text)), noTransaction: () => noTx.push(fn.name) }); return calls; };
+    const up = record(mod.up);
+    expect(record(mod.up)).toEqual(up);
+    // Pre-1 C4: up runs outside a transaction, so no lock outlives its statement;
+    // each CHECK is added NOT VALID and validated in a later statement of its own.
+    expect(noTx).toEqual(["up", "up"]);
+    // Re-up: every column add is IF NOT EXISTS, every CHECK sits behind its pg_constraint guard.
+    const adds = up.flatMap((stmt) => stmt.match(/ADD COLUMN (?:IF NOT EXISTS )?\w+/g) ?? []);
+    expect(adds.every((add) => add.startsWith("ADD COLUMN IF NOT EXISTS "))).toBe(true);
+    expect(adds.map((add) => add.split(" ").pop()).sort()).toEqual(
+      ["pause_claim_expires_at", "pause_claim_phase", "pause_claim_token", "pause_generation", "paused_run_generation"],
+    );
+    const constraints = up.flatMap((stmt) => [...stmt.matchAll(/ADD CONSTRAINT (\w+)/g)].map((m) => m[1]));
+    expect(constraints).toEqual(["agent_runs_pause_claim_phase_chk", "agent_runs_pause_claim_shape_chk"]);
+    for (const name of constraints) {
+      const guarded = up.find((stmt) => stmt.includes(`ADD CONSTRAINT ${name}`));
+      expect(guarded).toMatch(new RegExp(`IF NOT EXISTS \\(\\s*SELECT 1 FROM pg_constraint\\s+WHERE conname = '${name}'`));
+      expect(guarded).toMatch(/\) NOT VALID;/);
+      const validate = up.findIndex((stmt) => stmt.includes(`VALIDATE CONSTRAINT ${name};`));
+      expect(validate).toBeGreaterThan(up.indexOf(guarded));
+      expect(up[validate]).toMatch(/AND NOT convalidated/);
+      expect(up[validate]).not.toMatch(/ADD CONSTRAINT/);
+    }
+    // Down: IF EXISTS throughout, constraints before columns, and nothing up did not add.
+    const down = record(mod.down).join(";\n");
+    const dropped = [...down.matchAll(/DROP (COLUMN|CONSTRAINT) IF EXISTS (\w+)/g)].map((m) => m[2]);
+    expect(dropped.slice(0, 2).sort()).toEqual([...constraints].sort());
+    expect(dropped.slice(2).sort()).toEqual(adds.map((add) => add.split(" ").pop()).sort());
+    expect(down).not.toMatch(/\bDROP (?:COLUMN|CONSTRAINT|TABLE) (?!IF EXISTS)|\bCASCADE\b|\bDROP TABLE\b/);
+  });
+});

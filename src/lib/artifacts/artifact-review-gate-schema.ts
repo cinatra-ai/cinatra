@@ -813,6 +813,10 @@ export function lifecycleRepairSchemaQueries(schemaName: string): QueryInput[] {
       text: `CREATE INDEX IF NOT EXISTS lifecycle_repair_status_idx
   ON "${q}"."lifecycle_repair" (status, created_at)`,
     },
+    // cinatra#4245: the run's pause_generation that a change request ended, so
+    // the drain's stop can be conditioned on it. Nullable, no backfill: a repair
+    // recorded before the column reads NULL. Migration twin core__0116.
+    { text: `ALTER TABLE "${q}"."lifecycle_repair" ADD COLUMN IF NOT EXISTS paused_run_generation bigint` },
 
     // -----------------------------------------------------------------------
     // ROUTED ADDITION — the AC-6 rejected-recommendation efficacy row (S3).

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgSchema, text, integer, boolean, timestamp, index, uniqueIndex, primaryKey, jsonb } from "drizzle-orm/pg-core";
+import { pgSchema, text, integer, bigint, boolean, timestamp, index, uniqueIndex, primaryKey, jsonb } from "drizzle-orm/pg-core";
 
 // ---------------------------------------------------------------------------
 // Extension registry origin coordinates.
@@ -476,6 +476,19 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   lifecycleMoment: text("lifecycle_moment"),
   lifecycleCardKind: text("lifecycle_card_kind"),
   lifecycleCardRef: text("lifecycle_card_ref"),
+  // THE PAUSE CLAIM (cinatra#4245): a generation-stamped lease on the run row,
+  // so a resume, a stop and a change request serialize on one row lock.
+  // pauseGeneration counts every change of what the run waits at; the claim
+  // triple says who holds the pause (token), how far it got (phase: claimed,
+  // sending, changes_requested) and until when (DB-clock expiry; NULL only for
+  // the changes_requested end mark). CHECKs agent_runs_pause_claim_phase_chk and
+  // agent_runs_pause_claim_shape_chk. A row from before the columns reads
+  // generation 0 and no claim. Migration: core__0116 + the bootstrap leaf
+  // agentRunPauseClaimSchemaQueries.
+  pauseGeneration: bigint("pause_generation", { mode: "number" }).notNull().default(0),
+  pauseClaimToken: text("pause_claim_token"),
+  pauseClaimPhase: text("pause_claim_phase"),
+  pauseClaimExpiresAt: timestamp("pause_claim_expires_at", { withTimezone: true }),
 }, (t) => ({
   templateIdIdx:    index("agent_runs_template_id_idx").on(t.templateId),
   statusIdx:        index("agent_runs_status_idx").on(t.status),
@@ -1059,6 +1072,8 @@ export const lifecycleRepair = cinatraSchema.table("lifecycle_repair", {
   idempotencyKey:                  text("idempotency_key").notNull(),
   createdAt:                       timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt:                       timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  // cinatra#4245: the run's pause_generation the change request ended (core__0116).
+  pausedRunGeneration:             bigint("paused_run_generation", { mode: "number" }),
 }, (t) => ({
   gateUniq:    uniqueIndex("lifecycle_repair_gate_uniq").on(t.gateId),
   lineageIdx:  index("lifecycle_repair_lineage_idx").on(t.lineageId),
