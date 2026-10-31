@@ -67,9 +67,14 @@ describe("an organization tab route", () => {
     expect(labels.join(" ")).not.toContain(ORG_ID.slice(0, 8));
   });
 
-  it("falls back to the id's first eight characters plus an ellipsis while the name is unavailable", () => {
+  // The name read answers nothing on a refusal, so the scope's fixed word stands
+  // in and no part of the id reaches the reader (cinatra#4453). The drawing: "a
+  // crumb standing for the refused or the missing entity shows a fixed label ...
+  // and never any part of the id".
+  it("shows the scope's fixed word, with no part of the id, when no name was read", () => {
     const labels = trail(`/organizations/${ORG_ID}/agents`, scope, "agents");
-    expect(labels).toEqual(["Organizations", `${ORG_ID.slice(0, 8)}…`, "Agents"]);
+    expect(labels).toEqual(["Organizations", "Organization", "Agents"]);
+    expect(labels.join(" ")).not.toContain(ORG_ID.slice(0, 8));
   });
 });
 
