@@ -27,6 +27,8 @@ const shared = vi.hoisted(() => ({
   executed: [] as unknown[],
   executeRows: [] as Array<Record<string, unknown>>,
   updateCalls: 0,
+  selectRows: [] as Array<Record<string, unknown>>,
+  returningError: null as Error | null,
 }));
 
 vi.mock("../db", async () => {
@@ -40,7 +42,12 @@ vi.mock("../db", async () => {
           where: (cond: unknown) => {
             shared.whereConds.push(cond);
             const rows = shared.returningRows.length > 0 ? shared.returningRows.shift()! : [{ id: "run-1" }];
-            return Object.assign(Promise.resolve(undefined), { returning: async () => rows });
+            return Object.assign(Promise.resolve(undefined), {
+              returning: async () => {
+                if (shared.returningError) throw shared.returningError;
+                return rows;
+              },
+            });
           },
         };
       },
@@ -52,7 +59,8 @@ vi.mock("../db", async () => {
       update,
       insert,
       // The park clear on a pending_approval exit reads the row: no park here.
-      select: () => ({ from: () => ({ where: () => ({ limit: async () => [] }) }) }),
+      // claimPause's refusal read gets shared.selectRows.
+      select: () => ({ from: () => ({ where: () => ({ limit: async () => shared.selectRows }) }) }),
       execute: async (q: unknown) => {
         shared.executed.push(q);
         return { rows: shared.executeRows };
@@ -79,7 +87,13 @@ import { transitionRunStatus } from "../store";
 import { updateAgentRunStatusConditional } from "../run-transition";
 import { PAUSE_CLAIM_LEASE_SECONDS, PAUSE_SEND_LEASE_SECONDS } from "../run-status";
 import { WAYFLOW_A2A_TIMEOUT_MS } from "../wayflow-url";
-import { PauseClaimReleaseError } from "../run-pause-claim";
+import {
+  PauseClaimReleaseError,
+  claimPause,
+  fencePauseInPlace,
+  releasePauseClaim,
+  settlePauseSend,
+} from "../run-pause-claim";
 import { resumeRunFromSetupApproval } from "../resume-run-from-setup-approval";
 import { agentRuns } from "../schema";
 
@@ -132,6 +146,8 @@ beforeEach(() => {
   shared.executed.length = 0;
   shared.executeRows = [];
   shared.updateCalls = 0;
+  shared.selectRows = [];
+  shared.returningError = null;
 });
 
 describe("the lease constants", () => {
@@ -319,6 +335,18 @@ describe("rule 5: the change-request end mark", () => {
       }),
     ).rejects.toThrow(/pauseEndMark supplied for pending_approval→running/);
   });
+
+  it("refuses a malformed end mark before any write", async () => {
+    for (const generation of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53, undefined]) {
+      const { tx, rec } = casTx();
+      await expect(
+        updateAgentRunStatusConditional(RUN, "pending_approval", "stopped", undefined, ORG, tx, {
+          pauseEndMark: { generation } as { generation: number },
+        }),
+      ).rejects.toThrow(/malformed pauseEndMark/);
+      expect(rec.set).toHaveLength(0);
+    }
+  });
 });
 
 describe("transitionRunStatus: the control fields", () => {
@@ -395,6 +423,62 @@ describe("the setup resume (a direct status writer)", () => {
     expect(render(rec.where[0]).sql).toContain(
       `(${RUNS}."pause_claim_token" IS NULL OR (${RUNS}."pause_claim_phase" IN ('claimed', 'sending') AND ${RUNS}."pause_claim_expires_at" <= now()))`,
     );
+  });
+});
+
+describe("the claim module's guards", () => {
+  const REF = { runId: RUN, orgId: ORG, generation: 2 };
+  const OWN = { runId: RUN, orgId: ORG, token: "tok" };
+
+  it("claimPause and fencePauseInPlace refuse a malformed generation before any write", async () => {
+    for (const generation of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53]) {
+      await expect(claimPause({ ...REF, generation }, SESSION)).rejects.toThrow(/malformed generation/);
+      await expect(fencePauseInPlace({ ...REF, generation, token: "tok" }, SESSION)).rejects.toThrow(/malformed generation/);
+    }
+    expect(shared.updateCalls).toBe(0);
+  });
+
+  it("all four refuse an empty token before any write", async () => {
+    await expect(claimPause(REF, SESSION, { token: "" })).rejects.toThrow(/empty claim token/);
+    await expect(fencePauseInPlace({ ...REF, token: "" }, SESSION)).rejects.toThrow(/empty claim token/);
+    await expect(releasePauseClaim({ ...OWN, token: "" }, SESSION)).rejects.toThrow(/empty claim token/);
+    await expect(settlePauseSend({ ...OWN, token: "" }, SESSION)).rejects.toThrow(/empty claim token/);
+    expect(shared.updateCalls).toBe(0);
+  });
+
+  it("claimPause throws on a row count over one, and on a returned row without an expiry", async () => {
+    const at = new Date();
+    shared.returningRows = [[{ expiresAt: at }, { expiresAt: at }] as unknown as { id: string }[]];
+    await expect(claimPause(REF, SESSION)).rejects.toThrow(/unexpected result/);
+    shared.returningRows = [[{ expiresAt: null }] as unknown as { id: string }[]];
+    await expect(claimPause(REF, SESSION)).rejects.toThrow(/unexpected result/);
+  });
+
+  it("a refusal reads the generation as a number, and names one it cannot read as null", async () => {
+    shared.returningRows = [[]];
+    shared.selectRows = [{ status: "pending_approval", generation: "9007199254740993", phase: null }];
+    expect(await claimPause(REF, SESSION)).toEqual({
+      kind: "refused",
+      reason: "moved-on",
+      status: "pending_approval",
+      generation: null,
+    });
+    shared.returningRows = [[]];
+    shared.selectRows = [{ status: "pending_approval", generation: "2", phase: "claimed" }];
+    expect(await claimPause(REF, SESSION)).toEqual({
+      kind: "refused",
+      reason: "held",
+      status: "pending_approval",
+      generation: 2,
+    });
+  });
+
+  it("all four throw a database error", async () => {
+    shared.returningError = new Error("the database went away");
+    await expect(claimPause(REF, SESSION)).rejects.toThrow("the database went away");
+    await expect(fencePauseInPlace({ ...REF, token: "tok" }, SESSION)).rejects.toThrow("the database went away");
+    await expect(releasePauseClaim(OWN, SESSION)).rejects.toThrow("the database went away");
+    await expect(settlePauseSend(OWN, SESSION)).rejects.toThrow("the database went away");
   });
 });
 

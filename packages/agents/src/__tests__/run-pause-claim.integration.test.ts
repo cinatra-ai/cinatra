@@ -8,7 +8,9 @@
  *   - a claim at the generation read; the four refusals; the lease measured on
  *     the database clock;
  *   - an expired lease is taken over, and the old holder's release is `lost`;
- *   - two claims at once: exactly one wins;
+ *   - two claims at once, and two takers of an expired lease: exactly one wins;
+ *   - release leaves a sending lease alone;
+ *   - another organization's call touches nothing;
  *   - the fence (status seam and in place), and a fence with a stale token;
  *   - no stop under a live send (pause_resume_in_flight); the stop lands after
  *     the settle or after the send lease expired;
@@ -45,8 +47,10 @@ if (process.env.X4245_PAUSE_CLAIM_REALDB === "1" && !HAS_DB) {
 const q = (s: string) => s.replaceAll('"', '""');
 const T = () => `"${q(TEST_SCHEMA)}"."agent_runs"`;
 const ORG = "org-4245-a2";
+const OTHER_ORG = "org-4245-a2-other";
 const USER = "user-4245-a2";
 const SESSION = { orgId: ORG, can: () => true };
+const OTHER_SESSION = { orgId: OTHER_ORG, can: () => true };
 
 let claims: typeof import("../run-pause-claim");
 let store: typeof import("../store");
@@ -115,8 +119,8 @@ beforeAll(async () => {
     for (const s of agentRunPauseClaimSchemaQueries(TEST_SCHEMA)) await admin.query(s.text);
     await admin.query(
       `INSERT INTO public."organization" (id, name, slug, "createdAt")
-       VALUES ($1, $1, $1, now()) ON CONFLICT (id) DO NOTHING`,
-      [ORG],
+       VALUES ($1, $1, $1, now()), ($2, $2, $2, now()) ON CONFLICT (id) DO NOTHING`,
+      [ORG, OTHER_ORG],
     );
   } finally {
     await admin.end().catch(() => {});
@@ -226,6 +230,53 @@ describe.skipIf(!HAS_DB)("cinatra#4245 the pause claim (real database)", () => {
       expect(results.find((r) => r.kind === "refused")).toMatchObject({ reason: "held" });
       expect((await read(id)).token).toBe((won[0] as { token: string }).token);
     }
+  });
+
+  it("two takers of an expired lease: exactly one wins", async () => {
+    for (const phase of ["claimed", "sending"] as const) {
+      for (let i = 0; i < 5; i += 1) {
+        const id = await seedRun("pending_approval", 1);
+        await setClaim(id, "tok-dead", phase, -1);
+        const results = await Promise.all(
+          ["tok-x", "tok-y"].map((token) => claims.claimPause({ runId: id, orgId: ORG, generation: 1 }, SESSION, { token })),
+        );
+        const won = results.filter((r) => r.kind === "claimed");
+        expect(won).toHaveLength(1);
+        expect(results.find((r) => r.kind === "refused")).toMatchObject({ reason: "held" });
+        expect(await read(id)).toMatchObject({ token: (won[0] as { token: string }).token, phase: "claimed" });
+      }
+    }
+  });
+
+  it("release leaves a sending lease alone, under the holder's own token", async () => {
+    const id = await seedRun("pending_approval", 4);
+    await claims.claimPause({ runId: id, orgId: ORG, generation: 4 }, SESSION, { token: "tok-f" });
+    await claims.fencePauseInPlace({ runId: id, orgId: ORG, generation: 4, token: "tok-f" }, SESSION);
+    expect(await claims.releasePauseClaim({ runId: id, orgId: ORG, token: "tok-f" }, SESSION)).toBe("lost");
+    expect(await read(id)).toMatchObject({ token: "tok-f", phase: "sending", generation: 5 });
+  });
+
+  it("another organization's call touches nothing; a session of one org cannot name another", async () => {
+    const id = await seedRun("pending_approval", 3);
+    await setClaim(id, "tok-o", "claimed", 60);
+    const before = await read(id);
+    const ref = { runId: id, orgId: OTHER_ORG };
+    expect(await claims.claimPause({ ...ref, generation: 3 }, OTHER_SESSION)).toEqual({
+      kind: "refused",
+      reason: "not-pending",
+      status: "absent",
+      generation: null,
+    });
+    expect(await claims.fencePauseInPlace({ ...ref, generation: 3, token: "tok-o" }, OTHER_SESSION)).toBe("lost");
+    expect(await claims.releasePauseClaim({ ...ref, token: "tok-o" }, OTHER_SESSION)).toBe("lost");
+    expect(await claims.settlePauseSend({ ...ref, token: "tok-o" }, OTHER_SESSION)).toBe("already-cleared");
+    await expect(claims.claimPause({ ...ref, generation: 3 }, SESSION)).rejects.toMatchObject({ reason: "org-mismatch" });
+    expect(await read(id)).toMatchObject({
+      status: before.status,
+      generation: before.generation,
+      token: "tok-o",
+      phase: "claimed",
+    });
   });
 
   it("release gives back a claimed lease once; settle answers already-cleared on a claimed one", async () => {
