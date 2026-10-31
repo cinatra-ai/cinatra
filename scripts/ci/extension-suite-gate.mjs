@@ -450,7 +450,7 @@ export function planRun({ packages, carveOuts = CARVE_OUTS }) {
   const stale = [];
   // node:test suites whose own CI skips them (check 3). They are always
   // ENFORCED: the ledger is written in vitest's report vocabulary and has no
-  // entry for them, so a carve-out can never apply to one.
+  // entry for them, so no carve-out names one.
   const nodeRun = packages.filter(isHostRunNodeTest);
   for (const p of packages) {
     if (p.runner !== "vitest") continue;
@@ -1186,8 +1186,8 @@ function runVitest({ repoRoot, pkg, reportDir, slot }) {
 // (`--test-force-exit`). The file bound is this
 // gate's own: a file still running after it (a synchronous loop, which no test
 // timeout can interrupt) has its process group killed and is reported as timed
-// out, so a hung file is ended after the bound instead of holding the job until
-// the workflow's own timeout.
+// out, so the gate stops waiting for a hung file after the bound instead of
+// holding the job until the workflow's own timeout.
 //
 // The files run one after another, so the file bound alone does not bound the
 // node:test phase: six files that each reach it take 30 minutes. The phase
@@ -1216,8 +1216,8 @@ const NODE_STDERR_CAP = 100_000;
 // file that registers no test as one test named by the file's path, and the
 // TAP of that report is the same as the TAP of a real test of that name. What
 // differs is the location node gives it: line 1, column 1 of the file, where a
-// real test is reported at the place of its call. A file written by the reporter is not
-// mixed with what the tests print, which reaches the TAP as comments.
+// real test is reported at the place of its call. In the readings, what a test
+// printed reached the TAP as comments and not the reporter's file.
 export function nodeTestArgs(file, topLevelFile, testTimeoutMs = NODE_TEST_TIMEOUT_MS) {
   return [
     "--test",
@@ -1300,7 +1300,7 @@ function killNodeGroup(child) {
   }
 }
 
-// End every running node:test child (its whole process group) and remove its
+// Kill the process group of every running node:test child and remove its
 // record folder, and kill again the group of each run that ended without a
 // close (its folder is already removed: `recDir: null`). Returns one entry per
 // child. Exported for its test.
@@ -1316,8 +1316,8 @@ export function stopLiveNodeRuns() {
   return out;
 }
 
-// In `main`: a SIGTERM or SIGINT to the gate (a cancelled or timed-out job) ends
-// the running node:test children and removes their record folders before the
+// In `main`: a SIGTERM or SIGINT to the gate (a cancelled or timed-out job)
+// kills the running node:test children and removes their record folders before the
 // gate exits with the signal's usual code. Exported for its test.
 export function installNodeRunCleanup(proc = process) {
   for (const [sig, code] of [
@@ -1341,7 +1341,7 @@ export function installNodeRunCleanup(proc = process) {
 // after the child's close, or after NODE_KILL_GRACE_MS without one (noted in the
 // detail). On every ending the records are read, their folder is removed, and
 // the child's output pipes are destroyed and the child is unref'd, so a process
-// that still holds the pipes (one a test moved out of the group) cannot keep
+// that still holds the pipes (one that left the child's group) does not keep
 // the gate from exiting. That process is not killed: the gate does not know it.
 // After a kill without a close, the group stays under the signal cleanup
 // (survivingNodeGroups). foldNodeRuns reads both kill endings as a lost report.
