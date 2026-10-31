@@ -452,6 +452,9 @@ export function lifecycleInterceptionsSchemaQueries(schemaName: string): QueryIn
     { text: `ALTER TABLE "${q}"."artifact_review_resume_outbox" ADD COLUMN IF NOT EXISTS max_attempts integer NOT NULL DEFAULT 20` },
     { text: `ALTER TABLE "${q}"."artifact_review_resume_outbox" ADD COLUMN IF NOT EXISTS dead_lettered_at timestamptz` },
     { text: `ALTER TABLE "${q}"."artifact_review_resume_outbox" ADD COLUMN IF NOT EXISTS last_error text` },
+    // cinatra#3745 (core__0116): the delivery's durable claim mark and send witness.
+    { text: `ALTER TABLE "${q}"."artifact_review_resume_outbox" ADD COLUMN IF NOT EXISTS run_claimed_at timestamptz` },
+    { text: `ALTER TABLE "${q}"."artifact_review_resume_outbox" ADD COLUMN IF NOT EXISTS resume_task_result jsonb` },
     {
       text: `CREATE INDEX IF NOT EXISTS artifact_review_resume_outbox_dead_idx
   ON "${q}"."artifact_review_resume_outbox" (dead_lettered_at) WHERE dead_lettered_at IS NOT NULL`,
@@ -1115,4 +1118,17 @@ export function runRecommendationOfferedSetSchemaQueries(schemaName: string): Qu
   ON "${q}"."${RUN_RECOMMENDATION_OFFERED_SET_TABLE}" (run_id)`,
     },
   ];
+}
+
+/** Bootstrap twin of reserved core__0115; no data backfill grants authority. */
+export function outwardActionPolicySchemaQueries(schemaName: string): QueryInput[] {
+  const q = schemaName.replaceAll('"', '""');
+  return [{ text: `CREATE TABLE IF NOT EXISTS "${q}"."agent_run_outward_action_policies" (
+    run_id text PRIMARY KEY, org_id text NOT NULL, execution_attempt_id text NOT NULL,
+    policy jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
+  )` }, { text: `CREATE TABLE IF NOT EXISTS "${q}"."artifact_review_action_consumptions" (
+    gate_id text PRIMARY KEY, run_id text NOT NULL, org_id text NOT NULL,
+    step_id text NOT NULL, tool_identity jsonb NOT NULL,
+    executed_source_sha256 text NOT NULL, consumed_at timestamptz NOT NULL DEFAULT now()
+  )` }];
 }

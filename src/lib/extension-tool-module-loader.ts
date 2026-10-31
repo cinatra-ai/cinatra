@@ -1,3 +1,4 @@
+import { readLoadedExtensionIdentity, isLoadedExtensionIdentityCurrent, type LoadedExtensionIdentity } from "@/lib/extension-capabilities-registry";
 import "server-only";
 
 // LOADING THE CALLING PACK'S OWN DECLARED MODULE (cinatra#3249, epic #3023).
@@ -135,11 +136,12 @@ const sourceDirPackageRoot = async (
  * discovery builds its records from the manifests it finds, and the version an
  * admission is bound to has to be the version whose code is about to run.
  */
-const defaultPackageRootResolver: PinnedPackageRootResolver = async ({
+type SelectedPackage = { root: string; identity?: LoadedExtensionIdentity; verify: () => Promise<boolean> };
+const defaultPackageSelection = async ({
   packageName,
   packageVersion,
   orgId,
-}) => {
+}: Parameters<PinnedPackageRootResolver>[0]): Promise<SelectedPackage | null> => {
   const [
     { discoverStoreRecordsV2, realStoreFs },
     { resolveExtensionDataRoot },
@@ -158,7 +160,9 @@ const defaultPackageRootResolver: PinnedPackageRootResolver = async ({
   // the boot loader does before it hands a path to the import seam.
   const resolveAnchors = await makeDefaultInstallAnchorsResolver(orgId);
   const anchors = await resolveAnchors(packageName);
-  const anchor = anchors.find((a) => (a.version ?? null) === packageVersion);
+  const matches = anchors.filter((a) => (a.version ?? null) === packageVersion);
+  if (matches.length > 1) return null; // No arbitrary canonical owner on collision.
+  const anchor = matches[0];
   const records = (await discoverStoreRecordsV2(resolveExtensionDataRoot(), realStoreFs)).filter(
     (record) => record.packageName === packageName,
   );
@@ -168,7 +172,10 @@ const defaultPackageRootResolver: PinnedPackageRootResolver = async ({
   // moved off a materialized install onto a source tree. ONLY a store holding
   // no record for it at all — what a development installation always reads —
   // reaches the second road.
-  if (records.length === 0) return sourceDirPackageRoot(packageName, packageVersion);
+  if (records.length === 0) {
+    const root = await sourceDirPackageRoot(packageName, packageVersion);
+    return root ? { root, verify: async () => true } : null;
+  }
   if (!anchor) return null;
   // Anchor KIND binding: the canonical row's kind against the store path's kind.
   const kindBound = records.filter((record) =>
@@ -191,7 +198,13 @@ const defaultPackageRootResolver: PinnedPackageRootResolver = async ({
     return null;
   }
   if (parsed.name !== packageName || parsed.version !== packageVersion) return null;
-  return record.storeDir;
+  const { verifyMaterializedPackageIntegrity } = await import("@/lib/extension-package-store");
+  const verify = () => verifyMaterializedPackageIntegrity(record, {
+    trustedIntegrity: anchor.integrity, trustedContentHash: anchor.contentHash });
+  if (!await verify()) return null;
+  const identity = anchor.installId && anchor.digest ? readLoadedExtensionIdentity({
+    packageName, version: packageVersion, installId: anchor.installId, digest: anchor.digest }) : undefined;
+  return { root: record.storeDir, identity, verify };
 };
 
 /**
@@ -199,7 +212,7 @@ const defaultPackageRootResolver: PinnedPackageRootResolver = async ({
  * lock. Every refusal is stated; nothing is imported before both path gates
  * have passed.
  */
-export async function loadDeclaredToolModule(
+export async function loadDeclaredToolModuleWithIdentity(
   input: {
     packageName: string;
     packageVersion: string;
@@ -209,14 +222,20 @@ export async function loadDeclaredToolModule(
     modulePath: string;
   },
   deps: ExtensionToolModuleLoaderDeps = {},
-): Promise<unknown> {
-  const resolveRoot = deps.resolvePackageRoot ?? defaultPackageRootResolver;
-  const root = await resolveRoot({
+): Promise<{ namespace: unknown; identity?: LoadedExtensionIdentity }> {
+  const selection = deps.resolvePackageRoot
+    ? await deps.resolvePackageRoot({
+        packageName: input.packageName,
+        packageVersion: input.packageVersion,
+        orgId: input.orgId,
+      }).then(root => root === null ? null : { root, verify: async () => true } as SelectedPackage)
+    : await defaultPackageSelection({
     packageName: input.packageName,
     packageVersion: input.packageVersion,
     orgId: input.orgId,
   });
-  if (root === null) {
+  const root = selection?.root ?? null;
+  if (root === null || !selection) {
     throw new ExtensionToolModuleRefusal(
       `extension_tool: the calling extension is not materialized at the pinned version, so the ` +
         `module it declares for \`${input.toolName}\` cannot be loaded`,
@@ -258,5 +277,15 @@ export async function loadDeclaredToolModule(
       const { importFileFromPackageDirRealpathBound } = await import("@/lib/runtime-package-loader");
       return importFileFromPackageDirRealpathBound(p, realRoot);
     });
-  return importModule(realAbs);
+  const namespace = await importModule(realAbs);
+  if (!await selection.verify() || (selection.identity && !isLoadedExtensionIdentityCurrent(selection.identity))) {
+    throw new ExtensionToolModuleRefusal("extension_tool: selected namespace identity changed during import");
+  }
+  return Object.freeze({ namespace, ...(selection.identity ? { identity: selection.identity } : {}) });
+}
+
+/** Legacy namespace ABI preserved; guarded dispatch uses the paired snapshot. */
+export async function loadDeclaredToolModule(input: Parameters<typeof loadDeclaredToolModuleWithIdentity>[0],
+  deps: ExtensionToolModuleLoaderDeps = {}): Promise<unknown> {
+  return (await loadDeclaredToolModuleWithIdentity(input, deps)).namespace;
 }

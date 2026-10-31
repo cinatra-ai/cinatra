@@ -798,6 +798,7 @@ def test_mount_malformed_declaration_raises(monkeypatch, tmp_path: Path) -> None
 
 def test_composed_oas_handler_auth_and_lookup(monkeypatch) -> None:
     import asyncio
+    from types import MappingProxyType
 
     import agent_loader as al
 
@@ -813,6 +814,7 @@ def test_composed_oas_handler_auth_and_lookup(monkeypatch) -> None:
         fingerprint = "f" * 64
         composed_oas = {"id": "x"}
         composed_sha256 = "c" * 64
+        selected_source_binding = None
         context_injection = [
             {
                 "slot": "s",
@@ -822,7 +824,8 @@ def test_composed_oas_handler_auth_and_lookup(monkeypatch) -> None:
             }
         ]
 
-    handler = al._build_composed_oas_handler(_FakeRegistry(_FakeAgent()))
+    agent = _FakeAgent()
+    handler = al._build_composed_oas_handler(_FakeRegistry(agent))
 
     class _Req:
         def __init__(self, token: str, vendor: str = "cinatra-ai", slug: str = "known"):
@@ -845,6 +848,15 @@ def test_composed_oas_handler_auth_and_lookup(monkeypatch) -> None:
     assert body["injected"] is True
     assert body["templateVersion"] == CONTEXT_SUBFLOW_TEMPLATE_VERSION
     assert body["composedOas"] == {"id": "x"}
+    assert body["selectedSourceBinding"] is None
+
+    binding = {"packageName": "@cinatra-ai/known", "sourceSha256": "s" * 64}
+    agent.selected_source_binding = MappingProxyType(binding)
+    bound = asyncio.run(handler(_Req("sekrit")))
+    assert bound.status_code == 200
+    bound_body = json.loads(bound.body)
+    assert bound_body["selectedSourceBinding"] == binding
+    assert bound_body["composedOas"] == {"id": "x"}
 
 
 # ---------------------------------------------------------------------------

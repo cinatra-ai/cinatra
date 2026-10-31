@@ -48,11 +48,13 @@ import {
   readAgentRunsByTemplateRaw,
   type AgentRunRecord,
 } from "../store";
+import { claimGateForResume } from "../run-status";
 // Run-scoped test-delivery send + parse primitives (#1625): the two handlers
 // live in ./test-delivery-handlers (extracted to keep this primitive hub under
 // the file-size ratchet). The send PORT, ledger store, and port types are
 // imported by that module, not here.
 import { handleEmailTestDeliveryRunSend, handleEmailTestDeliveryParseAction } from "./test-delivery-handlers";
+import { declarePersonDecisionEvaluation } from "@/lib/extension-capabilities-registry";
 // The `agent_run` create → decide → dispatch sequence (chat-hitl S9b).
 import { createAgentRunForLaunchFrame } from "../actions";
 import { handleEmailOutreachInitialDraftsUpdate } from "./drafts-persist-handler";
@@ -2190,6 +2192,16 @@ async function handleAgentBuilderRunResume(
         }
       }
 
+      // #1193 resume carrier + cinatra#3745 claim (lockstep with review-task-actions.ts):
+      // claim the gate (`pending_approval -> running`, keeping the attempt the step
+      // policy is bound to) and mint this leg's per-run credential BEFORE anything is
+      // recorded or sent; a lost claim means the gate was already answered. The RAW
+      // token rides in the A2A message METADATA (not text: `resumeText` reaches the
+      // gate's InputMessageNode VERBATIM).
+      const { mintResumeRunTokenMetadata } = await import("../wayflow-run-token-carrier");
+      const claim = await claimGateForResume(transitionRunStatus, run.id, resumeAuthority, () => mintResumeRunTokenMetadata(run.id));
+      if (!claim.claimed) return { error: `Run is not pending approval: gate ${run.a2aTaskId} on run ${run.id} was already answered.` };
+      const resumeMetadata = claim.value;
       await writeHitlPrompt({
         runId: run.id,
         agentId: packageName,                          // existing local var; do NOT change to template.packageName
@@ -2202,14 +2214,6 @@ async function handleAgentBuilderRunResume(
       }).catch((e) => {
         console.warn(`[handleAgentBuilderRunResume] writeHitlPrompt failed run=${run.id}`, e);
       });
-      // #1193 resume carrier: mint this leg's per-run credential and persist its
-      // hash BEFORE the blocking sendTask, then carry the RAW token in the A2A
-      // message METADATA. Kept in lockstep with the UI resume path
-      // (review-task-actions.ts) — both drive the same HITL gate, so both must
-      // carry run identity into the resumed leg. Metadata (not text) because
-      // `resumeText` reaches the gate's InputMessageNode VERBATIM.
-      const { mintResumeRunTokenMetadata } = await import("../wayflow-run-token-carrier");
-      const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
       // Send into the existing context so fasta2a routes to the paused conversation.
       const task = await client.sendTask({
         message: {
@@ -2223,13 +2227,10 @@ async function handleAgentBuilderRunResume(
         configuration: { acceptedOutputModes: ["text"] },
       });
 
-      // multi-gate handler. Lazy import (relative path
-      // is "../execution" because this file lives in packages/agents/src/mcp/).
-      // fromStatus is "pending_approval" — the resume handler reached this branch
-      // because run.a2aTaskId was set, which only happens when the run paused at
-      // an A2A gate (status === "pending_approval").
+      // multi-gate handler. Lazy import ("../execution": this file lives in src/mcp/).
+      // fromStatus is "running": the claim above already moved the row off pending_approval.
       const { handleWayflowTaskState } = await import("../execution");
-      await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task, authority: resumeAuthority });
+      await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task, authority: resumeAuthority });
 
       const finalState = task.status?.state;
       return {
@@ -5751,10 +5752,9 @@ export function createAgentBuilderPrimitiveHandlers(): Record<
       handleAgentRunHitlPromptsList(req as Parameters<typeof handleAgentRunHitlPromptsList>[0]),
     agent_run_hitl_prompts_exclude: (req) =>
       handleAgentRunHitlPromptsExclude(req as Parameters<typeof handleAgentRunHitlPromptsExclude>[0]),
-    // run-scoped test-delivery send + parse primitives (#1625) — run,
-    // declaring package, campaign, and submission id all context-derived.
-    email_test_delivery_run_send: (req) =>
-      handleEmailTestDeliveryRunSend(req as Parameters<typeof handleEmailTestDeliveryRunSend>[0]),
+    // run-scoped test-delivery send + parse (#1625), context-derived; the send evaluates the person's gate (#3745).
+    email_test_delivery_run_send: declarePersonDecisionEvaluation((req: unknown) =>
+      handleEmailTestDeliveryRunSend(req as Parameters<typeof handleEmailTestDeliveryRunSend>[0])),
     email_test_delivery_parse_action: (req) =>
       handleEmailTestDeliveryParseAction(req as Parameters<typeof handleEmailTestDeliveryParseAction>[0]),
     // run-scoped drafts-review PERSIST primitive (#1959) — run, declaring

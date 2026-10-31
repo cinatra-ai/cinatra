@@ -1,3 +1,4 @@
+import type { ARTIFACT_ACTION_CHECK_CAPABILITY, ArtifactActionCheckProvider } from "./artifact-action-check-contract";
 // ---------------------------------------------------------------------------
 // CapabilityContractMap — the typed capability-id -> contract-surface map.
 //
@@ -98,6 +99,7 @@ import type { AppointmentSchedulesProvider } from "./appointment-schedules-contr
  * generic open-`string` path is unaffected.
  */
 export type CapabilityContractMap = {
+  [ARTIFACT_ACTION_CHECK_CAPABILITY]: ArtifactActionCheckProvider;
   [NANGO_SYSTEM_CAPABILITY]: NangoSystemSurface;
   [EMAIL_SEND_CAPABILITY]: EmailConnector;
   [EMAIL_SYSTEM_CAPABILITY]: EmailSystemProvider;

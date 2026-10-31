@@ -55,7 +55,11 @@ vi.mock("@/lib/verdaccio-config", () => ({ loadVerdaccioConfigForReads: async ()
 // classes stay real too — the dispatch classifies on them.
 vi.mock("@/lib/extension-tool-module-loader", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/extension-tool-module-loader")>()),
-  loadDeclaredToolModule: (...args: unknown[]) => loadDeclaredToolModule(...args),
+  // The dispatch loads through the identity-paired seam: the stub answers it
+  // with the namespace the spy resolves, and no loaded identity.
+  loadDeclaredToolModuleWithIdentity: async (...args: unknown[]) => ({
+    namespace: await loadDeclaredToolModule(...args),
+  }),
 }));
 
 /** The run row as the passthrough hands it over, pinned to its own version. */

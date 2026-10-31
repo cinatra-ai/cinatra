@@ -215,11 +215,25 @@ describe("the known decision writers", () => {
         return readFileSync(join(REPO_ROOT, real), "utf8");
       },
     });
-    // The gate store owns 10 sites (8 from the #2047 annex + the two
-    // cinatra#2571 suggestion writes that ride the same CAS transaction), the
-    // repair store 2, the orchestration store 2, and the S6b delivery arm 5
-    // (claim, applied-stamp, done, terminal dead-letter, exhausted dead-letter).
-    expect(violations.length).toBe(19);
+    // The gate store owns 15 sites (8 from the #2047 annex + the two
+    // cinatra#2571 suggestion writes that ride the same CAS transaction + the
+    // cinatra#3745 resume intent's lease renewal, task record and deferral + the
+    // two cinatra#3745 run-edge writes: the lease fence and the clear of the
+    // other claims), the repair store 2, the orchestration store 2, and the S6b
+    // delivery arm 5 (claim, applied-stamp, done, terminal dead-letter,
+    // exhausted dead-letter).
+    expect(violations.length).toBe(24);
+  });
+
+  it("keeps the run edges' resume-intent writes in the gate store, not in the run transition (cinatra#3745)", () => {
+    // transitionRunStatus fences a resume delivery's run edge on the intent's
+    // lease and clears the run's other claims in the run's own transaction.
+    // Those two writes are the gate store's; the run transition only calls them.
+    const transition = readFileSync(join(REPO_ROOT, "packages/agents/src/run-transition.ts"), "utf8");
+    expect(scanSourceForDecisionWrites(transition)).toEqual([]);
+    const store = readFileSync(join(REPO_ROOT, "packages/agents/src/artifact-review-gate-store.ts"), "utf8");
+    expect(store).toContain("export async function fenceResumeIntentLeaseInRunTx(");
+    expect(store).toContain("export async function clearOtherResumeClaimsInRunTx(");
   });
 
   it("allowlists the guard itself and nothing unexpected", () => {
