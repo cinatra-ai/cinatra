@@ -523,5 +523,10 @@ export function agentTemplateRunGateSchemaQueries(schemaName: string): { text: s
     // unknown (legacy row / no readable sibling manifest) and falls through to the
     // pre-#3208 registry read. Operator-upgrade twin in migrations/core/core__0101.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS artifact_bindings text` },
+    // publishing_steps (cinatra#4150): the nodes the compiled OAS declares
+    // `publishes: true`, JSON-as-text. NULLABLE, no default, no backfill: null =
+    // compiled before the column existed. Operator-upgrade twin in
+    // migrations/core/core__0118.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS publishing_steps text` },
   ];
 }

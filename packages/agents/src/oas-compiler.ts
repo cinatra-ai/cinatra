@@ -146,6 +146,8 @@ const agentNodeSchema = z.object({
         .object({
           riskClass: z.string().optional(),
           requiresApproval: z.boolean().optional(),
+          // cinatra#4150: read on EVERY node by collectPublishingSteps.
+          publishes: z.boolean().optional(),
           renderer: z.string().optional(),
           a2uiSurfaceId: z.string().optional(),
           a2uiSurfaceIdOverride: z.string().optional(),
@@ -1264,6 +1266,11 @@ export type CompiledAgentOas = {
   // produces refs the materializer resolves declared types through are unknown,
   // so nothing is persisted and the materializer keeps its pre-#3208 fallback.
   artifactBindings: PersistedArtifactBindingDeclaration | null;
+  // cinatra#4150: the ids of the top-level flow nodes declared
+  // `metadata.cinatra.publishes: true`, in node order. Persisted (serialized) to
+  // agent_templates.publishing_steps by every install/recompile writer. The
+  // runtime stops in front of each of them until a person decides.
+  publishingSteps: string[];
   // Sibling cinatra.json metadata: per-agent limits,
   // required connection types, and authoring-time defaults. Operator-tunable
   // overrides will land on agent_install_settings DB table in a follow-up.
@@ -1350,6 +1357,110 @@ function subflowFiresNonContextRuntimeGate(
   return fires;
 }
 
+// cinatra#4150: the publishing-step declaration. A pack marks the node that
+// performs a publication with `metadata.cinatra.publishes: true`, and the
+// runtime stops in front of it. The flag is trusted only to ADD a stop, so the
+// reader is an allow-list: only the literal boolean `true` on a TOP-LEVEL flow
+// node of an action type counts. Anything else that carries the key refuses
+// the compile instead of being ignored: a non-boolean value, `true` on a node
+// that cannot be the action (or inside a nested subflow, where the runtime
+// cannot insert its stop, or on a subflow definition or the flow root), and any
+// node id that takes the host's reserved gate prefix. `false` is an explicit
+// "writes, but does not publish" and is allowed anywhere.
+const PUBLISH_GATE_ID_PREFIX = "cinatra_publish_gate__";
+const PUBLISHES_NOT_AN_ACTION = new Set([
+  "StartNode", "EndNode", "InputMessageNode", "OutputMessageNode", "BranchingNode", "Flow",
+]);
+
+function describePublishesValue(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "an array";
+  return typeof value === "string" ? `the string ${JSON.stringify(value)}` : `a ${typeof value}`;
+}
+
+function collectPublishingSteps(
+  parsed: Record<string, unknown>,
+): { ok: true; steps: string[] } | { ok: false; error: string } {
+  const topLevelIds = new Set(
+    ((parsed.nodes as Array<{ $component_ref?: unknown }> | undefined) ?? [])
+      .map((n) => n?.$component_ref)
+      .filter((ref): ref is string => typeof ref === "string"),
+  );
+  const steps: string[] = [];
+  const readPublishes = (owner: unknown): { present: boolean; value?: unknown } => {
+    const metadata = (owner as { metadata?: unknown } | null)?.metadata;
+    if (!metadata || typeof metadata !== "object") return { present: false };
+    const cinatra = (metadata as { cinatra?: unknown }).cinatra;
+    if (!cinatra || typeof cinatra !== "object" || !Object.prototype.hasOwnProperty.call(cinatra, "publishes")) {
+      return { present: false };
+    }
+    return { present: true, value: (cinatra as Record<string, unknown>).publishes };
+  };
+
+  const root = readPublishes(parsed);
+  if (root.present && typeof root.value !== "boolean") {
+    return { ok: false, error: `PUBLISHES_MALFORMED: the flow root declares metadata.cinatra.publishes as ${describePublishesValue(root.value)}; it must be the JSON boolean true or false` };
+  }
+  if (root.value === true) {
+    return { ok: false, error: `PUBLISHES_MISPLACED: the flow root declares metadata.cinatra.publishes: true; declare it on the node that publishes` };
+  }
+  for (const ref of [...topLevelIds, (parsed.start_node as { $component_ref?: unknown } | undefined)?.$component_ref]) {
+    if (typeof ref === "string" && ref.startsWith(PUBLISH_GATE_ID_PREFIX)) {
+      return { ok: false, error: `RESERVED_NODE_ID: node "${ref}" uses the reserved prefix "${PUBLISH_GATE_ID_PREFIX}"` };
+    }
+  }
+
+  const visit = (key: string | undefined, comp: unknown, nested: boolean, depth: number): string | null => {
+    if (!comp || typeof comp !== "object" || Array.isArray(comp)) return null;
+    if (depth > INJECT_MAX_DEPTH) return `OAS_NESTING_TOO_DEEP: subflow nesting exceeds ${INJECT_MAX_DEPTH} levels`;
+    const node = comp as Record<string, unknown>;
+    const id = typeof node.id === "string" ? node.id : undefined;
+    const label = key ?? id ?? "<inline subflow>";
+    for (const candidate of [key, id]) {
+      if (candidate !== undefined && candidate.startsWith(PUBLISH_GATE_ID_PREFIX)) {
+        return `RESERVED_NODE_ID: node "${candidate}" uses the reserved prefix "${PUBLISH_GATE_ID_PREFIX}"`;
+      }
+    }
+    const flag = readPublishes(node);
+    if (flag.present && typeof flag.value !== "boolean") {
+      return `PUBLISHES_MALFORMED: node "${label}" declares metadata.cinatra.publishes as ${describePublishesValue(flag.value)}; it must be the JSON boolean true or false`;
+    }
+    if (flag.value === true) {
+      const componentType = typeof node.component_type === "string" ? node.component_type : "<none>";
+      if (nested || key === undefined || !topLevelIds.has(key)) {
+        return `PUBLISHES_MISPLACED: node "${label}" declares publishes: true but is not a top-level node of the flow (a node inside a nested subflow, or a subflow definition); the runtime cannot stop in front of it`;
+      }
+      if (PUBLISHES_NOT_AN_ACTION.has(componentType)) {
+        return `PUBLISHES_MISPLACED: node "${label}" is a ${componentType}, which cannot be the publishing action`;
+      }
+      if (!steps.includes(key)) steps.push(key);
+    }
+    const children: Array<[string | undefined, unknown]> = [];
+    const refs = node.$referenced_components;
+    if (refs && typeof refs === "object" && !Array.isArray(refs)) children.push(...Object.entries(refs as Record<string, unknown>));
+    const inline = (v: unknown): boolean => !!v && typeof v === "object" && !("$component_ref" in (v as object));
+    if (inline(node.subflow)) children.push([undefined, node.subflow]);
+    if (Array.isArray(node.subflows)) {
+      for (const s of node.subflows) if (inline(s)) children.push([undefined, s]);
+    }
+    for (const [childKey, child] of children) {
+      const error = visit(childKey, child, true, depth + 1);
+      if (error) return error;
+    }
+    return null;
+  };
+
+  const rootRefs = (parsed.$referenced_components as Record<string, unknown> | undefined) ?? {};
+  for (const [key, comp] of Object.entries(rootRefs)) {
+    const error = visit(key, comp, false, 0);
+    if (error) return { ok: false, error };
+  }
+  // Node order, not map order: the list follows the flow's `nodes` array.
+  const order = [...topLevelIds];
+  steps.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  return { ok: true, steps };
+}
+
 // ---------------------------------------------------------------------------
 // Main compile entry point
 // ---------------------------------------------------------------------------
@@ -1423,6 +1534,14 @@ export async function compileOasAgentJson(opts: {
       ok: false,
       error: `OAS structural validation failed for ${opts.packageName}:\n${structuralErrors.join("\n")}`,
     };
+  }
+
+  // cinatra#4150: read the publishing-step declaration before any pass mutates
+  // the document. A malformed or misplaced flag, or a reserved node id, fails
+  // the compile here; it is never ignored.
+  const publishing = collectPublishingSteps(parsed);
+  if (!publishing.ok) {
+    return { ok: false, error: publishing.error };
   }
 
   // Fan out `metadata.cinatra.llm` to every
@@ -2338,6 +2457,8 @@ export async function compileOasAgentJson(opts: {
       hasArtifactBindings,
       // cinatra#3208 — the executed declaration itself, persisted alongside it.
       artifactBindings,
+      // cinatra#4150 — the nodes declared `publishes: true`.
+      publishingSteps: publishing.steps,
       // sibling cinatra.json
       cinatraConfig,
     },

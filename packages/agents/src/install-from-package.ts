@@ -584,6 +584,8 @@ async function _installAgentFromPackageImpl(
       // run-completion materializer resolves a run's bindings from the template
       // version it executed instead of re-reading the package registry.
       artifactBindings: seed.artifactBindings,
+      // cinatra#4150 — and for the publishing-step declaration.
+      publishingSteps: seed.publishingSteps,
       status: input.status ?? "draft",
     };
 
@@ -649,6 +651,9 @@ async function _installAgentFromPackageImpl(
             // version can never see a matching package_version paired with the
             // NEW version's bindings.
             artifactBindings: seed.artifactBindings,
+            // cinatra#4150: re-projected on every (re)install, so a version
+            // that drops its last declaration clears the list.
+            publishingSteps: seed.publishingSteps,
             packageVersion: extracted.packageVersion,
             agentDependencies:
               Object.keys(agentDependencies).length > 0 ? agentDependencies : undefined,
@@ -1028,6 +1033,10 @@ export async function syncCompiledTemplateToDb(
       // can read them directly from agent_templates without recompiling.
       triggerMode: compiled.triggerMode,
       gatedSteps: compiled.gatedSteps,
+      // cinatra#4150: written on every recompile like gatedSteps, NOT
+      // version-paired: the runtime loads the current on-disk flow, so the
+      // column follows the source it compiled.
+      publishingSteps: compiled.publishingSteps,
       packageVersion: agentPackageVersion ?? undefined,
       hasArtifactBindings: agentPackageVersion ? compiled.hasArtifactBindings : undefined,
       artifactBindings: agentPackageVersion
