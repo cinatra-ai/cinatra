@@ -200,6 +200,11 @@ export const __LEGAL_TRANSITIONS__: ReadonlySet<string> = LEGAL_TRANSITIONS;
  *                              LEGAL_TRANSITIONS. Do NOT catch and swallow.
  *   - "stale_from_status"   — race; the DB row changed between read and CAS.
  *                              Usually benign (another worker won); log + continue.
+ *   - "pause_resume_in_flight" — a `→stopped` edge met a live `sending` pause
+ *                              claim (cinatra#4245): a resumed answer is on the
+ *                              wire, so the stop did not land. Not a stale read;
+ *                              a caller that tolerates only "stale_from_status"
+ *                              propagates it (fail-closed).
  */
 /**
  * thrown when ownership reassignment is attempted on a template
@@ -221,14 +226,41 @@ export class CannotReassignAfterFirstRun extends Error {
   }
 }
 
+export type RunTransitionErrorCode =
+  | "illegal_transition"
+  | "stale_from_status"
+  | "pause_resume_in_flight";
+
+// ---------------------------------------------------------------------------
+// THE PAUSE CLAIM (cinatra#4245): the lease constants and the two control
+// fields of the status seam. The claim lives on the run row (core__0116); its
+// writers are packages/agents/src/run-pause-claim.ts and the seam rules in
+// run-transition.ts. Every expiry is compared with the database clock.
+// ---------------------------------------------------------------------------
+
+/** Claim to fence: one prompt insert, two Redis writes and one token mint. */
+export const PAUSE_CLAIM_LEASE_SECONDS = 120;
+/** A fenced send: the blocking sendTask cannot outlive WAYFLOW_A2A_TIMEOUT_MS
+ *  (wayflow-url.ts, 86 400 000 ms); five minutes more cover the handling of its
+ *  answer. Written as a number so this module stays dependency-free; a unit test
+ *  pins it to WAYFLOW_A2A_TIMEOUT_MS / 1000 + 300. */
+export const PAUSE_SEND_LEASE_SECONDS = 86_700;
+
+/** `pending_approval → running` under a live `claimed` lease of this token at
+ *  this generation (seam rule 3). */
+export type PauseFence = { readonly token: string; readonly generation: number };
+/** `→ stopped` only while the pause carries the change-request end mark at this
+ *  generation (seam rule 5). */
+export type PauseEndMark = { readonly generation: number };
+
 export class RunTransitionError extends Error {
-  readonly code: "illegal_transition" | "stale_from_status";
+  readonly code: RunTransitionErrorCode;
   readonly runId: string;
   readonly from: AgentRunStatus;
   readonly to: AgentRunStatus;
 
   constructor(args: {
-    code: "illegal_transition" | "stale_from_status";
+    code: RunTransitionErrorCode;
     runId: string;
     from: AgentRunStatus;
     to: AgentRunStatus;
