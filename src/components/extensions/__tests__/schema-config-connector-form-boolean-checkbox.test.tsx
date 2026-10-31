@@ -11,7 +11,8 @@
 // buttons runs, so it is a confirmable form choice: the connectors drawing
 // (app-connectors §II, the config tab's on / off rows) draws it as a checkbox
 // with its label beside the box. The hidden input stays the only named element
-// and still carries exactly "true" or "false".
+// and still carries exactly "true" or "false". The box's accessible name comes
+// only from that label, so the box has an id of its own for each mounted row.
 import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -184,7 +185,7 @@ describe("schema-config form: the boolean row is a checkbox", () => {
     expect(control.getAttribute("aria-checked")).toBe("false");
     expect(hiddenValues(container)).toEqual(["hidden=false"]);
 
-    // The label names the box, so a click on the label ticks it.
+    // The label points at the box by the box's id, so a click on the label ticks it.
     const label = container.querySelector<HTMLLabelElement>(`label[for="${control.id}"]`)!;
     fireEvent.click(label);
     expect(control.getAttribute("aria-checked")).toBe("true");
@@ -225,5 +226,46 @@ describe("schema-config form: the boolean row is a checkbox", () => {
     expect(control.getAttribute("aria-checked")).toBe("true");
     expect(hiddenValues(container)).toEqual(["hidden=true"]);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the box's name and label when a sibling field's key is the row's key plus -toggle", async () => {
+    const surface = surfaceOf({
+      fields: [
+        { kind: "text", key: "audit-toggle", label: "Audit destination" },
+        { kind: "boolean", key: "audit", label: "Require audit logs" },
+      ],
+    });
+    const { container } = await act(async () =>
+      render(<SchemaConfigConnectorForm installId="i4309" packageName="@x/boolean" surface={surface} initialValues={{}} />),
+    );
+    const control = screen.getByRole("checkbox", { name: "Require audit logs" });
+    const sibling = screen.getByRole("textbox", { name: "Audit destination" });
+    expect(control.id).not.toBe(sibling.id);
+
+    fireEvent.click(screen.getByText("Require audit logs"));
+    expect(control.getAttribute("aria-checked")).toBe("true");
+    expect(container.querySelector<HTMLInputElement>('[name="audit"]')?.value).toBe("true");
+  });
+
+  it("keeps each box's name and label when two mounted forms have the same boolean key", async () => {
+    const form = (installId: string) => (
+      <SchemaConfigConnectorForm installId={installId} packageName="@x/boolean" surface={booleanSurface(false)} initialValues={{}} />
+    );
+    const { container } = await act(async () =>
+      render(
+        <>
+          {form("i4309-a")}
+          {form("i4309-b")}
+        </>,
+      ),
+    );
+    const controls = screen.getAllByRole("checkbox", { name: LABEL });
+    expect(controls).toHaveLength(2);
+    expect(controls[0].id).not.toBe(controls[1].id);
+
+    // A click on the second form's label ticks only the second form's box.
+    fireEvent.click(container.querySelector<HTMLLabelElement>(`label[for="${controls[1].id}"]`)!);
+    expect(controls.map((el) => el.getAttribute("aria-checked"))).toEqual(["false", "true"]);
+    expect(hiddenValues(container)).toEqual(["hidden=false", "hidden=true"]);
   });
 });

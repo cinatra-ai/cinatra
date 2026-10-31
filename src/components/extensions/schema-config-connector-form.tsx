@@ -15,7 +15,7 @@
 // are filtered against the HOST-evaluated `isAdmin` prop (the host re-rejects an
 // admin-only value at the write handler — defense in depth).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CheckIcon, CopyIcon, ListIcon, PlusIcon, Trash2Icon, Unplug } from "lucide-react";
 // The Connect action's glyph is the first-party joined plug (cinatra#2356) —
@@ -1637,18 +1637,22 @@ function DynamicSelectRow({
  * serializing `"true"`/`"false"` into `collectFormInputs` (the visible
  * checkbox is nameless); the host write handler parses the exact string, not
  * truthiness. The box comes first with its label beside it, and the description
- * sits below that line at the row's left edge.
+ * sits below that line at the row's left edge. The box takes its id from
+ * `useId`, because its accessible name comes only from the label's `htmlFor`:
+ * an id derived from the key could match a sibling field's key or the same row
+ * of another mounted form, and the label would then point at that element.
  */
 function BooleanRow({ field, initialValue }: { field: BooleanField; initialValue?: string }) {
   const initial = initialValue !== undefined ? initialValue === "true" : field.defaultValue ?? false;
   const [checked, setChecked] = useState<boolean>(initial);
+  const boxId = useId();
   return (
     <Field className="gap-1">
       {/* Hidden input is the ONLY named element — collectFormInputs reads it. */}
       <Input type="hidden" name={field.key} value={checked ? "true" : "false"} readOnly />
       <div className="flex items-center gap-2">
-        <Checkbox id={`${field.key}-toggle`} checked={checked} onCheckedChange={(next) => setChecked(next === true)} />
-        <FieldLabel htmlFor={`${field.key}-toggle`}>{field.label}</FieldLabel>
+        <Checkbox id={boxId} checked={checked} onCheckedChange={(next) => setChecked(next === true)} />
+        <FieldLabel htmlFor={boxId}>{field.label}</FieldLabel>
       </div>
       {field.description ? <FieldDescription>{field.description}</FieldDescription> : null}
     </Field>

@@ -473,7 +473,7 @@ describe("SchemaConfigConnectorForm — field-kind expansion (#782)", () => {
     expect(named.length).toBe(1);
     expect(named.item(0)?.getAttribute("type")).toBe("hidden");
     // Untick the checkbox → hidden flips to "false".
-    const toggle = container.querySelector<HTMLButtonElement>("#allowNetwork-toggle");
+    const toggle = container.querySelector<HTMLButtonElement>('[role="checkbox"]');
     expect(toggle).toBeTruthy();
     await act(async () => {
       toggle!.click();
