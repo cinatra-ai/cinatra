@@ -329,7 +329,7 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       "packages/agents/src/actions.ts",
       "packages/agents/src/execution.ts",
       "packages/agents/src/index.ts",
-      "packages/agents/src/mcp/handlers.ts",
+      "packages/agents/src/run-resume-under-claim.ts",
       "packages/agents/src/orchestrator-actions.ts",
       "packages/agents/src/orchestrator-execution.ts",
       "packages/agents/src/run-actions.ts",
@@ -424,9 +424,9 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
   //   (pause_claim_token / _phase / _expires_at, and pause_generation at the
   //   in-place fence), inside guardedRunWrite with run.execute; the org axis is
   //   the authority's org and every UPDATE is org-scoped. The allowlists name the
-  //   resume roads that take the claim (the MCP resume, the review page's
-  //   Continue, the resume delivery worker); only the delivery worker fences in
-  //   place.
+  //   resume roads that take the claim (the MCP resume in
+  //   run-resume-under-claim.ts, the review page's Continue, the resume delivery
+  //   worker); only the delivery worker fences in place.
   {
     module: "packages/agents/src/run-pause-claim.ts",
     exportName: "claimPause",
@@ -436,7 +436,7 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     cascadeOwnership: "inert-history",
     importBanned: true,
     allowedImporters: [
-      "packages/agents/src/mcp/handlers.ts",
+      "packages/agents/src/run-resume-under-claim.ts",
       "packages/agents/src/review-task-actions.ts",
       "packages/agents/src/artifact-review-resume-delivery.ts",
     ],
@@ -460,7 +460,7 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     cascadeOwnership: "inert-history",
     importBanned: true,
     allowedImporters: [
-      "packages/agents/src/mcp/handlers.ts",
+      "packages/agents/src/run-resume-under-claim.ts",
       "packages/agents/src/review-task-actions.ts",
       "packages/agents/src/artifact-review-resume-delivery.ts",
     ],
@@ -474,7 +474,7 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     cascadeOwnership: "inert-history",
     importBanned: true,
     allowedImporters: [
-      "packages/agents/src/mcp/handlers.ts",
+      "packages/agents/src/run-resume-under-claim.ts",
       "packages/agents/src/review-task-actions.ts",
       "packages/agents/src/artifact-review-resume-delivery.ts",
     ],

@@ -50,6 +50,8 @@ import {
   readAgentRunByTaskId,
   readAgentTemplateById,
 } from "./store";
+import { claimPause, fencePauseInPlace, PauseClaimReleaseError } from "./run-pause-claim";
+import { failPreSendStep, settleSendOrDescribe } from "./run-resume-under-claim";
 import {
   WAYFLOW_A2A_TIMEOUT_MS,
   createWayflowFetch,
@@ -342,26 +344,69 @@ export async function deliverArtifactReviewResumeIntent(
     return ok ? "already-advanced" : "lease-lost";
   }
 
+  // cinatra#4245: the same claim as the other resume roads, at the generation read.
+  // A pause that moved on, or that a change request ended, needs no send: the intent
+  // is done. A pause another claimer holds is tried again later.
+  const authority = mintAgentRunExecutionAuthority(run.orgId);
+  const claim = await claimPause({ runId: run.id, orgId: run.orgId, generation: run.pauseGeneration as number }, authority);
+  if (claim.kind === "refused") {
+    if (claim.reason === "held") return "retryable";
+    const ok = await markResumeIntentDelivered(gateId, leaseToken);
+    console.log(`[artifact-review-resume] gate=${gateId} run=${run.id} claim refused (${claim.reason}) — marked ${ok ? "done" : "LEASE-LOST"}`);
+    return ok ? "already-advanced" : "lease-lost";
+  }
+  const claimRef = { runId: run.id, orgId: run.orgId, token: claim.token };
+
   // Deliver the typed decision verbatim as the WayFlow resume message. Dynamic
   // import mirrors review-task-actions.ts (circular-dep avoidance:
   // agents ← @cinatra-ai/a2a ← mcp-server ← agent-builder).
   const { createExternalA2AClient } = await import("@cinatra-ai/a2a");
-  const client = await createExternalA2AClient({
-    agentUrl: wayflowUrl,
-    timeoutMs: WAYFLOW_A2A_TIMEOUT_MS,
-    fetchImpl: createWayflowFetch(),
-  });
-  // #1193 resume carrier: mint this leg's per-run credential and persist its hash
-  // BEFORE the blocking sendTask, then carry the RAW token in the A2A message
-  // METADATA. Metadata is required here rather than the text: this path delivers
-  // the typed decision VERBATIM by contract, so the text cannot be wrapped.
-  //
-  // Rotation is ADDITIVE (agent_run_tokens keeps earlier legs valid), which
-  // matters most on THIS path — delivery is at-least-once by design, so a lease
-  // that lapses mid-send can redeliver while the first accepted task is still
-  // executing. An overwrite-in-place rotation would 403 that live task.
-  const { mintResumeRunTokenMetadata } = await import("./wayflow-run-token-carrier");
-  const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
+  // The steps before the fence, under the claim: a failure gives it back, and a
+  // release that fails too leaves the intent pending until the lease frees itself.
+  const preSend = async () => {
+    const preSendClient = await createExternalA2AClient({
+      agentUrl: wayflowUrl,
+      timeoutMs: WAYFLOW_A2A_TIMEOUT_MS,
+      fetchImpl: createWayflowFetch(),
+    });
+    // #1193 resume carrier: mint this leg's per-run credential and persist its hash
+    // BEFORE the blocking sendTask, then carry the RAW token in the A2A message
+    // METADATA. Metadata is required here rather than the text: this path delivers
+    // the typed decision VERBATIM by contract, so the text cannot be wrapped.
+    //
+    // Rotation is ADDITIVE (agent_run_tokens keeps earlier legs valid), which
+    // matters most on THIS path — delivery is at-least-once by design, so a lease
+    // that lapses mid-send can redeliver while the first accepted task is still
+    // executing. An overwrite-in-place rotation would 403 that live task.
+    const { mintResumeRunTokenMetadata } = await import("./wayflow-run-token-carrier");
+    const metadata = await mintResumeRunTokenMetadata(run.id);
+    // THE FENCE, in place: the worker sends while the run stays pending_approval,
+    // so a stop during this send meets the same live `sending` lease.
+    const fence = await fencePauseInPlace({ runId: run.id, orgId: run.orgId, generation: claim.generation, token: claim.token }, authority);
+    return fence === "fenced" ? { client: preSendClient, resumeMetadata: metadata } : null;
+  };
+  let ready: Awaited<ReturnType<typeof preSend>>;
+  try {
+    ready = await preSend();
+  } catch (stepError) {
+    try {
+      return await failPreSendStep({ ...claimRef, expiresAt: claim.expiresAt }, authority, stepError);
+    } catch (surfaced) {
+      if (!(surfaced instanceof PauseClaimReleaseError)) throw surfaced;
+      console.warn(`[artifact-review-resume] gate=${gateId} run=${run.id} left pending: ${surfaced.message}`);
+      return "retryable";
+    }
+  }
+  if (!ready) return "retryable";
+  const { client, resumeMetadata } = ready;
+  const fencedAt = Date.now();
+  // The lease is settled however the send ends. A settle that fails leaves the
+  // intent pending: the guards above read the moved run on the next cycle.
+  let settleFailure: string | null = null;
+  const settle = async () => {
+    settleFailure = await settleSendOrDescribe(claimRef, authority, fencedAt);
+    if (settleFailure !== null) console.error(`[artifact-review-resume] gate=${gateId} run=${run.id}: ${settleFailure}`);
+  };
   const task = await client.sendTask({
     message: {
       role: "user",
@@ -377,6 +422,9 @@ export async function deliverArtifactReviewResumeIntent(
       parts: [{ kind: "text", text: responseText }],
     },
     configuration: { acceptedOutputModes: ["text"] },
+  }).catch(async (sendError) => {
+    await settle();
+    throw sendError;
   });
 
   // Drive the returned Task through the canonical state machine (advances the
@@ -386,8 +434,12 @@ export async function deliverArtifactReviewResumeIntent(
   // cinatra#1939 wave 2: the delivery worker advances the run with no session in
   // scope — it grounds the transition on the system dispatch mint, scoped to the
   // run's org (the human approval already happened when the intent row was written).
-  const authority = mintAgentRunExecutionAuthority(run.orgId);
-  await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task, authority });
+  try {
+    await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task, authority, pauseClaimToken: claim.token });
+  } finally {
+    await settle();
+  }
+  if (settleFailure !== null) return "retryable";
 
   const marked = await markResumeIntentDelivered(gateId, leaseToken);
   console.log(

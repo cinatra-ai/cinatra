@@ -4,6 +4,11 @@ const ports = vi.hoisted(() => ({
   query: vi.fn(), send: vi.fn(), get: vi.fn(), handle: vi.fn(),
   status: "pending_approval", gate: null as Record<string, unknown> | null,
 }));
+// cinatra#4245: the resume road's pause claim always wins here.
+vi.mock("../run-pause-claim", async (orig) => ({
+  ...(await orig<typeof import("../run-pause-claim")>()),
+  ...(await import("./pause-claim-test-fake")).pauseClaimFake,
+}));
 vi.mock("../db", () => ({
   db: { insert: () => ({ values: async (row: Record<string, unknown>) => {
     ports.events.push("capture"); ports.rows.push(row);

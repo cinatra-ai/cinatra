@@ -15,6 +15,11 @@ const authSessionMock = vi.hoisted(() => ({
   requireAuthSession: vi.fn(),
   resolveOrgRoleForUser: vi.fn(async () => "member"),
 }));
+// cinatra#4245: the resume road's pause claim always wins here.
+vi.mock("../run-pause-claim", async (orig) => ({
+  ...(await orig<typeof import("../run-pause-claim")>()),
+  ...(await import("./pause-claim-test-fake")).pauseClaimFake,
+}));
 vi.mock("@/lib/auth-session", () => authSessionMock);
 
 const storeMock = vi.hoisted(() => ({
@@ -58,7 +63,7 @@ const storeMock = vi.hoisted(() => ({
   resolveRunCoOwnerUserIds: vi.fn(async () => []),
   setAgentRunTokenHash: vi.fn(async () => {}),
   findSavedConnectionForAgentUrl: vi.fn(async () => null),
-  updateAgentRunA2ATaskId: vi.fn(async () => undefined),
+  updateAgentRunA2ATaskId: vi.fn(async () => ({ written: true })),
   updateAgentRunA2AContextId: vi.fn(async () => undefined),
 }));
 vi.mock("../store", () => storeMock);
@@ -286,7 +291,8 @@ describe("cinatra#3007 — an unrecordable hold inside the resume primitive", ()
       Buffer.byteLength(JSON.stringify(data.producedReviewHold) ?? "", "utf8"),
     ).toBeLessThanOrEqual(PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES);
 
-    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    // cinatra#4245: the only status write is the resume's fence; no terminal status.
+    expect((storeMock.transitionRunStatus.mock.calls as unknown as unknown[][]).map((c) => c[2])).toEqual(["running"]);
   });
 
   it("the delivered payload lets a later convergence pass land the withheld verdict", async () => {
@@ -302,9 +308,10 @@ describe("cinatra#3007 — an unrecordable hold inside the resume primitive", ()
       park: data.producedReviewHoldPark as number,
     });
 
-    const calls = storeMock.transitionRunStatus.mock.calls as unknown as Array<
+    // cinatra#4245: leave the resume's fence out; this reads the convergence pass.
+    const calls = (storeMock.transitionRunStatus.mock.calls as unknown as Array<
       [string, string, string, Record<string, unknown> | undefined, unknown]
-    >;
+    >).filter((c) => c[2] !== "running");
     expect(calls).toHaveLength(1);
     expect([calls[0][1], calls[0][2]]).toEqual(["pending_approval", "completed"]);
     expect(calls[0][3]?.stepResults).toBeDefined();

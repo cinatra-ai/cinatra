@@ -27,7 +27,9 @@ import {
   // setup- branch already runs through `resumeRunFromSetupApproval`.
   transitionRunStatus,
 } from "./store";
-import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuccessfulContinue, continueBindingDigest, continueGateDigest } from "./agent-run-hitl-prompts";
+import { claimPause } from "./run-pause-claim";
+import { failPreSendStep, settleSendOrDescribe } from "./run-resume-under-claim";
+import { readDurableHitlGateForContinue, captureHitlPromptForContinue, updateHitlPromptExcluded, recordSuccessfulContinue, continueBindingDigest, continueGateDigest } from "./agent-run-hitl-prompts";
 // cinatra#1939 wave 2 (§7.1): the guarded setup-resume writer — the setup-*
 // inputParams-merge + pending_approval->queued CAS now runs inside the org-write
 // kernel guard instead of directly on the module `db` (owner ruling 2026-07-26,
@@ -864,6 +866,7 @@ export async function approveReviewTaskInternal(
   if (reviewTaskId.startsWith("wayflow-")) {
     const taskId = reviewTaskId.slice("wayflow-".length);
     let run = await readAgentRunByTaskId(taskId);
+    let foundThroughReverseMap = false;
     if (!run) {
       // `agent_runs.a2a_task_id` is a single column that `handleWayflowTaskState`
       // overwrites per gate; that overwrite races the worker's status transition
@@ -880,6 +883,7 @@ export async function approveReviewTaskInternal(
       if (fallbackRunId) {
         run = await readAgentRunById(fallbackRunId);
         if (run) {
+          foundThroughReverseMap = true;
           console.log(
             `[approveReviewTaskInternal] wayflow- reverse-lookup recovered run=${run.id} ` +
             `from Redis task-run map (a2a_task_id column was stale for task=${taskId})`,
@@ -970,40 +974,40 @@ export async function approveReviewTaskInternal(
     // "WayFlow task failed". A read-then-check is not a decision.
     //
     // So the answer CLAIMS the gate before it records anything and before it
-    // dispatches: ONE conditional statement on the gate row's status
-    // (`pending_approval -> running`, the resume edge the state machine already
-    // carries, org-scoped and guarded like every other run write). Exactly one
-    // caller can win it.
+    // dispatches: ONE conditional statement on the run row, at the generation this
+    // answer read (`claimPause`, cinatra#4245). Exactly one caller can win it, and
+    // a delayed answer cannot act on a later pause. A run found through the reverse
+    // map may wait at a later task: the latest-task key names the one it waits at.
     //
-    // The loser reads the winner's disposition back off the row and is refused
+    // The loser is refused
     // with the TYPED no-longer-pending outcome — the one the boundary in
     // `hitl-actions.ts` turns into `{ ok: false, blocked: "no-longer-pending" }`
     // and the run surface draws its blocked state from. Nothing of the loser's
     // answer is recorded, nothing is dispatched, and the run goes on with the
     // first answer rather than failing.
-    try {
-      await transitionRunStatus(
-        run.id,
-        "pending_approval",
-        "running",
-        undefined,
-        resumeAuthority,
-      );
-    } catch (e) {
-      if (e instanceof RunTransitionError && e.code === "stale_from_status") {
-        // The winner's disposition, read back off the row the CAS lost to.
-        const decided = await readAgentRunById(run.id).catch(() => null);
-        const currentStatus = decided?.status ?? "unknown";
-        throw new GateNotPendingError({
-          runId: run.id,
-          currentStatus,
-          message:
-            `WayFlow approval rejected: gate ${taskId} on run ${run.id} was already ` +
-            `decided (status: ${currentStatus})`,
-        });
+    const refuse = (currentStatus: string, why: string) =>
+      new GateNotPendingError({
+        runId: run.id,
+        currentStatus,
+        message: `WayFlow approval rejected: gate ${taskId} on run ${run.id} ${why}`,
+      });
+    if (foundThroughReverseMap) {
+      const { resolveLatestWayflowGateTaskId } = await import("@cinatra-ai/a2a");
+      if ((await resolveLatestWayflowGateTaskId(run.id).catch(() => null)) !== taskId) {
+        throw refuse(run.status, `is no longer the pause the run waits at`);
       }
-      throw e;
     }
+    const claim = await claimPause(
+      { runId: run.id, orgId: run.orgId, generation: run.pauseGeneration as number },
+      resumeAuthority,
+    );
+    if (claim.kind === "refused") {
+      if (claim.reason === "held") throw refuse("running", "is being answered by another request");
+      if (claim.reason === "moved-on") throw refuse(claim.status, "is no longer the pause the run waits at");
+      if (claim.reason === "changes-requested") throw refuse("pending_approval", "had changes requested on its review");
+      throw refuse(claim.status, `was already decided (status: ${claim.status})`);
+    }
+    const claimRef = { runId: run.id, orgId: run.orgId, token: claim.token };
 
     // Precedence for the WayFlow resume message:
     //   1. values.userResponse (string, non-empty after trim)  — structured-form path
@@ -1087,6 +1091,8 @@ export async function approveReviewTaskInternal(
     let gateSnapshot: Awaited<ReturnType<typeof readDurableHitlGateForContinue>> = null;
     try { gateSnapshot = await readDurableHitlGateForContinue(run.id,reviewTaskId); } catch { /* Missing durable evidence stays unconfirmed. */ }
     let dispatchStarted = false;
+    let fencedAt = 0;
+    let settled = false;
     let capturedPromptId: string | null = null;
     try {
       // UNCONDITIONAL write. Empty `message` is allowed (column NOT NULL accepts
@@ -1170,8 +1176,32 @@ export async function approveReviewTaskInternal(
       // `resumeText` is passed to the gate's InputMessageNode VERBATIM.
       const { mintResumeRunTokenMetadata } = await import("./wayflow-run-token-carrier");
       const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
+      // THE FENCE: a stop or a lease takeover since the claim loses here, and
+      // nothing is sent.
+      try {
+        await transitionRunStatus(
+          run.id,
+          "pending_approval",
+          "running",
+          { pauseFence: { token: claim.token, generation: claim.generation } },
+          resumeAuthority,
+        );
+      } catch (e) {
+        if (!(e instanceof RunTransitionError && e.code === "stale_from_status")) throw e;
+        const now = await readAgentRunById(run.id).catch(() => null);
+        const stopped = now?.status === "stopped";
+        let why = stopped ? "was refused: the run was stopped before the answer was sent" : "was refused: the claim expired before the send";
+        if (capturedPromptId) {
+          await updateHitlPromptExcluded(capturedPromptId, true).catch((excludeError) => {
+            why += `; its captured prompt could not be excluded (${excludeError instanceof Error ? excludeError.message : String(excludeError)})`;
+          });
+        }
+        settled = true; // This claimer no longer holds a lease to give back.
+        throw refuse(stopped ? "stopped" : (now?.status ?? "unknown"), why);
+      }
       // Past this line the answer is on the wire.
       dispatchStarted = true;
+      fencedAt = Date.now();
       const deadline = Date.now() + WAYFLOW_A2A_TIMEOUT_MS;
       const initialTask = await client.sendTask({
         message: {
@@ -1189,14 +1219,14 @@ export async function approveReviewTaskInternal(
       // Lazy import to avoid circular dep (review-task-actions ← actions.ts ←
       // index.ts ← @cinatra-ai/a2a).
       //
-      // `fromStatus` is "running" because the claim above already moved the row off
+      // `fromStatus` is "running" because the fence above already moved the row off
       // `pending_approval` (cinatra#3423): the handler's park and terminal
       // transitions are taken from where the run ACTUALLY is, and every edge it
       // needs out of `running` — to `pending_approval` for the next gate, to
       // `completed`, `failed` or `waiting_trigger` — the state machine already
       // carries. resumeAuthority was minted above (before sendTask).
       const { handleWayflowTaskState } = await import("./execution");
-      await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task, authority: resumeAuthority });
+      await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task, authority: resumeAuthority, pauseClaimToken: claim.token });
 
       const state=task.status?.state;
       if(capturedPromptId && gateSnapshot && submittedValues !== null
@@ -1215,24 +1245,17 @@ export async function approveReviewTaskInternal(
         actorId,
         resultState: task.status?.state,
       });
+      settled = true;
+      const settleFailure = await settleSendOrDescribe(claimRef, resumeAuthority, fencedAt);
+      if (settleFailure !== null) throw new Error(`The answer was sent, but ${settleFailure}`);
       return;
     } catch (e) {
-      if (!dispatchStarted) {
-        await transitionRunStatus(
-          run.id,
-          "running",
-          "pending_approval",
-          undefined,
-          resumeAuthority,
-        ).catch((releaseError) => {
-          console.warn(
-            "[approveReviewTaskInternal] could not release the gate claim",
-            { runId: run.id, taskId },
-            releaseError,
-          );
-        });
-      }
-      throw e;
+      if (settled) throw e;
+      if (!dispatchStarted) return await failPreSendStep({ ...claimRef, expiresAt: claim.expiresAt }, resumeAuthority, e);
+      // A failed send is not given back (WayFlow may hold the message): it is settled.
+      const settleFailure = await settleSendOrDescribe(claimRef, resumeAuthority, fencedAt);
+      if (settleFailure === null) throw e;
+      throw new Error(`${e instanceof Error ? e.message : String(e)}; ${settleFailure}`, { cause: e });
     }
   }
 
