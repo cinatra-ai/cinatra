@@ -148,6 +148,7 @@ export async function ensureBundledAgentTemplateRecord(input: {
             lifecycleConfig: seed.lifecycleConfig,
             hasArtifactBindings: seed.hasArtifactBindings,
             artifactBindings: seed.artifactBindings,
+            publishingSteps: seed.publishingSteps,
             // The image's catalogue is the instance's OWN published set — the
             // chat resolves and dispatches what the instance publishes, and a
             // draft row is not offered there. A tenant-owned row is never

@@ -1,0 +1,9 @@
+{
+  "seq": "0118",
+  "file": "core/core__0118_agent-template-publishing-steps.mjs",
+  "summary": "The publishing-step declaration on agent_templates (cinatra#4150). ONE additive nullable column: publishing_steps text, JSON-as-text like gated_steps — the ids of the flow nodes the compiled OAS document declares metadata.cinatra.publishes: true, written by every install and recompile writer from the compiler's publishingSteps; null = a row compiled before this column existed. No backfill, no default, no constraint change: every existing row reads NULL. A legacy row cannot declare the flag (the key is new). Idempotent ADD COLUMN IF NOT EXISTS twin of the fresh-install bootstrap DDL (agentTemplateRunGateSchemaQueries in src/lib/extension-grant-schema.ts), shipped in the SAME change (core__0091 / core__0101 precedent). down() drops the column. SEQ IS PROVISIONAL: 0113 is the highest sequence on main at authoring time and 0114-0116 are claimed by other open changes; a rename-only renumber at merge is normal.",
+  "destructive": false,
+  "tables": [
+    "agent_templates"
+  ]
+}

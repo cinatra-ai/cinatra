@@ -510,10 +510,22 @@ export function serializeTemplate(input: CreateAgentTemplateInput) {
     // JSON-as-text from the install seed. null on create when the caller does
     // not derive it from a compile — "unknown", the pre-#3208 fallback.
     artifactBindings: input.artifactBindings ?? null,
+    // cinatra#4150 — the declared publishing nodes, JSON-as-text like gatedSteps.
+    // null on create when the caller does not derive it from a compile.
+    publishingSteps: input.publishingSteps ? JSON.stringify(input.publishingSteps) : null,
     // template-level AgentAuthPolicy as JSON-as-text. null = use
     // DEFAULT_AGENT_AUTH_POLICY at read time.
     agentAuthPolicy: input.agentAuthPolicy ? JSON.stringify(input.agentAuthPolicy) : null,
   };
+}
+
+function parsePublishingStepsColumn(text: string | null): string[] | null {
+  if (text === null) return null;
+  const value: unknown = JSON.parse(text);
+  if (!Array.isArray(value) || !value.every((id) => typeof id === "string")) {
+    throw new Error("agent_templates.publishing_steps is not a JSON list of node ids");
+  }
+  return value as string[];
 }
 
 export function deserializeTemplate(row: typeof agentTemplates.$inferSelect): AgentTemplateRecord {
@@ -589,6 +601,9 @@ export function deserializeTemplate(row: typeof agentTemplates.$inferSelect): Ag
     // JSON-as-text on the record; the materializer parses it fail-closed
     // through the single grammar (parseArtifactBindingDeclaration).
     artifactBindings: row.artifactBindings ?? null,
+    // cinatra#4150 — null (unknown) passes through; a stored value that is not a
+    // list of node ids throws instead of being read as "publishes nothing".
+    publishingSteps: parsePublishingStepsColumn(row.publishingSteps ?? null),
     // JSON-as-text deserialization. Returns null when column is null.
     // fix: defensive parse — see parseAuthPolicySafe definition above.
     agentAuthPolicy: parseAuthPolicySafe(row.agentAuthPolicy ?? null),
