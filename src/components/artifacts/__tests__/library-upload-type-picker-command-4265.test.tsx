@@ -335,6 +335,8 @@ describe("cinatra#4265 — the picker's rows at 13px and section labels in 10px 
       // CommandItem tints on the attribute's presence, so the row clears it.
       expect(row.classList.contains("data-selected:bg-transparent")).toBe(true);
       expect(row.classList.contains("data-[selected=true]:bg-primary/5!")).toBe(true);
+      // No static background: a row with no selection variant draws no tint.
+      expect([...row.classList].filter((c) => c.startsWith("bg-"))).toEqual([]);
     }
   });
 });
@@ -538,7 +540,7 @@ describe("cinatra#4265 — the choice is kept per row", () => {
     expect(actions.assertUploadMeaning).toHaveBeenCalledWith({ artifactId: ARTIFACT_ID, extension: MANIFEST_EXT });
   });
 
-  it("P2: two rows of one extension: a press checks only the pressed row, and Confirm asserts the shared extension", async () => {
+  it("P2: two rows of one extension: a press selects only the pressed row, and Confirm asserts the shared extension", async () => {
     const PACK_EXT = "@cinatra-ai/blog-pack";
     answer({ preselect: PACK_EXT, suggestions: [] }, [
       { objectTypeId: `${PACK_EXT}:idea`, extension: PACK_EXT, displayName: "Idea", extensionLabel: "Blog Pack" },
