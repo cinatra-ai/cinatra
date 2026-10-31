@@ -18,7 +18,7 @@
  *   SUPABASE_DB_URL=postgres://postgres:postgres@127.0.0.1:5634/s42042 \
  *     pnpm --filter @cinatra-ai/agents test:integration lifecycle-verification
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 
@@ -31,7 +31,7 @@ import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-ac
 import type { ChangesRequestedRequest } from "@/lib/lifecycle/lifecycle-repair";
 import type { VerificationFieldProjector, VerificationTargetRef } from "../lifecycle-verification-store";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
-import { verificationReopenedGateBackfillSql, verificationReopenedGateDdlSql } from "../../../../migrations/core/core__0117_verification-reopened-gate.mjs";
+import { up as upgrade0117, down as downgrade0117 } from "../../../../migrations/core/core__0117_verification-reopened-gate.mjs";
 
 const TEST_SCHEMA = "cinatra_test_lifecycle_2042";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
@@ -612,36 +612,169 @@ describe.skipIf(!HAS_DB)("cinatra#2042 — post-change verification (real store)
     await expect(repairStore.isRepairLineageOpen(original!.lineageId)).rejects.toMatchObject({ code: "malformed-lineage" });
   });
 
-  it("THE UPGRADE BACKFILL (cinatra#4312, core__0117): names a slot gate on the record's run and org created at or after the record, and only that", async () => {
-    const backfill = () => pool(`BEGIN; SET LOCAL search_path TO "${q(TEST_SCHEMA)}"; ${verificationReopenedGateDdlSql} ${verificationReopenedGateBackfillSql} COMMIT;`);
+  /** The statements of a migration function, as the runner would receive them. */
+  function statementsOf(migrate: (pgm: { sql: (text: string) => void }) => void): string {
+    const statements: string[] = [];
+    migrate({ sql: (text) => { statements.push(text); } });
+    return statements.join("\n");
+  }
+
+  /** Run core__0117's `up` on the test schema, in a transaction. */
+  const upgrade = () => pool(`BEGIN; SET LOCAL search_path TO "${q(TEST_SCHEMA)}"; ${statementsOf(upgrade0117)} COMMIT;`);
+
+  const clearName = (successorGateId: string) =>
+    pool(`UPDATE "${q(TEST_SCHEMA)}"."artifact_verification_records" SET reopened_gate_id=NULL WHERE id=$1`, [`verify:${successorGateId}`]);
+
+  it("THE UPGRADE BACKFILL (cinatra#4312, core__0117): names a gate that already carries a repair row at attempt 2 or later, in the record's slot, on its run and org, created at or after it, and only that; a rerun changes nothing", async () => {
     const emit = (v: ReturnType<typeof slotOf>, runId: string, orgId: string) =>
       gateStore.emitArtifactReviewGate({ runId, orgId, reviewTaskId: v.reopenTask, targets: [v.pin] });
 
-    // Written before the column: the record, then the gate after it. The name is gone.
+    // Written before the column: the record, the gate after it, and the note's attempt 2. The name is gone.
     const honest = await failedVerificationOfLandedRepair();
-    await pool(`UPDATE "${q(TEST_SCHEMA)}"."artifact_verification_records" SET reopened_gate_id=NULL WHERE id=$1`, [`verify:${honest.successorGateId}`]);
-    expect(await changesRequestedOnReopenShaped(honest, honest.ev.producerRunId!, honest.reopenGateId)).toMatchObject({ ok: false, code: "lineage-unbound" });
+    const lineageId = (await repairStore.readRepair(honest.repairId))!.lineageId;
+    expect(await changesRequestedOnReopenShaped(honest, honest.ev.producerRunId!, honest.reopenGateId)).toMatchObject({ ok: true, attempt: 2 });
+    await clearName(honest.successorGateId);
+    await expect(repairStore.isRepairLineageOpen(lineageId)).rejects.toMatchObject({ code: "malformed-lineage" });
 
-    // A gate created before its record.
+    // Each of these carries an attempt-2 row and fails one other condition.
     const before = slotOf(await landRepair());
-    await emit(before, before.ev.producerRunId!, ORG);
+    const beforeGate = await emit(before, before.ev.producerRunId!, ORG);
+    await writeAttempt2OnGate(before, beforeGate.gateId);
     await pool(`UPDATE "${q(TEST_SCHEMA)}"."artifact_verification_records" SET created_at=$2 WHERE id=$1`, [
       `verify:${before.successorGateId}`,
       new Date(Date.now() + 3_600_000),
     ]);
-    // A gate of another run after the record, and a gate of another org on the record's run.
     const otherRun = slotOf(await landRepair());
-    await emit(otherRun, `run-other-${randomUUID()}`, ORG);
+    await writeAttempt2OnGate(otherRun, (await emit(otherRun, `run-other-${randomUUID()}`, ORG)).gateId);
     const otherOrg = slotOf(await landRepair());
-    await emit(otherOrg, otherOrg.ev.producerRunId!, "org-other-4312");
+    await writeAttempt2OnGate(otherOrg, (await emit(otherOrg, otherOrg.ev.producerRunId!, "org-other-4312")).gateId);
+    // A gate whose repair row is an attempt 1 is the root of its own lineage, not a reopen that lineage went on through.
+    const firstAttempt = slotOf(await landRepair());
+    const firstAttemptGate = await emit(firstAttempt, firstAttempt.ev.producerRunId!, ORG);
+    await writeAttempt2OnGate(firstAttempt, firstAttemptGate.gateId);
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."lifecycle_repair" SET attempt=1 WHERE gate_id=$1`, [firstAttemptGate.gateId]);
 
-    await backfill();
+    await upgrade();
     expect(await namedGate(honest.successorGateId)).toBe(honest.reopenGateId);
+    await expect(repairStore.isRepairLineageOpen(lineageId)).resolves.toBe(true);
     expect(await namedGate(before.successorGateId)).toBeNull();
     expect(await namedGate(otherRun.successorGateId)).toBeNull();
     expect(await namedGate(otherOrg.successorGateId)).toBeNull();
-    const cr = await changesRequestedOnReopenShaped(honest, honest.ev.producerRunId!, honest.reopenGateId);
-    expect(cr).toMatchObject({ ok: true, attempt: 2 });
+    expect(await namedGate(firstAttempt.successorGateId)).toBeNull();
+
+    await upgrade();
+    expect(await namedGate(honest.successorGateId)).toBe(honest.reopenGateId);
+    expect(await namedGate(before.successorGateId)).toBeNull();
+  });
+
+  it("A CALLER'S GATE BEFORE THE UPGRADE (cinatra#4312, core__0117): a gate in the slot, after the record, with no repair row stays unnamed, and a note on it is refused (lineage-unbound)", async () => {
+    const v = slotOf(await landRepair());
+    const forged = await reserveSlot(v);
+    await upgrade();
+    expect(await namedGate(v.successorGateId)).toBeNull();
+    await expectCallerGateRefused(v, forged);
+  });
+
+  it("AN HONEST GATE PENDING AT THE UPGRADE (cinatra#4312, core__0117): with no repair row it stays unnamed: a re-drive answers reopen-conflict and a note is refused, the lineage stays readable and open, and Continue still resolves the gate", async () => {
+    const v = await failedVerificationOfLandedRepair();
+    await clearName(v.successorGateId);
+    await upgrade();
+    expect(await namedGate(v.successorGateId)).toBeNull();
+    const again = await verifStore.recordVerificationForRepair({ repairId: v.repairId, projectFields: failedFields });
+    expect(again).toMatchObject({ ok: false, code: "reopen-conflict" });
+    await expectCallerGateRefused(v, v.reopenGateId);
+    const committed = await gateStore.commitReviewDecision({
+      runId: v.ev.producerRunId!,
+      reviewTaskId: v.reopenTask,
+      disposition: "approve",
+      terminal: true,
+      fingerprint: `fp-${randomUUID()}`,
+      comment: null,
+      decidedBy: "user-4312",
+      auditRows: [{
+        artifactId: v.pin.artifactId,
+        representationRevisionId: v.pin.representationRevisionId,
+        disposition: "approve",
+        rendererProvenance: { kind: "floor", packageName: null, digest: null },
+      }],
+      dispositionOps: [],
+      resumeIntent: null,
+      suggestionPlan: null,
+    });
+    expect(committed).toMatchObject({ status: "committed" });
+    expect((await gateStore.readReviewGate(v.ev.producerRunId!, v.reopenTask))?.status).toBe("resolved");
+    expect(await repairStore.isRepairLineageOpen((await repairStore.readRepair(v.repairId))!.lineageId)).toBe(true);
+  });
+
+  it("A NAMED GATE DELETED (cinatra#4312): the foreign key sets the name to null, and the record stays", async () => {
+    const v = await failedVerificationOfLandedRepair();
+    await pool(`DELETE FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE id=$1`, [v.reopenGateId]);
+    expect(await namedGate(v.successorGateId)).toBeNull();
+  });
+
+  it("THE MIGRATION'S DOWN AND UP (cinatra#4312, core__0117): in a transaction down drops the column, up adds it with a foreign key that sets a deleted gate's name to null, and a rollback brings the column and its names back", async () => {
+    const v = await failedVerificationOfLandedRepair();
+    const client = await dbMod.agentBuilderPool.connect();
+    const hasColumn = async () =>
+      (await client.query(
+        `SELECT 1 FROM information_schema.columns WHERE table_schema=$1 AND table_name='artifact_verification_records' AND column_name='reopened_gate_id'`,
+        [TEST_SCHEMA],
+      )).rows.length === 1;
+    try {
+      await client.query(`BEGIN`);
+      await client.query(`SET LOCAL search_path TO "${q(TEST_SCHEMA)}"`);
+      expect(await hasColumn()).toBe(true);
+      await client.query(statementsOf(downgrade0117));
+      expect(await hasColumn()).toBe(false);
+      await client.query(statementsOf(upgrade0117));
+      expect(await hasColumn()).toBe(true);
+      const nameOf = async () =>
+        (await client.query(`SELECT reopened_gate_id FROM artifact_verification_records WHERE id=$1`, [`verify:${v.successorGateId}`])).rows[0];
+      await client.query(`UPDATE artifact_verification_records SET reopened_gate_id=$2 WHERE id=$1`, [`verify:${v.successorGateId}`, v.reopenGateId]);
+      expect(await nameOf()).toEqual({ reopened_gate_id: v.reopenGateId });
+      await client.query(`DELETE FROM artifact_review_gates WHERE id=$1`, [v.reopenGateId]);
+      expect(await nameOf()).toEqual({ reopened_gate_id: null });
+    } finally {
+      await client.query(`ROLLBACK`);
+      client.release();
+    }
+    expect(await namedGate(v.successorGateId)).toBe(v.reopenGateId);
+  });
+
+  it("REPLAY ON A RESERVED SLOT (cinatra#4312): a replayed repair response whose verification answers reopen-conflict still returns the successor, and warns", async () => {
+    const v = slotOf(await landRepair());
+    const repair = (await repairStore.readRepair(v.repairId))!;
+    const forged = await reserveSlot(v);
+    // The landed repair's automatic record reads no representations; the replay's reads two that differ.
+    for (const [id, revision] of [[v.ev.representationRevisionId, 1], [v.successorRev, 2]] as const) {
+      await pool(
+        `INSERT INTO "${q(TEST_SCHEMA)}"."representation" (id, org_id, artifact_id, resource_id, revision, form)
+         VALUES ($1,$2,$3,$4,$5,'file')`,
+        [id, ORG, v.ev.artifactId, `res-${randomUUID()}`, revision],
+      );
+    }
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const replay = await repairStore.submitRepairResponse({
+        repairId: v.repairId,
+        currentBaseRevisionId: v.ev.representationRevisionId,
+        reauthorized: true,
+        response: {
+          gateId: repair.gateId,
+          baseTarget: { artifactId: v.ev.artifactId, representationRevisionId: v.ev.representationRevisionId },
+          successorTarget: v.pin,
+          findingOutcomes: [{ findingId: "f1", applied: true }, { findingId: "f2", applied: true }],
+          changeSummary: "fixed",
+          producerProvenance: { runId: v.ev.producerRunId, agentId: null },
+        },
+      });
+      expect(replay).toMatchObject({ ok: true, successorGateId: v.successorGateId });
+      expect(warn.mock.calls.flat().join(" ")).toContain("reopen-conflict");
+    } finally {
+      warn.mockRestore();
+    }
+    expect(await namedGate(v.successorGateId)).toBeNull();
+    await expectCallerGateRefused(v, forged);
   });
 
   it("NOT REPAIRED (cinatra#4312): the reopen gate of a successor whose repair row no longer reads `repaired` is refused by the status check (lineage-unbound)", async () => {
