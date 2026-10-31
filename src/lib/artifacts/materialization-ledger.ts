@@ -309,6 +309,41 @@ export async function readRevisionImagePrompt(input: {
 }
 
 /**
+ * THE STORED FACTS OF A FILED PICTURE (cinatra#4223): the provider and model
+ * the finalized ledger row of exactly this revision recorded, read when a
+ * re-drive of the same node with the same bytes is answered with that
+ * revision. A re-drive is served by the first write, so it reports the facts
+ * stored with that write and never those of the attempt that found it.
+ *
+ * Scoped like `readRevisionImagePrompt`: organisation, artifact and revision,
+ * finalized, with an image provider recorded. Anything but exactly one such
+ * row is null: the caller refuses rather than guess.
+ */
+export async function readRevisionImageProvenance(input: {
+  orgId: string;
+  artifactId: string;
+  representationRevisionId: string;
+}): Promise<{ provider: string; model: string | null } | null> {
+  ensurePostgresSchema();
+  const s = schema();
+  const res = await pool().query(
+    `SELECT image_provider, image_model FROM "${s}"."artifact_materializations"
+     WHERE org_id = $1 AND artifact_id = $2 AND representation_revision_id = $3
+       AND phase = 'finalized' AND image_provider IS NOT NULL
+     LIMIT 2`,
+    [input.orgId, input.artifactId, input.representationRevisionId],
+  );
+  if (res.rows.length !== 1) return null;
+  const row = res.rows[0] as { image_provider: unknown; image_model: unknown };
+  if (typeof row.image_provider !== "string" || row.image_provider.length === 0) return null;
+  return {
+    provider: row.image_provider,
+    model:
+      typeof row.image_model === "string" && row.image_model.length > 0 ? row.image_model : null,
+  };
+}
+
+/**
  * Advisory WARN-phase lookup for the LLM-emit path: the finalized
  * DECLARATIVE (`end_node_binding`) materialization of this run + extension +
  * content hash, or null. A hit proves the run's template package declared a

@@ -570,3 +570,169 @@ describe.skipIf(!HAS_REAL_DB)(
     });
   },
 );
+
+/** A provider of another name and model that answers the given picture. */
+function otherProvider(image: string) {
+  return async () => ({
+    provider: "other-image-provider",
+    generateImage: async () => ({ imageData: image, mimeType: "image/png", model: "other-model" }),
+  });
+}
+
+describe.skipIf(!HAS_REAL_DB)(
+  "cinatra#4223 — a re-drive reports the facts stored with the revision it returns",
+  () => {
+    it("a re-drive of the same node with the same bytes from another provider reports the first write's provider and model", async () => {
+      const runId = nextId("run");
+      await seedRun(runId);
+      const base = {
+        runId,
+        orgId: ORG,
+        templateId: TEMPLATE,
+        packageVersion: "1.0.0",
+        createdBy: "user-3032",
+        nodeId: "picture-node",
+        extension: PICTURE_EXT,
+        title: "The lighthouse",
+        prompt: "a lighthouse at dusk",
+        data: { post: "post-artifact-1", placement: "featured" },
+      };
+      const first = await tool.generateArtifactImage(base, providerServing([PNG_RED]).deps());
+      if (!first.ok) throw new Error(first.error);
+
+      const again = await tool.generateArtifactImage(
+        base,
+        providerServing([PNG_RED]).deps({ resolveImageProvider: otherProvider(PNG_RED) }),
+      );
+      expect(again.ok).toBe(true);
+      if (!again.ok) throw new Error(again.error);
+      expect(again.deduped).toBe(true);
+      expect(again.artifactId).toBe(first.artifactId);
+      expect(again.representationRevisionId).toBe(first.representationRevisionId);
+      // The facts stored with that revision, never this attempt's.
+      expect(again.provider).toBe("test-image-provider");
+      expect(again.model).toBe("test-image-model-1");
+      const ledger = await ledgerRow(runId, "picture-node");
+      expect(ledger?.image_provider).toBe("test-image-provider");
+    });
+
+    it("a re-drive of a landed regeneration from another provider reports that append's stored facts", async () => {
+      const runId = nextId("run");
+      await seedRun(runId);
+      const create = {
+        runId,
+        orgId: ORG,
+        templateId: TEMPLATE,
+        packageVersion: "1.0.0",
+        createdBy: "user-3032",
+        nodeId: "picture-node",
+        extension: PICTURE_EXT,
+        title: "The lighthouse",
+        prompt: "a lighthouse at dusk",
+        data: { post: "post-artifact-1", placement: "featured" },
+      };
+      const first = await tool.generateArtifactImage(create, providerServing([PNG_RED]).deps());
+      if (!first.ok) throw new Error(first.error);
+      const regen = {
+        ...create,
+        title: "",
+        prompt: "the same lighthouse, at dawn",
+        artifactId: first.artifactId,
+        baseRepresentationRevisionId: first.representationRevisionId,
+      };
+      const appended = await tool.generateArtifactImage(regen, providerServing([PNG_BLUE]).deps());
+      if (!appended.ok) throw new Error(appended.error);
+      expect(appended.revision).toBe(2);
+
+      const again = await tool.generateArtifactImage(
+        regen,
+        providerServing([PNG_BLUE]).deps({ resolveImageProvider: otherProvider(PNG_BLUE) }),
+      );
+      expect(again.ok).toBe(true);
+      if (!again.ok) throw new Error(again.error);
+      expect(again.deduped).toBe(true);
+      expect(again.representationRevisionId).toBe(appended.representationRevisionId);
+      expect(again.revision).toBe(2);
+      expect(again.provider).toBe("test-image-provider");
+      expect(again.model).toBe("test-image-model-1");
+      expect(await revisionCount(first.artifactId)).toBe(2);
+    });
+  },
+);
+
+describe.skipIf(!HAS_REAL_DB)(
+  "cinatra#4223 — the stored-facts read answers exactly one finalized picture row, or nothing",
+  () => {
+    it("reads the provider and model of exactly one finalized row of that organisation, artifact and revision", async () => {
+      const { readRevisionImageProvenance } = await import("@/lib/artifacts/materialization-ledger");
+      const runId = nextId("run");
+      await seedRun(runId);
+      const first = await tool.generateArtifactImage(
+        {
+          runId,
+          orgId: ORG,
+          templateId: TEMPLATE,
+          packageVersion: "1.0.0",
+          createdBy: "user-3032",
+          nodeId: "reader-node",
+          extension: PICTURE_EXT,
+          title: "The lighthouse",
+          prompt: "a lighthouse at dusk",
+          data: { post: "post-artifact-1", placement: "featured" },
+        },
+        providerServing([PNG_RED]).deps(),
+      );
+      if (!first.ok) throw new Error(first.error);
+      const key = {
+        orgId: ORG,
+        artifactId: first.artifactId,
+        representationRevisionId: first.representationRevisionId,
+      };
+      const table = `"${S()}"."artifact_materializations"`;
+      const where = `run_id = $1 AND output_id = 'reader-node'`;
+
+      // One finalized row: its facts.
+      expect(await readRevisionImageProvenance(key)).toEqual({
+        provider: "test-image-provider",
+        model: "test-image-model-1",
+      });
+      // Another organisation, another revision: no row.
+      expect(await readRevisionImageProvenance({ ...key, orgId: "org-other" })).toBeNull();
+      expect(
+        await readRevisionImageProvenance({ ...key, representationRevisionId: "rep-none" }),
+      ).toBeNull();
+
+      // A null or empty stored model reads as a null model.
+      await sql(`UPDATE ${table} SET image_model = NULL WHERE ${where}`, [runId]);
+      expect(await readRevisionImageProvenance(key)).toEqual({
+        provider: "test-image-provider",
+        model: null,
+      });
+      await sql(`UPDATE ${table} SET image_model = '' WHERE ${where}`, [runId]);
+      expect((await readRevisionImageProvenance(key))?.model).toBeNull();
+
+      // An empty stored provider is no fact: nothing.
+      await sql(`UPDATE ${table} SET image_provider = '' WHERE ${where}`, [runId]);
+      expect(await readRevisionImageProvenance(key)).toBeNull();
+      await sql(`UPDATE ${table} SET image_provider = 'test-image-provider' WHERE ${where}`, [runId]);
+
+      // A row that is not finalized is no fact: nothing.
+      await sql(`UPDATE ${table} SET phase = 'claimed' WHERE ${where}`, [runId]);
+      expect(await readRevisionImageProvenance(key)).toBeNull();
+      await sql(`UPDATE ${table} SET phase = 'finalized' WHERE ${where}`, [runId]);
+      expect((await readRevisionImageProvenance(key))?.provider).toBe("test-image-provider");
+
+      // Two finalized rows for one revision are ambiguous: nothing, never a guess.
+      await sql(
+        `INSERT INTO ${table}
+           (id, org_id, run_id, output_id, node_id, path, extension, content_hash, phase,
+            artifact_id, representation_revision_id, image_prompt, image_provider, image_model)
+         SELECT $2, org_id, run_id, output_id || '#second', node_id, path, extension, content_hash, phase,
+                artifact_id, representation_revision_id, image_prompt, 'other-image-provider', image_model
+           FROM ${table} WHERE ${where}`,
+        [runId, nextId("ledger")],
+      );
+      expect(await readRevisionImageProvenance(key)).toBeNull();
+    });
+  },
+);
