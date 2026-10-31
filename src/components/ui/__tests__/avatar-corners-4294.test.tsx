@@ -342,8 +342,7 @@ describe("the shared member list and the app's ownership panel draw one Avatar r
   it("the merged class set of each Avatar root is the same in both lists", () => {
     // packages/sdk-ui/src/permissions-panel.tsx pins `size-9` on its member
     // Avatar so that this set equals the app's (the shared Avatar defaults to
-    // `size-8`, the app's to `size-9`). Only the root is compared: the two
-    // lists' fallbacks differ by design.
+    // `size-8`, the app's to `size-9`). Only the root is compared.
     const shared = avatarRootClassSets(renderSharedPanel());
     const app = avatarRootClassSets(renderOwnershipPanel());
     expect(shared).toHaveLength(2);
