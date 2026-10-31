@@ -1611,6 +1611,19 @@ export function setDevActorForExternalMcp(
 }
 
 /**
+ * DEV-ONLY (cinatra#4387): the owner of the install-made connections that the
+ * dev-boot shell pushed through `setDevActorForExternalMcp` on THIS boot — the
+ * fixture account, or the first administrator and that administrator's
+ * organisation (cinatra#4112). Null off a dev/preview boot, or when the boot
+ * found no owner. A copy is returned, so a caller cannot change the holder.
+ * The host binds it to a dev-hook instance save itself; a hook never sees it.
+ */
+export function getDevInstallConnectionOwner(): { userId: string; organizationId: string } | null {
+  const actor = seededDevActorForExternalMcp;
+  return actor ? { userId: actor.userId, organizationId: actor.organizationId } : null;
+}
+
+/**
  * DEV-ONLY (cinatra#1238): attach a freshly dev-minted Twenty workspace API key
  * through the SAME sanctioned path the setup-page connect flow uses
  * (`saveTwentyConnection`), then VERIFY the gated bearer resolver actually mints

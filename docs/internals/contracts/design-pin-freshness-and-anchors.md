@@ -15,7 +15,7 @@ They refuse silence.
 | | what it compares | red when | warn-first |
 | --- | --- | --- | --- |
 | [`design-pin-freshness`](../../../scripts/ci/design-pin-freshness.mjs) | the pin against the design source's default branch | a governed drawing moved past the pinned revision | yes |
-| [`design-anchor-resolution`](../../../scripts/ci/design-anchor-resolution.mjs) | the recorded anchors against the drawings the pin governs | a recorded anchor resolves in no governed drawing | yes |
+| [`design-anchor-resolution`](../../../scripts/ci/design-anchor-resolution.mjs) | the recorded anchors against the drawings the pin governs | a recorded anchor resolves in no governed drawing | no, blocking (cinatra#3555) |
 | [`design-record-grammar`](../../../scripts/ci/design-record-grammar.mjs) | a pull request body against the pin on its branch | a graded section names no pin, or the wrong one | yes |
 
 Everything the three share — the pin grammar, the reader, the trigger rule —
@@ -23,7 +23,8 @@ lives in [`scripts/ci/lib/design-pin.mjs`](../../../scripts/ci/lib/design-pin.mj
 and the paths they trigger on are in
 [`scripts/ci/design-pin-gates.paths.json`](../../../scripts/ci/design-pin-gates.paths.json).
 Their unit suites ride the root Vitest include, so a failure in one reds a
-required check even while the gate jobs themselves are warn-first.
+required check even while the freshness and record-grammar gate jobs are
+warn-first.
 
 This page does not replace
 [the pin-drift check](./design-conformance-pin-drift.md), which compares the
@@ -104,15 +105,29 @@ authenticated reader at the contract's own pinned revision — and says so.
 - **Matching is exact, not substring.** A raw text search would let a selector
   quoted in prose or shown in a code sample "resolve". The checker parses each
   drawing's tags, ignoring comments and the contents of `pre`/`code`/`script`/
-  `style`, and matches an attribute name and value exactly.
+  `style`, and matches attribute names and values element by element (a name
+  case-insensitively, a value exactly; see below).
 - **An anchor that resolves in a governed drawing other than the first is
   resolved**, and the report says which. One that resolves only in a drawing the
   pin does *not* govern is **unresolved**, with that distinction stated — that is
   the second defect, and it is not the same as an anchor drawn nowhere.
-- **A selector form beyond one attribute predicate is refused by name**, and the
-  run exits `2`. It is never approximated and never counted in either direction.
-  The live recorded set carries such a form today (a class selector among the
-  frame-wide capture requirements), and the suite pins that. `--print-unresolved`
+- **Three selector forms are decided, and any other form is refused by name.**
+  The decided forms are one attribute predicate (`[a]`, `[a="v"]` or
+  `[a='v']`), a compound of attribute predicates (`[a][b="v"]`), which one
+  element must satisfy as a whole, and one class token (`.frame`). The refused
+  forms include a descendant combinator, a tag or id selector, a compound of
+  classes, a class beside an attribute predicate, an operator other than `=`,
+  an unquoted value and an empty selector (`parseAnchorSelector` in
+  `scripts/ci/design-anchor-resolution.mjs`). A refused form makes the run exit
+  `2`, unless a recorded `anchorsUnresolvedAtPin` disagrees with what the run
+  finds: outside `--print-unresolved` that comparison comes first and exits
+  `1`. A refused form is never approximated and never counted in either
+  direction. The report line and both refusal errors (the run's and the one of
+  `--print-unresolved`) print a refused selector as a JSON string, so the empty
+  selector reads `""` instead of a blank.
+  The suite pins that refusal. In the live recorded set the one class selector,
+  `.cw-frame` (a frame-wide capture requirement), is a passive capture marker,
+  which the report lists and does not match against a drawing. `--print-unresolved`
   — the road the adoption script reads — **prints nothing and exits `2`** while
   any selector is refused: a set with a verdict missing from it would otherwise
   be recorded, and digest-bound, as though it were the whole finding.
@@ -130,9 +145,22 @@ authenticated reader at the contract's own pinned revision — and says so.
   proves the array was not edited afterwards; it can never prove it was true
   when it was written, and this is the script that decides that.
 
-It reports what is true today: the recorded owner anchors do not resolve at the
-pin the contract names. That is the state the check exists to make visible
-rather than digest-passable, and it stays until the anchor content itself moves.
+- **Four card controls that no governed drawing draws under the recorded
+  value are not anchors of the contract.** The anchor contract leaves them out
+  of the capture requirements it records (`AGENT_OWNED_CAPTURE_CONTROLS` in
+  `scripts/audit/lib/anchor-contract.mjs`, a closed list per kind), each for its
+  own reason. The skills card's per-skill Confirm, Adjust and Skip: the drawing
+  retired them. The schedule card's own Confirm,
+  `[data-action="confirm-schedule-proposal"]`: the governed drawing draws that
+  floor under another value, `confirm-schedule -> scheduled`, and the product's
+  value is tracked in cinatra#3678. The capture recorder still grades the
+  pictures of each control's own kind against it; only the contract's digest
+  and this check stop asking a drawing to draw them (cinatra#3677).
+
+With those controls out, every recorded owner anchor and capture requirement
+resolves in a governed drawing or is a passive capture marker, and
+`anchorsUnresolvedAtPin` is empty. A recorded anchor that a later pin stops
+drawing turns the check red again.
 
 ## `design-record-grammar` — does a graded record name its pin?
 
@@ -213,12 +241,63 @@ node scripts/audit/adopt-design-pin.mjs --pin "design@<40-hex> specs/<drawing>.h
   claim a person makes about what they re-examined, and the script has
   re-examined nothing. It prints where the note goes.
 
-While `anchorsUnresolvedAtPin` is absent — as it is today — the digest is taken
-over the original three inputs and stands exactly where it stood. That is what
-lets these checks land before the adoption that writes it.
+While `anchorsUnresolvedAtPin` is absent, the digest is taken over the original
+three inputs and stands exactly where it stood. That is what let these checks
+land before the adoption that writes it. The contract now records the key (as
+the empty array), so the digest takes it as its fourth input.
 
 ## Rollout
 
-All three follow the pin-drift check's rollout: **warn-first**, with the
+The gates follow the pin-drift check's rollout: **warn-first**, with the
 `.github/branch-protections.json` edit that makes a context required landing as
 a **separate** pull request, per that file's own note.
+
+- **`design-anchor-resolution` is blocking** (cinatra#3555). Its job in
+  `.github/workflows/gates.yml` has no job-level `continue-on-error`. Its context
+  is listed in `.github/branch-protections.json` and mirrored in
+  `scripts/ci/merge-group-coverage-guard.mjs`, and
+  `.github/merge-readiness.json` lists it as an expected context (regenerated
+  with `node scripts/ci/merge-readiness-inventory.mjs --write`) instead of
+  excluding it as report-only. The recorded `anchorsUnresolvedAtPin` is the empty
+  array, and the check exits `0` on `main`. It reads the drawings through the
+  design-source token, which some runs do not have, and the design source can be
+  down. Three classes of run are affected: a **fork** pull request (a fork run
+  has no Actions secrets), a **Dependabot**-triggered run (Dependabot runs get a
+  secret store of their own, not the Actions one) and an **outage** (the App
+  credential is refused, or the design source cannot be read with a credential
+  present). For such a run the checker decides by the diff, with the touched-path
+  rule of `design-pin-drift` over `scripts/ci/design-pin-gates.paths.json`:
+  - a pull request, merge group or branch push that changes **no path the
+    checker reads** exits `0` with a `::notice` and certifies nothing, since the
+    drawings could not change its verdict. The paths are the files the checker
+    imports, taken transitively, and the pin carriers. A test derives the imports
+    from the checker (static, relative specifiers only) and adds the carriers
+    named in `COMMIT_BEARING_PINS`; it fails when one is missing from the map. It
+    does not find a dynamic or computed import, a bare or package import, or a
+    new data file the checker opens. The diff is read without rename detection,
+    so a moved file lists its old path too;
+  - a run that **changes** such a path, a push to `main`, a dispatch, and a run
+    with no diff base (every pin then counts as touched) exit `2` and are red, as
+    does a run that cannot read its pin, contract, path map or diff base, or whose
+    path map names other pins than the ones the checker reads, and a run under
+    `--print-unresolved`, which promises a printed set on exit `0`.
+
+  A push to `main` stays red during an outage until a dispatch, or the next push
+  once the source reads again, clears it. A fork or Dependabot pull request that
+  changes `.github/workflows/gates.yml` or
+  `.github/workflows/design-record-grammar.yml` stays red without the token: both
+  are global paths, which count as touching every pin.
+
+  A re-run does not cure the exit `2` of a run whose diff touches a read path
+  while the credential or the design source is unavailable.
+  `.github/branch-protections.json` is a declaration: the live protection changes
+  only when it is re-applied with the `gh api -X PUT` command at the top of it,
+  a separate administrator step. No workflow in `.github/workflows` applies that
+  file, so the re-apply is by hand.
+- **The path map is shared** by the three gates. The two files this change adds
+  to it (`scripts/ci/design-pin-drift.mjs` and the recorder's contract module
+  under `scripts/ci/lib/`) therefore also count as touching `chat-hitl-lifecycle`
+  for `design-pin-freshness` and `design-record-grammar`. Both are not required,
+  so only the colour of their check run changes.
+- **`design-pin-freshness` and `design-record-grammar` stay warn-first.** Each
+  becomes required in a pull request of its own.
