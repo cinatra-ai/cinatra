@@ -9,15 +9,20 @@
 //   "status-coloured text + border"
 //   "5 variants"
 //   "icon led"
-//   "close + optional copy"
+//   "close + copy by default (copy when non-empty copy text is available)"
 //   "Five variants — default · success · warning · error · info — each on the
 //    popover surface with a status-coloured border and matching text; an icon
-//    on the left identifies the type. Every toast carries a Copy action and a
-//    Close (X) on the right, so the user can grab the message text or dismiss
-//    the toast. Never block on a toast; use Dialog when the user must
-//    acknowledge. Stack vertically, newest on top."
+//    on the left identifies the type. By default every toast carries a Close
+//    (X) on the right, and a Copy action when non-empty copy text is
+//    available, so the user can grab the message text or dismiss the toast.
+//    Never block on a toast; use Dialog when the user must acknowledge. Stack
+//    vertically, newest on top."
 //
-// NO DEPARTURE FOUND.
+// A DEPARTURE FOUND AND FIXED (cinatra#3189, G4): the default toast's border
+// was the row hairline, while "each" of the five has a border that matches
+// its text, and the drawn default draws `border: 1px solid var(--line-strong)`,
+// the ink of its text. The icon and the stack are read in a rendered Toaster
+// by toast-icon-led-and-stack-3189.test.tsx.
 //
 // HOW THIS ONE IS GRADED, and why it differs from its siblings. This primitive
 // owns no markup: it configures the `sonner` library, and the clauses it is
@@ -88,11 +93,12 @@ describe('clause: "status-coloured text + border" / "a status-coloured border an
     },
   );
 
-  it("keeps the default toast on the neutral ink and the row hairline", () => {
-    // "default" is one of the five but is not status-coloured; it takes the
-    // popover's own foreground and the neutral border.
+  it("draws the default toast's border in the ink its text carries", () => {
+    // "default" is one of the five, and "each" carries a border that matches
+    // its text. Its text is the popover's ink, and the drawn default's border
+    // is `--line-strong`, the same ink in both palettes.
     expect(declared("normal", "text")).toBe("var(--popover-foreground)");
-    expect(declared("normal", "border")).toBe("var(--border)");
+    expect(declared("normal", "border")).toBe("var(--line-strong)");
   });
 
   it("draws every status from a design token rather than a literal colour", () => {
@@ -124,14 +130,16 @@ describe("the palette the toasts render in", () => {
 });
 
 describe('clause: "icon led" / "an icon on the left identifies the type"', () => {
-  // GRADED IN THE LIBRARY'S OWN DOM, with the reason: the per-type icon is
-  // rendered by `sonner` inside each toast when one is raised, not by this
-  // component. It is read on the live boot, where a real toast exists to look
-  // at ("toast icon", tests/e2e/design/conformance/primitive-wave-leg1.spec.ts).
-  it.skip(
-    "graded on the boot instead: the per-type icon is drawn by the library inside a raised toast — see primitive-wave-leg1.spec.ts",
-    () => {},
-  );
+  // The glyphs are drawn inside a raised toast, so they are read in a rendered
+  // Toaster: toast-icon-led-and-stack-3189.test.tsx. This component hands the
+  // library the three typed glyphs the drawing draws; info keeps the library's.
+  it("hands the library its own typed glyphs", () => {
+    expect(SRC).toMatch(/icons=\{TYPE_ICONS\}/);
+    for (const type of ["success", "warning", "error"]) {
+      expect(SRC).toMatch(new RegExp(`\\n  ${type}: `));
+    }
+    expect(SRC).not.toMatch(/\n  info: /);
+  });
 });
 
 describe('clause: "close + optional copy" / "Every toast carries a Copy action and a Close (X) on the right"', () => {
@@ -154,7 +162,8 @@ describe('clause: "close + optional copy" / "Every toast carries a Copy action a
 describe('clauses: "Never block on a toast" / "Stack vertically, newest on top"', () => {
   // NOT APPLICABLE at this primitive, with the reason: non-blocking behaviour
   // and stack order are the library's own defaults, and this component
-  // overrides neither. "Never block on a toast; use Dialog when the user must
+  // overrides neither; the stack order is read in a rendered Toaster by
+  // toast-icon-led-and-stack-3189.test.tsx. "Never block on a toast; use Dialog when the user must
   // acknowledge" is in addition a call-site rule about which primitive to reach
   // for.
   it.skip(

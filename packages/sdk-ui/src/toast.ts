@@ -122,6 +122,12 @@ export function buildOptions(
   const next: ExternalToast = { ...rest };
   let ghostCopyAction = false;
 
+  // The drawing makes a toast icon led ("an icon on the left identifies the
+  // type"), so a falsy `icon` (null, false, 0, an empty string) is no icon and does not take
+  // the glyph away: the toast keeps its type's glyph, and a caller's own icon
+  // element still replaces it (cinatra#3189).
+  if (!next.icon) delete next.icon;
+
   if (action === null) {
     // explicit opt-out — leave action undefined
   } else if (action) {
@@ -189,9 +195,42 @@ export function buildOptions(
   return next;
 }
 
+/**
+ * The default toast's glyph, as the components drawing draws it (Toast /
+ * Sonner, the first example): a muted circled alert, 14px, stroke 2.2. With no
+ * caller icon, the library draws an icon only for a typed toast, so the wrapper hands the
+ * untyped toast (the bare call and `.message`) this one (cinatra#3189).
+ */
+function defaultToastIcon() {
+  return createElement(
+    "svg",
+    {
+      viewBox: "0 0 24 24",
+      width: 14,
+      height: 14,
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: 2.2,
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+      className: "text-muted-foreground",
+      "aria-hidden": "true",
+      "data-toast-glyph": "",
+    },
+    createElement("circle", { cx: 12, cy: 12, r: 9 }),
+    createElement("path", { d: "M12 8v4" }),
+    createElement("path", { d: "M12 16h.01" }),
+  );
+}
+
+function untypedOptions(message: ToastMessage, options?: CinatraToastOptions): ExternalToast {
+  const next = buildOptions(message, options);
+  return { ...next, icon: next.icon ?? defaultToastIcon() };
+}
+
 export const cinatraToast = Object.assign(
   function cinatraToast(message: ToastMessage, options?: CinatraToastOptions) {
-    return sonnerToast(message as string, buildOptions(message, options));
+    return sonnerToast(message as string, untypedOptions(message, options));
   },
   {
     success(message: ToastMessage, options?: CinatraToastOptions) {
@@ -207,7 +246,7 @@ export const cinatraToast = Object.assign(
       return sonnerToast.info(message as string, buildOptions(message, options));
     },
     message(message: ToastMessage, options?: CinatraToastOptions) {
-      return sonnerToast.message(message as string, buildOptions(message, options));
+      return sonnerToast.message(message as string, untypedOptions(message, options));
     },
     promise: sonnerToast.promise,
     loading: sonnerToast.loading,
