@@ -540,6 +540,15 @@ export type SubmitRepairResponseResult =
   | { ok: true; successorGateId: string; successorTaskId: string }
   | { ok: false; code: string; error: string };
 
+/** cinatra#4312 — a landed repair's verification is best-effort, and the repair
+ * stands either way. A `reopen-conflict` means that no reopen gate opened for a failed
+ * verification, so it is logged instead of disappearing. */
+function warnOnReopenConflict(repairId: string, result: { ok: true } | { ok: false; code: string; error: string }): void {
+  if (!result.ok && result.code === "reopen-conflict") {
+    console.warn(`[lifecycle-repair] verification of repair ${repairId}: reopen-conflict: ${result.error}`);
+  }
+}
+
 /** Sentinel that forces the atomic emit+finalize transaction to ROLL BACK (drizzle
  * rolls back only on a throw) while carrying the non-finalized outcome out to the
  * caller — so a freshly-emitted successor gate is never committed without its
@@ -581,7 +590,7 @@ export async function submitRepairResponse(
   if (repair.status === "repaired" && repair.successorGateId) {
     try {
       const { triggerVerificationForLandedRepair } = await import("./lifecycle-verification-store");
-      await triggerVerificationForLandedRepair({ repairId: repair.id, orgId: repair.orgId });
+      warnOnReopenConflict(repair.id, await triggerVerificationForLandedRepair({ repairId: repair.id, orgId: repair.orgId }));
     } catch {
       /* swallowed — verification is an annotation, never a repair-blocking dependency. */
     }
@@ -804,7 +813,7 @@ export async function submitRepairResponse(
   // repair; the successor gate stands regardless.
   try {
     const { triggerVerificationForLandedRepair } = await import("./lifecycle-verification-store");
-    await triggerVerificationForLandedRepair({ repairId: repair.id, orgId: repair.orgId });
+    warnOnReopenConflict(repair.id, await triggerVerificationForLandedRepair({ repairId: repair.id, orgId: repair.orgId }));
   } catch {
     // swallowed — verification is an annotation, never a repair-blocking dependency.
   }

@@ -9,16 +9,23 @@
 // emit into it first. `reopened_gate_id` is written in the transaction that
 // inserts the gate, only by the verification that inserted it.
 //
-// BACKFILL, ONCE. On a database upgraded from before this column, a reopen gate
-// verification opened has no name yet, and without one its repair lineage reads
-// malformed. The old writer inserted the record first and the gate after it, so
-// this names the gate in the record's slot when it is on the run and in the
-// organization of the record's gate and was created at or after the record. A
-// gate a caller emitted into the slot before the upgrade and after the record
-// cannot be told apart from those rows and is named as well. A gate created before
-// the record is not named, and its lineage refuses it. This runs once, in this
-// migration; the bootstrap never repeats it, because after the upgrade only the
-// writer names a gate.
+// BACKFILL, ONCE, FAIL-CLOSED. On a database upgraded from before this column, a
+// lineage that already went on through a reopen gate has no name to read, and it
+// would read as malformed. So this names a gate only when it already carries a
+// repair row at attempt 2 or later, in the record's slot, on the run and in the
+// organization of the record's gate, created at or after the record (the old writer
+// wrote the record first). That joins nothing new: the old code had already joined
+// such a gate to the lineage, which includes a caller's gate it let in.
+//
+// THE COST. A reopen gate the old writer opened that is pending at the upgrade with
+// no note on it carries no repair row, so it stays unnamed, as does a caller's gate
+// with no row: the data cannot tell them apart. A re-drive of its verification answers
+// `reopen-conflict`, and a changes-requested note on it is refused (`lineage-unbound`).
+// Continue still resolves it. The lineage stays readable, because no attempt rests on
+// that gate.
+//
+// This runs once, in this migration; the bootstrap never repeats it, because after
+// the upgrade only the writer names a gate.
 //
 // DOWN drops the column; the names are not restorable, and the code that reads
 // them goes with the same revert.
@@ -44,7 +51,11 @@ export const verificationReopenedGateBackfillSql = `
      AND reopen.review_task_id = 'lifecycle-review:verify:' || r.id
      AND reopen.run_id = verified.run_id
      AND reopen.org_id = verified.org_id
-     AND reopen.created_at >= r.created_at;
+     AND reopen.created_at >= r.created_at
+     AND EXISTS (
+       SELECT 1 FROM lifecycle_repair AS attempt
+        WHERE attempt.gate_id = reopen.id AND attempt.attempt >= 2
+     );
 `;
 
 /** @param {Pick<import("node-pg-migrate").MigrationBuilder, "sql">} pgm */
