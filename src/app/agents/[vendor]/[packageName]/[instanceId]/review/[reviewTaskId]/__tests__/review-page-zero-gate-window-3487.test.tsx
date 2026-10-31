@@ -77,11 +77,13 @@ vi.mock("../review-actor", () => ({
 }));
 
 // The window's field and its server bridge, as the review window's own render
-// suite stands them in (the real field pulls browser-only deps).
+// suite stands them in (the real field pulls browser-only deps). The stand-in
+// carries the real field's textbox role, so the reader can count it. The real
+// field's editor is read in the run page's `SetupScreen` test and the fixtures.
 vi.mock("@cinatra-ai/sdk-ui", () => ({
   LoadingSpinner: () => null,
   PromptField: ({ placeholder }: { placeholder?: string }) => (
-    <div data-testid="run-window-prompt">{placeholder}</div>
+    <div data-testid="run-window-prompt" role="textbox">{placeholder}</div>
   ),
 }));
 vi.mock("@cinatra-ai/agents/run-window-actions", () => ({
@@ -238,8 +240,9 @@ describe("the design-conformance reading of the real review page (cinatra#3487 i
     const anchor = anchors[0]!;
     expect(anchor.closest('[data-run-window-host="page-chrome"]')).not.toBeNull();
     expect(anchor.closest("[data-lifecycle-card-host]")).toBeNull();
-    // The anchor is the window itself: the field the person types into is in it.
+    // The anchor is the window itself: the field's stand-in is the one textbox in it.
     expect(anchor.contains(screen.getByTestId("run-window-prompt"))).toBe(true);
+    expect(anchor.querySelectorAll('[role="textbox"]').length).toBe(1);
 
     const reading = readRunWindowOwnership(container);
     expect(reading).toMatchObject({ windows: 1, ownedWindows: 1, promptsInCards: 0 });
