@@ -1467,128 +1467,63 @@ export function isSwitchModule(spec: string): boolean {
 
 const SWITCH_NAME = "Switch";
 
-/** An assignment operator (`=`, `+=`, ..., `||=`, `&&=`, `??=`). */
-function isAssignmentKind(kind: ts.SyntaxKind): boolean {
-  return kind >= ts.SyntaxKind.FirstAssignment && kind <= ts.SyntaxKind.LastAssignment;
-}
-
 /**
- * Whether the identifier is written to: the target of an assignment or compound assignment, of `++` or `--`, the
- * variable of a `for (x in y)` or `for (x of y)`, or a name inside a destructuring assignment pattern
- * (`[x] = a`, `({ x } = a)`, `({ k: x } = a)`, `[...x] = a`, `[x = 1] = a`).
- */
-function isWriteTarget(n: ts.Node): boolean {
-  let cur: ts.Node = n;
-  for (;;) {
-    const p = cur.parent;
-    if (p === undefined) return false;
-    if (
-      ts.isParenthesizedExpression(p) || ts.isNonNullExpression(p) || ts.isAsExpression(p) || ts.isTypeAssertionExpression(p) ||
-      ts.isSatisfiesExpression(p) || ts.isSpreadElement(p) || ts.isSpreadAssignment(p) || ts.isArrayLiteralExpression(p) || ts.isObjectLiteralExpression(p)
-    ) {
-      cur = p;
-      continue;
-    }
-    if (ts.isPropertyAssignment(p) && p.initializer === cur) {
-      cur = p;
-      continue;
-    }
-    if (ts.isShorthandPropertyAssignment(p)) {
-      if (p.name !== cur) return false;
-      cur = p;
-      continue;
-    }
-    if (ts.isBinaryExpression(p)) return isAssignmentKind(p.operatorToken.kind) && p.left === cur;
-    if (ts.isPrefixUnaryExpression(p) || ts.isPostfixUnaryExpression(p)) {
-      return p.operator === ts.SyntaxKind.PlusPlusToken || p.operator === ts.SyntaxKind.MinusMinusToken;
-    }
-    if (ts.isForInStatement(p) || ts.isForOfStatement(p)) return p.initializer === cur;
-    return false;
-  }
-}
-
-/**
- * Whether a file declares a function named Switch itself and exports it under that name (cinatra#4334 cure, the
- * ruling that the Switch lives in the module the row already imported), and nothing in the file can make the exported
- * binding anything else. Every occurrence of the identifier Switch is read, and the file is refused (false) as soon as
- * one is none of these: the name of the one top-level `function Switch` with a body (bodiless overloads of it are
- * allowed), the plain `export { Switch }` with no module specifier, no rename and no `type`, the property name of a
- * member or a key (`x.Switch`, `{ Switch: v }`, `import { Switch as X }`, `const { Switch: v } = o`), a type name, or a
- * read of the binding. Refused: any other binding of the name (import, parameter, variable, class, enum, namespace,
- * function expression, destructuring, catch variable, a nested or second function), any write to it (`Switch = x`, a
- * compound assignment, `++`, `for (Switch of x)`, a destructuring assignment), any default export of it
- * (`export default Switch`, `export { Switch as default }`, `export = Switch`, `export default function Switch`, also
- * beside a named export), a re-export (`export { Switch } from "m"`), an alias in either direction, a type-only export
- * and an ambient declaration alone; the default export is found through parentheses, `!`, `as`, an angle-bracket assertion and
- * `satisfies`. A module that spells `exports`, `module` or `eval` is refused. A file with no body for Switch, or one that does not
- * export it, is none of these.
+ * Whether a module declares a function named Switch and exports it under that name, by an allow-list (cinatra#4430, pre-5).
+ * True only if ALL of these hold, and false as soon as one does not:
+ * - every identifier spelled Switch in the file is one of exactly three things: the name of the one top-level function
+ *   declaration with a body (not a default export), a top-level export specifier of the plain name (`export { Switch }`: no
+ *   module specifier, no rename, not type-only), or the imported name of an aliased import (`import { Switch as Primitive }`);
+ *   any other occurrence refuses the module: a read, a write, a call, a member or a key, a type, a tag, a second or bodiless
+ *   declaration, an overload, an alias in either direction, a re-export, an ambient or nested declaration;
+ * - the file has no export assignment of any kind (`export default x`, `export = x`);
+ * - the file spells none of the identifiers `exports`, `module` and `eval`;
+ * - there is exactly one function with a body, and exactly one export of it, by the `export` modifier or by one export specifier.
+ * What the rule does not read: the function body (a function named Switch that draws a checkbox counts), a `require` of the
+ * module's own path, `arguments`, a string key, and a top-level `this` in a file the build compiles to CommonJS.
  */
 export function declaresAndExportsSwitch(sf: ts.SourceFile): boolean {
   let bodies = 0;
-  let exportedByModifier = false;
-  let exportedByList = false;
+  let exportedByModifier = 0;
+  let exportedByList = 0;
   let ok = true;
-  const occurrence = (n: ts.Identifier): boolean => {
+  const allowed = (n: ts.Identifier): boolean => {
     const p = n.parent;
     if (ts.isFunctionDeclaration(p) && p.name === n) {
-      if (!ts.isSourceFile(p.parent) || hasModifier(p, ts.SyntaxKind.DefaultKeyword)) return false;
-      if (p.body !== undefined) {
-        bodies++;
-        if (hasModifier(p, ts.SyntaxKind.ExportKeyword)) exportedByModifier = true;
-      }
+      if (!ts.isSourceFile(p.parent) || p.body === undefined || hasModifier(p, ts.SyntaxKind.DefaultKeyword)) return false;
+      bodies++;
+      if (hasModifier(p, ts.SyntaxKind.ExportKeyword)) exportedByModifier++;
       return true;
     }
-    if (ts.isExportSpecifier(p)) {
+    if (ts.isExportSpecifier(p) && p.name === n && p.propertyName === undefined && !p.isTypeOnly) {
       const decl = p.parent.parent;
-      if (p.name === n && p.propertyName === undefined && !p.isTypeOnly && !decl.isTypeOnly && decl.moduleSpecifier === undefined) {
-        exportedByList = true;
+      if (!decl.isTypeOnly && decl.moduleSpecifier === undefined && ts.isSourceFile(decl.parent)) {
+        exportedByList++;
         return true;
       }
       return false;
     }
-    // An export assignment through parentheses, `!`, `as`, an angle-bracket assertion or `satisfies` still exports the binding
-    // (`export default (Switch)`, `export = Switch!`): climb them before the test (review 4 MF1).
-    let up: ts.Node = n;
-    while (
-      up.parent !== undefined &&
-      (ts.isParenthesizedExpression(up.parent) || ts.isNonNullExpression(up.parent) || ts.isAsExpression(up.parent) ||
-        ts.isTypeAssertionExpression(up.parent) || ts.isSatisfiesExpression(up.parent))
-    ) {
-      up = up.parent;
-    }
-    if (up.parent !== undefined && ts.isExportAssignment(up.parent)) return false;
-    if (ts.isImportSpecifier(p) && p.propertyName === n) return true;
-    if (ts.isBindingElement(p) && p.propertyName === n) return true;
-    if (ts.isPropertyAccessExpression(p) && p.name === n) return true;
-    if (ts.isQualifiedName(p) && p.right === n) return true;
-    if (
-      (ts.isPropertyAssignment(p) || ts.isPropertySignature(p) || ts.isPropertyDeclaration(p) || ts.isMethodDeclaration(p) || ts.isMethodSignature(p) ||
-        ts.isGetAccessorDeclaration(p) || ts.isSetAccessorDeclaration(p) || ts.isJsxAttribute(p) || ts.isEnumMember(p) ||
-        ts.isInterfaceDeclaration(p) || ts.isTypeAliasDeclaration(p) || ts.isTypeParameterDeclaration(p)) &&
-      p.name === n
-    ) {
-      return true;
-    }
-    if (ts.isShorthandPropertyAssignment(p) && p.name === n) return !isWriteTarget(n);
-    if ((p as { name?: ts.Node }).name === n) return false;
-    return !isWriteTarget(n);
+    return ts.isImportSpecifier(p) && p.propertyName === n;
   };
   const visit = (n: ts.Node): void => {
     if (!ok) return;
-    if (ts.isIdentifier(n) && n.text === SWITCH_NAME && !occurrence(n)) {
+    if (ts.isExportAssignment(n)) {
       ok = false;
       return;
     }
-    // A module that spells `exports`, `module` or `eval` can change its exported names after the declaration
-    // (`exports.Switch = x`, `module.exports = ...`, `Object.defineProperty(exports, ...)`, `eval("Switch = x")`): refused (review 4 MF2).
-    if (ts.isIdentifier(n) && (n.text === "exports" || n.text === "module" || n.text === "eval")) {
-      ok = false;
-      return;
+    if (ts.isIdentifier(n)) {
+      if (n.text === "exports" || n.text === "module" || n.text === "eval") {
+        ok = false;
+        return;
+      }
+      if (n.text === SWITCH_NAME && !allowed(n)) {
+        ok = false;
+        return;
+      }
     }
     ts.forEachChild(n, visit);
   };
   visit(sf);
-  return ok && bodies === 1 && (exportedByModifier || exportedByList);
+  return ok && bodies === 1 && exportedByModifier + exportedByList === 1;
 }
 
 /**

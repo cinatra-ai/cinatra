@@ -1594,7 +1594,7 @@ describe("the switch rule refuses what is ambiguous or can change, and takes onl
     }
   });
 
-  it("MF2: a module that writes to Switch anywhere is refused, and a read of it is not", () => {
+  it("MF2: a module that writes to Switch anywhere is refused, and so is any read of it", () => {
     const head = "export function Checkbox() { return null; }\nexport function Switch() { return null; }\n";
     const writes: Record<string, string> = {
       assignment: "Switch = Checkbox;",
@@ -1624,9 +1624,9 @@ describe("the switch rule refuses what is ambiguous or can change, and takes onl
     // an angle-bracket assertion is a write target only in a .ts module (in .tsx it parses as a tag)
     const angle = `${head}(<unknown>Switch) = Checkbox;\n`;
     expect(declaresAndExportsSwitch(parseSource("m.ts", angle))).toBe(false);
-    expect(declaresAndExportsSwitch(parseSource("m.ts", `${head}export const read = <unknown>Switch;\n`))).toBe(true);
+    expect(declaresAndExportsSwitch(parseSource("m.ts", `${head}export const read = <unknown>Switch;\n`))).toBe(false);
     expect(refused(`${IMPORT}\nexport const R = () => ${ITEM("<Switch checked={on} />")};\n`, { "src/ui/checkbox.ts": angle })).toBe(true);
-    expect(passes(`${IMPORT}\nexport const R = () => ${ITEM("<Switch checked={on} />")};\n`, { "src/ui/checkbox.ts": `${head}export const read = <unknown>Switch;\n` })).toBe(true);
+    expect(refused(`${IMPORT}\nexport const R = () => ${ITEM("<Switch checked={on} />")};\n`, { "src/ui/checkbox.ts": `${head}export const read = <unknown>Switch;\n` })).toBe(true);
     // a JavaScript-family module is read the same way: a later reassignment and a var of the name refuse
     for (const m of [`${head}Switch = Checkbox;\n`, "export function Checkbox() { return null; }\nexport function Switch() { return null; }\nvar Switch = Checkbox;\n"]) {
       expect(refused('import { Switch } from "@ui/box";\nexport const R = () => ' + ITEM("<Switch checked={on} />") + ";\n", { "src/ui/checkbox.js": m }, undefined, '{ "compilerOptions": { "paths": { "@ui/box": ["src/ui/checkbox.js"] } } }')).toBe(true);
@@ -1643,7 +1643,9 @@ describe("the switch rule refuses what is ambiguous or can change, and takes onl
       `${head}export const get = (o: { Switch: unknown }) => o.Switch;\nexport const { Switch: s } = obj;\n`,
       "export function Checkbox() { return null; }\nfunction Switch() { return null; }\nexport { Checkbox, Switch };\n",
     ];
-    for (const m of reads) expect([m, declaresAndExportsSwitch(parseSource("m.tsx", m))]).toEqual([m, true]);
+    // only two of these stay sound: Switch as the imported name of an aliased import, and the plain export list beside another name
+    const sound = new Set([reads[6], reads[8]]);
+    for (const m of reads) expect([m, declaresAndExportsSwitch(parseSource("m.tsx", m))]).toEqual([m, sound.has(m)]);
   });
 
   it("MF3: any default export of Switch refuses, also beside a named export", () => {
@@ -1659,6 +1661,14 @@ describe("the switch rule refuses what is ambiguous or can change, and takes onl
       "default through non-null": "function Switch() { return null; }\nexport { Switch };\nexport default Switch!;\n",
       "default through satisfies": "function Switch() { return null; }\nexport { Switch };\nexport default Switch satisfies unknown;\n",
       "export equals in parentheses": "function Switch() { return null; }\nexport { Switch };\nexport = (Switch);\n",
+      "export equals another value": "function Switch() { return null; }\nexport { Switch };\nexport = o;\n",
+      "export equals an object with a key Switch": "function Switch() { return null; }\nexport { Switch };\nexport = { Switch: Checkbox };\n",
+      "export equals a comma expression": "function Switch() { return null; }\nexport { Switch };\nexport = (0, Switch);\n",
+      "export equals an instantiation": "function Switch() { return null; }\nexport { Switch };\nexport = Switch<unknown>;\n",
+      "default with an or": "function Switch() { return null; }\nexport { Switch };\nexport default Switch || other;\n",
+      "default an object with a key Switch": "function Switch() { return null; }\nexport { Switch };\nexport default ({ Switch: Checkbox });\n",
+      "default a comma expression": "function Switch() { return null; }\nexport { Switch };\nexport default (0, Switch);\n",
+      "default another value": "function Switch() { return null; }\nexport { Switch };\nexport default other;\n",
     };
     for (const [what, m] of Object.entries(refusedModules)) {
       expect([what, declaresAndExportsSwitch(parseSource("m.tsx", m))]).toEqual([what, false]);
@@ -1732,6 +1742,8 @@ describe("the switch rule refuses what is ambiguous or can change, and takes onl
     for (const m of ["declare function Switch(): void;\nexport { Switch };\n", "function Switch(): void;\nexport { Switch };\n", "export declare function Switch(): void;\n"]) {
       expect([m, refused(row, { [KIT]: `export function Checkbox() { return null; }\n${m}` })]).toEqual([m, true]);
     }
+    // a declaration file has no body for Switch: a specifier that names it as written refuses
+    expect(refused('import { Switch } from "./ui/checkbox.d.ts";\nexport const R = () => ' + ITEM("<Switch checked={on} />") + ";\n", { "src/ui/checkbox.d.ts": "export declare function Switch(): null;\n" })).toBe(true);
   });
 
   it("reads bareSwitchImport on one file: the one plain import and bare tags give the specifier, anything else gives null", () => {
@@ -1767,15 +1779,21 @@ describe("the switch rule refuses what is ambiguous or can change, and takes onl
     expect(tree.files.map((f) => f.file).sort()).toEqual(["src/b.tsx", KIT]);
   });
 
-  it("reads declaresAndExportsSwitch on one module: sound ones and the ones that can change", () => {
+  it("reads declaresAndExportsSwitch on one module: three positions for the name, and every other occurrence refuses", () => {
     const yes = [
-      "export function Switch() { return Switch.displayName; }\nSwitch.displayName = 'S';",
-      "function Switch() { return 1; }\nexport { Switch };\nexport const Alias = Switch;",
-      "export function Switch() { return o.Switch; }\nexport const { Switch: kept } = o;",
+      "export function Switch() { return 1; }",
       'import { Switch as Primitive } from "radix-ui";\nexport function Switch() { return Primitive; }',
-      "export function Switch() { return 1; }\nexport type T = NS.Switch;",
+      "function Switch() { return 1; }\nfunction Other() { return 2; }\nexport { Other, Switch };",
     ];
     const no = [
+      "export function Switch() { return Switch.displayName; }\nSwitch.displayName = 'S';",
+      "function Switch() { return 1; }\nexport { Switch };\nexport const Alias = Switch;",
+      "export function Switch() { return o.Switch; }",
+      "export function Switch() { return 1; }\nexport const { Switch: kept } = o;",
+      "export function Switch() { return 1; }\nexport type T = NS.Switch;",
+      "export function Switch() { return 1; }\nexport const o = { Switch: 1 };",
+      "export function Switch() { return 1; }\nexport const el = <Switch />;",
+      "export function Switch() { return 1; }\nexport type S = typeof Switch;",
       "export function Switch() { return 1; }\nSwitch = other;",
       "export function Switch() { return 1; }\nvar Switch = other;",
       "export function Switch() { return 1; }\nexport function Switch() { return 2; }",
@@ -1785,11 +1803,27 @@ describe("the switch rule refuses what is ambiguous or can change, and takes onl
       "export function Switch() { return 1; }\nenum Switch { A }",
       "export function Switch() { return 1; }\nnamespace Switch { export const a = 1; }",
       'export function Switch() { return 1; }\nexport * as Switch from "m";',
+      "export function Switch() { return 1; }\ninterface Switch { a: number }",
+      "export function Switch() { return 1; }\ntype Switch = number;",
       "export function Switch() { return 1; }\nexport default Switch;",
+      "export function Switch() { return 1; }\nexport default other;",
+      "export function Switch() { return 1; }\nexport = other;",
       "export function Switch() { return 1; }\nexport function other() { return 2; }\nexport { Switch as Tick };",
+      "function Switch() { return 1; }\nexport { Switch };\nexport { Switch };",
+      "export function Switch() { return 1; }\nexport { Switch };",
       "declare function Switch(): void;\nexport { Switch };",
       "function Switch(): void;\nexport { Switch };",
       "function Switch(a: string): void;\nfunction Switch(a: number): void;\nexport { Switch };",
+      "function Switch(): void;\nexport function Switch() { return 1; }",
+      "namespace N { export function Switch() { return 1; } }\nexport { N };",
+      'import { Switch } from "m";\nexport function Other() { return Switch; }',
+      "export function Switch() { return 1; }\nconst x = exports;",
+      "export function Switch() { return 1; }\nconst y = module;",
+      "export function Switch() { return 1; }\nconst z = eval;",
+      'function Switch() { return 1; }\ndeclare module "x" { export { Switch }; }',
+      "export { Switch };",
+      "function Other() { return 1; }\nexport { Switch };",
+      "function Switch() { return 1; }\nexport function Switch() { return 2; }",
     ];
     for (const t of yes) expect([t, declaresAndExportsSwitch(parseSource("m.tsx", t))]).toEqual([t, true]);
     for (const t of no) expect([t, declaresAndExportsSwitch(parseSource("m.tsx", t))]).toEqual([t, false]);
