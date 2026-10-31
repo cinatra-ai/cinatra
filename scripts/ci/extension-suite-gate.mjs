@@ -45,7 +45,11 @@
 //      be run here. If one is not — and is not a named carve-out — the gate
 //      fails and says which repo is making a claim the host does not honour.
 //      This is the invariant that keeps the premise true as the fleet grows,
-//      in the only place that can prove it.
+//      in the only place that can prove it. A skipping package whose test
+//      sources name `node:test` (the fleet's one other runner) is therefore RUN
+//      here with `node --test`, one file at a time, and enforced like a vitest
+//      suite: green, and every on-disk test file executed with at least one
+//      test. Its own ci.yml skips it, so in CI this gate is where it runs.
 //   4. CARVE-OUTS ARE PIN- AND SHAPE-SCOPED, AND SELF-RETIRING. An entry
 //      tolerates ONE documented failure, at ONE pinned sha, in a CLEAN
 //      checkout of it. It is still RUN. If the observed shape differs from the
@@ -307,8 +311,10 @@ export function skipsStandaloneTests({ pkgJson, ciWorkflow }) {
  *   "vitest" — a vitest suite: this gate runs it.
  *   "other"  — ships test files that are NOT vitest (today: four agent repos
  *              on `node --test`). Recorded in the manifest, never silently
- *              dropped; check 3 fails if such a package ALSO skips its tests
- *              standalone, because then nothing would run them.
+ *              dropped. If such a package ALSO skips its tests standalone,
+ *              nothing else runs them: with "node-test" evidence this gate
+ *              runs them itself (planRun's `nodeRun`); with "unknown"
+ *              evidence check 3 fails, because it cannot.
  *
  * runnerEvidence — WHAT the "other" verdict actually rests on, kept separate
  * from the verdict itself so an ASSUMPTION cannot pass for a finding:
@@ -442,6 +448,10 @@ export function planRun({ packages, carveOuts = CARVE_OUTS }) {
   const run = [];
   const carved = [];
   const stale = [];
+  // node:test suites whose own CI skips them (check 3). They are always
+  // ENFORCED: the ledger is written in vitest's report vocabulary and has no
+  // entry for them, so an entry that names one is read as stale and exempts nothing.
+  const nodeRun = packages.filter(isHostRunNodeTest);
   for (const p of packages) {
     if (p.runner !== "vitest") continue;
     const entry = byId.get(p.id);
@@ -464,7 +474,140 @@ export function planRun({ packages, carveOuts = CARVE_OUTS }) {
         why: `the checkout at ${String(p.sha).slice(0, 12)} has LOCAL MODIFICATIONS — the entry documents a defect in that commit's content, not in an edited tree, so the suite is ENFORCED`,
       });
   }
-  return { run, carved, stale };
+  return { run, carved, stale, nodeRun };
+}
+
+/**
+ * Is this a node:test package that, in CI, only this gate runs? Its tests are not
+ * vitest, its test sources name `node:test`, and its own ci.yml skips them on
+ * the "the cinatra monorepo runs these" grounds. Without this road the gate
+ * could only name such a package (check 3) and never satisfy the claim.
+ */
+export function isHostRunNodeTest(p) {
+  return p.runner === "other" && p.runnerEvidence === "node-test" && p.standaloneTestsSkipped === true && p.testFiles.length > 0;
+}
+
+/**
+ * Read the TAP that `node --test --test-reporter=tap <file>` prints into the
+ * fields the rules use. Pure, so a missing summary is tested, not assumed.
+ *
+ * The summary is the TOP-LEVEL `# tests N` / `# pass N` / `# fail N` /
+ * `# cancelled N` / `# skipped N` / `# todo N` block node prints last; an
+ * indented line belongs to a subtest and is never read as the summary. No
+ * `# tests` line at top level returns `summary: false`, which the caller treats
+ * as a lost report (fail-closed), never as zero failures.
+ *
+ * A file that registers no test is not reported as zero tests: node reports
+ * the FILE ITSELF as one test, named by the path it was given (`ok 1 -
+ * test/x.test.mjs`, `# tests 1`, `# suites 0`), at line 1, column 1 of the
+ * file (read on node v24.20.0 and v24.22.1, for .mjs, .js and .cjs files with
+ * and without content). The TAP name is not read for this: node escapes and a ` # SKIP` or
+ * ` # TODO` directive can change how a path reads in TAP. A run whose TAP has
+ * exactly one top-level result and no suite is therefore `fileOnly` unless two
+ * things hold. First, a top-level record (`topLevel`, from nodeTopLevelReporter)
+ * gives a location other than 1:1 (`provesRealTest`). A location alone proves
+ * nothing, because the job's `node-version: '24'` floats and a later version can
+ * move its report of the file; the location only saves a second run of a file
+ * that reads 1:1. Second, `standaloneTap`, the TAP of a second run of the file
+ * with plain `node` and no `--test` (runNodeTest), shows a test (`standaloneRanTest`).
+ * Node's report of the file comes from the `--test` runner, and a plain run has no
+ * such runner. Any other shape of either reading is file-only, and the caller then
+ * does not count the file as executed. The cost is a false red: a real lone test
+ * whose call starts at line 1, column 1, or that has no usable record or no
+ * usable plain run, reads as file-only. A red lone result stays red, with or
+ * without the second run.
+ */
+// A top-level record gives a location other than node's 1:1 for the file: a
+// positive-integer line and column. This is a filter, not a proof (see above).
+export function provesRealTest(r) {
+  return Boolean(r) && Number.isInteger(r.line) && Number.isInteger(r.column) && r.line > 0 && r.column > 0 && !(r.line === 1 && r.column === 1);
+}
+
+// The TAP of a plain run shows a test: a top-level result and a top-level
+// `# tests N` with N at least 1. Anything else, such as no output, shows none.
+export function standaloneRanTest(tap) {
+  if (typeof tap !== "string") return false;
+  const n = /^# tests (\d+)$/m.exec(tap);
+  return Boolean(n) && Number(n[1]) >= 1 && /^(?:not )?ok \d+ /m.test(tap);
+}
+
+export function parseNodeTap(text, file, topLevel = [], standaloneTap) {
+  const counts = {};
+  const failedNames = [];
+  let topResults = 0;
+  for (const line of String(text ?? "").split(/\r?\n/)) {
+    const c = /^# (tests|suites|pass|fail|cancelled|skipped|todo) (\d+)$/.exec(line);
+    if (c) counts[c[1]] = Number(c[2]);
+    const f = /^\s*not ok \d+ - (.*?)(?:\s+#\s+(?:SKIP|TODO)\b.*)?$/.exec(line);
+    if (f && !/#\s+(?:SKIP|TODO)\b/.test(line)) failedNames.push(f[1]);
+    if (/^(?:not )?ok \d+ /.test(line)) topResults += 1;
+  }
+  const red = (counts.fail ?? 0) + (counts.cancelled ?? 0) > 0;
+  const fileOnly =
+    topResults === 1 && (counts.suites ?? 0) === 0 && !(topLevel.some(provesRealTest) && (red || standaloneRanTest(standaloneTap)));
+  return {
+    summary: Object.prototype.hasOwnProperty.call(counts, "tests"),
+    tests: counts.tests ?? 0,
+    pass: counts.pass ?? 0,
+    fail: counts.fail ?? 0,
+    cancelled: counts.cancelled ?? 0,
+    skipped: counts.skipped ?? 0,
+    todo: counts.todo ?? 0,
+    failedNames,
+    fileOnly,
+  };
+}
+
+/**
+ * Fold the per-file node:test runs of one package into the result shape the
+ * vitest road produces, so the same rules judge both. A file counts as
+ * EXECUTED only when its run printed a summary with at least one test of its
+ * own: a file node ran that registered nothing (reported as zero tests, or as
+ * the file itself, see parseNodeTap) is uncollected, as a vitest file collected
+ * by nothing is, and node's report of the file is not counted as a test. A
+ * file whose run printed no summary makes the report lost, and so does a file
+ * killed at the file bound or at the gate's node:test deadline
+ * (runNodeTestFile), whatever TAP it printed first, and a file not started
+ * because that deadline had passed (runNodeTest).
+ *
+ * files: Array<{ file, exitCode, tap, timedOut?, notStarted?, topLevel?, standaloneTap? }>
+ */
+export function foldNodeRuns(files) {
+  const executedFiles = [];
+  const failedTestNames = [];
+  const timedOutFiles = [];
+  const notStartedFiles = [];
+  let total = 0;
+  let failed = 0;
+  let pending = 0;
+  let reportOk = files.length > 0;
+  let exitCode = 0;
+  let ok = files.length > 0;
+  for (const { file, exitCode: code, tap, timedOut, notStarted, topLevel, standaloneTap } of files) {
+    const t = parseNodeTap(tap, file, topLevel, standaloneTap);
+    if (timedOut) timedOutFiles.push(file);
+    if (notStarted) notStartedFiles.push(file);
+    if (!t.summary || timedOut || notStarted) reportOk = false;
+    if (t.summary && t.tests > 0 && !t.fileOnly && !timedOut && !notStarted) executedFiles.push(file);
+    if (!t.fileOnly) total += t.tests;
+    failed += t.fail + t.cancelled;
+    pending += t.skipped + t.todo;
+    for (const n of t.failedNames) failedTestNames.push(`${file} › ${n}`);
+    if (code !== 0 && exitCode === 0) exitCode = code ?? -1;
+    if (code !== 0 || !t.summary || t.fail > 0 || t.cancelled > 0) ok = false;
+  }
+  return {
+    ok,
+    exitCode,
+    reportOk,
+    executedFiles: executedFiles.sort(),
+    numTotalTests: total,
+    numFailedTests: failed,
+    numPendingTests: pending,
+    failedTestNames: failedTestNames.sort(),
+    timedOutFiles: timedOutFiles.sort(),
+    notStartedFiles: notStartedFiles.sort(),
+  };
 }
 
 /**
@@ -572,7 +715,7 @@ export function parseReport({ report, pkgDir, relativize = (from, to) => to.slic
 export function judge({ packages, results, carveOuts = CARVE_OUTS }) {
   const findings = [];
   const notices = [];
-  const { run, carved, stale } = planRun({ packages, carveOuts });
+  const { run, carved, stale, nodeRun } = planRun({ packages, carveOuts });
 
   // FAIL-CLOSED: a vacuous pass would silently recreate cinatra#2288.
   if (packages.length === 0) {
@@ -580,14 +723,14 @@ export function judge({ packages, results, carveOuts = CARVE_OUTS }) {
       kind: "no-packages",
       message: "no extension packages materialized under extensions/ — clone-back failed; refusing to pass vacuously.",
     });
-    return { findings, notices, run, carved, stale };
+    return { findings, notices, run, carved, stale, nodeRun };
   }
   if (run.length + carved.length === 0) {
     findings.push({
       kind: "no-suites",
       message: `discovered ${packages.length} materialized package(s) but ZERO vitest suites — the classifier or the clone-back is broken; refusing to pass vacuously.`,
     });
-    return { findings, notices, run, carved, stale };
+    return { findings, notices, run, carved, stale, nodeRun };
   }
 
   // A stale entry grants no exemption, so it cannot weaken enforcement — it is
@@ -614,6 +757,23 @@ export function judge({ packages, results, carveOuts = CARVE_OUTS }) {
         kind: "no-report",
         slug: pkg.slug,
         message: `${pkg.id}: vitest produced no parseable JSON report (exit ${res.exitCode}) — the run cannot be judged, and an absent report must never read as an expected result.`,
+      });
+    }
+  }
+  for (const pkg of nodeRun) {
+    const res = results.get(pkg.id);
+    if (res && res.reportOk === false) {
+      const killed = res.timedOutFiles ?? [];
+      const notStarted = res.notStartedFiles ?? [];
+      const parts = [];
+      if (killed.length) parts.push(`was still running at its bound and was killed for ${killed.join(", ")}`);
+      if (notStarted.length) parts.push(`was not started before the gate's node:test deadline for ${notStarted.join(", ")}`);
+      findings.push({
+        kind: "no-report",
+        slug: pkg.slug,
+        message: parts.length
+          ? `${pkg.id}: \`node --test\` ${parts.join("; it ")} — the run did not finish, so it cannot be judged.`
+          : `${pkg.id}: a \`node --test\` run printed no TAP summary (exit ${res.exitCode}) — the run cannot be judged, and an absent summary must never read as zero failures.`,
       });
     }
   }
@@ -673,8 +833,42 @@ export function judge({ packages, results, carveOuts = CARVE_OUTS }) {
     });
   }
 
+  // The node:test suites only this gate runs: enforced like the vitest set —
+  // green, and every on-disk test file executed with at least one test — or it
+  // blocks. No ledger entry applies to them (planRun).
+  for (const pkg of nodeRun) {
+    if (lostReport.has(pkg.slug)) continue;
+    const res = results.get(pkg.id);
+    if (!res) {
+      findings.push({
+        kind: "not-run",
+        slug: pkg.slug,
+        message: `${pkg.id}: its own ci.yml skips its node:test suite as run by the host, and this gate never executed it.`,
+      });
+      continue;
+    }
+    if (!res.ok) {
+      findings.push({
+        kind: "suite-red",
+        slug: pkg.slug,
+        message: `${pkg.id}: node:test suite FAILED (exit ${res.exitCode}, ${res.numFailedTests ?? "?"} failing test(s)).`,
+      });
+      continue;
+    }
+    const missing = observedShape(pkg, res).uncollected;
+    if (missing.length > 0) {
+      findings.push({
+        kind: "uncollected-files",
+        slug: pkg.slug,
+        message:
+          `${pkg.id}: ${missing.length} on-disk test file(s) ran no test under \`node --test\` — ${missing.join(", ")}. ` +
+          `A file that registers nothing proves nothing; name node:test in it or remove it.`,
+      });
+    }
+  }
+
   // AC6: the companion skip may never outrun what the host actually does.
-  const gated = new Set([...run, ...carved].map((p) => p.id));
+  const gated = new Set([...run, ...carved, ...nodeRun].map((p) => p.id));
   for (const pkg of packages) {
     if (pkg.testFiles.length === 0) continue;
     if (!pkg.standaloneTestsSkipped) continue;
@@ -711,13 +905,14 @@ export function judge({ packages, results, carveOuts = CARVE_OUTS }) {
     });
   }
 
-  return { findings, notices, run, carved, stale };
+  return { findings, notices, run, carved, stale, nodeRun };
 }
 
 /** Fixed-width manifest of the WHOLE materialized fleet. */
 export function renderManifest({ packages, results, carveOuts = CARVE_OUTS }) {
-  const { carved } = planRun({ packages, carveOuts });
+  const { carved, nodeRun } = planRun({ packages, carveOuts });
   const carvedIds = new Set(carved.map((p) => p.id));
+  const nodeRunIds = new Set(nodeRun.map((p) => p.id));
   const lines = [];
   const w = Math.max(24, ...packages.map((p) => p.slug.length));
   lines.push(
@@ -728,7 +923,21 @@ export function renderManifest({ packages, results, carveOuts = CARVE_OUTS }) {
     const res = results?.get(p.id);
     let status;
     if (p.runner === "none") status = "no test files";
-    else if (p.runner === "other") {
+    else if (nodeRunIds.has(p.id)) {
+      // Its repo skips its tests, so this gate runs them with node --test.
+      if (!res) status = "node:test here — NOT RUN";
+      else if (res.timedOutFiles?.length || res.notStartedFiles?.length) {
+        const n = res.notStartedFiles?.length ?? 0;
+        status = `node:test here — TIMED OUT (${res.timedOutFiles?.length ?? 0} file(s) killed${n ? `, ${n} not started before the deadline` : ""})`;
+      }
+      else if (res.reportOk === false) status = `node:test here — NO REPORT (exit ${res.exitCode})`;
+      else if (!res.ok) status = `node:test here — RED (exit ${res.exitCode})`;
+      else {
+        const executed = new Set(res.executedFiles);
+        const missing = p.testFiles.filter((f) => !executed.has(f)).length;
+        status = missing ? `node:test here — INCOMPLETE (${missing} file(s) ran no test)` : "node:test here — ok";
+      }
+    } else if (p.runner === "other") {
       status = p.standaloneTestsSkipped
         ? "NOT GATED — its repo skips tests too"
         : p.runnerEvidence === "unknown"
@@ -984,6 +1193,336 @@ function runVitest({ repoRoot, pkg, reportDir, slot }) {
   });
 }
 
+// The bounds of one `node --test` file run. A test is cancelled after the same
+// 30 s the vitest road grants (`--testTimeout=30000` above), and node exits once
+// the file's tests have ended even when the file left a timer or a socket open
+// (`--test-force-exit`). The file bound is this
+// gate's own: a file still running after it (a synchronous loop, which no test
+// timeout can interrupt) has its process group killed and is reported as timed
+// out, so the gate stops waiting for a hung file after the bound instead of
+// holding the job until the workflow's own timeout.
+//
+// The files run one after another, so the file bound alone does not bound the
+// node:test phase: six files that each reach it take 30 minutes. The phase
+// therefore also has a deadline, NODE_GATE_DEADLINE_MS after the gate started:
+// a file still running at it is killed, a file not yet started is not started,
+// both are reported as `no-report`, and the manifest is still printed. The job
+// that runs this gate ("Perpetual extension suites (discovery gate shard)" in
+// .github/workflows/build-image.yml) has `timeout-minutes: 27`; its steps before
+// the gate (checkout, pnpm, node, the companion clones and the install) took
+// 74 s at cinatra#4425's fifth commit, so the 20 minutes leave 7 minutes for
+// that setup, the wait for the last killed file to close (NODE_KILL_GRACE_MS),
+// the manifest and the post steps. The vitest phase runs first and counts
+// against the deadline, but this gate does not stop a vitest run.
+// EXTENSION_SUITE_NODE_DEADLINE_MS can only shorten the deadline (see
+// nodeGateDeadlineMs). After a kill, the gate waits for the child's close up to
+// NODE_KILL_GRACE_MS before it reads the records and removes their folder.
+export const NODE_TEST_TIMEOUT_MS = 30_000;
+export const NODE_FILE_TIMEOUT_MS = 300_000;
+export const NODE_GATE_DEADLINE_MS = 20 * 60_000;
+export const NODE_KILL_GRACE_MS = 10_000;
+const NODE_STDOUT_CAP = 400_000;
+const NODE_STDERR_CAP = 100_000;
+
+// The TAP goes to stdout. A second reporter, this script's default export,
+// writes one JSON line per top-level test to `topLevelFile`: node reports a
+// file that registers no test as one test named by the file's path, and the
+// TAP of that report is the same as the TAP of a real test of that name. What
+// differs is the location node gives it: line 1, column 1 of the file, where a
+// real test is reported at the place of its call.
+export function nodeTestArgs(file, topLevelFile, testTimeoutMs = NODE_TEST_TIMEOUT_MS) {
+  return [
+    "--test",
+    "--test-reporter=tap",
+    "--test-reporter-destination=stdout",
+    `--test-reporter=${import.meta.url}`,
+    `--test-reporter-destination=${topLevelFile}`,
+    `--test-timeout=${testTimeoutMs}`,
+    "--test-force-exit",
+    file,
+  ];
+}
+
+// The second run of a lone test (needsStandaloneRun): plain `node`, so no test
+// runner reports the file. The TAP goes to a file of its own, because what a
+// plain run's test prints reaches its stdout and could read as TAP.
+export function nodeStandaloneArgs(file, tapFile, testTimeoutMs = NODE_TEST_TIMEOUT_MS) {
+  return [
+    "--test-reporter=tap",
+    `--test-reporter-destination=${tapFile}`,
+    `--test-timeout=${testTimeoutMs}`,
+    "--test-force-exit",
+    file,
+  ];
+}
+
+// A green run with one top-level result, no suite and a location other than 1:1
+// needs the plain run before it can count as a test. Exported for its test.
+export function needsStandaloneRun({ file, exitCode, tap, timedOut, topLevel = [] }) {
+  return exitCode === 0 && !timedOut && parseNodeTap(tap, file, topLevel).fileOnly && topLevel.some(provesRealTest);
+}
+
+// The second reporter (see nodeTestArgs): node loads this script as a module
+// and uses its default export; `main` below runs only when the script is the
+// program itself.
+export default async function* nodeTopLevelReporter(source) {
+  for await (const event of source) {
+    if ((event.type === "test:pass" || event.type === "test:fail") && event.data.nesting === 0) {
+      yield `${JSON.stringify({ name: event.data.name, line: event.data.line ?? null, column: event.data.column ?? null })}\n`;
+    }
+  }
+}
+
+// The lines nodeTopLevelReporter wrote; a missing file or a line that is not
+// such a record gives nothing, which parseNodeTap reads in the safe direction.
+export function readTopLevel(text) {
+  const out = [];
+  for (const line of String(text ?? "").split("\n")) {
+    try {
+      const r = JSON.parse(line);
+      if (r && typeof r.name === "string") out.push({ name: r.name, line: r.line, column: r.column });
+    } catch {
+      // not a record
+    }
+  }
+  return out;
+}
+
+// The deadline of the node:test phase in ms after the gate started. A positive
+// integer in EXTENSION_SUITE_NODE_DEADLINE_MS below the default replaces it (the
+// kit cases use a short one); any other value, or none, keeps the default, so
+// the variable can only shorten the deadline. Exported for its test.
+export function nodeGateDeadlineMs(env = process.env) {
+  const v = Number(env.EXTENSION_SUITE_NODE_DEADLINE_MS);
+  return Number.isInteger(v) && v > 0 && v < NODE_GATE_DEADLINE_MS ? v : NODE_GATE_DEADLINE_MS;
+}
+
+// The node:test children now running, by pid, with their record folders, so a
+// signal to the gate kills their process groups (installNodeRunCleanup).
+const liveNodeRuns = new Map();
+
+// The pid and record folder of each node:test child now running. Exported for its test.
+export function listLiveNodeRuns() {
+  return [...liveNodeRuns.entries()].map(([pid, { recDir }]) => ({ pid, recDir }));
+}
+
+// The children whose run ended after a kill without a close: a process of the
+// group may have outlived the kill, so a signal to the gate kills the group
+// again (stopLiveNodeRuns). A process that a test moved out of the group (its
+// own session) is not in it and is not reached. Exported for its test.
+const survivingNodeGroups = new Map();
+export function listSurvivingNodeGroups() {
+  return [...survivingNodeGroups.keys()];
+}
+
+// Kill the process group of a child that was started with `detached: true`; if
+// the group kill fails, kill the child alone. Returns what was done, for the
+// detail line: "group", "leader", or "failed".
+function killNodeGroup(child) {
+  try {
+    process.kill(-child.pid, "SIGKILL");
+    return "group";
+  } catch {
+    try {
+      return child.kill("SIGKILL") ? "leader" : "failed";
+    } catch {
+      return "failed";
+    }
+  }
+}
+
+// Kill the process group of every running node:test child and remove its
+// record folder, and kill again the group of each run that ended without a
+// close (its folder is already removed: `recDir: null`). Returns one entry per
+// child. Exported for its test.
+export function stopLiveNodeRuns() {
+  const out = [];
+  for (const [pid, run] of liveNodeRuns) {
+    out.push({ pid, kill: killNodeGroup(run.child), recDir: run.recDir });
+    fs.rmSync(run.recDir, { recursive: true, force: true });
+  }
+  liveNodeRuns.clear();
+  for (const [pid, child] of survivingNodeGroups) out.push({ pid, kill: killNodeGroup(child), recDir: null });
+  survivingNodeGroups.clear();
+  return out;
+}
+
+// In `main`: a SIGTERM or SIGINT to the gate (a cancelled or timed-out job)
+// kills the running node:test children and removes their record folders before the
+// gate exits with the signal's usual code. Exported for its test.
+export function installNodeRunCleanup(proc = process) {
+  for (const [sig, code] of [
+    ["SIGTERM", 143],
+    ["SIGINT", 130],
+  ]) {
+    proc.once(sig, () => {
+      stopLiveNodeRuns();
+      proc.exit(code);
+    });
+  }
+}
+
+// One `node --test` process per test file, in the package's own directory, so a
+// file that registers nothing is visible as such instead of being hidden in a
+// package total. The TAP and the top-level records are what parseNodeTap reads;
+// the package's `test` script is not used, for the same reason runVitest does
+// not use it. A child that cannot start resolves as exit -1 with no TAP. A child
+// still running at the file bound, or at `deadlineAt` when that comes first, has
+// its process group killed; the run resolves as exit -1 with `timedOut: true`
+// after the child's close, or after NODE_KILL_GRACE_MS without one (noted in the
+// detail). On every ending the records are read, their folder is removed, and
+// the child's output pipes are destroyed and the child is unref'd, so a process
+// that still holds the pipes (one that left the child's group) does not keep
+// the gate from exiting. That process is not killed: the gate does not know it.
+// After a kill without a close, the group stays under the signal cleanup
+// (survivingNodeGroups). foldNodeRuns reads both kill endings as a lost report.
+// Exported for its test, with
+// the bounds as parameters so the test can use short ones, and the spawn as one
+// so the test can give a child that never closes or cannot be killed.
+// `standalone` runs the file with plain `node` (nodeStandaloneArgs); the run's
+// `records` is then its TAP.
+export function runNodeTestFile({
+  cwd,
+  file,
+  testTimeoutMs = NODE_TEST_TIMEOUT_MS,
+  fileTimeoutMs = NODE_FILE_TIMEOUT_MS,
+  deadlineAt = Infinity,
+  killGraceMs = NODE_KILL_GRACE_MS,
+  spawnChild = spawn,
+  standalone = false,
+}) {
+  return new Promise((resolve) => {
+    // NODE_TEST_CONTEXT would make the child report to a parent test runner
+    // instead of printing its own TAP; it is dropped so the summary is printed.
+    const env = { ...process.env, CI: "1", FORCE_COLOR: "0" };
+    delete env.NODE_TEST_CONTEXT;
+    let out = "";
+    let err = "";
+    let timer;
+    let graceTimer;
+    let killed = null;
+    let settled = false;
+    let child;
+    const recDir = fs.mkdtempSync(path.join(os.tmpdir(), "ext-suite-node-"));
+    const recFile = path.join(recDir, "top-level.jsonl");
+    const finish = (run) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(graceTimer);
+      if (child?.pid) liveNodeRuns.delete(child.pid);
+      if (child?.pid && killed && run.closed === false) survivingNodeGroups.set(child.pid, child);
+      // A process outside the group may still hold the pipes: stop reading them
+      // and drop the child's hold on the event loop, so the gate can exit.
+      child?.stdout?.destroy?.();
+      child?.stderr?.destroy?.();
+      child?.unref?.();
+      let rec = "";
+      try {
+        rec = fs.readFileSync(recFile, "utf8");
+      } catch {
+        // no record file: the run wrote none
+      }
+      fs.rmSync(recDir, { recursive: true, force: true });
+      resolve({ ...run, recDir, records: rec, topLevel: readTopLevel(rec) });
+    };
+    const killedRun = (closed) => {
+      const note =
+        `[extension-suite-gate] ${file} was still running ${killed.why} and was killed (kill: ${killed.how}` +
+        `${closed ? ", closed" : `, no close within ${killGraceMs} ms`})`;
+      return { file, exitCode: -1, tap: out, timedOut: true, pid: child.pid, kill: killed.how, closed, detail: `${out}${err}\n${note}` };
+    };
+    // Its own process group, so the kill below also reaches the processes a test
+    // started in that group.
+    try {
+      child = spawnChild(process.execPath, (standalone ? nodeStandaloneArgs : nodeTestArgs)(file, recFile, testTimeoutMs), {
+        cwd,
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: true,
+      });
+    } catch (e) {
+      finish({ file, exitCode: -1, tap: "", detail: String(e) });
+      return;
+    }
+    if (child.pid) liveNodeRuns.set(child.pid, { child, recDir });
+    child.stdout.on("data", (c) => {
+      out += c;
+      if (out.length > NODE_STDOUT_CAP) out = out.slice(-NODE_STDOUT_CAP);
+    });
+    child.stderr.on("data", (c) => {
+      err += c;
+      if (err.length > NODE_STDERR_CAP) err = err.slice(-NODE_STDERR_CAP);
+    });
+    const byDeadline = deadlineAt - Date.now() < fileTimeoutMs;
+    const bound = Math.max(0, Math.min(fileTimeoutMs, deadlineAt - Date.now()));
+    timer = setTimeout(() => {
+      // Set before the kill: a child.kill() can emit `error` at once, and the
+      // handler then finds a kill under way, whose result reads "failed" until
+      // the kill returns, and a grace timer that finish clears.
+      killed = {
+        how: "failed",
+        why: byDeadline ? "at the gate's node:test deadline" : `after ${fileTimeoutMs} ms`,
+      };
+      graceTimer = setTimeout(() => finish(killedRun(false)), killGraceMs);
+      killed.how = killNodeGroup(child);
+    }, bound);
+    child.on("error", (e) => finish(killed ? killedRun(false) : { file, exitCode: -1, tap: "", detail: String(e) }));
+    child.on("close", (code) => {
+      // A close after the grace: the group's pid can be reused, so it leaves the signal cleanup.
+      if (child.pid) survivingNodeGroups.delete(child.pid);
+      finish(killed ? killedRun(true) : { file, exitCode: code, tap: out, detail: out + err });
+    });
+  });
+}
+
+// The files of one package, one after another, folded into one result. A file
+// not started because `deadlineAt` has passed is recorded as `notStarted`.
+// Exported for its test.
+export async function runNodeTest({ repoRoot, pkg, testTimeoutMs, fileTimeoutMs, deadlineAt = Infinity, killGraceMs }) {
+  const started = Date.now();
+  const cwd = path.join(repoRoot, pkg.dir);
+  const files = [];
+  for (const file of pkg.testFiles) {
+    if (Date.now() >= deadlineAt) {
+      files.push({ file, exitCode: -1, tap: "", notStarted: true, detail: "[extension-suite-gate] not started: the gate's node:test deadline had passed" });
+      continue;
+    }
+    const one = await runNodeTestFile({ cwd, file, testTimeoutMs, fileTimeoutMs, deadlineAt, killGraceMs });
+    if (needsStandaloneRun(one)) {
+      const plain = await runNodeTestFile({ cwd, file, testTimeoutMs, fileTimeoutMs, deadlineAt, killGraceMs, standalone: true });
+      if (plain.exitCode === 0) one.standaloneTap = plain.records;
+      one.detail = `${one.detail}\n--- node ${file} (plain run, exit ${plain.exitCode}${plain.timedOut ? ", killed" : ""})`;
+    }
+    files.push(one);
+  }
+  const how = (f) => (f.notStarted ? ", not started" : f.timedOut ? ", killed" : "");
+  return {
+    ...foldNodeRuns(files),
+    durationMs: Date.now() - started,
+    detail: files.map((f) => `--- node --test ${f.file} (exit ${f.exitCode}${how(f)})\n${f.detail}`).join("\n"),
+  };
+}
+
+// Run the node:test packages and add their results to the vitest results map,
+// keyed by the same scope-qualified id. Exported for its test.
+export async function runNodeSuites({ repoRoot, nodeRun, jobs, results, log = console.log, testTimeoutMs, fileTimeoutMs, deadlineAt = Infinity, killGraceMs }) {
+  if (nodeRun.length === 0) return results;
+  log(`\n[extension-suite-gate] running ${nodeRun.length} node:test suite(s) whose own CI skips them...\n`);
+  const nodeResults = await pool(nodeRun, jobs, async (pkg) => {
+    const res = await runNodeTest({ repoRoot, pkg, testTimeoutMs, fileTimeoutMs, deadlineAt, killGraceMs });
+    log(
+      `::group::${res.ok ? "PASS" : "FAIL"} ${pkg.id} [node:test] (${(res.durationMs / 1000).toFixed(1)}s, ` +
+        `${res.executedFiles.length}/${pkg.testFiles.length} file(s))`,
+    );
+    log(fenceWorkflowCommands(res.detail).trimEnd());
+    log("::endgroup::");
+    return res;
+  });
+  for (const [id, res] of nodeResults) results.set(id, res);
+  return results;
+}
+
 async function pool(items, limit, worker) {
   const out = new Map();
   let cursor = 0;
@@ -1009,17 +1548,19 @@ export function fenceWorkflowCommands(text) {
 }
 
 async function main() {
+  const startedAt = Date.now();
   const repoRoot = process.cwd();
   const listOnly = process.argv.includes("--list");
   const jobs = Math.max(1, Number(process.env.EXTENSION_SUITE_JOBS || Math.min(4, os.availableParallelism?.() ?? 4)));
 
   const packages = discover(repoRoot);
-  const { run, carved, stale } = planRun({ packages });
+  const { run, carved, stale, nodeRun } = planRun({ packages });
 
   console.log(
     `[extension-suite-gate] discovered ${packages.length} materialized package(s): ` +
       `${run.length} vitest suite(s) enforced, ${carved.length} carved out (at pin), ` +
-      `${packages.filter((p) => p.runner === "other").length} non-vitest, ` +
+      `${packages.filter((p) => p.runner === "other").length} non-vitest ` +
+      `(${nodeRun.length} of them node:test suites run here because their own CI skips them), ` +
       `${packages.filter((p) => p.runner === "none").length} with no test files.`,
   );
 
@@ -1039,6 +1580,8 @@ async function main() {
       return res;
     });
     fs.rmSync(reportDir, { recursive: true, force: true });
+    installNodeRunCleanup();
+    await runNodeSuites({ repoRoot, nodeRun, jobs, results, deadlineAt: startedAt + nodeGateDeadlineMs() });
   }
 
   console.log("\n[extension-suite-gate] MANIFEST (every materialized package; nothing here is silent)\n");
@@ -1065,7 +1608,7 @@ async function main() {
   const totalSecs = [...results.values()].reduce((n, r) => n + r.durationMs, 0) / 1000;
   console.log(
     `\n[extension-suite-gate] ${totalTests} test(s) across ${results.size} suite(s); ` +
-      `${totalSecs.toFixed(1)}s of vitest at ${jobs}-way concurrency.`,
+      `${totalSecs.toFixed(1)}s of suite time at ${jobs}-way concurrency.`,
   );
 
   for (const n of notices) console.log(`::notice title=extension-suite-gate::${n.message}`);
