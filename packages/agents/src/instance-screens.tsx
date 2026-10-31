@@ -68,6 +68,9 @@ import {
 import { runReviewStepReading, runReviewStepSettled } from "./run-review-slot-reading";
 import { RecommendationHoldCard } from "./run-recommendation-chip-row";
 import { LifecycleCardSurfaceProvider } from "./lifecycle-card-runtime";
+// THE RUN PAGE'S CHROME (cinatra#3487) — the one module that mounts a prompt
+// window, and the frame every run-detail screen registers with.
+import { RunPageChrome } from "./run-page-chrome";
 // §VII's card on the `run_card` host (cinatra#2789, epic #2784 S9e) — see the
 // mount below for what it draws and what it deliberately does not.
 import { VerificationSummaryCard } from "./verification-summary-card";
@@ -2756,6 +2759,12 @@ export async function SetupScreen({
           // different panel — which is exactly why the width is declared here
           // and not looked up from `activeTab`.
           <AgentPanelBody role="frame">
+          {/* THE RUN PAGE'S CHROME OWNS THE ONE PROMPT WINDOW (cinatra#3487),
+              AND IT WRAPS THE DETAIL COLUMN, never the whole two-column
+              contract: the chrome draws its window after its children, so
+              wrapped around the contract it would land beneath BOTH columns.
+              The rail frame below draws the chrome inside its own detail
+              column; the branch without a frame wraps its detail column here. */}
           <div className="flex items-start gap-6" data-run-detail-contract="" data-conformance-id="run-surface">
             {(() => {
               // THE ONE `recommendation_hold` MOUNT ON THIS PAGE (cinatra#3047),
@@ -3564,7 +3573,9 @@ export async function SetupScreen({
                   {railNode ? (
                     <div className="flex shrink-0 flex-col gap-2 pt-1">{railNode}</div>
                   ) : null}
-                  <div className="flex min-w-0 flex-1 flex-col gap-4">{runDetailFallback}</div>
+                  <div className="flex min-w-0 flex-1 flex-col gap-4">
+                    <RunPageChrome>{runDetailFallback}</RunPageChrome>
+                  </div>
                 </>
               );
             })()}
@@ -4575,18 +4586,24 @@ export async function TriggerScreen({
              The surface takes the FRAME width because it is a two-column frame,
              not a form; the schedule step inside it declares Narrow for itself. */
           <AgentPanelBody role="frame">
-            <div
-              className="flex items-start gap-6"
-              data-run-detail-contract=""
-              data-conformance-id="run-surface"
-            >
-              <RunSurfaceRail steps={railSteps} initialSelection="schedule" />
-            </div>
+            {/* THE RUN PAGE'S CHROME OWNS THE ONE PROMPT WINDOW (cinatra#3487). */}
+            <RunPageChrome>
+              <div
+                className="flex items-start gap-6"
+                data-run-detail-contract=""
+                data-conformance-id="run-surface"
+              >
+                <RunSurfaceRail steps={railSteps} initialSelection="schedule" />
+              </div>
+            </RunPageChrome>
           </AgentPanelBody>
         ) : (
           /* No run to name steps for (`/trigger` reached with `new`): the form
-             stands alone, exactly as it did. */
-          scheduleFormSurface
+             stands alone, and the page's chrome still owns its one prompt
+             window (cinatra#3487): the schedule screen lends its window to the
+             nearest chrome, so without one here the pre-run window that fills
+             this form from a sentence would not be drawn at all. */
+          <RunPageChrome>{scheduleFormSurface}</RunPageChrome>
         )}
       </AgentPageLayout>
     </Main>
