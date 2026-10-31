@@ -122,10 +122,11 @@ export function buildOptions(
   const next: ExternalToast = { ...rest };
   let ghostCopyAction = false;
 
-  // Every toast is icon led ("an icon on the left identifies the type"), so
-  // `icon: null` does not take the glyph away: the toast keeps its type's
-  // glyph, and a caller's own icon element still replaces it (cinatra#3189).
-  if (next.icon === null) delete next.icon;
+  // Every toast is icon led ("an icon on the left identifies the type"), so a
+  // falsy `icon` (null, false, 0, an empty string) is no icon and does not take
+  // the glyph away: the toast keeps its type's glyph, and a caller's own icon
+  // element still replaces it (cinatra#3189).
+  if (!next.icon) delete next.icon;
 
   if (action === null) {
     // explicit opt-out — leave action undefined

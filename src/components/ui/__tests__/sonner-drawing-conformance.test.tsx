@@ -132,12 +132,13 @@ describe("the palette the toasts render in", () => {
 describe('clause: "icon led" / "an icon on the left identifies the type"', () => {
   // The glyphs are drawn inside a raised toast, so they are read in a rendered
   // Toaster: toast-icon-led-and-stack-3189.test.tsx. This component hands the
-  // library the four typed glyphs.
+  // library the three typed glyphs the drawing draws; info keeps the library's.
   it("hands the library its own typed glyphs", () => {
     expect(SRC).toMatch(/icons=\{TYPE_ICONS\}/);
-    for (const type of ["success", "warning", "error", "info"]) {
+    for (const type of ["success", "warning", "error"]) {
       expect(SRC).toMatch(new RegExp(`\\n  ${type}: `));
     }
+    expect(SRC).not.toMatch(/\n  info: /);
   });
 });
 

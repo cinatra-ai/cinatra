@@ -77,8 +77,8 @@ describe.each(COPIES)("%s: the roster's families for Scheduled and Queued", (_na
 });
 
 // The roster draws Declined with a trash can and Failed with the cross. The
-// application's copy draws them apart since cinatra#4296; the SDK's copy is
-// read here.
+// application's copy draws them apart only when the open cinatra#4364 lands; the
+// SDK's copy is read here.
 describe("the SDK's StatusPill: Declined and Failed are drawn apart", () => {
   const paths = (status: string) =>
     Array.from(pill(SdkPill, status).querySelectorAll("svg path")).map((p) => p.getAttribute("d"));

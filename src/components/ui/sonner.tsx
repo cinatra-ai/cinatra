@@ -18,8 +18,8 @@ function resolveSonnerTheme(theme: string | undefined): SonnerTheme {
 // The typed toasts' glyphs, as the components drawing (Toast / Sonner) draws
 // them: a 14px stroked mark in the toast's own status colour, never the
 // library's filled discs. Success is the check, warning the triangle and error
-// the cross. Info is not drawn there; it takes the same family's circled
-// "i". The default toast's glyph is added by the toast wrapper
+// the cross. Info has no drawn glyph there, so it keeps the library's own. The
+// default toast's glyph is added by the toast wrapper
 // (packages/sdk-ui/src/toast.ts), because the library keeps no slot for an
 // untyped toast's icon (cinatra#3189).
 function TypeGlyph({ children }: { children: React.ReactNode }) {
@@ -51,7 +51,6 @@ const TYPE_ICONS: NonNullable<ToasterProps['icons']> = {
     </TypeGlyph>
   ),
   error: <TypeGlyph><path d='M18 6 6 18' /><path d='m6 6 12 12' /></TypeGlyph>,
-  info: <TypeGlyph><circle cx='12' cy='12' r='9' /><path d='M12 16v-4' /><path d='M12 8h.01' /></TypeGlyph>,
 }
 
 export function Toaster({ ...props }: ToasterProps) {

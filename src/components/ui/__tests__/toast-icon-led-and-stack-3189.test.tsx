@@ -10,7 +10,8 @@
  * status-coloured border and matching text; an icon on the left identifies
  * the type. ... Stack vertically, newest on top." Its examples draw the
  * glyphs: the default toast a muted circled alert (stroke 2.2), success the
- * check, warning the triangle, error the cross (stroke 2.4), each 14px.
+ * check, warning the triangle, error the cross (stroke 2.4), each 14px. They
+ * draw no info glyph, so the info toast keeps the library's own.
  *
  * The toast library draws an icon only for a typed toast, and its own icons
  * are filled discs. The product's Toaster (src/components/ui/sonner.tsx) hands
@@ -86,7 +87,6 @@ const TYPED: Array<[string, (m: string, o?: CinatraToastOptions) => unknown, str
     ],
   ],
   ["error", toast.error, ["path M18 6 6 18", "path m6 6 12 12"]],
-  ["info", toast.info, ["circle 12,12 r9", "path M12 16v-4", "path M12 8h.01"]],
 ];
 
 describe('"an icon on the left identifies the type": the default toast', () => {
@@ -120,6 +120,19 @@ describe('"an icon on the left identifies the type": the default toast', () => {
       toast("Export queued.", { icon: null });
     });
     expect(glyphOf(await rendered("Export queued."))).toEqual(DEFAULT_GLYPH);
+  });
+
+  it.each([
+    ["false", false],
+    ["0", 0],
+    ["an empty string", ""],
+  ])("keeps the glyph when a caller passes icon: %s, because a falsy icon is no icon", async (name, icon) => {
+    mountToaster();
+    const message = `Falsy ${name}.`;
+    act(() => {
+      toast(message, { icon });
+    });
+    expect(glyphOf(await rendered(message))).toEqual(DEFAULT_GLYPH);
   });
 
   it("draws a caller's own icon element instead of the default glyph", async () => {
@@ -159,12 +172,30 @@ describe('"an icon on the left identifies the type": the typed toasts', () => {
     expect(svg.getAttribute("width")).toBe("14");
   });
 
-  it("keeps a typed toast's glyph when a caller passes icon: null", async () => {
+  it.each([
+    ["null", null],
+    ["false", false],
+  ])("keeps a typed toast's glyph when a caller passes icon: %s", async (name, icon) => {
+    mountToaster();
+    const message = `Connector lost, ${name}.`;
+    act(() => {
+      toast.error(message, { icon });
+    });
+    expect(glyphOf(await rendered(message))).toEqual(["path M18 6 6 18", "path m6 6 12 12"]);
+  });
+});
+
+describe("the info toast, whose glyph the drawing does not draw", () => {
+  it("keeps the library's own glyph, not one of the drawn family", async () => {
     mountToaster();
     act(() => {
-      toast.error("Connector lost.", { icon: null });
+      toast.info("An info toast.");
     });
-    expect(glyphOf(await rendered("Connector lost."))).toEqual(["path M18 6 6 18", "path m6 6 12 12"]);
+    const el = await rendered("An info toast.");
+    expect(el.getAttribute("data-type")).toBe("info");
+    const svg = el.querySelector(":scope > [data-icon] svg");
+    expect(svg).not.toBeNull();
+    expect(svg!.hasAttribute("data-toast-glyph")).toBe(false);
   });
 });
 
