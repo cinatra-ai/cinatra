@@ -45,7 +45,7 @@ export function SubmissionStatusPill({
           {pill.label}
         </StatusPill>
       )}
-      {step ? <p className="mt-[3px] text-[11.5px] text-muted-foreground">{step}</p> : null}
+      {step ? <p className="mt-[3px] text-xs text-muted-foreground">{step}</p> : null}
     </div>
   );
 }

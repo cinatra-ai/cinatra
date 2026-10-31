@@ -31,7 +31,7 @@ export function VendorApplicationStatusCell({
       )}
       {repairStuckAt ? <RepairStuckPill /> : null}
       {count ? (
-        <span className="text-[11.5px] text-muted-foreground">
+        <span className="text-xs text-muted-foreground">
           {count} {count === 1 ? "attempt" : "attempts"}
         </span>
       ) : null}
