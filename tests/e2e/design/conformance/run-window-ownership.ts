@@ -14,18 +14,28 @@ export type WindowOwnershipReading = {
 // so, inside `[data-run-window-host="page-chrome"]`. A window is that anchor; or
 // a `review-prompt-window` or `schedule-prompt-window` node with no `run-window`
 // inside it, also when it is drawn inside the page's own `run-window`; or a
-// prompt control that no declared holder holds (`unownedPrompts`, each outermost
-// one counted once). A page window that lost its own anchor is not owned.
+// prompt control that no declared holder holds (`unownedPrompts`, see below). A
+// page window that lost its own anchor is not owned.
 //
-// TEXT ENTRY IS DEFAULT-DENY. A prompt control is a text-entry control (an input
-// of any type but the non-text types below, a textarea, a contenteditable that
-// is not "false", role=textbox) or one of the named prompt markers. The declared
-// holders are a window anchor, a lifecycle card, the composer and chat's message
-// editor. A card may hold any fields. A window anchor or a composer holds at most
-// one prompt control. The message editor holds exactly one textarea as a direct
-// child, and is read on chat only. WHAT THIS DOES NOT READ: a send button with
-// another label than the window's own, or any control that takes no text. A
-// prompt made of those alone is not counted.
+// TEXT ENTRY IS READ BY ONE RULE, ON RAW CONTROLS, BEFORE ANY COLLAPSE. A text-entry
+// control is an input of any type but the non-text types below, a textarea, a
+// node whose contenteditable attribute is present and not "false", or a node
+// whose role attribute lists textbox or searchbox. Each one counts by itself. A
+// named field marker counts only when no text-entry control and no other marker
+// stands inside it under the same nearest holder. The window's send label also
+// counts outside the holders, unless a field marker holds it or it is already a
+// text-entry control.
+//
+// The declared holders are a window anchor, a lifecycle card, the composer and
+// chat's message editor. A card may hold any fields. A window anchor or a composer
+// holds at most one control by that count. Each message editor holds exactly one
+// textarea as a direct child, and any editor anchor is refused on run and review.
+//
+// WHAT THIS DOES NOT READ: a send button with another label; a control that takes
+// no text, such as a select or a button; role=combobox or role=spinbutton on a node
+// that is no input; a node editable only by inheritance or by a script property;
+// document.designMode, a frame or a shadow root. Fields inside a lifecycle card are
+// not read, and chat takes any number of well-formed message editors.
 //
 // EVERY ANCHOR IS READ ON ITS OWN NODE: an owned window sits strictly inside the
 // page chrome (an anchor on the chrome node itself is not owned), and a lifecycle
@@ -34,7 +44,8 @@ export type WindowOwnershipReading = {
 // THE ROOT: its own markers are read like any other node's. A page chrome, window
 // anchor, composer or message editor above the root is not read. A lifecycle card
 // is the one exception, read in the whole document: a card above the root puts
-// every prompt, composer and notice of the root inside a card.
+// every prompt marker, composer and notice of the root inside a card. An unmarked
+// text-entry control there counts as an unowned prompt, not as inside a card.
 export function readRunWindowOwnership(root: Element | null): WindowOwnershipReading {
   if (root === null) return { rootPresent: false, windows: 0, ownedWindows: 0, unownedPrompts: 0, overfullHolders: 0, messageEditors: 0,
     cards: 0, promptsInCards: 0, composers: 0, composersInCards: 0,
@@ -50,10 +61,11 @@ export function readRunWindowOwnership(root: Element | null): WindowOwnershipRea
   const messageEditor = '[data-chat-message-editor]';
   const promptFieldMarkers = ['[data-run-window-field]', '[data-testid="chat-prompt-input"]', '[data-conformance-id="chat-composer-primary"]'].join(',');
   const sendLabel = '[aria-label="Apply AI suggestion"]';
-  const textEntryCandidates = 'input, textarea, [contenteditable], [role="textbox"]';
+  const textEntryCandidates = 'input, textarea, [contenteditable], [role]';
   const nonTextInputTypes = ["hidden", "checkbox", "radio", "button", "submit", "reset", "image", "file", "range", "color"];
   const isTextEntry = (node: Element): boolean => {
-    if (node.matches('textarea, [role="textbox"]')) return true;
+    if (node.matches("textarea")) return true;
+    if ((node.getAttribute("role") ?? "").toLowerCase().split(/\s+/).some((role) => role === "textbox" || role === "searchbox")) return true;
     if (node.matches("[contenteditable]") && (node.getAttribute("contenteditable") ?? "").toLowerCase() !== "false") return true;
     return node.matches("input") && !nonTextInputTypes.includes((node.getAttribute("type") ?? "text").toLowerCase());
   };
@@ -77,18 +89,24 @@ export function readRunWindowOwnership(root: Element | null): WindowOwnershipRea
   const anchored = all(runWindow);
   const unanchored = all(otherWindows)
     .filter((node) => node.querySelector(runWindow) === null);
-  const outermost = (nodes: Element[]): Element[] => nodes.filter((node) => !nodes.some((other) => other !== node && other.contains(node)));
-  const distinct = (nodes: Element[]): Element[] => Array.from(new Set(nodes));
   const nodesWithin = (node: Element, selector: string): Element[] =>
     [...(node.matches(selector) ? [node] : []), ...Array.from(node.querySelectorAll(selector))];
-  const entriesWithin = (node: Element): Element[] => outermost(distinct([
-    ...nodesWithin(node, textEntryCandidates).filter(isTextEntry), ...nodesWithin(node, promptFieldMarkers)]));
-  const loose = distinct([...nodesWithin(top, sendLabel), ...nodesWithin(top, promptFieldMarkers), ...nodesWithin(top, textEntryCandidates).filter(isTextEntry)])
-    .filter((node) => closestInRoot(node, holders) === null);
-  const unownedPrompts = outermost(loose).length;
+  const rawEntries = (node: Element): Element[] => nodesWithin(node, textEntryCandidates).filter(isTextEntry);
+  const nearestHolder = (node: Element): Element | null => closestInRoot(node, holders);
+  // The one count: every raw control, plus each marker with no control or marker
+  // of its own holder inside it.
+  const controls = (node: Element): Element[] => [...rawEntries(node), ...nodesWithin(node, promptFieldMarkers).filter((marker) =>
+    !isTextEntry(marker) && ![...Array.from(marker.querySelectorAll(promptFieldMarkers)), ...rawEntries(marker)]
+      .some((inner) => inner !== marker && nearestHolder(inner) === nearestHolder(marker)))];
+  const looseSendLabels = nodesWithin(top, sendLabel).filter((node) =>
+    !isTextEntry(node) && (node.parentElement === null || closestInRoot(node.parentElement, promptFieldMarkers) === null));
+  const unownedPrompts = [...controls(top), ...looseSendLabels].filter((node) => closestInRoot(node, holders) === null).length;
   const editors = all(messageEditor);
-  const overfullWindows = all([runWindow, otherWindows, composer].join(',')).filter((node) => entriesWithin(node).length > 1).length;
-  const malformedEditors = editors.filter((node) => entriesWithin(node).length !== 1 || !entriesWithin(node)[0]!.matches("textarea") || entriesWithin(node)[0]!.parentElement !== node).length;
+  const overfullWindows = all([runWindow, otherWindows, composer].join(',')).filter((node) => controls(node).length > 1).length;
+  const malformedEditors = editors.filter((node) => {
+    const held = controls(node);
+    return held.length !== 1 || !held[0]!.matches("textarea") || held[0]!.parentElement !== node;
+  }).length;
   // A lifecycle card anywhere above the root, read in the whole document.
   const belowCard = top.parentElement !== null && top.parentElement.closest(card) !== null;
   const aboveCard = (selector: string): number => (belowCard ? within(top, selector) : 0);
@@ -106,7 +124,8 @@ export function readRunWindowOwnership(root: Element | null): WindowOwnershipRea
     pageNotices: all(notice).filter(inChrome).length,
     noticesInCards: aboveCard(notice) + cards.reduce((total, node) => total + within(node, notice), 0),
     interactiveNotices: all(notice).reduce((total, node) =>
-      total + within(closestInRoot(node, '[data-conformance-id="schedule-prompt-window"]') ?? node, 'input, textarea, button, [contenteditable="true"]'), 0),
+      total + nodesWithin(closestInRoot(node, '[data-conformance-id="schedule-prompt-window"]') ?? node, `button, ${textEntryCandidates}`)
+        .filter((control) => control.matches("input, button") || isTextEntry(control)).length, 0),
   };
 }
 export function assertRunWindowOwnership(reading: WindowOwnershipReading, host: "run" | "review" | "chat"): void {
