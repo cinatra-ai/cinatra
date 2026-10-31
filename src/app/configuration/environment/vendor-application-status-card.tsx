@@ -9,7 +9,8 @@ import {
 } from "@/components/ui/card";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { StatusPill } from "@/components/ui/status-pill";
+import { ApprovalPendingPill, RepairStuckPill } from "@/lib/approvals/approval-pills";
+import { isRepairStuckStamp } from "@/lib/approvals/repair-stuck";
 import type { InstanceIdentity } from "@/lib/instance-identity-store";
 import {
   cancelVendorApplicationAction,
@@ -35,6 +36,10 @@ export function VendorApplicationStatusCard({
 }) {
   const applicationId = identity.vendorApplicationId ?? null;
   const scope = identity.vendorScope ?? null;
+  // The persisted stuck stamp (mirrored from the marketplace by the refresh
+  // and the boot reconcile). The identity store only casts it, so it counts
+  // as stuck only when it is a valid timestamp string (cinatra#4296).
+  const repairStuck = isRepairStuckStamp(identity.vendorApplicationRepairStuckAt);
 
   return (
     <Card className="border-line bg-surface backdrop-blur-none">
@@ -49,7 +54,14 @@ export function VendorApplicationStatusCard({
               decision state from cm.
             </CardDescription>
           </div>
-          <StatusPill status="running">Applied</StatusPill>
+          {/* The instance's own open application waits on a marketplace
+              moderator: the approval's pending pill, Awaiting others
+              (specs/app.html V.1). A stuck repair adds the Failed pill
+              beside it, as on the approval row. */}
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            <ApprovalPendingPill viewerMayDecide={false} data-state="applied" />
+            {repairStuck ? <RepairStuckPill /> : null}
+          </div>
         </div>
       </CardHeader>
       <CardContent>

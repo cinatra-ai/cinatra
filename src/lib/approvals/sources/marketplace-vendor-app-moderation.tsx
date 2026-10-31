@@ -7,9 +7,12 @@ import type { MarketplaceVendorApplicationAdminRow } from "@cinatra-ai/marketpla
 
 import { Badge } from "@/components/ui/badge";
 
+import { repairAttemptsText } from "../approval-pills";
+import { textField, toRepairStuck } from "../repair-stuck";
 import { MarketplaceDecisionActions } from "../marketplace-decision-actions";
 import { decideMarketplaceVendorApplication } from "../marketplace-decision-helpers";
-import { MarketplaceRowView, type MarketplaceBadgeVariant } from "./marketplace-row";
+import { MarketplaceRowView } from "./marketplace-row";
+import { viewerMayDecide } from "./marketplace-state";
 import { marketplaceVendorAppModerationContract } from "./marketplace-vendor-app-moderation.contract";
 import {
   MARKETPLACE_GROUP,
@@ -51,50 +54,53 @@ const MODERATE_ACTIONS: ApprovalAction[] = [
   { id: "reject", label: "Reject", intent: "destructive", enforcement: "action-time", requiresReason: true },
 ];
 
+// Every field below is read from the marketplace's unchecked JSON through
+// ../repair-stuck: a text field that is not a non-empty string is null and is
+// not drawn; the repair flag and its count are validated (cinatra#4296).
 interface VendorAppRaw {
-  scope: string;
-  tier: string;
+  scope: string | null;
+  tier: string | null;
   repairStuck: boolean;
-  recoveryAttempts: number;
-}
-
-function statusVariant(status: string): MarketplaceBadgeVariant {
-  switch (status) {
-    case "approved":
-      return "default";
-    case "rejected":
-      return "destructive";
-    case "applied":
-      return "secondary";
-    default:
-      return "outline";
-  }
+  /** A non-negative safe integer, or null when the count is missing or malformed. */
+  recoveryAttempts: number | null;
 }
 
 // `ownAppId` / `ownCreatedAt` align the ONE row that is this instance's own
 // application (also visible via the self-status mirror) onto the SAME local
 // timestamp both adapters resolve, so the unified feed's deduped keyset cursor
 // is stable no matter which mirror fetched it (cinatra#1555). Every OTHER
-// vendor's row keeps the authoritative remote `applied_at`.
-function toRow(
+// vendor's row keeps the authoritative remote `applied_at`. Exported for its
+// unit test (the public repair fields, cinatra#4296).
+export function toVendorApplicationModerationRow(
   r: MarketplaceVendorApplicationAdminRow,
   ownAppId: string | undefined,
   ownCreatedAt: string,
 ): ApprovalRow {
+  // Stuck only for a valid `repair_stuck_at` timestamp; the count only for a
+  // non-negative safe integer (../repair-stuck). An omitted, empty or invalid
+  // stamp is NOT stuck; a malformed count leaves the flag without a count.
+  const repairStuck = toRepairStuck(r.repair_stuck_at, r.recovery_attempts);
+  const scope = textField(r.scope);
   const raw: VendorAppRaw = {
-    scope: r.scope,
-    tier: r.tier,
-    repairStuck: r.repair_stuck_at !== null,
-    recoveryAttempts: r.recovery_attempts,
+    scope,
+    tier: textField(r.tier),
+    repairStuck: repairStuck !== undefined,
+    recoveryAttempts: repairStuck?.attempts ?? null,
   };
   return {
+    // The id is the decision key, re-authorized by the marketplace at action
+    // time; the status goes through the allow-listed state table
+    // (./marketplace-state); the eligibility hint through toRowEligibility.
     id: r.application_id,
     sourceId: SOURCE_ID,
-    title: r.display_name,
-    subtitle: r.scope,
+    title: textField(r.display_name) ?? "Vendor application",
+    ...(scope ? { subtitle: scope } : {}),
     status: r.status,
     createdAt: ownAppId && r.application_id === ownAppId ? ownCreatedAt : r.applied_at,
     eligibility: toRowEligibility(r.eligibility),
+    // PUBLIC: only the repair field a view draws (cinatra#4296), so the
+    // Notifications card can draw the flag without reading `raw`.
+    ...(repairStuck ? { repairStuck } : {}),
     raw,
   };
 }
@@ -143,7 +149,7 @@ export const marketplaceVendorAppModerationSource: ApprovalSource = {
       // so its row aligns with the self-status mirror's timestamp.
       const ownAppId = resolveOwnVendorApplicationId();
       const ownCreatedAt = resolveOwnVendorApplicationCreatedAt();
-      return rows.map((r) => toRow(r, ownAppId, ownCreatedAt));
+      return rows.map((r) => toVendorApplicationModerationRow(r, ownAppId, ownCreatedAt));
     });
   },
 
@@ -154,25 +160,32 @@ export const marketplaceVendorAppModerationSource: ApprovalSource = {
 
   rowRenderer(row: ApprovalRow) {
     const raw = (row.raw ?? {}) as VendorAppRaw;
-    const applied = formatDistanceToNow(new Date(row.createdAt), { addSuffix: true });
+    // An applied_at the marketplace sent malformed is not drawn (date-fns
+    // throws on an invalid date); the row still renders.
+    const appliedDate = new Date(row.createdAt);
+    const applied = Number.isFinite(appliedDate.getTime())
+      ? `applied ${formatDistanceToNow(appliedDate, { addSuffix: true })}`
+      : null;
+    // Repair stuck is a flag, not a state: the Failed pill sits beside the state
+    // pill and the attempt count rides on the meta line (specs/app.html V.1).
+    const count = raw.repairStuck ? repairAttemptsText(raw.recoveryAttempts) : "";
+    const meta = [raw.tier ? `${raw.tier} tier` : null, applied, count || null]
+      .filter(Boolean)
+      .join(" · ");
     return (
       <MarketplaceRowView
         title={row.title}
-        statusLabel={row.status}
-        statusVariant={statusVariant(row.status)}
+        state={row.status}
+        viewerMayDecide={viewerMayDecide(row.eligibility)}
+        repairStuck={raw.repairStuck === true}
         extraBadges={
-          <>
+          raw.scope ? (
             <Badge variant="outline" className="font-mono text-xs">
               {raw.scope}
             </Badge>
-            {raw.repairStuck ? (
-              <Badge variant="destructive" className="text-xs">
-                {raw.recoveryAttempts > 0 ? `repair stuck · ${raw.recoveryAttempts}` : "repair stuck"}
-              </Badge>
-            ) : null}
-          </>
+          ) : null
         }
-        meta={`${raw.tier} tier · applied ${applied}`}
+        meta={meta || "Vendor application"}
         right={
           <MarketplaceDecisionActions
             sourceId={SOURCE_ID}

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { Check, Lock, RefreshCw, TriangleAlert, X } from "lucide-react";
+import { RefreshCw, TriangleAlert } from "lucide-react";
 // Extended tailwind-merge (same reason as extension-card.tsx): the default app
 // cn strips the custom design-token size utilities whenever a text-COLOR class
 // follows in the same merge.
@@ -17,6 +17,10 @@ import {
   type VendorPresentation,
 } from "@/lib/vendor-presentation";
 import type { ExtensionSourceLabel } from "@cinatra-ai/extensions/screens/extension-source-label";
+
+// The lifecycle status chip lives in its own module so the Extensions package's
+// chip row (lifecycle-badges.tsx) draws the same marked text (cinatra#4296).
+export { InstalledStatusIndicator } from "@/components/extensions/installed-status-indicator";
 
 /**
  * InstalledExtensionCard — the design system's "Installed extensions" card
@@ -161,53 +165,6 @@ export type InstalledExtensionCardProps = {
   accentInert?: boolean;
   className?: string;
 };
-
-/**
- * §VI "Installed extensions" status indicator (published design system §VI
- * drawing, refreshed 2026-07-05). Three lifecycle glyphs beside the mono,
- * uppercase, letter-spaced label:
- *   • active   → a green check;
- *   • locked   → a green LOCK (cinatra#1570). A system extension IS live, so it
- *     shares the green `--success` ink, but it now reads DISTINCTLY from a
- *     normal active row: it cannot be archived or uninstalled (the tooltip
- *     says so). Previously locked silently reused the active check, making a
- *     locked row visually identical to an active one but for the text label;
- *   • archived → a muted cross.
- * Colour/semantics are pinned by the paired `app-extensions.html` spec update
- * that lands with this change (design-surface gate). The general
- * `LifecycleBadge`/`StatusPill` stays the §VII list/table renderer.
- */
-export function InstalledStatusIndicator({
-  status,
-}: {
-  status: "active" | "locked" | "archived";
-}) {
-  const archived = status === "archived";
-  const locked = status === "locked";
-  const label = archived ? "Archived" : locked ? "Locked" : "Active";
-  const Icon = archived ? X : locked ? Lock : Check;
-  return (
-    <span
-      data-slot="installed-status-indicator"
-      data-status={status}
-      className={cn(
-        // §VI status label = the canonical badge-2xs kicker style (9.5px mono,
-        // uppercase, the design-system badge letter-spacing) — named tokens per
-        // the ui-design-system gate; no arbitrary text-[]/tracking-[].
-        "inline-flex items-center gap-1.5 font-mono text-badge-2xs font-bold uppercase",
-        archived ? "text-muted-foreground" : "text-success",
-      )}
-      title={
-        status === "locked"
-          ? "System extension — always active; cannot be archived or uninstalled."
-          : undefined
-      }
-    >
-      <Icon aria-hidden className="size-3 shrink-0" strokeWidth={3} />
-      {label}
-    </span>
-  );
-}
 
 /**
  * §III "Update available" chip (published design system §III, spec-line update
