@@ -79,7 +79,7 @@ function crumbsIn(tree: unknown): { prefix: string; label: string }[] {
   const html = renderToStaticMarkup(tree as React.ReactElement);
   const m = /data-testid="crumbs">([^<]*)</.exec(html);
   if (!m) throw new Error("no crumbs published");
-  return JSON.parse(m[1]!.replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&#x27;/g, "'"));
+  return JSON.parse(m[1]!.replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&amp;/g, "&"));
 }
 
 beforeEach(() => {
