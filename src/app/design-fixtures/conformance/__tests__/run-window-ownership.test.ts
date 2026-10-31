@@ -80,7 +80,7 @@ describe("#3487 positive ownership guard", () => {
     expect(readRunWindowOwnership(page)).toMatchObject({ pageNotices: 1, interactiveNotices: 0 });
     expect(() => assertRunWindowOwnership(readRunWindowOwnership(page), "run")).not.toThrow();
     const interactive = root(page.innerHTML.replace('</p>', '</p><button>Send</button>'));
-    expect(() => assertRunWindowOwnership(readRunWindowOwnership(interactive), "run")).toThrow(/interactive/);
+    expect(() => assertRunWindowOwnership(readRunWindowOwnership(interactive), "run")).toThrow(/notice's window/);
     const contained = root('<section data-lifecycle-card-host="run_card">' + notice + '</section>' + window);
     expect(() => assertRunWindowOwnership(readRunWindowOwnership(contained), "run")).toThrow(/inside/);
   });
@@ -145,7 +145,7 @@ describe("#3487 positive ownership guard", () => {
     const node = root(card + window.replace('</button></div></div>', '</button></div><button data-conformance-id="schedule-window-over">Over</button></div>'));
     expect(readRunWindowOwnership(node)).toMatchObject({ windows: 1, ownedWindows: 1, pageNotices: 1 });
     expect(readRunWindowOwnership(node).interactiveNotices).toBeGreaterThan(0);
-    expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "run")).toThrow(/interactive/);
+    expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "run")).toThrow(/notice's window/);
   });
   // cinatra#3487 item 3, the SC of pre-review 2: the root element's own markers
   // are read. Above the root only a lifecycle card is read. A real root is a plain wrapper.
@@ -272,7 +272,7 @@ describe("#3487 positive ownership guard", () => {
   it.each(['contenteditable=""', 'contenteditable="plaintext-only"', 'role="searchbox"'])("refuses a read-only notice that is itself editable: %s", (attribute) => {
     const node = root(card + '<div data-run-window-host="page-chrome"><div data-conformance-id="schedule-prompt-window"><div data-conformance-id="run-window"><div data-run-window-field data-conformance-id="schedule-window-over" ' + attribute + '></div></div></div></div>');
     expect(readRunWindowOwnership(node).interactiveNotices).toBeGreaterThan(0);
-    expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "run")).toThrow(/interactive/);
+    expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "run")).toThrow(/notice's window/);
   });
   // Pre-review 3, finding 4: a card above the root counts the root's prompt
   // markers, composers and notices. An unmarked field there stays an unowned prompt.
@@ -326,7 +326,8 @@ describe("#3487 positive ownership guard", () => {
     expect(() => assertRunWindowOwnership(readRunWindowOwnership(root(card + composerOnly + markup)), "chat")).toThrow(/holds? |message editor/);
   });
   // Pre-review 5: THE INVERSION. The anchor is the node that itself holds exactly
-  // one control. Anything else refuses, whatever the reason it is wrong.
+  // one control. A shape where it does not is refused, whatever the reason it is
+  // wrong. The named limits below are what the reader does not read.
   const page = (inner: string): string => '<div data-run-window-host="page-chrome">' + inner + '</div>';
   const anchor = (inner: string): string => '<div data-conformance-id="run-window">' + inner + '</div>';
   const legacy = (inner: string): string => '<div data-conformance-id="review-prompt-window">' + inner + '</div>';
@@ -355,6 +356,15 @@ describe("#3487 positive ownership guard", () => {
     ["a composer marker's field in the anchor", page(anchor('<div data-conformance-id="chat-composer-primary"></div>'))],
     ["the anchor on the field node itself", page('<div data-conformance-id="run-window" data-run-window-field></div>')],
     ["the anchor on the text-entry node itself", page('<textarea data-conformance-id="run-window"></textarea>')],
+    ["the anchor on the field node, holding a typed control", page('<div data-conformance-id="run-window" data-run-window-field><textarea></textarea></div>')],
+    ["the anchor on the field node, holding the real field's editor and send button", page('<div data-conformance-id="run-window" data-run-window-field><div role="textbox" contenteditable="true"></div><button aria-label="Apply AI suggestion"></button></div>')],
+    ["the anchor on the field node, disabled, holding the notice", page('<div data-conformance-id="run-window" data-run-window-field aria-disabled="true"><p data-conformance-id="schedule-window-over">Over</p></div>')],
+    ["the anchor on the prompt test id, holding a typed control", page('<div data-conformance-id="run-window" data-testid="chat-prompt-input"><textarea></textarea></div>')],
+    ["the anchor on the send label, holding a typed control", page('<div data-conformance-id="run-window" aria-label="Apply AI suggestion"><textarea></textarea></div>')],
+    ["the anchor on an editable node, holding a typed control", page('<div data-conformance-id="run-window" contenteditable="true"><textarea></textarea></div>')],
+    ["the anchor with a textbox role, holding a typed control", page('<div data-conformance-id="run-window" role="textbox"><textarea></textarea></div>')],
+    ["a field marker around the anchor", page('<div data-run-window-field>' + anchor(typed) + '</div>')],
+    ["a field marker on the legacy node around the anchor", page('<div data-conformance-id="review-prompt-window" data-run-window-field>' + anchor(typed) + '</div>')],
     ["the anchor's one control inside a card in the anchor", page(anchor('<section data-lifecycle-card-host="inner"><textarea></textarea></section>'))],
     ["the anchor's one control inside a message editor in the anchor", page(anchor('<div data-chat-message-editor><textarea></textarea></div>'))],
     ["the anchor's one control inside a composer in the anchor", page(anchor('<div data-conversation-composer><textarea></textarea></div>'))],
@@ -378,17 +388,23 @@ describe("#3487 positive ownership guard", () => {
     ["a composer with a field marker and no typed control", '<div data-conversation-composer><div data-conformance-id="chat-composer-primary"></div></div>'],
     ["a composer with only a send button", '<div data-conversation-composer><button aria-label="Apply AI suggestion"></button></div>'],
     ["a composer whose one control is inside a card in it", '<div data-conversation-composer><section data-lifecycle-card-host="inner"><textarea></textarea></section></div>'],
+    ["a composer on the field node, holding a typed control", '<div data-conversation-composer data-run-window-field><textarea></textarea></div>'],
+    ["a composer on the prompt test id, holding a typed control", '<div data-conversation-composer data-testid="chat-prompt-input"><textarea></textarea></div>'],
     ["a composer whose one control is its own node", '<textarea data-conversation-composer></textarea>'],
   ])("refuses %s on chat", (_name, markup) => {
     expect(() => assertRunWindowOwnership(readRunWindowOwnership(root(card + markup)), "chat")).toThrow();
   });
-  // Pre-review 5, finding 2: a notice's window holds no interactive control at all, of any kind.
+  // Pre-review 5, finding 2: a notice's window is closed. It holds only elements of a
+  // small allow-list, so a kind of control that no list names is refused too.
   it.each([
     '<select><option>Change</option></select>', '<button>Change</button>', '<a href="/x">Change</a>', '<input type="hidden">', '<input type="file">', '<input type="checkbox">',
     '<textarea></textarea>', '<details><summary>More</summary></details>', '<label>Change</label>', '<div tabindex="0">Change</div>', '<div tabindex="-1">Change</div>',
     '<div contenteditable="true"></div>', '<div role="button">Change</div>', '<div role="BUTTON">Change</div>', '<div role="presentation link">Change</div>', '<div role="combobox"></div>', '<div role="spinbutton"></div>',
     '<div role="listbox"></div>', '<div role="option"></div>', '<div role="checkbox"></div>', '<div role="radio"></div>', '<div role="switch"></div>', '<div role="slider"></div>',
     '<div role="menuitem"></div>', '<div role="tab"></div>', '<div role="searchbox"></div>', '<video controls></video>', '<audio controls></audio>', '<iframe></iframe>', '<div onclick="x()">Change</div>',
+    '<div role="treegrid"></div>', '<div role="toolbar"></div>', '<div role="application"></div>', '<div role="radiogroup"></div>', '<div role="dialog"></div>', '<div role="alertdialog"></div>',
+    '<option>Change</option>', '<dialog></dialog>', '<menu></menu>', '<datalist></datalist>', '<img src="x">', '<svg></svg>', '<section>Change</section>', '<div draggable="true">Change</div>',
+    '<div onfocus="x()">Change</div>', '<div aria-label="Change"></div>', '<div id="change"></div>', '<div style="color: red"></div>', '<div role="status link"></div>', '<custom-control></custom-control>',
   ])("refuses a spent window that holds %s", (control) => {
     for (const markup of [
       spent(spentField.replace('</p>', '</p>' + control)),
@@ -398,16 +414,21 @@ describe("#3487 positive ownership guard", () => {
     ]) {
       const reading = readRunWindowOwnership(root(card + markup));
       expect(reading.interactiveNotices).toBeGreaterThan(0);
-      expect(() => assertRunWindowOwnership(reading, "run")).toThrow(/interactive/);
+      expect(() => assertRunWindowOwnership(reading, "run")).toThrow(/notice's window/);
     }
   });
   it("reads a notice in any window by the same rule, and a notice that is no anchor's", () => {
     const live = root(card + page(legacy(anchor(typed + '<p data-conformance-id="schedule-window-over">Over</p>'))));
     expect(readRunWindowOwnership(live).interactiveNotices).toBeGreaterThan(0);
-    expect(() => assertRunWindowOwnership(readRunWindowOwnership(live), "run")).toThrow(/interactive/);
+    expect(() => assertRunWindowOwnership(readRunWindowOwnership(live), "run")).toThrow(/notice's window/);
     const beside = root(card + page(anchor(typed) + '<p data-conformance-id="schedule-window-over">Over</p>'));
     expect(readRunWindowOwnership(beside)).toMatchObject({ notices: 1, pageNotices: 0 });
     expect(() => assertRunWindowOwnership(readRunWindowOwnership(beside), "run")).toThrow(/notice/);
+  });
+  it("takes the allow-list's own elements and attributes in a spent window", () => {
+    const reading = readRunWindowOwnership(root(card + spent(spentField.replace('Over', '<span class="x" data-y="z" role="STATUS">Over</span>') + '<div class="x"><p>More</p></div>')));
+    expect(reading).toMatchObject({ pageNotices: 1 });
+    expect(() => assertRunWindowOwnership(reading, "run")).not.toThrow();
   });
   it("takes the spent window's own status role and an inert notice text", () => {
     const reading = readRunWindowOwnership(root(card + spent(spentField.replace('Over', '<span>Over</span>'))));
