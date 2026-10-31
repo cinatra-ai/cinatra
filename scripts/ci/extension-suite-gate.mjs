@@ -503,24 +503,35 @@ export function isHostRunNodeTest(p) {
  * file (read on node v24.20.0 and v24.22.1, for .mjs, .js and .cjs files with
  * and without content). The TAP name is not read for this: node escapes and a ` # SKIP` or
  * ` # TODO` directive can change how a path reads in TAP. A run whose TAP has
- * exactly one top-level result and no suite is therefore `fileOnly` unless a
- * top-level record (`topLevel`, from nodeTopLevelReporter) gives a location
- * that proves a real test: a line and a column that are both positive
- * integers and are not line 1, column 1. A missing record, a null or unknown
- * location, and 1:1 all read as file-only; the caller then does not count the
- * file as executed. On the versions read, the cost is a false red: a real lone
- * test whose call starts at line 1, column 1, or whose record was lost, also
- * reads as file-only. A node version that gave its report of such a file another
- * positive location would read that file as a test; the job's `node-version: '24'`
- * floats, and this rule was not read on other versions.
+ * exactly one top-level result and no suite is therefore `fileOnly` unless two
+ * things hold. First, a top-level record (`topLevel`, from nodeTopLevelReporter)
+ * gives a location other than 1:1 (`provesRealTest`). A location alone proves
+ * nothing, because the job's `node-version: '24'` floats and a later version can
+ * move its report of the file; the location only saves a second run of a file
+ * that reads 1:1. Second, `standaloneTap`, the TAP of a second run of the file
+ * with plain `node` and no `--test` (runNodeTest), shows a test (`standaloneRanTest`).
+ * Node's report of the file comes from the `--test` runner, and a plain run has no
+ * such runner. Any other shape of either reading is file-only, and the caller then
+ * does not count the file as executed. The cost is a false red: a real lone test
+ * whose call starts at line 1, column 1, or that has no usable record or no
+ * usable plain run, reads as file-only. A red lone result stays red, with or
+ * without the second run.
  */
-// A top-level record proves a real test only by a location node gives a test
-// call: a positive-integer line and column, other than node's 1:1 for the file.
+// A top-level record gives a location other than node's 1:1 for the file: a
+// positive-integer line and column. This is a filter, not a proof (see above).
 export function provesRealTest(r) {
   return Boolean(r) && Number.isInteger(r.line) && Number.isInteger(r.column) && r.line > 0 && r.column > 0 && !(r.line === 1 && r.column === 1);
 }
 
-export function parseNodeTap(text, file, topLevel = []) {
+// The TAP of a plain run shows a test: a top-level result and a top-level
+// `# tests N` with N at least 1. Anything else, such as no output, shows none.
+export function standaloneRanTest(tap) {
+  if (typeof tap !== "string") return false;
+  const n = /^# tests (\d+)$/m.exec(tap);
+  return Boolean(n) && Number(n[1]) >= 1 && /^(?:not )?ok \d+ /m.test(tap);
+}
+
+export function parseNodeTap(text, file, topLevel = [], standaloneTap) {
   const counts = {};
   const failedNames = [];
   let topResults = 0;
@@ -531,7 +542,9 @@ export function parseNodeTap(text, file, topLevel = []) {
     if (f && !/#\s+(?:SKIP|TODO)\b/.test(line)) failedNames.push(f[1]);
     if (/^(?:not )?ok \d+ /.test(line)) topResults += 1;
   }
-  const fileOnly = topResults === 1 && (counts.suites ?? 0) === 0 && !topLevel.some(provesRealTest);
+  const red = (counts.fail ?? 0) + (counts.cancelled ?? 0) > 0;
+  const fileOnly =
+    topResults === 1 && (counts.suites ?? 0) === 0 && !(topLevel.some(provesRealTest) && (red || standaloneRanTest(standaloneTap)));
   return {
     summary: Object.prototype.hasOwnProperty.call(counts, "tests"),
     tests: counts.tests ?? 0,
@@ -557,7 +570,7 @@ export function parseNodeTap(text, file, topLevel = []) {
  * (runNodeTestFile), whatever TAP it printed first, and a file not started
  * because that deadline had passed (runNodeTest).
  *
- * files: Array<{ file, exitCode, tap, timedOut?, notStarted?, topLevel? }>
+ * files: Array<{ file, exitCode, tap, timedOut?, notStarted?, topLevel?, standaloneTap? }>
  */
 export function foldNodeRuns(files) {
   const executedFiles = [];
@@ -570,8 +583,8 @@ export function foldNodeRuns(files) {
   let reportOk = files.length > 0;
   let exitCode = 0;
   let ok = files.length > 0;
-  for (const { file, exitCode: code, tap, timedOut, notStarted, topLevel } of files) {
-    const t = parseNodeTap(tap, file, topLevel);
+  for (const { file, exitCode: code, tap, timedOut, notStarted, topLevel, standaloneTap } of files) {
+    const t = parseNodeTap(tap, file, topLevel, standaloneTap);
     if (timedOut) timedOutFiles.push(file);
     if (notStarted) notStartedFiles.push(file);
     if (!t.summary || timedOut || notStarted) reportOk = false;
@@ -1230,6 +1243,25 @@ export function nodeTestArgs(file, topLevelFile, testTimeoutMs = NODE_TEST_TIMEO
   ];
 }
 
+// The second run of a lone test (needsStandaloneRun): plain `node`, so no test
+// runner reports the file. The TAP goes to a file of its own, because what a
+// plain run's test prints reaches its stdout and could read as TAP.
+export function nodeStandaloneArgs(file, tapFile, testTimeoutMs = NODE_TEST_TIMEOUT_MS) {
+  return [
+    "--test-reporter=tap",
+    `--test-reporter-destination=${tapFile}`,
+    `--test-timeout=${testTimeoutMs}`,
+    "--test-force-exit",
+    file,
+  ];
+}
+
+// A green run with one top-level result, no suite and a location other than 1:1
+// needs the plain run before it can count as a test. Exported for its test.
+export function needsStandaloneRun({ file, exitCode, tap, timedOut, topLevel = [] }) {
+  return exitCode === 0 && !timedOut && parseNodeTap(tap, file, topLevel).fileOnly && topLevel.some(provesRealTest);
+}
+
 // The second reporter (see nodeTestArgs): node loads this script as a module
 // and uses its default export; `main` below runs only when the script is the
 // program itself.
@@ -1347,6 +1379,8 @@ export function installNodeRunCleanup(proc = process) {
 // Exported for its test, with
 // the bounds as parameters so the test can use short ones, and the spawn as one
 // so the test can give a child that never closes or cannot be killed.
+// `standalone` runs the file with plain `node` (nodeStandaloneArgs); the run's
+// `records` is then its TAP.
 export function runNodeTestFile({
   cwd,
   file,
@@ -1355,6 +1389,7 @@ export function runNodeTestFile({
   deadlineAt = Infinity,
   killGraceMs = NODE_KILL_GRACE_MS,
   spawnChild = spawn,
+  standalone = false,
 }) {
   return new Promise((resolve) => {
     // NODE_TEST_CONTEXT would make the child report to a parent test runner
@@ -1389,7 +1424,7 @@ export function runNodeTestFile({
         // no record file: the run wrote none
       }
       fs.rmSync(recDir, { recursive: true, force: true });
-      resolve({ ...run, recDir, topLevel: readTopLevel(rec) });
+      resolve({ ...run, recDir, records: rec, topLevel: readTopLevel(rec) });
     };
     const killedRun = (closed) => {
       const note =
@@ -1400,7 +1435,7 @@ export function runNodeTestFile({
     // Its own process group, so the kill below also reaches the processes a test
     // started in that group.
     try {
-      child = spawnChild(process.execPath, nodeTestArgs(file, recFile, testTimeoutMs), {
+      child = spawnChild(process.execPath, (standalone ? nodeStandaloneArgs : nodeTestArgs)(file, recFile, testTimeoutMs), {
         cwd,
         env,
         stdio: ["ignore", "pipe", "pipe"],
@@ -1422,14 +1457,22 @@ export function runNodeTestFile({
     const byDeadline = deadlineAt - Date.now() < fileTimeoutMs;
     const bound = Math.max(0, Math.min(fileTimeoutMs, deadlineAt - Date.now()));
     timer = setTimeout(() => {
+      // Set before the kill: a child.kill() can emit `error` at once, and the
+      // handler then finds a kill under way, whose result reads "failed" until
+      // the kill returns, and a grace timer that finish clears.
       killed = {
-        how: killNodeGroup(child),
+        how: "failed",
         why: byDeadline ? "at the gate's node:test deadline" : `after ${fileTimeoutMs} ms`,
       };
       graceTimer = setTimeout(() => finish(killedRun(false)), killGraceMs);
+      killed.how = killNodeGroup(child);
     }, bound);
-    child.on("error", (e) => finish({ file, exitCode: -1, tap: "", detail: String(e) }));
-    child.on("close", (code) => finish(killed ? killedRun(true) : { file, exitCode: code, tap: out, detail: out + err }));
+    child.on("error", (e) => finish(killed ? killedRun(false) : { file, exitCode: -1, tap: "", detail: String(e) }));
+    child.on("close", (code) => {
+      // A close after the grace: the group's pid can be reused, so it leaves the signal cleanup.
+      if (child.pid) survivingNodeGroups.delete(child.pid);
+      finish(killed ? killedRun(true) : { file, exitCode: code, tap: out, detail: out + err });
+    });
   });
 }
 
@@ -1445,7 +1488,13 @@ export async function runNodeTest({ repoRoot, pkg, testTimeoutMs, fileTimeoutMs,
       files.push({ file, exitCode: -1, tap: "", notStarted: true, detail: "[extension-suite-gate] not started: the gate's node:test deadline had passed" });
       continue;
     }
-    files.push(await runNodeTestFile({ cwd, file, testTimeoutMs, fileTimeoutMs, deadlineAt, killGraceMs }));
+    const one = await runNodeTestFile({ cwd, file, testTimeoutMs, fileTimeoutMs, deadlineAt, killGraceMs });
+    if (needsStandaloneRun(one)) {
+      const plain = await runNodeTestFile({ cwd, file, testTimeoutMs, fileTimeoutMs, deadlineAt, killGraceMs, standalone: true });
+      if (plain.exitCode === 0) one.standaloneTap = plain.records;
+      one.detail = `${one.detail}\n--- node ${file} (plain run, exit ${plain.exitCode}${plain.timedOut ? ", killed" : ""})`;
+    }
+    files.push(one);
   }
   const how = (f) => (f.notStarted ? ", not started" : f.timedOut ? ", killed" : "");
   return {
