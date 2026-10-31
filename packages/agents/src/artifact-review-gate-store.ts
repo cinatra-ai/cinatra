@@ -48,7 +48,7 @@ import { electCurrentReviewGate } from "./run-step-rail";
 // ---------------------------------------------------------------------------
 
 import { createHash, randomUUID } from "node:crypto";
-import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 
 import { db } from "./db";
@@ -151,7 +151,7 @@ export class ArtifactReviewGateError extends Error {
 // successor-gate emit + finalize ATOMIC (cinatra#2065 Seam A): a rollback before
 // the caller's commit leaves NO gate row, so a fresh-target retry never strands a
 // gate or hits a pin conflict.
-type GateStoreExecutor =
+export type GateStoreExecutor =
   | typeof db
   | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -1128,6 +1128,13 @@ export async function claimPendingResumeIntents(opts?: {
           // Gate-store extension (cinatra#2038 S0): a DEAD-LETTERED intent is
           // never re-claimed — its attempts were exhausted; it awaits ops.
           isNull(artifactReviewResumeOutbox.deadLetteredAt),
+          // cinatra#4312 — nor an intent that has used its attempts but is not
+          // dead-lettered yet: the sweep dead-letters it
+          // (deadLetterExhaustedResumeIntents) instead of a further attempt.
+          // Each claim uses an attempt (the update below), whatever the
+          // delivery then returns, a `retryable` outcome included
+          // (artifact-review-resume-delivery `sweepArtifactReviewResumeIntents`).
+          lt(artifactReviewResumeOutbox.attempts, artifactReviewResumeOutbox.maxAttempts),
           or(
             eq(artifactReviewResumeOutbox.status, "pending"),
             and(
@@ -1178,8 +1185,9 @@ export async function claimPendingResumeIntents(opts?: {
 export async function markResumeIntentDelivered(
   gateId: string,
   leaseToken: string,
+  executor: GateStoreExecutor = db,
 ): Promise<boolean> {
-  const done = await db
+  const done = await executor
     .update(artifactReviewResumeOutbox)
     .set({ status: "done", updatedAt: sql`now()` })
     .where(
@@ -1191,6 +1199,28 @@ export async function markResumeIntentDelivered(
     )
     .returning({ gateId: artifactReviewResumeOutbox.gateId });
   return done.length === 1;
+}
+
+/**
+ * cinatra#4312 — run `fn` in one transaction that holds a SHARE lock on the
+ * run's row. The resume worker writes the acknowledgement that keeps a run
+ * parked (another artifact of the pause, or a regenerated artifact's review, is
+ * open; no resume is sent) inside this lock, on a re-read of the family and of
+ * its repair lineages. The terminal repair writers take the same row with
+ * `FOR NO KEY UPDATE` before they wake a set-aside decision
+ * (lifecycle-repair-store `wakeDeclaredReviewAfterTerminalRepair`). So the two
+ * cannot interleave: either the acknowledgement commits first and the wake sees
+ * it, or the terminal write commits first and the re-read sees the lineage
+ * closed. A run row that does not exist takes no lock; `fn` still runs.
+ */
+export async function withRunDecisionLock<T>(
+  runId: string,
+  fn: (tx: GateStoreExecutor) => Promise<T>,
+): Promise<T> {
+  return db.transaction(async (tx) => {
+    await tx.select({ id: agentRuns.id }).from(agentRuns).where(eq(agentRuns.id, runId)).for("share");
+    return fn(tx);
+  });
 }
 
 // ---------------------------------------------------------------------------

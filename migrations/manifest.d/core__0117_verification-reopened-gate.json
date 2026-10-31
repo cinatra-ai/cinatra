@@ -1,0 +1,9 @@
+{
+  "seq": "0117",
+  "file": "core/core__0117_verification-reopened-gate.mjs",
+  "summary": "The verification record names the gate it reopened (cinatra#4312). Adds nullable artifact_verification_records.reopened_gate_id (FK to artifact_review_gates, ON DELETE SET NULL), written in the transaction that inserts the reopen gate, and read as the proof that a verification-reopen gate joins a repair lineage. A one-time backfill names a gate in the record's slot only when it already carries a repair row at attempt 2 or later, on the same run and organization, created at or after the record; a reopen gate pending at the upgrade with no note stays unnamed. The review orchestration sweep repeats the statement for a note an old writer adds after the upgrade. Fresh-install bootstrap twin in lifecycleInterceptionsSchemaQueries.",
+  "destructive": false,
+  "tables": [
+    "artifact_verification_records"
+  ]
+}

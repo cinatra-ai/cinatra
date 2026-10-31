@@ -16,8 +16,17 @@ const ports = vi.hoisted(() => ({
   queued: vi.fn(),
 }));
 vi.mock("server-only", () => ({}));
+// cinatra#4312 — an escalation CASes the repair and wakes a declared review's
+// paused run in ONE transaction; the transaction runs on this same fake, and the
+// wake (proven against a real database in
+// lifecycle-c-w11-picture-regenerate-parks-run-3035.integration.test.ts) is inert.
+vi.mock("../lifecycle-repair-store", async (orig) => ({
+  ...(await orig<typeof import("../lifecycle-repair-store")>()),
+  wakeDeclaredReviewAfterTerminalRepair: async () => null,
+}));
 vi.mock("../db", () => ({
   db: {
+    async transaction(this: unknown, fn: (tx: unknown) => Promise<unknown>) { return fn(this); },
     select: () => {
       const result = ports.reads.shift();
       if (!result) throw new Error("Unexpected database read");

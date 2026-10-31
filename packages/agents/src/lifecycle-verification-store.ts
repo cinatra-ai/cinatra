@@ -29,11 +29,12 @@ import "server-only";
 // call from `submitRepairResponse`.
 // ---------------------------------------------------------------------------
 
-import { eq } from "drizzle-orm";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
+import { getTableConfig } from "drizzle-orm/pg-core";
 
 import { db } from "./db";
 import { artifactVerificationRecords, lifecycleRepair } from "./schema";
-import { emitArtifactReviewGate, ArtifactReviewGateError } from "./artifact-review-gate-store";
+import { emitArtifactReviewGate, ArtifactReviewGateError, type GateStoreExecutor } from "./artifact-review-gate-store";
 import { dispatchAutoGateOpen } from "./run-wait-notifier";
 
 import {
@@ -102,8 +103,50 @@ export type VerificationRecordResult =
       reopenedGateId: string | null;
       /** True when a failure was NOT reopened because the cycle bound was reached. */
       escalated: boolean;
+      /** cinatra#4312 — true when a failure was NOT reopened because the successor
+       * gate of a declared review leg's repair already reviews this revision. */
+      reopenWithheld?: boolean;
     }
   | { ok: false; code: string; error: string };
+
+/**
+ * cinatra#4312 — the backfill of core__0117, equal to the migration's frozen statement
+ * (a test pins the two). The old application can still serve after the migration ran,
+ * and it can write a note on an unnamed reopen gate. The new code writes no repair row
+ * on an unnamed gate, so this names only what an old writer or a manual write joined.
+ */
+export const verificationReopenNamesSql = `
+  UPDATE artifact_verification_records AS r
+     SET reopened_gate_id = reopen.id
+    FROM artifact_review_gates AS verified, artifact_review_gates AS reopen
+   WHERE r.reopened_gate_id IS NULL
+     AND verified.id = r.gate_id
+     AND reopen.review_task_id = 'lifecycle-review:verify:' || r.id
+     AND reopen.run_id = verified.run_id
+     AND reopen.org_id = verified.org_id
+     AND reopen.created_at >= r.created_at
+     AND EXISTS (
+       SELECT 1 FROM lifecycle_repair AS attempt
+        WHERE attempt.gate_id = reopen.id AND attempt.attempt >= 2
+     );
+`;
+
+/** Run `verificationReopenNamesSql` on the store's schema. The statement holds no schema name. */
+export async function nameVerificationReopensThatRepairRowsRestOn(): Promise<void> {
+  const schema = getTableConfig(artifactVerificationRecords).schema ?? "cinatra";
+  await db.transaction(async (tx) => {
+    await tx.execute(sql.raw(`SET LOCAL search_path TO "${schema.replace(/"/g, '""')}"`));
+    await tx.execute(sql.raw(verificationReopenNamesSql));
+  });
+}
+
+/** Carries a refused name out of the writer's transaction, so that it rolls back. */
+class ReopenNameTaken extends Error {
+  constructor(recordId: string) {
+    super(`Verification record ${recordId} already names another reopen gate`);
+    this.name = "ReopenNameTaken";
+  }
+}
 
 /** The deterministic verification record id — one verification per gate, so a
  * re-drive is idempotent and the reopen gate is stable. */
@@ -131,6 +174,8 @@ interface WriteVerificationInput {
   attempt: number;
   maxCycles?: number;
   expiresAt?: Date | null;
+  /** cinatra#4312 — record the verdict but reopen no gate (see recordVerificationForRepair). */
+  withholdReopen?: boolean;
 }
 
 /** Compute the verdict, persist the record, and reopen exactly one bounded gate on
@@ -166,25 +211,29 @@ async function writeVerificationRecordAndMaybeReopen(
   }
 
   const id = verificationId(input.gateId);
-  const inserted = await db
-    .insert(artifactVerificationRecords)
-    .values({
-      id,
-      gateId: input.gateId,
-      reviewedArtifactId: input.reviewedTarget.artifactId,
-      reviewedRepresentationRevisionId: input.reviewedTarget.representationRevisionId,
-      repairedArtifactId: input.repairedTarget.artifactId,
-      repairedRepresentationRevisionId: input.repairedTarget.representationRevisionId,
-      scopeManifest: scopeManifest as unknown,
-      fieldDiff: verdict.fieldDiff as unknown,
-      outcome: verdict.outcome,
-    })
-    .onConflictDoNothing({ target: [artifactVerificationRecords.id] })
-    .returning({ id: artifactVerificationRecords.id });
-  const idempotent = inserted.length === 0;
+  /** Insert the record; true when it already existed. */
+  const writeRecord = async (executor: GateStoreExecutor): Promise<boolean> => {
+    const inserted = await executor
+      .insert(artifactVerificationRecords)
+      .values({
+        id,
+        gateId: input.gateId,
+        reviewedArtifactId: input.reviewedTarget.artifactId,
+        reviewedRepresentationRevisionId: input.reviewedTarget.representationRevisionId,
+        repairedArtifactId: input.repairedTarget.artifactId,
+        repairedRepresentationRevisionId: input.repairedTarget.representationRevisionId,
+        scopeManifest: scopeManifest as unknown,
+        fieldDiff: verdict.fieldDiff as unknown,
+        outcome: verdict.outcome,
+      })
+      .onConflictDoNothing({ target: [artifactVerificationRecords.id] })
+      .returning({ id: artifactVerificationRecords.id });
+    return inserted.length === 0;
+  };
 
   // A verified verdict releases the review to proceed — no reopen.
   if (verdict.outcome === "verified") {
+    const idempotent = await writeRecord(db);
     return { ok: true, verificationId: id, gateId: input.gateId, verdict, idempotent, reopenedGateId: null, escalated: false };
   }
 
@@ -192,55 +241,100 @@ async function writeVerificationRecordAndMaybeReopen(
   // the S2 cycle bound. Past the bound it escalates (records the verdict, reopens
   // nothing — never an unbounded reopen loop).
   //
-  // NOT the Seam A class (cinatra#2065 grounding). The record insert above and this
-  // reopen emit are two statements, but the reopen does NOT share the repair
-  // successor-gate seam's defect, so it needs no one-transaction fix: (1) the
-  // reopen target is DURABLY DETERMINISTIC — always `repairedTarget`, derived from
-  // the persisted verification record / repair row, never a caller-varying fresh
-  // target — so a retry re-emits the IDENTICAL (run, task, target) and converges
-  // idempotently, never a pin conflict; and (2) the record insert is itself
-  // idempotent on a deterministic id, so a crash between the two heals on any
-  // re-drive. `submitRepairResponse`'s idempotent-replay branch RE-RUNS this exact
-  // trigger for precisely that reason. Fail-closed either way (an unwritten reopen
-  // leaves the effect HELD, never released).
+  // cinatra#4312 — the record and its reopen gate commit in ONE transaction, and the
+  // record names the gate only when this verification inserted it
+  // (`reopened_gate_id`). The repair lineage reads that name as the proof that
+  // verification opened the gate, because the unique (run, task) slot proves only
+  // that a gate occupies it: any same-organization caller can emit into the slot
+  // first. So a gate found in the slot is this verification's only when the record
+  // already names it (a re-drive, which `submitRepairResponse`'s idempotent-replay
+  // branch runs); any other occupant, with the same pin or another, is a
+  // `reopen-conflict`, and the record stays with no name. A failed gate insert
+  // rolls the record back, and the next verification writes both. A record that
+  // already names a gate keeps it: a verification on another run that inserts its
+  // own gate answers `reopen-conflict`, and its gate rolls back. If that verification
+  // comes first, it holds the name, and the later one answers `reopen-conflict`.
+  if (input.withholdReopen === true) {
+    const idempotent = await writeRecord(db);
+    return { ok: true, verificationId: id, gateId: input.gateId, verdict, idempotent, reopenedGateId: null, escalated: false, reopenWithheld: true };
+  }
   const maxCycles = input.maxCycles ?? MAX_REPAIR_CYCLES;
   if (input.attempt >= maxCycles) {
+    const idempotent = await writeRecord(db);
     return { ok: true, verificationId: id, gateId: input.gateId, verdict, idempotent, reopenedGateId: null, escalated: true };
   }
 
   const reopenTaskId = verificationReopenReviewTaskId(id);
-  try {
-    const emitted = await emitArtifactReviewGate({
-      runId: input.runId,
-      orgId: input.orgId,
-      reviewTaskId: reopenTaskId,
-      targets: [
-        {
-          artifactId: input.repairedTarget.artifactId,
-          representationRevisionId: input.repairedTarget.representationRevisionId,
-        },
-      ],
-      expiresAt: input.expiresAt ?? null,
-    });
-    // cinatra#2833 — the VERIFICATION pin reopens a review, and a reopened review
-    // needs its human as much as the first one did: this gate is emitted
-    // directly, outside the orchestration sweep, so before this it opened in
-    // silence. Same seam, same "fresh emit only" posture — and that guard is not
-    // decorative here: `submitRepairResponse`'s idempotent-replay branch RE-RUNS
-    // this exact trigger, which re-emits the identical deterministic (run, task,
-    // target) and must not re-notify. Best-effort by construction (the
-    // dispatcher swallows every error), so a notification can never fail a
-    // verification whose record is already written.
+  const written = await db.transaction(async (tx) => {
+    const idempotent = await writeRecord(tx);
+    let emitted: Awaited<ReturnType<typeof emitArtifactReviewGate>>;
+    try {
+      emitted = await emitArtifactReviewGate({
+        runId: input.runId,
+        orgId: input.orgId,
+        reviewTaskId: reopenTaskId,
+        targets: [
+          {
+            artifactId: input.repairedTarget.artifactId,
+            representationRevisionId: input.repairedTarget.representationRevisionId,
+          },
+        ],
+        expiresAt: input.expiresAt ?? null,
+      }, tx);
+    } catch (err) {
+      if (err instanceof ArtifactReviewGateError) return { conflict: err.message };
+      throw err;
+    }
     if (!emitted.idempotent) {
-      await dispatchAutoGateOpen({ runId: input.runId, reviewTaskId: reopenTaskId });
+      // A record names one gate. A verification on another run has a slot of its own
+      // and inserts a gate there; it must not take the name from the gate already
+      // named. The throw rolls back the gate it inserted.
+      const named = await tx
+        .update(artifactVerificationRecords)
+        .set({ reopenedGateId: emitted.gateId })
+        .where(
+          and(
+            eq(artifactVerificationRecords.id, id),
+            or(
+              isNull(artifactVerificationRecords.reopenedGateId),
+              eq(artifactVerificationRecords.reopenedGateId, emitted.gateId),
+            ),
+          ),
+        )
+        .returning({ id: artifactVerificationRecords.id });
+      if (named.length !== 1) throw new ReopenNameTaken(id);
+      return { idempotent, reopenedGateId: emitted.gateId, inserted: true };
     }
-    return { ok: true, verificationId: id, gateId: input.gateId, verdict, idempotent, reopenedGateId: emitted.gateId, escalated: false };
-  } catch (err) {
-    if (err instanceof ArtifactReviewGateError) {
-      return { ok: false, code: "reopen-conflict", error: err.message };
+    // Read after the emit: a concurrent verification that inserted the gate has
+    // committed its name by now, because the emit waited on its insert.
+    const [record] = await tx
+      .select({ reopenedGateId: artifactVerificationRecords.reopenedGateId })
+      .from(artifactVerificationRecords)
+      .where(eq(artifactVerificationRecords.id, id))
+      .limit(1);
+    if (record?.reopenedGateId !== emitted.gateId) {
+      return { conflict: `Review gate ${reopenTaskId} on run ${input.runId} was not opened by this verification.` };
     }
+    return { idempotent, reopenedGateId: emitted.gateId, inserted: false };
+  }).catch((err: unknown) => {
+    if (err instanceof ReopenNameTaken) return { conflict: err.message };
     throw err;
+  });
+  if (written.conflict !== undefined) {
+    return { ok: false, code: "reopen-conflict", error: written.conflict };
   }
+  // cinatra#2833 — the VERIFICATION pin reopens a review, and a reopened review
+  // needs its human as much as the first one did: this gate is emitted
+  // directly, outside the orchestration sweep, so before this it opened in
+  // silence. Same seam, same "fresh emit only" posture — and that guard is not
+  // decorative here: `submitRepairResponse`'s idempotent-replay branch RE-RUNS
+  // this exact trigger, which finds the gate the record names and must not
+  // re-notify. Best-effort by construction (the dispatcher swallows every error),
+  // so a notification can never fail a verification whose record is already written.
+  if (written.inserted) {
+    await dispatchAutoGateOpen({ runId: input.runId, reviewTaskId: reopenTaskId });
+  }
+  return { ok: true, verificationId: id, gateId: input.gateId, verdict, idempotent: written.idempotent, reopenedGateId: written.reopenedGateId, escalated: false };
 }
 
 /**
@@ -283,6 +377,16 @@ export async function recordVerificationForRepair(input: {
 
   const findings = ((repair.findings as RepairFinding[]) ?? []).map((f) => ({ id: f.id, path: f.path ?? null }));
 
+  // cinatra#4312 — the repair of a declared review leg (the featured image's
+  // Regenerate) pins its successor in a gate the person reviews next, on the same
+  // revision a reopen would pin. The verdict is recorded on that successor gate;
+  // a second pending gate on the same revision is not opened (one new pending
+  // gate per Regenerate). A lineage root that is missing or not bound to the
+  // lineage throws (the caller's best-effort trigger swallows it): no reopen is
+  // minted on such a lineage.
+  const { isDeclaredReviewLineage } = await import("./lifecycle-repair-store");
+  const withholdReopen = await isDeclaredReviewLineage(repair.lineageId);
+
   return writeVerificationRecordAndMaybeReopen({
     gateId: repair.successorGateId,
     orgId: repair.orgId,
@@ -298,6 +402,7 @@ export async function recordVerificationForRepair(input: {
     attempt: repair.attempt,
     maxCycles: input.maxCycles,
     expiresAt: input.expiresAt,
+    withholdReopen,
   });
 }
 

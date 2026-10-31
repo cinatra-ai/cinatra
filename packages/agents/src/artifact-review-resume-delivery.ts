@@ -57,15 +57,19 @@ import {
 } from "./wayflow-url";
 import {
   claimPendingResumeIntents,
+  deadLetterExhaustedResumeIntents,
   listReviewGatesForRun,
   markResumeIntentDelivered,
+  withRunDecisionLock,
+  type GateStoreExecutor,
   type ResumeIntentRow,
 } from "./artifact-review-gate-store";
 import {
   baseReviewTaskId,
   declaredReviewFamilyState,
+  isDeclaredReviewLeg,
 } from "@/lib/artifacts/artifact-review-target";
-import { isAutoReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
+import { isAutoReviewTaskId, isRepairSuccessorTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
 
 /** The per-intent delivery outcome. */
 export type ResumeDeliveryOutcome =
@@ -107,7 +111,9 @@ export interface ResumeSweepSummary {
  * delivery outcome; THROWS only on an unexpected fault (the caller tallies it as
  * `failed` and leaves the intent pending for lease re-claim). Marks the intent
  * delivered on `delivered` / `already-advanced`; leaves it pending on
- * `retryable`.
+ * `retryable`. A `retryable`, a `lease-lost` and a throw each leave the intent
+ * for a re-claim after its lease, and each claim uses one of its attempts
+ * (cinatra#4312): see `sweepArtifactReviewResumeIntents`.
  */
 export async function deliverArtifactReviewResumeIntent(
   intent: ResumeIntentRow,
@@ -131,6 +137,23 @@ export async function deliverArtifactReviewResumeIntent(
   if (isAutoReviewTaskId(reviewTaskId)) {
     if (!leaseToken) return "retryable";
     await releaseRunForResolvedAutoGate(gateId);
+    // cinatra#4312 — Regenerate on a later leg of a per-artifact declared review
+    // (the featured image's) settled that leg and opened this successor gate on
+    // its repair lineage. The run the leg paused waits for THIS decision, so the
+    // intent takes that leg's WayFlow road below (with this gate's own decision).
+    // The lineage read is strict: a malformed task id, an unknown repair, another
+    // attempt, a repair that does not name this gate, or a missing root gate
+    // THROWS (RepairLineageStateError), and the sweep leaves the intent for
+    // re-claim until its attempts are used, then dead-letters it. A successor
+    // whose lineage started on any other gate keeps the automatic-gate road.
+    if (isRepairSuccessorTaskId(reviewTaskId)) {
+      const { readRepairLineageRootGate } = await import("./lifecycle-repair-store");
+      const leg = await readRepairLineageRootGate(reviewTaskId, gateId);
+      if (isDeclaredReviewLeg({ runId: leg.runId, orgId: leg.orgId,
+        reviewTaskId: leg.reviewTaskId, pinnedTargets: leg.pinnedTargets })) {
+        return deliverArtifactReviewResumeIntent({ ...intent, reviewTaskId: leg.reviewTaskId });
+      }
+    }
     const ok = await markResumeIntentDelivered(gateId, leaseToken);
     console.log(
       `[artifact-review-resume] gate=${gateId} is an S1 auto-gate (task=${reviewTaskId}); the decision released the producing run — marked ${ok ? "done" : "LEASE-LOST"}`,
@@ -332,14 +355,28 @@ export async function deliverArtifactReviewResumeIntent(
   const familyState = declaredReviewFamilyState({ runId: run.id, orgId: run.orgId,
     reviewTaskId, gates: siblingLegs });
   if (familyState === "incomplete") return "retryable";
-  if (familyState === "pending") {
-    const ok = await markResumeIntentDelivered(gateId, leaseToken);
-    console.log(
-      `[artifact-review-resume] gate=${gateId} run=${run.id} decided one artifact of a ` +
-        `per-artifact review; another artifact of the same pause is still open — the run stays ` +
-        `parked, marked ${ok ? "done" : "LEASE-LOST"}`,
-    );
-    return ok ? "already-advanced" : "lease-lost";
+  if (familyState === "pending" || await regenerationOpen(siblingLegs, reviewTaskId)) {
+    // cinatra#4312 — this acknowledgement (the run stays parked, no resume) is
+    // written under the run's decision lock, on a re-read of the family and its
+    // repair lineages. A terminal repair write (escalated, stale) takes the same
+    // lock before it wakes a set-aside decision, so it either sees this
+    // acknowledgement or this re-read sees its lineage closed
+    // (artifact-review-gate-store `withRunDecisionLock`).
+    // A re-read that finds the pause decided falls through to the resume below.
+    const parked = await withRunDecisionLock(run.id, async (tx) => {
+      const legs = await listReviewGatesForRun(run.id, tx);
+      const state = declaredReviewFamilyState({ runId: run.id, orgId: run.orgId, reviewTaskId, gates: legs });
+      if (state === "incomplete") return "retryable" as const;
+      if (state !== "pending" && !(await regenerationOpen(legs, reviewTaskId, tx))) return null;
+      const ok = await markResumeIntentDelivered(gateId, leaseToken, tx);
+      console.log(
+        `[artifact-review-resume] gate=${gateId} run=${run.id} decided one artifact of a ` +
+          `per-artifact review; another artifact of the same pause, or a regenerated artifact's ` +
+          `review, is still open — the run stays parked, marked ${ok ? "done" : "LEASE-LOST"}`,
+      );
+      return ok ? "already-advanced" as const : "lease-lost" as const;
+    });
+    if (parked !== null) return parked;
   }
 
   // Deliver the typed decision verbatim as the WayFlow resume message. Dynamic
@@ -395,6 +432,34 @@ export async function deliverArtifactReviewResumeIntent(
       `(resultState=${task.status?.state}) — marked ${marked ? "done" : "LEASE-LOST"}`,
   );
   return marked ? "delivered" : "lease-lost";
+}
+
+/**
+ * cinatra#4312 — is a regenerated artifact of this pause still under review? A
+ * leg settled as `changes_requested` (Regenerate) is resolved, so the family can
+ * read complete while the successor gate of its repair lineage is still open.
+ * The run stays parked until that lineage is decided. A failed read, and a
+ * lineage in a missing, malformed or unknown state (RepairLineageStateError),
+ * propagates like the sibling read above: it never authorizes a resume and never
+ * acknowledges this intent. A lineage that closes with no successor (escalated,
+ * stale) wakes a set-aside intent of the family in the same commit
+ * (lifecycle-repair-store `wakeDeclaredReviewAfterTerminalRepair`). `executor`:
+ * the run decision lock's transaction, for the re-read under that lock.
+ */
+async function regenerationOpen(
+  legs: readonly { id: string; reviewTaskId: string; disposition: string | null }[],
+  reviewTaskId: string,
+  executor?: GateStoreExecutor,
+): Promise<boolean> {
+  const base = baseReviewTaskId(reviewTaskId);
+  const settled = legs.filter((g) =>
+    baseReviewTaskId(g.reviewTaskId) === base && g.disposition === "changes_requested");
+  if (settled.length === 0) return false;
+  const { isRepairLineageOpen } = await import("./lifecycle-repair-store");
+  for (const leg of settled) {
+    if (await (executor ? isRepairLineageOpen(leg.id, executor) : isRepairLineageOpen(leg.id))) return true;
+  }
+  return false;
 }
 
 /**
@@ -465,7 +530,9 @@ async function releaseDecidedProducedReviewParks(
  * Drain a batch of deliverable resume intents. Per-intent failures are TALLIED
  * (never rethrown) so one broken row can never poison the queue — the row stays
  * pending and the next cycle (after lease expiry) re-claims it (the sweep is the
- * durable backstop for a lost/crashed one-shot delivery).
+ * durable backstop for a lost/crashed one-shot delivery) until its attempts are
+ * used; the sweep after that dead-letters it (cinatra#4312, the comment above
+ * the dead-letter pass below).
  */
 export async function sweepArtifactReviewResumeIntents(opts?: {
   limit?: number;
@@ -499,6 +566,44 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
   // idempotent consumer.
   const DEFAULT_LEASE_MS = 5 * 60_000;
   const DEFAULT_LIMIT = 5;
+  // cinatra#4312 — an intent that used its attempts (`attempts >= max_attempts`,
+  // no live lease) is dead-lettered here, where ops read it, before the claim
+  // below (which leaves such an intent out). Before cinatra#4312 no production
+  // code ran this pass and the claim had no attempts bound, so an intent that
+  // was not delivered was re-claimed after each lease expiry without a bound.
+  //
+  // The bound counts CLAIMS, whatever their outcome: the claim adds one to
+  // `attempts` before the delivery runs. Every outcome that leaves the intent
+  // for a re-claim uses an attempt: a throw (a lineage the reader refuses, a
+  // send that fails), `lease-lost`, and each `retryable` road of
+  // `deliverArtifactReviewResumeIntent` (no lease token, a review task id that
+  // is not `wayflow-`, a run not resolvable, a run with no a2aContextId, a
+  // refusal whose terminal transition did not land, an unreadable scope check,
+  // an incomplete declared family). With the default `max_attempts` of 20 and
+  // the default 5-minute lease, an intent that is never closed is
+  // dead-lettered no sooner than about 100 minutes after its first claim (20
+  // claims, each after the lease of the claim before it expired). That is
+  // intended (the #2038 ceiling, artifact-review-gate-store, above
+  // `deadLetterExhaustedResumeIntents`): no retryable road waits for a step
+  // that comes after the decision. The run's context is persisted right after
+  // its initial send (the a2aContextId road above), the legs of a declared
+  // family are inserted in one transaction (`emitDeclaredReviewGateFamily`),
+  // and an outcome that repeats on 20 claims is a fault for ops. A
+  // dead-lettered intent is not claimed and not woken
+  // again, so it resumes nothing; ops read it (`readDeadLetteredResumeIntents`).
+  // Only `delivered`, `already-advanced` and `refused-out-of-scope` close an
+  // intent. A wake of a declared review (lifecycle-repair-store
+  // `wakeDeclaredReviewAfterTerminalRepair`) puts a delivering or done intent
+  // that is not dead-lettered back to pending with `attempts` at 0 and leaves a
+  // pending one as it is. A failed pass is tallied; the claim still leaves
+  // exhausted intents out.
+  try {
+    const dead = await deadLetterExhaustedResumeIntents();
+    if (dead > 0) console.warn(`[artifact-review-resume] dead-lettered ${dead} exhausted resume intent(s)`);
+  } catch (err) {
+    summary.failed += 1;
+    console.error("[artifact-review-resume] dead-letter pass failed:", err);
+  }
   const claimed = await claimPendingResumeIntents({
     limit: opts?.limit ?? DEFAULT_LIMIT,
     leaseMs: opts?.leaseMs ?? DEFAULT_LEASE_MS,

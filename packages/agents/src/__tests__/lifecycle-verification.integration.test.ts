@@ -18,7 +18,7 @@
  *   SUPABASE_DB_URL=postgres://postgres:postgres@127.0.0.1:5634/s42042 \
  *     pnpm --filter @cinatra-ai/agents test:integration lifecycle-verification
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 
@@ -26,11 +26,12 @@ import {
   producedEventId,
   type ArtifactProducedEvent,
 } from "@/lib/lifecycle/lifecycle-produced-event";
-import { autoReviewTaskId, isVerificationReopenTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
+import { autoReviewTaskId, isVerificationReopenTaskId, verificationReopenReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
 import type { ChangesRequestedRequest } from "@/lib/lifecycle/lifecycle-repair";
 import type { VerificationFieldProjector, VerificationTargetRef } from "../lifecycle-verification-store";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
+import { up as upgrade0117, down as downgrade0117, verificationReopenedGateBackfillSql } from "../../../../migrations/core/core__0117_verification-reopened-gate.mjs";
 
 const TEST_SCHEMA = "cinatra_test_lifecycle_2042";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
@@ -325,6 +326,538 @@ describe.skipIf(!HAS_DB)("cinatra#2042 — post-change verification (real store)
     expect(viaSuccessor).not.toBeNull();
     expect(viaSuccessor!.id).toBe(repairId);
     expect(viaSuccessor!.lineageId).toBe(original!.lineageId);
+  });
+
+  it("REOPEN-CHAIN (cinatra#4312): changes requested on the verification reopen gate the record names joins the repair's lineage at attempt 2, and the lineage reader accepts that chain", async () => {
+    const { ev, repairId, successorRev, successorGateId } = await landRepair();
+    const original = await repairStore.readRepair(repairId);
+    expect(original).not.toBeNull();
+    const res = await verifStore.recordVerificationForRepair({
+      repairId,
+      projectFields: () => ({ subject: "old", body: "old" }), // nothing changed vs base ⇒ findings unmet
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.reopenedGateId).not.toBeNull();
+    const reopenTask = verificationReopenReviewTaskId(`verify:${successorGateId}`);
+    const reopen = await gateStore.readReviewGate(ev.producerRunId!, reopenTask);
+    expect(reopen?.id).toBe(res.reopenedGateId);
+
+    const pin = { artifactId: ev.artifactId, representationRevisionId: successorRev };
+    const cr = await repairStore.recordChangesRequested({
+      runId: ev.producerRunId!,
+      reviewTaskId: reopenTask,
+      orgId: ORG,
+      request: { ...mkChangesRequested(ev, reopen!.id), baseTarget: pin, expectedBaseRevisionId: successorRev },
+      repairCapable: true,
+      producerRunId: ev.producerRunId,
+      currentBaseRevisionId: successorRev,
+    });
+    expect(cr).toMatchObject({ ok: true, attempt: 2, status: "requested" });
+    if (!cr.ok) return;
+    const next = await repairStore.readRepair(cr.repairId);
+    expect(next!.lineageId).toBe(original!.lineageId);
+    expect(next!.gateId).toBe(reopen!.id);
+    expect(await repairStore.isRepairLineageOpen(original!.lineageId)).toBe(true);
+  });
+
+  /** A landed ordinary repair whose verification failed: the reopen gate it opened on
+   * the producing run, and the verification record `verify:<successor>` bound to the
+   * successor gate and naming that reopen gate (cinatra#4312). */
+  async function failedVerificationOfLandedRepair() {
+    const landed = await landRepair();
+    const res = await verifStore.recordVerificationForRepair({
+      repairId: landed.repairId,
+      projectFields: () => ({ subject: "old", body: "old" }), // nothing changed vs base ⇒ findings unmet
+    });
+    if (!res.ok || !res.reopenedGateId) throw new Error("the verification opened no reopen gate");
+    return { ...slotOf(landed), reopenGateId: res.reopenedGateId };
+  }
+
+  /** The verification-reopen slot of a landed repair. */
+  function slotOf(landed: Awaited<ReturnType<typeof landRepair>>) {
+    const reopenTask = verificationReopenReviewTaskId(`verify:${landed.successorGateId}`);
+    const pin = { artifactId: landed.ev.artifactId, representationRevisionId: landed.successorRev };
+    return { ...landed, reopenTask, pin };
+  }
+
+  /** The gate the record `verify:<successor>` names as its reopen. */
+  async function namedGate(successorGateId: string): Promise<string | null | undefined> {
+    const r = await pool(
+      `SELECT reopened_gate_id FROM "${q(TEST_SCHEMA)}"."artifact_verification_records" WHERE id=$1`,
+      [`verify:${successorGateId}`],
+    );
+    return (r.rows[0] as { reopened_gate_id: string | null } | undefined)?.reopened_gate_id;
+  }
+
+  /** A same-organization caller's gate in the slot on the producing run, before the verification below. */
+  async function reserveSlot(v: ReturnType<typeof slotOf>, pin: { artifactId: string; representationRevisionId: string } = v.pin) {
+    const emitted = await gateStore.emitArtifactReviewGate({ runId: v.ev.producerRunId!, orgId: ORG, reviewTaskId: v.reopenTask, targets: [pin] });
+    expect(emitted.idempotent).toBe(false);
+    return emitted.gateId;
+  }
+
+  /** A note on a caller's gate in the slot is refused, and the lineage stays at one open attempt. */
+  async function expectCallerGateRefused(v: ReturnType<typeof slotOf>, gateId: string) {
+    const original = await repairStore.readRepair(v.repairId);
+    const cr = await changesRequestedOnReopenShaped(v, v.ev.producerRunId!, gateId);
+    expect(cr).toMatchObject({ ok: false, code: "lineage-unbound" });
+    expect(await attemptsOf(original!.lineageId)).toBe(1);
+    expect((await gateStore.readReviewGate(v.ev.producerRunId!, v.reopenTask))?.status).toBe("pending");
+    expect(await repairStore.isRepairLineageOpen(original!.lineageId)).toBe(true);
+  }
+
+  const failedFields = () => ({ subject: "old", body: "old" }); // nothing changed vs base ⇒ findings unmet
+
+  /** A failed verification bound to the successor through the external-change road, with a caller's run and org. */
+  async function externalFailedVerification(v: ReturnType<typeof slotOf>, runId: string, orgId: string) {
+    const res = await verifStore.recordVerificationForExternalChange({
+      gateId: v.successorGateId,
+      orgId,
+      runId,
+      reviewedTarget: { artifactId: v.ev.artifactId, representationRevisionId: v.ev.representationRevisionId },
+      repairedTarget: v.pin,
+      acceptedFindings: [{ id: "f1", path: "subject" }],
+      projectFields: failedFields,
+    });
+    if (!res.ok || !res.reopenedGateId) throw new Error("the external-change verification opened no reopen gate");
+    return res.reopenedGateId;
+  }
+
+  async function writeAttempt2OnGate(v: ReturnType<typeof slotOf>, gateId: string) {
+    await pool(
+      `INSERT INTO "${q(TEST_SCHEMA)}"."lifecycle_repair"
+         (id, lineage_id, gate_id, org_id, base_artifact_id, base_representation_revision_id, expected_base_revision_id,
+          findings, continuation_mode, continuation_address, attempt, route, status, idempotency_key)
+       SELECT $2, lineage_id, $3, org_id, $4, $5, $5, findings, continuation_mode, continuation_address, 2, route, 'escalated', $6
+         FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE id=$1`,
+      [v.repairId, randomUUID(), gateId, v.pin.artifactId, v.pin.representationRevisionId, `k-${randomUUID()}`],
+    );
+  }
+
+  /** `recordChangesRequested` on gate `gateId` of run `runId` with task `reviewTaskId`. */
+  async function changesRequestedOnReopenShaped(
+    v: Awaited<ReturnType<typeof slotOf>>,
+    runId: string,
+    gateId: string,
+  ) {
+    return repairStore.recordChangesRequested({
+      runId,
+      reviewTaskId: v.reopenTask,
+      orgId: ORG,
+      request: { ...mkChangesRequested(v.ev, gateId), baseTarget: v.pin, expectedBaseRevisionId: v.successorRev },
+      repairCapable: true,
+      producerRunId: v.ev.producerRunId,
+      currentBaseRevisionId: v.successorRev,
+    });
+  }
+
+  async function attemptsOf(lineageId: string): Promise<number> {
+    const r = await pool(`SELECT count(*)::int AS n FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE lineage_id=$1`, [lineageId]);
+    return (r.rows[0] as { n: number }).n;
+  }
+
+  it("OPENED AND NAMED (cinatra#4312): the failed verification names the gate it inserted, a re-drive keeps that name and that gate, and a note on the gate joins the lineage", async () => {
+    const v = await failedVerificationOfLandedRepair();
+    const original = await repairStore.readRepair(v.repairId);
+    expect(await namedGate(v.successorGateId)).toBe(v.reopenGateId);
+    const again = await verifStore.recordVerificationForRepair({ repairId: v.repairId, projectFields: failedFields });
+    expect(again).toMatchObject({ ok: true, idempotent: true, reopenedGateId: v.reopenGateId });
+    expect(await namedGate(v.successorGateId)).toBe(v.reopenGateId);
+    const cr = await changesRequestedOnReopenShaped(v, v.ev.producerRunId!, v.reopenGateId);
+    expect(cr).toMatchObject({ ok: true, attempt: 2 });
+    if (!cr.ok) return;
+    expect((await repairStore.readRepair(cr.repairId))!.lineageId).toBe(original!.lineageId);
+  });
+
+  it("READ-BACK REVISION (cinatra#4312): an external-change verification of the successor on its own run and org names the gate it inserted on the read-back revision, and a note on that gate joins the lineage", async () => {
+    const v = slotOf(await landRepair());
+    const original = await repairStore.readRepair(v.repairId);
+    const readBack = { artifactId: v.ev.artifactId, representationRevisionId: `rev-readback-${randomUUID()}` };
+    const res = await verifStore.recordVerificationForExternalChange({
+      gateId: v.successorGateId,
+      orgId: ORG,
+      runId: v.ev.producerRunId!,
+      reviewedTarget: { artifactId: v.ev.artifactId, representationRevisionId: v.ev.representationRevisionId },
+      repairedTarget: readBack,
+      acceptedFindings: [{ id: "f1", path: "subject" }],
+      projectFields: failedFields,
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok || !res.reopenedGateId) return;
+    expect(await namedGate(v.successorGateId)).toBe(res.reopenedGateId);
+    const cr = await repairStore.recordChangesRequested({
+      runId: v.ev.producerRunId!,
+      reviewTaskId: v.reopenTask,
+      orgId: ORG,
+      request: { ...mkChangesRequested(v.ev, res.reopenedGateId), baseTarget: readBack, expectedBaseRevisionId: readBack.representationRevisionId },
+      repairCapable: true,
+      producerRunId: v.ev.producerRunId,
+      currentBaseRevisionId: readBack.representationRevisionId,
+    });
+    expect(cr).toMatchObject({ ok: true, attempt: 2 });
+    if (!cr.ok) return;
+    expect((await repairStore.readRepair(cr.repairId))!.lineageId).toBe(original!.lineageId);
+  });
+
+  it("RESERVED, THEN VERIFIED (cinatra#4312): a verified verification reopens nothing and names nothing, so a caller's gate in the slot is refused (lineage-unbound)", async () => {
+    const v = slotOf(await landRepair());
+    const forged = await reserveSlot(v);
+    const res = await verifStore.recordVerificationForRepair({
+      repairId: v.repairId,
+      projectFields: projector(v.ev.representationRevisionId, { subject: "old", body: "old" }, v.successorRev, { subject: "new", body: "new" }),
+    });
+    expect(res).toMatchObject({ ok: true, reopenedGateId: null, escalated: false });
+    if (res.ok) expect(res.verdict.outcome).toBe("verified");
+    expect(await namedGate(v.successorGateId)).toBeNull();
+    await expectCallerGateRefused(v, forged);
+  });
+
+  it("RESERVED, THEN CYCLE BOUND (cinatra#4312): a failed verification at the cycle bound escalates and names nothing, so a caller's gate in the slot is refused (lineage-unbound)", async () => {
+    const v = slotOf(await landRepair());
+    const forged = await reserveSlot(v);
+    const res = await verifStore.recordVerificationForRepair({ repairId: v.repairId, projectFields: failedFields, maxCycles: 1 });
+    expect(res).toMatchObject({ ok: true, reopenedGateId: null, escalated: true });
+    expect(await namedGate(v.successorGateId)).toBeNull();
+    await expectCallerGateRefused(v, forged);
+  });
+
+  it("RESERVED WITH THE SAME PIN (cinatra#4312): a failed verification below the bound does not adopt a caller's gate in the slot: it answers reopen-conflict, names nothing, and the gate is refused (lineage-unbound)", async () => {
+    const v = slotOf(await landRepair());
+    const forged = await reserveSlot(v);
+    const res = await verifStore.recordVerificationForRepair({ repairId: v.repairId, projectFields: failedFields });
+    expect(res).toMatchObject({ ok: false, code: "reopen-conflict" });
+    expect(await namedGate(v.successorGateId)).toBeNull();
+    await expectCallerGateRefused(v, forged);
+  });
+
+  it("RESERVED WITH ANOTHER PIN (cinatra#4312): a failed verification answers reopen-conflict and keeps the record with no name, and the caller's gate is refused (lineage-unbound)", async () => {
+    const v = slotOf(await landRepair());
+    const forged = await reserveSlot(v, { artifactId: v.ev.artifactId, representationRevisionId: `rev-other-${randomUUID()}` });
+    await pool(`DELETE FROM "${q(TEST_SCHEMA)}"."artifact_verification_records" WHERE id=$1`, [`verify:${v.successorGateId}`]);
+    const res = await verifStore.recordVerificationForRepair({ repairId: v.repairId, projectFields: failedFields });
+    expect(res).toMatchObject({ ok: false, code: "reopen-conflict" });
+    const rec = await verifStore.readVerificationRecordForGate(v.successorGateId);
+    expect(rec?.outcome).toBe("unmet");
+    expect(await namedGate(v.successorGateId)).toBeNull();
+    await expectCallerGateRefused(v, forged);
+  });
+
+  it("RESERVED IN THE OLD WINDOW (cinatra#4312): a failed record the old writer left with no gate, and a caller's gate in the slot since: the re-drive answers reopen-conflict and names nothing, and the gate is refused (lineage-unbound)", async () => {
+    const v = slotOf(await landRepair());
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."artifact_verification_records" SET outcome='unmet' WHERE id=$1`, [`verify:${v.successorGateId}`]);
+    const forged = await reserveSlot(v);
+    const res = await verifStore.recordVerificationForRepair({ repairId: v.repairId, projectFields: failedFields });
+    expect(res).toMatchObject({ ok: false, code: "reopen-conflict" });
+    expect(await namedGate(v.successorGateId)).toBeNull();
+    await expectCallerGateRefused(v, forged);
+  });
+
+  it("NO INSERT-TO-EMIT WINDOW (cinatra#4312): the failed record and its reopen gate commit together: a gate insert that fails leaves no record, and the next verification writes both and names the gate", async () => {
+    const v = slotOf(await landRepair());
+    await pool(`DELETE FROM "${q(TEST_SCHEMA)}"."artifact_verification_records" WHERE id=$1`, [`verify:${v.successorGateId}`]);
+    const fn = `refuse_reopen_${randomUUID().replaceAll("-", "")}`;
+    await pool(`CREATE FUNCTION "${q(TEST_SCHEMA)}"."${fn}"() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN RAISE EXCEPTION 'gate insert refused by the test'; END; $body$`);
+    await pool(
+      `CREATE TRIGGER "${fn}" BEFORE INSERT ON "${q(TEST_SCHEMA)}"."artifact_review_gates" FOR EACH ROW
+       WHEN (NEW.review_task_id = '${v.reopenTask}') EXECUTE FUNCTION "${q(TEST_SCHEMA)}"."${fn}"()`,
+    );
+    try {
+      await expect(verifStore.recordVerificationForRepair({ repairId: v.repairId, projectFields: failedFields })).rejects.toThrow();
+    } finally {
+      await pool(`DROP TRIGGER "${fn}" ON "${q(TEST_SCHEMA)}"."artifact_review_gates"`);
+      await pool(`DROP FUNCTION "${q(TEST_SCHEMA)}"."${fn}"()`);
+    }
+    expect(await namedGate(v.successorGateId)).toBeUndefined();
+    expect(await gateStore.readReviewGate(v.ev.producerRunId!, v.reopenTask)).toBeNull();
+    const res = await verifStore.recordVerificationForRepair({ repairId: v.repairId, projectFields: failedFields });
+    expect(res).toMatchObject({ ok: true, idempotent: false });
+    if (!res.ok || !res.reopenedGateId) return;
+    expect(await namedGate(v.successorGateId)).toBe(res.reopenedGateId);
+  });
+
+  it("NAMED ON ANOTHER RUN (cinatra#4312): an external-change verification given another run names the gate it inserted there, and the run check alone refuses a note on it (lineage-unbound)", async () => {
+    const v = slotOf(await landRepair());
+    const original = await repairStore.readRepair(v.repairId);
+    const runB = `run-other-${randomUUID()}`;
+    const gateId = await externalFailedVerification(v, runB, ORG);
+    expect(await namedGate(v.successorGateId)).toBe(gateId);
+    const cr = await changesRequestedOnReopenShaped(v, runB, gateId);
+    expect(cr).toMatchObject({ ok: false, code: "lineage-unbound" });
+    expect(await attemptsOf(original!.lineageId)).toBe(1);
+    expect((await gateStore.readReviewGate(runB, v.reopenTask))?.status).toBe("pending");
+  });
+
+  it("NAMED ON ANOTHER RUN, ALREADY WRITTEN (cinatra#4312): an attempt 2 already written on such a gate does not read as the lineage's next attempt: the reader throws malformed-lineage", async () => {
+    const v = slotOf(await landRepair());
+    const original = await repairStore.readRepair(v.repairId);
+    const gateId = await externalFailedVerification(v, `run-other-${randomUUID()}`, ORG);
+    await writeAttempt2OnGate(v, gateId);
+    await expect(repairStore.isRepairLineageOpen(original!.lineageId)).rejects.toMatchObject({ code: "malformed-lineage" });
+  });
+
+  it("NAMED IN ANOTHER ORG, ALREADY WRITTEN (cinatra#4312): an attempt 2 already written on a gate an external-change verification named in another organization does not read as the lineage's next attempt: the org check throws malformed-lineage", async () => {
+    const v = slotOf(await landRepair());
+    const original = await repairStore.readRepair(v.repairId);
+    const gateId = await externalFailedVerification(v, v.ev.producerRunId!, "org-other-4312");
+    await writeAttempt2OnGate(v, gateId);
+    await expect(repairStore.isRepairLineageOpen(original!.lineageId)).rejects.toMatchObject({ code: "malformed-lineage" });
+  });
+
+  it("A CALLER'S GATE, ALREADY WRITTEN (cinatra#4312): before a sweep, an attempt 2 already written on a caller's gate in the slot reads as malformed; the sweep cannot tell that row from an old writer's, so it names the gate", async () => {
+    const v = slotOf(await landRepair());
+    const original = await repairStore.readRepair(v.repairId);
+    const forged = await reserveSlot(v);
+    await writeAttempt2OnGate(v, forged);
+    await expect(repairStore.isRepairLineageOpen(original!.lineageId)).rejects.toMatchObject({ code: "malformed-lineage" });
+    await orch.sweepReviewOrchestration();
+    expect(await namedGate(v.successorGateId)).toBe(forged);
+  });
+
+  /** The statements of a migration function, as the runner would receive them. */
+  function statementsOf(migrate: (pgm: { sql: (text: string) => void }) => void): string {
+    const statements: string[] = [];
+    migrate({ sql: (text) => { statements.push(text); } });
+    return statements.join("\n");
+  }
+
+  /** Run core__0117's `up` on the test schema, in a transaction. */
+  const upgrade = () => pool(`BEGIN; SET LOCAL search_path TO "${q(TEST_SCHEMA)}"; ${statementsOf(upgrade0117)} COMMIT;`);
+
+  const clearName = (successorGateId: string) =>
+    pool(`UPDATE "${q(TEST_SCHEMA)}"."artifact_verification_records" SET reopened_gate_id=NULL WHERE id=$1`, [`verify:${successorGateId}`]);
+
+  it("THE UPGRADE BACKFILL (cinatra#4312, core__0117): names a gate that already carries a repair row at attempt 2 or later, in the record's slot, on its run and org, created at or after it, and only that; a rerun changes nothing", async () => {
+    const emit = (v: ReturnType<typeof slotOf>, runId: string, orgId: string) =>
+      gateStore.emitArtifactReviewGate({ runId, orgId, reviewTaskId: v.reopenTask, targets: [v.pin] });
+
+    // Each of these carries an attempt-2 row and fails one other condition.
+    const before = slotOf(await landRepair());
+    const beforeGate = await emit(before, before.ev.producerRunId!, ORG);
+    await writeAttempt2OnGate(before, beforeGate.gateId);
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."artifact_verification_records" SET created_at=$2 WHERE id=$1`, [
+      `verify:${before.successorGateId}`,
+      new Date(Date.now() + 3_600_000),
+    ]);
+    const otherRun = slotOf(await landRepair());
+    await writeAttempt2OnGate(otherRun, (await emit(otherRun, `run-other-${randomUUID()}`, ORG)).gateId);
+    const otherOrg = slotOf(await landRepair());
+    await writeAttempt2OnGate(otherOrg, (await emit(otherOrg, otherOrg.ev.producerRunId!, "org-other-4312")).gateId);
+    // A gate whose repair row is an attempt 1 is the root of its own lineage, not a reopen that lineage went on through.
+    const firstAttempt = slotOf(await landRepair());
+    const firstAttemptGate = await emit(firstAttempt, firstAttempt.ev.producerRunId!, ORG);
+    await writeAttempt2OnGate(firstAttempt, firstAttemptGate.gateId);
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."lifecycle_repair" SET attempt=1 WHERE gate_id=$1`, [firstAttemptGate.gateId]);
+
+    // Last, because a landing runs the sweep, which would name this gate before the upgrade does.
+    // Written before the column: the record, the gate after it, and the note's attempt 2. The name is gone.
+    const honest = await failedVerificationOfLandedRepair();
+    const lineageId = (await repairStore.readRepair(honest.repairId))!.lineageId;
+    expect(await changesRequestedOnReopenShaped(honest, honest.ev.producerRunId!, honest.reopenGateId)).toMatchObject({ ok: true, attempt: 2 });
+    await clearName(honest.successorGateId);
+    await expect(repairStore.isRepairLineageOpen(lineageId)).rejects.toMatchObject({ code: "malformed-lineage" });
+
+    await upgrade();
+    expect(await namedGate(honest.successorGateId)).toBe(honest.reopenGateId);
+    await expect(repairStore.isRepairLineageOpen(lineageId)).resolves.toBe(true);
+    expect(await namedGate(before.successorGateId)).toBeNull();
+    expect(await namedGate(otherRun.successorGateId)).toBeNull();
+    expect(await namedGate(otherOrg.successorGateId)).toBeNull();
+    expect(await namedGate(firstAttempt.successorGateId)).toBeNull();
+
+    await upgrade();
+    expect(await namedGate(honest.successorGateId)).toBe(honest.reopenGateId);
+    expect(await namedGate(before.successorGateId)).toBeNull();
+  });
+
+  it("A CALLER'S GATE BEFORE THE UPGRADE (cinatra#4312, core__0117): a gate in the slot, after the record, with no repair row stays unnamed, and a note on it is refused (lineage-unbound)", async () => {
+    const v = slotOf(await landRepair());
+    const forged = await reserveSlot(v);
+    await upgrade();
+    expect(await namedGate(v.successorGateId)).toBeNull();
+    await expectCallerGateRefused(v, forged);
+  });
+
+  it("AN HONEST GATE PENDING AT THE UPGRADE (cinatra#4312, core__0117): with no repair row it stays unnamed: a re-drive answers reopen-conflict and a note is refused, the lineage stays readable and open, and Continue still resolves the gate", async () => {
+    const v = await failedVerificationOfLandedRepair();
+    await clearName(v.successorGateId);
+    await upgrade();
+    expect(await namedGate(v.successorGateId)).toBeNull();
+    const again = await verifStore.recordVerificationForRepair({ repairId: v.repairId, projectFields: failedFields });
+    expect(again).toMatchObject({ ok: false, code: "reopen-conflict" });
+    await expectCallerGateRefused(v, v.reopenGateId);
+    const committed = await gateStore.commitReviewDecision({
+      runId: v.ev.producerRunId!,
+      reviewTaskId: v.reopenTask,
+      disposition: "approve",
+      terminal: true,
+      fingerprint: `fp-${randomUUID()}`,
+      comment: null,
+      decidedBy: "user-4312",
+      auditRows: [{
+        artifactId: v.pin.artifactId,
+        representationRevisionId: v.pin.representationRevisionId,
+        disposition: "approve",
+        rendererProvenance: { kind: "floor", packageName: null, digest: null },
+      }],
+      dispositionOps: [],
+      resumeIntent: null,
+      suggestionPlan: null,
+    });
+    expect(committed).toMatchObject({ status: "committed" });
+    expect((await gateStore.readReviewGate(v.ev.producerRunId!, v.reopenTask))?.status).toBe("resolved");
+    expect(await repairStore.isRepairLineageOpen((await repairStore.readRepair(v.repairId))!.lineageId)).toBe(true);
+  });
+
+  it("AN OLD WRITER AFTER THE BACKFILL (cinatra#4312): a note the old code writes on an unnamed gate after the upgrade reads as malformed until the next sweep, which names the gate; the lineage then reads open", async () => {
+    const v = await failedVerificationOfLandedRepair();
+    const lineageId = (await repairStore.readRepair(v.repairId))!.lineageId;
+    await clearName(v.successorGateId);
+    await upgrade();
+    expect(await namedGate(v.successorGateId)).toBeNull();
+    // What the old code writes: the gate settled as changes requested, and a requested attempt 2 on it.
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates" SET status='resolved', disposition='changes_requested', fingerprint=$2, resolved_at=now() WHERE id=$1`, [v.reopenGateId, `fp-${randomUUID()}`]);
+    await writeAttempt2OnGate(v, v.reopenGateId);
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."lifecycle_repair" SET status='requested' WHERE gate_id=$1`, [v.reopenGateId]);
+    await expect(repairStore.isRepairLineageOpen(lineageId)).rejects.toMatchObject({ code: "malformed-lineage" });
+    await orch.sweepReviewOrchestration();
+    expect(await namedGate(v.successorGateId)).toBe(v.reopenGateId);
+    await expect(repairStore.isRepairLineageOpen(lineageId)).resolves.toBe(true);
+  });
+
+  it("THE SWEEP'S NAMING FAILS (cinatra#4312): it is logged, and the sweep still opens the gates it owes", async () => {
+    const records = `"${q(TEST_SCHEMA)}"."artifact_verification_records"`;
+    const ev = await produce("document", { destinationClass: "external_publish" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await pool(`ALTER TABLE ${records} RENAME COLUMN reopened_gate_id TO reopened_gate_id_moved`);
+    try {
+      await orch.sweepReviewOrchestration();
+      expect(await gateStore.readReviewGate(ev.producerRunId!, autoReviewTaskId(ev.eventId))).not.toBeNull();
+      expect(warn.mock.calls.flat().join(" ")).toContain("verification reopen names");
+    } finally {
+      await pool(`ALTER TABLE ${records} RENAME COLUMN reopened_gate_id_moved TO reopened_gate_id`);
+      warn.mockRestore();
+    }
+  });
+
+  it("ONE STATEMENT (cinatra#4312): the sweep's naming statement equals the frozen backfill of core__0117", () => {
+    expect((verifStore as { verificationReopenNamesSql?: string }).verificationReopenNamesSql?.trim()).toBe(verificationReopenedGateBackfillSql.trim());
+  });
+
+  it("A NAMED GATE DELETED (cinatra#4312): the foreign key sets the name to null, and the record stays", async () => {
+    const v = await failedVerificationOfLandedRepair();
+    await pool(`DELETE FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE id=$1`, [v.reopenGateId]);
+    expect(await namedGate(v.successorGateId)).toBeNull();
+  });
+
+  it("THE MIGRATION'S DOWN AND UP (cinatra#4312, core__0117): in a transaction down drops the column, up adds it with a foreign key that sets a deleted gate's name to null, and a rollback brings the column and its names back", async () => {
+    const v = await failedVerificationOfLandedRepair();
+    const client = await dbMod.agentBuilderPool.connect();
+    const hasColumn = async () =>
+      (await client.query(
+        `SELECT 1 FROM information_schema.columns WHERE table_schema=$1 AND table_name='artifact_verification_records' AND column_name='reopened_gate_id'`,
+        [TEST_SCHEMA],
+      )).rows.length === 1;
+    try {
+      await client.query(`BEGIN`);
+      await client.query(`SET LOCAL search_path TO "${q(TEST_SCHEMA)}"`);
+      expect(await hasColumn()).toBe(true);
+      await client.query(statementsOf(downgrade0117));
+      expect(await hasColumn()).toBe(false);
+      await client.query(statementsOf(upgrade0117));
+      expect(await hasColumn()).toBe(true);
+      const nameOf = async () =>
+        (await client.query(`SELECT reopened_gate_id FROM artifact_verification_records WHERE id=$1`, [`verify:${v.successorGateId}`])).rows[0];
+      await client.query(`UPDATE artifact_verification_records SET reopened_gate_id=$2 WHERE id=$1`, [`verify:${v.successorGateId}`, v.reopenGateId]);
+      expect(await nameOf()).toEqual({ reopened_gate_id: v.reopenGateId });
+      await client.query(`DELETE FROM artifact_review_gates WHERE id=$1`, [v.reopenGateId]);
+      expect(await nameOf()).toEqual({ reopened_gate_id: null });
+    } finally {
+      await client.query(`ROLLBACK`);
+      client.release();
+    }
+    expect(await namedGate(v.successorGateId)).toBe(v.reopenGateId);
+  });
+
+  it("REPLAY ON A RESERVED SLOT (cinatra#4312): a replayed repair response whose verification answers reopen-conflict still returns the successor, and warns", async () => {
+    const v = slotOf(await landRepair());
+    const repair = (await repairStore.readRepair(v.repairId))!;
+    const forged = await reserveSlot(v);
+    // The landed repair's automatic record reads no representations; the replay's reads two that differ.
+    for (const [id, revision] of [[v.ev.representationRevisionId, 1], [v.successorRev, 2]] as const) {
+      await pool(
+        `INSERT INTO "${q(TEST_SCHEMA)}"."representation" (id, org_id, artifact_id, resource_id, revision, form)
+         VALUES ($1,$2,$3,$4,$5,'file')`,
+        [id, ORG, v.ev.artifactId, `res-${randomUUID()}`, revision],
+      );
+    }
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const replay = await repairStore.submitRepairResponse({
+        repairId: v.repairId,
+        currentBaseRevisionId: v.ev.representationRevisionId,
+        reauthorized: true,
+        response: {
+          gateId: repair.gateId,
+          baseTarget: { artifactId: v.ev.artifactId, representationRevisionId: v.ev.representationRevisionId },
+          successorTarget: v.pin,
+          findingOutcomes: [{ findingId: "f1", applied: true }, { findingId: "f2", applied: true }],
+          changeSummary: "fixed",
+          producerProvenance: { runId: v.ev.producerRunId, agentId: null },
+        },
+      });
+      expect(replay).toMatchObject({ ok: true, successorGateId: v.successorGateId });
+      expect(warn.mock.calls.flat().join(" ")).toContain("reopen-conflict");
+    } finally {
+      warn.mockRestore();
+    }
+    expect(await namedGate(v.successorGateId)).toBeNull();
+    await expectCallerGateRefused(v, forged);
+  });
+
+  it("A SECOND VERIFICATION ON ANOTHER RUN (cinatra#4312): it cannot replace the record's name. It answers reopen-conflict and leaves no gate on that run; the named gate still re-drives and takes a note", async () => {
+    const v = await failedVerificationOfLandedRepair();
+    const otherRun = `run-other-${randomUUID()}`;
+    const second = await verifStore.recordVerificationForExternalChange({
+      gateId: v.successorGateId,
+      orgId: ORG,
+      runId: otherRun,
+      reviewedTarget: { artifactId: v.ev.artifactId, representationRevisionId: v.ev.representationRevisionId },
+      repairedTarget: v.pin,
+      acceptedFindings: [{ id: "f1", path: "subject" }],
+      projectFields: failedFields,
+    });
+    expect(second).toMatchObject({ ok: false, code: "reopen-conflict" });
+    expect(await namedGate(v.successorGateId)).toBe(v.reopenGateId);
+    expect(await gateStore.readReviewGate(otherRun, v.reopenTask)).toBeNull();
+
+    const again = await verifStore.recordVerificationForRepair({ repairId: v.repairId, projectFields: failedFields });
+    expect(again).toMatchObject({ ok: true, reopenedGateId: v.reopenGateId });
+    expect(await changesRequestedOnReopenShaped(v, v.ev.producerRunId!, v.reopenGateId)).toMatchObject({ ok: true, attempt: 2 });
+    expect(await repairStore.isRepairLineageOpen((await repairStore.readRepair(v.repairId))!.lineageId)).toBe(true);
+  });
+
+  it("NOT REPAIRED (cinatra#4312): the reopen gate of a successor whose repair row no longer reads `repaired` is refused by the status check (lineage-unbound)", async () => {
+    const v = await failedVerificationOfLandedRepair();
+    const original = await repairStore.readRepair(v.repairId);
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."lifecycle_repair" SET status='stale' WHERE id=$1`, [v.repairId]);
+    const cr = await changesRequestedOnReopenShaped(v, v.ev.producerRunId!, v.reopenGateId);
+    expect(cr).toMatchObject({ ok: false, code: "lineage-unbound" });
+    expect(await attemptsOf(original!.lineageId)).toBe(1);
+  });
+
+  it("RECORD ON ANOTHER GATE (cinatra#4312): the reopen gate whose verification record `verify:S` is bound to another gate than S is refused by the record check (lineage-unbound)", async () => {
+    const v = await failedVerificationOfLandedRepair();
+    const original = await repairStore.readRepair(v.repairId);
+    const baseGate = await gateStore.readReviewGate(v.ev.producerRunId!, autoReviewTaskId(v.ev.eventId));
+    expect(baseGate).not.toBeNull();
+    await pool(
+      `UPDATE "${q(TEST_SCHEMA)}"."artifact_verification_records" SET gate_id=$2 WHERE id=$1`,
+      [`verify:${v.successorGateId}`, baseGate!.id],
+    );
+    const cr = await changesRequestedOnReopenShaped(v, v.ev.producerRunId!, v.reopenGateId);
+    expect(cr).toMatchObject({ ok: false, code: "lineage-unbound" });
+    expect(await attemptsOf(original!.lineageId)).toBe(1);
   });
 
   it("ADVISOR LANE: the Audit lane writes a provenance-stamped advisory comment on a gate (idempotent), readable by the run view", async () => {

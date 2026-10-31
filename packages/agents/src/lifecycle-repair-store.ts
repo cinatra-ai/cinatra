@@ -40,13 +40,16 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { createHash, randomUUID } from "node:crypto";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import { db } from "./db";
 import {
+  agentRuns,
   artifactReviewGates,
   artifactReviewAudit,
   artifactProducedOutbox,
+  artifactReviewResumeOutbox,
+  artifactVerificationRecords,
   lifecycleRepair,
   lifecycleBatchEpoch,
   lifecycleBatchDisposition,
@@ -74,7 +77,22 @@ import {
   type PerTargetOutcome,
   type BatchDisposition,
 } from "@/lib/lifecycle/lifecycle-batch";
-import { repairSuccessorReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
+import {
+  REPAIR_SUCCESSOR_TASK_PREFIX,
+  VERIFICATION_REOPEN_TASK_PREFIX,
+  isRepairSuccessorTaskId,
+  isVerificationReopenTaskId,
+  repairSuccessorReviewTaskId,
+} from "@/lib/lifecycle/lifecycle-orchestration";
+import { baseReviewTaskId, isDeclaredReviewLeg } from "@/lib/artifacts/artifact-review-target";
+
+/** The store's executor: the pool, or the caller's open transaction. */
+type RepairStoreExecutor =
+  | typeof db
+  | Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** The tail of a repair-successor task id after its prefix: `<repairId>:<attempt>`. */
+const SUCCESSOR_TASK_TAIL = /^([^:]+):([1-9][0-9]*)$/;
 
 // ---------------------------------------------------------------------------
 // changes_requested — close the review attempt, open the repair.
@@ -124,10 +142,10 @@ export interface RecordChangesRequestedInput {
   /** The LIVE current revision of the base artifact (the store's caller resolves
    * it — host-specific). null ⇒ the base was tombstoned/removed. */
   currentBaseRevisionId: string | null;
-  /** The lineage id for a reopen chain; defaults to the base gate id (a fresh
-   * lineage). A successor gate that itself receives changes_requested passes the
-   * ORIGINAL lineage id so the cycle guard counts the whole chain. */
-  lineageId?: string;
+  // cinatra#4312 — no caller-set lineage id: the store derives the lineage from
+  // the decided gate itself (`deriveDecidedGateLineage`), because the lineage
+  // decides same-artifact enforcement, the verification reopen, the wake scope
+  // and the resume road.
   /** The cycle bound (test override); defaults to `MAX_REPAIR_CYCLES`. */
   maxCycles?: number;
   /** The DECIDING actor (cinatra#2047 D-2). `changes_requested` RESOLVES the base
@@ -135,6 +153,114 @@ export interface RecordChangesRequestedInput {
    * the approve/reject commit now leaves: `resolved_by` on the gate. Null where
    * the host cannot name an actor (a worker-driven record). */
   decidedBy?: string | null;
+}
+
+/** The gate fields the verification-reopen binding reads. */
+type ReopenCandidateGate = { id: string; runId: string; orgId: string };
+
+/**
+ * cinatra#4312 — did the verification of `repair`'s successor open `gate` as its
+ * reopen? The proof is the name on the record: `lifecycle-verification-store`
+ * writes `reopened_gate_id` in the transaction that inserts the gate, only when it
+ * inserted it. A gate that merely occupies the (run, task) slot has no such name.
+ * All of:
+ *   - the repair is `repaired` with a successor gate;
+ *   - the record `verify:<successor>` is bound to that gate and names `gate`, so a
+ *     verified, withheld or cycle-bound verification (which opens no gate), and a
+ *     verification that answered `reopen-conflict`, pass for no gate. A database
+ *     upgraded from before the name gets it by the one-time backfill of core__0117,
+ *     whose limit its header states;
+ *   - `gate` is on the repair's producing run, or its orphan run id, and in the
+ *     repair's org. The external-change road takes its run and org from its caller,
+ *     and it names what it inserted there;
+ *   - the repair's lineage is not a declared review leg's: the external-change road
+ *     can open and name a gate on such a successor, and a note on it is refused. A
+ *     lineage whose root cannot be read (`readBoundLineageRoot` throws) passes for no
+ *     gate either.
+ * The pinned revision is not compared: a read-back verification reopens on its
+ * read-back revision.
+ */
+async function isRecordedVerificationReopen(
+  gate: ReopenCandidateGate,
+  repair: LineageAttemptRow,
+  executor: RepairStoreExecutor = db,
+): Promise<boolean> {
+  if (repair.status !== "repaired" || !repair.successorGateId) return false;
+  if (gate.runId !== (repair.producerRunId ?? orphanRepairRunId(repair.id))) return false;
+  if (gate.orgId !== repair.orgId) return false;
+  try {
+    if (await isDeclaredReviewLineage(repair.lineageId, executor)) return false;
+  } catch {
+    return false;
+  }
+  const [record] = await executor
+    .select({ gateId: artifactVerificationRecords.gateId, reopenedGateId: artifactVerificationRecords.reopenedGateId })
+    .from(artifactVerificationRecords)
+    .where(eq(artifactVerificationRecords.id, `verify:${repair.successorGateId}`))
+    .limit(1);
+  return record?.gateId === repair.successorGateId && record.reopenedGateId === gate.id;
+}
+
+/**
+ * cinatra#4312 — the repair lineage a `changes_requested` on gate `gateId` joins,
+ * read from the decided gate's OWN persisted task id (never from the caller):
+ *   - a repair-SUCCESSOR gate (`${PREFIX}<repairId>:<attempt>`) joins the lineage
+ *     of the repair that names THIS gate as its successor, at that attempt and in
+ *     the gate's org; any other state refuses (`lineage-unbound`);
+ *   - a post-change VERIFICATION-REOPEN gate (cinatra#2042) joins the lineage of
+ *     the repair whose successor its verification read, so the cycle bound
+ *     counts the verify→reopen→repair loop, but only when that verification's
+ *     record names the gate (`isRecordedVerificationReopen`); a reopen-shaped gate
+ *     that names a repair's successor in any other way refuses (`lineage-unbound`), as does more than one repair
+ *     naming that successor. A reopen-shaped gate whose encoded gate is no
+ *     repair's successor (an external-change verification) starts a fresh
+ *     lineage;
+ *   - every other gate starts a fresh lineage: its own id.
+ * A gate that does not exist starts a fresh lineage here; the gate CAS of the
+ * record refuses it.
+ */
+async function deriveDecidedGateLineage(
+  gateId: string,
+): Promise<{ ok: true; lineageId: string } | { ok: false; code: "lineage-unbound"; error: string }> {
+  const [gate] = await db
+    .select({
+      id: artifactReviewGates.id,
+      runId: artifactReviewGates.runId,
+      reviewTaskId: artifactReviewGates.reviewTaskId,
+      orgId: artifactReviewGates.orgId,
+    })
+    .from(artifactReviewGates)
+    .where(eq(artifactReviewGates.id, gateId))
+    .limit(1);
+  if (!gate) return { ok: true, lineageId: gateId };
+  const unbound = (why: string) =>
+    ({ ok: false as const, code: "lineage-unbound" as const, error: `gate ${gateId}: ${why}` });
+  if (isRepairSuccessorTaskId(gate.reviewTaskId)) {
+    const tail = SUCCESSOR_TASK_TAIL.exec(gate.reviewTaskId.slice(REPAIR_SUCCESSOR_TASK_PREFIX.length));
+    if (!tail) return unbound(`not a repair successor task id: ${gate.reviewTaskId}`);
+    const repair = await readRepair(tail[1]);
+    if (!repair || String(repair.attempt) !== tail[2] || repair.successorGateId !== gateId || repair.orgId !== gate.orgId) {
+      return unbound(`repair ${tail[1]} does not name this gate as its successor at attempt ${tail[2]}`);
+    }
+    return { ok: true, lineageId: repair.lineageId };
+  }
+  if (isVerificationReopenTaskId(gate.reviewTaskId)) {
+    // The reopen task encodes the verification id `verify:<successorGateId>`.
+    const verificationId = gate.reviewTaskId.slice(VERIFICATION_REOPEN_TASK_PREFIX.length);
+    const successorGateId = verificationId.startsWith("verify:") ? verificationId.slice("verify:".length) : verificationId;
+    const repairs = successorGateId
+      ? await db.select().from(lifecycleRepair).where(eq(lifecycleRepair.successorGateId, successorGateId)).limit(2)
+      : [];
+    if (repairs.length === 0) return { ok: true, lineageId: gateId };
+    if (repairs.length > 1) return unbound(`more than one repair names gate ${successorGateId} as its successor`);
+    const [repair] = repairs;
+    if (repair.orgId !== gate.orgId) return unbound(`repair ${repair.id} is in another org`);
+    if (!(await isRecordedVerificationReopen(gate, repair))) {
+      return unbound(`not the verification reopen of repair ${repair.id}'s successor ${successorGateId}`);
+    }
+    return { ok: true, lineageId: repair.lineageId };
+  }
+  return { ok: true, lineageId: gateId };
 }
 
 export type RecordChangesRequestedResult =
@@ -205,7 +331,9 @@ export async function recordChangesRequested(
     return { ok: false, code: "stale-base", error: "base revision moved since the review (CAS witness mismatch) — stale changes_requested rejected" };
   }
 
-  const lineageId = input.lineageId ?? request.gateId;
+  const derived = await deriveDecidedGateLineage(request.gateId);
+  if (!derived.ok) return derived;
+  const lineageId = derived.lineageId;
   // Count prior repair attempts on this lineage (the cycle-guard counter).
   const priorRows = await db
     .select({ attempt: lifecycleRepair.attempt })
@@ -310,7 +438,13 @@ export async function recordChangesRequested(
       })
       .onConflictDoNothing({ target: [lifecycleRepair.gateId] })
       .returning();
-    if (ins[0]) return { row: ins[0], fresh: true as const };
+    if (ins[0]) {
+      // cinatra#4312 — an escalated lineage has no successor to decide. If the
+      // settled gate is a declared review leg whose run is still paused, wake the
+      // decision the resume worker set aside for it, in this same commit.
+      if (status === "escalated") await wakeDeclaredReviewAfterTerminalRepair(tx, lineageId);
+      return { row: ins[0], fresh: true as const };
+    }
     // A CONCURRENT identical call won the (gate) UNIQUE — read the durable winner
     // so we never return a repairId that was never persisted.
     const [won] = await tx
@@ -406,6 +540,15 @@ export type SubmitRepairResponseResult =
   | { ok: true; successorGateId: string; successorTaskId: string }
   | { ok: false; code: string; error: string };
 
+/** cinatra#4312 — a landed repair's verification is best-effort, and the repair
+ * stands either way. A `reopen-conflict` means that no reopen gate opened for a failed
+ * verification, so it is logged instead of disappearing. */
+function warnOnReopenConflict(repairId: string, result: { ok: true } | { ok: false; code: string; error: string }): void {
+  if (!result.ok && result.code === "reopen-conflict") {
+    console.warn(`[lifecycle-repair] verification of repair ${repairId}: reopen-conflict: ${result.error}`);
+  }
+}
+
 /** Sentinel that forces the atomic emit+finalize transaction to ROLL BACK (drizzle
  * rolls back only on a throw) while carrying the non-finalized outcome out to the
  * caller — so a freshly-emitted successor gate is never committed without its
@@ -447,7 +590,7 @@ export async function submitRepairResponse(
   if (repair.status === "repaired" && repair.successorGateId) {
     try {
       const { triggerVerificationForLandedRepair } = await import("./lifecycle-verification-store");
-      await triggerVerificationForLandedRepair({ repairId: repair.id, orgId: repair.orgId });
+      warnOnReopenConflict(repair.id, await triggerVerificationForLandedRepair({ repairId: repair.id, orgId: repair.orgId }));
     } catch {
       /* swallowed — verification is an annotation, never a repair-blocking dependency. */
     }
@@ -473,19 +616,38 @@ export async function submitRepairResponse(
     continuationAddress: repair.continuationAddress,
   };
 
+  // cinatra#4312 — a lineage that started on a declared review leg (the featured
+  // image's) repairs THAT artifact: its successor must be a new revision of the
+  // reviewed artifact, never another one (the post's included). A lineage root
+  // that is missing or not bound to the lineage refuses the response; it never
+  // widens what may be pinned.
+  let declaredLineage: boolean;
+  try {
+    declaredLineage = await isDeclaredReviewLineage(repair.lineageId);
+  } catch (err) {
+    if (err instanceof RepairLineageStateError) return { ok: false, code: err.code, error: err.message };
+    throw err;
+  }
   const lineage = validateRepairLineage({
     request,
     response: input.response,
     currentBaseRevisionId: input.currentBaseRevisionId,
+    requireSameArtifact: declaredLineage,
   });
   if (!lineage.ok) {
     // A stale/tombstoned base marks the repair STALE (a moved target the review no
     // longer applies to); a producer-shape error leaves the repair open to retry.
+    // cinatra#4312 — a stale lineage has no successor to decide, so the same commit
+    // wakes a declared review's paused run (see wakeDeclaredReviewAfterTerminalRepair).
     if (lineage.code === "stale-base" || lineage.code === "tombstoned-base") {
-      await db
-        .update(lifecycleRepair)
-        .set({ status: "stale", updatedAt: sql`now()` })
-        .where(and(eq(lifecycleRepair.id, repair.id), eq(lifecycleRepair.status, repair.status)));
+      await db.transaction(async (tx) => {
+        const moved = await tx
+          .update(lifecycleRepair)
+          .set({ status: "stale", updatedAt: sql`now()` })
+          .where(and(eq(lifecycleRepair.id, repair.id), eq(lifecycleRepair.status, repair.status)))
+          .returning({ lineageId: lifecycleRepair.lineageId });
+        if (moved[0]) await wakeDeclaredReviewAfterTerminalRepair(tx, moved[0].lineageId);
+      });
     }
     return { ok: false, code: lineage.code, error: lineage.error };
   }
@@ -651,7 +813,7 @@ export async function submitRepairResponse(
   // repair; the successor gate stands regardless.
   try {
     const { triggerVerificationForLandedRepair } = await import("./lifecycle-verification-store");
-    await triggerVerificationForLandedRepair({ repairId: repair.id, orgId: repair.orgId });
+    warnOnReopenConflict(repair.id, await triggerVerificationForLandedRepair({ repairId: repair.id, orgId: repair.orgId }));
   } catch {
     // swallowed — verification is an annotation, never a repair-blocking dependency.
   }
@@ -698,7 +860,9 @@ export async function readRepair(repairId: string): Promise<RepairRow | null> {
 /** Recover the repair whose SUCCESSOR gate is `gateId` — the anchor a post-change
  * verification-reopen gate uses to thread the ORIGINAL repair lineage (so the cycle
  * bound counts the verify→reopen→repair loop, cinatra#2042). Null for a gate that is
- * not a repair successor (e.g. an external-change verification). */
+ * not a repair successor (e.g. an external-change verification). A read only: the
+ * lineage derivation (`deriveDecidedGateLineage`) also binds the reopen gate to
+ * that repair (`isRecordedVerificationReopen`) before it joins the lineage. */
 export async function readRepairBySuccessorGateId(gateId: string): Promise<RepairRow | null> {
   const [r] = await db
     .select()
@@ -718,6 +882,333 @@ export async function readRepairLineage(lineageId: string): Promise<RepairRow[]>
     .where(eq(lifecycleRepair.lineageId, lineageId))
     .orderBy(asc(lifecycleRepair.attempt), asc(lifecycleRepair.createdAt));
   return rows.map(toRepairRow);
+}
+
+/** A repair lineage the cinatra#4312 readers cannot read as open or closed: a
+ * missing, malformed or unknown state. The readers THROW it rather than answer,
+ * so a caller never resumes a run, or acknowledges a resume, on such a state.
+ * The resume sweep leaves the intent for re-claim until its attempts are used,
+ * then dead-letters it where ops read it (`sweepArtifactReviewResumeIntents`). */
+export type RepairLineageStateCode =
+  | "malformed-successor-task"
+  | "unknown-repair"
+  | "attempt-mismatch"
+  | "successor-mismatch"
+  | "missing-root-gate"
+  | "missing-repair"
+  | "unknown-repair-status"
+  | "repaired-without-successor"
+  | "missing-successor-gate"
+  | "unknown-gate-status"
+  | "malformed-lineage"
+  | "terminal-with-successor";
+
+export class RepairLineageStateError extends Error {
+  readonly code: RepairLineageStateCode;
+  constructor(code: RepairLineageStateCode, message: string) {
+    super(`${code}: ${message}`);
+    this.name = "RepairLineageStateError";
+    this.code = code;
+  }
+}
+
+type LineageRootGate = { id: string; runId: string; orgId: string; reviewTaskId: string; pinnedTargets: unknown };
+
+/** The gate a lineage started on, BOUND to the lineage (cinatra#4312): the gate
+ * must exist (`missing-root-gate`), and the lineage's attempt 1 must be exactly
+ * one repair, of THAT gate, in the gate's org (`malformed-lineage`). A lineage
+ * id that names some other existing gate is refused, never read as its root. */
+async function readBoundLineageRoot(lineageId: string, executor: RepairStoreExecutor = db): Promise<LineageRootGate> {
+  const [root] = await executor
+    .select({
+      id: artifactReviewGates.id,
+      runId: artifactReviewGates.runId,
+      orgId: artifactReviewGates.orgId,
+      reviewTaskId: artifactReviewGates.reviewTaskId,
+      pinnedTargets: artifactReviewGates.pinnedTargets,
+    })
+    .from(artifactReviewGates)
+    .where(eq(artifactReviewGates.id, lineageId))
+    .limit(1);
+  if (!root) throw new RepairLineageStateError("missing-root-gate", `lineage ${lineageId} has no root gate`);
+  const first = await executor
+    .select({ gateId: lifecycleRepair.gateId, orgId: lifecycleRepair.orgId })
+    .from(lifecycleRepair)
+    .where(and(eq(lifecycleRepair.lineageId, lineageId), eq(lifecycleRepair.attempt, 1)));
+  if (first.length !== 1 || first[0].gateId !== lineageId || first[0].orgId !== root.orgId) {
+    throw new RepairLineageStateError(
+      "malformed-lineage",
+      `lineage ${lineageId} does not start with one attempt-1 repair of gate ${lineageId} in its org`,
+    );
+  }
+  return root;
+}
+
+function isDeclaredRoot(root: LineageRootGate): boolean {
+  return isDeclaredReviewLeg({
+    runId: root.runId, orgId: root.orgId, reviewTaskId: root.reviewTaskId, pinnedTargets: root.pinnedTargets,
+  });
+}
+
+/** Did this repair lineage start on a later leg of a per-artifact DECLARED
+ * review (cinatra#4312: the featured image's)? Reads the bound root
+ * (`readBoundLineageRoot`): a missing or unbound root throws. */
+export async function isDeclaredReviewLineage(lineageId: string, executor: RepairStoreExecutor = db): Promise<boolean> {
+  return isDeclaredRoot(await readBoundLineageRoot(lineageId, executor));
+}
+
+/** The gate a repair-SUCCESSOR gate's lineage started on (the gate that first
+ * received `changes_requested`). cinatra#4312: the resume worker reads it to find
+ * the declared review leg a regenerated picture's successor gate answers.
+ *
+ * Strict: the task id must be `${PREFIX}<repairId>:<attempt>`, the repair must
+ * exist, carry that attempt, be `repaired` and name THIS gate (`successorGateId`)
+ * as its successor, and the lineage root must be bound to the lineage
+ * (`readBoundLineageRoot`) and in the repair's org. Any other state throws a
+ * `RepairLineageStateError` naming it; none of them reads as "no lineage". */
+export async function readRepairLineageRootGate(
+  successorReviewTaskId: string,
+  successorGateId: string,
+): Promise<LineageRootGate> {
+  const tail = isRepairSuccessorTaskId(successorReviewTaskId)
+    ? SUCCESSOR_TASK_TAIL.exec(successorReviewTaskId.slice(REPAIR_SUCCESSOR_TASK_PREFIX.length))
+    : null;
+  if (!tail) {
+    throw new RepairLineageStateError("malformed-successor-task", `not a repair successor task id: ${successorReviewTaskId}`);
+  }
+  const [, repairId, attempt] = tail;
+  const repair = await readRepair(repairId);
+  if (!repair) throw new RepairLineageStateError("unknown-repair", `repair ${repairId} not found`);
+  if (String(repair.attempt) !== attempt) {
+    throw new RepairLineageStateError("attempt-mismatch", `repair ${repairId} is attempt ${repair.attempt}, the task names ${attempt}`);
+  }
+  if (repair.status !== "repaired" || repair.successorGateId !== successorGateId) {
+    throw new RepairLineageStateError("successor-mismatch", `repair ${repairId} does not name gate ${successorGateId} as its successor`);
+  }
+  const root = await readBoundLineageRoot(repair.lineageId);
+  if (root.orgId !== repair.orgId) {
+    throw new RepairLineageStateError("malformed-lineage", `repair ${repairId} and its lineage root are in different orgs`);
+  }
+  return root;
+}
+
+type LineageAttemptRow = typeof lifecycleRepair.$inferSelect;
+
+/** Structural checks of a lineage chain (oldest attempt first), cinatra#4312:
+ * attempt 1 is a repair of the root gate; the attempts are 1..n with no
+ * duplicate or gap, created in attempt order; one org; every attempt before
+ * the latest is `repaired` with a successor; and every later attempt is a
+ * repair of the attempt before it: of that attempt's successor gate, or of
+ * a verification-reopen gate that the successor's verification record names
+ * (`isRecordedVerificationReopen`). A lineage goes on only from those two
+ * gates. Throws `malformed-lineage`. */
+async function assertWellFormedLineage(
+  lineageId: string,
+  chain: readonly LineageAttemptRow[],
+  executor: RepairStoreExecutor,
+): Promise<void> {
+  const fail = (why: string): never => {
+    throw new RepairLineageStateError("malformed-lineage", `lineage ${lineageId}: ${why}`);
+  };
+  if (chain[0].gateId !== lineageId) fail(`attempt ${chain[0].attempt} is not a repair of the root gate`);
+  chain.forEach((row, i) => {
+    if (row.attempt !== i + 1) fail(`attempts are not 1..${chain.length} (duplicate, gap or out of order)`);
+    if (row.orgId !== chain[0].orgId) fail(`attempt ${row.attempt} is in another org`);
+    if (i > 0 && row.createdAt < chain[i - 1].createdAt) fail(`attempt ${row.attempt} was created before attempt ${i}`);
+    if (i < chain.length - 1 && (row.status !== "repaired" || !row.successorGateId)) {
+      fail(`attempt ${row.attempt} is followed by another attempt but is ${row.status}`);
+    }
+  });
+  for (let i = 1; i < chain.length; i++) {
+    const prev = chain[i - 1];
+    const row = chain[i];
+    if (row.gateId === prev.successorGateId) continue;
+    const [gate] = await executor
+      .select({
+        id: artifactReviewGates.id,
+        runId: artifactReviewGates.runId,
+        orgId: artifactReviewGates.orgId,
+        reviewTaskId: artifactReviewGates.reviewTaskId,
+      })
+      .from(artifactReviewGates)
+      .where(eq(artifactReviewGates.id, row.gateId))
+      .limit(1);
+    if (!gate || !(await isRecordedVerificationReopen(gate, prev, executor))) {
+      fail(
+        `attempt ${row.attempt} repairs gate ${row.gateId}, which is neither the successor of attempt ${prev.attempt} nor its verification reopen`,
+      );
+    }
+  }
+}
+
+const hasSuccessorFields = (row: LineageAttemptRow): boolean =>
+  row.successorGateId !== null || row.successorArtifactId !== null || row.successorRepresentationRevisionId !== null;
+
+/** Is the repair lineage that `gateId` started still open (cinatra#4312)? The
+ * chain must be well formed (`assertWellFormedLineage`); then an allow-list over
+ * the LATEST attempt (a successor that itself received `changes_requested`
+ * opened the next attempt of the same lineage):
+ *   - `requested` / `dispatched` with no successor field — the producer has not
+ *     answered: open;
+ *   - `repaired` — open while its successor gate is `pending`, closed once it is
+ *     `resolved` with any disposition but `changes_requested` (that one records
+ *     the next attempt, which would then be the latest);
+ *   - `escalated` / `stale` with no successor field — no successor to wait for:
+ *     closed.
+ * Every other state throws a `RepairLineageStateError`: no repair row for a gate
+ * settled as changes requested (`missing-repair`), a malformed chain
+ * (`malformed-lineage`), an escalated or stale attempt that carries a successor
+ * field (`terminal-with-successor`), a requested or dispatched one that does
+ * (`malformed-lineage`), an unknown status, a `repaired` attempt without a
+ * successor id, a successor gate that is missing, in an unknown status, or
+ * settled as changes requested with no later attempt (`malformed-lineage`).
+ * `executor`: the resume worker's run decision lock transaction, if any. */
+export async function isRepairLineageOpen(gateId: string, executor: RepairStoreExecutor = db): Promise<boolean> {
+  const chain = await executor
+    .select()
+    .from(lifecycleRepair)
+    .where(eq(lifecycleRepair.lineageId, gateId))
+    .orderBy(asc(lifecycleRepair.attempt), asc(lifecycleRepair.createdAt));
+  const latest = chain[chain.length - 1];
+  if (!latest) throw new RepairLineageStateError("missing-repair", `gate ${gateId} has no repair lineage`);
+  await assertWellFormedLineage(gateId, chain, executor);
+  switch (latest.status) {
+    case "requested":
+    case "dispatched":
+      if (hasSuccessorFields(latest)) {
+        throw new RepairLineageStateError("malformed-lineage", `repair ${latest.id} is ${latest.status} but carries a successor`);
+      }
+      return true;
+    case "escalated":
+    case "stale":
+      if (hasSuccessorFields(latest)) {
+        throw new RepairLineageStateError("terminal-with-successor", `repair ${latest.id} is ${latest.status} but carries a successor`);
+      }
+      return false;
+    case "repaired":
+      break;
+    default:
+      throw new RepairLineageStateError("unknown-repair-status", `repair ${latest.id} has status ${latest.status}`);
+  }
+  if (!latest.successorGateId) {
+    throw new RepairLineageStateError("repaired-without-successor", `repair ${latest.id} is repaired with no successor gate`);
+  }
+  const [successor] = await executor
+    .select({ status: artifactReviewGates.status, disposition: artifactReviewGates.disposition })
+    .from(artifactReviewGates)
+    .where(eq(artifactReviewGates.id, latest.successorGateId))
+    .limit(1);
+  if (!successor) {
+    throw new RepairLineageStateError("missing-successor-gate", `successor gate ${latest.successorGateId} not found`);
+  }
+  if (successor.status === "pending") return true;
+  if (successor.status === "resolved" && successor.disposition === "changes_requested") {
+    // That decision records the next attempt in the same commit, so the latest
+    // attempt cannot be this one.
+    throw new RepairLineageStateError(
+      "malformed-lineage",
+      `successor gate ${latest.successorGateId} was settled as changes requested but the lineage has no later attempt`,
+    );
+  }
+  if (successor.status === "resolved") return false;
+  throw new RepairLineageStateError("unknown-gate-status", `successor gate ${latest.successorGateId} has status ${successor.status}`);
+}
+
+/**
+ * cinatra#4312 — WAKE a declared review's paused run once a lineage that one of
+ * its legs started closes WITHOUT a successor to decide (`escalated` at record
+ * time or by the dispatch drain, `stale` on a moved base). Runs inside the
+ * caller's transaction, so the terminal write and the wake commit together.
+ *
+ * While the lineage was open, the resume worker acknowledged decisions of the
+ * family without sending them (the run stays parked), and a leg settled as
+ * changes requested writes no resume intent. With no successor left, no later
+ * decision would resume the run. So the wake makes sure one intent of the family
+ * is `pending` when this commit lands: the worker then re-reads the family and
+ * the lineage and resumes the run with that decision.
+ *
+ * Serialization with the worker:
+ *   1. The run row is taken `FOR NO KEY UPDATE` first. The worker writes the
+ *      acknowledgement that keeps a run parked (another artifact of the pause,
+ *      or a regenerated artifact's review, is open; no resume is sent) under a
+ *      SHARE lock on the same row, on a re-read (artifact-review-resume-delivery,
+ *      artifact-review-gate-store `withRunDecisionLock`). So that acknowledgement
+ *      is either committed before this read (the wake sees the `done` row) or
+ *      made after this commit (the re-read sees the lineage closed and the worker
+ *      resumes). This holds for an intent written after this read, too.
+ *   2. The family's intents in `pending`, `delivering` or `done` are taken
+ *      `FOR UPDATE` (in gate-id order). A `pending` one is left as it is: the
+ *      claim skips a locked row, and after this commit the worker reads the
+ *      lineage closed. Else a `delivering` one (a worker holds it) goes back to
+ *      `pending` with its lease cleared, so the holder's acknowledgement no
+ *      longer matches (`lease-lost`). Else the most recently acknowledged `done`
+ *      one goes back to `pending`. The woken intent starts a new delivery:
+ *      `attempts` returns to 0, so it is not dead-lettered for attempts an
+ *      earlier delivery used.
+ *
+ * Nothing to wake: the root is no declared review leg, the root is missing or
+ * not bound to the lineage (another run's intents are never touched), the run
+ * is no longer `pending_approval`, or the family has no intent in those states
+ * (the family's next decision writes its own intent).
+ */
+export async function wakeDeclaredReviewAfterTerminalRepair(
+  executor: RepairStoreExecutor,
+  lineageId: string,
+): Promise<string | null> {
+  let root: LineageRootGate;
+  try {
+    root = await readBoundLineageRoot(lineageId, executor);
+  } catch (err) {
+    if (!(err instanceof RepairLineageStateError)) throw err;
+    console.warn(`[lifecycle-repair] no wake for lineage ${lineageId}: ${err.message}`);
+    return null;
+  }
+  if (!isDeclaredRoot(root)) return null;
+  const [run] = await executor
+    .select({ status: agentRuns.status })
+    .from(agentRuns)
+    .where(eq(agentRuns.id, root.runId))
+    .limit(1)
+    .for("no key update");
+  if (run?.status !== "pending_approval") return null;
+  const base = baseReviewTaskId(root.reviewTaskId);
+  const legIds = (
+    await executor
+      .select({ id: artifactReviewGates.id, reviewTaskId: artifactReviewGates.reviewTaskId })
+      .from(artifactReviewGates)
+      .where(eq(artifactReviewGates.runId, root.runId))
+  )
+    .filter((g) => baseReviewTaskId(g.reviewTaskId) === base)
+    .map((g) => g.id);
+  if (legIds.length === 0) return null;
+  const candidates = await executor
+    .select({
+      gateId: artifactReviewResumeOutbox.gateId,
+      status: artifactReviewResumeOutbox.status,
+      updatedAt: artifactReviewResumeOutbox.updatedAt,
+    })
+    .from(artifactReviewResumeOutbox)
+    .where(
+      and(
+        inArray(artifactReviewResumeOutbox.gateId, legIds),
+        inArray(artifactReviewResumeOutbox.status, ["pending", "delivering", "done"]),
+        isNull(artifactReviewResumeOutbox.deadLetteredAt),
+      ),
+    )
+    .orderBy(asc(artifactReviewResumeOutbox.gateId))
+    .for("update");
+  const pendingOne = candidates.find((c) => c.status === "pending");
+  if (pendingOne) return pendingOne.gateId;
+  const chosen =
+    candidates.find((c) => c.status === "delivering") ??
+    [...candidates].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
+  if (!chosen) return null;
+  const woken = await executor
+    .update(artifactReviewResumeOutbox)
+    .set({ status: "pending", leaseToken: null, leaseExpiresAt: null, attempts: 0, updatedAt: sql`now()` })
+    .where(and(eq(artifactReviewResumeOutbox.gateId, chosen.gateId), eq(artifactReviewResumeOutbox.status, chosen.status)))
+    .returning({ gateId: artifactReviewResumeOutbox.gateId });
+  return woken[0]?.gateId ?? null;
 }
 
 function toRepairRow(r: typeof lifecycleRepair.$inferSelect): RepairRow {
