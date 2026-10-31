@@ -26,9 +26,10 @@ import {
   useRef,
   useState,
 } from "react";
-import { Loader2, Trash2, Users } from "lucide-react";
+import { Loader2, Trash2 } from "lucide-react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { userAvatarAccent, userInitials } from "@/lib/user-avatar";
 import { Button } from "@/components/ui/button";
 import {
   Command,
@@ -93,16 +94,6 @@ export type PermissionsFormDraftProps = {
    */
   showAccess?: boolean;
 };
-
-function getInitials(name: string): string {
-  if (!name) return "";
-  const parts = name.trim().split(/\s+/);
-  if (parts.length === 0 || !parts[0]) return "";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  const first = parts[0][0] ?? "";
-  const last = parts[parts.length - 1][0] ?? "";
-  return (first + last).toUpperCase();
-}
 
 export function PermissionsFormDraft({
   value,
@@ -335,8 +326,8 @@ export function PermissionsFormDraft({
                 >
                   <Avatar className="h-8 w-8">
                     <AvatarImage src={c.image ?? undefined} alt={c.name} />
-                    <AvatarFallback>
-                      {getInitials(c.name) || <Users className="size-4" />}
+                    <AvatarFallback accent={userAvatarAccent({ id: c.userId })}>
+                      {userInitials(c)}
                     </AvatarFallback>
                   </Avatar>
                   <div className="flex flex-col flex-1 min-w-0 leading-tight">

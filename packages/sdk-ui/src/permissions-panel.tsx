@@ -608,7 +608,7 @@ export function PermissionsPanel({
                         resource ownership panel draws for its Avatar root
                         (src/components/resource-ownership-panel.tsx;
                         src/components/ui/__tests__/avatar-corners-4294.test.tsx
-                        pins it). The fallbacks differ. */}
+                        pins it). */}
                     <Avatar className="size-9 h-8 w-8">
                       <AvatarImage src={c.image ?? undefined} alt={c.name} />
                       <AvatarFallback

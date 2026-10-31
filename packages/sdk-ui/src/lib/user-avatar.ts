@@ -11,8 +11,13 @@
  * string), so one person draws the same accent on every render of a surface
  * that passes the same fields.
  *
- * The app-side `src/lib/user-avatar.ts` re-exports this module, so the app
- * and the packages share one implementation.
+ * The app-side `src/lib/user-avatar.ts` re-exports this module so that app
+ * code can import it. In the app, the owner lists use it
+ * (`src/components/resource-ownership-panel.tsx`,
+ * `src/components/permissions-form-draft.tsx`); the app's other avatars do not
+ * yet. The other users are `packages/sdk-ui/src/permissions-panel.tsx`,
+ * `packages/sdk-ui/src/prompt-field.tsx` and
+ * `packages/chat/src/chat-messages-view.tsx`.
  */
 
 import {
