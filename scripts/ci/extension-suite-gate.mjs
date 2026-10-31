@@ -450,7 +450,7 @@ export function planRun({ packages, carveOuts = CARVE_OUTS }) {
   const stale = [];
   // node:test suites whose own CI skips them (check 3). They are always
   // ENFORCED: the ledger is written in vitest's report vocabulary and has no
-  // entry for them, so no carve-out names one.
+  // entry for them, so an entry that names one is read as stale and exempts nothing.
   const nodeRun = packages.filter(isHostRunNodeTest);
   for (const p of packages) {
     if (p.runner !== "vitest") continue;
@@ -1216,8 +1216,7 @@ const NODE_STDERR_CAP = 100_000;
 // file that registers no test as one test named by the file's path, and the
 // TAP of that report is the same as the TAP of a real test of that name. What
 // differs is the location node gives it: line 1, column 1 of the file, where a
-// real test is reported at the place of its call. In the readings, what a test
-// printed reached the TAP as comments and not the reporter's file.
+// real test is reported at the place of its call.
 export function nodeTestArgs(file, topLevelFile, testTimeoutMs = NODE_TEST_TIMEOUT_MS) {
   return [
     "--test",
@@ -1267,7 +1266,7 @@ export function nodeGateDeadlineMs(env = process.env) {
 }
 
 // The node:test children now running, by pid, with their record folders, so a
-// signal to the gate can end them (installNodeRunCleanup).
+// signal to the gate kills their process groups (installNodeRunCleanup).
 const liveNodeRuns = new Map();
 
 // The pid and record folder of each node:test child now running. Exported for its test.
