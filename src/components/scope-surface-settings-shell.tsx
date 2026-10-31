@@ -36,9 +36,8 @@ export function ScopeSurfaceSettingsShell({
   /**
    * The scope's own name, resolved by the route behind that scope's read gate
    * (cinatra#2809 fix leg 2). `null` where the reader may not be told it, and
-   * the crumb then falls back to the id's first eight characters plus an
-   * ellipsis — the drawing's genuinely-unavailable arm, which is NOT what this
-   * page used to show while the name was sitting resolved one level up.
+   * the crumb then shows the scope's fixed word, never any part of the id
+   * (cinatra#4453).
    */
   scopeTitle?: string | null;
   subject: ScopeSurfaceSettingsSubject;

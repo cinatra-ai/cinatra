@@ -7,7 +7,10 @@ import { resolveChatViewCatalog } from "@/lib/chat-views-catalog.server";
 // through the actor's audience-filtered registry + per-instance authority, and
 // turns an unknown/out-of-audience assistant, a bad instance, or a missing
 // thread into a 404 (a bare /chat into a redirect).
-import { resolveChatRouteForCurrentActor } from "@/lib/chat-route-resolver";
+import {
+  readChatThreadTitleForCurrentActor,
+  resolveChatRouteForCurrentActor,
+} from "@/lib/chat-route-resolver";
 import { resolveRemoteChatForBoundRoute } from "@/lib/assistants-directory.server";
 // Narrow subpath import (not the @cinatra-ai/chat barrel): the barrel also
 // re-exports the thread/history/side panels this page never renders, and the
@@ -50,6 +53,9 @@ export default async function ChatPageMount({
   if (resolution.kind === "redirect") redirect(resolution.to);
   if (resolution.kind !== "resolved") notFound();
   const { route, assistant, threadId } = resolution;
+  // The thread's name for the breadcrumb, from this server render and after the
+  // guard above (cinatra#4453), so the crumb does not wait on a client fetch.
+  const initialThreadTitle = threadId ? await readChatThreadTitleForCurrentActor(threadId) : null;
 
   // "Remote chat" flyout (AC#5): only for a remote-capable, instance-scoped
   // bound route; the href is server-sourced from the first-party remote-target
@@ -76,6 +82,7 @@ export default async function ChatPageMount({
   return (
     <ChatPage
       initialThreadId={threadId ?? undefined}
+      initialThreadTitle={initialThreadTitle}
       initialAssistantPackage={assistant.packageName}
       initialInstanceId={route.instance ?? null}
       remoteChat={remoteChat}

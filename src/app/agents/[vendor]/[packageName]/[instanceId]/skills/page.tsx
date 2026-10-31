@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { readAgentRunById } from "@cinatra-ai/agents/store";
+import { readAgentRunById, readAgentTemplateById } from "@cinatra-ai/agents/store";
 import type { ActorRoleHints } from "@cinatra-ai/agents/auth-policy";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { AuthzError } from "@/lib/authz";
@@ -20,7 +20,8 @@ import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { resolveAgentInstanceMetadata } from "@/lib/agent-instance-tab-title";
+import { agentInstancePathname, resolveAgentInstanceMetadata } from "@/lib/agent-instance-tab-title";
+import { launchScopeInstanceLabel, readLaunchScopeAnchor } from "@/lib/launch-scope-anchor";
 
 // THE TAB MIRRORS THE TRAIL (cinatra#2934, fix leg 9). The static title this
 // route used to export was re-applied over the mirrored one on every live-poll
@@ -61,7 +62,7 @@ type Props = {
  * IT RUNS NO HOME CHECK, and that is a decision rather than an omission: this
  * pane is not addressed by anything the product draws, so no reader arrives here
  * at the wrong base for a run. The scope it was read under is what its trail
- * says.
+ * says, and the base is where it publishes the run's crumb.
  */
 type ScopeProps = {
   /** The scope base the page is mounted under, e.g. `/teams/<id>`. */
@@ -71,6 +72,30 @@ type ScopeProps = {
   /** The scope's resolved name, read behind the scope's own gate. */
   scopeTitle?: string | null;
 };
+
+/**
+ * THE RUN'S NAME FOR THE TRAIL (cinatra#4453), the identity the run page publishes:
+ * the run's title, else the template's name, else the drawing's placeholder, and
+ * the owner beside it on a personal run. Called only after the run's access check,
+ * so the reader this names the run for is one who may read it. Without it the
+ * trail drew "Agent run", the label the drawing keeps for a refused or missing run.
+ */
+async function readRunCrumbLabel(
+  run: { title?: string | null; templateId?: string | null; launchScopeAnchor?: unknown },
+  instanceId: string,
+): Promise<string> {
+  let name = run.title?.trim() || null;
+  if (!name && run.templateId) {
+    try {
+      name = (await readAgentTemplateById(run.templateId))?.name?.trim() || null;
+    } catch {
+      name = null;
+    }
+  }
+  const label = name ?? `${instanceId.slice(0, 8)}…`;
+  const owner = launchScopeInstanceLabel(readLaunchScopeAnchor(run.launchScopeAnchor), {});
+  return owner === "Personal (owner)" ? `${label} · ${owner}` : label;
+}
 
 /**
  * Skills tab.
@@ -88,10 +113,7 @@ export default async function AgentPackageInstanceSkillsPage({
   launchScope,
   scopeTitle,
 }: Props & ScopeProps) {
-  const { instanceId } = await params;
-  // The base decides nothing here (see `ScopeProps`); the vantage decides the
-  // trail's head, exactly as it does on the run page.
-  void scopeBase;
+  const { vendor, packageName, instanceId } = await params;
 
   // ── THE RUN'S OWN ACCESS DOOR, BEFORE ANY LEDGER IS READ (cinatra#3693) ───
   //
@@ -118,12 +140,14 @@ export default async function AgentPackageInstanceSkillsPage({
     }),
     actorOrganizationId: session.session?.activeOrganizationId ?? undefined,
   };
+  let run: Awaited<ReturnType<typeof readAgentRunById>>;
   try {
-    if (!(await readAgentRunById(instanceId, actor, roles))) notFound();
+    run = await readAgentRunById(instanceId, actor, roles);
   } catch (err) {
     if (err instanceof AuthzError) notFound();
     throw err;
   }
+  if (!run) notFound();
 
   const skills = listSkillsUsedForRun({ runId: instanceId });
   // Join the telemetry ledger against the authoritative per-run selection set so
@@ -134,11 +158,18 @@ export default async function AgentPackageInstanceSkillsPage({
 
   return (
     <Main className="min-h-screen">
-      {launchScope ? (
-        <CrumbContributions
-          entries={scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle ?? undefined)}
-        />
-      ) : null}
+      <CrumbContributions
+        entries={[
+          // The vantage decides the trail's head, exactly as it does on the run page.
+          ...(launchScope
+            ? scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle ?? undefined)
+            : []),
+          {
+            prefix: `${scopeBase ?? ""}${agentInstancePathname({ vendor, packageName, instanceId })}`,
+            label: await readRunCrumbLabel(run, instanceId),
+          },
+        ]}
+      />
       <PageHeader
         title="Skills"
         description="Skills resolved + invoked during this run."

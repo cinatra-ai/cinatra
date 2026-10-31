@@ -12,6 +12,10 @@ export type ChatPageMode = "create-agent" | "create-workflow";
 
 export type ChatPageProps = {
   initialThreadId?: string;
+  /** The name of `initialThreadId`, read by the route's server render after its
+   *  access checks (cinatra#4453). The breadcrumb shows it until the client's own
+   *  thread list holds that thread, so a direct load does not wait on a fetch. */
+  initialThreadTitle?: string | null;
   /** The route-resolved assistant binding for this mount (cinatra#1878 W3): the
    *  bound assistant PACKAGE and, for a remote-capable assistant, the connected
    *  site instance. Seeds the client's URL builders + thread binding so new

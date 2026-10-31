@@ -297,9 +297,8 @@ export const SCOPE_SURFACE_TAB_ACTION: Record<
  * name — at every position, not only the last. Names come from the owning page's
  * server render, strictly after its access checks").
  *
- *   - the ENTITY crumb carries the resolved name, or — while the name is
- *     genuinely unavailable to this reader — the id's first eight characters
- *     plus an ellipsis, never a title-cased raw id;
+ *   - the ENTITY crumb carries the resolved name, or the scope's fixed word when
+ *     no name was read for this reader, never any part of the id (cinatra#4453);
  *   - the LEAF crumb of a scoped tab carries the TAB's own name. Without it the
  *     shell's leaf-crumb rule takes the page heading, which on an entity page is
  *     the entity — so /workspace/assistants read "Workspace > Workspace" and an
@@ -317,11 +316,11 @@ export function scopeSurfaceCrumbEntries(
   agentsTab: "all" | "executions" = "all",
 ): { prefix: string; label: string }[] {
   const base = scopeSurfaceBase(scope);
-  const entityLabel =
-    title ??
-    ("id" in scope
-      ? `${scope.id.slice(0, 8)}\u2026`
-      : SCOPE_SURFACE_ENTITY_FALLBACK[scope.kind]);
+  // NO PART OF THE ID WHEN NO NAME WAS READ (cinatra#4453). The name read answers
+  // nothing on a refusal and the page still renders, so this arm serves a reader
+  // who may not read the entity. The drawing: "a crumb standing for the refused
+  // or the missing entity shows a fixed label ... and never any part of the id".
+  const entityLabel = title ?? SCOPE_SURFACE_ENTITY_FALLBACK[scope.kind];
   const entries = [{ prefix: base, label: entityLabel }];
   if (tab !== "dashboards") {
     entries.push({ prefix: `${base}/${tab}`, label: SCOPE_SURFACE_TAB_LABEL[tab] });
