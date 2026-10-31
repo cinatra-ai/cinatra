@@ -382,10 +382,12 @@ describe("(f) the artifact page dispatches every row and hands every display the
     expect(CODE).toMatch(/resolveArtifactDisplayMount\(/);
   });
 
-  it("its props snapshot passes the data road and no review reading", () => {
+  // What the reading holds is proven on the rendered page
+  // (`core-data-road-artifact-page.test.tsx`); this pins that one snapshot carries both.
+  it("its props snapshot passes the data road and the page's review reading", () => {
     const call = CODE.match(/const rendererProps = buildArtifactRendererProps\(\{[\s\S]*?\}\);/);
     expect(call).not.toBeNull();
     expect(call?.[0]).toMatch(/\bdata:/);
-    expect(call?.[0]).not.toMatch(/\breview\b/);
+    expect(call?.[0]).toMatch(/\breview,/);
   });
 });

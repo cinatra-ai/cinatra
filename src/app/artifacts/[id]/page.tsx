@@ -47,6 +47,7 @@ import {
   readOnlyArtifactEdit,
 } from "@/lib/artifacts/artifact-renderer-props";
 import { hostArtifactContentBuilder } from "./review-surface-roads";
+import { readArtifactPageReviewReading } from "./artifact-page-review-reading";
 import {
   artifactDisplayTitle,
   buildArtifactDetailHeader,
@@ -255,6 +256,11 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
                 : "no-write-rights",
         );
 
+  // THE REVIEW READING (cinatra#3092). Read here, past the row's own read
+  // authorization above, so a reader the row is hidden from learns nothing of
+  // its reviews.
+  const review = await readArtifactPageReviewReading({ orgId, artifactId: id });
+
   // The normalized, serializable renderer props snapshot (AC-5) — supplied to an
   // extension-shipped renderer; the host context never crosses into it.
   const rendererProps = buildArtifactRendererProps({
@@ -269,6 +275,7 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
     // reader's session. An address, never a credential; the builder drops it
     // for a display that declared a version below 3.
     data: ARTIFACT_RENDERER_SESSION_DATA_ROAD,
+    review,
   });
 
   // THE NEVER-BLANK FLOOR, and the drawing says what stands in it. §III's third

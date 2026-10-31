@@ -361,7 +361,9 @@ export interface ArtifactRendererProps {
    * THE REVIEW READING (props v3, cinatra#3092). Which reading of a review the
    * surface draws this display in. `openLive` — the live navigation's address —
    * is null in the pending reading whatever the surface passed: the builder
-   * forces it. ABSENT outside a review, and ABSENT BELOW v3.
+   * forces it. ABSENT where no review stands, and ABSENT BELOW v3. The artifact's
+   * own page hands the pending reading while a gate is open on the artifact, or
+   * when it cannot tell.
    */
   review?: ArtifactRendererReviewReading;
   /**
@@ -412,8 +414,8 @@ export function buildArtifactRendererProps(input: {
    */
   edit: ArtifactEditCapability;
   /**
-   * The review reading this surface draws (v3). Optional: a surface outside a
-   * review passes none. A `pending` reading is written with `openLive: null`
+   * The review reading this surface draws (v3). Optional: where no review stands
+   * a surface passes none. A `pending` reading is written with `openLive: null`
    * whatever is passed here — a pending review was not continued and carries no
    * live link.
    */

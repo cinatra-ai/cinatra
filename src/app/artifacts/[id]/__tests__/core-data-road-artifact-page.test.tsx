@@ -28,7 +28,7 @@ const mocks = vi.hoisted(() => ({
   readArtifactForDetail: vi.fn(),
   resolveArtifactVersionForServe: vi.fn(() => null as { mime: string; sizeBytes: number } | null),
   resolveNonFileArtifactRevision: vi.fn(() => null as { mime: string } | null),
-  resolveEditorRevisionId: vi.fn(async () => null),
+  resolveEditorRevisionId: vi.fn(async (): Promise<string | null> => null),
   getRepresentationByIdForReplay: vi.fn(() => null),
   hostArtifactContentBuilder: vi.fn(() => async () => ({ kind: "none" })),
   can: vi.fn(() => false),
@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => ({
     pointer: { artifactId: "a-1", dashboardId: "d-1", name: "A dashboard" },
   })),
   mounted: [] as Array<Record<string, unknown>>,
+  isArtifactUnderOpenReview: vi.fn(async () => false),
 }));
 
 vi.mock("@/lib/auth-session", () => ({
@@ -61,6 +62,10 @@ vi.mock("../review-surface-roads", () => ({
   hostArtifactContentBuilder: mocks.hostArtifactContentBuilder,
 }));
 vi.mock("@/lib/authz/enforce", () => ({ can: mocks.can }));
+// The store read is the seam, so the page's own fail-closed reading runs for real.
+vi.mock("@cinatra-ai/agents/artifact-open-review-read", () => ({
+  isArtifactUnderOpenReview: mocks.isArtifactUnderOpenReview,
+}));
 vi.mock("@/lib/dashboards/dashboard-artifact-surface", () => ({
   isDashboardArtifactType: mocks.isDashboardArtifactType,
 }));
@@ -116,6 +121,8 @@ async function renderPage(): Promise<string> {
 
 beforeEach(() => {
   mocks.mounted.length = 0;
+  mocks.isArtifactUnderOpenReview.mockReset();
+  mocks.isArtifactUnderOpenReview.mockResolvedValue(false);
   mocks.getAuthSession.mockResolvedValue({
     user: { id: "u-1" },
     session: { activeOrganizationId: "org-1" },
@@ -184,5 +191,54 @@ describe("the head revision the artifact page opens on (cinatra#3092)", () => {
     expect(mountedProps().representation).toEqual({ revisionId: "rev-1", mime: "text/markdown" });
     expect(mountedProps().bytes?.preview).toBe("/api/artifacts/a-1/versions/rev-1/preview");
     expect(mountedProps().bytes?.download).toBe("/api/artifacts/a-1/versions/rev-1/content");
+  });
+});
+
+describe("the artifact page's review reading (cinatra#3092)", () => {
+  function handedReview(): unknown {
+    return (mocks.mounted[0]?.props as { review?: unknown } | undefined)?.review;
+  }
+
+  it("asks about this artifact in the reader's organization", async () => {
+    await renderPage();
+    expect(mocks.isArtifactUnderOpenReview).toHaveBeenCalledWith({ orgId: "org-1", artifactId: "a-1" });
+  });
+
+  it("an open gate hands the pending reading with no live address", async () => {
+    mocks.isArtifactUnderOpenReview.mockResolvedValue(true);
+    mocks.readArtifactForDetail.mockReturnValue({
+      kind: "ok",
+      artifact: { ...ARTIFACT, sourceUrl: "https://dash.example/live" },
+    });
+    await renderPage();
+    expect(handedReview()).toEqual({ reading: "pending", openLive: null });
+  });
+
+  it("no open gate hands no reading", async () => {
+    await renderPage();
+    expect(mocks.mounted[0]?.props).toBeDefined();
+    expect(mocks.mounted[0]?.props).not.toHaveProperty("review");
+  });
+
+  it("a read that fails hands the pending reading and the page still draws", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.isArtifactUnderOpenReview.mockRejectedValue(new Error("the read failed"));
+    await renderPage();
+    expect(handedReview()).toEqual({ reading: "pending", openLive: null });
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it("a row the reader may not read is never asked about", async () => {
+    mocks.readArtifactForDetail.mockReturnValue({ kind: "denied" });
+    await renderPage();
+    expect(mocks.mounted).toHaveLength(0);
+    expect(mocks.isArtifactUnderOpenReview).not.toHaveBeenCalled();
+  });
+
+  it("a row that is not found is never asked about", async () => {
+    mocks.readArtifactForDetail.mockReturnValue({ kind: "not-found" });
+    await expect(renderPage()).rejects.toThrow("NOT_FOUND");
+    expect(mocks.isArtifactUnderOpenReview).not.toHaveBeenCalled();
   });
 });

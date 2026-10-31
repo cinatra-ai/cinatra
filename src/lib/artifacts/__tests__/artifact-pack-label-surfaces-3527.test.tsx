@@ -8,6 +8,9 @@ import { cleanup, render, waitFor } from "@testing-library/react";
 import type { ArtifactSummary } from "../artifact-service";
 
 const ports = vi.hoisted(() => ({ artifact: {} as ArtifactSummary, gate: vi.fn() }));
+vi.mock("@cinatra-ai/agents/artifact-open-review-read", () => ({
+  isArtifactUnderOpenReview: async () => false,
+}));
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: async () => ({ session: { activeOrganizationId: "org-label" } }),
   requireActorContext: async () => ({ actor: { kind: "user", id: "label-reader" } }),
