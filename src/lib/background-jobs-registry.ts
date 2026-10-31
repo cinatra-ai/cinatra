@@ -236,12 +236,6 @@ type LifecycleGateMaintenanceSummary = {
   optionalExpired: number;
   requiredExpiredBlocked: number;
   parksReleased: number;
-  /** Completed CMS repairs left with no CONFIRMED `repaired` picture and no
-   * reason pinned onto the gate (cinatra#2044 / #2046) — the successor gate may
-   * render a one-sided repair pair. Surfaced here because the store-side counter
-   * is otherwise discarded by this runner, which would have made its own
-   * "ops-visible" claim untrue. */
-  cmsRepairsUncaptured: number;
 };
 
 type LifecycleReviewRunner = {
@@ -2356,11 +2350,10 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
             summary.tombstoneFailures > 0 ||
             summary.optionalExpired > 0 ||
             summary.requiredExpiredBlocked > 0 ||
-            summary.parksReleased > 0 ||
-            summary.cmsRepairsUncaptured > 0
+            summary.parksReleased > 0
           ) {
             console.log(
-              `[lifecycle-gate-maintenance] tombstones=${summary.tombstonesApplied} tombstoneFailures=${summary.tombstoneFailures} optionalExpired=${summary.optionalExpired} requiredExpiredBlocked=${summary.requiredExpiredBlocked} parksReleased=${summary.parksReleased} cmsRepairsUncaptured=${summary.cmsRepairsUncaptured}`,
+              `[lifecycle-gate-maintenance] tombstones=${summary.tombstonesApplied} tombstoneFailures=${summary.tombstoneFailures} optionalExpired=${summary.optionalExpired} requiredExpiredBlocked=${summary.requiredExpiredBlocked} parksReleased=${summary.parksReleased}`,
             );
           }
         },
