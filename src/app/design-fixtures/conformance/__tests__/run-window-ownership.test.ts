@@ -77,7 +77,7 @@ describe("#3487 positive ownership guard", () => {
   it("accepts a page-owned read-only schedule notice but refuses interactive or card-owned notice", () => {
     const notice = '<div data-conformance-id="schedule-prompt-window"><div data-conformance-id="run-window"><div data-run-window-field aria-disabled="true"><p data-conformance-id="schedule-window-over">Over</p></div></div></div>';
     const page = root(card + '<div data-run-window-host="page-chrome">' + notice + '</div>');
-    expect(readRunWindowOwnership(page)).toMatchObject({ pageNotices: 1, interactiveNotices: 0 });
+    expect(readRunWindowOwnership(page)).toMatchObject({ pageNotices: 1, noticeWindowBreaches: 0 });
     expect(() => assertRunWindowOwnership(readRunWindowOwnership(page), "run")).not.toThrow();
     const interactive = root(page.innerHTML.replace('</p>', '</p><button>Send</button>'));
     expect(() => assertRunWindowOwnership(readRunWindowOwnership(interactive), "run")).toThrow(/notice's window/);
@@ -144,7 +144,7 @@ describe("#3487 positive ownership guard", () => {
   it("refuses a read-only notice that is itself an interactive control", () => {
     const node = root(card + window.replace('</button></div></div>', '</button></div><button data-conformance-id="schedule-window-over">Over</button></div>'));
     expect(readRunWindowOwnership(node)).toMatchObject({ windows: 1, ownedWindows: 1, pageNotices: 1 });
-    expect(readRunWindowOwnership(node).interactiveNotices).toBeGreaterThan(0);
+    expect(readRunWindowOwnership(node).noticeWindowBreaches).toBeGreaterThan(0);
     expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "run")).toThrow(/notice's window/);
   });
   // cinatra#3487 item 3, the SC of pre-review 2: the root element's own markers
@@ -271,7 +271,7 @@ describe("#3487 positive ownership guard", () => {
   // Pre-review 3, finding 3: an editable notice is interactive, by the same text-entry rule.
   it.each(['contenteditable=""', 'contenteditable="plaintext-only"', 'role="searchbox"'])("refuses a read-only notice that is itself editable: %s", (attribute) => {
     const node = root(card + '<div data-run-window-host="page-chrome"><div data-conformance-id="schedule-prompt-window"><div data-conformance-id="run-window"><div data-run-window-field data-conformance-id="schedule-window-over" ' + attribute + '></div></div></div></div>');
-    expect(readRunWindowOwnership(node).interactiveNotices).toBeGreaterThan(0);
+    expect(readRunWindowOwnership(node).noticeWindowBreaches).toBeGreaterThan(0);
     expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "run")).toThrow(/notice's window/);
   });
   // Pre-review 3, finding 4: a card above the root counts the root's prompt
@@ -413,13 +413,13 @@ describe("#3487 positive ownership guard", () => {
       spent(spentField.replace('Over', 'Over' + control)),
     ]) {
       const reading = readRunWindowOwnership(root(card + markup));
-      expect(reading.interactiveNotices).toBeGreaterThan(0);
+      expect(reading.noticeWindowBreaches).toBeGreaterThan(0);
       expect(() => assertRunWindowOwnership(reading, "run")).toThrow(/notice's window/);
     }
   });
   it("reads a notice in any window by the same rule, and a notice that is no anchor's", () => {
     const live = root(card + page(legacy(anchor(typed + '<p data-conformance-id="schedule-window-over">Over</p>'))));
-    expect(readRunWindowOwnership(live).interactiveNotices).toBeGreaterThan(0);
+    expect(readRunWindowOwnership(live).noticeWindowBreaches).toBeGreaterThan(0);
     expect(() => assertRunWindowOwnership(readRunWindowOwnership(live), "run")).toThrow(/notice's window/);
     const beside = root(card + page(anchor(typed) + '<p data-conformance-id="schedule-window-over">Over</p>'));
     expect(readRunWindowOwnership(beside)).toMatchObject({ notices: 1, pageNotices: 0 });
@@ -432,7 +432,7 @@ describe("#3487 positive ownership guard", () => {
   });
   it("takes the spent window's own status role and an inert notice text", () => {
     const reading = readRunWindowOwnership(root(card + spent(spentField.replace('Over', '<span>Over</span>'))));
-    expect(reading).toMatchObject({ pageNotices: 1, interactiveNotices: 0 });
+    expect(reading).toMatchObject({ pageNotices: 1, noticeWindowBreaches: 0 });
     expect(() => assertRunWindowOwnership(reading, "run")).not.toThrow();
   });
   it("names the limit: outside a notice's window a control that takes no text is no control", () => {

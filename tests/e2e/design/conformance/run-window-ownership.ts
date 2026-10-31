@@ -2,7 +2,7 @@
 export type WindowOwnershipReading = {
   rootPresent: boolean; windows: number; ownedWindows: number; unownedPrompts: number; malformedHolders: number; messageEditors: number;
   cards: number; promptsInCards: number; composers: number; composersInCards: number;
-  notices: number; pageNotices: number; noticesInCards: number; interactiveNotices: number;
+  notices: number; pageNotices: number; noticesInCards: number; noticeWindowBreaches: number;
 };
 // Self-contained so Playwright evaluates this exact reader in the page. Native
 // tests run it on DOM produced by the real components — the fixtures route's
@@ -13,8 +13,8 @@ export type WindowOwnershipReading = {
 // drawing of the run page's window (`app-artifact-review.html` §I.6) anchors it
 // so, inside `[data-run-window-host="page-chrome"]`.
 //
-// THE ANCHOR IS THE NODE THAT ITSELF HOLDS EXACTLY ONE CONTROL, AND ANYTHING ELSE
-// REFUSES. A window is an anchor; or a `review-prompt-window` or
+// THE ANCHOR IS THE NODE THAT ITSELF HOLDS EXACTLY ONE CONTROL. WHAT THIS DOES NOT
+// READ, below, names the shapes outside this rule. A window is an anchor; or a `review-prompt-window` or
 // `schedule-prompt-window` node, unless that node stands strictly inside the page
 // chrome and wraps an anchor; or a prompt control that no holder holds
 // (`unownedPrompts`). A legacy window node holds nothing: a control beside the
@@ -24,10 +24,11 @@ export type WindowOwnershipReading = {
 // A window anchor or a composer is well formed when, strictly inside it, it holds
 // no other holder and exactly one control, and that control is a text-entry control
 // or the spent field: a field marker with aria-disabled="true" that carries the
-// notice. An empty anchor, an anchor on the field node itself, and a live field
-// marker with no typed control in it each refuse. Each message editor holds exactly
+// notice. The node itself carries no field marker, no send label and no text entry,
+// empty or populated. An empty anchor and a live field marker with no typed control
+// in it each refuse. Each message editor holds exactly
 // one textarea as a direct child, and any editor anchor is refused on run and
-// review. A lifecycle card may hold any fields.
+// review. A lifecycle card may hold any unmarked field.
 //
 // TEXT ENTRY IS READ BY ONE RULE, ON RAW CONTROLS. A text-entry control is an input
 // of any type but the non-text types below, a textarea, a node whose contenteditable
@@ -38,15 +39,17 @@ export type WindowOwnershipReading = {
 // marker holds it or it is already a text-entry control.
 //
 // A NOTICE stands in the page's own anchor. Its window, which is its nearest legacy
-// node or else its anchor, holds no interactive control of any kind, as
-// `isInteractive` below reads it. An input of any type counts there, also a hidden one.
+// node or else its anchor, is closed: each element in it, the window's own node
+// included, is a div, p or span, and carries only class, data-*, aria-disabled and
+// role="status". Anything else there is a breach, so no list of controls is needed.
+// The rule reads elements and attributes: a script listener or a script property
+// on an allowed element is not read.
 //
 // WHAT THIS DOES NOT READ: outside a notice's window, a send button with another
 // label and a control that takes no text, such as a select, a button or a non-input
 // node with role=combobox or role=spinbutton; a node editable only by inheritance or
-// by a script property; an interactive node made so only by a script listener;
-// document.designMode, a frame's or a shadow root's inside. Fields inside a lifecycle
-// card are not read, and chat takes any number of well-formed message editors.
+// by a script property; document.designMode, a frame's or a shadow root's inside.
+// An unmarked field inside a lifecycle card is not read, and chat takes any number of well-formed message editors.
 //
 // EVERY ANCHOR IS READ ON ITS OWN NODE: an owned window sits strictly inside the
 // page chrome (an anchor on the chrome node itself is not owned), and a lifecycle
@@ -60,7 +63,7 @@ export type WindowOwnershipReading = {
 export function readRunWindowOwnership(root: Element | null): WindowOwnershipReading {
   if (root === null) return { rootPresent: false, windows: 0, ownedWindows: 0, unownedPrompts: 0, malformedHolders: 0, messageEditors: 0,
     cards: 0, promptsInCards: 0, composers: 0, composersInCards: 0,
-    notices: 0, pageNotices: 0, noticesInCards: 0, interactiveNotices: 0 };
+    notices: 0, pageNotices: 0, noticesInCards: 0, noticeWindowBreaches: 0 };
   const runWindow = '[data-conformance-id="run-window"]';
   const otherWindows = '[data-conformance-id="review-prompt-window"], [data-conformance-id="schedule-prompt-window"]';
   const composer = '[data-conversation-composer]';
@@ -80,11 +83,9 @@ export function readRunWindowOwnership(root: Element | null): WindowOwnershipRea
     if (node.matches("[contenteditable]") && (node.getAttribute("contenteditable") ?? "").toLowerCase() !== "false") return true;
     return node.matches("input") && !nonTextInputTypes.includes((node.getAttribute("type") ?? "text").toLowerCase());
   };
-  const interactiveTags = "a[href], area[href], button, input, select, textarea, summary, details, label, audio[controls], video[controls], iframe, embed, object, [tabindex], [onclick]";
-  const interactiveRoles = ["button", "link", "checkbox", "radio", "switch", "menu", "menubar", "menuitem", "menuitemcheckbox", "menuitemradio", "tab", "tablist",
-    "option", "combobox", "listbox", "textbox", "searchbox", "slider", "spinbutton", "scrollbar", "tree", "treeitem", "grid", "gridcell"];
-  const isInteractive = (node: Element): boolean => node.matches(interactiveTags) || isTextEntry(node)
-    || (node.getAttribute("role") ?? "").toLowerCase().split(/\s+/).some((role) => interactiveRoles.includes(role));
+  // The closed rule of a notice's window: only these elements, with only these attributes.
+  const allowedInNoticeWindow = (node: Element): boolean => node.matches("div, p, span") && node.getAttributeNames().every((name) =>
+    name === "class" || name === "aria-disabled" || name.startsWith("data-") || (name === "role" && (node.getAttribute("role") ?? "").toLowerCase() === "status"));
   const holders = [runWindow, card, composer, messageEditor].join(',');
   const top: Element = root;
   const all = (selector: string): Element[] =>
@@ -122,6 +123,7 @@ export function readRunWindowOwnership(root: Element | null): WindowOwnershipRea
   // other holder and exactly one control, typed or the spent field.
   const holdsOneControl = (node: Element): boolean => {
     const held = controls(node).filter((control) => control !== node);
+    if (node.matches(`${promptFieldMarkers}, ${sendLabel}`) || isTextEntry(node)) return false;
     if (node.querySelector(holders) !== null || held.length !== 1) return false;
     return isTextEntry(held[0]!) || (held[0]!.getAttribute("aria-disabled") === "true" && within(held[0]!, notice) === 1);
   };
@@ -149,15 +151,15 @@ export function readRunWindowOwnership(root: Element | null): WindowOwnershipRea
       return anchor !== null && inChrome(anchor);
     }).length,
     noticesInCards: aboveCard(notice) + cards.reduce((total, node) => total + within(node, notice), 0),
-    interactiveNotices: all(notice).reduce((total, node) =>
-      total + nodesWithin(closestInRoot(node, otherWindows) ?? closestInRoot(node, runWindow) ?? node, "*").filter(isInteractive).length, 0),
+    noticeWindowBreaches: all(notice).reduce((total, node) =>
+      total + nodesWithin(closestInRoot(node, otherWindows) ?? closestInRoot(node, runWindow) ?? node, "*").filter((inner) => !allowedInNoticeWindow(inner)).length, 0),
   };
 }
 export function assertRunWindowOwnership(reading: WindowOwnershipReading, host: "run" | "review" | "chat"): void {
   if (!reading.rootPresent || reading.cards === 0) throw new Error("Missing real fixture/card root");
   if (reading.promptsInCards !== 0 || reading.composersInCards !== 0 || reading.noticesInCards !== 0)
     throw new Error("Prompt window/composer/notice is inside a lifecycle card");
-  if (reading.interactiveNotices !== 0) throw new Error("A read-only notice's window holds an interactive control");
+  if (reading.noticeWindowBreaches !== 0) throw new Error("A read-only notice's window holds an element outside its allow-list");
   if (host === "chat") {
     if (reading.windows !== 0 || reading.composers !== 1) throw new Error("Chat must own one composer and no run window");
   } else if (reading.windows !== 1 || reading.ownedWindows !== 1 || reading.composers !== 0 || reading.messageEditors !== 0) {
