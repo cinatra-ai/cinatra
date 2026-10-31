@@ -109,6 +109,7 @@ import { applyAttachmentEnvelope } from "./attachment-envelope-payload";
 import {
   hitlRendererFieldName,
   isAlreadyResolvedError,
+  hitlGateIdentityKey,
   isGroupedSetupRenderer,
   isSetupGateTaskId,
   liftRendererApprovalNote,
@@ -121,6 +122,7 @@ import {
 // the module this file already imports the placeholder token from — no new
 // module edge, for the reason the note above `SetupFieldContinue` gives.
 import { HITL_PLACEHOLDER_FIELD_NAME, resolveFieldLabel } from "./humanize-field-name";
+import { gateAwaitsRendererValue } from "./gate-renderer-value";
 // `HitlGateContext` is the shape the run's own read answers a gate with
 // (cinatra#3532, fix leg 3) — the same one `agentic-run-panel.tsx`'s refetch
 // reads, taken from a module this file already imports so the file's module
@@ -710,32 +712,36 @@ function HitlApprovalCard({
   // sequential per-field setup gates all reuse the SAME xRenderer
   // (schema-field-fallback), so an xRenderer-only key never fires on a
   // field→field advance (postTitle → blogPostUrl) and field 1's buffered
-  // value bleeds into field 2. fieldName is undefined outside the setup loop,
-  // so non-setup gate transitions keep their existing xRenderer-only behavior.
-  const prevBufferKeyRef = useRef<string | null>(null);
+  // value bleeds into field 2. The review task is part of the key (cinatra#3380):
+  // a mid-run gate carries no fieldName and can repeat its renderer, and a value
+  // written for one gate must not read as the next gate's answer.
+  //
+  // THE RESET IS DONE IN RENDER, not after it (cinatra#3380). The next gate's
+  // renderer can write its answer from a layout effect when it mounts (a list
+  // with nothing to pick answers with a no-pick value), and a reset after the
+  // commit would wipe that write and hold the Continue with nothing to press.
+  const [prevBufferKey, setPrevBufferKey] = useState<string | null>(null);
   const bufferKey =
-    interruptContext != null
-      ? `${interruptContext.xRenderer}::${interruptContext.fieldName ?? ""}`
-      : null;
+    interruptContext != null ? hitlGateIdentityKey(interruptContext) : null;
   if (
     bufferKey !== null &&
-    prevBufferKeyRef.current !== null &&
-    prevBufferKeyRef.current !== bufferKey
+    prevBufferKey !== null &&
+    prevBufferKey !== bufferKey
   ) {
     // Real gate→gate transition — clear the previous gate's buffer.
     if (Object.keys(bufferedHitlValue).length > 0) {
-      queueMicrotask(() => setBufferedHitlValue({}));
+      setBufferedHitlValue({});
     }
   }
-  // Advance the ref only on non-null keys so a transient null doesn't
+  // Advance the key only on non-null keys so a transient null doesn't
   // poison the next real comparison.
-  if (bufferKey !== null) {
-    prevBufferKeyRef.current = bufferKey;
+  if (bufferKey !== null && bufferKey !== prevBufferKey) {
+    setPrevBufferKey(bufferKey);
   }
 
   // The block belongs to ONE gate, so it is released on GATE IDENTITY — the
-  // review-task id — and not on the buffer key above (cinatra#3219 convergence).
-  // The buffer key is `xRenderer::fieldName`, which a following gate can repeat
+  // review-task id alone (cinatra#3219 convergence). An
+  // `xRenderer::fieldName` key is one a following gate can repeat
   // exactly: a mid-run WayFlow gate carries no fieldName and often reuses its
   // renderer, so a blocked panel keyed that way would cover a gate that is
   // genuinely open, with no way back but a full reload.
@@ -872,6 +878,12 @@ function HitlApprovalCard({
   const isGroupedSetup = isGroupedSetupRenderer(interruptContext.xRenderer, {
     includeSetupFormSuffix: true,
   });
+  // cinatra#3380 — a mid-run gate that declares a value its renderer must
+  // produce (`gate-renderer-value.ts`) keeps its outer Continue unavailable
+  // until the renderer has written one. A gate that declares none is held by
+  // nothing.
+  const continueAwaitsRendererValue =
+    isMidRunHitl && gateAwaitsRendererValue(renderSchema, bufferedHitlValue);
 
   // Bottom-of-page prompt handler. Sends the message on the ONE ROAD and applies
   // the fill that comes back to the
@@ -1277,9 +1289,9 @@ function HitlApprovalCard({
             // unmounts. Without fieldName in the key the renderer (and its
             // internal input state, e.g. SchemaFieldRenderer's localValue)
             // survives the field advance and the previous field's typed text
-            // pre-fills the next field. fieldName is undefined for non-setup
-            // interrupts, so those keep the existing xRenderer-keyed identity.
-            key={`${interruptContext.xRenderer}::${interruptContext.fieldName ?? ""}`}
+            // pre-fills the next field. The review task is in the key too
+            // (cinatra#3380): a mid-run gate can repeat its renderer.
+            key={hitlGateIdentityKey(interruptContext)}
             // The gate's REAL field identity (cinatra#2541). `fieldName` is what
             // the renderer labels itself from (resolveFieldLabel) and ids its
             // input with, so the hardcoded placeholder that used to sit here
@@ -1442,7 +1454,12 @@ function HitlApprovalCard({
 
         {showContinueButton && (
           <div className="flex justify-end pt-2 border-t border-line">
-            <Button size="sm" disabled={isApproving} onClick={handleContinue} className="gap-1.5">
+            <Button
+              size="sm"
+              disabled={isApproving || continueAwaitsRendererValue}
+              onClick={handleContinue}
+              className="gap-1.5"
+            >
               {isApproving ? "Continuing…" : "Continue"}
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>

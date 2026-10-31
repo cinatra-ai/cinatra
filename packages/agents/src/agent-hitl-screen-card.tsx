@@ -140,6 +140,7 @@ import { approveReviewTask } from "./hitl-actions";
 import { getFieldRendererContextForAgentBuilderAction } from "./server-actions";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
+  hitlGateIdentityKey,
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
@@ -149,6 +150,7 @@ import {
   wrapPrimitiveSetupPayload,
 } from "./hitl-gate-submit";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
+import { gateAwaitsRendererValue } from "./gate-renderer-value";
 import type { LifecycleCardHost } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
 /**
@@ -256,7 +258,7 @@ type SetupAnswer = { payload: unknown; fieldName: string | undefined };
  * encoding carries the boundaries rather than a chosen separator.
  */
 export function hitlGateKey(gate: AgentHitlScreenGate): string {
-  return JSON.stringify([gate.reviewTaskId, gate.xRenderer, gate.fieldName ?? null]);
+  return hitlGateIdentityKey(gate);
 }
 
 /**
@@ -818,7 +820,7 @@ export function AgentHitlScreenFields({
         </p>
       ) : (
         <Renderer
-          key={`${gate.xRenderer}::${gate.fieldName ?? ""}`}
+          key={hitlGateKey(gate)}
           fieldName={hitlRendererFieldName(gate.fieldName ?? undefined)}
           schema={renderSchema}
           value={
@@ -886,10 +888,15 @@ export function AgentHitlScreenFields({
 function HitlContinueControl({
   submitting,
   blocked,
+  awaitingRendererValue = false,
   onPress,
 }: {
   submitting: boolean;
   blocked: boolean;
+  /** cinatra#3380 — the gate declares a value its renderer must produce and the
+   *  renderer has written none yet. Unavailable, with no title: `blocked` keeps
+   *  its credential meaning and its sentence. */
+  awaitingRendererValue?: boolean;
   onPress: () => Promise<void>;
 }): ReactElement {
   return (
@@ -898,7 +905,7 @@ function HitlContinueControl({
         size="sm"
         className="gap-1.5"
         data-action="submit-hitl-screen"
-        disabled={submitting || blocked}
+        disabled={submitting || blocked || awaitingRendererValue}
         {...(blocked
           ? {
               title:
@@ -934,6 +941,14 @@ export function AgentHitlScreenContinue({
     <HitlContinueControl
       submitting={submitting}
       blocked={blocked}
+      // cinatra#3380 — the same rule the run panel and the stepper apply to
+      // their mid-run Continue (`gate-renderer-value.ts`): a gate that declares
+      // a value its renderer must produce waits for the renderer to write one.
+      // A gate that carries a presentation hint is drawn through the generic
+      // dispatch renderer, which writes nothing, so it is out of the rule.
+      awaitingRendererValue={
+        presentationHintOf(gate) === null && gateAwaitsRendererValue(gate.inputSchema, buffered)
+      }
       onPress={async () => {
         let payload: Record<string, unknown> = {
           ...buffered,
@@ -1040,13 +1055,25 @@ export function AgentHitlScreenCard({
     },
     [carrier, runId],
   );
-  const [buffered, setBufferedState] = useState<Record<string, unknown>>(
-    () => carriedRef.current?.buffered ?? EMPTY_BUFFER,
-  );
+  // THE BUFFER AND THE GATE IT WAS WRITTEN FOR ARE ONE VALUE (cinatra#3380). The
+  // renderer can write from a layout effect when it mounts (a list with nothing
+  // to pick answers with a no-pick value), which runs before the card's own
+  // gate-change effect. A write that says its gate survives that effect, and a
+  // buffer of another gate is simply not read.
+  const [bufferedFor, setBufferedFor] = useState<{
+    gateKey: string | null;
+    values: Record<string, unknown>;
+  }>(() => ({
+    // SEEDED FROM THE BOX (cinatra#3193), so a card that was MOVED mid-answer
+    // knows which question the words it is holding were typed into. A card with
+    // no box starts where it always did: holding nothing, for no gate.
+    gateKey: carriedRef.current?.gateKey ?? null,
+    values: carriedRef.current?.buffered ?? EMPTY_BUFFER,
+  }));
   const setBuffered = useCallback(
-    (next: Record<string, unknown>) => {
-      setBufferedState(next);
-      writeCarry({ buffered: next });
+    (forGate: string | null, next: Record<string, unknown>) => {
+      setBufferedFor({ gateKey: forGate, values: next });
+      writeCarry({ gateKey: forGate, buffered: next });
     },
     [writeCarry],
   );
@@ -1107,11 +1134,6 @@ export function AgentHitlScreenCard({
     onResolved: onResolvedState,
   });
 
-  const onBuffer = useCallback(
-    (next: Record<string, unknown>) => setBuffered(next),
-    [setBuffered],
-  );
-
   const gate = state !== null && state.state === "asking" ? state.gate : null;
 
   // THE BUFFER BELONGS TO ONE GATE, AND ONLY TO IT.
@@ -1124,12 +1146,19 @@ export function AgentHitlScreenCard({
   // hand — and the next submit would merge them into a question that never
   // asked for them. So the buffer is KEYED by the gate it was typed into: a
   // buffer whose key does not match the gate on screen is not this gate's
-  // answer and is not read, and the effect below drops it.
+  // answer and is not read, and the check below drops it.
   const gateKey = gate === null ? null : hitlGateKey(gate);
-  // SEEDED FROM THE BOX (cinatra#3193), so a card that was MOVED mid-answer
-  // knows which question the words it is holding were typed into. A card with
-  // no box starts where it always did: holding nothing, for no gate.
-  const bufferedGateRef = useRef<string | null>(carriedRef.current?.gateKey ?? null);
+  const onBuffer = useCallback(
+    (next: Record<string, unknown>) => setBuffered(gateKey, next),
+    [gateKey, setBuffered],
+  );
+  // Dropped while rendering, not in an effect: nothing between this render and
+  // the next can read the old values, and a mount-time write by the renderer of
+  // the new gate lands after it. A gate returning to the screen starts empty.
+  if (gateKey !== null && bufferedFor.gateKey !== gateKey) {
+    setBufferedFor({ gateKey, values: EMPTY_BUFFER });
+  }
+  const setupAnswerGateRef = useRef<string | null>(carriedRef.current?.gateKey ?? null);
   useEffect(() => {
     // NO GATE ON SCREEN IS NOT A DIFFERENT GATE (cinatra#3193). `gate` is null
     // on every first frame - the read has not landed yet - and on any frame the
@@ -1139,20 +1168,22 @@ export function AgentHitlScreenCard({
     // taking the screen, which the comparison below still catches the moment
     // one does.
     if (gateKey === null) return;
-    if (bufferedGateRef.current === gateKey) return;
-    bufferedGateRef.current = gateKey;
-    writeCarry({ gateKey, buffered: EMPTY_BUFFER });
-    setBuffered(EMPTY_BUFFER);
+    if (carrier?.current?.runId === runId && carrier.current.gateKey !== gateKey) {
+      writeCarry({ gateKey, buffered: EMPTY_BUFFER });
+    }
     // THE STAGED SETUP ANSWER BELONGS TO ONE GATE TOO, for exactly the reason
     // the buffer does, and so does the flush that produced it: the renderer is
     // keyed by the gate and re-registers on the new one, and a flush left over
     // from the previous gate would answer the next question with the last one's
     // field.
-    setupAnswerRef.current = null;
-  }, [gateKey, setBuffered, writeCarry]);
+    if (setupAnswerGateRef.current !== gateKey) {
+      setupAnswerGateRef.current = gateKey;
+      setupAnswerRef.current = null;
+    }
+  }, [carrier, gateKey, runId, writeCarry]);
   // Read in the SAME render the key changed in, so a submit that lands before
   // the effect runs cannot carry the previous gate's values either.
-  const activeBuffered = bufferedGateRef.current === gateKey ? buffered : EMPTY_BUFFER;
+  const activeBuffered = bufferedFor.gateKey === gateKey ? bufferedFor.values : EMPTY_BUFFER;
   // ASKING, on both paths: the host's own gate, or the authorized read's answer.
   const asking = hostSuppliesScreen || gate !== null;
 
@@ -1236,7 +1267,7 @@ export function AgentHitlScreenCard({
       setSubmitting(false);
       // WHAT WAS TYPED SURVIVES A REFUSAL and is cleared by a landing. A
       // refusal leaves the screen exactly as it was, with the answer in hand.
-      if (landed) setBuffered(EMPTY_BUFFER);
+      if (landed) setBuffered(gateKey, EMPTY_BUFFER);
       // THE CARD RE-READS EITHER WAY (convergence). A landing is
       // obviously a moment the answer changed — but so is a REFUSAL: the most
       // common reason a submit is refused is that the gate was already answered
@@ -1248,7 +1279,7 @@ export function AgentHitlScreenCard({
       // outcome of one request.
       setReloadToken((n) => n + 1);
     },
-    [gate, auth, cookieSession, runId, answeredRegister],
+    [gate, gateKey, auth, cookieSession, runId, answeredRegister],
   );
 
   const onContinue = useCallback(

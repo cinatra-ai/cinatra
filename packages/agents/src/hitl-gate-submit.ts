@@ -43,6 +43,20 @@ export function isSetupGateTaskId(reviewTaskId: string): boolean {
 }
 
 /**
+ * The identity of one gate: its review task, its renderer and the field it
+ * names. Injective (a JSON list, no chosen separator), because all three parts
+ * are unconstrained strings from a run's own row. Each surface keys what belongs
+ * to one gate on it: the buffer and the mounted renderer (cinatra#3380).
+ */
+export function hitlGateIdentityKey(gate: {
+  reviewTaskId: string;
+  xRenderer: string;
+  fieldName?: string | null;
+}): string {
+  return JSON.stringify([gate.reviewTaskId, gate.xRenderer, gate.fieldName ?? null]);
+}
+
+/**
  * Grouped-setup form classification. Both panels match the base renderer
  * id and its `<id>:` prefixed variants; the orchestrator stepper
  * additionally treats `:setup-form` suffixed renderers as grouped-setup
