@@ -1059,6 +1059,22 @@ export function AgentHitlScreenCard({
     },
     [writeCarry],
   );
+  // A LANDING CLEARS ONLY ITS OWN GATE'S BUFFER (cinatra#3380). A submit can stay
+  // in flight until the run has reached its next gate, and that gate's renderer
+  // can already have written its answer when the old request lands. The check is
+  // on the buffer as it is then, not as the submit saw it, for the state and for
+  // the box alike.
+  const clearBufferOf = useCallback(
+    (forGate: string | null) => {
+      setBufferedFor((held) =>
+        held.gateKey === forGate ? { gateKey: forGate, values: EMPTY_BUFFER } : held,
+      );
+      if (carrier?.current?.runId === runId && carrier.current.gateKey === forGate) {
+        writeCarry({ buffered: EMPTY_BUFFER });
+      }
+    },
+    [carrier, runId, writeCarry],
+  );
   const [submitting, setSubmitting] = useState(false);
 
   // THE SETUP GATE'S ANSWER, HELD BETWEEN THE FIELD AND THE CARD'S CONTINUE.
@@ -1249,7 +1265,7 @@ export function AgentHitlScreenCard({
       setSubmitting(false);
       // WHAT WAS TYPED SURVIVES A REFUSAL and is cleared by a landing. A
       // refusal leaves the screen exactly as it was, with the answer in hand.
-      if (landed) setBuffered(gateKey, EMPTY_BUFFER);
+      if (landed) clearBufferOf(gateKey);
       // THE CARD RE-READS EITHER WAY (convergence). A landing is
       // obviously a moment the answer changed — but so is a REFUSAL: the most
       // common reason a submit is refused is that the gate was already answered
@@ -1261,7 +1277,7 @@ export function AgentHitlScreenCard({
       // outcome of one request.
       setReloadToken((n) => n + 1);
     },
-    [gate, gateKey, auth, cookieSession, runId, answeredRegister],
+    [gate, gateKey, auth, cookieSession, runId, answeredRegister, clearBufferOf],
   );
 
   const onContinue = useCallback(
@@ -1276,9 +1292,12 @@ export function AgentHitlScreenCard({
   // the same field name — only who presses.
   const stageSetupAnswer = useCallback(
     async (payload: unknown, fieldName: string | undefined) => {
+      // A flush left over from the previous gate can answer after that gate has
+      // gone (cinatra#3380): what it hands over is not an answer to this one.
+      if (setupAnswerGateRef.current !== gateKey) return;
       setupAnswerRef.current = { payload, fieldName };
     },
-    [],
+    [gateKey],
   );
 
   /** Take what is staged, and leave nothing behind for the next press. */
@@ -1314,6 +1333,10 @@ export function AgentHitlScreenCard({
       // simply overwrites the stage with the same renderer's current value.
       const flush = flushRef.current;
       if (flush !== null && flush.key === gateKey) await flush.fn();
+      // THE GATE CAN CHANGE DURING THE FLUSH (cinatra#3380). This press answers the
+      // gate it was made on, so it stops here: it takes nothing the next gate may
+      // have staged, and it submits nothing.
+      if (setupAnswerGateRef.current !== gateKey) return;
       const staged = takeSetupAnswer();
       // Nothing to submit: a required box the renderer refused to hand over says
       // so itself, in its own words, inside the field. The screen is left
