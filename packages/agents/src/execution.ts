@@ -2789,9 +2789,9 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // #839: Surface an InputMessageNode gate's declared DFE inputs — which the
     // WayFlow runtime propagates through task.metadata.pendingApproval
     // (interruptPayload) — to the renderer. blog-pipeline's idea_selection_gate
-    // needs its `ideas[]` render input present to show an idea chooser (see
-    // blog-idea-selection-renderer.tsx, the dedicated renderer the chooser
-    // relocated onto). Merged BELOW spreadFromOutput and the
+    // needs its `ideas[]` render input present to show an idea chooser (the
+    // pipeline pack's own component on the dedicated idea-selection binding).
+    // Merged BELOW spreadFromOutput and the
     // explicit stepNumber/output so history-derived output still WINS: data-review
     // gates that parse `output` are unaffected.
     //
