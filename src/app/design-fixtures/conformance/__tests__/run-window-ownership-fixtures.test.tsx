@@ -108,7 +108,7 @@ describe("#3487 the real chat message editor", () => {
     const root = container.querySelector<HTMLElement>('[data-run-window-ownership-host="chat"]')!;
     await waitFor(() => expect(root.querySelector("textarea[class*='resize-none']")).not.toBeNull(), { timeout: 10000 });
     await waitFor(() => assertRunWindowOwnership(readRunWindowOwnership(root), "chat"), { timeout: 10000 });
-    expect(readRunWindowOwnership(root)).toMatchObject({ messageEditors: 1, unownedPrompts: 0, overfullHolders: 0, composers: 1 });
+    expect(readRunWindowOwnership(root)).toMatchObject({ messageEditors: 1, unownedPrompts: 0, malformedHolders: 0, composers: 1 });
     expect(root.querySelectorAll("[data-chat-message-editor] > textarea")).toHaveLength(1);
   });
 });

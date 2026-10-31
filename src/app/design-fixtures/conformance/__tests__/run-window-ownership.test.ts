@@ -248,7 +248,7 @@ describe("#3487 positive ownership guard", () => {
   // marker holds no second control unseen.
   it("refuses two text-entry controls hidden under one field marker in the page's run-window", () => {
     const node = root(card + '<div data-run-window-host="page-chrome"><div data-conformance-id="run-window"><div data-run-window-field><textarea></textarea><input aria-label="second prompt"></div></div></div>');
-    expect(readRunWindowOwnership(node)).toMatchObject({ windows: 1, ownedWindows: 1, overfullHolders: 1 });
+    expect(readRunWindowOwnership(node)).toMatchObject({ windows: 1, ownedWindows: 1, malformedHolders: 1 });
     expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "run")).toThrow(/holds? /);
   });
   it("refuses two text-entry controls hidden under one marker in chat's composer", () => {
@@ -265,7 +265,7 @@ describe("#3487 positive ownership guard", () => {
   });
   it("takes one control under a field marker in the page's run-window", () => {
     const node = root(card + '<div data-run-window-host="page-chrome"><div data-conformance-id="run-window"><div data-run-window-field><div role="textbox" contenteditable="true"></div><button aria-label="Apply AI suggestion"></button></div></div></div>');
-    expect(readRunWindowOwnership(node)).toMatchObject({ windows: 1, unownedPrompts: 0, overfullHolders: 0 });
+    expect(readRunWindowOwnership(node)).toMatchObject({ windows: 1, unownedPrompts: 0, malformedHolders: 0 });
     expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "run")).not.toThrow();
   });
   // Pre-review 3, finding 3: an editable notice is interactive, by the same text-entry rule.
@@ -286,13 +286,13 @@ describe("#3487 positive ownership guard", () => {
   it("names the limit: chat takes more than one well-formed message editor", () => {
     const editors = '<div data-chat-message-editor><textarea></textarea></div>';
     const reading = readRunWindowOwnership(root(card + '<div data-conversation-composer><div role="textbox"></div></div>' + editors + editors));
-    expect(reading).toMatchObject({ messageEditors: 2, overfullHolders: 0 });
+    expect(reading).toMatchObject({ messageEditors: 2, malformedHolders: 0 });
     expect(() => assertRunWindowOwnership(reading, "chat")).not.toThrow();
   });
   // Pre-review 2, finding 2: a holder takes one prompt control.
   it("refuses a second prompt control beside the anchor, inside the legacy node around the page's window", () => {
     const node = root(card + '<div data-run-window-host="page-chrome"><div data-conformance-id="review-prompt-window"><div data-conformance-id="run-window"><div data-run-window-field><textarea></textarea></div></div><aside class="second-window"><textarea></textarea><button aria-label="Apply AI suggestion"></button></aside></div></div>');
-    expect(readRunWindowOwnership(node)).toMatchObject({ windows: 2, ownedWindows: 1, unownedPrompts: 1 });
+    expect(readRunWindowOwnership(node)).toMatchObject({ windows: 3, ownedWindows: 1, unownedPrompts: 2 });
     expect(() => assertRunWindowOwnership(readRunWindowOwnership(node), "review")).toThrow(/exactly one/);
   });
   it("refuses a second text-entry control inside the page's run-window", () => {
@@ -301,10 +301,10 @@ describe("#3487 positive ownership guard", () => {
   });
   it("refuses two prompt controls inside chat's composer, and takes one", () => {
     const two = root(card + '<div data-conversation-composer><div role="textbox" data-testid="chat-prompt-input"></div><textarea></textarea></div>');
-    expect(readRunWindowOwnership(two)).toMatchObject({ composers: 1, overfullHolders: 1 });
+    expect(readRunWindowOwnership(two)).toMatchObject({ composers: 1, malformedHolders: 1 });
     expect(() => assertRunWindowOwnership(readRunWindowOwnership(two), "chat")).toThrow(/holds? /);
     const one = root(card + '<div data-conversation-composer><div role="textbox" data-testid="chat-prompt-input"></div></div>');
-    expect(readRunWindowOwnership(one)).toMatchObject({ composers: 1, overfullHolders: 0 });
+    expect(readRunWindowOwnership(one)).toMatchObject({ composers: 1, malformedHolders: 0 });
     expect(() => assertRunWindowOwnership(readRunWindowOwnership(one), "chat")).not.toThrow();
   });
   // Pre-review 2, finding 3: the chat message editor is one declared exception.
@@ -312,7 +312,7 @@ describe("#3487 positive ownership guard", () => {
   const editor = '<div data-chat-message-editor><textarea></textarea><button>Save</button></div>';
   it("accepts chat's message editor beside its composer, and on chat only", () => {
     const reading = readRunWindowOwnership(root(card + composerOnly + editor));
-    expect(reading).toMatchObject({ windows: 0, composers: 1, messageEditors: 1, unownedPrompts: 0, overfullHolders: 0 });
+    expect(reading).toMatchObject({ windows: 0, composers: 1, messageEditors: 1, unownedPrompts: 0, malformedHolders: 0 });
     expect(() => assertRunWindowOwnership(reading, "chat")).not.toThrow();
     for (const host of ["run", "review"] as const)
       expect(() => assertRunWindowOwnership(readRunWindowOwnership(root(card + window + editor)), host)).toThrow(/exactly one/);
