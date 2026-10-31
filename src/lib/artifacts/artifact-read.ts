@@ -485,3 +485,78 @@ export function previewDispositionFor(inlineEligible: boolean, filename: string)
     ? `inline; filename="${safe}"`
     : `attachment; filename="${safe}"`;
 }
+
+/**
+ * THE PAGE CAPTURE'S PER-REVISION FACTS (cinatra#4223).
+ *
+ * The page capture tool files the three facts of a capture — where, at what
+ * viewport, when — as one append-only `artifact_audit` row with this action,
+ * carrying the revision it filed, in the SAME transaction that files the
+ * revision. That row is the revision's own record of its facts: an update to
+ * the artifact's object data moves the row's live data, never this record.
+ */
+export const PAGE_CAPTURE_FACTS_AUDIT_ACTION = "page_capture_facts";
+
+/**
+ * Read the facts recorded for ONE revision, org-scoped, or `null` when the
+ * revision has no such record (it was not filed by the page capture tool). The
+ * caller validates the shape; this read only finds the record.
+ */
+export function readPageCaptureFactsForRevision(input: {
+  orgId: string;
+  artifactId: string;
+  representationRevisionId: string;
+}): unknown {
+  ensurePostgresSchema();
+  const schema = postgresSchema.replaceAll('"', '""');
+  const [res] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `SELECT detail FROM "${schema}"."artifact_audit"
+  WHERE org_id = $1 AND artifact_id = $2 AND representation_revision_id = $3
+    AND action = $4
+  ORDER BY created_at ASC, id ASC
+  LIMIT 1`,
+        values: [
+          input.orgId,
+          input.artifactId,
+          input.representationRevisionId,
+          PAGE_CAPTURE_FACTS_AUDIT_ACTION,
+        ],
+      },
+    ],
+  });
+  const row = res?.rows?.[0] as { detail?: unknown } | undefined;
+  return row?.detail ?? null;
+}
+
+/**
+ * The INSERT of one revision's facts record, for the transaction that files
+ * the revision (the writer's Tx2), so the record and the revision commit
+ * together or not at all.
+ */
+export function buildPageCaptureFactsRecordQuery(input: {
+  orgId: string;
+  artifactId: string;
+  representationRevisionId: string;
+  facts: { capturedUrl: string; viewport: { width: number; height: number }; capturedAt: string };
+}): { text: string; values: unknown[] } {
+  const schema = postgresSchema.replaceAll('"', '""');
+  return {
+    text: `INSERT INTO "${schema}"."artifact_audit"
+  (id, org_id, artifact_id, representation_revision_id, action, actor, detail)
+VALUES (gen_random_uuid()::text, $1::text, $2::text, $3::text, $4::text, NULL, $5::jsonb)`,
+    values: [
+      input.orgId,
+      input.artifactId,
+      input.representationRevisionId,
+      PAGE_CAPTURE_FACTS_AUDIT_ACTION,
+      JSON.stringify({
+        capturedUrl: input.facts.capturedUrl,
+        viewport: { width: input.facts.viewport.width, height: input.facts.viewport.height },
+        capturedAt: input.facts.capturedAt,
+      }),
+    ],
+  };
+}

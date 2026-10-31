@@ -796,7 +796,16 @@ export function getArtifact(input: {
  *     the detail route renders the not-authorized panel, NOT a 404.
  */
 export type ArtifactDetailAccess =
-  | { kind: "ok"; artifact: ArtifactSummary }
+  | {
+      kind: "ok";
+      artifact: ArtifactSummary;
+      /**
+       * The row's own object data, as stored (cinatra#4223). A display builder
+       * reads from it the fields a file row's type declares beyond the host
+       * envelope; the summary stays what every other reader uses.
+       */
+      objectData?: unknown;
+    }
   | { kind: "not-found" }
   | { kind: "denied" };
 
@@ -879,7 +888,11 @@ function readArtifactAccess(
           baseType: rec.type,
         })
       : undefined;
-  return { kind: "ok", artifact: toSummary(rec, enrichment, presentation) };
+  return {
+    kind: "ok",
+    artifact: toSummary(rec, enrichment, presentation),
+    objectData: rec.data,
+  };
 }
 
 /**
