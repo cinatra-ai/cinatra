@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 
 // cinatra#407 — hosted /widget-auth PKCE login + user-scoped widget token.
@@ -96,6 +96,7 @@ import {
   type VerifiedSiteContext,
   __testing,
 } from "@/lib/widget-user-auth";
+import * as widgetUserAuth from "@/lib/widget-user-auth";
 import {
   WIDGET_SIGNIN_GRANTED_SCOPES,
   WIDGET_SIGNIN_SCREEN_UNCLASSIFIED,
@@ -144,6 +145,186 @@ function storeOf(t: "txn" | "code" | "token") {
   return t === "txn" ? txnStore : t === "code" ? codeStore : tokenStore;
 }
 
+// Split a SQL list at its top-level commas (a LEAST(a, b) stays one entry).
+function splitTopLevel(list: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let cur = "";
+  for (const ch of list) {
+    if (ch === "(") depth += 1;
+    if (ch === ")") depth -= 1;
+    if (ch === "," && depth === 0) {
+      out.push(cur.trim());
+      cur = "";
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
+// Called once, at the start of the renewal statement, between the verifier's own
+// read and the claim: a test moves the clock here to prove the claim's guards are
+// the DATABASE's, not the verifier's.
+let renewClaimHook: (() => void) | null = null;
+// cinatra#4217 r4 — how much EARLIER than the clock `now()` reads inside the
+// renewal statement. In Postgres `now()` is the time the transaction BEGAN,
+// while `clock_timestamp()` is the clock as the statement runs. A test sets this
+// to model a renewal whose transaction began before another renewal committed
+// (READ COMMITTED still lets its statement see that commit). 0 = the same time.
+let renewTxnStartLagMs = 0;
+// cinatra#4217 r6 — how long the renewal statement pauses AFTER its guards are
+// decided and before its writes read the clock. In Postgres every
+// clock_timestamp() call reads the clock anew, so the writes may read a later
+// instant than the guards did. 0 = one instant for the whole statement.
+let renewStatementPauseMs = 0;
+
+function matchingParen(text: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < text.length; i += 1) {
+    if (text[i] === "(") depth += 1;
+    else if (text[i] === ")") {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  throw new Error("renewal double: unbalanced statement");
+}
+
+function renewalStatement(
+  sql: string,
+  values: unknown[],
+  store: Map<string, AnyRow>,
+): { rows: Record<string, unknown>[] } {
+  const at = (n: string) => values[Number(n) - 1];
+  // WITH claimed AS ( DELETE ... )
+  const open = "WITH claimed AS (".length - 1;
+  const close = matchingParen(sql, open);
+  const del = sql.slice(open + 1, close);
+  const dm = del.match(/^DELETE FROM \S+ WHERE (.*) RETURNING (.*)$/);
+  if (!dm) throw new Error("renewal double: unsupported claim");
+  const returned = splitTopLevel(dm[2]);
+  // The writes that follow: zero or more `, name AS (INSERT ...)`, then the main INSERT.
+  const inserts: string[] = [];
+  let rest = sql.slice(close + 1);
+  while (rest.startsWith(", ")) {
+    const named = rest.match(/^, (\w+) AS \(/);
+    if (!named) throw new Error("renewal double: unsupported CTE");
+    const o = named[0].length - 1;
+    const c = matchingParen(rest, o);
+    inserts.push(rest.slice(o + 1, c));
+    rest = rest.slice(c + 1);
+  }
+  if (!rest.startsWith(" INSERT INTO ")) throw new Error("renewal double: no main INSERT");
+  const mainAt = rest.indexOf(" RETURNING ", rest.indexOf(" FROM claimed"));
+  inserts.push(rest.slice(1, mainAt));
+  const mainReturning = splitTopLevel(rest.slice(mainAt + " RETURNING ".length));
+
+  const conds = dm[1].split(" AND ").map((c) => c.trim());
+  if (conds[0] !== "token_hash = $1") throw new Error("renewal double: the claim is not keyed on $1");
+  const claimed = store.get(String(at("1")));
+  let statementClockMs = nowMs; // clock_timestamp(): the guards' instant, then the writes'
+  const timeOf = (expr: string): number => {
+    const e = expr.trim();
+    const least = e.match(/^LEAST\((.*)\)$/);
+    if (least) return Math.min(...splitTopLevel(least[1]).map(timeOf));
+    const plus = e.match(/^(now\(\)|clock_timestamp\(\)|created_at) \+ make_interval\(secs => \$(\d+)\)$/);
+    if (plus) {
+      const secs = Number(at(plus[2]));
+      if (!Number.isFinite(secs)) throw new Error(`renewal double: $${plus[2]} is not a number`);
+      return timeOf(plus[1]) + secs * 1000;
+    }
+    if (e === "now()") return nowMs - renewTxnStartLagMs;
+    if (e === "clock_timestamp()") return statementClockMs;
+    if (e === "created_at" || e === "expires_at") {
+      const v = Number(claimed?.[`${e}_ms`]);
+      if (!Number.isFinite(v)) throw new Error(`renewal double: the row has no ${e}`);
+      return v;
+    }
+    throw new Error(`renewal double: unsupported time expression ${e}`);
+  };
+  if (!claimed) return { rows: [] };
+  for (const cond of conds.slice(1)) {
+    const gt = cond.split(" > ");
+    if (gt.length !== 2) throw new Error(`renewal double: unsupported guard ${cond}`);
+    if (!(timeOf(gt[0]) > timeOf(gt[1]))) return { rows: [] };
+  }
+  statementClockMs = nowMs + renewStatementPauseMs;
+  // The presented row is spent by this statement, so its key is free to be
+  // written again (the grace write-back); every other existing key is not.
+  const key = String(at("1"));
+  const written: AnyRow[] = [];
+  for (const ins of inserts) {
+    const im = ins.match(/^INSERT INTO \S+ \(/);
+    if (!im) throw new Error("renewal double: unsupported write");
+    const colsOpen = im[0].length - 1;
+    const colsClose = matchingParen(ins, colsOpen);
+    const cols = ins.slice(colsOpen + 1, colsClose).split(",").map((c) => c.trim());
+    const tail = ins.slice(colsClose + 1);
+    const sm = tail.match(/^ SELECT (.*) FROM claimed$/);
+    if (!sm) throw new Error("renewal double: a write that does not read the claim");
+    const exprs = splitTopLevel(sm[1]);
+    if (cols.length !== exprs.length) throw new Error("renewal double: column/value count differs");
+    const row: AnyRow = { expires_at_ms: 0, consumed: false };
+    cols.forEach((col, i) => {
+      const expr = exprs[i];
+      if (col === "expires_at" || col === "created_at") {
+        row[`${col}_ms`] = timeOf(expr);
+        return;
+      }
+      const param = expr.match(/^\$(\d+)$/);
+      if (col === "token_hash") {
+        if (!param) throw new Error("renewal double: token_hash must be bound");
+        row.token_hash = at(param[1]);
+        return;
+      }
+      if (expr !== col || !returned.includes(col)) {
+        throw new Error(`renewal double: ${col} must be a same-named copy of the claim, got ${expr}`);
+      }
+      if (claimed[col] === undefined) throw new Error(`renewal double: the claim has no ${col}`);
+      row[col] = claimed[col];
+    });
+    if (typeof row.token_hash !== "string" || row.token_hash === "") {
+      throw new Error("renewal double: a write without a token_hash");
+    }
+    const taken =
+      (store.has(row.token_hash) && row.token_hash !== key) ||
+      written.some((w) => w.token_hash === row.token_hash);
+    if (taken) {
+      throw new Error("renewal double: duplicate key value violates widget_user_tokens_pkey");
+    }
+    written.push(row);
+  }
+  // All or nothing, as one statement is: nothing is changed until every write
+  // has been read without an error.
+  store.delete(key);
+  for (const row of written) store.set(String(row.token_hash), row);
+  const successor = written[written.length - 1];
+  const out: Record<string, unknown> = {};
+  for (const r of mainReturning) {
+    if (r === "jti" || r === "scope") out[r] = successor[r];
+    else {
+      // The advertised life, reckoned from whichever clock the statement names.
+      // CEIL is read too, so the a246d839 statement runs here and its rounding
+      // is what a red case sees (cinatra#4217 rebuild: the shipped one FLOORs).
+      const life = r.match(/^(CEIL|FLOOR)\(EXTRACT\(EPOCH FROM \(expires_at - (now\(\)|clock_timestamp\(\))\)\)\)::int AS expires_in$/);
+      const cap = r.match(/^FLOOR\(EXTRACT\(EPOCH FROM \(created_at \+ make_interval\(secs => \$(\d+)\) - clock_timestamp\(\)\)\)\)::int AS session_expires_in$/);
+      if (life) {
+        const round = life[1] === "CEIL" ? Math.ceil : Math.floor;
+        out.expires_in = round((successor.expires_at_ms - timeOf(life[2])) / 1000);
+      } else if (cap) {
+        const secs = Number(at(cap[1]));
+        if (!Number.isFinite(secs)) throw new Error(`renewal double: $${cap[1]} is not a number`);
+        out.session_expires_in = Math.floor((Number(successor.created_at_ms) + secs * 1000 - statementClockMs) / 1000);
+      } else {
+        throw new Error(`renewal double: unsupported RETURNING ${r}`);
+      }
+    }
+  }
+  return { rows: [out] };
+}
+
 // Interpret one SQL statement against the in-memory stores. Supports the exact
 // shapes the module emits: INSERT (...) VALUES (... make_interval(secs=>$N)),
 // SELECT ... WHERE <key>=$1 [AND consumed_at IS NULL] [AND expires_at>now()],
@@ -173,6 +354,20 @@ function exec(sql: string, values: unknown[] = []): { rows: Record<string, unkno
   if (!t) return { rows: [] };
   const store = storeOf(t);
 
+  // cinatra#4217 — the RENEWAL: one statement claims the presented row, writes
+  // the spent bearer back for its grace window and writes the successor
+  // (`WITH claimed AS (DELETE ... RETURNING ...), grace AS (INSERT ... SELECT ...
+  // FROM claimed) INSERT ... SELECT ... FROM claimed RETURNING ...`). Interpreted
+  // from the statement's own text and FAIL-CLOSED: every guard is evaluated
+  // against the row; a time column takes exactly its expression; every other
+  // column must be a same-named copy of a column the DELETE returned, with a
+  // value; anything else throws. A dropped guard, a fresh jti, a mistyped copy
+  // or an uncapped expiry is therefore behaviour or an error, never a quiet pass.
+  if (sql.startsWith("WITH claimed AS (DELETE FROM")) {
+    renewClaimHook?.();
+    return renewalStatement(sql, values, store);
+  }
+
   // Sweep
   if (sql.includes("DELETE FROM") && sql.includes("expires_at < now()") && !sql.includes("RETURNING")) {
     for (const [k, r] of store) if (r.expires_at_ms < nowMs) store.delete(k);
@@ -200,8 +395,9 @@ function exec(sql: string, values: unknown[] = []): { rows: Record<string, unkno
     row.expires_at_ms = nowMs + secsInterval * 1000;
     // `created_at` is a trailing now() DEFAULT — the DATABASE clock writes it,
     // so it is not among the bound values. Synthesized here for the same reason
-    // expires_at is: it is one half of the ordering proof.
-    if (t === "txn") row.created_at_ms = nowMs;
+    // expires_at is: it is one half of the ordering proof (transactions), and the
+    // anchor of a renewed session's maximum lifetime (tokens, cinatra#4217).
+    if (t === "txn" || t === "token") row.created_at_ms = nowMs;
     const key = t === "txn" ? String(row.txn_id) : t === "code" ? String(row.code_hash) : String(row.token_hash);
     store.set(key, row);
     return { rows: [] };
@@ -2267,5 +2463,587 @@ describe("the widget token dies with the session that authorized it (cinatra#268
     mintTokenUnder(SESSION_B);
     const bound = [...tokenStore.values()].map((r) => r.auth_session_id).sort();
     expect(bound).toEqual([SESSION_A, SESSION_B]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4217 — THE FRAME'S SIGN-IN TOKEN IS RENEWED, NEVER STRETCHED FOREVER.
+// A renewal spends the presented `cwu_` and writes its successor in ONE
+// statement: a fresh bearer, the SAME jti (so every jti-sealed capability the
+// frame already holds keeps working), a fresh life capped at the session's
+// maximum, measured from the original sign-in. The presented bearer keeps at
+// most the grace window, so a request already sent with it still lands, and it
+// is never renewable again.
+//
+// RED ON MAIN: main has no renewal at all — widget-user-auth.ts:100-102 ("NO
+// refresh — re-login on expiry") and no such export in :1001-1214. The module is
+// read through a namespace import, so this file still loads on main; each case
+// then fails its first assertion, `typeof renewUserWidgetToken === "function"`
+// (or, for the cap and the double's own case, the absent `__testing` member).
+// ---------------------------------------------------------------------------
+type RenewResult =
+  | { ok: true; token: string; tokenType: "Bearer"; expiresIn: number; scope: string; userId?: string }
+  | { ok: false; reason: string };
+type RenewFn = (input: { token: string; agentSlug: string; site: VerifiedSiteContext }) => RenewResult;
+
+describe("renewUserWidgetToken — the frame's token renewal (cinatra#4217)", () => {
+  const CHAT_PATH = "/api/assistants/chat";
+  const AGENT = "wordpress-content-editor";
+  const TTL = __testing.USER_TOKEN_TTL_SECONDS;
+  const testing = __testing as unknown as Record<string, unknown>;
+  const GRACE = testing.USER_TOKEN_RENEW_GRACE_SECONDS as number;
+  const MAX = testing.USER_TOKEN_MAX_SESSION_SECONDS as number;
+
+  function siteLive(credentialVersion = SITE_A.credentialVersion) {
+    getActiveConnectSiteByIdMock.mockImplementation((siteId: string) =>
+      siteId === SITE_A.siteId
+        ? {
+            siteId: SITE_A.siteId,
+            client: "wordpress",
+            widgetOrigin: SITE_A.siteOrigin,
+            orgId: SITE_A.orgId,
+            credentialVersion,
+          }
+        : null,
+    );
+  }
+
+  beforeEach(() => {
+    siteLive();
+    renewClaimHook = null;
+    renewTxnStartLagMs = 0;
+    renewStatementPauseMs = 0;
+  });
+  afterEach(() => {
+    renewClaimHook = null;
+    renewTxnStartLagMs = 0;
+    renewStatementPauseMs = 0;
+  });
+
+  function signIn(): string {
+    const t = newTxn(SITE_A);
+    if (!t.ok) throw new Error("txn");
+    const issued = issueUserAuthCode({ authSessionId: SESSION_A, txnId: t.txnId, userId: "user-1" });
+    if (!issued.ok) throw new Error(`issue: ${issued.reason}`);
+    const r = redeemUserAuthCode({
+      code: issued.code,
+      codeVerifier: VERIFIER,
+      site: SITE_A,
+      issuerBaseUrl: "https://cinatra.test",
+    });
+    if (!r.ok) throw new Error(`redeem: ${r.reason}`);
+    return r.token;
+  }
+
+  function use(token: string) {
+    return consumeUserWidgetToken({
+      token,
+      agentSlug: AGENT,
+      routePath: CHAT_PATH,
+      requestOrigin: SITE_A.siteOrigin,
+    });
+  }
+
+  function renew(token: string, site: VerifiedSiteContext = SITE_A): RenewResult {
+    const fn = (widgetUserAuth as unknown as Record<string, unknown>).renewUserWidgetToken;
+    expect(typeof fn, "widget-user-auth exports renewUserWidgetToken").toBe("function");
+    return (fn as RenewFn)({ token, agentSlug: AGENT, site });
+  }
+
+  function advance(seconds: number) {
+    nowMs += seconds * 1000;
+  }
+
+  function liveRows(): number {
+    return [...tokenStore.values()].filter((r) => r.expires_at_ms > nowMs).length;
+  }
+
+  // (a) Acceptance 2, first item.
+  it("a token close to its expiry is renewed", () => {
+    const first = signIn();
+    const before = use(first);
+    expect(before.ok, "control: the fresh token is good").toBe(true);
+
+    advance(TTL - 60); // one minute of life left
+    const renewed = renew(first);
+    expect(renewed.ok).toBe(true);
+    if (!renewed.ok) return;
+    expect(renewed.token).toMatch(/^cwu_/);
+    expect(renewed.token).not.toBe(first);
+    expect(renewed.expiresIn, "a full life again").toBe(TTL);
+
+    // A request the frame sent with the presented bearer just before the answer
+    // still lands IF the server verifies it inside the grace window; the bearer
+    // is never renewed again. (One verified later is refused: see §3 of the spec.)
+    expect(Number.isFinite(GRACE) && GRACE > 0 && GRACE < 60, "a short grace window is defined").toBe(true);
+    expect(use(first).ok, "the presented bearer serves its grace window").toBe(true);
+    expect(renew(first), "a spent bearer is never renewed twice").toEqual({
+      ok: false,
+      reason: "not_renewable",
+    });
+    advance(GRACE);
+    expect(use(first), "and is refused once the grace window ends").toEqual({ ok: false, reason: "expired" });
+
+    advance(120 - GRACE); // past the FIRST token's own end
+    const after = use(renewed.token);
+    expect(after.ok, "the renewed token outlives the first one").toBe(true);
+    if (!after.ok || !before.ok) return;
+    // Same person, site, grant AND jti: the review island, capture and resume
+    // capabilities sealed on the jti keep working across the renewal.
+    expect(after.claims).toEqual(before.claims);
+    expect(liveRows(), "exactly one live row per frame").toBe(1);
+  });
+
+  // K5 of the PR: what decides a slow renewal is the user token's life left
+  // when the statement runs, not the request's latency alone. With the
+  // sign-in's lives the frame's timer sends a renewal at 210 s, and at the
+  // latest at 864 s (36 s left: 30 s grace, 5 s safety, 1 s fire margin).
+  it("a slow renewal renews while more than the 30 s grace is left when it arrives: 6 s late at 216 s and 5 s late at 869 s renew, 6 s late at 870 s is refused", () => {
+    expect(TTL, "the sign-in's user token life").toBe(900);
+    expect(GRACE).toBe(30);
+
+    const due = signIn();
+    advance(210 + 6);
+    expect(renew(due).ok, "sent at 210 s, 6 s late: 684 s left, renewed").toBe(true);
+
+    const latestFiveLate = signIn();
+    advance(TTL - 36 + 5);
+    expect(renew(latestFiveLate).ok, "sent at 864 s, 5 s late: 31 s left, renewed").toBe(true);
+
+    const latestSixLate = signIn();
+    advance(TTL - 36 + 6);
+    expect(renew(latestSixLate), "sent at 864 s, 6 s late: 30 s left, refused").toEqual({
+      ok: false,
+      reason: "not_renewable",
+    });
+  });
+
+  // (b) Acceptance 2, second item.
+  it("an expired or revoked token is refused and cannot be renewed", () => {
+    function refusedWithoutWrite(
+      label: string,
+      token: string,
+      reason: string,
+      site: VerifiedSiteContext = SITE_A,
+    ) {
+      const keys = new Set(tokenStore.keys());
+      expect(renew(token, site), label).toEqual({ ok: false, reason });
+      expect(
+        [...tokenStore.keys()].filter((k) => !keys.has(k)),
+        `${label}: no successor is written`,
+      ).toEqual([]);
+    }
+
+    const expired = signIn();
+    advance(TTL + 1);
+    refusedWithoutWrite("expired", expired, "expired");
+
+    const signedOut = signIn();
+    liveSessionIds.delete(SESSION_A); // the person signed out of Cinatra
+    refusedWithoutWrite("parent session signed out", signedOut, "session_revoked");
+    liveSessionIds.add(SESSION_A);
+
+    const siteGone = signIn();
+    getActiveConnectSiteByIdMock.mockImplementation(() => null); // site disconnected
+    refusedWithoutWrite("site revoked", siteGone, "site_revoked");
+    siteLive();
+
+    const rotated = signIn();
+    siteLive(SITE_A.credentialVersion + 1); // site reconnected: new credential generation
+    refusedWithoutWrite("site credential rotated", rotated, "site_revoked");
+    siteLive();
+
+    const spent = signIn();
+    const successor = renew(spent);
+    expect(successor.ok, "control: the first renewal succeeds").toBe(true);
+    refusedWithoutWrite("a token already renewed (replay, inside the grace window)", spent, "not_renewable");
+    advance(GRACE);
+    refusedWithoutWrite("a token already renewed (replay, after the grace window)", spent, "expired");
+    if (successor.ok) expect(use(successor.token).ok, "the replays spend nothing").toBe(true);
+
+    const nearlyOut = signIn();
+    advance(TTL - GRACE); // no more life than the grace window
+    refusedWithoutWrite("a token with only the grace window left", nearlyOut, "not_renewable");
+    expect(use(nearlyOut).ok, "a refused renewal spends nothing").toBe(true);
+
+    const elsewhere = signIn();
+    refusedWithoutWrite("under another site's binding", elsewhere, "site_mismatch", {
+      ...SITE_A,
+      siteId: "33333333-3333-3333-3333-333333333333",
+    });
+    expect(use(elsewhere).ok, "a refused renewal spends nothing").toBe(true);
+  });
+
+  // (c) Acceptance 2, third item.
+  it("renewal never extends a session past the maximum lifetime", () => {
+    expect(
+      Number.isFinite(MAX) && MAX > TTL,
+      "a maximum session lifetime longer than one token life is defined",
+    ).toBe(true);
+    const cap = nowMs + MAX * 1000;
+    let token = signIn();
+    let renewals = 0;
+    // Renew a minute before every expiry, for as long as the session allows.
+    for (;;) {
+      const row = tokenStore.get(__testing.sha256Hex(token))!;
+      expect(row.expires_at_ms, "no token outlives the session cap").toBeLessThanOrEqual(cap);
+      if (row.expires_at_ms === cap) break; // the last renewal was shortened to end at the cap
+      advance(Math.max(1, Math.floor((row.expires_at_ms - nowMs) / 1000) - 60));
+      const next = renew(token);
+      expect(next.ok, `renewal ${renewals + 1} inside the cap`).toBe(true);
+      if (!next.ok) return;
+      expect(nowMs + next.expiresIn * 1000, "the advertised life stops at the cap").toBeLessThanOrEqual(cap);
+      token = next.token;
+      renewals += 1;
+      if (renewals > 2000) throw new Error("runaway renewal loop");
+    }
+    expect(renewals, "the session really lasted many token lives").toBeGreaterThanOrEqual(
+      Math.floor(MAX / TTL),
+    );
+    advance(Math.ceil((cap - nowMs) / 1000) - GRACE);
+    // Like with like: the refused renewal still verifies the bearer, and that
+    // verification runs the module's expiry sweep, which removes rows that had
+    // already expired (the previous renewal's spent grace row). Snapshot only
+    // the rows that sweep keeps (expires_at >= now): every one of them must
+    // survive, and no row may be added.
+    const keys = new Set(
+      [...tokenStore.entries()].filter(([, r]) => r.expires_at_ms >= nowMs).map(([k]) => k),
+    );
+    expect(keys.has(__testing.sha256Hex(token)), "control: the presented bearer is in the snapshot").toBe(true);
+    expect(renew(token), "the session's last grace window is not renewable").toEqual({
+      ok: false,
+      reason: "not_renewable",
+    });
+    expect(new Set(tokenStore.keys()), "nothing is written or spent").toEqual(keys);
+    advance(GRACE);
+    expect(renew(token)).toEqual({ ok: false, reason: "expired" });
+
+    // The guard holds on its own too: a chain that began MAX ago is refused even
+    // while its newest token still lives (the cap lowered under a live chain).
+    const late = signIn();
+    const lateRow = tokenStore.get(__testing.sha256Hex(late))!;
+    lateRow.created_at_ms = nowMs - MAX * 1000;
+    const lateKeys = new Set(tokenStore.keys());
+    expect(renew(late)).toEqual({ ok: false, reason: "not_renewable" });
+    expect(new Set(tokenStore.keys()), "nothing is written or spent").toEqual(lateKeys);
+  });
+
+  // Acceptance 1, the server's half: a frame left open well past one token's
+  // life renews on the frame's own schedule and never loses its sign-in, and a
+  // request that was already on its way with the previous bearer still lands
+  // when the server verifies it inside the grace window. A request verified
+  // after the grace window is refused (the stated residual, not a guarantee).
+  it("a frame open for 45 minutes stays signed in on the frame's schedule", () => {
+    const RENEW_AT = 210; // the frame renews when its 300 s transport credential is 210 s old
+    let token = signIn();
+    const first = use(token);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const spent: string[] = [];
+    for (let elapsed = 0; elapsed < 45 * 60; elapsed += RENEW_AT) {
+      advance(RENEW_AT);
+      const next = renew(token);
+      expect(next.ok, `renewal at ${elapsed + RENEW_AT} s`).toBe(true);
+      if (!next.ok) return;
+      const inFlight = use(token);
+      expect(inFlight.ok, "a request verified inside the grace window with the previous bearer lands").toBe(true);
+      spent.push(token);
+      token = next.token;
+      const now = use(token);
+      expect(now.ok).toBe(true);
+      if (now.ok) expect(now.claims, "the same sign-in all along").toEqual(first.claims);
+      expect(liveRows(), "at most the successor and one grace row").toBeLessThanOrEqual(2);
+    }
+    advance(GRACE);
+    for (const old of spent) expect(use(old).ok, "no spent bearer works after its grace").toBe(false);
+    expect(use(token).ok).toBe(true);
+  });
+
+  // The guards are the DATABASE's, evaluated when the statement runs: the
+  // verifier's earlier read of the same row decides nothing.
+  it("the claim reads the clock when it runs, not when the token was checked", () => {
+    const t = signIn();
+    advance(TTL - 45); // 45 s left when the verifier reads it
+    renewClaimHook = () => advance(20); // 25 s left when the claim runs
+    const keys = new Set(tokenStore.keys());
+    expect(renew(t)).toEqual({ ok: false, reason: "not_renewable" });
+    expect(new Set(tokenStore.keys()), "nothing is written or spent").toEqual(keys);
+    renewClaimHook = null;
+
+    const u = signIn();
+    advance(TTL - 45);
+    expect(renew(u).ok, "control: the same token is renewed when the clock stands still").toBe(true);
+  });
+
+  // cinatra#4217 r4 — a lost race must not fork the chain. RED BEFORE r4: the
+  // claim guard compared with now(), the transaction's START, so a second
+  // renewal whose transaction began a second before the first one committed saw
+  // the first one's grace row (expiring at the first one's now() + grace) as
+  // having more than the grace window left, claimed it and minted a SECOND
+  // successor with the same jti. The guard now reads clock_timestamp().
+  it("two renewals of one bearer cannot both pass, even when the second one's transaction began first", () => {
+    const t = signIn();
+    advance(TTL - 60);
+    const first = renew(t);
+    expect(first.ok, "the first renewal wins").toBe(true);
+    if (!first.ok) return;
+
+    // The second renewal's transaction began one second before the first one
+    // committed; its statement runs now and sees the grace row.
+    renewTxnStartLagMs = 1000;
+    const keys = new Set(tokenStore.keys());
+    expect(renew(t), "the grace row is never claimed").toEqual({ ok: false, reason: "not_renewable" });
+    expect(new Set(tokenStore.keys()), "no second successor is written").toEqual(keys);
+    renewTxnStartLagMs = 0;
+
+    const jti = tokenStore.get(__testing.sha256Hex(first.token))!.jti;
+    expect(
+      [...tokenStore.values()].filter((r) => r.jti === jti && r.expires_at_ms > nowMs + GRACE * 1000),
+      "one renewable row for the chain: the first renewal's successor",
+    ).toHaveLength(1);
+  });
+
+  // cinatra#4217 r5 — the CAP guard reads the statement's clock. RED ON r4: the
+  // cap compared with now(), the transaction's START, so a renewal whose
+  // transaction began a second before the cap and whose statement ran after it
+  // still claimed the chain and wrote a successor whose cap was already past.
+  it("a renewal whose transaction began before the cap and ran after it is refused", () => {
+    const t = signIn();
+    const row = tokenStore.get(__testing.sha256Hex(t))!;
+    row.created_at_ms = nowMs - MAX * 1000 - 500; // the cap passed 0.5 s ago
+    renewTxnStartLagMs = 1000; // the transaction began 1 s ago, before the cap
+    const keys = new Set(tokenStore.keys());
+    expect(renew(t), "past the cap when the statement runs").toEqual({ ok: false, reason: "not_renewable" });
+    expect(new Set(tokenStore.keys()), "nothing is written or spent").toEqual(keys);
+    expect(use(t).ok, "a refused renewal spends nothing").toBe(true);
+
+    // Control: the cap still 0.5 s ahead when the statement runs.
+    const u = signIn();
+    tokenStore.get(__testing.sha256Hex(u))!.created_at_ms = nowMs - MAX * 1000 + 500;
+    const ok = renew(u);
+    expect(ok.ok, "control: under the cap when the statement runs").toBe(true);
+    // cinatra#4217 rebuild: the lives are FLOORed, so 0.5 s left advertises 0
+    // (which the frame reads as no life, and ends; a246d839 CEILed it to 1).
+    if (ok.ok) expect(ok.expiresIn, "the advertised life ends at the cap, floored").toBe(0);
+  });
+
+  // cinatra#4217 r5 — every time the statement WRITES or ADVERTISES is reckoned
+  // from the instant it acts. RED ON r4: the grace write, the successor's expiry
+  // and expires_in read now(), so a statement that ran a second after its
+  // transaction began wrote both lives a second short of the instant it acted
+  // (expires_in, reckoned from the same stale now(), still read TTL).
+  it("a renewal writes and advertises lives from the statement's clock", () => {
+    const t = signIn();
+    advance(TTL - 60);
+    renewTxnStartLagMs = 1000;
+    const renewed = renew(t);
+    expect(renewed.ok).toBe(true);
+    if (!renewed.ok) return;
+    expect(renewed.expiresIn, "a full life from the statement's instant").toBe(TTL);
+    expect(tokenStore.get(__testing.sha256Hex(renewed.token))!.expires_at_ms).toBe(nowMs + TTL * 1000);
+    expect(tokenStore.get(__testing.sha256Hex(t))!.expires_at_ms, "the grace row").toBe(nowMs + GRACE * 1000);
+  });
+
+  // cinatra#4217 r6 — the grace row is the EARLIER of the bearer's own expiry
+  // and the grace window. The guard and the write read the clock at different
+  // moments, so a statement that pauses after a guard that found just over 30 s
+  // left would, without LEAST, give the spent bearer a longer life than it had.
+  it("the grace row never outlives the bearer it replaces, even when the statement pauses after its guard", () => {
+    const t = signIn();
+    advance(TTL - 31); // 31 s left: the guard (more than 30 s) passes
+    const ownEnd = tokenStore.get(__testing.sha256Hex(t))!.expires_at_ms;
+    renewStatementPauseMs = 2000; // the writes read the clock 2 s after the guard
+    const renewed = renew(t);
+    expect(renewed.ok).toBe(true);
+    if (!renewed.ok) return;
+    expect(tokenStore.get(__testing.sha256Hex(t))!.expires_at_ms, "the grace row keeps the bearer's own end").toBe(ownEnd);
+    expect(tokenStore.get(__testing.sha256Hex(renewed.token))!.expires_at_ms).toBe(nowMs + 2000 + TTL * 1000);
+    expect(renewed.expiresIn).toBe(TTL);
+
+    // The case tells the two statements apart: without LEAST the same pause
+    // writes the grace row past the bearer's own end.
+    const text = (testing.renewClaimStatement as () => string)();
+    const mutant = text.replace(
+      "LEAST(expires_at, clock_timestamp() + make_interval(secs => $5))",
+      "clock_timestamp() + make_interval(secs => $5)",
+    );
+    expect(mutant, "the mutation applies").not.toBe(text);
+    const u = signIn();
+    advance(TTL - 31);
+    const uEnd = tokenStore.get(__testing.sha256Hex(u))!.expires_at_ms;
+    exec(mutant, [__testing.sha256Hex(u), "mutant-successor-hash", MAX, TTL, GRACE]);
+    expect(tokenStore.get(__testing.sha256Hex(u))!.expires_at_ms, "the mutant outlives the bearer").toBeGreaterThan(uEnd);
+  });
+
+  // cinatra#4217 r6 — the true live-row bound. Each renewal leaves the bearer it
+  // spent as one grace row of at most GRACE, so a chain renewed several times
+  // within GRACE has one grace row per such renewal beside its successor. Only
+  // the successor is renewable. (Review 3: r5 claimed at most two live rows.)
+  it("renewals in quick succession leave one grace row each, and only the successor is renewable", () => {
+    const tokens = [signIn()];
+    for (let i = 0; i < 3; i += 1) {
+      const next = renew(tokens[tokens.length - 1]);
+      expect(next.ok, `renewal ${i + 1}`).toBe(true);
+      if (!next.ok) return;
+      tokens.push(next.token);
+    }
+    const jti = tokenStore.get(__testing.sha256Hex(tokens[3]))!.jti;
+    const chainRows = () => [...tokenStore.values()].filter((r) => r.jti === jti && r.expires_at_ms > nowMs);
+    expect(chainRows(), "the successor and three grace rows").toHaveLength(4);
+    const renewable = chainRows().filter((r) => r.expires_at_ms > nowMs + GRACE * 1000);
+    expect(renewable.map((r) => r.token_hash), "only the successor is renewable").toEqual([
+      __testing.sha256Hex(tokens[3]),
+    ]);
+    for (const spent of tokens.slice(0, 3)) {
+      expect(tokenStore.get(__testing.sha256Hex(spent))!.expires_at_ms).toBeLessThanOrEqual(nowMs + GRACE * 1000);
+      expect(renew(spent), "a spent bearer is never renewed").toEqual({ ok: false, reason: "not_renewable" });
+    }
+    advance(GRACE);
+    expect(chainRows(), "after GRACE only the successor is live").toHaveLength(1);
+  });
+
+  // cinatra#4217 r4 — forensics. RED BEFORE r4: the result named nobody, so the
+  // route's renew_success audit line could not name the person either.
+  it("a renewal names the person it renewed for, and nothing secret", () => {
+    const t = signIn();
+    advance(TTL - 60);
+    const renewed = renew(t);
+    expect(renewed.ok).toBe(true);
+    if (!renewed.ok) return;
+    expect(renewed.userId, "the verified claim's user id").toBe("user-1");
+    expect(Object.keys(renewed).sort()).toEqual(
+      ["expiresIn", "ok", "scope", "sessionExpiresIn", "token", "tokenType", "userId"],
+    );
+  });
+
+  // The double reads the module's own statement, and it refuses what it cannot
+  // read: a mutated statement errors instead of passing with a made-up row.
+  it("the in-memory database refuses a renewal statement it cannot read", () => {
+    const build = testing.renewClaimStatement;
+    expect(typeof build, "the module exposes its renewal statement").toBe("function");
+    const text = (build as () => string)();
+    const t = signIn();
+    const values = [__testing.sha256Hex(t), "successor-hash", MAX, TTL, GRACE];
+    const lastIss = text.lastIndexOf("iss, scope");
+    const mutants: Array<[string, string]> = [
+      ["a fresh jti", text.replace("SELECT $2, jti,", "SELECT $2, gen_random_uuid(),")],
+      ["a mistyped copy", text.slice(0, lastIss) + "isss, scope" + text.slice(lastIss + "iss, scope".length)],
+      ["an unknown expiry", text.replace("clock_timestamp() + make_interval(secs => $4)", "clock_timestamp() + interval '1 day'")],
+      ["an unknown guard", text.replace("AND created_at + make_interval(secs => $3) > clock_timestamp() ", "AND true ")],
+    ];
+    for (const [label, mutant] of mutants) {
+      expect(mutant, `${label}: the mutation applies`).not.toBe(text);
+      const before = new Map(tokenStore);
+      expect(() => exec(mutant, values), label).toThrow(/renewal double/);
+      expect(new Map(tokenStore), `${label}: nothing is changed`).toEqual(before);
+    }
+  });
+
+  // cinatra#4217 — the advertised life is a positive finite number of seconds,
+  // or 0. The statement's expires_in comes back from the driver as text or a
+  // number; a value that does not read as a positive finite number (a NULL, a
+  // non-number, an infinity, zero or a negative from a clock step) is advertised
+  // as 0, so the frame renews at once instead of waiting on a bogus life.
+  it("an expires_in that is not a positive finite number is advertised as 0", () => {
+    const realImpl = runPostgresQueriesSyncMock.getMockImplementation()!;
+    const answer = (value: unknown) =>
+      runPostgresQueriesSyncMock.mockImplementation(
+        (input: { queries: { text: string; values?: unknown[] }[] }) => {
+          const out = realImpl(input) as Array<{ rows?: Array<Record<string, unknown>> }>;
+          if (input.queries.some((q) => q.text.startsWith("WITH claimed AS (DELETE FROM"))) {
+            const row = out[0]?.rows?.[0];
+            if (row) row.expires_in = value;
+          }
+          return out;
+        },
+      );
+    try {
+      for (const [value, advertised] of [
+        ["120", 120],
+        [120, 120],
+        [null, 0],
+        [undefined, 0],
+        ["not a number", 0],
+        [Number.NaN, 0],
+        [Number.POSITIVE_INFINITY, 0],
+        ["Infinity", 0],
+        [0, 0],
+        [-5, 0],
+      ] as Array<[unknown, number]>) {
+        answer(value);
+        const r = renew(signIn());
+        expect(r.ok, `expires_in=${String(value)}: still renewed`).toBe(true);
+        if (!r.ok) continue;
+        expect(r.expiresIn, `expires_in=${String(value)}`).toBe(advertised);
+      }
+    } finally {
+      runPostgresQueriesSyncMock.mockImplementation(realImpl);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // cinatra#4217 rebuild — the advertised lives. Each title names its census
+  // row of the rebuild spec. RED AT a246d839: expires_in was CEILed, and no
+  // session_expires_in or sessionExpiresIn existed.
+  // -------------------------------------------------------------------------
+
+  it("C25: the advertised lives are floored: 299.4 s left advertises 299, never 300", () => {
+    const t = signIn();
+    // The cap is 299.4 s ahead when the statement runs: the successor ends at
+    // the cap, and both lives read 299.
+    tokenStore.get(__testing.sha256Hex(t))!.created_at_ms = nowMs - MAX * 1000 + 299_400;
+    const r = renew(t) as RenewResult & { sessionExpiresIn?: number };
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.expiresIn, "the user life, floored").toBe(299);
+    expect(r.sessionExpiresIn, "the time to the cap, floored").toBe(299);
+    expect(tokenStore.get(__testing.sha256Hex(r.token))!.expires_at_ms - nowMs).toBe(299_400);
+  });
+
+  it("C24: sessionExpiresIn is the time to created_at + MAX, read on the statement's clock", () => {
+    const t = signIn();
+    advance(TTL - 60);
+    renewStatementPauseMs = 2000;
+    const r = renew(t) as RenewResult & { sessionExpiresIn?: number };
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // created_at is the sign-in: MAX - (TTL - 60) s ago it began; 2 s more pass
+    // before the writes read the clock.
+    expect(r.sessionExpiresIn).toBe(MAX - (TTL - 60) - 2);
+    expect(r.expiresIn).toBe(TTL);
+    expect(r.sessionExpiresIn).toBeGreaterThanOrEqual(r.expiresIn);
+  });
+
+  it("C24: near the cap the successor's life is min(TTL, cap left), and sessionExpiresIn equals it", () => {
+    const t = signIn();
+    tokenStore.get(__testing.sha256Hex(t))!.created_at_ms = nowMs - MAX * 1000 + 600_000; // 600 s to the cap
+    const r = renew(t) as RenewResult & { sessionExpiresIn?: number };
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.expiresIn).toBe(600);
+    expect(r.sessionExpiresIn).toBe(600);
+  });
+
+  it("C23: the sign-in advertises the full session lifetime as sessionExpiresIn", () => {
+    const tx = newTxn(SITE_A);
+    if (!tx.ok) throw new Error("txn");
+    const issued = issueUserAuthCode({ authSessionId: SESSION_A, txnId: tx.txnId, userId: "user-1" });
+    if (!issued.ok) throw new Error("issue");
+    const r = redeemUserAuthCode({
+      code: issued.code,
+      codeVerifier: VERIFIER,
+      site: SITE_A,
+      issuerBaseUrl: "https://cinatra.test",
+    }) as ReturnType<typeof redeemUserAuthCode> & { sessionExpiresIn?: number };
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.expiresIn).toBe(TTL);
+    expect(r.sessionExpiresIn).toBe(MAX);
+  });
+
+  it("the frame's mirrored constants equal the server's (grace window and life cap)", async () => {
+    const client = await import("@/lib/embed/frame-widget-session.client");
+    expect((client as Record<string, unknown>).FRAME_SERVER_RENEW_GRACE_SECONDS).toBe(GRACE);
+    expect((client as Record<string, unknown>).FRAME_LIFE_MAX_SECONDS).toBe(MAX);
   });
 });

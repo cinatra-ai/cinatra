@@ -119,6 +119,7 @@ import { Button } from "@/components/ui/button";
 import {
   LIFECYCLE_HITL_SCREEN_PATH,
   LIFECYCLE_HITL_SCREEN_SUBMIT_PATH,
+  sendAcrossRenewal,
   useAnsweredHitlQuestionRegister,
   useCookieSessionSurface,
   useLifecycleCardAuth,
@@ -319,14 +320,27 @@ const EMPTY_BUFFER: Record<string, unknown> = Object.freeze({});
 async function readHitlScreenThroughBroker(
   runId: string,
   auth: LifecycleCardAuth,
+  ended?: AbortSignal,
 ): Promise<AgentHitlScreenState | null> {
   try {
-    const response = await fetch(LIFECYCLE_HITL_SCREEN_PATH, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...auth.headers() },
-      body: JSON.stringify({ runId }),
-      credentials: auth.credentials,
-    });
+    // cinatra#4217 fold 3: a read refused while the host's renewal was on its
+    // way, or after it replaced the credential, is sent once more with the
+    // renewed credential before its refusal is believed (`sendAcrossRenewal`).
+    // Without it the card was taken away below for a refusal that said nothing
+    // about the reader. `ended` (the card's read went stale) ends the wait, and
+    // nothing more is sent.
+    const response = await sendAcrossRenewal(
+      auth,
+      () =>
+        fetch(LIFECYCLE_HITL_SCREEN_PATH, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...auth.headers() },
+          body: JSON.stringify({ runId }),
+          credentials: auth.credentials,
+        }),
+      ended,
+    );
+    if (response === null) return null;
     // A REFUSAL IS AN ANSWER, NOT A FAILURE (convergence finding). The read
     // caches the last authorized answer so a transient 5xx does not blank a
     // question mid-edit — but a credential that was revoked or replaced while
@@ -465,9 +479,12 @@ export function useAgentHitlScreenState(params: {
   useEffect(() => {
     if (!runId) return;
     let live = true;
+    // Ends a broker read's wait across the host's renewal (cinatra#4217 fold 3)
+    // when this read goes stale.
+    const ended = new AbortController();
     void (async () => {
       const state = auth
-        ? await readHitlScreenThroughBroker(runId, auth)
+        ? await readHitlScreenThroughBroker(runId, auth, ended.signal)
         : await getAgentHitlScreenStateAction({ runId }).catch(() => null);
       // A read that could not be completed is a FAILURE, not a state: the last
       // authorized answer stands, and an unread card stays silent.
@@ -477,6 +494,7 @@ export function useAgentHitlScreenState(params: {
     })();
     return () => {
       live = false;
+      ended.abort();
     };
     // `onResolved` is deliberately NOT a dependency: it is a write-through into
     // the host's box, and re-issuing an authorized read because a callback

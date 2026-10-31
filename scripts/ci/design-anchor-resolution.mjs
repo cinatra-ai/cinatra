@@ -86,17 +86,32 @@
 // while the capture recorder still grades pictures against them. A visible
 // control is still never excused HERE: every recorded owner anchor and every
 // capture selector other than the passive capture markers goes through the
-// drawing check. It is landed warn-first — its context is not
-// required until a separate pull request adds it.
+// drawing check. It landed warn-first and is now blocking (cinatra#3555): the
+// job has no job-level continue-on-error and its context is listed in
+// .github/branch-protections.json.
 //
 // Usage:
 //   node scripts/ci/design-anchor-resolution.mjs
 //   node scripts/ci/design-anchor-resolution.mjs --github-annotations
 //   node scripts/ci/design-anchor-resolution.mjs --print-unresolved
 //
+// WHEN THE DRAWINGS CANNOT BE READ (cinatra#3555). This check is a required
+// context and it reads the drawings through a credential. A fork pull request
+// has no Actions secrets, a Dependabot-triggered run gets a secret store of its
+// own, and the App credential or the design source can be refused or down: in
+// each the read fails. A pull request, merge group or branch push whose diff
+// changes no path this checker reads (the touched-path rule of design-pin-drift, over
+// scripts/ci/design-pin-gates.paths.json, whose pin paths include every
+// file the checker imports or opens as data) cannot change what the check
+// would find, so that run exits 0 with a ::notice and reads no verdict. A run
+// whose diff does change such a path, a push to main, a dispatch, a run with no
+// diff base (every pin then counts as touched) and a run that cannot read its
+// pin, contract, path map or diff base all keep exit 2, as does a path map that
+// names other pins than the ones read, and a run under --print-unresolved.
+//
 // Exit codes. A run takes the FIRST of these that applies, in this order:
 //   2  the gate could not read its pin, contract, path map, diff base or
-//      drawings ("could not run honestly")
+//      drawings ("could not run honestly"), except the untouched-diff run above
 //   1  a recorded `anchorsUnresolvedAtPin` disagrees with what this check
 //      finds, on any event
 //   2  the recorded set carries a selector form this matcher refuses
@@ -634,6 +649,18 @@ export async function runCli({
     } catch (err) {
       return cannotRun(err instanceof DesignPinError ? err.message : "the path map could not be read");
     }
+    // The map must name exactly the pins this checker reads. A map that names
+    // fewer (or none) would resolve every diff to "no pin touched", global
+    // paths included, and so open the exit-0 road below for any diff. design-pin-drift
+    // refuses the same disagreement for its own map.
+    const mappedIds = Object.keys(map.pins).sort();
+    const pinIds = pins.map((p) => p.id).sort();
+    if (JSON.stringify(mappedIds) !== JSON.stringify(pinIds)) {
+      return cannotRun(
+        `the path map names [${mappedIds.join(", ")}] but the pins read are [${pinIds.join(", ")}]; ` +
+          "every pin needs a path list before this gate can decide which diffs touch it.",
+      );
+    }
     const base = (env.DESIGN_PIN_DRIFT_DIFF_BASE ?? "").trim();
     if (base === "") {
       log("::notice::no diff base is set — treating every pin as touched (fail-closed).");
@@ -642,7 +669,9 @@ export async function runCli({
       let touchedPaths;
       try {
         runGit(["rev-parse", "--verify", "--quiet", `${base}^{commit}`]);
-        touchedPaths = runGit(["diff", "--name-only", `${base}...HEAD`])
+        // No rename detection: with it, `--name-only` lists only the destination
+        // of a moved file, and the source (a path the checker may read) vanishes.
+        touchedPaths = runGit(["diff", "--name-only", "--no-renames", `${base}...HEAD`])
           .split("\n")
           .map((l) => l.trim())
           .filter(Boolean);
@@ -659,10 +688,24 @@ export async function runCli({
     try {
       drawings = await loadDrawings({ pin, env, createReader });
     } catch (err) {
-      if (err instanceof DesignSourceError) return cannotRun(`${err.message}.`);
-      return cannotRun(
-        err instanceof DesignPinError ? `${err.message}.` : "the drawings could not be read.",
-      );
+      const why =
+        err instanceof DesignSourceError || err instanceof DesignPinError
+          ? `${err.message}.`
+          : "the drawings could not be read.";
+      // A run that could not read the drawings decides nothing about a diff that
+      // changes no path this checker reads (see the header): it says so and
+      // exits 0. It certifies nothing, and it never takes this road on a push
+      // to main, on dispatch, with no diff base, or when any pin is touched. It
+      // never takes it under --print-unresolved either: that road promises that
+      // exit 0 means the whole unresolved set was printed.
+      if (!alwaysRed && !printUnresolved && touchedPinIds.length === 0) {
+        log(
+          `::notice title=design-anchor-resolution::the check did not run: ${why} ` +
+            "This diff changes no path the check reads, so the drawings could not change its verdict.",
+        );
+        return 0;
+      }
+      return cannotRun(why);
     }
     const pinAnchors = anchors.filter((a) => a.pinId === undefined || a.pinId === pin.id);
     reports.push(

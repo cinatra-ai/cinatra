@@ -7,7 +7,7 @@
 // Extract `RecurringSchedulePicker` to @cinatra-ai/sdk-ui once a third caller appears.
 
 import { useState, useTransition } from "react";
-import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -295,7 +295,7 @@ export function MatchesCronPicker({ initial }: { initial: ScheduleSnapshot }) {
       </summary>
       <div className="mt-4 flex flex-col gap-4">
         <div className="flex items-center gap-3">
-          <Switch id="schedule-enabled" checked={enabled} onCheckedChange={setEnabled} />
+          <Checkbox id="schedule-enabled" checked={enabled} onCheckedChange={(checked) => setEnabled(checked === true)} />
           <Label htmlFor="schedule-enabled">Enabled</Label>
         </div>
 
