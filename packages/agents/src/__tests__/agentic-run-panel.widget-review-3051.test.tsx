@@ -8,6 +8,7 @@ import { LifecycleCardSurfaceProvider, lifecycleRequestCredential, type Lifecycl
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "../agent-builder-ids";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import { AgenticRunPanel } from "../agentic-run-panel";
+import { RunPageChrome } from "../run-page-chrome";
 import { getAgentBuilderTask } from "../a2a-actions";
 import { loadRunWindowConversation, sendRunWindowTurn } from "../run-window-actions";
 
@@ -325,6 +326,7 @@ describe("#3051 — the widget run-card owns one broker-authorised review", () =
 // window nor the settled exchange is drawn there. A cookie host keeps both.
 describe("#3051 — a broker host mounts no cookie-bound run window", () => {
   const WINDOW = '[data-conformance-id="review-prompt-window"]';
+  const CHROME = '[data-run-window-host="page-chrome"]';
   const EXCHANGE = "[data-review-settled-exchange]";
   const SETTLED = '[data-conformance-id="review-gate-settled"]';
   const changesRequested = { state: "settled", outcome: "changes_requested" };
@@ -368,9 +370,12 @@ describe("#3051 — a broker host mounts no cookie-bound run window", () => {
 
   it("a standalone run_card review keeps its prompt window on the run's exchange", async () => {
     service();
-    const { container } = render(<AgenticRunPanel {...props()} />);
+    // The run page's one prompt window belongs to the page chrome (#3487): the
+    // cookie host's positive control renders the panel inside RunPageChrome and
+    // reads the window in the chrome's own node.
+    const { container } = render(<RunPageChrome><AgenticRunPanel {...props()} /></RunPageChrome>);
     await screen.findByRole("button", { name: "Approve" });
-    await waitFor(() => expect(container.querySelector(WINDOW)).not.toBeNull());
+    await waitFor(() => expect(container.querySelector(`${CHROME} > ${WINDOW}`)).not.toBeNull());
     expect(loadRunWindowConversation).toHaveBeenCalledWith(RUN);
   });
 
