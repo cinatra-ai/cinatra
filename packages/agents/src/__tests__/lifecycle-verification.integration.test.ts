@@ -328,7 +328,7 @@ describe.skipIf(!HAS_DB)("cinatra#2042 — post-change verification (real store)
     expect(viaSuccessor!.lineageId).toBe(original!.lineageId);
   });
 
-  it("REOPEN-CHAIN (cinatra#4312): changes requested on the canonical verification reopen joins the repair's lineage at attempt 2, and the lineage reader accepts that chain", async () => {
+  it("REOPEN-CHAIN (cinatra#4312): changes requested on the verification reopen gate the record names joins the repair's lineage at attempt 2, and the lineage reader accepts that chain", async () => {
     const { ev, repairId, successorRev, successorGateId } = await landRepair();
     const original = await repairStore.readRepair(repairId);
     expect(original).not.toBeNull();

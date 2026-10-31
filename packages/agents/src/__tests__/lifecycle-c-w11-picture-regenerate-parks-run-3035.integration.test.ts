@@ -1113,8 +1113,8 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — the attempts bound counts every claim
 
 // ---------------------------------------------------------------------------
 // cinatra#4312, review 3 of cinatra#4339 (finding 1): a gate shaped as a
-// verification reopen joins a repair's lineage only when it is that repair's
-// canonical reopen.
+// verification reopen joins a repair's lineage only when the verification record
+// of that repair's successor names it, and never a declared review leg's lineage.
 // ---------------------------------------------------------------------------
 
 /** A gate in another run of the same org, with the verification reopen task id
