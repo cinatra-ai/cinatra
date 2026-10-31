@@ -228,7 +228,7 @@ export function VerificationSummaryCard({
           className="font-sans text-sm font-bold text-foreground"
           data-verification-chrome="Core analysis"
         >
-          Audit
+          Core analysis
         </span>
         <StatusPill status={copy.pill} data-verification-outcome={body.outcome}>
           {copy.label}
