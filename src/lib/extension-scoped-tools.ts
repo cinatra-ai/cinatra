@@ -98,7 +98,9 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
  * (#4223), and the server log records the stage, the tool, the run and a class
  * word, never its text. A throw that cannot even be classified (a proxy whose
  * trap throws, a refusal whose `message` or `reason` getter throws) answers
- * the same fixed sentence, with the class word `unreadable`.
+ * the same fixed sentence, with the class word `unreadable`. The catch reads
+ * the tool and the run id for the log through `diagnosticFields`, which never
+ * throws.
  */
 export async function dispatchExtensionScopedTool(input: {
   tool: string;
@@ -128,7 +130,7 @@ export async function dispatchExtensionScopedTool(input: {
     }
     return { ok: true, result: await runArtifactRead(context, input) };
   } catch (e) {
-    const where = { tool: input.tool, runId: input.run.id, stage: "extension-scoped tool call" };
+    const where = { ...diagnosticFields(input), stage: "extension-scoped tool call" };
     const stated = statedRefusal(e);
     if (stated === UNREADABLE) {
       logFixedLine(
@@ -145,6 +147,29 @@ export async function dispatchExtensionScopedTool(input: {
       error: passthroughFixedFailureText(e, where, PASSTHROUGH_UNEXPECTED_ERROR),
     };
   }
+}
+
+/**
+ * The tool and the run id the failure log names, read so that no getter can
+ * throw out of the catch: a value that is not a string, or a read that throws,
+ * is the word "unreadable".
+ */
+function diagnosticFields(input: { tool: unknown; run: unknown }): { tool: string; runId: string } {
+  let tool = "unreadable";
+  let runId = "unreadable";
+  try {
+    const value: unknown = input.tool;
+    if (typeof value === "string") tool = value;
+  } catch {
+    /* the word stays */
+  }
+  try {
+    const value: unknown = (input.run as { id?: unknown }).id;
+    if (typeof value === "string") runId = value;
+  } catch {
+    /* the word stays */
+  }
+  return { tool, runId };
 }
 
 /** A throw this module could not classify or read: answered as a failure. */
