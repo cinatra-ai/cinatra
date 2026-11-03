@@ -592,6 +592,49 @@ describe("cinatra#4150 review fold: surfaced values are plain JSON, errors name 
     expect(calls.values).toHaveLength(2);
   });
 
+  it("writes a positive zero, the keys in JSON's own order, and the depth cap as the exact same text", async () => {
+    await insertParkedDecision({ ...PARK, surfacedValues: { n: 0 } });
+    expect(calls.values[0].surfacedValues).toBe('{"n":0}');
+    const ordered = { b: 1, a: [1, { z: 1, y: 2 }], "2": "two", "1": "one" };
+    await insertParkedDecision({ ...PARK, surfacedValues: ordered });
+    expect(calls.values[1].surfacedValues).toBe(JSON.stringify(ordered));
+    expect(calls.values[1].surfacedValues).toBe('{"1":"one","2":"two","b":1,"a":[1,{"z":1,"y":2}]}');
+    const deepest = nested(PUBLISH_DECISION_MAX_SURFACED_DEPTH);
+    await insertParkedDecision({ ...PARK, surfacedValues: deepest });
+    expect(calls.values[2].surfacedValues).toBe(JSON.stringify(deepest));
+    expect(JSON.parse(calls.values[2].surfacedValues as string)).toEqual(deepest);
+  });
+
+  it("refuses an array or object whose prototype is a proxy, and no trap runs", async () => {
+    let traps = 0;
+    const handler = new Proxy({}, { get: () => { traps += 1; return undefined; } }); // counts every trap looked up
+    const values = [
+      { x: Object.setPrototypeOf([1], new Proxy(Array.prototype, handler)) as unknown[] },
+      { x: Object.setPrototypeOf({ a: 1 }, new Proxy({}, handler)) as Record<string, unknown> },
+      Object.setPrototypeOf({ what: "x" }, new Proxy({}, handler)) as Record<string, unknown>,
+      new Proxy({ what: "x" }, handler),
+    ];
+    for (const value of values) expect(await codeOf(insertParkedDecision({ ...PARK, surfacedValues: value }))).toBe("invalid-input");
+    expect(traps).toBe(0);
+    expect(calls.values).toHaveLength(0);
+  });
+
+  it("an error the value or the serializer throws never passes as the store's own, even a PublishDecisionError", async () => {
+    const foreign = new PublishDecisionError("conflict", "text-from-the-value");
+    const trapped = { x: Object.setPrototypeOf([1], new Proxy(Array.prototype, { has: () => { throw foreign; } })) as unknown[] };
+    const fromTrap = insertParkedDecision({ ...PARK, surfacedValues: trapped });
+    expect(await codeOf(fromTrap)).toBe("invalid-input");
+    expect(await messageOf(fromTrap)).not.toContain("text-from-the-value");
+    for (const thrown of [foreign, new Error("text-from-the-serializer")]) {
+      const spy = vi.spyOn(JSON, "stringify").mockImplementationOnce(() => { throw thrown; });
+      const work = insertParkedDecision({ ...PARK, surfacedValues: { what: "x" } }); // runs to the serializer before its first await
+      spy.mockRestore();
+      expect(await codeOf(work)).toBe("invalid-input");
+      expect(await messageOf(work)).toBe("surfacedValues could not be read as plain data");
+    }
+    expect(calls.values).toHaveLength(0);
+  });
+
   it("reads no getter, and a getter's error text never reaches the message", async () => {
     let reads = 0;
     const counted = Object.defineProperty({ what: "x" }, "n", { get: () => { reads += 1; return 1; }, enumerable: true });

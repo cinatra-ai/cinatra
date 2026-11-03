@@ -74,21 +74,23 @@ function deserialize(row: StoredRow): PublishDecisionRow {
 
 export const PUBLISH_DECISION_MAX_SURFACED_DEPTH = 64;
 
+const OWN_REFUSALS = new WeakSet<object>(); // the refusals plainJson raises; the catch below passes only these
 /** Copies surfaced values as plain data, each own property read once through its descriptor (no getter runs), and refuses
  *  every value JSON would drop, change or fail on, -0 and proxies included, so the stored text reads back as the same object. */
 function plainJson(value: unknown, depth: number, open: Set<object>): unknown {
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
   if (typeof value === "number" && Number.isFinite(value) && !Object.is(value, -0)) return value;
-  const refuse = (why: string) => new PublishDecisionError("invalid-input", `surfacedValues ${why}`);
+  const refuse = (why: string) => { const error = new PublishDecisionError("invalid-input", `surfacedValues ${why}`); OWN_REFUSALS.add(error); return error; };
   if (typeof value !== "object") throw refuse("must hold only strings, finite numbers other than -0, booleans, null, arrays and plain objects");
   if (types.isProxy(value)) throw refuse("must not hold a proxy");
   if (open.has(value)) throw refuse("must not contain itself");
   if (depth > PUBLISH_DECISION_MAX_SURFACED_DEPTH) throw refuse(`must nest at most ${PUBLISH_DECISION_MAX_SURFACED_DEPTH} levels`);
   const array = Array.isArray(value);
-  const proto: unknown = Object.getPrototypeOf(value);
+  const proto: unknown = Object.getPrototypeOf(value); // checked before the `in` test below, so no trap in a prototype runs
+  if (array ? proto !== Array.prototype || Object.getPrototypeOf(Array.prototype) !== Object.prototype : proto !== Object.prototype && proto !== null) throw refuse("must hold only plain objects and arrays");
   const keys = Reflect.ownKeys(value).filter((key) => !(array && key === "length")); // an array's own "length"
   const props = keys.map((key) => Reflect.getOwnPropertyDescriptor(value, key));
-  if ((!array && proto !== Object.prototype && proto !== null) || "toJSON" in value || (array && keys.length !== (value as unknown[]).length)
+  if ("toJSON" in value || (array && keys.length !== (value as unknown[]).length)
     || keys.some((key, i) => typeof key !== "string" || (array && key !== String(i)) || !props[i]?.enumerable || !("value" in props[i]!))) {
     throw refuse("must hold only plain objects and dense arrays of data properties, with no toJSON, getter, symbol or hidden keys");
   }
@@ -132,10 +134,10 @@ export async function insertParkedDecision(input: InsertParkedDecisionInput): Pr
   const a2aContextId = optionalText(input.a2aContextId, "a2aContextId");
   const top: unknown = input.surfacedValues;
   let surfaced: string | null = null;
-  try { // a reflection or serialization failure becomes the typed error, with no value text
+  try { // only the refusals plainJson raises pass; any other failure becomes the typed error, with no value text
     if (typeof top === "object" && top !== null && (types.isProxy(top) || !Array.isArray(top))) surfaced = JSON.stringify(plainJson(top, 1, new Set()));
   } catch (error) {
-    throw error instanceof PublishDecisionError ? error : new PublishDecisionError("invalid-input", "surfacedValues could not be read as plain data");
+    throw OWN_REFUSALS.has(error as object) ? error : new PublishDecisionError("invalid-input", "surfacedValues could not be read as plain data");
   }
   if (surfaced === null || Buffer.byteLength(surfaced, "utf8") > PUBLISH_DECISION_MAX_SURFACED_BYTES) {
     throw new PublishDecisionError("invalid-input", `surfacedValues must be an object of at most ${PUBLISH_DECISION_MAX_SURFACED_BYTES} bytes of JSON`);
