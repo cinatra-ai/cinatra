@@ -78,6 +78,8 @@ import { approveReviewTask } from "./hitl-actions";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
   buildChatGateSubmitPayload,
+  gateAwaitsRendererValue,
+  gateCarriesPresentationHint,
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
@@ -85,6 +87,7 @@ import {
   isSetupGateTaskId,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
+  withDeclaredRendererValues,
   wrapPrimitiveSetupPayload,
 } from "./hitl-gate-submit";
 import {
@@ -121,11 +124,6 @@ import { agentUIOverrideRegistry } from "./agent-ui-override-registry";
 import { getFieldRendererContextForAgentBuilderAction, getSkillsForAgentAction, type SkillForChip } from "./server-actions";
 import { HitlSkillChips } from "./hitl-skill-chips";
 import { HITL_PLACEHOLDER_FIELD_NAME, resolveFieldLabel } from "./humanize-field-name";
-import {
-  gateAwaitsRendererValue,
-  gateCarriesPresentationHint,
-  withDeclaredRendererValues,
-} from "./gate-renderer-value";
 
 // Client-safe serialized form of AgentRunMessageRecord — Date becomes ISO string
 export type SerializedAgentRunMessage = {
@@ -1355,7 +1353,7 @@ export function AgenticRunPanel({
       // cinatra#3380 — a caller of the published submit (none yet) is a second entrance
       // to the same resume as the gate's Continue, so it is held by the same
       // rule: a mid-run gate that declares a value its renderer must produce
-      // (`gate-renderer-value.ts`) is not resumed until the answer carries that
+      // (`hitl-gate-submit.ts`) is not resumed until the answer carries that
       // value. Nothing is sent. A gate that carries a presentation hint is drawn
       // through the generic dispatch renderer, which writes nothing, so it is out
       // of the rule, as on its Continue. The rule reads what the renderer wrote and
@@ -3142,7 +3140,7 @@ export function AgenticRunPanel({
                     {/* Show the external Continue button only for non-grouped-setup midrun renderers.
                         cinatra#3380 — it stays unavailable while the gate declares a
                         value its renderer must produce and the renderer has written
-                        none (`gate-renderer-value.ts`); a gate that declares none is
+                        none (`hitl-gate-submit.ts`); a gate that declares none is
                         drawn exactly as before. */}
                     {isMidRunHitl &&
                       !isGroupedSetup &&

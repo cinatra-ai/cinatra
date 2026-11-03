@@ -140,6 +140,7 @@ import { approveReviewTask } from "./hitl-actions";
 import { getFieldRendererContextForAgentBuilderAction } from "./server-actions";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
+  gateAwaitsRendererValue,
   hitlGateIdentityKey,
   hitlRendererFieldName,
   isAlreadyResolvedError,
@@ -147,10 +148,10 @@ import {
   isSetupGateTaskId,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
+  withDeclaredRendererValues,
   wrapPrimitiveSetupPayload,
 } from "./hitl-gate-submit";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
-import { gateAwaitsRendererValue, withDeclaredRendererValues } from "./gate-renderer-value";
 import type { LifecycleCardHost } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
 /**
@@ -931,7 +932,7 @@ export function AgentHitlScreenContinue({
       submitting={submitting}
       blocked={blocked}
       // cinatra#3380 — the same rule the run panel and the stepper apply to
-      // their mid-run Continue (`gate-renderer-value.ts`): a gate that declares
+      // their mid-run Continue (`hitl-gate-submit.ts`): a gate that declares
       // a value its renderer must produce waits for the renderer to write one.
       // A gate that carries a presentation hint is drawn through the generic
       // dispatch renderer, which writes nothing, so it is out of the rule.

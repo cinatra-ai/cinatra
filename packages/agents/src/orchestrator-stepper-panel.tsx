@@ -108,6 +108,7 @@ import { applyAttachmentEnvelope } from "./attachment-envelope-payload";
 // #817 context-selector envelope synthesis are shared with
 // agentic-run-panel so both surfaces submit byte-identical payloads.
 import {
+  gateAwaitsRendererValue,
   hitlRendererFieldName,
   isAlreadyResolvedError,
   hitlGateIdentityKey,
@@ -116,6 +117,7 @@ import {
   liftRendererApprovalNote,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
+  withDeclaredRendererValues,
   wrapPrimitiveSetupPayload,
 } from "./hitl-gate-submit";
 // `resolveFieldLabel` joins it for cinatra#3532 fix leg 3: the answered step
@@ -123,7 +125,6 @@ import {
 // the module this file already imports the placeholder token from — no new
 // module edge, for the reason the note above `SetupFieldContinue` gives.
 import { HITL_PLACEHOLDER_FIELD_NAME, resolveFieldLabel } from "./humanize-field-name";
-import { gateAwaitsRendererValue, withDeclaredRendererValues } from "./gate-renderer-value";
 // `HitlGateContext` is the shape the run's own read answers a gate with
 // (cinatra#3532, fix leg 3) — the same one `agentic-run-panel.tsx`'s refetch
 // reads, taken from a module this file already imports so the file's module
@@ -896,7 +897,7 @@ function HitlApprovalCard({
     includeSetupFormSuffix: true,
   });
   // cinatra#3380 — a mid-run gate that declares a value its renderer must
-  // produce (`gate-renderer-value.ts`) keeps its outer Continue unavailable
+  // produce (`hitl-gate-submit.ts`) keeps its outer Continue unavailable
   // until the renderer has written one. A gate that declares none is held by
   // nothing.
   const continueAwaitsRendererValue =

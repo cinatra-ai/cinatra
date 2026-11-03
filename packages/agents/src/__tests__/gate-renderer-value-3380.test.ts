@@ -1,12 +1,13 @@
 /**
  * cinatra#3380 — THE RULE A MID-RUN CONTINUE IS HELD BY.
  *
- * `gate-renderer-value.ts` reads a gate's schema and the buffer its renderer
- * wrote. A property declared `"x-required": true` (with no `default`) is a value
- * the renderer must produce before the Continue may send. The object-level
- * `required` list is not read: the email gates declare `required: ["decision"]`,
- * no renderer of theirs writes `decision`, and the Continue's payload carries
- * `approved`, so a rule over that list would hold those gates.
+ * The renderer-value section of `hitl-gate-submit.ts` reads a gate's schema and
+ * the buffer its renderer wrote. A property declared `"x-required": true` (with
+ * no `default`) is a value the renderer must produce before the Continue may
+ * send. The object-level `required` list is not read: the email gates declare
+ * `required: ["decision"]`, no renderer of theirs writes `decision`, and the
+ * Continue's payload carries `approved`, so a rule over that list would hold
+ * those gates.
  *
  * The three surfaces that draw a mid-run Continue (the run panel, the stepper
  * and the conversation card) each read this rule; their own files pin them.
@@ -20,9 +21,9 @@ import {
   gateAwaitsRendererValue,
   gateCarriesPresentationHint,
   gateRequiredRendererKeys,
+  hitlGateIdentityKey,
   withDeclaredRendererValues,
-} from "../gate-renderer-value";
-import { hitlGateIdentityKey } from "../hitl-gate-submit";
+} from "../hitl-gate-submit";
 
 const PICKED_JSON = JSON.stringify({ artifactId: "a-2", representationRevisionId: "r-2" });
 
