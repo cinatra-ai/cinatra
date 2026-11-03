@@ -166,6 +166,21 @@ export function useInsideConversation(): boolean {
 export type LifecycleCardAuth = {
   headers: () => Record<string, string>;
   credentials: RequestCredentials;
+  /** cinatra#4217: the host's credential RENEWAL, for a host that replaces its
+   *  pair while it stays open (the site widget's frame). The server commits a
+   *  renewed pair before its answer reaches the frame, so for that gap a
+   *  refusal of the pair the frame still holds is not final. Absent on every
+   *  other host, whose refusals stay final exactly as before. */
+  renewal?: LifecycleCardAuthRenewal;
+};
+
+export type LifecycleCardAuthRenewal = {
+  /** True while a renewal request is on its way. */
+  pending: () => boolean;
+  /** Settles when no renewal request is on its way. After a renewal that
+   *  succeeded, `headers()` already carries the renewed pair when this settles.
+   *  Bounded by the renewal request's own deadline. */
+  settled: () => Promise<void>;
 };
 
 /**
@@ -1190,6 +1205,140 @@ export function lifecycleRequestCredential(
     : null;
 }
 
+// ---------------------------------------------------------------------------
+// A REFUSAL ACROSS THE HOST'S RENEWAL (cinatra#4217 fold 3).
+//
+// The site widget's frame renews its credential pair while it stays open. The
+// server commits the renewed pair, and keeps the pair it replaced for its grace
+// window only, before the renewal's answer reaches the frame. When that answer
+// is late, a request the frame sends with the pair it still holds is refused,
+// and the refusal says nothing about the reader: the renewed pair is on its way.
+// It can also come back in the other order, after the renewed pair was
+// installed while the request was out.
+//
+// So no reader on this surface takes such a refusal as final, and none charges
+// it to a budget. A ONE-SHOT read (a card's resolve, the run card's first read,
+// a HITL screen read) sends once more with the renewed pair: `sendAcrossRenewal`.
+// A WATCH that looks on a cadence (the run-moment watch, the review slot) does
+// not count a look that got no answer while it was caught in a renewal, and it
+// waits for the renewal to settle before its next look: `lookCaughtInRenewal`
+// and `LifecycleCardAuthRenewal.settled`.
+//
+// THE BOUND IS THE RENEWAL'S OWN. `settled` resolves once no renewal request is
+// on its way, and the frame gives a request up at its deadline (the later of
+// the held pair's upper end of life and the request's start plus 90 s), so
+// nothing here holds a fixed window that a valid renewal could outlast. A host
+// that declares no renewal keeps every refusal final, exactly as before.
+// ---------------------------------------------------------------------------
+
+/** How many times ONE read is sent again because the host's credential
+ *  changed after it was refused. Each needs a changed credential, so a read
+ *  cannot loop. */
+const RENEWED_SENDS = 2;
+
+/** The two headers that ARE the broker credential pair: the transport token
+ *  and the widget user token. Lower case; header names are case-insensitive. */
+const CREDENTIAL_KEY_HEADERS = ["authorization", WIDGET_USER_TOKEN_HEADER] as const;
+
+/**
+ * The credential a request carries, as one comparable value: the two headers
+ * of the credential pair the declaration answers NOW, read by name in any
+ * case. Every other header (the assistant and origin selectors) is left out,
+ * so a selector that changes, or a header whose name changes case, is not a
+ * moved credential. It lives only for one comparison (did the credential change
+ * between sending a request and reading its refusal) and is never stored in
+ * state, logged or sent. A cookie host has no declaration and one constant key,
+ * so its refusals never read as a renewal.
+ */
+export function lifecycleCredentialKey(auth: LifecycleCardAuth | null | undefined): string {
+  if (!auth) return "";
+  const pair: Record<string, string> = {};
+  for (const [name, value] of Object.entries(auth.headers())) {
+    const lower = name.toLowerCase();
+    if ((CREDENTIAL_KEY_HEADERS as readonly string[]).includes(lower)) pair[lower] = value;
+  }
+  return JSON.stringify(CREDENTIAL_KEY_HEADERS.map((name) => pair[name] ?? null));
+}
+
+/**
+ * Was a look that got NO ANSWER (a refusal, a timeout, a transport failure)
+ * caught in the host's renewal? `sentKey` is `lifecycleCredentialKey(auth)` read
+ * when the look was sent. True when a renewal request is on its way now, or the
+ * credential the host holds now is not the one the look carried. Always false
+ * on a cookie host, and on a broker host whose credential did not move.
+ */
+export function lookCaughtInRenewal(
+  auth: LifecycleCardAuth | null | undefined,
+  sentKey: string,
+): boolean {
+  if (!auth) return false;
+  if (auth.renewal?.pending() === true) return true;
+  return lifecycleCredentialKey(auth) !== sentKey;
+}
+
+/** Wait until no renewal is on its way, or until `signal` aborts. A rejected
+ *  wait counts as settled: the caller then compares credentials as usual. */
+async function renewalSettledOrAborted(
+  renewal: LifecycleCardAuthRenewal,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  if (!signal) {
+    await renewal.settled().catch(() => undefined);
+    return;
+  }
+  if (signal.aborted) return;
+  await new Promise<void>((resolve) => {
+    const done = () => {
+      signal.removeEventListener("abort", done);
+      resolve();
+    };
+    signal.addEventListener("abort", done, { once: true });
+    renewal.settled().then(done, done);
+  });
+}
+
+/**
+ * SEND ONE READ ACROSS THE HOST'S RENEWAL. `send` sends the request with the
+ * credential the host holds when it is called, or answers `null` to send
+ * nothing. A 401 or 403 is the answer as it stands unless the host's credential
+ * was renewed: on a host that declares a renewal this first waits until no
+ * renewal is on its way (so a refusal that came back BEFORE the renewed pair was
+ * installed is not compared too early), then, when the credential held now is
+ * not the one the refused request carried and it still holds a widget user
+ * token, it sends once more with it, at most `RENEWED_SENDS` times.
+ *
+ * Fail-closed: any other answer, a cookie host, an unchanged credential, a
+ * credential that holds no token any more (the renewal ended the chain) and an
+ * abort while waiting all return the refusal as it came, and nothing is sent
+ * without a token.
+ */
+export async function sendAcrossRenewal(
+  auth: LifecycleCardAuth | null | undefined,
+  send: () => Promise<Response> | null,
+  signal?: AbortSignal,
+): Promise<Response | null> {
+  let sentKey = lifecycleCredentialKey(auth);
+  const first = send();
+  if (first === null) return null;
+  let response = await first;
+  for (let resent = 0; resent < RENEWED_SENDS; resent += 1) {
+    if (response.status !== 401 && response.status !== 403) return response;
+    if (!auth) return response;
+    if (auth.renewal) {
+      await renewalSettledOrAborted(auth.renewal, signal);
+      if (signal?.aborted) return response;
+    }
+    const nowKey = lifecycleCredentialKey(auth);
+    if (nowKey === sentKey) return response;
+    if (lifecycleRequestCredential(auth) === null) return response;
+    sentKey = nowKey;
+    const again = send();
+    if (again === null) return response;
+    response = await again;
+  }
+  return response;
+}
+
 /**
  * The host's embedding context, or `null` on a first-party host. Read by the
  * review card when it addresses the §III island, so the server can re-derive
@@ -1370,16 +1519,31 @@ export function useLifecycleCardResolve<K extends LifecycleDataPartViewType>(par
       // under the new one during the window before the effect cleanup aborts it.
       const requestIdentity = identity;
       try {
-        // A broker declaration with no widget user token now sends nothing.
-        const credential = lifecycleRequestCredential(auth);
-        if (credential === null) return;
-        const response = await fetch(LIFECYCLE_VIEW_RESOLVE_PATH, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...credential.headers },
-          body: JSON.stringify({ viewType, ref }),
-          credentials: credential.credentials,
+        // cinatra#4217 fold 3 (pre-3 MUST-FIX 2): a resolve refused while the
+        // host's renewal was on its way, or after it replaced the credential,
+        // is sent once more with the renewed credential instead of leaving the
+        // card unresolved until a focus or a reload. See `sendAcrossRenewal`.
+        const response = await sendAcrossRenewal(
+          auth,
+          () => {
+            // A resolve that a newer one superseded while it waited for the
+            // renewal sends nothing more: its answer would be dropped below.
+            if (signal.aborted || requestId !== latestRequestRef.current) return null;
+            // A broker declaration with no widget user token now sends nothing.
+            const credential = lifecycleRequestCredential(auth);
+            if (credential === null) return null;
+            return fetch(LIFECYCLE_VIEW_RESOLVE_PATH, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", ...credential.headers },
+              body: JSON.stringify({ viewType, ref }),
+              credentials: credential.credentials,
+              signal,
+            });
+          },
           signal,
-        });
+        );
+        if (response === null) return;
+        if (signal.aborted || requestId !== latestRequestRef.current) return;
         if (!response.ok) return;
         const payload: unknown = await response.json();
         // Parsed against the kind THIS request asked for. Anything else — an
@@ -1710,6 +1874,25 @@ function runMomentAwaitsAPerson(card: RunMomentCard): boolean {
 const MOMENT_UNANSWERED_LIMIT = 20;
 const MOMENT_MISS_LIMIT = 10;
 const MOMENT_READ_TIMEOUT_MS = 8000;
+/**
+ * A LOOK CAUGHT IN THE HOST'S RENEWAL IS NOT A MISS (cinatra#4217 fold 3). A
+ * look that got no answer (a refusal, its read deadline, a transport failure)
+ * while the host's renewal was on its way, or after the renewal replaced the
+ * credential it carried, says nothing about the run: the watch does not count
+ * it, and its next look waits until no renewal is on its way. So the watch's
+ * wait is bounded by the renewal request's own deadline and by nothing shorter
+ * that a valid renewal could outlast (pre-3 MUST-FIX 1 replaced a fixed 180 s
+ * window).
+ *
+ * At most this many such looks IN A ROW are forgiven. A valid renewal costs
+ * one: the look after it carries the renewed pair. The belt is for a host whose
+ * `settled()` resolves while its `pending()` keeps reading true; past it, such
+ * looks count as misses again, so the watch still ends. It does NOT cover a
+ * `settled()` that never resolves: the next look waits for it, so such a host
+ * holds the watch for as long as it stays unresolved. The embed's resolves at
+ * the latest at the renewal request's own deadline.
+ */
+const MOMENT_RENEWAL_WAIT_LIMIT = 3;
 
 /**
  * AND IT IS BRISK WHILE THE RUN IS STANDING AT THE MOMENT. That is the one
@@ -1747,7 +1930,14 @@ export function useRunMomentCard({
     answered: boolean;
     reads: number;
     misses: number;
-  }>({ answered: false, reads: 0, misses: 0 });
+    /** Looks IN A ROW that were caught in the host's renewal (cinatra#4217
+     *  fold 3). They count toward neither belt; see MOMENT_RENEWAL_WAIT_LIMIT. */
+    renewalWaits: number;
+  }>({ answered: false, reads: 0, misses: 0, renewalWaits: 0 });
+  // The host's credential declaration, read only to ask whether a look that got
+  // no answer was caught in its renewal (cinatra#4217 fold 3). The reader
+  // carries the same declaration: both come from this subtree's surface.
+  const auth = useContext(LifecycleCardAuthContext);
   // A DIFFERENT READER IS A DIFFERENT SUBJECT — another run, or the same run
   // asked for with another credential — and the previous answer says nothing
   // about it. Adjusted during render (React's documented "adjust state when a
@@ -1763,7 +1953,7 @@ export function useRunMomentCard({
   if (seenRead.read !== read) {
     setSeenRead({ read });
     setCard(RUN_MOMENT_UNREAD);
-    setProbe({ answered: false, reads: 0, misses: 0 });
+    setProbe({ answered: false, reads: 0, misses: 0, renewalWaits: 0 });
   }
 
   const watchEnded =
@@ -1797,6 +1987,9 @@ export function useRunMomentCard({
           () => abort.abort(),
           MOMENT_READ_TIMEOUT_MS,
         );
+        // The credential this look leaves with, for one comparison only
+        // (cinatra#4217 fold 3); never stored.
+        const sentKey = lifecycleCredentialKey(auth);
         let landed = false;
         try {
           const next = await read(abort.signal);
@@ -1813,21 +2006,30 @@ export function useRunMomentCard({
           window.clearTimeout(deadline);
           inFlight = false;
           if (!cancelled) {
-            setProbe((prev) => ({
-              answered: prev.answered || landed,
-              reads: prev.reads + 1,
-              // CONSECUTIVE misses, reset by any answer: what this ends is a
-              // transport that has stopped answering, not one that hiccupped.
-              misses: landed ? 0 : prev.misses + 1,
-            }));
+            // A LOOK CAUGHT IN THE HOST'S RENEWAL (cinatra#4217 fold 3) is
+            // neither an answer nor a miss, up to MOMENT_RENEWAL_WAIT_LIMIT in
+            // a row; the next look waits for the renewal (below).
+            const caught = !landed && lookCaughtInRenewal(auth, sentKey);
+            setProbe((prev) => {
+              if (caught && prev.renewalWaits < MOMENT_RENEWAL_WAIT_LIMIT) {
+                return { ...prev, renewalWaits: prev.renewalWaits + 1 };
+              }
+              return {
+                answered: prev.answered || landed,
+                reads: prev.reads + 1,
+                // CONSECUTIVE misses, reset by any answer: what this ends is a
+                // transport that has stopped answering, not one that hiccupped.
+                misses: landed ? 0 : prev.misses + 1,
+                // Past the belt (LIMIT + 1) a caught look is charged and the
+                // next look does not wait; a look that was not caught ends the
+                // row.
+                renewalWaits: caught ? MOMENT_RENEWAL_WAIT_LIMIT + 1 : 0,
+              };
+            });
           }
         }
       })();
     };
-    const timer = window.setTimeout(
-      look,
-      probe.reads === 0 ? 0 : momentReadDelay(probe.reads, runMomentAwaitsAPerson(card)),
-    );
     // THE PERSON COMING BACK TO THE TAB is the cheap stand-in for "something
     // may have happened while nobody was looking" — the same signal the card
     // resolve beside this uses — and it costs one read rather than a faster
@@ -1835,14 +2037,43 @@ export function useRunMomentCard({
     const onFocus = () => {
       if (!cancelled) look();
     };
-    window.addEventListener("focus", onFocus);
+    let timer: number | undefined;
+    let listening = false;
+    const start = () => {
+      if (cancelled) return;
+      timer = window.setTimeout(
+        look,
+        // Only the very first look is immediate: the look after a renewal wait
+        // takes the ordinary cadence too, so a renewal reading that settles at
+        // once can never make the watch spin.
+        probe.reads === 0 && probe.renewalWaits === 0
+          ? 0
+          : momentReadDelay(probe.reads, runMomentAwaitsAPerson(card)),
+      );
+      window.addEventListener("focus", onFocus);
+      listening = true;
+    };
+    // AFTER A LOOK CAUGHT IN THE RENEWAL, NOTHING LOOKS UNTIL IT SETTLES — not
+    // the cadence and not a focus: a look sent now would carry the pair the
+    // server has already renewed away from. `settled` is bounded by the renewal
+    // request's own deadline. Past the belt nothing waits.
+    const renewal = auth?.renewal;
+    if (
+      renewal &&
+      probe.renewalWaits > 0 &&
+      probe.renewalWaits <= MOMENT_RENEWAL_WAIT_LIMIT
+    ) {
+      void renewal.settled().then(start, start);
+    } else {
+      start();
+    }
     return () => {
       cancelled = true;
       abort.abort();
-      window.clearTimeout(timer);
-      window.removeEventListener("focus", onFocus);
+      if (timer !== undefined) window.clearTimeout(timer);
+      if (listening) window.removeEventListener("focus", onFocus);
     };
-  }, [read, probe.answered, probe.reads, probe.misses, watchEnded, card]);
+  }, [read, auth, probe.answered, probe.reads, probe.misses, probe.renewalWaits, watchEnded, card]);
 
   return {
     card,
@@ -1851,9 +2082,18 @@ export function useRunMomentCard({
     // who is asking, or a transport that never answered. A caller that is
     // WITHHOLDING something until this read lands has to be able to stop
     // withholding it, or a dead endpoint would empty a turn for ever.
+    //
+    // AND IT IS EVERY WAY THE WATCH STOPS UNANSWERED (cinatra#4217 fold 3,
+    // pre-3 MUST-FIX 4). The effect stops at MOMENT_MISS_LIMIT whether or not
+    // it was ever answered, and every look of a watch that was never answered
+    // is a miss, so that belt is the one such a watch reaches first. Without it
+    // here a first-ever watch stopped with `gaveUp` false, and a caller that
+    // withheld the run's own reading behind it withheld it for ever.
     gaveUp:
       !probe.answered &&
-      (read === null || probe.reads >= MOMENT_UNANSWERED_LIMIT),
+      (read === null ||
+        probe.reads >= MOMENT_UNANSWERED_LIMIT ||
+        probe.misses >= MOMENT_MISS_LIMIT),
   };
 }
 
@@ -1942,6 +2182,10 @@ const PARKED_RUN_STATUS = "pending_approval";
 const SLOT_READ_LIMIT = 30;
 const SLOT_HOLD_LIMIT = 5;
 const SLOT_READ_TIMEOUT_MS = 8000;
+/** How many looks in a row caught in the host's renewal are not charged
+ *  (cinatra#4217 fold 3); see `renewalWaits` on the probe. A valid renewal
+ *  costs one: the look after it carries the renewed pair. */
+const SLOT_RENEWAL_WAIT_LIMIT = 3;
 
 /**
  * THE PARK'S OWN BUDGETS (cinatra#3007). A park is not the completed settle
@@ -2123,6 +2367,7 @@ async function reviewTicketStillPending(
     // credential: the answer a 401 gives below, without sending the request.
     const credential = lifecycleRequestCredential(auth);
     if (credential === null) return "withdrawn";
+    const sentKey = lifecycleCredentialKey(auth);
     const response = await fetch(LIFECYCLE_VIEW_RESOLVE_PATH, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...credential.headers },
@@ -2132,7 +2377,18 @@ async function reviewTicketStillPending(
     });
     // Credential invalidation is authoritative even without a protocol body:
     // the resolve route answers 401 { error: "Unauthorized" } for that case.
-    if (response.status === 401 || response.status === 403) return "withdrawn";
+    // EXCEPT ACROSS THE HOST'S RENEWAL (cinatra#4217 fold 3): a refusal while a
+    // renewal is on its way, or after it replaced the credential, says nothing
+    // about the gate, so it is indeterminate and the authorized ticket stays on
+    // file. The next look asks again with the renewed credential.
+    // BUT NOT WHEN THE CHAIN ENDED WHILE THIS PROBE WAS OUT: the declaration
+    // then holds no widget user token, its key moved only because the pair was
+    // dropped, and no renewed credential will ever ask again. That refusal is
+    // read exactly as a probe with no token is read before sending: withdrawn.
+    if (response.status === 401 || response.status === 403) {
+      if (lifecycleRequestCredential(auth) === null) return "withdrawn";
+      return lookCaughtInRenewal(auth, sentKey) ? "indeterminate" : "withdrawn";
+    }
     const envelope = parseLifecycleResolveEnvelope(
       "artifact_review_gate",
       await response.json(),
@@ -2284,11 +2540,25 @@ export function useRunReviewSlot({
      * bounded, and a surface that is demonstrably alive keeps its reader.
      */
     parkLooks: number;
+    /**
+     * LOOKS IN A ROW CAUGHT IN THE HOST'S RENEWAL (cinatra#4217 fold 3, pre-3
+     * MUST-FIX 3). A look that got no answer while the host's renewal was on
+     * its way, or after the renewal replaced the credential it carried, says
+     * nothing about the slot, so it spends none of the three budgets above, and
+     * the next look waits until no renewal is on its way. At most
+     * SLOT_RENEWAL_WAIT_LIMIT in a row; past it (LIMIT + 1) such looks are
+     * charged again, so a host whose `settled()` resolves while its
+     * `pending()` keeps reading true still meets every belt. A `settled()`
+     * that never resolves holds the next look for as long as it stays
+     * unresolved (the embed's resolves at the renewal request's deadline).
+     */
+    renewalWaits: number;
   }>({
     answered: initial != null,
     reads: 0,
     failures: 0,
     parkLooks: 0,
+    renewalWaits: 0,
   });
   const [seenLiveSignal, setSeenLiveSignal] = useState(liveSignal);
   // THE LAST ANSWER THIS READER DELIVERED, held in a ref rather than read off
@@ -2312,6 +2582,16 @@ export function useRunReviewSlot({
   // budget (fix leg 8).
   const lastLookAtRef = useRef<number>(0);
   const lastLookSignalRef = useRef<number | undefined>(liveSignal);
+  // THE ONE WAIT FOR THE HOST'S RENEWAL (cinatra#4217). The schedule below is
+  // rebuilt whenever the caller's liveness signal moves, and a rebuilt schedule
+  // that waits for the renewal asks the SAME renewal reading for the same
+  // settlement. So the reading is asked once per renewal and the wait shared.
+  // A stopped schedule still waits on that one shared promise until it
+  // settles, and then returns without looking.
+  const renewalWaitRef = useRef<{
+    renewal: LifecycleCardAuthRenewal;
+    settled: Promise<void>;
+  } | null>(null);
   // AND WHICH LOOK OWNS THE ANSWER (cinatra#3007, fix leg 8, convergence).
   //
   // Leg 8 put the caller's liveness signal into the scheduling effect's
@@ -2357,7 +2637,7 @@ export function useRunReviewSlot({
     setSeenAuth(auth);
     lastAnswerRef.current = EMPTY_RUN_REVIEW_SLOT;
     setSlot(EMPTY_RUN_REVIEW_SLOT);
-    setProbe({ answered: false, reads: 0, failures: 0, parkLooks: 0 });
+    setProbe({ answered: false, reads: 0, failures: 0, parkLooks: 0, renewalWaits: 0 });
     parkFlagDropsRef.current = 0;
     // The look in flight was asking about the status this reader has just left,
     // so its answer is not about this wait. Releasing the guard here is what
@@ -2392,7 +2672,7 @@ export function useRunReviewSlot({
     ) {
       lastAnswerRef.current = EMPTY_RUN_REVIEW_SLOT;
       setSlot(EMPTY_RUN_REVIEW_SLOT);
-      setProbe({ answered: false, reads: 0, failures: 0, parkLooks: 0 });
+      setProbe({ answered: false, reads: 0, failures: 0, parkLooks: 0, renewalWaits: 0 });
       parkFlagDropsRef.current = 0;
       lookEpochRef.current += 1;
       inFlightRef.current = false;
@@ -2621,9 +2901,45 @@ export function useRunReviewSlot({
             SLOT_LIVE_LOOK_SPACING_MS,
           )
         : slotReadDelay(probe.reads, probe.failures));
+    let stopped = false;
+    const renewal = auth?.renewal;
+    const waitForRenewal =
+      renewal &&
+      probe.renewalWaits > 0 &&
+      probe.renewalWaits <= SLOT_RENEWAL_WAIT_LIMIT
+        ? renewal
+        : null;
     const timer = window.setTimeout(
       () => {
         void (async () => {
+          // AFTER A LOOK CAUGHT IN THE RENEWAL, THE NEXT ONE WAITS FOR IT TO
+          // SETTLE (cinatra#4217 fold 3): a look sent before would carry the
+          // pair the server has already renewed away from. The cadence above
+          // runs first, so a renewal reading that settles at once cannot make
+          // this reader spin. `settled` is bounded by the renewal request's own
+          // deadline; past the belt nothing waits. Only the newest schedule
+          // goes on after the wait: a rebuilt effect stops this one. The
+          // reading is asked once per renewal; a rebuilt schedule joins the
+          // wait already asked for (see renewalWaitRef).
+          if (waitForRenewal) {
+            let shared = renewalWaitRef.current;
+            if (shared === null || shared.renewal !== waitForRenewal) {
+              const entry = {
+                renewal: waitForRenewal,
+                settled: waitForRenewal.settled().then(
+                  () => undefined,
+                  () => undefined,
+                ),
+              };
+              renewalWaitRef.current = entry;
+              void entry.settled.then(() => {
+                if (renewalWaitRef.current === entry) renewalWaitRef.current = null;
+              });
+              shared = entry;
+            }
+            await shared.settled;
+            if (stopped) return;
+          }
           // The budget above is spent HERE, when the look actually starts, and
           // the signal it was taken against travels with it: a bump that has
           // already been answered by a look must not shorten the next one.
@@ -2632,6 +2948,9 @@ export function useRunReviewSlot({
           inFlightEpochRef.current = epoch;
           lastLookAtRef.current = Date.now();
           lastLookSignalRef.current = liveSignal;
+          // The credential this look leaves with, for one comparison only
+          // (cinatra#4217 fold 3); never stored.
+          const sentKey = lifecycleCredentialKey(auth);
           const abort = new AbortController();
           const deadline = window.setTimeout(() => abort.abort(), SLOT_READ_TIMEOUT_MS);
           let landed = false;
@@ -2814,27 +3133,40 @@ export function useRunReviewSlot({
             window.clearTimeout(deadline);
             if (lookEpochRef.current === epoch) {
               inFlightRef.current = false;
-              setProbe((prev) => ({
-                answered: prev.answered || landed,
-                reads: prev.reads + 1,
-                // CONSECUTIVE, not cumulative: one answer clears the count, so
-                // only a transport that has actually stopped answering reaches
-                // the park's failure belt.
-                failures: landed ? 0 : prev.failures + 1,
-                // AND CONSECUTIVE FOR THE CEILING TOO (fix leg 7): a look that
-                // said something new re-arms it, a look that repeated the last
-                // answer spends one. See the field's own note above.
-                parkLooks: changed ? 0 : prev.parkLooks + 1,
-              }));
+              // A LOOK CAUGHT IN THE HOST'S RENEWAL (cinatra#4217 fold 3, pre-3
+              // MUST-FIX 3) spends no budget, up to SLOT_RENEWAL_WAIT_LIMIT in a
+              // row; the next look waits for the renewal (below).
+              const caught = !landed && lookCaughtInRenewal(auth, sentKey);
+              setProbe((prev) => {
+                if (caught && prev.renewalWaits < SLOT_RENEWAL_WAIT_LIMIT) {
+                  return { ...prev, renewalWaits: prev.renewalWaits + 1 };
+                }
+                return {
+                  answered: prev.answered || landed,
+                  reads: prev.reads + 1,
+                  // CONSECUTIVE, not cumulative: one answer clears the count, so
+                  // only a transport that has actually stopped answering reaches
+                  // the park's failure belt.
+                  failures: landed ? 0 : prev.failures + 1,
+                  // AND CONSECUTIVE FOR THE CEILING TOO (fix leg 7): a look that
+                  // said something new re-arms it, a look that repeated the last
+                  // answer spends one. See the field's own note above.
+                  parkLooks: changed ? 0 : prev.parkLooks + 1,
+                  renewalWaits: caught ? SLOT_RENEWAL_WAIT_LIMIT + 1 : 0,
+                };
+              });
             }
           }
         })();
       },
       // The first look under a new status is immediate — the gate is usually
-      // already open by the time the run reports done.
-      probe.reads === 0 ? 0 : Math.max(0, dueAt - now),
+      // already open by the time the run reports done. The look after a
+      // renewal wait keeps the cadence (cinatra#4217 fold 3), so a renewal
+      // reading that settles at once cannot make this reader spin.
+      probe.reads === 0 && probe.renewalWaits === 0 ? 0 : Math.max(0, dueAt - now),
     );
     return () => {
+      stopped = true;
       window.clearTimeout(timer);
     };
   }, [
@@ -2844,6 +3176,7 @@ export function useRunReviewSlot({
     answered,
     probe.reads,
     probe.failures,
+    probe.renewalWaits,
     read,
     auth,
     isProducedReviewPark,
