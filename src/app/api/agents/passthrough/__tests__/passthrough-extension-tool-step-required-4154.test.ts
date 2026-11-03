@@ -150,6 +150,26 @@ describe("cinatra#4154 — extension_tool needs a proven step", () => {
     expect(arg.run.dependentInstallId).toBeNull();
   });
 
+  // Only a blank key counts as no key: a key with outer spaces is used as it
+  // is, never trimmed, so a pair signed with the raw spaced value verifies and
+  // a pair signed with the trimmed value does not.
+  it("a key with outer spaces is kept raw: a pair signed with the raw spaced key verifies", async () => {
+    const spaced = `  ${KEY}  `;
+    process.env.CINATRA_CONTEXT_ATTEST_KEY = spaced;
+    const res = await POST(req("extension_tool", stepHeaders({ key: spaced }), TOOL_INPUT));
+    expect(res.status).toBe(200);
+    const arg = h.dispatchExtensionScopedTool.mock.calls[0]![0] as { run: Record<string, unknown> };
+    expect(arg.run.verifiedStepId).toBe(NODE);
+  });
+
+  it("a key with outer spaces is kept raw: a pair signed with the trimmed key is refused", async () => {
+    process.env.CINATRA_CONTEXT_ATTEST_KEY = `  ${KEY}  `;
+    const res = await POST(req("extension_tool", stepHeaders({ key: KEY }), TOOL_INPUT));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: EXTENSION_TOOL_STEP_UNPROVEN });
+    expect(h.dispatchExtensionScopedTool).not.toHaveBeenCalled();
+  });
+
   const now = Math.floor(Date.now() / 1000);
   const valid = sign();
   const unproven: Array<[string, Record<string, string>, (() => void)?]> = [
