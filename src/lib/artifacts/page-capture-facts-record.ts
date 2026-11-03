@@ -32,7 +32,12 @@ export const PAGE_CAPTURE_FACTS_RECORD_VERSION = 1;
 const MAX_VIEWPORT_SIDE = 65_535;
 const MAX_URL_LENGTH = 2_048;
 
-const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
+const ISO_DATE_TIME =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|[+-](\d{2}):(\d{2}))$/;
+/** Any control character (tab, line feed and the C1 range included): `new URL` drops some of them silently. */
+const CONTROL_CHARACTER = /\p{Cc}/u;
+/** User information in the authority, even an empty one (`http://@host`), which `new URL` drops from the parsed URL. */
+const URL_USER_INFORMATION = /^[A-Za-z][A-Za-z0-9+.-]*:[/\\]{2}[^/\\?#]*@/;
 
 export type PageCaptureFacts = { capturedUrl: string; viewport: { width: number; height: number }; capturedAt: string };
 
@@ -69,6 +74,7 @@ function isSide(value: unknown): value is number {
 
 function isCapturedUrl(value: unknown): value is string {
   if (typeof value !== "string" || value.length === 0 || value.length > MAX_URL_LENGTH) return false;
+  if (CONTROL_CHARACTER.test(value) || URL_USER_INFORMATION.test(value)) return false;
   let url: URL;
   try {
     url = new URL(value);
@@ -80,23 +86,49 @@ function isCapturedUrl(value: unknown): value is string {
   return url.username === "" && url.password === "";
 }
 
+/** An ISO date-time with a zone that is a real calendar moment: 2026-02-30 and T24:00 are refused (round trip). */
 function isCapturedAt(value: unknown): value is string {
-  return typeof value === "string" && ISO_DATE_TIME.test(value) && Number.isFinite(Date.parse(value));
+  if (typeof value !== "string") return false;
+  const m = ISO_DATE_TIME.exec(value);
+  if (m === null) return false;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const hour = Number(m[4]);
+  const minute = Number(m[5]);
+  const second = Number(m[6]);
+  if (Number(m[7] ?? 0) > 23 || Number(m[8] ?? 0) > 59) return false;
+  const moment = new Date(0);
+  moment.setUTCFullYear(year, month - 1, day);
+  moment.setUTCHours(hour, minute, second, 0);
+  const roundTrips =
+    moment.getUTCFullYear() === year &&
+    moment.getUTCMonth() === month - 1 &&
+    moment.getUTCDate() === day &&
+    moment.getUTCHours() === hour &&
+    moment.getUTCMinutes() === minute &&
+    moment.getUTCSeconds() === second;
+  return roundTrips && Number.isFinite(Date.parse(value));
 }
 
 /**
  * The three facts, or `null` when `value` is not exactly a facts object: a plain
  * object with only `capturedUrl` (an absolute http(s) URL without user
- * information), `viewport` (only integer `width` and `height`, each at least 1)
- * and `capturedAt` (an ISO date-time with a zone).
+ * information or control characters), `viewport` (only integer `width` and
+ * `height`, each at least 1) and `capturedAt` (a real ISO date-time with a
+ * zone). Total: a value whose reading throws (a getter, a proxy) is `null`.
  */
 export function parsePageCaptureFacts(value: unknown): PageCaptureFacts | null {
-  if (!isPlainRecord(value) || !hasExactlyKeys(value, ["capturedUrl", "viewport", "capturedAt"])) return null;
-  const { capturedUrl, viewport, capturedAt } = value;
-  if (!isCapturedUrl(capturedUrl) || !isCapturedAt(capturedAt)) return null;
-  if (!isPlainRecord(viewport) || !hasExactlyKeys(viewport, ["width", "height"])) return null;
-  if (!isSide(viewport.width) || !isSide(viewport.height)) return null;
-  return { capturedUrl, viewport: { width: viewport.width, height: viewport.height }, capturedAt };
+  try {
+    if (!isPlainRecord(value) || !hasExactlyKeys(value, ["capturedUrl", "viewport", "capturedAt"])) return null;
+    const { capturedUrl, viewport, capturedAt } = value;
+    if (!isCapturedUrl(capturedUrl) || !isCapturedAt(capturedAt)) return null;
+    if (!isPlainRecord(viewport) || !hasExactlyKeys(viewport, ["width", "height"])) return null;
+    if (!isSide(viewport.width) || !isSide(viewport.height)) return null;
+    return { capturedUrl, viewport: { width: viewport.width, height: viewport.height }, capturedAt };
+  } catch {
+    return null;
+  }
 }
 
 function isId(value: unknown): value is string {
@@ -156,12 +188,19 @@ export type PageCaptureFactsReadDeps = {
 };
 
 function defaultRunQuery(query: { text: string; values: unknown[] }): unknown[] {
+  // The bridge answers every query of a production build with an empty list instead of reading: that is no read,
+  // so it is no confirmed absence (the reader answers unreadable for a throw).
+  if (process.env.NEXT_PHASE === "phase-production-build") {
+    throw new Error("page capture facts are not readable during the production build");
+  }
   ensurePostgresSchema();
   const [res] = runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
     queries: [query],
   });
-  return (res?.rows ?? []) as unknown[];
+  // The rows as the bridge returned them. A missing result or a rows value that is not a list is not an empty
+  // list: the reader below answers unreadable for it, never absent.
+  return res?.rows as unknown[];
 }
 
 /** Read the facts recorded for ONE revision of ONE artifact of ONE type, organisation-scoped. */
