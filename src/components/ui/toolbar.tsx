@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 //     <ToolbarGroup>…tab buttons…</ToolbarGroup>
 //     <ToolbarSeparator />
 //     <ToolbarSearchGroup>
-//       <ToolbarSearchInput placeholder="…" defaultValue={…} onChange={…} />
+//       <ToolbarSearchInput aria-label="…" placeholder="…" defaultValue={…} onChange={…} />
 //     </ToolbarSearchGroup>
 //     <ToolbarSeparator />
 //     <ToolbarGroup>
@@ -237,10 +237,26 @@ function ToolbarSearchGroup({
   );
 }
 
+// The search pill's name. The pill is a <label> holding a decorative glass and
+// the input, so the label has no text and the input takes no name from it; a
+// placeholder is only a fallback that some assistive technology drops. The type
+// therefore REQUIRES a name from the caller — an `aria-label` or an
+// `aria-labelledby` (a string) — and a caller without one does not compile
+// (cinatra#4452: three toolbars shipped a search box with an empty name).
+type ToolbarSearchInputName =
+  | { "aria-label": string; "aria-labelledby"?: string }
+  | { "aria-labelledby": string; "aria-label"?: string };
+
+type ToolbarSearchInputProps = Omit<
+  React.InputHTMLAttributes<HTMLInputElement>,
+  "aria-label" | "aria-labelledby"
+> &
+  ToolbarSearchInputName;
+
 function ToolbarSearchInput({
   className,
   ...props
-}: React.InputHTMLAttributes<HTMLInputElement>) {
+}: ToolbarSearchInputProps) {
   const level = React.useContext(ToolbarLevelContext);
   return (
     <label
