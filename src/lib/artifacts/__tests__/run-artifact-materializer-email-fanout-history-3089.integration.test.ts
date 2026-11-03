@@ -17,7 +17,8 @@
  *     ledgered fan-out now uses, carrying the raw payload of that time (`body`,
  *     `draftItemId`, `step`, no `bodyMarkdown`, no representation, no ledger
  *     row) — for the send under test and for an older send;
- *   - the raw `email:recipient` rows the boundary wrote beside them;
+ *   - the raw `email:recipient` rows the boundary wrote beside them, one per
+ *     confirmed recipient of the send under test and one of the older send;
  *   - the associations on those rows: the producer's eligible assertion, an
  *     archived one, and a matcher's un-promoted draft association on a
  *     base-type row;
@@ -25,22 +26,41 @@
  *     the SAME bytes as one draft of the send, so the fan-out's write reaches a
  *     content-addressed resource row that already exists.
  *
+ * THE PRODUCER STATE is valid: the run's template names its agent package and
+ * the run pins its version, and that package's manifest declares the body type
+ * under `cinatra.produces`. The producer chain therefore validates the run and
+ * files the agent's association on each new body, as it does in production;
+ * nothing degrades to "no producer assertion".
+ *
  * THE DRIVE is the production fan-out: `materializeEmailFanout` with its body
  * writer wired to the real `materializeFanoutMessageRevision`, exactly as the
- * send boundary's default projection wires it, run TWICE over the same send.
+ * send boundary's default projection wires it, over the send's drafts AND its
+ * confirmed recipients (the boundary passes both), run TWICE over the same send.
  *
  * THE CLAIM is read as bytes: before the first drive, every row of every table
  * in the schema is read in its text form, column by column; after both drives
- * every one of those rows must still be there, unchanged. The historical rows
- * and their associations are then read again by name, so a failure says which
- * row moved and how.
+ * every one of those rows must still be there, unchanged. What the first drive
+ * ADDS is held to an exact permitted delta: per table, exactly the rows of the
+ * send's new bodies (their objects, representation, audit, association, outbox
+ * and ledger rows, and the one new content-addressed resource and blob), in an
+ * exact count, and nothing else — so an additive backfill (a copy of a raw row
+ * under a new id, an association or revision added to a historical row) fails
+ * as surely as a rewrite. The historical rows and their associations are then
+ * read again by name, so a failure says which row moved and how.
  *
  * NOT A STUB ANYWHERE THAT MATTERS. The fan-out, the ledger, the claim
- * arbitration, the type resolution, the creation path and the blob store are
- * the production ones. Substituted, as the sibling real-DB tiers substitute
- * them: the schema and connection seams the throwaway schema needs, the
- * app-boot type registrar (this suite registers the one type it needs), and
- * the meaning matcher's post-commit queue enqueue, which writes no row.
+ * arbitration, the producer chain and its association writes, the type
+ * resolution, the creation path and the blob store are the production ones.
+ * Substituted, as the sibling real-DB tiers substitute them: the schema and
+ * connection seams the throwaway schema needs, the app-boot type registrar
+ * (this suite registers the one type it needs), the meaning matcher's
+ * post-commit queue enqueue, which writes no row, and the package registry's
+ * network read: `getAgentPackage` answers the fixture package's manifest (and
+ * refuses any other), the registry config loader a fixed config.
+ *
+ * TEARDOWN runs every step (schema drop, connection close, blob root, process
+ * state) whatever fails, and then fails the run naming each step that failed:
+ * a tier that cannot drop its schema does not finish green.
  *
  * ISOLATION (the #3030 / #3032 pattern): a fresh schema from the CANONICAL
  * `buildCreateStoreSchemaQueries` DDL; the artifact blob root is a temp dir;
@@ -80,6 +100,59 @@ vi.mock("@/lib/register-all-object-types", () => ({ registerAllObjectTypes: () =
 vi.mock("@/lib/artifacts/matcher-enqueue", () => ({
   enqueueArtifactMatchRun: async () => {},
 }));
+
+// THE PRODUCER DECLARATION: the agent package the fixture's template names, at
+// the version the runs pin, declares the body type. Only the registry's network
+// read is substituted; the producer chain that reads it (run validation, the
+// template's package, the manifest's `produces`, the install-active write gate)
+// is the production one.
+const producer = vi.hoisted(() => {
+  const packageName = "@cinatra-ai/outreach-fixture-agent";
+  const packageVersion = "1.0.0";
+  const config = { registryUrl: "http://registry.invalid/", fixture: "3089" };
+  const manifest = {
+    name: packageName,
+    version: packageVersion,
+    cinatra: {
+      packageType: "agent",
+      manifestVersion: 1,
+      sourceTemplateId: "tpl-3089",
+      sourceVersionId: "v1",
+      sourceVersionNumber: 1,
+      riskLevel: "low",
+      hasApprovalGates: false,
+      toolAccess: [],
+      ownerOrgId: null,
+      produces: [{ extension: "@cinatra-ai/email-artifacts", objectTypeId: "@cinatra-ai/email:body" }],
+    },
+  };
+  const reads: Array<{ packageName: string; packageVersion: string | undefined; configOk: boolean }> = [];
+  return { packageName, packageVersion, config, manifest, reads };
+});
+vi.mock("@cinatra-ai/registries", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    getAgentPackage: async (
+      input: { packageName: string; packageVersion?: string },
+      config?: unknown,
+    ) => {
+      producer.reads.push({
+        packageName: input.packageName,
+        packageVersion: input.packageVersion,
+        configOk: config === producer.config,
+      });
+      if (input.packageName !== producer.packageName || input.packageVersion !== producer.packageVersion) {
+        throw new Error(`no package ${input.packageName}@${input.packageVersion ?? "(default)"} in the fixture registry`);
+      }
+      return { manifest: producer.manifest };
+    },
+  };
+});
+vi.mock("@/lib/verdaccio-config", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return { ...actual, loadVerdaccioConfigForReads: async () => producer.config };
+});
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
@@ -123,12 +196,21 @@ const DRAFTS = [
   { id: "d2", contactId: "contact-2", subject: "Hello Two", body: BODY_TWO, step: 1 },
 ];
 
+/** The send's confirmed recipients: what the boundary reads from the
+ *  confirmed-recipients bundle and passes to the fan-out beside the drafts.
+ *  Each one also has the raw `email:recipient` row the boundary wrote. */
+const SEND_RECIPIENTS = [
+  { rowId: "hist-recipient-send-1", contactId: "contact-1", email: "one@example.test", name: "One" },
+  { rowId: "hist-recipient-send-2", contactId: "contact-2", email: "two@example.test", name: "Two" },
+];
+
 /** The historical rows, by name: what the cutover must leave alone. */
 const HISTORICAL_OBJECT_IDS = [
   "hist-body-send-d1",
   "hist-body-send-d2",
   "hist-body-old-d1",
   "hist-recipient-send-1",
+  "hist-recipient-send-2",
   "hist-recipient-old-1",
   "hist-base-document-1",
 ];
@@ -220,6 +302,91 @@ function rowsGone(before: Snapshot, after: Snapshot): Record<string, string[]> {
   return gone;
 }
 
+/** The rows of `after` that are not in `before`, per table (multiset). */
+function rowsAdded(before: Snapshot, after: Snapshot): Record<string, string[]> {
+  return rowsGone(after, before);
+}
+
+/**
+ * THE FIRST DRIVE'S EXACT PERMITTED DELTA. Two new bodies (BODY_ONE's bytes
+ * already have a content-addressed resource, BODY_TWO's do not), each written
+ * by the production creation path: its objects row and projection outbox row,
+ * its representation, its writer-witness audit row, its produced-event outbox
+ * row, its finalized ledger row, and two associations (the producer's classic,
+ * superseded in the same write by the claim's binding). Nothing else.
+ */
+const FIRST_DRIVE_DELTA: Record<string, number> = {
+  artifact_audit: 2,
+  artifact_blobs: 1,
+  artifact_materializations: 2,
+  artifact_produced_outbox: 2,
+  graphiti_projection_outbox: 2,
+  objects: 2,
+  representation: 2,
+  resource: 1,
+  semantic_assertion: 4,
+};
+
+/** How each delta table's rows are tied to the drive's new bodies ($1). */
+function tiedTo(table: string): string {
+  const s = q(S());
+  switch (table) {
+    case "objects":
+      return "t.id = ANY($1::text[])";
+    case "graphiti_projection_outbox":
+      return "t.object_id = ANY($1::text[])";
+    case "artifact_materializations":
+      return `t.artifact_id = ANY($1::text[]) AND t.run_id = '${RUN_SEND}' AND t.path = 'email_fanout'`;
+    case "resource":
+      return `t.id IN (SELECT p.resource_id FROM ${s}."representation" p WHERE p.artifact_id = ANY($1::text[]))`;
+    case "artifact_blobs":
+      return `t.id IN (SELECT r.metadata->>'blobId' FROM ${s}."resource" r
+                 JOIN ${s}."representation" p ON p.resource_id = r.id WHERE p.artifact_id = ANY($1::text[]))`;
+    default:
+      return "t.artifact_id = ANY($1::text[])";
+  }
+}
+
+/**
+ * The rows the first drive may add: per delta table, the rows tied to its new
+ * bodies that `before` did not hold, read in `before`'s columns.
+ */
+async function permittedFirstDriveRows(
+  client: Client,
+  before: Snapshot,
+  newIds: string[],
+): Promise<Record<string, string[]>> {
+  const out: Record<string, string[]> = {};
+  for (const table of Object.keys(FIRST_DRIVE_DELTA)) {
+    const columns = before.get(table)?.columns;
+    if (columns === undefined) throw new Error(`the schema has no table ${table}`);
+    const res = await client.query<{ r: string }>(
+      `SELECT ROW(${columns.map((c) => `t.${q(c)}`).join(", ")})::text AS r FROM ${q(S())}.${q(table)} t WHERE ${tiedTo(table)}`,
+      [newIds],
+    );
+    const tied: Snapshot = new Map([[table, { columns, rows: res.rows.map((x) => x.r).sort() }]]);
+    const fresh = rowsAdded(new Map([[table, before.get(table) as TableRows]]), tied)[table];
+    if (fresh !== undefined) out[table] = fresh.sort();
+  }
+  return out;
+}
+
+/** Run every teardown step whatever an earlier one did, then fail naming each
+ *  step that failed: cleanup never fails open. */
+async function runTeardown(steps: ReadonlyArray<readonly [string, () => unknown]>): Promise<void> {
+  const failed: string[] = [];
+  for (const [label, step] of steps) {
+    try {
+      await step();
+    } catch (err) {
+      failed.push(`${label}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  if (failed.length > 0) {
+    throw new Error(`the tier's teardown failed (${failed.length} step(s)): ${failed.join("; ")}`);
+  }
+}
+
 function rowCount(s: Snapshot): number {
   let n = 0;
   for (const { rows } of s.values()) n += rows.length;
@@ -235,6 +402,15 @@ async function rowsById(table: string, ids: string[]): Promise<Record<string, st
   const out: Record<string, string> = {};
   for (const r of res.rows as Array<{ id: string; j: string }>) out[r.id] = r.j;
   return out;
+}
+
+/** Every association on one artifact, each as its whole-row jsonb text. */
+async function assertionsOn(artifactId: string): Promise<string[]> {
+  const res = await sql(
+    `SELECT to_jsonb(t)::text AS j FROM ${q(S())}."semantic_assertion" t WHERE t.artifact_id = $1`,
+    [artifactId],
+  );
+  return (res.rows as Array<{ j: string }>).map((r) => r.j).sort();
 }
 
 // ---------------------------------------------------------------------------
@@ -314,9 +490,9 @@ async function seedAssertion(row: {
 
 async function seedRun(runId: string) {
   await sql(
-    `INSERT INTO ${q(S())}."agent_runs" (id, template_id, org_id, run_by, status, input_params)
-       VALUES ($1, $2, $3, $4, 'running', '{}')`,
-    [runId, TEMPLATE, ORG, USER],
+    `INSERT INTO ${q(S())}."agent_runs" (id, template_id, org_id, run_by, status, input_params, package_version)
+       VALUES ($1, $2, $3, $4, 'running', '{}', $5)`,
+    [runId, TEMPLATE, ORG, USER, producer.packageVersion],
   );
 }
 
@@ -333,11 +509,12 @@ async function seedHistory() {
   const old = rawBodyData(RUN_OLD, { id: "d1", contactId: "contact-9", subject: "An older hello", body: BODY_OLD, step: 1 });
   await seedRawObject({ id: "hist-body-old-d1", type: BODY_TYPE, runId: RUN_OLD, externalId: old.externalId, data: old.data });
 
-  // The recipient rows the boundary wrote beside them before the cutover.
+  // The recipient rows the boundary wrote beside them before the cutover: one
+  // per confirmed recipient of the send, and one of the older send.
   for (const [id, runId, contactId, email] of [
-    ["hist-recipient-send-1", RUN_SEND, "contact-1", "one@example.test"],
-    ["hist-recipient-old-1", RUN_OLD, "contact-9", "nine@example.test"],
-  ] as const) {
+    ...SEND_RECIPIENTS.map((r) => [r.rowId, RUN_SEND, r.contactId, r.email] as const),
+    ["hist-recipient-old-1", RUN_OLD, "contact-9", "nine@example.test"] as const,
+  ]) {
     const externalId = `email-recipient:${runId}:${contactId}`;
     await seedRawObject({
       id,
@@ -389,10 +566,18 @@ async function seedHistory() {
 }
 
 /** The production fan-out over the send, its body writer wired as the send
- *  boundary's default projection wires it. */
+ *  boundary's default projection wires it, its recipients the send's own. */
 async function driveFanout() {
   return fanout.materializeEmailFanout(
-    { runScopeId: RUN_SEND, campaignId: CAMPAIGN, drafts: DRAFTS, recipients: [] },
+    {
+      runScopeId: RUN_SEND,
+      campaignId: CAMPAIGN,
+      drafts: DRAFTS,
+      // The send's confirmed recipients, as the boundary passes them
+      // (trigger-email-send-use-cases.ts, runInitialSend): a recipient-keyed
+      // rewrite or backfill would run here.
+      recipients: SEND_RECIPIENTS.map(({ contactId, email, name }) => ({ contactId, email, name })),
+    },
     {
       registeredTypes: new Set([fanout.EMAIL_BODY_TYPE_ID]),
       writeBody: (w) =>
@@ -469,7 +654,7 @@ beforeAll(async () => {
         package_name, package_version, owner_level, owner_id)
      VALUES ($1, $2, '3089 outreach fixture', 'n/a', '{}', '{}', 'auto', 'active',
              $3, '1.0.0', 'organization', $2)`,
-    [TEMPLATE, ORG, "@cinatra-ai/outreach-fixture-agent"],
+    [TEMPLATE, ORG, producer.packageName],
   );
   await seedRun(RUN_OLD);
   await seedRun(RUN_SEND);
@@ -477,15 +662,48 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!HAS_REAL_DB) return;
-  objectTypeRegistry._clearForTests();
   const client = new Client({ connectionString: DB_URL });
-  await client.connect();
-  await client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`).catch(() => {});
-  await client.end().catch(() => {});
-  if (BLOB_ROOT) rmSync(BLOB_ROOT, { recursive: true, force: true });
-  delete process.env.CINATRA_ARTIFACT_DATA_ROOT;
-  delete (globalThis as { __cinatraPostgresSchemaInitialized?: boolean })
-    .__cinatraPostgresSchemaInitialized;
+  let connected = false;
+  // Every step runs; a failed drop (or a connection that never opened, so the
+  // drop never ran) fails the run after the blob root and the process state are
+  // cleaned, instead of finishing green with the schema left behind.
+  await runTeardown([
+    ["clear the type registry", () => objectTypeRegistry._clearForTests()],
+    [
+      "connect",
+      async () => {
+        await client.connect();
+        connected = true;
+      },
+    ],
+    [
+      "drop the tier's schema",
+      async () => {
+        if (!connected) throw new Error("no connection, so the schema was not dropped");
+        await client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`);
+      },
+    ],
+    [
+      "close the connection",
+      async () => {
+        if (connected) await client.end();
+      },
+    ],
+    [
+      "remove the blob root",
+      () => {
+        if (BLOB_ROOT) rmSync(BLOB_ROOT, { recursive: true, force: true });
+      },
+    ],
+    [
+      "reset the process state",
+      () => {
+        delete process.env.CINATRA_ARTIFACT_DATA_ROOT;
+        delete (globalThis as { __cinatraPostgresSchemaInitialized?: boolean })
+          .__cinatraPostgresSchemaInitialized;
+      },
+    ],
+  ]);
 });
 
 describe.skipIf(!HAS_REAL_DB)(
@@ -504,6 +722,8 @@ describe.skipIf(!HAS_REAL_DB)(
     let afterSecondAsBefore: Snapshot;
     let objectsBefore: Record<string, string>;
     let assertionsBefore: Record<string, string>;
+    let boundAssertionsBefore: string[];
+    let permitted: Record<string, string[]>;
     let first: Awaited<ReturnType<typeof driveFanout>>;
     let second: Awaited<ReturnType<typeof driveFanout>>;
 
@@ -514,9 +734,11 @@ describe.skipIf(!HAS_REAL_DB)(
       before = await snapshot(reader);
       objectsBefore = await rowsById("objects", [...HISTORICAL_OBJECT_IDS, boundArtifactId]);
       assertionsBefore = await rowsById("semantic_assertion", HISTORICAL_ASSERTION_IDS);
+      boundAssertionsBefore = await assertionsOn(boundArtifactId);
       first = await driveFanout();
       afterFirst = await snapshot(reader);
       afterFirstAsBefore = await snapshot(reader, before);
+      permitted = await permittedFirstDriveRows(reader, before, first.bodies.map((b) => b.objectId));
       second = await driveFanout();
       afterSecond = await snapshot(reader, afterFirst);
       afterSecondAsBefore = await snapshot(reader, before);
@@ -577,6 +799,19 @@ describe.skipIf(!HAS_REAL_DB)(
       expect(rowsGone(before, afterSecondAsBefore)).toEqual({});
     });
 
+    it("adds exactly the first drive's own rows: the new bodies' rows, in an exact count per table, and no other row", () => {
+      // The schema itself did not change shape.
+      expect([...afterFirst.keys()]).toEqual([...before.keys()]);
+      for (const [table, { columns }] of before) expect(afterFirst.get(table)?.columns).toEqual(columns);
+      const added = rowsAdded(before, afterFirstAsBefore);
+      expect(Object.fromEntries(Object.entries(added).map(([t, rows]) => [t, rows.length]))).toEqual(
+        FIRST_DRIVE_DELTA,
+      );
+      // Each added row is one the new bodies own: a copy of a raw row under a
+      // new id, or anything added on a historical row, is not.
+      expect(Object.fromEntries(Object.entries(added).map(([t, rows]) => [t, [...rows].sort()]))).toEqual(permitted);
+    });
+
     it("leaves the historical raw rows as they were written: no backfill into bodyMarkdown, no revision, no ledger row", async () => {
       expect(await rowsById("objects", [...HISTORICAL_OBJECT_IDS, boundArtifactId])).toEqual(objectsBefore);
 
@@ -610,11 +845,96 @@ describe.skipIf(!HAS_REAL_DB)(
       expect((onHistory.rows as Array<{ id: string }>).map((r) => r.id).sort()).toEqual(
         [...HISTORICAL_ASSERTION_IDS].sort(),
       );
+      // The binding-era body's own associations, filed by its producer before
+      // the drive, are untouched too.
+      expect(boundAssertionsBefore.length).toBeGreaterThan(0);
+      expect(await assertionsOn(boundArtifactId)).toEqual(boundAssertionsBefore);
+    });
+
+    it("files the producer's association on each new body from the declared package, superseded by the claim's binding", async () => {
+      // The producer chain read the fixture package at the version the run
+      // pins, with the registry config: the branch did not degrade.
+      expect(producer.reads.length).toBeGreaterThan(0);
+      expect(producer.reads).toEqual(
+        producer.reads.map(() => ({
+          packageName: producer.packageName,
+          packageVersion: producer.packageVersion,
+          configOk: true,
+        })),
+      );
+      const ids = first.bodies.map((b) => b.objectId).sort();
+      const rows = await sql(
+        `SELECT artifact_id, extension, asserted_by, eligibility, assertion_basis, binding_claim_id, binding_generation
+           FROM ${q(S())}."semantic_assertion" WHERE artifact_id = ANY($1::text[])
+          ORDER BY artifact_id, assertion_basis`,
+        [ids],
+      );
+      expect(rows.rows).toEqual(
+        ids.flatMap((id) => [
+          {
+            artifact_id: id,
+            extension: EMAIL_EXT,
+            asserted_by: "system",
+            eligibility: "eligible",
+            assertion_basis: "binding",
+            binding_claim_id: "claim-3089-body",
+            binding_generation: 1,
+          },
+          {
+            artifact_id: id,
+            extension: EMAIL_EXT,
+            asserted_by: "agent",
+            eligibility: "archived",
+            assertion_basis: "classic",
+            binding_claim_id: null,
+            binding_generation: null,
+          },
+        ]),
+      );
+      // The run the producer validated is the one recorded on each revision.
+      const reps = await sql(
+        `SELECT artifact_id, created_by_run_id FROM ${q(S())}."representation"
+          WHERE artifact_id = ANY($1::text[]) ORDER BY artifact_id`,
+        [ids],
+      );
+      expect(reps.rows).toEqual(ids.map((id) => ({ artifact_id: id, created_by_run_id: RUN_SEND })));
     });
 
     it("changes no row and adds none on the second drive", () => {
       expect(rowsGone(afterFirst, afterSecond)).toEqual({});
       expect(rowsGone(afterSecond, afterFirst)).toEqual({});
+    });
+
+    it("tears down by running every step and failing on any step that fails", async () => {
+      const ran: string[] = [];
+      await expect(
+        runTeardown([
+          [
+            "drop",
+            () => {
+              ran.push("drop");
+              throw new Error("the drop was refused");
+            },
+          ],
+          [
+            "close",
+            async () => {
+              ran.push("close");
+            },
+          ],
+          [
+            "remove",
+            () => {
+              ran.push("remove");
+              throw new Error("the removal was refused");
+            },
+          ],
+        ]),
+      ).rejects.toThrow(
+        "the tier's teardown failed (2 step(s)): drop: the drop was refused; remove: the removal was refused",
+      );
+      expect(ran).toEqual(["drop", "close", "remove"]);
+      await expect(runTeardown([["only", () => {}]])).resolves.toBeUndefined();
     });
   },
 );
