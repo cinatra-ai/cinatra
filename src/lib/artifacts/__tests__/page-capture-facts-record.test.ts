@@ -160,6 +160,69 @@ describe("parsePageCaptureFacts (cinatra#4223)", () => {
   });
 });
 
+describe("parsePageCaptureFacts is exact and reads each field once (cinatra#4223)", () => {
+  it("refuses a symbol key and a non-enumerable key, at the top level and in the viewport", () => {
+    const hidden = (target: object) => Object.defineProperty(target, "hidden", { value: 1, enumerable: false });
+    const marked = (target: object) => Object.defineProperty(target, Symbol("mark"), { value: 1, enumerable: true });
+    for (const facts of [
+      hidden({ ...FACTS }),
+      marked({ ...FACTS }),
+      { ...FACTS, viewport: hidden({ ...FACTS.viewport }) },
+      { ...FACTS, viewport: marked({ ...FACTS.viewport }) },
+      Object.defineProperty({ ...FACTS }, Symbol("hidden"), { value: 1, enumerable: false }),
+    ]) {
+      expect(parsePageCaptureFacts(facts)).toBeNull();
+    }
+    expect(parsePageCaptureFacts({ ...FACTS })).toEqual(FACTS);
+  });
+
+  it("reads every field once, so a getter that answers differently the second time cannot split validation from storage", () => {
+    const reads: Record<string, number> = {};
+    const once = <T,>(name: string, first: T, later: T) => () => {
+      reads[name] = (reads[name] ?? 0) + 1;
+      return reads[name] === 1 ? first : later;
+    };
+    const viewport = {
+      get width(): number {
+        return once("width", 1440, 0)();
+      },
+      get height(): number {
+        return once("height", 900, 0)();
+      },
+    };
+    const getters = {
+      get capturedUrl(): string {
+        return once("capturedUrl", FACTS.capturedUrl, "javascript:alert(1)")();
+      },
+      get viewport() {
+        reads.viewport = (reads.viewport ?? 0) + 1;
+        return reads.viewport === 1 ? viewport : { width: 0, height: 0 };
+      },
+      get capturedAt(): string {
+        return once("capturedAt", FACTS.capturedAt, "not a date")();
+      },
+    };
+    expect(parsePageCaptureFacts(getters)).toEqual(FACTS);
+    expect(reads).toEqual({ capturedUrl: 1, viewport: 1, width: 1, height: 1, capturedAt: 1 });
+    for (const name of Object.keys(reads)) delete reads[name];
+    const built = buildPageCaptureFactsRecordOp({ schema: "cinatra", ...IDS, objectType: TYPE, facts: getters });
+    expect(reads).toEqual({ capturedUrl: 1, viewport: 1, width: 1, height: 1, capturedAt: 1 });
+    expect(JSON.parse(built.values[4] as string)).toMatchObject({ viewport: { width: 1440, height: 900 } });
+  });
+
+  it("takes the exact boundaries and the URL forms that carry no credential, stored as given", () => {
+    const edge = { ...FACTS, viewport: { width: 1, height: 65535 } };
+    expect(parsePageCaptureFacts(edge)).toEqual(edge);
+    const longest = `https://shop.example/${"a".repeat(2048 - "https://shop.example/".length)}`;
+    expect(longest).toHaveLength(2048);
+    expect(parsePageCaptureFacts({ ...FACTS, capturedUrl: longest })).toEqual({ ...FACTS, capturedUrl: longest });
+    expect(parsePageCaptureFacts({ ...FACTS, capturedUrl: `${longest}a` })).toBeNull();
+    for (const capturedUrl of ["http:@shop.example/", "http:/@shop.example/", "http:///@shop.example/", " https://shop.example/ "]) {
+      expect(parsePageCaptureFacts({ ...FACTS, capturedUrl }), JSON.stringify(capturedUrl)).toEqual({ ...FACTS, capturedUrl });
+    }
+  });
+});
+
 describe("buildPageCaptureFactsRecordOp (cinatra#4223)", () => {
   it("writes one artifact_audit row of the facts action, binding the organisation, artifact, revision and type", () => {
     const op = buildPageCaptureFactsRecordOp({ schema: "cinatra", objectType: TYPE, facts: FACTS, ...IDS });
@@ -278,6 +341,40 @@ describe("readPageCaptureFactsForRevision (cinatra#4223)", () => {
         readPageCaptureFactsForRevision({ ...input, objectType: type }, { runQuery: () => [record(good), other] }),
       ).toEqual({ status: "unreadable" });
     }
+  });
+
+  it("answers unreadable, with only the fixed log line, when decoding a row, a detail or the list throws", () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const boom = () => {
+      throw new Error("row-secret-42");
+    };
+    const rowWithThrowingDetail = { get detail(): unknown { return boom(); } };
+    const detailWithThrowingField = {
+      detail: {
+        v: 1,
+        objectType: TYPE,
+        capturedUrl: FACTS.capturedUrl,
+        viewport: FACTS.viewport,
+        get capturedAt(): string { return boom(); },
+      },
+    };
+    const rowProxy = new Proxy({}, { getPrototypeOf: boom });
+    const detailProxy = { detail: new Proxy({}, { ownKeys: boom }) };
+    const detailProxyPrototype = { detail: new Proxy({}, { getPrototypeOf: boom }) };
+    const listProxy = new Proxy([record(good)], { get: boom });
+    for (const rows of [
+      [rowWithThrowingDetail],
+      [detailWithThrowingField],
+      [rowProxy],
+      [detailProxy],
+      [detailProxyPrototype],
+      listProxy,
+    ]) {
+      expect(readPageCaptureFactsForRevision(input, { runQuery: () => rows as unknown[] })).toEqual({ status: "unreadable" });
+    }
+    const logged = JSON.stringify(log.mock.calls);
+    expect(logged).not.toContain("row-secret-42");
+    expect(logged).toContain("rev-1");
   });
 
   it("answers unreadable when the read throws, and its log line carries no text of the error", () => {

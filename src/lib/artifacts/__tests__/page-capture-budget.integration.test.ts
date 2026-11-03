@@ -16,6 +16,7 @@ import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 import { pageCaptureLeasesSchemaQueries } from "@/lib/artifacts/page-capture-lease-schema";
 import {
   acquirePageCaptureLease,
+  pageCaptureBudgetLockKey,
   type PageCaptureBudgetDeps,
   type PageCaptureBudgetQuery,
 } from "@/lib/artifacts/page-capture-budget";
@@ -142,6 +143,55 @@ describe.skipIf(!RUN_DB)("page capture budget on a real Postgres (cinatra#4223)"
     expect((await acquirePageCaptureLease(run, short)).ok).toBe(true);
     expect(await acquirePageCaptureLease(run, short)).toEqual({ ok: false, reason: "run_cap_exceeded" });
     expect(await rowsOf("org-ttl", "run-ttl")).toEqual({ total: 3, open: 3 });
+  });
+
+  it("calls that waited on the lock longer than the TTL are admitted with live leases, so a fresh call cannot exceed the cap", async () => {
+    const run = { orgId: "org-stale", runId: "run-stale" };
+    const short = depsOn(newProcess(), { limits: { perRun: 20, concurrent: 2, ttlSeconds: 1 } });
+    // A holder takes the run's lock and keeps it past the TTL; two calls begin their transactions and wait behind it.
+    const holder = await admin.connect();
+    await holder.query("BEGIN");
+    await holder.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+      pageCaptureBudgetLockKey(run.orgId, run.runId),
+    ]);
+    const waiting = [acquirePageCaptureLease(run, short), acquirePageCaptureLease(run, short)];
+    await new Promise((r) => setTimeout(r, 1_800));
+    await holder.query("COMMIT");
+    holder.release();
+    const admitted = await Promise.all(waiting);
+    expect(admitted.map((x) => x.ok)).toEqual([true, true]);
+    // Their leases were stamped after the wait: both are still in flight now, so a fresh call is refused.
+    expect(await acquirePageCaptureLease(run, short)).toEqual({ ok: false, reason: "concurrency_exceeded" });
+    expect(await rowsOf(run.orgId, run.runId)).toEqual({ total: 2, open: 2 });
+  });
+
+  it("an insert whose answer is lost leaves no lease behind: the transaction rolls back", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const pool = newProcess();
+    const lossy: PageCaptureBudgetDeps = {
+      ...depsOn(pool),
+      transaction: async (fn) => {
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          const out = await fn(async <T = unknown>(text: string, values?: readonly unknown[]) => {
+            const rows = (await client.query(text, values ? [...values] : undefined)).rows as T[];
+            return /^INSERT INTO/.test(text) ? ([] as T[]) : rows; // the insert ran; its answer is lost
+          });
+          await client.query("COMMIT");
+          return out;
+        } catch (err) {
+          await client.query("ROLLBACK").catch(() => {});
+          throw err;
+        } finally {
+          client.release();
+        }
+      },
+    };
+    const run = { orgId: "org-lossy", runId: "run-lossy" };
+    expect(await acquirePageCaptureLease(run, lossy)).toEqual({ ok: false, reason: "budget_unavailable" });
+    expect(await rowsOf(run.orgId, run.runId)).toEqual({ total: 0, open: 0 });
+    vi.restoreAllMocks();
   });
 
   it("a store it cannot use refuses budget_unavailable and takes no lease", async () => {
