@@ -9,6 +9,13 @@
  * status 500, and the server log records the stage, the tool, the run and a
  * class word, never the error's text. The stated refusals keep their own
  * sentence and status (403, and 404 for a missing artifact), and are not logged.
+ * No throw leaves the dispatch: a throw of the context resolution, and a throw
+ * the dispatch cannot even classify (a proxy whose trap throws, a refusal whose
+ * `message` or `reason` getter throws), answer the same fixed sentence.
+ *
+ * Every log case reads the COMPLETE list of calls of console.error, warn, log,
+ * info and debug made by the dispatch, and inspects every argument (an Error by
+ * its message and stack), so an extra argument or an extra line fails it.
  *
  * The roads under test are the extension tool, the data tool and the artifact
  * reads. Their workers are stubbed to throw; the refusal classes stay real,
@@ -18,6 +25,7 @@
  *   pnpm exec vitest run src/lib/__tests__/extension-scoped-tools-unexpected-error-4471.test.ts
  */
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { inspect } from "node:util";
 import { z } from "zod";
 
 const dataOperation = vi.fn();
@@ -25,6 +33,7 @@ const toolDispatch = vi.fn();
 const artifactsList = vi.fn();
 const artifactGet = vi.fn();
 const contentRead = vi.fn();
+const resolveContext = vi.fn();
 
 vi.mock("@/lib/db/pooled", async () => ({
   ...(await vi.importActual<typeof import("@/lib/db/pooled")>("@/lib/db/pooled")),
@@ -45,11 +54,7 @@ vi.mock("@cinatra-ai/agents/installed-oas-path", () => ({
 }));
 vi.mock("@/lib/verdaccio-config", () => ({ loadVerdaccioConfigForReads: async () => ({}) }));
 vi.mock("@/lib/extension-run-package", () => ({
-  resolveRunExtensionContext: async () => ({
-    packageName: "@fixture-scope/fixture-pack",
-    packageVersion: "1.0.0",
-    cinatra: { dependencies: [] },
-  }),
+  resolveRunExtensionContext: (...a: unknown[]) => resolveContext(...a),
 }));
 vi.mock("@cinatra-ai/sdk-extensions/manifest", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@cinatra-ai/sdk-extensions/manifest")>()),
@@ -90,20 +95,29 @@ const LEAKY = `ENOENT: no such file or directory, open '${FAKE_PATH}' (install $
 
 const FIXED = "the tool call failed on an unexpected error; the failure is logged on the server";
 
-let consoleError: MockInstance<typeof console.error>;
+const FAILURE_LINE =
+  "[agents-passthrough] extension-scoped tool call failed; the error's own text is not logged";
+const UNREADABLE_LINE =
+  "[agents-passthrough] extension-scoped tool call failed; the error could not be read, " +
+  "and its text is not logged";
 
-/** The dispatch's own failure lines: the ones the passthrough's failure log writes. */
-function failureLines(): unknown[][] {
-  return consoleError.mock.calls.filter(
-    (call) => typeof call[0] === "string" && call[0].startsWith("[agents-passthrough]"),
-  );
-}
+const LOG_METHODS = ["error", "warn", "log", "info", "debug"] as const;
+type LogMethod = (typeof LOG_METHODS)[number];
+let spies: Record<LogMethod, MockInstance>;
 
 beforeEach(() => {
   for (const f of [dataOperation, toolDispatch, artifactsList, artifactGet, contentRead]) {
     f.mockReset();
   }
-  consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+  resolveContext.mockReset();
+  resolveContext.mockResolvedValue({
+    packageName: "@fixture-scope/fixture-pack",
+    packageVersion: "1.0.0",
+    cinatra: { dependencies: [] },
+  });
+  spies = Object.fromEntries(
+    LOG_METHODS.map((m) => [m, vi.spyOn(console, m).mockImplementation(() => {})]),
+  ) as unknown as Record<LogMethod, MockInstance>;
 });
 
 afterEach(() => {
@@ -111,9 +125,40 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/** The dispatch, with every console spy cleared after the module import. */
 async function dispatch(tool: string, input: Record<string, unknown>) {
   const { dispatchExtensionScopedTool } = await import("@/lib/extension-scoped-tools");
+  for (const m of LOG_METHODS) spies[m].mockClear();
   return dispatchExtensionScopedTool({ tool, input, run: RUN });
+}
+
+/** Every call of every console method, each argument inspected in full. */
+function everythingLogged(): string {
+  return LOG_METHODS.map((m) =>
+    spies[m].mock.calls
+      .map((call) => call.map((arg) => inspect(arg, { depth: 8, showHidden: true })).join(" "))
+      .join("\n"),
+  ).join("\n");
+}
+
+/** The console saw exactly `errorCalls` on console.error and nothing else. */
+function expectExactLog(errorCalls: unknown[][]) {
+  expect(spies.error.mock.calls).toEqual(errorCalls);
+  for (const m of LOG_METHODS) if (m !== "error") expect(spies[m].mock.calls).toEqual([]);
+  const text = everythingLogged();
+  expect(text).not.toContain(FAKE_PATH);
+  expect(text).not.toContain(FAKE_INSTALL_ID);
+  expect(text).not.toContain("ENOENT");
+}
+
+function failureCall(tool: string, errorClass: string): unknown[] {
+  return [FAILURE_LINE, { tool, runId: RUN.id, errorClass }];
+}
+
+/** A primitive's refusal carrying the fake path, from the class copy the dispatch sees. */
+async function leakyPrimitiveRefusal(): Promise<Error> {
+  const { PrimitiveInvocationError } = await import("@cinatra-ai/mcp-client");
+  return new PrimitiveInvocationError({ code: "FIXTURE_CODE", message: LEAKY, retryable: false });
 }
 
 /** Every road, with the worker that throws on it and the call that reaches it. */
@@ -164,6 +209,7 @@ describe("an unexpected error on an extension-scoped road (cinatra#4471)", () =>
       const body = JSON.stringify(outcome);
       expect(body).not.toContain(FAKE_PATH);
       expect(body).not.toContain(FAKE_INSTALL_ID);
+      expectExactLog([failureCall(road.tool, "Error")]);
     });
   }
 
@@ -171,28 +217,19 @@ describe("an unexpected error on an extension-scoped road (cinatra#4471)", () =>
     toolDispatch.mockRejectedValue(LEAKY);
     const outcome = await dispatch("extension_tool", { name: "fixture_tool", input: {} });
     expect(outcome).toEqual({ ok: false, status: 500, error: FIXED });
+    expectExactLog([failureCall("extension_tool", "other")]);
   });
 
   // The passthrough's other roads answer these two with their own text
   // (#4223). On this road they are not stated refusals, so they answer the
   // fixed sentence like any other throw, and the log names their class.
   it("answers the fixed sentence for a primitive's refusal thrown on this road", async () => {
-    // Imported after the module reset, so the class is the one the failure
-    // log reads its class word from.
-    const { PrimitiveInvocationError } = await import("@cinatra-ai/mcp-client");
-    toolDispatch.mockRejectedValue(
-      new PrimitiveInvocationError({ code: "FIXTURE_CODE", message: LEAKY, retryable: false }),
-    );
+    // Built after the module reset, so the class is the one the failure log
+    // reads its class word from.
+    toolDispatch.mockRejectedValue(await leakyPrimitiveRefusal());
     const outcome = await dispatch("extension_tool", { name: "fixture_tool", input: {} });
     expect(outcome).toEqual({ ok: false, status: 500, error: FIXED });
-    expect(failureLines()[0]?.[1]).toEqual({
-      tool: "extension_tool",
-      runId: RUN.id,
-      errorClass: "PrimitiveInvocationError",
-    });
-    const everything = JSON.stringify(consoleError.mock.calls);
-    expect(everything).not.toContain(FAKE_PATH);
-    expect(everything).not.toContain(FAKE_INSTALL_ID);
+    expectExactLog([failureCall("extension_tool", "PrimitiveInvocationError")]);
   });
 
   it("answers the fixed sentence for a zod error thrown on this road", async () => {
@@ -202,30 +239,63 @@ describe("an unexpected error on an extension-scoped road (cinatra#4471)", () =>
     const outcome = await dispatch("extension_data", { table: "fixture_rows", operation: "select" });
     expect(outcome).toEqual({ ok: false, status: 500, error: FIXED });
     expect(JSON.stringify(outcome)).not.toContain(FAKE_PATH);
-    expect(failureLines()[0]?.[1]).toEqual({
-      tool: "extension_data",
-      runId: RUN.id,
-      errorClass: "ZodError",
-    });
-    const everything = JSON.stringify(consoleError.mock.calls);
-    expect(everything).not.toContain(FAKE_PATH);
-    expect(everything).not.toContain(FAKE_INSTALL_ID);
+    expectExactLog([failureCall("extension_data", "ZodError")]);
   });
 
-  it("logs the failure on the server with the tool, the run and a class word, never the error's text", async () => {
-    toolDispatch.mockRejectedValue(new Error(LEAKY));
-    await dispatch("extension_tool", { name: "fixture_tool", input: {} });
-    const lines = failureLines();
-    expect(lines).toHaveLength(1);
-    const everything = JSON.stringify(consoleError.mock.calls);
-    expect(everything).not.toContain(FAKE_PATH);
-    expect(everything).not.toContain(FAKE_INSTALL_ID);
-    expect(everything).not.toContain("ENOENT");
-    expect(lines[0]?.[1]).toEqual({
-      tool: "extension_tool",
-      runId: RUN.id,
-      errorClass: "Error",
+  it("answers the fixed sentence when the run's context resolution throws", async () => {
+    resolveContext.mockRejectedValue(new Error(LEAKY));
+    const outcome = await dispatch("extension_tool", { name: "fixture_tool", input: {} });
+    expect(outcome).toEqual({ ok: false, status: 500, error: FIXED });
+    expect(toolDispatch).not.toHaveBeenCalled();
+    expectExactLog([failureCall("extension_tool", "Error")]);
+  });
+
+  it("answers the fixed sentence for a thrown proxy whose prototype trap throws a primitive's refusal", async () => {
+    const replacement = await leakyPrimitiveRefusal();
+    const trap = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw replacement;
+        },
+      },
+    );
+    toolDispatch.mockRejectedValue(trap);
+    const outcome = await dispatch("extension_tool", { name: "fixture_tool", input: {} });
+    expect(outcome).toEqual({ ok: false, status: 500, error: FIXED });
+    expectExactLog([[UNREADABLE_LINE, { tool: "extension_tool", runId: RUN.id, errorClass: "unreadable" }]]);
+  });
+
+  it("answers the fixed sentence for a stated refusal whose message getter throws", async () => {
+    const { ExtensionToolRefusal } = await import("@/lib/extension-tool-dispatch");
+    const replacement = await leakyPrimitiveRefusal();
+    const refusal = new ExtensionToolRefusal("fixture tool refusal");
+    Object.defineProperty(refusal, "message", {
+      get() {
+        throw replacement;
+      },
     });
+    toolDispatch.mockRejectedValue(refusal);
+    const outcome = await dispatch("extension_tool", { name: "fixture_tool", input: {} });
+    expect(outcome).toEqual({ ok: false, status: 500, error: FIXED });
+    expectExactLog([[UNREADABLE_LINE, { tool: "extension_tool", runId: RUN.id, errorClass: "unreadable" }]]);
+  });
+
+  it("answers the fixed sentence for an artifact content refusal whose reason getter throws", async () => {
+    const { ArtifactContentRefusal } = await import("@/lib/artifacts/extension-artifact-reads");
+    const replacement = await leakyPrimitiveRefusal();
+    const refusal = new ArtifactContentRefusal("not-found", "fixture not found");
+    Object.defineProperty(refusal, "reason", {
+      get() {
+        throw replacement;
+      },
+    });
+    contentRead.mockRejectedValue(refusal);
+    const outcome = await dispatch("artifact_content_read", { artifactId: "a-1" });
+    expect(outcome).toEqual({ ok: false, status: 500, error: FIXED });
+    expectExactLog([
+      [UNREADABLE_LINE, { tool: "artifact_content_read", runId: RUN.id, errorClass: "unreadable" }],
+    ]);
   });
 });
 
@@ -235,6 +305,7 @@ describe("a stated refusal keeps its own sentence and status (cinatra#4471)", ()
     dataOperation.mockRejectedValue(new ExtensionDataRefusal("fixture", "fixture data refusal"));
     const outcome = await dispatch("extension_data", { table: "fixture_rows", operation: "select" });
     expect(outcome).toEqual({ ok: false, status: 403, error: "fixture data refusal" });
+    expectExactLog([]);
   });
 
   it("answers an ExtensionToolRefusal with 403 and its sentence", async () => {
@@ -242,6 +313,7 @@ describe("a stated refusal keeps its own sentence and status (cinatra#4471)", ()
     toolDispatch.mockRejectedValue(new ExtensionToolRefusal("fixture tool refusal"));
     const outcome = await dispatch("extension_tool", { name: "fixture_tool", input: {} });
     expect(outcome).toEqual({ ok: false, status: 403, error: "fixture tool refusal" });
+    expectExactLog([]);
   });
 
   it("answers an ExtensionToolModuleRefusal with 403 and its sentence", async () => {
@@ -249,6 +321,7 @@ describe("a stated refusal keeps its own sentence and status (cinatra#4471)", ()
     toolDispatch.mockRejectedValue(new ExtensionToolModuleRefusal("fixture module refusal"));
     const outcome = await dispatch("extension_tool", { name: "fixture_tool", input: {} });
     expect(outcome).toEqual({ ok: false, status: 403, error: "fixture module refusal" });
+    expectExactLog([]);
   });
 
   it("answers an ArtifactAdmissionRefusal with 403 and its sentence", async () => {
@@ -267,11 +340,13 @@ describe("a stated refusal keeps its own sentence and status (cinatra#4471)", ()
     artifactGet.mockRejectedValue(refusal);
     const outcome = await dispatch("artifacts_get", { artifactId: "a-1" });
     expect(outcome).toEqual({ ok: false, status: 403, error: refusal.message });
+    expectExactLog([]);
   });
 
   it("answers the listing's page-token refusal (artifact-service) with 403 and its sentence", async () => {
-    // The class is read by its exported name, written in two parts so that a
-    // word scan of this diff reads no tool name in it.
+    // The class is read by its exported name, written in two parts so that no
+    // line this change adds spells it: a word in the name is on the list of
+    // tool names that the public-text scan reads in added lines.
     const service: Record<string, unknown> = await import("@/lib/artifacts/artifact-service");
     const PageTokenRefusal = service[["ArtifactCur", "sorRefusal"].join("")] as new (
       token: string,
@@ -281,6 +356,7 @@ describe("a stated refusal keeps its own sentence and status (cinatra#4471)", ()
     artifactsList.mockRejectedValue(refusal);
     const outcome = await dispatch("artifacts_list", {});
     expect(outcome).toEqual({ ok: false, status: 403, error: refusal.message });
+    expectExactLog([]);
   });
 
   it("answers an ArtifactContentRefusal for a missing artifact with 404 and its sentence", async () => {
@@ -288,6 +364,7 @@ describe("a stated refusal keeps its own sentence and status (cinatra#4471)", ()
     contentRead.mockRejectedValue(new ArtifactContentRefusal("not-found", "fixture not found"));
     const outcome = await dispatch("artifact_content_read", { artifactId: "a-1" });
     expect(outcome).toEqual({ ok: false, status: 404, error: "fixture not found" });
+    expectExactLog([]);
   });
 
   it("answers any other ArtifactContentRefusal with 403 and its sentence", async () => {
@@ -295,12 +372,6 @@ describe("a stated refusal keeps its own sentence and status (cinatra#4471)", ()
     contentRead.mockRejectedValue(new ArtifactContentRefusal("too-large", "fixture too large"));
     const outcome = await dispatch("artifact_content_read", { artifactId: "a-1" });
     expect(outcome).toEqual({ ok: false, status: 403, error: "fixture too large" });
-  });
-
-  it("does not log a stated refusal", async () => {
-    const { ExtensionToolRefusal } = await import("@/lib/extension-tool-dispatch");
-    toolDispatch.mockRejectedValue(new ExtensionToolRefusal("fixture tool refusal"));
-    await dispatch("extension_tool", { name: "fixture_tool", input: {} });
-    expect(failureLines()).toHaveLength(0);
+    expectExactLog([]);
   });
 });
