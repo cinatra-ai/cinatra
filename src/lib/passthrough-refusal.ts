@@ -6,20 +6,25 @@
 // becomes the body of a failure. Two kinds of error are the caller's own
 // refusal, and the caller acts on their answer:
 //
-//   - a PrimitiveInvocationError: a primitive's stated refusal, written by the
-//     primitive for its caller (for example "the type is not registered"). It
-//     keeps its own text.
 //   - a ZodError: the input did not parse against the primitive's schema. Its
 //     answer is built from its issues only (each path and code, and for a type
 //     error the expected type), never from its own message (cinatra#4465): the
 //     marker that identifies a zod error can be written by any code, and a
-//     wrapper can keep it with a message of its own.
+//     wrapper can keep it with a message of its own. The marker is read first,
+//     so an error that carries it is answered this way even when it is also a
+//     PrimitiveInvocationError. A marked error with no issue, or with an issue
+//     or a list length it cannot read, is answered with the fixed sentence below.
+//   - a PrimitiveInvocationError without the zod marker: a primitive's stated
+//     refusal, written by the primitive for its caller (for example "the type
+//     is not registered"). It keeps its own text when that text is a string.
 //
-// Every other throw is answered with one fixed sentence. The server log records
-// that sentence's stage, the tool, the run and a word for the error's class
-// from a fixed list, never text taken from the error (src/lib/failure-log.ts).
-// A caller-facing refusal answered with its own text is not logged. Reading the error and writing the
-// log can never throw out of this module or change the answer.
+// Every other throw, and every refusal above that falls back to the fixed
+// sentence, is answered with one fixed sentence. The server log records that
+// sentence's stage, the tool, the run and a word for the error's class from a
+// fixed list, never text taken from the error (src/lib/failure-log.ts). Only an
+// answer of a refusal's own text, or of a text built from its issues, is not
+// logged. Reading the error and writing the log can never throw out of this
+// module or change the answer.
 //
 // Pure module apart from its runtime imports, so it is unit-testable in
 // isolation, the same posture as the other passthrough seams.
@@ -60,9 +65,12 @@ export function isZodError(err: unknown): boolean {
 }
 
 /**
- * True when the error is a refusal for the caller: a primitive's stated
- * refusal, answered with its own text, or a zod error, answered with a text
- * built from its issues (callerFacingText). Not proof that zod built the error.
+ * True when the error is of a kind the caller may be answered with: a value
+ * that carries the zod marker, or a primitive's stated refusal. Not proof that
+ * zod built the error, and not proof of the answer: callerFacingText answers a
+ * marked error from its issues, a primitive's refusal without the marker with
+ * its own text, and gives the fixed sentence, logged, to a marked error with
+ * no readable issue and to a refusal whose message is not a string.
  */
 export function isCallerFacingError(err: unknown): err is Error {
   return err instanceof PrimitiveInvocationError || isZodError(err);
@@ -110,18 +118,36 @@ const ZOD_EXPECTED_TYPES: ReadonlySet<string> = new Set([
 
 const MAX_ISSUES = 20;
 const MAX_PATH_SEGMENTS = 16;
+/** The largest length a JavaScript array can have. */
+const MAX_ARRAY_LENGTH = 2 ** 32 - 1;
 /** A path segment shown as a field name: letters, digits, `_`, `$` and `-`, 1 to 64 of them. */
 const PATH_KEY = /^[A-Za-z0-9_$-]{1,64}$/;
 
 /**
- * An issue's path as `a.b[0].c`: a non-negative integer as `[n]`, a key of
- * PATH_KEY's form as a name, any other segment as `[?]`, at most
+ * A list's length, read once, or null when it is not a non-negative safe
+ * integer of at most MAX_ARRAY_LENGTH: a Proxy over an array passes
+ * Array.isArray and can answer any value for `length`.
+ */
+function listLength(list: readonly unknown[]): number | null {
+  const length: unknown = list.length;
+  if (typeof length !== "number") return null;
+  if (!Number.isSafeInteger(length)) return null;
+  if (length < 0) return null;
+  if (length > MAX_ARRAY_LENGTH) return null;
+  return length;
+}
+
+/**
+ * An issue's path as `a.b[0].c`: a non-negative safe integer as `[n]`, a key
+ * of PATH_KEY's form as a name, any other segment as `[?]`, at most
  * MAX_PATH_SEGMENTS segments (then `[...]`); an empty path as `(input)`.
- * Null when the path is not a list.
+ * Null when the path is not a list or its length is not a list length
+ * (listLength).
  */
 function pathText(path: unknown): string | null {
   if (!Array.isArray(path)) return null;
-  const length = path.length;
+  const length = listLength(path);
+  if (length === null) return null;
   if (length === 0) return "(input)";
   let text = "";
   for (let i = 0; i < Math.min(length, MAX_PATH_SEGMENTS); i++) {
@@ -137,7 +163,7 @@ function pathText(path: unknown): string | null {
   return length > MAX_PATH_SEGMENTS ? `${text}[...]` : text;
 }
 
-/** One issue as `<path>: <code>[, expected <type>]`, or null when it is not an object with a path list. */
+/** One issue as `<path>: <code>[, expected <type>]`, or null when it is not an object with a readable path list. */
 function issueText(issue: unknown): string | null {
   if (typeof issue !== "object" || issue === null) return null;
   const fields = issue as { path?: unknown; code?: unknown; expected?: unknown };
@@ -156,16 +182,17 @@ function issueText(issue: unknown): string | null {
 /**
  * The answer to a zod error, built from its issues only: PASSTHROUGH_SCHEMA_ERROR,
  * then at most MAX_ISSUES issues joined by "; ", then the count of the rest.
- * Null (the fixed sentence answers) when there is no issue or an issue cannot
- * be read; every zod error the tests build from a failed parse carries at
- * least one issue. Never a throw.
+ * Null (the fixed sentence answers) when there is no issue, when the list's
+ * length is not a list length (listLength), or when an issue cannot be read;
+ * every zod error the tests build from a failed parse carries at least one
+ * issue. Never a throw.
  */
 function schemaErrorText(err: unknown): string | null {
   try {
     const issues: unknown = (err as { issues?: unknown }).issues;
     if (!Array.isArray(issues)) return null;
-    const count = issues.length;
-    if (count === 0) return null;
+    const count = listLength(issues);
+    if (count === null || count === 0) return null;
     const parts: string[] = [];
     for (let i = 0; i < Math.min(count, MAX_ISSUES); i++) {
       const part = issueText(issues[i]);
@@ -180,26 +207,30 @@ function schemaErrorText(err: unknown): string | null {
 }
 
 /**
- * The caller-facing refusal's answer, or null: a primitive's refusal's own
- * message, or a zod error's text built from its issues. Never a throw.
+ * The caller-facing refusal's answer, or null: an error with the zod marker
+ * gets its text built from its issues, read first so that a primitive's
+ * refusal that also carries the marker never answers its own message; a
+ * primitive's refusal without the marker gets its own message. Never a throw.
  */
 function callerFacingText(err: unknown): string | null {
   try {
-    if (err instanceof PrimitiveInvocationError) {
-      const message: unknown = err.message;
-      return typeof message === "string" ? message : null;
-    }
-    return isZodError(err) ? schemaErrorText(err) : null;
+    if (isZodError(err)) return schemaErrorText(err);
+    if (!(err instanceof PrimitiveInvocationError)) return null;
+    const message: unknown = err.message;
+    return typeof message === "string" ? message : null;
   } catch {
     return null;
   }
 }
 
 /**
- * The text a failure answers with: a primitive's refusal's own message, a zod
- * error's text built from its issues, or the fixed sentence `fixed`, with the
+ * The text a failure answers with: a zod error's text built from its issues,
+ * a primitive's refusal's own message, or the fixed sentence `fixed`, with the
  * stage, the tool, the run and the error's class word logged on the server.
- * The caller-facing refusal is not logged: its text is the caller's own answer.
+ * Only an answer from callerFacingText is not logged: its text is the caller's
+ * own answer. A caller-facing error that callerFacingText cannot answer (a
+ * marked error with no readable issue, a refusal whose message is not a
+ * string) gets the fixed sentence and is logged.
  */
 export function passthroughFailureText(
   err: unknown,

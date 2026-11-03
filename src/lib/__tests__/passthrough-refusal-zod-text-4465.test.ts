@@ -7,12 +7,14 @@
  * own. So the passthrough answers an input-schema error with a text built from
  * its issues only: each path and code, and for a type error the expected type.
  * A code, a type word or a path segment outside a fixed form is not copied.
- * An error with no issue, or with an issue it cannot read, answers the fixed
- * sentence and is logged without its text. On the base the error's own message
- * is the answer, so every case here fails there.
+ * An error with no issue, or with an issue or a list length it cannot read,
+ * answers the fixed sentence and is logged without its text. A primitive's
+ * refusal that also carries the marker is answered as a zod error. On the base
+ * the error's own message is the answer, so every case here fails there.
  *
  *   npx vitest run src/lib/__tests__/passthrough-refusal-zod-text-4465.test.ts
  */
+import { PrimitiveInvocationError } from "@cinatra-ai/mcp-client";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { z } from "zod";
 
@@ -228,5 +230,58 @@ describe("cinatra#4465 — the expected type is named only for a type error", ()
     expect(passthroughFailureText(forgedZodError(SECRET, issues), CTX)).toBe(
       `${PREFIX}: name: too_small; count: custom; count: invalid_type, expected number`,
     );
+  });
+});
+
+describe("cinatra#4465 — a primitive's refusal that carries the zod marker is answered as a zod error", () => {
+  it("never answers the primitive's own message: its issues, or the fixed sentence when it has none", () => {
+    const marked = (issues: unknown[]) =>
+      Object.assign(new PrimitiveInvocationError({ code: "NOT_FOUND", message: SECRET, retryable: false }), {
+        _zod: { traits: new Set(["ZodError"]) },
+        issues,
+      });
+    expect(passthroughFailureText(marked([{ path: [], code: "custom" }]), CTX)).toBe(`${PREFIX}: (input): custom`);
+    expect(logged).not.toHaveBeenCalled();
+    expect(passthroughFailureText(marked([]), CTX)).toBe(PASSTHROUGH_UNEXPECTED_ERROR);
+    expect(logged).toHaveBeenCalledTimes(1);
+    expectNoSecretLogged();
+  });
+});
+
+describe("cinatra#4465 — a list length is read once and must be a whole list length", () => {
+  /** A Proxy over `target` that passes Array.isArray and answers `length` with `length`. */
+  const lying = (target: unknown[], length: unknown): unknown[] =>
+    new Proxy(target, {
+      get(t, key) {
+        return key === "length" ? length : Reflect.get(t, key);
+      },
+    });
+  const twenty = () => Array.from({ length: 20 }, (_, i) => ({ code: "custom", path: [`f${i}`] }));
+
+  it("an issue list whose length is fractional, negative, not finite, too large or not a number answers the fixed sentence", () => {
+    const lists = [
+      lying(twenty(), 20.5),
+      lying([], -1),
+      lying(twenty(), Number.NaN),
+      lying(twenty(), Number.POSITIVE_INFINITY),
+      lying(twenty(), 2 ** 32),
+      lying(twenty(), "20"),
+    ];
+    for (const issues of lists) {
+      expect(isZodError(forgedZodError(SECRET, issues))).toBe(true);
+      expect(passthroughFailureText(forgedZodError(SECRET, issues), CTX)).toBe(PASSTHROUGH_UNEXPECTED_ERROR);
+    }
+    expect(logged).toHaveBeenCalledTimes(lists.length);
+    expectNoSecretLogged();
+  });
+
+  it("a path whose length is not a number, negative, fractional or not finite answers the fixed sentence", () => {
+    const lengths = [Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY];
+    for (const length of lengths) {
+      const issues = [{ code: "custom", path: lying(["safe"], length) }];
+      expect(passthroughFailureText(forgedZodError(SECRET, issues), CTX)).toBe(PASSTHROUGH_UNEXPECTED_ERROR);
+    }
+    expect(logged).toHaveBeenCalledTimes(lengths.length);
+    expectNoSecretLogged();
   });
 });
