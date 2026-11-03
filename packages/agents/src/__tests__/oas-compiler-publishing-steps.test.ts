@@ -20,7 +20,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { compileOasAgentJson, __resetRegistryCacheForTests } from "../oas-compiler";
+import { collectPublishingSteps, compileOasAgentJson, __resetRegistryCacheForTests } from "../oas-compiler";
 
 type Node = Record<string, unknown>;
 
@@ -266,5 +266,116 @@ describe("cinatra#4150 — the gate prefix is reserved for the host", () => {
     expect(await publishingStepsOf(buildFlow({ middle: [apiNode("my_cinatra_publish_gate__x", { publishes: true })] }))).toEqual([
       "my_cinatra_publish_gate__x",
     ]);
+  });
+});
+
+describe("cinatra#4150 — the action kinds are an allow-list", () => {
+  const flowWith = (node: Node) => ({
+    nodes: [{ $component_ref: "step" }],
+    $referenced_components: { step: { id: "step", ...node } },
+  });
+  const declared = { metadata: { cinatra: { publishes: true } } };
+
+  for (const kind of ["ApiNode", "AgentNode", "FlowNode", "ParallelFlowNode"]) {
+    it(`accepts ${kind}`, () => {
+      expect(collectPublishingSteps(flowWith({ component_type: kind, ...declared }))).toEqual({ ok: true, steps: ["step"] });
+    });
+  }
+
+  for (const kind of [
+    "StartNode", "EndNode", "InputMessageNode", "OutputMessageNode", "BranchingNode", "Flow",
+    "TriggerWaitNode", "LlmNode", "ToolNode", "MapNode", "SomeFutureNode",
+  ]) {
+    it(`refuses ${kind}`, () => {
+      const res = collectPublishingSteps(flowWith({ component_type: kind, ...declared }));
+      expect(res).toEqual({ ok: false, error: expect.stringMatching(new RegExp(`^PUBLISHES_MISPLACED: .*is a ${kind},`)) });
+    });
+  }
+
+  it("refuses a node with no kind, and a kind that is not a string", () => {
+    for (const node of [declared, { component_type: 7, ...declared }]) {
+      expect(collectPublishingSteps(flowWith(node))).toEqual({
+        ok: false,
+        error: expect.stringMatching(/^PUBLISHES_MISPLACED: .*is a <none>,/),
+      });
+    }
+  });
+
+  it("a kind outside the list may still say publishes: false", () => {
+    const node = { component_type: "TriggerWaitNode", metadata: { cinatra: { publishes: false } } };
+    expect(collectPublishingSteps(flowWith(node))).toEqual({ ok: true, steps: [] });
+  });
+});
+
+describe("cinatra#4150 — every branch of the reader", () => {
+  const api = (id: string, publishes?: unknown): Node => ({
+    component_type: "ApiNode",
+    id,
+    ...(publishes === undefined ? {} : { metadata: { cinatra: { publishes } } }),
+  });
+
+  it("the flow root: a malformed value and true refuse, false passes", () => {
+    const root = (publishes: unknown) => ({ metadata: { cinatra: { publishes } }, nodes: [], $referenced_components: {} });
+    expect(collectPublishingSteps(root("yes"))).toEqual({ ok: false, error: expect.stringMatching(/^PUBLISHES_MALFORMED: the flow root .*the string "yes"/) });
+    expect(collectPublishingSteps(root(true))).toEqual({ ok: false, error: expect.stringMatching(/^PUBLISHES_MISPLACED: the flow root/) });
+    expect(collectPublishingSteps(root(false))).toEqual({ ok: true, steps: [] });
+  });
+
+  it("the reserved prefix refuses on a listed node and on start_node, with no component behind either", () => {
+    const listed = { nodes: [{ $component_ref: "cinatra_publish_gate__a" }] };
+    const start = { nodes: [], start_node: { $component_ref: "cinatra_publish_gate__b" } };
+    expect(collectPublishingSteps(listed)).toEqual({ ok: false, error: expect.stringMatching(/^RESERVED_NODE_ID: .*cinatra_publish_gate__a/) });
+    expect(collectPublishingSteps(start)).toEqual({ ok: false, error: expect.stringMatching(/^RESERVED_NODE_ID: .*cinatra_publish_gate__b/) });
+  });
+
+  it("the reserved prefix refuses on a component key and on a component id", () => {
+    const byKey = { $referenced_components: { cinatra_publish_gate__c: api("clean") } };
+    const byId = { $referenced_components: { clean: api("cinatra_publish_gate__d") } };
+    expect(collectPublishingSteps(byKey)).toEqual({ ok: false, error: expect.stringMatching(/^RESERVED_NODE_ID: .*cinatra_publish_gate__c/) });
+    expect(collectPublishingSteps(byId)).toEqual({ ok: false, error: expect.stringMatching(/^RESERVED_NODE_ID: .*cinatra_publish_gate__d/) });
+  });
+
+  it("an entry that is not an object is skipped: null, a string, an array", () => {
+    const doc = { nodes: [], $referenced_components: { a: null, b: "text", c: [] } };
+    expect(collectPublishingSteps(doc as Record<string, unknown>)).toEqual({ ok: true, steps: [] });
+  });
+
+  it("nesting deeper than the limit refuses", () => {
+    let inner: Node = api("deepest");
+    for (let i = 0; i < 40; i++) inner = { component_type: "FlowNode", id: `level${i}`, subflow: inner };
+    const res = collectPublishingSteps({ $referenced_components: { top: inner } });
+    expect(res).toEqual({ ok: false, error: expect.stringMatching(/^OAS_NESTING_TOO_DEEP: /) });
+  });
+
+  it("an inline subflow is read: its flag refuses as nested, whatever its form", () => {
+    const top = (node: Node) => ({ nodes: [{ $component_ref: "top" }], $referenced_components: { top: { component_type: "FlowNode", id: "top", ...node } } });
+    for (const doc of [top({ subflow: api("inner", true) }), top({ subflows: [api("inner", true)] })]) {
+      expect(collectPublishingSteps(doc)).toEqual({ ok: false, error: expect.stringMatching(/^PUBLISHES_MISPLACED: node "inner" /) });
+    }
+    expect(collectPublishingSteps(top({ subflows: [api("inner", "yes")] }))).toEqual({ ok: false, error: expect.stringMatching(/^PUBLISHES_MALFORMED: node "inner" /) });
+  });
+
+  it("a subflow by reference is not read as inline; its definition is read through the refs", () => {
+    const doc = {
+      nodes: [{ $component_ref: "top" }],
+      $referenced_components: {
+        top: { component_type: "FlowNode", id: "top", subflow: { $component_ref: "sub" }, subflows: [{ $component_ref: "sub" }, "text"] },
+        sub: { component_type: "Flow", id: "sub", nodes: [], $referenced_components: { inner: api("inner", false) } },
+      },
+    };
+    expect(collectPublishingSteps(doc)).toEqual({ ok: true, steps: [] });
+  });
+
+  it("a component in the refs but not in nodes cannot declare, even of an action kind", () => {
+    const doc = { nodes: [], $referenced_components: { loose: api("loose", true) } };
+    expect(collectPublishingSteps(doc)).toEqual({ ok: false, error: expect.stringMatching(/^PUBLISHES_MISPLACED: node "loose" .*not a top-level node/) });
+  });
+
+  it("the list follows nodes, not the map's order", () => {
+    const doc = {
+      nodes: [{ $component_ref: "first" }, { $component_ref: "second" }],
+      $referenced_components: { second: api("second", true), first: api("first", true) },
+    };
+    expect(collectPublishingSteps(doc)).toEqual({ ok: true, steps: ["first", "second"] });
   });
 });

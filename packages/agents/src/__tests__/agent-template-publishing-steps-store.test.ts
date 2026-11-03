@@ -43,6 +43,7 @@ vi.mock("../publish-template", () => ({
 
 import { createLocalAgentTemplateVersion } from "../import-export-actions";
 import { serializeTemplate, deserializeTemplate } from "../store-template-versions";
+import { _runAgentTemplateUpdate } from "../store";
 import type { CreateAgentTemplateInput } from "../store";
 
 const rowInput = () => createTemplate.mock.calls[0]?.[0] as Record<string, unknown>;
@@ -113,4 +114,38 @@ describe("cinatra#4150 — the column round-trips through serializeTemplate / de
       expect(() => deserializeTemplate(asRow(values))).toThrow();
     });
   }
+});
+
+describe("cinatra#4150 — the update patch re-projects the column", () => {
+  async function setOf(patch: Record<string, unknown>): Promise<Record<string, unknown>> {
+    let set: Record<string, unknown> = {};
+    const exec = {
+      update: () => ({
+        set: (u: Record<string, unknown>) => {
+          set = u;
+          return { where: () => ({ returning: async () => [] }) };
+        },
+      }),
+    };
+    await _runAgentTemplateUpdate(exec as never, "tmpl-1", patch as never, undefined);
+    return set;
+  }
+
+  it("a list is written as JSON-as-text", async () => {
+    expect((await setOf({ publishingSteps: ["publish"] })).publishingSteps).toBe('["publish"]');
+  });
+
+  it("an empty list stays an empty list", async () => {
+    expect((await setOf({ publishingSteps: [] })).publishingSteps).toBe("[]");
+  });
+
+  it("null clears the column", async () => {
+    const set = await setOf({ publishingSteps: null });
+    expect(set).toHaveProperty("publishingSteps");
+    expect(set.publishingSteps).toBeNull();
+  });
+
+  it("an omitted field leaves the column untouched", async () => {
+    expect(await setOf({ name: "renamed" })).not.toHaveProperty("publishingSteps");
+  });
 });

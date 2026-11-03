@@ -1368,9 +1368,9 @@ function subflowFiresNonContextRuntimeGate(
 // node id that takes the host's reserved gate prefix. `false` is an explicit
 // "writes, but does not publish" and is allowed anywhere.
 const PUBLISH_GATE_ID_PREFIX = "cinatra_publish_gate__";
-const PUBLISHES_NOT_AN_ACTION = new Set([
-  "StartNode", "EndNode", "InputMessageNode", "OutputMessageNode", "BranchingNode", "Flow",
-]);
+// The node kinds that can be the publishing action. Every other kind refuses, a
+// kind this compiler does not know and a node with no kind included.
+const PUBLISHES_ACTION_KINDS = new Set(["ApiNode", "AgentNode", "FlowNode", "ParallelFlowNode"]);
 
 function describePublishesValue(value: unknown): string {
   if (value === null) return "null";
@@ -1378,7 +1378,7 @@ function describePublishesValue(value: unknown): string {
   return typeof value === "string" ? `the string ${JSON.stringify(value)}` : `a ${typeof value}`;
 }
 
-function collectPublishingSteps(
+export function collectPublishingSteps(
   parsed: Record<string, unknown>,
 ): { ok: true; steps: string[] } | { ok: false; error: string } {
   const topLevelIds = new Set(
@@ -1430,10 +1430,10 @@ function collectPublishingSteps(
       if (nested || key === undefined || !topLevelIds.has(key)) {
         return `PUBLISHES_MISPLACED: node "${label}" declares publishes: true but is not a top-level node of the flow (a node inside a nested subflow, or a subflow definition); the runtime cannot stop in front of it`;
       }
-      if (PUBLISHES_NOT_AN_ACTION.has(componentType)) {
+      if (!PUBLISHES_ACTION_KINDS.has(componentType)) {
         return `PUBLISHES_MISPLACED: node "${label}" is a ${componentType}, which cannot be the publishing action`;
       }
-      if (!steps.includes(key)) steps.push(key);
+      steps.push(key);
     }
     const children: Array<[string | undefined, unknown]> = [];
     const refs = node.$referenced_components;
