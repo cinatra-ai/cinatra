@@ -163,6 +163,16 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     await expect(store.readOpenDecisionForRun(input.runId)).rejects.toMatchObject({ code: "malformed-row" });
   });
 
+  it("an answer on a row the store cannot read throws and rolls back: the row stays parked", async () => {
+    const { decision } = await store.insertParkedDecision(park());
+    await admin.query(`UPDATE ${TABLE} SET surfaced_values = '{nope' WHERE id = $1`, [decision.id]);
+    await expect(
+      store.decide(decision.id, { from: "parked", to: "released", actor: "person-1" }),
+    ).rejects.toMatchObject({ code: "malformed-row" });
+    const { rows } = await admin.query(`SELECT status, decided_by, decided_at FROM ${TABLE} WHERE id = $1`, [decision.id]);
+    expect(rows[0]).toEqual({ status: "parked", decided_by: null, decided_at: null });
+  });
+
   it("both readers answer the newest row: by created_at, then by id on a tie", async () => {
     const input = park();
     const older = (await store.insertParkedDecision(input)).decision;

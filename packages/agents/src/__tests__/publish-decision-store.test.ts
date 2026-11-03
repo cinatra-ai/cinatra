@@ -12,6 +12,8 @@ const { calls, answers } = vi.hoisted(() => ({
     where: [] as unknown[],
     limit: [] as number[],
     orderBy: 0,
+    transactions: 0,
+    rollbacks: 0,
   },
   answers: {
     insert: async (): Promise<unknown[]> => [],
@@ -20,8 +22,8 @@ const { calls, answers } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../db", () => ({
-  db: {
+vi.mock("../db", () => {
+  const db: Record<string, unknown> = {
     insert: () => ({
       values: (v: Record<string, unknown>) => {
         calls.values.push(v);
@@ -57,8 +59,20 @@ vi.mock("../db", () => ({
         },
       }),
     }),
-  },
-}));
+  };
+  // The double's transaction runs the work on the same double and counts a throw out of it
+  // as a rollback, the way drizzle's transaction rolls back on a throw.
+  db.transaction = async (work: (tx: unknown) => Promise<unknown>) => {
+    calls.transactions += 1;
+    try {
+      return await work(db);
+    } catch (error) {
+      calls.rollbacks += 1;
+      throw error;
+    }
+  };
+  return { db };
+});
 
 import {
   PUBLISH_DECISION_DEFAULT_TTL_MS,
@@ -123,6 +137,8 @@ beforeEach(() => {
   calls.where.length = 0;
   calls.limit.length = 0;
   calls.orderBy = 0;
+  calls.transactions = 0;
+  calls.rollbacks = 0;
   answers.insert = async () => [stored()];
   answers.update = async () => [stored()];
   answers.select = async () => [];
@@ -200,6 +216,25 @@ describe("decide", () => {
     expect(where.params).toEqual(["d1", "parked"]);
     expect(calls.set[0]).toMatchObject({ status: "released", decidedBy: "person-1", decisionNote: null });
     expect(rendered(calls.set[0].decidedAt).sql).toBe("now()");
+  });
+
+  it("the conditional UPDATE and the read after a lost answer run in one transaction", async () => {
+    await decide("d1", { from: "parked", to: "released", actor: "person-1" });
+    answers.update = async () => [];
+    answers.select = async () => [stored({ status: "released" })];
+    await decide("d1", { from: "parked", to: "declined", actor: "person-2" });
+    expect(calls.transactions).toBe(2);
+    expect(calls.rollbacks).toBe(0);
+  });
+
+  it.each([
+    ["unreadable surfaced values", { surfacedValues: "{nope" }],
+    ["an unknown status", { status: "approved" }],
+  ])("a winning UPDATE whose returned row has %s throws inside the transaction, so the answer rolls back", async (_label, patch) => {
+    answers.update = async () => [stored(patch)];
+    expect(await codeOf(decide("d1", { from: "parked", to: "released", actor: "person-1" }))).toBe("malformed-row");
+    expect(calls.transactions).toBe(1);
+    expect(calls.rollbacks).toBe(1);
   });
 
   it("a decline keeps its decider and its note", async () => {

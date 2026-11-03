@@ -1,9 +1,9 @@
 import "server-only";
 
-// publish-decision-store (cinatra#4150): the record of one stop in front of a declared
-// publishing step. `decide` is the ONE way a row leaves `parked`: one conditional UPDATE,
-// so one of two concurrent answers wins. Every read error and every row this module
-// cannot read THROWS: an unreadable record never reads as "no open decision".
+// publish-decision-store (cinatra#4150): one stop in front of a declared publishing step.
+// `decide` is the ONE way a row leaves `parked`: one conditional UPDATE in a transaction, so
+// one of two concurrent answers wins, and a row it cannot read rolls the answer back. Every
+// read error and every unreadable row THROWS: it never reads as "no open decision".
 
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, lte, sql } from "drizzle-orm";
@@ -66,9 +66,7 @@ function deserialize(row: StoredRow): PublishDecisionRow {
   let surfacedValues: unknown = null;
   try {
     surfacedValues = JSON.parse(row.surfacedValues);
-  } catch {
-    // Reported below, with every other shape this module cannot read.
-  }
+  } catch { /* reported below, with every other shape this module cannot read */ }
   if (!isPlainObject(surfacedValues)) {
     throw new PublishDecisionError("malformed-row", `decision ${row.id} has unreadable surfaced values`);
   }
@@ -194,20 +192,22 @@ export async function decide(id: string, input: DecideInput): Promise<DecideResu
   const decisionId = requireText(id, "id");
   const { actor, note } = requireTransition(input);
 
-  const [won] = await db
-    .update(agentRunPublishDecisions)
-    .set({ status: input.to, decidedBy: actor, decidedAt: sql`now()`, decisionNote: note })
-    .where(and(eq(agentRunPublishDecisions.id, decisionId), eq(agentRunPublishDecisions.status, "parked")))
-    .returning();
-  if (won) return { outcome: "won", decision: deserialize(won) };
+  return db.transaction(async (tx): Promise<DecideResult> => {
+    const [won] = await tx
+      .update(agentRunPublishDecisions)
+      .set({ status: input.to, decidedBy: actor, decidedAt: sql`now()`, decisionNote: note })
+      .where(and(eq(agentRunPublishDecisions.id, decisionId), eq(agentRunPublishDecisions.status, "parked")))
+      .returning();
+    if (won) return { outcome: "won", decision: deserialize(won) };
 
-  const [current] = await db
-    .select()
-    .from(agentRunPublishDecisions)
-    .where(eq(agentRunPublishDecisions.id, decisionId))
-    .limit(1);
-  if (!current) throw new PublishDecisionError("not-found", `no decision ${decisionId}`);
-  return { outcome: "lost", currentStatus: deserialize(current).status };
+    const [current] = await tx
+      .select()
+      .from(agentRunPublishDecisions)
+      .where(eq(agentRunPublishDecisions.id, decisionId))
+      .limit(1);
+    if (!current) throw new PublishDecisionError("not-found", `no decision ${decisionId}`);
+    return { outcome: "lost", currentStatus: deserialize(current).status };
+  });
 }
 
 /** The newest decision of this step of this run, whatever its status. */
