@@ -2521,7 +2521,8 @@ export async function SetupScreen({
   // WAS THE QUESTION ANSWERED? Passed DOWN to the run panel, which draws no
   // skill picker inside itself for a run whose skills were decided on the card
   // ("The agentic run progress card appears once the skills are decided; no
-  // skill inside it can be selected"). The panel used to read this off a
+  // skill inside it can be selected"; in a conversation turn the bound design's
+  // §V supersedes the first half, cinatra#3062). The panel used to read this off a
   // recommendation card of its own; that mount is gone (cinatra#3047), so the
   // host that draws the card answers for it — here, from the run's own row.
   //

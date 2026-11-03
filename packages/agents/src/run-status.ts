@@ -1232,6 +1232,29 @@ function platformStartSentencePattern(runId: string): RegExp {
 }
 
 /**
+ * A CLAUSE-LESS SENTENCE IS ONLY THE PLATFORM'S WHEN IT STANDS ALONE. One door
+ * mints the head with no clause after it, and that door writes the sentence as
+ * the whole line. The same characters INSIDE prose are a quotation of the line,
+ * not the line, so a clause-less match counts only when nothing but whitespace
+ * shares its line. A match that carries one of the minted clauses is the
+ * platform's wherever it stands.
+ *
+ * ONE rule, read by both the renderer's question below and the corrections'
+ * rewrite, so the two take the same matches as the platform's sentence.
+ */
+function isThePlatformsOwnMatch(
+  text: string,
+  match: string,
+  clause: string | undefined,
+  offset: number,
+): boolean {
+  if (clause !== undefined) return true;
+  const before = text.slice(0, offset);
+  const after = text.slice(offset + match.length);
+  return /(?:^|\n)[ \t]*$/.test(before) && /^[ \t]*(?:\n|$)/.test(after);
+}
+
+/**
  * DOES THIS TEXT CARRY THE PLATFORM'S OWN START SENTENCE FOR THIS RUN?
  * (cinatra#3062, §V: "the assistant says it dispatched the agent and that the
  * run paused for a decision on the recommended skills — … — and that same turn
@@ -1241,25 +1264,26 @@ function platformStartSentencePattern(runId: string): RegExp {
  * dispatched stands above the run's own cards. The start's tool result reaches
  * the turn BEFORE the model says the line back, so the turn's ordered trace
  * carries the run's part first and the line after it; the renderer asks this to
- * draw that one line above the run's slot. The pattern is the same one the
- * corrections below rewrite, so the two can never disagree about which sentence
- * is the platform's. Pure: it reads, it rewrites nothing.
+ * draw that one line above the run's slot. It reads the same pattern and the
+ * same stands-alone rule (`isThePlatformsOwnMatch`) as the corrections below,
+ * so a clause-less sentence quoted inside prose is not the platform's here
+ * either. Pure: it reads, it rewrites nothing.
  */
 export function textCarriesRunStartSentence(text: string, runId: string): boolean {
   if (!runId) return false;
-  return platformStartSentencePattern(runId).test(text);
+  for (const m of text.matchAll(platformStartSentencePattern(runId))) {
+    if (isThePlatformsOwnMatch(text, m[0], m[2], m.index ?? 0)) return true;
+  }
+  return false;
 }
 
 /**
  * Rewrite the platform's own start sentence for ONE run, wherever it stands in
  * a turn's text, and leave everything else byte-identical.
  *
- * A CLAUSE-LESS SENTENCE IS ONLY THE PLATFORM'S WHEN IT STANDS ALONE. One door
- * mints the head with no clause after it, and that door writes the sentence as
- * the whole line. The same characters INSIDE prose are a quotation of the line,
- * not the line, and a corrector that rewrote a quotation would be a second
- * author of the turn -- so a clause-less match is taken only when nothing but
- * whitespace shares its line.
+ * A clause-less match is taken only when it stands alone on its line
+ * (`isThePlatformsOwnMatch` above): a corrector that rewrote a quotation of the
+ * line would be a second author of the turn.
  */
 function rewritePlatformStartSentence(input: {
   text: string;
@@ -1274,12 +1298,7 @@ function rewritePlatformStartSentence(input: {
       clause: string | undefined,
       offset: number,
     ) => {
-      if (clause === undefined) {
-        const before = input.text.slice(0, offset);
-        const after = input.text.slice(offset + match.length);
-        const ownsTheLine = /(?:^|\n)[ \t]*$/.test(before) && /^[ \t]*(?:\n|$)/.test(after);
-        if (!ownsTheLine) return match;
-      }
+      if (!isThePlatformsOwnMatch(input.text, match, clause, offset)) return match;
       return input.replace(packageName);
     },
   );

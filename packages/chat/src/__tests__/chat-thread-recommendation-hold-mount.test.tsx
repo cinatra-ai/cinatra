@@ -124,11 +124,26 @@ vi.mock("../../../agents/src/server-actions", () => ({
 //
 // What stays stubbed is the panel's chrome and its data fetch, which belong to
 // the agents package's own tests.
+// When `draws` is set, the stub reports that it draws a review screen, the way
+// the shipped panel reports its reading (`onReviewReadingChange`), and draws a
+// marked stand-in for that screen.
+const panelReview = vi.hoisted(() => ({ draws: false }));
 vi.mock("../inline-agent-run-card", () => ({
-  InlineAgentRunCard: ({ runId }: { runId: string }) => {
+  InlineAgentRunCard: ({
+    runId,
+    onReviewReadingChange,
+  }: {
+    runId: string;
+    onReviewReadingChange?: (runId: string, drawsReview: boolean) => void;
+  }) => {
     const ambientHost = useLifecycleCardHost();
+    const draws = panelReview.draws;
+    React.useEffect(() => {
+      onReviewReadingChange?.(runId, draws);
+    }, [runId, draws, onReviewReadingChange]);
     return (
       <div data-testid="inline-run-panel" data-run-card-host="" data-run-id={runId}>
+        {draws ? <div data-panel-review-stand-in="">Review requested</div> : null}
         {runCardOwnsLifecycleCopy(ambientHost) ? (
           <LifecycleCardSurfaceProvider host="run_card">
             <RecommendationHoldCard runId={runId} wireRef={null} />
@@ -174,7 +189,9 @@ import {
 } from "./conversation-column-harness";
 
 /** The assistant turn a parked chat dispatch actually produces: one `agent_run`
- *  tool call with the server-pinned run id, and the dispatch line beside it. */
+ *  tool call with the server-pinned run id, and the dispatch line beside it.
+ *  The line is the sentence the platform mints for a parked start
+ *  (`RUN_START_PARKED_CLAUSE`), the line the 3062-walk1 round recorded. */
 function dispatchTurn(): UiMessage[] {
   return [
     { id: "u1", role: "user", content: `run cinatra_blog-draft-writer-agent for me` },
@@ -193,7 +210,7 @@ function dispatchTurn(): UiMessage[] {
         },
         {
           kind: "text",
-          content: `Dispatched \`${PACKAGE}\` (runId: \`${RUN_ID}\`, status: \`pending_input\`). The run is paused for your decision on the recommended skills.`,
+          content: `Dispatched \`${PACKAGE}\` (runId: \`${RUN_ID}\`, status: \`pending_input\`). The run paused for a decision on the recommended skills.`,
         },
       ],
     } as unknown as UiMessage,
@@ -227,6 +244,7 @@ beforeEach(() => {
   holdState.current = HELD;
   holdState.calls = [];
   holdState.pending = null;
+  panelReview.draws = false;
   // A FRESH BROWSER SESSION PER ARM (cinatra#3062, fix leg 3). The card
   // remembers the row it drew, keyed by run, so that a remount redraws it
   // instead of emptying the turn — every arm here reuses one run id, so each
@@ -595,10 +613,11 @@ describe("the turn shows exactly one recommendation card", () => {
 //    skill inside it can be selected."
 //
 // So the turn's shape is decided by the ROW'S STATE, not by the presence of an
-// `agent_run` part: held draws the chip row alone, and the decision is what
-// brings the run card in. Both conversation hosts are measured, because one
-// column serves `/chat` and the widget and a rule that holds on only one of
-// them is not the rule.
+// `agent_run` part: held draws the chip row alone. The plan's second sentence
+// is superseded by the bound design's §V for the decided turn (see the arms
+// below): the decision does NOT bring the run card in beneath the settled row.
+// Both conversation hosts are measured, because one column serves `/chat` and
+// the widget and a rule that holds on only one of them is not the rule.
 // ---------------------------------------------------------------------------
 describe("the agentic run progress card waits for the skills decision", () => {
   it("draws the chip row and NO run card while the hold is open", async () => {
@@ -705,7 +724,7 @@ describe("the agentic run progress card waits for the skills decision", () => {
     expect(root).not.toBeNull();
     const slot = container.querySelector(`[data-agent-run-slot="${RUN_ID}"]`);
     expect(slot?.contains(root)).toBe(true);
-    const TEXT = "paused for your decision on the recommended skills";
+    const TEXT = "paused for a decision on the recommended skills";
     const carriers = [...container.querySelectorAll("*")].filter(
       (el) =>
         el.textContent?.includes(TEXT) &&
@@ -717,6 +736,71 @@ describe("the agentic run progress card waits for the skills decision", () => {
     expect(
       line.compareDocumentPosition(root!) & Node.DOCUMENT_POSITION_FOLLOWING,
       "the row is drawn beneath the dispatch line",
+    ).toBeTruthy();
+  });
+
+  it("shows the review a decided turn's panel draws, beneath the settled row", async () => {
+    // §II: the run's review is drawn in place, in the run's own slot. The
+    // stand-down covers only a panel that asks nothing.
+    holdState.current = { state: "confirmed", runId: RUN_ID, skillNames: ["blog-content"] };
+    panelReview.draws = true;
+    const { container } = await mountSurface("chat", { messages: dispatchTurn() });
+
+    await waitFor(() => {
+      if (!container.querySelector('[data-run-recommendation-decision="confirmed"]')) {
+        throw new Error("settled row not drawn");
+      }
+    });
+    await waitFor(() => {
+      const review = container.querySelector("[data-panel-review-stand-in]");
+      if (!review || review.closest("[hidden]")) throw new Error("the review the panel draws is not shown");
+    });
+    const panel = container.querySelector(RUN_PANEL)!;
+    expect(panel.closest("[data-inline-run-panel-stood-down]")).toBeNull();
+    expect(panel.closest('[aria-hidden="true"]')).toBeNull();
+    const slot = container.querySelector(`[data-agent-run-slot="${RUN_ID}"]`);
+    const row = slot?.querySelector("[data-chat-thread-recommendation-hold]");
+    expect(row).not.toBeNull();
+    expect(slot?.contains(panel)).toBe(true);
+    expect(
+      row!.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING,
+      "the review is drawn beneath the settled row",
+    ).toBeTruthy();
+  });
+
+  it("keeps the row in place and draws the line above it when the line streams in after the run's part", async () => {
+    // The trace of a live turn: the start's tool part lands first, the model's
+    // text part arrives while the turn streams.
+    const [user, assistant] = dispatchTurn() as unknown as [UiMessage, UiMessage & { parts: unknown[] }];
+    const runOnly = [user, { ...assistant, parts: [assistant.parts[0]] } as unknown as UiMessage];
+    const result = await mountSurface("chat", { messages: runOnly, streamingIds: ["a1"] });
+    await waitFor(() => {
+      if (!result.container.querySelector('[data-lifecycle-card="recommendation_hold"]')) {
+        throw new Error("the held row is not drawn before the line arrives");
+      }
+    });
+    const rowBefore = result.container.querySelector('[data-lifecycle-card="recommendation_hold"]')!;
+
+    result.rerender(surfaceElement("chat", { messages: dispatchTurn(), streamingIds: ["a1"] }));
+    const TEXT = "paused for a decision on the recommended skills";
+    const deepest = () =>
+      [...result.container.querySelectorAll("*")].filter(
+        (el) =>
+          el.textContent?.includes(TEXT) &&
+          ![...el.children].some((c) => c.textContent?.includes(TEXT)),
+      );
+    await waitFor(() => {
+      if (deepest().length !== 1) throw new Error("the streamed line is not drawn");
+    });
+    const rowAfter = result.container.querySelector('[data-lifecycle-card="recommendation_hold"]');
+    expect(rowAfter, "the row was remounted when the line arrived").toBe(rowBefore);
+    const slot = result.container.querySelector(`[data-agent-run-slot="${RUN_ID}"]`);
+    const line = deepest()[0]!;
+    expect(slot!.contains(rowAfter)).toBe(true);
+    expect(slot!.contains(line)).toBe(false);
+    expect(
+      line.compareDocumentPosition(rowAfter!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      "the row is drawn beneath the streamed line",
     ).toBeTruthy();
   });
 

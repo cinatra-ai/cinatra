@@ -131,7 +131,7 @@ function dispatchTurn(): UiMessage[] {
         },
         {
           kind: "text",
-          content: `Dispatched \`${PACKAGE}\` (runId: \`${RUN_ID}\`, status: \`pending_input\`). The run is paused for your decision on the recommended skills.`,
+          content: `Dispatched \`${PACKAGE}\` (runId: \`${RUN_ID}\`, status: \`pending_input\`). The run paused for a decision on the recommended skills.`,
         },
       ],
     } as unknown as UiMessage,
@@ -272,7 +272,7 @@ describe("the widget draws §V's checkbox card inside a third-party page", () =>
       // The line is read off the DEEPEST element that carries it: an ancestor
       // contains both, and `compareDocumentPosition` calls a descendant
       // FOLLOWING, so an ancestor would answer whatever was asked of it.
-      const TEXT = "paused for your decision on the recommended skills";
+      const TEXT = "paused for a decision on the recommended skills";
       const carriers = [...result.container.querySelectorAll("*")].filter(
         (el) =>
           el.textContent?.includes(TEXT) &&

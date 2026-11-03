@@ -7,7 +7,10 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { textCarriesRunStartSentence } from "@cinatra-ai/agents/run-status";
+import {
+  correctRunStartSentenceForScheduleWait,
+  textCarriesRunStartSentence,
+} from "@cinatra-ai/agents/run-status";
 
 import type { AssistantMessagePart } from "../assistant-parts";
 import { drawOrderWithRunStartLinesFirst } from "../run-start-line-order";
@@ -35,6 +38,29 @@ describe("textCarriesRunStartSentence", () => {
     expect(textCarriesRunStartSentence("The run paused for a decision on the recommended skills.", RUN_A)).toBe(false);
     expect(textCarriesRunStartSentence(line(RUN_A), "")).toBe(false);
   });
+
+  it("does not read a clause-less sentence quoted inside prose as the platform's line", () => {
+    const quoted = `I dispatched it. ${line(RUN_A, "")} Anything else?`;
+    expect(textCarriesRunStartSentence(quoted, RUN_A)).toBe(false);
+    // The same characters on a line of their own are the platform's line.
+    expect(textCarriesRunStartSentence(`I dispatched it.\n${line(RUN_A, "")}\nAnything else?`, RUN_A)).toBe(true);
+  });
+
+  it("takes the same sentences as the platform's as the start-sentence correction does", () => {
+    const inputs = [
+      line(RUN_A),
+      line(RUN_A, ""),
+      `Sure. ${line(RUN_A)}`,
+      `I dispatched it. ${line(RUN_A, "")} Anything else?`,
+      `I dispatched it.\n${line(RUN_A, "")}\nAnything else?`,
+      line(RUN_B),
+      "The run paused for a decision on the recommended skills.",
+    ];
+    for (const input of inputs) {
+      const rewritten = correctRunStartSentenceForScheduleWait({ text: input, runId: RUN_A }) !== input;
+      expect(textCarriesRunStartSentence(input, RUN_A), input).toBe(rewritten);
+    }
+  });
 });
 
 describe("drawOrderWithRunStartLinesFirst", () => {
@@ -50,6 +76,16 @@ describe("drawOrderWithRunStartLinesFirst", () => {
 
   it("leaves a turn whose line already stands above the run exactly as it is", () => {
     expect(drawOrderWithRunStartLinesFirst([text(line(RUN_A)), run(RUN_A)])).toEqual([0, 1]);
+  });
+
+  it("leaves a turn whose line stands above the run as it is, even with a second copy after the run", () => {
+    expect(drawOrderWithRunStartLinesFirst([text(line(RUN_A)), run(RUN_A), text(line(RUN_A))])).toEqual([0, 1, 2]);
+  });
+
+  it("does not move a text that only quotes the clause-less sentence inside prose", () => {
+    expect(
+      drawOrderWithRunStartLinesFirst([run(RUN_A), text(`I dispatched it. ${line(RUN_A, "")} Anything else?`)]),
+    ).toEqual([0, 1]);
   });
 
   it("leaves a turn with no platform line, or a text that is not this run's, as it is", () => {

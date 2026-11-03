@@ -252,10 +252,14 @@ function ThoughtGroupSection({ group, isLive }: { group: UiThoughtGroup; isLive:
 //    skill inside it can be selected."
 //
 // So while the row is open the turn carries the assistant's text and the chip
-// row and nothing else; the decision is what brings the run card in, with the
-// settled chips above it. Both readings live in ONE container — the `agent_run`
-// part's own slot — so the card that arrives lands exactly where the panel
-// always was, not at the end of the turn.
+// row and nothing else. The plan's second sentence is superseded in this turn by
+// the bound design's §V ("No reading is ever redrawn as a row above another
+// card"): once the skills are decided the settled row stays, and the run card is
+// NOT drawn beneath it — the panel stays mounted but stood down, and a review it
+// draws is shown in place (see the stand-down in `AgentRunTurnSlot`). Both
+// readings live in ONE container — the `agent_run` part's own slot — so a review
+// the panel draws lands exactly where the panel always was, not at the end of
+// the turn.
 //
 // ONE RESOLVE ANSWERS BOTH QUESTIONS. The hold's authoritative state is read by
 // the card (the ONE renderer of `recommendation_hold`) and published here; this
@@ -974,7 +978,12 @@ function AgentRunTurnSlot({
           it - and, for the reason above, it is not unmounted either: it stays
           this turn's one publisher of the run's later gates, and a review it
           draws is shown, by the same rule. A run that was never held (`none`)
-          or whose hold cannot be read is not decided, and keeps its panel. */}
+          or whose hold cannot be read is not decided, and keeps its panel.
+          The bound design draws no decided-run turn of its own; what it draws
+          for a run in the thread is §II's placeholder, which "names no status,
+          reports no result" and is "replaced, in place, by the review", and a
+          run's steps and what each did are read on the run page (Agent run &
+          review §I). */}
       {runCardWaits || runCardStandsDown ? null : turnCarriesSettledSchedule || decided ? (
         <div
           hidden={!panelDrawsReview}

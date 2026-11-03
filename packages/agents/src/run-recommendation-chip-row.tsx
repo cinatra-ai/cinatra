@@ -2012,11 +2012,14 @@ const RESOLVE_RETRY_DELAYS_MS = [400, 1_500, 4_000] as const;
  * deadline that passes while the read is merely slow draws the run progress card
  * over a question that is still open — the very card §V keeps off the turn —
  * until the late answer takes it away again. This read is measured at twelve to
- * thirty seconds under load on a development runtime (see `resolve` below), and
- * the 8 s this deadline used to be drew exactly that in the widget of a graded
- * capture of this issue: an "Agentic Run Progress" card and no Skills row on a
- * held run. So the deadline stands above the slowest read measured; it still ends a
- * read that never answers, which is the only case it exists for.
+ * thirty seconds under load on a development runtime (see `resolve` below). A
+ * graded capture of this issue recorded, in the widget, a run card and no Skills
+ * row while the run was held, and its round record leaves the cause open
+ * ("possibly a third product defect, only a re-shoot can tell"); the 8 s this
+ * deadline used to be, passing inside such a slow read, is the likely cause, and
+ * the next graded round re-shoots it. So the deadline stands above the slowest
+ * read measured; it still ends a read that never answers, which is the only case
+ * it exists for.
  */
 const RESOLVE_DEADLINE_MS = 45_000;
 

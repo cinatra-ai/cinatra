@@ -18,7 +18,8 @@
 // for THAT run is drawn just before the run's slot. Nothing is rewritten, no part
 // is dropped or duplicated, each part keeps its own index (its key and its
 // `data-transcript-slot` mark), and a turn whose line already stands above the
-// run's part, or that carries no such line, is drawn exactly as before.
+// run's part in the trace (even with a second copy after it), or that carries
+// no such line, is drawn exactly as before.
 // ---------------------------------------------------------------------------
 import { textCarriesRunStartSentence } from "@cinatra-ai/agents/run-status";
 
@@ -35,12 +36,14 @@ export function drawOrderWithRunStartLinesFirst(
     if (moved.has(index)) return;
     if (part.kind === "tool_call" && isRunStartToolName(part.name) && part.runId) {
       const runId = part.runId;
-      const line = parts.findIndex(
+      const carries = (candidate: AssistantMessagePart) =>
+        candidate.kind === "text" && textCarriesRunStartSentence(candidate.content, runId);
+      // A line the trace already carries above the run stays where it is, and
+      // a later copy of it is not moved up beside it.
+      const alreadyAbove = parts.some((candidate, at) => at < index && carries(candidate));
+      const line = alreadyAbove ? -1 : parts.findIndex(
         (candidate, at) =>
-          at > index &&
-          !moved.has(at) &&
-          candidate.kind === "text" &&
-          textCarriesRunStartSentence(candidate.content, runId),
+          at > index && !moved.has(at) && carries(candidate),
       );
       if (line !== -1) {
         order.push(line);
