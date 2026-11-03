@@ -67,8 +67,8 @@ export const SUBMISSIONS = [
   submission("stub-sub-3", "mail-digest", "promoted", "complete"),
 ];
 
-// The fields of each reply row, as the shipped client's types declare them
-// (packages/marketplace-mcp-client/src/types.ts): MarketplaceVendorSubmission, MarketplaceAdminSubmission and
+// The fields of each reply row, as the shipped marketplace client's types declare them:
+// MarketplaceVendorSubmission, MarketplaceAdminSubmission and
 // MarketplaceVendorApplicationAdminRow. Each list reply cuts its rows to its own list, so a row that a test
 // passes in carries no other field into a reply: the vendor's own list drops the admin-only fields and
 // `eligibility`, and every list drops a field that no type has. marketplace-mcp-stub.test.ts compares
