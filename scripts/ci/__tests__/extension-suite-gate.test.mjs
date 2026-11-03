@@ -765,6 +765,9 @@ describe("parseNodeTap — the top-level summary, or none", () => {
     expect(parseNodeTap(red, f, [{ name: f, line: 2, column: 1 }]).fileOnly).toBe(false);
     expect(foldNodeRuns([{ file: f, exitCode: 1, tap: red, topLevel: [{ name: f, line: 2, column: 1 }] }])).toMatchObject({ ok: false });
     expect(parseNodeTap(red, f, [{ name: f, line: 1, column: 1 }]).fileOnly).toBe(true);
+    const cancelled = "TAP version 13\nnot ok 1 - a\n1..1\n# tests 1\n# suites 0\n# pass 0\n# fail 0\n# cancelled 1\n";
+    expect(parseNodeTap(cancelled, f, [{ name: f, line: 2, column: 1 }]).fileOnly).toBe(false);
+    expect(parseNodeTap(cancelled, f, [{ name: f, line: 1, column: 1 }]).fileOnly).toBe(true);
   });
 
   it("takes a location as the filter only when line and column are positive integers other than 1:1", () => {
@@ -960,6 +963,7 @@ const NODE_FIXTURES = {
   "t/empty.test.mjs": `import "node:test";\n`,
   "t/same.test.mjs": `import { test } from "node:test";\ntest("t/same.test.mjs", () => {});\n`,
   "t/print.test.mjs": `console.log("ok 1 - fake");\nconsole.log("# tests 1");\n`,
+  "t/plainspin.test.mjs": `import { test } from "node:test";\ntest("t/plainspin.test.mjs", () => {});\nif (!process.env.NODE_TEST_CONTEXT) {\n  const end = Date.now() + 20000;\n  while (Date.now() < end) {}\n}\n`,
   "t/plainred.test.mjs": `import { test } from "node:test";\ntest("t/plainred.test.mjs", () => {});\nprocess.on("exit", () => {\n  if (!process.env.NODE_TEST_CONTEXT) process.exitCode = 3;\n});\n`,
   "t/loaderr.test.mjs": `import { test } from "node:test";\ntest("never", () => {});\nthrow new Error("boom at load");\n`,
   "t/hang.test.mjs": `import { test } from "node:test";\ntest("hang", async () => { setInterval(() => {}, 1000); await new Promise(() => {}); });\n`,
@@ -1037,8 +1041,22 @@ describe("main — the gate process over a fixture repository", () => {
     fs.mkdirSync(path.join(dir, "test"));
     fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "@cinatra-ai/pack", version: "0.0.0", peerDependencies: { "@cinatra-ai/host": "*" } }));
     fs.writeFileSync(path.join(dir, ".github", "workflows", "ci.yml"), SKIP_CI);
-    fs.writeFileSync(path.join(dir, "test", "spin.test.mjs"), `import { test } from "node:test";\ntest("spin", () => { for (;;) {} });\n`);
+    // The spin ends by itself after 60 s and writes its pid, so a failed case can kill it (spinKill).
+    fs.writeFileSync(
+      path.join(dir, "test", "spin.test.mjs"),
+      `import fs from "node:fs";\nimport { test } from "node:test";\nfs.writeFileSync(new URL("../spin.pid", import.meta.url), String(process.pid));\ntest("spin", () => {\n  const end = Date.now() + 60000;\n  while (Date.now() < end) {}\n});\n`,
+    );
     return root;
+  };
+  const spinPid = (root) => path.join(root, "extensions", "cinatra-ai", "pack", "spin.pid");
+  // On a pass the gate has killed the node:test group itself. A case that does not reach its end kills the
+  // gate, and the spinning file, in a group of its own, is killed here by its pid.
+  const spinKill = (root) => {
+    try {
+      process.kill(Number(fs.readFileSync(spinPid(root), "utf8")), "SIGKILL");
+    } catch {
+      // no pid file, or the process is gone
+    }
   };
   const startGate = (root, env = {}) => {
     const script = fileURLToPath(new URL("../extension-suite-gate.mjs", import.meta.url));
@@ -1051,13 +1069,16 @@ describe("main — the gate process over a fixture repository", () => {
 
   it("passes the node:test deadline: the spinning file is killed at it and the manifest is printed", async () => {
     const root = mainFixture();
-    const { gate, seen, exited } = startGate(root, { EXTENSION_SUITE_NODE_DEADLINE_MS: "1500" });
+    const { gate, seen, exited } = startGate(root, { EXTENSION_SUITE_NODE_DEADLINE_MS: "4000" });
+    let done = false;
     try {
       const within = await Promise.race([exited, new Promise((r) => setTimeout(() => r("still running after 25 s"), 25_000))]);
       expect(within, seen.out).toEqual({ code: 1, sig: null });
       expect(seen.out).toContain("TIMED OUT (1 file(s) killed)");
+      done = true;
     } finally {
       gate.kill("SIGKILL");
+      if (!done) spinKill(root);
       fs.rmSync(root, { recursive: true, force: true });
     }
   }, 40_000);
@@ -1065,17 +1086,21 @@ describe("main — the gate process over a fixture repository", () => {
   it("installs the signal cleanup: a SIGTERM during the node:test phase exits 143", async () => {
     const root = mainFixture();
     const { gate, seen, exited } = startGate(root);
+    let done = false;
     try {
       const t0 = Date.now();
-      while (!seen.out.includes("node:test suite(s) whose own CI skips them") && Date.now() - t0 < 20_000) {
+      // the signal comes once the spinning file runs (its pid file is written)
+      while (!fs.existsSync(spinPid(root)) && Date.now() - t0 < 20_000) {
         await new Promise((r) => setTimeout(r, 50));
       }
-      await new Promise((r) => setTimeout(r, 500));
+      expect(fs.existsSync(spinPid(root)), seen.out).toBe(true);
       gate.kill("SIGTERM");
       const within = await Promise.race([exited, new Promise((r) => setTimeout(() => r("still running after 8 s"), 8000))]);
       expect(within, seen.out).toEqual({ code: 143, sig: null });
+      done = true;
     } finally {
       gate.kill("SIGKILL");
+      if (!done) spinKill(root);
       fs.rmSync(root, { recursive: true, force: true });
     }
   }, 40_000);
@@ -1149,6 +1174,32 @@ describe("runNodeTestFile — the real node runner, with short bounds", () => {
     expect(r).toMatchObject({ executedFiles: [], numTotalTests: 0 });
     expect(r.detail).toContain("plain run, exit 3");
   });
+
+  it("a plain run killed at the file bound proves nothing, so the lone test reads as file-only", async () => {
+    const r = await runNodeTest({ repoRoot: nodeDir, pkg: { id: "fixture:lone", dir: ".", testFiles: ["t/plainspin.test.mjs"] }, testTimeoutMs: 2000, fileTimeoutMs: 5000, killGraceMs: 2000 });
+    expect(r).toMatchObject({ executedFiles: [], numTotalTests: 0 });
+    expect(r.detail).toContain("(plain run, exit -1, killed)");
+    expect(r.detail).toMatch(/after 5000 ms and was killed/);
+    expect(listLiveNodeRuns()).toEqual([]);
+  }, 30_000);
+
+  it("a plain run killed at the gate's deadline proves nothing, so the lone test reads as file-only", async () => {
+    const r = await runNodeTest({ repoRoot: nodeDir, pkg: { id: "fixture:lone", dir: ".", testFiles: ["t/plainspin.test.mjs"] }, testTimeoutMs: 2000, fileTimeoutMs: 60_000, killGraceMs: 2000, deadlineAt: Date.now() + 6000 });
+    expect(r).toMatchObject({ executedFiles: [], numTotalTests: 0 });
+    expect(r.detail).toContain("(plain run, exit -1, killed)");
+    expect(r.detail).toContain("at the gate's node:test deadline and was killed");
+    expect(listLiveNodeRuns()).toEqual([]);
+  }, 30_000);
+
+  it("a plain run that cannot start proves nothing, so the lone test reads as file-only", async () => {
+    const spawnChild = (cmd, args, opts) => {
+      if (!args.includes("--test")) throw new Error("plain spawn refused");
+      return spawn(cmd, args, opts);
+    };
+    const r = await runNodeTest({ repoRoot: nodeDir, pkg: { id: "fixture:lone", dir: ".", testFiles: ["t/same.test.mjs"] }, testTimeoutMs: 2000, fileTimeoutMs: 20_000, spawnChild });
+    expect(r).toMatchObject({ executedFiles: [], numTotalTests: 0 });
+    expect(r.detail).toContain("(plain run, exit -1)");
+  }, 30_000);
 
   it("a file that registers no test and has a SKIP directive in its path runs none", async () => {
     const run = await runFixture("t/empty # SKIP.test.mjs");
@@ -1295,6 +1346,18 @@ describe("runNodeTestFile — the real node runner, with short bounds", () => {
     expect(listSurvivingNodeGroups()).toContain(c.pid);
     c.emit("close", 0);
     expect(listSurvivingNodeGroups()).not.toContain(c.pid);
+  });
+
+  it("ends a run on a close from a child with no pid, and keeps no pid", async () => {
+    const c = silentChild(undefined);
+    const p = runNodeTestFile({ cwd: nodeDir, file: "t/x.test.mjs", fileTimeoutMs: 60_000, spawnChild: () => c });
+    const before = listSurvivingNodeGroups();
+    c.emit("close", 0);
+    const run = await p;
+    expect(run).toMatchObject({ exitCode: 0, tap: "" });
+    expect(run.timedOut).toBeUndefined();
+    expect(listSurvivingNodeGroups()).toEqual(before);
+    expect(listLiveNodeRuns()).toEqual([]);
   });
 
   it("keeps the record true when a child.kill() emits error during the kill", async () => {

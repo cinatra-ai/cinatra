@@ -1478,8 +1478,8 @@ export function runNodeTestFile({
 
 // The files of one package, one after another, folded into one result. A file
 // not started because `deadlineAt` has passed is recorded as `notStarted`.
-// Exported for its test.
-export async function runNodeTest({ repoRoot, pkg, testTimeoutMs, fileTimeoutMs, deadlineAt = Infinity, killGraceMs }) {
+// Exported for its test, with the spawn as a parameter (runNodeTestFile).
+export async function runNodeTest({ repoRoot, pkg, testTimeoutMs, fileTimeoutMs, deadlineAt = Infinity, killGraceMs, spawnChild = spawn }) {
   const started = Date.now();
   const cwd = path.join(repoRoot, pkg.dir);
   const files = [];
@@ -1488,11 +1488,11 @@ export async function runNodeTest({ repoRoot, pkg, testTimeoutMs, fileTimeoutMs,
       files.push({ file, exitCode: -1, tap: "", notStarted: true, detail: "[extension-suite-gate] not started: the gate's node:test deadline had passed" });
       continue;
     }
-    const one = await runNodeTestFile({ cwd, file, testTimeoutMs, fileTimeoutMs, deadlineAt, killGraceMs });
+    const one = await runNodeTestFile({ cwd, file, testTimeoutMs, fileTimeoutMs, deadlineAt, killGraceMs, spawnChild });
     if (needsStandaloneRun(one)) {
-      const plain = await runNodeTestFile({ cwd, file, testTimeoutMs, fileTimeoutMs, deadlineAt, killGraceMs, standalone: true });
+      const plain = await runNodeTestFile({ cwd, file, testTimeoutMs, fileTimeoutMs, deadlineAt, killGraceMs, spawnChild, standalone: true });
       if (plain.exitCode === 0) one.standaloneTap = plain.records;
-      one.detail = `${one.detail}\n--- node ${file} (plain run, exit ${plain.exitCode}${plain.timedOut ? ", killed" : ""})`;
+      one.detail = `${one.detail}\n--- node ${file} (plain run, exit ${plain.exitCode}${plain.timedOut ? ", killed" : ""})\n${plain.detail}`;
     }
     files.push(one);
   }
