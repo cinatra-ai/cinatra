@@ -68,6 +68,7 @@ import {
   type ChatRoute,
 } from "@cinatra-ai/chat/chat-path-codec";
 import type { AssistantRegistryEntry } from "@/lib/assistant-registry-reader";
+import type { ChatThreadName } from "@/lib/chat-shell-bus";
 import {
   remoteConnectorKindForProvider,
   type RemoteConnectorKind,
@@ -490,33 +491,30 @@ export function resolveChatContainerForCurrentActor(
  * strictly after its access checks".
  *
  * The route guard proves only that the thread lives in the addressed container.
- * A title is a disclosure, so this repeats the reader rule the thread read route
- * applies (`readAssistantThreadForActor`). A refusal, a missing thread and any
- * failure all answer `null`: the crumb then draws no thread name.
+ * A title is a disclosure, so this calls THE thread read the read route calls
+ * (`readAssistantThreadPayloadForActor`): its access matrix and its
+ * durable-content gate. The answer is typed (`ChatThreadName`): `named`, `blank`
+ * for a readable thread whose title is empty, and `unavailable` for a refusal, a
+ * missing thread, a thread the read route would not return, or any failure.
  */
-export async function readChatThreadTitleForCurrentActor(threadId: string): Promise<string | null> {
+export async function readChatThreadNameForCurrentActor(threadId: string): Promise<ChatThreadName> {
+  const unavailable: ChatThreadName = { state: "unavailable" };
   try {
     const { getAuthSession, isPlatformAdmin } = await import("@/lib/auth-session");
     const session = await getAuthSession();
     const actorUserId = session?.user?.id ?? "";
-    if (!session || !actorUserId) return null;
-    const admin = isPlatformAdmin(session);
-    const { loadChatThreadForActorAccess } = await import("@/lib/chat-thread-store");
-    const { evaluateChatThreadAccess } = await import("@/lib/chat-thread-access");
-    const access = loadChatThreadForActorAccess({ threadId, actorUserId, isPlatformAdmin: admin });
-    if (!access) return null;
-    const allowed = evaluateChatThreadAccess({
-      ownerUserId: access.ownerUserId,
-      teamId: access.teamId,
+    if (!session || !actorUserId) return unavailable;
+    const { readAssistantThreadPayloadForActor } = await import("@/lib/assistant-thread-read");
+    const payload = readAssistantThreadPayloadForActor({
+      threadId,
       actorUserId,
-      isPlatformAdmin: admin,
-      isActorTeamMember: access.isActorTeamMember,
+      isPlatformAdmin: isPlatformAdmin(session),
     });
-    if (!allowed) return null;
-    const { getAssistantThread } = await import("@/lib/assistant-thread-store");
-    return getAssistantThread(threadId)?.title?.trim() || null;
+    if (!payload) return unavailable;
+    const title = typeof payload.title === "string" ? payload.title.trim() : "";
+    return title ? { state: "named", name: title } : { state: "blank" };
   } catch {
-    return null;
+    return unavailable;
   }
 }
 

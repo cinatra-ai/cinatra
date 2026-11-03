@@ -130,6 +130,19 @@ describe("the entity crumb of a nested dashboard", () => {
     expect(crumbs[0]!.label).not.toContain(TEAM_ID.slice(0, 8));
   });
 
+  it("shows the fixed word for the read's unavailable answer", async () => {
+    mocks.readScopeSurfaceEntityName.mockResolvedValue({ state: "unavailable" });
+    expect(crumbsIn(await teamScreen())[0]).toEqual({ prefix: `/teams/${TEAM_ID}`, label: "Team" });
+  });
+
+  it("shows the id's first eight characters plus an ellipsis for the read's blank answer", async () => {
+    mocks.readScopeSurfaceEntityName.mockResolvedValue({ state: "blank" });
+    expect(crumbsIn(await teamScreen())[0]).toEqual({
+      prefix: `/teams/${TEAM_ID}`,
+      label: `${TEAM_ID.slice(0, 8)}\u2026`,
+    });
+  });
+
   it("reads no entity name before the access check passes", async () => {
     mocks.requireDashboardAccess.mockRejectedValue(new mocks.AccessError("refused"));
     await expect(teamScreen()).rejects.toThrow("NEXT_NOT_FOUND");

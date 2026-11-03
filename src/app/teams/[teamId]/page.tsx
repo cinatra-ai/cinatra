@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { readScopeSurfaceEntityName } from "@/lib/scope-surface-entity-name";
+import { scopeSurfaceEntityLabel } from "@/lib/scope-surfaces";
 
 // Gate-repeating metadata (cinatra#1737, the dashboards pattern): the tab
 // title repeats the page's read gate before disclosing the team name; any
@@ -13,8 +14,9 @@ export async function generateMetadata({
   params: Promise<{ teamId: string }>;
 }): Promise<Metadata> {
   const { teamId } = await params;
-  const name = await readScopeSurfaceEntityName({ kind: "team", id: teamId });
-  return { title: name || "Team" };
+  const scope = { kind: "team", id: teamId } as const;
+  // The tab mirrors the trail's entity crumb under the same rules (cinatra#4453).
+  return { title: scopeSurfaceEntityLabel(scope, await readScopeSurfaceEntityName(scope)) };
 }
 
 // /teams/[teamId] renders the per-team dashboards surface (read-only Overview

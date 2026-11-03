@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { readScopeSurfaceEntityName } from "@/lib/scope-surface-entity-name";
+import { scopeSurfaceEntityLabel } from "@/lib/scope-surfaces";
 
 // Gate-repeating metadata (cinatra#1737, the dashboards pattern): the tab
 // title repeats the page's read gate before disclosing the org name; any
@@ -13,8 +14,9 @@ export async function generateMetadata({
   params: Promise<{ id: string }>;
 }): Promise<Metadata> {
   const { id } = await params;
-  const name = await readScopeSurfaceEntityName({ kind: "organization", id });
-  return { title: name || "Organization" };
+  const scope = { kind: "organization", id } as const;
+  // The tab mirrors the trail's entity crumb under the same rules (cinatra#4453).
+  return { title: scopeSurfaceEntityLabel(scope, await readScopeSurfaceEntityName(scope)) };
 }
 
 // /organizations/[id] renders a per-org detail DC dashboard (read-only, scoped

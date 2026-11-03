@@ -16,6 +16,7 @@ import { ScopeAssignmentPage } from "@/components/scope-assignment/scope-assignm
 import type { ScopeAssignmentPageModel } from "@/lib/scope-assignment/scope-assignment-page.server";
 import {
   scopeSurfaceCrumbEntries,
+  type ScopeSurfaceNameInput,
   type ScopeSurfaceRef,
 } from "@/lib/scope-surfaces";
 
@@ -35,11 +36,13 @@ export function ScopeSurfaceSettingsShell({
   scope: ScopeSurfaceRef;
   /**
    * The scope's own name, resolved by the route behind that scope's read gate
-   * (cinatra#2809 fix leg 2). `null` where the reader may not be told it, and
-   * the crumb then shows the scope's fixed word, never any part of the id
-   * (cinatra#4453).
+   * (cinatra#2809 fix leg 2), as the read's typed answer. The crumb draws what
+   * the drawing draws for each answer (cinatra#4453): the name, the id's first
+   * eight characters plus an ellipsis for a reader who may read the scope whose
+   * name is genuinely unavailable, and the scope's fixed word for a refused or
+   * missing scope, never any part of the id.
    */
-  scopeTitle?: string | null;
+  scopeTitle?: ScopeSurfaceNameInput;
   subject: ScopeSurfaceSettingsSubject;
   /** The assignment page the route resolved for this reader (cinatra#2814). */
   page: ScopeAssignmentPageModel;
@@ -53,7 +56,7 @@ export function ScopeSurfaceSettingsShell({
           The leaf ("Settings") is named by the route's own last segment; the
           entry this shell used to publish for it targeted `<base>/<tab>/
           settings`, a path no route answers on, so it named nothing. */}
-      <CrumbContributions entries={scopeSurfaceCrumbEntries(scope, tab, scopeTitle ?? undefined)} />
+      <CrumbContributions entries={scopeSurfaceCrumbEntries(scope, tab, scopeTitle)} />
       <ScopeAssignmentPage model={page} />
     </Main>
   );

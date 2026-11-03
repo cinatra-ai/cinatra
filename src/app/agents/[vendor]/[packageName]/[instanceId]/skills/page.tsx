@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { readAgentRunById, readAgentTemplateById } from "@cinatra-ai/agents/store";
+import { ensureRunTitle, readAgentRunById, readAgentTemplateById } from "@cinatra-ai/agents/store";
 import type { ActorRoleHints } from "@cinatra-ai/agents/auth-policy";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { AuthzError } from "@/lib/authz";
@@ -12,7 +12,7 @@ import {
 } from "@/lib/auth-session";
 import { redirect } from "next/navigation";
 import { CrumbContributions } from "@/components/crumb-contributions";
-import { scopeSurfaceCrumbEntries, type ScopeSurfaceRef } from "@/lib/scope-surfaces";
+import { scopeSurfaceCrumbEntries, type ScopeSurfaceNameInput, type ScopeSurfaceRef } from "@/lib/scope-surfaces";
 import { listSkillsUsedForRun } from "@/lib/agent-run-skills-used";
 import { readRunSelectedSkillRevisions } from "@/lib/run-selected-skill-revisions";
 import { Main } from "@/components/layout/main";
@@ -69,30 +69,43 @@ type ScopeProps = {
   scopeBase?: string | null;
   /** The scope itself, for the trail's head. */
   launchScope?: ScopeSurfaceRef | null;
-  /** The scope's resolved name, read behind the scope's own gate. */
-  scopeTitle?: string | null;
+  /** The scope's name, read behind the scope's own gate, as the read's typed answer (cinatra#4453). */
+  scopeTitle?: ScopeSurfaceNameInput;
 };
 
 /**
- * THE RUN'S NAME FOR THE TRAIL (cinatra#4453), the identity the run page publishes:
- * the run's title, else the template's name, else the drawing's placeholder, and
- * the owner beside it on a personal run. Called only after the run's access check,
- * so the reader this names the run for is one who may read it. Without it the
- * trail drew "Agent run", the label the drawing keeps for a refused or missing run.
+ * THE RUN'S NAME FOR THE TRAIL (cinatra#4453), the identity the run page publishes,
+ * read the way the run page reads it (`instance-screens.tsx`, the run page's
+ * `runName`, and `agent-page-layout.tsx`, its crumb): a started run takes its name
+ * through `ensureRunTitle`, which gives an untitled run its numbered name
+ * ("Blog Draft Writer Agent (1)") and keeps it; a run still waiting for its
+ * first input keeps its own title. Then the template's name, then the drawing's
+ * placeholder, and the owner beside it on a personal run. Called only after the
+ * run's access check, so the reader this names the run for is one who may read
+ * it. Without it the trail drew "Agent run", the label the drawing keeps for a
+ * refused or missing run.
  */
 async function readRunCrumbLabel(
-  run: { title?: string | null; templateId?: string | null; launchScopeAnchor?: unknown },
+  run: NonNullable<Awaited<ReturnType<typeof readAgentRunById>>>,
   instanceId: string,
 ): Promise<string> {
-  let name = run.title?.trim() || null;
-  if (!name && run.templateId) {
+  let templateName: string | null = null;
+  if (run.templateId) {
     try {
-      name = (await readAgentTemplateById(run.templateId))?.name?.trim() || null;
+      templateName = (await readAgentTemplateById(run.templateId))?.name?.trim() || null;
     } catch {
-      name = null;
+      templateName = null;
     }
   }
-  const label = name ?? `${instanceId.slice(0, 8)}…`;
+  let runName = run.title ?? "";
+  if (templateName !== null && run.status !== "pending_input") {
+    try {
+      runName = await ensureRunTitle(run, templateName);
+    } catch {
+      runName = run.title ?? "";
+    }
+  }
+  const label = runName.trim() || templateName || `${instanceId.slice(0, 8)}…`;
   const owner = launchScopeInstanceLabel(readLaunchScopeAnchor(run.launchScopeAnchor), {});
   return owner === "Personal (owner)" ? `${label} · ${owner}` : label;
 }
@@ -162,7 +175,7 @@ export default async function AgentPackageInstanceSkillsPage({
         entries={[
           // The vantage decides the trail's head, exactly as it does on the run page.
           ...(launchScope
-            ? scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle ?? undefined)
+            ? scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle)
             : []),
           {
             prefix: `${scopeBase ?? ""}${agentInstancePathname({ vendor, packageName, instanceId })}`,

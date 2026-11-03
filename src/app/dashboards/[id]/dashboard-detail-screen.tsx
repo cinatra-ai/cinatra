@@ -121,7 +121,9 @@ export async function DashboardDetailScreen({
   // THE ENTITY'S CRUMB ON A NESTED ROUTE (cinatra#4453). The drawing: a crumb that
   // stands for an entity id "shows that entity's display name, at every position,
   // not only the last". Read here, after every gate above, through the entity's
-  // own gated read: a reader it refuses gets the entity's fixed word.
+  // own gated read, whose typed answer the crumb draws: the name, the id's first
+  // eight characters for a name that is genuinely unavailable, and the entity's
+  // fixed word for a reader it refuses.
   const anchorScope: ScopeSurfaceRef | null = expectedAnchor
     ? { kind: expectedAnchor.entityType, id: expectedAnchor.entityId }
     : null;
@@ -129,7 +131,7 @@ export async function DashboardDetailScreen({
     ? scopeSurfaceCrumbEntries(
         anchorScope,
         "dashboards",
-        (await readScopeSurfaceEntityName(anchorScope)) ?? undefined,
+        await readScopeSurfaceEntityName(anchorScope),
       )
     : [];
 

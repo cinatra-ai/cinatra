@@ -77,7 +77,8 @@ export default async function UserProfilePage({ params }: Props) {
       <PageHeader
         // The title is also the trail's leaf, so a user with no name and no email
         // shows the drawing's placeholder and never the whole id (cinatra#4453).
-        title={profileUser.name || profileUser.email || `${userId.slice(0, 8)}…`}
+        // A name or an email of only spaces is no name.
+        title={profileUser.name?.trim() || profileUser.email?.trim() || `${userId.slice(0, 8)}…`}
         description={profileUser.email ?? undefined}
       />
       <PageContent className="flex flex-col gap-6 pb-8">

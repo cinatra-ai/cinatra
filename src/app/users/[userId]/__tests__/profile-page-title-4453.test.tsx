@@ -83,4 +83,12 @@ describe("the user profile page title", () => {
   it("treats an empty name and an empty email as missing", async () => {
     expect(await profileTitle({ name: "", email: "" })).toBe(`${USER_ID.slice(0, 8)}…`);
   });
+
+  it("treats a name of only spaces as missing and shows the email", async () => {
+    expect(await profileTitle({ name: "   ", email: "ada@example.com" })).toBe("ada@example.com");
+  });
+
+  it("treats a name and an email of only spaces as missing", async () => {
+    expect(await profileTitle({ name: "   ", email: " \t " })).toBe(`${USER_ID.slice(0, 8)}…`);
+  });
 });

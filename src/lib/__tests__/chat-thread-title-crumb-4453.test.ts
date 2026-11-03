@@ -5,16 +5,17 @@
 // fetches a name from the client after paint."
 //
 // The route guard proves that a thread lives in the addressed container. It does
-// not apply the thread's reader rule, and a title is a disclosure, so this read
-// repeats the rule the thread read route applies. A refusal, a missing thread and
-// any failure all answer null, so the crumb draws no thread name.
+// not apply the thread's reader rule, and a title is a disclosure, so the name is
+// read through THE read the thread read route calls
+// (`readAssistantThreadPayloadForActor`, the real module here): its access matrix
+// and its durable-content gate. Only the stores below it are stood in for.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getAuthSession: vi.fn(),
   isPlatformAdmin: vi.fn(() => false),
   loadChatThreadForActorAccess: vi.fn(),
-  getAssistantThread: vi.fn(),
+  reconstructThreadPayload: vi.fn(),
 }));
 
 vi.mock("@/lib/auth-session", () => ({
@@ -25,12 +26,13 @@ vi.mock("@/lib/chat-thread-store", () => ({
   loadChatThreadForActorAccess: mocks.loadChatThreadForActorAccess,
 }));
 vi.mock("@/lib/assistant-thread-store", () => ({
-  getAssistantThread: mocks.getAssistantThread,
+  reconstructThreadPayload: mocks.reconstructThreadPayload,
 }));
 
-import { readChatThreadTitleForCurrentActor } from "../chat-route-resolver";
+import { readChatThreadNameForCurrentActor } from "../chat-route-resolver";
 
 const THREAD_ID = "0f0f4a25-6a0d-4c60-9d3a-2f1a1b1c9d20";
+const UNAVAILABLE = { state: "unavailable" };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -41,27 +43,34 @@ beforeEach(() => {
     teamId: null,
     isActorTeamMember: false,
   });
-  mocks.getAssistantThread.mockReturnValue({ id: THREAD_ID, title: "Quarterly plan" });
+  mocks.reconstructThreadPayload.mockReturnValue({ id: THREAD_ID, title: "Quarterly plan" });
 });
 
-describe("readChatThreadTitleForCurrentActor", () => {
-  it("answers the title for the thread's owner, and asks about this thread and this reader", async () => {
-    await expect(readChatThreadTitleForCurrentActor(THREAD_ID)).resolves.toBe("Quarterly plan");
+describe("readChatThreadNameForCurrentActor", () => {
+  it("names the thread for its owner, and asks about this thread and this reader", async () => {
+    await expect(readChatThreadNameForCurrentActor(THREAD_ID)).resolves.toEqual({
+      state: "named",
+      name: "Quarterly plan",
+    });
     expect(mocks.loadChatThreadForActorAccess).toHaveBeenCalledWith({
       threadId: THREAD_ID,
       actorUserId: "u1",
       isPlatformAdmin: false,
     });
+    expect(mocks.reconstructThreadPayload).toHaveBeenCalledWith(THREAD_ID);
   });
 
-  it("answers the title for a platform admin on a thread another user owns", async () => {
+  it("names the thread for a platform admin on a thread another user owns", async () => {
     mocks.isPlatformAdmin.mockReturnValue(true);
     mocks.loadChatThreadForActorAccess.mockReturnValue({
       ownerUserId: "someone-else",
       teamId: null,
       isActorTeamMember: false,
     });
-    await expect(readChatThreadTitleForCurrentActor(THREAD_ID)).resolves.toBe("Quarterly plan");
+    await expect(readChatThreadNameForCurrentActor(THREAD_ID)).resolves.toEqual({
+      state: "named",
+      name: "Quarterly plan",
+    });
     expect(mocks.loadChatThreadForActorAccess).toHaveBeenCalledWith({
       threadId: THREAD_ID,
       actorUserId: "u1",
@@ -69,58 +78,90 @@ describe("readChatThreadTitleForCurrentActor", () => {
     });
   });
 
-  it("answers the title for a team thread when the reader is a member", async () => {
+  it("names a team thread for a member of the team", async () => {
     mocks.loadChatThreadForActorAccess.mockReturnValue({
       ownerUserId: null,
       teamId: "team-1",
       isActorTeamMember: true,
     });
-    await expect(readChatThreadTitleForCurrentActor(THREAD_ID)).resolves.toBe("Quarterly plan");
+    await expect(readChatThreadNameForCurrentActor(THREAD_ID)).resolves.toEqual({
+      state: "named",
+      name: "Quarterly plan",
+    });
   });
 
-  it("answers the title for a legacy thread with no owner and no team, as the thread read route does", async () => {
+  it("names a legacy thread with no owner and no team that has durable content, as the read route does", async () => {
     mocks.loadChatThreadForActorAccess.mockReturnValue({
       ownerUserId: null,
       teamId: null,
       isActorTeamMember: false,
     });
-    await expect(readChatThreadTitleForCurrentActor(THREAD_ID)).resolves.toBe("Quarterly plan");
+    await expect(readChatThreadNameForCurrentActor(THREAD_ID)).resolves.toEqual({
+      state: "named",
+      name: "Quarterly plan",
+    });
   });
 
-  it("answers null for a reader who does not own the thread, and never reads the title", async () => {
+  it("tells nothing of a thread with no durable content, which the read route does not return", async () => {
+    mocks.loadChatThreadForActorAccess.mockReturnValue({
+      ownerUserId: null,
+      teamId: null,
+      isActorTeamMember: false,
+    });
+    mocks.reconstructThreadPayload.mockReturnValue(null);
+    await expect(readChatThreadNameForCurrentActor(THREAD_ID)).resolves.toEqual(UNAVAILABLE);
+  });
+
+  it("tells a reader who does not own the thread nothing, and reads no content", async () => {
     mocks.loadChatThreadForActorAccess.mockReturnValue({
       ownerUserId: "someone-else",
       teamId: null,
       isActorTeamMember: false,
     });
-    await expect(readChatThreadTitleForCurrentActor(THREAD_ID)).resolves.toBeNull();
-    expect(mocks.getAssistantThread).not.toHaveBeenCalled();
+    await expect(readChatThreadNameForCurrentActor(THREAD_ID)).resolves.toEqual(UNAVAILABLE);
+    expect(mocks.reconstructThreadPayload).not.toHaveBeenCalled();
   });
 
-  it("answers null for a team thread when the reader is not a member", async () => {
+  it("tells a reader who is not on the thread's team nothing", async () => {
     mocks.loadChatThreadForActorAccess.mockReturnValue({
       ownerUserId: null,
       teamId: "team-1",
       isActorTeamMember: false,
     });
-    await expect(readChatThreadTitleForCurrentActor(THREAD_ID)).resolves.toBeNull();
-    expect(mocks.getAssistantThread).not.toHaveBeenCalled();
+    await expect(readChatThreadNameForCurrentActor(THREAD_ID)).resolves.toEqual(UNAVAILABLE);
+    expect(mocks.reconstructThreadPayload).not.toHaveBeenCalled();
   });
 
-  it("answers null with no session and with no thread", async () => {
+  it("tells nothing with no session, with a session that names no user, and with no thread", async () => {
     mocks.getAuthSession.mockResolvedValueOnce(null);
-    await expect(readChatThreadTitleForCurrentActor(THREAD_ID)).resolves.toBeNull();
+    await expect(readChatThreadNameForCurrentActor(THREAD_ID)).resolves.toEqual(UNAVAILABLE);
+    mocks.getAuthSession.mockResolvedValueOnce({ user: { id: "" }, session: {} });
+    await expect(readChatThreadNameForCurrentActor(THREAD_ID)).resolves.toEqual(UNAVAILABLE);
     mocks.loadChatThreadForActorAccess.mockReturnValue(null);
-    await expect(readChatThreadTitleForCurrentActor(THREAD_ID)).resolves.toBeNull();
-    expect(mocks.getAssistantThread).not.toHaveBeenCalled();
+    await expect(readChatThreadNameForCurrentActor(THREAD_ID)).resolves.toEqual(UNAVAILABLE);
+    expect(mocks.reconstructThreadPayload).not.toHaveBeenCalled();
   });
 
-  it("answers null when a read fails, and for a blank title", async () => {
-    mocks.getAssistantThread.mockReturnValueOnce({ id: THREAD_ID, title: "   " });
-    await expect(readChatThreadTitleForCurrentActor(THREAD_ID)).resolves.toBeNull();
+  it("answers blank for a readable thread whose title is empty or only spaces", async () => {
+    mocks.reconstructThreadPayload.mockReturnValueOnce({ id: THREAD_ID, title: "   " });
+    await expect(readChatThreadNameForCurrentActor(THREAD_ID)).resolves.toEqual({ state: "blank" });
+    mocks.reconstructThreadPayload.mockReturnValueOnce({ id: THREAD_ID, title: "" });
+    await expect(readChatThreadNameForCurrentActor(THREAD_ID)).resolves.toEqual({ state: "blank" });
+  });
+
+  it("tells nothing when a read fails", async () => {
     mocks.loadChatThreadForActorAccess.mockImplementation(() => {
       throw new Error("database down");
     });
-    await expect(readChatThreadTitleForCurrentActor(THREAD_ID)).resolves.toBeNull();
+    await expect(readChatThreadNameForCurrentActor(THREAD_ID)).resolves.toEqual(UNAVAILABLE);
+    mocks.loadChatThreadForActorAccess.mockReturnValue({
+      ownerUserId: "u1",
+      teamId: null,
+      isActorTeamMember: false,
+    });
+    mocks.reconstructThreadPayload.mockImplementation(() => {
+      throw new Error("database down");
+    });
+    await expect(readChatThreadNameForCurrentActor(THREAD_ID)).resolves.toEqual(UNAVAILABLE);
   });
 });

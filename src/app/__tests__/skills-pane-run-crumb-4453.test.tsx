@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   AuthzError: class AuthzErrorStub extends Error {},
   readAgentRunById: vi.fn(),
   readAgentTemplateById: vi.fn(),
+  ensureRunTitle: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -35,6 +36,7 @@ vi.mock("@/lib/auth-session", () => ({
 vi.mock("@cinatra-ai/agents/store", () => ({
   readAgentRunById: mocks.readAgentRunById,
   readAgentTemplateById: mocks.readAgentTemplateById,
+  ensureRunTitle: mocks.ensureRunTitle,
 }));
 vi.mock("@/lib/agent-run-skills-used", () => ({ listSkillsUsedForRun: vi.fn(() => []) }));
 vi.mock("@/lib/run-selected-skill-revisions", () => ({
@@ -91,6 +93,12 @@ beforeEach(() => {
     launchScopeAnchor: null,
   });
   mocks.readAgentTemplateById.mockResolvedValue({ name: "Blog Draft Writer Agent" });
+  // The store's rule (store.ts, ensureRunTitle): a title stays; an untitled run
+  // of a user is numbered and kept; a system run keeps the template's name.
+  mocks.ensureRunTitle.mockImplementation(
+    async (run: { title: string | null; runBy?: string | null }, baseName: string) =>
+      run.title?.trim() || (run.runBy ? `${baseName} (1)` : baseName),
+  );
 });
 
 describe("the skills pane's run crumb", () => {
@@ -101,6 +109,40 @@ describe("the skills pane's run crumb", () => {
 
   it("falls back to the template's name when the run has no title", async () => {
     mocks.readAgentRunById.mockResolvedValue({ id: RUN_ID, title: null, templateId: "tpl-1" });
+    const tree = await AgentPackageInstanceSkillsPage({ params: params() });
+    expect(crumbsIn(tree)).toEqual([{ prefix: BARE_PATH, label: "Blog Draft Writer Agent" }]);
+  });
+
+  it("names an untitled started run of a user as its own run page does, through ensureRunTitle", async () => {
+    const run = { id: RUN_ID, title: null, templateId: "tpl-1", runBy: "u1", status: "running" };
+    mocks.readAgentRunById.mockResolvedValue(run);
+    const tree = await AgentPackageInstanceSkillsPage({ params: params() });
+    expect(crumbsIn(tree)).toEqual([{ prefix: BARE_PATH, label: "Blog Draft Writer Agent (1)" }]);
+    expect(mocks.ensureRunTitle).toHaveBeenCalledWith(run, "Blog Draft Writer Agent");
+  });
+
+  it("gives a run still waiting for its first input no numbered name, as the run page does", async () => {
+    mocks.readAgentRunById.mockResolvedValue({
+      id: RUN_ID,
+      title: null,
+      templateId: "tpl-1",
+      runBy: "u1",
+      status: "pending_input",
+    });
+    const tree = await AgentPackageInstanceSkillsPage({ params: params() });
+    expect(crumbsIn(tree)).toEqual([{ prefix: BARE_PATH, label: "Blog Draft Writer Agent" }]);
+    expect(mocks.ensureRunTitle).not.toHaveBeenCalled();
+  });
+
+  it("keeps the run's own title when the numbered name cannot be written", async () => {
+    mocks.readAgentRunById.mockResolvedValue({
+      id: RUN_ID,
+      title: null,
+      templateId: "tpl-1",
+      runBy: "u1",
+      status: "running",
+    });
+    mocks.ensureRunTitle.mockRejectedValue(new Error("database down"));
     const tree = await AgentPackageInstanceSkillsPage({ params: params() });
     expect(crumbsIn(tree)).toEqual([{ prefix: BARE_PATH, label: "Blog Draft Writer Agent" }]);
   });

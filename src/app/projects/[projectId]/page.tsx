@@ -7,6 +7,7 @@ import * as authSession from "@/lib/auth-session";
 const { requireActorContext } = authSession;
 import { projectsDb, projects } from "@/lib/projects-store";
 import { readScopeSurfaceEntityName } from "@/lib/scope-surface-entity-name";
+import { scopeSurfaceEntityLabel } from "@/lib/scope-surfaces";
 import { CrumbContributions } from "@/components/crumb-contributions";
 import { actorHoldsProjectGrant } from "@/lib/authz/project-read-gate";
 
@@ -28,8 +29,9 @@ import { buildScopeCatalogNode } from "@/components/dashboards/scope-catalog-nod
 // can never disagree about what the viewer may be told.
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { projectId } = await params;
-  const name = await readScopeSurfaceEntityName({ kind: "project", id: projectId });
-  return { title: name || "Project" };
+  const scope = { kind: "project", id: projectId } as const;
+  // The tab mirrors the trail's entity crumb under the same rules (cinatra#4453).
+  return { title: scopeSurfaceEntityLabel(scope, await readScopeSurfaceEntityName(scope)) };
 }
 
 type Props = {

@@ -3,7 +3,7 @@
   "routes": {
     "/sign-in": 165,
     "/api/mcp": 1309,
-    "/chat": 1410,
+    "/chat": 1412,
     "/api/a2a": 1317,
     "/api/llm-bridge": 1327
   },
@@ -28,8 +28,8 @@
     },
     "/chat": {
       "from": 1409,
-      "to": 1410,
-      "reason": "This pull request's one new core module on the route, src/lib/chat-thread-access.ts (the pure reader decision the thread read route already uses), reached through src/lib/chat-route-resolver.ts: the route's server render now reads the thread's name for the breadcrumb under the same reader rule (cinatra#4453).",
+      "to": 1412,
+      "reason": "This pull request's three new core modules on the route (cinatra#4453). src/lib/assistant-thread-read.ts is the thread read that the thread read route and the route's server render both call, so the render names a thread in the breadcrumb only where the read route returns it; it brings src/lib/chat-thread-access.ts (the reader decision that read applies) onto the route, reached through src/lib/chat-route-resolver.ts. packages/chat/src/thread-crumb-name.ts chooses the active thread's crumb name in the chat page.",
       "pr": 4456
     },
     "/sign-in": {

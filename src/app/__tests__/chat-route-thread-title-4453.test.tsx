@@ -26,7 +26,7 @@ vi.mock("@/lib/chat-views-catalog.server", () => ({
 }));
 vi.mock("@/lib/chat-route-resolver", () => ({
   resolveChatRouteForCurrentActor: mocks.resolve,
-  readChatThreadTitleForCurrentActor: mocks.readTitle,
+  readChatThreadNameForCurrentActor: mocks.readTitle,
 }));
 vi.mock("@/lib/assistants-directory.server", () => ({
   resolveRemoteChatForBoundRoute: vi.fn(async () => null),
@@ -57,11 +57,11 @@ describe("the /chat route and the thread's name", () => {
       assistant: ASSISTANT,
       threadId: THREAD_ID,
     });
-    mocks.readTitle.mockResolvedValue("Quarterly plan");
+    mocks.readTitle.mockResolvedValue({ state: "named", name: "Quarterly plan" });
     const props = await mount();
     expect(mocks.readTitle).toHaveBeenCalledWith(THREAD_ID);
     expect(props.initialThreadId).toBe(THREAD_ID);
-    expect(props.initialThreadTitle).toBe("Quarterly plan");
+    expect(props.initialThreadName).toEqual({ state: "named", name: "Quarterly plan" });
   });
 
   it("reads no name for a new chat", async () => {
@@ -73,12 +73,18 @@ describe("the /chat route and the thread's name", () => {
     });
     const props = await mount();
     expect(mocks.readTitle).not.toHaveBeenCalled();
-    expect(props.initialThreadTitle).toBeNull();
+    expect(props.initialThreadName).toBeUndefined();
   });
 
   it("reads no name when the guard answers not-found", async () => {
     mocks.resolve.mockResolvedValue({ kind: "not-found" });
     await expect(mount()).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(mocks.readTitle).not.toHaveBeenCalled();
+  });
+
+  it("reads no name when the guard answers a redirect", async () => {
+    mocks.resolve.mockResolvedValue({ kind: "redirect", to: "/chat/cinatra-ai/cinatra-assistant" });
+    await expect(mount()).rejects.toThrow("REDIRECT:/chat/cinatra-ai/cinatra-assistant");
     expect(mocks.readTitle).not.toHaveBeenCalled();
   });
 });
