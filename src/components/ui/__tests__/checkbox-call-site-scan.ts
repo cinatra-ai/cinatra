@@ -1474,8 +1474,10 @@ const SWITCH_NAME = "Switch";
  *   declaration with a body (not a default export), a top-level export specifier of the plain name (`export { Switch }`: no
  *   module specifier, no rename, not type-only), or the imported name of an aliased import (`import { Switch as Primitive }`);
  *   any other occurrence refuses the module: a read, a write, a call, a member or a key, a type, a tag, a second or bodiless
- *   declaration, an overload, an alias in either direction, a re-export, an ambient or nested declaration;
- * - an export name written as the string "Switch" (`export { Other as "Switch" }`, `export * as "Switch" from "m"`) refuses too;
+ *   declaration, an overload, an alias in either direction, a re-export, a nested declaration, and an ambient one (a function
+ *   carrying the `declare` modifier, even with a body, and ANY declaration file: both are erased at run time);
+ * - a name written as the string "Switch" in an export or import specifier (`export { Other as "Switch" }`, `export * as "Switch" from "m"`,
+ *   `import { "Switch" as P }`) refuses too;
  * - the file has no export assignment of any kind (`export default x`, `export = x`);
  * - the file spells none of the identifiers `exports`, `module` and `eval`;
  * - there is exactly one function named Switch with a body, and exactly one export of it, by the `export` modifier or by one export specifier.
@@ -1491,6 +1493,7 @@ export function declaresAndExportsSwitch(sf: ts.SourceFile): boolean {
     const p = n.parent;
     if (ts.isFunctionDeclaration(p) && p.name === n) {
       if (!ts.isSourceFile(p.parent) || p.body === undefined || hasModifier(p, ts.SyntaxKind.DefaultKeyword)) return false;
+      if (hasModifier(p, ts.SyntaxKind.DeclareKeyword) || sf.isDeclarationFile) return false;
       bodies++;
       if (hasModifier(p, ts.SyntaxKind.ExportKeyword)) exportedByModifier++;
       return true;
@@ -1511,7 +1514,7 @@ export function declaresAndExportsSwitch(sf: ts.SourceFile): boolean {
       ok = false;
       return;
     }
-    if (ts.isStringLiteral(n) && n.text === SWITCH_NAME && (ts.isExportSpecifier(n.parent) || ts.isNamespaceExport(n.parent))) {
+    if (ts.isStringLiteral(n) && n.text === SWITCH_NAME && (ts.isExportSpecifier(n.parent) || ts.isNamespaceExport(n.parent) || ts.isImportSpecifier(n.parent))) {
       ok = false;
       return;
     }

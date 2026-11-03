@@ -1747,6 +1747,21 @@ describe("the switch rule refuses what is ambiguous or can change, and takes onl
     expect(refused('import { Switch } from "./ui/checkbox.d.ts";\nexport const R = () => ' + ITEM("<Switch checked={on} />") + ";\n", { "src/ui/checkbox.d.ts": "export declare function Switch(): null;\n" })).toBe(true);
   });
 
+  it("an ambient declaration refuses even with a body, and so does any declaration file (round 6 MF1)", () => {
+    const row = `${IMPORT}\nexport const R = () => ${ITEM("<Switch checked={on} />")};\n`;
+    const head = "export function Checkbox() { return null; }\n";
+    for (const m of ["declare function Switch() { return null; }\nexport { Switch };\n", "export declare function Switch() { return null; }\n"]) {
+      expect([m, declaresAndExportsSwitch(parseSource("m.tsx", `${head}${m}`))]).toEqual([m, false]);
+      expect([m, refused(row, { [KIT]: `${head}${m}` })]).toEqual([m, true]);
+    }
+    // the same function with a body in a declaration file, reached by the written .d.ts specifier and by a path alias
+    const dts = "export function Switch() { return null; }\n";
+    expect(declaresAndExportsSwitch(parseSource("m.d.ts", dts))).toBe(false);
+    expect(declaresAndExportsSwitch(parseSource("m.ts", dts))).toBe(true);
+    expect(refused('import { Switch } from "./ui/checkbox.d.ts";\nexport const R = () => ' + ITEM("<Switch checked={on} />") + ";\n", { "src/ui/checkbox.d.ts": dts })).toBe(true);
+    expect(refused('import { Switch } from "@ui/box";\nexport const R = () => ' + ITEM("<Switch checked={on} />") + ";\n", { "src/ui/checkbox.d.ts": dts }, undefined, '{ "compilerOptions": { "paths": { "@ui/box": ["src/ui/checkbox.d.ts"] } } }')).toBe(true);
+  });
+
   it("reads bareSwitchImport on one file: the one plain import and bare tags give the specifier, anything else gives null", () => {
     const yes: Record<string, string> = {
       'import { Switch } from "./a";\nexport const R = () => <Switch />;': "./a",
@@ -1827,6 +1842,7 @@ describe("the switch rule refuses what is ambiguous or can change, and takes onl
       "function Switch() { return 1; }\nexport function Switch() { return 2; }",
       'export function Switch() { return 1; }\nfunction Other() { return 2; }\nexport { Other as "Switch" };',
       'export function Switch() { return 1; }\nexport * as "Switch" from "m";',
+      'import { "Switch" as P } from "radix-ui";\nexport function Switch() { return P; }',
     ];
     for (const t of yes) expect([t, declaresAndExportsSwitch(parseSource("m.tsx", t))]).toEqual([t, true]);
     for (const t of no) expect([t, declaresAndExportsSwitch(parseSource("m.tsx", t))]).toEqual([t, false]);
