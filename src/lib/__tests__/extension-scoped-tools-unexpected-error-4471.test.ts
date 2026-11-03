@@ -18,6 +18,7 @@
  *   pnpm exec vitest run src/lib/__tests__/extension-scoped-tools-unexpected-error-4471.test.ts
  */
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { z } from "zod";
 
 const dataOperation = vi.fn();
 const toolDispatch = vi.fn();
@@ -170,6 +171,45 @@ describe("an unexpected error on an extension-scoped road (cinatra#4471)", () =>
     toolDispatch.mockRejectedValue(LEAKY);
     const outcome = await dispatch("extension_tool", { name: "fixture_tool", input: {} });
     expect(outcome).toEqual({ ok: false, status: 500, error: FIXED });
+  });
+
+  // The passthrough's other roads answer these two with their own text
+  // (#4223). On this road they are not stated refusals, so they answer the
+  // fixed sentence like any other throw, and the log names their class.
+  it("answers the fixed sentence for a primitive's refusal thrown on this road", async () => {
+    // Imported after the module reset, so the class is the one the failure
+    // log reads its class word from.
+    const { PrimitiveInvocationError } = await import("@cinatra-ai/mcp-client");
+    toolDispatch.mockRejectedValue(
+      new PrimitiveInvocationError({ code: "FIXTURE_CODE", message: LEAKY, retryable: false }),
+    );
+    const outcome = await dispatch("extension_tool", { name: "fixture_tool", input: {} });
+    expect(outcome).toEqual({ ok: false, status: 500, error: FIXED });
+    expect(failureLines()[0]?.[1]).toEqual({
+      tool: "extension_tool",
+      runId: RUN.id,
+      errorClass: "PrimitiveInvocationError",
+    });
+    const everything = JSON.stringify(consoleError.mock.calls);
+    expect(everything).not.toContain(FAKE_PATH);
+    expect(everything).not.toContain(FAKE_INSTALL_ID);
+  });
+
+  it("answers the fixed sentence for a zod error thrown on this road", async () => {
+    const parsed = z.string().refine(() => false, { message: LEAKY }).safeParse("x");
+    expect(parsed.success).toBe(false);
+    dataOperation.mockRejectedValue(parsed.error);
+    const outcome = await dispatch("extension_data", { table: "fixture_rows", operation: "select" });
+    expect(outcome).toEqual({ ok: false, status: 500, error: FIXED });
+    expect(JSON.stringify(outcome)).not.toContain(FAKE_PATH);
+    expect(failureLines()[0]?.[1]).toEqual({
+      tool: "extension_data",
+      runId: RUN.id,
+      errorClass: "ZodError",
+    });
+    const everything = JSON.stringify(consoleError.mock.calls);
+    expect(everything).not.toContain(FAKE_PATH);
+    expect(everything).not.toContain(FAKE_INSTALL_ID);
   });
 
   it("logs the failure on the server with the tool, the run and a class word, never the error's text", async () => {
