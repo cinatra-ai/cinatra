@@ -1033,6 +1033,51 @@ describe("nodeTopLevelReporter and readTopLevel — one record per top-level tes
   });
 });
 
+// Kills, with `kill`, the process whose pid a fixture wrote to `file`. A pid that is not a whole number above 1 is
+// refused: an empty file reads as 0, and a kill of 0 signals the caller's own process group (of -n, the group n; of 1, init).
+const killByPidFile = (file, kill = (pid, sig) => process.kill(pid, sig)) => {
+  let text;
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    return "no pid file";
+  }
+  const pid = Number(text.trim());
+  if (!Number.isInteger(pid) || pid <= 1) return "refused";
+  try {
+    kill(pid, "SIGKILL");
+    return "killed";
+  } catch {
+    return "gone";
+  }
+};
+
+describe("killByPidFile — the cleanup of the main cases", () => {
+  it("kills only a pid that is a whole number above 1, and refuses an empty, zero, negative or other pid", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ext-suite-pid-"));
+    const file = path.join(dir, "spin.pid");
+    const calls = [];
+    const kill = (pid, sig) => calls.push([pid, sig]);
+    try {
+      expect(killByPidFile(file, kill)).toBe("no pid file");
+      for (const text of ["", "\n", "0", "-1", "-4242", "1", "1.5", "abc"]) {
+        fs.writeFileSync(file, text);
+        expect(killByPidFile(file, kill), JSON.stringify(text)).toBe("refused");
+      }
+      expect(calls).toEqual([]);
+      fs.writeFileSync(file, "4242\n");
+      expect(killByPidFile(file, kill)).toBe("killed");
+      expect(calls).toEqual([[4242, "SIGKILL"]]);
+      const gone = () => {
+        throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+      };
+      expect(killByPidFile(file, gone)).toBe("gone");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("main — the gate process over a fixture repository", () => {
   const mainFixture = () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "ext-suite-main-"));
@@ -1051,13 +1096,7 @@ describe("main — the gate process over a fixture repository", () => {
   const spinPid = (root) => path.join(root, "extensions", "cinatra-ai", "pack", "spin.pid");
   // On a pass the gate has killed the node:test group itself. A case that does not reach its end kills the
   // gate, and the spinning file, in a group of its own, is killed here by its pid.
-  const spinKill = (root) => {
-    try {
-      process.kill(Number(fs.readFileSync(spinPid(root), "utf8")), "SIGKILL");
-    } catch {
-      // no pid file, or the process is gone
-    }
-  };
+  const spinKill = (root) => killByPidFile(spinPid(root));
   const startGate = (root, env = {}) => {
     const script = fileURLToPath(new URL("../extension-suite-gate.mjs", import.meta.url));
     const gate = spawn(process.execPath, [script], { cwd: root, env: { ...process.env, EXTENSION_SUITE_JOBS: "1", ...env }, stdio: ["ignore", "pipe", "pipe"] });
@@ -1189,6 +1228,17 @@ describe("runNodeTestFile — the real node runner, with short bounds", () => {
     expect(r.detail).toContain("(plain run, exit -1, killed)");
     expect(r.detail).toContain("at the gate's node:test deadline and was killed");
     expect(listLiveNodeRuns()).toEqual([]);
+  }, 30_000);
+
+  it("hands its spawn to the first run as well as to the plain run", async () => {
+    const calls = [];
+    const spawnChild = (cmd, args, opts) => {
+      calls.push(args.includes("--test") ? "first" : "plain");
+      return spawn(cmd, args, opts);
+    };
+    const r = await runNodeTest({ repoRoot: nodeDir, pkg: { id: "fixture:lone", dir: ".", testFiles: ["t/same.test.mjs"] }, testTimeoutMs: 2000, fileTimeoutMs: 20_000, spawnChild });
+    expect(calls).toEqual(["first", "plain"]);
+    expect(r).toMatchObject({ ok: true, executedFiles: ["t/same.test.mjs"], numTotalTests: 1 });
   }, 30_000);
 
   it("a plain run that cannot start proves nothing, so the lone test reads as file-only", async () => {
