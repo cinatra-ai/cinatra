@@ -134,7 +134,7 @@ describe("the skills pane's run crumb", () => {
     expect(mocks.ensureRunTitle).not.toHaveBeenCalled();
   });
 
-  it("keeps the run's own title when the numbered name cannot be written", async () => {
+  it("falls back to the template's name when the numbered name cannot be written", async () => {
     mocks.readAgentRunById.mockResolvedValue({
       id: RUN_ID,
       title: null,
@@ -145,6 +145,58 @@ describe("the skills pane's run crumb", () => {
     mocks.ensureRunTitle.mockRejectedValue(new Error("database down"));
     const tree = await AgentPackageInstanceSkillsPage({ params: params() });
     expect(crumbsIn(tree)).toEqual([{ prefix: BARE_PATH, label: "Blog Draft Writer Agent" }]);
+  });
+
+  it("keeps a run's own title, trimmed", async () => {
+    mocks.readAgentRunById.mockResolvedValue({
+      id: RUN_ID,
+      title: "  Launch notes  ",
+      templateId: "tpl-1",
+      runBy: "u1",
+      status: "running",
+    });
+    const tree = await AgentPackageInstanceSkillsPage({ params: params() });
+    expect(crumbsIn(tree)).toEqual([{ prefix: BARE_PATH, label: "Launch notes" }]);
+  });
+
+  it("gives a run waiting for its first input with a blank title the template's name", async () => {
+    mocks.readAgentRunById.mockResolvedValue({
+      id: RUN_ID,
+      title: "   ",
+      templateId: "tpl-1",
+      runBy: "u1",
+      status: "pending_input",
+    });
+    const tree = await AgentPackageInstanceSkillsPage({ params: params() });
+    expect(crumbsIn(tree)).toEqual([{ prefix: BARE_PATH, label: "Blog Draft Writer Agent" }]);
+    expect(mocks.ensureRunTitle).not.toHaveBeenCalled();
+  });
+
+  it("names a system run by its template, as ensureRunTitle does", async () => {
+    mocks.readAgentRunById.mockResolvedValue({
+      id: RUN_ID,
+      title: null,
+      templateId: "tpl-1",
+      runBy: null,
+      status: "running",
+    });
+    const tree = await AgentPackageInstanceSkillsPage({ params: params() });
+    expect(crumbsIn(tree)).toEqual([{ prefix: BARE_PATH, label: "Blog Draft Writer Agent" }]);
+  });
+
+  it("shows the id's first eight characters when the run's template is gone", async () => {
+    mocks.readAgentRunById.mockResolvedValue({
+      id: RUN_ID,
+      title: null,
+      templateId: "tpl-gone",
+      runBy: "u1",
+      status: "running",
+    });
+    mocks.readAgentTemplateById.mockResolvedValue(null);
+    const tree = await AgentPackageInstanceSkillsPage({ params: params() });
+    expect(crumbsIn(tree)).toEqual([{ prefix: BARE_PATH, label: `${RUN_ID.slice(0, 8)}…` }]);
+    expect(mocks.readAgentTemplateById).toHaveBeenCalledWith("tpl-gone");
+    expect(mocks.ensureRunTitle).not.toHaveBeenCalled();
   });
 
   it("shows the id's first eight characters when no name can be read", async () => {
@@ -176,6 +228,12 @@ describe("the skills pane's run crumb", () => {
       { prefix: "/organizations/o1/agents", label: "Agents" },
       { prefix: `/organizations/o1${BARE_PATH}`, label: "Blog Draft Writer Agent (1)" },
     ]);
+  });
+
+  it("lets a run read that fails for another reason than access fail the page, reading no template", async () => {
+    mocks.readAgentRunById.mockRejectedValue(new Error("database down"));
+    await expect(AgentPackageInstanceSkillsPage({ params: params() })).rejects.toThrow("database down");
+    expect(mocks.readAgentTemplateById).not.toHaveBeenCalled();
   });
 
   it("reads no template and publishes nothing for a run the access check refuses", async () => {

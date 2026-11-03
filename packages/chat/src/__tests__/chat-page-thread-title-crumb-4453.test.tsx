@@ -305,6 +305,18 @@ describe("the chat page's thread name for the crumb (cinatra#4453)", () => {
     await crumbBecomes(null);
   }, 30_000);
 
+  it("shows no stale server name after the list held the thread and then dropped it", async () => {
+    // The reads stay open, so only the list spends the server's answer.
+    await mountPage({ initialThreadId: THREAD_ID, initialThreadName: NAMED });
+    await act(async () => {
+      releaseList();
+    });
+    await crumbBecomes("From the list");
+    listAnswer = [];
+    // The page polls its list every five seconds; the next answer drops the thread.
+    await crumbBecomes(null);
+  }, 30_000);
+
   it("shows no stale server name after a read has answered and the thread is then gone", async () => {
     await mountPage({ initialThreadId: THREAD_ID, initialThreadName: NAMED });
     await act(async () => {

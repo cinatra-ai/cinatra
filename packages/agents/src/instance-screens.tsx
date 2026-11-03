@@ -28,7 +28,8 @@ import {
   readOrgsWithTeamsForUserActiveOnly,
   readProjectsForUser,
 } from "@/lib/better-auth-db";
-import { readAgentTemplateBySlug, readAgentRunById, readAgentRunMessages, readAgentTemplates, ensureRunTitle, readRunCoOwners } from "./store";
+import { readAgentTemplateBySlug, readAgentRunById, readAgentRunMessages, readAgentTemplates, readRunCoOwners } from "./store";
+import { readRunCrumbIdentity } from "./run-crumb-identity";
 import { randomUUID } from "node:crypto";
 import { RunStartedRuns } from "./run-started-runs";
 import { resolveEffectivePolicy, buildScopeReason, resolveTemplateVisibilityActor, buildActorContextFromPrimitive } from "./auth-policy";
@@ -2094,11 +2095,10 @@ export async function SetupScreen({
 
   // Pre-generate a unique run name so the title shows immediately on load.
   // Only runs that have started (not pending_input) get a name here; abandoned
-  // pending_input runs skip auto-naming to avoid wasting numbered slots.
-  const runName =
-    run && run.status !== "pending_input"
-      ? await ensureRunTitle(run, template.name)
-      : run?.title ?? "";
+  // pending_input runs skip auto-naming to avoid wasting numbered slots. The
+  // skills pane names the run with the same read (cinatra#4453).
+  const runIdentity = run ? await readRunCrumbIdentity(run, template) : null;
+  const runName = runIdentity?.runName ?? "";
   const extensionHeaderLink = buildExtensionHeaderLink(
     template.packageName,
     isPlatformAdmin(await getAuthSession().catch(() => null)),
@@ -2725,6 +2725,7 @@ export async function SetupScreen({
         })}
         templateName={template.name}
         initialRunName={runName}
+        runFallbackName={runIdentity?.fallbackName}
         runId={run?.id ?? null}
         isPublished={template.status === "published"}
         showTriggerTab={showTriggerTab}

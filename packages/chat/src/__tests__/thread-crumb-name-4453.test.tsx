@@ -5,10 +5,15 @@
  */
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 
-import { CHAT_THREAD_RENAMED_EVENT, chatThreadCrumbLabel } from "@/lib/chat-shell-bus";
-import { crumbThreadName } from "../thread-crumb-name";
+import {
+  CHAT_THREAD_RENAMED_EVENT,
+  chatThreadCrumbLabel,
+  getCurrentChatThreadTitle,
+  publishChatThreadTitle,
+} from "@/lib/chat-shell-bus";
+import { crumbThreadName, useThreadCrumbName } from "../thread-crumb-name";
 
 const renameChatThread = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../actions", () => ({
@@ -28,7 +33,10 @@ const base = {
   serverNameSpent: false,
 };
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  publishChatThreadTitle(null);
+});
 
 describe("crumbThreadName", () => {
   it("takes the page's read of the active thread first", () => {
@@ -144,5 +152,122 @@ describe("the thread panel's rename", () => {
     } finally {
       window.removeEventListener(CHAT_THREAD_RENAMED_EVENT, listener);
     }
+  });
+});
+
+// The hook's reads, asked and answered by hand in any order. `answer(read, title)`
+// hands a read its answer: a title, or `null` for the read route's not-found.
+type Listed = { id: string; title: string };
+type Answer = (thread: { title?: string | null } | null) => void;
+const OTHER = "7c1e2b9a-0d3f-4e5a-8b6c-1d2e3f4a5b6c";
+
+function mountCrumb(activeThreadId: string | null, threads: Listed[] = []) {
+  const setThreads = vi.fn();
+  return renderHook(
+    (p: { activeThreadId: string | null; threads: Listed[] }) =>
+      useThreadCrumbName<Listed>({ activeThreadId: p.activeThreadId, threads: p.threads, setThreads }),
+    { initialProps: { activeThreadId, threads } },
+  );
+}
+
+function answer(read: Answer, title: string | null) {
+  act(() => read(title === null ? null : { title }));
+}
+
+describe("the crumb's reads of the active thread, when they overlap or outlive a visit", () => {
+  it("keeps the newer read's name when an older read answers after it", () => {
+    const { result } = mountCrumb(ID);
+    let older!: Answer;
+    let newer!: Answer;
+    act(() => {
+      older = result.current(ID);
+      newer = result.current(ID);
+    });
+    answer(newer, "Annual plan");
+    expect(getCurrentChatThreadTitle()).toBe("Annual plan");
+    answer(older, "Quarterly plan");
+    expect(getCurrentChatThreadTitle()).toBe("Annual plan");
+  });
+
+  it("keeps a newer read's not-found when an older read of the thread answers after it", () => {
+    const { result } = mountCrumb(ID, [{ id: ID, title: "From the list" }]);
+    expect(getCurrentChatThreadTitle()).toBe("From the list");
+    let older!: Answer;
+    let newer!: Answer;
+    act(() => {
+      older = result.current(ID);
+      newer = result.current(ID);
+    });
+    answer(newer, null);
+    expect(getCurrentChatThreadTitle()).toBeNull();
+    answer(older, "Quarterly plan");
+    expect(getCurrentChatThreadTitle()).toBeNull();
+  });
+
+  it("takes each answer in turn when the reads answer in the order they were asked", () => {
+    const { result } = mountCrumb(ID);
+    let older!: Answer;
+    let newer!: Answer;
+    act(() => {
+      older = result.current(ID);
+      newer = result.current(ID);
+    });
+    answer(older, "Quarterly plan");
+    expect(getCurrentChatThreadTitle()).toBe("Quarterly plan");
+    answer(newer, "Annual plan");
+    expect(getCurrentChatThreadTitle()).toBe("Annual plan");
+  });
+
+  it("keeps no read across a switch away and back: the list names the thread until a new read answers", () => {
+    const listed = [{ id: ID, title: "Annual plan" }];
+    const { result, rerender } = mountCrumb(ID, listed);
+    answer(result.current(ID), "Quarterly plan");
+    expect(getCurrentChatThreadTitle()).toBe("Quarterly plan");
+    rerender({ activeThreadId: OTHER, threads: listed });
+    expect(getCurrentChatThreadTitle()).toBeNull();
+    rerender({ activeThreadId: ID, threads: listed });
+    expect(getCurrentChatThreadTitle()).toBe("Annual plan");
+    answer(result.current(ID), "Annual plan, renamed");
+    expect(getCurrentChatThreadTitle()).toBe("Annual plan, renamed");
+  });
+
+  it("drops a read asked before a switch away and back that answers after it", () => {
+    const listed = [{ id: ID, title: "Annual plan" }];
+    const { result, rerender } = mountCrumb(ID, listed);
+    let early!: Answer;
+    act(() => {
+      early = result.current(ID);
+    });
+    rerender({ activeThreadId: null, threads: listed });
+    rerender({ activeThreadId: ID, threads: listed });
+    answer(early, "Quarterly plan");
+    expect(getCurrentChatThreadTitle()).toBe("Annual plan");
+  });
+
+  it("drops a read of the thread left behind that answers after the switch", () => {
+    const listed = [{ id: OTHER, title: "Other plan" }];
+    const { result, rerender } = mountCrumb(ID, listed);
+    let early!: Answer;
+    act(() => {
+      early = result.current(ID);
+    });
+    rerender({ activeThreadId: OTHER, threads: listed });
+    answer(early, "Quarterly plan");
+    expect(getCurrentChatThreadTitle()).toBe("Other plan");
+  });
+
+  it("starts with no read after a remount, and an answer to the old mount reaches nothing", () => {
+    const listed = [{ id: ID, title: "Annual plan" }];
+    const first = mountCrumb(ID, listed);
+    answer(first.result.current(ID), "Quarterly plan");
+    let late!: Answer;
+    act(() => {
+      late = first.result.current(ID);
+    });
+    first.unmount();
+    mountCrumb(ID, listed);
+    expect(getCurrentChatThreadTitle()).toBe("Annual plan");
+    answer(late, "Quarterly plan");
+    expect(getCurrentChatThreadTitle()).toBe("Annual plan");
   });
 });

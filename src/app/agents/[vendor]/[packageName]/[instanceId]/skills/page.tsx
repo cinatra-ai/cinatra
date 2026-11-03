@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { ensureRunTitle, readAgentRunById, readAgentTemplateById } from "@cinatra-ai/agents/store";
+import { readAgentRunById } from "@cinatra-ai/agents/store";
+import { readRunCrumbIdentity } from "@cinatra-ai/agents/run-crumb-identity";
 import type { ActorRoleHints } from "@cinatra-ai/agents/auth-policy";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { AuthzError } from "@/lib/authz";
@@ -74,38 +75,15 @@ type ScopeProps = {
 };
 
 /**
- * THE RUN'S NAME FOR THE TRAIL (cinatra#4453), the identity the run page publishes,
- * read the way the run page reads it (`instance-screens.tsx`, the run page's
- * `runName`, and `agent-page-layout.tsx`, its crumb): a started run takes its name
- * through `ensureRunTitle`, which gives an untitled run its numbered name
- * ("Blog Draft Writer Agent (1)") and keeps it; a run still waiting for its
- * first input keeps its own title. Then the template's name, then the drawing's
- * placeholder, and the owner beside it on a personal run. Called only after the
- * run's access check, so the reader this names the run for is one who may read
- * it. Without it the trail drew "Agent run", the label the drawing keeps for a
- * refused or missing run.
+ * THE RUN'S NAME FOR THE TRAIL (cinatra#4453): the run page's own read,
+ * `readRunCrumbIdentity`, which the run page hands its layout's crumb; then the
+ * owner beside it on a personal run. Called only after the run's access check,
+ * so the reader this names the run for is one who may read it. Without it the
+ * trail drew "Agent run", the label the drawing keeps for a refused or missing run.
  */
-async function readRunCrumbLabel(
-  run: NonNullable<Awaited<ReturnType<typeof readAgentRunById>>>,
-  instanceId: string,
-): Promise<string> {
-  let templateName: string | null = null;
-  if (run.templateId) {
-    try {
-      templateName = (await readAgentTemplateById(run.templateId))?.name?.trim() || null;
-    } catch {
-      templateName = null;
-    }
-  }
-  let runName = run.title ?? "";
-  if (templateName !== null && run.status !== "pending_input") {
-    try {
-      runName = await ensureRunTitle(run, templateName);
-    } catch {
-      runName = run.title ?? "";
-    }
-  }
-  const label = runName.trim() || templateName || `${instanceId.slice(0, 8)}…`;
+async function readRunCrumbLabel(run: NonNullable<Awaited<ReturnType<typeof readAgentRunById>>>): Promise<string> {
+  const { runName, fallbackName } = await readRunCrumbIdentity(run);
+  const label = runName || fallbackName;
   const owner = launchScopeInstanceLabel(readLaunchScopeAnchor(run.launchScopeAnchor), {});
   return owner === "Personal (owner)" ? `${label} · ${owner}` : label;
 }
@@ -179,7 +157,7 @@ export default async function AgentPackageInstanceSkillsPage({
             : []),
           {
             prefix: `${scopeBase ?? ""}${agentInstancePathname({ vendor, packageName, instanceId })}`,
-            label: await readRunCrumbLabel(run, instanceId),
+            label: await readRunCrumbLabel(run),
           },
         ]}
       />
