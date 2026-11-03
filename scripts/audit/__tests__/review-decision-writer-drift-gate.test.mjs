@@ -215,13 +215,14 @@ describe("the known decision writers", () => {
         return readFileSync(join(REPO_ROOT, real), "utf8");
       },
     });
-    // The gate store owns 10 sites (8 from the #2047 annex + the two
-    // cinatra#2571 suggestion writes that ride the same CAS transaction), the
-    // repair store 3 (the gate CAS and its audit row, and the cinatra#4312
+    // The gate store owns 11 sites (8 from the #2047 annex + the two
+    // cinatra#2571 suggestion writes that ride the same CAS transaction + the
+    // cinatra#4312 close of a declared review's other pending intents after its
+    // resume was sent), the repair store 3 (the gate CAS and its audit row, and the cinatra#4312
     // resume intent a lineage's close inserts to carry a declared review's
     // latest decision), the orchestration store 2, and the S6b delivery arm 5
     // (claim, applied-stamp, done, terminal dead-letter, exhausted dead-letter).
-    expect(violations.length).toBe(20);
+    expect(violations.length).toBe(21);
   });
 
   it("allowlists the guard itself and nothing unexpected", () => {

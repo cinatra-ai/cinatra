@@ -1803,4 +1803,100 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — plan (b): the carrier of a declared r
     expect(resumesOf(p)).toHaveLength(0);
     expect(await runStatus(p.runId)).toBe(status);
   });
+
+  // cinatra#4312 (review 10, finding 1) — three inputs at which a later pause was not
+  // read: a later review with the same created time, a later review whose gates are
+  // committed after the close read the run's gates, and a pause on the same base task
+  // id after the resume (which writes no new gate).
+  it("b3 — A LATER PAUSE AT THE SAME TIME: the run went on to a later declared review whose gate has the same created time as the newest leg of the earlier one; that lineage's close carries nothing, and no sweep sends the earlier decision", async () => {
+    const p = await pausedPipeline();
+    const { pressed, stale } = await regenerateThenStale(p, p.leg2, p.picture);
+    await approve(p.runId, p.step);
+    await sweep();
+    await expectParked(p);
+    const laterStep = await emitLaterPause(p);
+    await pool(
+      `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates" SET created_at =
+         (SELECT max(created_at) FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE run_id=$1 AND review_task_id IN ($2, $3))
+       WHERE run_id=$1 AND review_task_id=$4`,
+      [p.runId, p.step, p.leg2, laterStep],
+    );
+    const times = await pool(
+      `SELECT review_task_id, created_at FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE run_id=$1 AND review_task_id IN ($2, $3)`,
+      [p.runId, p.leg2, laterStep],
+    );
+    const [t1, t2] = times.rows.map((row) => (row as { created_at: Date }).created_at.getTime());
+    expect(t1).toBe(t2);
+
+    await stale();
+    expect(await intentOf(pressed.settledGateId)).toBeUndefined();
+    const summary = await sweep();
+    expect(summary.failed).toBe(0);
+    expect(resumesOf(p)).toHaveLength(0);
+    expect(await runStatus(p.runId)).toBe("pending_approval");
+  });
+
+  it("b3 — A LATER PAUSE COMMITTED AFTER THE CLOSE'S READ: a later declared review's gates are written while a stale close is open, after it read the run's gates; the carrier it inserted is closed without a send, and the run waits at the later review", async () => {
+    const p = await pausedPipeline();
+    const pressed = await pressRegenerate(p.runId, p.leg2, p.picture);
+    const text = await approve(p.runId, p.step);
+    await sweep();
+    await expectParked(p);
+
+    const terminal = await openSession();
+    expect(await staleAndCarry(terminal, pressed.repairId, pressed.settledGateId)).toBe(pressed.settledGateId);
+    const laterStep = await emitLaterPause(p);
+    await terminal.commit();
+    await expectCarrier(pressed.settledGateId, p.leg2, text);
+
+    const summary = await sweep();
+    expect(summary.failed).toBe(0);
+    expect(resumesOf(p)).toHaveLength(0);
+    expect(await intentStatusOf(pressed.settledGateId)).toBe("done");
+    expect(await pendingGates(p.runId)).toEqual([laterStep]);
+  });
+
+  it("b3 — A SAME-BASE PAUSE AFTER THE RESUME: two pictures' lineages close, one carrier is delivered and resumes the run, and the run pauses again on the same task (the replayed emission adds no gate); the other carrier, still pending, was closed by that resume and sends nothing", async () => {
+    const p = await pausedPipeline(true, 2);
+    const third = p.more[0];
+    const a = await regenerateThenStale(p, p.leg2, p.picture);
+    const b = await regenerateThenStale(p, third.leg, third.pin);
+    const text = await approve(p.runId, p.step);
+    await sweep();
+    expect(resumesOf(p)).toHaveLength(0);
+
+    await a.stale();
+    await expectCarrier(a.pressed.settledGateId, p.leg2, text);
+    const claimed = (await gateStore.claimPendingResumeIntents({ limit: 50, leaseMs: 300_000 }))
+      .filter((c) => c.runId === p.runId);
+    expect(claimed.map((c) => c.gateId)).toEqual([a.pressed.settledGateId]);
+    await b.stale();
+    await expectCarrier(b.pressed.settledGateId, third.leg, text);
+    expect(await resumeDelivery.deliverArtifactReviewResumeIntent(claimed[0])).toBe("delivered");
+    expectResumedWith(p, text);
+
+    const gatesBefore = (await gateStore.listReviewGatesForRun(p.runId)).length;
+    await gateStore.emitDeclaredReviewGateFamily({ runId: p.runId, orgId: ORG, reviewTaskId: p.step, targets: [p.post, p.picture, third.pin] });
+    expect((await gateStore.listReviewGatesForRun(p.runId)).length).toBe(gatesBefore);
+    expect(await runStatus(p.runId)).toBe("pending_approval");
+    expect(await intentStatusOf(b.pressed.settledGateId)).toBe("done");
+
+    const summary = await sweep();
+    expect(summary.failed).toBe(0);
+    expect(resumesOf(p)).toHaveLength(1);
+  });
 });
+
+/** cinatra#4312 — the run goes on to a later declared review: a new task id and its
+ * own family of one leg, as A LATER PAUSE writes it. Returns that review's task id. */
+async function emitLaterPause(p: Pipeline): Promise<string> {
+  const laterTask = `task-${randomUUID()}`;
+  const laterStep = `wayflow-${laterTask}`;
+  const laterPin = { artifactId: `art-post2-${randomUUID()}`, representationRevisionId: `rev-post2-${randomUUID()}` };
+  await pool(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."objects" (id, type, data, org_id) VALUES ($1, 'document', '{}'::jsonb, $2)`,
+    [laterPin.artifactId, ORG],
+  );
+  await gateStore.emitDeclaredReviewGateFamily({ runId: p.runId, orgId: ORG, reviewTaskId: laterStep, targets: [laterPin] });
+  return laterStep;
+}
