@@ -48,7 +48,7 @@ import {
   PASSTHROUGH_ACTOR_CONTEXT_ERROR,
   passthroughFailureText,
   passthroughFixedFailureText,
-} from "./passthrough-refusal";
+} from "@/lib/passthrough-refusal";
 
 /**
  * Deterministic MCP-call passthrough for WayFlow.
