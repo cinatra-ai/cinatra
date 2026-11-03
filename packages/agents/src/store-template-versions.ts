@@ -519,12 +519,18 @@ export function serializeTemplate(input: CreateAgentTemplateInput) {
   };
 }
 
+// The error names the column only: never the stored text, nor the parser's
+// message, which can quote it.
 function parsePublishingStepsColumn(text: string | null): string[] | null {
   if (text === null) return null;
-  const value: unknown = JSON.parse(text);
-  if (!Array.isArray(value) || !value.every((id) => typeof id === "string")) {
-    throw new Error("agent_templates.publishing_steps is not a JSON list of node ids");
+  const malformed = () => new Error("agent_templates.publishing_steps is not a JSON list of node ids");
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw malformed();
   }
+  if (!Array.isArray(value) || !value.every((id) => typeof id === "string")) throw malformed();
   return value as string[];
 }
 

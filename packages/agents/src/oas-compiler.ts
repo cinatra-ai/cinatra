@@ -1372,10 +1372,14 @@ const PUBLISH_GATE_ID_PREFIX = "cinatra_publish_gate__";
 // kind this compiler does not know and a node with no kind included.
 const PUBLISHES_ACTION_KINDS = new Set(["ApiNode", "AgentNode", "FlowNode", "ParallelFlowNode"]);
 
-function describePublishesValue(value: unknown): string {
+// Error texts name the field and the node id only, never a value or a kind
+// the pack wrote: the id is quoted with JSON escaping and cut at 120 characters.
+function describePublishesType(value: unknown): string {
   if (value === null) return "null";
-  if (Array.isArray(value)) return "an array";
-  return typeof value === "string" ? `the string ${JSON.stringify(value)}` : `a ${typeof value}`;
+  return Array.isArray(value) ? "an array" : `a ${typeof value}`;
+}
+function quoteNodeId(id: string): string {
+  return JSON.stringify(id.length > 120 ? `${id.slice(0, 120)}...` : id);
 }
 
 export function collectPublishingSteps(
@@ -1399,42 +1403,20 @@ export function collectPublishingSteps(
 
   const root = readPublishes(parsed);
   if (root.present && typeof root.value !== "boolean") {
-    return { ok: false, error: `PUBLISHES_MALFORMED: the flow root declares metadata.cinatra.publishes as ${describePublishesValue(root.value)}; it must be the JSON boolean true or false` };
+    return { ok: false, error: `PUBLISHES_MALFORMED: the flow root declares metadata.cinatra.publishes as ${describePublishesType(root.value)}; it must be the JSON boolean true or false` };
   }
   if (root.value === true) {
     return { ok: false, error: `PUBLISHES_MISPLACED: the flow root declares metadata.cinatra.publishes: true; declare it on the node that publishes` };
   }
   for (const ref of [...topLevelIds, (parsed.start_node as { $component_ref?: unknown } | undefined)?.$component_ref]) {
     if (typeof ref === "string" && ref.startsWith(PUBLISH_GATE_ID_PREFIX)) {
-      return { ok: false, error: `RESERVED_NODE_ID: node "${ref}" uses the reserved prefix "${PUBLISH_GATE_ID_PREFIX}"` };
+      return { ok: false, error: `RESERVED_NODE_ID: node ${quoteNodeId(ref)} uses the reserved prefix "${PUBLISH_GATE_ID_PREFIX}"` };
     }
   }
 
-  const visit = (key: string | undefined, comp: unknown, nested: boolean, depth: number): string | null => {
-    if (!comp || typeof comp !== "object" || Array.isArray(comp)) return null;
-    if (depth > INJECT_MAX_DEPTH) return `OAS_NESTING_TOO_DEEP: subflow nesting exceeds ${INJECT_MAX_DEPTH} levels`;
-    const node = comp as Record<string, unknown>;
-    const id = typeof node.id === "string" ? node.id : undefined;
-    const label = key ?? id ?? "<inline subflow>";
-    for (const candidate of [key, id]) {
-      if (candidate !== undefined && candidate.startsWith(PUBLISH_GATE_ID_PREFIX)) {
-        return `RESERVED_NODE_ID: node "${candidate}" uses the reserved prefix "${PUBLISH_GATE_ID_PREFIX}"`;
-      }
-    }
-    const flag = readPublishes(node);
-    if (flag.present && typeof flag.value !== "boolean") {
-      return `PUBLISHES_MALFORMED: node "${label}" declares metadata.cinatra.publishes as ${describePublishesValue(flag.value)}; it must be the JSON boolean true or false`;
-    }
-    if (flag.value === true) {
-      const componentType = typeof node.component_type === "string" ? node.component_type : "<none>";
-      if (nested || key === undefined || !topLevelIds.has(key)) {
-        return `PUBLISHES_MISPLACED: node "${label}" declares publishes: true but is not a top-level node of the flow (a node inside a nested subflow, or a subflow definition); the runtime cannot stop in front of it`;
-      }
-      if (!PUBLISHES_ACTION_KINDS.has(componentType)) {
-        return `PUBLISHES_MISPLACED: node "${label}" is a ${componentType}, which cannot be the publishing action`;
-      }
-      steps.push(key);
-    }
+  const asNode = (comp: unknown): Record<string, unknown> | null =>
+    comp && typeof comp === "object" && !Array.isArray(comp) ? (comp as Record<string, unknown>) : null;
+  const childrenOf = (node: Record<string, unknown>): Array<[string | undefined, unknown]> => {
     const children: Array<[string | undefined, unknown]> = [];
     const refs = node.$referenced_components;
     if (refs && typeof refs === "object" && !Array.isArray(refs)) children.push(...Object.entries(refs as Record<string, unknown>));
@@ -1443,7 +1425,58 @@ export function collectPublishingSteps(
     if (Array.isArray(node.subflows)) {
       for (const s of node.subflows) if (inline(s)) children.push([undefined, s]);
     }
-    for (const [childKey, child] of children) {
+    return children;
+  };
+  const reservedIdError = (key: string | undefined, node: Record<string, unknown>): string | null => {
+    for (const candidate of [key, typeof node.id === "string" ? node.id : undefined]) {
+      if (candidate !== undefined && candidate.startsWith(PUBLISH_GATE_ID_PREFIX)) {
+        return `RESERVED_NODE_ID: node ${quoteNodeId(candidate)} uses the reserved prefix "${PUBLISH_GATE_ID_PREFIX}"`;
+      }
+    }
+    return null;
+  };
+  // Below INJECT_MAX_DEPTH levels the reader stops recursing and reads the rest
+  // without recursion: a reserved id refuses as at any depth, and any publishes
+  // key refuses the compile, since it is not checked that deep. A subtree with
+  // neither compiles as before: the depth check runs only for a declaration.
+  const belowLimit = (key: string | undefined, comp: unknown): string | null => {
+    const stack: Array<[string | undefined, unknown]> = [[key, comp]];
+    while (stack.length > 0) {
+      const [k, c] = stack.pop()!;
+      const node = asNode(c);
+      if (!node) continue;
+      const reserved = reservedIdError(k, node);
+      if (reserved) return reserved;
+      if (readPublishes(node).present) {
+        return `OAS_NESTING_TOO_DEEP: metadata.cinatra.publishes is declared below ${INJECT_MAX_DEPTH} levels of subflow nesting`;
+      }
+      stack.push(...childrenOf(node));
+    }
+    return null;
+  };
+
+  const visit = (key: string | undefined, comp: unknown, nested: boolean, depth: number): string | null => {
+    const node = asNode(comp);
+    if (!node) return null;
+    if (depth > INJECT_MAX_DEPTH) return belowLimit(key, node);
+    const name = key ?? (typeof node.id === "string" ? node.id : undefined);
+    const who = name === undefined ? "an inline subflow" : `node ${quoteNodeId(name)}`;
+    const reserved = reservedIdError(key, node);
+    if (reserved) return reserved;
+    const flag = readPublishes(node);
+    if (flag.present && typeof flag.value !== "boolean") {
+      return `PUBLISHES_MALFORMED: ${who} declares metadata.cinatra.publishes as ${describePublishesType(flag.value)}; it must be the JSON boolean true or false`;
+    }
+    if (flag.value === true) {
+      if (nested || key === undefined || !topLevelIds.has(key)) {
+        return `PUBLISHES_MISPLACED: ${who} declares publishes: true but is not a top-level node of the flow (a node inside a nested subflow, or a subflow definition); the runtime cannot stop in front of it`;
+      }
+      if (typeof node.component_type !== "string" || !PUBLISHES_ACTION_KINDS.has(node.component_type)) {
+        return `PUBLISHES_MISPLACED: ${who} declares publishes: true, but only a node of kind ApiNode, AgentNode, FlowNode or ParallelFlowNode can be the publishing action`;
+      }
+      steps.push(key);
+    }
+    for (const [childKey, child] of childrenOf(node)) {
       const error = visit(childKey, child, true, depth + 1);
       if (error) return error;
     }

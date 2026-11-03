@@ -108,12 +108,25 @@ describe("cinatra#4150 — the column round-trips through serializeTemplate / de
     ["a list holding a number", "[1]"],
     ["a bare string", '"publish"'],
     ["text that is not JSON", "publish"],
+    ["the JSON null", "null"],
   ] as const) {
     it(`a stored value that is ${label} throws instead of reading as "publishes nothing"`, () => {
       const values = { ...serializeTemplate(input(undefined)), publishingSteps: stored };
       expect(() => deserializeTemplate(asRow(values))).toThrow();
     });
   }
+
+  it("the error names the column only, never the stored text or the parser's message", () => {
+    for (const stored of ["sk-live-SECRET-0123 is not json", '{"token":"sk-live-SECRET-0123"}']) {
+      const values = { ...serializeTemplate(input(undefined)), publishingSteps: stored };
+      expect(() => deserializeTemplate(asRow(values))).toThrow(/^agent_templates\.publishing_steps is not a JSON list of node ids$/);
+      try {
+        deserializeTemplate(asRow(values));
+      } catch (error) {
+        expect(String((error as Error).message)).not.toContain("SECRET");
+      }
+    }
+  });
 });
 
 describe("cinatra#4150 — the update patch re-projects the column", () => {

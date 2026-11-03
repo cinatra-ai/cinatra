@@ -235,6 +235,26 @@ describe("cinatra#4150 — the recompile writer persists publishingSteps", () =>
     await syncCompiledTemplateToDb(PKG, undefined, compiledFixture());
     expect(upsertPatch().publishingSteps).toEqual(["publish"]);
   });
+
+  it("a recompile that declares nothing clears the list (an empty list, never omitted)", async () => {
+    readTemplate.mockResolvedValue({ id: "tpl-existing", status: "active" });
+    await syncCompiledTemplateToDb(PKG, "1.0.1", compiledFixture());
+    expect(upsertPatch()).toHaveProperty("publishingSteps", []);
+  });
+
+  it("no row for the package: nothing is written", async () => {
+    PUBLISHING_STEPS = ["publish"];
+    await syncCompiledTemplateToDb(PKG, "1.0.1", compiledFixture());
+    expect(updateTemplate).not.toHaveBeenCalled();
+  });
+
+  it("a failed write is caught and does not fail the recompile", async () => {
+    PUBLISHING_STEPS = ["publish"];
+    readTemplate.mockResolvedValue({ id: "tpl-existing", status: "active" });
+    updateTemplate.mockRejectedValueOnce(new Error("db down"));
+    await expect(syncCompiledTemplateToDb(PKG, "1.0.1", compiledFixture())).resolves.toBeUndefined();
+    expect(updateTemplate).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ---------------------------------------------------------------------------

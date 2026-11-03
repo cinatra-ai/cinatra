@@ -132,4 +132,11 @@ describe("cinatra#4150 — importAgentTemplateCore persists publishingSteps", ()
     expect(upsertPatch().publishingSteps).toEqual(["publish"]);
     expect(upsertPatch().packageVersion).toBe("0.1.0");
   });
+
+  it("UPSERT: a version that declares nothing clears the list (an empty list, never omitted)", async () => {
+    PUBLISHING_STEPS = [];
+    readTemplate.mockResolvedValue({ id: "tmpl-existing" });
+    await importZip();
+    expect(upsertPatch()).toHaveProperty("publishingSteps", []);
+  });
 });

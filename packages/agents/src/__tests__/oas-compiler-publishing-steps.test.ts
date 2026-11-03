@@ -288,7 +288,8 @@ describe("cinatra#4150 — the action kinds are an allow-list", () => {
   ]) {
     it(`refuses ${kind}`, () => {
       const res = collectPublishingSteps(flowWith({ component_type: kind, ...declared }));
-      expect(res).toEqual({ ok: false, error: expect.stringMatching(new RegExp(`^PUBLISHES_MISPLACED: .*is a ${kind},`)) });
+      expect(res).toEqual({ ok: false, error: expect.stringMatching(/^PUBLISHES_MISPLACED: node "step" .*can be the publishing action$/) });
+      expect((res as { error: string }).error).not.toMatch(new RegExp(`\\b${kind}\\b`));
     });
   }
 
@@ -296,7 +297,7 @@ describe("cinatra#4150 — the action kinds are an allow-list", () => {
     for (const node of [declared, { component_type: 7, ...declared }]) {
       expect(collectPublishingSteps(flowWith(node))).toEqual({
         ok: false,
-        error: expect.stringMatching(/^PUBLISHES_MISPLACED: .*is a <none>,/),
+        error: expect.stringMatching(/^PUBLISHES_MISPLACED: node "step" .*can be the publishing action$/),
       });
     }
   });
@@ -316,7 +317,7 @@ describe("cinatra#4150 — every branch of the reader", () => {
 
   it("the flow root: a malformed value and true refuse, false passes", () => {
     const root = (publishes: unknown) => ({ metadata: { cinatra: { publishes } }, nodes: [], $referenced_components: {} });
-    expect(collectPublishingSteps(root("yes"))).toEqual({ ok: false, error: expect.stringMatching(/^PUBLISHES_MALFORMED: the flow root .*the string "yes"/) });
+    expect(collectPublishingSteps(root("yes"))).toEqual({ ok: false, error: expect.stringMatching(/^PUBLISHES_MALFORMED: the flow root .* as a string;/) });
     expect(collectPublishingSteps(root(true))).toEqual({ ok: false, error: expect.stringMatching(/^PUBLISHES_MISPLACED: the flow root/) });
     expect(collectPublishingSteps(root(false))).toEqual({ ok: true, steps: [] });
   });
@@ -340,11 +341,36 @@ describe("cinatra#4150 — every branch of the reader", () => {
     expect(collectPublishingSteps(doc as Record<string, unknown>)).toEqual({ ok: true, steps: [] });
   });
 
-  it("nesting deeper than the limit refuses", () => {
-    let inner: Node = api("deepest");
-    for (let i = 0; i < 40; i++) inner = { component_type: "FlowNode", id: `level${i}`, subflow: inner };
-    const res = collectPublishingSteps({ $referenced_components: { top: inner } });
-    expect(res).toEqual({ ok: false, error: expect.stringMatching(/^OAS_NESTING_TOO_DEEP: /) });
+  // The limit is INJECT_MAX_DEPTH = 16: the outermost component is depth 0, so
+  // `levels` wrappers put the innermost node at depth `levels`.
+  const nest = (deepest: Node, levels: number): Record<string, unknown> => {
+    let inner: Node = deepest;
+    for (let i = 0; i < levels; i++) inner = { component_type: "FlowNode", id: `level${i}`, subflow: inner };
+    return { $referenced_components: { top: inner } };
+  };
+
+  it("a flow with no declaration compiles at any depth: the depth check runs only for a declaration", () => {
+    for (const levels of [16, 17, 40, 2000]) {
+      expect(collectPublishingSteps(nest(api("deepest"), levels))).toEqual({ ok: true, steps: [] });
+    }
+  });
+
+  it("at the limit the node is still read; one level below it a publishes key refuses, false included", () => {
+    expect(collectPublishingSteps(nest(api("deepest", false), 16))).toEqual({ ok: true, steps: [] });
+    expect(collectPublishingSteps(nest(api("deepest", "yes"), 16))).toEqual({ ok: false, error: expect.stringMatching(/^PUBLISHES_MALFORMED: node "deepest" /) });
+    for (const value of [false, true, "yes"]) {
+      expect(collectPublishingSteps(nest(api("deepest", value), 17))).toEqual({
+        ok: false,
+        error: "OAS_NESTING_TOO_DEEP: metadata.cinatra.publishes is declared below 16 levels of subflow nesting",
+      });
+    }
+    expect(collectPublishingSteps(nest(api("deepest", true), 2000))).toEqual({ ok: false, error: expect.stringMatching(/^OAS_NESTING_TOO_DEEP: /) });
+  });
+
+  it("below the limit a reserved id still refuses as a reserved id, by component key or by id", () => {
+    expect(collectPublishingSteps(nest(api("cinatra_publish_gate__deep"), 30))).toEqual({ ok: false, error: expect.stringMatching(/^RESERVED_NODE_ID: node "cinatra_publish_gate__deep" /) });
+    const byKey = nest({ component_type: "Flow", id: "sub", $referenced_components: { cinatra_publish_gate__k: api("clean") } }, 20);
+    expect(collectPublishingSteps(byKey)).toEqual({ ok: false, error: expect.stringMatching(/^RESERVED_NODE_ID: node "cinatra_publish_gate__k" /) });
   });
 
   it("an inline subflow is read: its flag refuses as nested, whatever its form", () => {
@@ -377,5 +403,43 @@ describe("cinatra#4150 — every branch of the reader", () => {
       $referenced_components: { second: api("second", true), first: api("first", true) },
     };
     expect(collectPublishingSteps(doc)).toEqual({ ok: true, steps: ["first", "second"] });
+  });
+});
+
+describe("cinatra#4150 — the error texts name the field and the node id, never the pack's value or kind", () => {
+  const SECRET = "sk-live-0123456789-not-a-real-key";
+  const one = (node: Node) => ({ nodes: [{ $component_ref: "step" }], $referenced_components: { step: { id: "step", ...node } } });
+
+  it("a malformed string value is reported by its type only, on a node and on the root", () => {
+    const onNode = collectPublishingSteps(one({ component_type: "ApiNode", metadata: { cinatra: { publishes: SECRET } } }));
+    const onRoot = collectPublishingSteps({ metadata: { cinatra: { publishes: SECRET } }, nodes: [] });
+    for (const res of [onNode, onRoot]) {
+      expect(res.ok).toBe(false);
+      const error = (res as { error: string }).error;
+      expect(error).toMatch(/^PUBLISHES_MALFORMED: .*metadata\.cinatra\.publishes as a string;/);
+      expect(error).not.toContain(SECRET);
+    }
+  });
+
+  it("a kind outside the list is not echoed", () => {
+    const res = collectPublishingSteps(one({ component_type: SECRET, metadata: { cinatra: { publishes: true } } }));
+    expect(res).toEqual({ ok: false, error: expect.stringMatching(/^PUBLISHES_MISPLACED: node "step" /) });
+    expect((res as { error: string }).error).not.toContain(SECRET);
+  });
+
+  it("a node id is JSON-escaped and cut at 120 characters", () => {
+    const odd = 'a"b\nc';
+    const res = collectPublishingSteps({ nodes: [], $referenced_components: { [odd]: { component_type: "ApiNode", metadata: { cinatra: { publishes: true } } } } });
+    expect((res as { error: string }).error).toContain(`node ${JSON.stringify(odd)} `);
+    expect((res as { error: string }).error).not.toContain("\n");
+    const long = `x${"y".repeat(300)}`;
+    const resLong = collectPublishingSteps({ nodes: [], $referenced_components: { [long]: { component_type: "ApiNode", metadata: { cinatra: { publishes: true } } } } });
+    expect((resLong as { error: string }).error).toContain(`node "${long.slice(0, 120)}..." `);
+    expect((resLong as { error: string }).error).not.toContain(long);
+  });
+
+  it("an inline subflow with no id is named as such", () => {
+    const doc = { nodes: [{ $component_ref: "top" }], $referenced_components: { top: { component_type: "FlowNode", id: "top", subflow: { component_type: "Flow", metadata: { cinatra: { publishes: "x" } } } } } };
+    expect(collectPublishingSteps(doc)).toEqual({ ok: false, error: expect.stringMatching(/^PUBLISHES_MALFORMED: an inline subflow declares /) });
   });
 });
