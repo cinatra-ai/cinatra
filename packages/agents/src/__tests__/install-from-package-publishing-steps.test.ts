@@ -1,7 +1,10 @@
 import { identityClaimMockFrom } from "./helpers/identity-claim-mock";
 /**
- * cinatra#4150 — every template writer persists the compiler's
- * `publishingSteps` on `agent_templates.publishing_steps`.
+ * cinatra#4150 — every template writer that takes its row from a compile
+ * (the writers that write `hasArtifactBindings`) persists the compiler's
+ * `publishingSteps` on `agent_templates.publishing_steps`. Writers that do not
+ * compile a pack (the external-template upsert in `store.ts`, the built-in
+ * assistant upsert) leave the column null.
  *
  * The behavioural half drives the REAL `installAgentFromPackage` (fresh /
  * upsert / 23505 race) and the REAL recompile writer `syncCompiledTemplateToDb`

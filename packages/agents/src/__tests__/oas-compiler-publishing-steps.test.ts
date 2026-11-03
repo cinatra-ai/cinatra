@@ -438,6 +438,16 @@ describe("cinatra#4150 — the error texts name the field and the node id, never
     expect((resLong as { error: string }).error).not.toContain(long);
   });
 
+  it("a line or paragraph separator in a node id is escaped", () => {
+    for (const sep of ["\u2028", "\u2029"]) {
+      const odd = `a${sep}b`;
+      const res = collectPublishingSteps({ nodes: [], $referenced_components: { [odd]: { component_type: "ApiNode", metadata: { cinatra: { publishes: true } } } } });
+      const error = (res as { error: string }).error;
+      expect(error).toMatch(/^PUBLISHES_MISPLACED: node "a\\u202[89]b" /);
+      expect(error).not.toContain(sep);
+    }
+  });
+
   it("an inline subflow with no id is named as such", () => {
     const doc = { nodes: [{ $component_ref: "top" }], $referenced_components: { top: { component_type: "FlowNode", id: "top", subflow: { component_type: "Flow", metadata: { cinatra: { publishes: "x" } } } } } };
     expect(collectPublishingSteps(doc)).toEqual({ ok: false, error: expect.stringMatching(/^PUBLISHES_MALFORMED: an inline subflow declares /) });

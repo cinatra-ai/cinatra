@@ -1269,7 +1269,8 @@ export type CompiledAgentOas = {
   // cinatra#4150: the ids of the top-level flow nodes declared
   // `metadata.cinatra.publishes: true`, in node order. Persisted (serialized) to
   // agent_templates.publishing_steps by the install, import, seed and recompile
-  // writers. The runtime stops in front of each of them until a person decides.
+  // writers. The list is for a later consumer that is to stop the run in front
+  // of each of them until a person decides; nothing reads it to stop a run yet.
   publishingSteps: string[];
   // Sibling cinatra.json metadata: per-agent limits,
   // required connection types, and authoring-time defaults. Operator-tunable
@@ -1358,28 +1359,34 @@ function subflowFiresNonContextRuntimeGate(
 }
 
 // cinatra#4150: the publishing-step declaration. A pack marks the node that
-// performs a publication with `metadata.cinatra.publishes: true`, and the
-// runtime stops in front of it. The flag is trusted only to ADD a stop, so the
-// reader is an allow-list: only the literal boolean `true` on a TOP-LEVEL flow
-// node of an action type counts. Anything else that carries the key refuses
-// the compile instead of being ignored: a non-boolean value, `true` on a node
-// that cannot be the action (or inside a nested subflow, where the runtime
-// cannot insert its stop, or on a subflow definition or the flow root), and any
-// node id that takes the host's reserved gate prefix. `false` is an explicit
-// "writes, but does not publish" and is allowed anywhere.
+// performs a publication with `metadata.cinatra.publishes: true`; a later
+// consumer is to stop the run in front of it (this reader adds no stop). The
+// flag is meant only to ADD a stop, so the reader is an allow-list: only the
+// literal boolean `true` on a TOP-LEVEL flow node of an action type counts.
+// Anything else that carries the key refuses the compile instead of being
+// ignored: a non-boolean value, `true` on a node that cannot be the action (or
+// inside a nested subflow, where a stop could not be inserted, or on a subflow
+// definition or the flow root), and any node id that takes the host's reserved
+// gate prefix. `false` is an explicit "writes, but does not publish" and is
+// allowed on any node down to INJECT_MAX_DEPTH levels of subflow nesting;
+// below that depth any publishes key, `false` included, refuses the compile.
 const PUBLISH_GATE_ID_PREFIX = "cinatra_publish_gate__";
 // The node kinds that can be the publishing action. Every other kind refuses, a
 // kind this compiler does not know and a node with no kind included.
 const PUBLISHES_ACTION_KINDS = new Set(["ApiNode", "AgentNode", "FlowNode", "ParallelFlowNode"]);
 
 // Error texts name the field and the node id only, never a value or a kind
-// the pack wrote: the id is quoted with JSON escaping and cut at 120 characters.
+// the pack wrote: the id is quoted with JSON escaping and cut at 120 characters,
+// and the line and paragraph separators U+2028 and U+2029, which JSON.stringify
+// leaves as they are, are escaped too, so the text stays on one line.
 function describePublishesType(value: unknown): string {
   if (value === null) return "null";
   return Array.isArray(value) ? "an array" : `a ${typeof value}`;
 }
 function quoteNodeId(id: string): string {
-  return JSON.stringify(id.length > 120 ? `${id.slice(0, 120)}...` : id);
+  return JSON.stringify(id.length > 120 ? `${id.slice(0, 120)}...` : id)
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
 }
 
 export function collectPublishingSteps(
