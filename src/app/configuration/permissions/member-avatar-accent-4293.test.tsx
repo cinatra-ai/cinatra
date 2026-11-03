@@ -6,7 +6,6 @@
 //
 //   pnpm exec vitest run src/app/configuration/permissions/member-avatar-accent-4293.test.tsx
 
-import React from "react";
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
