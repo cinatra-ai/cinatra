@@ -55,6 +55,8 @@ const STDERR = {
   notOurRef: `fatal: remote error: upload-pack: not our ref ${PIN}\n`,
   sourceNotOurRef: `fatal: git upload-pack: not our ref ${PIN}\nfatal: remote error: upload-pack: not our ref ${PIN}\n`,
   locked: "fatal: cannot mkdir .git: Permission denied\n",
+  forbidden: "fatal: unable to access 'https://github.com/cinatra-ai/blog-pipeline-agent.git/': The requested URL returned error: 403\n",
+  noSpace: "error: unable to write file: No space left on device\n",
 };
 
 function gitError(args, stderr) {
@@ -68,7 +70,16 @@ function gitError(args, stderr) {
  * fetch is `fetch`. `init` creates the destination; `checkout` moves HEAD (to
  * `landsOn` when set). Every git call records its arguments and its cwd.
  */
-function makeDeps({ existing = false, emptyDir = false, staleSource = false, head = PIN, plan = {}, landsOn } = {}) {
+function makeDeps({
+  existing = false,
+  emptyDir = false,
+  unreadable = false,
+  staleSource = false,
+  head = PIN,
+  plan = {},
+  landsOn,
+  failRemoval,
+} = {}) {
   const state = {
     exists: new Set(),
     dirEntries: {},
@@ -84,6 +95,7 @@ function makeDeps({ existing = false, emptyDir = false, staleSource = false, hea
     state.exists.add(DEST);
     state.dirEntries[DEST] = [];
   }
+  if (unreadable) state.exists.add(DEST);
   if (staleSource) state.exists.add(SOURCE);
   const calls = [];
   const cwds = [];
@@ -101,12 +113,14 @@ function makeDeps({ existing = false, emptyDir = false, staleSource = false, hea
     exists: (p) => state.exists.has(p),
     readdir: (p) => {
       if (!state.exists.has(p)) throw new Error(`ENOENT: ${p}`);
+      if (unreadable && p === DEST) throw new Error(`EACCES: ${p}`);
       return [...(state.dirEntries[p] ?? [])];
     },
     mkdirp: () => {},
     unlink: () => {},
     removeTree: (p) => {
       removed.push(p);
+      if (failRemoval === p) throw new Error(`EBUSY: ${p}`);
       for (const q of [...state.exists]) if (q === p || q.startsWith(`${p}/`)) state.exists.delete(q);
       delete state.dirEntries[p];
     },
@@ -288,6 +302,43 @@ describe("syncOneRepo --shallow — an absent checkout fetches the pin at depth 
     expect(deps.calls).toEqual([...MADE_NEW, ORIGIN_FETCH, ...CHECKED_OUT]);
   });
 
+  it("a failing remote add, or a failing checkout, throws with the new checkout removed and no fallback", () => {
+    for (const plan of [{ remote: [STDERR.locked] }, { checkout: [STDERR.noSpace] }]) {
+      const deps = makeDeps({ plan });
+      const { thrown } = run(deps);
+      expect(thrown?.stderr).toBe(Object.values(plan)[0][0]);
+      expect(deps.removed).toEqual([DEST]);
+      expect(starts(deps.calls, "clone")).toEqual([]);
+    }
+  });
+
+  it("an HTTP 403 on the depth-1 fetch takes the fallback, where the same refusal fails loud", () => {
+    const deps = makeDeps({ plan: { fetch: [STDERR.forbidden], clone: [STDERR.forbidden] } });
+    const { thrown, lines } = run(deps);
+    expect(thrown?.stderr).toBe(STDERR.forbidden);
+    expect(deps.calls.filter((c) => c === ORIGIN_FETCH)).toHaveLength(1);
+    expect(starts(deps.calls, "clone")).toHaveLength(1);
+    expect(lines.some((l) => /falling back to the full clone/.test(l))).toBe(true);
+  });
+
+  it("a removal that fails after a refused fetch throws the git failure and does not fall back", () => {
+    const deps = makeDeps({ plan: { fetch: [STDERR.unadvertised] }, failRemoval: DEST });
+    const { thrown, lines } = run(deps);
+    expect(thrown?.stderr).toBe(STDERR.unadvertised);
+    expect(starts(deps.calls, "clone")).toEqual([]);
+    expect(lines.some((l) => /could not remove/.test(l))).toBe(true);
+  });
+
+  it("a moved copy left by an interrupted run is removed even when the destination is absent", () => {
+    const deps = makeDeps({ staleSource: true });
+    const { result, thrown } = run(deps);
+    expect(thrown).toBeNull();
+    expect(result).toEqual(CLONED);
+    expect(deps.removed).toEqual([SOURCE]);
+    expect(deps.renamed).toEqual([]);
+    expect(deps.calls).toEqual([...MADE_NEW, ORIGIN_FETCH, ...CHECKED_OUT]);
+  });
+
   it("refuses --shallow without a pinned sha, before any git call", () => {
     const deps = makeDeps();
     const { thrown } = run(deps, { sha: undefined });
@@ -296,12 +347,25 @@ describe("syncOneRepo --shallow — an absent checkout fetches the pin at depth 
   });
 
   it("refuses a remote URL with credentials, before any git call, and never prints them", () => {
+    for (const url of [
+      "https://x-access-token:secret123@github.com/cinatra-ai/blog-pipeline-agent.git",
+      "https://secret123@github.com/cinatra-ai/blog-pipeline-agent.git",
+      "ssh://git:secret123@github.com/cinatra-ai/blog-pipeline-agent.git",
+    ]) {
+      const deps = makeDeps();
+      const { thrown } = run(deps, { url });
+      expect(String(thrown?.message)).toMatch(/carries credentials|refusing a git remote/);
+      expect(String(thrown?.message)).not.toMatch(/secret123|x-access-token/);
+      expect(deps.calls).toEqual([]);
+      expect(deps.state.exists.size).toBe(0);
+    }
+  });
+
+  it("lets the plain ssh://git@github.com form through (a user name, no credential)", () => {
     const deps = makeDeps();
-    const { thrown } = run(deps, { url: "https://x-access-token:secret123@github.com/cinatra-ai/blog-pipeline-agent.git" });
-    expect(String(thrown?.message)).toMatch(/carries credentials/);
-    expect(String(thrown?.message)).not.toMatch(/secret123|x-access-token/);
-    expect(deps.calls).toEqual([]);
-    expect(deps.state.exists.size).toBe(0);
+    const { result, thrown } = run(deps, { url: "ssh://git@github.com/cinatra-ai/blog-pipeline-agent.git" });
+    expect(thrown).toBeNull();
+    expect(result).toEqual(CLONED);
   });
 });
 
@@ -366,6 +430,30 @@ describe("syncOneRepo --shallow — an existing (cache-restored) checkout is onl
     expect(String(thrown?.message)).toMatch(/verification failed/);
     expect(deps.removed).toEqual([DEST, SOURCE]);
     expect(deps.state.exists.size).toBe(0);
+  });
+
+  it("an existing destination that cannot be read is moved aside like any checkout, never taken for empty", () => {
+    const deps = makeDeps({ unreadable: true });
+    const { result, thrown } = run(deps);
+    expect(thrown).toBeNull();
+    expect(result).toEqual(CLONED);
+    expect(deps.renamed).toEqual([[DEST, SOURCE]]);
+    expect(deps.removed).toEqual([SOURCE]);
+  });
+
+  it("a source fetch that fails for a local reason (no space) is never fatal: origin serves the pin", () => {
+    const deps = makeDeps({ existing: true, plan: { fetchSource: [STDERR.noSpace] } });
+    const { result, thrown } = run(deps);
+    expect(thrown).toBeNull();
+    expect(result).toEqual(CLONED);
+    expect(deps.calls).toEqual([...MADE_NEW, SOURCE_FETCH, ORIGIN_FETCH, ...CHECKED_OUT]);
+  });
+
+  it("a removal that fails after a failure still tries the other removal and throws the git failure", () => {
+    const deps = makeDeps({ existing: true, landsOn: OTHER, failRemoval: DEST });
+    const { thrown } = run(deps);
+    expect(String(thrown?.message)).toMatch(/verification failed/);
+    expect(deps.removed).toEqual([DEST, SOURCE]);
   });
 
   it("a moved copy left by an interrupted earlier run is removed first", () => {
