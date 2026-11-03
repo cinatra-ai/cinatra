@@ -59,7 +59,11 @@ export function isZodError(err: unknown): boolean {
   );
 }
 
-/** True when the error's own text is a stated refusal for the caller. */
+/**
+ * True when the error is a refusal for the caller: a primitive's stated
+ * refusal, answered with its own text, or a zod error, answered with a text
+ * built from its issues (callerFacingText). Not proof that zod built the error.
+ */
 export function isCallerFacingError(err: unknown): err is Error {
   return err instanceof PrimitiveInvocationError || isZodError(err);
 }

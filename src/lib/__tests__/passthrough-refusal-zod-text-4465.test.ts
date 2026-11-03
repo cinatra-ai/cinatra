@@ -187,3 +187,33 @@ describe("cinatra#4465 — an issue list it cannot read answers the fixed senten
     expectNoSecretLogged();
   });
 });
+
+describe("cinatra#4465 — the bounds hold exactly at their edges", () => {
+  const custom = (path: unknown[]) => ({ code: "custom", path });
+  const answer = (issues: unknown[]) => passthroughFailureText(forgedZodError(SECRET, issues), CTX);
+
+  it("a path of exactly 16 segments is shown whole; a path of 17 is cut after the 16th", () => {
+    const path = Array.from({ length: 17 }, (_, i) => `k${i}`);
+    const sixteen = path.slice(0, 16).join(".");
+    expect(answer([custom(path.slice(0, 16))])).toBe(`${PREFIX}: ${sixteen}: custom`);
+    expect(answer([custom(path)])).toBe(`${PREFIX}: ${sixteen}[...]: custom`);
+  });
+
+  it("exactly 20 issues are all named with no count; 21 name 20 and then 1 more", () => {
+    const issues = Array.from({ length: 21 }, (_, i) => custom([`f${i}`]));
+    const named = issues.slice(0, 20).map((_, i) => `f${i}: custom`);
+    expect(answer(issues.slice(0, 20))).toBe(`${PREFIX}: ${named.join("; ")}`);
+    expect(answer(issues)).toBe(`${PREFIX}: ${named.join("; ")}; and 1 more`);
+  });
+
+  it("a key of exactly 64 characters is shown; one of 65 is shown as [?]", () => {
+    const k64 = "k".repeat(64);
+    expect(answer([custom([k64])])).toBe(`${PREFIX}: ${k64}: custom`);
+    expect(answer([custom([`${k64}k`])])).toBe(`${PREFIX}: [?]: custom`);
+  });
+
+  it("the largest safe integer is shown as an index; 2^53 is not safe and is shown as [?]", () => {
+    expect(answer([custom([Number.MAX_SAFE_INTEGER])])).toBe(`${PREFIX}: [${Number.MAX_SAFE_INTEGER}]: custom`);
+    expect(answer([custom([2 ** 53])])).toBe(`${PREFIX}: [?]: custom`);
+  });
+});
