@@ -28,7 +28,9 @@ export type WindowOwnershipReading = {
 // empty or populated. An empty anchor and a live field marker with no typed control
 // in it each refuse. Each message editor holds exactly
 // one textarea as a direct child, and any editor anchor is refused on run and
-// review. A lifecycle card may hold any unmarked field.
+// review. A lifecycle card inside the root may hold any unmarked field. A card
+// that is an ancestor of the root is not read as holding the root's unmarked
+// text-entry controls: one there counts as an unowned prompt (THE ROOT, below).
 //
 // TEXT ENTRY IS READ BY ONE RULE, ON RAW CONTROLS. A text-entry control is an input
 // of any type but the non-text types below, a textarea, a node whose contenteditable
@@ -49,7 +51,9 @@ export type WindowOwnershipReading = {
 // label and a control that takes no text, such as a select, a button or a non-input
 // node with role=combobox or role=spinbutton; a node editable only by inheritance or
 // by a script property; document.designMode, a frame's or a shadow root's inside.
-// An unmarked field inside a lifecycle card is not read, and chat takes any number of well-formed message editors.
+// An unmarked field inside a lifecycle card inside the root is not read; in a card
+// that is an ancestor of the root, an unmarked text-entry control counts as an
+// unowned prompt. Chat takes any number of well-formed message editors.
 //
 // EVERY ANCHOR IS READ ON ITS OWN NODE: an owned window sits strictly inside the
 // page chrome (an anchor on the chrome node itself is not owned), and a lifecycle
