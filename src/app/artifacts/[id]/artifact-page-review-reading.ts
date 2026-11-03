@@ -23,10 +23,19 @@ export async function readArtifactPageReviewReading(args: {
   try {
     return (await isArtifactUnderOpenReview(args)) ? PENDING : undefined;
   } catch (err) {
+    // The class of the error and a fixed text, never its message: a driver's
+    // message carries the failed query and its parameters ("Failed query: ...
+    // params: ..."), so the organization and the artifact would reach the log.
     console.warn(
       "[artifact-page] the open review read failed; drawing the pending reading:",
-      err instanceof Error ? err.message : String(err),
+      errorClassOf(err),
     );
     return PENDING;
   }
+}
+
+/** A class name made only of identifier characters, or a fixed word. */
+function errorClassOf(err: unknown): string {
+  const name = err instanceof Error ? err.constructor?.name : undefined;
+  return typeof name === "string" && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name) ? name : "UnknownError";
 }

@@ -33,8 +33,8 @@ const mocks = vi.hoisted(() => ({
   hostArtifactContentBuilder: vi.fn(() => async () => ({ kind: "none" })),
   can: vi.fn(() => false),
   resolveArtifactDisplayMount: vi.fn(),
-  isDashboardArtifactType: vi.fn(() => false),
-  resolveDashboardArtifactPointer: vi.fn(async () => ({
+  isDashboardArtifactType: vi.fn((_objectType: string | null | undefined): boolean => false),
+  resolveDashboardArtifactPointer: vi.fn(async (_artifactId: string): Promise<{ access: string; pointer?: unknown }> => ({
     access: "ok",
     pointer: { artifactId: "a-1", dashboardId: "d-1", name: "A dashboard" },
   })),
@@ -240,5 +240,74 @@ describe("the artifact page's review reading (cinatra#3092)", () => {
     mocks.readArtifactForDetail.mockReturnValue({ kind: "not-found" });
     await expect(renderPage()).rejects.toThrow("NOT_FOUND");
     expect(mocks.isArtifactUnderOpenReview).not.toHaveBeenCalled();
+  });
+});
+
+describe("the open review read's warning carries no query text (cinatra#3092)", () => {
+  it("logs the error's class and a fixed text, never a driver message with its parameters", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.isArtifactUnderOpenReview.mockRejectedValue(
+      new Error('Failed query: select "id" from "artifact_review_gates" where ... params: org-1,pending,[{"artifactId":"a-1"}]'),
+    );
+    await renderPage();
+    expect(warn).toHaveBeenCalledTimes(1);
+    const logged = warn.mock.calls[0].map(String).join(" ");
+    expect(logged).not.toMatch(/Failed query|params|org-1|a-1|artifact_review_gates/);
+    expect(warn.mock.calls[0][1]).toBe("Error");
+    warn.mockRestore();
+  });
+});
+
+describe("the dashboard's own read gate on the artifact page (cinatra#3092)", () => {
+  const DASHBOARD_TYPE = "@cinatra-ai/dashboard-artifact:dashboard";
+  function dashboardRow(): void {
+    mocks.readArtifactForDetail.mockReturnValue({
+      kind: "ok",
+      artifact: { ...ARTIFACT, objectType: DASHBOARD_TYPE, artifactType: DASHBOARD_TYPE },
+    });
+    mocks.isDashboardArtifactType.mockImplementation((t) => t === DASHBOARD_TYPE);
+  }
+  beforeEach(() => {
+    mocks.resolveDashboardArtifactPointer.mockReset();
+  });
+
+  it("a reader the dashboard's grant refuses is denied: nothing is mounted and no review is read", async () => {
+    dashboardRow();
+    mocks.resolveDashboardArtifactPointer.mockResolvedValue({ access: "denied" });
+    await renderPage();
+    expect(mocks.resolveDashboardArtifactPointer).toHaveBeenCalledWith("a-1");
+    expect(mocks.mounted).toHaveLength(0);
+    expect(mocks.isArtifactUnderOpenReview).not.toHaveBeenCalled();
+  });
+
+  it("a dashboard the gate does not find (a template, an orphaned or archived dashboard) is not found", async () => {
+    dashboardRow();
+    mocks.resolveDashboardArtifactPointer.mockResolvedValue({ access: "not-found" });
+    await expect(renderPage()).rejects.toThrow("NOT_FOUND");
+    expect(mocks.mounted).toHaveLength(0);
+    expect(mocks.isArtifactUnderOpenReview).not.toHaveBeenCalled();
+  });
+
+  it("a gate that cannot be read throws and draws nothing", async () => {
+    dashboardRow();
+    mocks.resolveDashboardArtifactPointer.mockRejectedValue(new Error("store down"));
+    await expect(renderPage()).rejects.toThrow("store down");
+    expect(mocks.mounted).toHaveLength(0);
+  });
+
+  it("a dashboard the gate admits draws through the one dispatch", async () => {
+    dashboardRow();
+    mocks.resolveDashboardArtifactPointer.mockResolvedValue({
+      access: "ok",
+      pointer: { artifactId: "a-1", dashboardId: "a-1", name: "A dashboard" },
+    });
+    await renderPage();
+    expect(mocks.mounted).toHaveLength(1);
+  });
+
+  it("a row of another type never asks the dashboard gate", async () => {
+    await renderPage();
+    expect(mocks.resolveDashboardArtifactPointer).not.toHaveBeenCalled();
+    expect(mocks.mounted).toHaveLength(1);
   });
 });

@@ -48,6 +48,7 @@ import {
 } from "@/lib/artifacts/artifact-renderer-props";
 import { hostArtifactContentBuilder } from "./review-surface-roads";
 import { readArtifactPageReviewReading } from "./artifact-page-review-reading";
+import { readArtifactTypeGate } from "./artifact-type-read-gate";
 import {
   artifactDisplayTitle,
   buildArtifactDetailHeader,
@@ -92,10 +93,17 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
   if (access.kind === "not-found") notFound();
   if (access.kind === "denied") return <ArtifactReadDeniedPanel />;
   const artifact: ArtifactSummary = access.artifact;
+  // THE TYPE'S OWN READ GATE (cinatra#3092): a row that is the twin of a record
+  // with its own authorization (a dashboard) keeps it here. Not found hides the
+  // row, denied draws the not-authorized panel, and a gate that cannot be read
+  // throws to the route's error boundary. It decides access, never the drawing.
+  const typeGate = await readArtifactTypeGate(artifact);
+  if (typeGate === "not-found") notFound();
+  if (typeGate === "denied") return <ArtifactReadDeniedPanel />;
 
   // EVERY ROW REACHES THE ONE DISPLAY DISPATCH BELOW, whatever its type
-  // (cinatra#3092). The page holds no branch for any one type: a type's own
-  // display draws it, and a type with none draws the generic floor.
+  // (cinatra#3092). The page holds no drawing branch for any one type: a type's
+  // own display draws it, and a type with none draws the generic floor.
 
   // THE EDITOR OPENS ON THE HEAD REVISION, read from the store.
   //
