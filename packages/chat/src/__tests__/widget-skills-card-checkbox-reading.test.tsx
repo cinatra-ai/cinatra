@@ -259,16 +259,15 @@ describe("the widget draws §V's checkbox card inside a third-party page", () =>
       expect(result.container.querySelector('[data-testid="inline-run-panel"]')).toBeNull();
       expect(slot!.querySelectorAll("[data-lifecycle-card]")).toHaveLength(1);
 
-      // NAMED DEVIATION, MEASURED RATHER THAN ASSUMED (cinatra#3062). §V draws
-      // the row "beneath the line" — the assistant says it dispatched the agent
-      // and the row follows. In the shipped transcript the card is drawn at its
-      // PRODUCING SLOT, the `agent_run` part's own container (S9i, and the
-      // held-turn card contract requires exactly that), and a dispatch turn
-      // emits the tool part BEFORE the text part — so the card precedes the
-      // line. Moving it would take the card out of the container the contract
-      // rules it into, which is neither this issue's scope nor a thing to do
-      // silently. The order is pinned HERE, as it is, so it cannot change
-      // without someone reading this note.
+      // THE LINE FIRST, THEN THE ROW (cinatra#3062, §V). §V draws the row
+      // "beneath the line" — the assistant says it dispatched the agent and the
+      // row follows (the drawing `recommendation-row-paused`). A dispatch turn
+      // emits the tool part BEFORE the text part, so the card used to precede
+      // the line; a graded capture failed exactly that (the pending cell). The
+      // card stays at its PRODUCING SLOT, the `agent_run` part's own container
+      // (S9i, the held-turn card contract): what moves is the draw order of the
+      // one text part that carries the platform's start sentence for this run,
+      // which is now drawn above the run's slot.
       //
       // The line is read off the DEEPEST element that carries it: an ancestor
       // contains both, and `compareDocumentPosition` calls a descendant
@@ -283,9 +282,10 @@ describe("the widget draws §V's checkbox card inside a third-party page", () =>
       const line = carriers[0]!;
       expect(line.contains(root), "the line is not an ancestor of the card").toBe(false);
       expect(
-        line.compareDocumentPosition(root) & Node.DOCUMENT_POSITION_PRECEDING,
-        "the card is drawn at its producing slot, which precedes the dispatch text",
+        line.compareDocumentPosition(root) & Node.DOCUMENT_POSITION_FOLLOWING,
+        "the row is drawn beneath the dispatch line (§V)",
       ).toBeTruthy();
+      expect(slot!.contains(line), "the line stays out of the run's own slot").toBe(false);
     } finally {
       stub.restore();
     }

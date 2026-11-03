@@ -2007,8 +2007,18 @@ const RESOLVE_RETRY_DELAYS_MS = [400, 1_500, 4_000] as const;
  * Longer than the retry budget it backstops (400 + 1500 + 4000 ms plus the
  * attempts themselves), so an endpoint that is merely slow is answered by a retry
  * rather than written off.
+ *
+ * AND LONGER THAN A SLOW READ THAT IS STILL ON ITS WAY (cinatra#3062). A
+ * deadline that passes while the read is merely slow draws the run progress card
+ * over a question that is still open — the very card §V keeps off the turn —
+ * until the late answer takes it away again. This read is measured at twelve to
+ * thirty seconds under load on a development runtime (see `resolve` below), and
+ * the 8 s this deadline used to be drew exactly that in the widget of a graded
+ * capture of this issue: an "Agentic Run Progress" card and no Skills row on a
+ * held run. So the deadline stands above the slowest read measured; it still ends a
+ * read that never answers, which is the only case it exists for.
  */
-const RESOLVE_DEADLINE_MS = 8_000;
+const RESOLVE_DEADLINE_MS = 45_000;
 
 /**
  * WHAT THIS RUN'S RECOMMENDATION IS, INCLUDING "NOT KNOWN YET".

@@ -648,7 +648,29 @@ describe("the agentic run progress card waits for the skills decision", () => {
     }
   });
 
-  it("brings the run card in once the decision has landed", async () => {
+  // §V AT THE BOUND DESIGN (cinatra#3062): "Once the run has started the same
+  // pills are drawn with the state their boxes were left in, read-only, and
+  // with no Continue … No reading is ever redrawn as a row above another card."
+  // The plan's older "the run card appears once the skills are decided" drew
+  // the settled row ABOVE the run progress card, which a graded round failed
+  // (the settled cells, both palettes). So a decided turn keeps the panel MOUNTED -
+  // it is still this turn's one publisher of the run's later gates - but
+  // stood down: out of the picture and out of the accessibility tree.
+  const RUN_PANEL = '[data-testid="inline-run-panel"]';
+  function expectPanelStoodDown(container: HTMLElement) {
+    const panel = container.querySelector(RUN_PANEL);
+    expect(panel, "the decided turn unmounted its gate publisher").not.toBeNull();
+    const wrapper = panel!.closest(`[data-inline-run-panel-stood-down="${RUN_ID}"]`);
+    expect(wrapper, "the run card is drawn beneath the settled row").not.toBeNull();
+    expect(wrapper!.hasAttribute("hidden")).toBe(true);
+    expect(wrapper!.getAttribute("aria-hidden")).toBe("true");
+    // The settled row is still drawn, in the same container.
+    const slot = container.querySelector(`[data-agent-run-slot="${RUN_ID}"]`);
+    expect(slot?.querySelector("[data-chat-thread-recommendation-hold]")).not.toBeNull();
+    expect(slot?.contains(wrapper)).toBe(true);
+  }
+
+  it("draws NO run card beneath the settled row once the decision has landed", async () => {
     holdState.current = { state: "confirmed", runId: RUN_ID, skillNames: ["blog-content"] };
     const { container } = await mountSurface("chat", { messages: dispatchTurn() });
 
@@ -658,16 +680,12 @@ describe("the agentic run progress card waits for the skills decision", () => {
       }
     });
     await waitFor(() => {
-      if (!container.querySelector('[data-testid="inline-run-panel"]')) {
-        throw new Error("no run card after the decision");
-      }
+      if (!container.querySelector(RUN_PANEL)) throw new Error("no gate publisher after the decision");
     });
-    // The settled chips are ABOVE it, in the same container, exactly as before.
-    const slot = container.querySelector('[data-testid="inline-run-panel"]')?.parentElement;
-    expect(slot?.querySelector("[data-chat-thread-recommendation-hold]")).not.toBeNull();
+    expectPanelStoodDown(container);
   });
 
-  it("brings the run card in for a skipped decision too", async () => {
+  it("draws no run card beneath a skipped decision either", async () => {
     holdState.current = {
       state: "skipped",
       runId: RUN_ID,
@@ -676,10 +694,30 @@ describe("the agentic run progress card waits for the skills decision", () => {
     const { container } = await mountSurface("chat", { messages: dispatchTurn() });
 
     await waitFor(() => {
-      if (!container.querySelector('[data-testid="inline-run-panel"]')) {
-        throw new Error("no run card after the skip");
-      }
+      if (!container.querySelector(RUN_PANEL)) throw new Error("no gate publisher after the skip");
     });
+    expectPanelStoodDown(container);
+  });
+
+  it("draws the dispatch line ABOVE the row, with the row in its own slot (§V)", async () => {
+    const { container } = await mountHeldTurn();
+    const root = container.querySelector('[data-lifecycle-card="recommendation_hold"]');
+    expect(root).not.toBeNull();
+    const slot = container.querySelector(`[data-agent-run-slot="${RUN_ID}"]`);
+    expect(slot?.contains(root)).toBe(true);
+    const TEXT = "paused for your decision on the recommended skills";
+    const carriers = [...container.querySelectorAll("*")].filter(
+      (el) =>
+        el.textContent?.includes(TEXT) &&
+        ![...el.children].some((c) => c.textContent?.includes(TEXT)),
+    );
+    expect(carriers, "the dispatch line is not in the turn").toHaveLength(1);
+    const line = carriers[0]!;
+    expect(slot!.contains(line)).toBe(false);
+    expect(
+      line.compareDocumentPosition(root!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      "the row is drawn beneath the dispatch line",
+    ).toBeTruthy();
   });
 
   it("FAILS OPEN: a run that was never held keeps its run card", async () => {
@@ -779,13 +817,61 @@ describe("the agentic run progress card waits for the skills decision", () => {
       expect(result.container.querySelector('[data-testid="inline-run-panel"]')).toBeNull();
       // Past it: the question is unreadable and the turn draws what it always did.
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(10_000);
+        await vi.advanceTimersByTimeAsync(50_000);
       });
       expect(
         result.container.querySelector('[data-testid="inline-run-panel"]'),
         "a read that never answers withheld the run card for ever",
       ).not.toBeNull();
       expect(settle).not.toBeNull();
+    } finally {
+      holdState.pending = null;
+      vi.useRealTimers();
+    }
+  });
+
+  it("never draws the run card while a SLOW read of a held run is still on its way", async () => {
+    // cinatra#3062 (the widget cells of a graded capture): the read of a held run is
+    // measured at twelve to thirty seconds under load on a development runtime.
+    // A deadline that passes inside that window draws the run progress card over
+    // the open question, and the person sees the forbidden card until the late
+    // answer takes it away. Here the read answers HELD after 25 s: the run card
+    // must appear in no frame, and the row must be drawn once the answer lands.
+    vi.useFakeTimers();
+    const RUN_PANEL = '[data-testid="inline-run-panel"]';
+    try {
+      let settle: ((value: Record<string, unknown> | null) => void) | null = null;
+      holdState.pending = new Promise<Record<string, unknown> | null>((resolve) => {
+        settle = resolve;
+      });
+      const result = render(surfaceElement("chat", { messages: dispatchTurn() }));
+      let everSeen = result.container.querySelector(RUN_PANEL) !== null;
+      const observer = new MutationObserver(() => {
+        if (result.container.querySelector(RUN_PANEL)) everSeen = true;
+      });
+      observer.observe(result.container, { childList: true, subtree: true });
+      try {
+        for (let i = 0; i < 25; i += 1) {
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(1_000);
+          });
+        }
+        expect(result.container.querySelector(RUN_PANEL)).toBeNull();
+        holdState.pending = null;
+        holdState.current = HELD;
+        await act(async () => {
+          settle!(HELD);
+          await vi.advanceTimersByTimeAsync(100);
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1_000);
+        });
+      } finally {
+        observer.disconnect();
+      }
+      expect(result.container.querySelector("[data-recommendation-chip]")).not.toBeNull();
+      expect(everSeen, "the run progress card was on screen while the slow read was on its way").toBe(false);
+      expect(result.container.querySelector(RUN_PANEL)).toBeNull();
     } finally {
       holdState.pending = null;
       vi.useRealTimers();

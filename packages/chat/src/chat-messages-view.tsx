@@ -20,6 +20,7 @@
 // components that emit byte-identical DOM.
 
 import { isRunStartToolName } from "./run-start-tool-names";
+import { drawOrderWithRunStartLinesFirst } from "./run-start-line-order";
 import { Component, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentType, type ReactElement, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
@@ -963,8 +964,18 @@ function AgentRunTurnSlot({
           wrapper element across both readings and the stand-down is written on
           it and taken off it: same element, same position, same panel, and the
           three marks are exactly the ones it always carried while it stands
-          down. */}
-      {runCardWaits || runCardStandsDown ? null : turnCarriesSettledSchedule ? (
+          down.
+
+          AND THE SAME STAND-DOWN ONCE THE SKILLS ARE DECIDED (cinatra#3062,
+          §V). "Once the run has started the same pills are drawn with the state
+          their boxes were left in, read-only, and with no Continue … No reading
+          is ever redrawn as a row above another card." The settled row is the
+          run's reading in this turn, so the progress panel is not drawn beneath
+          it - and, for the reason above, it is not unmounted either: it stays
+          this turn's one publisher of the run's later gates, and a review it
+          draws is shown, by the same rule. A run that was never held (`none`)
+          or whose hold cannot be read is not decided, and keeps its panel. */}
+      {runCardWaits || runCardStandsDown ? null : turnCarriesSettledSchedule || decided ? (
         <div
           hidden={!panelDrawsReview}
           aria-hidden={panelDrawsReview ? undefined : true}
@@ -1443,9 +1454,14 @@ function OrderedPartsSection({
     (part) => part.kind === "text" && correctPlatformScheduleText(part.content).includes(runStandingLine),
   );
   if (parts.length === 0) return null;
+  // THE LINE FIRST, THEN THE ROW (cinatra#3062, §V): the platform's start
+  // sentence for a run is drawn above that run's slot; every part keeps its
+  // own index. See `drawOrderWithRunStartLinesFirst`.
+  const drawOrder = drawOrderWithRunStartLinesFirst(parts);
   return (
     <div className="flex flex-col gap-2" onClick={onMarkdownClick}>
-      {parts.map((part, idx) => {
+      {drawOrder.map((idx) => {
+        const part = parts[idx]!;
         if (part.kind === "text") {
           // §VI: the authorized schedule reading owns this turn's one prose
           // sentence. Neither a lead-in nor a follow-up accompanies it; the

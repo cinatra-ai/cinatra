@@ -1232,6 +1232,25 @@ function platformStartSentencePattern(runId: string): RegExp {
 }
 
 /**
+ * DOES THIS TEXT CARRY THE PLATFORM'S OWN START SENTENCE FOR THIS RUN?
+ * (cinatra#3062, §V: "the assistant says it dispatched the agent and that the
+ * run paused for a decision on the recommended skills — … — and that same turn
+ * carries the chip-row beneath the line".)
+ *
+ * The conversation reads downwards, so the line that says the run was
+ * dispatched stands above the run's own cards. The start's tool result reaches
+ * the turn BEFORE the model says the line back, so the turn's ordered trace
+ * carries the run's part first and the line after it; the renderer asks this to
+ * draw that one line above the run's slot. The pattern is the same one the
+ * corrections below rewrite, so the two can never disagree about which sentence
+ * is the platform's. Pure: it reads, it rewrites nothing.
+ */
+export function textCarriesRunStartSentence(text: string, runId: string): boolean {
+  if (!runId) return false;
+  return platformStartSentencePattern(runId).test(text);
+}
+
+/**
  * Rewrite the platform's own start sentence for ONE run, wherever it stands in
  * a turn's text, and leave everything else byte-identical.
  *
