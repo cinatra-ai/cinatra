@@ -1255,3 +1255,121 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — a verification-reopen-shaped gate of 
     expect(await pendingGates(p.runId)).toEqual([successor.taskId]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#4312, review 6 of cinatra#4339 — the sweep's naming on a declared leg's lineage.
+// ---------------------------------------------------------------------------
+
+/** A declared leg's successor whose verification wrote its record (real representations),
+ * the post continued and set aside: the run is parked and the post's intent is `done`. */
+async function parkedOnARegeneratedPicture() {
+  const p = await pausedPipeline();
+  await seedRepresentation(p.picture, 1);
+  const pressed = await pressRegenerate(p.runId, p.leg2, p.picture);
+  const regenerated = { artifactId: p.picture.artifactId, representationRevisionId: `rev-img-r-${randomUUID()}` };
+  await seedRepresentation(regenerated, 2);
+  const successor = await pressed.answer(regenerated);
+  await approve(p.runId, p.step);
+  await sweep();
+  await expectParked(p);
+  const post = await gateStore.readReviewGate(p.runId, p.step);
+  expect(await intentStatusOf(post!.id)).toBe("done");
+  expect(await reopenNameOf(successor.gateId)).toBeNull();
+  return { p, pressed, successor, postGateId: post!.id };
+}
+
+/** What an old application can leave on that lineage: a gate in the successor's verification
+ * reopen slot on run A, with no name on the record (the new writer withholds that reopen),
+ * settled as changes requested, and its attempt 2 in `status`. */
+async function oldWritersNoteOnTheReopenSlot(
+  repairId: string,
+  successor: { gateId: string; pin: Pin },
+  runId: string,
+  status: "requested" | "escalated",
+): Promise<string> {
+  const task = verificationReopenReviewTaskId(`verify:${successor.gateId}`);
+  const reopen = await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: task, targets: [successor.pin] });
+  await pool(
+    `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates"
+        SET status='resolved', disposition='changes_requested', fingerprint=$2, resolved_at=now() WHERE id=$1`,
+    [reopen.gateId, `fp-${randomUUID()}`],
+  );
+  await pool(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."lifecycle_repair"
+       (id, lineage_id, gate_id, org_id, producer_run_id, producer_agent_id, base_artifact_id, base_representation_revision_id,
+        expected_base_revision_id, findings, continuation_mode, continuation_address, attempt, route, status, idempotency_key)
+     SELECT $2, lineage_id, $3, org_id, producer_run_id, producer_agent_id, $4, $5, $5, findings, continuation_mode,
+            continuation_address, 2, route, $6, $7
+       FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE id=$1`,
+    [repairId, randomUUID(), reopen.gateId, successor.pin.artifactId, successor.pin.representationRevisionId, status, `k-${randomUUID()}`],
+  );
+  return reopen.gateId;
+}
+
+async function reopenNameOf(successorGateId: string): Promise<string | null | undefined> {
+  const r = await pool(
+    `SELECT reopened_gate_id FROM "${q(TEST_SCHEMA)}"."artifact_verification_records" WHERE id=$1`,
+    [`verify:${successorGateId}`],
+  );
+  return (r.rows[0] as { reopened_gate_id: string | null } | undefined)?.reopened_gate_id;
+}
+
+async function attempt2StatusOn(gateId: string): Promise<string | undefined> {
+  const r = await pool(`SELECT status FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE gate_id=$1 AND attempt=2`, [gateId]);
+  return (r.rows[0] as { status: string } | undefined)?.status;
+}
+
+async function sweepReviewOrchestration() {
+  const { sweepReviewOrchestration: run } = await import("../lifecycle-review-orchestration-store");
+  return run();
+}
+
+describe.skipIf(!HAS_DB)("cinatra#4312 — the sweep's naming never closes a declared leg's lineage (review 6, finding 1)", () => {
+  // As in the group above: `sweep()` claims every outstanding intent, so an intent an
+  // earlier case left pending or delivering is set aside first.
+  beforeEach(async () => {
+    await pool(
+      `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_resume_outbox"
+          SET dead_lettered_at = now(), last_error = 'set aside by the test: left by an earlier case'
+        WHERE dead_lettered_at IS NULL AND status IN ('pending', 'delivering')`,
+    );
+  });
+
+  it("AN OLD WRITER'S ESCALATED NOTE, THEN THE NAMING: the sweep names the gate, but the declared-lineage check refuses it as a reopen, so the lineage reads malformed before and after and never reads closed; the post's intent stays as the worker left it, and the successor's decision is left for re-claim", async () => {
+    const { p, pressed, successor, postGateId } = await parkedOnARegeneratedPicture();
+    const reopen = await oldWritersNoteOnTheReopenSlot(pressed.repairId, successor, p.runId, "escalated");
+    await expect(repairStore.isRepairLineageOpen(pressed.settledGateId)).rejects.toMatchObject({ code: "malformed-lineage" });
+
+    await sweepReviewOrchestration();
+    expect(await reopenNameOf(successor.gateId)).toBe(reopen);
+    await expect(repairStore.isRepairLineageOpen(pressed.settledGateId)).rejects.toMatchObject({ code: "malformed-lineage" });
+    expect(await intentStatusOf(postGateId)).toBe("done");
+    await expectParked(p);
+
+    await approve(p.runId, successor.taskId);
+    const decided = await gateStore.readReviewGate(p.runId, successor.taskId);
+    await expectLeftForReclaim(await sweep(), decided!.id);
+    expect(await runStatus(p.runId)).toBe("pending_approval");
+  });
+
+  it("DISPATCH ESCALATION BEFORE THE NAMING: the drain escalates an old writer's requested attempt 2 on the unnamed gate, and its wake reads only the lineage's root, so it puts the post's intent back to pending before any name exists; after the naming the lineage still reads malformed, and that intent is left for re-claim", async () => {
+    const { p, pressed, successor, postGateId } = await parkedOnARegeneratedPicture();
+    const reopen = await oldWritersNoteOnTheReopenSlot(pressed.repairId, successor, p.runId, "requested");
+    // The drain takes only this case's attempt: the requested rows earlier cases left are set aside first.
+    await pool(
+      `UPDATE "${q(TEST_SCHEMA)}"."lifecycle_repair" SET status='escalated' WHERE status='requested' AND gate_id <> $1`,
+      [reopen],
+    );
+    const { dispatchPendingProducerRepairs } = await import("../lifecycle-repair-dispatch-store");
+    await dispatchPendingProducerRepairs({ limit: 200 });
+    expect(await attempt2StatusOn(reopen)).toBe("escalated");
+    expect(await reopenNameOf(successor.gateId)).toBeNull();
+    expect(await intentStatusOf(postGateId)).toBe("pending");
+
+    await sweepReviewOrchestration();
+    expect(await reopenNameOf(successor.gateId)).toBe(reopen);
+    await expect(repairStore.isRepairLineageOpen(pressed.settledGateId)).rejects.toMatchObject({ code: "malformed-lineage" });
+    await expectLeftForReclaim(await sweep(), postGateId);
+    expect(await runStatus(p.runId)).toBe("pending_approval");
+  });
+});

@@ -725,6 +725,36 @@ describe.skipIf(!HAS_DB)("cinatra#2042 — post-change verification (real store)
     await expect(repairStore.isRepairLineageOpen(lineageId)).resolves.toBe(true);
   });
 
+  it("AN OLD WRITER'S TERMINAL ATTEMPT (cinatra#4312): the old code can also leave attempt 2 escalated, stale, or repaired with a settled successor; after the sweep names the gate each reads closed, and the lineage did not start on a declared leg, so the wake has no paused run to wake (null)", async () => {
+    const gates = `"${q(TEST_SCHEMA)}"."artifact_review_gates"`;
+    const repairs = `"${q(TEST_SCHEMA)}"."lifecycle_repair"`;
+    for (const left of ["escalated", "stale", "repaired"] as const) {
+      const v = await failedVerificationOfLandedRepair();
+      const lineageId = (await repairStore.readRepair(v.repairId))!.lineageId;
+      await clearName(v.successorGateId);
+      await upgrade();
+      await pool(`UPDATE ${gates} SET status='resolved', disposition='changes_requested', fingerprint=$2, resolved_at=now() WHERE id=$1`, [v.reopenGateId, `fp-${randomUUID()}`]);
+      await writeAttempt2OnGate(v, v.reopenGateId);
+      if (left === "stale") await pool(`UPDATE ${repairs} SET status='stale' WHERE gate_id=$1`, [v.reopenGateId]);
+      if (left === "repaired") {
+        const settled = await gateStore.emitArtifactReviewGate({ runId: v.ev.producerRunId!, orgId: ORG, reviewTaskId: `settled-${randomUUID()}`, targets: [v.pin] });
+        await pool(`UPDATE ${gates} SET status='resolved', disposition='approve', fingerprint=$2, resolved_at=now() WHERE id=$1`, [settled.gateId, `fp-${randomUUID()}`]);
+        await pool(
+          `UPDATE ${repairs} SET status='repaired', successor_gate_id=$2, successor_artifact_id=$3, successor_representation_revision_id=$4 WHERE gate_id=$1`,
+          [v.reopenGateId, settled.gateId, v.pin.artifactId, `rev-settled-${randomUUID()}`],
+        );
+      }
+      await expect(repairStore.isRepairLineageOpen(lineageId)).rejects.toMatchObject({ code: "malformed-lineage" });
+      await orch.sweepReviewOrchestration();
+      expect(await namedGate(v.successorGateId)).toBe(v.reopenGateId);
+      await expect(repairStore.isRepairLineageOpen(lineageId)).resolves.toBe(false);
+      expect(await repairStore.isDeclaredReviewLineage(lineageId)).toBe(false);
+      const woken = await dbMod.db.transaction((tx) =>
+        repairStore.wakeDeclaredReviewAfterTerminalRepair(tx as unknown as Parameters<typeof repairStore.wakeDeclaredReviewAfterTerminalRepair>[0], lineageId));
+      expect(woken).toBeNull();
+    }
+  });
+
   it("THE SWEEP'S NAMING FAILS (cinatra#4312): it is logged, and the sweep still opens the gates it owes", async () => {
     const records = `"${q(TEST_SCHEMA)}"."artifact_verification_records"`;
     const ev = await produce("document", { destinationClass: "external_publish" });
