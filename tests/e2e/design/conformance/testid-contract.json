@@ -25,7 +25,7 @@
       "requires": [
         {
           "file": "src/app/design-fixtures/conformance/toast-fixture.tsx",
-          "literals": ["data-testid=\"show-conformance-toast\"", "toast.error(CONFORMANCE_TOAST_MESSAGE"]
+          "literals": ["data-testid=\"show-conformance-toast\"", "toast.error(CONFORMANCE_TOAST_MESSAGE", "data-testid=\"show-conformance-default-toast\"", "toast(CONFORMANCE_DEFAULT_TOAST_MESSAGE"]
         },
         {
           "file": "packages/sdk-ui/src/toast.ts",
