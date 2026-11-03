@@ -81,6 +81,23 @@ describe("textCarriesRunStartSentence", () => {
     expect(correctRunStartSentenceForScheduleWait({ text: arriving, runId: RUN_A })).toBe(arriving);
   });
 
+  it("reads a rest that starts with tabs as a line still arriving", () => {
+    expect(textCarriesRunStartSentence(line(RUN_A, "\t\tThe run"), RUN_A)).toBe(true);
+  });
+
+  it("does not read a rest that holds a carriage return as a line still arriving", () => {
+    expect(textCarriesRunStartSentence(line(RUN_A, " The run\r"), RUN_A)).toBe(false);
+  });
+
+  it("after other words on its line: the bare head is not the line, the head with a clause prefix is", () => {
+    expect(textCarriesRunStartSentence(`Sure. ${line(RUN_A, "")}`, RUN_A)).toBe(false);
+    expect(textCarriesRunStartSentence(`Sure. ${line(RUN_A, " The")}`, RUN_A)).toBe(true);
+  });
+
+  it("reads a prefix of a minted clause other than the parked one as a line still arriving", () => {
+    expect(textCarriesRunStartSentence(line(RUN_A, " The run is queued and will"), RUN_A)).toBe(true);
+  });
+
   it("does not read a head whose words leave every minted clause, or go on past the prefix", () => {
     expect(textCarriesRunStartSentence(line(RUN_A, " The run is paused for your decision"), RUN_A)).toBe(false);
     expect(textCarriesRunStartSentence(`${line(RUN_A, " The run")}\nAnything else?`, RUN_A)).toBe(false);
@@ -97,6 +114,21 @@ describe("drawOrderWithRunStartLinesFirst", () => {
     for (const clause of ["", " The run", " The run paused for a decision", " The run paused for a decision on the recommended skills."]) {
       expect(drawOrderWithRunStartLinesFirst([run(RUN_A), text(line(RUN_A, clause))]), clause).toEqual([1, 0]);
     }
+  });
+
+  it("KNOWN: a line after other words on its line moves while it streams in; the finished line stands above", () => {
+    expect(drawOrderWithRunStartLinesFirst([run(RUN_A), text(`Sure. ${line(RUN_A, "")}`)])).toEqual([0, 1]);
+    expect(drawOrderWithRunStartLinesFirst([run(RUN_A), text(`Sure. ${line(RUN_A, " The")}`)])).toEqual([1, 0]);
+    expect(drawOrderWithRunStartLinesFirst([run(RUN_A), text(`Sure. ${line(RUN_A)}`)])).toEqual([1, 0]);
+  });
+
+  it("KNOWN: a paraphrased line stands above while its words begin a minted clause, and drops beneath once they leave it", () => {
+    expect(drawOrderWithRunStartLinesFirst([run(RUN_A), text(line(RUN_A, " The run is"))])).toEqual([1, 0]);
+    expect(drawOrderWithRunStartLinesFirst([run(RUN_A), text(line(RUN_A, " The run is p"))])).toEqual([0, 1]);
+  });
+
+  it("KNOWN: a head quoted inside prose that ends the text in a clause prefix is drawn as the platform's line", () => {
+    expect(drawOrderWithRunStartLinesFirst([run(RUN_A), text(`I wrote ${line(RUN_A, " The")}`)])).toEqual([1, 0]);
   });
 
   it("does the same for the widget's own start tool", () => {

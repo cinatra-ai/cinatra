@@ -1266,6 +1266,15 @@ function isThePlatformsOwnMatch(
  * finished line will stand, so the line does not drop beneath the run's row
  * and come back up inside one streamed sentence. A text that goes on past the
  * prefix, or whose words leave every minted clause, is not this state.
+ *
+ * KNOWN LIMIT: this holds only for a line that stands alone. The state does not
+ * read what stands before the head. So a line that follows other words on its
+ * line ("Sure. Dispatched … ).") is not read while its head ends the text, and
+ * is read from the first letters of its clause on; a head quoted inside prose
+ * that ends the text in a clause prefix is read as the platform's line; and a
+ * paraphrased line is read while its words still begin a minted clause and not
+ * after they leave it. Such a line can move while it streams in; the finished
+ * text is drawn as the stands-alone rule and the clauses read it.
  */
 function endsInAMintedClauseStillArriving(after: string): boolean {
   const rest = after.replace(/^[ \t]+/, "");
@@ -1287,10 +1296,11 @@ function endsInAMintedClauseStillArriving(after: string): boolean {
  * carries the run's part first and the line after it; the renderer asks this to
  * draw that one line above the run's slot. It reads the same pattern and the
  * same stands-alone rule (`isThePlatformsOwnMatch`) as the corrections below,
- * so a clause-less sentence quoted inside prose is not the platform's here
- * either. It takes one state more than the corrections: a line still arriving
- * (`endsInAMintedClauseStillArriving`), which the corrections leave alone,
- * because they rewrite a finished sentence. Pure: it reads, it rewrites
+ * so a finished clause-less sentence quoted inside prose is not the platform's
+ * here either. It takes one state more than the corrections: a line still
+ * arriving (`endsInAMintedClauseStillArriving`), which the corrections leave
+ * alone, because they rewrite a finished sentence. That state does NOT apply
+ * the stands-alone rule (see its known limit). Pure: it reads, it rewrites
  * nothing.
  */
 export function textCarriesRunStartSentence(text: string, runId: string): boolean {

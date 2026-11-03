@@ -21,8 +21,11 @@
 // `data-transcript-slot` mark), and a turn whose line already stands above the
 // run's part in the trace (even with a second copy after it), or that carries
 // no such line, is drawn exactly as before. A line still streaming in (the head,
-// then the first words of the minted clause) already counts, so the line keeps
-// its place above the slot from its first complete head on.
+// then the first words of the minted clause) already counts, so a line that
+// stands alone keeps its place above the slot from its first complete head on.
+// Known limit: a line after other words on its line, or a paraphrased line, can
+// still move while it streams in; the finished text is drawn as it reads then
+// (textCarriesRunStartSentence in packages/agents/src/run-status.ts).
 // ---------------------------------------------------------------------------
 import { textCarriesRunStartSentence } from "@cinatra-ai/agents/run-status";
 
