@@ -386,6 +386,42 @@ describe("syncCinatraDevExtensions --pinned — sha plumbing + override semantic
     expect(r.results[0].pinnedSha).toBe(SHA_B);
   });
 
+  it("--shallow is parsed as a flag of its own (cinatra#4484)", () => {
+    expect(parseDevExtensionFlags(["--pinned", "--shallow"]).shallow).toBe(true);
+    expect(parseDevExtensionFlags(["--pinned"]).shallow).toBe(false);
+  });
+
+  it("--pinned --shallow fetches the dev-lock sha at depth 1 instead of cloning the branch (cinatra#4484)", async () => {
+    const gitCalls = [];
+    const r = await syncCinatraDevExtensions({
+      repoRoot: "/repo",
+      targetRoot: "/repo",
+      argv: ["--pinned", "--shallow"],
+      env: {},
+      log: () => {},
+      deps: makeDeps(gitCalls),
+    });
+    expect(r.results[0]).toMatchObject({ action: "cloned", pinnedSha: SHA_B });
+    expect(gitCalls).toContain(`fetch --depth 1 --no-tags origin ${SHA_B}`);
+    expect(gitCalls.some((g) => g.startsWith("clone"))).toBe(false);
+    expect(gitCalls).toContain(`checkout --detach ${SHA_B}`);
+  });
+
+  it("--shallow without --pinned is refused before any git call (cinatra#4484)", async () => {
+    const gitCalls = [];
+    await expect(
+      syncCinatraDevExtensions({
+        repoRoot: "/repo",
+        targetRoot: "/repo",
+        argv: ["--shallow"],
+        env: {},
+        log: () => {},
+        deps: makeDeps(gitCalls),
+      }),
+    ).rejects.toThrow(/--shallow requires --pinned/);
+    expect(gitCalls).toEqual([]);
+  });
+
   it("--pinned + --force are mutually exclusive", async () => {
     await expect(
       syncCinatraDevExtensions({
