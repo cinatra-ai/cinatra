@@ -34,8 +34,9 @@ export const resumeIntentRunClaimDdlSql = `
 //
 // On a draft database:
 //   - the boot is refused unless the operator states that every draft worker is
-//     stopped (CINATRA_3745_DRAFT_DB_ACK=workers-stopped). A stopped worker
-//     cannot claim after this check, so the count below stays true;
+//     stopped (CINATRA_3745_DRAFT_DB_ACK=workers-stopped). The migration cannot
+//     check that statement; only if it is true does no draft worker claim after
+//     this check, so that the count below sees every unmarked claim;
 //   - with that statement, every claim the draft may have left without a mark
 //     refuses the boot: an intent with no claim mark whose run is running,
 //     whether it is still delivering or already dead-lettered (a dead-lettered
