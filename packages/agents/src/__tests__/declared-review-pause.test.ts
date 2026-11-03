@@ -87,7 +87,10 @@ describe("cinatra#4312 — laterDeclaredPause", () => {
   });
 
   it("reads no later pause from times it cannot read when the run has no other declared review", () => {
-    expect(laterDeclaredPause(own(undefined), "wayflow-task-1")).toBe(false);
+    // `own(undefined)` would take the default time AT, so the missing time is a gate without `createdAt`.
+    expect(laterDeclaredPause([{ reviewTaskId: "wayflow-task-1" }, { reviewTaskId: "wayflow-task-1#2" }], "wayflow-task-1")).toBe(false);
+    expect(laterDeclaredPause(own(null), "wayflow-task-1")).toBe(false);
+    expect(laterDeclaredPause(own(new Date(Number.NaN)), "wayflow-task-1")).toBe(false);
     expect(laterDeclaredPause([], "wayflow-task-1")).toBe(false);
   });
 });
