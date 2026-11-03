@@ -213,8 +213,8 @@ export const agentTemplates = cinatraSchema.table("agent_templates", {
   artifactBindings: text("artifact_bindings"),
   // publishingSteps (cinatra#4150): the ids of the flow nodes the compiled OAS
   // declares `metadata.cinatra.publishes: true`, JSON-as-text like gated_steps.
-  // Written by every install/recompile writer. NULLABLE with no default and no
-  // backfill: null means a template compiled before this column existed. A
+  // Written by the install, import, seed and recompile writers. NULLABLE with no default and no
+  // backfill: null = unknown: a row written before this column existed, or by a writer that does not take the list from a compile. A
   // legacy template cannot declare the flag (the key is new), so a reader treats
   // null as "unknown", never as "publishes nothing".
   publishingSteps: text("publishing_steps"),

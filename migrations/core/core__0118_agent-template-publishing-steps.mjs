@@ -8,9 +8,10 @@
 //
 //   - `publishing_steps` (text, JSON-as-text like `gated_steps`): the ids of
 //     the flow nodes the compiled OAS document declares
-//     `metadata.cinatra.publishes: true`. Written by every install and
-//     recompile writer from the compiler's `publishingSteps`. null = a row
-//     compiled before this column existed.
+//     `metadata.cinatra.publishes: true`. Written by the install, import, seed
+//     and recompile writers from the compiler's `publishingSteps`. null =
+//     unknown: a row written before this column existed, or by a writer that
+//     does not take the list from a compile.
 //
 // No backfill, no default, no constraint change: every existing row reads
 // NULL. A legacy row cannot declare the flag (the key is new, so every pack

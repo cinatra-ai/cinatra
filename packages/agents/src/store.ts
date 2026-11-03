@@ -262,7 +262,8 @@ export type AgentTemplateRecord = {
   // objects in tests remain valid; `deserializeTemplate` always populates it.
   artifactBindings?: string | null;
   // The nodes the compiled OAS declares `publishes: true` (cinatra#4150); null =
-  // unknown (a row compiled before the column existed). OPTIONAL in the type so
+  // unknown: a row written before the column existed, or by a writer that does not
+  // take the list from a compile. OPTIONAL in the type so
   // legacy fixture objects in tests remain valid.
   publishingSteps?: string[] | null;
   // template-level default AgentAuthPolicy. null = use
