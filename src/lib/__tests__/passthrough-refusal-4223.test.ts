@@ -1,5 +1,5 @@
 /**
- * cinatra#4223 — THE PASSTHROUGH'S FAILURE-TEXT ALLOW-LIST.
+ * cinatra#4223 — THE PASSTHROUGH'S FAILURE-TEXT ALLOW-LIST (src/lib/passthrough-refusal.ts).
  *
  * Only a primitive's stated refusal (PrimitiveInvocationError) and an
  * input-schema error (ZodError) keep their own text; every other throw answers
@@ -9,7 +9,7 @@
  * writing the log never throws or changes the answer. The module is new in
  * this change, so on the base this file fails at its import.
  *
- *   npx vitest run src/app/api/agents/passthrough/__tests__/passthrough-refusal-4223.test.ts
+ *   npx vitest run src/lib/__tests__/passthrough-refusal-4223.test.ts
  */
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { z, ZodError } from "zod";
