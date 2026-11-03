@@ -49,6 +49,10 @@ import {
   extensionArtifactsList,
 } from "@/lib/artifacts/extension-artifact-reads";
 import { ArtifactCursorRefusal } from "@/lib/artifacts/artifact-service";
+import {
+  PASSTHROUGH_UNEXPECTED_ERROR,
+  passthroughFixedFailureText,
+} from "@/lib/passthrough-refusal";
 
 /** The names W7 adds to the passthrough allowlist, each scoped below. */
 export const EXTENSION_SCOPED_TOOLS = new Set<string>([
@@ -125,7 +129,19 @@ export async function dispatchExtensionScopedTool(input: {
     if (e instanceof ArtifactContentRefusal) {
       return { ok: false, status: e.reason === "not-found" ? 404 : 403, error: e.message };
     }
-    return { ok: false, status: 500, error: e instanceof Error ? e.message : String(e) };
+    // cinatra#4471: every other throw (a module's own failure, a host read
+    // inside a port) can name a path, a store directory or an install id, so
+    // it answers the passthrough's fixed sentence (#4223), and the server log
+    // records the stage, the tool, the run and a class word, never its text.
+    return {
+      ok: false,
+      status: 500,
+      error: passthroughFixedFailureText(
+        e,
+        { tool: input.tool, runId: input.run.id, stage: "extension-scoped tool call" },
+        PASSTHROUGH_UNEXPECTED_ERROR,
+      ),
+    };
   }
 }
 
