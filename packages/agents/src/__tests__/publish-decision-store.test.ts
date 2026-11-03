@@ -634,4 +634,110 @@ describe("the integration file's teardown (publish-decision-suite-teardown)", ()
       delete shared.__cinatraPostgresSchemaInitialized;
     }
   });
+
+  // Each case below sets the shared state the teardown clears and puts it back after.
+  async function withSharedState(run: () => Promise<void>): Promise<void> {
+    const outer = process.env.SUPABASE_SCHEMA;
+    try {
+      process.env.SUPABASE_SCHEMA = "cinatra_test_publish_decision_4150";
+      shared.__cinatraAgentBuilderPool = { ended: true };
+      shared.__cinatraPostgresSchemaInitialized = true;
+      await run();
+    } finally {
+      if (outer === undefined) delete process.env.SUPABASE_SCHEMA;
+      else process.env.SUPABASE_SCHEMA = outer;
+      delete shared.__cinatraAgentBuilderPool;
+      delete shared.__cinatraPostgresSchemaInitialized;
+    }
+  }
+
+  it("with no pool (setup failed before the pool), still clears the shared state, drops the schema and closes the admin client", async () => {
+    await withSharedState(async () => {
+      const done: string[] = [];
+      await expect(
+        endPublishDecisionSuite({
+          pool: undefined,
+          admin: {
+            query: async (text: string) => done.push(`query ${text}`),
+            end: async () => done.push("admin"),
+          },
+          dropSchemaSql: "DROP SCHEMA IF EXISTS x CASCADE",
+          priorSchema: undefined,
+        }),
+      ).resolves.toBeUndefined();
+      expect(done).toEqual(["query DROP SCHEMA IF EXISTS x CASCADE", "admin"]);
+      expect("SUPABASE_SCHEMA" in process.env).toBe(false);
+      expect(shared.__cinatraAgentBuilderPool).toBeUndefined();
+      expect(shared.__cinatraPostgresSchemaInitialized).toBeUndefined();
+    });
+  });
+
+  it("with no admin client, ends the pool and clears the shared state, then fails because the schema was not dropped", async () => {
+    await withSharedState(async () => {
+      const done: string[] = [];
+      await expect(
+        endPublishDecisionSuite({
+          pool: { end: async () => done.push("pool") },
+          admin: undefined,
+          dropSchemaSql: "DROP SCHEMA IF EXISTS x CASCADE",
+          priorSchema: "cinatra_before_4150",
+        }),
+      ).rejects.toThrow("no admin client to drop the schema");
+      expect(done).toEqual(["pool"]);
+      expect(process.env.SUPABASE_SCHEMA).toBe("cinatra_before_4150");
+      expect(shared.__cinatraAgentBuilderPool).toBeUndefined();
+      expect(shared.__cinatraPostgresSchemaInitialized).toBeUndefined();
+    });
+  });
+
+  it("when ending the pool fails, still runs every later step, then fails", async () => {
+    await withSharedState(async () => {
+      const done: string[] = [];
+      await expect(
+        endPublishDecisionSuite({
+          pool: {
+            end: async () => {
+              throw new Error("pool end failed");
+            },
+          },
+          admin: {
+            query: async (text: string) => done.push(`query ${text}`),
+            end: async () => done.push("admin"),
+          },
+          dropSchemaSql: "DROP SCHEMA IF EXISTS x CASCADE",
+          priorSchema: undefined,
+        }),
+      ).rejects.toThrow("pool end failed");
+      expect(done).toEqual(["query DROP SCHEMA IF EXISTS x CASCADE", "admin"]);
+      expect("SUPABASE_SCHEMA" in process.env).toBe(false);
+      expect(shared.__cinatraAgentBuilderPool).toBeUndefined();
+      expect(shared.__cinatraPostgresSchemaInitialized).toBeUndefined();
+    });
+  });
+
+  it("when restoring the schema setting fails, still drops the schema and closes the admin client, then fails", async () => {
+    await withSharedState(async () => {
+      const done: string[] = [];
+      // process.env turns the value into a string; this one refuses, so the restore step throws.
+      const unrestorable = {
+        toString(): string {
+          throw new Error("restore failed");
+        },
+      } as unknown as string;
+      await expect(
+        endPublishDecisionSuite({
+          pool: { end: async () => done.push("pool") },
+          admin: {
+            query: async (text: string) => done.push(`query ${text}`),
+            end: async () => done.push("admin"),
+          },
+          dropSchemaSql: "DROP SCHEMA IF EXISTS x CASCADE",
+          priorSchema: unrestorable,
+        }),
+      ).rejects.toThrow("restore failed");
+      expect(done).toEqual(["pool", "query DROP SCHEMA IF EXISTS x CASCADE", "admin"]);
+      expect(shared.__cinatraAgentBuilderPool).toBeUndefined();
+      expect(shared.__cinatraPostgresSchemaInitialized).toBeUndefined();
+    });
+  });
 });
