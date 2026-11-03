@@ -1160,13 +1160,17 @@ export function AgentHitlScreenCard({
   useInsertionEffect(() => {
     if (gateKey !== null) liveGateKeyRef.current = gateKey;
   }, [gateKey]);
+  const isGateOnScreen = useCallback(
+    (forGate: string | null) => forGate === null || liveGateKeyRef.current === forGate,
+    [],
+  );
   const onBuffer = useCallback(
     (next: Record<string, unknown>) => {
       // A renderer that has been replaced writes for a gate that is gone.
-      if (gateKey !== null && liveGateKeyRef.current !== gateKey) return;
+      if (!isGateOnScreen(gateKey)) return;
       setBuffered(gateKey, next);
     },
-    [gateKey, setBuffered],
+    [gateKey, isGateOnScreen, setBuffered],
   );
   // Dropped while rendering, not in an effect: nothing between this render and
   // the next can read the old values, and a mount-time write by the renderer of
