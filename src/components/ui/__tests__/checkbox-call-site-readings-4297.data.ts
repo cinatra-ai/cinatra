@@ -162,6 +162,22 @@ export const CHECKBOX_CALL_SITE_READINGS: FileReading[] = [
     ],
   },
   {
+    file: "src/app/configuration/skills/_matches-cron-picker.tsx",
+    tokens: 3,
+    sites: [
+      {
+        anchor: 'id="schedule-enabled"',
+        tag: "Checkbox",
+        drawn: "checkbox",
+        effect: "confirmed",
+        reading:
+          "Enabled of the matches tab's schedule picker: a change only sets local state, and the Save schedule button writes it with the schedule (setScheduleAction)",
+        tagIncludes: ["onCheckedChange={(checked) => setEnabled(checked === true)}"],
+        fileIncludes: ["<Button onClick={handleSave} disabled={pending}>", 'if (enabled) fd.set("enabled", "on");', "await setScheduleAction(fd);"],
+      },
+    ],
+  },
+  {
     file: "src/app/configuration/development/page.tsx",
     tokens: 3,
     sites: [
