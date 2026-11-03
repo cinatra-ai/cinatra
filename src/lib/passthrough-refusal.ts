@@ -210,7 +210,10 @@ function schemaErrorText(err: unknown): string | null {
  * The caller-facing refusal's answer, or null: an error with the zod marker
  * gets its text built from its issues, read first so that a primitive's
  * refusal that also carries the marker never answers its own message; a
- * primitive's refusal without the marker gets its own message. Never a throw.
+ * primitive's refusal without the marker gets its own message when that
+ * message is a string. Null (the fixed sentence answers, logged) for a marked
+ * error with no readable issue and for a refusal whose message is not a
+ * string. Never a throw.
  */
 function callerFacingText(err: unknown): string | null {
   try {
