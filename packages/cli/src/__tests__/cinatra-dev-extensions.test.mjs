@@ -397,14 +397,31 @@ describe("syncCinatraDevExtensions --pinned — sha plumbing + override semantic
       repoRoot: "/repo",
       targetRoot: "/repo",
       argv: ["--pinned", "--shallow"],
-      env: {},
+      env: { CI: "true" },
       log: () => {},
       deps: makeDeps(gitCalls),
     });
     expect(r.results[0]).toMatchObject({ action: "cloned", pinnedSha: SHA_B });
-    expect(gitCalls).toContain(`fetch --depth 1 --no-tags origin ${SHA_B}`);
+    expect(gitCalls).toContain(`fetch --quiet --depth 1 --no-tags origin ${SHA_B}`);
     expect(gitCalls.some((g) => g.startsWith("clone"))).toBe(false);
-    expect(gitCalls).toContain(`checkout --detach ${SHA_B}`);
+    expect(gitCalls).toContain(`checkout --quiet --detach ${SHA_B}`);
+  });
+
+  it("--pinned --shallow outside CI is refused before any git call: it replaces every checkout (cinatra#4484)", async () => {
+    for (const env of [{}, { CI: "1" }, { CI: "false" }]) {
+      const gitCalls = [];
+      await expect(
+        syncCinatraDevExtensions({
+          repoRoot: "/repo",
+          targetRoot: "/repo",
+          argv: ["--pinned", "--shallow"],
+          env,
+          log: () => {},
+          deps: makeDeps(gitCalls),
+        }),
+      ).rejects.toThrow(/--shallow runs in CI only/);
+      expect(gitCalls).toEqual([]);
+    }
   });
 
   it("--shallow without --pinned is refused before any git call (cinatra#4484)", async () => {
