@@ -317,9 +317,18 @@ function syncShallowPinned({ pkgName, url, sha, dest, deps, log }) {
       throw new Error(`${pkgName}: pinned checkout verification failed — HEAD is ${head}, expected ${sha}.`);
     }
   } catch (err) {
-    removeTree(dest);
-    if (haveSource) removeTree(source);
-    if (stage === "origin" && transientGitNetworkReason(err) === null) {
+    // Both removals are tried; a removal that fails never hides the git
+    // failure, and it stops the fallback (the full clone needs dest absent).
+    let cleaned = true;
+    for (const p of haveSource ? [dest, source] : [dest]) {
+      try {
+        removeTree(p);
+      } catch (rmErr) {
+        cleaned = false;
+        log(`  ${pkgName}: could not remove ${p} after the failure (${rmErr?.message ?? rmErr}).`);
+      }
+    }
+    if (cleaned && stage === "origin" && transientGitNetworkReason(err) === null) {
       log(`  ${pkgName}: origin did not serve ${pin12} at depth 1 (${gitFailLine(err)}); falling back to the full clone.`);
       return null;
     }

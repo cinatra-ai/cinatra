@@ -1,5 +1,5 @@
 import path from "node:path";
-import { readFileSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { defaultRepoSyncDeps, normalizeGitHubRemote, syncOneRepo } from "./dev-repo-sync.mjs";
 
 // ---------------------------------------------------------------------------
@@ -88,6 +88,54 @@ export function destDirForExtension(pkgName, spec, targetRoot) {
   const m = String(pkgName).match(/^@([^/]+)\/(.+)$/);
   const dest = path.resolve(targetRoot, "extensions", m[1], m[2]);
   return assertContainedIn(path.join(targetRoot, "extensions"), dest, pkgName, "extensions/");
+}
+
+/**
+ * Shallow pinned mode only (cinatra#4484, CI only): before any checkout is
+ * synced, remove every entry under `extRoot` that is not a declared checkout
+ * or a scope directory holding one — undeclared directories, files, symlinks
+ * (a symlinked scope directory or checkout too) and dot entries. In CI the
+ * tree under extensions/ may come from the actions/cache entry, and no git
+ * command may ever run inside an undeclared restored directory (the stale
+ * checkout prune of scripts/ci/sync-dev-extensions.mjs runs `git status` in
+ * each one). Nothing here runs git or follows a link. Returns the removed
+ * paths, relative to `extRoot`.
+ */
+export function pruneToDeclaredCheckouts({ extRoot, declaredDests, log = () => {} }) {
+  const removed = [];
+  const isRealDir = (p) => {
+    try {
+      return lstatSync(p).isDirectory();
+    } catch {
+      return null; // absent
+    }
+  };
+  const remove = (p) => {
+    rmSync(p, { recursive: true, force: true });
+    const rel = path.relative(extRoot, p) || ".";
+    removed.push(rel);
+    log(`  extensions/${rel === "." ? "" : rel}: removed — not a declared checkout (a --shallow sync keeps only the declared checkouts).`);
+  };
+  const root = isRealDir(extRoot);
+  if (root === null) return removed;
+  if (root === false) {
+    remove(extRoot);
+    return removed;
+  }
+  const declared = new Set([...declaredDests].map((d) => path.resolve(d)));
+  const scopes = new Set([...declared].filter((d) => path.dirname(path.dirname(d)) === path.resolve(extRoot)).map((d) => path.dirname(d)));
+  for (const scope of readdirSync(extRoot)) {
+    const scopeDir = path.resolve(extRoot, scope);
+    if (!scopes.has(scopeDir) || isRealDir(scopeDir) !== true) {
+      remove(scopeDir);
+      continue;
+    }
+    for (const name of readdirSync(scopeDir)) {
+      const dest = path.join(scopeDir, name);
+      if (!declared.has(dest) || isRealDir(dest) !== true) remove(dest);
+    }
+  }
+  return removed;
 }
 
 export function readDevExtensionsConfig(repoRoot, readFile = readFileSync) {
@@ -342,6 +390,12 @@ export async function syncCinatraDevExtensions({
   // config, or a fake `git` in tests) without having to supply the whole git-op
   // surface (`exists`/`git`/`mkdirp`/`readdir`) that `syncOneRepo` needs.
   const realDeps = deps ? { ...defaultRepoSyncDeps(), ...deps } : defaultRepoSyncDeps();
+  if (flags.shallow) {
+    // Every declared entry, selected or not, keeps its checkout.
+    const declaredDests = Object.entries(config).map(([pkgName, spec]) => destDirForExtension(pkgName, spec, targetRoot));
+    const prune = deps?.pruneToDeclaredCheckouts ?? pruneToDeclaredCheckouts;
+    prune({ extRoot: path.join(targetRoot, "extensions"), declaredDests, log });
+  }
   const results = [];
   log(
     `- Dev extensions (${selected.length} selected${flags.pinned ? ", pinned to the committed lock shas" : ""}${flags.jobs > 1 ? `, --jobs ${flags.jobs} reserved` : ""}):`,

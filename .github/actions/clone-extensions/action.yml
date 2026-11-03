@@ -28,9 +28,11 @@ runs:
     # the two committed lock files (exact key only), restored only into an
     # absent tree, and saved right after a sync that missed the cache (before
     # any install adds to the tree). The sync never uses a restored checkout
-    # as a repository: --shallow makes every checkout new at depth 1 and reads
-    # a restored one only as a source of objects over file://, where git hashes
-    # every object it receives (packages/cli/src/dev-repo-sync.mjs).
+    # as a repository: --shallow first removes every restored entry that is not
+    # a declared checkout, then makes every checkout new at depth 1 and reads a
+    # restored one only as a source of objects over file://, where git hashes
+    # every object it receives (packages/cli/src/cinatra-dev-extensions.mjs,
+    # packages/cli/src/dev-repo-sync.mjs).
     - name: Restore the pinned companion checkouts from the cache
       id: companion-cache
       if: inputs.mode == 'pinned' && hashFiles('extensions/*/*/package.json') == ''
