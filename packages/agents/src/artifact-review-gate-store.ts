@@ -1202,6 +1202,46 @@ export async function markResumeIntentDelivered(
 }
 
 /**
+ * cinatra#4312 — after a declared review's decision was SENT to its paused run
+ * (the resume worker's `delivered`), close every other PENDING intent of that
+ * review on the run: an intent whose review task id is the review's base task id
+ * or one of its legs (`<base>#<n>`), a carrier included. Each of them carries a
+ * decision of the same pause, which the send has already answered; sent later, it
+ * would answer whatever the run paused at next, a pause on the same base task id
+ * among them, which no stored row tells apart from this one. Closed means `done`
+ * without a send, as the worker closes an intent of a run that went on. An intent
+ * that another worker holds (`delivering`) is not touched: that delivery runs, at
+ * least once, as on main for two legs decided at the same time. A dead-lettered
+ * intent is not touched either: ops read it as it is. Returns the number of
+ * intents closed.
+ */
+export async function closeFamilyIntentsAfterResume(
+  runId: string,
+  reviewTaskId: string,
+  sentGateId: string,
+  executor: GateStoreExecutor = db,
+): Promise<number> {
+  const base = baseReviewTaskId(reviewTaskId);
+  const closed = await executor
+    .update(artifactReviewResumeOutbox)
+    .set({ status: "done", updatedAt: sql`now()` })
+    .where(
+      and(
+        eq(artifactReviewResumeOutbox.runId, runId),
+        eq(artifactReviewResumeOutbox.status, "pending"),
+        isNull(artifactReviewResumeOutbox.deadLetteredAt),
+        sql`${artifactReviewResumeOutbox.gateId} <> ${sentGateId}`,
+        or(
+          eq(artifactReviewResumeOutbox.reviewTaskId, base),
+          sql`left(${artifactReviewResumeOutbox.reviewTaskId}, ${base.length + 1}::int) = ${base + "#"}`,
+        ),
+      ),
+    )
+    .returning({ gateId: artifactReviewResumeOutbox.gateId });
+  return closed.length;
+}
+
+/**
  * cinatra#4312 — run `fn` in one transaction that holds a SHARE lock on the
  * run's row. The resume worker writes the acknowledgement that keeps a run
  * parked (another artifact of the pause, or a regenerated artifact's review, is

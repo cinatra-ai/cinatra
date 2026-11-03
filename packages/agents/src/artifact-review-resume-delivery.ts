@@ -57,6 +57,7 @@ import {
 } from "./wayflow-url";
 import {
   claimPendingResumeIntents,
+  closeFamilyIntentsAfterResume,
   deadLetterExhaustedResumeIntents,
   listReviewGatesForRun,
   markResumeIntentDelivered,
@@ -70,6 +71,7 @@ import {
   isDeclaredReviewTaskId,
 } from "@/lib/artifacts/artifact-review-target";
 import { isAutoReviewTaskId, isRepairSuccessorTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
+import { laterDeclaredPause } from "./declared-review-pause";
 
 /** The per-intent delivery outcome. */
 export type ResumeDeliveryOutcome =
@@ -353,6 +355,20 @@ export async function deliverArtifactReviewResumeIntent(
   // re-claim. Neither a resume nor a delivered acknowledgement is authorized by
   // an unreadable sibling set (cinatra#3944, App160).
   const siblingLegs = await listReviewGatesForRun(run.id);
+  // cinatra#4312 — a run that went on to another declared review after this one
+  // gets no decision of this one, whatever wrote this intent (a decision, or a
+  // carrier a close inserted before that later review's gates were committed):
+  // the intent is closed WITHOUT a send (`laterDeclaredPause`; an equal created
+  // time is read as later). The latest-task check above answers the same when
+  // its map is present; this read does not depend on the map.
+  if (laterDeclaredPause(siblingLegs, reviewTaskId)) {
+    const ok = await markResumeIntentDelivered(gateId, leaseToken);
+    console.log(
+      `[artifact-review-resume] gate=${gateId} run=${run.id} is paused at a later review ` +
+        `than ${baseReviewTaskId(reviewTaskId)} — marked ${ok ? "done" : "LEASE-LOST"} without a send`,
+    );
+    return ok ? "already-advanced" : "lease-lost";
+  }
   const familyState = declaredReviewFamilyState({ runId: run.id, orgId: run.orgId,
     reviewTaskId, gates: siblingLegs });
   if (familyState === "incomplete") return "retryable";
@@ -435,6 +451,23 @@ export async function deliverArtifactReviewResumeIntent(
     `[artifact-review-resume] gate=${gateId} run=${run.id} DELIVERED ${kind} resume ` +
       `(resultState=${task.status?.state}) — marked ${marked ? "done" : "LEASE-LOST"}`,
   );
+  // cinatra#4312 — the pause is answered: every other pending intent of this
+  // review on the run is closed without a send (a second carrier among them), so
+  // none of them answers what the run pauses at next, a pause on the same base
+  // task id included (`closeFamilyIntentsAfterResume`). The send has landed, so a
+  // failure here is logged and the delivery stays `delivered`; the intents it
+  // would have closed stay pending, at least once, as on main.
+  try {
+    const closed = await closeFamilyIntentsAfterResume(run.id, reviewTaskId, gateId);
+    if (closed > 0) {
+      console.log(`[artifact-review-resume] gate=${gateId} run=${run.id} closed ${closed} other pending intent(s) of the same review without a send`);
+    }
+  } catch (err) {
+    console.warn(
+      `[artifact-review-resume] gate=${gateId} run=${run.id} could not close the other pending intents of its review: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
   return marked ? "delivered" : "lease-lost";
 }
 
@@ -607,7 +640,9 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
   // dead-lettered intent is not claimed again and no code puts it back, so it
   // resumes nothing; ops read it (`readDeadLetteredResumeIntents`). Only
   // `delivered`, `already-advanced` and `refused-out-of-scope` close an intent,
-  // and no code puts a closed intent back to pending. A failed pass is tallied;
+  // and a `delivered` declared review's resume, which closes the other pending
+  // intents of that review on the run (`closeFamilyIntentsAfterResume`). No code
+  // puts a closed intent back to pending. A failed pass is tallied;
   // the claim still leaves exhausted intents out.
   try {
     const dead = await deadLetterExhaustedResumeIntents();

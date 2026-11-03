@@ -85,6 +85,7 @@ import {
   repairSuccessorReviewTaskId,
 } from "@/lib/lifecycle/lifecycle-orchestration";
 import { baseReviewTaskId, isDeclaredReviewLeg, isDeclaredReviewTaskId } from "@/lib/artifacts/artifact-review-target";
+import { laterDeclaredPause } from "./declared-review-pause";
 
 /** The store's executor: the pool, or the caller's open transaction. */
 type RepairStoreExecutor =
@@ -1155,16 +1156,21 @@ export async function isRepairLineageOpen(gateId: string, executor: RepairStoreE
  * either committed before this read (this inserts the carrier, which reads the
  * lineage closed) or made after this commit (the re-read sees the lineage closed,
  * and that worker resumes the run itself). In the second case, and when two
- * closes of a family commit together, more than one intent can send: delivery
- * stays at least once, as on main for two legs decided at the same time, and
- * every intent after the first that lands finds the run off `pending_approval`.
+ * closes of a family commit together, more than one intent can be live. The
+ * worker's send of one of them closes the others that are still pending
+ * (artifact-review-gate-store `closeFamilyIntentsAfterResume`); two that are
+ * delivered at the same time can both send: delivery stays at least once, as on
+ * main for two legs decided at the same time. The worker also reads
+ * `laterDeclaredPause` before it sends, so a carrier inserted before a later
+ * review's gates were committed sends nothing into that review.
  *
  * Nothing is inserted (null): the root is missing or not bound to the lineage
  * (another run's intents are never read), its task id is no declared review task
  * id, the run is not `pending_approval`, the lineage is still open or not
  * readable (RepairLineageStateError; a later naming or close inserts then), a
- * declared gate of another review of the run is newer than every leg of this
- * family (the run went on to a later pause), or the family has no decision yet
+ * declared gate of another review of the run is not older than every leg of this
+ * family (`laterDeclaredPause`: the run went on to a later pause, or an equal
+ * time cannot tell), or the family has no decision yet
  * (its next decision writes its own intent). A failed read that is no
  * RepairLineageStateError throws, so the caller's transaction rolls back with it.
  */
@@ -1210,9 +1216,7 @@ export async function carryDeclaredReviewDecision(
     .where(eq(artifactReviewGates.runId, root.runId));
   const legs = runGates.filter((g) => baseReviewTaskId(g.reviewTaskId) === base);
   if (legs.length === 0) return null;
-  const newestLeg = Math.max(...legs.map((g) => g.createdAt.getTime()));
-  if (runGates.some((g) => isDeclaredReviewTaskId(g.reviewTaskId) &&
-      baseReviewTaskId(g.reviewTaskId) !== base && g.createdAt.getTime() > newestLeg)) {
+  if (laterDeclaredPause(runGates, root.reviewTaskId)) {
     console.warn(`[lifecycle-repair] no carrier for lineage ${lineageId}: run ${root.runId} is paused at a later review`);
     return null;
   }
