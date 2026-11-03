@@ -16,9 +16,15 @@
  *      by role AND name, the way assistive technology finds them.
  *   2. The name is a TYPE-LEVEL requirement of `ToolbarSearchInput` — an
  *      `aria-label` or an `aria-labelledby`. `pnpm typecheck` checks every
- *      caller, whatever file type, alias or `createElement` it goes through; the
+ *      caller in the files its tsconfig includes (.ts, .tsx and .mts, not
+ *      the `__tests__/fixtures` folders and not the tests folders under
+ *      `extensions`), whether the caller is
+ *      written as JSX, as a `createElement` call, through an alias, with a
+ *      conditional label or with a spread of a typed props object; the
  *      `@ts-expect-error` cases below fail the typecheck as an UNUSED directive
- *      the day the requirement is dropped.
+ *      the day the requirement is dropped. The type does not see an empty or
+ *      whitespace-only string, an `any`-typed spread, an `aria-labelledby` that
+ *      points to no element, or a file outside that include.
  */
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -73,7 +79,7 @@ describe("the application toolbar search fields are named search boxes", () => {
 });
 
 describe("ToolbarSearchInput requires a name at compile time", () => {
-  it("an unnamed caller does not compile, however it is written", () => {
+  it("an unnamed caller does not compile, in each form pinned here", () => {
     // @ts-expect-error — neither aria-label nor aria-labelledby
     const jsx = <ToolbarSearchInput placeholder="Search" />;
     // @ts-expect-error — createElement goes through the same props type
@@ -81,7 +87,13 @@ describe("ToolbarSearchInput requires a name at compile time", () => {
     const Alias = ToolbarSearchInput;
     // @ts-expect-error — an alias is the same component
     const aliased = <Alias placeholder="Search" />;
-    expect([jsx, created, aliased].every((el) => el !== null)).toBe(true);
+    const enabled = Math.random() > 2;
+    // @ts-expect-error — a conditional label can be undefined, so it names nothing on one branch
+    const conditional = <ToolbarSearchInput aria-label={enabled ? "Search" : undefined} placeholder="Search" />;
+    const rest: React.InputHTMLAttributes<HTMLInputElement> = {};
+    // @ts-expect-error — a spread of a typed props object carries no required name
+    const spread = <ToolbarSearchInput {...rest} />;
+    expect([jsx, created, aliased, conditional, spread].every((el) => el !== null)).toBe(true);
   });
 
   it("an aria-label or an aria-labelledby is accepted and names the field", () => {
