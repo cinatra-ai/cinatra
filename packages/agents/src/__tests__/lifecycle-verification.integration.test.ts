@@ -725,7 +725,7 @@ describe.skipIf(!HAS_DB)("cinatra#2042 — post-change verification (real store)
     await expect(repairStore.isRepairLineageOpen(lineageId)).resolves.toBe(true);
   });
 
-  it("AN OLD WRITER'S TERMINAL ATTEMPT (cinatra#4312): the old code can also leave attempt 2 escalated, stale, or repaired with a settled successor; after the sweep names the gate each reads closed, and the lineage did not start on a declared leg, so the wake has no paused run to wake (null)", async () => {
+  it("AN OLD WRITER'S TERMINAL ATTEMPT (cinatra#4312): the old code can also leave attempt 2 escalated, stale, or repaired with a settled successor; after the sweep names the gate each reads closed, and the lineage did not start on a gate of a declared review, so the wake answers null", async () => {
     const gates = `"${q(TEST_SCHEMA)}"."artifact_review_gates"`;
     const repairs = `"${q(TEST_SCHEMA)}"."lifecycle_repair"`;
     for (const left of ["escalated", "stale", "repaired"] as const) {

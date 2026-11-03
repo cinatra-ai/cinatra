@@ -96,8 +96,13 @@ const repairStoreMock = vi.hoisted(() => ({
     throw Object.assign(new Error("unknown-repair: not seeded"), { name: "RepairLineageStateError", code: "unknown-repair" });
   }),
   isRepairLineageOpen: vi.fn<(gateId: string, executor?: unknown) => Promise<boolean>>(async () => false),
+  wakeDeclaredFamilyOnClosedLineage: vi.fn<(executor: unknown, lineageId: string) => Promise<string | null>>(async () => null),
 }));
 vi.mock("../lifecycle-repair-store", () => repairStoreMock);
+// The commit a post-leg successor's decision takes (mark done + the family's wake).
+const SUCCESSOR_TX = vi.hoisted(() => ({ tx: "successor-commit" }));
+const dbTransactionSpy = vi.hoisted(() => vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(SUCCESSOR_TX)));
+vi.mock("../db", () => ({ db: { transaction: dbTransactionSpy } }));
 
 import {
   deliverArtifactReviewResumeIntent,
@@ -515,6 +520,37 @@ describe("cinatra#4312 — Regenerate on a declared picture leg keeps the pause 
     expect(outcome).toBe("already-advanced");
     expect(sendTaskSpy).not.toHaveBeenCalled();
     expect(storeMock.readAgentRunByTaskId).not.toHaveBeenCalled();
+  });
+
+  it("a successor whose lineage started on the post's own leg wakes that family in the commit that marks its intent done (review 7)", async () => {
+    const leg = regeneratedFamily()[0];
+    repairStoreMock.readRepairLineageRootGate.mockResolvedValue({
+      id: "gate-root", runId: "run-1", orgId: "org-1", reviewTaskId: "wayflow-task-1", pinnedTargets: leg.pinnedTargets,
+    });
+    const outcome = await deliverArtifactReviewResumeIntent(intent({ gateId: "gate-succ", reviewTaskId: SUCCESSOR }));
+    expect(outcome).toBe("already-advanced");
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-succ", "lease-abc", SUCCESSOR_TX);
+    expect(repairStoreMock.wakeDeclaredFamilyOnClosedLineage).toHaveBeenCalledWith(SUCCESSOR_TX, "gate-root");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+  });
+
+  it("a successor whose lineage started on an ordinary automatic gate wakes nothing (review 7)", async () => {
+    repairStoreMock.readRepairLineageRootGate.mockResolvedValue({
+      id: "gate-root", runId: "run-1", orgId: "org-1", reviewTaskId: "lifecycle-review:ev-1", pinnedTargets: regeneratedFamily()[1].pinnedTargets,
+    });
+    await deliverArtifactReviewResumeIntent(intent({ gateId: "gate-succ", reviewTaskId: SUCCESSOR }));
+    expect(dbTransactionSpy).not.toHaveBeenCalled();
+    expect(repairStoreMock.wakeDeclaredFamilyOnClosedLineage).not.toHaveBeenCalled();
+  });
+
+  it("a successor of the post's own leg whose intent was taken by another worker (lease lost) wakes nothing (review 7)", async () => {
+    gateStoreMock.markResumeIntentDelivered.mockResolvedValueOnce(false);
+    repairStoreMock.readRepairLineageRootGate.mockResolvedValue({
+      id: "gate-root", runId: "run-1", orgId: "org-1", reviewTaskId: "wayflow-task-1", pinnedTargets: regeneratedFamily()[0].pinnedTargets,
+    });
+    const outcome = await deliverArtifactReviewResumeIntent(intent({ gateId: "gate-succ", reviewTaskId: SUCCESSOR }));
+    expect(outcome).toBe("lease-lost");
+    expect(repairStoreMock.wakeDeclaredFamilyOnClosedLineage).not.toHaveBeenCalled();
   });
 
   it("a failed lineage read on the post's decision throws: nothing is resumed and the intent is not marked done", async () => {

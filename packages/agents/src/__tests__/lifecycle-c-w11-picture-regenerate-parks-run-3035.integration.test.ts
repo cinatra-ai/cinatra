@@ -1373,3 +1373,164 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — the sweep's naming never closes a dec
     expect(await runStatus(p.runId)).toBe("pending_approval");
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#4312, review 7 of cinatra#4339 — a lineage on the post's own leg also keeps
+// the run parked (`regenerationOpen` reads every leg settled as changes requested), so
+// every road that closes it wakes the family.
+// ---------------------------------------------------------------------------
+
+/** Changes requested straight on the post's own leg P (an accepted store state: the
+ * surface keeps the post's plain Comment, the store takes the request). */
+async function changesRequestedOnThePost(p: Pipeline) {
+  const postGate = await gateStore.readReviewGate(p.runId, p.step);
+  const key = `k-${randomUUID()}`;
+  const cr = await repairStore.recordChangesRequested({
+    runId: p.runId,
+    reviewTaskId: p.step,
+    orgId: ORG,
+    request: {
+      gateId: postGate!.id,
+      decisionId: key,
+      idempotencyKey: key,
+      baseTarget: p.post,
+      expectedBaseRevisionId: p.post.representationRevisionId,
+      findings: [{ id: "prompt-window", message: "Tighten the intro" }],
+      continuationMode: "async_effects_gated",
+      continuationAddress: null,
+    },
+    repairCapable: true,
+    producerRunId: p.runId,
+    currentBaseRevisionId: p.post.representationRevisionId,
+  });
+  if (!cr.ok) throw new Error(`changes_requested refused: ${cr.code}`);
+  return {
+    repairId: cr.repairId,
+    postGateId: postGate!.id,
+    answer: () => answerRegenerate(p.runId, cr.repairId, postGate!.id, p.post),
+  };
+}
+
+/** The picture's leg Q is continued while the post's lineage is open: the worker sets
+ * Q's decision aside and the run stays parked. Returns Q's decision text and gate id. */
+async function pictureContinuedWhileThePostsLineageIsOpen(p: Pipeline, postGateId: string) {
+  const text = await approve(p.runId, p.leg2);
+  await sweep();
+  await expectParked(p);
+  const picture = await gateStore.readReviewGate(p.runId, p.leg2);
+  expect(await intentStatusOf(picture!.id)).toBe("done");
+  expect(await repairStore.isRepairLineageOpen(postGateId)).toBe(true);
+  return { text, pictureGateId: picture!.id };
+}
+
+/** The verification record an old writer leaves for successor S: no reopen name. */
+async function oldWritersRecordFor(successor: { gateId: string; pin: Pin }, reviewed: Pin) {
+  await pool(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_verification_records"
+       (id, gate_id, reviewed_artifact_id, reviewed_representation_revision_id, repaired_artifact_id,
+        repaired_representation_revision_id, outcome)
+     VALUES ($1,$2,$3,$4,$5,$6,'unmet') ON CONFLICT (id) DO NOTHING`,
+    [`verify:${successor.gateId}`, successor.gateId, reviewed.artifactId, reviewed.representationRevisionId,
+      successor.pin.artifactId, successor.pin.representationRevisionId],
+  );
+  expect(await reopenNameOf(successor.gateId)).toBeNull();
+}
+
+describe.skipIf(!HAS_DB)("cinatra#4312 — a lineage on the post's own leg wakes the paused run when it closes (review 7, finding 1)", () => {
+  // As in the groups above: `sweep()` claims every outstanding intent and the drain takes
+  // every requested repair, so what earlier cases left is set aside first.
+  beforeEach(async () => {
+    await pool(
+      `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_resume_outbox"
+          SET dead_lettered_at = now(), last_error = 'set aside by the test: left by an earlier case'
+        WHERE dead_lettered_at IS NULL AND status IN ('pending', 'delivering')`,
+    );
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."lifecycle_repair" SET status='escalated' WHERE status='requested'`);
+  });
+
+  it("THE SEVEN STEPS OF REVIEW 7: the post's successor S waits, the picture's decision is set aside, an old writer leaves requested attempt 2 on the unnamed reopen gate, the drain escalates it (its wake puts the picture's decision back), the sweep names the gate and the lineage reads closed; the run goes on with the picture's decision, and S's later decision sends nothing more", async () => {
+    // 1-2. The accepted two-leg family; changes requested on the post's leg P, successor S lands.
+    const p = await pausedPipeline();
+    const onPost = await changesRequestedOnThePost(p);
+    const successor = await onPost.answer();
+    // 3. The picture's leg Q is continued while S waits: set aside, the run is parked on P's lineage.
+    const { text, pictureGateId } = await pictureContinuedWhileThePostsLineageIsOpen(p, onPost.postGateId);
+    // 4. An old writer: record verify:S, its reopen gate R unnamed, requested attempt 2 on R.
+    await oldWritersRecordFor(successor, p.post);
+    const reopen = await oldWritersNoteOnTheReopenSlot(onPost.repairId, successor, p.runId, "requested");
+    await expect(repairStore.isRepairLineageOpen(onPost.postGateId)).rejects.toMatchObject({ code: "malformed-lineage" });
+    // 5. The drain escalates attempt 2 before any name exists; its wake reads the family, the post's leg too.
+    const { dispatchPendingProducerRepairs } = await import("../lifecycle-repair-dispatch-store");
+    await dispatchPendingProducerRepairs({ limit: 200 });
+    expect(await attempt2StatusOn(reopen)).toBe("escalated");
+    expect(await reopenNameOf(successor.gateId)).toBeNull();
+    expect(await intentStatusOf(pictureGateId)).toBe("pending");
+    // 6. The sweep names R: the lineage reads closed.
+    await sweepReviewOrchestration();
+    expect(await reopenNameOf(successor.gateId)).toBe(reopen);
+    expect(await repairStore.isRepairLineageOpen(onPost.postGateId)).toBe(false);
+    expect(await intentStatusOf(pictureGateId)).toBe("pending");
+    // 7. The worker resumes the run with the picture's decision; S's decision resumes nothing more.
+    await sweep();
+    expectResumedWith(p, text);
+    expect(await intentStatusOf(pictureGateId)).toBe("done");
+    // The resume moves the run off its pause (the replaced task-state handler would).
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status='running' WHERE id=$1`, [p.runId]);
+    await approve(p.runId, successor.taskId);
+    await sweep();
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+    expect(await intentStatusOf(pictureGateId)).toBe("done");
+    expect(await intentStatus(p.runId, successor.taskId)).toBe("done");
+  });
+
+  it("AN OLD WRITER'S ESCALATED NOTE ON THE POST'S LINEAGE, THEN THE NAMING: no repair write closes the lineage, the name does; the sweep's naming wakes the picture's decision and the run goes on", async () => {
+    const p = await pausedPipeline();
+    const onPost = await changesRequestedOnThePost(p);
+    const successor = await onPost.answer();
+    const { text, pictureGateId } = await pictureContinuedWhileThePostsLineageIsOpen(p, onPost.postGateId);
+    await oldWritersRecordFor(successor, p.post);
+    const reopen = await oldWritersNoteOnTheReopenSlot(onPost.repairId, successor, p.runId, "escalated");
+    await expect(repairStore.isRepairLineageOpen(onPost.postGateId)).rejects.toMatchObject({ code: "malformed-lineage" });
+    expect(await intentStatusOf(pictureGateId)).toBe("done");
+
+    await sweepReviewOrchestration();
+    expect(await reopenNameOf(successor.gateId)).toBe(reopen);
+    expect(await repairStore.isRepairLineageOpen(onPost.postGateId)).toBe(false);
+    expect(await intentStatusOf(pictureGateId)).toBe("pending");
+
+    await sweep();
+    expectResumedWith(p, text);
+  });
+
+  it("THE POST'S SUCCESSOR CONTINUED LAST: S's decision keeps the automatic-gate road and resumes nothing itself, but its commit wakes the picture's decision, and the run goes on with it", async () => {
+    const p = await pausedPipeline();
+    const onPost = await changesRequestedOnThePost(p);
+    const successor = await onPost.answer();
+    const { text, pictureGateId } = await pictureContinuedWhileThePostsLineageIsOpen(p, onPost.postGateId);
+
+    await approve(p.runId, successor.taskId);
+    await sweep();
+    expect(await intentStatus(p.runId, successor.taskId)).toBe("done");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(await intentStatusOf(pictureGateId)).toBe("pending");
+
+    await sweep();
+    expectResumedWith(p, text);
+    expect(await intentStatusOf(pictureGateId)).toBe("done");
+  });
+
+  it("THE POST'S REPAIR ESCALATED BY THE DRAIN: the producer never answered, the picture's decision was set aside, and the escalation's wake now reaches the post's leg; the run goes on", async () => {
+    const p = await pausedPipeline();
+    const onPost = await changesRequestedOnThePost(p);
+    const { text, pictureGateId } = await pictureContinuedWhileThePostsLineageIsOpen(p, onPost.postGateId);
+
+    const { dispatchPendingProducerRepairs } = await import("../lifecycle-repair-dispatch-store");
+    const drained = await dispatchPendingProducerRepairs({ limit: 200 });
+    expect(drained).toMatchObject({ escalated: 1, dispatched: 0 });
+    expect((await repairOf(onPost.repairId)).status).toBe("escalated");
+    expect(await intentStatusOf(pictureGateId)).toBe("pending");
+
+    await sweep();
+    expectResumedWith(p, text);
+  });
+});
