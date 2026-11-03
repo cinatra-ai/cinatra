@@ -890,9 +890,9 @@ export async function POST(req: Request): Promise<Response> {
 
     return NextResponse.json(result);
   } catch (err) {
-    // cinatra#4223: a primitive's stated refusal and an input-schema error keep
-    // their text (the caller acts on it); every other throw answers one fixed
-    // sentence, with the failure logged without its text.
+    // cinatra#4223: a primitive's stated refusal keeps its text and an
+    // input-schema error answers its issues (cinatra#4465); every other throw
+    // answers one fixed sentence, with the failure logged without its text.
     return NextResponse.json(
       { error: passthroughFailureText(err, { tool, runId: agentRunId, stage: "tool call" }) },
       { status: 500 },
