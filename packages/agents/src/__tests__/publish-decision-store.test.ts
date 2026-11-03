@@ -14,6 +14,10 @@ const { calls, answers } = vi.hoisted(() => ({
     orderBy: 0,
     transactions: 0,
     rollbacks: 0,
+    /** Each call by the handle it went through: "db" (the pool) or "tx" (the transaction). */
+    via: [] as string[],
+    /** The writes that stayed: through "db", or through a "tx" whose transaction returned. */
+    committed: [] as Array<Record<string, unknown>>,
   },
   answers: {
     insert: async (): Promise<unknown[]> => [],
@@ -23,53 +27,75 @@ const { calls, answers } = vi.hoisted(() => ({
 }));
 
 vi.mock("../db", () => {
-  const db: Record<string, unknown> = {
-    insert: () => ({
-      values: (v: Record<string, unknown>) => {
-        calls.values.push(v);
-        return { onConflictDoNothing: () => ({ returning: () => answers.insert() }) };
-      },
-    }),
-    update: () => ({
-      set: (v: Record<string, unknown>) => {
-        calls.set.push(v);
-        return {
-          where: (w: unknown) => {
-            calls.where.push(w);
-            return { returning: () => answers.update() };
-          },
-        };
-      },
-    }),
-    select: () => ({
-      from: () => ({
-        where: (w: unknown) => {
-          calls.where.push(w);
-          const limit = (n: number) => {
-            calls.limit.push(n);
-            return answers.select();
-          };
+  // Two distinct handles: the store gets "tx" inside a transaction and "db" outside one. An
+  // UPDATE that returns a row is a write; a write through "tx" stays only when the work
+  // returns, and a throw out of the work counts as a rollback that drops it, as in drizzle.
+  const handle = (name: "db" | "tx", writes: Array<Record<string, unknown>>) => ({
+    insert: () => {
+      calls.via.push(`${name}.insert`);
+      return {
+        values: (v: Record<string, unknown>) => {
+          calls.values.push(v);
+          return { onConflictDoNothing: () => ({ returning: () => answers.insert() }) };
+        },
+      };
+    },
+    update: () => {
+      calls.via.push(`${name}.update`);
+      return {
+        set: (v: Record<string, unknown>) => {
+          calls.set.push(v);
           return {
-            limit,
-            orderBy: () => {
-              calls.orderBy += 1;
-              return { limit };
+            where: (w: unknown) => {
+              calls.where.push(w);
+              return {
+                returning: async () => {
+                  const rows = await answers.update();
+                  if (rows.length > 0) writes.push(v);
+                  return rows;
+                },
+              };
             },
           };
         },
-      }),
-    }),
-  };
-  // The double's transaction runs the work on the same double and counts a throw out of it
-  // as a rollback, the way drizzle's transaction rolls back on a throw.
-  db.transaction = async (work: (tx: unknown) => Promise<unknown>) => {
-    calls.transactions += 1;
-    try {
-      return await work(db);
-    } catch (error) {
-      calls.rollbacks += 1;
-      throw error;
-    }
+      };
+    },
+    select: () => {
+      calls.via.push(`${name}.select`);
+      return {
+        from: () => ({
+          where: (w: unknown) => {
+            calls.where.push(w);
+            const limit = (n: number) => {
+              calls.limit.push(n);
+              return answers.select();
+            };
+            return {
+              limit,
+              orderBy: () => {
+                calls.orderBy += 1;
+                return { limit };
+              },
+            };
+          },
+        }),
+      };
+    },
+  });
+  const db = {
+    ...handle("db", calls.committed),
+    transaction: async (work: (tx: unknown) => Promise<unknown>) => {
+      calls.transactions += 1;
+      const pending: Array<Record<string, unknown>> = [];
+      try {
+        const result = await work(handle("tx", pending));
+        calls.committed.push(...pending);
+        return result;
+      } catch (error) {
+        calls.rollbacks += 1;
+        throw error;
+      }
+    },
   };
   return { db };
 });
@@ -80,6 +106,7 @@ import {
   PUBLISH_DECISION_MAX_ID_LENGTH,
   PUBLISH_DECISION_MAX_NOTE_LENGTH,
   PUBLISH_DECISION_MAX_SURFACED_BYTES,
+  PUBLISH_DECISION_MAX_SURFACED_DEPTH,
   PublishDecisionError,
   decide,
   insertParkedDecision,
@@ -87,6 +114,7 @@ import {
   readDecisionForRunNode,
   readOpenDecisionForRun,
 } from "../publish-decision-store";
+import { endPublishDecisionSuite } from "./__fixtures__/publish-decision-suite-teardown";
 
 function stored(overrides: Record<string, unknown> = {}) {
   return {
@@ -139,6 +167,8 @@ beforeEach(() => {
   calls.orderBy = 0;
   calls.transactions = 0;
   calls.rollbacks = 0;
+  calls.via.length = 0;
+  calls.committed.length = 0;
   answers.insert = async () => [stored()];
   answers.update = async () => [stored()];
   answers.select = async () => [];
@@ -218,13 +248,33 @@ describe("decide", () => {
     expect(rendered(calls.set[0].decidedAt).sql).toBe("now()");
   });
 
-  it("the conditional UPDATE and the read after a lost answer run in one transaction", async () => {
+  it("a winning answer is one UPDATE through the transaction, and it commits", async () => {
+    answers.update = async () => [stored({ status: "released", decidedBy: "person-1" })];
     await decide("d1", { from: "parked", to: "released", actor: "person-1" });
+    expect(calls.via).toEqual(["tx.update"]);
+    expect(calls).toMatchObject({ transactions: 1, rollbacks: 0 });
+    expect(calls.committed).toEqual([expect.objectContaining({ status: "released", decidedBy: "person-1" })]);
+  });
+
+  it("a lost answer reads the current status through the same transaction, and commits nothing", async () => {
     answers.update = async () => [];
     answers.select = async () => [stored({ status: "released" })];
-    await decide("d1", { from: "parked", to: "declined", actor: "person-2" });
-    expect(calls.transactions).toBe(2);
-    expect(calls.rollbacks).toBe(0);
+    expect(await decide("d1", { from: "parked", to: "declined", actor: "person-2" })).toEqual({ outcome: "lost", currentStatus: "released" });
+    expect(calls.via).toEqual(["tx.update", "tx.select"]);
+    expect(calls).toMatchObject({ transactions: 1, rollbacks: 0 });
+    expect(calls.committed).toEqual([]);
+  });
+
+  it.each([
+    ["unreadable surfaced values", { surfacedValues: "{nope" }],
+    ["an unknown status", { status: "approved" }],
+  ])("a lost answer whose re-read row has %s throws inside the transaction, and the state is unchanged", async (_label, patch) => {
+    answers.update = async () => [];
+    answers.select = async () => [stored({ status: "released", ...patch })];
+    expect(await codeOf(decide("d1", { from: "parked", to: "declined", actor: "person-2" }))).toBe("malformed-row");
+    expect(calls.via).toEqual(["tx.update", "tx.select"]);
+    expect(calls).toMatchObject({ transactions: 1, rollbacks: 1 });
+    expect(calls.committed).toEqual([]);
   });
 
   it.each([
@@ -235,6 +285,8 @@ describe("decide", () => {
     expect(await codeOf(decide("d1", { from: "parked", to: "released", actor: "person-1" }))).toBe("malformed-row");
     expect(calls.transactions).toBe(1);
     expect(calls.rollbacks).toBe(1);
+    expect(calls.via).toEqual(["tx.update"]);
+    expect(calls.committed).toEqual([]);
   });
 
   it("a decline keeps its decider and its note", async () => {
@@ -459,6 +511,127 @@ describe("cinatra#4150 SC fold: the paths and the inputs the first reading left 
       expect(message).not.toBe("");
       expect(message).not.toContain(SECRET);
       expect(message).not.toContain(NOTE);
+    }
+  });
+});
+
+describe("cinatra#4150 review fold: surfaced values are plain JSON, errors name no id", () => {
+  const ID = "SECRET-ID-4150";
+  const messageOf = async (work: Promise<unknown>): Promise<string> =>
+    work.then(
+      () => "",
+      (e: unknown) => String((e as Error).message),
+    );
+  const nested = (levels: number): Record<string, unknown> => {
+    let value: Record<string, unknown> = { what: "x" };
+    for (let level = 1; level < levels; level += 1) value = { value };
+    return value;
+  };
+  const circular = (): Record<string, unknown> => {
+    const value: Record<string, unknown> = { what: "x" };
+    value.self = { back: value };
+    return value;
+  };
+
+  it.each([
+    ["a date", () => ({ when: new Date("2026-11-03T00:00:00Z") })],
+    ["a date as the whole value", () => new Date("2026-11-03T00:00:00Z")],
+    ["a toJSON that returns an array", () => ({ x: { toJSON: () => [1] } })],
+    ["a toJSON that returns a number", () => ({ x: { toJSON: () => 5 } })],
+    ["a toJSON that returns undefined", () => ({ x: { toJSON: () => undefined } })],
+    ["a toJSON on the whole value", () => ({ what: "x", toJSON: () => ({ other: "y" }) })],
+    ["an undefined value", () => ({ x: undefined })],
+    ["an undefined array item", () => ({ x: [undefined] })],
+    ["a hole in an array", () => ({ x: new Array(2) })],
+    ["an array with an extra key", () => ({ x: Object.assign([1], { extra: 2 }) })],
+    ["a circular value", circular],
+    ["a BigInt", () => ({ n: BigInt(10) })],
+    ["NaN", () => ({ n: Number.NaN })],
+    ["an infinite number", () => ({ n: Number.NEGATIVE_INFINITY })],
+    ["a function", () => ({ f: () => 1 })],
+    ["a symbol", () => ({ s: Symbol("s") })],
+    ["a symbol key", () => ({ what: "x", [Symbol("k")]: 1 })],
+    ["a hidden key", () => Object.defineProperty({ what: "x" }, "hidden", { value: 1, enumerable: false })],
+    ["a Map", () => ({ m: new Map([["a", 1]]) })],
+    ["a class instance", () => ({ c: new (class Thing { a = 1 })() })],
+    ["values nested deeper than the cap", () => nested(PUBLISH_DECISION_MAX_SURFACED_DEPTH + 1)],
+  ])("refuses surfaced values with %s before any write, with a typed error", async (_label, make) => {
+    const input = { ...PARK, surfacedValues: make() } as unknown as Parameters<typeof insertParkedDecision>[0];
+    expect(await codeOf(insertParkedDecision(input))).toBe("invalid-input");
+    expect(calls.values).toHaveLength(0);
+  });
+
+  it("writes plain JSON as it reads back: nested arrays and objects, a null-prototype object, a shared branch, the depth cap", async () => {
+    const shared = { a: 1 };
+    const bare = Object.assign(Object.create(null) as Record<string, unknown>, { k: "v" });
+    const value = { list: [1, "two", true, null, -0.5, { deep: [shared, shared] }], bare, empty: {}, none: [] };
+    expect((await insertParkedDecision({ ...PARK, surfacedValues: value })).inserted).toBe(true);
+    expect(JSON.parse(calls.values[0].surfacedValues as string)).toEqual(JSON.parse(JSON.stringify(value)));
+    await insertParkedDecision({ ...PARK, surfacedValues: nested(PUBLISH_DECISION_MAX_SURFACED_DEPTH) });
+    expect(calls.values).toHaveLength(2);
+  });
+
+  it("no error message carries an id", async () => {
+    const messages: string[] = [];
+    answers.insert = async () => [];
+    messages.push(await messageOf(insertParkedDecision({ ...PARK, runId: ID, nodeId: `${ID}-node`, gateTaskId: `${ID}-task` })));
+    messages.push(await messageOf(insertParkedDecision({ ...PARK, runId: ID.repeat(PUBLISH_DECISION_MAX_ID_LENGTH) })));
+    answers.select = async () => [stored({ id: ID, status: "approved" })];
+    messages.push(await messageOf(insertParkedDecision(PARK)));
+    messages.push(await messageOf(readOpenDecisionForRun("run-1")));
+    answers.select = async () => [stored({ id: ID, surfacedValues: "{nope" })];
+    messages.push(await messageOf(readDecisionForRunNode("run-1", "publish")));
+    messages.push(await messageOf(listDueParked(1)));
+    answers.update = async () => [stored({ id: ID, surfacedValues: "[]" })];
+    messages.push(await messageOf(decide(ID, { from: "parked", to: "released", actor: "person-1" })));
+    answers.update = async () => [];
+    answers.select = async () => [];
+    messages.push(await messageOf(decide(ID, { from: "parked", to: "expired", actor: null })));
+    messages.push(await messageOf(decide("d1", { from: "parked", to: "released", actor: ID.repeat(PUBLISH_DECISION_MAX_ID_LENGTH) })));
+    expect(messages).toHaveLength(9);
+    for (const message of messages) {
+      expect(message).not.toBe("");
+      expect(message).not.toContain(ID);
+    }
+  });
+});
+
+describe("the integration file's teardown (publish-decision-suite-teardown)", () => {
+  const shared = globalThis as { __cinatraAgentBuilderPool?: unknown; __cinatraPostgresSchemaInitialized?: boolean };
+
+  it.each([
+    ["a schema setting that was set", "cinatra_before_4150"],
+    ["no schema setting", undefined],
+  ])("restores %s, clears the global pool, closes everything and reports a failed drop", async (_label, priorSchema) => {
+    const outer = process.env.SUPABASE_SCHEMA;
+    const ended: string[] = [];
+    try {
+      process.env.SUPABASE_SCHEMA = "cinatra_test_publish_decision_4150";
+      shared.__cinatraAgentBuilderPool = { ended: true };
+      shared.__cinatraPostgresSchemaInitialized = true;
+      await expect(
+        endPublishDecisionSuite({
+          pool: { end: async () => ended.push("pool") },
+          admin: {
+            query: async () => {
+              throw new Error("drop schema failed");
+            },
+            end: async () => ended.push("admin"),
+          },
+          dropSchemaSql: "DROP SCHEMA IF EXISTS x CASCADE",
+          priorSchema,
+        }),
+      ).rejects.toThrow("drop schema failed");
+      expect(ended).toEqual(["pool", "admin"]);
+      expect(process.env.SUPABASE_SCHEMA).toBe(priorSchema);
+      expect("SUPABASE_SCHEMA" in process.env).toBe(priorSchema !== undefined);
+      expect(shared.__cinatraAgentBuilderPool).toBeUndefined();
+      expect(shared.__cinatraPostgresSchemaInitialized).toBeUndefined();
+    } finally {
+      if (outer === undefined) delete process.env.SUPABASE_SCHEMA;
+      else process.env.SUPABASE_SCHEMA = outer;
+      delete shared.__cinatraAgentBuilderPool;
+      delete shared.__cinatraPostgresSchemaInitialized;
     }
   });
 });

@@ -2027,9 +2027,7 @@ $body$` },
     // the pure-strings leaf src/lib/artifacts/publication-operation-schema.ts;
     // existing deployments also converge via migration core__0055.
     ...publicationOperationLedgerSchemaQueries(schemaName),
-    // ---- agent_run_publish_decisions (cinatra#4150) ----
-    // One row per stop in front of a declared publishing step. DDL in the same pure-strings
-    // leaf; existing deployments also converge via migration core__0119.
+    // ---- agent_run_publish_decisions (cinatra#4150): same leaf; also migration core__0119 ----
     ...publishDecisionSchemaQueries(schemaName),
     // ---- environment_layers + environment_layer_references (cinatra#1708 S3 A2) ----
     // Durable L1 environment-layer store: content-addressed cache entries +

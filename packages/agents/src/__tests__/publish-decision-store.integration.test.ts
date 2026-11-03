@@ -12,9 +12,11 @@ import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
+import { endPublishDecisionSuite } from "./__fixtures__/publish-decision-suite-teardown";
 
 const TEST_SCHEMA = "cinatra_test_publish_decision_4150";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
+const PRIOR_SCHEMA = process.env.SUPABASE_SCHEMA;
 const HAS_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const q = (s: string) => s.replaceAll('"', '""');
 const TABLE = `"${q(TEST_SCHEMA)}"."agent_run_publish_decisions"`;
@@ -52,10 +54,12 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!HAS_DB) return;
-  await dbMod?.agentBuilderPool?.end().catch(() => {});
-  await admin.query(`DROP SCHEMA IF EXISTS "${q(TEST_SCHEMA)}" CASCADE`).catch(() => {});
-  await admin.end().catch(() => {});
-  delete (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized;
+  await endPublishDecisionSuite({
+    pool: dbMod?.agentBuilderPool,
+    admin,
+    dropSchemaSql: `DROP SCHEMA IF EXISTS "${q(TEST_SCHEMA)}" CASCADE`,
+    priorSchema: PRIOR_SCHEMA,
+  });
 });
 
 describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
@@ -171,6 +175,24 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     ).rejects.toMatchObject({ code: "malformed-row" });
     const { rows } = await admin.query(`SELECT status, decided_by, decided_at FROM ${TABLE} WHERE id = $1`, [decision.id]);
     expect(rows[0]).toEqual({ status: "parked", decided_by: null, decided_at: null });
+  });
+
+  it("a late answer on a settled row the store cannot read throws inside the transaction: the row keeps its answer", async () => {
+    const { decision } = await store.insertParkedDecision(park());
+    await store.decide(decision.id, { from: "parked", to: "released", actor: "person-1" });
+    await admin.query(`UPDATE ${TABLE} SET surfaced_values = '{nope' WHERE id = $1`, [decision.id]);
+    await expect(
+      store.decide(decision.id, { from: "parked", to: "declined", actor: "person-2", note: "no" }),
+    ).rejects.toMatchObject({ code: "malformed-row" });
+    const { rows } = await admin.query(`SELECT status, decided_by, decision_note FROM ${TABLE} WHERE id = $1`, [decision.id]);
+    expect(rows[0]).toEqual({ status: "released", decided_by: "person-1", decision_note: null });
+  });
+
+  it("surfaced values JSON would change are refused, and no row is written", async () => {
+    const input = park({ surfacedValues: { when: new Date("2026-11-03T00:00:00Z") } });
+    await expect(store.insertParkedDecision(input)).rejects.toMatchObject({ code: "invalid-input" });
+    const { rows } = await admin.query(`SELECT count(*)::int AS n FROM ${TABLE} WHERE run_id = $1`, [input.runId]);
+    expect(rows[0].n).toBe(0);
   });
 
   it("both readers answer the newest row: by created_at, then by id on a tie", async () => {

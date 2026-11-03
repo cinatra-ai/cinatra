@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgSchema, text, integer, boolean, timestamp, index, uniqueIndex, primaryKey, jsonb } from "drizzle-orm/pg-core";
+import { pgSchema, text, integer, boolean, timestamp, index, uniqueIndex, primaryKey, jsonb, check } from "drizzle-orm/pg-core";
 
 // ---------------------------------------------------------------------------
 // Extension registry origin coordinates.
@@ -835,9 +835,8 @@ export const lifecycleContinuationPark = cinatraSchema.table("lifecycle_continua
     .where(sql`hold_notification = 'live'`),
 }));
 
-/** One stop in front of a declared publishing step (cinatra#4150). `parked` is the
- * only open status; a row leaves it once, through one conditional UPDATE
- * (publish-decision-store.ts). `surfaced_values` is JSON-as-text. */
+/** One stop in front of a declared publishing step (cinatra#4150). `parked` is the only open status;
+ * a row leaves it once, through publish-decision-store.ts. `surfaced_values` is JSON-as-text. */
 export const agentRunPublishDecisions = cinatraSchema.table("agent_run_publish_decisions", {
   id:             text("id").primaryKey(),
   orgId:          text("org_id"),
@@ -855,6 +854,7 @@ export const agentRunPublishDecisions = cinatraSchema.table("agent_run_publish_d
 }, (t) => ({
   parkUniq: uniqueIndex("agent_run_publish_decisions_park_uniq").on(t.runId, t.nodeId, t.gateTaskId),
   dueIdx:   index("agent_run_publish_decisions_due_idx").on(t.expiresAt).where(sql`status = 'parked'`),
+  statusCheck: check("agent_run_publish_decisions_status_check", sql`status IN ('parked', 'released', 'declined', 'expired', 'run_ended')`),
 }));
 
 /** The zero-authority advisory seam — gate-bound, provenance-stamped, idempotent,

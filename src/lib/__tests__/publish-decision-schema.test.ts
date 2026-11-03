@@ -9,9 +9,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { getTableConfig } from "drizzle-orm/pg-core";
+import { PgDialect, getTableConfig } from "drizzle-orm/pg-core";
 
 import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
+import { publishDecisionSchemaQueries } from "@/lib/artifacts/publication-operation-schema";
 import { agentRunPublishDecisions } from "@cinatra-ai/agents/schema";
 
 type MigrationModule = {
@@ -101,5 +102,34 @@ describe("agent_run_publish_decisions — DDL parity", () => {
       { name: "agent_run_publish_decisions_park_uniq", unique: true },
       { name: "agent_run_publish_decisions_due_idx", unique: false },
     ]);
+  });
+
+  it("the Drizzle table declares the DDL's status CHECK, and each index's columns and predicate", async () => {
+    const mod = await loadMigration();
+    const config = getTableConfig(agentRunPublishDecisions);
+    const dialect = new PgDialect();
+    const drizzle = {
+      checks: config.checks.map((c) => ({ name: c.name, body: dialect.sqlToQuery(c.value).sql })),
+      indexes: config.indexes.map((i) => ({
+        name: i.config.name,
+        unique: i.config.unique,
+        columns: i.config.columns.map((c) => (c as { name: string }).name),
+        where: i.config.where ? dialect.sqlToQuery(i.config.where).sql : null,
+      })),
+    };
+    const homes = [mod.agentRunPublishDecisionsDdlSql, publishDecisionSchemaQueries("cinatra").map((x) => x.text).join(";\n") + ";"];
+    for (const home of homes) {
+      const ddl = home.replace(/\s+/g, " ");
+      const checks = [...ddl.matchAll(/CONSTRAINT (\w+) CHECK \((.*?\))\) \);/g)].map((m) => ({ name: m[1], body: m[2] }));
+      const indexes = [...ddl.matchAll(/CREATE (UNIQUE )?INDEX IF NOT EXISTS (\w+) ON \S+ \(([^)]*)\)(?: WHERE ([^;]*))?;/g)].map((m) => ({
+        name: m[2],
+        unique: m[1] !== undefined,
+        columns: m[3].split(", "),
+        where: m[4] ?? null,
+      }));
+      expect(checks).toHaveLength(1);
+      expect(indexes).toHaveLength(2);
+      expect(drizzle).toEqual({ checks, indexes });
+    }
   });
 });

@@ -1,15 +1,7 @@
-// core__0119 — the publish-decision record (cinatra#4150). The operator-upgrade
-// twin of the fresh-install bootstrap DDL (`publishDecisionSchemaQueries`, the
-// pure-strings leaf src/lib/artifacts/publication-operation-schema.ts, spread into
-// `buildCreateStoreSchemaQueries`), added in the SAME change — the core__0055
-// precedent for a new table.
-//
-// ADDITIVE (a new empty table + its indexes): a no-op on a bootstrap-seeded schema.
-// Unqualified names ride the runner's search_path; no noTransaction().
-//
-// SEQ 0119 — 0113 is the highest sequence on main at authoring time; 0114, 0115,
-// 0116, 0117 and 0118 are claimed by other open changes. A concurrent change may
-// land a sequence first, in which case a rename-only renumber is normal.
+// core__0119 — the publish-decision record (cinatra#4150): the operator-upgrade twin of the
+// bootstrap DDL (`publishDecisionSchemaQueries` in src/lib/artifacts/publication-operation-schema.ts).
+// Additive and idempotent: a no-op on a bootstrapped schema. Unqualified names ride the runner's
+// search_path. SEQ 0119: 0113 is main's highest; open changes claim 0114 to 0118.
 
 /** Idempotent DDL mirroring the bootstrap leaf — safe to run after it. */
 export const agentRunPublishDecisionsDdlSql = `
@@ -43,8 +35,6 @@ export function up(pgm) {
 
 /** @param {import("node-pg-migrate").MigrationBuilder} pgm */
 export function down(pgm) {
-  // Reversible: the table is a fresh addition, so dropping it restores the exact
-  // pre-0119 shape (indexes ride the table drop). HONEST COST: the decision history
-  // is lost; an operator-initiated `--down` accepts that.
+  // Restores the pre-0119 shape (the indexes go with the table); the decision history is lost.
   pgm.sql(`DROP TABLE IF EXISTS agent_run_publish_decisions;`);
 }

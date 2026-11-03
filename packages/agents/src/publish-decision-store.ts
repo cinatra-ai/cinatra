@@ -58,19 +58,39 @@ function isStatus(value: unknown): value is PublishDecisionStatus {
   return (PUBLISH_DECISION_STATUSES as readonly unknown[]).includes(value);
 }
 
-/** A stored row this module cannot read is an error, never a quiet default. */
+/** A stored row this module cannot read is an error, never a quiet default. Errors name no id or value. */
 function deserialize(row: StoredRow): PublishDecisionRow {
-  if (!isStatus(row.status)) {
-    throw new PublishDecisionError("malformed-row", `decision ${row.id} has an unknown status`);
-  }
+  if (!isStatus(row.status)) throw new PublishDecisionError("malformed-row", "a stored decision has an unknown status");
   let surfacedValues: unknown = null;
   try {
     surfacedValues = JSON.parse(row.surfacedValues);
   } catch { /* reported below, with every other shape this module cannot read */ }
   if (!isPlainObject(surfacedValues)) {
-    throw new PublishDecisionError("malformed-row", `decision ${row.id} has unreadable surfaced values`);
+    throw new PublishDecisionError("malformed-row", "a stored decision has unreadable surfaced values");
   }
   return { ...row, status: row.status, surfacedValues };
+}
+
+export const PUBLISH_DECISION_MAX_SURFACED_DEPTH = 64;
+
+/** Refuses every value JSON would drop, change or fail on, so the stored text reads back as the same object. */
+function requireJson(value: unknown, depth: number, open: Set<object>): void {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return;
+  if (typeof value === "number" && Number.isFinite(value)) return;
+  const refuse = (why: string) => new PublishDecisionError("invalid-input", `surfacedValues ${why}`);
+  if (typeof value !== "object") throw refuse("must hold only strings, finite numbers, booleans, null, arrays and plain objects");
+  if (open.has(value)) throw refuse("must not contain itself");
+  if (depth > PUBLISH_DECISION_MAX_SURFACED_DEPTH) throw refuse(`must nest at most ${PUBLISH_DECISION_MAX_SURFACED_DEPTH} levels`);
+  const array = Array.isArray(value);
+  const proto: unknown = Object.getPrototypeOf(value);
+  const keys = Reflect.ownKeys(value).length - (array ? 1 : 0); // an array's own "length"
+  if ((!array && proto !== Object.prototype && proto !== null) || "toJSON" in value || keys !== Object.keys(value).length
+    || (array && keys !== (value as unknown[]).length)) {
+    throw refuse("must hold only plain objects and dense arrays, with no toJSON, symbol or hidden keys");
+  }
+  open.add(value);
+  for (const item of Object.values(value)) requireJson(item, depth + 1, open);
+  open.delete(value);
 }
 
 function requireText(value: unknown, name: string, max = PUBLISH_DECISION_MAX_ID_LENGTH): string {
@@ -104,6 +124,7 @@ export async function insertParkedDecision(input: InsertParkedDecisionInput): Pr
   const gateTaskId = requireText(input.gateTaskId, "gateTaskId");
   const orgId = optionalText(input.orgId, "orgId");
   const a2aContextId = optionalText(input.a2aContextId, "a2aContextId");
+  if (isPlainObject(input.surfacedValues)) requireJson(input.surfacedValues, 1, new Set());
   const surfaced = isPlainObject(input.surfacedValues) ? JSON.stringify(input.surfacedValues) : null;
   if (surfaced === null || Buffer.byteLength(surfaced, "utf8") > PUBLISH_DECISION_MAX_SURFACED_BYTES) {
     throw new PublishDecisionError("invalid-input", `surfacedValues must be an object of at most ${PUBLISH_DECISION_MAX_SURFACED_BYTES} bytes of JSON`);
@@ -144,7 +165,7 @@ export async function insertParkedDecision(input: InsertParkedDecisionInput): Pr
     )
     .limit(1);
   if (!existing) {
-    throw new PublishDecisionError("conflict", `the stop ${runId}/${nodeId}/${gateTaskId} conflicted and has no row`);
+    throw new PublishDecisionError("conflict", "the stop conflicted and has no row");
   }
   return { inserted: false, decision: deserialize(existing) };
 }
@@ -205,7 +226,7 @@ export async function decide(id: string, input: DecideInput): Promise<DecideResu
       .from(agentRunPublishDecisions)
       .where(eq(agentRunPublishDecisions.id, decisionId))
       .limit(1);
-    if (!current) throw new PublishDecisionError("not-found", `no decision ${decisionId}`);
+    if (!current) throw new PublishDecisionError("not-found", "no decision has this id");
     return { outcome: "lost", currentStatus: deserialize(current).status };
   });
 }

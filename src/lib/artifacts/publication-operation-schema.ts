@@ -89,22 +89,11 @@ export function publicationOperationLedgerSchemaQueries(
   ];
 }
 
-// Bootstrap DDL for the publish-decision record (cinatra#4150): one table.
-//
-// One row is one person's (or the expiry sweep's) answer to one stop in front of
-// a declared publishing step.
-//
-// CONSTRAINT MODEL the DB itself enforces:
-//   - agent_run_publish_decisions_park_uniq — UNIQUE (run_id, node_id,
-//     gate_task_id): one row per stop, so a re-delivered park is idempotent.
-//   - the status CHECK — the closed status set. `parked` is the only open status.
-//
-// NO foreign keys ON PURPOSE (the artifact_publication_operations precedent):
-// this is durable history that must outlive the run row.
-//
-// In this same leaf so no new module joins any route's graph (the route-graph
-// ratchet). An EXISTING deployment gets the table via migration core__0119.
-
+// Bootstrap DDL for the publish-decision record (cinatra#4150): one row per stop in front of a
+// declared publishing step. The DB enforces one row per stop (park_uniq) and the closed status
+// set (the status CHECK). No foreign keys, as for artifact_publication_operations: the history
+// outlives the run row. In this leaf so no new module joins a route's graph; an existing
+// deployment gets the table through migration core__0119.
 export function publishDecisionSchemaQueries(schemaName: string): { text: string }[] {
   const q = schemaName.replaceAll('"', '""'); // identifier
   return [
