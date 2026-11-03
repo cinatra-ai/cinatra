@@ -69,8 +69,6 @@ const gateStoreMock = vi.hoisted(() => ({
   claimPendingResumeIntents: vi.fn(),
   listReviewGatesForRun: vi.fn<(runId: string, executor?: unknown) => Promise<Array<{ runId?: string; orgId?: string; reviewTaskId: string; status: string; pinnedTargets?: unknown; createdAt?: Date }>>>(async () => []),
   markResumeIntentDelivered: vi.fn(),
-  // cinatra#4312 — a sent resume closes the other pending intents of its review.
-  closeFamilyIntentsAfterResume: vi.fn(async () => 0),
   withRunDecisionLock: vi.fn(async (_runId: string, fn: (tx: unknown) => Promise<unknown>) => fn(TX)),
   deadLetterExhaustedResumeIntents: vi.fn(async () => 0),
 }));
@@ -444,11 +442,10 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
       expect(outcome).toBe("already-advanced");
       expect(sendTaskSpy).not.toHaveBeenCalled();
       expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-1", "lease-abc");
-      expect(gateStoreMock.closeFamilyIntentsAfterResume).not.toHaveBeenCalled();
     },
   );
 
-  it("an older declared review of the run does not hold this one's decision, and the sent resume closes this review's other pending intents", async () => {
+  it("an older declared review of the run does not hold this one's decision: it is sent", async () => {
     const at = new Date("2026-11-03T12:00:00Z");
     gateStoreMock.listReviewGatesForRun.mockResolvedValue([
       { runId: "run-1", orgId: "org-1", reviewTaskId: "wayflow-task-0", status: "resolved", createdAt: new Date(at.getTime() - 1) },
@@ -457,7 +454,6 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
     const outcome = await deliverArtifactReviewResumeIntent(intent());
     expect(outcome).toBe("delivered");
     expect(sendTaskSpy).toHaveBeenCalledTimes(1);
-    expect(gateStoreMock.closeFamilyIntentsAfterResume).toHaveBeenCalledWith("run-1", "wayflow-task-1", "gate-1");
   });
 
   it("a decision held by a later declared review whose lease was lost answers lease-lost and sends nothing", async () => {
@@ -471,7 +467,6 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
     expect(outcome).toBe("lease-lost");
     expect(sendTaskSpy).not.toHaveBeenCalled();
     expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-1", "lease-abc");
-    expect(gateStoreMock.closeFamilyIntentsAfterResume).not.toHaveBeenCalled();
   });
 
 });

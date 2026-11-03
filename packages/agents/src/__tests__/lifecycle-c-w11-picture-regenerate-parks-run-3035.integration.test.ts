@@ -1856,7 +1856,12 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — plan (b): the carrier of a declared r
     expect(await pendingGates(p.runId)).toEqual([laterStep]);
   });
 
-  it("b3 — A SAME-BASE PAUSE AFTER THE RESUME: two pictures' lineages close, one carrier is delivered and resumes the run, and the run pauses again on the same task (the replayed emission adds no gate); the other carrier, still pending, was closed by that resume and sends nothing", async () => {
+  // cinatra#4312 (review 11, findings 1 and 3) — no stored row tells a later pause on the
+  // same base task id from the one a carrier was written for, so a sent resume closes no
+  // other intent of its review: the run keeps a live intent. The task-state handler is the
+  // test's no-op, so this case does not drive the run leaving `pending_approval` and pausing
+  // again; it drives the replayed emission and what the outbox then holds.
+  it("b3 — A SAME-BASE REPLAY AFTER THE RESUME KEEPS A LIVE INTENT: two pictures' lineages close and one carrier is delivered; the family's emission replayed on the same task adds no gate; the other carrier stays pending, and the next sweep sends the same decision again, at least once", async () => {
     const p = await pausedPipeline(true, 2);
     const third = p.more[0];
     const a = await regenerateThenStale(p, p.leg2, p.picture);
@@ -1879,11 +1884,52 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — plan (b): the carrier of a declared r
     await gateStore.emitDeclaredReviewGateFamily({ runId: p.runId, orgId: ORG, reviewTaskId: p.step, targets: [p.post, p.picture, third.pin] });
     expect((await gateStore.listReviewGatesForRun(p.runId)).length).toBe(gatesBefore);
     expect(await runStatus(p.runId)).toBe("pending_approval");
-    expect(await intentStatusOf(b.pressed.settledGateId)).toBe("done");
+    expect(await intentStatusOf(b.pressed.settledGateId)).toBe("pending");
 
     const summary = await sweep();
     expect(summary.failed).toBe(0);
-    expect(resumesOf(p)).toHaveLength(1);
+    const sent = resumesOf(p);
+    expect(sent).toHaveLength(2);
+    expect(sent[1].message.parts[0].text).toBe(text);
+    expect(await intentStatusOf(b.pressed.settledGateId)).toBe("done");
+  });
+
+  // cinatra#4312 (review 11, finding 2) — `created_at` is kept in microseconds and a
+  // JavaScript date in milliseconds. An earlier declared review of the run whose gate is
+  // 800 microseconds older than this family's legs, in the same millisecond, is earlier.
+  it("b3 — AN EARLIER REVIEW IN THE SAME MILLISECOND: another declared review's gate is 800 microseconds older than the family's legs, within one millisecond; the lineage's close carries the decision and the sweep sends it", async () => {
+    const p = await pausedPipeline();
+    const { pressed, stale } = await regenerateThenStale(p, p.leg2, p.picture);
+    const text = await approve(p.runId, p.step);
+    await sweep();
+    await expectParked(p);
+    const otherStep = await emitLaterPause(p);
+    // The family's legs share one created time (one transaction). Both times are moved into
+    // the millisecond before it, the other review's 800 microseconds earlier.
+    await pool(
+      `WITH t AS (SELECT date_trunc('milliseconds', max(created_at)) AS ms FROM "${q(TEST_SCHEMA)}"."artifact_review_gates"
+                   WHERE run_id=$1 AND review_task_id IN ($2, $3))
+       UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates" g
+          SET created_at = CASE WHEN g.review_task_id = $4 THEN t.ms - interval '900 microseconds'
+                                ELSE t.ms - interval '100 microseconds' END
+         FROM t WHERE g.run_id=$1 AND (g.review_task_id IN ($2, $3, $4))`,
+      [p.runId, p.step, p.leg2, otherStep],
+    );
+    const rows = (await pool(
+      `SELECT review_task_id, created_at, (extract(microseconds FROM created_at))::bigint % 1000 AS us
+         FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE run_id=$1 AND review_task_id IN ($2, $3)`,
+      [p.runId, p.leg2, otherStep],
+    )).rows as { review_task_id: string; created_at: Date; us: string }[];
+    const leg = rows.find((row) => row.review_task_id === p.leg2)!;
+    const other = rows.find((row) => row.review_task_id === otherStep)!;
+    expect(leg.created_at.getTime()).toBe(other.created_at.getTime());
+    expect([Number(leg.us), Number(other.us)]).toEqual([900, 100]);
+
+    await stale();
+    await expectCarrier(pressed.settledGateId, p.leg2, text);
+    const summary = await sweep();
+    expect(summary.failed).toBe(0);
+    expectResumedWith(p, text);
   });
 });
 
@@ -1900,52 +1946,3 @@ async function emitLaterPause(p: Pipeline): Promise<string> {
   await gateStore.emitDeclaredReviewGateFamily({ runId: p.runId, orgId: ORG, reviewTaskId: laterStep, targets: [laterPin] });
   return laterStep;
 }
-
-describe.skipIf(!HAS_DB)("cinatra#4312 — the close after a resume closes only this review's other pending intents (SC pre11, C2)", () => {
-  // These cases pin what `closeFamilyIntentsAfterResume` already does at f79bca23;
-  // they are not red first.
-  it("b3 — THE CLOSE AFTER A RESUME LEAVES WHAT IT DOES NOT ANSWER: the sent intent, a dead-lettered and a delivering one (held or with an expired lease), another review's (a task id that only starts with this one's, another base) and another run's stay as they are; the base's own and a leg's pending intents are closed", async () => {
-    const p = await pausedPipeline();
-    const other = await pausedPipeline();
-    const base = await gateStore.readReviewGate(p.runId, p.step);
-    await pool(
-      `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_review_resume_outbox"
-         (gate_id, run_id, review_task_id, kind, response_text) VALUES ($1,$2,$3,'approve','{}')`,
-      [base!.id, p.runId, p.step],
-    );
-    const sent = await decidedGateWithIntent(p.runId, `${p.step}#7`, p.post);
-    const leg = await decidedGateWithIntent(p.runId, `${p.step}#8`, p.post);
-    const deadLettered = await decidedGateWithIntent(p.runId, `${p.step}#9`, p.post);
-    await setIntent(deadLettered, "dead_lettered_at = now(), last_error = 'set aside by the test'");
-    const held = await decidedGateWithIntent(p.runId, `${p.step}#10`, p.post);
-    await setIntent(held, "status = 'delivering', lease_token = 'lease-held', lease_expires_at = now() + interval '5 minutes'");
-    const expired = await decidedGateWithIntent(p.runId, `${p.step}#11`, p.post);
-    await setIntent(expired, "status = 'delivering', lease_token = 'lease-expired', lease_expires_at = now() - interval '1 second'");
-    const prefixed = await decidedGateWithIntent(p.runId, `${p.step}0`, p.post);
-    const prefixedLeg = await decidedGateWithIntent(p.runId, `${p.step}0#2`, p.post);
-    const otherReview = await decidedGateWithIntent(p.runId, `wayflow-task-${randomUUID()}`, p.post);
-    const otherRun = await decidedGateWithIntent(other.runId, `${p.step}#12`, p.post);
-
-    // The worker names the review by the task id of the intent it sent, a leg's too.
-    expect(await gateStore.closeFamilyIntentsAfterResume(p.runId, p.leg2, sent)).toBe(2);
-
-    expect(await intentStatusOf(base!.id)).toBe("done");
-    expect(await intentStatusOf(leg)).toBe("done");
-    expect(await intentStatusOf(sent)).toBe("pending");
-    expect(await intentRow(deadLettered)).toMatchObject({ status: "pending" });
-    expect((await intentRow(deadLettered)).dead_lettered_at).not.toBeNull();
-    expect(await intentRow(held)).toMatchObject({ status: "delivering", lease_token: "lease-held" });
-    expect(await intentRow(expired)).toMatchObject({ status: "delivering", lease_token: "lease-expired" });
-    for (const gateId of [prefixed, prefixedLeg, otherReview, otherRun]) {
-      expect(await intentStatusOf(gateId)).toBe("pending");
-    }
-
-    // Set aside what this case left live, so no later sweep claims it.
-    await pool(
-      `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_resume_outbox"
-          SET dead_lettered_at = now(), last_error = 'set aside by the test: left by an earlier case'
-        WHERE dead_lettered_at IS NULL AND status IN ('pending', 'delivering') AND run_id IN ($1, $2)`,
-      [p.runId, other.runId],
-    );
-  });
-});

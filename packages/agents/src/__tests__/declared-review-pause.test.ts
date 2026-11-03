@@ -94,3 +94,34 @@ describe("cinatra#4312 — laterDeclaredPause", () => {
     expect(laterDeclaredPause([], "wayflow-task-1")).toBe(false);
   });
 });
+
+// cinatra#4312 (review 11, finding 2) — the store keeps `created_at` in microseconds and
+// a JavaScript date in milliseconds. The stores pass `createdAtMicros`, the created time
+// in microseconds since the epoch as decimal text, and the check compares that.
+describe("cinatra#4312 — laterDeclaredPause compares created times in microseconds", () => {
+  const MS = "1793707200000"; // 2026-11-03T12:00:00.000Z in milliseconds
+  const at = new Date(Number(MS));
+  const gate = (reviewTaskId: string, micros: string | null | undefined) => ({ reviewTaskId, createdAt: at, createdAtMicros: micros });
+  const own = (micros: string | null | undefined) => [gate("wayflow-task-1", micros), gate("wayflow-task-1#2", micros)];
+
+  it("reads no later pause for a declared review 800 microseconds older in the same millisecond", () => {
+    expect(laterDeclaredPause([gate("wayflow-task-0", `${MS}100`), ...own(`${MS}900`)], "wayflow-task-1")).toBe(false);
+  });
+
+  it("reads a later pause for a declared review newer in the same millisecond, and for one with the same microsecond", () => {
+    expect(laterDeclaredPause([...own(`${MS}100`), gate("wayflow-task-2", `${MS}900`)], "wayflow-task-1")).toBe(true);
+    expect(laterDeclaredPause([...own(`${MS}500`), gate("wayflow-task-2", `${MS}500`)], "wayflow-task-1")).toBe(true);
+  });
+
+  it("compares the microseconds even where the dates differ", () => {
+    const older = { reviewTaskId: "wayflow-task-0", createdAt: new Date(Number(MS) + 5), createdAtMicros: `${MS}100` };
+    expect(laterDeclaredPause([older, ...own(`${MS}900`)], "wayflow-task-1")).toBe(false);
+  });
+
+  it("reads a later pause when a microsecond time it is given cannot be read, on either side", () => {
+    // The other review's date is the older one, so only the unreadable microseconds make it later.
+    const older = (micros: string) => ({ reviewTaskId: "wayflow-task-0", createdAt: new Date(Number(MS) - 5), createdAtMicros: micros });
+    expect(laterDeclaredPause([older("not-a-time"), ...own(`${MS}900`)], "wayflow-task-1")).toBe(true);
+    expect(laterDeclaredPause([older(`${MS}100`), ...own("1.5")], "wayflow-task-1")).toBe(true);
+  });
+});
