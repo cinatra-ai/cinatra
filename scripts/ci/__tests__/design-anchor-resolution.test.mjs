@@ -32,7 +32,8 @@
 
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, normalize, resolve as resolvePath } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
@@ -56,6 +57,14 @@ import {
   resolvesIn,
   runCli,
 } from "../design-anchor-resolution.mjs";
+import {
+  ANCHOR_RESOLUTION_CHECKER_PATH,
+  COMMIT_BEARING_PINS,
+  DesignSourceError,
+  GLOBAL_PATHS,
+  loadGatePathMap,
+  resolveTouchedPins,
+} from "../lib/design-pin.mjs";
 
 
 const manifest = () => JSON.parse(readFileSync(MANIFEST_PATH, "utf8"));
@@ -874,6 +883,221 @@ describe("the CLI", () => {
       logError: () => {},
     });
     expect(JSON.parse(out.join("\n"))).toEqual(['[data-lifecycle-card="verification_summary"]']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5b. A run that cannot read the drawings (cinatra#3555)
+// ---------------------------------------------------------------------------
+//
+// The check is a REQUIRED context, and it reads the drawings through a
+// credential. A run without one is a fork pull request (no Actions secrets), a
+// Dependabot-triggered run (Dependabot gets its own secret store, not the
+// Actions one), or a run whose App credential was refused; a run whose read
+// fails with a credential present is an outage of the design source. For a pull
+// request that changes no path the checker reads, none of these can change the
+// verdict, so such a run exits 0 with a notice and certifies nothing. A run that
+// does change such a path, and every push to main and dispatch, keeps exit 2.
+
+describe("a run that cannot read the drawings", () => {
+  const REPO_ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+  const mapped = "scripts/audit/chat-hitl-anchor-contract.json";
+
+  const gitStub =
+    (touched = []) =>
+    (args) => (args[0] === "rev-parse" ? "" : touched.join("\n"));
+
+  const noReader = () => null;
+  const outageReader = () => ({
+    drawingAt: async () => {
+      throw new DesignSourceError("read-failed");
+    },
+    revisionsTouching: async () => [],
+  });
+
+  async function runBlind({ env = {}, touched = [], createReader = noReader, argv = [], runGit, repoRoot, pins }) {
+    const out = [];
+    const err = [];
+    const code = await runCli({
+      argv,
+      env: { DESIGN_PIN_DRIFT_DIFF_BASE: "base", GITHUB_EVENT_NAME: "pull_request", ...env },
+      ...(repoRoot ? { repoRoot } : {}),
+      pins: pins ?? [pin()],
+      anchors: [anchor('[data-lifecycle-card="verification_summary"]')],
+      recordedUnresolved: null,
+      createReader,
+      runGit: runGit ?? gitStub(touched),
+      log: (l) => out.push(String(l)),
+      logError: (l) => err.push(String(l)),
+    });
+    return { code, all: [...out, ...err].join("\n"), out: out.join("\n") };
+  }
+
+  it("exits 0 with a notice on a pull request that changes no path the checker reads, with no credential", async () => {
+    const r = await runBlind({ touched: ["README.md", "docs/guide.md"] });
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("::notice");
+    expect(r.out).toContain("not run");
+    expect(r.out).toContain("no credential for the design source is present");
+  });
+
+  it("exits 0 with a notice on an untouched merge group and on an untouched push to another branch", async () => {
+    for (const env of [
+      { GITHUB_EVENT_NAME: "merge_group" },
+      { GITHUB_EVENT_NAME: "push", GITHUB_REF_NAME: "feature/x" },
+    ]) {
+      const r = await runBlind({ env, touched: ["README.md"] });
+      expect(r.code, JSON.stringify(env)).toBe(0);
+      expect(r.out, JSON.stringify(env)).toContain("::notice");
+    }
+  });
+
+  it("does not say the anchors resolve when it read nothing", async () => {
+    const r = await runBlind({ touched: ["README.md"] });
+    expect(r.all).not.toContain("ok: every drawing anchor resolves");
+    expect(r.all).not.toContain("WARNING");
+  });
+
+  it("exits 0 with a notice when the design source cannot be read, with a credential, and no mapped path changed", async () => {
+    const r = await runBlind({
+      env: { DESIGN_SOURCE_TOKEN: "token-present" },
+      touched: ["README.md"],
+      createReader: outageReader,
+    });
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("::notice");
+    expect(r.out).toContain("not run");
+  });
+
+  it("keeps exit 2 with no credential when the diff touches a path the checker reads", async () => {
+    for (const touched of [
+      [mapped],
+      ["README.md", "scripts/audit/lib/anchor-contract.mjs"],
+      ["scripts/ci/lib/capture-record-contract.mjs"],
+      ["scripts/ci/design-pin-drift.mjs"],
+      [".github/workflows/gates.yml"],
+      ["scripts/ci/design-anchor-resolution.mjs"],
+    ]) {
+      const r = await runBlind({ touched });
+      expect(r.code, touched.join(",")).toBe(2);
+      expect(r.all, touched.join(",")).toContain("could not run");
+    }
+  });
+
+  it("keeps exit 2 on an outage when the diff touches a path the checker reads", async () => {
+    const r = await runBlind({
+      env: { DESIGN_SOURCE_TOKEN: "token-present" },
+      touched: [mapped],
+      createReader: outageReader,
+    });
+    expect(r.code).toBe(2);
+  });
+
+  it("keeps exit 2 on a push to main and on dispatch, whatever the diff", async () => {
+    for (const env of [{ GITHUB_EVENT_NAME: "push", GITHUB_REF_NAME: "main" }, { GITHUB_EVENT_NAME: "" }]) {
+      const r = await runBlind({ env, touched: ["README.md"] });
+      expect(r.code, JSON.stringify(env)).toBe(2);
+    }
+  });
+
+  it("keeps exit 2 when no diff base is set, because then every pin counts as touched", async () => {
+    const r = await runBlind({ env: { DESIGN_PIN_DRIFT_DIFF_BASE: "" }, touched: ["README.md"] });
+    expect(r.code).toBe(2);
+  });
+
+  it("keeps exit 2 when the diff base does not resolve", async () => {
+    const code = await runCli({
+      env: { DESIGN_PIN_DRIFT_DIFF_BASE: "gone", GITHUB_EVENT_NAME: "pull_request" },
+      pins: [pin()],
+      anchors: [anchor('[data-lifecycle-card="verification_summary"]')],
+      recordedUnresolved: null,
+      createReader: noReader,
+      runGit: () => {
+        throw new Error("bad revision");
+      },
+      log: () => {},
+      logError: () => {},
+    });
+    expect(code).toBe(2);
+  });
+
+  it("reads the diff without rename detection, so a moved file lists its old path too", async () => {
+    // `git diff --name-only` pairs a rename and lists only its destination; the
+    // source of a moved file the checker reads would then be invisible.
+    const calls = [];
+    const r = await runBlind({
+      runGit: (args) => {
+        calls.push(args);
+        return args[0] === "rev-parse" ? "" : "README.md";
+      },
+    });
+    expect(r.code).toBe(0);
+    const diff = calls.find((a) => a[0] === "diff");
+    expect(diff).toBeDefined();
+    expect(diff).toContain("--no-renames");
+    expect(diff).toContain("--name-only");
+  });
+
+  it("does not take the exit-0 road under --print-unresolved, which promises a printed set on exit 0", async () => {
+    const r = await runBlind({ argv: ["--print-unresolved"], touched: ["README.md"] });
+    expect(r.code).toBe(2);
+    expect(r.all).toContain("could not run");
+    expect(r.all).not.toContain("::notice title=design-anchor-resolution");
+  });
+
+  it("refuses a path map whose pin ids differ from the pins it reads, though the diff is untouched", async () => {
+    const real = JSON.parse(readFileSync(resolvePath(REPO_ROOT, "scripts/ci/design-pin-gates.paths.json"), "utf8"));
+    for (const pinsOfMap of [{}, { "some-other-pin": ["README.md"] }, { ...real.pins, "extra-pin": ["README.md"] }]) {
+      const root = mkdtempSync(join(tmpdir(), "anchor-map-"));
+      mkdirSync(join(root, "scripts/ci"), { recursive: true });
+      writeFileSync(join(root, "scripts/ci/design-pin-gates.paths.json"), JSON.stringify({ ...real, pins: pinsOfMap }));
+      const r = await runBlind({ repoRoot: root, touched: ["README.md"] });
+      expect(r.code, JSON.stringify(Object.keys(pinsOfMap))).toBe(2);
+      expect(r.all, JSON.stringify(Object.keys(pinsOfMap))).toContain("could not run");
+    }
+  });
+
+  it("keeps exit 2 when the pin or the contract cannot be read, though the diff is untouched", async () => {
+    const code = await runCli({
+      env: { DESIGN_PIN_DRIFT_DIFF_BASE: "base", GITHUB_EVENT_NAME: "pull_request" },
+      pins: () => {
+        throw new Error("unreadable");
+      },
+      anchors: [],
+      recordedUnresolved: null,
+      createReader: noReader,
+      runGit: gitStub(["README.md"]),
+      log: () => {},
+      logError: () => {},
+    });
+    expect(code).toBe(2);
+  });
+
+  // The untouched-diff shortcut is only as good as the set of paths it calls
+  // "read by the checker", so that set is derived here from the checker's own
+  // inputs and not typed in: the static relative imports of the checker, taken
+  // transitively, plus the files it opens as data (the pin carriers). Each must
+  // count as touching the pin under the shared rule. Imports made by a dynamic
+  // or computed specifier are not followed.
+  it("counts every file the checker imports or reads as touching its pin", () => {
+    const seen = new Set();
+    const todo = [ANCHOR_RESOLUTION_CHECKER_PATH];
+    while (todo.length) {
+      const rel = todo.pop();
+      if (seen.has(rel)) continue;
+      seen.add(rel);
+      const text = readFileSync(resolvePath(REPO_ROOT, rel), "utf8");
+      for (const m of text.matchAll(/(?:from|import)\s*\(?\s*["'](\.[^"']+)["']/g)) {
+        todo.push(normalize(join(dirname(rel), m[1])).split("\\").join("/"));
+      }
+    }
+    const inputs = [...seen, ...COMMIT_BEARING_PINS.flatMap((p) => [p.authority, p.mirror])];
+    expect(inputs.length).toBeGreaterThan(5);
+    const map = loadGatePathMap(REPO_ROOT);
+    const uncovered = inputs.filter(
+      (f) => resolveTouchedPins({ touchedPaths: [f], map, globalPaths: GLOBAL_PATHS }).length === 0,
+    );
+    expect(uncovered).toEqual([]);
   });
 });
 

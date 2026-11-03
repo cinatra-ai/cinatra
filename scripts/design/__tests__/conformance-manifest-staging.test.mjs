@@ -62,10 +62,13 @@ const STAGED = {
     contentHash: "sha256:dd0eeaf1e9aaeede212214e7711e57a7c76fa3d000a501c13266da971a0e70c6",
   },
   // The lifecycle-cards drawing, staged by cinatra#3156 (the suggestion-chip wave).
+  // Re-copied verbatim at design@f77ea323 (cinatra#3978): the copy carries the
+  // continued readings that design#191 placed inside the email and post displays,
+  // and every surface the drawing has added since. No surface is removed or changed.
   "app-lifecycle-cards.json": {
     spec: "specs/app-lifecycle-cards.html",
-    manifestSha256: "983fd9fdaa49f4d0749c4637c2ede51ce0b0cd1dc858a92e4d7e63080a4e6af3",
-    contentHash: "sha256:218bf86ae8e105d9279aaf8f6e8ecfc8612ec70b5f7d982aecd94491f728ca10",
+    manifestSha256: "2f9879e8e2a829fb5524f6ac44ea1b50b5e182792a918032658080f42da84f25",
+    contentHash: "sha256:48b868de1d67def632f060c694d49f36caa683e941c3d6794d88de24c4e4996e",
   },
   // The artifact-review drawing, staged by cinatra#3158 (the artifact-kind
   // display wave). First-time adoption: the drawing has never been committed
@@ -180,6 +183,37 @@ describe("the artifacts drawing carries the ratified five-entry tab strip", () =
 
   it("declares the empty, error, artifact-kind and loading state variants", () => {
     expect(scopeDashboardsTab().states).toEqual(["empty", "error", "kind:artifact", "loading"]);
+  });
+});
+
+describe("the lifecycle-cards drawing carries the continued readings inside the displays", () => {
+  // The adoption cinatra#3978 needs: design#191 draws each display's own continued
+  // reading inside the display, bound to the review reading and the decision time,
+  // beneath which the host draws only the generic settled marker. Asserting the four
+  // surfaces here means a later re-copy that drops them cannot land unnoticed while
+  // the drawing is still unpinned. Read at assertion time, for the reason the
+  // artifacts block above gives.
+  const CONTINUED_READINGS = [
+    "email-continued-reading-in-thread",
+    "email-continued-reading-outside-thread",
+    "post-continued-reading",
+    "regenerated-post-continued-reading",
+  ];
+  const surfaceOf = (id) => {
+    const abs = path.join(MANIFEST_DIR, "app-lifecycle-cards.json");
+    expect(existsSync(abs), "manifests/app-lifecycle-cards.json is not committed.").toBe(true);
+    return readJson(abs).surfaces.find((s) => s.id === id);
+  };
+
+  it.each(CONTINUED_READINGS)("declares %s with the reading and the decision time", (id) => {
+    const surface = surfaceOf(id);
+    expect(surface, `app-lifecycle-cards.json does not declare ${id}`).toBeDefined();
+    expect(surface.fields).toEqual([
+      { field: "reading", source: "review.reading" },
+      { field: "decision", source: "review.decidedAt" },
+    ]);
+    expect(surface.actions).toEqual([]);
+    expect(surface.states).toEqual(["empty"]);
   });
 });
 
