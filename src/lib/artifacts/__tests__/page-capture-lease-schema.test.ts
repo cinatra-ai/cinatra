@@ -1,11 +1,12 @@
 // The page capture budget's table ships in the bootstrap DDL (cinatra#4223).
+import { readFileSync, existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
 import {
   PAGE_CAPTURE_LEASES_TABLE,
   pageCaptureLeasesSchemaQueries,
-} from "@/lib/artifacts/page-capture-lease-schema";
+} from "@/lib/artifacts/publication-operation-schema";
 
 describe("page_capture_leases bootstrap DDL (cinatra#4223)", () => {
   it("the bootstrap runs every statement of the lease leaf exactly once", () => {
@@ -35,6 +36,15 @@ describe("page_capture_leases bootstrap DDL (cinatra#4223)", () => {
     for (const stmt of [table, index]) {
       expect(stmt).not.toMatch(/\b(?:DROP|ALTER|UPDATE|DELETE|UNIQUE|REFERENCES)\b/i);
     }
+  });
+
+  it("ships in the leaf drizzle-store.ts already imports, so no module joins a locked route graph", () => {
+    const store = readFileSync("src/lib/drizzle-store.ts", "utf8");
+    expect(store).toMatch(
+      /import \{[^}]*\bpageCaptureLeasesSchemaQueries\b[^}]*\} from "@\/lib\/artifacts\/publication-operation-schema";/,
+    );
+    expect(store).not.toContain("page-capture-lease-schema");
+    expect(existsSync("src/lib/artifacts/page-capture-lease-schema.ts")).toBe(false);
   });
 
   it("escapes the schema name", () => {

@@ -13,7 +13,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Pool } from "pg";
 
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
-import { pageCaptureLeasesSchemaQueries } from "@/lib/artifacts/page-capture-lease-schema";
+import { pageCaptureLeasesSchemaQueries } from "@/lib/artifacts/publication-operation-schema";
 import {
   acquirePageCaptureLease,
   pageCaptureBudgetLockKey,

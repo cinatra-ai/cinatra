@@ -6,7 +6,7 @@ import "server-only";
 //
 // A budget held in one server process is no limit: calls routed to other
 // processes, a restart or an evicted entry start from zero. So every process
-// reads one table (page-capture-lease-schema.ts), and the check and the take
+// reads one table (page_capture_leases, publication-operation-schema.ts), and the check and the take
 // are ONE transaction that first takes `pg_advisory_xact_lock` on the run's key,
 // so two racing callers of one run are serialized.
 //
@@ -23,7 +23,7 @@ import "server-only";
 import { getPooledDb } from "@/lib/db/pooled";
 import { postgresSchema } from "@/lib/postgres-config";
 import { logFailure } from "@/lib/failure-log";
-import { PAGE_CAPTURE_LEASES_TABLE } from "./page-capture-lease-schema";
+import { PAGE_CAPTURE_LEASES_TABLE } from "./publication-operation-schema";
 
 /** At most this many page captures per run. */
 export const MAX_PAGE_CAPTURES_PER_RUN = 20;
