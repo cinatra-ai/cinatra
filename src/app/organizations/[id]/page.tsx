@@ -4,8 +4,11 @@ import { readScopeSurfaceEntityName } from "@/lib/scope-surface-entity-name";
 import { scopeSurfaceEntityLabel } from "@/lib/scope-surfaces";
 
 // Gate-repeating metadata (cinatra#1737, the dashboards pattern): the tab
-// title repeats the page's read gate before disclosing the org name; any
-// failure yields the generic title. The gate and the read live in ONE place
+// title repeats the page's read gate before disclosing the org name. A
+// refused or missing org, or a failure before the access decision, yields the
+// generic title; a member whose org has a blank name, or whose org name read
+// fails after the membership check, gets the id's first eight characters plus
+// an ellipsis, as the crumb does. The gate and the read live in ONE place
 // (cinatra#2807 fix leg 2) so this tab title and the page heading beneath it
 // can never disagree about what the viewer may be told.
 export async function generateMetadata({

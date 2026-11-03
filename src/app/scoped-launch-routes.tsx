@@ -309,9 +309,12 @@ export async function ScopedAssistantsRoute({
 // what the tab reads meanwhile, and a static noun would mirror nothing.
 //
 // The read is THE gated one every other scoped surface uses, so this title can
-// never disclose a name the page beneath it may not disclose; a withheld or
-// genuinely unavailable name falls back to the surface's own noun, never to
-// the id in any form.
+// never disclose a name the page beneath it may not disclose. A withheld name
+// (a refused or missing scope, or a failure before the access decision) falls
+// back to the surface's own noun and no part of the id; a scope the reader may
+// read whose name is blank, or an organization whose name read fails after
+// the membership check, adds the id's first eight characters plus an
+// ellipsis, as the crumb does.
 export async function scopedSurfaceMetadata(
   scope: ScopeSurfaceRef,
   surface: "Agents" | "Assistants",

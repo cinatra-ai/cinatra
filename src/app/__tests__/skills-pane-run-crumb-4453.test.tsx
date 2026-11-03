@@ -182,6 +182,10 @@ describe("the skills pane's run crumb", () => {
     });
     const tree = await AgentPackageInstanceSkillsPage({ params: params() });
     expect(crumbsIn(tree)).toEqual([{ prefix: BARE_PATH, label: "Blog Draft Writer Agent" }]);
+    expect(mocks.ensureRunTitle).toHaveBeenCalledWith(
+      expect.objectContaining({ id: RUN_ID, runBy: null }),
+      "Blog Draft Writer Agent",
+    );
   });
 
   it("shows the id's first eight characters when the run's template is gone", async () => {

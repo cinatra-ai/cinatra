@@ -2096,8 +2096,9 @@ export async function SetupScreen({
   // Pre-generate a unique run name so the title shows immediately on load.
   // Only runs that have started (not pending_input) get a name here; abandoned
   // pending_input runs skip auto-naming to avoid wasting numbered slots. The
-  // skills pane names the run with the same read (cinatra#4453).
-  const runIdentity = run ? await readRunCrumbIdentity(run, template) : null;
+  // skills pane names the run with the same read, which reads the run's own
+  // template by its id, not the template this route resolved (cinatra#4453).
+  const runIdentity = run ? await readRunCrumbIdentity(run) : null;
   const runName = runIdentity?.runName ?? "";
   const extensionHeaderLink = buildExtensionHeaderLink(
     template.packageName,

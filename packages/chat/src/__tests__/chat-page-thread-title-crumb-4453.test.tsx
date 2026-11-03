@@ -19,6 +19,7 @@ import {
   getCurrentChatThreadTitle,
   publishChatThreadTitle,
 } from "@/lib/chat-shell-bus";
+import * as threadCrumbName from "../thread-crumb-name";
 
 vi.mock("next-themes", () => ({ useTheme: () => ({ resolvedTheme: "light" }) }));
 vi.mock("@/lib/auth-client", () => ({
@@ -176,6 +177,9 @@ afterEach(() => {
   releaseReads();
   cleanup();
   publishChatThreadTitle(null);
+  // The server answers this document spent: each case mounts its own page. Read through the
+  // namespace because the red-first run loads this file where the function does not exist yet.
+  (threadCrumbName as { forgetSpentServerThreadNames?: () => void }).forgetSpentServerThreadNames?.();
   vi.unstubAllGlobals();
 });
 

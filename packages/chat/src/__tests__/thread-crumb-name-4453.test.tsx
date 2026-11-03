@@ -13,7 +13,7 @@ import {
   getCurrentChatThreadTitle,
   publishChatThreadTitle,
 } from "@/lib/chat-shell-bus";
-import { crumbThreadName, useThreadCrumbName } from "../thread-crumb-name";
+import { crumbThreadName, forgetSpentServerThreadNames, useThreadCrumbName } from "../thread-crumb-name";
 
 const renameChatThread = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../actions", () => ({
@@ -36,6 +36,8 @@ const base = {
 afterEach(() => {
   cleanup();
   publishChatThreadTitle(null);
+  // Optional call: the red-first run loads this file where the function does not exist yet.
+  forgetSpentServerThreadNames?.();
 });
 
 describe("crumbThreadName", () => {
@@ -161,13 +163,21 @@ type Listed = { id: string; title: string };
 type Answer = (thread: { title?: string | null } | null) => void;
 const OTHER = "7c1e2b9a-0d3f-4e5a-8b6c-1d2e3f4a5b6c";
 
-function mountCrumb(activeThreadId: string | null, threads: Listed[] = []) {
+type ServerAnswer = { initialThreadId: string; initialThreadName: { state: "named"; name: string } };
+
+function mountCrumb(activeThreadId: string | null, threads: Listed[] = [], server?: ServerAnswer) {
   const setThreads = vi.fn();
   return renderHook(
     (p: { activeThreadId: string | null; threads: Listed[] }) =>
-      useThreadCrumbName<Listed>({ activeThreadId: p.activeThreadId, threads: p.threads, setThreads }),
+      useThreadCrumbName<Listed>({ activeThreadId: p.activeThreadId, threads: p.threads, setThreads, ...server }),
     { initialProps: { activeThreadId, threads } },
   );
+}
+
+function renameOnThisPage(threadId: string, title: string) {
+  act(() => {
+    window.dispatchEvent(new CustomEvent(CHAT_THREAD_RENAMED_EVENT, { detail: { threadId, title } }));
+  });
 }
 
 function answer(read: Answer, title: string | null) {
@@ -269,5 +279,76 @@ describe("the crumb's reads of the active thread, when they overlap or outlive a
     expect(getCurrentChatThreadTitle()).toBe("Annual plan");
     answer(late, "Quarterly plan");
     expect(getCurrentChatThreadTitle()).toBe("Annual plan");
+  });
+});
+
+// The server render's answer for the route's own thread (a thread the list does
+// not hold): it may name the crumb on a direct load, but never after the visit
+// that got it, and never again after a remount once the page has spent it.
+describe("the server's answer for the route's own thread, after the visit that got it", () => {
+  const server: ServerAnswer = { initialThreadId: ID, initialThreadName: { state: "named", name: "Quarterly plan" } };
+
+  it("draws no cached server name after a switch away and back; the next read names the thread renamed while away", () => {
+    const { result, rerender } = mountCrumb(ID, [], server);
+    expect(getCurrentChatThreadTitle()).toBe("Quarterly plan");
+    act(() => {
+      result.current(ID);
+    });
+    rerender({ activeThreadId: OTHER, threads: [] });
+    rerender({ activeThreadId: ID, threads: [] });
+    expect(getCurrentChatThreadTitle()).toBeNull();
+    answer(result.current(ID), "Annual plan");
+    expect(getCurrentChatThreadTitle()).toBe("Annual plan");
+  });
+
+  it("draws no cached server name after a switch away and back to a thread deleted while away", () => {
+    const { result, rerender } = mountCrumb(ID, [], server);
+    rerender({ activeThreadId: OTHER, threads: [] });
+    rerender({ activeThreadId: ID, threads: [] });
+    expect(getCurrentChatThreadTitle()).toBeNull();
+    answer(result.current(ID), null);
+    expect(getCurrentChatThreadTitle()).toBeNull();
+  });
+
+  it("does not draw the same server answer again after a remount that follows an accepted not-found", () => {
+    const first = mountCrumb(ID, [], server);
+    expect(getCurrentChatThreadTitle()).toBe("Quarterly plan");
+    answer(first.result.current(ID), null);
+    expect(getCurrentChatThreadTitle()).toBeNull();
+    first.unmount();
+    mountCrumb(ID, [], server);
+    expect(getCurrentChatThreadTitle()).toBeNull();
+  });
+
+  it("draws a different server answer after a remount", () => {
+    const first = mountCrumb(ID, [], server);
+    answer(first.result.current(ID), null);
+    first.unmount();
+    mountCrumb(ID, [], { initialThreadId: ID, initialThreadName: { state: "named", name: "Annual plan" } });
+    expect(getCurrentChatThreadTitle()).toBe("Annual plan");
+  });
+});
+
+describe("a rename on this page and the reads of the active thread", () => {
+  it("keeps the active thread's read when another thread is renamed while it is on its way", () => {
+    const { result } = mountCrumb(ID);
+    let pending!: Answer;
+    act(() => {
+      pending = result.current(ID);
+    });
+    renameOnThisPage(OTHER, "Other plan, renamed");
+    answer(pending, "Annual plan");
+    expect(getCurrentChatThreadTitle()).toBe("Annual plan");
+  });
+
+  it("drops the active thread's read when the active thread itself is renamed while it is on its way", () => {
+    const { result } = mountCrumb(ID);
+    let pending!: Answer;
+    act(() => {
+      pending = result.current(ID);
+    });
+    renameOnThisPage(ID, "Annual plan, renamed");
+    answer(pending, "Annual plan");
+    expect(getCurrentChatThreadTitle()).toBeNull();
   });
 });

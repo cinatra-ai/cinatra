@@ -42,6 +42,7 @@ const row = vi.hoisted(() => ({
   templateId: "tmpl-3693",
   ensureFails: false,
   ownTemplate: null as { name: string } | null,
+  templateReadFails: false,
 }));
 const store = vi.hoisted(() => ({
   // The store's rule (store.ts, ensureRunTitle): a title stays; an untitled run
@@ -50,7 +51,10 @@ const store = vi.hoisted(() => ({
     if (row.ensureFails) throw new Error("database down");
     return run.title?.trim() || `${baseName} (1)`;
   }),
-  readAgentTemplateById: vi.fn(async () => row.ownTemplate),
+  readAgentTemplateById: vi.fn(async () => {
+    if (row.templateReadFails) throw new Error("database down");
+    return row.ownTemplate;
+  }),
 }));
 
 vi.mock("../run-name-actions", () => ({
@@ -348,6 +352,7 @@ beforeEach(() => {
   row.templateId = TEMPLATE.id;
   row.ensureFails = false;
   row.ownTemplate = null;
+  row.templateReadFails = false;
   nav.pathname = BARE_RUN;
 });
 
@@ -398,14 +403,16 @@ async function runPageLayoutProps() {
 describe("the run page's name for its run", () => {
   beforeEach(() => {
     row.anchor = null;
+    // The store's answer for the run's own template, which is also the template this route resolved.
+    row.ownTemplate = { name: "Blog Draft Writer Agent" };
   });
 
-  it("numbers an untitled started run by the route's template when it is the run's own, reading no template again", async () => {
+  it("numbers an untitled started run by its own template, read by its id as the skills pane reads it", async () => {
     expect(await runPageLayoutProps()).toEqual({
       initialRunName: "Blog Draft Writer Agent (1)",
       runFallbackName: "Blog Draft Writer Agent",
     });
-    expect(store.readAgentTemplateById).not.toHaveBeenCalled();
+    expect(store.readAgentTemplateById).toHaveBeenCalledWith(TEMPLATE.id);
     expect(store.ensureRunTitle).toHaveBeenCalledWith(
       expect.objectContaining({ id: RUN_ID }),
       "Blog Draft Writer Agent",
@@ -428,6 +435,25 @@ describe("the run page's name for its run", () => {
       runFallbackName: "Blog Draft Writer Agent",
     });
     expect(store.ensureRunTitle).not.toHaveBeenCalled();
+  });
+
+  it("draws the id's first eight characters, not the route's template, when the read of the run's own template fails", async () => {
+    row.templateReadFails = true;
+    expect(await runPageLayoutProps()).toEqual({
+      initialRunName: "",
+      runFallbackName: `${RUN_ID.slice(0, 8)}…`,
+    });
+    expect(store.ensureRunTitle).not.toHaveBeenCalled();
+  });
+
+  it("draws the id's first eight characters for a run waiting for its first input with a blank title when the template read fails", async () => {
+    row.status = "pending_input";
+    row.title = "   ";
+    row.templateReadFails = true;
+    expect(await runPageLayoutProps()).toEqual({
+      initialRunName: "",
+      runFallbackName: `${RUN_ID.slice(0, 8)}…`,
+    });
   });
 
   it("names the run by its own template when the route's template is another", async () => {

@@ -29,13 +29,19 @@ import {
 //      not-found alike. A switch to another thread, also away and back, drops
 //      the kept answer and every read asked before it.
 //   2. The page's thread list, for a thread no read of this visit has answered.
-//   3. The server render's answer for the route's own thread, only until a read
-//      or the list first holds that thread, so a direct load does not wait on a
-//      fetch and a name the server read never outlives a fresher answer.
+//   3. The server render's answer for the route's own thread, until it is
+//      spent, so a direct load does not wait on a fetch. The answer is spent
+//      when a read or the list holds that thread, or when the reader switches
+//      to another thread (also away and back). A spent answer stays spent for the rest
+//      of the document, also after a remount with the same cached server props:
+//      a server answer the page has already replaced, or left, never comes back,
+//      for a renamed or a deleted thread alike. A server render that answers
+//      differently (a new name, a new state) is a new answer.
 //
 // A rename made on this page arrives as `CHAT_THREAD_RENAMED_EVENT` and wins at
-// once. A read that was already on its way when the rename landed is dropped,
-// so it cannot bring the old name back.
+// once. A read of the renamed thread that was already on its way when the
+// rename landed is dropped, so it cannot bring the old name back. A rename of
+// another thread leaves the reads of the active thread alone.
 //
 // While a reply streams, the page polls neither the thread nor the list
 // (chat-page.tsx), so a rename or a deletion by another writer reaches the
@@ -48,6 +54,19 @@ type ThreadSummaryLike = { id: string; title: string };
 export type ThreadNameRead = { threadId: string; title: string | null };
 
 const UNAVAILABLE: ChatThreadName = { state: "unavailable" };
+
+// The server answers spent in this document, by thread and answer. A remount
+// that receives the same cached answer again does not draw it (source 3 above).
+const spentServerAnswers = new Set<string>();
+
+function serverAnswerKey(threadId: string, answer: ChatThreadName): string {
+  return `${threadId}\u0000${JSON.stringify(answer)}`;
+}
+
+/** For tests: forget the server answers spent in this document. */
+export function forgetSpentServerThreadNames(): void {
+  spentServerAnswers.clear();
+}
 
 /** The reads of one visit to a thread: the newest answer by the order asked. */
 type ThreadVisit = { threadId: string | null; visit: number; read: ThreadNameRead | null; readSeq: number };
@@ -92,16 +111,17 @@ export function useThreadCrumbName<T extends ThreadSummaryLike>(input: {
   }
   const read = visit.read;
   const currentVisit = visit.visit;
-  const renameEpochRef = useRef(0);
+  // Per thread: how many renames this page made of it. A read that started
+  // before a rename of its own thread answers too late to count.
+  const renameEpochsRef = useRef<Map<string, number>>(new Map());
   const readSeqRef = useRef(0);
-  const serverNameSpentRef = useRef(false);
 
   const startThreadNameRead = useCallback(
     (threadId: string) => {
-      const epoch = renameEpochRef.current;
+      const epoch = renameEpochsRef.current.get(threadId) ?? 0;
       const seq = ++readSeqRef.current;
       return (thread: { title?: string | null } | null) => {
-        if (epoch !== renameEpochRef.current) return;
+        if (epoch !== (renameEpochsRef.current.get(threadId) ?? 0)) return;
         setVisit((v) =>
           v.visit !== currentVisit || v.threadId !== threadId || seq <= v.readSeq
             ? v
@@ -118,7 +138,7 @@ export function useThreadCrumbName<T extends ThreadSummaryLike>(input: {
       const threadId = detail?.threadId;
       const title = detail?.title;
       if (typeof threadId !== "string" || typeof title !== "string") return;
-      renameEpochRef.current += 1;
+      renameEpochsRef.current.set(threadId, (renameEpochsRef.current.get(threadId) ?? 0) + 1);
       setThreads((prev) => prev.map((t) => (t.id === threadId ? { ...t, title } : t)));
       setVisit((v) => (v.read?.threadId === threadId ? { ...v, read: { threadId, title } } : v));
     }
@@ -127,11 +147,13 @@ export function useThreadCrumbName<T extends ThreadSummaryLike>(input: {
   }, [setThreads]);
 
   useEffect(() => {
+    const serverKey =
+      initialThreadId && initialThreadName ? serverAnswerKey(initialThreadId, initialThreadName) : null;
     if (
-      initialThreadId &&
-      (read?.threadId === initialThreadId || threads.some((t) => t.id === initialThreadId))
+      serverKey &&
+      (currentVisit > 0 || read?.threadId === initialThreadId || threads.some((t) => t.id === initialThreadId))
     ) {
-      serverNameSpentRef.current = true;
+      spentServerAnswers.add(serverKey);
     }
     const name = crumbThreadName({
       activeThreadId,
@@ -139,10 +161,10 @@ export function useThreadCrumbName<T extends ThreadSummaryLike>(input: {
       threads,
       initialThreadId,
       initialThreadName,
-      serverNameSpent: serverNameSpentRef.current,
+      serverNameSpent: serverKey === null || spentServerAnswers.has(serverKey),
     });
     publishChatThreadTitle(activeThreadId ? chatThreadCrumbLabel(name, activeThreadId) : null);
-  }, [activeThreadId, read, threads, initialThreadId, initialThreadName]);
+  }, [activeThreadId, currentVisit, read, threads, initialThreadId, initialThreadName]);
 
   return startThreadNameRead;
 }
