@@ -217,3 +217,16 @@ describe("cinatra#4465 — the bounds hold exactly at their edges", () => {
     expect(answer([custom([2 ** 53])])).toBe(`${PREFIX}: [?]: custom`);
   });
 });
+
+describe("cinatra#4465 — the expected type is named only for a type error", () => {
+  it("an issue of another code that carries a listed expected word names no type", () => {
+    const issues = [
+      { code: "too_small", expected: "string", path: ["name"] },
+      { code: "custom", expected: "number", path: ["count"] },
+      { code: "invalid_type", expected: "number", path: ["count"] },
+    ];
+    expect(passthroughFailureText(forgedZodError(SECRET, issues), CTX)).toBe(
+      `${PREFIX}: name: too_small; count: custom; count: invalid_type, expected number`,
+    );
+  });
+});

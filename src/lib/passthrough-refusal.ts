@@ -157,7 +157,8 @@ function issueText(issue: unknown): string | null {
  * The answer to a zod error, built from its issues only: PASSTHROUGH_SCHEMA_ERROR,
  * then at most MAX_ISSUES issues joined by "; ", then the count of the rest.
  * Null (the fixed sentence answers) when there is no issue or an issue cannot
- * be read: a failed zod parse always has at least one issue. Never a throw.
+ * be read; every zod error the tests build from a failed parse carries at
+ * least one issue. Never a throw.
  */
 function schemaErrorText(err: unknown): string | null {
   try {
