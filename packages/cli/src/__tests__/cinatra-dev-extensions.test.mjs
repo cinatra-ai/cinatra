@@ -571,6 +571,27 @@ describe("pruneToDeclaredCheckouts — a --shallow sync keeps only the declared 
     expect(existsSync(path.join(outside, "package.json"))).toBe(true);
   });
 
+  it("an extensions/ that cannot be read is an error, never taken for absent", () => {
+    const { outside } = fresh();
+    // lstat answers ENOTDIR: the parent is a file.
+    const extRoot = path.join(outside, "package.json", "extensions");
+    expect(() => pruneToDeclaredCheckouts({ extRoot, declaredDests: [] })).toThrow(/ENOTDIR/);
+  });
+
+  it("a regular file where a declared checkout belongs is removed, and a hostile entry name is logged escaped", () => {
+    const { ext, declared } = fresh();
+    rmSync(path.join(ext, "cinatra-ai", "kept-agent"), { recursive: true });
+    writeFileSync(path.join(ext, "cinatra-ai", "kept-agent"), "not a checkout\n");
+    mkdirSync(path.join(ext, "cinatra-ai", "evil\n::error::forged"));
+    const lines = [];
+    const removed = pruneToDeclaredCheckouts({ extRoot: ext, declaredDests: declared, log: (m) => lines.push(m) });
+    expect(removed.sort()).toEqual(["cinatra-ai/evil\n::error::forged", "cinatra-ai/kept-agent"].sort());
+    expect(lines).toHaveLength(2);
+    // One line per removal: a newline in a restored name never starts a line of its own.
+    for (const l of lines) expect(l).not.toMatch(/\n/);
+    expect(lines.some((l) => l.includes(String.raw`evil\n::error::forged`))).toBe(true);
+  });
+
   it("an absent extensions/ is left absent; a symlinked extensions/ is removed, its target kept", () => {
     const { root, outside } = fresh();
     expect(pruneToDeclaredCheckouts({ extRoot: path.join(root, "nothing-here"), declaredDests: [] })).toEqual([]);
