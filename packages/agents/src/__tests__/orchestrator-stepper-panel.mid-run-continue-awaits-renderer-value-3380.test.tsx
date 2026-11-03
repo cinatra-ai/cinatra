@@ -339,4 +339,20 @@ describe("OrchestratorStepperPanel — a mid-run Continue waits for the renderer
     expect(taskId).toBe("wayflow-task-3380-empty");
     expect(payload.selectedIdeaJson).toBe(NO_PICK_JSON);
   });
+
+  it("keeps what the first gate's renderer writes when it mounts: a list with nothing to pick is answered, and the Continue sends that answer", async () => {
+    await mountGate(DECLARING_SCHEMA, { ideas: [] });
+
+    await waitFor(() => expect(outerContinue()).not.toBeNull());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitFor(() => expect(outerContinue()!.disabled).toBe(false));
+    fireEvent.click(outerContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe(REVIEW_TASK_ID);
+    expect(payload.selectedIdeaJson).toBe(NO_PICK_JSON);
+  });
 });

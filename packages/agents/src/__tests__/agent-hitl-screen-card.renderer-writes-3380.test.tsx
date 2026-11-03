@@ -13,6 +13,8 @@
  *     renderer and starts with nothing;
  *   - a submit still in flight when that later gate arrives clears only its own
  *     gate's buffer when it lands, never what the later renderer wrote;
+ *   - the same on the broker door, where a credential host reads and answers
+ *     through the routes;
  *   - a setup press whose gate changes during its flush stops: it submits nothing,
  *     and what that flush hands over is no answer to the later gate.
  */
@@ -142,6 +144,23 @@ function SetupRenderer({
     <Button type="button" data-testid="type-words" onClick={() => void onChange(words)}>
       Type
     </Button>
+  );
+}
+
+const WIDGET_AUTH = {
+  headers: () => ({ Authorization: "Bearer cwu_site" }),
+  credentials: "omit" as const,
+};
+
+function widgetCard(wireRef: string, carrier: Box) {
+  return (
+    <LifecycleCardSurfaceProvider
+      host="site_widget"
+      auth={WIDGET_AUTH}
+      frame={{ assistant: "a", instanceId: "i" }}
+    >
+      <AgentHitlScreenCard runId={RUN_ID} wireRef={wireRef} carrier={carrier} />
+    </LifecycleCardSurfaceProvider>
   );
 }
 
@@ -404,5 +423,68 @@ describe("AgentHitlScreenCard — what its renderer writes (cinatra#3380)", () =
     expect(fieldName).toBe("later");
     expect(JSON.stringify(values)).toContain("words of later");
     expect(JSON.stringify(values)).not.toContain("words of first");
+  });
+
+  it("keeps what a later gate's renderer wrote when the earlier submit lands after it on the broker door", async () => {
+    const original = globalThis.fetch;
+    const box: Box = { current: null };
+    const inFlight = deferred();
+    let screen: unknown = asking("task-first", [{ id: "a" }]);
+    const submits: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const json = (v: unknown) =>
+        new Response(JSON.stringify(v), { status: 200, headers: { "Content-Type": "application/json" } });
+      if (url.endsWith("/hitl-screen/submit")) {
+        submits.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+        return submits.length === 1 ? (inFlight.promise as Promise<Response>) : json({ outcome: { ok: true } });
+      }
+      return json(screen);
+    }) as unknown as typeof fetch;
+    try {
+      const mounted = render(widgetCard("task-first", box));
+      await settle();
+      await waitFor(() => expect(pickRow()).not.toBeNull());
+      await act(async () => {
+        fireEvent.click(pickRow()!);
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(cardContinue()!.disabled).toBe(false));
+      await act(async () => {
+        fireEvent.click(cardContinue()!);
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(submits).toHaveLength(1));
+
+      screen = asking("task-empty", []);
+      mounted.rerender(widgetCard("task-empty", box));
+      await settle();
+      await waitFor(() => expect(box.current?.buffered.selectedIdeaJson).toBe(NO_PICK_JSON));
+
+      await act(async () => {
+        inFlight.resolve(
+          new Response(JSON.stringify({ outcome: { ok: true } }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+        await Promise.resolve();
+      });
+      await settle();
+
+      expect(box.current?.gateKey).toContain("task-empty");
+      expect(box.current?.buffered.selectedIdeaJson).toBe(NO_PICK_JSON);
+      await waitFor(() => expect(cardContinue()!.disabled).toBe(false));
+      await act(async () => {
+        fireEvent.click(cardContinue()!);
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(submits).toHaveLength(2));
+      expect(submits[1].reviewTaskId).toBe("task-empty");
+      expect((submits[1].values as Record<string, unknown>).selectedIdeaJson).toBe(NO_PICK_JSON);
+      expect(approveMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 });

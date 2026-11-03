@@ -474,4 +474,50 @@ describe("AgenticRunPanel — a mid-run Continue waits for the renderer's declar
     expect(taskId).toBe("wayflow-task-3380-empty");
     expect(payload.selectedIdeaJson).toBe(NO_PICK_JSON);
   });
+
+  it("keeps what the first gate's renderer writes when it mounts: a list with nothing to pick is answered, and the Continue sends that answer", async () => {
+    await mountGate(DECLARING_SCHEMA, undefined, { ideas: [] });
+
+    await waitFor(() => expect(gateContinue()).not.toBeNull());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitFor(() => expect(gateContinue()!.disabled).toBe(false));
+    fireEvent.click(gateContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe(REVIEW_TASK_ID);
+    expect(payload.selectedIdeaJson).toBe(NO_PICK_JSON);
+  });
+
+  it("reads the published submit's payload: a caller's object that carries the declared field is sent with nothing written", async () => {
+    const published: { submit: GateSubmit | null } = { submit: null };
+    await mountGate(DECLARING_SCHEMA, (_runId, gate) => {
+      if (gate) published.submit = gate.submit;
+    });
+
+    await waitFor(() => expect(published.submit).not.toBeNull());
+    await published.submit!({ selectedIdeaJson: PICKED_JSON });
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(payload.selectedIdeaJson).toBe(PICKED_JSON);
+  });
+
+  it("reads the published submit's payload: a caller's blank field over a written pick holds the gate, and nothing is sent", async () => {
+    const published: { submit: GateSubmit | null } = { submit: null };
+    await mountGate(DECLARING_SCHEMA, (_runId, gate) => {
+      if (gate) published.submit = gate.submit;
+    });
+
+    await waitFor(() => expect(published.submit).not.toBeNull());
+    await waitFor(() => expect(document.querySelector('[data-testid="pick-row-2"]')).not.toBeNull());
+    fireEvent.click(document.querySelector('[data-testid="pick-row-2"]')!);
+    await waitFor(() => expect(gateContinue()!.disabled).toBe(false));
+    await expect(published.submit!({ selectedIdeaJson: "  " })).rejects.toThrow(/waiting for a choice/);
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
 });

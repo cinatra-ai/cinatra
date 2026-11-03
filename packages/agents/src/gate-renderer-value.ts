@@ -29,9 +29,10 @@
  * are answers. A property that declares a `default` is answered by that default
  * (cinatra#3452) and holds nothing.
  *
- * Only what the RENDERER wrote counts — the buffer the Continue sends — never
- * the gate's own current values: those are what the run handed the screen, not
- * an answer the person gave on it.
+ * Only the payload the surface sends counts — for the Continue the buffer the
+ * renderer wrote, for the published submit the buffer plus the caller's value —
+ * never the gate's own current values: those are what the run handed the
+ * screen, not an answer the person gave on it.
  *
  * Generic by construction: it reads a schema and a buffer, never a renderer id
  * or an agent name. A gate that declares nothing is held by nothing.
