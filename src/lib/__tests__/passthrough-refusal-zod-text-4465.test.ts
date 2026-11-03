@@ -10,8 +10,12 @@
  * An error with no issue, or with an issue or a list length it cannot read,
  * answers the fixed sentence and is logged without its text. A primitive's
  * refusal that also carries the marker is answered as a zod error, or with the
- * fixed sentence when its issues are missing or not a list. On the base
- * the error's own message is the answer, so every case here fails there.
+ * fixed sentence when its issues are missing or not a list. The marker is
+ * read with the native Set membership, never a `has` the error supplies, and a
+ * traits value that membership cannot read answers the fixed sentence. On the base
+ * the error's own message is the answer, so every case here fails there, except
+ * the one for a primitive's message that is not a string: the base already
+ * answers it with the fixed sentence, and the case pins that.
  *
  *   npx vitest run src/lib/__tests__/passthrough-refusal-zod-text-4465.test.ts
  */
@@ -22,6 +26,7 @@ import { z } from "zod";
 import {
   PASSTHROUGH_SCHEMA_ERROR,
   PASSTHROUGH_UNEXPECTED_ERROR,
+  isCallerFacingError,
   isZodError,
   passthroughFailureText,
 } from "../passthrough-refusal";
@@ -267,6 +272,119 @@ describe("cinatra#4465 — a primitive's refusal that carries the zod marker is 
   });
 });
 
+describe("cinatra#4465 — the predicates and a primitive's message never throw or answer text that is not a string", () => {
+  it("isZodError and isCallerFacingError answer false, never a throw, when a read of the error throws", () => {
+    const markedGetter = new Error(SECRET);
+    Object.defineProperty(markedGetter, "_zod", {
+      get() {
+        throw new Error(SECRET);
+      },
+    });
+    const throwingIssues = Object.assign(new Error(SECRET), { _zod: { traits: new Set(["ZodError"]) } });
+    Object.defineProperty(throwingIssues, "issues", {
+      get() {
+        throw new Error(SECRET);
+      },
+    });
+    const throwingPrototype = new Proxy(new Error(SECRET), {
+      getPrototypeOf() {
+        throw new Error(SECRET);
+      },
+    });
+    const revocable = Proxy.revocable(forgedZodError(SECRET, [{ path: [], code: "custom" }]), {});
+    revocable.revoke();
+    for (const err of [markedGetter, throwingIssues, throwingPrototype, revocable.proxy]) {
+      expect(isZodError(err)).toBe(false);
+      expect(isCallerFacingError(err)).toBe(false);
+      expect(passthroughFailureText(err, CTX)).toBe(PASSTHROUGH_UNEXPECTED_ERROR);
+    }
+    expectNoSecretLogged();
+  });
+
+  it("a primitive's refusal without the marker whose message is not a string, or throws, answers the fixed sentence, logged", () => {
+    const refusal = () => new PrimitiveInvocationError({ code: "NOT_FOUND", message: "refused", retryable: false });
+    const numeric = Object.defineProperty(refusal(), "message", { value: 7 });
+    const missing = Object.defineProperty(refusal(), "message", { value: undefined });
+    const throwing = Object.defineProperty(refusal(), "message", {
+      get() {
+        throw new Error(SECRET);
+      },
+    });
+    for (const err of [numeric, missing, throwing]) {
+      expect(passthroughFailureText(err, CTX)).toBe(PASSTHROUGH_UNEXPECTED_ERROR);
+    }
+    expect(logged).toHaveBeenCalledTimes(3);
+    expectNoSecretLogged();
+  });
+});
+
+describe("cinatra#4465 — the zod marker is read with the native Set membership, never a method of the error", () => {
+  const ISSUES = [{ path: [], code: "custom" }];
+  const primitiveWith = (traits: unknown, issues: unknown = ISSUES) =>
+    Object.assign(new PrimitiveInvocationError({ code: "NOT_FOUND", message: SECRET, retryable: false }), {
+      _zod: { traits },
+      issues,
+    });
+
+  it("a native Set that holds the marker is a marker even when its own or its class's `has` lies or throws", () => {
+    const ownFalse = new Set(["ZodError"]);
+    Object.defineProperty(ownFalse, "has", { value: () => false });
+    const ownThrows = new Set(["$ZodError"]);
+    Object.defineProperty(ownThrows, "has", {
+      value: () => {
+        throw new Error(SECRET);
+      },
+    });
+    class LyingSet extends Set<string> {
+      override has(): boolean {
+        return false;
+      }
+    }
+    const nullPrototype = new Set(["ZodError"]);
+    Object.setPrototypeOf(nullPrototype, null);
+    for (const traits of [ownFalse, ownThrows, new LyingSet(["ZodError"]), nullPrototype]) {
+      const err = primitiveWith(traits);
+      expect(isZodError(err)).toBe(true);
+      expect(passthroughFailureText(err, CTX)).toBe(`${PREFIX}: (input): custom`);
+    }
+    expect(logged).not.toHaveBeenCalled();
+  });
+
+  it("a trait value the native membership cannot read answers the fixed sentence, logged", () => {
+    const proxied = new Proxy(new Set(["ZodError"]), {});
+    const values: unknown[] = [["ZodError"], "ZodError", { has: () => true }, Object.create(Set.prototype), proxied];
+    for (const traits of values) {
+      const err = primitiveWith(traits);
+      expect(isZodError(err)).toBe(false);
+      expect(passthroughFailureText(err, CTX)).toBe(PASSTHROUGH_UNEXPECTED_ERROR);
+    }
+    expect(logged).toHaveBeenCalledTimes(values.length);
+    expectNoSecretLogged();
+  });
+
+  it("a Proxy that changes its prototype between reads never answers a marked error's own message", () => {
+    // `order` gives the prototype each getPrototypeOf call answers, in turn.
+    const flipping = (order: object[]) => {
+      let calls = 0;
+      return new Proxy(primitiveWith(new Set(["ZodError"])), {
+        getPrototypeOf() {
+          const proto = order[calls % order.length] as object;
+          calls += 1;
+          return proto;
+        },
+      });
+    };
+    const primitive = PrimitiveInvocationError.prototype;
+    for (const order of [
+      [Object.prototype, primitive],
+      [primitive, Object.prototype],
+    ]) {
+      expect(passthroughFailureText(flipping(order), CTX)).toBe(`${PREFIX}: (input): custom`);
+    }
+    expect(logged).not.toHaveBeenCalled();
+  });
+});
+
 describe("cinatra#4465 — a list length is read once and must be a whole list length", () => {
   /** A Proxy over `target` that passes Array.isArray and answers `length` with `length`. */
   const lying = (target: unknown[], length: unknown): unknown[] =>
@@ -301,6 +419,44 @@ describe("cinatra#4465 — a list length is read once and must be a whole list l
       expect(passthroughFailureText(forgedZodError(SECRET, issues), CTX)).toBe(PASSTHROUGH_UNEXPECTED_ERROR);
     }
     expect(logged).toHaveBeenCalledTimes(lengths.length);
+    expectNoSecretLogged();
+  });
+
+  it("an issue list of the largest list length, 2^32 - 1, names 20 issues and then the rest", () => {
+    const named = Array.from({ length: 20 }, (_, i) => `f${i}: custom`).join("; ");
+    expect(passthroughFailureText(forgedZodError(SECRET, lying(twenty(), 2 ** 32 - 1)), CTX)).toBe(
+      `${PREFIX}: ${named}; and ${2 ** 32 - 1 - 20} more`,
+    );
+    expect(logged).not.toHaveBeenCalled();
+  });
+
+  it("a throwing traits, code or expected getter, or a revoked Proxy as issues or path, answers the fixed sentence", () => {
+    const thrower = () => {
+      throw new Error(SECRET);
+    };
+    const traitsThrows = Object.assign(
+      new PrimitiveInvocationError({ code: "NOT_FOUND", message: SECRET, retryable: false }),
+      { _zod: Object.defineProperty({}, "traits", { get: thrower }), issues: [{ path: [], code: "custom" }] },
+    );
+    const codeThrows = forgedZodError(SECRET, [Object.defineProperty({ path: [] }, "code", { get: thrower })]);
+    const expectedThrows = forgedZodError(SECRET, [
+      Object.defineProperty({ path: [], code: "invalid_type" }, "expected", { get: thrower }),
+    ]);
+    const revokedIssues = Proxy.revocable([{ path: [], code: "custom" }], {});
+    revokedIssues.revoke();
+    const revokedPath = Proxy.revocable(["a"], {});
+    revokedPath.revoke();
+    const errors = [
+      traitsThrows,
+      codeThrows,
+      expectedThrows,
+      forgedZodError(SECRET, revokedIssues.proxy),
+      forgedZodError(SECRET, [{ path: revokedPath.proxy, code: "custom" }]),
+    ];
+    for (const err of errors) {
+      expect(passthroughFailureText(err, CTX)).toBe(PASSTHROUGH_UNEXPECTED_ERROR);
+    }
+    expect(logged).toHaveBeenCalledTimes(errors.length);
     expectNoSecretLogged();
   });
 });
