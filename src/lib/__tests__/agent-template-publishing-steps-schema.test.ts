@@ -3,7 +3,8 @@
 //
 // The column has TWO homes that must agree: the fresh-install bootstrap DDL
 // (`buildCreateStoreSchemaQueries`, src/lib/drizzle-store.ts, through the
-// `agentTemplateRunGateSchemaQueries` leaf) and the operator-upgrade migration
+// `agentTemplateRunGateSchemaQueries` leaf of src/lib/extension-grant-schema.ts,
+// read directly as well) and the operator-upgrade migration
 // (`migrations/core/core__0118`). A fresh install that gets the column while an
 // upgraded instance does not — or the reverse — is a silent split-brain. This
 // suite pins both, plus the Drizzle table definition. Model:
@@ -11,6 +12,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
+import { agentTemplateRunGateSchemaQueries } from "@/lib/extension-grant-schema";
 import { agentTemplates } from "@cinatra-ai/agents/schema";
 
 const bootstrap = buildCreateStoreSchemaQueries("cinatra")
@@ -22,6 +24,12 @@ describe("agent_templates.publishing_steps — DDL parity", () => {
     expect(bootstrap).toMatch(
       /ALTER TABLE .*agent_templates.* ADD COLUMN IF NOT EXISTS publishing_steps text/,
     );
+  });
+
+  it("the agent_templates leaf of the bootstrap carries the ALTER last, with the schema name quoted", () => {
+    const leaf = agentTemplateRunGateSchemaQueries('we"ird').map((q) => q.text);
+    expect(leaf.at(-1)).toBe('ALTER TABLE "we""ird"."agent_templates" ADD COLUMN IF NOT EXISTS publishing_steps text');
+    expect(leaf.filter((text) => text.includes("publishing_steps"))).toHaveLength(1);
   });
 
   it("the migration adds the same column, idempotently", async () => {
