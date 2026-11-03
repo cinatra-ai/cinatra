@@ -1413,7 +1413,7 @@ export function collectPublishingSteps(
     return { ok: false, error: `PUBLISHES_MALFORMED: the flow root declares metadata.cinatra.publishes as ${describePublishesType(root.value)}; it must be the JSON boolean true or false` };
   }
   if (root.value === true) {
-    return { ok: false, error: `PUBLISHES_MISPLACED: the flow root declares metadata.cinatra.publishes: true; declare it on the node that publishes` };
+    return { ok: false, error: `PUBLISHES_MISPLACED: the flow root declares metadata.cinatra.publishes; declare it on the node that publishes` };
   }
   for (const ref of [...topLevelIds, (parsed.start_node as { $component_ref?: unknown } | undefined)?.$component_ref]) {
     if (typeof ref === "string" && ref.startsWith(PUBLISH_GATE_ID_PREFIX)) {
@@ -1476,10 +1476,10 @@ export function collectPublishingSteps(
     }
     if (flag.value === true) {
       if (nested || key === undefined || !topLevelIds.has(key)) {
-        return `PUBLISHES_MISPLACED: ${who} declares publishes: true but is not a top-level node of the flow (a node inside a nested subflow, or a subflow definition); the runtime cannot stop in front of it`;
+        return `PUBLISHES_MISPLACED: ${who} declares metadata.cinatra.publishes but is not a top-level node of the flow (a node inside a nested subflow, or a subflow definition); a stop could not be inserted in front of it`;
       }
       if (typeof node.component_type !== "string" || !PUBLISHES_ACTION_KINDS.has(node.component_type)) {
-        return `PUBLISHES_MISPLACED: ${who} declares publishes: true, but only a node of kind ApiNode, AgentNode, FlowNode or ParallelFlowNode can be the publishing action`;
+        return `PUBLISHES_MISPLACED: ${who} declares metadata.cinatra.publishes, but only a node of kind ApiNode, AgentNode, FlowNode or ParallelFlowNode can be the publishing action`;
       }
       steps.push(key);
     }

@@ -438,6 +438,21 @@ describe("cinatra#4150 — the error texts name the field and the node id, never
     expect((resLong as { error: string }).error).not.toContain(long);
   });
 
+  it("a misplaced declaration does not echo the value it declares", () => {
+    const top = (node: Node) => ({ nodes: [{ $component_ref: "top" }], $referenced_components: { top: { component_type: "FlowNode", id: "top", ...node } } });
+    const cases = [
+      collectPublishingSteps({ metadata: { cinatra: { publishes: true } }, nodes: [] }),
+      collectPublishingSteps(top({ subflow: { component_type: "ApiNode", id: "inner", metadata: { cinatra: { publishes: true } } } })),
+      collectPublishingSteps(one({ component_type: "StartNode", metadata: { cinatra: { publishes: true } } })),
+    ];
+    expect(cases.map((res) => (res as { error: string }).error)).toEqual([
+      "PUBLISHES_MISPLACED: the flow root declares metadata.cinatra.publishes; declare it on the node that publishes",
+      expect.stringMatching(/^PUBLISHES_MISPLACED: node "inner" declares metadata\.cinatra\.publishes but is not a top-level node/),
+      expect.stringMatching(/^PUBLISHES_MISPLACED: node "step" declares metadata\.cinatra\.publishes, but only a node of kind /),
+    ]);
+    for (const res of cases) expect((res as { error: string }).error).not.toMatch(/\btrue\b/);
+  });
+
   it("a line or paragraph separator in a node id is escaped", () => {
     for (const sep of ["\u2028", "\u2029"]) {
       const odd = `a${sep}b`;
