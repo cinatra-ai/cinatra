@@ -70,6 +70,14 @@ export type ExtensionScopedToolRun = {
   runBy: string | null;
   templateId: string;
   packageVersion: string | null;
+  /** The run's template version pin (cinatra#4154); null when the run has none. */
+  versionId?: string | null;
+  /** The install the run executes as (cinatra#1392 Gap 2); null when the row has none. */
+  dependentInstallId?: string | null;
+  /** The calling step the route verified from the runtime's signed pair
+   *  (cinatra#3745, #4154); null when the pair did not verify. The route
+   *  refuses an `extension_tool` call without one before reaching here. */
+  verifiedStepId?: string | null;
 };
 
 export type ExtensionScopedToolOutcome =
