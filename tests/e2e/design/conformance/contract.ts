@@ -109,6 +109,7 @@ import {
   type ArtifactKindDisplay,
   type ArtifactKindDisplaySurfaceId,
 } from "./artifact-review-displays";
+import { kindDisplayFieldDrivers } from "./artifact-review-display-readings";
 import {
   LIFECYCLE_CHAT_COMPOSER_MOUNT,
   type LifecycleComposerRowMount,
@@ -3032,7 +3033,9 @@ function kindDisplayKindState(surface: string, kind: string): StateAssert {
  *     shipped review target already carries — so a display bound to the wrong
  *     source cannot resolve the locator at all. A field the drawing binds only
  *     once the review is continued is read on the continued mount, and its
- *     absence on the open one (`continuedOnlyField`).
+ *     absence on the open one (`continuedOnlyField`). A field the drawing binds
+ *     in several readings gets one driver, from all of its declarations
+ *     (`kindDisplayFieldDrivers` in artifact-review-display-readings.ts).
  *   - the one action the manifest declares, pressed on the control that declares
  *     exactly that action AND that outcome (`declaredAction`), so a driver
  *     cannot press one control and report another one's outcome.
@@ -3063,20 +3066,20 @@ function artifactKindDisplayDriver(row: ArtifactKindDisplay): SurfaceDriver {
     states: {},
   };
 
-  for (const field of row.fields) {
-    const binding = `[data-field="${field.name}=${field.source}"]`;
-    driver.fields[field.name] = {
-      source: field.source,
-      assert:
-        field.reading === "continued"
-          ? continuedOnlyField(row.surface, binding)
-          : async (_page, root) => {
-              const bound = kindDisplayPanel(root, row.surface).locator(binding);
-              await expect(bound).toHaveCount(1);
-              await expect(bound).toBeVisible();
-            },
-    };
-  }
+  // artifact-review-display-readings.ts groups the row's declarations by name
+  // and picks the assertion for each name's reading; this map only says what
+  // each of the three assertions does.
+  driver.fields = kindDisplayFieldDrivers(row.surface, row.fields, {
+    present: (binding) => async (_page: Page, root: Locator) => {
+      const bound = kindDisplayPanel(root, row.surface).locator(binding);
+      await expect(bound).toHaveCount(1);
+      await expect(bound).toBeVisible();
+    },
+    continuedOnly: (binding) => continuedOnlyField(row.surface, binding),
+    skip: (reason) => async () => {
+      test.skip(true, reason);
+    },
+  });
 
   const action = row.action;
   if (action !== null) {

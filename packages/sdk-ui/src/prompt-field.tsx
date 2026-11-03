@@ -18,6 +18,7 @@ import { Label } from "./ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Switch } from "./ui/checkbox";
 import { cn } from "./lib/utils";
+import { userAvatarAccent, userInitials } from "./lib/user-avatar";
 import { LoadingSpinner } from "./loading-spinner";
 
 // ---------------------------------------------------------------------------
@@ -56,6 +57,14 @@ export type Mentionable = {
   displayName: string;
   type?: "assistant" | "user";
   image?: string | null;
+  /** A person's persisted avatar accent (`user.accent_color`), when the host has it. */
+  accentColor?: string | null;
+  /**
+   * A person's display name from the directory, when the host has it. It gives
+   * a user row's avatar initials ("Grace Hopper" draws "GH"); the chat sets
+   * `displayName` to the handle, so the row's label is unchanged.
+   */
+  name?: string | null;
 };
 
 export type PromptFieldProps = {
@@ -772,7 +781,15 @@ export const PromptField = forwardRef<PromptFieldHandle, PromptFieldProps>(funct
               >
                 <Avatar data-size="sm" className="shrink-0">
                   {m.image && <AvatarImage src={m.image} alt={m.displayName} />}
-                  <AvatarFallback>{m.displayName.charAt(0).toUpperCase()}</AvatarFallback>
+                  {m.type === "user" ? (
+                    <AvatarFallback accent={userAvatarAccent({ id: m.id, accentColor: m.accentColor })}>
+                      {/* A row carries no e-mail; its handle ("ada_lovelace") reads
+                          like an e-mail's local part, so it stands in for one. */}
+                      {userInitials({ name: m.name || m.displayName, email: m.handle })}
+                    </AvatarFallback>
+                  ) : (
+                    <AvatarFallback>{m.displayName.charAt(0).toUpperCase()}</AvatarFallback>
+                  )}
                 </Avatar>
                 <span className="truncate">{m.displayName}</span>
               </li>
