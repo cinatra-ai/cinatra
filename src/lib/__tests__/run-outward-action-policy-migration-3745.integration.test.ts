@@ -251,11 +251,14 @@ describe.skipIf(!HAS_DB)("core__0120 on the real runner: additive on main, guard
     expect(await shape()).toEqual({ tables: [], outboxColumns: [] });
   });
 
-  it("a draft database with the statement and no unmarked claim on a running run passes; a marked claim and a paused run do not count", async () => {
+  it("a draft database with the statement and no unmarked claim on a running run passes; a marked claim, a paused run and a pending or done intent of a running run do not count", async () => {
     await seed({ draft: true });
     await addIntent({ gateId: "draft-marked", runStatus: "running", status: "delivering", claimed: true });
     await addIntent({ gateId: "draft-paused", runStatus: "pending_approval", status: "delivering" });
     await addIntent({ gateId: "draft-done", runStatus: "completed", status: "delivered" });
+    // A running run's intent that is neither delivering nor dead-lettered was never claimed by a delivery.
+    await addIntent({ gateId: "draft-running-pending", runStatus: "running", status: "pending" });
+    await addIntent({ gateId: "draft-running-done", runStatus: "running", status: "done" });
     process.env[ACK_ENV] = "workers-stopped";
     const outcome = await migrate();
     expect(outcome.ranNames).toEqual([MIGRATION]);
