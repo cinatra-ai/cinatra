@@ -126,8 +126,9 @@ describe("vendor applications queue (vendor-applications/page.tsx)", () => {
 });
 
 describe("vendor's own submissions (submissions/page.tsx)", () => {
-  it("draws Awaiting others for a pending row, even when the row carries an approving eligibility, and offers Withdraw and no retry", async () => {
-    await serve({ submissions: [pending("mine", { eligibility: { can_approve: true, can_reject: true } })] });
+  // The vendor's own list type has no eligibility, and the stub cuts its rows to that type.
+  it("draws Awaiting others for a pending row and offers Withdraw and no retry", async () => {
+    await serve({ submissions: [pending("mine")] });
     const { container } = render(await VendorSubmissionsPage());
     expect(pillsOf(container, "@acme/mine")).toEqual(["Awaiting others"]);
     expect(container.textContent).toContain("Withdraw");

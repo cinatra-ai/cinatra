@@ -67,21 +67,44 @@ export const SUBMISSIONS = [
   submission("stub-sub-3", "mail-digest", "promoted", "complete"),
 ];
 
+// The fields of each reply row, as the shipped client's types declare them
+// (packages/marketplace-mcp-client/src/types.ts): MarketplaceVendorSubmission, MarketplaceAdminSubmission and
+// MarketplaceVendorApplicationAdminRow. Each list reply cuts its rows to its own list, so a row that a test
+// passes in carries no other field into a reply: the vendor's own list drops the admin-only fields and
+// `eligibility`, and every list drops a field that no type has. marketplace-mcp-stub.test.ts compares
+// these lists with key maps that the compiler checks against those types.
+export const VENDOR_SUBMISSION_FIELDS = [
+  "submission_id", "namespace", "extension_name", "version", "status", "target_final_identity", "artifact_digest",
+  "submitted_at", "decided_at", "decision_reason", "promotion_state", "promotion_error", "final_artifact_digest",
+];
+export const ADMIN_SUBMISSION_FIELDS = [
+  ...VENDOR_SUBMISSION_FIELDS,
+  "vendor_id", "staging_artifact_path", "artifact_size_bytes", "submitter_id", "decided_by_admin_id", "description",
+  "deps_json", "eligibility",
+];
+export const APPLICATION_ROW_FIELDS = [
+  "application_id", "scope", "vendor_id", "status", "tier", "terms_version", "terms_digest", "display_name",
+  "applicant_user_id", "applied_at", "decided_at", "decided_by_admin_id", "decision_reason", "reserved_at",
+  "recovery_attempts", "repair_stuck_at", "eligibility",
+];
+const only = (fields) => (row) => Object.fromEntries(fields.filter((key) => Object.hasOwn(row, key)).map((key) => [key, row[key]]));
+const ADMIN_DEFAULTS = { vendor_id: 1, staging_artifact_path: "stub", artifact_size_bytes: 1, submitter_id: 1, decided_by_admin_id: 1, description: null, deps_json: null };
+
 // The tool table for one set of rows. A walk uses the default rows; a test passes its own.
 export function toolsFor({ applications = VENDOR_APPLICATIONS, submissions = SUBMISSIONS } = {}) {
   return {
     "cinatra-vendor-application-list-admin": ({ status } = {}) => {
       const wanted = Array.isArray(status) ? status : [];
-      const rows = wanted.length
+      const rows = (wanted.length
         ? applications.filter((row) => wanted.includes(row.status) || (wanted.includes("stuck") && row.repair_stuck_at))
-        : applications;
+        : applications).map(only(APPLICATION_ROW_FIELDS));
       return { rows, next_cursor: null };
     },
     "cinatra-extension-submission-list-admin": ({ status } = {}) => {
       const rows = status ? submissions.filter((row) => row.status === status) : submissions;
-      return { submissions: rows.map((row) => ({ vendor_id: 1, staging_artifact_path: "stub", artifact_size_bytes: 1, submitter_id: 1, decided_by_admin_id: 1, description: null, deps_json: null, ...row })) };
+      return { submissions: rows.map((row) => only(ADMIN_SUBMISSION_FIELDS)({ ...ADMIN_DEFAULTS, ...row })) };
     },
-    "cinatra-extension-submission-list-self": () => ({ submissions }),
+    "cinatra-extension-submission-list-self": () => ({ submissions: submissions.map(only(VENDOR_SUBMISSION_FIELDS)) }),
     "cinatra-vendor-application-status": () => ({ state: "approved", scope: "acme", application_id: "stub-app-1", tier: "free", repair_stuck_at: "2026-10-02T09:00:00Z" }),
   };
 }

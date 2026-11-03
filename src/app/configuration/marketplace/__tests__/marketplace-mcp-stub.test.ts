@@ -7,38 +7,66 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createHttpMarketplaceMcpClient } from "@cinatra-ai/marketplace-mcp-client/http-client";
 import type {
   MarketplaceAdminSubmission,
+  MarketplaceExtensionSubmissionListAdminOutput,
+  MarketplaceExtensionSubmissionListSelfOutput,
   MarketplaceVendorApplicationAdminRow,
+  MarketplaceVendorApplicationListAdminOutput,
   MarketplaceVendorApplicationStatusOutput,
   MarketplaceVendorSubmission,
 } from "@cinatra-ai/marketplace-mcp-client";
 
-import { createStub, SUBMISSIONS, VENDOR_APPLICATIONS } from "../../../../../tests/e2e/marketplace-approvals/marketplace-mcp-stub.mjs";
+import {
+  ADMIN_SUBMISSION_FIELDS,
+  APPLICATION_ROW_FIELDS,
+  createStub,
+  SUBMISSIONS,
+  VENDOR_APPLICATIONS,
+  VENDOR_SUBMISSION_FIELDS,
+} from "../../../../../tests/e2e/marketplace-approvals/marketplace-mcp-stub.mjs";
 
-// Each key list is checked by the compiler against the client's own type: a key the type
-// gains or loses makes this file fail to compile, so the runtime checks below cannot drift.
+// A key map names every key of one client type and marks it required or optional, as the type does.
+// `satisfies KeyMap<T>` fails to compile when the type has a key that the map lacks (the mapped type
+// makes every key required), when the map has a key that the type lacks (the excess-property check of
+// the object literal), and when the map marks a key required that the type makes optional, or the reverse.
+type KeyMap<T> = { [K in keyof T]-?: Record<never, never> extends Pick<T, K> ? "optional" : "required" };
+type Keys = Record<string, "required" | "optional">;
+
 const SUBMISSION_KEYS = {
-  submission_id: true, namespace: true, extension_name: true, version: true, status: true, target_final_identity: true,
-  artifact_digest: true, submitted_at: true, decided_at: true, decision_reason: true, promotion_state: true,
-  promotion_error: true, final_artifact_digest: true,
-} satisfies Record<keyof MarketplaceVendorSubmission, true>;
-const ADMIN_ONLY_KEYS = {
-  vendor_id: true, staging_artifact_path: true, artifact_size_bytes: true, submitter_id: true, decided_by_admin_id: true,
-  description: true, deps_json: true,
-} satisfies Record<Exclude<keyof MarketplaceAdminSubmission, keyof MarketplaceVendorSubmission | "eligibility">, true>;
+  submission_id: "required", namespace: "required", extension_name: "required", version: "required", status: "required",
+  target_final_identity: "required", artifact_digest: "required", submitted_at: "required", decided_at: "required",
+  decision_reason: "required", promotion_state: "required", promotion_error: "required", final_artifact_digest: "required",
+} satisfies KeyMap<MarketplaceVendorSubmission>;
+const ADMIN_SUBMISSION_KEYS = {
+  ...SUBMISSION_KEYS,
+  vendor_id: "required", staging_artifact_path: "required", artifact_size_bytes: "required", submitter_id: "required",
+  decided_by_admin_id: "required", description: "required", deps_json: "required", eligibility: "optional",
+} satisfies KeyMap<MarketplaceAdminSubmission>;
 const APPLICATION_KEYS = {
-  application_id: true, scope: true, vendor_id: true, status: true, tier: true, terms_version: true, terms_digest: true,
-  display_name: true, applicant_user_id: true, applied_at: true, decided_at: true, decided_by_admin_id: true,
-  decision_reason: true, reserved_at: true, recovery_attempts: true, repair_stuck_at: true,
-} satisfies Record<Exclude<keyof MarketplaceVendorApplicationAdminRow, "eligibility">, true>;
-const STATUS_KEYS: string[] = ["state", "scope", "application_id", "tier", "repair_stuck_at"] satisfies Array<keyof MarketplaceVendorApplicationStatusOutput>;
+  application_id: "required", scope: "required", vendor_id: "required", status: "required", tier: "required",
+  terms_version: "required", terms_digest: "required", display_name: "required", applicant_user_id: "required",
+  applied_at: "required", decided_at: "required", decided_by_admin_id: "required", decision_reason: "required",
+  reserved_at: "required", recovery_attempts: "required", repair_stuck_at: "required", eligibility: "optional",
+} satisfies KeyMap<MarketplaceVendorApplicationAdminRow>;
+const STATUS_KEYS = {
+  state: "required", scope: "optional", application_id: "optional", tier: "optional", decided_at: "optional",
+  decision_reason: "optional", terms_version: "optional", repair_stuck_at: "optional",
+} satisfies KeyMap<MarketplaceVendorApplicationStatusOutput>;
+const APPLICATION_LIST_KEYS = { rows: "required", next_cursor: "required" } satisfies KeyMap<MarketplaceVendorApplicationListAdminOutput>;
+const OWN_SUBMISSION_LIST_KEYS = { submissions: "required" } satisfies KeyMap<MarketplaceExtensionSubmissionListSelfOutput>;
+const ADMIN_SUBMISSION_LIST_KEYS = { submissions: "required" } satisfies KeyMap<MarketplaceExtensionSubmissionListAdminOutput>;
 
 const TIERS = ["free", "commercial"];
 const APPLICATION_STATUSES = ["applied", "approved", "rejected", "cancelled", "reset"];
 const STATUS_STATES = ["none", "applied", "approved", "rejected", "cancelled", "reset"];
 
-function expectRow(row: object, required: object) {
-  for (const key of Object.keys(required)) expect(row, `missing ${key}`).toHaveProperty(key);
+// The value carries every required key of its map and no key that the map lacks.
+function expectExact(value: object, keys: Keys, what: string) {
+  for (const key of Object.keys(value)) expect(Object.hasOwn(keys, key), `${what}: extra key ${key}`).toBe(true);
+  for (const [key, kind] of Object.entries(keys)) {
+    if (kind === "required") expect(Object.hasOwn(value, key), `${what}: missing key ${key}`).toBe(true);
+  }
 }
+const sorted = (keys: Iterable<string>) => [...keys].sort();
 
 describe("marketplace MCP stub", () => {
   let server: Server;
@@ -89,9 +117,10 @@ describe("marketplace MCP stub", () => {
     it("vendor application list: every row field, the tier, the status and next_cursor", async () => {
       const out = await client.vendorApplicationListAdmin({ limit: 50 });
       expect(out).toHaveProperty("next_cursor", null);
+      expectExact(out, APPLICATION_LIST_KEYS, "application list");
       expect(out.rows.length).toBeGreaterThan(0);
       for (const row of out.rows) {
-        expectRow(row, APPLICATION_KEYS);
+        expectExact(row, APPLICATION_KEYS, `application ${row.application_id}`);
         expect(TIERS).toContain(row.tier);
         expect(APPLICATION_STATUSES).toContain(row.status);
         expect(typeof row.recovery_attempts).toBe("number");
@@ -99,26 +128,78 @@ describe("marketplace MCP stub", () => {
       }
     });
 
-    it("both submission lists: every row field, digests included, and the admin-only fields on the admin list only", async () => {
+    it("both submission lists: the output keys, every row's keys, digests included, and the admin-only keys on the admin list only", async () => {
       const own = await client.extensionSubmissionListSelf();
+      expectExact(own, OWN_SUBMISSION_LIST_KEYS, "own submission list");
       expect(own.submissions.length).toBeGreaterThan(0);
       for (const row of own.submissions) {
-        expectRow(row, SUBMISSION_KEYS);
+        expectExact(row, SUBMISSION_KEYS, `own submission ${row.submission_id}`);
         expect(typeof row.artifact_digest).toBe("string");
         expect(row.final_artifact_digest === null || typeof row.final_artifact_digest === "string").toBe(true);
       }
       const admin = await client.extensionSubmissionListAdmin({});
-      for (const row of admin.submissions) {
-        expectRow(row, SUBMISSION_KEYS);
-        expectRow(row, ADMIN_ONLY_KEYS);
-      }
+      expectExact(admin, ADMIN_SUBMISSION_LIST_KEYS, "admin submission list");
+      expect(admin.submissions.length).toBeGreaterThan(0);
+      for (const row of admin.submissions) expectExact(row, ADMIN_SUBMISSION_KEYS, `admin submission ${row.submission_id}`);
     });
 
-    it("application status: only the fields of its output type, with a valid state and tier", async () => {
+    it("application status: only the keys of its output type, with a valid state and tier", async () => {
       const out = await client.vendorApplicationStatus();
+      expectExact(out, STATUS_KEYS, "application status");
       expect(STATUS_STATES).toContain(out.state);
       expect(TIERS).toContain(out.tier);
-      for (const key of Object.keys(out)) expect(STATUS_KEYS, `unknown ${key}`).toContain(key);
+    });
+
+    it("cuts each list row to the field list of its type", () => {
+      expect(sorted(VENDOR_SUBMISSION_FIELDS)).toEqual(sorted(Object.keys(SUBMISSION_KEYS)));
+      expect(sorted(ADMIN_SUBMISSION_FIELDS)).toEqual(sorted(Object.keys(ADMIN_SUBMISSION_KEYS)));
+      expect(sorted(APPLICATION_ROW_FIELDS)).toEqual(sorted(Object.keys(APPLICATION_KEYS)));
+    });
+  });
+
+  describe("rows that a test passes in", () => {
+    const hint = { can_approve: false, can_reject: false };
+    let injected: Server;
+    let at: string;
+    beforeAll(async () => {
+      injected = createStub({
+        applications: [{ ...VENDOR_APPLICATIONS[1], eligibility: hint, debug: true }],
+        submissions: [{ ...SUBMISSIONS[0], eligibility: hint, debug: true }],
+      });
+      await new Promise<void>((resolve) => injected.listen(0, "localhost", resolve));
+      at = `http://localhost:${(injected.address() as AddressInfo).port}`;
+    });
+    afterAll(async () => {
+      await new Promise((resolve) => injected.close(resolve));
+    });
+    const onlyRow = async (name: string, list: string) => {
+      const response = await fetch(`${at}/wp-json/cinatra/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: {} } }),
+      });
+      const reply = (await response.json()) as { result: { structuredContent: Record<string, Array<Record<string, unknown>>> } };
+      const rows = reply.result.structuredContent[list];
+      expect(rows).toHaveLength(1);
+      return rows[0];
+    };
+
+    it("the application list keeps eligibility and drops a key that no type has", async () => {
+      const row = await onlyRow("cinatra-vendor-application-list-admin", "rows");
+      expectExact(row, APPLICATION_KEYS, "injected application");
+      expect(row.eligibility).toEqual(hint);
+    });
+
+    it("the vendor's own list drops eligibility, the admin-only keys and a key that no type has", async () => {
+      const row = await onlyRow("cinatra-extension-submission-list-self", "submissions");
+      expectExact(row, SUBMISSION_KEYS, "injected own submission");
+      expect(row).not.toHaveProperty("eligibility");
+    });
+
+    it("the admin submission list keeps eligibility and drops a key that no type has", async () => {
+      const row = await onlyRow("cinatra-extension-submission-list-admin", "submissions");
+      expectExact(row, ADMIN_SUBMISSION_KEYS, "injected admin submission");
+      expect(row.eligibility).toEqual(hint);
     });
   });
 
