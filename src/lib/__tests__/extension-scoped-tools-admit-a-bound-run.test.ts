@@ -326,8 +326,15 @@ describe("dispatchExtensionScopedTool — a module's own refusal (cinatra#3847)"
   });
 
   it("still answers a module that fails without refusing as a server error", async () => {
+    // cinatra#4471: the failure's own text never becomes the body; the
+    // passthrough's fixed sentence does, and the server log records the rest.
+    vi.spyOn(console, "error").mockImplementation(() => {});
     const outcome = await dispatchThrowing(new Error("fixture failure"));
-    expect(outcome).toEqual({ ok: false, status: 500, error: "fixture failure" });
+    expect(outcome).toEqual({
+      ok: false,
+      status: 500,
+      error: "the tool call failed on an unexpected error; the failure is logged on the server",
+    });
   });
 
   it("answers a named refusal whose sentence breaks a bound as a server error, without the sentence", async () => {
