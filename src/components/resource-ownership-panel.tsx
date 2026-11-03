@@ -415,7 +415,7 @@ export function ResourceOwnershipPanel({
                   key={c.userId}
                   className="flex items-center gap-3 py-2 border-b border-line last:border-b-0"
                 >
-                  <Avatar className="h-8 w-8 rounded-full">
+                  <Avatar className="h-8 w-8">
                     <AvatarImage src={c.image ?? undefined} alt={c.name} />
                     <AvatarFallback>
                       {getInitials(c.name) || <Users className="size-4" />}
