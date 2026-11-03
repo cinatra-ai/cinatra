@@ -50,13 +50,16 @@ const STAGED = {
   // tablist the five-entry strip and added the workspace scope (epic cinatra#2806),
   // and re-copied verbatim at version 0.12.0 (design@bda0cf8d, cinatra#4126): the copy carries
   // every surface the drawing has added since, among them the console's fourth tab,
-  // review-policy, and its gate-volume.
+  // review-policy, and its gate-volume. Re-copied verbatim again at version 0.13.0
+  // (design@67ecd66d, cinatra#4388): the dashboard's artifact page draws the dashboard
+  // extension's own display, so the two surfaces of the core pointer (the pointer detail
+  // and its scope chips) are no longer declared.
   // Unpinned because only one of its surfaces is in scope for that adoption; it
   // joins the pin gate when every surface of the drawing has a driver.
   "app-artifacts.json": {
     spec: "specs/app-artifacts.html",
-    manifestSha256: "213e69761afecc68527cd97ca1bfdd9d2f6af011c1209026f43146f2eb7c0ae4",
-    contentHash: "sha256:f1d26ced35085568cc8286365a625939d77021d7836e03c46e0871468f415de9",
+    manifestSha256: "9be0560000ad449b9c75167c726ca44c51efcd5e6eea1497cdb8691b34e1f05b",
+    contentHash: "sha256:dd0eeaf1e9aaeede212214e7711e57a7c76fa3d000a501c13266da971a0e70c6",
   },
   // The lifecycle-cards drawing, staged by cinatra#3156 (the suggestion-chip wave).
   "app-lifecycle-cards.json": {
@@ -66,12 +69,15 @@ const STAGED = {
   },
   // The artifact-review drawing, staged by cinatra#3158 (the artifact-kind
   // display wave). First-time adoption: the drawing has never been committed
-  // here, so there is no earlier record to move. Eleven of its forty surfaces are
-  // driven by that wave; it joins the pin gate when every one of them is covered.
+  // here, so there is no earlier record to move. Re-copied verbatim from the
+  // published body (design@70c209dd), which declares fifty-nine surfaces; it joins
+  // the pin gate when every one of them is covered. Re-copied verbatim at
+  // design@67ecd66d (cinatra#4388): dashboard-display draws six readings and binds
+  // open-live once for each of the four that draw the live dashboard link.
   "app-artifact-review.json": {
     spec: "specs/app-artifact-review.html",
-    manifestSha256: "605745f5f670628d1bbaeb6e5e868e3d4401d653666cdf450ab149120ce94113",
-    contentHash: "sha256:eed1cc2d55f1aa561b77e637d382bef271340c87239a189c117d12baa51c44b1",
+    manifestSha256: "641bcfff84564190321abfff34c55321ae7c7c15e8d820c505a6552f2c5b6a6c",
+    contentHash: "sha256:6d519e1e4611425263875da940529f526867b664931356be9774a85ee66d198d",
   },
 };
 
