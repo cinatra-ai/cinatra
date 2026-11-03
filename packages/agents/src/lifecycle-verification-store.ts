@@ -133,10 +133,10 @@ export const verificationReopenNamesSql = `
 
 /**
  * Run `verificationReopenNamesSql` on the store's schema (the statement holds no schema
- * name), then, in the same transaction, wake the paused run of a declared review family
- * whose lineage the names make read closed (lifecycle-repair-store
- * `wakeDeclaredFamilyOnClosedLineage`): every lineage with an attempt at 2 or later on
- * a gate named here. Returns the gate ids of the intents it woke.
+ * name), then, in the same transaction, carry the latest decision of a declared review
+ * family whose lineage the names make read closed (lifecycle-repair-store
+ * `carryDeclaredReviewDecision`): every lineage with an attempt at 2 or later on a gate
+ * named here. Returns the gate ids of the resume intents it inserted.
  */
 export async function nameVerificationReopensThatRepairRowsRestOn(): Promise<string[]> {
   const schema = getTableConfig(artifactVerificationRecords).schema ?? "cinatra";
@@ -157,13 +157,13 @@ export async function nameVerificationReopensThatRepairRowsRestOn(): Promise<str
         ).map((r) => r.lineageId),
       ),
     ].sort();
-    const { wakeDeclaredFamilyOnClosedLineage } = await import("./lifecycle-repair-store");
-    const woken: string[] = [];
+    const { carryDeclaredReviewDecision } = await import("./lifecycle-repair-store");
+    const carried: string[] = [];
     for (const lineageId of lineageIds) {
-      const gateId = await wakeDeclaredFamilyOnClosedLineage(tx, lineageId);
-      if (gateId) woken.push(gateId);
+      const gateId = await carryDeclaredReviewDecision(tx, lineageId);
+      if (gateId) carried.push(gateId);
     }
-    return woken;
+    return carried;
   });
 }
 

@@ -40,7 +40,7 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { createHash, randomUUID } from "node:crypto";
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { db } from "./db";
 import {
@@ -144,8 +144,8 @@ export interface RecordChangesRequestedInput {
   currentBaseRevisionId: string | null;
   // cinatra#4312 — no caller-set lineage id: the store derives the lineage from
   // the decided gate itself (`deriveDecidedGateLineage`), because the lineage
-  // decides same-artifact enforcement, the verification reopen, the wake scope
-  // and the resume road.
+  // decides same-artifact enforcement, the verification reopen, the carrier
+  // scope and the resume road.
   /** The cycle bound (test override); defaults to `MAX_REPAIR_CYCLES`. */
   maxCycles?: number;
   /** The DECIDING actor (cinatra#2047 D-2). `changes_requested` RESOLVES the base
@@ -443,9 +443,10 @@ export async function recordChangesRequested(
       .returning();
     if (ins[0]) {
       // cinatra#4312 — an escalated lineage has no successor to decide. If the
-      // settled gate is a declared review leg whose run is still paused, wake the
-      // decision the resume worker set aside for it, in this same commit.
-      if (status === "escalated") await wakeDeclaredReviewAfterTerminalRepair(tx, lineageId);
+      // settled gate's lineage started on a leg of a declared review whose run is
+      // still paused, the same commit inserts a resume intent that carries the
+      // family's latest decision (carryDeclaredReviewDecision).
+      if (status === "escalated") await carryDeclaredReviewDecision(tx, lineageId);
       return { row: ins[0], fresh: true as const };
     }
     // A CONCURRENT identical call won the (gate) UNIQUE — read the durable winner
@@ -641,7 +642,7 @@ export async function submitRepairResponse(
     // A stale/tombstoned base marks the repair STALE (a moved target the review no
     // longer applies to); a producer-shape error leaves the repair open to retry.
     // cinatra#4312 — a stale lineage has no successor to decide, so the same commit
-    // wakes a declared review's paused run (see wakeDeclaredReviewAfterTerminalRepair).
+    // carries a declared review's latest decision (see carryDeclaredReviewDecision).
     if (lineage.code === "stale-base" || lineage.code === "tombstoned-base") {
       await db.transaction(async (tx) => {
         const moved = await tx
@@ -649,7 +650,7 @@ export async function submitRepairResponse(
           .set({ status: "stale", updatedAt: sql`now()` })
           .where(and(eq(lifecycleRepair.id, repair.id), eq(lifecycleRepair.status, repair.status)))
           .returning({ lineageId: lifecycleRepair.lineageId });
-        if (moved[0]) await wakeDeclaredReviewAfterTerminalRepair(tx, moved[0].lineageId);
+        if (moved[0]) await carryDeclaredReviewDecision(tx, moved[0].lineageId);
       });
     }
     return { ok: false, code: lineage.code, error: lineage.error };
@@ -1065,7 +1066,8 @@ const hasSuccessorFields = (row: LineageAttemptRow): boolean =>
  * (`malformed-lineage`), an unknown status, a `repaired` attempt without a
  * successor id, a successor gate that is missing, in an unknown status, or
  * settled as changes requested with no later attempt (`malformed-lineage`).
- * `executor`: the resume worker's run decision lock transaction, if any. */
+ * `executor`: a caller's open transaction, if any: the resume worker's run
+ * decision lock, or the close that carries a decision (`carryDeclaredReviewDecision`). */
 export async function isRepairLineageOpen(gateId: string, executor: RepairStoreExecutor = db): Promise<boolean> {
   const chain = await executor
     .select()
@@ -1118,46 +1120,55 @@ export async function isRepairLineageOpen(gateId: string, executor: RepairStoreE
 }
 
 /**
- * cinatra#4312 — WAKE a declared review's paused run once a lineage that one of
- * its legs started closes WITHOUT a successor to decide (`escalated` at record
- * time or by the dispatch drain, `stale` on a moved base). Runs inside the
- * caller's transaction, so the terminal write and the wake commit together.
+ * cinatra#4312 — CARRY a declared review's decision once a lineage that one of
+ * its legs started closes WITHOUT a gate decision: the latest attempt goes
+ * `escalated` (at record time, or by the dispatch drain) or `stale` (a moved
+ * base), or the review orchestration sweep names a verification reopen gate
+ * and the lineage then reads closed. Runs inside the caller's transaction, so
+ * the close and the carrier commit together.
  *
- * While the lineage was open, the resume worker acknowledged decisions of the
- * family without sending them (the run stays parked), and a leg settled as
- * changes requested writes no resume intent. With no successor left, no later
- * decision would resume the run. So the wake makes sure one intent of the family
- * is `pending` when this commit lands: the worker then re-reads the family and
- * the lineage and resumes the run with that decision.
+ * While the lineage was open, the resume worker closed the family's decisions
+ * without a send (the run stays parked, as for a sibling leg that is still
+ * pending), and a leg settled as changes requested writes no resume intent. With
+ * no gate left to decide on this lineage, no later decision would resume the run.
+ * So this INSERTS one new `pending` resume intent that carries the family's
+ * latest decision. It never updates a row: an intent that is pending, leased,
+ * done or dead-lettered keeps its status, attempts and lease as they are.
  *
- * Serialization with the worker:
- *   1. The run row is taken `FOR NO KEY UPDATE` first. The worker writes the
- *      acknowledgement that keeps a run parked (another artifact of the pause,
- *      or a regenerated artifact's review, is open; no resume is sent) under a
- *      SHARE lock on the same row, on a re-read (artifact-review-resume-delivery,
- *      artifact-review-gate-store `withRunDecisionLock`). So that acknowledgement
- *      is either committed before this read (the wake sees the `done` row) or
- *      made after this commit (the re-read sees the lineage closed and the worker
- *      resumes). This holds for an intent written after this read, too.
- *   2. The family's intents in `pending`, `delivering` or `done` are taken
- *      `FOR UPDATE` (in gate-id order). A `pending` one is left as it is: the
- *      claim skips a locked row, and after this commit the worker reads the
- *      lineage closed. Else a `delivering` one (a worker holds it) goes back to
- *      `pending` with its lease cleared, so the holder's acknowledgement no
- *      longer matches (`lease-lost`). Else the most recently acknowledged `done`
- *      one goes back to `pending`. The woken intent starts a new delivery:
- *      `attempts` returns to 0, so it is not dead-lettered for attempts an
- *      earlier delivery used.
+ * The new intent:
+ *   - is keyed on the gate the closing attempt repairs (the gate whose
+ *     changes-requested decision opened that attempt; the root for attempt 1).
+ *     Such a gate was settled as changes requested, so its decision wrote no
+ *     intent, and each attempt closes at most once on these roads. The insert is
+ *     `ON CONFLICT (gate_id) DO NOTHING`;
+ *   - names the root leg's review task id, so the worker takes the family road
+ *     (`declaredReviewFamilyState`, then every leg's lineage) before it sends;
+ *   - copies `kind` and `response_text` of the newest intent (by `created_at`)
+ *     on a gate of the family: a leg, or a gate one of the family's lineages
+ *     repairs or opened as its successor. The status of that intent does not
+ *     matter: only its decision is copied.
  *
- * Nothing to wake: the root's task id is no declared review task id, the root
- * is missing or not bound to the lineage (another run's intents are never
- * touched), the run is no longer `pending_approval`, or the family has no
- * intent in those states (the family's next decision writes its own intent).
- * The root can be any leg of the family, the post's own leg too: the worker
- * keeps the run parked on a lineage of every leg settled as changes requested
- * (artifact-review-resume-delivery `regenerationOpen`).
+ * Serialization with the worker: the run row is taken `FOR NO KEY UPDATE` before
+ * the lineage and the decisions are read. The worker closes a decision without a
+ * send under a SHARE lock on the same row, on a re-read of the family and of every
+ * lineage (artifact-review-gate-store `withRunDecisionLock`). So that close is
+ * either committed before this read (this inserts the carrier, which reads the
+ * lineage closed) or made after this commit (the re-read sees the lineage closed,
+ * and that worker resumes the run itself). In the second case, and when two
+ * closes of a family commit together, more than one intent can send: delivery
+ * stays at least once, as on main for two legs decided at the same time, and
+ * every intent after the first that lands finds the run off `pending_approval`.
+ *
+ * Nothing is inserted (null): the root is missing or not bound to the lineage
+ * (another run's intents are never read), its task id is no declared review task
+ * id, the run is not `pending_approval`, the lineage is still open or not
+ * readable (RepairLineageStateError; a later naming or close inserts then), a
+ * declared gate of another review of the run is newer than every leg of this
+ * family (the run went on to a later pause), or the family has no decision yet
+ * (its next decision writes its own intent). A failed read that is no
+ * RepairLineageStateError throws, so the caller's transaction rolls back with it.
  */
-export async function wakeDeclaredReviewAfterTerminalRepair(
+export async function carryDeclaredReviewDecision(
   executor: RepairStoreExecutor,
   lineageId: string,
 ): Promise<string | null> {
@@ -1166,57 +1177,10 @@ export async function wakeDeclaredReviewAfterTerminalRepair(
     root = await readBoundLineageRoot(lineageId, executor);
   } catch (err) {
     if (!(err instanceof RepairLineageStateError)) throw err;
-    console.warn(`[lifecycle-repair] no wake for lineage ${lineageId}: ${err.message}`);
+    console.warn(`[lifecycle-repair] no carrier for lineage ${lineageId}: ${err.message}`);
     return null;
   }
   if (!isDeclaredReviewTaskId(root.reviewTaskId)) return null;
-  return wakeFamilyIntent(executor, root);
-}
-
-/**
- * cinatra#4312 — WAKE the paused run of a declared review family once a lineage
- * of one of its legs reads closed on a road that writes no terminal repair:
- *   - the sweep's naming of a verification reopen gate (lifecycle-verification-store
- *     `nameVerificationReopensThatRepairRowsRestOn`), in the naming's transaction.
- *     An old writer's later attempt on an unnamed reopen gate leaves the lineage
- *     malformed; the name makes it readable, and with a terminal latest attempt it
- *     reads closed. On a later declared leg the declared-lineage check of the reopen
- *     binding refuses the name, so that lineage stays malformed; on the post's own
- *     leg it does not;
- *   - the decision of a successor whose lineage did not start on a later declared
- *     leg (artifact-review-resume-delivery: that decision keeps the automatic-gate
- *     road and resumes nothing), in the transaction that marks its intent done.
- * The resume worker keeps a run parked while a lineage of ANY leg of the family
- * settled as changes requested is open (`regenerationOpen`), the post's own leg's
- * too. So this wakes one intent of the family the way
- * `wakeDeclaredReviewAfterTerminalRepair` does, and the worker re-reads the family
- * and every lineage before it resumes the run or sets the intent aside again.
- *
- * Nothing to wake: the root is missing or not bound to the lineage, the lineage is
- * still open or not readable (RepairLineageStateError), the root's task id is no
- * declared review task id, or, as in `wakeFamilyIntent`, the run or the family has
- * nothing to wake. A failed read that is no RepairLineageStateError throws, so the
- * caller's transaction rolls back with it.
- */
-export async function wakeDeclaredFamilyOnClosedLineage(
-  executor: RepairStoreExecutor,
-  lineageId: string,
-): Promise<string | null> {
-  let root: LineageRootGate;
-  try {
-    root = await readBoundLineageRoot(lineageId, executor);
-    if (await isRepairLineageOpen(lineageId, executor)) return null;
-  } catch (err) {
-    if (!(err instanceof RepairLineageStateError)) throw err;
-    return null;
-  }
-  if (!isDeclaredReviewTaskId(root.reviewTaskId)) return null;
-  return wakeFamilyIntent(executor, root);
-}
-
-/** The family part of the two wakes above: the run lock, then one intent of the
- * family set to `pending` (see `wakeDeclaredReviewAfterTerminalRepair`). */
-async function wakeFamilyIntent(executor: RepairStoreExecutor, root: LineageRootGate): Promise<string | null> {
   const [run] = await executor
     .select({ status: agentRuns.status })
     .from(agentRuns)
@@ -1224,44 +1188,63 @@ async function wakeFamilyIntent(executor: RepairStoreExecutor, root: LineageRoot
     .limit(1)
     .for("no key update");
   if (run?.status !== "pending_approval") return null;
+  try {
+    if (await isRepairLineageOpen(lineageId, executor)) return null;
+  } catch (err) {
+    if (!(err instanceof RepairLineageStateError)) throw err;
+    console.warn(`[lifecycle-repair] no carrier for lineage ${lineageId} yet: ${err.message}`);
+    return null;
+  }
+  const [closing] = await executor
+    .select({ gateId: lifecycleRepair.gateId })
+    .from(lifecycleRepair)
+    .where(eq(lifecycleRepair.lineageId, lineageId))
+    .orderBy(desc(lifecycleRepair.attempt), desc(lifecycleRepair.createdAt))
+    .limit(1);
+  if (!closing) return null;
+
   const base = baseReviewTaskId(root.reviewTaskId);
-  const legIds = (
-    await executor
-      .select({ id: artifactReviewGates.id, reviewTaskId: artifactReviewGates.reviewTaskId })
-      .from(artifactReviewGates)
-      .where(eq(artifactReviewGates.runId, root.runId))
-  )
-    .filter((g) => baseReviewTaskId(g.reviewTaskId) === base)
-    .map((g) => g.id);
-  if (legIds.length === 0) return null;
-  const candidates = await executor
-    .select({
-      gateId: artifactReviewResumeOutbox.gateId,
-      status: artifactReviewResumeOutbox.status,
-      updatedAt: artifactReviewResumeOutbox.updatedAt,
-    })
+  const runGates = await executor
+    .select({ id: artifactReviewGates.id, reviewTaskId: artifactReviewGates.reviewTaskId, createdAt: artifactReviewGates.createdAt })
+    .from(artifactReviewGates)
+    .where(eq(artifactReviewGates.runId, root.runId));
+  const legs = runGates.filter((g) => baseReviewTaskId(g.reviewTaskId) === base);
+  if (legs.length === 0) return null;
+  const newestLeg = Math.max(...legs.map((g) => g.createdAt.getTime()));
+  if (runGates.some((g) => isDeclaredReviewTaskId(g.reviewTaskId) &&
+      baseReviewTaskId(g.reviewTaskId) !== base && g.createdAt.getTime() > newestLeg)) {
+    console.warn(`[lifecycle-repair] no carrier for lineage ${lineageId}: run ${root.runId} is paused at a later review`);
+    return null;
+  }
+  const legIds = legs.map((g) => g.id);
+  const familyGates = new Set(legIds);
+  for (const r of await executor
+    .select({ gateId: lifecycleRepair.gateId, successorGateId: lifecycleRepair.successorGateId })
+    .from(lifecycleRepair)
+    .where(inArray(lifecycleRepair.lineageId, legIds))) {
+    familyGates.add(r.gateId);
+    if (r.successorGateId) familyGates.add(r.successorGateId);
+  }
+  const [decision] = await executor
+    .select({ kind: artifactReviewResumeOutbox.kind, responseText: artifactReviewResumeOutbox.responseText })
     .from(artifactReviewResumeOutbox)
-    .where(
-      and(
-        inArray(artifactReviewResumeOutbox.gateId, legIds),
-        inArray(artifactReviewResumeOutbox.status, ["pending", "delivering", "done"]),
-        isNull(artifactReviewResumeOutbox.deadLetteredAt),
-      ),
-    )
-    .orderBy(asc(artifactReviewResumeOutbox.gateId))
-    .for("update");
-  const pendingOne = candidates.find((c) => c.status === "pending");
-  if (pendingOne) return pendingOne.gateId;
-  const chosen =
-    candidates.find((c) => c.status === "delivering") ??
-    [...candidates].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
-  if (!chosen) return null;
-  const woken = await executor
-    .update(artifactReviewResumeOutbox)
-    .set({ status: "pending", leaseToken: null, leaseExpiresAt: null, attempts: 0, updatedAt: sql`now()` })
-    .where(and(eq(artifactReviewResumeOutbox.gateId, chosen.gateId), eq(artifactReviewResumeOutbox.status, chosen.status)))
+    .where(inArray(artifactReviewResumeOutbox.gateId, [...familyGates]))
+    .orderBy(desc(artifactReviewResumeOutbox.createdAt), desc(artifactReviewResumeOutbox.gateId))
+    .limit(1);
+  if (!decision) return null;
+  const carried = await executor
+    .insert(artifactReviewResumeOutbox)
+    .values({
+      gateId: closing.gateId,
+      runId: root.runId,
+      reviewTaskId: root.reviewTaskId,
+      kind: decision.kind,
+      responseText: decision.responseText,
+      status: "pending",
+    })
+    .onConflictDoNothing({ target: [artifactReviewResumeOutbox.gateId] })
     .returning({ gateId: artifactReviewResumeOutbox.gateId });
-  return woken[0]?.gateId ?? null;
+  return carried[0]?.gateId ?? null;
 }
 
 function toRepairRow(r: typeof lifecycleRepair.$inferSelect): RepairRow {

@@ -1206,12 +1206,14 @@ export async function markResumeIntentDelivered(
  * run's row. The resume worker writes the acknowledgement that keeps a run
  * parked (another artifact of the pause, or a regenerated artifact's review, is
  * open; no resume is sent) inside this lock, on a re-read of the family and of
- * its repair lineages. The terminal repair writers take the same row with
- * `FOR NO KEY UPDATE` before they wake a set-aside decision
- * (lifecycle-repair-store `wakeDeclaredReviewAfterTerminalRepair`). So the two
- * cannot interleave: either the acknowledgement commits first and the wake sees
- * it, or the terminal write commits first and the re-read sees the lineage
- * closed. A run row that does not exist takes no lock; `fn` still runs.
+ * its repair lineages. A close of a lineage with no gate decision takes the
+ * same row with `FOR NO KEY UPDATE` before it reads the lineage and the family's
+ * decisions and inserts a resume intent that carries the latest one
+ * (lifecycle-repair-store `carryDeclaredReviewDecision`). So the two cannot
+ * interleave: either the acknowledgement commits first and the close then reads
+ * the lineage closed and inserts the carrier, or the close commits first and the
+ * re-read sees the lineage closed and the worker resumes the run itself. A run
+ * row that does not exist takes no lock; `fn` still runs.
  */
 export async function withRunDecisionLock<T>(
   runId: string,

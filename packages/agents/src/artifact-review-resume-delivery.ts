@@ -67,7 +67,6 @@ import {
 import {
   baseReviewTaskId,
   declaredReviewFamilyState,
-  isDeclaredReviewLeg,
   isDeclaredReviewTaskId,
 } from "@/lib/artifacts/artifact-review-target";
 import { isAutoReviewTaskId, isRepairSuccessorTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
@@ -138,40 +137,22 @@ export async function deliverArtifactReviewResumeIntent(
   if (isAutoReviewTaskId(reviewTaskId)) {
     if (!leaseToken) return "retryable";
     await releaseRunForResolvedAutoGate(gateId);
-    // cinatra#4312 — Regenerate on a later leg of a per-artifact declared review
-    // (the featured image's) settled that leg and opened this successor gate on
-    // its repair lineage. The run the leg paused waits for THIS decision, so the
-    // intent takes that leg's WayFlow road below (with this gate's own decision).
-    // The lineage read is strict: a malformed task id, an unknown repair, another
-    // attempt, a repair that does not name this gate, or a missing root gate
-    // THROWS (RepairLineageStateError), and the sweep leaves the intent for
-    // re-claim until its attempts are used, then dead-letters it. A successor
-    // whose lineage started on any other gate keeps the automatic-gate road.
-    // When that gate is a leg of a declared review (the post's own leg), the
-    // run can still be parked on this lineage (`regenerationOpen` reads every
-    // leg's), and this decision resumes nothing: so the commit that marks this
-    // intent done also wakes one intent of that family once the lineage reads
-    // closed (lifecycle-repair-store `wakeDeclaredFamilyOnClosedLineage`).
+    // cinatra#4312 — Regenerate on a leg of a declared review (the featured
+    // image's, or the post's own through a caller other than the review surface)
+    // settled that leg and opened this successor gate on its repair lineage. The
+    // run the leg paused waits for THIS decision, so the intent takes that leg's
+    // WayFlow road below with this gate's own decision: the family check, then
+    // every leg's lineage, as for any decision of the family. The lineage read is
+    // strict: a malformed task id, an unknown repair, another attempt, a repair
+    // that does not name this gate, or a missing root gate THROWS
+    // (RepairLineageStateError), and the sweep leaves the intent for re-claim
+    // until its attempts are used, then dead-letters it. A successor whose
+    // lineage started on any other gate keeps the automatic-gate road.
     if (isRepairSuccessorTaskId(reviewTaskId)) {
-      const { readRepairLineageRootGate, wakeDeclaredFamilyOnClosedLineage } = await import("./lifecycle-repair-store");
+      const { readRepairLineageRootGate } = await import("./lifecycle-repair-store");
       const leg = await readRepairLineageRootGate(reviewTaskId, gateId);
-      if (isDeclaredReviewLeg({ runId: leg.runId, orgId: leg.orgId,
-        reviewTaskId: leg.reviewTaskId, pinnedTargets: leg.pinnedTargets })) {
-        return deliverArtifactReviewResumeIntent({ ...intent, reviewTaskId: leg.reviewTaskId });
-      }
       if (isDeclaredReviewTaskId(leg.reviewTaskId)) {
-        const { db } = await import("./db");
-        const marked = await db.transaction(async (tx) => {
-          const done = await markResumeIntentDelivered(gateId, leaseToken, tx);
-          if (done) await wakeDeclaredFamilyOnClosedLineage(tx, leg.id);
-          return done;
-        });
-        console.log(
-          `[artifact-review-resume] gate=${gateId} is the successor of a repair on the declared leg ${leg.reviewTaskId}; ` +
-            `the automatic-gate road resumes nothing, the family of that leg is woken once the lineage reads closed — ` +
-            `marked ${marked ? "done" : "LEASE-LOST"}`,
-        );
-        return marked ? "already-advanced" : "lease-lost";
+        return deliverArtifactReviewResumeIntent({ ...intent, reviewTaskId: leg.reviewTaskId });
       }
     }
     const ok = await markResumeIntentDelivered(gateId, leaseToken);
@@ -376,11 +357,14 @@ export async function deliverArtifactReviewResumeIntent(
     reviewTaskId, gates: siblingLegs });
   if (familyState === "incomplete") return "retryable";
   if (familyState === "pending" || await regenerationOpen(siblingLegs, reviewTaskId)) {
-    // cinatra#4312 — this acknowledgement (the run stays parked, no resume) is
-    // written under the run's decision lock, on a re-read of the family and its
-    // repair lineages. A terminal repair write (escalated, stale) takes the same
-    // lock before it wakes a set-aside decision, so it either sees this
-    // acknowledgement or this re-read sees its lineage closed
+    // cinatra#4312 — an open repair lineage on a leg reads like a sibling leg
+    // that is still pending: the intent is closed without a send and the run
+    // stays parked. This acknowledgement is written under the run's decision
+    // lock, on a re-read of the family and its repair lineages. A close of a
+    // lineage with no gate decision (escalated, stale, the sweep's naming) takes
+    // the same lock before it reads the lineage and inserts a new intent that
+    // carries the family's latest decision, so either that close reads the
+    // lineage closed after this commit, or this re-read sees it closed
     // (artifact-review-gate-store `withRunDecisionLock`).
     // A re-read that finds the pause decided falls through to the resume below.
     const parked = await withRunDecisionLock(run.id, async (tx) => {
@@ -462,14 +446,15 @@ export async function deliverArtifactReviewResumeIntent(
  * lineage in a missing, malformed or unknown state (RepairLineageStateError),
  * propagates like the sibling read above: it never authorizes a resume and never
  * acknowledges this intent. Every leg settled as changes requested is read, the
- * post's own leg's too. A lineage that closes with no successor (escalated,
- * stale) wakes a set-aside intent of the family in the same commit
- * (lifecycle-repair-store `wakeDeclaredReviewAfterTerminalRepair`); so do the
- * sweep's naming of a reopen gate that makes a lineage read closed, and the
- * decision of a successor whose lineage started on the post's own leg (that
- * decision keeps the automatic-gate road), once the lineage reads closed
- * (`wakeDeclaredFamilyOnClosedLineage`). A dead-lettered intent is not woken. `executor`:
- * the run decision lock's transaction, for the re-read under that lock.
+ * post's own leg's too. A lineage closes on one of two kinds of road. A decision
+ * on its successor gate writes its own intent, which takes the family road above
+ * (the successor branch at the top of `deliverArtifactReviewResumeIntent`). A
+ * close with no gate decision (escalated, stale, or the sweep's naming of a
+ * reopen gate that makes the lineage read closed) inserts, in its own commit, a
+ * new intent that carries the family's latest decision (lifecycle-repair-store
+ * `carryDeclaredReviewDecision`). Neither road writes an intent that already
+ * exists. `executor`: the run decision lock's transaction, for the re-read under
+ * that lock.
  */
 async function regenerationOpen(
   legs: readonly { id: string; reviewTaskId: string; disposition: string | null }[],
@@ -610,18 +595,20 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
   // claims, each after the lease of the claim before it expired). That is
   // intended (the #2038 ceiling, artifact-review-gate-store, above
   // `deadLetterExhaustedResumeIntents`): no retryable road waits for a step
-  // that comes after the decision. The run's context is persisted right after
+  // that comes after the decision, but one: a lineage the reader refuses until
+  // the review orchestration sweep names its reopen gate (an old writer's
+  // attempt on an unnamed gate). Such an intent can be dead-lettered first; the
+  // naming then inserts a new intent that carries the family's latest decision,
+  // whatever the status of the intent it copies (lifecycle-repair-store
+  // `carryDeclaredReviewDecision`). The run's context is persisted right after
   // its initial send (the a2aContextId road above), the legs of a declared
   // family are inserted in one transaction (`emitDeclaredReviewGateFamily`),
   // and an outcome that repeats on 20 claims is a fault for ops. A
-  // dead-lettered intent is not claimed and not woken
-  // again, so it resumes nothing; ops read it (`readDeadLetteredResumeIntents`).
-  // Only `delivered`, `already-advanced` and `refused-out-of-scope` close an
-  // intent. A wake of a declared review (lifecycle-repair-store
-  // `wakeDeclaredReviewAfterTerminalRepair`) puts a delivering or done intent
-  // that is not dead-lettered back to pending with `attempts` at 0 and leaves a
-  // pending one as it is. A failed pass is tallied; the claim still leaves
-  // exhausted intents out.
+  // dead-lettered intent is not claimed again and no code puts it back, so it
+  // resumes nothing; ops read it (`readDeadLetteredResumeIntents`). Only
+  // `delivered`, `already-advanced` and `refused-out-of-scope` close an intent,
+  // and no code puts a closed intent back to pending. A failed pass is tallied;
+  // the claim still leaves exhausted intents out.
   try {
     const dead = await deadLetterExhaustedResumeIntents();
     if (dead > 0) console.warn(`[artifact-review-resume] dead-lettered ${dead} exhausted resume intent(s)`);

@@ -1131,10 +1131,11 @@ export async function sweepReviewOrchestration(opts?: {
   // too. A lineage the name makes readable did not start on a later declared leg (the
   // declared-lineage check of the reopen binding refuses those), but it can have started
   // on the post's own leg of a declared review, and a run that leg's lineage kept parked
-  // has no other wake. So, in the naming's transaction, a declared family whose lineage
-  // now reads closed gets one intent back to pending (`wakeDeclaredFamilyOnClosedLineage`).
-  // A failure rolls the names and the wakes back together and stops nothing else; the
-  // next sweep tries again.
+  // has no gate decision left to resume it. So, in the naming's transaction, a declared
+  // family whose lineage now reads closed gets one new resume intent that carries its
+  // latest decision (`carryDeclaredReviewDecision`, an insert only). A failure rolls the
+  // names and the inserts back together and stops nothing else; the next sweep tries
+  // again.
   try {
     const { nameVerificationReopensThatRepairRowsRestOn } = await import("./lifecycle-verification-store");
     await nameVerificationReopensThatRepairRowsRestOn();

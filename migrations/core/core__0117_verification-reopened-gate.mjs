@@ -35,12 +35,21 @@
 // review leg, the lineage reader never takes a reopen gate as the next attempt (the
 // declared-lineage check), so a name written there leaves that lineage malformed.
 //
+// CARRIER. The sweep's naming, in its own transaction, also carries the latest decision
+// of a declared review whose lineage it makes read closed (lifecycle-repair-store
+// `carryDeclaredReviewDecision`). This migration's run of the statement carries none:
+// it runs before the new application serves, so no lineage the new code wrote exists
+// yet, and the old code wrote no lineage on a declared review's gate (its review
+// surface refused changes requested on any flow-authored gate).
+//
 // The bootstrap never repeats this statement.
 //
 // DOWN drops the column; the names are not restorable, and the code that reads
 // them goes with the same revert.
 //
 // SEQ 0117 — 0113 is the highest on main; 0114 to 0116 are claimed by open changes.
+// If a migration numbered above 0117 reaches main before this one, this change takes
+// the next free number before it merges.
 //
 // Unqualified names ride the runner's search_path (the app schema).
 

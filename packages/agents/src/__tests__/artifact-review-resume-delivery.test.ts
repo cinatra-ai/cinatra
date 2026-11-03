@@ -96,12 +96,8 @@ const repairStoreMock = vi.hoisted(() => ({
     throw Object.assign(new Error("unknown-repair: not seeded"), { name: "RepairLineageStateError", code: "unknown-repair" });
   }),
   isRepairLineageOpen: vi.fn<(gateId: string, executor?: unknown) => Promise<boolean>>(async () => false),
-  // The base code's post-leg successor road (mark done + the family's wake in one
-  // commit) imports these; the fix removes that road and these two stand-ins.
-  wakeDeclaredFamilyOnClosedLineage: vi.fn<(executor: unknown, lineageId: string) => Promise<string | null>>(async () => null),
 }));
 vi.mock("../lifecycle-repair-store", () => repairStoreMock);
-vi.mock("../db", () => ({ db: { transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn({}) } }));
 
 import {
   deliverArtifactReviewResumeIntent,

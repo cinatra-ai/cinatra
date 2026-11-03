@@ -88,7 +88,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "./db";
 import { agentRuns, agentTemplates, lifecycleRepair } from "./schema";
 import { launchAgentRun } from "./lifecycle-coordinator";
-import { markRepairDispatched, wakeDeclaredReviewAfterTerminalRepair } from "./lifecycle-repair-store";
+import { carryDeclaredReviewDecision, markRepairDispatched } from "./lifecycle-repair-store";
 
 import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
 
@@ -482,7 +482,7 @@ async function resolveProducingTemplate(producerRunId: string | null, orgId: str
 /** CAS a `requested` repair to `escalated`, recording WHY on `change_summary`
  * behind the dispatch sentinel. Returns false when the row moved under us.
  * cinatra#4312 — an escalated lineage has no successor to decide, so the same
- * commit wakes a declared review's paused run (wakeDeclaredReviewAfterTerminalRepair). */
+ * commit carries a declared review's latest decision (carryDeclaredReviewDecision). */
 async function escalateRepair(repairId: string, reason: string): Promise<boolean> {
   return db.transaction(async (tx) => {
     const rows = await tx
@@ -495,7 +495,7 @@ async function escalateRepair(repairId: string, reason: string): Promise<boolean
       .where(and(eq(lifecycleRepair.id, repairId), eq(lifecycleRepair.status, "requested")))
       .returning({ lineageId: lifecycleRepair.lineageId });
     if (rows.length !== 1) return false;
-    await wakeDeclaredReviewAfterTerminalRepair(tx, rows[0].lineageId);
+    await carryDeclaredReviewDecision(tx, rows[0].lineageId);
     return true;
   });
 }
