@@ -27,7 +27,7 @@ const application = (id, scope, displayName, status, extra = {}) => ({
   scope,
   vendor_id: 1,
   status,
-  tier: "community",
+  tier: "free",
   terms_version: "1",
   terms_digest: "stub",
   display_name: displayName,
@@ -59,6 +59,7 @@ const submission = (id, name, status, promotionState) => ({
   decision_reason: null,
   promotion_state: promotionState,
   promotion_error: null,
+  final_artifact_digest: null,
 });
 export const SUBMISSIONS = [
   submission("stub-sub-1", "support-desk", "approved", "in_flight"),
@@ -66,38 +67,40 @@ export const SUBMISSIONS = [
   submission("stub-sub-3", "mail-digest", "promoted", "complete"),
 ];
 
-function vendorApplications({ status } = {}) {
-  const wanted = Array.isArray(status) ? status : [];
-  const rows = wanted.length
-    ? VENDOR_APPLICATIONS.filter((row) => wanted.includes(row.status) || (wanted.includes("stuck") && row.repair_stuck_at))
-    : VENDOR_APPLICATIONS;
-  return { rows };
+// The tool table for one set of rows. A walk uses the default rows; a test passes its own.
+export function toolsFor({ applications = VENDOR_APPLICATIONS, submissions = SUBMISSIONS } = {}) {
+  return {
+    "cinatra-vendor-application-list-admin": ({ status } = {}) => {
+      const wanted = Array.isArray(status) ? status : [];
+      const rows = wanted.length
+        ? applications.filter((row) => wanted.includes(row.status) || (wanted.includes("stuck") && row.repair_stuck_at))
+        : applications;
+      return { rows, next_cursor: null };
+    },
+    "cinatra-extension-submission-list-admin": ({ status } = {}) => {
+      const rows = status ? submissions.filter((row) => row.status === status) : submissions;
+      return { submissions: rows.map((row) => ({ vendor_id: 1, staging_artifact_path: "stub", artifact_size_bytes: 1, submitter_id: 1, decided_by_admin_id: 1, description: null, deps_json: null, ...row })) };
+    },
+    "cinatra-extension-submission-list-self": () => ({ submissions }),
+    "cinatra-vendor-application-status": () => ({ state: "approved", scope: "acme", application_id: "stub-app-1", tier: "free", repair_stuck_at: "2026-10-02T09:00:00Z" }),
+  };
 }
-function adminSubmissions({ status } = {}) {
-  const rows = status ? SUBMISSIONS.filter((row) => row.status === status) : SUBMISSIONS;
-  return { submissions: rows.map((row) => ({ ...row, vendor_id: 1, staging_artifact_path: "stub", artifact_size_bytes: 1, submitter_id: 1, decided_by_admin_id: 1, description: null, deps_json: null })) };
-}
+export const TOOLS = toolsFor();
 
-export const TOOLS = {
-  "cinatra-vendor-application-list-admin": vendorApplications,
-  "cinatra-extension-submission-list-admin": adminSubmissions,
-  "cinatra-extension-submission-list-self": () => ({ submissions: SUBMISSIONS }),
-  "cinatra-vendor-application-status": () => ({ state: "approved", scope: "acme", application_id: "stub-app-1", tier: "community", repair_stuck_at: "2026-10-02T09:00:00Z", recovery_attempts: 3 }),
-};
-
-function answer(message) {
+function answer(message, tools) {
   const reply = (body) => ({ jsonrpc: "2.0", id: message.id, ...body });
   if (message.method === "initialize") {
     return reply({ result: { protocolVersion: message.params?.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "marketplace-mcp-stub", version: "1.0.0" } } });
   }
-  if (message.method === "tools/call" && Object.hasOwn(TOOLS, message.params?.name)) {
-    const output = TOOLS[message.params.name](message.params.arguments ?? {});
+  if (message.method === "tools/call" && Object.hasOwn(tools, message.params?.name)) {
+    const output = tools[message.params.name](message.params.arguments ?? {});
     return reply({ result: { content: [{ type: "text", text: JSON.stringify(output) }], structuredContent: output } });
   }
   return reply({ error: { code: -32601, message: `the stub does not answer ${message.method} ${message.params?.name ?? ""}`.trim() } });
 }
 
-export function createStub() {
+export function createStub(data) {
+  const tools = toolsFor(data);
   return createServer((req, res) => {
     const path = new URL(req.url, `http://${HOST}`).pathname;
     if (path !== MCP_PATH || req.method !== "POST") {
@@ -118,7 +121,7 @@ export function createStub() {
         res.writeHead(202).end();
         return;
       }
-      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(answer(message)));
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(answer(message, tools)));
     });
   });
 }
