@@ -71,13 +71,13 @@ function setHas(set: unknown, value: unknown): boolean {
  * sentence answers. Any code in the process can write the marker, whatever its
  * `issues` holds. Throws when a read throws; callerFacingText catches it.
  */
-function zodMarker(err: object): "marked" | "unreadable" | "none" {
+function zodMarker(err: object): "zod-marked" | "unreadable" | "none" {
   const zod: unknown = (err as { _zod?: unknown })._zod;
   if (zod === undefined || zod === null) return "none";
   const traits: unknown = (zod as { traits?: unknown }).traits;
   if (traits === undefined || traits === null) return "none";
   try {
-    return setHas(traits, "ZodError") || setHas(traits, "$ZodError") ? "marked" : "none";
+    return setHas(traits, "ZodError") || setHas(traits, "$ZodError") ? "zod-marked" : "none";
   } catch {
     return "unreadable";
   }
@@ -100,7 +100,7 @@ function zodMarker(err: object): "marked" | "unreadable" | "none" {
 export function isZodError(err: unknown): boolean {
   try {
     if (!(err instanceof Error)) return false;
-    return zodMarker(err) === "marked" && Array.isArray((err as { issues?: unknown }).issues);
+    return zodMarker(err) === "zod-marked" && Array.isArray((err as { issues?: unknown }).issues);
   } catch {
     return false; // a read that throws is not a zod error
   }
@@ -274,7 +274,7 @@ function callerFacingText(err: unknown): string | null {
     const primitive = err instanceof PrimitiveInvocationError;
     if (!primitive && !(err instanceof Error)) return null;
     const marker = zodMarker(err as object);
-    if (marker === "marked") return schemaErrorText(err);
+    if (marker === "zod-marked") return schemaErrorText(err);
     if (marker === "unreadable" || !primitive) return null;
     const message: unknown = (err as PrimitiveInvocationError).message;
     return typeof message === "string" ? message : null;
