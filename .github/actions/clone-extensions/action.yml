@@ -23,16 +23,40 @@ inputs:
 runs:
   using: composite
   steps:
+    # cinatra#4484: a full run used to make about 3000 serial full clones
+    # (about 26 jobs x 116 repos). The pinned checkouts are cached, keyed on
+    # the two committed lock files (exact key only), restored only into an
+    # absent tree, and saved right after a sync that missed the cache (before
+    # any install adds to the tree). The sync never trusts a restored
+    # checkout: --shallow makes it run git fsck, check HEAD against the pin
+    # and rewrite the tree from the pin (packages/cli/src/dev-repo-sync.mjs).
+    - name: Restore the pinned companion checkouts from the cache
+      id: companion-cache
+      if: inputs.mode == 'pinned' && hashFiles('extensions/*/*/package.json') == ''
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: extensions
+        key: clone-extensions-pinned-v1-${{ runner.os }}-${{ hashFiles('cinatra-required-extensions.lock.json', 'cinatra-dev-extensions.lock.json') }}
     - name: Clone companion extension repos into extensions/
       shell: bash
       env:
         CLONE_EXTENSIONS_MODE: ${{ inputs.mode }}
+        # A stalled transfer fails (and takes the bounded retry) instead of
+        # crawling until the job time limit cancels the job.
+        GIT_HTTP_LOW_SPEED_LIMIT: "1000"
+        GIT_HTTP_LOW_SPEED_TIME: "60"
       run: |
         case "$CLONE_EXTENSIONS_MODE" in
-          pinned) node scripts/ci/sync-dev-extensions.mjs --pinned ;;
+          pinned) node scripts/ci/sync-dev-extensions.mjs --pinned --shallow ;;
           head)   node scripts/ci/sync-dev-extensions.mjs ;;
           *)
             echo "::error::clone-extensions: unknown mode '$CLONE_EXTENSIONS_MODE' (expected 'pinned' or 'head')."
             exit 1
             ;;
         esac
+    - name: Save the pinned companion checkouts to the cache
+      if: inputs.mode == 'pinned' && steps.companion-cache.outputs.cache-primary-key != '' && steps.companion-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: extensions
+        key: ${{ steps.companion-cache.outputs.cache-primary-key }}
