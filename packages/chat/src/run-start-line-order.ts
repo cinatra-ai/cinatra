@@ -8,8 +8,9 @@
 // first and the row in the slot beneath it.
 //
 // WHY THE TRACE HAS THEM THE OTHER WAY ROUND. The start's tool result reaches the
-// turn before the model says the platform's sentence back (the reply rule tells
-// it to say that sentence and nothing else), so the ordered trace carries the
+// turn before the model says the platform's sentence back (the reply rule,
+// RUN_START_REPLY_RULE in packages/agents/src/run-status.ts, tells it to say that
+// sentence back exactly as it is written), so the ordered trace carries the
 // run's own part first and the line after it. Drawn in trace order, the row
 // stood above the line that introduces it.
 //
@@ -19,7 +20,9 @@
 // is dropped or duplicated, each part keeps its own index (its key and its
 // `data-transcript-slot` mark), and a turn whose line already stands above the
 // run's part in the trace (even with a second copy after it), or that carries
-// no such line, is drawn exactly as before.
+// no such line, is drawn exactly as before. A line still streaming in (the head,
+// then the first words of the minted clause) already counts, so the line keeps
+// its place above the slot from its first complete head on.
 // ---------------------------------------------------------------------------
 import { textCarriesRunStartSentence } from "@cinatra-ai/agents/run-status";
 

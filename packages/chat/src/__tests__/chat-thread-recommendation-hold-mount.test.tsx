@@ -804,6 +804,50 @@ describe("the agentic run progress card waits for the skills decision", () => {
     ).toBeTruthy();
   });
 
+  it("never draws the line beneath the row while the line itself streams in, chunk by chunk", async () => {
+    // A live turn's text part grows: the head alone, the head and the first
+    // words of the clause, the whole line. Every state draws the line above the
+    // run's slot, and the row keeps its node.
+    const [user, assistant] = dispatchTurn() as unknown as [UiMessage, UiMessage & { parts: unknown[] }];
+    const head = `Dispatched \`${PACKAGE}\` (runId: \`${RUN_ID}\`, status: \`pending_input\`).`;
+    const turnWith = (content: string) => [
+      user,
+      { ...assistant, parts: [assistant.parts[0], { kind: "text", content }] } as unknown as UiMessage,
+    ];
+    const states = [head, `${head} The run`, `${head} The run paused for a decision on the recommended skills.`];
+    const result = await mountSurface("chat", { messages: turnWith(states[0]!), streamingIds: ["a1"] });
+    await waitFor(() => {
+      if (!result.container.querySelector('[data-lifecycle-card="recommendation_hold"]')) {
+        throw new Error("the held row is not drawn");
+      }
+    });
+    const rowFirst = result.container.querySelector('[data-lifecycle-card="recommendation_hold"]')!;
+    const lineCarrier = () =>
+      [...result.container.querySelectorAll("*")].filter(
+        (el) =>
+          el.textContent?.includes("Dispatched") &&
+          ![...el.children].some((c) => c.textContent?.includes("Dispatched")),
+      );
+    for (const [at, state] of states.entries()) {
+      if (at > 0) result.rerender(surfaceElement("chat", { messages: turnWith(state), streamingIds: ["a1"] }));
+      await waitFor(() => {
+        if (!lineCarrier()[0]?.textContent?.includes(state.replace(/`/g, ""))) {
+          throw new Error(`state ${at} is not drawn`);
+        }
+      });
+      const carriers = lineCarrier();
+      expect(carriers, `state ${at}: one line`).toHaveLength(1);
+      const row = result.container.querySelector('[data-lifecycle-card="recommendation_hold"]');
+      expect(row, `state ${at}: the row was remounted`).toBe(rowFirst);
+      const slot = result.container.querySelector(`[data-agent-run-slot="${RUN_ID}"]`);
+      expect(slot!.contains(carriers[0]!), `state ${at}: the line is inside the run's slot`).toBe(false);
+      expect(
+        carriers[0]!.compareDocumentPosition(row!) & Node.DOCUMENT_POSITION_FOLLOWING,
+        `state ${at}: the row is drawn beneath the line`,
+      ).toBeTruthy();
+    }
+  });
+
   it("FAILS OPEN: a run that was never held keeps its run card", async () => {
     // The negative control this rule is paid for with. A run with no
     // recommendation at all — and a hold read that answers "none" — must draw

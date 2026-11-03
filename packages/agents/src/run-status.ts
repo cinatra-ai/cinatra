@@ -1187,6 +1187,16 @@ function escapeLiteral(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** Every clause the platform mints after the start head, longest first (see below). */
+const PLATFORM_START_CLAUSES: readonly string[] = [
+  ...new Set([
+    ...Object.values(RUN_START_CLAUSES),
+    RUN_START_NOT_STARTED_CLAUSE,
+    RUN_START_PARKED_CLAUSE,
+    RUN_START_SCHEDULE_WAIT_CLAUSE,
+  ]),
+].sort((a, b) => b.length - a.length);
+
 /**
  * THE PLATFORM'S OWN SENTENCE FOR ONE RUN, as a pattern.
  *
@@ -1210,17 +1220,7 @@ function escapeLiteral(value: string): string {
  * which sentences are the platform's to rewrite.
  */
 function platformStartSentencePattern(runId: string): RegExp {
-  const clauses = [
-    ...new Set([
-      ...Object.values(RUN_START_CLAUSES),
-      RUN_START_NOT_STARTED_CLAUSE,
-      RUN_START_PARKED_CLAUSE,
-      RUN_START_SCHEDULE_WAIT_CLAUSE,
-    ]),
-  ]
-    .sort((a, b) => b.length - a.length)
-    .map(escapeLiteral)
-    .join("|");
+  const clauses = PLATFORM_START_CLAUSES.map(escapeLiteral).join("|");
   return new RegExp(
     "Dispatched\\s+`([^`\\n]+)`\\s+\\(runId:\\s*`" +
       escapeLiteral(runId) +
@@ -1239,8 +1239,11 @@ function platformStartSentencePattern(runId: string): RegExp {
  * shares its line. A match that carries one of the minted clauses is the
  * platform's wherever it stands.
  *
+ * A line ends at LF or at CRLF: a carriage return just before the line break
+ * is part of the break, not a word that shares the line.
+ *
  * ONE rule, read by both the renderer's question below and the corrections'
- * rewrite, so the two take the same matches as the platform's sentence.
+ * rewrite, so the two take the same complete matches as the platform's sentence.
  */
 function isThePlatformsOwnMatch(
   text: string,
@@ -1251,7 +1254,25 @@ function isThePlatformsOwnMatch(
   if (clause !== undefined) return true;
   const before = text.slice(0, offset);
   const after = text.slice(offset + match.length);
-  return /(?:^|\n)[ \t]*$/.test(before) && /^[ \t]*(?:\n|$)/.test(after);
+  return /(?:^|\n)[ \t]*$/.test(before) && /^[ \t]*\r?(?:\n|$)/.test(after);
+}
+
+/**
+ * A LINE STILL ARRIVING. While the model streams the line back, the text part
+ * grows chunk by chunk, so the renderer reads states such as "Dispatched … ).
+ * The run": the head is complete and the clause is not yet. Such a state ends
+ * the text with a strict prefix of one of the minted clauses and nothing else
+ * after the head. Read as the platform's line, it keeps the line where the
+ * finished line will stand, so the line does not drop beneath the run's row
+ * and come back up inside one streamed sentence. A text that goes on past the
+ * prefix, or whose words leave every minted clause, is not this state.
+ */
+function endsInAMintedClauseStillArriving(after: string): boolean {
+  const rest = after.replace(/^[ \t]+/, "");
+  if (rest.length === 0 || /[\r\n]/.test(rest)) return false;
+  return PLATFORM_START_CLAUSES.some(
+    (clause) => clause.length > rest.length && clause.startsWith(rest),
+  );
 }
 
 /**
@@ -1267,12 +1288,19 @@ function isThePlatformsOwnMatch(
  * draw that one line above the run's slot. It reads the same pattern and the
  * same stands-alone rule (`isThePlatformsOwnMatch`) as the corrections below,
  * so a clause-less sentence quoted inside prose is not the platform's here
- * either. Pure: it reads, it rewrites nothing.
+ * either. It takes one state more than the corrections: a line still arriving
+ * (`endsInAMintedClauseStillArriving`), which the corrections leave alone,
+ * because they rewrite a finished sentence. Pure: it reads, it rewrites
+ * nothing.
  */
 export function textCarriesRunStartSentence(text: string, runId: string): boolean {
   if (!runId) return false;
   for (const m of text.matchAll(platformStartSentencePattern(runId))) {
-    if (isThePlatformsOwnMatch(text, m[0], m[2], m.index ?? 0)) return true;
+    const offset = m.index ?? 0;
+    if (isThePlatformsOwnMatch(text, m[0], m[2], offset)) return true;
+    if (m[2] === undefined && endsInAMintedClauseStillArriving(text.slice(offset + m[0].length))) {
+      return true;
+    }
   }
   return false;
 }

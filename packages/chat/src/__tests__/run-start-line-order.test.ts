@@ -46,13 +46,19 @@ describe("textCarriesRunStartSentence", () => {
     expect(textCarriesRunStartSentence(`I dispatched it.\n${line(RUN_A, "")}\nAnything else?`, RUN_A)).toBe(true);
   });
 
-  it("takes the same sentences as the platform's as the start-sentence correction does", () => {
+  it("reads a clause-less line that ends in CRLF as standing alone on its line", () => {
+    expect(textCarriesRunStartSentence(`I dispatched it.\r\n${line(RUN_A, "")}\r\nAnything else?`, RUN_A)).toBe(true);
+    expect(textCarriesRunStartSentence(`${line(RUN_A, "")}\r\n`, RUN_A)).toBe(true);
+  });
+
+  it("takes the same complete sentences as the platform's as the start-sentence correction does", () => {
     const inputs = [
       line(RUN_A),
       line(RUN_A, ""),
       `Sure. ${line(RUN_A)}`,
       `I dispatched it. ${line(RUN_A, "")} Anything else?`,
       `I dispatched it.\n${line(RUN_A, "")}\nAnything else?`,
+      `I dispatched it.\r\n${line(RUN_A, "")}\r\nAnything else?`,
       line(RUN_B),
       "The run paused for a decision on the recommended skills.",
     ];
@@ -61,11 +67,36 @@ describe("textCarriesRunStartSentence", () => {
       expect(textCarriesRunStartSentence(input, RUN_A), input).toBe(rewritten);
     }
   });
+
+  it("reads the line while it is still arriving: the head, then each prefix of the minted clause", () => {
+    const clause = " The run paused for a decision on the recommended skills.";
+    for (let end = 0; end <= clause.length; end += 1) {
+      const state = line(RUN_A, clause.slice(0, end));
+      expect(textCarriesRunStartSentence(state, RUN_A), JSON.stringify(state)).toBe(true);
+    }
+  });
+
+  it("leaves a line still arriving to the corrections, which rewrite only a finished sentence", () => {
+    const arriving = line(RUN_A, " The run");
+    expect(correctRunStartSentenceForScheduleWait({ text: arriving, runId: RUN_A })).toBe(arriving);
+  });
+
+  it("does not read a head whose words leave every minted clause, or go on past the prefix", () => {
+    expect(textCarriesRunStartSentence(line(RUN_A, " The run is paused for your decision"), RUN_A)).toBe(false);
+    expect(textCarriesRunStartSentence(`${line(RUN_A, " The run")}\nAnything else?`, RUN_A)).toBe(false);
+    expect(textCarriesRunStartSentence(line(RUN_B, " The run"), RUN_A)).toBe(false);
+  });
 });
 
 describe("drawOrderWithRunStartLinesFirst", () => {
   it("draws the dispatch line above the run's slot (the 3062-walk1 trace)", () => {
     expect(drawOrderWithRunStartLinesFirst([run(RUN_A), text(line(RUN_A))])).toEqual([1, 0]);
+  });
+
+  it("keeps the line above the run in every state of a streamed line (the head, a prefix of the clause, the whole line)", () => {
+    for (const clause of ["", " The run", " The run paused for a decision", " The run paused for a decision on the recommended skills."]) {
+      expect(drawOrderWithRunStartLinesFirst([run(RUN_A), text(line(RUN_A, clause))]), clause).toEqual([1, 0]);
+    }
   });
 
   it("does the same for the widget's own start tool", () => {
