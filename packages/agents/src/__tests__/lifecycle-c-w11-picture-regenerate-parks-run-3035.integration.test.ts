@@ -91,11 +91,19 @@ beforeAll(async () => {
   dbMod = await import("../db");
 }, 90_000);
 
-beforeEach(() => {
+beforeEach(async () => {
   if (!HAS_DB) return;
   process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV] = "on";
-  sendTaskSpy.mockClear();
-  handleWayflowTaskStateSpy.mockClear();
+  sendTaskSpy.mockReset();
+  sendTaskSpy.mockImplementation(async () => ({ id: "wf-task", status: { state: "completed" } }));
+  handleWayflowTaskStateSpy.mockReset();
+  handleWayflowTaskStateSpy.mockImplementation(async () => undefined);
+  // cinatra#4312 (review 8, finding 4) — each case judges only its own run. The file
+  // shares one database, and an intent an earlier case left pending (a carrier among
+  // them) would be sent by a later case's sweep. So every run an earlier case left
+  // paused is ended first: a later sweep then closes its intents without a send, and a
+  // later close carries no decision into it.
+  await pool(`UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status='failed' WHERE status='pending_approval'`);
 });
 
 afterAll(async () => {
@@ -110,13 +118,17 @@ afterAll(async () => {
 });
 
 type Pin = { artifactId: string; representationRevisionId: string };
-type Pipeline = { runId: string; contextId: string; step: string; leg2: string; post: Pin; picture: Pin };
+type Pipeline = {
+  runId: string; contextId: string; step: string; leg2: string; post: Pin; picture: Pin;
+  /** cinatra#4312 — the legs after `#2`, when the case asked for more pictures. */
+  more: { leg: string; pin: Pin }[];
+};
 
 /** The blog pipeline's run, paused at its marked review step: one declared gate per
  * artifact (the post's on the step's task id, the featured image's on `#2`), from
  * the real `emitDeclaredReviewGateFamily`. The run is internal and, unless a case
  * says otherwise, repair-capable. */
-async function pausedPipeline(repairCapable = true): Promise<Pipeline> {
+async function pausedPipeline(repairCapable = true, pictures = 1): Promise<Pipeline> {
   const runId = `run-blog-${randomUUID()}`;
   const templateId = `tmpl-${randomUUID()}`;
   const taskId = `task-${randomUUID()}`;
@@ -135,15 +147,18 @@ async function pausedPipeline(repairCapable = true): Promise<Pipeline> {
   );
   const post = { artifactId: `art-post-${randomUUID()}`, representationRevisionId: `rev-post-${randomUUID()}` };
   const picture = { artifactId: `art-img-${randomUUID()}`, representationRevisionId: `rev-img-${randomUUID()}` };
-  for (const [id, type] of [[post.artifactId, "document"], [picture.artifactId, "image"]]) {
+  const extra = Array.from({ length: pictures - 1 }, () => ({
+    artifactId: `art-img-${randomUUID()}`, representationRevisionId: `rev-img-${randomUUID()}`,
+  }));
+  for (const [id, type] of [[post.artifactId, "document"], [picture.artifactId, "image"], ...extra.map((x) => [x.artifactId, "image"])]) {
     await pool(
       `INSERT INTO "${q(TEST_SCHEMA)}"."objects" (id, type, data, org_id) VALUES ($1, $2, '{}'::jsonb, $3)`,
       [id, type, ORG],
     );
   }
   const step = `wayflow-${taskId}`;
-  await gateStore.emitDeclaredReviewGateFamily({ runId, orgId: ORG, reviewTaskId: step, targets: [post, picture] });
-  return { runId, contextId, step, leg2: `${step}#2`, post, picture };
+  await gateStore.emitDeclaredReviewGateFamily({ runId, orgId: ORG, reviewTaskId: step, targets: [post, picture, ...extra] });
+  return { runId, contextId, step, leg2: `${step}#2`, post, picture, more: extra.map((pin, i) => ({ leg: `${step}#${i + 3}`, pin })) };
 }
 
 /** A person presses Regenerate with a note on `reviewTaskId` (the real store entry
@@ -241,14 +256,55 @@ async function expectParked(p: Pipeline) {
   expect(await runStatus(p.runId)).toBe("pending_approval");
 }
 
+/** The resumes sent into `p`'s context (cinatra#4312, review 8 finding 4: only this run's). */
+function resumesOf(p: Pipeline) {
+  return sendTaskSpy.mock.calls
+    .map((c) => c[0] as { message: { contextId: string; messageId: string; parts: { text: string }[] } })
+    .filter((req) => req.message.contextId === p.contextId);
+}
+
 /** The run goes on: exactly one resume into the run's context, carrying `text`. */
 function expectResumedWith(p: Pipeline, text: string) {
-  expect(sendTaskSpy).toHaveBeenCalledTimes(1);
-  const req = sendTaskSpy.mock.calls[0][0] as { message: { contextId: string; parts: { text: string }[] } };
-  expect(req.message.contextId).toBe(p.contextId);
-  expect(req.message.parts[0].text).toBe(text);
-  expect(handleWayflowTaskStateSpy).toHaveBeenCalledTimes(1);
-  expect(handleWayflowTaskStateSpy.mock.calls[0][0]).toMatchObject({ runId: p.runId, fromStatus: "pending_approval" });
+  const sent = resumesOf(p);
+  expect(sent).toHaveLength(1);
+  expect(sent[0].message.parts[0].text).toBe(text);
+  const handled = handleWayflowTaskStateSpy.mock.calls.filter((c) => (c[0] as { runId: string }).runId === p.runId);
+  expect(handled).toHaveLength(1);
+  expect(handled[0][0]).toMatchObject({ runId: p.runId, fromStatus: "pending_approval" });
+}
+
+/** cinatra#4312 — a resume moves the run off its pause, as the replaced task-state
+ * handler does: later intents of that pause then find it advanced and send nothing. */
+function advanceRunsOnResume() {
+  handleWayflowTaskStateSpy.mockImplementation(async (args: unknown) => {
+    await pool(
+      `UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status='running' WHERE id=$1 AND status='pending_approval'`,
+      [(args as { runId: string }).runId],
+    );
+  });
+}
+
+/** cinatra#4312 — the whole resume intent row of `gateId`, or undefined. */
+async function intentOf(gateId: string) {
+  const r = await pool(
+    `SELECT status, attempts, lease_token, review_task_id, kind, response_text, dead_lettered_at, updated_at
+       FROM "${q(TEST_SCHEMA)}"."artifact_review_resume_outbox" WHERE gate_id=$1`,
+    [gateId],
+  );
+  return r.rows[0] as
+    | { status: string; attempts: number; lease_token: string | null; review_task_id: string; kind: string;
+        response_text: string; dead_lettered_at: Date | null; updated_at: Date }
+    | undefined;
+}
+
+/** cinatra#4312 (b3) — the close of a lineage inserted one new pending intent on
+ * `gateId` (the gate its closing attempt repairs) that carries `text` on the root leg's
+ * review task id. */
+async function expectCarrier(gateId: string, rootTaskId: string, text: string) {
+  expect(await intentOf(gateId)).toMatchObject({
+    status: "pending", attempts: 0, lease_token: null, review_task_id: rootTaskId, kind: "approve",
+    response_text: text, dead_lettered_at: null,
+  });
 }
 
 describe.skipIf(!HAS_DB)("cinatra#4312 — the run stays parked at the picture's successor gate (real worker)", () => {
@@ -397,13 +453,15 @@ async function expectLeftForReclaim(summary: { failed: number }, gateId: string)
   expect(await intentStatusOf(gateId)).toBe("delivering");
 }
 
-describe.skipIf(!HAS_DB)("cinatra#4312 — a lineage that closes with no successor wakes the paused run (finding 1)", () => {
-  it("POST FIRST, then Regenerate with a producer that cannot repair: the escalation wakes the post's decision and the run goes on", async () => {
+describe.skipIf(!HAS_DB)("cinatra#4312 — a lineage that closes with no successor carries the family's decision in a new intent (finding 1, b3)", () => {
+  it("POST FIRST, then Regenerate with a producer that cannot repair: the escalation inserts a carrier of the post's decision, the post's own intent stays done, and the run goes on", async () => {
     const p = await pausedPipeline(false);
     const text = await approve(p.runId, p.step);
     await sweep();
     await expectParked(p);
-    expect(await intentStatus(p.runId, p.step)).toBe("done");
+    const post = await gateStore.readReviewGate(p.runId, p.step);
+    const before = await intentOf(post!.id);
+    expect(before?.status).toBe("done");
 
     const cr = await crStore.recordReviewSurfaceChangesRequested({
       runId: p.runId,
@@ -414,19 +472,25 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — a lineage that closes with no success
     });
     expect(cr).toMatchObject({ ok: true, status: "escalated" });
     expect(await pendingGates(p.runId)).toEqual([]);
-    expect(await intentStatus(p.runId, p.step)).toBe("pending");
+    const leg2 = await gateStore.readReviewGate(p.runId, p.leg2);
+    await expectCarrier(leg2!.id, p.leg2, text);
+    expect(await intentOf(post!.id)).toEqual(before);
 
     await sweep();
     expectResumedWith(p, text);
-    expect(await intentStatus(p.runId, p.step)).toBe("done");
+    expect(resumesOf(p)[0].message.messageId).toBe(`artifact-review-resume-${leg2!.id}`);
+    expect(await intentStatusOf(leg2!.id)).toBe("done");
+    expect(await intentOf(post!.id)).toEqual(before);
   });
 
-  it("STALE: the post is continued while the repair waits, then the producer answers against a moved base; the stale lineage wakes the post's decision", async () => {
+  it("STALE: the post is continued while the repair waits, then the producer answers against a moved base; the stale close inserts a carrier of the post's decision", async () => {
     const p = await pausedPipeline();
     const pressed = await pressRegenerate(p.runId, p.leg2, p.picture);
     const text = await approve(p.runId, p.step);
     await sweep();
     await expectParked(p);
+    const post = await gateStore.readReviewGate(p.runId, p.step);
+    const before = await intentOf(post!.id);
 
     const rr = await repairStore.submitRepairResponse({
       repairId: pressed.repairId,
@@ -444,17 +508,21 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — a lineage that closes with no success
     expect(rr).toMatchObject({ ok: false, code: "stale-base" });
     expect((await repairOf(pressed.repairId)).status).toBe("stale");
     expect(await pendingGates(p.runId)).toEqual([]);
+    await expectCarrier(pressed.settledGateId, p.leg2, text);
+    expect(await intentOf(post!.id)).toEqual(before);
 
     await sweep();
     expectResumedWith(p, text);
   });
 
-  it("ESCALATED LATER: the post is continued while the repair waits, then the dispatch drain escalates it (no human principal); the escalation wakes the post's decision", async () => {
+  it("ESCALATED LATER: the post is continued while the repair waits, then the dispatch drain escalates it (no human principal); the escalation inserts a carrier of the post's decision", async () => {
     const p = await pausedPipeline();
     const pressed = await pressRegenerate(p.runId, p.leg2, p.picture);
     const text = await approve(p.runId, p.step);
     await sweep();
     await expectParked(p);
+    const post = await gateStore.readReviewGate(p.runId, p.step);
+    const before = await intentOf(post!.id);
 
     // This case's repair is the only one waiting, so the drain touches no other case.
     const waiting = await pool(`SELECT id FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE status='requested'`);
@@ -463,15 +531,18 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — a lineage that closes with no success
     const drained = await dispatchPendingProducerRepairs({ limit: 200 });
     expect(drained).toMatchObject({ escalated: 1, dispatched: 0 });
     expect((await repairOf(pressed.repairId)).status).toBe("escalated");
+    await expectCarrier(pressed.settledGateId, p.leg2, text);
+    expect(await intentOf(post!.id)).toEqual(before);
 
     await sweep();
     expectResumedWith(p, text);
   });
 });
 
-describe.skipIf(!HAS_DB)("cinatra#4312 — the wake also reaches a decision a worker holds at that moment (finding 1, race)", () => {
-  it("IN-FLIGHT: the post's intent is leased when the lineage goes stale; the holder's acknowledgement no longer lands and the next sweep lets the run go on", async () => {
+describe.skipIf(!HAS_DB)("cinatra#4312 — the carrier leaves a decision a worker holds as it is (finding 1, race)", () => {
+  it("IN-FLIGHT: the post's intent is leased when the lineage goes stale; the holder's lease and acknowledgement are untouched, and the carrier lets the run go on once", async () => {
     const p = await pausedPipeline();
+    advanceRunsOnResume();
     const pressed = await pressRegenerate(p.runId, p.leg2, p.picture);
     const text = await approve(p.runId, p.step);
     const post = await gateStore.readReviewGate(p.runId, p.step);
@@ -493,14 +564,16 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — the wake also reaches a decision a wo
       },
     });
     expect(rr).toMatchObject({ ok: false, code: "stale-base" });
-    // A holder that read the lineage as open before the stale commit would now
-    // acknowledge without sending. This case makes that acknowledgement directly
-    // (no worker read runs here): the wake cleared the lease, so the write misses.
-    expect(await gateStore.markResumeIntentDelivered(post!.id, held!.leaseToken!)).toBe(false);
-    expect(await intentStatusOf(post!.id)).toBe("pending");
+    expect(await intentOf(post!.id)).toMatchObject({ status: "delivering", lease_token: held!.leaseToken, attempts: 1 });
+    await expectCarrier(pressed.settledGateId, p.leg2, text);
+    // A holder that read the lineage as open before the stale commit acknowledges
+    // without a send. This case makes that acknowledgement directly (no worker read
+    // runs here): the close wrote no row of that holder, so it lands.
+    expect(await gateStore.markResumeIntentDelivered(post!.id, held!.leaseToken!)).toBe(true);
 
     await sweep();
     expectResumedWith(p, text);
+    expect(await intentStatusOf(pressed.settledGateId)).toBe("done");
   });
 });
 
@@ -673,37 +746,38 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — the roads that stay as they were, aga
     expect(await runStatus(p.runId)).toBe("pending_approval");
   });
 
-  it("the successor of a repair that started on the post's own leg keeps the automatic-gate road", async () => {
+  it("the successor of a repair that started on the post's own leg takes the family road with its own decision (b2): set aside while the picture's leg is open, then the picture's decision lets the run go on", async () => {
     const p = await pausedPipeline();
-    const postGate = await gateStore.readReviewGate(p.runId, p.step);
-    const key = `k-${randomUUID()}`;
-    const cr = await repairStore.recordChangesRequested({
-      runId: p.runId,
-      reviewTaskId: p.step,
-      orgId: ORG,
-      request: {
-        gateId: postGate!.id,
-        decisionId: key,
-        idempotencyKey: key,
-        baseTarget: p.post,
-        expectedBaseRevisionId: p.post.representationRevisionId,
-        findings: [{ id: "prompt-window", message: "Tighten the intro" }],
-        continuationMode: "async_effects_gated",
-        continuationAddress: null,
-      },
-      repairCapable: true,
-      producerRunId: p.runId,
-      currentBaseRevisionId: p.post.representationRevisionId,
-    });
-    if (!cr.ok) throw new Error(`changes_requested refused: ${cr.code}`);
-    const successor = await answerRegenerate(p.runId, cr.repairId, postGate!.id, p.post);
-    await approve(p.runId, successor.taskId);
-    const summary = await sweep();
+    const onPost = await changesRequestedOnThePost(p);
+    const successor = await onPost.answer();
+    const successorText = await approve(p.runId, successor.taskId);
+    let summary = await sweep();
     expect(summary.failed).toBe(0);
-    expect(sendTaskSpy).not.toHaveBeenCalled();
+    await expectParked(p);
     expect(await intentStatus(p.runId, successor.taskId)).toBe("done");
+
+    const text = await approve(p.runId, p.leg2);
+    summary = await sweep();
+    expect(summary.failed).toBe(0);
+    expectResumedWith(p, text);
+    expect(successorText).not.toBe(text);
   });
 
+  it("the successor of a repair that started on the post's own leg, decided last, resumes the run with its own decision (b2)", async () => {
+    const p = await pausedPipeline();
+    const onPost = await changesRequestedOnThePost(p);
+    const successor = await onPost.answer();
+    const { pictureGateId } = await pictureContinuedWhileThePostsLineageIsOpen(p, onPost.postGateId);
+    const pictureBefore = await intentOf(pictureGateId);
+
+    const successorText = await approve(p.runId, successor.taskId);
+    const summary = await sweep();
+    expect(summary.failed).toBe(0);
+    expectResumedWith(p, successorText);
+    expect(resumesOf(p)[0].message.messageId).toBe(`artifact-review-resume-${successor.gateId}`);
+    expect(await intentStatus(p.runId, successor.taskId)).toBe("done");
+    expect(await intentOf(pictureGateId)).toEqual(pictureBefore);
+  });
   it("SUCCESSOR FIRST, post last: the successor's decision is set aside while the post is open, and the post's decision lets the run go on", async () => {
     const p = await pausedPipeline();
     const successor = await regenerate(p.runId, p.leg2, p.picture);
@@ -719,12 +793,12 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — the roads that stay as they were, aga
 });
 
 // ---------------------------------------------------------------------------
-// cinatra#4312, review 2 of cinatra#4339 — the wake against a concurrent worker,
+// cinatra#4312, review 2 of cinatra#4339 — the carrier against a concurrent worker,
 // the lineage bound to the decided gate, malformed terminal rows, dead-letter.
 // ---------------------------------------------------------------------------
 
 /** A second database session with its own open transaction: the terminal repair
- * write and its wake, held uncommitted so a case orders the other session's
+ * write and its carrier, held uncommitted so a case orders the other session's
  * steps around it. */
 const openSessions = new Set<Client>();
 
@@ -748,19 +822,19 @@ async function openSession() {
   const tx = drizzle(client, { schema: schemaMod });
   return {
     client,
-    tx: tx as unknown as Parameters<typeof repairStore.wakeDeclaredReviewAfterTerminalRepair>[0],
+    tx: tx as unknown as Parameters<typeof repairStore.carryDeclaredReviewDecision>[0],
     commit: async () => { await client.query("COMMIT"); openSessions.delete(client); await client.end(); },
   };
 }
 
-/** The terminal write of a stale repair and its wake, as `submitRepairResponse`
+/** The terminal write of a stale repair and its carrier, as `submitRepairResponse`
  * makes them, in `session`'s open transaction. */
-async function staleAndWake(session: Awaited<ReturnType<typeof openSession>>, repairId: string, lineageId: string) {
+async function staleAndCarry(session: Awaited<ReturnType<typeof openSession>>, repairId: string, lineageId: string) {
   await session.client.query(
     `UPDATE "${q(TEST_SCHEMA)}"."lifecycle_repair" SET status='stale', updated_at=now() WHERE id=$1`,
     [repairId],
   );
-  return repairStore.wakeDeclaredReviewAfterTerminalRepair(session.tx, lineageId);
+  return repairStore.carryDeclaredReviewDecision(session.tx, lineageId);
 }
 
 /** Wait until another session waits on a row lock, or `settled` turns true. */
@@ -815,42 +889,39 @@ function changesRequestedOn(gateId: string, base: Pin) {
   };
 }
 
-describe.skipIf(!HAS_DB)("cinatra#4312 — the wake and a concurrent worker cannot strand the run (review 2, finding 1)", () => {
-  it("PENDING: the post's intent is pending when the lineage goes stale; a sweep before that commit neither sends nor acknowledges the post's decision, and the next sweep lets the run go on", async () => {
+describe.skipIf(!HAS_DB)("cinatra#4312 — the carrier and a concurrent worker cannot strand the run (review 2, finding 1)", () => {
+  it("PENDING: the post's intent is pending when the lineage goes stale; the worker's acknowledgement waits for that commit, re-reads the lineage closed and resumes; the carrier, taken after that, finds the run advanced and sends nothing", async () => {
     const p = await pausedPipeline();
+    advanceRunsOnResume();
     const pressed = await pressRegenerate(p.runId, p.leg2, p.picture);
     const text = await approve(p.runId, p.step);
     const post = await gateStore.readReviewGate(p.runId, p.step);
 
     const terminal = await openSession();
-    expect(await staleAndWake(terminal, pressed.repairId, pressed.settledGateId)).toBe(post!.id);
-    // The worker's sweep runs while the stale write is not committed yet. The wake
-    // holds the post's intent row, so the claim skips it and the sweep returns
-    // without a wait on the open write. A sweep that claims the intent instead
-    // waits on the run row the wake holds; the case then commits the write to let
-    // that sweep return, and fails on `waited`.
+    expect(await staleAndCarry(terminal, pressed.repairId, pressed.settledGateId)).toBe(pressed.settledGateId);
+    // The worker's sweep runs while the stale write is not committed yet. It claims the
+    // post's intent (the close holds no intent row), reads the lineage open, and its
+    // acknowledgement waits on the run row the close holds.
     let settled = false;
-    let committed = false;
     const sweeping = sweep().finally(() => { settled = true; });
-    const waited = await waitForLockWait(() => settled);
-    if (waited) { await terminal.commit(); committed = true; }
+    expect(await waitForLockWait(() => settled)).toBe(true);
+    expect(settled).toBe(false);
+    await terminal.commit();
     await sweeping;
-    expect(waited).toBe(false);
-    expect(sendTaskSpy).not.toHaveBeenCalled();
-    expect(await intentStatusOf(post!.id)).toBe("pending");
-    if (!committed) await terminal.commit();
-
-    await sweep();
     expectResumedWith(p, text);
     expect(await intentStatusOf(post!.id)).toBe("done");
+
+    await sweep();
+    expect(resumesOf(p)).toHaveLength(1);
+    expect(await intentStatusOf(pressed.settledGateId)).toBe("done");
   });
 
-  it("WRITTEN AFTER THE WAKE'S READ: the post is continued while the stale write is open; the worker's acknowledgement waits for that commit, re-reads the lineage closed and lets the run go on", async () => {
+  it("WRITTEN AFTER THE CLOSE'S READ: the post is continued while the stale write is open; the close found no decision to carry, the worker's acknowledgement waits for that commit, re-reads the lineage closed and lets the run go on", async () => {
     const p = await pausedPipeline();
     const pressed = await pressRegenerate(p.runId, p.leg2, p.picture);
 
     const terminal = await openSession();
-    expect(await staleAndWake(terminal, pressed.repairId, pressed.settledGateId)).toBeNull();
+    expect(await staleAndCarry(terminal, pressed.repairId, pressed.settledGateId)).toBeNull();
     const text = await approve(p.runId, p.step);
     let settled = false;
     const sweeping = sweep().finally(() => { settled = true; });
@@ -862,9 +933,10 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — the wake and a concurrent worker cann
     expectResumedWith(p, text);
     const post = await gateStore.readReviewGate(p.runId, p.step);
     expect(await intentStatusOf(post!.id)).toBe("done");
+    expect(await intentOf(pressed.settledGateId)).toBeUndefined();
   });
 
-  it("DELIVERING: a worker's acknowledgement lands between the wake's read and its write; the wake still puts the intent back to pending and the next sweep lets the run go on", async () => {
+  it("DELIVERING: a worker's acknowledgement is open when the lineage goes stale; the close waits on no intent row, writes none of that worker's, and its carrier lets the run go on", async () => {
     const p = await pausedPipeline();
     const pressed = await pressRegenerate(p.runId, p.leg2, p.picture);
     const text = await approve(p.runId, p.step);
@@ -873,7 +945,7 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — the wake and a concurrent worker cann
     expect(held?.status).toBe("delivering");
 
     // The worker's acknowledgement (markResumeIntentDelivered's write), in its own
-    // open transaction: it holds the row when the wake reaches it.
+    // open transaction: it holds the post's intent row while the close runs.
     const worker = await openSession();
     const acked = await worker.client.query(
       `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_resume_outbox" SET status='done', updated_at=now()
@@ -883,13 +955,11 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — the wake and a concurrent worker cann
     expect(acked.rowCount).toBe(1);
 
     const terminal = await openSession();
-    let settled = false;
-    const waking = staleAndWake(terminal, pressed.repairId, pressed.settledGateId).finally(() => { settled = true; });
-    expect(await waitForLockWait(() => settled)).toBe(true);
-    await worker.commit();
-    expect(await waking).toBe(post!.id);
+    expect(await staleAndCarry(terminal, pressed.repairId, pressed.settledGateId)).toBe(pressed.settledGateId);
     await terminal.commit();
-    expect(await intentRow(post!.id)).toMatchObject({ status: "pending", attempts: 0, lease_token: null });
+    await worker.commit();
+    expect(await intentOf(post!.id)).toMatchObject({ status: "done", lease_token: held!.leaseToken, attempts: 1 });
+    await expectCarrier(pressed.settledGateId, p.leg2, text);
 
     await sweep();
     expectResumedWith(p, text);
@@ -1352,8 +1422,9 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — the sweep's naming never closes a dec
     expect(await runStatus(p.runId)).toBe("pending_approval");
   });
 
-  it("DISPATCH ESCALATION BEFORE THE NAMING: the drain escalates an old writer's requested attempt 2 on the unnamed gate, and its wake reads only the lineage's root, so it puts the post's intent back to pending before any name exists; after the naming the lineage still reads malformed, and that intent is left for re-claim", async () => {
+  it("DISPATCH ESCALATION BEFORE THE NAMING: the drain escalates an old writer's requested attempt 2 on the unnamed gate; the close reads the lineage malformed and carries nothing, before and after the naming, and the post's intent stays as the worker left it (an old binary's state)", async () => {
     const { p, pressed, successor, postGateId } = await parkedOnARegeneratedPicture();
+    const before = await intentOf(postGateId);
     const reopen = await oldWritersNoteOnTheReopenSlot(pressed.repairId, successor, p.runId, "requested");
     // The drain takes only this case's attempt: the requested rows earlier cases left are set aside first.
     await pool(
@@ -1364,20 +1435,23 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — the sweep's naming never closes a dec
     await dispatchPendingProducerRepairs({ limit: 200 });
     expect(await attempt2StatusOn(reopen)).toBe("escalated");
     expect(await reopenNameOf(successor.gateId)).toBeNull();
-    expect(await intentStatusOf(postGateId)).toBe("pending");
+    expect(await intentOf(reopen)).toBeUndefined();
+    expect(await intentOf(postGateId)).toEqual(before);
 
     await sweepReviewOrchestration();
     expect(await reopenNameOf(successor.gateId)).toBe(reopen);
     await expect(repairStore.isRepairLineageOpen(pressed.settledGateId)).rejects.toMatchObject({ code: "malformed-lineage" });
-    await expectLeftForReclaim(await sweep(), postGateId);
-    expect(await runStatus(p.runId)).toBe("pending_approval");
+    expect(await intentOf(reopen)).toBeUndefined();
+    expect(await intentOf(postGateId)).toEqual(before);
+    const summary = await sweep();
+    expect(summary.failed).toBe(0);
+    await expectParked(p);
   });
 });
-
 // ---------------------------------------------------------------------------
 // cinatra#4312, review 7 of cinatra#4339 — a lineage on the post's own leg also keeps
 // the run parked (`regenerationOpen` reads every leg settled as changes requested), so
-// every road that closes it wakes the family.
+// every road that closes it with no gate decision carries the family's decision.
 // ---------------------------------------------------------------------------
 
 /** Changes requested straight on the post's own leg P (an accepted store state: the
@@ -1436,7 +1510,7 @@ async function oldWritersRecordFor(successor: { gateId: string; pin: Pin }, revi
   expect(await reopenNameOf(successor.gateId)).toBeNull();
 }
 
-describe.skipIf(!HAS_DB)("cinatra#4312 — a lineage on the post's own leg wakes the paused run when it closes (review 7, finding 1)", () => {
+describe.skipIf(!HAS_DB)("cinatra#4312 — a lineage on the post's own leg carries the family's decision when it closes (review 7, finding 1)", () => {
   // As in the groups above: `sweep()` claims every outstanding intent and the drain takes
   // every requested repair, so what earlier cases left is set aside first.
   beforeEach(async () => {
@@ -1448,88 +1522,262 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — a lineage on the post's own leg wakes
     await pool(`UPDATE "${q(TEST_SCHEMA)}"."lifecycle_repair" SET status='escalated' WHERE status='requested'`);
   });
 
-  it("THE SEVEN STEPS OF REVIEW 7: the post's successor S waits, the picture's decision is set aside, an old writer leaves requested attempt 2 on the unnamed reopen gate, the drain escalates it (its wake puts the picture's decision back), the sweep names the gate and the lineage reads closed; the run goes on with the picture's decision, and S's later decision sends nothing more", async () => {
+  it("THE SEVEN STEPS OF REVIEW 7: the post's successor S waits, the picture's decision is set aside, an old writer leaves requested attempt 2 on the unnamed reopen gate, the drain escalates it (the lineage reads malformed, nothing is carried), the sweep names the gate and the lineage reads closed (the naming carries the picture's decision); the run goes on with it, and S's later decision sends nothing more", async () => {
     // 1-2. The accepted two-leg family; changes requested on the post's leg P, successor S lands.
     const p = await pausedPipeline();
     const onPost = await changesRequestedOnThePost(p);
     const successor = await onPost.answer();
     // 3. The picture's leg Q is continued while S waits: set aside, the run is parked on P's lineage.
     const { text, pictureGateId } = await pictureContinuedWhileThePostsLineageIsOpen(p, onPost.postGateId);
+    const pictureBefore = await intentOf(pictureGateId);
     // 4. An old writer: record verify:S, its reopen gate R unnamed, requested attempt 2 on R.
     await oldWritersRecordFor(successor, p.post);
     const reopen = await oldWritersNoteOnTheReopenSlot(onPost.repairId, successor, p.runId, "requested");
     await expect(repairStore.isRepairLineageOpen(onPost.postGateId)).rejects.toMatchObject({ code: "malformed-lineage" });
-    // 5. The drain escalates attempt 2 before any name exists; its wake reads the family, the post's leg too.
+    // 5. The drain escalates attempt 2 before any name exists: the lineage reads malformed, nothing is carried.
     const { dispatchPendingProducerRepairs } = await import("../lifecycle-repair-dispatch-store");
     await dispatchPendingProducerRepairs({ limit: 200 });
     expect(await attempt2StatusOn(reopen)).toBe("escalated");
     expect(await reopenNameOf(successor.gateId)).toBeNull();
-    expect(await intentStatusOf(pictureGateId)).toBe("pending");
-    // 6. The sweep names R: the lineage reads closed.
+    expect(await intentOf(reopen)).toBeUndefined();
+    // 6. The sweep names R: the lineage reads closed, and the naming inserts a carrier on R.
     await sweepReviewOrchestration();
     expect(await reopenNameOf(successor.gateId)).toBe(reopen);
     expect(await repairStore.isRepairLineageOpen(onPost.postGateId)).toBe(false);
-    expect(await intentStatusOf(pictureGateId)).toBe("pending");
+    await expectCarrier(reopen, p.step, text);
+    expect(await intentOf(pictureGateId)).toEqual(pictureBefore);
     // 7. The worker resumes the run with the picture's decision; S's decision resumes nothing more.
+    advanceRunsOnResume();
     await sweep();
     expectResumedWith(p, text);
-    expect(await intentStatusOf(pictureGateId)).toBe("done");
-    // The resume moves the run off its pause (the replaced task-state handler would).
-    await pool(`UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status='running' WHERE id=$1`, [p.runId]);
+    expect(await intentStatusOf(reopen)).toBe("done");
     await approve(p.runId, successor.taskId);
     await sweep();
-    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
-    expect(await intentStatusOf(pictureGateId)).toBe("done");
+    expect(resumesOf(p)).toHaveLength(1);
     expect(await intentStatus(p.runId, successor.taskId)).toBe("done");
   });
 
-  it("AN OLD WRITER'S ESCALATED NOTE ON THE POST'S LINEAGE, THEN THE NAMING: no repair write closes the lineage, the name does; the sweep's naming wakes the picture's decision and the run goes on", async () => {
+  it("AN OLD WRITER'S ESCALATED NOTE ON THE POST'S LINEAGE, THEN THE NAMING: no repair write closes the lineage, the name does; the sweep's naming carries the picture's decision and the run goes on", async () => {
     const p = await pausedPipeline();
     const onPost = await changesRequestedOnThePost(p);
     const successor = await onPost.answer();
     const { text, pictureGateId } = await pictureContinuedWhileThePostsLineageIsOpen(p, onPost.postGateId);
+    const pictureBefore = await intentOf(pictureGateId);
     await oldWritersRecordFor(successor, p.post);
     const reopen = await oldWritersNoteOnTheReopenSlot(onPost.repairId, successor, p.runId, "escalated");
     await expect(repairStore.isRepairLineageOpen(onPost.postGateId)).rejects.toMatchObject({ code: "malformed-lineage" });
-    expect(await intentStatusOf(pictureGateId)).toBe("done");
 
     await sweepReviewOrchestration();
     expect(await reopenNameOf(successor.gateId)).toBe(reopen);
     expect(await repairStore.isRepairLineageOpen(onPost.postGateId)).toBe(false);
-    expect(await intentStatusOf(pictureGateId)).toBe("pending");
+    await expectCarrier(reopen, p.step, text);
+    expect(await intentOf(pictureGateId)).toEqual(pictureBefore);
 
     await sweep();
     expectResumedWith(p, text);
   });
 
-  it("THE POST'S SUCCESSOR CONTINUED LAST: S's decision keeps the automatic-gate road and resumes nothing itself, but its commit wakes the picture's decision, and the run goes on with it", async () => {
-    const p = await pausedPipeline();
-    const onPost = await changesRequestedOnThePost(p);
-    const successor = await onPost.answer();
-    const { text, pictureGateId } = await pictureContinuedWhileThePostsLineageIsOpen(p, onPost.postGateId);
-
-    await approve(p.runId, successor.taskId);
-    await sweep();
-    expect(await intentStatus(p.runId, successor.taskId)).toBe("done");
-    expect(sendTaskSpy).not.toHaveBeenCalled();
-    expect(await intentStatusOf(pictureGateId)).toBe("pending");
-
-    await sweep();
-    expectResumedWith(p, text);
-    expect(await intentStatusOf(pictureGateId)).toBe("done");
-  });
-
-  it("THE POST'S REPAIR ESCALATED BY THE DRAIN: the producer never answered, the picture's decision was set aside, and the escalation's wake now reaches the post's leg; the run goes on", async () => {
+  it("THE POST'S REPAIR ESCALATED BY THE DRAIN: the producer never answered, the picture's decision was set aside, and the escalation carries it on the post's leg; the run goes on", async () => {
     const p = await pausedPipeline();
     const onPost = await changesRequestedOnThePost(p);
     const { text, pictureGateId } = await pictureContinuedWhileThePostsLineageIsOpen(p, onPost.postGateId);
+    const pictureBefore = await intentOf(pictureGateId);
 
     const { dispatchPendingProducerRepairs } = await import("../lifecycle-repair-dispatch-store");
     const drained = await dispatchPendingProducerRepairs({ limit: 200 });
     expect(drained).toMatchObject({ escalated: 1, dispatched: 0 });
     expect((await repairOf(onPost.repairId)).status).toBe("escalated");
-    expect(await intentStatusOf(pictureGateId)).toBe("pending");
+    await expectCarrier(onPost.postGateId, p.step, text);
+    expect(await intentOf(pictureGateId)).toEqual(pictureBefore);
 
+    await sweep();
+    expectResumedWith(p, text);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4312, review 9 of cinatra#4339 — plan (b): an open lineage reads like a
+// pending leg (b1), a successor's decision takes the family road (b2), and a close with
+// no gate decision inserts one new intent that carries the family's latest decision
+// (b3, an insert only, in the close's transaction).
+// ---------------------------------------------------------------------------
+
+/** cinatra#4312 — Regenerate pressed on `leg` (repair-capable producer, no answer yet)
+ * and the producer's answer against a moved base: the lineage goes stale. */
+async function regenerateThenStale(p: Pipeline, leg: string, base: Pin) {
+  const pressed = await pressRegenerate(p.runId, leg, base);
+  return {
+    pressed,
+    stale: async () => {
+      const rr = await repairStore.submitRepairResponse({
+        repairId: pressed.repairId,
+        currentBaseRevisionId: `rev-img-moved-${randomUUID()}`,
+        reauthorized: true,
+        response: {
+          gateId: pressed.settledGateId,
+          baseTarget: base,
+          successorTarget: { artifactId: base.artifactId, representationRevisionId: `rev-img-r-${randomUUID()}` },
+          findingOutcomes: [{ findingId: "prompt-window", applied: true }],
+          changeSummary: "darker sky",
+          producerProvenance: { runId: p.runId, agentId: null },
+        },
+      });
+      expect(rr).toMatchObject({ ok: false, code: "stale-base" });
+    },
+  };
+}
+
+describe.skipIf(!HAS_DB)("cinatra#4312 — plan (b): the carrier of a declared review's decision (review 9)", () => {
+  it("b1 — AN OPEN LINEAGE READS LIKE A PENDING LEG: the post's decision is closed as done without a send, on every sweep, and the lineage's close never puts that row back", async () => {
+    const p = await pausedPipeline();
+    const { pressed: open, stale } = await regenerateThenStale(p, p.leg2, p.picture);
+    const text = await approve(p.runId, p.step);
+    const post = await gateStore.readReviewGate(p.runId, p.step);
+    await sweep();
+    await sweep();
+    await expectParked(p);
+    const setAside = await intentOf(post!.id);
+    expect(setAside).toMatchObject({ status: "done", attempts: 1, dead_lettered_at: null });
+    expect(await repairStore.isRepairLineageOpen(open.settledGateId)).toBe(true);
+
+    await stale();
+    expect(await intentOf(post!.id)).toEqual(setAside);
+    await expectCarrier(open.settledGateId, p.leg2, text);
+    await sweep();
+    expectResumedWith(p, text);
+    expect(await intentOf(post!.id)).toEqual(setAside);
+  });
+
+  it("b3 — AN INSERT ONLY: a carrier is written once per closing attempt; a second close of the same attempt inserts nothing and writes no row", async () => {
+    const p = await pausedPipeline();
+    const { pressed, stale } = await regenerateThenStale(p, p.leg2, p.picture);
+    const text = await approve(p.runId, p.step);
+    await sweep();
+    await stale();
+    await expectCarrier(pressed.settledGateId, p.leg2, text);
+    const carrier = await intentOf(pressed.settledGateId);
+    const again = await dbMod.db.transaction((tx) =>
+      repairStore.carryDeclaredReviewDecision(tx as unknown as Parameters<typeof repairStore.carryDeclaredReviewDecision>[0], pressed.settledGateId));
+    expect(again).toBeNull();
+    expect(await intentOf(pressed.settledGateId)).toEqual(carrier);
+  });
+
+  it("b3 — THE NEWEST DECISION CARRIES: with two pictures regenerated, the post continued and one successor continued (both set aside), the other lineage's stale close carries the successor's decision, and the run goes on with it", async () => {
+    const p = await pausedPipeline(true, 2);
+    const third = p.more[0];
+    const first = await pressRegenerate(p.runId, p.leg2, p.picture);
+    const second = await regenerateThenStale(p, third.leg, third.pin);
+    await approve(p.runId, p.step);
+    await sweep();
+    await expectParked(p);
+    const successor = await first.answer();
+    const successorText = await approve(p.runId, successor.taskId);
+    await sweep();
+    await expectParked(p);
+    expect(await intentStatus(p.runId, successor.taskId)).toBe("done");
+
+    await second.stale();
+    await expectCarrier(second.pressed.settledGateId, third.leg, successorText);
+    await sweep();
+    expectResumedWith(p, successorText);
+  });
+
+  it("b3 — TWO CARRIERS COMMIT TOGETHER: two pictures' lineages go stale in two sessions that commit together; each inserts its own carrier, and the run is never stranded. Taken one after the other the second finds the run advanced; delivered at the same time both can send, at least once, as two legs decided at the same time do on main", async () => {
+    // A control on main's road: two legs decided at the same time, no lineage.
+    const main = await pausedPipeline();
+    await approve(main.runId, main.step);
+    await approve(main.runId, main.leg2);
+    const legs = await gateStore.claimPendingResumeIntents({ limit: 50, leaseMs: 300_000 });
+    const mainRows = legs.filter((c) => c.runId === main.runId);
+    expect(mainRows).toHaveLength(2);
+    await Promise.all(mainRows.map((row) => resumeDelivery.deliverArtifactReviewResumeIntent(row)));
+    const mainSends = resumesOf(main).length;
+    expect(mainSends).toBe(2);
+
+    const runOf = async (carriedSequentially: boolean) => {
+      const p = await pausedPipeline(true, 2);
+      const third = p.more[0];
+      const a = await regenerateThenStale(p, p.leg2, p.picture);
+      const b = await regenerateThenStale(p, third.leg, third.pin);
+      const text = await approve(p.runId, p.step);
+      await sweep();
+      // Parked, read for this run only: the control above and the first variant
+      // sent into other runs' contexts.
+      expect(resumesOf(p)).toHaveLength(0);
+      expect(await runStatus(p.runId)).toBe("pending_approval");
+
+      const one = await openSession();
+      const two = await openSession();
+      await one.client.query(`UPDATE "${q(TEST_SCHEMA)}"."lifecycle_repair" SET status='stale', updated_at=now() WHERE id=$1`, [a.pressed.repairId]);
+      await two.client.query(`UPDATE "${q(TEST_SCHEMA)}"."lifecycle_repair" SET status='stale', updated_at=now() WHERE id=$1`, [b.pressed.repairId]);
+      expect(await repairStore.carryDeclaredReviewDecision(one.tx, a.pressed.settledGateId)).toBe(a.pressed.settledGateId);
+      // The second close waits on the run row the first holds; both then commit.
+      let settled = false;
+      const carriedTwo = repairStore.carryDeclaredReviewDecision(two.tx, b.pressed.settledGateId)
+        .finally(() => { settled = true; });
+      expect(await waitForLockWait(() => settled)).toBe(true);
+      await one.commit();
+      expect(await carriedTwo).toBe(b.pressed.settledGateId);
+      await two.commit();
+      await expectCarrier(a.pressed.settledGateId, p.leg2, text);
+      await expectCarrier(b.pressed.settledGateId, third.leg, text);
+
+      if (carriedSequentially) {
+        advanceRunsOnResume();
+        await sweep();
+        expectResumedWith(p, text);
+      } else {
+        const rows = (await gateStore.claimPendingResumeIntents({ limit: 50, leaseMs: 300_000 }))
+          .filter((c) => c.runId === p.runId);
+        expect(rows.map((r) => r.gateId).sort()).toEqual([a.pressed.settledGateId, b.pressed.settledGateId].sort());
+        await Promise.all(rows.map((row) => resumeDelivery.deliverArtifactReviewResumeIntent(row)));
+        expect(resumesOf(p)).toHaveLength(mainSends);
+        expect(resumesOf(p).every((r) => r.message.parts[0].text === text)).toBe(true);
+      }
+      expect(await intentStatusOf(a.pressed.settledGateId)).toBe("done");
+      expect(await intentStatusOf(b.pressed.settledGateId)).toBe("done");
+      expect(await pendingGates(p.runId)).toEqual([]);
+    };
+    await runOf(true);
+    handleWayflowTaskStateSpy.mockImplementation(async () => undefined);
+    await runOf(false);
+  });
+
+  it("b3 — A LATER PAUSE: the run went on to a later declared review (a new task id, its own family) while a picture's lineage of the earlier pause was open; that lineage's close carries nothing into the later pause, and no sweep sends the earlier decision", async () => {
+    const p = await pausedPipeline();
+    const { pressed, stale } = await regenerateThenStale(p, p.leg2, p.picture);
+    await approve(p.runId, p.step);
+    await sweep();
+    await expectParked(p);
+
+    const laterTask = `task-${randomUUID()}`;
+    const laterStep = `wayflow-${laterTask}`;
+    const laterPin = { artifactId: `art-post2-${randomUUID()}`, representationRevisionId: `rev-post2-${randomUUID()}` };
+    await pool(
+      `INSERT INTO "${q(TEST_SCHEMA)}"."objects" (id, type, data, org_id) VALUES ($1, 'document', '{}'::jsonb, $2)`,
+      [laterPin.artifactId, ORG],
+    );
+    // The run's a2a_task_id column is best effort and still names the earlier task, and
+    // the latest-task map has lapsed (this file's mock answers null): only the gates show
+    // that the run went on.
+    await gateStore.emitDeclaredReviewGateFamily({ runId: p.runId, orgId: ORG, reviewTaskId: laterStep, targets: [laterPin] });
+    expect(await pendingGates(p.runId)).toEqual([laterStep]);
+
+    await stale();
+    expect(await intentOf(pressed.settledGateId)).toBeUndefined();
+    const summary = await sweep();
+    expect(summary.failed).toBe(0);
+    expect(resumesOf(p)).toHaveLength(0);
+    expect(await runStatus(p.runId)).toBe("pending_approval");
+  });
+
+  it("b3 — NOTHING TO CARRY: a lineage that closes before any decision of its family carries nothing; the family's next decision writes its own intent and lets the run go on", async () => {
+    const p = await pausedPipeline();
+    const { pressed, stale } = await regenerateThenStale(p, p.leg2, p.picture);
+    await stale();
+    expect(await intentOf(pressed.settledGateId)).toBeUndefined();
+    await expectParked(p);
+    const text = await approve(p.runId, p.step);
     await sweep();
     expectResumedWith(p, text);
   });
