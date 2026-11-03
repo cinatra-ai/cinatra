@@ -19,7 +19,7 @@ vi.mock("../db", () => ({
   agentBuilderPool: { on: () => {}, listenerCount: () => 1, end: vi.fn() },
 }));
 
-const createTemplate = vi.fn(async (..._a: unknown[]) => ({ id: "tmpl-1" }));
+const createTemplate = vi.fn<(...args: unknown[]) => Promise<{ id: string }>>(async () => ({ id: "tmpl-1" }));
 vi.mock("../store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../store")>();
   return {

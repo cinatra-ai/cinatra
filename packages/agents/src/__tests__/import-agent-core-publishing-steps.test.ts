@@ -59,8 +59,8 @@ vi.mock("../oas-compiler", () => ({
 }));
 
 const readTemplate = vi.fn(async (): Promise<{ id: string } | null> => null);
-const createTemplate = vi.fn(async (..._a: unknown[]) => {});
-const updateTemplate = vi.fn(async (..._a: unknown[]) => {});
+const createTemplate = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
+const updateTemplate = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
 vi.mock("../store", () => ({
   readAgentTemplateByPackageName: (...a: unknown[]) => readTemplate(...(a as [])),
   createAgentTemplate: (...a: unknown[]) => createTemplate(...(a as [])),

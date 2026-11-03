@@ -108,13 +108,13 @@ vi.mock("../verdaccio/package-contract", async (importOriginal) => {
 });
 vi.mock("../verdaccio/cli-flags", () => ({ buildRegistryAuthArgs: () => [] }));
 
-const createLocal = vi.fn(async (..._a: unknown[]) => ({ templateId: "tpl-fresh", versionId: "ver-fresh" }));
+const createLocal = vi.fn<(...args: unknown[]) => Promise<{ templateId: string; versionId: string }>>(async () => ({ templateId: "tpl-fresh", versionId: "ver-fresh" }));
 vi.mock("../import-export-actions", () => ({
   createLocalAgentTemplateVersion: (...a: unknown[]) => createLocal(...(a as [])),
 }));
 
 const readTemplate = vi.fn(async (): Promise<{ id: string; status: string } | null> => null);
-const updateTemplate = vi.fn(async (..._a: unknown[]) => {});
+const updateTemplate = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
 vi.mock("../store", () => ({
   readAgentTemplateByPackageName: (...a: unknown[]) => readTemplate(...(a as [])),
   updateAgentTemplate: async (...a: unknown[]) =>
