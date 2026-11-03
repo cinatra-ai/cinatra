@@ -343,6 +343,21 @@ describe("readPageCaptureFactsForRevision (cinatra#4223)", () => {
     }
   });
 
+  it("answers unreadable, never absent, for a record whose type is missing, null, empty or not a string", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const objectType of [undefined, null, "", 7, true, {}, [TYPE]]) {
+      expect(
+        readPageCaptureFactsForRevision(input, { runQuery: () => [record({ ...good, objectType })] }),
+        JSON.stringify(objectType) ?? "undefined",
+      ).toEqual({ status: "unreadable" });
+    }
+    expect(
+      readPageCaptureFactsForRevision(input, {
+        runQuery: () => [record({ ...good, objectType: "@cinatra-ai/chart-artifact:chart" })],
+      }),
+    ).toEqual({ status: "absent" });
+  });
+
   it("answers unreadable, with only the fixed log line, when decoding a row, a detail or the list throws", () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     const boom = () => {
