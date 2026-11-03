@@ -893,8 +893,9 @@ export async function POST(req: Request): Promise<Response> {
     // cinatra#4223, cinatra#4465: an error with the zod marker answers its
     // issues, and a primitive's stated refusal without it keeps its text when
     // that text is a string. Every other throw, a marked error with no readable
-    // issue, and a refusal whose message is not a string answer one fixed
-    // sentence, with the failure logged without its text.
+    // issue list (missing, not a list, empty or unreadable), and a refusal whose
+    // message is not a string answer one fixed sentence, with the failure logged
+    // without its text.
     return NextResponse.json(
       { error: passthroughFailureText(err, { tool, runId: agentRunId, stage: "tool call" }) },
       { status: 500 },

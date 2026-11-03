@@ -12,8 +12,10 @@
 //     marker that identifies a zod error can be written by any code, and a
 //     wrapper can keep it with a message of its own. The marker is read first,
 //     so an error that carries it is answered this way even when it is also a
-//     PrimitiveInvocationError. A marked error with no issue, or with an issue
-//     or a list length it cannot read, is answered with the fixed sentence below.
+//     PrimitiveInvocationError, whatever its `issues` holds. A marked error
+//     whose `issues` is missing or not a list, or with no issue, or with an
+//     issue or a list length it cannot read, is answered with the fixed
+//     sentence below.
 //   - a PrimitiveInvocationError without the zod marker: a primitive's stated
 //     refusal, written by the primitive for its caller (for example "the type
 //     is not registered"). It keeps its own text when that text is a string.
@@ -44,7 +46,21 @@ export const PASSTHROUGH_ACTOR_CONTEXT_ERROR =
 export const PASSTHROUGH_SCHEMA_ERROR = "the input does not match the tool's input schema";
 
 /**
- * A zod error, recognised by the trait zod writes on every error it builds.
+ * True when the error carries the zod marker: an Error whose `_zod.traits` is a
+ * Set holding "ZodError" or "$ZodError", whatever its `issues` holds. Any code
+ * in the process can write it. callerFacingText reads it before the primitive
+ * check, so a marked error never answers its own message, even when its
+ * `issues` is missing or not a list.
+ */
+function hasZodMarker(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const traits = (err as { _zod?: { traits?: unknown } })._zod?.traits;
+  return traits instanceof Set && (traits.has("ZodError") || traits.has("$ZodError"));
+}
+
+/**
+ * A zod error, recognised by the trait zod writes on every error it builds
+ * (hasZodMarker) and an `issues` list.
  *
  * Not `instanceof ZodError`: zod 4 answers `instanceof` through its own
  * `Symbol.hasInstance`, which can take a shortcut through the class's `Error`
@@ -55,22 +71,17 @@ export const PASSTHROUGH_SCHEMA_ERROR = "the input does not match the tool's inp
  * issues, and only in the fixed forms of `schemaErrorText`.
  */
 export function isZodError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  const traits = (err as { _zod?: { traits?: unknown } })._zod?.traits;
-  return (
-    traits instanceof Set &&
-    (traits.has("ZodError") || traits.has("$ZodError")) &&
-    Array.isArray((err as { issues?: unknown }).issues)
-  );
+  return hasZodMarker(err) && Array.isArray((err as { issues?: unknown }).issues);
 }
 
 /**
- * True when the error is of a kind the caller may be answered with: a value
- * that carries the zod marker, or a primitive's stated refusal. Not proof that
- * zod built the error, and not proof of the answer: callerFacingText answers a
- * marked error from its issues, a primitive's refusal without the marker with
- * its own text, and gives the fixed sentence, logged, to a marked error with
- * no readable issue and to a refusal whose message is not a string.
+ * True when the error is of a kind the caller may be answered with: a zod
+ * error (isZodError), or a primitive's stated refusal. Not proof that zod
+ * built the error, and not proof of the answer: callerFacingText answers an
+ * error with the zod marker from its issues, a primitive's refusal without the
+ * marker with its own text, and gives the fixed sentence, logged, to a marked
+ * error with no readable issue list (missing, not a list, empty or unreadable)
+ * and to a refusal whose message is not a string.
  */
 export function isCallerFacingError(err: unknown): err is Error {
   return err instanceof PrimitiveInvocationError || isZodError(err);
@@ -208,8 +219,9 @@ function schemaErrorText(err: unknown): string | null {
 
 /**
  * The caller-facing refusal's answer, or null: an error with the zod marker
- * gets its text built from its issues, read first so that a primitive's
- * refusal that also carries the marker never answers its own message; a
+ * (hasZodMarker, whatever its `issues` holds) gets its text built from its
+ * issues, read first so that a primitive's refusal that also carries the
+ * marker never answers its own message; a
  * primitive's refusal without the marker gets its own message when that
  * message is a string. Null (the fixed sentence answers, logged) for a marked
  * error with no readable issue and for a refusal whose message is not a
@@ -217,7 +229,7 @@ function schemaErrorText(err: unknown): string | null {
  */
 function callerFacingText(err: unknown): string | null {
   try {
-    if (isZodError(err)) return schemaErrorText(err);
+    if (hasZodMarker(err)) return schemaErrorText(err);
     if (!(err instanceof PrimitiveInvocationError)) return null;
     const message: unknown = err.message;
     return typeof message === "string" ? message : null;

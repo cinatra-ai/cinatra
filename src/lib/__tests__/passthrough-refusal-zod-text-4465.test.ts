@@ -9,7 +9,8 @@
  * A code, a type word or a path segment outside a fixed form is not copied.
  * An error with no issue, or with an issue or a list length it cannot read,
  * answers the fixed sentence and is logged without its text. A primitive's
- * refusal that also carries the marker is answered as a zod error. On the base
+ * refusal that also carries the marker is answered as a zod error, or with the
+ * fixed sentence when its issues are missing or not a list. On the base
  * the error's own message is the answer, so every case here fails there.
  *
  *   npx vitest run src/lib/__tests__/passthrough-refusal-zod-text-4465.test.ts
@@ -244,6 +245,24 @@ describe("cinatra#4465 — a primitive's refusal that carries the zod marker is 
     expect(logged).not.toHaveBeenCalled();
     expect(passthroughFailureText(marked([]), CTX)).toBe(PASSTHROUGH_UNEXPECTED_ERROR);
     expect(logged).toHaveBeenCalledTimes(1);
+    expectNoSecretLogged();
+  });
+
+  it("never answers the primitive's own message when its issues are missing or not a list", () => {
+    const values: unknown[] = [null, undefined, "issues", { 0: { path: [], code: "custom" }, length: 1 }];
+    for (const issues of values) {
+      const err = Object.assign(new PrimitiveInvocationError({ code: "NOT_FOUND", message: SECRET, retryable: false }), {
+        _zod: { traits: new Set(["ZodError"]) },
+        issues,
+      });
+      expect(isZodError(err)).toBe(false);
+      expect(passthroughFailureText(err, CTX)).toBe(PASSTHROUGH_UNEXPECTED_ERROR);
+    }
+    const missing = Object.assign(new PrimitiveInvocationError({ code: "NOT_FOUND", message: SECRET, retryable: false }), {
+      _zod: { traits: new Set(["$ZodError"]) },
+    });
+    expect(passthroughFailureText(missing, CTX)).toBe(PASSTHROUGH_UNEXPECTED_ERROR);
+    expect(logged).toHaveBeenCalledTimes(values.length + 1);
     expectNoSecretLogged();
   });
 });
