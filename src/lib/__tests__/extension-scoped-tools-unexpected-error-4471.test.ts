@@ -9,9 +9,10 @@
  * status 500, and the server log records the stage, the tool, the run and a
  * class word, never the error's text. The stated refusals keep their own
  * sentence and status (403, and 404 for a missing artifact), and are not logged.
- * No throw leaves the dispatch: a throw of the context resolution, and a throw
- * the dispatch cannot even classify (a proxy whose trap throws, a refusal whose
- * `message` or `reason` getter throws), answer the same fixed sentence.
+ * No throw leaves the dispatch: a throw of the context resolution, a throw the
+ * dispatch cannot even classify (a proxy whose trap throws, a refusal whose
+ * `message` or `reason` getter throws), and a run whose `id` getter throws
+ * while the failure is logged, answer the same fixed sentence.
  *
  * Every log case reads the COMPLETE list of calls of console.error, warn, log,
  * info and debug made by the dispatch, and inspects every argument (an Error by
@@ -248,6 +249,26 @@ describe("an unexpected error on an extension-scoped road (cinatra#4471)", () =>
     expect(outcome).toEqual({ ok: false, status: 500, error: FIXED });
     expect(toolDispatch).not.toHaveBeenCalled();
     expectExactLog([failureCall("extension_tool", "Error")]);
+  });
+
+  it("answers the fixed sentence when the run's id getter throws while the failure is logged", async () => {
+    resolveContext.mockRejectedValue(new Error(LEAKY));
+    const replacement = await leakyPrimitiveRefusal();
+    const run = { ...RUN };
+    Object.defineProperty(run, "id", {
+      get() {
+        throw replacement;
+      },
+    });
+    const { dispatchExtensionScopedTool } = await import("@/lib/extension-scoped-tools");
+    for (const m of LOG_METHODS) spies[m].mockClear();
+    const outcome = await dispatchExtensionScopedTool({
+      tool: "extension_tool",
+      input: { name: "fixture_tool", input: {} },
+      run,
+    });
+    expect(outcome).toEqual({ ok: false, status: 500, error: FIXED });
+    expectExactLog([[FAILURE_LINE, { tool: "extension_tool", runId: "unreadable", errorClass: "Error" }]]);
   });
 
   it("answers the fixed sentence for a thrown proxy whose prototype trap throws a primitive's refusal", async () => {
