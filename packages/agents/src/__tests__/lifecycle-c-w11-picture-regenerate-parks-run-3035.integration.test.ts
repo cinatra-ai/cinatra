@@ -1781,4 +1781,26 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — plan (b): the carrier of a declared r
     await sweep();
     expectResumedWith(p, text);
   });
+
+  // This case pins behaviour the carrier already has: the close carries nothing into a
+  // run that is no longer at its pause (the run-status exit of carryDeclaredReviewDecision).
+  it.each(["failed", "running"])("b3 — A RUN THAT LEFT ITS PAUSE (%s): the post's decision was set aside, then the run left pending_approval before the picture's lineage closed; the close carries nothing, a second carry inserts nothing, and no sweep sends", async (status) => {
+    const p = await pausedPipeline();
+    const { pressed, stale } = await regenerateThenStale(p, p.leg2, p.picture);
+    await approve(p.runId, p.step);
+    await sweep();
+    await expectParked(p);
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status=$2 WHERE id=$1`, [p.runId, status]);
+
+    await stale();
+    expect(await intentOf(pressed.settledGateId)).toBeUndefined();
+    const again = await dbMod.db.transaction((tx) =>
+      repairStore.carryDeclaredReviewDecision(tx as unknown as Parameters<typeof repairStore.carryDeclaredReviewDecision>[0], pressed.settledGateId));
+    expect(again).toBeNull();
+    expect(await intentOf(pressed.settledGateId)).toBeUndefined();
+    const summary = await sweep();
+    expect(summary.failed).toBe(0);
+    expect(resumesOf(p)).toHaveLength(0);
+    expect(await runStatus(p.runId)).toBe(status);
+  });
 });
