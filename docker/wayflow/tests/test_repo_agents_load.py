@@ -179,3 +179,97 @@ def test_oas_loads_via_agentspec_loader(oas_path: Path, slug: str) -> None:
             f"{slug} is in _KNOWN_FAILING_GATE_AGENTS but now mounts — remove its "
             f"entry (the allowlist must never outlive the failure it records)."
         )
+
+
+# ---------------------------------------------------------------------------
+# cinatra#4154 — the signed step id IS the flow document's node id.
+#
+# The runtime signs the executing step's own id (`self.id`) on every call to the
+# passthrough road (agent_loader.py, cinatra#3745), and the application decides
+# which package's tool such a call reaches by finding that id in the INSTALLED
+# flow document. That holds only if the real loader compiles each passthrough
+# ApiNode to a step whose `id` is the node's own `id`. The in-repository
+# pre-load transforms write no existing `id`; the mapping inside
+# `AgentSpecLoader` is the library's, so it is pinned here, per mounted agent,
+# after the same pre-load pipeline as the mount test above.
+#
+# Not vacuous: an agent whose document holds a passthrough ApiNode fails when the
+# walk below finds no compiled step with that id, so a walker that sees nothing
+# is red, not green.
+# ---------------------------------------------------------------------------
+
+_PASSTHROUGH_PATH = "/agents/passthrough"
+
+
+def _oas_passthrough_node_ids(doc: object) -> set[str]:
+    """Every ApiNode id of the pre-loaded document whose url targets the passthrough road."""
+    found: set[str] = set()
+    pending = [doc]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, dict):
+            if (
+                node.get("component_type") == "ApiNode"
+                and isinstance(node.get("id"), str)
+                and _PASSTHROUGH_PATH in str(node.get("url", ""))
+            ):
+                found.add(node["id"])
+            pending.extend(node.values())
+        elif isinstance(node, list):
+            pending.extend(node)
+    return found
+
+
+def _compiled_passthrough_step_ids(agent: object) -> set[str]:
+    """Every compiled ApiCallStep id whose url targets the passthrough road, over the
+    flow, its sub-flows (`flow`, `flows`) and the steps of each."""
+    from wayflowcore.steps import ApiCallStep  # type: ignore[import-not-found]
+
+    found: set[str] = set()
+    pending: list[object] = [agent]
+    seen: set[int] = set()
+    while pending:
+        obj = pending.pop()
+        if obj is None or id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        if isinstance(obj, ApiCallStep):
+            step_id = getattr(obj, "id", None)
+            if isinstance(step_id, str) and _PASSTHROUGH_PATH in str(getattr(obj, "url", "")):
+                found.add(step_id)
+        steps = getattr(obj, "steps", None)
+        if isinstance(steps, dict):
+            pending.extend(steps.values())
+        elif isinstance(steps, (list, tuple)):
+            pending.extend(steps)
+        for attr in ("flow", "flows"):
+            sub = getattr(obj, attr, None)
+            if isinstance(sub, (list, tuple)):
+                pending.extend(sub)
+            elif sub is not None:
+                pending.append(sub)
+    return found
+
+
+@pytest.mark.skipif(AgentSpecLoader is None, reason="wayflowcore not installed (run inside the wayflow image)")
+@pytest.mark.parametrize("oas_path,slug", _agent_oas_params())
+def test_passthrough_step_ids_are_the_document_node_ids(oas_path: Path, slug: str) -> None:
+    """cinatra#4154: each passthrough ApiNode compiles to a step whose `id` is the
+    node's own id, so the signed step id re-anchors in the installed document."""
+    if slug in _KNOWN_FAILING_GATE_AGENTS:
+        pytest.skip(f"{slug} does not mount (see _KNOWN_FAILING_GATE_AGENTS)")
+    raw = oas_path.read_text(encoding="utf-8")
+    label = oas_path.parent.parent.name
+    substituted = _runtime_preload(raw, label)
+    expected = _oas_passthrough_node_ids(json.loads(substituted))
+    agent = AgentSpecLoader().load_json(substituted)
+    compiled = _compiled_passthrough_step_ids(agent)
+    assert compiled == expected, (
+        f"{slug}: compiled passthrough step ids differ from the document's node ids; "
+        f"only in the document: {sorted(expected - compiled)}; only compiled: {sorted(compiled - expected)}"
+    )
+    if slug == "email-outreach-agent":
+        assert "sender-file_recipients" in compiled, (
+            "email-outreach-agent: the embedded delivery step `sender-file_recipients` must compile "
+            "to a step of that id (cinatra#4154)"
+        )
