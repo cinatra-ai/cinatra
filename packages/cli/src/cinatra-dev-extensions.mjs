@@ -251,9 +251,9 @@ export function parseDevExtensionFlags(argv = []) {
     // instead of branch tips. Mutually exclusive with --force by design — the
     // pinned path has no stash/reset semantics.
     pinned: argv.includes("--pinned"),
-    // CI only, with --pinned (cinatra#4484): fetch each pin at depth 1 instead
-    // of cloning the branch, and verify (git fsck) and rewrite every existing
-    // checkout from its pin, since in CI it comes from the actions/cache entry.
+    // CI only, with --pinned (cinatra#4484): every checkout is made new at
+    // depth 1 from its pin; an existing one (in CI, restored from the
+    // actions/cache entry) is moved aside and read only as a source of objects.
     shallow: argv.includes("--shallow"),
   };
 }
@@ -304,6 +304,13 @@ export async function syncCinatraDevExtensions({
   }
   if (flags.shallow && !flags.pinned) {
     throw new Error("[cinatra dev-extensions] --shallow requires --pinned — only a pinned commit is fetched at depth 1.");
+  }
+  // The shallow road replaces every existing checkout, local edits included:
+  // CI only (GitHub Actions sets CI=true).
+  if (flags.shallow && env.CI !== "true") {
+    throw new Error(
+      "[cinatra dev-extensions] --shallow runs in CI only (CI=true): it replaces every existing checkout, local edits included.",
+    );
   }
   // Fail-closed BEFORE any git work: every config entry must be pinnable, or
   // pinned sync refuses outright (a partially-pinned universe would mix

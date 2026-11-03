@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
 import path from "node:path";
 
 // ---------------------------------------------------------------------------
@@ -91,6 +91,7 @@ export function defaultRepoSyncDeps() {
     mkdirp: (p) => mkdirSync(p, { recursive: true }),
     unlink: (p) => rmSync(p, { force: true }),
     removeTree: (p) => rmSync(p, { recursive: true, force: true }),
+    rename: (from, to) => renameSync(from, to),
     sleep: (ms) => sleepSync(ms),
   };
 }
@@ -221,6 +222,113 @@ function dirIsEmpty(dir, deps) {
 
 const COMMIT_SHA_RE = /^[0-9a-f]{40}$/;
 
+// The last non-empty line git printed for a failed call, credentials redacted.
+function gitFailLine(err) {
+  const text = String(err?.stderr || err?.message || err).trim();
+  return redactGitUrl(text.split("\n").filter((l) => l.trim() !== "").pop() ?? "");
+}
+
+// Where the shallow road moves an existing checkout while it rebuilds the
+// destination: a dot-name beside it, so no `extensions/*/*` glob reads it.
+export function shallowSourceDirFor(dest) {
+  return path.join(path.dirname(dest), `.${path.basename(dest)}.restored`);
+}
+
+/**
+ * Shallow pinned sync of one repository (cinatra#4484, CI only). The
+ * destination is always made new: `git init`, `git remote add origin <url>`, a
+ * depth-1 fetch of exactly `sha`, a detached checkout and a HEAD read.
+ *
+ * An existing checkout (in CI, one the clone-extensions action restored from
+ * the actions/cache entry) is never used as a repository: no git command runs
+ * in it, so its config, hooks, index, replace refs and files are never read.
+ * It is moved aside and offered only as a SOURCE of objects, over `file://`:
+ * `git upload-pack` serves it (it is built to serve untrusted repositories),
+ * and the receiving side hashes every object itself and checks that the pin's
+ * commit and tree are complete. When it cannot serve the pin, the pin is
+ * fetched from origin. The moved copy is removed in every case.
+ *
+ * Returns the result, or null when origin answered the depth-1 fetch with
+ * anything but a transient network failure (for example a server that refuses
+ * a fetch by sha): the destination is then absent again and the caller takes
+ * the full clone, where an unreachable pin still fails loud. A transient
+ * failure that outlasts the bounded retry, and every other failure, is thrown
+ * with the destination and the moved copy removed.
+ */
+function syncShallowPinned({ pkgName, url, sha, dest, deps, log }) {
+  const { git } = deps;
+  const removeTree = deps.removeTree ?? ((p) => rmSync(p, { recursive: true, force: true }));
+  const rename = deps.rename ?? ((from, to) => renameSync(from, to));
+  const pin12 = sha.slice(0, 12);
+  const source = shallowSourceDirFor(dest);
+  // A moved copy left by an interrupted earlier run is this road's own.
+  if (deps.exists(source)) removeTree(source);
+  let haveSource = false;
+  if (deps.exists(dest)) {
+    // Unlike dirIsEmpty, an unreadable destination is not taken for empty: it
+    // is moved aside like any other existing checkout.
+    let empty = false;
+    try {
+      empty = deps.readdir(dest).filter((n) => n !== ".DS_Store").length === 0;
+    } catch {
+      empty = false;
+    }
+    if (empty) {
+      removeTree(dest);
+    } else {
+      rename(dest, source);
+      haveSource = true;
+    }
+  }
+  log(
+    haveSource
+      ? `  ${pkgName}: rebuilding ${dest} at ${pin12} at depth 1; the existing checkout is read only as a source of objects.`
+      : `  ${pkgName}: fetching ${redactGitUrl(url)} at ${pin12} at depth 1 -> ${dest}`,
+  );
+  let stage = "init";
+  try {
+    deps.mkdirp(path.dirname(dest));
+    git(["init", "--quiet", "--", dest], path.dirname(dest));
+    git(["remote", "add", "origin", url], dest);
+    let fetched = false;
+    if (haveSource) {
+      stage = "source";
+      try {
+        git(["fetch", "--quiet", "--depth", "1", "--no-tags", `file://${path.resolve(source)}`, sha], dest);
+        fetched = true;
+      } catch (err) {
+        log(`  ${pkgName}: the existing checkout does not serve ${pin12} (${gitFailLine(err)}); fetching it from origin at depth 1.`);
+      }
+    }
+    if (!fetched) {
+      stage = "origin";
+      withNetworkRetry({
+        run: () => git(["fetch", "--quiet", "--depth", "1", "--no-tags", "origin", sha], dest),
+        what: `git fetch at depth 1 of the pinned commit ${pin12}`,
+        pkgName,
+        deps,
+        log,
+      });
+    }
+    stage = "checkout";
+    git(["checkout", "--quiet", "--detach", sha], dest);
+    const head = git(["rev-parse", "HEAD"], dest).trim();
+    if (head !== sha) {
+      throw new Error(`${pkgName}: pinned checkout verification failed — HEAD is ${head}, expected ${sha}.`);
+    }
+  } catch (err) {
+    removeTree(dest);
+    if (haveSource) removeTree(source);
+    if (stage === "origin" && transientGitNetworkReason(err) === null) {
+      log(`  ${pkgName}: origin did not serve ${pin12} at depth 1 (${gitFailLine(err)}); falling back to the full clone.`);
+      return null;
+    }
+    throw err;
+  }
+  if (haveSource) removeTree(source);
+  return { pkgName, action: "cloned", changed: true, pinnedSha: sha };
+}
+
 /**
  * Sync a single target repo. `deps` is injectable for tests. Returns
  * { pkgName, action } or throws on a fail-state. `forceFlagHint` / `stashLabel`
@@ -246,20 +354,10 @@ const COMMIT_SHA_RE = /^[0-9a-f]{40}$/;
  *                                resets local work (no --force semantics).
  *   - wrong origin / non-git  -> hard fail (unchanged from branch mode).
  *
- * Shallow pinned mode (`shallow` set, CI only; cinatra#4484) changes two states:
- *   - absent/empty            -> `git init` + `git fetch --depth 1 origin <sha>`
- *                                + the detached checkout above, instead of the
- *                                full branch clone. A fetch the server REFUSES
- *                                (not a transient network failure) falls back
- *                                to the full branch clone, where an unreachable
- *                                pin still fails loud.
- *   - existing git, clean     -> the checkout is UNTRUSTED (in CI it comes
- *                                from the actions/cache entry): `git fsck` must
- *                                pass (a forged object fails), HEAD must equal
- *                                or be re-pinned to the sha (fetched at depth
- *                                1), then the index is dropped and the tree is
- *                                rewritten from the sha and cleaned, so no
- *                                modified, added or ignored file survives.
+ * Shallow pinned mode (`shallow` set with `sha`, CI only; cinatra#4484): every
+ * state is rebuilt as a new depth-1 checkout of the sha, and an existing
+ * checkout is read only as a source of objects (see syncShallowPinned). A
+ * refused depth-1 fetch falls back to the absent/empty road above.
  */
 export function syncOneRepo({
   pkgName,
@@ -283,9 +381,6 @@ export function syncOneRepo({
     throw new Error(
       `${pkgName}: pinned sync requires a full lowercase 40-hex commit sha (got "${sha}").`,
     );
-  }
-  if (shallow && sha === undefined) {
-    throw new Error(`${pkgName}: a shallow sync requires a pinned sha (--shallow needs --pinned).`);
   }
   // `lockSha` (non-pinned mode only): the committed lock pin for this repo,
   // resolved BEST-EFFORT by the caller. Consulted ONLY for a detached,
@@ -312,6 +407,24 @@ export function syncOneRepo({
         `Allowed: https/ssh github.com, file://, or an absolute local path.`,
     );
   }
+  // Shallow pinned mode (CI only, cinatra#4484): see syncShallowPinned. A
+  // refused depth-1 fetch falls through to the full clone below.
+  if (shallow) {
+    if (sha === undefined) {
+      throw new Error(`${pkgName}: a shallow sync requires a pinned sha (--shallow needs --pinned).`);
+    }
+    // The URL is stored in the new checkout's .git/config, and in CI that tree
+    // is saved to the actions/cache entry: never with a credential in it.
+    if (/^[a-z][a-z0-9+.-]*:\/\/[^/@\s]+@/i.test(url.trim()) && !/^ssh:\/\/git@github\.com\//i.test(url.trim())) {
+      throw new Error(
+        `${pkgName}: refusing a shallow sync of a remote URL that carries credentials ("${redactGitUrl(url)}") — ` +
+          `the checkout is cached in CI.`,
+      );
+    }
+    const done = syncShallowPinned({ pkgName, url, sha, dest, deps, log });
+    if (done !== null) return done;
+  }
+
   const wantRemote = normalizeGitHubRemote(url);
   const exists = deps.exists(dest);
   const isGit = deps.exists(path.join(dest, ".git"));
@@ -322,19 +435,6 @@ export function syncOneRepo({
   // this avoids a per-repo network round-trip). GitHub serves reachable-sha
   // fetches; an unreachable pin (force-pushed companion history) fails loud
   // here — that is the bump-the-lock signal, never a silent fallback to tip.
-  // The fetch of a pin: at depth 1 in shallow mode (cinatra#4484). The full
-  // clone fallback below turns it back to the plain fetch.
-  let fetchShallow = shallow;
-  const pinFetchArgs = (pin) =>
-    fetchShallow ? ["fetch", "--depth", "1", "--no-tags", "origin", pin] : ["fetch", "origin", pin];
-  const verifyHeadIs = (pin) => {
-    const head = git(["rev-parse", "HEAD"], dest).trim();
-    if (head !== pin) {
-      throw new Error(
-        `${pkgName}: pinned checkout verification failed — HEAD is ${head}, expected ${pin}.`,
-      );
-    }
-  };
   const ensurePinnedCommitTo = (pin) => {
     let present = true;
     try {
@@ -344,7 +444,7 @@ export function syncOneRepo({
     }
     if (!present) {
       withNetworkRetry({
-        run: () => git(pinFetchArgs(pin), dest),
+        run: () => git(["fetch", "origin", pin], dest),
         what: `git fetch of the pinned commit ${pin.slice(0, 12)}`,
         pkgName,
         deps,
@@ -352,42 +452,14 @@ export function syncOneRepo({
       });
     }
     git(["checkout", "--detach", pin], dest);
-    verifyHeadIs(pin);
+    const head = git(["rev-parse", "HEAD"], dest).trim();
+    if (head !== pin) {
+      throw new Error(
+        `${pkgName}: pinned checkout verification failed — HEAD is ${head}, expected ${pin}.`,
+      );
+    }
   };
   const ensurePinnedCommit = () => ensurePinnedCommitTo(sha);
-
-  // Shallow mode only: an existing checkout is untrusted (in CI the cache
-  // restored it). `git fsck` re-hashes every object, so an object whose content
-  // does not match its name fails here, before anything is checked out.
-  const failLine = (err) =>
-    redactGitUrl(String(err?.stderr || err?.message || err).trim().split("\n").filter(Boolean).pop() ?? "");
-  const verifyObjectStore = () => {
-    try {
-      git(["fsck", "--no-dangling", "--no-progress"], dest);
-    } catch (err) {
-      throw new Error(
-        `${pkgName}: the checkout in "${dest}" fails git fsck — a corrupt or tampered object store is never used ` +
-          `(when the clone-extensions cache restored it, delete that cache entry). git said: ${failLine(err)}`,
-      );
-    }
-  };
-  // ... and its working tree is never trusted either: `git status` trusts the
-  // index's stat data (and the assume-unchanged bit). Drop the index, rewrite
-  // every tracked file from the verified pin, remove everything else (ignored
-  // files too), then read HEAD and a fully empty status back.
-  const rewriteTreeFromPin = () => {
-    const unlink = deps.unlink ?? ((p) => rmSync(p, { force: true }));
-    unlink(path.join(dest, ".git", "index"));
-    git(["reset", "--quiet", "--hard", sha], dest);
-    git(["clean", "-f", "-f", "-d", "-x", "-q"], dest);
-    verifyHeadIs(sha);
-    const left = git(["status", "--porcelain", "--untracked-files=all", "--ignored"], dest).trim();
-    if (left !== "") {
-      throw new Error(
-        `${pkgName}: the checkout in "${dest}" still differs from the pinned commit ${sha.slice(0, 12)} after the rewrite.`,
-      );
-    }
-  };
 
   // Tree state, with the untracked published-marker debris classified apart
   // from real local work (see PUBLISHED_MARKER_BASENAME above).
@@ -413,6 +485,11 @@ export function syncOneRepo({
 
   // absent OR empty non-git dir -> clone
   if (!exists || (!isGit && dirIsEmpty(dest, deps))) {
+    log(
+      sha
+        ? `  ${pkgName}: cloning ${redactGitUrl(url)} (pinned ${sha.slice(0, 12)}) -> ${dest}`
+        : `  ${pkgName}: cloning ${redactGitUrl(url)} (${branch}) -> ${dest}`,
+    );
     deps.mkdirp(path.dirname(dest));
     // A failed clone attempt may leave a partial destination. Before the next
     // attempt remove ONLY what this call created: the whole destination when it
@@ -430,66 +507,30 @@ export function syncOneRepo({
       }
     }
     const removeTree = deps.removeTree ?? ((p) => rmSync(p, { recursive: true, force: true }));
-    const removeWhatThisCallMade = () => {
-      if (!deps.exists(dest)) return true;
-      if (!destExisted) {
-        removeTree(dest);
-        return true;
-      }
-      if (!baselineRead) return false;
-      let entriesNow;
-      try {
-        entriesNow = deps.readdir(dest);
-      } catch {
-        return false;
-      }
-      for (const name of entriesNow) {
-        if (!entriesBefore.has(name)) removeTree(path.join(dest, name));
-      }
-      return true;
-    };
-    if (shallow) {
-      // cinatra#4484: only the pinned commit, at depth 1 — not the branch's
-      // whole history. A transient network failure keeps the bounded retry and
-      // is then thrown (a crawling network is never retried as a full clone).
-      log(`  ${pkgName}: fetching ${redactGitUrl(url)} at the pin ${sha.slice(0, 12)} (depth 1) -> ${dest}`);
-      let fetched = false;
-      try {
-        git(["init", "--quiet", "--", dest], path.dirname(dest));
-        git(["remote", "add", "origin", url], dest);
-        withNetworkRetry({
-          run: () => git(pinFetchArgs(sha), dest),
-          what: `git fetch of the pinned commit ${sha.slice(0, 12)}`,
-          pkgName,
-          deps,
-          log,
-        });
-        fetched = true;
-      } catch (err) {
-        // Never leave a half-made repository behind (a later sync would read
-        // its unborn HEAD); what cannot be told apart is left and thrown.
-        const cleaned = removeWhatThisCallMade();
-        if (transientGitNetworkReason(err) !== null || !cleaned) throw err;
-        log(`  ${pkgName}: the depth-1 fetch of the pin failed (${failLine(err)}); falling back to the full clone.`);
-        fetchShallow = false;
-      }
-      if (fetched) {
-        ensurePinnedCommit();
-        return { pkgName, action: "cloned", changed: true, pinnedSha: sha };
-      }
-    }
-    log(
-      sha
-        ? `  ${pkgName}: cloning ${redactGitUrl(url)} (pinned ${sha.slice(0, 12)}) -> ${dest}`
-        : `  ${pkgName}: cloning ${redactGitUrl(url)} (${branch}) -> ${dest}`,
-    );
     withNetworkRetry({
       run: () => git(["clone", "--branch", branch, "--single-branch", "--", url, dest], path.dirname(dest)),
       what: "git clone",
       pkgName,
       deps,
       log,
-      beforeRetry: removeWhatThisCallMade,
+      beforeRetry: () => {
+        if (!deps.exists(dest)) return true;
+        if (!destExisted) {
+          removeTree(dest);
+          return true;
+        }
+        if (!baselineRead) return false;
+        let entriesNow;
+        try {
+          entriesNow = deps.readdir(dest);
+        } catch {
+          return false;
+        }
+        for (const name of entriesNow) {
+          if (!entriesBefore.has(name)) removeTree(path.join(dest, name));
+        }
+        return true;
+      },
     });
     if (sha) {
       ensurePinnedCommit();
@@ -636,19 +677,16 @@ export function syncOneRepo({
     // runtime-written marker debris (cinatra#1136 — 33 stray markers made the
     // pinned recovery sync fail closed on the documented update path).
     if (tree.hasStrayMarker) dropStrayPublishedMarker();
-    if (shallow) verifyObjectStore();
     const headBefore = git(["rev-parse", "HEAD"], dest).trim();
     if (headBefore === sha) {
       // The pinned contract is "AT the pin and DETACHED" — a warm checkout
       // sitting on a branch that happens to point at the pin is still
       // detached here (cheap; content unchanged, so `changed` stays false).
       if (curBranch !== "HEAD") git(["checkout", "--detach", sha], dest);
-      if (shallow) rewriteTreeFromPin();
       return { pkgName, action: "pinned", changed: false, pinnedSha: sha };
     }
     log(`  ${pkgName}: re-pinning ${headBefore.slice(0, 12)} -> ${sha.slice(0, 12)} (detached)`);
     ensurePinnedCommit();
-    if (shallow) rewriteTreeFromPin();
     return { pkgName, action: "repinned", changed: true, pinnedSha: sha };
   }
   if (dirty) {
