@@ -54,6 +54,39 @@ describe("readChatThreadTitleForCurrentActor", () => {
     });
   });
 
+  it("answers the title for a platform admin on a thread another user owns", async () => {
+    mocks.isPlatformAdmin.mockReturnValue(true);
+    mocks.loadChatThreadForActorAccess.mockReturnValue({
+      ownerUserId: "someone-else",
+      teamId: null,
+      isActorTeamMember: false,
+    });
+    await expect(readChatThreadTitleForCurrentActor(THREAD_ID)).resolves.toBe("Quarterly plan");
+    expect(mocks.loadChatThreadForActorAccess).toHaveBeenCalledWith({
+      threadId: THREAD_ID,
+      actorUserId: "u1",
+      isPlatformAdmin: true,
+    });
+  });
+
+  it("answers the title for a team thread when the reader is a member", async () => {
+    mocks.loadChatThreadForActorAccess.mockReturnValue({
+      ownerUserId: null,
+      teamId: "team-1",
+      isActorTeamMember: true,
+    });
+    await expect(readChatThreadTitleForCurrentActor(THREAD_ID)).resolves.toBe("Quarterly plan");
+  });
+
+  it("answers the title for a legacy thread with no owner and no team, as the thread read route does", async () => {
+    mocks.loadChatThreadForActorAccess.mockReturnValue({
+      ownerUserId: null,
+      teamId: null,
+      isActorTeamMember: false,
+    });
+    await expect(readChatThreadTitleForCurrentActor(THREAD_ID)).resolves.toBe("Quarterly plan");
+  });
+
   it("answers null for a reader who does not own the thread, and never reads the title", async () => {
     mocks.loadChatThreadForActorAccess.mockReturnValue({
       ownerUserId: "someone-else",

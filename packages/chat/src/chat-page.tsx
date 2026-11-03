@@ -589,10 +589,18 @@ export function ChatPage({ initialThreadId, initialThreadTitle, initialAssistant
     rememberThreadTranscript(userId ?? null, activeThreadId, loadedThreadIdRef.current, messages);
   }, [activeThreadId, messages]);
 
-  // Emit active thread title so AppShell can show it in the breadcrumb.
+  // Emit active thread title so AppShell can show it in the breadcrumb. The
+  // server's title for the route's own thread (cinatra#4453) serves only until
+  // the client's list first holds that thread; from then on the list alone
+  // names it, so a thread the list later drops shows no stale name.
+  const serverTitleSpentRef = useRef(false);
   useEffect(() => {
+    if (initialThreadId && threads.some((t) => t.id === initialThreadId)) serverTitleSpentRef.current = true;
     const listed = threads.find((t) => t.id === activeThreadId)?.title;
-    const fromServer = activeThreadId === (initialThreadId ?? null) ? initialThreadTitle : null;
+    const fromServer =
+      initialThreadId && activeThreadId === initialThreadId && !serverTitleSpentRef.current
+        ? initialThreadTitle
+        : null;
     publishChatThreadTitle(listed ?? fromServer ?? null);
   }, [activeThreadId, threads, initialThreadId, initialThreadTitle]);
 

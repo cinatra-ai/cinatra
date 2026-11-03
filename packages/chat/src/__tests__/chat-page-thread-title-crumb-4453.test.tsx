@@ -82,7 +82,13 @@ const SUMMARY = {
   updatedAt: "2026-01-02T00:00:00.000Z",
 };
 
-let releaseList: (() => void) | null = null;
+// Every list request made before the release waits for it and answers the
+// thread; a request made after it answers `listAfterRelease` (the page polls).
+let releaseList: () => void = () => {};
+let listGate: Promise<void> = Promise.resolve();
+let released = false;
+let listRequested = false;
+let listAfterRelease: (typeof SUMMARY)[] = [SUMMARY];
 
 function installNetwork() {
   vi.stubGlobal(
@@ -90,9 +96,9 @@ function installNetwork() {
     vi.fn(async (url: string, init?: RequestInit) => {
       const u = String(url);
       if (u === "/api/assistants/threads" && init?.method !== "POST") {
-        await new Promise<void>((resolve) => {
-          releaseList = resolve;
-        });
+        if (released) return new Response(JSON.stringify(listAfterRelease));
+        listRequested = true;
+        await listGate;
         return new Response(JSON.stringify([SUMMARY]));
       }
       if (u.startsWith("/api/assistants/threads/")) {
@@ -107,11 +113,19 @@ function installNetwork() {
 async function mountPage(props: Record<string, unknown>) {
   const { ChatPage } = await import("../chat-page");
   render(<ChatPage userId="u-1" {...props} />);
-  await waitFor(() => expect(releaseList).not.toBeNull(), { timeout: 15_000 });
+  await waitFor(() => expect(listRequested).toBe(true), { timeout: 15_000 });
 }
 
 beforeEach(() => {
-  releaseList = null;
+  released = false;
+  listRequested = false;
+  listAfterRelease = [SUMMARY];
+  listGate = new Promise<void>((resolve) => {
+    releaseList = () => {
+      released = true;
+      resolve();
+    };
+  });
   publishChatThreadTitle(null);
   installNetwork();
 });
@@ -131,7 +145,7 @@ describe("the chat page's thread name for the crumb (cinatra#4453)", () => {
   it("lets the client's list win once it has arrived, so a rename still shows", async () => {
     await mountPage({ initialThreadId: THREAD_ID, initialThreadTitle: "Quarterly plan" });
     await act(async () => {
-      releaseList?.();
+      releaseList();
     });
     await waitFor(() => expect(getCurrentChatThreadTitle()).toBe("Renamed on the client"), {
       timeout: 15_000,
@@ -142,4 +156,31 @@ describe("the chat page's thread name for the crumb (cinatra#4453)", () => {
     await mountPage({ initialThreadTitle: null });
     expect(getCurrentChatThreadTitle()).toBeNull();
   });
+
+  it("publishes no server name when the page has no thread of its own", async () => {
+    await mountPage({ initialThreadTitle: "Quarterly plan" });
+    expect(getCurrentChatThreadTitle()).toBeNull();
+  });
+
+  it("publishes no server name for another thread the reader switches to", async () => {
+    await mountPage({ initialThreadId: THREAD_ID, initialThreadTitle: "Quarterly plan" });
+    expect(getCurrentChatThreadTitle()).toBe("Quarterly plan");
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent("cinatra:chat:select", { detail: { threadId: "thr-other" } }));
+    });
+    await waitFor(() => expect(getCurrentChatThreadTitle()).toBeNull(), { timeout: 15_000 });
+  });
+
+  it("shows no stale server name after the list held the thread and then dropped it", async () => {
+    await mountPage({ initialThreadId: THREAD_ID, initialThreadTitle: "Quarterly plan" });
+    await act(async () => {
+      releaseList();
+    });
+    await waitFor(() => expect(getCurrentChatThreadTitle()).toBe("Renamed on the client"), {
+      timeout: 15_000,
+    });
+    listAfterRelease = [];
+    // The page polls its list every five seconds; the next answer drops the thread.
+    await waitFor(() => expect(getCurrentChatThreadTitle()).toBeNull(), { timeout: 15_000 });
+  }, 30_000);
 });
