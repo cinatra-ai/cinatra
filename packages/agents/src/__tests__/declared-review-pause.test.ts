@@ -97,7 +97,8 @@ describe("cinatra#4312 — laterDeclaredPause", () => {
 
 // cinatra#4312 (review 11, finding 2) — the store keeps `created_at` in microseconds and
 // a JavaScript date in milliseconds. The stores pass `createdAtMicros`, the created time
-// in microseconds since the epoch as decimal text, and the check compares that.
+// in microseconds since the epoch as decimal text (signed before 1970), and the check
+// compares that.
 describe("cinatra#4312 — laterDeclaredPause compares created times in microseconds", () => {
   const MS = "1793707200000"; // 2026-11-03T12:00:00.000Z in milliseconds
   const at = new Date(Number(MS));
@@ -126,8 +127,8 @@ describe("cinatra#4312 — laterDeclaredPause compares created times in microsec
   });
 
   it("reads a later pause when a date before 1970 is given without microseconds", () => {
-    // The check keeps no negative time; the store gives none. The other review's date is the
-    // older one, so only the date before 1970 makes it later.
+    // The check reads no negative time; `created_at` has no lower bound, so the store can give
+    // one. The other review's date is the older one, so only the date before 1970 makes it later.
     const dated = (reviewTaskId: string, iso: string) => ({ reviewTaskId, createdAt: new Date(iso) });
     const legs = (iso: string) => [dated("wayflow-task-1", iso), dated("wayflow-task-1#2", iso)];
     const read = (other: string, mine: string) => laterDeclaredPause([dated("wayflow-task-0", other), ...legs(mine)], "wayflow-task-1");

@@ -341,8 +341,8 @@ export interface ReviewGateRow {
   resolvedBy: string | null;
   resolvedAt: Date | null;
   createdAt: Date;
-  /** cinatra#4312 — `created_at` in microseconds since the epoch, as decimal text
-   * (`createdAtMicrosSql`); set by `listReviewGatesForRun`. */
+  /** cinatra#4312 — `created_at` in microseconds since the epoch, as decimal text,
+   * signed before 1970 (`createdAtMicrosSql`); set by `listReviewGatesForRun`. */
   createdAtMicros?: string;
 }
 

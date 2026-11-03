@@ -3,9 +3,10 @@ import { baseReviewTaskId, isDeclaredReviewTaskId } from "@/lib/artifacts/artifa
 
 /**
  * cinatra#4312 — a review gate's created time in microseconds since the epoch, as
- * decimal text. The store keeps `created_at` in microseconds; a JavaScript date
- * keeps milliseconds, so two gates in one millisecond read as equal there. The
- * stores that feed `laterDeclaredPause` select this beside `created_at`.
+ * decimal text, signed for a time before 1970 (`created_at` has no lower bound).
+ * The store keeps `created_at` in microseconds; a JavaScript date keeps
+ * milliseconds, so two gates in one millisecond read as equal there. The stores
+ * that feed `laterDeclaredPause` select this beside `created_at`.
  */
 export function createdAtMicrosSql(column: AnyColumn): SQL<string> {
   return sql<string>`(floor(extract(epoch from ${column}))::bigint * 1000000 + floor(extract(microseconds from ${column}))::bigint % 1000000)::text`;
@@ -17,7 +18,8 @@ const MICROS = /^\d{1,20}$/;
 
 /**
  * A gate's created time as 20-digit microsecond text, or null when it cannot be
- * read. A time before 1970 is not kept: its text would not sort, so it reads as null.
+ * read. A time before 1970 (signed microsecond text, or a negative date) reads as
+ * null, because its text would not sort.
  */
 function timeKey(g: GateTime): string | null {
   if (g.createdAtMicros !== undefined && g.createdAtMicros !== null) {
@@ -42,10 +44,11 @@ function timeKey(g: GateTime): string | null {
  * The check fails closed: when the run has another declared review, a time it
  * cannot read (missing, null or an invalid date, a date before 1970, or
  * microseconds that are no decimal text, on either side) and a missing gate of
- * this review are read as a later pause too, so the decision is closed without a send rather than sent
- * into a pause that may be later. The stored `created_at` is NOT NULL, so the
- * store gives no such row. A run with no other declared review has no later
- * pause: false.
+ * this review are read as a later pause too, so the decision is closed without a
+ * send rather than sent into a pause that may be later. The stored `created_at`
+ * is NOT NULL but has no lower bound, so the store can give a time before 1970,
+ * as signed text; that time, like any time the check cannot read, makes it fail
+ * closed. A run with no other declared review has no later pause: false.
  *
  * Read at two places: by the close that inserts a carrier
  * (`carryDeclaredReviewDecision`, under the run row lock), and by the resume
