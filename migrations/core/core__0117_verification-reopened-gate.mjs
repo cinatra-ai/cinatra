@@ -1,10 +1,10 @@
-// core__0117 — the verification record names the gate it reopened (cinatra#4312).
+// core__0117 — the verification record names its reopen gate (cinatra#4312).
 // The operator-upgrade twin of the fresh-install bootstrap ALTER in
 // `lifecycleInterceptionsSchemaQueries` (src/lib/artifacts/artifact-review-gate-schema.ts),
 // added in the SAME pull request.
 //
 // WHY. A changes-requested note on a verification-reopen gate joins the repair
-// lineage only when verification opened that gate. The unique (run, task) slot
+// lineage only when the record names that gate. The unique (run, task) slot
 // proves only that the gate occupies the slot; any same-organization caller can
 // emit into it first. The verification writes `reopened_gate_id` in the transaction
 // that inserts the gate, and only for a gate it inserted. One more statement writes

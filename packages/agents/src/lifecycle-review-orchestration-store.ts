@@ -1128,9 +1128,13 @@ export async function sweepReviewOrchestration(opts?: {
   // cinatra#4312 — an old application that still serves after core__0117 can write a
   // note on an unnamed reopen gate; name such a gate here. The statement names any gate
   // in the slot that a repair row at attempt 2 or later rests on, a hand-written row's
-  // too. It wakes nothing: a lineage it makes readable did not start on a declared leg
-  // (the declared-lineage check of the reopen binding), and the wake acts only on one
-  // that did. A failure stops nothing else.
+  // too. A lineage the name makes readable did not start on a later declared leg (the
+  // declared-lineage check of the reopen binding refuses those), but it can have started
+  // on the post's own leg of a declared review, and a run that leg's lineage kept parked
+  // has no other wake. So, in the naming's transaction, a declared family whose lineage
+  // now reads closed gets one intent back to pending (`wakeDeclaredFamilyOnClosedLineage`).
+  // A failure rolls the names and the wakes back together and stops nothing else; the
+  // next sweep tries again.
   try {
     const { nameVerificationReopensThatRepairRowsRestOn } = await import("./lifecycle-verification-store");
     await nameVerificationReopensThatRepairRowsRestOn();

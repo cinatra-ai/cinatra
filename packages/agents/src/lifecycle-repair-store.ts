@@ -84,7 +84,7 @@ import {
   isVerificationReopenTaskId,
   repairSuccessorReviewTaskId,
 } from "@/lib/lifecycle/lifecycle-orchestration";
-import { baseReviewTaskId, isDeclaredReviewLeg } from "@/lib/artifacts/artifact-review-target";
+import { baseReviewTaskId, isDeclaredReviewLeg, isDeclaredReviewTaskId } from "@/lib/artifacts/artifact-review-target";
 
 /** The store's executor: the pool, or the caller's open transaction. */
 type RepairStoreExecutor =
@@ -1149,10 +1149,13 @@ export async function isRepairLineageOpen(gateId: string, executor: RepairStoreE
  *      `attempts` returns to 0, so it is not dead-lettered for attempts an
  *      earlier delivery used.
  *
- * Nothing to wake: the root is no declared review leg, the root is missing or
- * not bound to the lineage (another run's intents are never touched), the run
- * is no longer `pending_approval`, or the family has no intent in those states
- * (the family's next decision writes its own intent).
+ * Nothing to wake: the root's task id is no declared review task id, the root
+ * is missing or not bound to the lineage (another run's intents are never
+ * touched), the run is no longer `pending_approval`, or the family has no
+ * intent in those states (the family's next decision writes its own intent).
+ * The root can be any leg of the family, the post's own leg too: the worker
+ * keeps the run parked on a lineage of every leg settled as changes requested
+ * (artifact-review-resume-delivery `regenerationOpen`).
  */
 export async function wakeDeclaredReviewAfterTerminalRepair(
   executor: RepairStoreExecutor,
@@ -1166,7 +1169,54 @@ export async function wakeDeclaredReviewAfterTerminalRepair(
     console.warn(`[lifecycle-repair] no wake for lineage ${lineageId}: ${err.message}`);
     return null;
   }
-  if (!isDeclaredRoot(root)) return null;
+  if (!isDeclaredReviewTaskId(root.reviewTaskId)) return null;
+  return wakeFamilyIntent(executor, root);
+}
+
+/**
+ * cinatra#4312 — WAKE the paused run of a declared review family once a lineage
+ * of one of its legs reads closed on a road that writes no terminal repair:
+ *   - the sweep's naming of a verification reopen gate (lifecycle-verification-store
+ *     `nameVerificationReopensThatRepairRowsRestOn`), in the naming's transaction.
+ *     An old writer's later attempt on an unnamed reopen gate leaves the lineage
+ *     malformed; the name makes it readable, and with a terminal latest attempt it
+ *     reads closed. On a later declared leg the declared-lineage check of the reopen
+ *     binding refuses the name, so that lineage stays malformed; on the post's own
+ *     leg it does not;
+ *   - the decision of a successor whose lineage did not start on a later declared
+ *     leg (artifact-review-resume-delivery: that decision keeps the automatic-gate
+ *     road and resumes nothing), in the transaction that marks its intent done.
+ * The resume worker keeps a run parked while a lineage of ANY leg of the family
+ * settled as changes requested is open (`regenerationOpen`), the post's own leg's
+ * too. So this wakes one intent of the family the way
+ * `wakeDeclaredReviewAfterTerminalRepair` does, and the worker re-reads the family
+ * and every lineage before it resumes the run or sets the intent aside again.
+ *
+ * Nothing to wake: the root is missing or not bound to the lineage, the lineage is
+ * still open or not readable (RepairLineageStateError), the root's task id is no
+ * declared review task id, or, as in `wakeFamilyIntent`, the run or the family has
+ * nothing to wake. A failed read that is no RepairLineageStateError throws, so the
+ * caller's transaction rolls back with it.
+ */
+export async function wakeDeclaredFamilyOnClosedLineage(
+  executor: RepairStoreExecutor,
+  lineageId: string,
+): Promise<string | null> {
+  let root: LineageRootGate;
+  try {
+    root = await readBoundLineageRoot(lineageId, executor);
+    if (await isRepairLineageOpen(lineageId, executor)) return null;
+  } catch (err) {
+    if (!(err instanceof RepairLineageStateError)) throw err;
+    return null;
+  }
+  if (!isDeclaredReviewTaskId(root.reviewTaskId)) return null;
+  return wakeFamilyIntent(executor, root);
+}
+
+/** The family part of the two wakes above: the run lock, then one intent of the
+ * family set to `pending` (see `wakeDeclaredReviewAfterTerminalRepair`). */
+async function wakeFamilyIntent(executor: RepairStoreExecutor, root: LineageRootGate): Promise<string | null> {
   const [run] = await executor
     .select({ status: agentRuns.status })
     .from(agentRuns)

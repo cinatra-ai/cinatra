@@ -29,7 +29,7 @@ import "server-only";
 // call from `submitRepairResponse`.
 // ---------------------------------------------------------------------------
 
-import { and, eq, isNull, or, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { getTableConfig } from "drizzle-orm/pg-core";
 
 import { db } from "./db";
@@ -131,12 +131,39 @@ export const verificationReopenNamesSql = `
      );
 `;
 
-/** Run `verificationReopenNamesSql` on the store's schema. The statement holds no schema name. */
-export async function nameVerificationReopensThatRepairRowsRestOn(): Promise<void> {
+/**
+ * Run `verificationReopenNamesSql` on the store's schema (the statement holds no schema
+ * name), then, in the same transaction, wake the paused run of a declared review family
+ * whose lineage the names make read closed (lifecycle-repair-store
+ * `wakeDeclaredFamilyOnClosedLineage`): every lineage with an attempt at 2 or later on
+ * a gate named here. Returns the gate ids of the intents it woke.
+ */
+export async function nameVerificationReopensThatRepairRowsRestOn(): Promise<string[]> {
   const schema = getTableConfig(artifactVerificationRecords).schema ?? "cinatra";
-  await db.transaction(async (tx) => {
+  return db.transaction(async (tx) => {
     await tx.execute(sql.raw(`SET LOCAL search_path TO "${schema.replace(/"/g, '""')}"`));
-    await tx.execute(sql.raw(verificationReopenNamesSql));
+    const named = await tx.execute(
+      sql.raw(`${verificationReopenNamesSql.trim().replace(/;$/, "")}\n  RETURNING reopen.id AS reopen_gate_id;`),
+    );
+    const gateIds = [...new Set((named.rows as { reopen_gate_id: string }[]).map((r) => r.reopen_gate_id))];
+    if (gateIds.length === 0) return [];
+    const lineageIds = [
+      ...new Set(
+        (
+          await tx
+            .select({ lineageId: lifecycleRepair.lineageId })
+            .from(lifecycleRepair)
+            .where(and(inArray(lifecycleRepair.gateId, gateIds), gte(lifecycleRepair.attempt, 2)))
+        ).map((r) => r.lineageId),
+      ),
+    ].sort();
+    const { wakeDeclaredFamilyOnClosedLineage } = await import("./lifecycle-repair-store");
+    const woken: string[] = [];
+    for (const lineageId of lineageIds) {
+      const gateId = await wakeDeclaredFamilyOnClosedLineage(tx, lineageId);
+      if (gateId) woken.push(gateId);
+    }
+    return woken;
   });
 }
 
@@ -245,8 +272,10 @@ async function writeVerificationRecordAndMaybeReopen(
   // record names the gate only when this verification inserted it
   // (`reopened_gate_id`; the sweep's `verificationReopenNamesSql` also names a gate
   // that a repair row at attempt 2 or later rests on, which can be a caller's gate with
-  // a hand-written row). The repair lineage reads that name as the proof that
-  // verification opened the gate, because the unique (run, task) slot proves only
+  // a hand-written row). The repair lineage reads that name as its proof that the
+  // gate is the record's reopen: the name proves that this verification opened the
+  // gate, or that a repair row at attempt 2 or later rested on it when the sweep or
+  // the migration ran, not who wrote that row. The unique (run, task) slot proves only
   // that a gate occupies it: any same-organization caller can emit into the slot
   // first. So a gate found in the slot is this verification's only when the record
   // already names it (a re-drive, which `submitRepairResponse`'s idempotent-replay
