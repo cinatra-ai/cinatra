@@ -81,9 +81,9 @@ same module.
 
 ## The frozen export list (contract major 1)
 
-Exactly the exports of the seventeen product components under `src/components/ui/`
-that the border floor records as byte copies inside connector and artifact
-packages. Adding a name is a MINOR bump; removing or renaming one is a MAJOR.
+Exactly the exports of the seventeen product components under src/components/ui/
+that connector and artifact packages copied before the migration of #3471.
+Adding a name is a MINOR bump; removing or renaming one is a MAJOR.
 
 | Component | Exports |
 | --- | --- |
@@ -120,11 +120,12 @@ check still compares majors and does not replace that host rollout dependency.
 
 ### Not in the list
 
-The border floor also records `external-link.tsx`, `link.tsx` and
-`text-link.tsx`. Those are **not** product primitives — they are the extensions'
-own components, and no such file exists under `src/components/ui/`, so the host
-cannot serve them. A package keeps its own copy of those, or folds them into
-its own source; they never enter this contract.
+Before the migration the border floor also recorded external-link.tsx, link.tsx
+and text-link.tsx. Those are not product primitives: they are the extensions'
+own components, and no such file exists under src/components/ui/, so the host
+cannot serve them. A connector or artifact package keeps such a component in its
+own source outside src/components/ui/ (the border gate refuses any file there);
+they never enter this contract.
 
 ## How a package migrates (the three lines a package changes)
 
@@ -142,8 +143,9 @@ its own source; they never enter this contract.
    `from "../components/ui/<item>"` with
    `from "@cinatra-ai/design-primitives"`.
 3. **the copies** — delete `src/components/ui/<item>.tsx` for every primitive in
-   the frozen list, and drop the package's entry from
-   `scripts/extensions/vendor-extension-primitives.mjs`'s `VENDOR_MANIFEST`.
+   the frozen list. Remove the package's pairs from the border floor and move its
+   dev-lock pin. (Only a kind:agent package also has a VENDOR_MANIFEST entry to
+   drop; see #3470.)
 
 Then re-baseline the border gate
 (`node scripts/extensions/self-rendering-extensions-border-gate.mjs
@@ -151,18 +153,21 @@ Then re-baseline the border gate
 bundle road already externalizes the id, and the host's barrel and shim already
 carry it.
 
-## What this slice does NOT do
+## What this slice did not do
 
-Honest boundaries, so slice 3 does not assume more than exists:
+Honest boundaries, so slice 3 did not assume more than existed:
 
-- **No package is migrated** and the border gate's baseline is untouched.
-- **The typed contract names the exports, not their component types.** The
-  contract module is React-free by design (importing it must never pull a second
-  copy of anything), so `HostDesignPrimitivesModule` is `unknown`-valued: a
-  migrating package types the values against its own React types.
-- **`initHostModuleRegistry` still has no production call site on this head** —
-  it has had none since it was introduced for React (epic #1620 M1 Slice A). This
-  slice registers `designPrimitives` on that same road; whoever wires the shim
-  for real supplies it, or the id resolves to `undefined` at run time. The
-  load-boundary checks are wired at the loader seam and are inert for a bundle
-  that declares no preamble field.
+- **No package was migrated** in this slice, and the border gate's baseline was
+  left untouched.
+- **The typed contract named the exports, not their component types.** The
+  contract module was React-free by design (importing it must never pull a second
+  copy of anything), so `HostDesignPrimitivesModule` was `unknown`-valued: a
+  migrating package typed the values against its own React types.
+- **`initHostModuleRegistry` had no production call site on that head** — it had
+  had none since it was introduced for React (epic #1620 M1 Slice A). This slice
+  registered `designPrimitives` on that same road; whoever wired the shim for
+  real supplied it, or the id resolved to `undefined` at run time. The
+  load-boundary checks were wired at the loader seam and were inert for a bundle
+  that declared no preamble field.
+
+Migrated since: #3509, #3510 and #3471; the border floor is empty.

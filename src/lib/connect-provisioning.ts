@@ -26,6 +26,7 @@ import { mintWebhookSecret } from "@cinatra-ai/webhooks";
 import { resolveConcreteOrigin } from "@cinatra-ai/streams/origin-policy";
 
 import { ensureInstanceId } from "@/lib/instance-identity-store";
+import { allowsLoopbackHttp } from "@/lib/loopback-http-policy";
 import { webhookSecretService } from "@/lib/webhook-secret-service";
 import {
   consumeAuthorizationCode,
@@ -145,10 +146,6 @@ function isLoopbackHost(hostname: string): boolean {
   return LOOPBACK_HOSTS.has(hostname.toLowerCase());
 }
 
-function allowsHttp(): boolean {
-  return process.env.NODE_ENV !== "production";
-}
-
 function hasControlOrCrlf(value: string): boolean {
   // Reject CR, LF, and any C0/C1 control characters (header/redirect smuggling).
   return /[\u0000-\u001f\u007f-\u009f]/.test(value);
@@ -159,7 +156,8 @@ function hasControlOrCrlf(value: string): boolean {
  * callbackOrigin on success, or null on any rejection. Layered controls
  * (there is intentionally NO static registry — the human admin on the consent
  * screen is the allowlist; this just blocks structurally dangerous values):
- *   - absolute URL; https (http loopback in non-prod only)
+ *   - absolute URL; https (http only on a loopback host, and only while the
+ *     app runs in development mode: allowsLoopbackHttp)
  *   - no userinfo; no fragment; no CR/LF/control chars
  *   - PATH must equal the per-client callback contract path; for WordPress the
  *     query must also contain action=cinatra_connect_callback (codex: check the
@@ -176,11 +174,11 @@ export function validateRedirectUri(
   } catch {
     return { ok: false };
   }
-  // Scheme: https always; http only for loopback in non-prod.
+  // Scheme: https always; http only for a loopback host in development mode.
   if (url.protocol === "https:") {
     // ok
   } else if (url.protocol === "http:") {
-    if (!(allowsHttp() && isLoopbackHost(url.hostname))) return { ok: false };
+    if (!(allowsLoopbackHttp() && isLoopbackHost(url.hostname))) return { ok: false };
   } else {
     return { ok: false };
   }
@@ -220,9 +218,10 @@ export function validateRedirectUri(
 
 /**
  * Validate a widget_origin: an absolute ORIGIN only (scheme+host+optional
- * port; no path/query/fragment/userinfo), https in prod (loopback-http in
- * dev), reject the literal "null". Returns the normalized origin, or the
- * refusal with a message the caller can show.
+ * port; no path/query/fragment/userinfo), https, or http on a loopback host
+ * while the app runs in development mode (allowsLoopbackHttp); reject the
+ * literal "null". Returns the normalized origin, or the refusal with a message
+ * the caller can show.
  *
  * REGISTRATION IS THE FIRST DOOR. Whatever this function accepts is what the
  * rest of the system later compares against and, for a widget site, what a
@@ -259,7 +258,7 @@ export function validateWidgetOrigin(
   if (url.protocol === "https:") {
     // ok
   } else if (url.protocol === "http:") {
-    if (!(allowsHttp() && isLoopbackHost(url.hostname))) {
+    if (!(allowsLoopbackHttp() && isLoopbackHost(url.hostname))) {
       return refuse("Use an https:// address.");
     }
   } else {

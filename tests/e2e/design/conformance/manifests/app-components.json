@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-components.html",
-  "contentHash": "sha256:393635e517b43856e0512f26235dc4b508b6ec2675295c6cdc59ac7b6315270b",
+  "contentHash": "sha256:7aceaf73557962256eb36cc308e9f7a814bf4c5c2b7841c566ccc724b35dbc4a",
   "surfaces": [
     {
       "id": "button",
@@ -250,6 +250,86 @@
         "error",
         "loading"
       ]
+    },
+    {
+      "id": "scheduling-step-quarterly",
+      "fields": [
+        {
+          "field": "recurring-quarter-anchor",
+          "source": "selection.quarterAnchor"
+        },
+        {
+          "field": "recurring-monthly-mode",
+          "source": "selection.monthlyMode"
+        },
+        {
+          "field": "recurring-day-of-month",
+          "source": "selection.dayOfMonth"
+        }
+      ],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "scheduling-step-yearly",
+      "fields": [
+        {
+          "field": "recurring-yearly-month",
+          "source": "selection.yearlyMonth"
+        },
+        {
+          "field": "recurring-monthly-mode",
+          "source": "selection.monthlyMode"
+        },
+        {
+          "field": "recurring-nth-week",
+          "source": "selection.nthWeek"
+        },
+        {
+          "field": "recurring-monthly-weekday",
+          "source": "selection.monthlyWeekday"
+        }
+      ],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "scheduling-step-configured-monthly",
+      "fields": [
+        {
+          "field": "recurring-monthly-mode",
+          "source": "selection.monthlyMode"
+        },
+        {
+          "field": "recurring-day-of-month",
+          "source": "selection.dayOfMonth"
+        }
+      ],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "scheduling-step-configured-quarterly",
+      "fields": [
+        {
+          "field": "recurring-quarter-anchor",
+          "source": "selection.quarterAnchor"
+        },
+        {
+          "field": "recurring-monthly-mode",
+          "source": "selection.monthlyMode"
+        },
+        {
+          "field": "recurring-nth-week",
+          "source": "selection.nthWeek"
+        },
+        {
+          "field": "recurring-monthly-weekday",
+          "source": "selection.monthlyWeekday"
+        }
+      ],
+      "actions": [],
+      "states": []
     }
   ]
 }

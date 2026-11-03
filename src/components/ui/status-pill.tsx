@@ -30,8 +30,11 @@ import { cn } from "@/lib/utils";
  *     visual weight as a "needs you" badge elsewhere in the app.
  */
 
+// Face: the drawing sets `.pill` in its sans face, Archivo
+// (specs/app-components.html:216, `--font-sans` at :41); the app's Archivo
+// token is `--font-display` (cinatra#4289).
 const pillVariants = cva(
-  "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11.5px] font-semibold whitespace-nowrap",
+  "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 font-display text-[11.5px] font-semibold whitespace-nowrap",
   {
     variants: {
       status: {
