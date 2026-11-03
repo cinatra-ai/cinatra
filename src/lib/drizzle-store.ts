@@ -27,7 +27,7 @@ import {
   objectContentSnapshotSchemaQueries,
   runContextSelectionsSchemaQueries,
 } from "@/lib/artifact-claim-schema";
-import { publicationOperationLedgerSchemaQueries } from "@/lib/artifacts/publication-operation-schema";
+import { publicationOperationLedgerSchemaQueries, publishDecisionSchemaQueries } from "@/lib/artifacts/publication-operation-schema";
 import { environmentLayerStoreSchemaQueries, agentExecutionConfigSchemaQueries } from "@/lib/execution/environment-layer-schema";
 import { auditEventsSchemaQueries } from "@/lib/authz/audit-events-schema";
 import { auditorSnapshotSchemaQueries } from "@/lib/auditor-snapshot-schema";
@@ -2027,6 +2027,10 @@ $body$` },
     // the pure-strings leaf src/lib/artifacts/publication-operation-schema.ts;
     // existing deployments also converge via migration core__0055.
     ...publicationOperationLedgerSchemaQueries(schemaName),
+    // ---- agent_run_publish_decisions (cinatra#4150) ----
+    // One row per stop in front of a declared publishing step. DDL in the same pure-strings
+    // leaf; existing deployments also converge via migration core__0119.
+    ...publishDecisionSchemaQueries(schemaName),
     // ---- environment_layers + environment_layer_references (cinatra#1708 S3 A2) ----
     // Durable L1 environment-layer store: content-addressed cache entries +
     // org-scoped recipe→layer references. Backs the exec-plane

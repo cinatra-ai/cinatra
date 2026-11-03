@@ -835,6 +835,28 @@ export const lifecycleContinuationPark = cinatraSchema.table("lifecycle_continua
     .where(sql`hold_notification = 'live'`),
 }));
 
+/** One stop in front of a declared publishing step (cinatra#4150). `parked` is the
+ * only open status; a row leaves it once, through one conditional UPDATE
+ * (publish-decision-store.ts). `surfaced_values` is JSON-as-text. */
+export const agentRunPublishDecisions = cinatraSchema.table("agent_run_publish_decisions", {
+  id:             text("id").primaryKey(),
+  orgId:          text("org_id"),
+  runId:          text("run_id").notNull(),
+  nodeId:         text("node_id").notNull(),
+  gateTaskId:     text("gate_task_id").notNull(),
+  a2aContextId:   text("a2a_context_id"),
+  status:         text("status").notNull().default("parked"), // parked | released | declined | expired | run_ended
+  surfacedValues: text("surfaced_values").notNull(),
+  decidedBy:      text("decided_by"),
+  decidedAt:      timestamp("decided_at", { withTimezone: true }),
+  decisionNote:   text("decision_note"),
+  createdAt:      timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  expiresAt:      timestamp("expires_at", { withTimezone: true }).notNull(),
+}, (t) => ({
+  parkUniq: uniqueIndex("agent_run_publish_decisions_park_uniq").on(t.runId, t.nodeId, t.gateTaskId),
+  dueIdx:   index("agent_run_publish_decisions_due_idx").on(t.expiresAt).where(sql`status = 'parked'`),
+}));
+
 /** The zero-authority advisory seam — gate-bound, provenance-stamped, idempotent,
  * DECISION-FREE (no decision columns exist). Rows live WITH the gate. */
 export const gateAdvisoryComments = cinatraSchema.table("gate_advisory_comments", {

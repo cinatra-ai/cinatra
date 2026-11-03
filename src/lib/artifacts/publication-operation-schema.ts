@@ -88,3 +88,51 @@ export function publicationOperationLedgerSchemaQueries(
     },
   ];
 }
+
+// Bootstrap DDL for the publish-decision record (cinatra#4150): one table.
+//
+// One row is one person's (or the expiry sweep's) answer to one stop in front of
+// a declared publishing step.
+//
+// CONSTRAINT MODEL the DB itself enforces:
+//   - agent_run_publish_decisions_park_uniq — UNIQUE (run_id, node_id,
+//     gate_task_id): one row per stop, so a re-delivered park is idempotent.
+//   - the status CHECK — the closed status set. `parked` is the only open status.
+//
+// NO foreign keys ON PURPOSE (the artifact_publication_operations precedent):
+// this is durable history that must outlive the run row.
+//
+// In this same leaf so no new module joins any route's graph (the route-graph
+// ratchet). An EXISTING deployment gets the table via migration core__0119.
+
+export function publishDecisionSchemaQueries(schemaName: string): { text: string }[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier
+  return [
+    {
+      text: `CREATE TABLE IF NOT EXISTS "${q}"."agent_run_publish_decisions" (
+  id               text PRIMARY KEY,
+  org_id           text,
+  run_id           text NOT NULL,
+  node_id          text NOT NULL,
+  gate_task_id     text NOT NULL,
+  a2a_context_id   text,
+  status           text NOT NULL DEFAULT 'parked',
+  surfaced_values  text NOT NULL,
+  decided_by       text,
+  decided_at       timestamptz,
+  decision_note    text,
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  expires_at       timestamptz NOT NULL,
+  CONSTRAINT agent_run_publish_decisions_status_check
+    CHECK (status IN ('parked', 'released', 'declined', 'expired', 'run_ended'))
+)`,
+    },
+    {
+      text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_run_publish_decisions_park_uniq ON "${q}"."agent_run_publish_decisions" (run_id, node_id, gate_task_id)`,
+    },
+    {
+      // The expiry sweep finds due open decisions without touching settled rows.
+      text: `CREATE INDEX IF NOT EXISTS agent_run_publish_decisions_due_idx ON "${q}"."agent_run_publish_decisions" (expires_at) WHERE status = 'parked'`,
+    },
+  ];
+}
