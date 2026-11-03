@@ -13,8 +13,11 @@ import "server-only";
 // FAIL CLOSED: a store that cannot be read or written refuses the capture
 // (`budget_unavailable`). A lease never released (a crash) stays in flight until
 // its TTL ends and always counts toward the run's total. Times are the
-// database's `now()`. The caller passes the organisation and run the server
-// resolved, never ids from the call's input.
+// database clock read by `clock_timestamp()` when each statement runs, NOT
+// `now()`: `now()` is the start of the transaction, so a call that waited on the
+// lock would stamp its lease with a moment before the wait and its lease could
+// already be expired when it commits. The caller passes the organisation and
+// run the server resolved, never ids from the call's input.
 // ---------------------------------------------------------------------------
 
 import { getPooledDb } from "@/lib/db/pooled";
@@ -125,7 +128,7 @@ export async function acquirePageCaptureLease(
       ]);
       const [counts] = await q<{ total: number; live: number }>(
         `SELECT count(*)::int AS total,
-       (count(*) FILTER (WHERE released_at IS NULL AND expires_at > now()))::int AS live
+       (count(*) FILTER (WHERE released_at IS NULL AND expires_at > clock_timestamp()))::int AS live
   FROM ${t} WHERE org_id = $1 AND run_id = $2`,
         [orgId, runId],
       );
@@ -142,12 +145,15 @@ export async function acquirePageCaptureLease(
       }
       const [row] = await q<{ id: string }>(
         `INSERT INTO ${t} (id, org_id, run_id, acquired_at, expires_at)
-VALUES (gen_random_uuid()::text, $1, $2, now(), now() + make_interval(secs => $3))
+SELECT gen_random_uuid()::text, $1::text, $2::text, stamp.taken_at, stamp.taken_at + make_interval(secs => $3::double precision)
+  FROM (SELECT clock_timestamp() AS taken_at) AS stamp
 RETURNING id`,
         [orgId, runId, limits.ttlSeconds],
       );
       const leaseId = row?.id;
-      if (!isId(leaseId)) return { ok: false as const, reason: "budget_unavailable" as const };
+      // The insert ran. An answer without a usable id must not commit that row as a lease nobody holds: throw, so the
+      // transaction rolls back, and the catch below answers budget_unavailable.
+      if (!isId(leaseId)) throw new Error("page capture budget: the lease insert returned no id");
       return { ok: true as const, leaseId };
     });
     if (!taken.ok) return taken;
@@ -173,7 +179,7 @@ function leaseHandle(
       released = true;
       try {
         await (deps.query ?? defaultQuery)(
-          `UPDATE ${t} SET released_at = now()
+          `UPDATE ${t} SET released_at = clock_timestamp()
   WHERE id = $1 AND org_id = $2 AND run_id = $3 AND released_at IS NULL`,
           [leaseId, orgId, runId],
         );

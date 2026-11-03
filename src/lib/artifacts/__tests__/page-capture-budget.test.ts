@@ -69,9 +69,9 @@ describe("page capture budget (cinatra#4223)", () => {
     expect(calls[0].values).toEqual([pageCaptureBudgetLockKey("org-1", "run-1")]);
     expect(calls[1].values).toEqual(["org-1", "run-1"]);
     expect(calls[1].text).toContain('FROM "cinatra"."page_capture_leases" WHERE org_id = $1 AND run_id = $2');
-    expect(calls[1].text).toContain("released_at IS NULL AND expires_at > now()");
+    expect(calls[1].text).toContain("released_at IS NULL AND expires_at > clock_timestamp()");
     expect(calls[2].values).toEqual(["org-1", "run-1", 300]);
-    expect(calls[2].text).toContain("now() + make_interval(secs => $3)");
+    expect(calls[2].text).toContain("stamp.taken_at + make_interval(secs => $3::double precision)");
   });
 
   it("refuses run_cap_exceeded once the run took 20 leases, even with none in flight, and takes no lease", async () => {
@@ -129,6 +129,55 @@ describe("page capture budget (cinatra#4223)", () => {
     }
   });
 
+  it("takes every lease time from the statement clock after the lock wait, never from the transaction start", async () => {
+    const { calls, updates, deps } = scripted({ total: 0, live: 0 });
+    const answer = await acquirePageCaptureLease(RUN, deps);
+    if (!answer.ok) throw new Error("expected a lease");
+    await answer.lease.release();
+    for (const text of [calls[1].text, calls[2].text, updates[0].text]) {
+      expect(text).toContain("clock_timestamp()");
+      expect(text).not.toMatch(/\bnow\(\)/);
+    }
+    // One stamp serves both columns of the insert, so a lease always expires after it was taken.
+    expect(calls[2].text.match(/clock_timestamp\(\)/g)).toHaveLength(1);
+    expect(calls[2].text).toContain("stamp.taken_at, stamp.taken_at + make_interval");
+  });
+
+  it("rolls back, and refuses budget_unavailable, when the insert answers without a usable id", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const inserted of [null, { id: "" }, { id: undefined }, { other: "x" }]) {
+      const { deps } = scripted({ total: 0, live: 0 }, inserted);
+      const ends: string[] = [];
+      const run = deps.transaction!;
+      deps.transaction = async (fn) => {
+        try {
+          const out = await run(fn);
+          ends.push("commit");
+          return out;
+        } catch (err) {
+          ends.push("rollback");
+          throw err;
+        }
+      };
+      expect(await acquirePageCaptureLease(RUN, deps), JSON.stringify(inserted)).toEqual({
+        ok: false,
+        reason: "budget_unavailable",
+      });
+      expect(ends, JSON.stringify(inserted)).toEqual(["rollback"]);
+    }
+    const { deps } = scripted({ total: 0, live: 0 });
+    const ends: string[] = [];
+    const run = deps.transaction!;
+    deps.transaction = async (fn) => {
+      const out = await run(fn);
+      ends.push("commit");
+      return out;
+    };
+    expect((await acquirePageCaptureLease(RUN, deps)).ok).toBe(true);
+    expect(ends).toEqual(["commit"]);
+    expect(JSON.stringify(log.mock.calls)).not.toContain("postgres://");
+  });
+
   it("refuses budget_unavailable for an empty organisation or run, without a transaction", async () => {
     const { calls, deps } = scripted({ total: 0, live: 0 });
     for (const input of [
@@ -149,7 +198,7 @@ describe("page capture budget (cinatra#4223)", () => {
     await answer.lease.release();
     expect(updates).toHaveLength(1);
     expect(updates[0].values).toEqual(["lease-1", "org-1", "run-1"]);
-    expect(updates[0].text).toContain("SET released_at = now()");
+    expect(updates[0].text).toContain("SET released_at = clock_timestamp()");
     expect(updates[0].text).toContain("WHERE id = $1 AND org_id = $2 AND run_id = $3 AND released_at IS NULL");
   });
 

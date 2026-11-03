@@ -63,9 +63,10 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return proto === Object.prototype || proto === null;
 }
 
+/** Exactly these own keys: symbol keys and non-enumerable keys count (Object.keys would not see them). */
 function hasExactlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const own = Object.keys(value);
-  return own.length === keys.length && keys.every((k) => Object.prototype.hasOwnProperty.call(value, k));
+  const own = Reflect.ownKeys(value);
+  return own.length === keys.length && keys.every((k) => own.includes(k));
 }
 
 function isSide(value: unknown): value is number {
@@ -116,7 +117,10 @@ function isCapturedAt(value: unknown): value is string {
  * object with only `capturedUrl` (an absolute http(s) URL without user
  * information or control characters), `viewport` (only integer `width` and
  * `height`, each at least 1) and `capturedAt` (a real ISO date-time with a
- * zone). Total: a value whose reading throws (a getter, a proxy) is `null`.
+ * zone). Exact: no other own key, symbol and non-enumerable ones included. Every
+ * field is read ONCE into a local, validated from it and stored from it, so a
+ * getter that answers differently the second time cannot split the two. Total:
+ * a value whose reading throws (a getter, a proxy) is `null`.
  */
 export function parsePageCaptureFacts(value: unknown): PageCaptureFacts | null {
   try {
@@ -124,8 +128,10 @@ export function parsePageCaptureFacts(value: unknown): PageCaptureFacts | null {
     const { capturedUrl, viewport, capturedAt } = value;
     if (!isCapturedUrl(capturedUrl) || !isCapturedAt(capturedAt)) return null;
     if (!isPlainRecord(viewport) || !hasExactlyKeys(viewport, ["width", "height"])) return null;
-    if (!isSide(viewport.width) || !isSide(viewport.height)) return null;
-    return { capturedUrl, viewport: { width: viewport.width, height: viewport.height }, capturedAt };
+    const width = viewport.width;
+    const height = viewport.height;
+    if (!isSide(width) || !isSide(height)) return null;
+    return { capturedUrl, viewport: { width, height }, capturedAt };
   } catch {
     return null;
   }
@@ -227,27 +233,46 @@ export function readPageCaptureFactsForRevision(
     return { status: "unreadable" };
   }
   const fields = { orgId, artifactId, representationRevisionId };
+  // Decoding what the query returned is its own total boundary: a row, a detail or a list whose inspection throws
+  // (a getter, a proxy) is unreadable, and the log line is the fixed sentence with the ids, never the thrown text.
+  try {
+    return decodeFactsRows(rows, objectType, fields);
+  } catch {
+    logFixedLine("page capture facts: the record read could not be decoded", fields);
+    return { status: "unreadable" };
+  }
+}
+
+const DETAIL_KEYS = ["v", "objectType", "capturedUrl", "viewport", "capturedAt"] as const;
+
+/** The answer for what one read returned. May throw on an object whose inspection throws; the caller turns that into unreadable. */
+function decodeFactsRows(
+  rows: unknown,
+  objectType: string,
+  fields: { orgId: string; artifactId: string; representationRevisionId: string },
+): RecordedPageCaptureFacts {
   if (!Array.isArray(rows)) {
     logFixedLine("page capture facts: the record read returned no row list", fields);
     return { status: "unreadable" };
   }
-  if (rows.length === 0) return { status: "absent" };
-  if (rows.length > 1) {
+  const count = rows.length;
+  if (count === 0) return { status: "absent" };
+  if (count > 1) {
     logFixedLine("page capture facts: a revision has more than one facts record", fields);
     return { status: "unreadable" };
   }
   const first: unknown = rows[0];
   const detail = isPlainRecord(first) ? first.detail : undefined;
-  if (
-    !isPlainRecord(detail) ||
-    detail.v !== PAGE_CAPTURE_FACTS_RECORD_VERSION ||
-    !hasExactlyKeys(detail, ["v", "objectType", "capturedUrl", "viewport", "capturedAt"])
-  ) {
+  if (!isPlainRecord(detail) || !hasExactlyKeys(detail, DETAIL_KEYS)) {
     logFixedLine("page capture facts: a facts record has an unknown shape", fields);
     return { status: "unreadable" };
   }
-  if (detail.objectType !== objectType) return { status: "absent" };
-  const { capturedUrl, viewport, capturedAt } = detail;
+  const { v, objectType: recordedType, capturedUrl, viewport, capturedAt } = detail;
+  if (v !== PAGE_CAPTURE_FACTS_RECORD_VERSION) {
+    logFixedLine("page capture facts: a facts record has an unknown shape", fields);
+    return { status: "unreadable" };
+  }
+  if (recordedType !== objectType) return { status: "absent" };
   const facts = parsePageCaptureFacts({ capturedUrl, viewport, capturedAt });
   if (facts === null) {
     logFixedLine("page capture facts: a facts record does not parse", fields);
