@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useInsertionEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -120,7 +121,11 @@ import { agentUIOverrideRegistry } from "./agent-ui-override-registry";
 import { getFieldRendererContextForAgentBuilderAction, getSkillsForAgentAction, type SkillForChip } from "./server-actions";
 import { HitlSkillChips } from "./hitl-skill-chips";
 import { HITL_PLACEHOLDER_FIELD_NAME, resolveFieldLabel } from "./humanize-field-name";
-import { gateAwaitsRendererValue, gateCarriesPresentationHint } from "./gate-renderer-value";
+import {
+  gateAwaitsRendererValue,
+  gateCarriesPresentationHint,
+  withDeclaredRendererValues,
+} from "./gate-renderer-value";
 
 // Client-safe serialized form of AgentRunMessageRecord — Date becomes ISO string
 export type SerializedAgentRunMessage = {
@@ -1356,21 +1361,22 @@ export function AgenticRunPanel({
       // of the rule, as on its Continue. The rule reads what the renderer wrote and
       // what the caller handed in, BEFORE the host adds approved, approvedAt and
       // userResponse: those are the host's, and a gate that declares one of them
-      // is not answered by them.
+      // is not answered by them. And what released the gate is what is sent: each
+      // declared key of that answer goes back over the host's fields.
       const callerFields =
         value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
-      if (
+      const answer = { ...bufferedHitlValueRef.current, ...callerFields };
+      const heldByTheRule =
         (ctx.xRenderer.endsWith(":output") || hasMidRunHitlBinding(ctx.xRenderer)) &&
         !isSetupGateTaskId(ctx.reviewTaskId) &&
-        !gateCarriesPresentationHint(ctx.currentValues) &&
-        gateAwaitsRendererValue(ctx.inputSchema, { ...bufferedHitlValueRef.current, ...callerFields })
-      ) {
+        !gateCarriesPresentationHint(ctx.currentValues);
+      if (heldByTheRule && gateAwaitsRendererValue(ctx.inputSchema, answer)) {
         throw new Error("This step is waiting for a choice on its card. Choose one there, then continue.");
       }
       await performGateSubmit({
         reviewTaskId: ctx.reviewTaskId,
         xRenderer: ctx.xRenderer,
-        payload,
+        payload: heldByTheRule ? withDeclaredRendererValues(ctx.inputSchema, answer, payload) : payload,
         payloadFieldName,
         trackApproving: true,
         suppressGate: true,
@@ -1589,6 +1595,22 @@ export function AgenticRunPanel({
     setPrevBufferedHitlValueKey(bufferedHitlValueKey);
     setBufferedHitlValue({});
   }
+  // THE GATE ON SCREEN, AS OF THE LAST COMMIT (cinatra#3380). A renderer that has
+  // been replaced can still call its `onChange` after an await, and the buffer
+  // above is the gate on screen's: such a write is no answer to it. Each
+  // renderer's `onChange` carries the gate it was drawn for and is compared with
+  // this. It is set in an insertion effect, which runs in the commit before every
+  // layout effect, so the next gate's renderer, writing from its own layout
+  // effect when it mounts, already reads its own gate here. Only another gate
+  // moves it, as only another gate resets the buffer.
+  const liveHitlGateKeyRef = useRef<string | null>(bufferedHitlValueKey);
+  useInsertionEffect(() => {
+    if (bufferedHitlValueKey !== null) liveHitlGateKeyRef.current = bufferedHitlValueKey;
+  }, [bufferedHitlValueKey]);
+  const isHitlGateOnScreen = useCallback(
+    (forGate: string) => liveHitlGateKeyRef.current === forGate,
+    [],
+  );
 
   // cinatra#3423 — the resume re-read described above, wired where the gate
   // context is known. `parkedWithNoGate` is the run saying it is standing at a
@@ -1963,6 +1985,9 @@ export function AgenticRunPanel({
      *  (`gateAwaitsRendererValue`) and the renderer has written none yet: the
      *  Continue is drawn disabled, and a disabled button takes no press. */
     awaitingRendererValue?: boolean;
+    /** cinatra#3380 — the schema whose declared keys the renderer's buffer
+     *  answers: each one it wrote is sent as written, over the host fields. */
+    declaredSchema?: Record<string, unknown> | null;
   }): ReactNode => effectiveHitlContext && (
     <div className="flex justify-end items-center gap-2 pt-2 border-t border-line">
       {opts?.withReject ? (
@@ -2062,6 +2087,15 @@ export function AgenticRunPanel({
             effectiveHitlContext.currentValues,
             nextBuffered,
           );
+          // cinatra#3380 — a key the gate declares and the renderer wrote is sent
+          // as the renderer wrote it, over approved, approvedAt and the wrap above.
+          if (opts?.declaredSchema) {
+            nextBuffered = withDeclaredRendererValues(
+              opts.declaredSchema,
+              bufferedHitlValue,
+              nextBuffered,
+            );
+          }
           await performGateSubmit({
             reviewTaskId: effectiveHitlContext.reviewTaskId,
             xRenderer: effectiveHitlContext.xRenderer,
@@ -2889,7 +2923,13 @@ export function AgenticRunPanel({
                   // so approvalActionsRow is always relevant here.
                   return (
                     <>
-                      <DispatchRenderer hint={hitlPresentationHint} mode="edit" />
+                      <DispatchRenderer
+                        // A new instance for each gate (cinatra#3380), as the
+                        // registry renderer below.
+                        key={hitlGateIdentityKey(effectiveHitlContext)}
+                        hint={hitlPresentationHint}
+                        mode="edit"
+                      />
                       {approvalActionsRow}
                     </>
                   );
@@ -2906,6 +2946,8 @@ export function AgenticRunPanel({
                   );
                 }
                 const RendererComponent = hitlRendererEntry.entry.renderer;
+                // The gate this renderer is drawn for (cinatra#3380).
+                const rendererGateKey = hitlGateIdentityKey(effectiveHitlContext);
                 // Mid-run HITL screens (`:output` suffix) buffer values into
                 // bufferedHitlValue and show a Continue button below. The
                 // context-selector renderer also buffers selections for an outer
@@ -3012,7 +3054,12 @@ export function AgenticRunPanel({
                         if (next && typeof next === "object" && !Array.isArray(next)) {
                           const newValues = next as Record<string, unknown>;
                           nextBuffered = { ...bufferedHitlValue, ...newValues };
-                          setBufferedHitlValue(nextBuffered); // visual update
+                          // A renderer that has been replaced writes for a gate
+                          // that is gone (cinatra#3380): the buffer is the gate on
+                          // screen's, so that write does not reach it.
+                          if (isHitlGateOnScreen(rendererGateKey)) {
+                            setBufferedHitlValue(nextBuffered); // visual update
+                          }
                         }
                         // Grouped-setup forms: approve immediately on form submit so the
                         // user only ever sees one Continue button (no separate row below).
@@ -3072,7 +3119,11 @@ export function AgenticRunPanel({
                       }}
                       context={hitlRendererEntry.context}
                       mode="edit"
-                      onApply={handleApply}
+                      // A suggestion applied by a replaced renderer is no answer
+                      // to the gate on screen either (cinatra#3380).
+                      onApply={(suggestions: Record<string, unknown>) => {
+                        if (isHitlGateOnScreen(rendererGateKey)) handleApply(suggestions);
+                      }}
                       aiSuggestions={aiSuggestions}
                       // cinatra#3532 — where the product owns the send, the
                       // renderer's own submit is not drawn inside the field
@@ -3100,6 +3151,7 @@ export function AgenticRunPanel({
                           hitlRendererEntry.fieldSchema,
                           bufferedHitlValue,
                         ),
+                        declaredSchema: hitlRendererEntry.fieldSchema,
                       })}
                     {/* cinatra#3532 — the product's Continue for a setup field
                         whose renderer declares no submit control of its own:

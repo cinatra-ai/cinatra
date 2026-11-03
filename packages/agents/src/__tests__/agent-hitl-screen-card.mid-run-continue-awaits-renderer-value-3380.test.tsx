@@ -9,7 +9,9 @@
  * the renderer has written that property; a gate that declares none (here the
  * email gates' object-level `required: ["decision"]`) is unchanged. A gate that
  * carries a presentation hint is out of the rule: the card draws it through the
- * generic dispatch renderer, which writes nothing.
+ * generic dispatch renderer, which writes nothing. A key the gate declares and
+ * the renderer wrote is sent as written, even where the Continue adds a field of
+ * the same name (approved, approvedAt).
  *
  * This file renders the control alone with a fixed buffer; the card's mount
  * passes it the buffer its renderer writes (`activeBuffered`).
@@ -149,4 +151,28 @@ describe("AgentHitlScreenContinue — the card's mid-run Continue (cinatra#3380)
     fireEvent.click(cardContinue()!);
     await waitFor(() => expect(onContinue).toHaveBeenCalledTimes(1));
   });
+
+  // cinatra#3380: what released the Continue is sent.
+  it.each([
+    ["approved", { type: "boolean", "x-required": true }, false],
+    ["approvedAt", { type: "string", "x-required": true }, "2020-01-02T03:04:05.000Z"],
+  ] as const)(
+    "sends a declared %s as the renderer wrote it, not the Continue's own value",
+    async (key, property, written) => {
+      const onContinue = vi.fn<(payload: Record<string, unknown>) => Promise<undefined>>(async () => undefined);
+      render(
+        <AgentHitlScreenContinue
+          gate={gateWith({ type: "object", properties: { [key]: property } })}
+          buffered={{ [key]: written }}
+          submitting={false}
+          blocked={false}
+          onContinue={onContinue}
+        />,
+      );
+      expect(cardContinue()!.disabled).toBe(false);
+      fireEvent.click(cardContinue()!);
+      await waitFor(() => expect(onContinue).toHaveBeenCalledTimes(1));
+      expect(onContinue.mock.calls[0]![0][key]).toBe(written);
+    },
+  );
 });

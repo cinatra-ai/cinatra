@@ -25,6 +25,7 @@
 import {
   useCallback,
   useEffect,
+  useInsertionEffect,
   useMemo,
   useRef,
   useState,
@@ -122,7 +123,7 @@ import {
 // the module this file already imports the placeholder token from — no new
 // module edge, for the reason the note above `SetupFieldContinue` gives.
 import { HITL_PLACEHOLDER_FIELD_NAME, resolveFieldLabel } from "./humanize-field-name";
-import { gateAwaitsRendererValue } from "./gate-renderer-value";
+import { gateAwaitsRendererValue, withDeclaredRendererValues } from "./gate-renderer-value";
 // `HitlGateContext` is the shape the run's own read answers a gate with
 // (cinatra#3532, fix leg 3) — the same one `agentic-run-panel.tsx`'s refetch
 // reads, taken from a module this file already imports so the file's module
@@ -738,6 +739,22 @@ function HitlApprovalCard({
   if (bufferKey !== null && bufferKey !== prevBufferKey) {
     setPrevBufferKey(bufferKey);
   }
+  // THE GATE ON SCREEN, AS OF THE LAST COMMIT (cinatra#3380). A renderer that has
+  // been replaced can still call its `onChange` after an await, and the buffer is
+  // the gate on screen's: such a write is no answer to it. Each renderer's
+  // `onChange` carries the gate it was drawn for and is compared with this. It is
+  // set in an insertion effect, which runs in the commit before every layout
+  // effect, so the next gate's renderer, writing from its own layout effect when
+  // it mounts, already reads its own gate here. A null flicker does not move it,
+  // for the reason above.
+  const liveBufferKeyRef = useRef<string | null>(bufferKey);
+  useInsertionEffect(() => {
+    if (bufferKey !== null) liveBufferKeyRef.current = bufferKey;
+  }, [bufferKey]);
+  const isGateOnScreen = useCallback(
+    (forGate: string) => liveBufferKeyRef.current === forGate,
+    [],
+  );
 
   // The block belongs to ONE gate, so it is released on GATE IDENTITY — the
   // review-task id alone (cinatra#3219 convergence). An
@@ -884,6 +901,8 @@ function HitlApprovalCard({
   // nothing.
   const continueAwaitsRendererValue =
     isMidRunHitl && gateAwaitsRendererValue(renderSchema, bufferedHitlValue);
+  // The gate this card's renderer is drawn for (cinatra#3380).
+  const rendererGateKey = hitlGateIdentityKey(interruptContext);
 
   // Bottom-of-page prompt handler. Sends the message on the ONE ROAD and applies
   // the fill that comes back to the
@@ -1004,6 +1023,12 @@ function HitlApprovalCard({
         nextBuffered,
         pendingAttachmentsRef.current,
       );
+    }
+    // cinatra#3380 — on a mid-run gate, a key the gate declares and the renderer
+    // wrote is sent as the renderer wrote it, over approved, approvedAt and every
+    // lift and wrap above.
+    if (isMidRunHitl) {
+      nextBuffered = withDeclaredRendererValues(renderSchema, bufferedHitlValue, nextBuffered);
     }
     let didApprove = false;
     try {
@@ -1329,7 +1354,12 @@ function HitlApprovalCard({
                     if (next && typeof next === "object" && !Array.isArray(next)) {
                       const newValues = next as Record<string, unknown>;
                       nextBuffered = { ...bufferedHitlValue, ...newValues };
-                      setBufferedHitlValue(nextBuffered); // visual update
+                      // A renderer that has been replaced writes for a gate that
+                      // is gone (cinatra#3380): the buffer is the gate on
+                      // screen's, so that write does not reach it.
+                      if (isGateOnScreen(rendererGateKey)) {
+                        setBufferedHitlValue(nextBuffered); // visual update
+                      }
                     }
                     if (isGroupedSetup) {
                       if (!(await checkRunName())) return;
@@ -1418,7 +1448,11 @@ function HitlApprovalCard({
             }
             context={context}
             mode="edit"
-            onApply={handleApply}
+            // A suggestion applied by a replaced renderer is no answer to the
+            // gate on screen either (cinatra#3380).
+            onApply={(suggestions: Record<string, unknown>) => {
+              if (isGateOnScreen(rendererGateKey)) handleApply(suggestions);
+            }}
             aiSuggestions={aiSuggestions}
             onHitlContextChange={handleHitlContextChange}
             // cinatra#3532 — where the product owns the send, the renderer's own

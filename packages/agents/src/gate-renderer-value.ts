@@ -33,7 +33,9 @@
  * the published submit that buffer with the caller's own value over it, read
  * before the host adds approved, approvedAt and userResponse — never the
  * gate's own current values: those are what the run handed the screen, not an
- * answer the person gave on it.
+ * answer the person gave on it. What released the Continue is also what is
+ * sent: `withDeclaredRendererValues` puts each declared key of that answer back
+ * over the host's fields.
  *
  * Generic by construction: it reads a schema and a buffer, never a renderer id
  * or an agent name. A gate that declares nothing is held by nothing.
@@ -90,6 +92,35 @@ export function gateAwaitsRendererValue(
       Object.prototype.hasOwnProperty.call(written, key) ? written[key] : undefined,
     ),
   );
+}
+
+/**
+ * THE RENDERER'S OWN VALUE OF A DECLARED KEY IS SENT AS IT WROTE IT
+ * (cinatra#3380). Each surface builds its payload with host fields beside the
+ * renderer's buffer: `approved` and `approvedAt`, and on the published submit a
+ * `userResponse` of its own. A gate may declare one of those names as a value
+ * its renderer must produce, and then the renderer's write is what released the
+ * Continue. So each declared key that `written` holds with a value that is not
+ * blank is put back over the built payload, after every host field. A declared
+ * key that `written` does not hold keeps what the host built. A gate that
+ * declares nothing gets the same payload object back.
+ */
+export function withDeclaredRendererValues(
+  schema: Record<string, unknown> | null | undefined,
+  written: Record<string, unknown> | null | undefined,
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  const keys = gateRequiredRendererKeys(schema);
+  if (keys.length === 0 || !written) return payload;
+  let sent = payload;
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(written, key)) continue;
+    const value = written[key];
+    if (isBlankRendererValue(value)) continue;
+    if (sent === payload) sent = { ...payload };
+    sent[key] = value;
+  }
+  return sent;
 }
 
 /**

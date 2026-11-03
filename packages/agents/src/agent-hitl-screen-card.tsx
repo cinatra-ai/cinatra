@@ -150,7 +150,7 @@ import {
   wrapPrimitiveSetupPayload,
 } from "./hitl-gate-submit";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
-import { gateAwaitsRendererValue } from "./gate-renderer-value";
+import { gateAwaitsRendererValue, withDeclaredRendererValues } from "./gate-renderer-value";
 import type { LifecycleCardHost } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
 /**
@@ -796,7 +796,13 @@ export function AgentHitlScreenFields({
         // Presentation-first, exactly as the panel reads it: a gate that
         // embedded a hint is drawn through the generic dispatch renderer rather
         // than through a per-renderer resolution.
-        <DispatchRenderer hint={hint} mode="edit" />
+        <DispatchRenderer
+          // A new instance for each gate (cinatra#3380), as the registry
+          // renderer below.
+          key={hitlGateKey(gate)}
+          hint={hint}
+          mode="edit"
+        />
       ) : Renderer === null ? (
         <p className="text-sm text-muted-foreground">
           Waiting for input — no renderer configured for this step.
@@ -942,6 +948,11 @@ export function AgentHitlScreenContinue({
           payload = applyAttachmentEnvelopeUserResponseOnly(payload, []);
         }
         payload = withContextSelectorEnvelope(gate.xRenderer, gate.currentValues, payload);
+        // cinatra#3380 — a key the gate declares and the renderer wrote is sent as
+        // the renderer wrote it, over approved, approvedAt and the wraps above.
+        if (presentationHintOf(gate) === null) {
+          payload = withDeclaredRendererValues(gate.inputSchema, buffered, payload);
+        }
         await onContinue(payload);
       }}
     />
@@ -1154,14 +1165,17 @@ export function AgentHitlScreenCard({
   // and is compared with this. It is set in an insertion effect, which runs in
   // the commit before every layout effect: the next gate's renderer, writing
   // from its own layout effect when it mounts, already reads its own gate here,
-  // and nothing that resumes after the commit can read the previous one. No
-  // gate on screen is not a different gate, as for the buffer below.
+  // and nothing that resumes after the commit can read the previous one. NO GATE
+  // ON SCREEN IS RECORDED TOO: the card holds its last authorized answer while a
+  // read is in flight, so a null gate here is a run that is not asking (the gate
+  // was answered elsewhere, or the run moved on), and a press or a write made for
+  // the gate that left answers nothing.
   const liveGateKeyRef = useRef<string | null>(gateKey);
   useInsertionEffect(() => {
-    if (gateKey !== null) liveGateKeyRef.current = gateKey;
+    liveGateKeyRef.current = gateKey;
   }, [gateKey]);
   const isGateOnScreen = useCallback(
-    (forGate: string | null) => forGate === null || liveGateKeyRef.current === forGate,
+    (forGate: string | null) => liveGateKeyRef.current === forGate,
     [],
   );
   const onBuffer = useCallback(
@@ -1357,9 +1371,9 @@ export function AgentHitlScreenCard({
       // simply overwrites the stage with the same renderer's current value.
       const flush = flushRef.current;
       if (flush !== null && flush.key === pressedFor) await flush.fn();
-      // THE GATE CAN CHANGE DURING THE FLUSH (cinatra#3380). This press answers the
-      // gate it was made on, so it stops here: it takes nothing the next gate may
-      // have staged, and it submits nothing.
+      // THE GATE CAN CHANGE, OR LEAVE THE SCREEN, DURING THE FLUSH (cinatra#3380).
+      // This press answers the gate it was made on, so it stops here: it takes
+      // nothing the next gate may have staged, and it submits nothing.
       if (liveGateKeyRef.current !== pressedFor) return;
       const staged = takeSetupAnswer();
       // Nothing to submit: a required box the renderer refused to hand over says

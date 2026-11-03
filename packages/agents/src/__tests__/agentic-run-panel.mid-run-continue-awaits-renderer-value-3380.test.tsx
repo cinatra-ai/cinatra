@@ -31,7 +31,13 @@
  *     value: the published submit sends at once without that value, as on main;
  *   - neither is a setup gate, even on a renderer that reads as mid-run;
  *   - a later gate on the same renderer starts with nothing: what the earlier
- *     gate's renderer wrote is not the later gate's answer.
+ *     gate's renderer wrote is not the later gate's answer;
+ *   - a key the gate declares and the renderer wrote is sent as written, even
+ *     where the host adds a field of the same name (approved, approvedAt, and on
+ *     the published submit userResponse);
+ *   - a write from a renderer that has been replaced does not reach the later
+ *     gate: that gate stays held until its own renderer writes;
+ *   - a gate with a presentation hint gets a new dispatch renderer for each gate.
  *
  * The renderer here is a stand-in registered under a test id; the rule names no
  * agent and no renderer.
@@ -42,7 +48,7 @@
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 
 import { Button } from "@/components/ui/button";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
@@ -116,6 +122,10 @@ const PICK_RENDERER_ID = "@cinatra-test/pick-agent:pick";
 const REVIEW_TASK_ID = "wayflow-task-3380";
 const NO_PICK_JSON = JSON.stringify({ noPick: true });
 const PICKED_JSON = JSON.stringify({ artifactId: "a-2", representationRevisionId: "r-2" });
+/** The `onChange` each mounted pick renderer was given, in mount order. */
+const pickMounts: Array<(next: unknown) => unknown> = [];
+/** The `onApply` each mounted pick renderer was given, in mount order. */
+const applyMounts: Array<((suggestions: Record<string, unknown>) => void) | undefined> = [];
 /** A renderer id with no `:output` suffix and no `midRunHitl` registry entry. */
 const NOT_MID_RUN_RENDERER_ID = "@cinatra-test/plain-agent:plain";
 
@@ -141,12 +151,17 @@ const UNDECLARING_SCHEMA: Record<string, unknown> = {
  * A PICK RENDERER: it offers rows, picks nothing for anyone, and writes the pick
  * into both keys when a row is pressed — the shape a pack's chooser commits.
  */
-function PickRenderer({ onChange, value }: FieldRendererProps) {
+function PickRenderer({ onChange, onApply, value }: FieldRendererProps) {
   const [picked, setPicked] = React.useState(false);
   // The real pipeline renderer's shape: a list with nothing to pick answers with
   // a no-pick value from a layout effect when it mounts.
   const emptyOffer = Array.isArray((value as { ideas?: unknown } | null)?.ideas)
     && (value as { ideas: unknown[] }).ideas.length === 0;
+  React.useLayoutEffect(() => {
+    pickMounts.push(onChange);
+    applyMounts.push(onApply);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   React.useLayoutEffect(() => {
     if (emptyOffer) void onChange({ selectedIdeaJson: NO_PICK_JSON, userResponse: NO_PICK_JSON });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -242,6 +257,8 @@ function gateContinue(): HTMLButtonElement | null {
 }
 
 beforeEach(() => {
+  pickMounts.length = 0;
+  applyMounts.length = 0;
   ensureDefaultFieldRenderersRegistered();
   fieldRendererRegistry.register({
     id: PICK_RENDERER_ID,
@@ -543,4 +560,142 @@ describe("AgenticRunPanel — a mid-run Continue waits for the renderer's declar
       expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
     },
   );
+
+  // cinatra#3380: what released the Continue is sent.
+  it.each([
+    ["approved", { type: "boolean", "x-required": true }, false],
+    ["approvedAt", { type: "string", "x-required": true }, "2020-01-02T03:04:05.000Z"],
+  ] as const)(
+    "sends a declared %s as the renderer wrote it on the Continue, not the host's own value",
+    async (key, property, written) => {
+      await mountGate({ type: "object", properties: { [key]: property } });
+
+      await waitFor(() => expect(document.querySelector('[data-testid="pick-row-2"]')).not.toBeNull());
+      await waitFor(() => expect(gateContinue()!.disabled).toBe(true));
+      await act(async () => {
+        void pickMounts[pickMounts.length - 1]!({ [key]: written });
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(gateContinue()!.disabled).toBe(false));
+      fireEvent.click(gateContinue()!);
+
+      await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+      const [, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+        string,
+        Record<string, unknown>,
+      ];
+      expect(payload[key]).toBe(written);
+    },
+  );
+
+  it.each([
+    ["approved", { type: "boolean", "x-required": true }, false],
+    ["approvedAt", { type: "string", "x-required": true }, "2020-01-02T03:04:05.000Z"],
+    ["userResponse", { type: "string", "x-required": true }, "The renderer's own words"],
+  ] as const)(
+    "sends a declared %s as the renderer wrote it on the published submit, not the host's own value",
+    async (key, property, written) => {
+      const published: { submit: GateSubmit | null } = { submit: null };
+      await mountGate({ type: "object", properties: { [key]: property } }, (_runId, gate) => {
+        if (gate) published.submit = gate.submit;
+      });
+
+      await waitFor(() => expect(published.submit).not.toBeNull());
+      await waitFor(() => expect(document.querySelector('[data-testid="pick-row-2"]')).not.toBeNull());
+      await act(async () => {
+        void pickMounts[pickMounts.length - 1]!({ [key]: written });
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(gateContinue()!.disabled).toBe(false));
+      await published.submit!("Use the second idea");
+
+      await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+      const [, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+        string,
+        Record<string, unknown>,
+      ];
+      expect(payload[key]).toBe(written);
+    },
+  );
+
+  // cinatra#3380: a replaced renderer answers nothing.
+  it("ignores a write from the earlier gate's renderer after the later gate arrives: the later gate stays held, on the Continue and the published submit, until its own renderer writes", async () => {
+    const published: { submit: GateSubmit | null } = { submit: null };
+    const view = await mountGate(DECLARING_SCHEMA, (_runId, gate) => {
+      if (gate) published.submit = gate.submit;
+    });
+
+    await waitFor(() => expect(document.querySelector('[data-testid="pick-row-2"]')).not.toBeNull());
+    const earlierOnChange = pickMounts[pickMounts.length - 1]!;
+
+    await view.moveToGate("wayflow-task-3380-next");
+    await waitFor(() => expect(pickMounts[pickMounts.length - 1]).not.toBe(earlierOnChange));
+    await waitFor(() => expect(gateContinue()!.disabled).toBe(true));
+
+    // The earlier gate's renderer, already replaced, writes after an await.
+    await act(async () => {
+      void earlierOnChange({ selectedIdeaJson: PICKED_JSON, userResponse: PICKED_JSON });
+      await Promise.resolve();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(gateContinue()!.disabled).toBe(true);
+    await expect(published.submit!("Use the second idea")).rejects.toThrow(/waiting for a choice/);
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    fireEvent.click(document.querySelector('[data-testid="pick-row-2"]')!);
+    await waitFor(() => expect(gateContinue()!.disabled).toBe(false));
+    fireEvent.click(gateContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("wayflow-task-3380-next");
+    expect(payload.selectedIdeaJson).toBe(PICKED_JSON);
+  });
+
+  // cinatra#3380: every gate gets a new renderer.
+  it("mounts a new presentation-hint renderer for a later gate with the same hint type", async () => {
+    const view = await mountGate(DECLARING_SCHEMA, undefined, HINT_VALUES);
+
+    const hintSection = () =>
+      Array.from(document.querySelectorAll("h3"))
+        .find((h) => h.textContent === "Review ideas")
+        ?.closest("section") ?? null;
+    await waitFor(() => expect(hintSection()).not.toBeNull());
+    const earlier = hintSection();
+
+    await view.moveToGate("wayflow-task-3380-next", HINT_VALUES);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await waitFor(() => expect(hintSection()).not.toBeNull());
+    expect(hintSection()).not.toBe(earlier);
+    expect(earlier!.isConnected).toBe(false);
+  });
+
+  it("ignores a suggestion applied by the earlier gate's renderer after the later gate arrives: the later gate stays held", async () => {
+    const view = await mountGate(DECLARING_SCHEMA);
+
+    await waitFor(() => expect(document.querySelector('[data-testid="pick-row-2"]')).not.toBeNull());
+    const earlierOnApply = applyMounts[applyMounts.length - 1];
+    expect(typeof earlierOnApply).toBe("function");
+    const earlierOnChange = pickMounts[pickMounts.length - 1]!;
+
+    await view.moveToGate("wayflow-task-3380-next");
+    await waitFor(() => expect(pickMounts[pickMounts.length - 1]).not.toBe(earlierOnChange));
+    await waitFor(() => expect(gateContinue()!.disabled).toBe(true));
+
+    // The earlier gate's renderer, already replaced, applies a suggestion after an await.
+    await act(async () => {
+      earlierOnApply!({ selectedIdeaJson: PICKED_JSON });
+      await Promise.resolve();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(gateContinue()!.disabled).toBe(true);
+    fireEvent.click(gateContinue()!);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
 });

@@ -16,7 +16,12 @@
  *   - the same on the broker door, where a credential host reads and answers
  *     through the routes;
  *   - a setup press whose gate changes during its flush stops: it submits nothing,
- *     and what that flush hands over is no answer to the later gate.
+ *     and what that flush hands over is no answer to the later gate;
+ *   - the same when the gate leaves the screen during the flush (the run is no
+ *     longer asking): nothing is sent;
+ *   - a write from a renderer whose gate has left the screen is no answer: the
+ *     gate that comes back is still held;
+ *   - a gate with a presentation hint gets a new dispatch renderer for each gate.
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -107,6 +112,24 @@ function PickRenderer({
 }
 
 type Box = { current: AgentHitlScreenCarry | null };
+
+/** A gate drawn through the generic dispatch renderer (a presentation hint). */
+function hintAsking(reviewTaskId: string) {
+  const screen = asking(reviewTaskId, []);
+  return {
+    ...screen,
+    gate: {
+      ...screen.gate,
+      currentValues: {
+        presentation: {
+          type: "card_list",
+          title: "Review ideas",
+          items: [{ title: "Idea one", description: "First" }],
+        },
+      },
+    },
+  };
+}
 
 const SETUP_X_RENDERER = "@cinatra-test/setup-agent:topic";
 const flushOfFirstGate = { current: Promise.resolve() as Promise<unknown> };
@@ -587,5 +610,83 @@ describe("AgentHitlScreenCard — what its renderer writes (cinatra#3380)", () =
     ];
     expect(taskId).toBe("task-empty");
     expect(values.selectedIdeaJson).toBe(NO_PICK_JSON);
+  });
+
+  // cinatra#3380: no gate on screen is recorded too.
+  it("stops a setup press whose gate leaves the screen during its flush: nothing is sent", async () => {
+    const flush = deferred();
+    flushOfFirstGate.current = flush.promise;
+    screenStateMock.mockImplementation(async () => setupAsking("setup-first", "first"));
+    const mounted = render(card("setup-first"));
+    await settle();
+    await waitFor(() => expect(cardContinue()).not.toBeNull());
+
+    await act(async () => {
+      fireEvent.click(cardContinue()!);
+      await Promise.resolve();
+    });
+
+    // The gate is answered on another surface: the run is no longer asking.
+    screenStateMock.mockImplementation(async () => ({ state: "none" }));
+    mounted.rerender(card("setup-answered"));
+    await settle();
+    await waitFor(() => expect(cardContinue()).toBeNull());
+
+    await act(async () => {
+      flush.resolve(undefined);
+      await Promise.resolve();
+    });
+    await settle();
+    expect(approveMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores a write from a renderer whose gate has left the screen: the gate that comes back is still held", async () => {
+    const box: Box = { current: null };
+    screenStateMock.mockImplementation(async () => asking("task-first", [{ id: "a" }]));
+    const mounted = render(card("task-first", box));
+    await settle();
+    await waitFor(() => expect(pickRow()).not.toBeNull());
+    expect(cardContinue()!.disabled).toBe(true);
+    const earlierOnChange = pickMounts[pickMounts.length - 1]!;
+
+    screenStateMock.mockImplementation(async () => ({ state: "none" }));
+    mounted.rerender(card("task-gone", box));
+    await settle();
+    await waitFor(() => expect(pickRow()).toBeNull());
+
+    // The renderer of the gate that left writes after an await.
+    await act(async () => {
+      void earlierOnChange({ selectedIdeaJson: PICKED_JSON, userResponse: PICKED_JSON });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(box.current?.buffered.selectedIdeaJson).toBeUndefined();
+
+    screenStateMock.mockImplementation(async () => asking("task-first", [{ id: "a" }]));
+    mounted.rerender(card("task-first-again", box));
+    await settle();
+    await waitFor(() => expect(pickRow()).not.toBeNull());
+    expect(cardContinue()!.disabled).toBe(true);
+    expect(approveMock).not.toHaveBeenCalled();
+  });
+
+  // cinatra#3380: every gate gets a new renderer.
+  it("mounts a new presentation-hint renderer for a later gate with the same hint type", async () => {
+    const hintSection = () =>
+      Array.from(document.querySelectorAll("h3"))
+        .find((h) => h.textContent === "Review ideas")
+        ?.closest("section") ?? null;
+    screenStateMock.mockImplementation(async () => hintAsking("task-hint-first"));
+    const mounted = render(card("task-hint-first"));
+    await settle();
+    await waitFor(() => expect(hintSection()).not.toBeNull());
+    const earlier = hintSection();
+
+    screenStateMock.mockImplementation(async () => hintAsking("task-hint-next"));
+    mounted.rerender(card("task-hint-next"));
+    await settle();
+    await waitFor(() => expect(earlier!.isConnected).toBe(false));
+    expect(hintSection()).not.toBeNull();
+    expect(hintSection()).not.toBe(earlier);
   });
 });

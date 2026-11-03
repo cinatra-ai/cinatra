@@ -20,6 +20,7 @@ import {
   gateAwaitsRendererValue,
   gateCarriesPresentationHint,
   gateRequiredRendererKeys,
+  withDeclaredRendererValues,
 } from "../gate-renderer-value";
 import { hitlGateIdentityKey } from "../hitl-gate-submit";
 
@@ -153,6 +154,55 @@ describe("gateAwaitsRendererValue (cinatra#3380)", () => {
       }),
     ).toEqual([]);
     expect(gateRequiredRendererKeys({ type: "string", "x-required": true })).toEqual([]);
+  });
+});
+
+describe("withDeclaredRendererValues (cinatra#3380)", () => {
+  const HOST = { approved: true, approvedAt: "2026-11-03T00:00:00.000Z", userResponse: "host text" };
+  const declaring = (...keys: string[]) => ({
+    type: "object",
+    properties: Object.fromEntries(keys.map((k) => [k, { "x-required": true }])),
+  });
+
+  it("puts a declared key the renderer wrote back over the host's own value, false and an empty object included", () => {
+    expect(withDeclaredRendererValues(declaring("approved"), { approved: false }, HOST)).toEqual({
+      ...HOST,
+      approved: false,
+    });
+    expect(
+      withDeclaredRendererValues(
+        declaring("approvedAt", "userResponse"),
+        { approvedAt: "2020-01-02T03:04:05.000Z", userResponse: { pick: {} } },
+        HOST,
+      ),
+    ).toEqual({ ...HOST, approvedAt: "2020-01-02T03:04:05.000Z", userResponse: { pick: {} } });
+  });
+
+  it("keeps the host's value for a declared key that is blank, absent or only inherited, and leaves undeclared keys alone", () => {
+    const inherited = Object.create({ approved: false }) as Record<string, unknown>;
+    expect(withDeclaredRendererValues(declaring("approved"), inherited, HOST)).toBe(HOST);
+    expect(withDeclaredRendererValues(declaring("userResponse"), { userResponse: "  " }, HOST)).toBe(HOST);
+    expect(withDeclaredRendererValues(declaring("approved"), {}, HOST)).toBe(HOST);
+    expect(withDeclaredRendererValues(declaring("selectedIdeaJson"), { approved: false }, HOST)).toBe(HOST);
+  });
+
+  it("returns the same payload for a gate that declares nothing, a declared default, or no buffer", () => {
+    expect(withDeclaredRendererValues(UNDECLARING_SCHEMA, { decision: "approve", approved: false }, HOST)).toBe(HOST);
+    expect(
+      withDeclaredRendererValues(
+        { type: "object", properties: { approved: { "x-required": true, default: true } } },
+        { approved: false },
+        HOST,
+      ),
+    ).toBe(HOST);
+    expect(withDeclaredRendererValues(null, { approved: false }, HOST)).toBe(HOST);
+    expect(withDeclaredRendererValues(declaring("approved"), null, HOST)).toBe(HOST);
+  });
+
+  it("does not change the payload it was given", () => {
+    const payload = { ...HOST };
+    withDeclaredRendererValues(declaring("approved"), { approved: false }, payload);
+    expect(payload).toEqual(HOST);
   });
 });
 
