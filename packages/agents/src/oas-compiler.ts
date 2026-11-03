@@ -1268,8 +1268,8 @@ export type CompiledAgentOas = {
   artifactBindings: PersistedArtifactBindingDeclaration | null;
   // cinatra#4150: the ids of the top-level flow nodes declared
   // `metadata.cinatra.publishes: true`, in node order. Persisted (serialized) to
-  // agent_templates.publishing_steps by every install/recompile writer. The
-  // runtime stops in front of each of them until a person decides.
+  // agent_templates.publishing_steps by the install, import, seed and recompile
+  // writers. The runtime stops in front of each of them until a person decides.
   publishingSteps: string[];
   // Sibling cinatra.json metadata: per-agent limits,
   // required connection types, and authoring-time defaults. Operator-tunable
