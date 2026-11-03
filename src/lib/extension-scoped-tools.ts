@@ -254,8 +254,20 @@ async function runArtifactRead(
   if (!artifactId) {
     throw new ArtifactContentRefusal("invalid-request", `${input.tool}: \`artifactId\` is required`);
   }
+  // The type the caller expects (see extensionArtifactGet). A field this cannot
+  // read is refused, never dropped: a dropped type would read any admitted type.
+  if (
+    raw.objectType !== undefined &&
+    (typeof raw.objectType !== "string" || raw.objectType.trim() === "")
+  ) {
+    throw new ArtifactContentRefusal(
+      "invalid-request",
+      `${input.tool}: \`objectType\` must name an object type`,
+    );
+  }
+  const objectType = typeof raw.objectType === "string" ? { objectType: raw.objectType } : {};
   if (input.tool === "artifacts_get") {
-    return { artifact: await extensionArtifactGet(ctx, { artifactId }) };
+    return { artifact: await extensionArtifactGet(ctx, { artifactId, ...objectType }) };
   }
   return extensionArtifactContentRead(ctx, {
     artifactId,
@@ -263,5 +275,6 @@ async function runArtifactRead(
       ? { representationRevisionId: raw.representationRevisionId }
       : {}),
     ...(typeof raw.maxBytes === "number" ? { maxBytes: raw.maxBytes } : {}),
+    ...objectType,
   });
 }

@@ -15,6 +15,10 @@ type Bucket = { count: number; resetAt: number };
 
 declare global {
   var __cinatraConnectRateBuckets: Map<string, Bucket> | undefined;
+  // cinatra#4217 — when the shared map may next be swept. It lives beside the
+  // map for the same reason the map does: every evaluation of this module in
+  // the process reads one sweep clock, not one each.
+  var __cinatraConnectRateNextSweepAt: number | undefined;
 }
 
 function buckets(): Map<string, Bucket> {
@@ -29,8 +33,37 @@ const IP_MAX = 30; // 30 token POSTs / min / IP
 const CODE_WINDOW_MS = 60_000;
 const CODE_MAX = 5; // 5 attempts / min against one code hash
 
+// cinatra#4217 — an entry whose window has ended is DELETED, not only reset when
+// its key comes back. Most keys never come back: every renewal presents a new
+// token, so its `code:<hash>` key is used once, and a burst of forged addresses
+// leaves one `ip:` key each. Without the sweep the map grew for the life of the
+// process. hit() sweeps at most once per SWEEP_INTERVAL_MS of the clock it is
+// given, for the whole process: the next sweep time is kept on globalThis with
+// the map, so a second evaluation of this module (a dev recompile) does not
+// start a second sweep clock. The cost is one pass over the map per window, not
+// one per request. An expired entry already counts as absent (the
+// `resetAt <= now` test below), so while the clock only moves forward the sweep
+// changes no answer: the caps and windows are exactly as before. If the wall
+// clock steps BACK, that no longer holds: a key swept before the step starts a
+// fresh window at its next hit where it would otherwise have continued the old
+// one, and from then on its windows can open and close at other times than
+// they would have, for as long as the key keeps being hit. What holds either
+// way: every window this limiter opens for a key admits at most that key's
+// cap. A step back also delays the next sweep until the clock is past the time
+// that sweep was set for.
+const SWEEP_INTERVAL_MS = 60_000;
+
+function sweepExpired(map: Map<string, Bucket>, now: number): void {
+  if (now < (globalThis.__cinatraConnectRateNextSweepAt ?? 0)) return;
+  for (const [key, bucket] of map) {
+    if (bucket.resetAt <= now) map.delete(key);
+  }
+  globalThis.__cinatraConnectRateNextSweepAt = now + SWEEP_INTERVAL_MS;
+}
+
 function hit(key: string, windowMs: number, max: number, now: number): boolean {
   const map = buckets();
+  sweepExpired(map, now);
   const existing = map.get(key);
   if (!existing || existing.resetAt <= now) {
     map.set(key, { count: 1, resetAt: now + windowMs });
@@ -90,4 +123,5 @@ export function allowNamedRateLimit(input: {
 /** Test seam: clear all buckets. */
 export function __resetConnectRateLimitForTests(): void {
   buckets().clear();
+  globalThis.__cinatraConnectRateNextSweepAt = 0;
 }
