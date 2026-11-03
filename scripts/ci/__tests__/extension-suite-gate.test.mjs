@@ -29,6 +29,7 @@ import nodeTopLevelReporter, {
   NODE_FILE_TIMEOUT_MS,
   NODE_GATE_DEADLINE_MS,
   NODE_KILL_GRACE_MS,
+  NODE_RECORDS_CAP,
   NODE_TEST_TIMEOUT_MS,
   nodeGateDeadlineMs,
   needsStandaloneRun,
@@ -37,6 +38,7 @@ import nodeTopLevelReporter, {
   parseNodeTap,
   parseReport,
   planRun,
+  readRecordFile,
   readTopLevel,
   standaloneRanTest,
   renderManifest,
@@ -934,6 +936,65 @@ describe("foldNodeRuns — per-file node:test runs as one suite result", () => {
     );
   });
 
+  it("judges the plain run's ending: not started or killed loses the report and is named, not able to start loses it, a non-zero exit is red", () => {
+    const f = "test/a.test.mjs";
+    const lone = { file: f, exitCode: 0, tap: tapFileOnly(f), topLevel: [{ name: f, line: 2, column: 1 }] };
+    // a vitest suite beside it, so the gate does not stop at "no-suites" before it reads the node:test package
+    const packages = [pkg({ slug: "gated", testFiles: ["x.test.ts"] }), brandVoice({ testFiles: [f] })];
+    const judged = (res) => {
+      const results = resultsFor([
+        ["gated", green(["x.test.ts"])],
+        ["brand-voice-artifact", res],
+      ]);
+      return { f: judge({ packages, results, carveOuts: [] }).findings, row: renderManifest({ packages, results, carveOuts: [] }) };
+    };
+    const notStarted = foldNodeRuns([{ ...lone, standalone: { notStarted: true } }]);
+    expect(notStarted).toMatchObject({ ok: false, reportOk: false, notStartedFiles: [`${f} (plain run)`], executedFiles: [] });
+    let j = judged(notStarted);
+    expect(j.f.map((x) => x.kind)).toEqual(["no-report"]);
+    expect(j.f[0].message).toContain(`the plain \`node\` run of a lone test was not started before the gate's node:test deadline for ${f} —`);
+    expect(j.f[0].message).not.toContain("`node --test`");
+    expect(j.row).toMatch(/node:test here — TIMED OUT \(0 file\(s\) killed, 1 not started before the deadline\)$/m);
+    const killed = foldNodeRuns([{ ...lone, standalone: { exitCode: -1, timedOut: true, startFailed: false } }]);
+    expect(killed).toMatchObject({ ok: false, reportOk: false, timedOutFiles: [`${f} (plain run)`], executedFiles: [] });
+    j = judged(killed);
+    expect(j.f.map((x) => x.kind)).toEqual(["no-report"]);
+    expect(j.f[0].message).toContain(`the plain \`node\` run of a lone test was still running at its bound and was killed for ${f} —`);
+    expect(j.f[0].message).not.toContain("`node --test`");
+    expect(j.row).toMatch(/node:test here — TIMED OUT \(1 file\(s\) killed\)$/m);
+    const noStart = foldNodeRuns([{ ...lone, standalone: { exitCode: -1, timedOut: false, startFailed: true } }]);
+    expect(noStart).toMatchObject({ ok: false, reportOk: false, plainNotRunFiles: [f], timedOutFiles: [], notStartedFiles: [] });
+    j = judged(noStart);
+    expect(j.f.map((x) => x.kind)).toEqual(["no-report"]);
+    expect(j.f[0].message).toContain(`the plain \`node\` run of a lone test could not start for ${f} —`);
+    expect(j.f[0].message).not.toContain("`node --test`");
+    expect(j.row).toMatch(/node:test here — NO REPORT \(exit -1\)$/m);
+    const red = foldNodeRuns([{ ...lone, standalone: { exitCode: 3, timedOut: false, startFailed: false } }]);
+    expect(red).toMatchObject({ ok: false, reportOk: true, exitCode: 3, executedFiles: [] });
+    j = judged(red);
+    expect(j.f.map((x) => x.kind)).toEqual(["suite-red"]);
+    expect(j.f[0].message).toContain("node:test suite FAILED (exit 3");
+    expect(j.row).toMatch(/node:test here — RED \(exit 3\)$/m);
+    // a killed `node --test` run and a plain run not started, in one package: each is named with its own command
+    const g = "test/b.test.mjs";
+    const mixed = foldNodeRuns([
+      { file: g, exitCode: -1, tap: "", timedOut: true },
+      { ...lone, standalone: { notStarted: true } },
+    ]);
+    j = judged(mixed);
+    expect(j.f[0].message).toContain(
+      `\`node --test\` was still running at its bound and was killed for ${g}; the plain \`node\` run of a lone test was not started before the gate's node:test deadline for ${f} —`,
+    );
+    // a plain run ended by a signal (exit null) is red as exit -1
+    expect(foldNodeRuns([{ ...lone, standalone: { exitCode: null, timedOut: false, startFailed: false } }])).toMatchObject({ ok: false, reportOk: true, exitCode: -1 });
+    // a plain run that exited 0 adds no finding of its own: its TAP decides file-only
+    expect(foldNodeRuns([{ ...lone, standalone: { exitCode: 0, timedOut: false, startFailed: false }, standaloneTap: PLAIN_TAP }])).toMatchObject({
+      ok: true,
+      reportOk: true,
+      executedFiles: [f],
+    });
+  });
+
   it("a run killed by a signal (exit code null) is not ok and reads as exit -1", () => {
     const r = foldNodeRuns([{ file: "test/a.test.mjs", exitCode: null, tap: TAP_GREEN }]);
     expect(r).toMatchObject({ ok: false, exitCode: -1 });
@@ -943,14 +1004,14 @@ describe("foldNodeRuns — per-file node:test runs as one suite result", () => {
 describe("runNodeTestFile — a child that cannot start", () => {
   it("resolves as exit -1 with no TAP, which folds into a lost report", async () => {
     const run = await runNodeTestFile({ cwd: "/nonexistent-extension-suite-gate-dir", file: "test/a.test.mjs" });
-    expect(run).toMatchObject({ file: "test/a.test.mjs", exitCode: -1, tap: "" });
+    expect(run).toMatchObject({ file: "test/a.test.mjs", exitCode: -1, tap: "", startFailed: true });
     expect(foldNodeRuns([run])).toMatchObject({ ok: false, reportOk: false, exitCode: -1 });
     expect(fs.existsSync(run.recDir)).toBe(false);
   });
 
   it("resolves the same way when the spawn throws at once, and removes the record folder", async () => {
     const run = await runNodeTestFile({ cwd: os.tmpdir(), file: "test/a\0b.test.mjs" });
-    expect(run).toMatchObject({ exitCode: -1, tap: "" });
+    expect(run).toMatchObject({ exitCode: -1, tap: "", startFailed: true });
     expect(run.recDir).toMatch(/ext-suite-node-/);
     expect(fs.existsSync(run.recDir)).toBe(false);
     expect(foldNodeRuns([run])).toMatchObject({ ok: false, reportOk: false });
@@ -1033,47 +1094,166 @@ describe("nodeTopLevelReporter and readTopLevel — one record per top-level tes
   });
 });
 
-// Kills, with `kill`, the process whose pid a fixture wrote to `file`. A pid that is not a whole number above 1 is
-// refused: an empty file reads as 0, and a kill of 0 signals the caller's own process group (of -n, the group n; of 1, init).
-const killByPidFile = (file, kill = (pid, sig) => process.kill(pid, sig)) => {
-  let text;
+// The identity of a process from /proc/<pid>: its working directory, its process group (field 5 of stat) and its start
+// time (field 22, in clock ticks since boot), read after the command name, which can hold spaces and parentheses.
+// Null when any of them cannot be read.
+const procIdentity = (procDir, pid) => {
   try {
-    text = fs.readFileSync(file, "utf8");
+    const cwd = fs.readlinkSync(path.join(procDir, String(pid), "cwd"));
+    const stat = fs.readFileSync(path.join(procDir, String(pid), "stat"), "utf8");
+    const f = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    const pgid = Number(f[2]);
+    const start = f[19];
+    if (!Number.isInteger(pgid) || !/^[0-9]+$/.test(start ?? "")) return null;
+    return { cwd, pgid, start };
   } catch {
-    return "no pid file";
-  }
-  const pid = Number(text.trim());
-  if (!Number.isInteger(pid) || pid <= 1) return "refused";
-  try {
-    kill(pid, "SIGKILL");
-    return "killed";
-  } catch {
-    return "gone";
+    return null;
   }
 };
 
-describe("killByPidFile — the cleanup of the main cases", () => {
-  it("kills only a pid that is a whole number above 1, and refuses an empty, zero, negative or other pid", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ext-suite-pid-"));
-    const file = path.join(dir, "spin.pid");
-    const calls = [];
-    const kill = (pid, sig) => calls.push([pid, sig]);
-    try {
-      expect(killByPidFile(file, kill)).toBe("no pid file");
-      for (const text of ["", "\n", "0", "-1", "-4242", "1", "1.5", "abc"]) {
-        fs.writeFileSync(file, text);
-        expect(killByPidFile(file, kill), JSON.stringify(text)).toBe("refused");
+// The cleanup of a main case that did not reach its end, in two steps. procScan lists the processes whose working
+// directory is the case's temporary folder `root` or a folder in it (a name no other process has), above pid 1 and other
+// than this one, each with its identity. killScanned then, for each, reads the identity again just before its first
+// signal and signals only a process whose working directory, process group and start time are unchanged, so a pid that
+// ended and was given to another process after the scan is not signalled. It signals the process group only when the
+// process leads it (the gate starts each node:test child in a group of its own, led by the child) and the group is
+// neither 1 nor this process's own, nor this process's own group unread; otherwise the process alone. So a process
+// whose group leader has already ended is signalled alone, and a member of that group whose working directory is out
+// of `root` is not reached. No pattern is matched, and a pid file is not read. A process that changed its working
+// directory out of `root` is not found. Between the last read and a signal a pid can still change hands (no pidfd in
+// node): a window of one system call before the first signal; a leader's own signal follows its group signal unread.
+// Without /proc (not Linux) nothing is signalled. killScanned (and killInRoot) return the signals sent.
+const procScan = (root, { procDir = "/proc", ownPid = process.pid } = {}) => {
+  let names;
+  let real;
+  try {
+    names = fs.readdirSync(procDir);
+    real = fs.realpathSync(root);
+  } catch {
+    return [];
+  }
+  const out = [];
+  const pids = names.filter((n) => /^[0-9]+$/.test(n)).map(Number).filter((pid) => pid > 1 && pid !== ownPid).sort((a, b) => a - b);
+  for (const pid of pids) {
+    const id = procIdentity(procDir, pid);
+    if (id && (id.cwd === real || id.cwd.startsWith(`${real}/`))) out.push({ pid, ...id });
+  }
+  return out;
+};
+const killScanned = (scanned, { procDir = "/proc", kill = (pid, sig) => process.kill(pid, sig), ownPgid } = {}) => {
+  const own = ownPgid ?? procIdentity(procDir, "self")?.pgid ?? null;
+  const done = [];
+  for (const e of scanned) {
+    const now = procIdentity(procDir, e.pid);
+    if (!now || now.cwd !== e.cwd || now.pgid !== e.pgid || now.start !== e.start) continue;
+    const g = e.pgid;
+    for (const target of g === e.pid && g > 1 && own !== null && g !== own ? [-g, e.pid] : [e.pid]) {
+      try {
+        kill(target, "SIGKILL");
+        done.push(target);
+      } catch {
+        // already gone
       }
-      expect(calls).toEqual([]);
-      fs.writeFileSync(file, "4242\n");
-      expect(killByPidFile(file, kill)).toBe("killed");
-      expect(calls).toEqual([[4242, "SIGKILL"]]);
+    }
+  }
+  return done;
+};
+const killInRoot = (root, opts = {}) => killScanned(procScan(root, opts), opts);
+
+describe("killInRoot — the cleanup of the main cases", () => {
+  // a stat line with the fields killInRoot reads: pgrp (field 5) and starttime (field 22)
+  const statLine = (pid, comm, pgrp, start) => `${pid} (${comm}) S 1 ${pgrp} ${pgrp} ${"0 ".repeat(14)}1 ${start} 0 0`;
+
+  it("signals only processes whose working directory is in the case's folder, and a group only when the process leads it", () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "ext-suite-proc-"));
+    try {
+      const root = path.join(base, "root");
+      fs.mkdirSync(path.join(root, "pack"), { recursive: true });
+      fs.mkdirSync(path.join(base, "rootx"));
+      const proc = path.join(base, "proc");
+      const fake = (pid, cwd, stat) => {
+        fs.mkdirSync(path.join(proc, String(pid)), { recursive: true });
+        if (cwd) fs.symlinkSync(cwd, path.join(proc, String(pid), "cwd"));
+        if (stat) fs.writeFileSync(path.join(proc, String(pid), "stat"), stat);
+      };
+      const real = fs.realpathSync(root);
+      fake(1, real, statLine(1, "init", 1, 5));
+      fake(100, path.join(real, "pack"), statLine(100, "node", 100, 500)); // leads its own group: group and process
+      fake(101, fs.realpathSync(path.join(base, "rootx")), statLine(101, "node", 101, 501)); // a sibling folder
+      fake(102, real, statLine(102, "a b) c", 7777, 502)); // in the runner's own group: the process only
+      fake(103, null, statLine(103, "gone", 103, 503)); // no working directory
+      fake(104, "/", statLine(104, "other", 104, 504)); // elsewhere
+      fake(105, real, statLine(105, "node", 1, 505)); // in group 1: the process only
+      fake(106, real, null); // no stat: not signalled
+      fake(107, real, statLine(107, "node", 4242, 507)); // in a group it does not lead: the process only
+      fake(108, real, "108 (short) S 1 108 108"); // a stat without a start time: not signalled
+      fake(109, real, statLine(109, "n) x", 109, 509)); // a name with ")" that leads its own group: group and process
+      fake(200, real, statLine(200, "vitest", 200, 600)); // this process
+      fake(7777, real, statLine(7777, "sh", 7777, 700)); // leads the runner's own group: the process only
+      fs.mkdirSync(path.join(proc, "self"));
+      const calls = [];
+      const kill = (pid, sig) => calls.push([pid, sig]);
+      expect(killInRoot(root, { procDir: proc, kill, ownPid: 200, ownPgid: 7777 })).toEqual([-100, 100, 102, 105, 107, -109, 109, 7777]);
+      expect(calls).toEqual([
+        [-100, "SIGKILL"],
+        [100, "SIGKILL"],
+        [102, "SIGKILL"],
+        [105, "SIGKILL"],
+        [107, "SIGKILL"],
+        [-109, "SIGKILL"],
+        [109, "SIGKILL"],
+        [7777, "SIGKILL"],
+      ]);
+      // this process's own group unread (self has no stat): no group is signalled, only the processes
+      const pidsOnly = [];
+      expect(killInRoot(root, { procDir: proc, kill: (pid) => pidsOnly.push(pid), ownPid: 200 })).toEqual([100, 102, 105, 107, 109, 7777]);
+      expect(pidsOnly).toEqual([100, 102, 105, 107, 109, 7777]);
+      // a signal that finds the process gone is not counted
       const gone = () => {
         throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
       };
-      expect(killByPidFile(file, gone)).toBe("gone");
+      expect(killInRoot(root, { procDir: proc, kill: gone, ownPid: 200, ownPgid: 7777 })).toEqual([]);
+      // no /proc, or no such folder: nothing is signalled
+      expect(killInRoot(root, { procDir: path.join(base, "none"), kill })).toEqual([]);
+      expect(killInRoot(path.join(base, "none"), { procDir: proc, kill })).toEqual([]);
+      expect(calls).toHaveLength(8);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("does not signal a pid that changed hands after the scan: another start time, group or working directory", () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "ext-suite-proc-"));
+    try {
+      const root = path.join(base, "root");
+      fs.mkdirSync(root);
+      const proc = path.join(base, "proc");
+      const real = fs.realpathSync(root);
+      const put = (pid, cwd, stat) => {
+        const d = path.join(proc, String(pid));
+        fs.rmSync(d, { recursive: true, force: true });
+        fs.mkdirSync(d, { recursive: true });
+        fs.symlinkSync(cwd, path.join(d, "cwd"));
+        fs.writeFileSync(path.join(d, "stat"), stat);
+      };
+      for (const pid of [300, 301, 302, 303]) put(pid, real, statLine(pid, "node", pid, 900 + pid));
+      const scanned = procScan(root, { procDir: proc, ownPid: 200 });
+      expect(scanned.map((e) => e.pid)).toEqual([300, 301, 302, 303]);
+      // after the scan: 300 ended and its pid went to a process with another start time; 301 to one in another group;
+      // 302 to one elsewhere; 303 ended and nothing has its pid; 304 is new
+      put(300, real, statLine(300, "other", 300, 9999));
+      put(301, real, statLine(301, "other", 5555, 1201));
+      put(302, "/", statLine(302, "other", 302, 1202));
+      fs.rmSync(path.join(proc, "303"), { recursive: true, force: true });
+      put(304, real, statLine(304, "node", 304, 1204));
+      const calls = [];
+      expect(killScanned(scanned, { procDir: proc, kill: (pid) => calls.push(pid), ownPgid: 7777 })).toEqual([]);
+      expect(calls).toEqual([]);
+      // unchanged, the same scan is signalled, the group with its leader
+      for (const pid of [300, 301, 302, 303]) put(pid, real, statLine(pid, "node", pid, 900 + pid));
+      expect(killScanned(scanned, { procDir: proc, kill: (pid) => calls.push(pid), ownPgid: 7777 })).toEqual([-300, 300, -301, 301, -302, 302, -303, 303]);
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
     }
   });
 });
@@ -1086,7 +1266,7 @@ describe("main — the gate process over a fixture repository", () => {
     fs.mkdirSync(path.join(dir, "test"));
     fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "@cinatra-ai/pack", version: "0.0.0", peerDependencies: { "@cinatra-ai/host": "*" } }));
     fs.writeFileSync(path.join(dir, ".github", "workflows", "ci.yml"), SKIP_CI);
-    // The spin ends by itself after 60 s and writes its pid, so a failed case can kill it (spinKill).
+    // The spin ends by itself after 60 s and writes its pid, which the signal case waits for.
     fs.writeFileSync(
       path.join(dir, "test", "spin.test.mjs"),
       `import fs from "node:fs";\nimport { test } from "node:test";\nfs.writeFileSync(new URL("../spin.pid", import.meta.url), String(process.pid));\ntest("spin", () => {\n  const end = Date.now() + 60000;\n  while (Date.now() < end) {}\n});\n`,
@@ -1095,8 +1275,7 @@ describe("main — the gate process over a fixture repository", () => {
   };
   const spinPid = (root) => path.join(root, "extensions", "cinatra-ai", "pack", "spin.pid");
   // On a pass the gate has killed the node:test group itself. A case that does not reach its end kills the
-  // gate, and the spinning file, in a group of its own, is killed here by its pid.
-  const spinKill = (root) => killByPidFile(spinPid(root));
+  // gate, and the processes of the case's folder and the group of each one that leads its own (killInRoot).
   const startGate = (root, env = {}) => {
     const script = fileURLToPath(new URL("../extension-suite-gate.mjs", import.meta.url));
     const gate = spawn(process.execPath, [script], { cwd: root, env: { ...process.env, EXTENSION_SUITE_JOBS: "1", ...env }, stdio: ["ignore", "pipe", "pipe"] });
@@ -1106,18 +1285,20 @@ describe("main — the gate process over a fixture repository", () => {
     return { gate, seen, exited: new Promise((r) => gate.on("exit", (code, sig) => r({ code, sig }))) };
   };
 
-  it("passes the node:test deadline: the spinning file is killed at it and the manifest is printed", async () => {
+  it("passes the node:test deadline: the spinning file is ended by it and the manifest is printed", async () => {
     const root = mainFixture();
     const { gate, seen, exited } = startGate(root, { EXTENSION_SUITE_NODE_DEADLINE_MS: "4000" });
     let done = false;
     try {
       const within = await Promise.race([exited, new Promise((r) => setTimeout(() => r("still running after 25 s"), 25_000))]);
       expect(within, seen.out).toEqual({ code: 1, sig: null });
-      expect(seen.out).toContain("TIMED OUT (1 file(s) killed)");
+      // The file is killed at the deadline, or, on a host so loaded that the gate reaches the node:test phase after
+      // it, not started: either way the deadline ended the phase, which without it would run the spin for 60 s.
+      expect(seen.out).toMatch(/TIMED OUT \((1 file\(s\) killed|0 file\(s\) killed, 1 not started before the deadline)\)/);
       done = true;
     } finally {
       gate.kill("SIGKILL");
-      if (!done) spinKill(root);
+      if (!done) killInRoot(root);
       fs.rmSync(root, { recursive: true, force: true });
     }
   }, 40_000);
@@ -1139,7 +1320,7 @@ describe("main — the gate process over a fixture repository", () => {
       done = true;
     } finally {
       gate.kill("SIGKILL");
-      if (!done) spinKill(root);
+      if (!done) killInRoot(root);
       fs.rmSync(root, { recursive: true, force: true });
     }
   }, 40_000);
@@ -1208,27 +1389,63 @@ describe("runNodeTestFile — the real node runner, with short bounds", () => {
     expect(r).toMatchObject({ ok: true, executedFiles: ["t/same.test.mjs"], numTotalTests: 1 });
   });
 
-  it("a plain run that exits red proves nothing, so the lone test reads as file-only", async () => {
+  it("a plain run that exits red proves nothing and makes the suite red with its exit code", async () => {
     const r = await runNodeTest({ repoRoot: nodeDir, pkg: { id: "fixture:lone", dir: ".", testFiles: ["t/plainred.test.mjs"] }, testTimeoutMs: 2000, fileTimeoutMs: 20_000 });
-    expect(r).toMatchObject({ executedFiles: [], numTotalTests: 0 });
+    expect(r).toMatchObject({ ok: false, reportOk: true, exitCode: 3, executedFiles: [], numTotalTests: 0 });
     expect(r.detail).toContain("plain run, exit 3");
   });
 
-  it("a plain run killed at the file bound proves nothing, so the lone test reads as file-only", async () => {
-    const r = await runNodeTest({ repoRoot: nodeDir, pkg: { id: "fixture:lone", dir: ".", testFiles: ["t/plainspin.test.mjs"] }, testTimeoutMs: 2000, fileTimeoutMs: 5000, killGraceMs: 2000 });
-    expect(r).toMatchObject({ executedFiles: [], numTotalTests: 0 });
+  // A stand-in for the first (`--test`) run of a lone test: at once, or once the clock has reached `holdUntil`
+  // (it holds the event loop until then), it writes a record at 2:1 to the reporter file named last in its
+  // arguments, prints the TAP of one passing result and closes with exit 0. It has no pid, so nothing is killed
+  // through it, and its timing does not depend on the load of the host.
+  const loneFirstRun = (file, args, holdUntil = 0) => {
+    const c = new EventEmitter();
+    c.stdout = new EventEmitter();
+    c.stderr = new EventEmitter();
+    c.kill = () => false;
+    const dest = args.filter((a) => a.startsWith("--test-reporter-destination=")).pop().slice("--test-reporter-destination=".length);
+    setImmediate(() => {
+      while (Date.now() <= holdUntil) {
+        // hold the event loop: no timer of the run fires before the close
+      }
+      fs.writeFileSync(dest, `${JSON.stringify({ name: file, line: 2, column: 1 })}\n`);
+      c.stdout.emit("data", tapFileOnly(file));
+      c.emit("close", 0);
+    });
+    return c;
+  };
+  const firstStandIn = (holdUntil) => (cmd, args, opts) => (args.includes("--test") ? loneFirstRun(args[args.length - 1], args, holdUntil) : spawn(cmd, args, opts));
+
+  it("a plain run killed at the file bound proves nothing, loses the report and is named as killed", async () => {
+    const r = await runNodeTest({ repoRoot: nodeDir, pkg: { id: "fixture:lone", dir: ".", testFiles: ["t/plainspin.test.mjs"] }, testTimeoutMs: 2000, fileTimeoutMs: 5000, killGraceMs: 2000, spawnChild: firstStandIn() });
+    expect(r).toMatchObject({ ok: false, reportOk: false, timedOutFiles: ["t/plainspin.test.mjs (plain run)"], executedFiles: [], numTotalTests: 0 });
     expect(r.detail).toContain("(plain run, exit -1, killed)");
     expect(r.detail).toMatch(/after 5000 ms and was killed/);
     expect(listLiveNodeRuns()).toEqual([]);
   }, 30_000);
 
-  it("a plain run killed at the gate's deadline proves nothing, so the lone test reads as file-only", async () => {
-    const r = await runNodeTest({ repoRoot: nodeDir, pkg: { id: "fixture:lone", dir: ".", testFiles: ["t/plainspin.test.mjs"] }, testTimeoutMs: 2000, fileTimeoutMs: 60_000, killGraceMs: 2000, deadlineAt: Date.now() + 6000 });
-    expect(r).toMatchObject({ executedFiles: [], numTotalTests: 0 });
+  it("a plain run killed at the gate's deadline proves nothing, loses the report and is named as killed", async () => {
+    const r = await runNodeTest({ repoRoot: nodeDir, pkg: { id: "fixture:lone", dir: ".", testFiles: ["t/plainspin.test.mjs"] }, testTimeoutMs: 2000, fileTimeoutMs: 60_000, killGraceMs: 2000, deadlineAt: Date.now() + 6000, spawnChild: firstStandIn() });
+    expect(r).toMatchObject({ ok: false, reportOk: false, timedOutFiles: ["t/plainspin.test.mjs (plain run)"], executedFiles: [], numTotalTests: 0 });
     expect(r.detail).toContain("(plain run, exit -1, killed)");
     expect(r.detail).toContain("at the gate's node:test deadline and was killed");
     expect(listLiveNodeRuns()).toEqual([]);
   }, 30_000);
+
+  it("does not start the plain run once the gate's deadline has passed, and names it as not started", async () => {
+    const calls = [];
+    const deadlineAt = Date.now() + 300;
+    const hold = firstStandIn(deadlineAt);
+    const spawnChild = (cmd, args, opts) => {
+      calls.push(args.includes("--test") ? "first" : "plain");
+      return hold(cmd, args, opts);
+    };
+    const r = await runNodeTest({ repoRoot: nodeDir, pkg: { id: "fixture:lone", dir: ".", testFiles: ["t/same.test.mjs"] }, testTimeoutMs: 2000, fileTimeoutMs: 20_000, deadlineAt, spawnChild });
+    expect(calls).toEqual(["first"]);
+    expect(r).toMatchObject({ ok: false, reportOk: false, notStartedFiles: ["t/same.test.mjs (plain run)"], timedOutFiles: [], executedFiles: [] });
+    expect(r.detail).toContain("(plain run, not started)");
+  });
 
   it("hands its spawn to the first run as well as to the plain run", async () => {
     const calls = [];
@@ -1241,13 +1458,13 @@ describe("runNodeTestFile — the real node runner, with short bounds", () => {
     expect(r).toMatchObject({ ok: true, executedFiles: ["t/same.test.mjs"], numTotalTests: 1 });
   }, 30_000);
 
-  it("a plain run that cannot start proves nothing, so the lone test reads as file-only", async () => {
+  it("a plain run that cannot start proves nothing and loses the report", async () => {
     const spawnChild = (cmd, args, opts) => {
       if (!args.includes("--test")) throw new Error("plain spawn refused");
       return spawn(cmd, args, opts);
     };
     const r = await runNodeTest({ repoRoot: nodeDir, pkg: { id: "fixture:lone", dir: ".", testFiles: ["t/same.test.mjs"] }, testTimeoutMs: 2000, fileTimeoutMs: 20_000, spawnChild });
-    expect(r).toMatchObject({ executedFiles: [], numTotalTests: 0 });
+    expect(r).toMatchObject({ ok: false, reportOk: false, plainNotRunFiles: ["t/same.test.mjs"], executedFiles: [], numTotalTests: 0 });
     expect(r.detail).toContain("(plain run, exit -1)");
   }, 30_000);
 
@@ -1398,6 +1615,32 @@ describe("runNodeTestFile — the real node runner, with short bounds", () => {
     expect(listSurvivingNodeGroups()).not.toContain(c.pid);
   });
 
+  it("removes an entry only for its own child: a late close of an older child leaves a later child with the same pid", async () => {
+    const pid = 2 ** 22 + 72345;
+    // two running children given the same pid: the older one's close leaves the later one under the signal cleanup
+    const a = silentChild(pid);
+    const b = silentChild(pid);
+    const pa = runNodeTestFile({ cwd: nodeDir, file: "t/a.test.mjs", fileTimeoutMs: 60_000, spawnChild: () => a });
+    const pb = runNodeTestFile({ cwd: nodeDir, file: "t/b.test.mjs", fileTimeoutMs: 60_000, spawnChild: () => b });
+    a.emit("close", 0);
+    await pa;
+    expect(listLiveNodeRuns().map((r) => r.pid)).toContain(pid);
+    b.emit("close", 0);
+    await pb;
+    expect(listLiveNodeRuns().map((r) => r.pid)).not.toContain(pid);
+    // two killed children that ended without a close, given the same pid: the older one's late close leaves the later one
+    const c = silentChild(pid);
+    const d = silentChild(pid);
+    d.kill = () => true;
+    expect(await runNodeTestFile({ cwd: nodeDir, file: "t/c.test.mjs", fileTimeoutMs: 50, killGraceMs: 50, spawnChild: () => c })).toMatchObject({ kill: "failed", closed: false });
+    expect(await runNodeTestFile({ cwd: nodeDir, file: "t/d.test.mjs", fileTimeoutMs: 50, killGraceMs: 50, spawnChild: () => d })).toMatchObject({ kill: "leader", closed: false });
+    c.emit("close", 0);
+    expect(listSurvivingNodeGroups()).toContain(pid);
+    // the entry is the later child's: its kill reaches it as leader
+    expect(stopLiveNodeRuns()).toContainEqual({ pid, kill: "leader", recDir: null });
+    expect(listSurvivingNodeGroups()).not.toContain(pid);
+  });
+
   it("ends a run on a close from a child with no pid, and keeps no pid", async () => {
     const c = silentChild(undefined);
     const p = runNodeTestFile({ cwd: nodeDir, file: "t/x.test.mjs", fileTimeoutMs: 60_000, spawnChild: () => c });
@@ -1420,6 +1663,9 @@ describe("runNodeTestFile — the real node runner, with short bounds", () => {
     const run = await runNodeTestFile({ cwd: nodeDir, file: "t/x.test.mjs", fileTimeoutMs: 50, killGraceMs: 60_000, spawnChild: () => c });
     expect(Date.now() - t0).toBeLessThan(10_000);
     expect(run).toMatchObject({ exitCode: -1, timedOut: true, kill: "failed", closed: false });
+    // the run ended at the error, not at the end of a grace it did not wait for
+    expect(run.detail).toContain("(kill: failed, no close: an error came first (Error: kill failed))");
+    expect(run.detail).not.toContain("no close within");
     expect(listSurvivingNodeGroups()).toContain(c.pid);
     expect(listLiveNodeRuns().map((r) => r.pid)).not.toContain(c.pid);
     stopLiveNodeRuns();
@@ -1453,7 +1699,7 @@ describe("runNodeTestFile — the real node runner, with short bounds", () => {
     const p1 = runNodeTestFile({ cwd: nodeDir, file: "t/x.test.mjs", fileTimeoutMs: 60_000, spawnChild: () => running });
     running.emit("error", new Error("boom"));
     const r1 = await p1;
-    expect(r1).toMatchObject({ exitCode: -1, tap: "" });
+    expect(r1).toMatchObject({ exitCode: -1, tap: "", startFailed: true });
     expect(r1.timedOut).toBeUndefined();
     expect(r1.detail).toContain("boom");
     expect(listSurvivingNodeGroups()).not.toContain(running.pid);
@@ -1461,7 +1707,9 @@ describe("runNodeTestFile — the real node runner, with short bounds", () => {
     after.kill = () => false;
     const p2 = runNodeTestFile({ cwd: nodeDir, file: "t/x.test.mjs", fileTimeoutMs: 50, killGraceMs: 60_000, spawnChild: () => after });
     setTimeout(() => after.emit("error", new Error("late")), 300);
-    expect(await p2).toMatchObject({ exitCode: -1, timedOut: true, kill: "failed", closed: false });
+    const r2 = await p2;
+    expect(r2).toMatchObject({ exitCode: -1, timedOut: true, kill: "failed", closed: false });
+    expect(r2.detail).toContain("no close: an error came first (Error: late)");
     expect(listSurvivingNodeGroups()).toContain(after.pid);
     stopLiveNodeRuns();
   });
@@ -1557,6 +1805,62 @@ describe("runNodeTestFile — the real node runner, with short bounds", () => {
     expect(await groupGone(live.pid)).toBe(true);
     expect(fs.existsSync(live.recDir)).toBe(false);
   }, 20_000);
+
+  it("reads a reporter file only up to the stdout cap, and a larger one not at all", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ext-suite-cap-"));
+    const file = path.join(dir, "r.txt");
+    try {
+      expect(NODE_RECORDS_CAP).toBe(400_000);
+      expect(readRecordFile(file)).toEqual({ text: "", over: false, failed: false });
+      fs.writeFileSync(file, "abcd");
+      expect(readRecordFile(file, 4)).toEqual({ text: "abcd", over: false, failed: false });
+      expect(readRecordFile(file, 3)).toEqual({ text: "", over: true, failed: false });
+      fs.writeFileSync(file, "x".repeat(NODE_RECORDS_CAP));
+      expect(readRecordFile(file).text.length).toBe(NODE_RECORDS_CAP);
+      fs.appendFileSync(file, "x");
+      expect(readRecordFile(file)).toEqual({ text: "", over: true, failed: false });
+      // a folder in the file's place cannot be read: no records, no throw
+      expect(readRecordFile(dir)).toEqual({ text: "", over: false, failed: true });
+      // nor can a path below a plain file, which fails at the open (ENOTDIR), unlike a missing file
+      expect(readRecordFile(path.join(file, "below"))).toEqual({ text: "", over: false, failed: true });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not read a reporter file over the cap: its records give nothing, and the detail says so", async () => {
+    const line = `${JSON.stringify({ name: "t/x.test.mjs", line: 2, column: 1 })}\n`;
+    const big = line.repeat(Math.ceil((NODE_RECORDS_CAP + 1) / line.length));
+    const c = silentChild(undefined);
+    const spawnChild = (cmd, args) => {
+      const dest = args.filter((a) => a.startsWith("--test-reporter-destination=")).pop().slice("--test-reporter-destination=".length);
+      setImmediate(() => {
+        fs.writeFileSync(dest, big);
+        c.emit("close", 0);
+      });
+      return c;
+    };
+    const run = await runNodeTestFile({ cwd: nodeDir, file: "t/x.test.mjs", fileTimeoutMs: 60_000, spawnChild });
+    expect(run).toMatchObject({ exitCode: 0, records: "", topLevel: [] });
+    expect(run.detail).toContain(`t/x.test.mjs: its reporter file is over ${NODE_RECORDS_CAP} bytes and was not read`);
+    expect(fs.existsSync(run.recDir)).toBe(false);
+  });
+
+  it("ends a run whose reporter file cannot be read: its records give nothing, the detail says so, and the folder is removed", async () => {
+    const c = silentChild(undefined);
+    const spawnChild = (cmd, args) => {
+      const dest = args.filter((a) => a.startsWith("--test-reporter-destination=")).pop().slice("--test-reporter-destination=".length);
+      setImmediate(() => {
+        fs.mkdirSync(dest);
+        c.emit("close", 0);
+      });
+      return c;
+    };
+    const run = await runNodeTestFile({ cwd: nodeDir, file: "t/x.test.mjs", fileTimeoutMs: 60_000, spawnChild });
+    expect(run).toMatchObject({ exitCode: 0, records: "", topLevel: [] });
+    expect(run.detail).toContain("t/x.test.mjs: its reporter file could not be read");
+    expect(fs.existsSync(run.recDir)).toBe(false);
+  });
 
   it("keeps the tail of a long output, where the summary is", async () => {
     const run = await runFixture("t/loud.test.mjs");

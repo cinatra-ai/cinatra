@@ -513,9 +513,18 @@ export function isHostRunNodeTest(p) {
  * Node's report of the file comes from the `--test` runner, and a plain run has no
  * such runner. Any other shape of either reading is file-only, and the caller then
  * does not count the file as executed. The cost is a false red: a real lone test
- * whose call starts at line 1, column 1, or that has no usable record or no
- * usable plain run, reads as file-only. A red lone result stays red, with or
- * without the second run.
+ * whose call starts at line 1, column 1, that has no usable record, or whose
+ * plain run exits 0 without showing a test, reads as file-only. A plain run that
+ * exits red, is killed, is not started or cannot start fails the package
+ * instead (foldNodeRuns). A red lone result stays red, with or without the
+ * second run.
+ *
+ * Both readings come from files in the run's record folder, which the test file,
+ * run as the same user, can find and write (the plain run's path is in its
+ * arguments). A file that writes or replaces them can read as a run test. This
+ * reading tells a file that registers no test from one that does; it is not a
+ * guard against what a test file's own code does, which could as well register
+ * a test that checks nothing.
  */
 // A top-level record gives a location other than node's 1:1 for the file: a
 // positive-integer line and column. This is a filter, not a proof (see above).
@@ -570,24 +579,41 @@ export function parseNodeTap(text, file, topLevel = [], standaloneTap) {
  * (runNodeTestFile), whatever TAP it printed first, and a file not started
  * because that deadline had passed (runNodeTest).
  *
- * files: Array<{ file, exitCode, tap, timedOut?, notStarted?, topLevel?, standaloneTap? }>
+ * The plain run of a lone test (`standalone`, see runNodeTest) is judged the
+ * same way, named as `<file> (plain run)`: not started before the deadline, or
+ * killed, makes the report lost and is named as such; not able to start makes
+ * the report lost (`plainNotRunFiles`); a non-zero exit makes the suite red with
+ * that exit code. Its TAP counts no test: it only decides `fileOnly` (parseNodeTap).
+ *
+ * files: Array<{ file, exitCode, tap, timedOut?, notStarted?, topLevel?, standaloneTap?, standalone? }>
  */
 export function foldNodeRuns(files) {
   const executedFiles = [];
   const failedTestNames = [];
   const timedOutFiles = [];
   const notStartedFiles = [];
+  const plainNotRunFiles = [];
   let total = 0;
   let failed = 0;
   let pending = 0;
   let reportOk = files.length > 0;
   let exitCode = 0;
   let ok = files.length > 0;
-  for (const { file, exitCode: code, tap, timedOut, notStarted, topLevel, standaloneTap } of files) {
+  for (const { file, exitCode: code, tap, timedOut, notStarted, topLevel, standaloneTap, standalone: s } of files) {
     const t = parseNodeTap(tap, file, topLevel, standaloneTap);
     if (timedOut) timedOutFiles.push(file);
     if (notStarted) notStartedFiles.push(file);
     if (!t.summary || timedOut || notStarted) reportOk = false;
+    if (s?.notStarted) notStartedFiles.push(`${file} (plain run)`);
+    else if (s?.timedOut) timedOutFiles.push(`${file} (plain run)`);
+    else if (s?.startFailed) plainNotRunFiles.push(file);
+    if (s?.notStarted || s?.timedOut || s?.startFailed) {
+      reportOk = ok = false;
+      if (exitCode === 0) exitCode = -1;
+    } else if (s && s.exitCode !== 0) {
+      ok = false;
+      if (exitCode === 0) exitCode = s.exitCode ?? -1;
+    }
     if (t.summary && t.tests > 0 && !t.fileOnly && !timedOut && !notStarted) executedFiles.push(file);
     if (!t.fileOnly) total += t.tests;
     failed += t.fail + t.cancelled;
@@ -607,6 +633,7 @@ export function foldNodeRuns(files) {
     failedTestNames: failedTestNames.sort(),
     timedOutFiles: timedOutFiles.sort(),
     notStartedFiles: notStartedFiles.sort(),
+    plainNotRunFiles: plainNotRunFiles.sort(),
   };
 }
 
@@ -763,16 +790,28 @@ export function judge({ packages, results, carveOuts = CARVE_OUTS }) {
   for (const pkg of nodeRun) {
     const res = results.get(pkg.id);
     if (res && res.reportOk === false) {
+      // The `node --test` runs and the plain `node` runs of a lone test (named
+      // `<file> (plain run)` in the fold) are reported apart, each with its own command.
+      const PLAIN = " (plain run)";
+      const ofFirst = (list) => list.filter((f) => !f.endsWith(PLAIN));
+      const ofPlain = (list) => list.filter((f) => f.endsWith(PLAIN)).map((f) => f.slice(0, -PLAIN.length));
+      const ends = (killed, notStarted, notRun) => {
+        const parts = [];
+        if (killed.length) parts.push(`was still running at its bound and was killed for ${killed.join(", ")}`);
+        if (notStarted.length) parts.push(`was not started before the gate's node:test deadline for ${notStarted.join(", ")}`);
+        if (notRun.length) parts.push(`could not start for ${notRun.join(", ")}`);
+        return parts.join("; it ");
+      };
       const killed = res.timedOutFiles ?? [];
       const notStarted = res.notStartedFiles ?? [];
-      const parts = [];
-      if (killed.length) parts.push(`was still running at its bound and was killed for ${killed.join(", ")}`);
-      if (notStarted.length) parts.push(`was not started before the gate's node:test deadline for ${notStarted.join(", ")}`);
+      const first = ends(ofFirst(killed), ofFirst(notStarted), []);
+      const plain = ends(ofPlain(killed), ofPlain(notStarted), res.plainNotRunFiles ?? []);
+      const said = [first && `\`node --test\` ${first}`, plain && `the plain \`node\` run of a lone test ${plain}`].filter(Boolean);
       findings.push({
         kind: "no-report",
         slug: pkg.slug,
-        message: parts.length
-          ? `${pkg.id}: \`node --test\` ${parts.join("; it ")} — the run did not finish, so it cannot be judged.`
+        message: said.length
+          ? `${pkg.id}: ${said.join("; ")} — the run did not finish, so it cannot be judged.`
           : `${pkg.id}: a \`node --test\` run printed no TAP summary (exit ${res.exitCode}) — the run cannot be judged, and an absent summary must never read as zero failures.`,
       });
     }
@@ -1223,6 +1262,9 @@ export const NODE_GATE_DEADLINE_MS = 20 * 60_000;
 export const NODE_KILL_GRACE_MS = 10_000;
 const NODE_STDOUT_CAP = 400_000;
 const NODE_STDERR_CAP = 100_000;
+// A reporter file is read up to the stdout cap: a larger one is not read at all
+// and gives nothing, which every reading takes in the safe direction (readRecordFile).
+export const NODE_RECORDS_CAP = NODE_STDOUT_CAP;
 
 // The TAP goes to stdout. A second reporter, this script's default export,
 // writes one JSON line per top-level test to `topLevelFile`: node reports a
@@ -1288,6 +1330,40 @@ export function readTopLevel(text) {
   return out;
 }
 
+// A reporter file of a run, read up to `cap` bytes. A file with more is not read:
+// `text` is empty and `over` is true. A missing file gives an empty `text`; a file
+// that cannot be read (a read error, or a folder in its place) gives an empty
+// `text` and `failed: true`. Each of these gives no records, which every reading
+// takes in the safe direction. Only cap + 1 bytes are ever held, however large
+// the file grew. It never throws. Exported for its test.
+export function readRecordFile(file, cap = NODE_RECORDS_CAP) {
+  let fd;
+  try {
+    fd = fs.openSync(file, "r");
+  } catch (e) {
+    return { text: "", over: false, failed: e?.code !== "ENOENT" };
+  }
+  try {
+    const buf = Buffer.alloc(cap + 1);
+    let n = 0;
+    for (;;) {
+      const r = fs.readSync(fd, buf, n, buf.length - n, n);
+      if (r <= 0) break;
+      n += r;
+      if (n > cap) return { text: "", over: true, failed: false };
+    }
+    return { text: buf.toString("utf8", 0, n), over: false, failed: false };
+  } catch {
+    return { text: "", over: false, failed: true };
+  } finally {
+    try {
+      fs.closeSync(fd);
+    } catch {
+      // the descriptor is gone with the read
+    }
+  }
+}
+
 // The deadline of the node:test phase in ms after the gate started. A positive
 // integer in EXTENSION_SUITE_NODE_DEADLINE_MS below the default replaces it (the
 // kit cases use a short one); any other value, or none, keeps the default, so
@@ -1309,7 +1385,10 @@ export function listLiveNodeRuns() {
 // The children whose run ended after a kill without a close: a process of the
 // group may have outlived the kill, so a signal to the gate kills the group
 // again (stopLiveNodeRuns). A process that a test moved out of the group (its
-// own session) is not in it and is not reached. Exported for its test.
+// own session) is not in it and is not reached. Keyed by pid: the entry set last
+// stays, so a later child given the same pid replaces the entry, and so does an
+// older child whose run ends after it (its grace ran out later, or an error after
+// its kill ended it later). Exported for its test.
 const survivingNodeGroups = new Map();
 export function listSurvivingNodeGroups() {
   return [...survivingNodeGroups.keys()];
@@ -1366,11 +1445,15 @@ export function installNodeRunCleanup(proc = process) {
 // file that registers nothing is visible as such instead of being hidden in a
 // package total. The TAP and the top-level records are what parseNodeTap reads;
 // the package's `test` script is not used, for the same reason runVitest does
-// not use it. A child that cannot start resolves as exit -1 with no TAP. A child
-// still running at the file bound, or at `deadlineAt` when that comes first, has
+// not use it. A child that cannot start (the spawn throws, or the child emits
+// `error` before any kill: with no message channel and no abort signal, node
+// emits it then only for a process it could not spawn) resolves as exit -1 with
+// no TAP and `startFailed: true`.
+// A child still running at the file bound, or at `deadlineAt` when that comes first, has
 // its process group killed; the run resolves as exit -1 with `timedOut: true`
-// after the child's close, or after NODE_KILL_GRACE_MS without one (noted in the
-// detail). On every ending the records are read, their folder is removed, and
+// after the child's close, after NODE_KILL_GRACE_MS without one, or at an error
+// from the child, whichever comes first (the detail says which). On every ending
+// the records are read (readRecordFile, up to NODE_RECORDS_CAP), their folder is removed, and
 // the child's output pipes are destroyed and the child is unref'd, so a process
 // that still holds the pipes (one that left the child's group) does not keep
 // the gate from exiting. That process is not killed: the gate does not know it.
@@ -1410,26 +1493,29 @@ export function runNodeTestFile({
       settled = true;
       clearTimeout(timer);
       clearTimeout(graceTimer);
-      if (child?.pid) liveNodeRuns.delete(child.pid);
+      // By the child, not by its pid alone: once a child has ended, its pid can be
+      // given to a later child, whose entries this must not remove.
+      if (child?.pid && liveNodeRuns.get(child.pid)?.child === child) liveNodeRuns.delete(child.pid);
       if (child?.pid && killed && run.closed === false) survivingNodeGroups.set(child.pid, child);
       // A process outside the group may still hold the pipes: stop reading them
       // and drop the child's hold on the event loop, so the gate can exit.
       child?.stdout?.destroy?.();
       child?.stderr?.destroy?.();
       child?.unref?.();
-      let rec = "";
-      try {
-        rec = fs.readFileSync(recFile, "utf8");
-      } catch {
-        // no record file: the run wrote none
-      }
+      const rec = readRecordFile(recFile);
       fs.rmSync(recDir, { recursive: true, force: true });
-      resolve({ ...run, recDir, records: rec, topLevel: readTopLevel(rec) });
+      const over = rec.over
+        ? `\n[extension-suite-gate] ${file}: its reporter file is over ${NODE_RECORDS_CAP} bytes and was not read`
+        : rec.failed
+          ? `\n[extension-suite-gate] ${file}: its reporter file could not be read`
+          : "";
+      resolve({ ...run, detail: `${run.detail}${over}`, recDir, records: rec.text, topLevel: readTopLevel(rec.text) });
     };
-    const killedRun = (closed) => {
-      const note =
-        `[extension-suite-gate] ${file} was still running ${killed.why} and was killed (kill: ${killed.how}` +
-        `${closed ? ", closed" : `, no close within ${killGraceMs} ms`})`;
+    // `error`: the run ended at an error from the child after the kill, before any
+    // close and before the grace had passed.
+    const killedRun = (closed, error) => {
+      const end = closed ? ", closed" : error ? `, no close: an error came first (${error})` : `, no close within ${killGraceMs} ms`;
+      const note = `[extension-suite-gate] ${file} was still running ${killed.why} and was killed (kill: ${killed.how}${end})`;
       return { file, exitCode: -1, tap: out, timedOut: true, pid: child.pid, kill: killed.how, closed, detail: `${out}${err}\n${note}` };
     };
     // Its own process group, so the kill below also reaches the processes a test
@@ -1442,7 +1528,7 @@ export function runNodeTestFile({
         detached: true,
       });
     } catch (e) {
-      finish({ file, exitCode: -1, tap: "", detail: String(e) });
+      finish({ file, exitCode: -1, tap: "", startFailed: true, detail: String(e) });
       return;
     }
     if (child.pid) liveNodeRuns.set(child.pid, { child, recDir });
@@ -1467,17 +1553,26 @@ export function runNodeTestFile({
       graceTimer = setTimeout(() => finish(killedRun(false)), killGraceMs);
       killed.how = killNodeGroup(child);
     }, bound);
-    child.on("error", (e) => finish(killed ? killedRun(false) : { file, exitCode: -1, tap: "", detail: String(e) }));
+    child.on("error", (e) => finish(killed ? killedRun(false, String(e)) : { file, exitCode: -1, tap: "", startFailed: true, detail: String(e) }));
     child.on("close", (code) => {
-      // A close after the grace: the group's pid can be reused, so it leaves the signal cleanup.
-      if (child.pid) survivingNodeGroups.delete(child.pid);
+      // A close after the grace takes this child out of the signal cleanup. By the
+      // child, not by its pid alone: a later child can have been given the same pid,
+      // and its entry stays. Until this close comes, a signal to the gate kills the
+      // group of that pid, whichever group it then is.
+      if (child.pid && survivingNodeGroups.get(child.pid) === child) survivingNodeGroups.delete(child.pid);
       finish(killed ? killedRun(true) : { file, exitCode: code, tap: out, detail: out + err });
     });
   });
 }
 
 // The files of one package, one after another, folded into one result. A file
-// not started because `deadlineAt` has passed is recorded as `notStarted`.
+// not started because `deadlineAt` has passed is recorded as `notStarted`. The
+// plain run of a lone test (needsStandaloneRun) is not started when `deadlineAt`
+// has passed as runNodeTest reaches it; one started in the moment after (its record
+// folder is made first) is killed at once at the deadline, as any run is (runNodeTestFile),
+// and named as killed. Its ending goes to foldNodeRuns as `standalone`: not
+// started, killed, not able to start, or its exit code; only a plain run that
+// exited 0 gives its TAP (`standaloneTap`).
 // Exported for its test, with the spawn as a parameter (runNodeTestFile).
 export async function runNodeTest({ repoRoot, pkg, testTimeoutMs, fileTimeoutMs, deadlineAt = Infinity, killGraceMs, spawnChild = spawn }) {
   const started = Date.now();
@@ -1490,9 +1585,15 @@ export async function runNodeTest({ repoRoot, pkg, testTimeoutMs, fileTimeoutMs,
     }
     const one = await runNodeTestFile({ cwd, file, testTimeoutMs, fileTimeoutMs, deadlineAt, killGraceMs, spawnChild });
     if (needsStandaloneRun(one)) {
-      const plain = await runNodeTestFile({ cwd, file, testTimeoutMs, fileTimeoutMs, deadlineAt, killGraceMs, spawnChild, standalone: true });
-      if (plain.exitCode === 0) one.standaloneTap = plain.records;
-      one.detail = `${one.detail}\n--- node ${file} (plain run, exit ${plain.exitCode}${plain.timedOut ? ", killed" : ""})\n${plain.detail}`;
+      if (Date.now() >= deadlineAt) {
+        one.standalone = { notStarted: true };
+        one.detail = `${one.detail}\n--- node ${file} (plain run, not started)\n[extension-suite-gate] not started: the gate's node:test deadline had passed`;
+      } else {
+        const plain = await runNodeTestFile({ cwd, file, testTimeoutMs, fileTimeoutMs, deadlineAt, killGraceMs, spawnChild, standalone: true });
+        one.standalone = { exitCode: plain.exitCode, timedOut: plain.timedOut === true, startFailed: plain.startFailed === true };
+        if (plain.exitCode === 0) one.standaloneTap = plain.records;
+        one.detail = `${one.detail}\n--- node ${file} (plain run, exit ${plain.exitCode}${plain.timedOut ? ", killed" : ""})\n${plain.detail}`;
+      }
     }
     files.push(one);
   }
