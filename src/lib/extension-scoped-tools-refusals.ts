@@ -1,8 +1,8 @@
 // THE EXTENSION-SCOPED ROAD'S FIXED SENTENCES (cinatra#4154).
 //
-// A module of constants only, so the passthrough route can name them without
-// pulling the extension-scoped stack into its static module graph (the route
-// reaches `@/lib/extension-scoped-tools` through a dynamic import).
+// A module of constants only. The passthrough route answers an unproven
+// `extension_tool` call with the sentence below before it loads any package
+// module and before any dispatch.
 
 /**
  * The 403 body of an `extension_tool` call whose calling step is not proven:
