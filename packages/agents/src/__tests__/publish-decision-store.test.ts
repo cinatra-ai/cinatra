@@ -544,6 +544,7 @@ describe("cinatra#4150 review fold: surfaced values are plain JSON, errors name 
     ["an undefined array item", () => ({ x: [undefined] })],
     ["a hole in an array", () => ({ x: new Array(2) })],
     ["an array with an extra key", () => ({ x: Object.assign([1], { extra: 2 }) })],
+    ["a hole and an extra key in an array", () => ({ x: Object.assign(new Array(1), { extra: 1 }) })],
     ["a circular value", circular],
     ["a BigInt", () => ({ n: BigInt(10) })],
     ["NaN", () => ({ n: Number.NaN })],
@@ -555,6 +556,26 @@ describe("cinatra#4150 review fold: surfaced values are plain JSON, errors name 
     ["a Map", () => ({ m: new Map([["a", 1]]) })],
     ["a class instance", () => ({ c: new (class Thing { a = 1 })() })],
     ["values nested deeper than the cap", () => nested(PUBLISH_DECISION_MAX_SURFACED_DEPTH + 1)],
+    ["a getter that reads as a number first and as undefined after", () => {
+      let reads = 0;
+      return Object.defineProperty({ what: "x" }, "flip", { get: () => (reads++ === 0 ? 1 : undefined), enumerable: true });
+    }],
+    ["a getter that throws", () => Object.defineProperty({ what: "x" }, "boom", { get: () => { throw new Error("from the getter"); }, enumerable: true })],
+    ["a proxy as the whole value", () => new Proxy({ what: "x" }, {})],
+    ["a proxy inside", () => ({ p: new Proxy({ a: 1 }, {}) })],
+    ["a revoked proxy", () => {
+      const revocable = Proxy.revocable({}, {});
+      revocable.revoke();
+      return { p: revocable.proxy };
+    }],
+    ["a revoked proxy as the whole value", () => {
+      const revocable = Proxy.revocable({ what: "x" }, {});
+      revocable.revoke();
+      return revocable.proxy;
+    }],
+    ["a setter without a getter", () => Object.defineProperty({ what: "x" }, "w", { set: () => undefined, enumerable: true })],
+    ["a negative zero", () => ({ n: -0 })],
+    ["a negative zero in an array", () => ({ x: [0, -0] })],
   ])("refuses surfaced values with %s before any write, with a typed error", async (_label, make) => {
     const input = { ...PARK, surfacedValues: make() } as unknown as Parameters<typeof insertParkedDecision>[0];
     expect(await codeOf(insertParkedDecision(input))).toBe("invalid-input");
@@ -569,6 +590,16 @@ describe("cinatra#4150 review fold: surfaced values are plain JSON, errors name 
     expect(JSON.parse(calls.values[0].surfacedValues as string)).toEqual(JSON.parse(JSON.stringify(value)));
     await insertParkedDecision({ ...PARK, surfacedValues: nested(PUBLISH_DECISION_MAX_SURFACED_DEPTH) });
     expect(calls.values).toHaveLength(2);
+  });
+
+  it("reads no getter, and a getter's error text never reaches the message", async () => {
+    let reads = 0;
+    const counted = Object.defineProperty({ what: "x" }, "n", { get: () => { reads += 1; return 1; }, enumerable: true });
+    expect(await codeOf(insertParkedDecision({ ...PARK, surfacedValues: counted }))).toBe("invalid-input");
+    expect(reads).toBe(0);
+    const throwing = Object.defineProperty({ what: "x" }, "boom", { get: () => { throw new Error("text-from-the-getter"); }, enumerable: true });
+    expect(await messageOf(insertParkedDecision({ ...PARK, surfacedValues: throwing }))).not.toContain("text-from-the-getter");
+    expect(calls.values).toHaveLength(0);
   });
 
   it("no error message carries an id", async () => {

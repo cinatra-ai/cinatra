@@ -6,6 +6,7 @@ import "server-only";
 // read error and every unreadable row THROWS: it never reads as "no open decision".
 
 import { randomUUID } from "node:crypto";
+import { types } from "node:util";
 import { and, asc, desc, eq, lte, sql } from "drizzle-orm";
 
 import { db } from "./db";
@@ -73,24 +74,29 @@ function deserialize(row: StoredRow): PublishDecisionRow {
 
 export const PUBLISH_DECISION_MAX_SURFACED_DEPTH = 64;
 
-/** Refuses every value JSON would drop, change or fail on, so the stored text reads back as the same object. */
-function requireJson(value: unknown, depth: number, open: Set<object>): void {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return;
-  if (typeof value === "number" && Number.isFinite(value)) return;
+/** Copies surfaced values as plain data, each own property read once through its descriptor (no getter runs), and refuses
+ *  every value JSON would drop, change or fail on, -0 and proxies included, so the stored text reads back as the same object. */
+function plainJson(value: unknown, depth: number, open: Set<object>): unknown {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value) && !Object.is(value, -0)) return value;
   const refuse = (why: string) => new PublishDecisionError("invalid-input", `surfacedValues ${why}`);
-  if (typeof value !== "object") throw refuse("must hold only strings, finite numbers, booleans, null, arrays and plain objects");
+  if (typeof value !== "object") throw refuse("must hold only strings, finite numbers other than -0, booleans, null, arrays and plain objects");
+  if (types.isProxy(value)) throw refuse("must not hold a proxy");
   if (open.has(value)) throw refuse("must not contain itself");
   if (depth > PUBLISH_DECISION_MAX_SURFACED_DEPTH) throw refuse(`must nest at most ${PUBLISH_DECISION_MAX_SURFACED_DEPTH} levels`);
   const array = Array.isArray(value);
   const proto: unknown = Object.getPrototypeOf(value);
-  const keys = Reflect.ownKeys(value).length - (array ? 1 : 0); // an array's own "length"
-  if ((!array && proto !== Object.prototype && proto !== null) || "toJSON" in value || keys !== Object.keys(value).length
-    || (array && keys !== (value as unknown[]).length)) {
-    throw refuse("must hold only plain objects and dense arrays, with no toJSON, symbol or hidden keys");
+  const keys = Reflect.ownKeys(value).filter((key) => !(array && key === "length")); // an array's own "length"
+  const props = keys.map((key) => Reflect.getOwnPropertyDescriptor(value, key));
+  if ((!array && proto !== Object.prototype && proto !== null) || "toJSON" in value || (array && keys.length !== (value as unknown[]).length)
+    || keys.some((key, i) => typeof key !== "string" || (array && key !== String(i)) || !props[i]?.enumerable || !("value" in props[i]!))) {
+    throw refuse("must hold only plain objects and dense arrays of data properties, with no toJSON, getter, symbol or hidden keys");
   }
   open.add(value);
-  for (const item of Object.values(value)) requireJson(item, depth + 1, open);
+  const copy: object = array ? [] : {};
+  keys.forEach((key, i) => Object.defineProperty(copy, key, { value: plainJson(props[i]!.value, depth + 1, open), enumerable: true, writable: true, configurable: true }));
   open.delete(value);
+  return copy;
 }
 
 function requireText(value: unknown, name: string, max = PUBLISH_DECISION_MAX_ID_LENGTH): string {
@@ -124,8 +130,13 @@ export async function insertParkedDecision(input: InsertParkedDecisionInput): Pr
   const gateTaskId = requireText(input.gateTaskId, "gateTaskId");
   const orgId = optionalText(input.orgId, "orgId");
   const a2aContextId = optionalText(input.a2aContextId, "a2aContextId");
-  if (isPlainObject(input.surfacedValues)) requireJson(input.surfacedValues, 1, new Set());
-  const surfaced = isPlainObject(input.surfacedValues) ? JSON.stringify(input.surfacedValues) : null;
+  const top: unknown = input.surfacedValues;
+  let surfaced: string | null = null;
+  try { // a reflection or serialization failure becomes the typed error, with no value text
+    if (typeof top === "object" && top !== null && (types.isProxy(top) || !Array.isArray(top))) surfaced = JSON.stringify(plainJson(top, 1, new Set()));
+  } catch (error) {
+    throw error instanceof PublishDecisionError ? error : new PublishDecisionError("invalid-input", "surfacedValues could not be read as plain data");
+  }
   if (surfaced === null || Buffer.byteLength(surfaced, "utf8") > PUBLISH_DECISION_MAX_SURFACED_BYTES) {
     throw new PublishDecisionError("invalid-input", `surfacedValues must be an object of at most ${PUBLISH_DECISION_MAX_SURFACED_BYTES} bytes of JSON`);
   }
@@ -137,14 +148,7 @@ export async function insertParkedDecision(input: InsertParkedDecisionInput): Pr
   const [row] = await db
     .insert(agentRunPublishDecisions)
     .values({
-      id: randomUUID(),
-      orgId,
-      runId,
-      nodeId,
-      gateTaskId,
-      a2aContextId,
-      status: "parked",
-      surfacedValues: surfaced,
+      id: randomUUID(), orgId, runId, nodeId, gateTaskId, a2aContextId, status: "parked", surfacedValues: surfaced,
       expiresAt: sql`now() + (${ttlMs} || ' milliseconds')::interval`,
     })
     .onConflictDoNothing({
@@ -156,17 +160,10 @@ export async function insertParkedDecision(input: InsertParkedDecisionInput): Pr
   const [existing] = await db
     .select()
     .from(agentRunPublishDecisions)
-    .where(
-      and(
-        eq(agentRunPublishDecisions.runId, runId),
-        eq(agentRunPublishDecisions.nodeId, nodeId),
-        eq(agentRunPublishDecisions.gateTaskId, gateTaskId),
-      ),
-    )
+    .where(and(eq(agentRunPublishDecisions.runId, runId), eq(agentRunPublishDecisions.nodeId, nodeId),
+      eq(agentRunPublishDecisions.gateTaskId, gateTaskId)))
     .limit(1);
-  if (!existing) {
-    throw new PublishDecisionError("conflict", "the stop conflicted and has no row");
-  }
+  if (!existing) throw new PublishDecisionError("conflict", "the stop conflicted and has no row");
   return { inserted: false, decision: deserialize(existing) };
 }
 
