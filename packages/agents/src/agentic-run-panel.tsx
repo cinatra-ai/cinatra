@@ -1350,15 +1350,20 @@ export function AgenticRunPanel({
       // cinatra#3380 — a caller of the published submit (none yet) is a second entrance
       // to the same resume as the gate's Continue, so it is held by the same
       // rule: a mid-run gate that declares a value its renderer must produce
-      // (`gate-renderer-value.ts`) is not resumed until the payload carries that
+      // (`gate-renderer-value.ts`) is not resumed until the answer carries that
       // value. Nothing is sent. A gate that carries a presentation hint is drawn
       // through the generic dispatch renderer, which writes nothing, so it is out
-      // of the rule, as on its Continue.
+      // of the rule, as on its Continue. The rule reads what the renderer wrote and
+      // what the caller handed in, BEFORE the host adds approved, approvedAt and
+      // userResponse: those are the host's, and a gate that declares one of them
+      // is not answered by them.
+      const callerFields =
+        value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
       if (
         (ctx.xRenderer.endsWith(":output") || hasMidRunHitlBinding(ctx.xRenderer)) &&
         !isSetupGateTaskId(ctx.reviewTaskId) &&
         !gateCarriesPresentationHint(ctx.currentValues) &&
-        gateAwaitsRendererValue(ctx.inputSchema, payload)
+        gateAwaitsRendererValue(ctx.inputSchema, { ...bufferedHitlValueRef.current, ...callerFields })
       ) {
         throw new Error("This step is waiting for a choice on its card. Choose one there, then continue.");
       }

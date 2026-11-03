@@ -106,6 +106,7 @@
 import {
   useCallback,
   useEffect,
+  useInsertionEffect,
   useMemo,
   useRef,
   useState,
@@ -1146,8 +1147,25 @@ export function AgentHitlScreenCard({
   // buffer whose key does not match the gate on screen is not this gate's
   // answer and is not read, and the check below drops it.
   const gateKey = gate === null ? null : hitlGateKey(gate);
+  // THE GATE ON SCREEN, AS OF THE LAST COMMIT (cinatra#3380). A write or a press
+  // made for one gate can arrive after the next gate has been committed: a
+  // flush that took its time, or a replaced renderer that still calls its
+  // `onChange` after an await. Each of them carries the gate it was made for
+  // and is compared with this. It is set in an insertion effect, which runs in
+  // the commit before every layout effect: the next gate's renderer, writing
+  // from its own layout effect when it mounts, already reads its own gate here,
+  // and nothing that resumes after the commit can read the previous one. No
+  // gate on screen is not a different gate, as for the buffer below.
+  const liveGateKeyRef = useRef<string | null>(gateKey);
+  useInsertionEffect(() => {
+    if (gateKey !== null) liveGateKeyRef.current = gateKey;
+  }, [gateKey]);
   const onBuffer = useCallback(
-    (next: Record<string, unknown>) => setBuffered(gateKey, next),
+    (next: Record<string, unknown>) => {
+      // A renderer that has been replaced writes for a gate that is gone.
+      if (gateKey !== null && liveGateKeyRef.current !== gateKey) return;
+      setBuffered(gateKey, next);
+    },
     [gateKey, setBuffered],
   );
   // Dropped while rendering, not in an effect: nothing between this render and
@@ -1294,7 +1312,7 @@ export function AgentHitlScreenCard({
     async (payload: unknown, fieldName: string | undefined) => {
       // A flush left over from the previous gate can answer after that gate has
       // gone (cinatra#3380): what it hands over is not an answer to this one.
-      if (setupAnswerGateRef.current !== gateKey) return;
+      if (liveGateKeyRef.current !== gateKey) return;
       setupAnswerRef.current = { payload, fieldName };
     },
     [gateKey],
@@ -1321,6 +1339,8 @@ export function AgentHitlScreenCard({
     // button and both reach the submit core with the same answer.
     if (setupPressRef.current) return;
     setupPressRef.current = true;
+    // The gate this press is made on, read when it is made.
+    const pressedFor = gateKey;
     setSubmitting(true);
     try {
       // ASK THE FIELD FOR ITS VALUE, the way the field's own button asks it.
@@ -1332,11 +1352,11 @@ export function AgentHitlScreenCard({
       // renderer with no way to answer at all. Where a flush IS registered it
       // simply overwrites the stage with the same renderer's current value.
       const flush = flushRef.current;
-      if (flush !== null && flush.key === gateKey) await flush.fn();
+      if (flush !== null && flush.key === pressedFor) await flush.fn();
       // THE GATE CAN CHANGE DURING THE FLUSH (cinatra#3380). This press answers the
       // gate it was made on, so it stops here: it takes nothing the next gate may
       // have staged, and it submits nothing.
-      if (setupAnswerGateRef.current !== gateKey) return;
+      if (liveGateKeyRef.current !== pressedFor) return;
       const staged = takeSetupAnswer();
       // Nothing to submit: a required box the renderer refused to hand over says
       // so itself, in its own words, inside the field. The screen is left

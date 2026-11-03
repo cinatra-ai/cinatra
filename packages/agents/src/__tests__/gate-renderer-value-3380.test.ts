@@ -166,4 +166,3 @@ describe("hitlGateIdentityKey (cinatra#3380)", () => {
     );
   });
 });
-

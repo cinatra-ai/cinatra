@@ -52,6 +52,8 @@ const RUN_ID = "run-3380";
 const X_RENDERER = "@cinatra-test/pick-agent:output";
 const PICKED_JSON = JSON.stringify({ artifactId: "a-2" });
 const NO_PICK_JSON = JSON.stringify({ noPick: true });
+/** The `onChange` each mounted pick renderer was given, in mount order. */
+const pickMounts: Array<(next: unknown) => unknown> = [];
 
 function asking(reviewTaskId: string, ideas: unknown[]) {
   return {
@@ -82,6 +84,10 @@ function PickRenderer({
   const ideas = (value as { ideas?: unknown } | null)?.ideas;
   const emptyOffer = Array.isArray(ideas) && ideas.length === 0;
   React.useLayoutEffect(() => {
+    pickMounts.push(onChange);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  React.useLayoutEffect(() => {
     if (emptyOffer) void onChange({ selectedIdeaJson: NO_PICK_JSON, userResponse: NO_PICK_JSON });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [emptyOffer]);
@@ -104,6 +110,8 @@ type Box = { current: AgentHitlScreenCarry | null };
 
 const SETUP_X_RENDERER = "@cinatra-test/setup-agent:topic";
 const flushOfFirstGate = { current: Promise.resolve() as Promise<unknown> };
+/** Called by the later gate's field from its layout effect when it mounts. */
+const onLaterFieldMount: { current: null | (() => void) } = { current: null };
 
 function setupAsking(reviewTaskId: string, fieldName: string) {
   return {
@@ -132,6 +140,10 @@ function SetupRenderer({
   registerFlush?: (fn: () => Promise<void>) => void;
 }) {
   const words = "words of " + fieldName;
+  React.useLayoutEffect(() => {
+    if (fieldName === "later") onLaterFieldMount.current?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   React.useEffect(() => {
     if (fieldName !== "first") return;
     registerFlush?.(async () => {
@@ -221,6 +233,8 @@ beforeEach(() => {
     credentialSafe: true,
   });
   approveMock.mockClear();
+  pickMounts.length = 0;
+  onLaterFieldMount.current = null;
 });
 
 afterEach(() => {
@@ -486,5 +500,92 @@ describe("AgentHitlScreenCard — what its renderer writes (cinatra#3380)", () =
     } finally {
       globalThis.fetch = original;
     }
+  });
+
+  it("stops a setup press whose flush answers in the moment the next gate is committed, before the card's effects run", async () => {
+    const flush = deferred();
+    flushOfFirstGate.current = flush.promise;
+    // The first gate's flush answers from inside the commit of the later gate:
+    // its continuation runs before that commit's passive effects.
+    onLaterFieldMount.current = () => flush.resolve(undefined);
+    screenStateMock.mockImplementation(async () => setupAsking("setup-first", "first"));
+    const mounted = render(card("setup-first"));
+    await settle();
+    await waitFor(() => expect(cardContinue()).not.toBeNull());
+    await act(async () => {
+      fireEvent.click(cardContinue()!);
+      await Promise.resolve();
+    });
+
+    const laterRead = deferred();
+    screenStateMock.mockImplementation(() => laterRead.promise);
+    mounted.rerender(card("setup-later"));
+
+    // The later gate arrives from the card's own read, outside act, so React
+    // commits it in one task and runs its passive effects in a later one.
+    const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const was = env.IS_REACT_ACT_ENVIRONMENT;
+    env.IS_REACT_ACT_ENVIRONMENT = false;
+    try {
+      laterRead.resolve(setupAsking("setup-later", "later"));
+      await new Promise((r) => setTimeout(r, 50));
+    } finally {
+      env.IS_REACT_ACT_ENVIRONMENT = was;
+    }
+    await settle();
+
+    expect(document.querySelector('[data-testid="type-words"]')).not.toBeNull();
+    expect(approveMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-testid="type-words"]')!);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(cardContinue()!.disabled).toBe(false));
+    await act(async () => {
+      fireEvent.click(cardContinue()!);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(approveMock).toHaveBeenCalledTimes(1));
+    const [taskId, values] = approveMock.mock.calls[0] as unknown as [string, unknown];
+    expect(taskId).toBe("setup-later");
+    expect(JSON.stringify(values)).toContain("words of later");
+    expect(JSON.stringify(values)).not.toContain("words of first");
+  });
+
+  it("ignores a write from a renderer that has been replaced: the later gate keeps what its own renderer wrote", async () => {
+    const box: Box = { current: null };
+    screenStateMock.mockImplementation(async () => asking("task-first", [{ id: "a" }]));
+    const mounted = render(card("task-first", box));
+    await settle();
+    await waitFor(() => expect(pickRow()).not.toBeNull());
+
+    screenStateMock.mockImplementation(async () => asking("task-empty", []));
+    mounted.rerender(card("task-empty", box));
+    await settle();
+    await waitFor(() => expect(box.current?.buffered.selectedIdeaJson).toBe(NO_PICK_JSON));
+    expect(pickMounts).toHaveLength(2);
+
+    // The first gate's renderer, already replaced, writes after an await.
+    await act(async () => {
+      void pickMounts[0]({ selectedIdeaJson: PICKED_JSON, userResponse: PICKED_JSON });
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(box.current?.gateKey).toContain("task-empty");
+    expect(box.current?.buffered.selectedIdeaJson).toBe(NO_PICK_JSON);
+    await waitFor(() => expect(cardContinue()!.disabled).toBe(false));
+    await act(async () => {
+      fireEvent.click(cardContinue()!);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(approveMock).toHaveBeenCalledTimes(1));
+    const [taskId, values] = approveMock.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("task-empty");
+    expect(values.selectedIdeaJson).toBe(NO_PICK_JSON);
   });
 });

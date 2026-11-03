@@ -520,4 +520,27 @@ describe("AgenticRunPanel — a mid-run Continue waits for the renderer's declar
     await expect(published.submit!({ selectedIdeaJson: "  " })).rejects.toThrow(/waiting for a choice/);
     expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["approved", {}],
+    ["approvedAt", {}],
+    ["userResponse", "Use the second idea"],
+  ] as const)(
+    "does not count what the host adds: a gate that declares %s is held with nothing written, and nothing is sent",
+    async (key, value) => {
+      const published: { submit: GateSubmit | null } = { submit: null };
+      await mountGate(
+        { type: "object", properties: { [key]: { type: "string", "x-required": true } } },
+        (_runId, gate) => {
+          if (gate) published.submit = gate.submit;
+        },
+      );
+
+      await waitFor(() => expect(published.submit).not.toBeNull());
+      await expect(published.submit!(value as Record<string, unknown> | string)).rejects.toThrow(
+        /waiting for a choice/,
+      );
+      expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    },
+  );
 });
