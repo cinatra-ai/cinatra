@@ -85,7 +85,7 @@ import {
   repairSuccessorReviewTaskId,
 } from "@/lib/lifecycle/lifecycle-orchestration";
 import { baseReviewTaskId, isDeclaredReviewLeg, isDeclaredReviewTaskId } from "@/lib/artifacts/artifact-review-target";
-import { laterDeclaredPause } from "./declared-review-pause";
+import { createdAtMicrosSql, laterDeclaredPause } from "./declared-review-pause";
 
 /** The store's executor: the pool, or the caller's open transaction. */
 type RepairStoreExecutor =
@@ -1156,12 +1156,12 @@ export async function isRepairLineageOpen(gateId: string, executor: RepairStoreE
  * either committed before this read (this inserts the carrier, which reads the
  * lineage closed) or made after this commit (the re-read sees the lineage closed,
  * and that worker resumes the run itself). In the second case, and when two
- * closes of a family commit together, more than one intent can be live. The
- * worker's send of one of them closes the others that are still pending
- * (artifact-review-gate-store `closeFamilyIntentsAfterResume`); two that are
- * delivered at the same time, or one whose lease expired, can both send:
- * delivery stays at least once, as on main for two legs decided at the same
- * time. The worker also reads `laterDeclaredPause` before it sends, so a carrier
+ * closes of a family commit together, more than one intent can be live, and
+ * each can send: delivery stays at least once, as on main for two legs decided
+ * at the same time. An intent that lands after the run left `pending_approval`
+ * finds it advanced; one that lands after the run paused again on the same base
+ * task id can send, because no stored row tells that pause apart. The worker
+ * also reads `laterDeclaredPause` before it sends, so a carrier
  * inserted before a later review's gates were committed is closed without a send
  * when the worker's read sees that review; a later review whose gates are
  * committed after the worker's read is not seen.
@@ -1213,7 +1213,8 @@ export async function carryDeclaredReviewDecision(
 
   const base = baseReviewTaskId(root.reviewTaskId);
   const runGates = await executor
-    .select({ id: artifactReviewGates.id, reviewTaskId: artifactReviewGates.reviewTaskId, createdAt: artifactReviewGates.createdAt })
+    .select({ id: artifactReviewGates.id, reviewTaskId: artifactReviewGates.reviewTaskId, createdAt: artifactReviewGates.createdAt,
+      createdAtMicros: createdAtMicrosSql(artifactReviewGates.createdAt) })
     .from(artifactReviewGates)
     .where(eq(artifactReviewGates.runId, root.runId));
   const legs = runGates.filter((g) => baseReviewTaskId(g.reviewTaskId) === base);

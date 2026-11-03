@@ -48,10 +48,11 @@ import { electCurrentReviewGate } from "./run-step-rail";
 // ---------------------------------------------------------------------------
 
 import { createHash, randomUUID } from "node:crypto";
-import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 
 import { db } from "./db";
+import { createdAtMicrosSql } from "./declared-review-pause";
 import { dispatchAutoGateResolved } from "./run-wait-notifier";
 // THE PARK'S OWN READING (cinatra#3046), from the module that writes the marker.
 // Re-exported below for the seed route, which reads this module already and must
@@ -340,6 +341,9 @@ export interface ReviewGateRow {
   resolvedBy: string | null;
   resolvedAt: Date | null;
   createdAt: Date;
+  /** cinatra#4312 — `created_at` in microseconds since the epoch, as decimal text
+   * (`createdAtMicrosSql`); set by `listReviewGatesForRun`. */
+  createdAtMicros?: string;
 }
 
 export async function readReviewGate(
@@ -403,7 +407,7 @@ async function readReviewGateVia(
 // ---------------------------------------------------------------------------
 export async function listReviewGatesForRun(runId: string, executor: GateStoreExecutor = db): Promise<ReviewGateRow[]> {
   const rows = await executor
-    .select()
+    .select({ ...getTableColumns(artifactReviewGates), createdAtMicros: createdAtMicrosSql(artifactReviewGates.createdAt) })
     .from(artifactReviewGates)
     .where(eq(artifactReviewGates.runId, runId))
     .orderBy(artifactReviewGates.createdAt);
@@ -419,6 +423,7 @@ export async function listReviewGatesForRun(runId: string, executor: GateStoreEx
     resolvedBy: row.resolvedBy,
     resolvedAt: row.resolvedAt,
     createdAt: row.createdAt,
+    createdAtMicros: row.createdAtMicros,
   }));
 }
 
@@ -1199,50 +1204,6 @@ export async function markResumeIntentDelivered(
     )
     .returning({ gateId: artifactReviewResumeOutbox.gateId });
   return done.length === 1;
-}
-
-/**
- * cinatra#4312 — after a declared review's decision was SENT to its paused run
- * (the resume worker's `delivered`), close every other PENDING intent of that
- * review on the run: an intent whose review task id is the review's base task id
- * or one of its legs (`<base>#<n>`), a carrier included. The rows tell no pause
- * apart: a pause on the same base task id writes no new gate. Such an intent,
- * sent later, would answer whatever the run paused at next, that pause among
- * them. Closed means `done` without a send, as the worker closes an intent of a
- * run that went on. A `delivering` intent is not touched, whether a worker still
- * holds its lease or the lease has expired: a held one is being delivered, and
- * an expired one is claimed again and sends if the run is `pending_approval`
- * then, a pause on the same base task id included. Closing an expired one would
- * not stop a late worker, which sends before it checks its lease. So delivery
- * stays at least once, as on main for two legs decided at the same time. A
- * dead-lettered intent is not touched either: ops read it as it is. A failure
- * here leaves the intents pending (the worker logs it). Returns the number of
- * intents closed.
- */
-export async function closeFamilyIntentsAfterResume(
-  runId: string,
-  reviewTaskId: string,
-  sentGateId: string,
-  executor: GateStoreExecutor = db,
-): Promise<number> {
-  const base = baseReviewTaskId(reviewTaskId);
-  const closed = await executor
-    .update(artifactReviewResumeOutbox)
-    .set({ status: "done", updatedAt: sql`now()` })
-    .where(
-      and(
-        eq(artifactReviewResumeOutbox.runId, runId),
-        eq(artifactReviewResumeOutbox.status, "pending"),
-        isNull(artifactReviewResumeOutbox.deadLetteredAt),
-        sql`${artifactReviewResumeOutbox.gateId} <> ${sentGateId}`,
-        or(
-          eq(artifactReviewResumeOutbox.reviewTaskId, base),
-          sql`left(${artifactReviewResumeOutbox.reviewTaskId}, ${base.length + 1}::int) = ${base + "#"}`,
-        ),
-      ),
-    )
-    .returning({ gateId: artifactReviewResumeOutbox.gateId });
-  return closed.length;
 }
 
 /**
