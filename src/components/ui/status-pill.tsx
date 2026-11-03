@@ -42,8 +42,12 @@ const pillVariants = cva(
         approved:     "border-success/30 bg-success/10 text-success",
         hold:         "border-warning/30 bg-warning/15 text-warning",
         "needs-review":"border-warning/40 bg-warning/15 text-warning",
-        scheduled:    "border-primary/30 bg-primary/8 text-primary",
-        queued:       "border-muted/30 bg-muted/10 text-muted-foreground",
+        // Scheduled and Queued take the families the roster draws them in
+        // (specs/app.html, the status-pills roster: Scheduled is `pill
+        // approved` on a 6% ground, Queued is `pill running` on an 8% ground)
+        // (cinatra#3189).
+        scheduled:    "border-success/30 bg-success/6 text-success",
+        queued:       "border-primary/30 bg-primary/8 text-primary",
         idle:         "border-line bg-transparent text-muted-foreground",
         archived:     "border-line bg-transparent text-muted-foreground opacity-70",
         failed:       "border-destructive bg-destructive text-destructive-foreground",
@@ -111,12 +115,12 @@ function StatusIcon({ status }: { status: StatusPillStatus }) {
         </svg>
       );
     case "scheduled":
+      // The roster's calendar: the frame and its two rings, three strokes.
       return (
         <svg {...common} strokeWidth="2.2">
           <rect x="3" y="6" width="18" height="15" rx="2" />
           <path d="M16 2v4" />
           <path d="M8 2v4" />
-          <path d="M3 10h18" />
         </svg>
       );
     case "queued":
