@@ -26,8 +26,12 @@ const pillVariants = cva(
         approved:       "border-success/30 bg-success/10 text-success",
         hold:           "border-warning/30 bg-warning/15 text-warning",
         "needs-review": "border-warning/40 bg-warning/15 text-warning",
-        scheduled:      "border-primary/30 bg-primary/8 text-primary",
-        queued:         "border-muted/30 bg-muted/10 text-muted-foreground",
+        // Scheduled and Queued take the families the roster draws them in
+        // (specs/app.html, the status-pills roster: Scheduled is `pill
+        // approved` on a 6% ground, Queued is `pill running` on an 8% ground)
+        // (cinatra#3189).
+        scheduled:      "border-success/30 bg-success/6 text-success",
+        queued:         "border-primary/30 bg-primary/8 text-primary",
         idle:           "border-line bg-transparent text-muted-foreground",
         archived:       "border-line bg-transparent text-muted-foreground opacity-70",
         failed:         "border-destructive bg-destructive text-destructive-foreground",
@@ -89,12 +93,12 @@ function StatusIcon({ status }: { status: StatusPillStatus }) {
         </svg>
       );
     case "scheduled":
+      // The roster's calendar: the frame and its two rings, three strokes.
       return (
         <svg {...common} strokeWidth="2.2">
           <rect x="3" y="6" width="18" height="15" rx="2" />
           <path d="M16 2v4" />
           <path d="M8 2v4" />
-          <path d="M3 10h18" />
         </svg>
       );
     case "queued":
@@ -113,8 +117,18 @@ function StatusIcon({ status }: { status: StatusPillStatus }) {
           <path d="m6 6 12 12" />
         </svg>
       );
-    case "failed":
     case "declined":
+      // Trash can, as the roster draws Declined (specs/app.html, the
+      // status-pills roster). The application's copy shares Failed's cross
+      // until cinatra#4364 lands.
+      return (
+        <svg {...common} strokeWidth="2.8">
+          <path d="M3 6h18" />
+          <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+        </svg>
+      );
+    case "failed":
       return (
         <svg {...common} strokeWidth="3">
           <path d="M18 6 6 18" />
