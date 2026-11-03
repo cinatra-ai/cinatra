@@ -494,7 +494,8 @@ export function parseAgentPackageManifestForInstall(
 // edited revision on, through the required `artifact_authoring_emit` consumed
 // primitive and with no terminal binding of its own — or by an IMAGE-TOOL STEP
 // (cinatra#3035): a passthrough ApiNode that calls the host's image tool
-// (`artifact_image_generate`) with a literal extension the produces list
+// (`artifact_image_generate`, or the page capture tool `artifact_page_capture`,
+// cinatra#4223) with a literal extension the produces list
 // declares and names itself as the ledger's node. All four are named side by
 // side as the roads that resolve a produces entry; the authoring emit is read
 // from `cinatra.consumes` because it is a capability edge, not a node
@@ -612,7 +613,7 @@ export function evaluateProducesMaterializationContract(args: {
         `no EndNode output binding (outputs[].cinatra.artifact), no ` +
         `artifact_materialize passthrough node, no required ` +
         `${ARTIFACT_AUTHORING_EMIT_PRIMITIVE} claim in cinatra.consumes, and no ` +
-        `artifact_image_generate passthrough step filing it — so the ` +
+        `artifact_image_generate or artifact_page_capture passthrough step filing it — so the ` +
         `declared artifact is never persisted. Add one of the four roads for ` +
         `"${ext}", or declare nothing (cinatra#924).`,
       source: "deterministic",

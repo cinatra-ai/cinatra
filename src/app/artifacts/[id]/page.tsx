@@ -48,7 +48,10 @@ import {
   artifactDisplayTitle,
   buildArtifactDetailHeader,
 } from "./artifact-detail-header";
-import { resolveArtifactContentClass } from "@/lib/artifacts/artifact-content-channel";
+import {
+  resolveArtifactContentClass,
+  resolveFileObjectContentProjection,
+} from "@/lib/artifacts/artifact-content-channel";
 import {
   getRepresentationByIdForReplay,
   resolveEditorRevisionId,
@@ -221,7 +224,7 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
   // above still decides on `content.kind === "text"`. Pinned by
   // `w3-forward-content-road-substance`: taking the narrower reader here would
   // silently un-ship the classes wave 3 added.
-  const content =
+  const fileContent =
     revisionId && representationForm
       ? await hostArtifactContentBuilder()({
           orgId,
@@ -231,6 +234,15 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
           mime,
         })
       : absentArtifactContent(revisionId ?? null, contentClass ? "unsupported-form" : "absent");
+  // A FILE ROW'S OWN FIELDS (cinatra#4223). When the file channel has no class
+  // for the form (a picture), the fields the row's type declares beyond the
+  // host envelope reach the display as the live object projection; every other
+  // answer of the channel passes through unchanged.
+  const content = resolveFileObjectContentProjection({
+    objectType: artifact.objectType,
+    objectData: access.objectData,
+    fileProjection: fileContent,
+  });
 
   // THE EDIT CAPABILITY (enabler 0.20). Minted HERE and nowhere else: this is
   // the artifact's own page, the one surface the plan makes editable. The

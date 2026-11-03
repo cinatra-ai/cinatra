@@ -15,8 +15,13 @@ import rootConfig from "../../vitest.config";
 // (organisation, artifact, revision) when it names a base another write already
 // built on. A stubbed store would agree with whatever the code said.
 //
+// cinatra#4223 adds THE PAGE CAPTURE TOOL to the same tier: a capture of a
+// connect-registered page filed as a real objects row of a file-form type,
+// its ledger row, and the two display builders reading that row back. It uses
+// the same schema and the same flag, and the files run one after the other.
+//
 // The root config deliberately EXCLUDES `**/*.integration.test.ts`; this one
-// includes exactly one file. Point it at a scratch Postgres:
+// includes exactly these files. Point it at a scratch Postgres:
 //   SUPABASE_DB_URL=THE-SCRATCH-DSN pnpm test:lifecycle-c-w8
 // The suite self-skips without one, so any OTHER config that picks it up keeps
 // the ordinary skip. Mirrors the #3030 tier shape and reasoning.
@@ -51,6 +56,7 @@ export default defineConfig({
     fileParallelism: false,
     include: [
       "src/lib/artifacts/__tests__/lifecycle-c-w8-image-tool.integration.test.ts",
+      "src/lib/artifacts/__tests__/lifecycle-c-screenshot-tool-4223.integration.test.ts",
     ],
     exclude: ["**/node_modules/**"],
     env: {
