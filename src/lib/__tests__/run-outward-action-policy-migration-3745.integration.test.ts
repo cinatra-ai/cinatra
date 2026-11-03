@@ -11,11 +11,14 @@
  * claimed a paused run before it sent, leaving a claim with no mark.
  *
  *   - a draft database boots only when the operator states that every draft
- *     worker is stopped (CINATRA_3745_DRAFT_DB_ACK=workers-stopped), so no
- *     draft worker can claim after the check;
+ *     worker is stopped (CINATRA_3745_DRAFT_DB_ACK=workers-stopped); the
+ *     migration cannot check that statement, and only if it is true does no
+ *     draft worker claim after the check;
  *   - with that statement, any unmarked claim on a running run refuses the
  *     boot, whether its intent is still delivering or already dead-lettered;
- *   - a database from main is never refused, and the down migration throws.
+ *   - a database from main is never refused, also when the bootstrap already
+ *     created the two tables and the two columns, and the down migration throws;
+ *   - every refusal leaves the schema and the ledger exactly as they were.
  *
  * The test never imports the migration module: it runs the runner over the
  * folder, so on a tree without core__0120 the runner completes and the refusal
@@ -123,6 +126,57 @@ async function ledgerHas(name: string): Promise<boolean> {
     (await c.query(`SELECT 1 FROM ${T("pgmigrations")} WHERE name = $1`, [name])).rowCount === 1);
 }
 
+/** Every column of every table in the test schema, and the ledger, in order. */
+async function snapshot(): Promise<{ columns: string[]; ledger: string[] }> {
+  return withClient(async (c) => {
+    const cols = await c.query(
+      `SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns
+        WHERE table_schema = $1 ORDER BY table_name, column_name`,
+      [SCHEMA],
+    );
+    const ledger = await c.query(`SELECT name FROM ${T("pgmigrations")} ORDER BY id`);
+    return {
+      columns: cols.rows.map((r) => `${r.table_name}.${r.column_name} ${r.data_type} ${r.is_nullable}`),
+      ledger: ledger.rows.map((r) => r.name),
+    };
+  });
+}
+
+/** The migration is refused with `message`, and the schema and the ledger are unchanged. */
+async function expectRefusedUnchanged(message: RegExp): Promise<void> {
+  const before = await snapshot();
+  await expect(migrate()).rejects.toThrow(message);
+  expect(await snapshot()).toEqual(before);
+  expect(await ledgerHas(MIGRATION)).toBe(false);
+}
+
+/**
+ * The two tables as the bootstrap twin (or the draft's first migration)
+ * creates them, each with one row, before core__0120 runs.
+ */
+async function preCreateTables(): Promise<void> {
+  await withClient(async (c) => {
+    await c.query(`CREATE TABLE ${T("agent_run_outward_action_policies")} (
+      run_id text PRIMARY KEY, org_id text NOT NULL, execution_attempt_id text NOT NULL,
+      policy jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now())`);
+    await c.query(`CREATE TABLE ${T("artifact_review_action_consumptions")} (
+      gate_id text PRIMARY KEY, run_id text NOT NULL, org_id text NOT NULL,
+      step_id text NOT NULL, tool_identity jsonb NOT NULL,
+      executed_source_sha256 text NOT NULL, consumed_at timestamptz NOT NULL DEFAULT now())`);
+    await c.query(`INSERT INTO ${T("agent_run_outward_action_policies")} (run_id, org_id, execution_attempt_id, policy)
+      VALUES ('run-pre', 'org-pre', 'attempt-pre', '{}')`);
+    await c.query(`INSERT INTO ${T("artifact_review_action_consumptions")} (gate_id, run_id, org_id, step_id, tool_identity, executed_source_sha256)
+      VALUES ('gate-pre', 'run-pre', 'org-pre', 'step-pre', '{}', 'sha-pre')`);
+  });
+}
+
+async function preCreatedRows(): Promise<{ policies: number; consumptions: number }> {
+  return withClient(async (c) => ({
+    policies: (await c.query(`SELECT 1 FROM ${T("agent_run_outward_action_policies")} WHERE run_id = 'run-pre'`)).rowCount ?? 0,
+    consumptions: (await c.query(`SELECT 1 FROM ${T("artifact_review_action_consumptions")} WHERE gate_id = 'gate-pre'`)).rowCount ?? 0,
+  }));
+}
+
 async function shape(): Promise<{ tables: string[]; outboxColumns: string[] }> {
   return withClient(async (c) => {
     const tables = await c.query(
@@ -169,8 +223,7 @@ describe.skipIf(!HAS_DB)("core__0120 on the real runner: additive on main, guard
 
   it("a draft database without the stopped-workers statement is refused before any change", async () => {
     await seed({ draft: true });
-    await expect(migrate()).rejects.toThrow(/core__0120: this database booted an unreleased draft.*CINATRA_3745_DRAFT_DB_ACK=workers-stopped/);
-    expect(await ledgerHas(MIGRATION)).toBe(false);
+    await expectRefusedUnchanged(/core__0120: this database booted an unreleased draft.*CINATRA_3745_DRAFT_DB_ACK=workers-stopped/);
     expect((await shape()).tables).toEqual([]);
   });
 
@@ -178,23 +231,24 @@ describe.skipIf(!HAS_DB)("core__0120 on the real runner: additive on main, guard
     await seed({ draft: true });
     await addIntent({ gateId: "draft-delivering", runStatus: "running", status: "delivering" });
     process.env[ACK_ENV] = "workers-stopped";
-    await expect(migrate()).rejects.toThrow(/core__0120: 1 resume intent\(s\) .*no claim mark.*agent_run_stop/);
-    expect(await ledgerHas(MIGRATION)).toBe(false);
+    await expectRefusedUnchanged(/core__0120: 1 resume intent\(s\) .*no claim mark.*agent_run_stop/);
+    expect((await shape()).tables).toEqual([]);
   });
 
   it("a draft database with the statement and an unmarked DEAD-LETTERED claim on a running run is refused", async () => {
     await seed({ draft: true });
     await addIntent({ gateId: "draft-dead", runStatus: "running", status: "dead_lettered", deadLettered: true });
     process.env[ACK_ENV] = "workers-stopped";
-    await expect(migrate()).rejects.toThrow(/core__0120: 1 resume intent\(s\) .*no claim mark.*agent_run_stop/);
-    expect(await ledgerHas(MIGRATION)).toBe(false);
+    await expectRefusedUnchanged(/core__0120: 1 resume intent\(s\) .*no claim mark.*agent_run_stop/);
+    expect((await shape()).tables).toEqual([]);
   });
 
   it("a draft database that ran only the first draft migration (no claim columns) is read without error and refused on its unmarked claim", async () => {
     await seed({ draft: true, draftNames: [DRAFT_0115] });
     await addIntent({ gateId: "draft-no-cols", runStatus: "running", status: "delivering" });
     process.env[ACK_ENV] = "workers-stopped";
-    await expect(migrate()).rejects.toThrow(/core__0120: 1 resume intent\(s\)/);
+    await expectRefusedUnchanged(/core__0120: 1 resume intent\(s\)/);
+    expect(await shape()).toEqual({ tables: [], outboxColumns: [] });
   });
 
   it("a draft database with the statement and no unmarked claim on a running run passes; a marked claim and a paused run do not count", async () => {
@@ -210,15 +264,40 @@ describe.skipIf(!HAS_DB)("core__0120 on the real runner: additive on main, guard
 
   it("either draft name alone marks a draft database", async () => {
     await seed({ draft: true, draftNames: [DRAFT_0116] });
-    await expect(migrate()).rejects.toThrow(/core__0120: this database booted an unreleased draft/);
+    await expectRefusedUnchanged(/core__0120: this database booted an unreleased draft/);
     await seed({ draft: true, draftNames: [DRAFT_0115] });
-    await expect(migrate()).rejects.toThrow(/core__0120: this database booted an unreleased draft/);
+    await expectRefusedUnchanged(/core__0120: this database booted an unreleased draft/);
   });
 
   it("an ack value other than the exact statement does not count", async () => {
     await seed({ draft: true });
     process.env[ACK_ENV] = "yes";
-    await expect(migrate()).rejects.toThrow(/core__0120: this database booted an unreleased draft/);
+    await expectRefusedUnchanged(/core__0120: this database booted an unreleased draft/);
+  });
+
+  it("a database from main whose bootstrap already created both tables and both columns: the migration passes and keeps their rows", async () => {
+    await seed({ draft: false });
+    await preCreateTables();
+    await withClient(async (c) => {
+      await c.query(`ALTER TABLE ${T("artifact_review_resume_outbox")} ADD COLUMN run_claimed_at timestamptz`);
+      await c.query(`ALTER TABLE ${T("artifact_review_resume_outbox")} ADD COLUMN resume_task_result jsonb`);
+    });
+    await addIntent({ gateId: "main-boot", runStatus: "running", status: "delivering" });
+    const outcome = await migrate();
+    expect(outcome.ranNames).toEqual([MIGRATION]);
+    expect(await shape()).toEqual(FULL_SHAPE);
+    expect(await preCreatedRows()).toEqual({ policies: 1, consumptions: 1 });
+  });
+
+  it("a draft database whose draft migrations created both tables and both columns: with the statement and no unmarked claim it passes and keeps their rows", async () => {
+    await seed({ draft: true });
+    await preCreateTables();
+    await addIntent({ gateId: "draft-pre-marked", runStatus: "running", status: "delivering", claimed: true });
+    process.env[ACK_ENV] = "workers-stopped";
+    const outcome = await migrate();
+    expect(outcome.ranNames).toEqual([MIGRATION]);
+    expect(await shape()).toEqual(FULL_SHAPE);
+    expect(await preCreatedRows()).toEqual({ policies: 1, consumptions: 1 });
   });
 
   it("the down migration refuses: dropping burned gates would re-admit them", async () => {
