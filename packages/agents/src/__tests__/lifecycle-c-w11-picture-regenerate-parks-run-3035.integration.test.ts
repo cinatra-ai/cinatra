@@ -1900,3 +1900,52 @@ async function emitLaterPause(p: Pipeline): Promise<string> {
   await gateStore.emitDeclaredReviewGateFamily({ runId: p.runId, orgId: ORG, reviewTaskId: laterStep, targets: [laterPin] });
   return laterStep;
 }
+
+describe.skipIf(!HAS_DB)("cinatra#4312 — the close after a resume closes only this review's other pending intents (SC pre11, C2)", () => {
+  // These cases pin what `closeFamilyIntentsAfterResume` already does at f79bca23;
+  // they are not red first.
+  it("b3 — THE CLOSE AFTER A RESUME LEAVES WHAT IT DOES NOT ANSWER: the sent intent, a dead-lettered and a delivering one (held or with an expired lease), another review's (a task id that only starts with this one's, another base) and another run's stay as they are; the base's own and a leg's pending intents are closed", async () => {
+    const p = await pausedPipeline();
+    const other = await pausedPipeline();
+    const base = await gateStore.readReviewGate(p.runId, p.step);
+    await pool(
+      `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_review_resume_outbox"
+         (gate_id, run_id, review_task_id, kind, response_text) VALUES ($1,$2,$3,'approve','{}')`,
+      [base!.id, p.runId, p.step],
+    );
+    const sent = await decidedGateWithIntent(p.runId, `${p.step}#7`, p.post);
+    const leg = await decidedGateWithIntent(p.runId, `${p.step}#8`, p.post);
+    const deadLettered = await decidedGateWithIntent(p.runId, `${p.step}#9`, p.post);
+    await setIntent(deadLettered, "dead_lettered_at = now(), last_error = 'set aside by the test'");
+    const held = await decidedGateWithIntent(p.runId, `${p.step}#10`, p.post);
+    await setIntent(held, "status = 'delivering', lease_token = 'lease-held', lease_expires_at = now() + interval '5 minutes'");
+    const expired = await decidedGateWithIntent(p.runId, `${p.step}#11`, p.post);
+    await setIntent(expired, "status = 'delivering', lease_token = 'lease-expired', lease_expires_at = now() - interval '1 second'");
+    const prefixed = await decidedGateWithIntent(p.runId, `${p.step}0`, p.post);
+    const prefixedLeg = await decidedGateWithIntent(p.runId, `${p.step}0#2`, p.post);
+    const otherReview = await decidedGateWithIntent(p.runId, `wayflow-task-${randomUUID()}`, p.post);
+    const otherRun = await decidedGateWithIntent(other.runId, `${p.step}#12`, p.post);
+
+    // The worker names the review by the task id of the intent it sent, a leg's too.
+    expect(await gateStore.closeFamilyIntentsAfterResume(p.runId, p.leg2, sent)).toBe(2);
+
+    expect(await intentStatusOf(base!.id)).toBe("done");
+    expect(await intentStatusOf(leg)).toBe("done");
+    expect(await intentStatusOf(sent)).toBe("pending");
+    expect(await intentRow(deadLettered)).toMatchObject({ status: "pending" });
+    expect((await intentRow(deadLettered)).dead_lettered_at).not.toBeNull();
+    expect(await intentRow(held)).toMatchObject({ status: "delivering", lease_token: "lease-held" });
+    expect(await intentRow(expired)).toMatchObject({ status: "delivering", lease_token: "lease-expired" });
+    for (const gateId of [prefixed, prefixedLeg, otherReview, otherRun]) {
+      expect(await intentStatusOf(gateId)).toBe("pending");
+    }
+
+    // Set aside what this case left live, so no later sweep claims it.
+    await pool(
+      `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_resume_outbox"
+          SET dead_lettered_at = now(), last_error = 'set aside by the test: left by an earlier case'
+        WHERE dead_lettered_at IS NULL AND status IN ('pending', 'delivering') AND run_id IN ($1, $2)`,
+      [p.runId, other.runId],
+    );
+  });
+});

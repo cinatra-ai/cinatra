@@ -209,9 +209,13 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
   });
 
   it("does not let another pause's pending leg hold this original task", async () => {
+    // cinatra#4312 — the other pause is an OLDER one: a later pause would close this
+    // decision without a send (`laterDeclaredPause`), and so would a gate whose time
+    // cannot be read, so every gate here carries its created time.
+    const at = new Date("2026-11-03T12:00:00Z");
     gateStoreMock.listReviewGatesForRun.mockResolvedValue([
-      ...familyRows(),
-      { reviewTaskId: "wayflow-task-2#2", status: "pending" },
+      ...familyRows().map((row) => ({ ...row, createdAt: at })),
+      { reviewTaskId: "wayflow-task-2#2", status: "pending", createdAt: new Date(at.getTime() - 1) },
     ]);
     const outcome = await deliverArtifactReviewResumeIntent(intent({ reviewTaskId: "wayflow-task-1#2" }));
     expect(outcome).toBe("delivered");
@@ -424,9 +428,10 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
     expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
   });
 
-  // cinatra#4312 (review 10, finding 1) — a decision of an earlier declared review
-  // is never sent into a later one, whether the later review's gate is newer or
-  // has the same created time; the latest-task map here names this task.
+  // cinatra#4312 (review 10, finding 1) — the worker closes a decision of an earlier
+  // declared review without a send when the run's gates, as it reads them, hold a
+  // later review: newer, or with the same created time. The latest-task map here
+  // names this task. A later review written after this read is not driven here.
   it.each([["newer", 1], ["equal", 0]])(
     "a declared review's decision on a run whose other declared review is %s is closed without a send",
     async (_label, laterBy) => {
@@ -453,6 +458,20 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
     expect(outcome).toBe("delivered");
     expect(sendTaskSpy).toHaveBeenCalledTimes(1);
     expect(gateStoreMock.closeFamilyIntentsAfterResume).toHaveBeenCalledWith("run-1", "wayflow-task-1", "gate-1");
+  });
+
+  it("a decision held by a later declared review whose lease was lost answers lease-lost and sends nothing", async () => {
+    const at = new Date("2026-11-03T12:00:00Z");
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue([
+      ...familyRows().map((row) => ({ ...row, createdAt: at })),
+      { runId: "run-1", orgId: "org-1", reviewTaskId: "wayflow-task-2", status: "pending", createdAt: new Date(at.getTime() + 1) },
+    ]);
+    gateStoreMock.markResumeIntentDelivered.mockResolvedValueOnce(false);
+    const outcome = await deliverArtifactReviewResumeIntent(intent());
+    expect(outcome).toBe("lease-lost");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-1", "lease-abc");
+    expect(gateStoreMock.closeFamilyIntentsAfterResume).not.toHaveBeenCalled();
   });
 
 });
