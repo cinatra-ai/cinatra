@@ -106,15 +106,19 @@ export function pruneToDeclaredCheckouts({ extRoot, declaredDests, log = () => {
   const isRealDir = (p) => {
     try {
       return lstatSync(p).isDirectory();
-    } catch {
-      return null; // absent
+    } catch (err) {
+      // Only an absent path is absent; any other read error fails the sync.
+      if (err?.code === "ENOENT") return null;
+      throw err;
     }
   };
   const remove = (p) => {
     rmSync(p, { recursive: true, force: true });
     const rel = path.relative(extRoot, p) || ".";
     removed.push(rel);
-    log(`  extensions/${rel === "." ? "" : rel}: removed — not a declared checkout (a --shallow sync keeps only the declared checkouts).`);
+    // The name comes from the restored tree: logged escaped, so a newline in
+    // it can never start a log line (or a workflow command) of its own.
+    log(`  extensions/ entry ${JSON.stringify(rel)}: removed — not a declared checkout (a --shallow sync keeps only the declared checkouts).`);
   };
   const root = isRealDir(extRoot);
   if (root === null) return removed;
