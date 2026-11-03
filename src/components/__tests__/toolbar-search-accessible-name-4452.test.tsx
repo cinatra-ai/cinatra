@@ -14,17 +14,20 @@
  * Two readings:
  *   1. The three fields are rendered through their real components and found
  *      by role AND name, the way assistive technology finds them.
- *   2. The name is a TYPE-LEVEL requirement of `ToolbarSearchInput` — an
- *      `aria-label` or an `aria-labelledby`. `pnpm typecheck` checks every
- *      caller in the files its tsconfig includes (.ts, .tsx and .mts, not
- *      the `__tests__/fixtures` folders and not the tests folders under
- *      `extensions`), whether the caller is
- *      written as JSX, as a `createElement` call, through an alias, with a
- *      conditional label or with a spread of a typed props object; the
- *      `@ts-expect-error` cases below fail the typecheck as an UNUSED directive
- *      the day the requirement is dropped. The type does not see an empty or
- *      whitespace-only string, an `any`-typed spread, an `aria-labelledby` that
- *      points to no element, or a file outside that include.
+ *   2. A name is a TYPE-LEVEL requirement of a typed call to `ToolbarSearchInput`:
+ *      an `aria-label` or an `aria-labelledby` (a string) must be present, and a
+ *      JSX call without either fails `pnpm typecheck`. That holds in the files
+ *      the tsconfig includes (.ts, .tsx and .mts, not the `__tests__/fixtures`
+ *      folders and not the tests folders under `extensions`) and is pinned below
+ *      for a JSX call, a `createElement` call, an alias, a conditional label and
+ *      a spread of a typed props object; the `@ts-expect-error` cases fail the
+ *      typecheck as an UNUSED directive the day the requirement is dropped.
+ *      The type does not stop every unnamed field: an empty or whitespace-only
+ *      string, an `aria-labelledby` that points to no element, an `any`-typed
+ *      spread or a cast, a later optional spread that overwrites the label with
+ *      `undefined` (one case below documents it), a widened `React.ElementType`
+ *      or registry, `@ts-ignore` or `@ts-nocheck`, `cloneElement`, and a file
+ *      outside the include all pass.
  */
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -94,6 +97,19 @@ describe("ToolbarSearchInput requires a name at compile time", () => {
     // @ts-expect-error — a spread of a typed props object carries no required name
     const spread = <ToolbarSearchInput {...rest} />;
     expect([jsx, created, aliased, conditional, spread].every((el) => el !== null)).toBe(true);
+  });
+
+  it("accepted escape, documented: a later optional spread can overwrite the label with undefined", () => {
+    // This compiles — an optional spread property does not remove the string
+    // that came before it — and the field renders without a name. The type asks
+    // for the prop to be present in the call; it cannot see a value that a later
+    // spread replaces. If the type is ever tightened so that this stops
+    // compiling, turn this case into a @ts-expect-error fixture.
+    const override: React.InputHTMLAttributes<HTMLInputElement> = { "aria-label": undefined };
+    const { container } = render(<ToolbarSearchInput aria-label="Search" {...override} />);
+    const input = container.querySelector("input[type=search]");
+    expect(input).not.toBeNull();
+    expect(input?.hasAttribute("aria-label")).toBe(false);
   });
 
   it("an aria-label or an aria-labelledby is accepted and names the field", () => {

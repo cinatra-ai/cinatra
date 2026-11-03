@@ -240,9 +240,17 @@ function ToolbarSearchGroup({
 // The search pill's name. The pill is a <label> holding a decorative glass and
 // the input, so the label has no text and the input takes no name from it; a
 // placeholder is only a fallback that some assistive technology drops. The type
-// therefore REQUIRES a name from the caller — an `aria-label` or an
-// `aria-labelledby` (a string) — and a caller without one does not compile
+// therefore asks the caller for a name — an `aria-label` or an `aria-labelledby`
+// (a string) — and a call written without either does not compile
 // (cinatra#4452: three toolbars shipped a search box with an empty name).
+// What the type enforces is that one of the two props is PRESENT as a string in
+// a typed call. It does not enforce that the name is non-empty or that it still
+// reaches the input: an empty or whitespace-only string, an `aria-labelledby`
+// that points to no element, an `any`-typed spread or a cast, a later optional
+// spread that overwrites the label with `undefined`, a widened
+// `React.ElementType` or component registry, `@ts-ignore` or `@ts-nocheck`,
+// `cloneElement` or any replacement of props after construction, and a file
+// outside the repository typecheck include all pass.
 type ToolbarSearchInputName =
   | { "aria-label": string; "aria-labelledby"?: string }
   | { "aria-labelledby": string; "aria-label"?: string };
