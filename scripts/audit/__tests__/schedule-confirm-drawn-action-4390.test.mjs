@@ -57,11 +57,10 @@ describe("cinatra#4390: the anchor contract re-ratified for the rename", () => {
     const { anchorsUnresolvedAtPin } = loadAnchorContract();
     expect(anchorsUnresolvedAtPin).not.toContain(RETIRED_SELECTOR);
     expect(anchorsUnresolvedAtPin).not.toContain(DRAWN_SELECTOR);
-    expect(anchorsUnresolvedAtPin).toEqual([
-      '[data-skill-action="adjust"]',
-      '[data-skill-action="confirm"]',
-      '[data-skill-action="skip"]',
-    ]);
+    // cinatra#3677 left the three `data-skill-action` controls out of the
+    // contract's recorded anchors, and the drawn Confirm resolves, so nothing
+    // the contract records is unresolved at the pin.
+    expect(anchorsUnresolvedAtPin).toEqual([]);
   });
 });
 

@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-artifacts.html",
-  "contentHash": "sha256:f1d26ced35085568cc8286365a625939d77021d7836e03c46e0871468f415de9",
+  "contentHash": "sha256:dd0eeaf1e9aaeede212214e7711e57a7c76fa3d000a501c13266da971a0e70c6",
   "surfaces": [
     {
       "id": "artifacts-facet",
@@ -319,36 +319,6 @@
       "states": [
         "kind:artifact"
       ]
-    },
-    {
-      "id": "artifact-dashboard-pointer",
-      "fields": [
-        {
-          "field": "name",
-          "source": "identity.displayName"
-        }
-      ],
-      "actions": [
-        {
-          "action": "open-dashboard",
-          "outcome": "dashboard-canonical"
-        }
-      ],
-      "states": [
-        "error",
-        "loading"
-      ]
-    },
-    {
-      "id": "artifact-dashboard-scope-chips",
-      "fields": [],
-      "actions": [
-        {
-          "action": "open-scope",
-          "outcome": "scope-view"
-        }
-      ],
-      "states": []
     },
     {
       "id": "scope-dashboards-tab",
