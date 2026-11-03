@@ -1159,18 +1159,20 @@ export async function isRepairLineageOpen(gateId: string, executor: RepairStoreE
  * closes of a family commit together, more than one intent can be live. The
  * worker's send of one of them closes the others that are still pending
  * (artifact-review-gate-store `closeFamilyIntentsAfterResume`); two that are
- * delivered at the same time can both send: delivery stays at least once, as on
- * main for two legs decided at the same time. The worker also reads
- * `laterDeclaredPause` before it sends, so a carrier inserted before a later
- * review's gates were committed sends nothing into that review.
+ * delivered at the same time, or one whose lease expired, can both send:
+ * delivery stays at least once, as on main for two legs decided at the same
+ * time. The worker also reads `laterDeclaredPause` before it sends, so a carrier
+ * inserted before a later review's gates were committed is closed without a send
+ * when the worker's read sees that review; a later review whose gates are
+ * committed after the worker's read is not seen.
  *
  * Nothing is inserted (null): the root is missing or not bound to the lineage
  * (another run's intents are never read), its task id is no declared review task
  * id, the run is not `pending_approval`, the lineage is still open or not
  * readable (RepairLineageStateError; a later naming or close inserts then), a
  * declared gate of another review of the run is not older than every leg of this
- * family (`laterDeclaredPause`: the run went on to a later pause, or an equal
- * time cannot tell), or the family has no decision yet
+ * family (`laterDeclaredPause`: the run went on to a later pause, an equal
+ * time cannot tell, or a time cannot be read), or the family has no decision yet
  * (its next decision writes its own intent). A failed read that is no
  * RepairLineageStateError throws, so the caller's transaction rolls back with it.
  */

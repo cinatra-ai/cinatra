@@ -355,12 +355,14 @@ export async function deliverArtifactReviewResumeIntent(
   // re-claim. Neither a resume nor a delivered acknowledgement is authorized by
   // an unreadable sibling set (cinatra#3944, App160).
   const siblingLegs = await listReviewGatesForRun(run.id);
-  // cinatra#4312 — a run that went on to another declared review after this one
-  // gets no decision of this one, whatever wrote this intent (a decision, or a
-  // carrier a close inserted before that later review's gates were committed):
-  // the intent is closed WITHOUT a send (`laterDeclaredPause`; an equal created
-  // time is read as later). The latest-task check above answers the same when
-  // its map is present; this read does not depend on the map.
+  // cinatra#4312 — when the run's gates, as read here, show that the run went on
+  // to another declared review after this one, the intent is closed WITHOUT a
+  // send, whatever wrote it (a decision, or a carrier a close inserted before that
+  // later review's gates were committed) (`laterDeclaredPause`: an equal created
+  // time, and a time it cannot read, are read as later). A later review whose
+  // gates are committed after this read is not seen. The latest-task check above
+  // answers the same when its map is present; this read does not depend on the
+  // map. A lost lease answers `lease-lost`.
   if (laterDeclaredPause(siblingLegs, reviewTaskId)) {
     const ok = await markResumeIntentDelivered(gateId, leaseToken);
     console.log(
@@ -451,12 +453,14 @@ export async function deliverArtifactReviewResumeIntent(
     `[artifact-review-resume] gate=${gateId} run=${run.id} DELIVERED ${kind} resume ` +
       `(resultState=${task.status?.state}) — marked ${marked ? "done" : "LEASE-LOST"}`,
   );
-  // cinatra#4312 — the pause is answered: every other pending intent of this
-  // review on the run is closed without a send (a second carrier among them), so
-  // none of them answers what the run pauses at next, a pause on the same base
-  // task id included (`closeFamilyIntentsAfterResume`). The send has landed, so a
-  // failure here is logged and the delivery stays `delivered`; the intents it
-  // would have closed stay pending, at least once, as on main.
+  // cinatra#4312 — the pause is answered: the other pending intents of this
+  // review on the run are closed without a send (a second carrier among them), so
+  // those cannot answer what the run pauses at next, a pause on the same base task
+  // id included (`closeFamilyIntentsAfterResume`). A `delivering` intent, held or
+  // with an expired lease, and a dead-lettered one are not closed; an expired one
+  // can be claimed again and send. The send has landed, so a failure here is
+  // logged and the delivery stays `delivered`; the intents it would have closed
+  // stay pending, at least once, as on main.
   try {
     const closed = await closeFamilyIntentsAfterResume(run.id, reviewTaskId, gateId);
     if (closed > 0) {

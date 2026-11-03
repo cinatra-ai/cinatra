@@ -1205,14 +1205,18 @@ export async function markResumeIntentDelivered(
  * cinatra#4312 — after a declared review's decision was SENT to its paused run
  * (the resume worker's `delivered`), close every other PENDING intent of that
  * review on the run: an intent whose review task id is the review's base task id
- * or one of its legs (`<base>#<n>`), a carrier included. Each of them carries a
- * decision of the same pause, which the send has already answered; sent later, it
- * would answer whatever the run paused at next, a pause on the same base task id
- * among them, which no stored row tells apart from this one. Closed means `done`
- * without a send, as the worker closes an intent of a run that went on. An intent
- * that another worker holds (`delivering`) is not touched: that delivery runs, at
- * least once, as on main for two legs decided at the same time. A dead-lettered
- * intent is not touched either: ops read it as it is. Returns the number of
+ * or one of its legs (`<base>#<n>`), a carrier included. The rows tell no pause
+ * apart: a pause on the same base task id writes no new gate. Such an intent,
+ * sent later, would answer whatever the run paused at next, that pause among
+ * them. Closed means `done` without a send, as the worker closes an intent of a
+ * run that went on. A `delivering` intent is not touched, whether a worker still
+ * holds its lease or the lease has expired: a held one is being delivered, and
+ * an expired one is claimed again and sends if the run is `pending_approval`
+ * then, a pause on the same base task id included. Closing an expired one would
+ * not stop a late worker, which sends before it checks its lease. So delivery
+ * stays at least once, as on main for two legs decided at the same time. A
+ * dead-lettered intent is not touched either: ops read it as it is. A failure
+ * here leaves the intents pending (the worker logs it). Returns the number of
  * intents closed.
  */
 export async function closeFamilyIntentsAfterResume(
