@@ -1,0 +1,11 @@
+{
+  "seq": "0120",
+  "file": "core/core__0120_run-outward-action-policy-and-resume-claim.mjs",
+  "summary": "cinatra#3745: adds agent_run_outward_action_policies (a run's one bound step-tool graph: run, org, execution attempt, policy) and artifact_review_action_consumptions (a burned artifact-review gate: gate, run, org, step, tool identity, executed source hash; no cascade, so deleting a gate or run never re-admits it), and two nullable columns on artifact_review_resume_outbox: run_claimed_at (the resume delivery's claim mark) and resume_task_result (its send witness). ADDITIVE ONLY: CREATE TABLE IF NOT EXISTS and ADD COLUMN IF NOT EXISTS; no row is written or backfilled, so no authority is fabricated. Mirrors the idempotent bootstrap twins outwardActionPolicySchemaQueries and lifecycleInterceptionsSchemaQueries (src/lib/artifacts/artifact-review-gate-schema.ts) and the Drizzle tables in packages/agents/src/schema.ts, shipped in the same pull request. A guard refuses only a database whose ledger holds a migration name of an unreleased draft of this change (core__0115_agent-run-outward-action-policy, core__0116_resume-intent-run-claim): such a boot needs CINATRA_3745_DRAFT_DB_ACK=workers-stopped, and then refuses while any intent of a running run carries no claim mark (delivering or dead-lettered), naming agent_run_stop. down() throws. SEQ 0120: 0113 is the highest sequence on main at authoring time, and 0114 to 0119 are claimed by other open changes; 0115 and 0116 are also the names an unreleased draft of this change used.",
+  "destructive": false,
+  "tables": [
+    "agent_run_outward_action_policies",
+    "artifact_review_action_consumptions",
+    "artifact_review_resume_outbox"
+  ]
+}
