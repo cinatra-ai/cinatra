@@ -272,6 +272,12 @@ function decodeFactsRows(
     logFixedLine("page capture facts: a facts record has an unknown shape", fields);
     return { status: "unreadable" };
   }
+  // Only a well-formed record of ANOTHER type is no record of this one. A missing, null, empty or non-string type is a
+  // malformed record: unreadable, never confirmed absence.
+  if (!isId(recordedType)) {
+    logFixedLine("page capture facts: a facts record has an unknown shape", fields);
+    return { status: "unreadable" };
+  }
   if (recordedType !== objectType) return { status: "absent" };
   const facts = parsePageCaptureFacts({ capturedUrl, viewport, capturedAt });
   if (facts === null) {

@@ -123,6 +123,19 @@ describe.skipIf(!RUN_DB)("page capture facts record on a real Postgres (cinatra#
     expect(readPageCaptureFactsForRevision({ ...witness, objectType: TYPE }, read)).toEqual({ status: "absent" });
   });
 
+  it("a stored facts record whose type is null is unreadable, never absent", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const bad = { orgId: "org-1", artifactId: "art-5", representationRevisionId: "rev-5" };
+    await client.query(
+      `INSERT INTO "${SCHEMA}"."artifact_audit"
+        (id, org_id, artifact_id, representation_revision_id, action, actor, detail)
+       VALUES (gen_random_uuid()::text, $1, $2, $3, 'page_capture_facts', NULL, $4::jsonb)`,
+      [bad.orgId, bad.artifactId, bad.representationRevisionId, JSON.stringify({ v: 1, objectType: null, ...FACTS })],
+    );
+    expect(readPageCaptureFactsForRevision({ ...bad, objectType: TYPE }, read)).toEqual({ status: "unreadable" });
+    vi.restoreAllMocks();
+  });
+
   it("two records for one revision are unreadable, never facts", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const twice = { orgId: "org-1", artifactId: "art-4", representationRevisionId: "rev-4" };
