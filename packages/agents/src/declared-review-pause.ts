@@ -15,7 +15,10 @@ type GateTime = { reviewTaskId: string; createdAt?: Date | null; createdAtMicros
 
 const MICROS = /^\d{1,20}$/;
 
-/** A gate's created time as 20-digit microsecond text, or null when it cannot be read. */
+/**
+ * A gate's created time as 20-digit microsecond text, or null when it cannot be
+ * read. A time before 1970 is not kept: its text would not sort, so it reads as null.
+ */
 function timeKey(g: GateTime): string | null {
   if (g.createdAtMicros !== undefined && g.createdAtMicros !== null) {
     return typeof g.createdAtMicros === "string" && MICROS.test(g.createdAtMicros) ? g.createdAtMicros.padStart(20, "0") : null;
@@ -37,9 +40,9 @@ function timeKey(g: GateTime): string | null {
  * `createdAtMicrosSql`), else as JavaScript dates, in milliseconds.
  *
  * The check fails closed: when the run has another declared review, a time it
- * cannot read (missing, null or an invalid date, or microseconds that are no
- * decimal text, on either side) and a missing gate of this review are read as a
- * later pause too, so the decision is closed without a send rather than sent
+ * cannot read (missing, null or an invalid date, a date before 1970, or
+ * microseconds that are no decimal text, on either side) and a missing gate of
+ * this review are read as a later pause too, so the decision is closed without a send rather than sent
  * into a pause that may be later. The stored `created_at` is NOT NULL, so the
  * store gives no such row. A run with no other declared review has no later
  * pause: false.

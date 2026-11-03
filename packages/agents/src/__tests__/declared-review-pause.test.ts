@@ -124,4 +124,15 @@ describe("cinatra#4312 — laterDeclaredPause compares created times in microsec
     expect(laterDeclaredPause([older("not-a-time"), ...own(`${MS}900`)], "wayflow-task-1")).toBe(true);
     expect(laterDeclaredPause([older(`${MS}100`), ...own("1.5")], "wayflow-task-1")).toBe(true);
   });
+
+  it("reads a later pause when a date before 1970 is given without microseconds", () => {
+    // The check keeps no negative time; the store gives none. The other review's date is the
+    // older one, so only the date before 1970 makes it later.
+    const dated = (reviewTaskId: string, iso: string) => ({ reviewTaskId, createdAt: new Date(iso) });
+    const legs = (iso: string) => [dated("wayflow-task-1", iso), dated("wayflow-task-1#2", iso)];
+    const read = (other: string, mine: string) => laterDeclaredPause([dated("wayflow-task-0", other), ...legs(mine)], "wayflow-task-1");
+    expect(read("1950-01-01T00:00:00Z", "1960-01-01T00:00:00Z")).toBe(true);
+    expect(read("1960-01-01T00:00:00Z", "1965-01-01T00:00:00Z")).toBe(true);
+    expect(read("1950-01-01T00:00:00Z", "2026-11-03T12:00:00Z")).toBe(true);
+  });
 });
