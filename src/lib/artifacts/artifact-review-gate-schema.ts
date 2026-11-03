@@ -452,8 +452,9 @@ export function lifecycleInterceptionsSchemaQueries(schemaName: string): QueryIn
     { text: `ALTER TABLE "${q}"."artifact_review_resume_outbox" ADD COLUMN IF NOT EXISTS max_attempts integer NOT NULL DEFAULT 20` },
     { text: `ALTER TABLE "${q}"."artifact_review_resume_outbox" ADD COLUMN IF NOT EXISTS dead_lettered_at timestamptz` },
     { text: `ALTER TABLE "${q}"."artifact_review_resume_outbox" ADD COLUMN IF NOT EXISTS last_error text` },
-    // cinatra#4312 — the gate this verification reopened (core__0117). No backfill here:
-    // the writer names a gate, and the review orchestration sweep names what an old writer left.
+    // cinatra#4312 — the record's reopen gate (core__0117). No backfill here: the writer
+    // names the gate it inserted, and the review orchestration sweep names a gate that a
+    // repair row at attempt 2 or later rests on (an old writer's, or a hand-written row's).
     {
       text: `ALTER TABLE "${q}"."artifact_verification_records"
   ADD COLUMN IF NOT EXISTS reopened_gate_id text

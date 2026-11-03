@@ -1126,7 +1126,11 @@ export async function sweepReviewOrchestration(opts?: {
   const limit = Math.max(1, Math.min(opts?.limit ?? 50, 200));
 
   // cinatra#4312 — an old application that still serves after core__0117 can write a
-  // note on an unnamed reopen gate; name such a gate here. A failure stops nothing else.
+  // note on an unnamed reopen gate; name such a gate here. The statement names any gate
+  // in the slot that a repair row at attempt 2 or later rests on, a hand-written row's
+  // too. It wakes nothing: a lineage it makes readable did not start on a declared leg
+  // (the declared-lineage check of the reopen binding), and the wake acts only on one
+  // that did. A failure stops nothing else.
   try {
     const { nameVerificationReopensThatRepairRowsRestOn } = await import("./lifecycle-verification-store");
     await nameVerificationReopensThatRepairRowsRestOn();

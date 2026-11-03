@@ -6,10 +6,13 @@
 // WHY. A changes-requested note on a verification-reopen gate joins the repair
 // lineage only when verification opened that gate. The unique (run, task) slot
 // proves only that the gate occupies the slot; any same-organization caller can
-// emit into it first. `reopened_gate_id` is written in the transaction that
-// inserts the gate, only by the verification that inserted it.
+// emit into it first. The verification writes `reopened_gate_id` in the transaction
+// that inserts the gate, and only for a gate it inserted. One more statement writes
+// the name: the backfill below, which this migration runs once and the review
+// orchestration sweep repeats (OLD WRITERS). It reads only the repair rows, so it can
+// also name a gate that a caller put in the slot, once such a row rests on that gate.
 //
-// BACKFILL, ONCE, FAIL-CLOSED. On a database upgraded from before this column, a
+// BACKFILL, FAIL-CLOSED. On a database upgraded from before this column, a
 // lineage that already went on through a reopen gate has no name to read, and it
 // would read as malformed. So this names a gate only when it already carries a
 // repair row at attempt 2 or later, in the record's slot, on the run and in the
@@ -28,7 +31,9 @@
 // lineage reads as malformed until the review orchestration sweep runs the same
 // statement (`verificationReopenNamesSql`, pinned equal by a test). The new code writes
 // no repair row on an unnamed gate, so such a row is the old code's or was written by
-// hand. The sweep names the gate either way.
+// hand. The sweep names the gate either way. On a lineage that started on a declared
+// review leg, the lineage reader never takes a reopen gate as the next attempt (the
+// declared-lineage check), so a name written there leaves that lineage malformed.
 //
 // The bootstrap never repeats this statement.
 //
@@ -46,7 +51,8 @@ export const verificationReopenedGateDdlSql = `
     REFERENCES artifact_review_gates (id) ON DELETE SET NULL;
 `;
 
-/** The one-time naming of the reopen gates written before this column. */
+/** The naming of the reopen gates written before this column: this migration runs it once,
+ * and the review orchestration sweep repeats the same statement (a test pins the two equal). */
 export const verificationReopenedGateBackfillSql = `
   UPDATE artifact_verification_records AS r
      SET reopened_gate_id = reopen.id

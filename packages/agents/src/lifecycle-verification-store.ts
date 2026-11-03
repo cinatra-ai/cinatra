@@ -243,7 +243,9 @@ async function writeVerificationRecordAndMaybeReopen(
   //
   // cinatra#4312 — the record and its reopen gate commit in ONE transaction, and the
   // record names the gate only when this verification inserted it
-  // (`reopened_gate_id`). The repair lineage reads that name as the proof that
+  // (`reopened_gate_id`; the sweep's `verificationReopenNamesSql` also names a gate
+  // that a repair row at attempt 2 or later rests on, which can be a caller's gate with
+  // a hand-written row). The repair lineage reads that name as the proof that
   // verification opened the gate, because the unique (run, task) slot proves only
   // that a gate occupies it: any same-organization caller can emit into the slot
   // first. So a gate found in the slot is this verification's only when the record
