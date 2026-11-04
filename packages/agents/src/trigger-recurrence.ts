@@ -147,9 +147,13 @@ export function buildCron(c: RecurringConfig): string {
  * cron is not read back (null), rather than drawn as a day with no option. A
  * saved day 29-31 is read back as it is.
  *
- * EVERY NUMBER OF A LIST, A RANGE OR A STEP IS CHECKED (cinatra#4407), not only
- * the first: `0 9 0,15 * *`, `0 9 0-5 * *` and `0 9 1,32 * *` are not read
- * back. The count after a `/` is a step, not a day, and is not checked.
+ * EVERY DAY THAT A LIST, A RANGE OR A STEP NAMES IS CHECKED (cinatra#4407), not
+ * only the first: `0 9 0,15 * *`, `0 9 0-5 * *` and `0 9 1,32 * *` are not read
+ * back. The count after a `/` is a step, not a day, and is not checked
+ * (`1-20/45` reads as the 1st). The day that is read is held to 1-31 as well:
+ * a field that starts with a minus (`-5`, `-1,15`) would read as a negative
+ * day, so such a cron is not read back. A field whose day part has no digit
+ * (an every-N-days step, `L`, `?`) still reads as the 1st.
  */
 function dateCronDay(domStr: string): number | null {
   if (/^\d+$/.test(domStr)) {
@@ -163,7 +167,8 @@ function dateCronDay(domStr: string): number | null {
       if (n < 1 || n > 31) return null;
     }
   }
-  return parseInt(domStr, 10) || 1;
+  const day = parseInt(domStr, 10) || 1;
+  return day >= 1 && day <= 31 ? day : null;
 }
 
 /** Cron → the selections that would have produced it (best effort). */
@@ -181,6 +186,12 @@ export function parseCronToRecurring(cron: string): Partial<RecurringConfig> | n
 
   // Quarterly Nth-weekday: "1-7 1,4,7,10 1"
   if (rangeMatch && (monthStr === Q_START_MONTHS || monthStr === Q_END_MONTHS)) {
+    // A day-of-week of `*` names no weekday, so the day range is the only day
+    // this cron names: both of its ends are held to 1-31, as a date cron's are
+    // (cinatra#4407). `0 9 32-40 1,4,7,10 *` and `0 9 0-5 1,4,7,10 *` are not
+    // read back; `0 9 1-7 1,4,7,10 *` keeps its reading. With a day-of-week
+    // (`0 9 32-40 1,4,7,10 1`) the day range is not checked.
+    if (dowStr === "*" && dateCronDay(domStr) === null) return null;
     const nthWeek = nthWeekFromRange(parseInt(rangeMatch[1], 10));
     return {
       frequency: "quarterly",

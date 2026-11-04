@@ -560,12 +560,15 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
       // the select cannot draw is never stored under it. A list, a range or a
       // step in the day field is read by the number it starts with (the 1st
       // when it names none), the reader's own approximation, which its tests
-      // pin, and every number in it must be 1-31 (cinatra#4407: `0 9 0,15 * *`,
-      // `0 9 0-5 * *` and `0 9 1,32 * *` are not read back). Such a cron is
-      // applied as given when that day is 1-28 (`0 9 1,15 * *` is stored and
-      // draws day 1), and refused when it is 29 or more (`0 9 29,30 * *`). A
-      // cron with a day-of-week field is applied as given, its day field
-      // unchecked (pinned by trigger-screen-day-field-fill-4407).
+      // pin, and every day it names must be 1-31 (cinatra#4407: `0 9 0,15 * *`,
+      // `0 9 0-5 * *`, `0 9 1,32 * *` and `0 9 -5 * *` are not read back). Such
+      // a cron is applied as given when that day is 1-28 (`0 9 1,15 * *` is
+      // stored and draws day 1), and refused when it is 29 or more
+      // (`0 9 29,30 * *`). A day range on the quarter months with a
+      // day-of-week of `*` is checked the same way (`0 9 32-40 1,4,7,10 *` is
+      // not read back). A cron with a weekday number in its day-of-week field
+      // is applied as given, its day field unchecked (`0 9 32 * 1`; pinned by
+      // trigger-screen-day-field-fill-4407).
       if (typeof values.cronExpression === "string") {
         const parsed = parseCronToRecurring(values.cronExpression);
         if (parsed && (parsed.dayOfMonth === undefined || isOfferedDayOfMonth(parsed.dayOfMonth))) {

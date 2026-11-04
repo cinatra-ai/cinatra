@@ -4,16 +4,22 @@
 //
 // The scheduling step applies a filled cron only when `parseCronToRecurring`
 // reads it back (and the day it names is one the select offers as a new
-// choice, 1-28). The reader now checks every number of a list, a range or a
-// step in the day field, so these crons are refused and neither the select nor
-// the stored cron moves:
+// choice, 1-28). The reader now checks every day that a list, a range or a
+// step in the day field names, and the day it reads, so these crons are
+// refused and neither the select nor the stored cron moves:
 //
-//   0 9 0,15 * *    0 9 0-5 * *    0 9 1,32 * *
+//   0 9 0,15 * *    0 9 0-5 * *    0 9 1,32 * *    0 9 -5 * *
 //
-// A cron that has a day-of-week field is not a date cron; its day field is not
-// checked, and the fill applies it as given. That present reading is pinned:
+// A day range on the quarter months with a day-of-week of `*` names no weekday;
+// its range is checked the same way, so these are refused too:
 //
-//   0 9 32 * 1   0 9 31 * 1   0 9 32-40 * 1   0 9 32 1 1   0 9 32-40 1,4,7,10 *
+//   0 9 32-40 1,4,7,10 *    0 9 0-5 1,4,7,10 *    0 9 1-40 3,6,9,12 *
+//
+// A cron that has a day-of-week field (a weekday number in the fifth field) is
+// not a date cron; its day field is not checked, and the fill applies it as
+// given. That present reading is pinned:
+//
+//   0 9 32 * 1   0 9 31 * 1   0 9 32-40 * 1   0 9 32 1 1   0 9 32-40 1,4,7,10 1
 //
 //   pnpm --filter @cinatra-ai/agents exec vitest run \
 //     src/__tests__/trigger-screen-day-field-fill-4407.test.tsx
@@ -116,7 +122,17 @@ afterEach(() => {
 });
 
 describe("a filled date cron with a day outside 1-31 in a list or range is refused (cinatra#4407)", () => {
-  for (const cron of ["0 9 0,15 * *", "0 9 0-5 * *", "0 9 1,32 * *"]) {
+  for (const cron of [
+    "0 9 0,15 * *",
+    "0 9 0-5 * *",
+    "0 9 1,32 * *",
+    // a field that starts with a minus
+    "0 9 -5 * *",
+    // a day range on the quarter months with a day-of-week of `*`
+    "0 9 32-40 1,4,7,10 *",
+    "0 9 0-5 1,4,7,10 *",
+    "0 9 1-40 3,6,9,12 *",
+  ]) {
     it(`"${cron}" moves neither the select nor the stored cron`, async () => {
       const container = await renderThenFillCron(cron);
       expect(byLabel(container, "Day of month")!.textContent).toBe("10");
@@ -157,11 +173,23 @@ describe("a filled cron with a day-of-week field is applied as given, its day fi
     expect(frequencyText(container)).toBe("day(s)");
   });
 
-  it("0 9 32-40 1,4,7,10 * is stored and draws the 4th Sunday of the quarter start", async () => {
-    const container = await renderThenFillCron("0 9 32-40 1,4,7,10 *");
-    await waitFor(() => expect(storedCron(container)).toBe("0 9 32-40 1,4,7,10 *"));
+  it("0 9 32-40 1,4,7,10 1 is stored and draws the 4th Monday of the quarter start", async () => {
+    const container = await renderThenFillCron("0 9 32-40 1,4,7,10 1");
+    await waitFor(() => expect(storedCron(container)).toBe("0 9 32-40 1,4,7,10 1"));
     expect(frequencyText(container)).toBe("quarter");
     expect(byLabel(container, "Week of month")!.textContent).toBe("4th");
+    expect(byLabel(container, "Weekday")!.textContent).toBe("Mon");
+  });
+});
+
+// A legal day range on the quarter months with a day-of-week of `*` is applied
+// as before: the check refuses only a range with an end outside 1-31.
+describe("a filled quarter-month day range with a day-of-week of `*` whose ends are days is applied (cinatra#4407)", () => {
+  it("0 9 1-7 1,4,7,10 * is stored and draws the 1st Sunday of the quarter start", async () => {
+    const container = await renderThenFillCron("0 9 1-7 1,4,7,10 *");
+    await waitFor(() => expect(storedCron(container)).toBe("0 9 1-7 1,4,7,10 *"));
+    expect(frequencyText(container)).toBe("quarter");
+    expect(byLabel(container, "Week of month")!.textContent).toBe("1st");
     expect(byLabel(container, "Weekday")!.textContent).toBe("Sun");
   });
 });
