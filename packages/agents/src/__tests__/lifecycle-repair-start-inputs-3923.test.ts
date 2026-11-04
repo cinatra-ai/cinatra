@@ -4,7 +4,8 @@ import { PgDialect } from "drizzle-orm/pg-core";
 
 // Only external persistence, queue and identity-reading ports are replaced.
 // The real dispatcher, coordinator, system authority mint, ActorContext
-// builder and CMS instruction projection execute. No run or queue job exists.
+// builder, the declared findings projection (cinatra#4424) and the CMS
+// instruction projection execute. No run or queue job exists.
 const ports = vi.hoisted(() => ({
   reads: [] as unknown[][],
   updateResults: [] as unknown[][],
@@ -14,6 +15,7 @@ const ports = vi.hoisted(() => ({
   role: "member" as "member" | undefined,
   createFailure: null as Error | null,
   queued: vi.fn(),
+  readBack: vi.fn(),
 }));
 vi.mock("server-only", () => ({}));
 vi.mock("../db", () => ({
@@ -75,7 +77,7 @@ vi.mock("@/lib/agent-run-enqueue", () => ({
   enqueueAgentRun: ports.queued,
 }));
 vi.mock("../cms-snapshot-readback-store", () => ({
-  readCmsSnapshotTargetByArtifact: async () => ports.target,
+  readCmsSnapshotTargetByArtifact: (...args: unknown[]) => ports.readBack(...args),
   readCmsSnapshotTargetByArtifactAndRevision: () => { throw new Error("Unexpected completion read"); },
 }));
 vi.mock("../cms-repaired-capture-port", () => ({
@@ -181,17 +183,32 @@ function pendingRepair(overrides: Record<string, unknown> = {}) {
     continuationAddress: null, findings: [currentFinding], ...overrides,
   };
 }
-function arrangeProducer(input: unknown, overrides: Record<string, unknown> = {}) {
+function arrangeProducer(input: unknown, overrides: Record<string, unknown> = {}, lifecycleConfig?: string | null) {
   const row = pendingRepair();
+  const template: Record<string, unknown> = { id: "template-producing", packageName: "@any-vendor/repair-producer" };
+  if (lifecycleConfig !== undefined) template.lifecycleConfig = lifecycleConfig;
   ports.reads = [[row], [{ templateId: "template-producing", runBy: "human-origin", oboCeiling: null,
     inputParams: typeof input === "string" ? input : JSON.stringify(input), ...overrides }],
-    [{ id: "template-producing", packageName: "@any-vendor/repair-producer" }], []];
+    [template], []];
   ports.updateResults = [[{ id: row.id }]];
   return row;
 }
 function cmsTarget(resourceType = "page") {
   return { artifactId: "artifact-base", snapshotRevisionId: "revision-base", connectorInstance: "cms-site",
     resourceType, resourceId: "content-42", scopeManifest: { paths: ["title"] } };
+}
+/** The compiled lifecycle a CMS producer persists once it declares its findings
+ * input (`cinatra.lifecycle.repairFindingsInput`, cinatra#4424). */
+const DECLARES_INSTRUCTIONS = JSON.stringify({ repairCapable: true, repairFindingsInput: { input: "instructions" } });
+/** The generic findings text (`buildRepairFindingsText`), spelled out so this
+ * file pins the wording a CMS producer's prompt reads. */
+const FINDINGS_TEXT = "A reviewer requested changes to the work you produced. Apply the following requested changes:"
+  + "\n\n1. Use the current reviewed title (field: title)";
+function deliveredRequest() {
+  return { kind: "lifecycle_repair_request", repairId: "repair-current", gateId: "gate-current", lineageId: "lineage-current",
+    attempt: 2, baseTarget: { artifactId: "artifact-base", representationRevisionId: "revision-base" },
+    expectedBaseRevisionId: "revision-base", findings: [currentFinding], continuationMode: "async_effects_gated",
+    continuationAddress: null, originatingRunBy: "human-origin" };
 }
 function inputParams() {
   return ports.created[0].input.inputParams as Record<string, unknown>;
@@ -206,6 +223,7 @@ beforeEach(() => {
   ports.reads = []; ports.updateResults = []; ports.writes = []; ports.created = [];
   ports.target = null; ports.role = "member"; ports.createFailure = null;
   vi.clearAllMocks();
+  ports.readBack.mockImplementation(async () => ports.target);
 });
 
 describe("repair start inputs satisfy the actual producing root contracts", () => {
@@ -234,14 +252,32 @@ describe("repair start inputs satisfy the actual producing root contracts", () =
       expect(delivered.lifecycleRepairRequest).toMatchObject({ repairId: "repair-current", attempt: 2, findings: [currentFinding] });
     });
 
-    it(`${contract.label}: fresh CMS instructions also satisfy the root when the producer recorded none`, async () => {
+    it(`${contract.label}: fresh CMS instructions also satisfy the root when the producer recorded none, on the declared projection instead of the CMS bridge`, async () => {
       const original = { ...contract.originalInputs } as Record<string, unknown>;
       delete original.instructions;
-      arrangeProducer(original); ports.target = cmsTarget(contract.resourceType);
+      arrangeProducer(original, {}, DECLARES_INSTRUCTIONS); ports.target = cmsTarget(contract.resourceType);
       await dispatchPendingProducerRepairs();
       expect(schemaForRoot(contract).safeParse(inputParams()).success).toBe(true);
+      expect(inputParams().instructions).toBe(FINDINGS_TEXT);
       expect(inputParams().instructions).toContain(currentFinding.message);
+      expect(inputParams()).not.toHaveProperty("task");
+      expect(ports.readBack).not.toHaveBeenCalled();
     });
+
+    for (const base of ["with", "without"] as const) {
+      it(`${contract.label}: a producer that declares its findings input gets the findings there, for a base ${base} a cms_snapshot_targets row`, async () => {
+        const original = { ...contract.originalInputs, customProducerOption: { untouched: ["value"] } };
+        arrangeProducer(original, {}, DECLARES_INSTRUCTIONS);
+        ports.target = base === "with" ? cmsTarget(contract.resourceType) : null;
+        const result = await dispatchPendingProducerRepairs();
+        expect(result).toMatchObject({ dispatched: 1, failed: 0, escalated: 0 });
+        const expected = { ...original, instructions: FINDINGS_TEXT, lifecycleRepairRequest: deliveredRequest() };
+        expect(JSON.stringify(inputParams())).toBe(JSON.stringify(expected));
+        expect(inputParams().instructions).not.toContain("Old producing instructions");
+        expect(schemaForRoot(contract).safeParse(inputParams()).success).toBe(true);
+        expect(ports.readBack).not.toHaveBeenCalled();
+      });
+    }
 
     it(`${contract.label}: root requirements reject a missing field or wrong type and allow the defaulted run id to be omitted`, () => {
       const schema = schemaForRoot(contract);
@@ -259,6 +295,42 @@ describe("repair start inputs satisfy the actual producing root contracts", () =
     await dispatchPendingProducerRepairs();
     expect(inputParams()).toMatchObject({ bespokeValue: original.bespokeValue, instructions: original.instructions, task: original.task,
       lifecycleRepairRequest: { repairId: "repair-current", findings: [currentFinding] } });
+  });
+
+  it("a producer that declares nothing gets a byte-identical dispatch: its own inputs plus the typed request", async () => {
+    const original = { bespokeValue: { nested: true }, instructions: "Non-CMS producer instructions", task: "Own task" };
+    for (const lifecycleConfig of [undefined, null, JSON.stringify({ repairCapable: true }), "{not json",
+      JSON.stringify({ repairCapable: true, repairFindingsInput: { input: "lifecycleRepairRequest" } }),
+      JSON.stringify({ repairCapable: true, repairFindingsInput: "instructions" })]) {
+      ports.created = [];
+      arrangeProducer(original, {}, lifecycleConfig);
+      await dispatchPendingProducerRepairs();
+      expect(JSON.stringify(inputParams())).toBe(JSON.stringify({ ...original, lifecycleRepairRequest: deliveredRequest() }));
+    }
+  });
+
+  it("a declared input named like a run field reaches only inputParams, never the run's authority", async () => {
+    for (const name of ["orgId", "runBy", "templateId", "parentRunId"]) {
+      ports.created = [];
+      arrangeProducer({ custom: "retained" }, {}, JSON.stringify({ repairFindingsInput: { input: name } }));
+      await dispatchPendingProducerRepairs();
+      const created = ports.created[0].input;
+      expect(created).toMatchObject({ orgId: "repair-org", runBy: "human-origin", templateId: "template-producing",
+        parentRunId: "producer-original" });
+      expect(inputParams()[name]).toBe(FINDINGS_TEXT);
+      expect(inputParams().lifecycleRepairRequest).toEqual(deliveredRequest());
+    }
+  });
+
+  it("a producer that declares nothing keeps the CMS bridge's instructions on a captured CMS base until its pinned release declares its input", async () => {
+    const original = { instanceId: "cms-site", instructions: "Old producing instructions" };
+    arrangeProducer(original, {}, JSON.stringify({ repairCapable: true })); ports.target = cmsTarget();
+    await dispatchPendingProducerRepairs();
+    const delivered = inputParams();
+    expect(delivered.instructions).toContain(currentFinding.message);
+    expect(delivered.instructions).not.toBe(FINDINGS_TEXT);
+    expect(delivered.task).toBe(delivered.instructions);
+    expect(ports.readBack).toHaveBeenCalledOnce();
   });
 
   it("returns no CMS additions for a non-CMS target", async () => {
