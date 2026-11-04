@@ -1634,10 +1634,11 @@ export async function compileOasAgentJson(opts: {
           : undefined;
       // cinatra#4457: the keys of a value-surfacing gate's message. The flag is
       // read with the loader's own strict identity (`=== true`, never a truthy
-      // coercion); each declared input's title is a key of the message.
+      // coercion); each declared input's title is a key of the message. An
+      // `inputs` that is not an array lists no key (the compile never throws).
       const surfaceGateInputKeys =
         ime.metadata?.cinatra?.surfaceGateInputs === true
-          ? readKeyList((ime.inputs ?? []).map((i) => i?.title))
+          ? readKeyList(Array.isArray(ime.inputs) ? ime.inputs.map((i) => i?.title) : [])
           : [];
       return {
         nodeType: "input_message",
