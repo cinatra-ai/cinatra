@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { matcherManifestRegistry } from "@cinatra-ai/objects/registry";
+import { matcherManifestRegistry, objectTypeRegistry } from "@cinatra-ai/objects/registry";
 
 import {
   selectMeaningTypesAcceptingMime,
@@ -313,5 +313,30 @@ describe("listInstalledMeaningTypesAcceptingMime — a matcher entry under a cla
     // Without a claim-backed entry the matcher entry is a candidate, as before.
     const plain = picker.listInstalledMeaningTypesAcceptingMime("text/markdown");
     expect(plain.filter((t) => t.extension === LINKEDIN).map((t) => t.objectTypeId)).toEqual([null]);
+  });
+
+  it("3319 T25 (picker): a claim-backed pack that registers a type without isArtifact has no object-type candidate, so its one candidate is the claim-backed entry", () => {
+    // The pack's own registration carries no `isArtifact`, so the object-type
+    // channel (which lists only artifact types) holds no candidate of it.
+    objectTypeRegistry.register(
+      { type: "@cinatra-ai/linkedin-artifacts:settings", category: "data" } as never,
+      LINKEDIN,
+    );
+    try {
+      expect(objectTypeRegistry.getTypesForPackage(LINKEDIN)).toEqual([
+        "@cinatra-ai/linkedin-artifacts:settings",
+      ]);
+      const got = picker.listInstalledMeaningTypesAcceptingMime("text/markdown", { claimBacked });
+      expect(got.filter((t) => t.extension === LINKEDIN)).toEqual([
+        {
+          objectTypeId: POST_DRAFT,
+          extension: LINKEDIN,
+          displayName: "Post draft",
+          extensionLabel: "LinkedIn post",
+        },
+      ]);
+    } finally {
+      objectTypeRegistry.removeByPackage(LINKEDIN);
+    }
   });
 });
