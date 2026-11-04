@@ -13,7 +13,13 @@
  *   - the gate draws exactly ONE Continue, beneath the box;
  *   - ticking and unticking the box sends nothing;
  *   - an untouched Continue sends `false`, a ticked one sends `true`, each under
- *     the gate's own field name, and each press sends exactly once.
+ *     the gate's own field name, and each press sends exactly once, also when a
+ *     second press lands in the same tick as the first.
+ *
+ * And on a MID-RUN gate (an `:output` renderer drawn by the schema floor) whose
+ * schema is a boolean: the stepper's own outer Continue stays the gate's one
+ * control, so the field draws no Continue beside it and the box writes through
+ * to the gate as it did before cinatra#4310.
  *
  * Harness mirrors orchestrator-stepper-panel-setup-continue-3532.test.tsx.
  *
@@ -23,11 +29,12 @@
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import { fieldRendererRegistry } from "../field-renderer-registry";
+import { SchemaOnlyFloorRenderer } from "../schema-field-renderer";
 
 vi.mock("lucide-react", () => {
   const StubIcon: React.FC = () => null;
@@ -94,6 +101,9 @@ vi.mock("../use-runtime-field-renderer-bindings", () => ({
 const FIELD = "sendFollowUps";
 const REVIEW_TASK_ID = "setup-run-4310";
 const SCHEMA = { type: "boolean" };
+/** A MID-RUN gate (`:output`) whose renderer is the schema floor. */
+const MID_RUN_RENDERER_ID = "@cinatra-test/pack-agent:output";
+const MID_RUN_TASK_ID = "lg-run-4310";
 
 /** The live interrupt the mocked stream hands the panel. */
 let INTERRUPT: Record<string, unknown> | null = null;
@@ -167,6 +177,14 @@ beforeEach(() => {
     vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) })),
   );
   ensureDefaultFieldRenderersRegistered();
+  fieldRendererRegistry.register({
+    id: MID_RUN_RENDERER_ID,
+    priority: 100,
+    condition: (_fieldName, schema) =>
+      (schema as { "x-renderer"?: unknown })["x-renderer"] === MID_RUN_RENDERER_ID,
+    renderer: SchemaOnlyFloorRenderer,
+    drawsOwnSubmit: true,
+  });
 });
 
 afterEach(() => {
@@ -232,7 +250,7 @@ describe("OrchestratorStepperPanel — a per-field boolean setup question (cinat
     expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1);
   });
 
-  it("a press repeated while the first send is in flight sends once", async () => {
+  it("presses repeated while the first send is in flight (the Continue disabled) send once", async () => {
     let release: (v: { ok: true }) => void = () => {};
     hitlActions.approveReviewTask.mockImplementationOnce(
       () =>
@@ -249,6 +267,70 @@ describe("OrchestratorStepperPanel — a per-field boolean setup question (cinat
     await settle();
     expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1);
     release({ ok: true });
+    await settle();
+    expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("two presses in the same tick send once", async () => {
+    let release: (v: { ok: true }) => void = () => {};
+    hitlActions.approveReviewTask.mockImplementationOnce(
+      () =>
+        new Promise<{ ok: true }>((resolve) => {
+          release = resolve;
+        }),
+    );
+    await mountGate();
+    await waitFor(() => expect(continues()).toHaveLength(1));
+    const press = continues()[0]!;
+    act(() => {
+      press.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      press.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await settle();
+    expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1);
+    release({ ok: true });
+    await settle();
+    expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("OrchestratorStepperPanel — a boolean asked on a mid-run gate (cinatra#4310)", () => {
+  async function mountMidRunGate() {
+    INTERRUPT = {
+      schema: SCHEMA,
+      xRenderer: MID_RUN_RENDERER_ID,
+      values: {},
+      reviewTaskId: MID_RUN_TASK_ID,
+    };
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    return render(<OrchestratorStepperPanel {...baseProps()} />);
+  }
+
+  function midRunBox(): HTMLElement | null {
+    return document.querySelector<HTMLElement>('[role="checkbox"]');
+  }
+
+  it("draws exactly one Continue, the stepper's own, and none beside the box", async () => {
+    await mountMidRunGate();
+    await waitFor(() => expect(midRunBox()).not.toBeNull());
+    await waitFor(() => expect(continues()).toHaveLength(1));
+  });
+
+  it("a tick sends nothing, and the one Continue sends the gate's approval once", async () => {
+    await mountMidRunGate();
+    await waitFor(() => expect(midRunBox()).not.toBeNull());
+    fireEvent.click(midRunBox()!);
+    await settle();
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    await waitFor(() => expect(continues()).toHaveLength(1));
+    fireEvent.click(continues()[0]!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    expect(hitlActions.approveReviewTask).toHaveBeenLastCalledWith(
+      MID_RUN_TASK_ID,
+      expect.objectContaining({ approved: true }),
+      undefined,
+      SCHEMA,
+    );
     await settle();
     expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1);
   });

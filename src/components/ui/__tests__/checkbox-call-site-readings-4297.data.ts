@@ -378,12 +378,15 @@ export const CHECKBOX_CALL_SITE_READINGS: FileReading[] = [
         drawn: "checkbox",
         effect: "confirmed",
         reading:
-          "the box of a boolean question in a schema-drawn form: inside a grouped setup form or a structured object's sub-field (hideSubmit) the form's own submit sends it, and on the per-field setup surfaces the box only stages the answer and the Continue drawn beneath it sends it (cinatra#4310)",
+          "the box of a boolean question in a schema-drawn form: inside a grouped setup form or a structured object's sub-field (hideSubmit) the form's own submit sends it; on a mid-run step (hideSubmit) the box draws no Continue and the step's one outer Continue is the step's only control; and on the per-field setup surfaces the box only stages the answer and the Continue drawn beneath it sends it (cinatra#4310)",
         tagIncludes: ["onCheckedChange={(next) => (ownsContinue ? setStagedChecked(next === true) : onChange(Boolean(next)))}"],
         fileIncludes: ['if (type === "boolean") {', "await handleSubmit(stagedChecked);", "onClick={() => void submitBoolean()}"],
         evidence: [
           { file: "packages/agents/src/register-default-renderers.ts", text: "drawsOwnSubmit: true," },
           { file: "packages/agents/src/grouped-setup-form-renderer.tsx", text: "hideSubmit={true}" },
+          { file: "packages/agents/src/agentic-run-panel.tsx", text: "midRunBooleanFieldHidesSubmit({" },
+          { file: "packages/agents/src/orchestrator-stepper-panel.tsx", text: "midRunBooleanFieldHidesSubmit({" },
+          { file: "packages/agents/src/agent-hitl-screen-card.tsx", text: "midRunBooleanFieldHidesSubmit({ isMidRun, isGroupedSetup, fieldSchema: renderSchema })" },
         ],
       },
     ],
