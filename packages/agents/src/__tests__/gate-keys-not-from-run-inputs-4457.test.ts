@@ -400,6 +400,62 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
         expect(Object.prototype.hasOwnProperty.call(ctx.currentValues, k), `screen ${k}`).toBe(false);
       }
     });
+
+    it("a stored step whose key list holds no usable key (an empty string, a number, null): nothing is withheld", async () => {
+      storeMock.readAgentTemplateById.mockResolvedValue(
+        makeTemplate([gateStep(6, LIST_RENDERER, ["", 5, null] as unknown as string[])]),
+      );
+      const run = makeRun({ ...STORED, "": "empty-named" });
+      const { emitted, ctx } = await emitAndRead(road, gateTask("cut {"), run);
+      expect(ctx.currentValues[""]).toBe("empty-named");
+      expect(ctx.currentValues.candidateMembers).toEqual(STORED.candidateMembers);
+      expect(emitted.schema).toEqual(GATE_SCHEMA);
+      expect(ctx.inputSchema).toEqual(GATE_SCHEMA);
+    });
+
+    it("a flagged gate with the artifact-review marker whose review core opens no review: the ordinary gate withholds the keys", async () => {
+      const decide = vi.fn(async () => ({ review: false, why: "no review for this work" }));
+      const readGate = vi.fn(async () => null);
+      (globalThis as { __cinatraArtifactReviewGateSeam?: unknown }).__cinatraArtifactReviewGateSeam = {
+        decideDeclaredReview: decide,
+        emit: vi.fn(),
+        readGate,
+        listGates: vi.fn(async () => []),
+      };
+      try {
+        storeMock.readAgentTemplateById.mockResolvedValue(
+          makeTemplate([
+            { ...gateStep(6, LIST_RENDERER, LIST_GATE_KEYS), artifactReviewTargetsInput: "reviewTargets" },
+          ]),
+        );
+        const { ctx } = await emitAndRead(road, gateTask(""));
+        // The marked branch ran and fell through to the ordinary gate.
+        expect(decide).toHaveBeenCalledTimes(1);
+        expect(readGate).toHaveBeenCalledTimes(1);
+        for (const k of LIST_GATE_KEYS) {
+          expect(Object.prototype.hasOwnProperty.call(ctx.currentValues, k), `screen ${k}`).toBe(false);
+        }
+        expect(ctx.currentValues.campaignNote).toBe("kept");
+        expect(ctx.inputSchema[GATE_KEYS_NOT_FROM_RUN_INPUTS]).toEqual(LIST_GATE_KEYS);
+      } finally {
+        delete (globalThis as { __cinatraArtifactReviewGateSeam?: unknown }).__cinatraArtifactReviewGateSeam;
+      }
+    });
+
+    it("a gate without the flag and without a step schema, whose pendingApproval holds the list key: the host does not pass the key on", async () => {
+      const step: Record<string, unknown> = gateStep(6, LIST_RENDERER);
+      delete step.inputMessageSchema;
+      storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate([step]));
+      const { emitted, ctx } = await emitAndRead(
+        road,
+        gateTask("cut {", { [GATE_KEYS_NOT_FROM_RUN_INPUTS]: ["campaignNote", "listName"] }),
+      );
+      expect(Object.prototype.hasOwnProperty.call(emitted.schema, GATE_KEYS_NOT_FROM_RUN_INPUTS)).toBe(false);
+      expect(Object.prototype.hasOwnProperty.call(ctx.inputSchema, GATE_KEYS_NOT_FROM_RUN_INPUTS)).toBe(false);
+      // The run's inputs reach the screen as before.
+      expect(ctx.currentValues.campaignNote).toBe("kept");
+      expect(ctx.currentValues.listName).toBe(STORED.listName);
+    });
   });
 });
 
@@ -458,5 +514,31 @@ describe("cinatra#4457 — the readers honour the schema's list on both roads", 
     }
     const ctx = (await deriveRunHitlContext(parked))!;
     expect(ctx.currentValues.candidateMembers).toEqual(STORED.candidateMembers);
+  });
+
+  it.each(ROADS)("%s road: a list entry that is an empty string or not a string withholds nothing", async (road) => {
+    const parkedEmpty = {
+      ...makeRun({ ...STORED, "": "empty-named" }),
+      status: "pending_approval",
+      a2aTaskId: "task-x",
+    } as AgentRunRecord;
+    const schema = { type: "object", [GATE_KEYS_NOT_FROM_RUN_INPUTS]: ["candidateMembers", "", 7, null] };
+    if (road === "interrupt") {
+      frameRoad.mode = "frame";
+      onInterruptSpy(schema, LIST_RENDERER, {}, "wayflow-task-x");
+    } else {
+      frameRoad.mode = "none";
+      storeMock.rows.push({
+        runId: parkedEmpty.id,
+        reviewTaskId: "wayflow-task-x",
+        xRenderer: LIST_RENDERER,
+        inputSchema: schema,
+        values: {},
+      });
+    }
+    const ctx = (await deriveRunHitlContext(parkedEmpty))!;
+    expect(Object.prototype.hasOwnProperty.call(ctx.currentValues, "candidateMembers")).toBe(false);
+    expect(ctx.currentValues[""]).toBe("empty-named");
+    expect(ctx.currentValues.listName).toBe(STORED.listName);
   });
 });

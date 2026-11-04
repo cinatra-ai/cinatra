@@ -23,7 +23,15 @@ import {
 const PACKAGE = "@cinatra-ai/list-curator-agent";
 const RENDERER = `${PACKAGE}:list-review`;
 
-function buildGateOas(cinatraFlag: Record<string, unknown>): Record<string, unknown> {
+const DECLARED_INPUTS: unknown[] = [
+  { title: "candidateMembers", type: "array" },
+  { title: "listName", type: "string" },
+];
+
+function buildGateOas(
+  cinatraFlag: Record<string, unknown>,
+  gateInputs: unknown[] = DECLARED_INPUTS,
+): Record<string, unknown> {
   return {
     agentspec_version: "26.1.0",
     component_type: "Flow",
@@ -62,10 +70,7 @@ function buildGateOas(cinatraFlag: Record<string, unknown>): Record<string, unkn
             ...cinatraFlag,
           },
         },
-        inputs: [
-          { title: "candidateMembers", type: "array" },
-          { title: "listName", type: "string" },
-        ],
+        inputs: gateInputs,
         outputs: [{ title: "userResponse", type: "string" }],
       },
       end: { component_type: "EndNode", id: "end", name: "End", outputs: [] },
@@ -82,9 +87,12 @@ afterEach(() => {
   rmSync(tempDir, { recursive: true, force: true });
 });
 
-async function compileGateStep(cinatraFlag: Record<string, unknown>): Promise<CompiledAgentOasStep> {
+async function compileGateStep(
+  cinatraFlag: Record<string, unknown>,
+  gateInputs?: unknown[],
+): Promise<CompiledAgentOasStep> {
   const oasPath = path.join(tempDir, "oas.json");
-  writeFileSync(oasPath, JSON.stringify(buildGateOas(cinatraFlag), null, 2));
+  writeFileSync(oasPath, JSON.stringify(buildGateOas(cinatraFlag, gateInputs), null, 2));
   const regPath = path.join(tempDir, "components.json");
   writeFileSync(regPath, JSON.stringify({ components: {} }));
   const res = await compileOasAgentJson({
@@ -115,6 +123,28 @@ describe("cinatra#4457 — compiled surfaceGateInputKeys", () => {
   ])("a gate whose flag is %s carries no keys (strict identity, as the loader reads it)", async (_label, flag) => {
     const step = await compileGateStep(flag);
     expect(step.surfaceGateInputKeys).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(step, "surfaceGateInputKeys")).toBe(false);
+  });
+
+  it("a flagged gate lists only its usable titles: a non-string, an empty title or an input without one is left out", async () => {
+    const step = await compileGateStep({ surfaceGateInputs: true }, [
+      { title: "candidateMembers", type: "array" },
+      { title: "", type: "string" },
+      { title: 5, type: "number" },
+      { title: null, type: "string" },
+      { title: ["listName"], type: "string" },
+      { title: { length: 2 }, type: "string" },
+      { id: "untitled", type: "string" },
+      { title: "listName", type: "string" },
+    ]);
+    expect(step.surfaceGateInputKeys).toEqual(["candidateMembers", "listName"]);
+  });
+
+  it.each([
+    ["no declared input", []],
+    ["only unusable titles", [{ title: "", type: "string" }, { title: 5, type: "number" }]],
+  ])("a flagged gate with %s carries no keys (the field is not written)", async (_label, inputs) => {
+    const step = await compileGateStep({ surfaceGateInputs: true }, inputs);
     expect(Object.prototype.hasOwnProperty.call(step, "surfaceGateInputKeys")).toBe(false);
   });
 });
