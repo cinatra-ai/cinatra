@@ -46,6 +46,7 @@ const FACTS = {
   createdBy: "user-1",
   toType: "@cinatra-ai/screenshot-artifact:screenshot",
   mime: "image/png",
+  baseRevisionId: "rep_base",
 };
 
 describe("the promotion append writes the witness in its own transaction", () => {

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgSchema, text, integer, boolean, timestamp, index, uniqueIndex, primaryKey, jsonb } from "drizzle-orm/pg-core";
+import { pgSchema, text, integer, boolean, timestamp, index, uniqueIndex, primaryKey, jsonb, check } from "drizzle-orm/pg-core";
 
 // ---------------------------------------------------------------------------
 // Extension registry origin coordinates.
@@ -211,6 +211,13 @@ export const agentTemplates = cinatraSchema.table("agent_templates", {
   // produces parity was never established) — and falls through to the pre-#3208
   // registry read, preserving that fail-closed posture byte for byte.
   artifactBindings: text("artifact_bindings"),
+  // publishingSteps (cinatra#4150): the ids of the flow nodes the compiled OAS
+  // declares `metadata.cinatra.publishes: true`, JSON-as-text like gated_steps.
+  // Written by the install, import, seed and recompile writers. NULLABLE with no default and no
+  // backfill: null = unknown: a row written before this column existed, or by a writer that does not take the list from a compile. A
+  // legacy template cannot declare the flag (the key is new), so a reader treats
+  // null as "unknown", never as "publishes nothing".
+  publishingSteps: text("publishing_steps"),
   // lifecycleConfig: the agent-manifest LIFECYCLE declarations (cinatra#2038,
   // epic #2037 S0) compiled onto the template trigger-style (like trigger_mode /
   // gated_steps): requestedSkips / producedTypes / repairCapable as JSON-as-text.
@@ -839,6 +846,28 @@ export const lifecycleContinuationPark = cinatraSchema.table("lifecycle_continua
   holdNotifyIdx: index("lifecycle_continuation_park_hold_notify_idx")
     .on(t.holdNotification, t.status)
     .where(sql`hold_notification = 'live'`),
+}));
+
+/** One stop in front of a declared publishing step (cinatra#4150). `parked` is the only open status;
+ * a row leaves it once, through publish-decision-store.ts. `surfaced_values` is JSON-as-text. */
+export const agentRunPublishDecisions = cinatraSchema.table("agent_run_publish_decisions", {
+  id:             text("id").primaryKey(),
+  orgId:          text("org_id"),
+  runId:          text("run_id").notNull(),
+  nodeId:         text("node_id").notNull(),
+  gateTaskId:     text("gate_task_id").notNull(),
+  a2aContextId:   text("a2a_context_id"),
+  status:         text("status").notNull().default("parked"), // parked | released | declined | expired | run_ended
+  surfacedValues: text("surfaced_values").notNull(),
+  decidedBy:      text("decided_by"),
+  decidedAt:      timestamp("decided_at", { withTimezone: true }),
+  decisionNote:   text("decision_note"),
+  createdAt:      timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  expiresAt:      timestamp("expires_at", { withTimezone: true }).notNull(),
+}, (t) => ({
+  parkUniq: uniqueIndex("agent_run_publish_decisions_park_uniq").on(t.runId, t.nodeId, t.gateTaskId),
+  dueIdx:   index("agent_run_publish_decisions_due_idx").on(t.expiresAt).where(sql`status = 'parked'`),
+  statusCheck: check("agent_run_publish_decisions_status_check", sql`status IN ('parked', 'released', 'declined', 'expired', 'run_ended')`),
 }));
 
 /** The zero-authority advisory seam — gate-bound, provenance-stamped, idempotent,

@@ -94,6 +94,16 @@ export default defineConfig({
         find: "@cinatra-ai/artifacts",
         replacement: path.join(__dirname, "packages/artifacts/src/index.ts"),
       },
+      // cinatra#4319: an extension's renderer imports the host-shared primitives
+      // by the bare `@cinatra-ai/design-primitives`. tsconfig has the path (and
+      // config/build-config.manifest.json the alias); vitest needs the mirrored
+      // alias, because `tsconfigPaths` reads the importer's NEAREST tsconfig and
+      // an extension clone ships its own, without that path. Exact match, as the
+      // tsconfig key is exact.
+      {
+        find: /^@cinatra-ai\/design-primitives$/,
+        replacement: path.join(__dirname, "src/lib/artifacts/host-shared-primitives.ts"),
+      },
       // cinatra#1894 B1b: the host dashboards-artifact twin writer imports the
       // dashboards fail-closed seam by this leaf subpath. tsconfig has the path
       // alias; the root vitest run needs the mirrored entry so host-side twin

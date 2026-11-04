@@ -93,18 +93,17 @@ export const HOST_DESIGN_PRIMITIVES_CONTRACT_MAJOR = 1;
 /**
  * The FROZEN export list of the shared primitives module at contract major
  * {@link HOST_DESIGN_PRIMITIVES_CONTRACT_MAJOR} — exactly the exports of the
- * seventeen product components under `src/components/ui/` that the
- * self-rendering-extensions border floor
- * (`scripts/extensions/self-rendering-extensions-border.baseline.json`) records
- * as byte copies inside connector/artifact packages: alert, alert-dialog,
+ * seventeen product components under src/components/ui/ that connector and
+ * artifact packages copied before the migration of #3471: alert, alert-dialog,
  * badge, button, card, checkbox, dialog, field, input-group, input, label,
- * paginated-table, pagination, select, separator, table, textarea.
+ * paginated-table, pagination, select, separator, table, textarea. The list is
+ * frozen by the contract version, not by the border floor, which is empty.
  *
- * The baseline ALSO lists `external-link.tsx`, `link.tsx` and `text-link.tsx`.
- * Those are NOT product primitives — they are the extensions' OWN components,
- * and no such file exists under `src/components/ui/`, so the host cannot and
- * does not serve them. The product's AlertDialog joins the shared contract in
- * version 1.1.0.
+ * Before the migration the border floor also recorded external-link.tsx,
+ * link.tsx and text-link.tsx. Those are NOT product primitives: they are the
+ * extensions' OWN components, and no such file exists under
+ * src/components/ui/, so the host cannot and does not serve them. The
+ * product's AlertDialog joins the shared contract in version 1.1.0.
  *
  * Adding a name here is a MINOR bump; removing or renaming one is a MAJOR.
  */
