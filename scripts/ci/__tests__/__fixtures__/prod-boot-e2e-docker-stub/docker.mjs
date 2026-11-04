@@ -2,8 +2,10 @@
 // `docker` wrapper first on PATH that runs this file, then runs the real script.
 //
 // Every call is checked against the exact shapes the script uses before it changes
-// anything; any other call exits 97 and records nothing, so a script change this
-// stand-in does not know fails the test instead of passing it.
+// anything; any other call exits non-zero and records nothing, so a script change this
+// stand-in does not know fails the test instead of passing it. This file exits 97. A
+// call whose `--env-file` names a missing file never reaches it: node reads that
+// option from its whole argument list and exits 9.
 //
 // A valid `docker run -d` is recorded as a run in the state file, with its EFFECTIVE
 // env resolved once, here: the last `-e NAME=value` of a name wins, and a bare
