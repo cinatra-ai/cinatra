@@ -138,18 +138,32 @@ export function buildCron(c: RecurringConfig): string {
 }
 
 /**
- * The day of month that a date cron's day field names (cinatra#4377). A day
- * written in digits is read as it is. Any other field (a list, a range or a
- * step) keeps the earlier approximate reading: the number it starts with, or
- * the 1st when that is missing or 0 (the every-N-days limit the tests pin).
+ * The day of month that a date cron's day field names (cinatra#4377, #4407). A
+ * day written in digits is read as it is. Any other field (a list, a range or
+ * a step) keeps the earlier approximate reading: the number it starts with, or
+ * the 1st when it names no number (the every-N-days limit the tests pin).
  * Either way the day must be one that some month has, 1 to 31: `0`, `32`,
  * `99` or a list such as `32,33` is no selection the form can draw, so the
  * cron is not read back (null), rather than drawn as a day with no option. A
  * saved day 29-31 is read back as it is.
+ *
+ * EVERY NUMBER OF A LIST, A RANGE OR A STEP IS CHECKED (cinatra#4407), not only
+ * the first: `0 9 0,15 * *`, `0 9 0-5 * *` and `0 9 1,32 * *` are not read
+ * back. The count after a `/` is a step, not a day, and is not checked.
  */
 function dateCronDay(domStr: string): number | null {
-  const day = /^\d+$/.test(domStr) ? Number(domStr) : parseInt(domStr, 10) || 1;
-  return day >= 1 && day <= 31 ? day : null;
+  if (/^\d+$/.test(domStr)) {
+    const day = Number(domStr);
+    return day >= 1 && day <= 31 ? day : null;
+  }
+  for (const element of domStr.split(",")) {
+    const base = element.split("/")[0];
+    for (const digits of base.match(/\d+/g) ?? []) {
+      const n = Number(digits);
+      if (n < 1 || n > 31) return null;
+    }
+  }
+  return parseInt(domStr, 10) || 1;
 }
 
 /** Cron → the selections that would have produced it (best effort). */
