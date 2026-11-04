@@ -128,6 +128,21 @@ async function defaultAudit(event: Record<string, unknown>): Promise<void> {
   await logAuditEvent(event as Parameters<typeof logAuditEvent>[0]);
 }
 
+/**
+ * The reason a denied audit row records: one fixed word, never text from the
+ * thrown value (cinatra#4471). A failing read inside a call can carry a file
+ * path or an install id in its message, and the audit sanitizer drops keys,
+ * not values. "refused" for a stated refusal of this port, "failed" for any
+ * other throw, and for a value whose class check throws.
+ */
+function deniedReason(e: unknown): "refused" | "failed" {
+  try {
+    return e instanceof ExtensionToolRefusal ? "refused" : "failed";
+  } catch {
+    return "failed";
+  }
+}
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
@@ -326,7 +341,7 @@ export function createExtensionObjectsPort(
       }
     } catch (e) {
       await auditRow("objects_read", "denied", objectId || undefined, {
-        reason: e instanceof Error ? e.message : String(e),
+        reason: deniedReason(e),
       });
       throw e;
     }
@@ -435,7 +450,7 @@ export function createExtensionObjectsPort(
         "objects_save",
         "denied",
         type || undefined,
-        { reason: e instanceof Error ? e.message : String(e) },
+        { reason: deniedReason(e) },
         admission,
       );
       throw e;
