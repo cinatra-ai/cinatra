@@ -37,6 +37,9 @@ const storeMock = vi.hoisted(() => ({
   updateAgentRunA2AContextId: vi.fn(async () => undefined),
 }));
 vi.mock("../store", () => storeMock);
+// cinatra#3745: the delivery's own pending_approval -> running claim before its
+// send. Kept apart from the store's transition, which carries the terminal write.
+vi.mock("../run-transition", () => ({ transitionRunStatus: vi.fn(async () => undefined) }));
 
 const holdSpy = vi.hoisted(() =>
   vi.fn(async () => ({ held: true, reason: "hold-unpersisted" }) as {
@@ -103,6 +106,10 @@ vi.mock("../wayflow-run-token-carrier", () => ({
 const gateStoreMock = vi.hoisted(() => ({
   claimPendingResumeIntents: vi.fn(async () => []),
   markResumeIntentDelivered: vi.fn(async () => true),
+  // cinatra#3745: an unclaimed intent, a live lease and an accepted task record.
+  readResumeIntentClaim: vi.fn(async () => ({ runClaimed: false, result: null })),
+  renewResumeIntentLease: vi.fn(async () => true),
+  recordResumeTaskResult: vi.fn(async () => true),
   // This delivery follows the resolved legacy gate; its complete inventory
   // must authorize the resume before this suite exercises terminal recovery.
   listReviewGatesForRun: vi.fn(async () => [{
@@ -194,6 +201,8 @@ function intent(): ResumeIntentRow {
     attempts: 1,
     leaseToken: "lease-abc",
     leaseExpiresAt: new Date(Date.now() + 60_000),
+    runClaimedAt: null,
+    resumeTaskResult: null,
   };
 }
 

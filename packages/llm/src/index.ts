@@ -595,7 +595,7 @@ export type ResolvedLlmRuntime =
   // `.provider` must handle it; the `isScriptedLlmRuntime` guard narrows it.
   | ScriptedLlmRuntime;
 
-export type DeterministicLlmExecutionInput = {
+export type DeterministicLlmExecutionInput = StepToolPolicyInput & {
   provider: LlmProvider;
   system: string;
   user: string;
@@ -1068,7 +1068,7 @@ async function runDeterministicLlmTaskImpl(input: DeterministicLlmExecutionInput
     system,
     prompt: input.user,
     model: input.model,
-    tools: exec.tools,
+    tools: restrictStepToolOffers(exec.tools, input.stepToolPolicy),
     maxSteps: exec.maxSteps,
     maxTokens: input.maxOutputTokens,
     // cinatra#2339: per-provider constraint sanitization at the core→adapter
@@ -1273,7 +1273,7 @@ async function runSkillAwareDeterministicLlmTaskImpl(input: SkillAwareDeterminis
     requestedMaxSteps: input.maxSteps,
     outputSchema: input.outputSchema,
   });
-  const execTools = exec.tools ?? allTools;
+  const execTools = restrictStepToolOffers(exec.tools ?? allTools, input.stepToolPolicy) ?? [];
   const system = [resolved.system, personalContext, skillContext, exec.systemCue]
     .filter(Boolean)
     .join("\n\n");
@@ -1406,13 +1406,13 @@ export async function runResolvedSkillAwareDeterministicLlmTask(
  * When input.provider is omitted, resolves the configured default internally.
  * Emits usage events automatically.
  */
-export async function generate(input: OrchestrateGenerateInput): Promise<LlmResponse> {
+export async function generate(input: OrchestrateGenerateInput & StepToolPolicyInput): Promise<LlmResponse> {
   return requireActorFrame("generate", input.actorContext, () =>
     orchestrateGenerateImpl(input),
   );
 }
 
-async function orchestrateGenerateImpl(input: OrchestrateGenerateInput): Promise<LlmResponse> {
+async function orchestrateGenerateImpl(input: OrchestrateGenerateInput & StepToolPolicyInput): Promise<LlmResponse> {
   let adapter: LlmProviderAdapter;
   if (input.provider) {
     adapter = await getAdapter(input.provider);
@@ -1427,6 +1427,7 @@ async function orchestrateGenerateImpl(input: OrchestrateGenerateInput): Promise
   // smuggle one via `as any`/JS — the resolver-bypass invariant must hold at
   // runtime, not just at the type).
   const {
+    stepToolPolicy: _stepToolPolicy,
     provider: _provider,
     attachments: _attachments,
     attachmentResolverPorts: _ports,
@@ -1439,7 +1440,8 @@ async function orchestrateGenerateImpl(input: OrchestrateGenerateInput): Promise
     executionExecutor: _executionExecutor,
     executionEnvironment: _executionEnvironment,
     ...adapterInput
-  } = input as OrchestrateGenerateInput & { resolvedAttachments?: unknown };
+  } = input as OrchestrateGenerateInput & StepToolPolicyInput & { resolvedAttachments?: unknown };
+  void _stepToolPolicy;
   // Explicit MCP injection.
   const tools = await injectMcpTools({
     provider: adapter.provider,
@@ -1483,7 +1485,7 @@ async function orchestrateGenerateImpl(input: OrchestrateGenerateInput): Promise
       system: exec.systemCue
         ? [resolvedAtt.system, exec.systemCue].filter(Boolean).join("\n\n")
         : resolvedAtt.system,
-      tools: exec.tools,
+      tools: restrictStepToolOffers(exec.tools, input.stepToolPolicy),
       maxSteps: exec.maxSteps,
       // cinatra#2339 — see runDeterministicLlmTaskImpl. This entry point may
       // resolve the adapter from the implicit-global default, so `input.provider`
@@ -1504,13 +1506,13 @@ async function orchestrateGenerateImpl(input: OrchestrateGenerateInput): Promise
  * When input.provider is omitted, resolves the configured default internally.
  * Injects usage emission into onUsageData automatically.
  */
-export async function stream(input: OrchestrateStreamInput): Promise<void> {
+export async function stream(input: OrchestrateStreamInput & StepToolPolicyInput): Promise<void> {
   return requireActorFrame("stream", input.actorContext, () =>
     orchestrateStreamImpl(input),
   );
 }
 
-async function orchestrateStreamImpl(input: OrchestrateStreamInput): Promise<void> {
+async function orchestrateStreamImpl(input: OrchestrateStreamInput & StepToolPolicyInput): Promise<void> {
   // Test-only deterministic provider for the WordPress/Drupal Playwright UATs.
   // No-op unless CINATRA_TEST_LLM_PROVIDER=scripted; fail-loud under production
   // runtime so it can never serve a real user.
@@ -1570,7 +1572,7 @@ async function orchestrateStreamImpl(input: OrchestrateStreamInput): Promise<voi
     executionExecutor: _executionExecutor,
     executionEnvironment: _executionEnvironment,
     ...rest
-  } = input as OrchestrateStreamInput & { resolvedAttachments?: unknown };
+  } = input as OrchestrateStreamInput & StepToolPolicyInput & { resolvedAttachments?: unknown };
   // Per-message resolution. Resolve EACH user message's attachments via the
   // per-message helper, which also SANITIZES every message (drops any
   // caller-smuggled `resolvedAttachments`, keeping only role + content +
@@ -1622,7 +1624,7 @@ async function orchestrateStreamImpl(input: OrchestrateStreamInput): Promise<voi
         ? [streamResolve.system, exec.systemCue].filter(Boolean).join("\n\n")
         : streamResolve.system,
       messages: streamResolve.messages,
-      tools: exec.tools,
+      tools: restrictStepToolOffers(exec.tools, input.stepToolPolicy),
       ...(onUsageData ? { onUsageData } : {}),
     }),
   );
@@ -1671,7 +1673,7 @@ export async function deleteFile(fileRef: LlmFileReference): Promise<void> {
  * Throws a descriptive error if the resolved provider lacks generateWithFileInput support.
  */
 export async function generateWithFileInput(
-  input: OrchestrateFileInputGenerateInput,
+  input: OrchestrateFileInputGenerateInput & StepToolPolicyInput,
 ): Promise<LlmResponse> {
   let adapter: LlmProviderAdapter;
   if (input.provider) {
@@ -1687,7 +1689,9 @@ export async function generateWithFileInput(
       "Switch to OpenAI or Anthropic in LLM settings."
     );
   }
-  const { provider: _provider, ...adapterInput } = input;
+  if (input.stepToolPolicy?.kind === "declared") throw new Error("step_tool_file_input_abi_unavailable");
+  const { provider: _provider, stepToolPolicy: _stepToolPolicy, ...adapterInput } = input;
+  void _stepToolPolicy;
   // Usage is emitted by the metering proxy (cinatra#2578).
   return withUsageAttribution({ skillLabel: input.skillLabel ?? null }, () =>
     adapter.generateWithFileInput!({
@@ -1723,7 +1727,7 @@ import type {
 } from "./types";
 import { BatchNotSupportedError } from "./errors";
 
-export type OrchestrateSubmitBatchInput = LlmBatchSubmitInput & {
+export type OrchestrateSubmitBatchInput = LlmBatchSubmitInput & StepToolPolicyInput & {
   provider: LlmProvider;
 };
 
@@ -1749,7 +1753,9 @@ export async function orchestrateSubmitBatch(
   if (!adapter.submitBatch) {
     throw new BatchNotSupportedError(input.provider);
   }
-  const { provider: _provider, ...adapterInput } = input;
+  if (input.stepToolPolicy?.kind === "declared") throw new Error("step_tool_batch_abi_unavailable");
+  const { provider: _provider, stepToolPolicy: _stepToolPolicy, ...adapterInput } = input;
+  void _stepToolPolicy;
   return adapter.submitBatch(adapterInput);
 }
 
@@ -1888,7 +1894,7 @@ async function requireBatchSurface(
   };
 }
 
-export type OrchestrateSubmitBatchV2Input = {
+export type OrchestrateSubmitBatchV2Input = StepToolPolicyInput & {
   provider: LlmProvider;
   requests: LlmBatchV2Request[];
   /** Best-effort tags; providers without a native slot drop them. */
@@ -1911,6 +1917,7 @@ export type OrchestrateBatchV2ByIdInput = {
 export async function orchestrateSubmitBatchV2(
   input: OrchestrateSubmitBatchV2Input,
 ): Promise<LlmBatchV2SubmitResult> {
+  if (input.stepToolPolicy?.kind === "declared") throw new Error("step_tool_batch_abi_unavailable");
   assertValidBatchV2Requests(input.requests);
   const { adapter, v2 } = await requireBatchSurface(input.provider);
   const requests = sanitizeBatchV2Requests(input.provider, input.requests);
@@ -2144,4 +2151,59 @@ export async function resolveConfiguredLlmRuntime(input?: {
   // set outside an explicit development runtime it THROWS here rather than
   // returning a runtime anything could execute.
   return resolveScriptedLlmRuntime();
+}
+
+/** Provider-neutral offer ceiling. A missing policy is never an empty allowlist. */
+export type StepToolOfferPolicy =
+  | { readonly kind: "undeclared" }
+  | { readonly kind: "declared"; readonly tools: readonly string[] };
+export function intersectStepToolNames(
+  offered: readonly string[], policy: StepToolOfferPolicy,
+): string[] {
+  if (policy.kind === "undeclared") return [...new Set(offered)];
+  if (policy.kind !== "declared" || !Array.isArray(policy.tools) ||
+      policy.tools.some((t) => typeof t !== "string" || t.length === 0)) {
+    throw new Error("step_tool_offer_policy_invalid");
+  }
+  return [...new Set(offered)].filter((t) => policy.tools.includes(t));
+}
+/** All ABIs get a nonempty intersection or no server, never unrestricted []. */
+export function restrictMcpServerOffer<T extends { allowedTools?: string[] | null }>(
+  server: T, offeredNames: readonly string[] | null, policy: StepToolOfferPolicy,
+): T | null {
+  if (policy.kind === "undeclared") return server;
+  if (!offeredNames) return null; // Unknown catalog/ABI cannot preserve a ceiling.
+  const initial = server.allowedTools == null ? offeredNames :
+    offeredNames.filter((n) => server.allowedTools!.includes(n));
+  const names = intersectStepToolNames(initial, policy);
+  return names.length === 0 ? null : { ...server, allowedTools: names };
+}
+
+export type StepToolPolicyInput = { stepToolPolicy?: StepToolOfferPolicy };
+/** Last filter AFTER every toolbox, skill and execution injection, for every adapter. */
+export function restrictStepToolOffers(tools: readonly LlmTool[] | undefined,
+  policy: StepToolOfferPolicy | undefined): LlmTool[] | undefined {
+  if (!policy || policy.kind === "undeclared") return tools === undefined ? undefined : [...tools];
+  // Validate even a zero-tool input; malformed policy must not be ignored.
+  intersectStepToolNames([], policy);
+  const offered = new Map<string, LlmTool>(); const ambiguous = new Set<string>();
+  for (const tool of tools ?? []) {
+    let retained: LlmTool | null = null; let key: string;
+    if (tool.type === "mcp") {
+      // No trustworthy catalog ceiling => suppress the server, never unrestricted [].
+      retained = restrictMcpServerOffer(tool, tool.allowedTools ?? null, policy);
+      key = `mcp:${tool.serverUrl}:${tool.serverLabel}`;
+    } else {
+      const name = "name" in tool && typeof tool.name === "string" ? tool.name : tool.type;
+      if (!name || !intersectStepToolNames([name], policy).length) continue;
+      retained = tool; key = `tool:${name}`;
+    }
+    if (!retained || ambiguous.has(key)) continue;
+    if (offered.has(key)) {
+      // Never pick an arbitrary same-name function/server/credential on collision.
+      offered.delete(key); ambiguous.add(key);
+    } else offered.set(key, retained);
+  }
+  const result = [...offered.values()];
+  return result.length ? result : undefined;
 }

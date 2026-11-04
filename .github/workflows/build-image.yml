@@ -1758,10 +1758,11 @@ jobs:
     # guard step below reports a definitive job FAILURE instead of a SKIP —
     # GitHub counts a skipped required check as satisfied, so a failed `detect`
     # merely *skipping* this job would NOT block a merge (same hole the `build`
-    # job closes with this exact pattern). Docs-only and draft PRs (detect
-    # succeeded + skip) still skip this job — the documented skip-as-success
-    # path is unchanged.
-    if: ${{ !cancelled() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
+    # job closes with this exact pattern). Docs-only PRs (detect succeeded +
+    # skip) still skip this job — the documented skip-as-success path is
+    # unchanged. A draft PR that selects unit feedback runs it, so the root
+    # Vitest suite (the gate of record) reads every draft head.
+    if: ${{ !cancelled() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true' || needs.detect.outputs.skip_feedback == 'false') }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}
     # Least privilege, tightened with cinatra#2288 slice 2 and matching what
     # actions-pin-gate / schema-migration-gate / archive-acceptance-gate in this

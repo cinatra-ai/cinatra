@@ -37,7 +37,7 @@ import {
   type ArtifactReviewTarget,
 } from "@/lib/artifacts/artifact-review-target";
 import {
-  loadDeclaredToolModule,
+  loadDeclaredToolModuleWithIdentity,
   type ExtensionToolModuleLoaderDeps,
 } from "@/lib/extension-tool-module-loader";
 
@@ -313,7 +313,7 @@ export async function dispatchExtensionTool(input: {
     }
   }
 
-  const namespace = await loadDeclaredToolModule(
+  const selected = await loadDeclaredToolModuleWithIdentity(
     {
       packageName: input.packageName,
       packageVersion: input.packageVersion,
@@ -323,6 +323,7 @@ export async function dispatchExtensionTool(input: {
     },
     input.deps ?? {},
   );
+  const namespace = selected.namespace;
   const callable = isPlainObject(namespace) ? namespace[EXTENSION_TOOL_MODULE_EXPORT] : undefined;
   if (typeof callable !== "function") {
     throw new ExtensionToolRefusal(
@@ -349,10 +350,20 @@ export async function dispatchExtensionTool(input: {
   // the same value (cinatra#3847).
   let result: unknown;
   try {
-    result = await (callable as ExtensionToolModule)({
-      input: moduleInput,
-      ports: { ...input.ports, review },
-    });
+    const invoke = (frozen: unknown) => Promise.resolve((callable as ExtensionToolModule)({
+      input: frozen as Record<string, unknown>, ports: { ...input.ports, review },
+    }));
+    const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
+    if (mcpRequestContextStorage.getStore()?.runId) {
+      // A module selected without a loaded identity (a bundled, legacy or dev
+      // load) runs under an unpinned owner: the guard serves it only when the
+      // call is not outward, after its source fence (cinatra#3745).
+      const { withGuardedRunActionInvocation } = await import("./extension-host-context");
+      const owner = selected.identity
+        ? { ...selected.identity, toolName: tool.name, wrapper: "extension_tool" as const }
+        : { unpinned: true as const, packageName: input.packageName, toolName: tool.name, wrapper: "extension_tool" as const };
+      result = await withGuardedRunActionInvocation({ action: owner, arguments: moduleInput }, invoke);
+    } else result = await invoke(moduleInput);
   } catch (e) {
     throw (
       moduleRefusalOf(e, {

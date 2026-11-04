@@ -143,6 +143,31 @@ vi.mock("@cinatra-ai/agents", () => ({
   transitionRunStatus: (...a: unknown[]) => transitionRunStatus(...a),
 }));
 
+// The run's selected flow source is bound before the task is sent (cinatra#3745):
+// explicit storage and selected-source ports, so no PostgreSQL or loader request.
+// The policy reader's own refusals are exercised by run-step-tool-policy.test.ts.
+const readSourceRun = vi.fn(async () => {
+  const input = createCarrierRun.mock.calls.at(-1)?.[0] as { orgId?: string } | undefined;
+  return { orgId: input?.orgId, executionAttemptId: "attempt", a2aContextId: "dispatch-context" };
+});
+const selectSourcePolicy = vi.fn(async (input: { contextId: string }) => ({
+  version: 1,
+  contextId: input.contextId,
+  source: "{}",
+  sourceSha256: "a".repeat(64),
+  executedSourceSha256: "b".repeat(64),
+  declarationSourceSha256: "c".repeat(64),
+}));
+const bindSourcePolicy = vi.fn(async (input: unknown) => {
+  void input;
+});
+vi.mock("@cinatra-ai/agents/store", () => ({
+  readAgentRunById: () => readSourceRun(),
+  updateAgentRunA2AContextId: vi.fn(),
+  selectWayflowRunStepToolPolicy: (input: { contextId: string }) => selectSourcePolicy(input),
+  bindRunStepToolPolicy: (input: unknown) => bindSourcePolicy(input),
+}));
+
 // The per-install identity resolver MUST NOT be reached on the widget path
 // (T7 no-downgrade). A spy asserts it stays untouched.
 const resolveContentEditorIdentityForInstance = vi.fn();

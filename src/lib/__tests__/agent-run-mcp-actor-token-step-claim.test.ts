@@ -118,3 +118,20 @@ afterAll(() => {
   vi.doUnmock("@cinatra-ai/mcp-server/credentials");
   vi.resetModules();
 });
+
+
+describe("source-bound actor token",()=>{
+ const proof={contextId:"ctx",stepId:"step",executionAttemptId:"attempt",sourceSha256:"a".repeat(64),executedSourceSha256:"b".repeat(64),declarationSourceSha256:"c".repeat(64)};
+ const actor=()=>({...ACTOR,verifiedStepId:"step",executionAttemptId:"attempt",verifiedExecutedSource:proof});
+ it("roundtrips the verified source and execution attempt",()=>{
+  const token=issueAgentRunMcpActorToken(actor());expect(decodePayload(token).src).toEqual(proof);
+  expect(verify(token)?.verifiedExecutedSource).toEqual(proof);
+ });
+ it("rejects malformed or step/attempt-inconsistent signed src claims",()=>{
+  const base=decodePayload(issueAgentRunMcpActorToken(actor()));
+  for(const src of [null,{}, {...proof,extra:"untrusted"},{...proof,stepId:"other"},{...proof,executionAttemptId:"other"},{...proof,sourceSha256:"invalid"}])expect(verify(signPayload({...base,src}))).toBeNull();
+ });
+ it("retains legacy ordinary tokens without treating them as source proof",()=>{
+  expect(verify(issueAgentRunMcpActorToken(ACTOR))?.verifiedExecutedSource).toBeUndefined();
+ });
+});
