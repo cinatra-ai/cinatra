@@ -185,13 +185,29 @@ The dispatch drain then puts a text built from the findings
 (`buildRepairFindingsText`, `src/lib/lifecycle/lifecycle-policy.ts`)
 into exactly that input, whatever the kind of the reviewed base. The text is the
 same for every producer: a lead line, then one numbered line per finding with the
-field it names. A producer that declares nothing gets its own inputs plus the
+field it names (a line break inside a message or a field becomes one space, and a
+stored finding without a message text is left out).
+
+The drain reads the declaration when it creates the repair run, but the worker
+runs the template as it is when the run starts. A re-import in between can change
+the declaration: a crash between creation and enqueue, after which a re-drain
+enqueues the existing run as it is, or a run that waits in the queue. So the run
+start (`runAgentBuilderExecutionJob`, `packages/agents/src/execution.ts`) reads the
+declaration of the template it loaded and, when the run does not already carry the
+text in that input, writes it there before the run's input gates read them. A run whose
+input cannot be written fails at start with a message that names the input. The
+run start removes nothing: an input that an earlier declaration named keeps the
+text, also when the template now declares no findings input.
+
+A producer that declares nothing gets its own inputs plus the
 typed request, and, until the application's pins name CMS agent releases that
 declare the input, also the CMS bridge's `task` and `instructions` when its base
 is a captured CMS snapshot (`projectCmsRepairInputParams`,
-`packages/agents/src/lifecycle-repair-cms-production-bridge.ts`). The drain does not
-check that the declared name is an input of the template: a name the template
-does not read adds an input that no prompt reads.
+`packages/agents/src/lifecycle-repair-cms-production-bridge.ts`). Neither the drain
+nor the run start checks that the declared name is an input of the template: a
+name the template does not read adds an input that no prompt reads, and a name the
+template types as `object` fails the run at start with a message that names the
+input.
 
 ### The round-trip a repair-capable producer must satisfy
 

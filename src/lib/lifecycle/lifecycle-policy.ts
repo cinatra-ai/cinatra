@@ -181,8 +181,10 @@ export interface CompiledManifestLifecycle {
   /** The input of this producer's template that a dispatched repair run gets
    * the reviewer's findings in (cinatra#4424). The dispatch drain builds the
    * text from the findings with one generic function and puts it in exactly
-   * this input. Absent ⇒ the repair run gets its own inputs plus the typed
-   * request, as before. */
+   * this input; the run start puts it into the input that the template it
+   * executes declares, when a re-import changed the declaration in between.
+   * Absent ⇒ the repair run gets its own inputs plus the typed request, as
+   * before. */
   repairFindingsInput?: RepairFindingsInputDeclaration;
 }
 
@@ -232,8 +234,10 @@ export function isRepairFindingsInputName(name: unknown): name is string {
 // producer declares for its repair runs. The repair dispatch drain
 // (`packages/agents/src/lifecycle-repair-dispatch-store.ts`) puts the text built
 // here into exactly the declared input, for every base the repair is anchored
-// to. Nothing here reads the base's kind, a package name or a stored row: the
-// text is built from the findings alone, the same for every producer.
+// to, and the run start (`packages/agents/src/execution.ts`) re-derives it from
+// the template the run executes. Nothing here reads the base's kind, a package
+// name or a stored row: the text is built from the findings alone, the same for
+// every producer.
 // ---------------------------------------------------------------------------
 
 /** One finding as the projection reads it (`RepairFinding` in
@@ -247,15 +251,45 @@ export interface RepairFindingText {
 export const REPAIR_FINDINGS_TEXT_LEAD =
   "A reviewer requested changes to the work you produced. Apply the following requested changes:";
 
+/** `text` on one line: each line break, with the blanks around it, becomes
+ * one space, and the ends are trimmed. */
+function asOneLine(text: string): string {
+  return text.split(/\s*(?:\r\n|[\n\r\v\f\u0085\u2028\u2029])\s*/).join(" ").trim();
+}
+
+/**
+ * The findings as the text reads them, from a stored value read fail-soft
+ * (`lifecycle_repair.findings` is JSON): a value that is not an array gives
+ * none; an entry without a non-empty message text is left out; a path that is
+ * not text names no field. Message and path are put on one line each.
+ */
+function readRepairFindingTexts(findings: unknown): RepairFindingText[] {
+  if (!Array.isArray(findings)) return [];
+  const out: RepairFindingText[] = [];
+  for (const finding of findings) {
+    if (!finding || typeof finding !== "object") continue;
+    const { message, path } = finding as { message?: unknown; path?: unknown };
+    if (typeof message !== "string") continue;
+    const line = asOneLine(message);
+    if (!line) continue;
+    const field = typeof path === "string" ? asOneLine(path) : "";
+    out.push(field ? { message: line, path: field } : { message: line });
+  }
+  return out;
+}
+
 /**
  * Build the findings text a repair run reads from its declared input: the
  * lead line, then one numbered line per finding (its message, and the field it
- * names when it names one). With no findings the text is the lead line alone.
- * Pure and deterministic.
+ * names when it names one). A line break inside a message or a path becomes
+ * one space, so a finding never spans two lines. With no findings the text is
+ * the lead line alone. Pure and deterministic; it reads only each finding's
+ * message and path.
  */
 export function buildRepairFindingsText(findings: readonly RepairFindingText[]): string {
-  if (findings.length === 0) return REPAIR_FINDINGS_TEXT_LEAD;
-  const lines = findings.map(
+  const read = readRepairFindingTexts(findings);
+  if (read.length === 0) return REPAIR_FINDINGS_TEXT_LEAD;
+  const lines = read.map(
     (finding, index) => `${index + 1}. ${finding.message}${finding.path ? ` (field: ${finding.path})` : ""}`,
   );
   return [REPAIR_FINDINGS_TEXT_LEAD, lines.join("\n")].join("\n\n");
@@ -281,11 +315,36 @@ export function readRepairFindingsInput(
  */
 export function projectRepairFindingsInput(
   lifecycle: Pick<CompiledManifestLifecycle, "repairFindingsInput"> | null | undefined,
-  findings: readonly RepairFindingText[],
+  findings: unknown,
 ): Record<string, string> | null {
   const input = readRepairFindingsInput(lifecycle);
   if (!input) return null;
-  return { [input]: buildRepairFindingsText(findings) };
+  // buildRepairFindingsText reads the stored value fail-soft itself.
+  return { [input]: buildRepairFindingsText(findings as readonly RepairFindingText[]) };
+}
+
+/**
+ * The run-start half of the projection (cinatra#4424). The drain projects the
+ * findings under the declaration it reads when it creates the repair run; the
+ * worker executes the template it loads later, and a re-import in between
+ * (a crash and re-drain over the existing deterministic run, or a run that
+ * waits in the queue) can change that declaration. Given the lifecycle of the
+ * template the run EXECUTES and the run's own inputs, this is the addition
+ * that puts the findings text of the run's `lifecycleRepairRequest` into the
+ * input that template declares, or null when it declares none or the input
+ * already carries that text. The caller applies it to lifecycle repair runs
+ * only (`sourceType` `lifecycle_repair`).
+ */
+export function reconcileRepairFindingsInput(
+  lifecycle: Pick<CompiledManifestLifecycle, "repairFindingsInput"> | null | undefined,
+  inputParams: Record<string, unknown>,
+): Record<string, string> | null {
+  const request = inputParams.lifecycleRepairRequest;
+  if (!request || typeof request !== "object" || Array.isArray(request)) return null;
+  const projected = projectRepairFindingsInput(lifecycle, (request as { findings?: unknown }).findings);
+  if (!projected) return null;
+  const [input, text] = Object.entries(projected)[0];
+  return Object.prototype.hasOwnProperty.call(inputParams, input) && inputParams[input] === text ? null : projected;
 }
 
 // ---------------------------------------------------------------------------
