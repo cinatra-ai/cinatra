@@ -1571,13 +1571,19 @@ describe("runNodeTestFile — the real node runner, with short bounds", () => {
       "for (;;) {}",
     ].join("\n");
     const gateUrl = new URL("../extension-suite-gate.mjs", import.meta.url).href;
+    // The script text is fixed: the gate's URL, the folder and the holder's source reach the child through its
+    // environment, so no value is built into the code it runs.
     const script = [
       'import { spawn } from "node:child_process";',
-      `const g = await import(${JSON.stringify(gateUrl)});`,
-      `const r = await g.runNodeTestFile({ cwd: ${JSON.stringify(nodeDir)}, file: "t/x.test.mjs", fileTimeoutMs: 1500, killGraceMs: 300, spawnChild: (cmd, args, opts) => spawn(cmd, ["-e", ${JSON.stringify(holder)}], opts) });`,
+      "const g = await import(process.env.ESG_GATE_URL);",
+      "const holder = process.env.ESG_HOLDER_SRC;",
+      'const r = await g.runNodeTestFile({ cwd: process.env.ESG_NODE_DIR, file: "t/x.test.mjs", fileTimeoutMs: 1500, killGraceMs: 300, spawnChild: (cmd, args, opts) => spawn(cmd, ["-e", holder], opts) });',
       'console.log(JSON.stringify({ kill: r.kill, closed: r.closed, timedOut: r.timedOut, surviving: typeof g.listSurvivingNodeGroups === "function" ? g.listSurvivingNodeGroups().length : null }));',
     ].join("\n");
-    const gate = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ESG_HOLDER_PID_FILE: pidFile } });
+    const gate = spawn(process.execPath, ["--input-type=module", "-e", script], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, ESG_HOLDER_PID_FILE: pidFile, ESG_GATE_URL: gateUrl, ESG_NODE_DIR: nodeDir, ESG_HOLDER_SRC: holder },
+    });
     let out = "";
     gate.stdout.on("data", (c) => (out += c));
     const exited = new Promise((r) => gate.on("exit", (code, sig) => r({ code, sig })));
