@@ -6,15 +6,25 @@ import "server-only";
 // claim, here because the size ratchet of mcp/handlers.ts only shrinks, and the
 // two steps every claimer shares.
 //
-// The order of a resume: read the generation, claim, pre-send steps, fence, send,
-// handle the answer, settle. A stop that commits before the fence wins: the status
-// change clears the claim, the fence then fails and nothing is sent. A stop during
-// a live send loses: the seam refuses it with `pause_resume_in_flight`.
+// The order of a resume: read the generation, claim, the steps before the fence,
+// fence, record the answer, send, handle the answer, settle. A stop that commits
+// before the fence wins: the status change clears the claim, the fence then fails
+// and nothing is sent. A stop during a live send loses: the seam refuses it with
+// `pause_resume_in_flight`.
+//
+// What records the answer (the prompt row) runs only after a fence this claimer
+// won. A claimer whose lease expired and was taken over stops at its fence, so it
+// never adds a row for an answer it did not send: the rows of a run stay one per
+// sent answer, in the order of its gates (`buildSubmissionMapByStepIndex` reads
+// them by position). The credential mint stays before the fence, because a failure
+// there must still give the pause back. A mint of a claimer that then loses its
+// fence only adds a credential of the same run that is never sent
+// (run-token-store.ts: the credential set is additive by design).
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
-import { captureHitlPromptForContinue, updateHitlPromptExcluded } from "./agent-run-hitl-prompts";
+import { captureHitlPromptForContinue } from "./agent-run-hitl-prompts";
 import type { AgentRunRecord } from "./agent-run-record";
 import { claimPause, PauseClaimReleaseError, releasePauseClaim, settlePauseSend } from "./run-pause-claim";
 import { PAUSE_SEND_LEASE_SECONDS, RunTransitionError, TERMINAL_RUN_STATUSES, type AgentRunStatus } from "./run-status";
@@ -86,21 +96,8 @@ export async function resumeWayflowUnderPauseClaim(args: {
   }
   const ref = { runId: run.id, orgId: run.orgId, token: claim.token };
 
-  let promptId: string | null = null;
   let resumeMetadata: unknown;
   try {
-    promptId = await captureHitlPromptForContinue({
-      runId: run.id,
-      agentId: prompt.agentId,
-      stepKey: run.a2aTaskId, // bare task.id, no `wayflow-` prefix
-      message: prompt.message,
-      submittedValues: prompt.submittedValues,
-      schemaSnapshot: null, // MCP path: the schema is not available at resume time.
-      excluded: prompt.message.length === 0,
-    }).catch((e) => {
-      console.warn("[resumeWayflowUnderPauseClaim] the prompt capture failed", { runId: run.id }, e);
-      return null;
-    });
     // #1193 resume carrier: the leg's credential goes in the message METADATA,
     // because `resumeText` reaches the gate's InputMessageNode VERBATIM.
     const { mintResumeRunTokenMetadata } = await import("./wayflow-run-token-carrier");
@@ -110,18 +107,28 @@ export async function resumeWayflowUnderPauseClaim(args: {
     if (!(stepError instanceof RunTransitionError && stepError.code === "stale_from_status")) {
       return failPreSendStep({ ...ref, expiresAt: claim.expiresAt }, authority, stepError);
     }
-    const lost =
-      (await readRun())?.status === "stopped"
-        ? "Run was stopped before the answer was sent; nothing was sent."
-        : "This resume's claim on the pause expired before the send; nothing was sent. Resume again.";
-    if (promptId === null) return { error: lost };
-    return updateHitlPromptExcluded(promptId, true).then(
-      () => ({ error: lost }),
-      (e) => ({ error: `${lost} Its captured prompt could not be excluded (${message(e)}).` }),
-    );
+    return {
+      error:
+        (await readRun())?.status === "stopped"
+          ? "Run was stopped before the answer was sent; nothing was sent."
+          : "This resume's claim on the pause expired before the send; nothing was sent. Resume again.",
+    };
   }
 
   const fencedAt = Date.now();
+  // The answer is recorded under the fence this claimer won (see the header). A
+  // failed capture stays best-effort, as it was before the claim.
+  await captureHitlPromptForContinue({
+    runId: run.id,
+    agentId: prompt.agentId,
+    stepKey: run.a2aTaskId, // bare task.id, no `wayflow-` prefix
+    message: prompt.message,
+    submittedValues: prompt.submittedValues,
+    schemaSnapshot: null, // MCP path: the schema is not available at resume time.
+    excluded: prompt.message.length === 0,
+  }).catch((e) => {
+    console.warn("[resumeWayflowUnderPauseClaim] the prompt capture failed", { runId: run.id }, e);
+  });
   let finalState: string | undefined;
   let failure: { error: unknown } | null = null;
   try {

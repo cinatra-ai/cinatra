@@ -105,6 +105,9 @@ vi.mock("@cinatra-ai/a2a", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   createExternalA2AClient: vi.fn(async () => ({ sendTask })),
   resolveRunIdByWayflowTaskId: vi.fn(async () => null),
+  // cinatra#4245: Continue reads the latest-task key on the column road too; no key
+  // leaves the column's word, and this file reaches no Redis.
+  resolveLatestWayflowGateTaskId: vi.fn(async () => null),
 }));
 
 const handleWayflowTaskState = vi.hoisted(() => vi.fn(async () => undefined));

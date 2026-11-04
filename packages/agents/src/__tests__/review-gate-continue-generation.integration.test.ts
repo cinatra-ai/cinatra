@@ -1,6 +1,7 @@
 /**
  * cinatra#4245 change B — the review page's Continue under the pause claim (spec 4.4,
- * 5.3; tests C1-C3). REAL store for the run, the claim and the seam.
+ * 5.3; tests C1-C3; spec-rev1 MF2 and MF3). REAL store for the run, the claim and
+ * the seam.
  *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided.
  */
@@ -16,6 +17,7 @@ const ctl = vi.hoisted(() => ({
   mint: null as null | Gate,
   latest: null as null | string,
   reverse: null as null | string,
+  failBack: false,
 }));
 function gate(): Gate {
   let arrive!: () => void;
@@ -50,16 +52,24 @@ vi.mock("../agent-run-serde", async (orig) => ({
   assertAgentRunScopeAuthorized: vi.fn(async () => undefined),
   assertAgentRunDispatchAuthorized: vi.fn(async () => undefined),
 }));
-vi.mock("../store", async (orig) => ({
-  ...(await orig<typeof import("../store")>()),
-  readRunCoOwners: vi.fn(async () => []),
-  readAgentTemplateById: vi.fn(async () => ({
-    id: "tmpl-cont",
-    packageName: "@cinatra-ai/cont-agent",
-    sourceType: "internal",
-    agentAuthPolicy: null,
-  })),
-}));
+vi.mock("../store", async (orig) => {
+  const actual = await orig<typeof import("../store")>();
+  return {
+    ...actual,
+    // `failBack` fails only the edge that puts a gate back (running → pending_approval).
+    transitionRunStatus: vi.fn(async (...args: Parameters<typeof actual.transitionRunStatus>) => {
+      if (ctl.failBack && args[1] === "running" && args[2] === "pending_approval") throw new Error("db blip");
+      return actual.transitionRunStatus(...args);
+    }),
+    readRunCoOwners: vi.fn(async () => []),
+    readAgentTemplateById: vi.fn(async () => ({
+      id: "tmpl-cont",
+      packageName: "@cinatra-ai/cont-agent",
+      sourceType: "internal",
+      agentAuthPolicy: null,
+    })),
+  };
+});
 vi.mock("../wayflow-url", () => ({
   WAYFLOW_UNDICI_TIMEOUT_MS: 60_000,
   resolveWayflowUrl: vi.fn(() => "http://wayflow.test"),
@@ -145,6 +155,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   ctl.role = ctl.mint = null;
   ctl.latest = ctl.reverse = null;
+  ctl.failBack = false;
   handle.mockImplementation(async ({ runId, task }: { runId: string; task: { id: string } }) => {
     await store.updateAgentRunA2ATaskId(runId, task.id);
     await store.transitionRunStatus(runId, "running", "pending_approval", { pauseTaskId: task.id }, SESSION);
@@ -167,10 +178,16 @@ async function seed() {
   );
   return { runId, task, gate: `wayflow-${task}` };
 }
-async function answer(reviewTaskId: string) {
+async function answer(reviewTaskId: string, userResponse?: string) {
   const { approveReviewTaskInternal } = await import("../review-task-actions");
-  return approveReviewTaskInternal(reviewTaskId, "user-a", undefined);
+  return approveReviewTaskInternal(reviewTaskId, "user-a", userResponse === undefined ? undefined : { userResponse });
 }
+const promptRows = async (id: string) =>
+  Number((await pool(`SELECT count(*)::int AS n FROM "${q(TEST_SCHEMA)}"."agent_run_hitl_prompts" WHERE run_id=$1`, [id])).rows[0].n);
+const redis = async () => import("../../../a2a/src/event-log") as unknown as Promise<{
+  rememberAnsweredGateSubmission: ReturnType<typeof vi.fn>;
+  rememberLatestWayflowGateTask: ReturnType<typeof vi.fn>;
+}>;
 const refused = async (p: Promise<unknown>) => {
   const e = await p.then(() => null, (err: unknown) => err);
   expect(e).toBeInstanceOf(GateNotPendingError);
@@ -248,5 +265,67 @@ describe.skipIf(!HAS_DB)("cinatra#4245 change B — Continue under the pause cla
     expect(await statusOf(s.runId)).toBe("running");
     await store.transitionRunStatus(s.runId, "running", "stopped", undefined, SESSION);
     expect(await statusOf(s.runId)).toBe("stopped");
+  });
+
+  it("spec-rev1 MF2: found by the column, a latest task that names another task refuses", async () => {
+    const s = await seed();
+    ctl.latest = randomUUID();
+    await refused(answer(s.gate));
+    expect(sendTask).not.toHaveBeenCalled();
+    expect(await statusOf(s.runId)).toBe("pending_approval");
+  });
+
+  it("spec-rev1 MF2 guard: found by the column, no latest task or a Redis error keeps the column's word", async () => {
+    const s = await seed();
+    ctl.latest = "throw";
+    await answer(s.gate);
+    expect(sendTask).toHaveBeenCalledTimes(1);
+    const t = await seed();
+    ctl.latest = null;
+    await answer(t.gate);
+    expect(sendTask).toHaveBeenCalledTimes(2);
+  });
+
+  it("spec-rev1 MF3: an abandoned answer writes no answered-gate record, no latest task and no prompt row", async () => {
+    const s = await seed();
+    const held = (ctl.mint = gate());
+    const a = answer(s.gate, JSON.stringify({ pick: "abandoned" }));
+    await held.reached;
+    await pool(`UPDATE ${RUNS} SET pause_claim_expires_at = now() - interval '1 second' WHERE id=$1`, [s.runId]);
+    const live = JSON.stringify({ pick: "live" });
+    await answer(s.gate, live);
+    held.open();
+    await refused(a);
+    expect(sendTask).toHaveBeenCalledTimes(1);
+    const r = await redis();
+    expect(r.rememberAnsweredGateSubmission.mock.calls).toEqual([[s.runId, s.task, live]]);
+    expect(r.rememberLatestWayflowGateTask.mock.calls).toEqual([[s.runId, s.task]]);
+    expect(await promptRows(s.runId)).toBe(1);
+  });
+
+  it("spec-rev1 MF3: a Redis failure after the fence puts the gate back; nothing is sent or recorded", async () => {
+    const s = await seed();
+    const r = await redis();
+    r.rememberAnsweredGateSubmission.mockRejectedValueOnce(new Error("redis is down"));
+    await expect(answer(s.gate, JSON.stringify({ pick: "one" }))).rejects.toThrow("redis is down");
+    expect(sendTask).not.toHaveBeenCalled();
+    expect(await statusOf(s.runId)).toBe("pending_approval");
+    const back = (await pool(`SELECT a2a_task_id, pause_claim_token FROM ${RUNS} WHERE id=$1`, [s.runId])).rows[0];
+    expect(back).toEqual({ a2a_task_id: s.task, pause_claim_token: null });
+    expect(await promptRows(s.runId)).toBe(0);
+    await answer(s.gate, JSON.stringify({ pick: "two" }));
+    expect(sendTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("a Redis failure and a failed put-back: the error says both, nothing was sent", async () => {
+    const s = await seed();
+    const r = await redis();
+    r.rememberAnsweredGateSubmission.mockRejectedValueOnce(new Error("redis is down"));
+    ctl.failBack = true;
+    const e = await answer(s.gate, JSON.stringify({ pick: "one" })).then(() => null, (err: unknown) => err as Error);
+    expect(e?.message).toMatch(/^redis is down; nothing was sent, and the gate could not be put back \(db blip\)/);
+    expect(e?.message).toMatch(/a stop lands once its send lease ends at \d{4}-/);
+    expect(sendTask).not.toHaveBeenCalled();
+    expect(await statusOf(s.runId)).toBe("running");
   });
 });

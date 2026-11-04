@@ -3,8 +3,9 @@
  * claim (spec 4.2, 4.3; tests B1-B8). REAL store for the run, the claim and the seam;
  * identity, transport, the run credential and the answer's handling are replaced.
  *
- * Barriers: in the prompt capture (after the claim, before the fence), in the stop's
- * access check (after its read, before its compare-and-set), and in the send.
+ * Barriers: in the credential mint (after the claim, before the fence; the base calls
+ * the mint too), in the prompt capture (after the fence), in the stop's access check
+ * (after its read, before its compare-and-set), and in the send.
  *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided.
  */
@@ -15,6 +16,7 @@ import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 type Gate = { reached: Promise<void>; arrive: () => void; open: () => void; wait: Promise<void> };
 const ctl = vi.hoisted(() => ({
+  mint: null as null | Gate,
   capture: null as null | Gate,
   access: null as null | Gate,
   send: null as null | Gate,
@@ -27,7 +29,7 @@ function gate(): Gate {
   const wait = new Promise<void>((r) => { open = r; });
   return { reached, arrive, open, wait };
 }
-const passThrough = vi.hoisted(() => async (slot: "capture" | "access" | "send") => {
+const passThrough = vi.hoisted(() => async (slot: "mint" | "capture" | "access" | "send") => {
   const g = ctl[slot];
   if (!g) return;
   ctl[slot] = null;
@@ -92,7 +94,12 @@ vi.mock("../wayflow-url", () => ({
   createWayflowFetch: vi.fn(() => globalThis.fetch),
   AGENT_RUN_TIMEOUT_MAX_SECONDS: 86_400,
 }));
-const mint = vi.hoisted(() => vi.fn(async () => ({})));
+const mint = vi.hoisted(() =>
+  vi.fn(async () => {
+    await passThrough("mint");
+    return {};
+  }),
+);
 vi.mock("../wayflow-run-token-carrier", () => ({ mintResumeRunTokenMetadata: mint }));
 const sendTask = vi.hoisted(() =>
   vi.fn(async () => {
@@ -185,7 +192,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  ctl.capture = ctl.access = ctl.send = null;
+  ctl.mint = ctl.capture = ctl.access = ctl.send = null;
   ctl.failRelease = false;
 });
 
@@ -230,7 +237,7 @@ const ALREADY = /Run is already resuming: its answer was sent before this stop, 
 describe.skipIf(!HAS_DB)("cinatra#4245 change B — resume and stop under the pause claim (real store)", () => {
   it("B1: a claimer that dies: its lease expires, a second resume sends once, the first's late fence is refused", async () => {
     const id = await seed();
-    const g = (ctl.capture = gate());
+    const g = (ctl.mint = gate());
     const first = resume(id);
     await g.reached;
     await pool(`UPDATE ${RUNS} SET pause_claim_expires_at = now() - interval '1 second' WHERE id=$1`, [id]);
@@ -240,11 +247,13 @@ describe.skipIf(!HAS_DB)("cinatra#4245 change B — resume and stop under the pa
     g.open();
     expect((await first).error).toMatch(/claim on the pause expired before the send; nothing was sent/);
     expect(sendTask).toHaveBeenCalledTimes(1);
+    // spec-rev1 MF3: the abandoned claimer recorded nothing; one row, the sent answer's.
+    expect(await excludedFlags(id)).toEqual([false]);
   });
 
   it("B1: a second resume while the first holds a live claim is refused", async () => {
     const id = await seed();
-    const g = (ctl.capture = gate());
+    const g = (ctl.mint = gate());
     const first = resume(id);
     await g.reached;
     expect((await resume(id)).error).toBe("Run is already being resumed at this pause by another request.");
@@ -292,9 +301,9 @@ describe.skipIf(!HAS_DB)("cinatra#4245 change B — resume and stop under the pa
     expect(sendTask).toHaveBeenCalledTimes(1);
   });
 
-  it("B4: a stop between the claim and the fence wins: nothing is sent, the prompt row is excluded", async () => {
+  it("B4: a stop between the claim and the fence wins: nothing is sent, no prompt row is written", async () => {
     const id = await seed();
-    const p = (ctl.capture = gate());
+    const p = (ctl.mint = gate());
     const resuming = resume(id);
     await p.reached;
     expect((await stop(id)).status).toBe("stopped");
@@ -302,7 +311,19 @@ describe.skipIf(!HAS_DB)("cinatra#4245 change B — resume and stop under the pa
     expect((await resuming).error).toBe("Run was stopped before the answer was sent; nothing was sent.");
     expect(sendTask).not.toHaveBeenCalled();
     expect(await row(id)).toMatchObject({ status: "stopped", pause_claim_token: null });
-    expect(await excludedFlags(id)).toEqual([true]);
+    expect(await excludedFlags(id)).toEqual([]);
+  });
+
+  it("spec-rev1 MF3: the answer is recorded only under a fence this resume won", async () => {
+    const id = await seed();
+    const c = (ctl.capture = gate());
+    const resuming = resume(id);
+    await c.reached;
+    expect(await row(id)).toMatchObject({ status: "running", pause_claim_phase: "sending" });
+    expect(sendTask).not.toHaveBeenCalled();
+    c.open();
+    expect((await resuming).error).toBeUndefined();
+    expect(await excludedFlags(id)).toEqual([false]);
   });
 
   it("B5: a stop during a live send: already resuming", async () => {
