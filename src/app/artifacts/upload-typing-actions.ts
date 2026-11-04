@@ -81,37 +81,68 @@ import {
  *   NON-channel OBJECT-TYPE candidates → the A4 addressability gate, UNCHANGED:
  *   a host-declared SYSTEM extension OR an addressable ACTIVE install for this
  *   actor's scope (`resolveActiveInstallForActor`).
+ *
+ *   CLAIM-BACKED extensions (cinatra#3319) → the A4 addressability gate AND the
+ *   claim-scoped gate of the winning claim's own install
+ *   (`canActorAccessClaimedArtifactExtension`, the gate the effective type
+ *   catalog reads a claim through). This is decided by the organisation's claim
+ *   identity, before the matcher-channel test: the matcher registry is keyed by
+ *   package only, and the winning install declares no matchers, so an entry
+ *   under a claim-backed extension's name is not that install's and never
+ *   selects the org-scoped matcher gate.
  */
 async function filterCandidatesByActorAccess(
   candidates: InstalledMeaningType[],
   actor: ActorContext,
   orgId: string,
+  claimBacked: readonly ClaimBackedMeaningType[],
 ): Promise<InstalledMeaningType[]> {
   if (candidates.length === 0) return [];
   const { isSystemExtension } = await import(
     "@cinatra-ai/extensions/system-extension-inventory"
   );
   const { matcherManifestRegistry } = await import("@cinatra-ai/objects/registry");
+  const claimByExtension = new Map(claimBacked.map((e) => [e.extension, e]));
   const channelPackages = new Set(
-    matcherManifestRegistry.list().map((e) => e.packageName),
+    matcherManifestRegistry
+      .list()
+      .map((e) => e.packageName)
+      .filter((packageName) => !claimByExtension.has(packageName)),
   );
-  // The org-scoped write gate (== the A6 resolver) is loaded ONLY when a
-  // candidate is actually a matcher-channel member, so the common object-type
-  // path never pulls the server-only artifact-extension-access module.
-  const orgWriteAllowed = candidates.some((c) => channelPackages.has(c.extension))
-    ? (
-        await import("@/lib/artifacts/artifact-extension-access")
-      ).isArtifactExtensionWriteAllowed
+  // The org-scoped write gate (== the A6 resolver) and the claim-scoped gate are
+  // loaded ONLY when a candidate needs one, so the common object-type path never
+  // pulls the server-only artifact-extension-access module.
+  const access = candidates.some(
+    (c) => channelPackages.has(c.extension) || claimByExtension.has(c.extension),
+  )
+    ? await import("@/lib/artifacts/artifact-extension-access")
     : null;
   const uniqueExtensions = [...new Set(candidates.map((c) => c.extension))];
   const accessible = new Set<string>();
   await Promise.all(
     uniqueExtensions.map(async (extension) => {
+      const claim = claimByExtension.get(extension);
+      if (claim) {
+        // Claim-backed: the A4 gate, then the winning claim's own install.
+        if (
+          access &&
+          (isSystemExtension(extension) ||
+            (await resolveActiveInstallForActor(extension, actor)) !== null) &&
+          (await access.canActorAccessClaimedArtifactExtension(
+            { extensionPackage: extension, installId: claim.installId, scope: claim.scope },
+            actor,
+            "read",
+          ))
+        ) {
+          accessible.add(extension);
+        }
+        return;
+      }
       if (channelPackages.has(extension)) {
         // Matcher-channel member: the A6 org-scoped write gate ALONE (offered ==
-        // will-present). `orgWriteAllowed` is guaranteed non-null here (some
-        // candidate is a channel member ⇒ the module was loaded).
-        if (orgWriteAllowed && (await orgWriteAllowed(extension, orgId))) {
+        // will-present). `access` is guaranteed non-null here (some candidate is
+        // a channel member ⇒ the module was loaded).
+        if (access && (await access.isArtifactExtensionWriteAllowed(extension, orgId))) {
           accessible.add(extension);
         }
         return;
@@ -200,7 +231,12 @@ async function screenPresentedBase(
   }).filter((t) => definers.has(t.extension));
   return {
     admitted,
-    accessible: await filterCandidatesByActorAccess(admitted, input.actor, input.orgId),
+    accessible: await filterCandidatesByActorAccess(
+      admitted,
+      input.actor,
+      input.orgId,
+      input.claimBacked,
+    ),
   };
 }
 
@@ -345,7 +381,7 @@ export async function listInstalledTypesForArtifact(
   // channel lists. Read through the ONE claim arbitration the writer and the
   // byte-serve reader use, after the gates and the warm above. The list reads
   // them leniently: a failed read offers no claim-backed type and still answers
-  // the ordinary list (the confirmation below refuses on the same failure).
+  // the ordinary list (the confirmation reads a failure the same way).
   const { readClaimBackedMeaningTypesForOrg } = await import(
     "@/lib/artifacts/resolve-bound-artifact-type"
   );
@@ -368,7 +404,7 @@ export async function listInstalledTypesForArtifact(
   // the claims leniently (a failed read names no claimant), because the
   // confirmation reads them again and refuses on a failure.
   const claimant = objectType ? await readRowTypeClaimantLeniently(orgId, objectType) : null;
-  const types = (await filterCandidatesByActorAccess(raw, actor, orgId)).filter(
+  const types = (await filterCandidatesByActorAccess(raw, actor, orgId, claimBacked)).filter(
     (t) => t.extension !== claimant,
   );
   // THE DERIVED MEANING (§VI.1, cinatra#3319): a matcher draft at or above its
@@ -497,7 +533,14 @@ export async function assertUploadMeaning(input: {
   const { mime, objectType } = read.artifact;
   // The same claim-backed population the candidate LIST offered (cinatra#3319),
   // so the validation gate decides against what the picker drew. A failed read
-  // refuses: the population the confirmation decides against cannot be told.
+  // is read as the list reads it: no claim-backed type, so none is a candidate
+  // and none is promoted. It does not refuse the confirmation outright, so a
+  // road that needs no claim-backed type (a type a package registers) still
+  // answers. Each step below that needs a claim reads it itself, and a failed
+  // read there ends in a refusal: the row's claimant (`readRowTypeClaimant`)
+  // and the definer of a row whose type no package registers
+  // (`readExtensionDefinesType`; its lenient form on the converging road reads
+  // a failure as "not a definer", which is refused too).
   const { readClaimBackedMeaningTypesForOrg } = await import(
     "@/lib/artifacts/resolve-bound-artifact-type"
   );
@@ -505,13 +548,13 @@ export async function assertUploadMeaning(input: {
   try {
     claimBacked = await readClaimBackedMeaningTypesForOrg(orgId);
   } catch {
-    return { ...INVALID_TYPE_REFUSAL };
+    claimBacked = [];
   }
   const raw = listInstalledMeaningTypesAcceptingMime(mime, {
     ...(objectType ? { excludeTypeId: objectType } : {}),
     claimBacked,
   });
-  const candidates = await filterCandidatesByActorAccess(raw, actor, orgId);
+  const candidates = await filterCandidatesByActorAccess(raw, actor, orgId, claimBacked);
   let ordinary = candidates.some((c) => c.extension === input.extension);
   if (ordinary && objectType) {
     // THE ROW'S OWN CLAIMANT IS NO ORDINARY CANDIDATE (cinatra#3319): the
@@ -814,9 +857,14 @@ async function promoteOnConfirmedMeaning(input: {
     // which is why a missing declaration no longer ends the call. Returning
     // early here is what made a person's assertion on a matcher-less pack a
     // silent no-op.
-    const entry = matcherManifestRegistry
-      .list()
-      .find((e) => e.packageName === input.extension);
+    //
+    // A CLAIM-BACKED type's threshold is null (cinatra#3319): its winning
+    // install declares no matchers, and the process-global matcher registry is
+    // keyed by package only, so an entry under the pack's name is not that
+    // install's and never sets the threshold of this organisation's promotion.
+    const entry = claimEntry
+      ? undefined
+      : matcherManifestRegistry.list().find((e) => e.packageName === input.extension);
     const threshold = entry ? entry.matcherConfidenceThreshold : null;
 
     // The org-write kernel authority the canonical objects writer requires,

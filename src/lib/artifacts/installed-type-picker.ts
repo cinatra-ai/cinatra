@@ -35,8 +35,12 @@ import { humanizeTypeLocalPart } from "./type-definitions-inventory";
 //       consistent with the epic's auto-above-threshold / chip-below model.
 //   (3) CLAIM-BACKED channel (cinatra#3319) — a host-registered type the org's
 //       claim arbitration admits for a pack that mints no own artifact type and
-//       declares no matchers (`readClaimBackedMeaningTypesForOrg`), keyed by the
-//       CLAIMING extension. Passed in by the caller; lowest precedence.
+//       whose winning install declares no matchers
+//       (`readClaimBackedMeaningTypesForOrg`), keyed by the CLAIMING extension.
+//       Passed in by the caller; lowest precedence in the union. The matcher
+//       registry is process-global and keyed by package only, so an entry under
+//       a claim-backed extension's name is not its winning install's (which
+//       declares no matchers): the list drops it.
 //
 // All three share the wildcard-aware `mimeAcceptedByAccepts` matcher and the
 // universal-floor exclusion (a `*/*` catch-all is the retired default-artifact
@@ -87,12 +91,17 @@ export type MatcherChannelMeaningType = {
 };
 
 /** One claim-backed meaning surface (cinatra#3319): the claimed host type, the
- *  claiming extension, and the accepts of the winner's own manifest version.
- *  Injectable so selection is unit-testable without the claim store. */
+ *  claiming extension, the accepts of the winner's own install manifest, and the
+ *  winning claim's identity (its version, its install row and its scope), which
+ *  the package-keyed registries cannot tell apart. Injectable so selection is
+ *  unit-testable without the claim store. */
 export type ClaimBackedMeaningType = {
   objectTypeId: string;
   extension: string;
   acceptMimes: readonly string[];
+  extensionVersion: string;
+  installId: string;
+  scope: string;
 };
 
 function isUniversalAcceptEntry(accept: string): boolean {
@@ -265,7 +274,9 @@ function sortMeaningTypes(types: InstalledMeaningType[]): InstalledMeaningType[]
  * matcher-channel candidate whose package is that type's DEFINING extension
  * (re-asserting the format base as a meaning is a no-op the picker must not
  * offer). `claimBacked` (cinatra#3319) is the caller's
- * `readClaimBackedMeaningTypesForOrg` read; without it the result is unchanged.
+ * `readClaimBackedMeaningTypesForOrg` read: its entries are candidates, and a
+ * matcher-channel entry of one of their extensions is dropped. Without it the
+ * result is unchanged.
  */
 export function listInstalledMeaningTypesAcceptingMime(
   mime: string,
@@ -292,8 +303,13 @@ export function listInstalledMeaningTypesAcceptingMime(
     ? objectTypeRegistry.getRegisteringPackage(excludeTypeId) ??
       opts?.claimBacked?.find((e) => e.objectTypeId === excludeTypeId)?.extension
     : undefined;
+  // A claim-backed extension's winning install in this organisation declares no
+  // matchers (cinatra#3319), so a matcher entry under its package name is not
+  // that install's surface and is no candidate here.
+  const claimBackedExtensions = new Set((opts?.claimBacked ?? []).map((e) => e.extension));
   const channel: MatcherChannelMeaningType[] = matcherManifestRegistry
     .list()
+    .filter((entry) => !claimBackedExtensions.has(entry.packageName))
     .map((entry) => ({
       packageName: entry.packageName,
       fileMimeTypes: entry.fileMimeTypes,
