@@ -92,8 +92,9 @@ describe("the recorded readings hold for the live tree", () => {
       ),
       ...COMPONENT_CALLERS.flatMap((set) => set.callers.filter((c) => c.effect === "immediate").map((c) => [c.file, Boolean(c.staysBecause)])),
     ];
+    // cinatra#4310 — the per-field boolean question's box left this list: it
+    // stages the answer, and the Continue drawn beneath it sends it.
     expect(stays).toEqual([
-      ["packages/agents/src/schema-field-renderer.tsx", true],
       ["packages/skills/src/skills-toolbar.tsx", true],
       ["src/components/scope-filter-combobox.tsx", true],
     ]);

@@ -182,6 +182,16 @@ type KindRow = {
    * same submit.
    */
   enterSubmits?: boolean;
+  /**
+   * cinatra#4310 — the kind's control is a box that is TICKED, not typed into:
+   * a real answer is given by a click on the box.
+   */
+  answerByTick?: boolean;
+  /**
+   * cinatra#4310 — a kind with no blank. The control left untouched already
+   * holds an answer, and the Continue sends exactly this value.
+   */
+  untouchedSends?: unknown;
 };
 
 const KINDS: KindRow[] = [
@@ -194,12 +204,17 @@ const KINDS: KindRow[] = [
     answer: "alpha",
   },
   {
+    // cinatra#4310 — the box STAGES the answer and the Continue beneath it
+    // sends it. A boolean has no blank: the box left clear is the answer
+    // `false`, so the untouched Continue sends `false` rather than nothing.
     kind: "boolean (Checkbox)",
-    drawnAt: "521-539, label 533 — no submit control of its own",
+    drawnAt: "the boolean branch, label in its one box row, Continue in its control floor",
     schema: { type: "boolean" },
-    drawsAContinue: false,
+    drawsAContinue: true,
     controlId: `field-${FIELD}`,
     answer: "true",
+    answerByTick: true,
+    untouchedSends: false,
   },
   {
     kind: "object single-text",
@@ -338,6 +353,17 @@ function typeInto(controlId: string, value: string) {
   fireEvent.change(el, { target: { value } });
 }
 
+/** Give the row's real answer on its control: typed, or a tick on the box. */
+function answerInto(row: KindRow) {
+  if (row.answerByTick) {
+    const el = document.getElementById(row.controlId);
+    if (!el) throw new Error(`no control #${row.controlId} on screen`);
+    fireEvent.click(el);
+    return;
+  }
+  typeInto(row.controlId, row.answer);
+}
+
 /**
  * Let a press settle. Every Continue road here is async (the object legs flush
  * their sub-fields first), so "nothing was submitted" is only a true reading
@@ -390,6 +416,22 @@ describe("cinatra#3582 — every start-field kind refuses a blank for a field th
       // The label of a field the agent declared required never calls it optional.
       expect(occurrencesOfOptional(view.container.textContent ?? "")).toBe(0);
 
+      if (row.untouchedSends !== undefined) {
+        // cinatra#4310 — a kind with no blank: the untouched control is an
+        // answer, and the Continue sends it once...
+        pressContinue();
+        await waitFor(() => {
+          expect(submits).toEqual([row.untouchedSends]);
+        });
+        // ...and the real answer, given on the control, is sent by the next press.
+        answerInto(row);
+        pressContinue();
+        await waitFor(() => {
+          expect(submits).toHaveLength(2);
+        });
+        return;
+      }
+
       if (row.drawsAContinue) {
         pressContinue();
       } else {
@@ -402,7 +444,7 @@ describe("cinatra#3582 — every start-field kind refuses a blank for a field th
 
       // ...and once the field carries a real answer the door opens.
       if (row.drawsAContinue) {
-        typeInto(row.controlId, row.answer);
+        answerInto(row);
         pressContinue();
         await waitFor(() => {
           expect(submits).toHaveLength(1);

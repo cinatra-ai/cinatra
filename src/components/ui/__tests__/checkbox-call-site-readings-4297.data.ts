@@ -373,19 +373,17 @@ export const CHECKBOX_CALL_SITE_READINGS: FileReading[] = [
     tokens: 4,
     sites: [
       {
-        anchor: "onCheckedChange={(next) => onChange(Boolean(next))}",
+        anchor: "checked={ownsContinue ? stagedChecked : Boolean(value)}",
         tag: "Checkbox",
         drawn: "checkbox",
-        effect: "immediate",
+        effect: "confirmed",
         reading:
-          "the box of a boolean question in a schema-drawn form: inside a grouped setup form or a mid-run input step the form's own submit sends it, but on the per-field setup surfaces no Continue is drawn beneath it, so the tick sends the answer at once",
-        staysBecause:
-          "it answers a yes/no question of a form, which the drawing gives as a confirmable form choice (a checkbox); its immediate send on the per-field setup surfaces is the missing Continue that cinatra#4310 adds, so the cure is the confirm, not a switch",
-        tagIncludes: ["onCheckedChange={(next) => onChange(Boolean(next))}"],
-        fileIncludes: ['if (t === "boolean"'],
+          "the box of a boolean question in a schema-drawn form: inside a grouped setup form or a structured object's sub-field (hideSubmit) the form's own submit sends it, and on the per-field setup surfaces the box only stages the answer and the Continue drawn beneath it sends it (cinatra#4310)",
+        tagIncludes: ["onCheckedChange={(next) => (ownsContinue ? setStagedChecked(next === true) : onChange(Boolean(next)))}"],
+        fileIncludes: ['if (type === "boolean") {', "await handleSubmit(stagedChecked);", "onClick={() => void submitBoolean()}"],
         evidence: [
           { file: "packages/agents/src/register-default-renderers.ts", text: "drawsOwnSubmit: true," },
-          { file: "packages/agents/src/agentic-run-panel.tsx", text: "hitlRendererEntry.entry.drawsOwnSubmit !== true;" },
+          { file: "packages/agents/src/grouped-setup-form-renderer.tsx", text: "hideSubmit={true}" },
         ],
       },
     ],
