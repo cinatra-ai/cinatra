@@ -60,8 +60,8 @@ section is the tests of item 3.
 
 ## Item 2: the preview-installation reading
 
-The second criterion of #4112 was read on one fresh preview installation, on 2026-11-04: a production build of the pull
-request's head, run with the preview install profile. As for item 1, the database readings were reads only; the product
+The second criterion of #4112 was read on one fresh preview installation, on 2026-11-04, run in production mode with
+the preview install profile. As for item 1, the database readings were reads only; the product
 steps were one sign-in and one dispatched run, whose setup screens and trigger form were answered. The database was read
 before anyone signed in, and the Connectors page and the list picker were then read through the running product.
 
@@ -72,14 +72,13 @@ commits that add this record, which change no other file. The Twenty connector w
 Email Outreach Agent at `92874fdd00de`; both locks held.
 
 Boot and second start. The first bring-up reported OK at 13:16:51Z, and the second bring-up started at 13:17:15Z and was
-admitted at 13:17:25Z. The second start recreates the installation's container. The container that held the application
+admitted at 13:17:25Z. The container that held the application
 was created at 13:23:06Z, after the second bring-up was admitted, so its log holds the second start only and the reading
 is of the second start. The runtime mode was production, the install profile preview and the Node environment
 production. The health route answered 200 and the run table held 0 rows before the reading. On the second start the
 preview branch's policy line (connector hooks only) appeared once, the first administrator's adoption line once, the
 connect line once and the ok line once; the warn, skip, no-administrator, Nango, mint and custom-fields lines appeared
-0 times, and no fixture account was set up. The log also holds three lines about a container composition not running;
-they are no gate, and the hook's own lines read ok.
+0 times, and no fixture account was set up. The log also holds three docker lines; the hook's own lines read ok.
 
 The attach. The Twenty key was handed to the installation and none was minted (the handed line once, the minted line 0
 times), and the attach resolved: the line `[dev-attach:twenty] not resolved: <word>` appeared 0 times, and each of its
