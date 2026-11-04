@@ -37,9 +37,14 @@
  * send boundary's default projection wires it, over the send's drafts AND its
  * confirmed recipients (the boundary passes both), run TWICE over the same send.
  *
- * THE CLAIM is read as bytes: before the first drive, every row of every table
- * in the schema is read in its text form, column by column; after both drives
- * every one of those rows must still be there, unchanged. What the first drive
+ * THE CLAIM is read as bytes: before the first drive, every relation of the
+ * schema is listed with its kind, and every row of every ordinary table is read
+ * in its text form, column by column; after both drives every one of those rows
+ * must still be there, unchanged. An index or a sequence counts as shape only;
+ * a relation of any other kind (partitioned, foreign, a view) holds rows this
+ * tier does not read, so a reading that meets one fails instead of calling the
+ * schema unchanged. Neither drive may change the schema's shape: its relations,
+ * their kinds and the ordinary tables' columns. What the first drive
  * ADDS is held to an exact permitted delta: per table, exactly the rows of the
  * send's new bodies (their objects, representation, audit, association, outbox
  * and ledger rows, and the one new content-addressed resource and blob), in an
@@ -58,9 +63,15 @@
  * network read: `getAgentPackage` answers the fixture package's manifest (and
  * refuses any other), the registry config loader a fixed config.
  *
- * TEARDOWN runs every step (schema drop, connection close, blob root, process
+ * CLIENTS AND TEARDOWN. Each client the tier opens (setup, reader, teardown) is
+ * built, connected and closed under one failure-collecting road: a malformed
+ * setting (the pg constructor parses the URL at once), a refused connection, a
+ * failed body or a failed close each fail the run, and a client that was built
+ * is closed whatever failed after it. The teardown runs every step (schema
+ * drop, a check that no session of the tier is left open, blob root, process
  * state) whatever fails, and then fails the run naming each step that failed:
- * a tier that cannot drop its schema does not finish green.
+ * a tier that cannot drop its schema, or that leaves a session open, does not
+ * finish green.
  *
  * ISOLATION (the #3030 / #3032 pattern): a fresh schema from the CANONICAL
  * `buildCreateStoreSchemaQueries` DDL; the artifact blob root is a temp dir;
@@ -242,30 +253,139 @@ async function sql(text: string, values: unknown[] = []) {
 }
 
 // ---------------------------------------------------------------------------
-// The byte reading: every row of every table of the schema, as text.
+// The tier's own clients: built, connected and closed on one road.
+// ---------------------------------------------------------------------------
+
+/** What the tier needs of a client: the pg Client, or a stand-in in the
+ *  in-file test of this road. */
+type TierClient = { connect(): Promise<unknown>; end(): Promise<unknown> };
+
+/** Every client the tier opens carries this name, so the teardown can find a
+ *  session of the tier that was left open. The production write path's pools
+ *  do not carry it. */
+const TIER_APPLICATION_NAME = "cinatra-3089-history-tier";
+
+/** A client on the tier's database. The pg constructor parses the URL at once,
+ *  so a malformed setting throws here, inside the road below. */
+const newTierClient = () => new Client({ connectionString: DB_URL, application_name: TIER_APPLICATION_NAME });
+
+const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+/**
+ * Build and connect one client. A build failure leaves nothing to close; a
+ * client that was built and did not connect is closed here, and the call fails
+ * naming the failed stage and any failed close.
+ */
+async function openTierClient<C extends TierClient>(label: string, open: () => C): Promise<C> {
+  let client: C | undefined;
+  try {
+    client = open();
+    await client.connect();
+    return client;
+  } catch (err) {
+    const failed = [`${client === undefined ? "build" : "connect"}: ${message(err)}`];
+    if (client !== undefined) {
+      try {
+        await client.end();
+      } catch (closeErr) {
+        failed.push(`close: ${message(closeErr)}`);
+      }
+    }
+    throw new Error(`the ${label} client failed (${failed.join("; ")})`);
+  }
+}
+
+/**
+ * Run `body` on a client opened as above, then close it whatever the body did.
+ * The call fails naming every failed stage: the build, the connect, the body
+ * and the close.
+ */
+async function withTierClient<C extends TierClient, T>(
+  label: string,
+  open: () => C,
+  body: (client: C) => Promise<T>,
+): Promise<T> {
+  const client = await openTierClient(label, open);
+  const failed: string[] = [];
+  let out: T | undefined;
+  try {
+    out = await body(client);
+  } catch (err) {
+    failed.push(`run: ${message(err)}`);
+  }
+  try {
+    await client.end();
+  } catch (err) {
+    failed.push(`close: ${message(err)}`);
+  }
+  if (failed.length > 0) throw new Error(`the ${label} client failed (${failed.join("; ")})`);
+  return out as T;
+}
+
+/** The sessions of the tier still open on its database, other than the
+ *  asking one. A closed client's backend ends a moment after the close, so the
+ *  count is read again for up to five seconds before a session is called left
+ *  open. */
+async function tierSessionsLeft(client: Client): Promise<number> {
+  let left = 0;
+  for (let i = 0; i < 50; i += 1) {
+    const res = await client.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM pg_stat_activity
+        WHERE datname = current_database() AND application_name = $1 AND pid <> pg_backend_pid()`,
+      [TIER_APPLICATION_NAME],
+    );
+    left = Number(res.rows[0]?.n ?? 0);
+    if (left === 0) return 0;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return left;
+}
+
+// ---------------------------------------------------------------------------
+// The byte reading: every relation of the schema by its kind, and every row of
+// every ordinary table, as text.
 // ---------------------------------------------------------------------------
 
 type TableRows = { columns: string[]; rows: string[] };
-type Snapshot = Map<string, TableRows>;
+type Tables = Map<string, TableRows>;
+/** One relation of the schema: its pg_class kind and, for an ordinary table,
+ *  its live columns in table order. */
+type Relation = { kind: string; columns: string[] };
+type Snapshot = { shape: Map<string, Relation>; tables: Tables };
 
 /**
- * Read every base table of the schema. Each row is its ROW(...) text form over
- * the given columns (or the table's own columns, in table order, when none are
- * given): the bytes Postgres renders for the stored values. Rows are sorted, so
- * two readings compare as multisets. ONE connection for every reading, so the
- * session settings that shape the text form (time zone, float digits) are the
- * same each time.
+ * How the tier reads a relation of its schema, by its `pg_class.relkind`. An
+ * ordinary table's rows are read. An index or a sequence is shape only: its
+ * name and kind. Every other kind (a partitioned or foreign table, a view, a
+ * materialized view, a composite type, a partitioned index) holds or shows rows
+ * this tier does not read, so a reading that meets one fails: it never calls a
+ * relation unchanged that it did not read.
  */
-async function snapshot(client: Client, columnsOf?: Snapshot): Promise<Snapshot> {
-  const tables = await client.query<{ name: string }>(
-    `SELECT c.relname AS name FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = $1 AND c.relkind = 'r' ORDER BY c.relname`,
+const RELATION_ROLES: Readonly<Record<string, "rows" | "shape">> = { r: "rows", i: "shape", S: "shape" };
+function relationRole(name: string, kind: string): "rows" | "shape" {
+  const role = Object.hasOwn(RELATION_ROLES, kind) ? RELATION_ROLES[kind] : undefined;
+  if (role === undefined) {
+    throw new Error(
+      `the schema holds ${name}, a relation of kind '${kind}' whose rows this tier does not read, ` +
+        "so it refuses to call the schema unchanged",
+    );
+  }
+  return role;
+}
+
+/** Every relation of the schema, by name: its kind, and an ordinary table's
+ *  live columns. Fails on a relation of a kind the tier does not read. */
+async function readShape(client: Client): Promise<Map<string, Relation>> {
+  const rels = await client.query<{ name: string; kind: string }>(
+    `SELECT c.relname AS name, c.relkind::text AS kind FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = $1 ORDER BY c.relname`,
     [S()],
   );
-  const out: Snapshot = new Map();
-  for (const { name } of tables.rows) {
-    let columns = columnsOf?.get(name)?.columns;
-    if (!columns) {
+  const shape = new Map<string, Relation>();
+  for (const { name, kind } of rels.rows) {
+    let columns: string[] = [];
+    if (relationRole(name, kind) === "rows") {
       const cols = await client.query<{ column_name: string }>(
         `SELECT column_name FROM information_schema.columns
           WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position`,
@@ -273,20 +393,36 @@ async function snapshot(client: Client, columnsOf?: Snapshot): Promise<Snapshot>
       );
       columns = cols.rows.map((r) => r.column_name);
     }
-    expect(columns).toBeDefined();
-    if (columns === undefined) {
-      throw new Error(`no column list resolved for table ${name}`);
-    }
+    shape.set(name, { kind, columns });
+  }
+  return shape;
+}
+
+/**
+ * Read the schema's shape and every ordinary table's rows. Each row is its
+ * ROW(...) text form over the columns `columnsOf` read for that table (or the
+ * table's own live columns, in table order, for a table `columnsOf` did not
+ * read): the bytes Postgres renders for the stored values. Rows are sorted, so
+ * two readings compare as multisets. ONE connection for every reading, so the
+ * session settings that shape the text form (time zone, float digits) are the
+ * same each time.
+ */
+async function snapshot(client: Client, columnsOf?: Snapshot): Promise<Snapshot> {
+  const shape = await readShape(client);
+  const tables: Tables = new Map();
+  for (const [name, relation] of shape) {
+    if (relationRole(name, relation.kind) !== "rows") continue;
+    const columns = columnsOf?.tables.get(name)?.columns ?? relation.columns;
     const res = await client.query<{ r: string }>(
       `SELECT ROW(${columns.map(q).join(", ")})::text AS r FROM ${q(S())}.${q(name)}`,
     );
-    out.set(name, { columns, rows: res.rows.map((x) => x.r).sort() });
+    tables.set(name, { columns, rows: res.rows.map((x) => x.r).sort() });
   }
-  return out;
+  return { shape, tables };
 }
 
 /** The rows of `before` that are not in `after`, per table (multiset). */
-function rowsGone(before: Snapshot, after: Snapshot): Record<string, string[]> {
+function rowsGone(before: Tables, after: Tables): Record<string, string[]> {
   const gone: Record<string, string[]> = {};
   for (const [table, { rows }] of before) {
     const left = new Map<string, number>();
@@ -303,7 +439,7 @@ function rowsGone(before: Snapshot, after: Snapshot): Record<string, string[]> {
 }
 
 /** The rows of `after` that are not in `before`, per table (multiset). */
-function rowsAdded(before: Snapshot, after: Snapshot): Record<string, string[]> {
+function rowsAdded(before: Tables, after: Tables): Record<string, string[]> {
   return rowsGone(after, before);
 }
 
@@ -358,14 +494,14 @@ async function permittedFirstDriveRows(
 ): Promise<Record<string, string[]>> {
   const out: Record<string, string[]> = {};
   for (const table of Object.keys(FIRST_DRIVE_DELTA)) {
-    const columns = before.get(table)?.columns;
+    const columns = before.tables.get(table)?.columns;
     if (columns === undefined) throw new Error(`the schema has no table ${table}`);
     const res = await client.query<{ r: string }>(
       `SELECT ROW(${columns.map((c) => `t.${q(c)}`).join(", ")})::text AS r FROM ${q(S())}.${q(table)} t WHERE ${tiedTo(table)}`,
       [newIds],
     );
-    const tied: Snapshot = new Map([[table, { columns, rows: res.rows.map((x) => x.r).sort() }]]);
-    const fresh = rowsAdded(new Map([[table, before.get(table) as TableRows]]), tied)[table];
+    const tied: Tables = new Map([[table, { columns, rows: res.rows.map((x) => x.r).sort() }]]);
+    const fresh = rowsAdded(new Map([[table, before.tables.get(table) as TableRows]]), tied)[table];
     if (fresh !== undefined) out[table] = fresh.sort();
   }
   return out;
@@ -389,7 +525,7 @@ async function runTeardown(steps: ReadonlyArray<readonly [string, () => unknown]
 
 function rowCount(s: Snapshot): number {
   let n = 0;
-  for (const { rows } of s.values()) n += rows.length;
+  for (const { rows } of s.tables.values()) n += rows.length;
   return n;
 }
 
@@ -601,22 +737,22 @@ beforeAll(async () => {
   BLOB_ROOT = mkdtempSync(path.join(tmpdir(), "cin-3089-blobs-"));
   process.env.CINATRA_ARTIFACT_DATA_ROOT = BLOB_ROOT;
 
-  const client = new Client({ connectionString: DB_URL });
-  await client.connect();
-  await client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`);
-  await client.query(`CREATE SCHEMA "${TEST_SCHEMA}"`);
-  const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
-  for (const qy of buildCreateStoreSchemaQueries(TEST_SCHEMA)) {
-    const head = qy.text.trim().slice(0, 6).toUpperCase();
-    if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S") continue;
-    try {
-      await client.query(qy.text, (qy as { values?: unknown[] }).values as never[]);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!msg.includes("does not exist")) throw err;
+  // The setup client is closed whatever the schema build does; a failed build
+  // fails the run, and the teardown below still runs every step.
+  await withTierClient("setup", newTierClient, async (client) => {
+    await client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`);
+    await client.query(`CREATE SCHEMA "${TEST_SCHEMA}"`);
+    const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
+    for (const qy of buildCreateStoreSchemaQueries(TEST_SCHEMA)) {
+      const head = qy.text.trim().slice(0, 6).toUpperCase();
+      if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S") continue;
+      try {
+        await client.query(qy.text, (qy as { values?: unknown[] }).values as never[]);
+      } catch (err) {
+        if (!message(err).includes("does not exist")) throw err;
+      }
     }
-  }
-  await client.end();
+  });
   (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized =
     true;
 
@@ -662,32 +798,27 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!HAS_REAL_DB) return;
-  const client = new Client({ connectionString: DB_URL });
-  let connected = false;
-  // Every step runs; a failed drop (or a connection that never opened, so the
-  // drop never ran) fails the run after the blob root and the process state are
-  // cleaned, instead of finishing green with the schema left behind.
+  // Every step runs whatever an earlier one did, and the run then fails naming
+  // each step that failed. Each client is built, connected and closed inside its
+  // own step, so a malformed setting, a refused connection or a failed close is
+  // one failed step: it never skips the blob root or the process state, and the
+  // tier never finishes green with its schema or a session left behind.
   await runTeardown([
     ["clear the type registry", () => objectTypeRegistry._clearForTests()],
     [
-      "connect",
-      async () => {
-        await client.connect();
-        connected = true;
-      },
-    ],
-    [
       "drop the tier's schema",
-      async () => {
-        if (!connected) throw new Error("no connection, so the schema was not dropped");
-        await client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`);
-      },
+      () =>
+        withTierClient("teardown", newTierClient, (client) =>
+          client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`),
+        ),
     ],
     [
-      "close the connection",
-      async () => {
-        if (connected) await client.end();
-      },
+      "leave no session of the tier open",
+      () =>
+        withTierClient("teardown", newTierClient, async (client) => {
+          const left = await tierSessionsLeft(client);
+          if (left > 0) throw new Error(`${left} session(s) of the tier are still open`);
+        }),
     ],
     [
       "remove the blob root",
@@ -709,7 +840,7 @@ afterAll(async () => {
 describe.skipIf(!HAS_REAL_DB)(
   "acceptance item 5 — the fan-out run twice leaves the historical raw rows and associations byte-identical",
   () => {
-    let reader: Client;
+    let reader: Client | undefined;
     let boundArtifactId = "";
     // `before` is read in each table's own columns. Every later reading is read
     // twice: over the columns `before` saw (what "byte-identical" compares, so a
@@ -729,23 +860,31 @@ describe.skipIf(!HAS_REAL_DB)(
 
     beforeAll(async () => {
       boundArtifactId = await seedHistory();
-      reader = new Client({ connectionString: DB_URL });
-      await reader.connect();
-      before = await snapshot(reader);
+      const client = await openTierClient("reader", newTierClient);
+      reader = client;
+      before = await snapshot(client);
       objectsBefore = await rowsById("objects", [...HISTORICAL_OBJECT_IDS, boundArtifactId]);
       assertionsBefore = await rowsById("semantic_assertion", HISTORICAL_ASSERTION_IDS);
       boundAssertionsBefore = await assertionsOn(boundArtifactId);
       first = await driveFanout();
-      afterFirst = await snapshot(reader);
-      afterFirstAsBefore = await snapshot(reader, before);
-      permitted = await permittedFirstDriveRows(reader, before, first.bodies.map((b) => b.objectId));
+      afterFirst = await snapshot(client);
+      afterFirstAsBefore = await snapshot(client, before);
+      permitted = await permittedFirstDriveRows(client, before, first.bodies.map((b) => b.objectId));
       second = await driveFanout();
-      afterSecond = await snapshot(reader, afterFirst);
-      afterSecondAsBefore = await snapshot(reader, before);
+      afterSecond = await snapshot(client, afterFirst);
+      afterSecondAsBefore = await snapshot(client, before);
     });
 
+    // The reader is closed, and a failed close fails the run.
     afterAll(async () => {
-      await reader?.end().catch(() => {});
+      await runTeardown([
+        [
+          "close the reader",
+          async () => {
+            if (reader !== undefined) await reader.end();
+          },
+        ],
+      ]);
     });
 
     it("drives the production fan-out twice: one ledgered body per draft, the second drive the same ids", async () => {
@@ -794,16 +933,16 @@ describe.skipIf(!HAS_REAL_DB)(
     });
 
     it("leaves every row the database held before the first drive byte-identical, in every table, after both drives", () => {
-      expect(before.size).toBeGreaterThan(0);
-      expect(rowsGone(before, afterFirstAsBefore)).toEqual({});
-      expect(rowsGone(before, afterSecondAsBefore)).toEqual({});
+      expect(before.tables.size).toBeGreaterThan(0);
+      expect(rowsGone(before.tables, afterFirstAsBefore.tables)).toEqual({});
+      expect(rowsGone(before.tables, afterSecondAsBefore.tables)).toEqual({});
     });
 
     it("adds exactly the first drive's own rows: the new bodies' rows, in an exact count per table, and no other row", () => {
-      // The schema itself did not change shape.
-      expect([...afterFirst.keys()]).toEqual([...before.keys()]);
-      for (const [table, { columns }] of before) expect(afterFirst.get(table)?.columns).toEqual(columns);
-      const added = rowsAdded(before, afterFirstAsBefore);
+      // The schema itself did not change shape: the same relations, of the same
+      // kinds, and the same columns on every ordinary table.
+      expect(afterFirst.shape).toEqual(before.shape);
+      const added = rowsAdded(before.tables, afterFirstAsBefore.tables);
       expect(Object.fromEntries(Object.entries(added).map(([t, rows]) => [t, rows.length]))).toEqual(
         FIRST_DRIVE_DELTA,
       );
@@ -900,9 +1039,10 @@ describe.skipIf(!HAS_REAL_DB)(
       expect(reps.rows).toEqual(ids.map((id) => ({ artifact_id: id, created_by_run_id: RUN_SEND })));
     });
 
-    it("changes no row and adds none on the second drive", () => {
-      expect(rowsGone(afterFirst, afterSecond)).toEqual({});
-      expect(rowsGone(afterSecond, afterFirst)).toEqual({});
+    it("changes no row and adds none on the second drive, and leaves the schema's shape as the first drive left it", () => {
+      expect(afterSecond.shape).toEqual(afterFirst.shape);
+      expect(rowsGone(afterFirst.tables, afterSecond.tables)).toEqual({});
+      expect(rowsGone(afterSecond.tables, afterFirst.tables)).toEqual({});
     });
 
     it("tears down by running every step and failing on any step that fails", async () => {
@@ -935,6 +1075,94 @@ describe.skipIf(!HAS_REAL_DB)(
       );
       expect(ran).toEqual(["drop", "close", "remove"]);
       await expect(runTeardown([["only", () => {}]])).resolves.toBeUndefined();
+    });
+
+    it("builds, connects and closes each client of the tier on one road, failing on every failed stage", async () => {
+      const calls: string[] = [];
+      const stand = (fail: { connect?: string; end?: string } = {}) => ({
+        connect: async () => {
+          calls.push("connect");
+          if (fail.connect) throw new Error(fail.connect);
+        },
+        end: async () => {
+          calls.push("end");
+          if (fail.end) throw new Error(fail.end);
+        },
+      });
+      const malformed = (): TierClient => {
+        throw new Error("Invalid URL");
+      };
+      const take = () => calls.splice(0, calls.length);
+
+      // A malformed setting: the build throws, the body never runs, nothing is left to close.
+      await expect(
+        withTierClient("teardown", malformed, async () => {
+          calls.push("run");
+        }),
+      ).rejects.toThrow("the teardown client failed (build: Invalid URL)");
+      expect(take()).toEqual([]);
+      // A refused connection: the body never runs, and the built client is closed.
+      await expect(
+        withTierClient("setup", () => stand({ connect: "refused" }), async () => {
+          calls.push("run");
+        }),
+      ).rejects.toThrow("the setup client failed (connect: refused)");
+      expect(take()).toEqual(["connect", "end"]);
+      // A failed body and a failed close: the close still runs, and both are named.
+      await expect(
+        withTierClient("setup", () => stand({ end: "the close was refused" }), async () => {
+          calls.push("run");
+          throw new Error("the schema build was refused");
+        }),
+      ).rejects.toThrow("the setup client failed (run: the schema build was refused; close: the close was refused)");
+      expect(take()).toEqual(["connect", "run", "end"]);
+      // A failed close alone fails the call.
+      await expect(
+        withTierClient("teardown", () => stand({ end: "the close was refused" }), async () => "dropped"),
+      ).rejects.toThrow("the teardown client failed (close: the close was refused)");
+      expect(take()).toEqual(["connect", "end"]);
+      // The reader's road: a refused connection closes the client and fails, naming a failed close too.
+      await expect(
+        openTierClient("reader", () => stand({ connect: "refused", end: "the close was refused" })),
+      ).rejects.toThrow("the reader client failed (connect: refused; close: the close was refused)");
+      expect(take()).toEqual(["connect", "end"]);
+      // A good client: the body's result, and one close.
+      await expect(withTierClient("teardown", () => stand(), async () => "dropped")).resolves.toBe("dropped");
+      expect(take()).toEqual(["connect", "end"]);
+      // In the teardown, a client that cannot be built is one failed step; the later steps run.
+      const ran: string[] = [];
+      await expect(
+        runTeardown([
+          ["drop the tier's schema", () => withTierClient("teardown", malformed, async () => {})],
+          [
+            "remove the blob root",
+            () => {
+              ran.push("remove");
+            },
+          ],
+        ]),
+      ).rejects.toThrow(
+        "the tier's teardown failed (1 step(s)): drop the tier's schema: the teardown client failed (build: Invalid URL)",
+      );
+      expect(ran).toEqual(["remove"]);
+    });
+
+    it("reads an ordinary table's rows, keeps an index or a sequence as shape, and refuses every other relation kind", () => {
+      expect(relationRole("objects", "r")).toBe("rows");
+      expect(relationRole("objects_pkey", "i")).toBe("shape");
+      expect(relationRole("a_table_id_seq", "S")).toBe("shape");
+      for (const kind of ["p", "f", "v", "m", "c", "I", "t", "toString"]) {
+        expect(() => relationRole("email_backfill", kind)).toThrow(
+          `the schema holds email_backfill, a relation of kind '${kind}' whose rows this tier does not read`,
+        );
+      }
+      // The readings above read the shape: the schema's ordinary tables and their indexes.
+      const kinds = new Set([...before.shape.values()].map((r) => r.kind));
+      expect(kinds.has("r")).toBe(true);
+      expect(kinds.has("i")).toBe(true);
+      expect([...before.tables.keys()]).toEqual(
+        [...before.shape].filter(([, r]) => r.kind === "r").map(([name]) => name),
+      );
     });
   },
 );
