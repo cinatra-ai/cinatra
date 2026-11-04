@@ -256,6 +256,41 @@ describe("the open review read's warning carries no query text (cinatra#3092)", 
     expect(warn.mock.calls[0][1]).toBe("Error");
     warn.mockRestore();
   });
+
+  it("logs a fixed word, never the thrown value, when the read throws something that is not an Error", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.isArtifactUnderOpenReview.mockRejectedValue("org-1 params a-1");
+    await renderPage();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][1]).toBe("UnknownError");
+    expect(warn.mock.calls[0].map(String).join(" ")).not.toMatch(/org-1|params|a-1/);
+    expect((mocks.mounted[0]?.props as { review?: unknown } | undefined)?.review).toEqual({
+      reading: "pending",
+      openLive: null,
+    });
+    warn.mockRestore();
+  });
+
+  it("logs a fixed word, never the class name, when the class name is not an identifier of at most 64 characters", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const named = (name: string) => {
+      const C = class extends Error {};
+      Object.defineProperty(C, "name", { value: name });
+      return new C("x");
+    };
+    for (const name of ["org-1 a-1", "a".repeat(65), "1Error", ""]) {
+      warn.mockClear();
+      mocks.isArtifactUnderOpenReview.mockRejectedValueOnce(named(name));
+      await renderPage();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][1]).toBe("UnknownError");
+    }
+    warn.mockClear();
+    mocks.isArtifactUnderOpenReview.mockRejectedValueOnce(named("A".repeat(64)));
+    await renderPage();
+    expect(warn.mock.calls[0][1]).toBe("A".repeat(64));
+    warn.mockRestore();
+  });
 });
 
 describe("the dashboard's own read gate on the artifact page (cinatra#3092)", () => {
