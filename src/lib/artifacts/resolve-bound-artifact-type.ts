@@ -168,6 +168,24 @@ export function readArtifactSafeClaimWinnerForType(
   return winner ? winner.extensionPackage : null;
 }
 
+/**
+ * The packages that win at least one artifact-safe claim in this organisation
+ * (cinatra#3319), sorted and de-duplicated: the same arbitration as the
+ * functions above. The upload actions read it only after the claim-backed read
+ * failed, to tell which matcher entries could be a claim-backed pack's. A
+ * failed claim read throws.
+ */
+export function readArtifactSafeClaimWinnerPackagesForOrg(
+  orgId: string,
+  readClaimsForOrg?: (orgId: string) => readonly ArbitrableClaim[],
+): string[] {
+  return [
+    ...new Set(
+      readArtifactSafeClaimWinners(orgId, readClaimsForOrg).map((w) => w.extensionPackage),
+    ),
+  ].sort();
+}
+
 // ---------------------------------------------------------------------------
 // THE ADMISSIBLE ARTIFACT TYPES OF ONE ORGANISATION (cinatra#3603).
 //
@@ -245,11 +263,17 @@ export function readAdmissibleArtifactTypeIdsForOrg(
  *   5. that manifest's `accepts` is non-empty;
  *   6. the winning claim is bound to an install row (`installId`).
  * Rules 0, 1, 3, 4 and 6 read the claims and the registry only; the manifest is
- * read only for an extension that passes them, and only from the winner's own
- * install (`readClaimWinnerManifestFields`), never from another digest or tree
- * of the same package. Each entry names the winner it was read for: version,
- * install and scope. The caller warms the registry. Both reads are injectable
- * for unit tests; a failed claim read or install-row read throws.
+ * read only for an extension that passes them, and only through the winner's
+ * own install row (`readClaimWinnerManifestFields`): the store record at the
+ * row's recorded digest, never another store record of the same package; a row
+ * with no recorded digest reads the development tree, which is bound to the
+ * claim by the package name and the claim's version only. Each entry names the
+ * winner it was read for: version, install and scope. The install row's
+ * organisation is not compared with the claim's scope here; the claim-scoped
+ * gate the upload actions ask (`canActorAccessClaimedArtifactExtension`)
+ * refuses a bound row that does not govern that scope. The caller warms the
+ * registry. Both reads are injectable for unit tests; a failed claim read or
+ * install-row read throws.
  */
 export async function readClaimBackedMeaningTypesForOrg(
   orgId: string,
@@ -415,8 +439,8 @@ async function readInstalledPackManifestFields(
 }
 
 /**
- * THE MANIFEST OF THE WINNING CLAIM'S OWN INSTALL (cinatra#3319): the bytes of
- * the install row the claim is bound to, never another digest or tree of the
+ * THE MANIFEST OF THE WINNING CLAIM'S OWN INSTALL (cinatra#3319): read through
+ * the install row the claim is bound to, never from another store record of the
  * same package.
  * The claim's install row (`installId`) must be a live (`active` or `locked`)
  * `kind:"artifact"` row of this package. Then:
@@ -427,7 +451,9 @@ async function readInstalledPackManifestFields(
  *   - a row that records no digest (for example a bundled or development
  *     install) answers through the development tree only when the store read
  *     succeeded and holds no record of the package at all, and exactly one
- *     development manifest of the package is readable.
+ *     development manifest of the package is readable. That tree carries no
+ *     install identity: it is taken as the bundled install's bytes, bound to
+ *     the claim by the package name and the version check below only.
  * In both cases the manifest's own `version` must be the claim's version, or the
  * answer is null. A failed install-row read throws.
  */
