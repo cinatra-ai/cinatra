@@ -19,7 +19,9 @@
 // road and on the durable road) leave them out too. The schema is the carrier
 // because both roads store it whole (the `x-` hint road of cinatra#3582): no
 // protocol argument, no column and no migration. A consumer that does not know
-// the key ignores it.
+// the key ignores it. Only the host writes the key: a schema that already holds
+// it (a gate's pendingApproval, which is the schema when the step has none, or
+// a pack's own step schema) loses it before the host writes its own list.
 // ---------------------------------------------------------------------------
 
 /** Schema key that lists the gate keys a run input must not fill. */
@@ -45,4 +47,10 @@ export function withoutKeys(
   if (keys.length === 0) return values;
   const drop = new Set(keys);
   return Object.fromEntries(Object.entries(values).filter(([k]) => !drop.has(k)));
+}
+
+/** The schema without the list key, so that only the host writes it; the same object when it has none. */
+export function withoutGateKeysList(schema: Record<string, unknown>): Record<string, unknown> {
+  if (!Object.prototype.hasOwnProperty.call(schema, GATE_KEYS_NOT_FROM_RUN_INPUTS)) return schema;
+  return withoutKeys(schema, [GATE_KEYS_NOT_FROM_RUN_INPUTS]);
 }

@@ -505,6 +505,7 @@ import { stepFiresRendererGate } from "./orchestrator-gate-predicate";
 import {
   GATE_KEYS_NOT_FROM_RUN_INPUTS,
   readKeyList,
+  withoutGateKeysList,
   withoutKeys,
 } from "./gate-keys-not-from-run-inputs";
 import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask, rememberLatestWayflowGateTask, rememberWayflowGateNodeClaim } from "@cinatra-ai/a2a";
@@ -2847,6 +2848,11 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     const gateKeysNotFromRunInputs = wayflowSurfaceGateInputKeys.filter(
       (k) => !gateOwnValueKeys.has(k),
     );
+    // Only the host writes the list: a schema source that already holds the
+    // key (the gate's pendingApproval when the step has no schema, or a pack's
+    // own step schema) loses it, so a gate cannot withhold run inputs itself.
+    const gateSchemaSource = (wayflowSchema ?? interruptPayload) as Record<string, unknown>;
+    const gateSchemaBase = withoutGateKeysList(gateSchemaSource);
     const enrichedValues: Record<string, unknown> = {
       ...withoutKeys(
         (run.inputParams ?? {}) as Record<string, unknown>,
@@ -2877,11 +2883,8 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       buildArtifact: async () => ({
         schema: await enrichSchemaWithResolvedData(
           gateKeysNotFromRunInputs.length > 0
-            ? {
-                ...((wayflowSchema ?? interruptPayload) as Record<string, unknown>),
-                [GATE_KEYS_NOT_FROM_RUN_INPUTS]: gateKeysNotFromRunInputs,
-              }
-            : ((wayflowSchema ?? interruptPayload) as Record<string, unknown>),
+            ? { ...gateSchemaBase, [GATE_KEYS_NOT_FROM_RUN_INPUTS]: gateKeysNotFromRunInputs }
+            : gateSchemaBase,
           enrichmentContextFor(run.runBy),
         ),
         xRenderer: wayflowXRenderer,
