@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-lifecycle-cards.html",
-  "contentHash": "sha256:218bf86ae8e105d9279aaf8f6e8ecfc8612ec70b5f7d982aecd94491f728ca10",
+  "contentHash": "sha256:48b868de1d67def632f060c694d49f36caa683e941c3d6794d88de24c4e4996e",
   "surfaces": [
     {
       "id": "chat-thread",
@@ -98,6 +98,12 @@
       "states": []
     },
     {
+      "id": "review-gate-card",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
       "id": "review-target-in-thread",
       "fields": [
         {
@@ -156,6 +162,40 @@
         "error",
         "kind:artifact",
         "loading"
+      ]
+    },
+    {
+      "id": "post-continued-reading",
+      "fields": [
+        {
+          "field": "reading",
+          "source": "review.reading"
+        },
+        {
+          "field": "decision",
+          "source": "review.decidedAt"
+        }
+      ],
+      "actions": [],
+      "states": [
+        "empty"
+      ]
+    },
+    {
+      "id": "regenerated-post-continued-reading",
+      "fields": [
+        {
+          "field": "reading",
+          "source": "review.reading"
+        },
+        {
+          "field": "decision",
+          "source": "review.decidedAt"
+        }
+      ],
+      "actions": [],
+      "states": [
+        "empty"
       ]
     },
     {
@@ -343,6 +383,23 @@
       "states": []
     },
     {
+      "id": "agent-hitl-screen-card",
+      "fields": [],
+      "actions": [
+        {
+          "action": "submit-hitl-screen",
+          "outcome": "continued"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "hitl-screen-fields",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
       "id": "schedule-card-first-shown",
       "fields": [],
       "actions": [],
@@ -429,6 +486,199 @@
           "outcome": "stopped"
         }
       ],
+      "states": []
+    },
+    {
+      "id": "schedule-cancel-confirm",
+      "fields": [],
+      "actions": [
+        {
+          "action": "keep-schedule",
+          "outcome": "dialog-dismissed"
+        },
+        {
+          "action": "cancel-schedule",
+          "outcome": "stopped"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "schedule-card-recurrence-first-shown",
+      "fields": [
+        {
+          "field": "recurring-quarter-anchor",
+          "source": "selection.quarterAnchor"
+        },
+        {
+          "field": "recurring-monthly-mode",
+          "source": "selection.monthlyMode"
+        },
+        {
+          "field": "recurring-day-of-month",
+          "source": "selection.dayOfMonth"
+        },
+        {
+          "field": "recurring-yearly-month",
+          "source": "selection.yearlyMonth"
+        },
+        {
+          "field": "recurring-nth-week",
+          "source": "selection.nthWeek"
+        },
+        {
+          "field": "recurring-monthly-weekday",
+          "source": "selection.monthlyWeekday"
+        }
+      ],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "schedule-card-recurrence-configured",
+      "fields": [
+        {
+          "field": "recurring-quarter-anchor",
+          "source": "selection.quarterAnchor"
+        },
+        {
+          "field": "recurring-monthly-mode",
+          "source": "selection.monthlyMode"
+        },
+        {
+          "field": "recurring-nth-week",
+          "source": "selection.nthWeek"
+        },
+        {
+          "field": "recurring-monthly-weekday",
+          "source": "selection.monthlyWeekday"
+        },
+        {
+          "field": "recurring-day-of-month",
+          "source": "selection.dayOfMonth"
+        }
+      ],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "schedule-card-recurrence-expired",
+      "fields": [
+        {
+          "field": "recurring-monthly-mode",
+          "source": "selection.monthlyMode"
+        },
+        {
+          "field": "recurring-nth-week",
+          "source": "selection.nthWeek"
+        },
+        {
+          "field": "recurring-monthly-weekday",
+          "source": "selection.monthlyWeekday"
+        },
+        {
+          "field": "recurring-yearly-month",
+          "source": "selection.yearlyMonth"
+        },
+        {
+          "field": "recurring-day-of-month",
+          "source": "selection.dayOfMonth"
+        }
+      ],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "schedule-card-recurrence-fired-recurring",
+      "fields": [
+        {
+          "field": "recurring-quarter-anchor",
+          "source": "selection.quarterAnchor"
+        },
+        {
+          "field": "recurring-monthly-mode",
+          "source": "selection.monthlyMode"
+        },
+        {
+          "field": "recurring-day-of-month",
+          "source": "selection.dayOfMonth"
+        },
+        {
+          "field": "recurring-yearly-month",
+          "source": "selection.yearlyMonth"
+        },
+        {
+          "field": "recurring-nth-week",
+          "source": "selection.nthWeek"
+        },
+        {
+          "field": "recurring-monthly-weekday",
+          "source": "selection.monthlyWeekday"
+        }
+      ],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "schedule-card-recurrence-restricted",
+      "fields": [
+        {
+          "field": "recurring-quarter-anchor",
+          "source": "selection.quarterAnchor"
+        },
+        {
+          "field": "recurring-monthly-mode",
+          "source": "selection.monthlyMode"
+        },
+        {
+          "field": "recurring-day-of-month",
+          "source": "selection.dayOfMonth"
+        },
+        {
+          "field": "recurring-yearly-month",
+          "source": "selection.yearlyMonth"
+        },
+        {
+          "field": "recurring-nth-week",
+          "source": "selection.nthWeek"
+        },
+        {
+          "field": "recurring-monthly-weekday",
+          "source": "selection.monthlyWeekday"
+        }
+      ],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "schedule-card-recurrence-stopped",
+      "fields": [
+        {
+          "field": "recurring-quarter-anchor",
+          "source": "selection.quarterAnchor"
+        },
+        {
+          "field": "recurring-monthly-mode",
+          "source": "selection.monthlyMode"
+        },
+        {
+          "field": "recurring-day-of-month",
+          "source": "selection.dayOfMonth"
+        },
+        {
+          "field": "recurring-yearly-month",
+          "source": "selection.yearlyMonth"
+        },
+        {
+          "field": "recurring-nth-week",
+          "source": "selection.nthWeek"
+        },
+        {
+          "field": "recurring-monthly-weekday",
+          "source": "selection.monthlyWeekday"
+        }
+      ],
+      "actions": [],
       "states": []
     },
     {
@@ -598,6 +848,23 @@
       ]
     },
     {
+      "id": "email-continued-reading-in-thread",
+      "fields": [
+        {
+          "field": "reading",
+          "source": "review.reading"
+        },
+        {
+          "field": "decision",
+          "source": "review.decidedAt"
+        }
+      ],
+      "actions": [],
+      "states": [
+        "empty"
+      ]
+    },
+    {
       "id": "review-states-outside-chat",
       "fields": [],
       "actions": [
@@ -610,6 +877,23 @@
         "error",
         "kind:artifact",
         "loading"
+      ]
+    },
+    {
+      "id": "email-continued-reading-outside-thread",
+      "fields": [
+        {
+          "field": "reading",
+          "source": "review.reading"
+        },
+        {
+          "field": "decision",
+          "source": "review.decidedAt"
+        }
+      ],
+      "actions": [],
+      "states": [
+        "empty"
       ]
     },
     {
@@ -746,6 +1030,28 @@
         "kind:artifact",
         "loading"
       ]
+    },
+    {
+      "id": "embed-signin-first",
+      "fields": [],
+      "actions": [
+        {
+          "action": "start-sign-in",
+          "outcome": "sign-in-window-opened"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "embed-signin-again",
+      "fields": [],
+      "actions": [
+        {
+          "action": "start-sign-in",
+          "outcome": "sign-in-window-opened"
+        }
+      ],
+      "states": []
     }
   ]
 }

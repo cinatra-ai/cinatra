@@ -50,11 +50,11 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // bundles at RUN TIME (the way React is shared) — so copying primitives INTO
 // those packages is no longer the road, and the copy check is retired for both
 // kinds: every kind:connector and kind:artifact entry is gone from this
-// manifest. The copies those packages still carry are recorded by the
+// manifest. The copies those packages carried were recorded by the
 // shrink-only baseline of
-// scripts/extensions/self-rendering-extensions-border-gate.mjs — the ONLY
-// record of them from now on — so a change to a primitive no longer forces a
-// release of every copying package. Re-adding an entry of either kind fails
+// scripts/extensions/self-rendering-extensions-border-gate.mjs until #3471
+// emptied it; that gate now refuses any copy in either kind outright. Re-adding
+// an entry of either kind fails
 // scripts/extensions/__tests__/vendor-extension-primitives.test.mjs.
 const VENDOR_MANIFEST = [
   // AGENT claimant (cinatra#1625, epic #1620 S8 — M3): blog-linkedin-publish-agent
