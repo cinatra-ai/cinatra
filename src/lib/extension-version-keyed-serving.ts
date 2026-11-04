@@ -1,3 +1,5 @@
+import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context";
+import { isGuardedRunLeaf } from "@/lib/extension-capabilities-registry";
 import "server-only";
 
 // VERSION-KEYED SERVING REGISTRY — positive non-agent edge-bound serving
@@ -367,6 +369,9 @@ export function resolveVersionKeyedMcpTool(
       "NO_SUCH_HANDLER",
       `version-keyed serving refused — ${packageName}@${version} registered no MCP tool "${toolName}"`,
     );
+  }
+  if (mcpRequestContextStorage.getStore()?.runId && !isGuardedRunLeaf(tool.handler)) {
+    return refuse("NO_SUCH_HANDLER", "version-keyed run tool has no host-bound action guard");
   }
   return { kind: "serve", value: tool };
 }

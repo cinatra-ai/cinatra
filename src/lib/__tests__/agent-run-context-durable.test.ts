@@ -8,8 +8,8 @@
  *     not do this);
  *   - raw bearer material NEVER reaches redis (keys are sha256; values carry
  *     only the run-token hash);
- *   - strict absent-vs-invalid classification: transport failure / no key ⇒
- *     "absent" (transition fallback allowed); present-but-malformed /
+ *   - strict absent-vs-invalid classification: successful no key ⇒
+ *     "absent"; transport failure / present-but-malformed /
  *     token-miss / lookup-error-after-found ⇒ "invalid" (FAIL CLOSED — the
  *     caller suppresses the legacy channels);
  *   - per-invocation-unique keys ⇒ clearing one request's keys can never
@@ -190,10 +190,12 @@ describe("durable run-context binding — strict absent-vs-invalid classificatio
     expect(r.outcome).toBe("absent");
   });
 
-  it("redis transport failure ⇒ absent (transitional availability policy)", async () => {
+  it("redis GET failure ⇒ invalid (absence is unproven)", async () => {
     redis.failGet = true;
-    const r = await resolveDurableRunContext(BEARER_A, lookup({}), redis);
-    expect(r.outcome).toBe("absent");
+    const lookupByHash = lookup({});
+    const r = await resolveDurableRunContext(BEARER_A, lookupByHash, redis);
+    expect(r.outcome).toBe("invalid");
+    expect(lookupByHash).not.toHaveBeenCalled();
   });
 
   it("present but malformed JSON ⇒ INVALID (fail closed, never a downgrade)", async () => {

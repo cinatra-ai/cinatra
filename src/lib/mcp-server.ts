@@ -1,3 +1,5 @@
+import { markGuardedRunDispatch, bindGuardedRunDispatch } from "@/lib/extension-capabilities-registry";
+import { isRunExecutedSourceCurrent } from "@cinatra-ai/agents/store";
 import "@/lib/extensions"; // initialises extensionRegistry side effects
 import "@/lib/register-test-delivery-send-port"; // wires the run-scoped test-delivery send PORT (#1625)
 import { admitToolInputSchema, createMcpRuntimeServer, createMcpServerAuthPlugins, createMcpServerMount, type McpServerSettings, type McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
@@ -393,10 +395,10 @@ export async function registerAllCapabilities(
           resolvedVersion,
           dispatchTarget,
         }),
-        async (input: unknown) => {
+        bindGuardedRunDispatch(async (input: unknown) => {
           const raw = await dispatchPlanned(input);
           return wrapExtensionToolResult(raw);
-        },
+        }, registration.handler),
       );
     } catch (error) {
       // Fail ISOLATED: one extension's unusable registration must not fail the
@@ -570,7 +572,7 @@ export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, Capt
           name: tool.name.toLowerCase(),
         },
       }),
-      async (input: unknown) => {
+      bindGuardedRunDispatch(async (input: unknown) => {
         // Edge-bound serve (cinatra#1392 Gap 1) — same chokepoint as the live
         // transport replay, so the in-process self-invoker serves identically.
         // (No plan-pinning here: this map applies no schema validation, so the
@@ -578,7 +580,7 @@ export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, Capt
         // dispatchPlannedExtensionMcpTool's doc.)
         const raw = await dispatchExtensionMcpToolEdgeBound(tool, input);
         return wrapExtensionToolResult(raw);
-      },
+      }, tool.handler),
     );
     unionEffective.push({ name: tool.name, packageName: tool.packageName });
   }
@@ -619,10 +621,10 @@ export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, Capt
           },
         },
       ),
-      async (input: unknown) => {
+      markGuardedRunDispatch(async (input: unknown) => {
         const raw = await dispatchVersionedOnlyExtensionMcpTool(target, input);
         return wrapExtensionToolResult(raw);
-      },
+      }),
     );
   }
   for (const deduped of retainedUnion.dedupedExtensionNames) {
@@ -686,7 +688,7 @@ export const mcpServerMount = createMcpServerMount({
   // DELETED with the registry (#1195 flip): this is the only run-context
   // channel the app wires besides the signed OBO token.
   resolveDurableRunContext: (rawBearerToken: string) =>
-    resolveDurableRunContext(rawBearerToken, readAgentRunByTokenHash),
+    resolveDurableRunContext(rawBearerToken, readAgentRunByTokenHash, undefined, isRunExecutedSourceCurrent),
   // #1195 metric — counts which channel attributed each MCP request. It once
   // gated the registry removal; the removal has LANDED, so it now records the
   // surviving channels (obo / durable / header / none) as ongoing observability.

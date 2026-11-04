@@ -201,3 +201,20 @@ afterAll(() => {
   vi.doUnmock("server-only");
   vi.resetModules();
 });
+
+
+describe("s2 actual loaded-source proof",()=>{
+ const raw="a".repeat(64), executed="b".repeat(64), declaration="c".repeat(64);
+ function signed(expiry=NOW_S+300){return `s2:${expiry}:${hmacHex(KEY,`s2\n${CTX}\n${NODE}\n${raw}\n${executed}\n${declaration}\n${expiry}`)}`;}
+ const input=()=>({key:KEY,contextId:CTX,node:NODE,sourceSha256:raw,executedSourceSha256:executed,declarationSourceSha256:declaration,attestation:signed(),nowMs:NOW_MS});
+ it("verifies all three loader digests and freezes the result",()=>{
+  const proof=runToken.verifySourceBoundRunStep(input());expect(proof).toEqual({stepId:NODE,contextId:CTX,sourceSha256:raw,executedSourceSha256:executed,declarationSourceSha256:declaration});expect(Object.isFrozen(proof)).toBe(true);
+ });
+ it("refuses source/context/node/key drift and s1 relabeling",()=>{
+  for(const change of [{sourceSha256:"f".repeat(64)},{executedSourceSha256:"f".repeat(64)},{declarationSourceSha256:"f".repeat(64)},{contextId:"other"},{node:"other"},{key:OTHER_KEY},{attestation:stepPair({}).attestation},{node:"step\nother"},{sourceSha256:null}])expect(runToken.verifySourceBoundRunStep({...input(),...change})).toBeNull();
+ });
+ it("rejects expired and far-future transport attestations without imposing receipt TTL",()=>{
+  expect(runToken.verifySourceBoundRunStep({...input(),attestation:signed(NOW_S-61)})).toBeNull();
+  expect(runToken.verifySourceBoundRunStep({...input(),attestation:signed(NOW_S+601)})).toBeNull();
+ });
+});

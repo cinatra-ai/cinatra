@@ -1,0 +1,508 @@
+/**
+ * cinatra#3745 — A RESUMED LEG IS ADMITTED BY THE RUN-SOURCE GATES, ON A REAL DATABASE.
+ *
+ * Every callback a WayFlow leg makes (the llm-bridge, a declared run tool, a
+ * reviewed artifact action) is admitted only while the run is `running` under the
+ * execution attempt its step-tool policy is bound to (`verifyRunExecutedSource`,
+ * `isRunExecutedSourceCurrent`; the action consumer's run fence reads the same
+ * three fields). This file drives the three resume roads through their REAL status
+ * transitions — no mocked "running" — into those gates at the moment the resumed
+ * leg calls back (inside `sendTask`), and asserts the approved callback is admitted:
+ *
+ *   (a) the artifact-review resume delivery (pending_approval -> resumed),
+ *   (b) the MCP `agent_run_resume` primitive (pending_approval -> resumed),
+ *   (c) the stopped-orchestrator resume (stopped -> queued -> running, fresh attempt).
+ *
+ * And, per road, that a stale or foreign attempt is still refused.
+ *
+ * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided. Run with:
+ *   CINATRA_TEST_DB_URL=postgres://user:pass@localhost:5432/db \
+ *     pnpm --filter @cinatra-ai/agents test:integration resume-legs-run-source-3745
+ */
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { Client } from "pg";
+
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
+
+const TEST_SCHEMA = "cinatra_test_resume_run_source_3745";
+const DB_URL = process.env.SUPABASE_DB_URL ?? "";
+const HAS_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
+const q = (s: string) => s.replaceAll('"', '""');
+const ORG = "org-3745-resume";
+const USER = "user-3745-resume";
+const AUTHORITY = { orgId: ORG, can: () => true };
+const STEP = "call_llm_bridge";
+const RAW_SOURCE = readFileSync(join(__dirname, "fixtures", "synthetic-gemini-agent.json"), "utf-8");
+
+type Callback = {
+  admitted: boolean;
+  code?: string;
+  cause?: string;
+  current?: boolean;
+  status: string | null;
+  runAttempt: string | null;
+  boundAttempt: string | null;
+};
+
+const h = vi.hoisted(() => ({
+  runId: "",
+  contextId: "",
+  taskId: "",
+  callbacks: [] as unknown[],
+  handled: [] as Array<{ fromStatus: string }>,
+  onSend: null as null | (() => Promise<unknown>),
+  sendError: null as null | Error,
+  sends: 0,
+  staleRead: null as unknown,
+  mintError: null as null | Error,
+}));
+
+vi.mock("@cinatra-ai/a2a", () => ({
+  createExternalA2AClient: vi.fn(async () => ({
+    sendTask: vi.fn(async () => {
+      h.sends++;
+      if (h.onSend) h.callbacks.push(await h.onSend());
+      if (h.sendError) throw h.sendError;
+      return { id: `task-next-${randomUUID()}`, contextId: h.contextId, status: { state: "completed" } };
+    }),
+  })),
+  resolveRunIdByWayflowTaskId: vi.fn(async () => null),
+  resolveLatestWayflowGateTaskId: vi.fn(async () => h.taskId),
+  // The terminal edge's best-effort stream expiry (a stop is terminal).
+  expireRunStream: vi.fn(async () => undefined),
+}));
+vi.mock("../execution", () => ({
+  handleWayflowTaskState: vi.fn(async (input: { fromStatus: string }) => {
+    h.handled.push({ fromStatus: input.fromStatus });
+  }),
+}));
+vi.mock("../wayflow-run-token-carrier", () => ({
+  mintResumeRunTokenMetadata: vi.fn(async () => {
+    if (h.mintError) throw h.mintError;
+    return { cinatra_run_token: "token" };
+  }),
+}));
+vi.mock("../wayflow-url", () => ({
+  WAYFLOW_UNDICI_TIMEOUT_MS: 60_000,
+  WAYFLOW_A2A_TIMEOUT_MS: 86_400_000,
+  resolveWayflowUrl: vi.fn(() => "http://wayflow.test"),
+  createWayflowFetch: vi.fn(() => globalThis.fetch),
+}));
+vi.mock("../agent-run-serde", async (orig) => ({
+  ...(await orig<typeof import("../agent-run-serde")>()),
+  assertAgentRunScopeAuthorized: vi.fn(async () => undefined),
+  assertAgentRunDispatchAuthorized: vi.fn(async () => undefined),
+}));
+vi.mock("../store", async (orig) => {
+  const actual = await orig<typeof import("../store")>();
+  return {
+    ...actual,
+    // The real row read, without the session-derived visibility filter.
+    readAgentRunById: (id: string) => actual.readAgentRunById(id),
+    // A read taken before another writer moved the run (the race the claim closes).
+    readAgentRunByTaskId: async (taskId: string) => {
+      const stale = h.staleRead as Awaited<ReturnType<typeof actual.readAgentRunByTaskId>> | null;
+      h.staleRead = null;
+      return stale ?? actual.readAgentRunByTaskId(taskId);
+    },
+    readAgentTemplateById: vi.fn(async () => ({
+      id: "tpl-3745",
+      name: "Resume template",
+      packageName: "@cinatra-ai/resume-test-agent",
+      sourceType: "internal",
+      status: "published",
+      type: "leaf",
+      agentAuthPolicy: null,
+    })),
+    readRunCoOwners: vi.fn(async () => []),
+    writeHitlPrompt: vi.fn(async () => undefined),
+  };
+});
+vi.mock("../artifact-review-gate-store", async (orig) => ({
+  ...(await orig<typeof import("../artifact-review-gate-store")>()),
+  listReviewGatesForRun: vi.fn(async () => [
+    { runId: h.runId, orgId: ORG, reviewTaskId: `wayflow-${h.taskId}`, status: "resolved",
+      pinnedTargets: [{ artifactId: "post", representationRevisionId: "r1" }] },
+  ]),
+  markResumeIntentDelivered: vi.fn(async () => true),
+}));
+vi.mock("@/lib/org-write/agent-run-authority-mint", () => ({
+  mintAgentRunExecutionAuthority: () => ({ orgId: ORG, can: () => true }),
+}));
+vi.mock("@/lib/org-write/authority", async (orig) => ({
+  ...(await orig<typeof import("@/lib/org-write/authority")>()),
+  sessionAuthorityFromResolvedRole: () => ({ orgId: ORG, can: () => true }),
+}));
+vi.mock("@/lib/auth-session", () => ({
+  getAuthSession: vi.fn(async () => ({
+    user: { id: USER, role: "user" },
+    session: { id: "s", userId: USER, activeOrganizationId: ORG },
+  })),
+  requireAuthSession: vi.fn(),
+  isPlatformAdmin: vi.fn(() => false),
+  resolveOrgRoleForUser: vi.fn(async () => "owner"),
+}));
+vi.mock("../auth-policy", () => ({ enforceRunAccess: vi.fn(async () => undefined) }));
+vi.mock("next/cache", () => ({ revalidatePath: vi.fn(), revalidateTag: vi.fn() }));
+vi.mock("@cinatra-ai/agent-ui-protocol/server", () => ({ publishAgUiEvent: vi.fn(async () => undefined) }));
+
+let serde: typeof import("../agent-run-serde");
+let transitions: typeof import("../run-transition");
+let dbMod: typeof import("../db");
+
+async function pool(text: string, values: unknown[] = []) {
+  return dbMod.agentBuilderPool.query(text, values);
+}
+
+async function admin<T>(fn: (c: Client) => Promise<T>): Promise<T> {
+  const c = new Client({ connectionString: DB_URL });
+  await c.connect();
+  try {
+    return await fn(c);
+  } finally {
+    await c.end().catch(() => {});
+  }
+}
+
+function attestation() {
+  const policy = serde.createRunStepToolPolicy({ contextId: h.contextId, rawSource: RAW_SOURCE });
+  return {
+    policy,
+    attestation: {
+      contextId: h.contextId,
+      stepId: STEP,
+      sourceSha256: policy.sourceSha256,
+      executedSourceSha256: policy.executedSourceSha256,
+      declarationSourceSha256: policy.declarationSourceSha256,
+    },
+  };
+}
+
+async function rows() {
+  const r = await pool(
+    `SELECT r.status, r.execution_attempt_id AS run_attempt, b.execution_attempt_id AS bound_attempt
+       FROM "${q(TEST_SCHEMA)}"."agent_runs" r
+       LEFT JOIN "${q(TEST_SCHEMA)}"."agent_run_outward_action_policies" b ON b.run_id = r.id
+      WHERE r.id = $1`,
+    [h.runId],
+  );
+  const row = r.rows[0] as { status: string; run_attempt: string | null; bound_attempt: string | null } | undefined;
+  return { status: row?.status ?? null, runAttempt: row?.run_attempt ?? null, boundAttempt: row?.bound_attempt ?? null };
+}
+
+/** THE RESUMED LEG CALLS BACK: the llm-bridge's own gate (a refusal there is the
+ *  route's 403 `run_source_mismatch`), then the declared-tool currency check, and
+ *  the three fields the reviewed-action run fence reads. */
+async function callback(): Promise<Callback> {
+  const state = await rows();
+  try {
+    const proof = await serde.verifyRunExecutedSource(h.runId, ORG, attestation().attestation);
+    const current = await serde.isRunExecutedSourceCurrent(h.runId, ORG, proof);
+    return { admitted: true, current, ...state };
+  } catch (err) {
+    return { admitted: false, code: "run_source_mismatch", cause: (err as { code?: string }).code, ...state };
+  }
+}
+
+/** A run that dispatched for real: running under attempt A, its graph bound to A
+ *  by the real first-dispatch bind, then moved to `toStatus` by the real CAS. */
+async function seedDispatchedRun(toStatus: "pending_approval" | "stopped") {
+  h.runId = `run-${randomUUID()}`;
+  h.contextId = `ctx-${randomUUID()}`;
+  h.taskId = `task-${randomUUID()}`;
+  const attemptA = randomUUID();
+  await pool(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."agent_runs"
+       (id, template_id, org_id, status, input_params, run_by, execution_attempt_id, a2a_context_id, a2a_task_id)
+     VALUES ($1, 'tpl-3745', $2, 'running', '{}', $3, $4, $5, $6)`,
+    [h.runId, ORG, USER, attemptA, h.contextId, h.taskId],
+  );
+  await serde.bindRunStepToolPolicy({ orgId: ORG, runId: h.runId, executionAttemptId: attemptA,
+    policy: attestation().policy, authority: AUTHORITY as never });
+  await transitions.transitionRunStatus(h.runId, "running", toStatus, undefined, AUTHORITY as never);
+  return attemptA;
+}
+
+/** A binding held by an attempt the run never carried: a stale or foreign one. */
+async function rebindToForeignAttempt() {
+  const foreign = randomUUID();
+  await pool(
+    `UPDATE "${q(TEST_SCHEMA)}"."agent_run_outward_action_policies" SET execution_attempt_id = $2 WHERE run_id = $1`,
+    [h.runId, foreign],
+  );
+  return foreign;
+}
+
+function approveIntent() {
+  return {
+    gateId: `gate-${randomUUID()}`,
+    runId: h.runId,
+    reviewTaskId: `wayflow-${h.taskId}`,
+    kind: "approve" as const,
+    responseText: JSON.stringify({ approved: true }),
+    status: "delivering",
+    attempts: 1,
+    leaseToken: "lease-3745",
+    leaseExpiresAt: new Date(Date.now() + 60_000),
+  };
+}
+
+async function resumeByMcp() {
+  const { createAgentBuilderPrimitiveHandlers } = await import("../mcp/handlers");
+  return (await createAgentBuilderPrimitiveHandlers().agent_run_resume({
+    primitiveName: "agent_run_resume",
+    input: { runId: h.runId, userResponse: JSON.stringify({ approved: true }) },
+    actor: { actorType: "user", source: "mcp", userId: USER },
+    mode: "deterministic",
+  })) as Record<string, unknown>;
+}
+
+beforeAll(async () => {
+  if (!HAS_DB) return;
+  process.env.SUPABASE_SCHEMA = TEST_SCHEMA;
+  await admin(async (c) => {
+    await c.query(`DROP SCHEMA IF EXISTS "${q(TEST_SCHEMA)}" CASCADE`);
+    await c.query(`CREATE SCHEMA "${q(TEST_SCHEMA)}"`);
+    const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
+    for (const qy of buildCreateStoreSchemaQueries(TEST_SCHEMA)) {
+      const head = qy.text.trim().slice(0, 6).toUpperCase();
+      if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S" && head !== "DO $$ ") {
+        continue;
+      }
+      if (qy.text.includes("user_slug_move_trg")) continue;
+      try {
+        await c.query(qy.text, (qy as { values?: unknown[] }).values as never[]);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!msg.includes("does not exist") && !msg.includes("already exists")) throw err;
+      }
+    }
+    await c.query(
+      `INSERT INTO public."organization" (id, name, slug, "createdAt")
+       VALUES ($1, $1, $1, now()) ON CONFLICT (id) DO NOTHING`,
+      [ORG],
+    );
+  });
+  (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized = true;
+  serde = await import("../agent-run-serde");
+  transitions = await import("../run-transition");
+  dbMod = await import("../db");
+}, 120_000);
+
+afterAll(async () => {
+  if (!HAS_DB) return;
+  await admin((c) => c.query(`DROP SCHEMA IF EXISTS "${q(TEST_SCHEMA)}" CASCADE`));
+  await dbMod?.agentBuilderPool?.end?.().catch(() => {});
+});
+
+beforeEach(() => {
+  h.callbacks = [];
+  h.handled = [];
+  h.onSend = callback;
+  h.sendError = null;
+  h.sends = 0;
+  h.staleRead = null;
+  h.mintError = null;
+});
+
+describe.skipIf(!HAS_DB)("(a) the artifact-review resume delivery", () => {
+  it("dispatches with the run running under its bound attempt, so the approved callback is admitted", async () => {
+    const attemptA = await seedDispatchedRun("pending_approval");
+    const { deliverArtifactReviewResumeIntent } = await import("../artifact-review-resume-delivery");
+    expect(await deliverArtifactReviewResumeIntent(approveIntent() as never)).toBe("delivered");
+    expect(h.callbacks).toEqual([{ admitted: true, current: true, status: "running", runAttempt: attemptA, boundAttempt: attemptA }]);
+    expect(h.handled).toEqual([{ fromStatus: "running" }]);
+  });
+
+  it("still refuses the callback when the binding belongs to a stale or foreign attempt", async () => {
+    await seedDispatchedRun("pending_approval");
+    const foreign = await rebindToForeignAttempt();
+    const { deliverArtifactReviewResumeIntent } = await import("../artifact-review-resume-delivery");
+    await deliverArtifactReviewResumeIntent(approveIntent() as never);
+    expect(h.callbacks).toHaveLength(1);
+    expect(h.callbacks[0]).toMatchObject({ admitted: false, code: "run_source_mismatch",
+      cause: "step_tool_run_source_inactive", boundAttempt: foreign });
+  });
+});
+
+describe.skipIf(!HAS_DB)("(b) the MCP agent_run_resume primitive", () => {
+  it("dispatches with the run running under its bound attempt, so the approved callback is admitted", async () => {
+    const attemptA = await seedDispatchedRun("pending_approval");
+    const result = await resumeByMcp();
+    expect(result).not.toHaveProperty("error");
+    expect(h.callbacks).toEqual([{ admitted: true, current: true, status: "running", runAttempt: attemptA, boundAttempt: attemptA }]);
+    expect(h.handled).toEqual([{ fromStatus: "running" }]);
+  });
+
+  it("still refuses the callback when the binding belongs to a stale or foreign attempt", async () => {
+    await seedDispatchedRun("pending_approval");
+    const foreign = await rebindToForeignAttempt();
+    await resumeByMcp();
+    expect(h.callbacks).toHaveLength(1);
+    expect(h.callbacks[0]).toMatchObject({ admitted: false, code: "run_source_mismatch",
+      cause: "step_tool_run_source_inactive", boundAttempt: foreign });
+  });
+});
+
+describe.skipIf(!HAS_DB)("(c) the stopped-orchestrator resume", () => {
+  it("claims a fresh attempt and carries the bound graph to it before the dispatch, so the approved callback is admitted", async () => {
+    const attemptA = await seedDispatchedRun("stopped");
+    const { resumeStoppedOrchestratorAction } = await import("../orchestrator-actions");
+    expect(await resumeStoppedOrchestratorAction(h.runId)).toEqual({ ok: true });
+    expect(h.callbacks).toHaveLength(1);
+    const cb = h.callbacks[0] as Callback;
+    expect(cb).toMatchObject({ admitted: true, current: true, status: "running" });
+    expect(cb.runAttempt).not.toBe(attemptA);
+    expect(cb.boundAttempt).toBe(cb.runAttempt);
+    expect(await rows()).toEqual({ status: "running", runAttempt: cb.runAttempt, boundAttempt: cb.runAttempt });
+  });
+
+  it("a proof minted under the old attempt is no longer current after the resume", async () => {
+    const attemptA = await seedDispatchedRun("stopped");
+    const oldProof = { ...attestation().attestation, executionAttemptId: attemptA };
+    const { resumeStoppedOrchestratorAction } = await import("../orchestrator-actions");
+    await resumeStoppedOrchestratorAction(h.runId);
+    expect(await serde.isRunExecutedSourceCurrent(h.runId, ORG, oldProof)).toBe(false);
+  });
+
+  it("never admits a callback under a binding held by a foreign attempt", async () => {
+    await seedDispatchedRun("stopped");
+    const foreign = await rebindToForeignAttempt();
+    const { resumeStoppedOrchestratorAction } = await import("../orchestrator-actions");
+    await resumeStoppedOrchestratorAction(h.runId);
+    for (const cb of h.callbacks) expect(cb).toMatchObject({ admitted: false, code: "run_source_mismatch" });
+    expect(await callback()).toMatchObject({ admitted: false, code: "run_source_mismatch", boundAttempt: foreign });
+  });
+});
+
+describe.skipIf(!HAS_DB)("the claim's other exits", () => {
+  it("(a) a failed send puts the gate back, so the intent is re-deliverable", async () => {
+    const attemptA = await seedDispatchedRun("pending_approval");
+    h.sendError = new Error("wayflow unreachable");
+    const { deliverArtifactReviewResumeIntent } = await import("../artifact-review-resume-delivery");
+    await expect(deliverArtifactReviewResumeIntent(approveIntent() as never)).rejects.toThrow("wayflow unreachable");
+    expect(await rows()).toEqual({ status: "pending_approval", runAttempt: attemptA, boundAttempt: attemptA });
+    expect(h.handled).toEqual([]);
+  });
+
+  it("(a) a run another writer already moved off the gate is not sent again", async () => {
+    await seedDispatchedRun("pending_approval");
+    const { deliverArtifactReviewResumeIntent } = await import("../artifact-review-resume-delivery");
+    const { readAgentRunByTaskId } = await import("../store");
+    h.staleRead = await readAgentRunByTaskId(h.taskId);
+    expect((h.staleRead as { status: string }).status).toBe("pending_approval");
+    await transitions.transitionRunStatus(h.runId, "pending_approval", "running", undefined, AUTHORITY as never);
+    expect(await deliverArtifactReviewResumeIntent(approveIntent() as never)).toBe("already-advanced");
+    expect(h.sends).toBe(0);
+  });
+
+  it("(b) two resumes of one gate: exactly one is sent, the other is refused", async () => {
+    await seedDispatchedRun("pending_approval");
+    const results = await Promise.all([resumeByMcp(), resumeByMcp()]);
+    expect(h.sends).toBe(1);
+    expect(results.filter((r) => "error" in r)).toHaveLength(1);
+    expect(h.callbacks).toMatchObject([{ admitted: true, status: "running" }]);
+  });
+
+  it("(b) a resume whose run token cannot be minted sends nothing and puts the gate back", async () => {
+    const attemptA = await seedDispatchedRun("pending_approval");
+    h.mintError = new Error("token store unavailable");
+    expect(await resumeByMcp()).toEqual({ error: "Resume failed: token store unavailable" });
+    expect(h.sends).toBe(0);
+    expect(await rows()).toEqual({ status: "pending_approval", runAttempt: attemptA, boundAttempt: attemptA });
+    h.mintError = null;
+    expect(await resumeByMcp()).not.toHaveProperty("error");
+    expect(h.callbacks).toMatchObject([{ admitted: true, status: "running" }]);
+  });
+
+  it("(c) a binding held by a foreign attempt sends nothing and puts the run back to stopped", async () => {
+    await seedDispatchedRun("stopped");
+    const foreign = await rebindToForeignAttempt();
+    const { resumeStoppedOrchestratorAction } = await import("../orchestrator-actions");
+    expect(await resumeStoppedOrchestratorAction(h.runId)).toEqual({ ok: false, error: "resume failed" });
+    expect(h.sends).toBe(0);
+    expect(await rows()).toMatchObject({ status: "stopped", boundAttempt: foreign });
+  });
+
+  it("(c) a failed send puts the run back to stopped, and its binding stays on the attempt that dispatched", async () => {
+    await seedDispatchedRun("stopped");
+    h.sendError = new Error("wayflow unreachable");
+    const { resumeStoppedOrchestratorAction } = await import("../orchestrator-actions");
+    expect(await resumeStoppedOrchestratorAction(h.runId)).toEqual({ ok: false, error: "resume failed" });
+    const after = await rows();
+    expect(after.status).toBe("stopped");
+    expect(after.boundAttempt).toBe(after.runAttempt);
+    // A second resume carries it forward again from that attempt.
+    h.sendError = null;
+    expect(await resumeStoppedOrchestratorAction(h.runId)).toEqual({ ok: true });
+    expect(h.callbacks.at(-1)).toMatchObject({ admitted: true, current: true, status: "running" });
+  });
+
+  it("(c) a run that was never bound stays unbound: the resume is not a first bind", async () => {
+    h.runId = `run-${randomUUID()}`;
+    h.contextId = `ctx-${randomUUID()}`;
+    await pool(
+      `INSERT INTO "${q(TEST_SCHEMA)}"."agent_runs"
+         (id, template_id, org_id, status, input_params, run_by, execution_attempt_id, a2a_context_id)
+       VALUES ($1, 'tpl-3745', $2, 'stopped', '{}', $3, $4, $5)`,
+      [h.runId, ORG, USER, randomUUID(), h.contextId],
+    );
+    const { resumeStoppedOrchestratorAction } = await import("../orchestrator-actions");
+    expect(await resumeStoppedOrchestratorAction(h.runId)).toEqual({ ok: true });
+    expect(h.callbacks).toMatchObject([{ admitted: false, code: "run_source_mismatch", boundAttempt: null }]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("rebindRunStepToolPolicyForResume refuses every carry it cannot prove", () => {
+  async function runningAfterResume() {
+    const attemptA = await seedDispatchedRun("stopped");
+    await transitions.transitionRunStatus(h.runId, "stopped", "queued", undefined, AUTHORITY as never);
+    const attemptB = randomUUID();
+    await transitions.transitionRunStatus(h.runId, "queued", "running", { dispatch: { attemptId: attemptB } }, AUTHORITY as never);
+    return { attemptA, attemptB };
+  }
+  const carry = (priorExecutionAttemptId: string | null, executionAttemptId: string) =>
+    serde.rebindRunStepToolPolicyForResume({ orgId: ORG, runId: h.runId, priorExecutionAttemptId,
+      executionAttemptId, authority: AUTHORITY as never });
+
+  it("carries the binding from the prior attempt to the dispatching one, once", async () => {
+    const { attemptA, attemptB } = await runningAfterResume();
+    await carry(attemptA, attemptB);
+    expect(await rows()).toEqual({ status: "running", runAttempt: attemptB, boundAttempt: attemptB });
+    await expect(carry(attemptA, attemptB)).rejects.toThrow("step_tool_dispatch_rebind_refused");
+  });
+
+  it("refuses an attempt the run is not running under, and a run that is not running", async () => {
+    const { attemptA } = await runningAfterResume();
+    await expect(carry(attemptA, randomUUID())).rejects.toThrow("step_tool_dispatch_binding_mismatch");
+    await expect(carry(attemptA, "")).rejects.toThrow("step_tool_dispatch_binding_mismatch");
+    const stopped = await seedDispatchedRun("stopped");
+    await expect(carry(stopped, stopped)).rejects.toThrow("step_tool_dispatch_binding_mismatch");
+  });
+
+  it("refuses a missing, equal or wrong prior attempt, and leaves the binding where it was", async () => {
+    const { attemptA, attemptB } = await runningAfterResume();
+    await expect(carry(null, attemptB)).rejects.toThrow("step_tool_dispatch_rebind_refused");
+    await expect(carry(attemptB, attemptB)).rejects.toThrow("step_tool_dispatch_rebind_refused");
+    await expect(carry(randomUUID(), attemptB)).rejects.toThrow("step_tool_dispatch_rebind_refused");
+    expect((await rows()).boundAttempt).toBe(attemptA);
+  });
+
+  it("refuses a binding whose graph names another context", async () => {
+    const { attemptA, attemptB } = await runningAfterResume();
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET a2a_context_id = $2 WHERE id = $1`, [h.runId, `ctx-${randomUUID()}`]);
+    await expect(carry(attemptA, attemptB)).rejects.toThrow("step_tool_dispatch_rebind_refused");
+    expect((await rows()).boundAttempt).toBe(attemptA);
+  });
+
+  it("leaves an unbound run unbound", async () => {
+    await runningAfterResume();
+    await pool(`DELETE FROM "${q(TEST_SCHEMA)}"."agent_run_outward_action_policies" WHERE run_id = $1`, [h.runId]);
+    const r = await rows();
+    await carry(randomUUID(), r.runAttempt!);
+    expect((await rows()).boundAttempt).toBeNull();
+  });
+});

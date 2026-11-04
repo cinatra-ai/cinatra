@@ -69,6 +69,21 @@ vi.mock("@cinatra-ai/agents", () => ({
   transitionRunStatus: (...a: unknown[]) => transitionRunStatus(...a),
 }));
 
+// #3745 explicit storage/selected-source ports: no operational PostgreSQL or loader request.
+// The policy reader's real missing-ABI refusal is separately exercised by run-step-tool-policy.test.ts.
+const readSourceRun = vi.fn(async () => {
+  const input=createCarrierRun.mock.calls.at(-1)?.[0] as {orgId?:string}|undefined;
+  return {orgId:input?.orgId,executionAttemptId:"attempt",a2aContextId:"dispatch-context"};
+});
+const selectSourcePolicy=vi.fn(async (input:{contextId:string})=>({version:1,contextId:input.contextId,source:"{}",sourceSha256:"a".repeat(64),executedSourceSha256:"b".repeat(64),declarationSourceSha256:"c".repeat(64)}));
+const bindSourcePolicy=vi.fn(async (input:unknown)=>{void input;});
+vi.mock("@cinatra-ai/agents/store",()=>({
+ readAgentRunById:()=>readSourceRun(),
+ updateAgentRunA2AContextId:vi.fn(),
+ selectWayflowRunStepToolPolicy:(input:{contextId:string})=>selectSourcePolicy(input),
+ bindRunStepToolPolicy:(input:unknown)=>bindSourcePolicy(input),
+}));
+
 // --- per-instance (cinatra#274) identity resolver ----------------------------
 // The dispatcher resolves identity through the per-install resolver, which
 // internally falls back to single-tenant. We mock the per-install resolver and
@@ -528,4 +543,27 @@ describe("dispatchContentEditorViaA2A — archived-org typed refusal (cinatra#19
     expect(authority).toBeDefined();
     expect(authority?.orgId).toBe("org_1");
   });
+});
+
+
+describe("#3745 selected-source binding before content-editor effects",()=>{
+ const input=()=>({agentUrl:"http://agent",packageName:"@cinatra-ai/wordpress-agent",payload:{postId:"7"},timeoutMs:1000});
+ it("binds exact carrier attempt/org/context under real minted authority before sending",async()=>{
+  await dispatchContentEditorViaA2A(input());
+  const run=createCarrierRun.mock.calls.at(-1)![0];
+  expect(bindSourcePolicy).toHaveBeenCalledWith(expect.objectContaining({runId:run.id,orgId:"org_1",executionAttemptId:"attempt",policy:expect.objectContaining({contextId:"dispatch-context"}),authority:expect.anything()}));
+  expect(bindSourcePolicy.mock.invocationCallOrder.at(-1)!).toBeLessThan(sendTask.mock.invocationCallOrder.at(-1)!);
+  expect(sendTask.mock.calls.at(-1)?.[0]).toMatchObject({message:{contextId:"dispatch-context"}});
+ });
+ it("refuses an absent durable attempt before any external task effect",async()=>{
+  readSourceRun.mockResolvedValueOnce({orgId:"org_1",executionAttemptId:"",a2aContextId:"dispatch-context"});
+  await expect(dispatchContentEditorViaA2A(input())).rejects.toThrow("step_tool_dispatch_attempt_missing");
+  expect(sendTask).not.toHaveBeenCalled();expect(bindSourcePolicy).not.toHaveBeenCalled();
+ });
+ it("does not send when the trusted declaration ABI or immutable binding refuses",async()=>{
+  selectSourcePolicy.mockRejectedValueOnce(Error("step_tool_reader_unavailable"));
+  await expect(dispatchContentEditorViaA2A(input())).rejects.toThrow("step_tool_reader_unavailable");expect(sendTask).not.toHaveBeenCalled();
+  bindSourcePolicy.mockRejectedValueOnce(Error("step_tool_dispatch_rebind_refused"));
+  await expect(dispatchContentEditorViaA2A(input())).rejects.toThrow("step_tool_dispatch_rebind_refused");expect(sendTask).not.toHaveBeenCalled();
+ });
 });

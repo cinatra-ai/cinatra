@@ -24,6 +24,9 @@ import sys
 import time
 from typing import Any, Dict, Optional, Tuple
 from unittest.mock import MagicMock
+from types import MappingProxyType
+
+SOURCE = {"sourceSha256": "a" * 64, "executedSourceSha256": "b" * 64, "declarationSourceSha256": "c" * 64}
 
 ATTEST_KEY = "attest-key-under-test"
 BRIDGE_TOKEN = "bridge-tok-abc"
@@ -37,7 +40,7 @@ STEP_ATTESTATION = "X-Cinatra-Step-Attestation"
 
 
 def _s1_material(ctx: str, node_id: str, expiry: int) -> bytes:
-    return f"s1\n{ctx}\n{node_id}\n{expiry}".encode("utf-8")
+    return f"s2\n{ctx}\n{node_id}\n{SOURCE['sourceSha256']}\n{SOURCE['executedSourceSha256']}\n{SOURCE['declarationSourceSha256']}\n{expiry}".encode("utf-8")
 
 
 def _expected_s1_sig(key: str, ctx: str, node_id: str, expiry: int) -> str:
@@ -46,7 +49,7 @@ def _expected_s1_sig(key: str, ctx: str, node_id: str, expiry: int) -> str:
 
 def _parse_s1_header(value: str) -> Tuple[int, str]:
     version, expiry_str, sig = value.split(":", 2)
-    assert version == "s1", "expected an s1 step attestation"
+    assert version == "s2", "expected a source-bound step attestation"
     return int(expiry_str), sig
 
 
@@ -97,8 +100,10 @@ def _drive(
     *,
     ctx_id: str,
     headers: Optional[Dict[str, str]] = None,
+    source_binding=SOURCE,
 ) -> Dict[str, Any]:
     token = loader._WAYFLOW_CONTEXT_ID.set(ctx_id)
+    source_token = loader._WAYFLOW_EXECUTED_SOURCE.set(MappingProxyType(dict(source_binding)) if source_binding else None)
     try:
         instance = FakeApiCallStep()
         request: Dict[str, Any] = {"url": url}
@@ -108,10 +113,14 @@ def _drive(
         return request
     finally:
         loader._WAYFLOW_CONTEXT_ID.reset(token)
+        loader._WAYFLOW_EXECUTED_SOURCE.reset(source_token)
 
 
 def _assert_signed_step(loader, headers: Dict[str, Any], before: int, after: int) -> None:
     assert headers[STEP_NODE] == NODE_ID
+    assert headers["X-Cinatra-Raw-Source"] == SOURCE["sourceSha256"]
+    assert headers["X-Cinatra-Executed-Source"] == SOURCE["executedSourceSha256"]
+    assert headers["X-Cinatra-Declaration-Source"] == SOURCE["declarationSourceSha256"]
     expiry, sig = _parse_s1_header(headers[STEP_ATTESTATION])
     ttl = loader._CONTEXT_ATTESTATION_TTL_SECONDS
     assert before + ttl <= expiry <= after + ttl
@@ -211,3 +220,23 @@ def test_no_step_pair_without_key_context_id_or_node_id(monkeypatch):
     )
     assert STEP_NODE not in req["headers"]
     assert STEP_ATTESTATION not in req["headers"]
+
+
+def test_missing_actual_loaded_sidecar_strips_forged_source_and_step_headers(monkeypatch):
+    FakeApiCallStep, loader = _install(monkeypatch, attest_key=ATTEST_KEY, node_id=NODE_ID)
+    req = _drive(loader, FakeApiCallStep, f"{INTERNAL_HOST}/api/llm-bridge", ctx_id=CTX_ID, source_binding=None,
+                 headers={"x-cinatra-step-node":"forged", "x-cinatra-step-attestation":"s2:1:00",
+                          "x-cinatra-executed-source":"f"*64, "x-cinatra-raw-source":"f"*64,
+                          "x-cinatra-declaration-source":"f"*64})
+    assert not any(k.lower() in ("x-cinatra-step-node","x-cinatra-step-attestation","x-cinatra-executed-source","x-cinatra-raw-source","x-cinatra-declaration-source") for k in req["headers"])
+
+
+def test_loaded_snapshot_is_call_scoped_and_does_not_borrow_another_mount(monkeypatch):
+    FakeApiCallStep, loader = _install(monkeypatch, attest_key=ATTEST_KEY, node_id=NODE_ID)
+    other={**SOURCE,"executedSourceSha256":"d"*64}
+    first=_drive(loader,FakeApiCallStep,f"{INTERNAL_HOST}/api/llm-bridge",ctx_id=CTX_ID)
+    second=_drive(loader,FakeApiCallStep,f"{INTERNAL_HOST}/api/llm-bridge",ctx_id=CTX_ID,source_binding=other)
+    assert first["headers"]["X-Cinatra-Executed-Source"] == SOURCE["executedSourceSha256"]
+    assert second["headers"]["X-Cinatra-Executed-Source"] == other["executedSourceSha256"]
+    assert first["headers"][STEP_ATTESTATION] != second["headers"][STEP_ATTESTATION]
+    assert loader._WAYFLOW_EXECUTED_SOURCE.get() is None

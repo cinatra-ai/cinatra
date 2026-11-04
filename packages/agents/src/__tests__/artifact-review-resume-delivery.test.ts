@@ -83,6 +83,11 @@ vi.mock("@cinatra-ai/a2a", () => ({
   resolveLatestWayflowGateTaskId: resolveLatestSpy,
 }));
 vi.mock("../execution", () => ({ handleWayflowTaskState: handleWayflowTaskStateSpy }));
+// cinatra#3745: the delivery claims the run (pending_approval -> running) before it
+// sends, so the resumed leg's callbacks find the run running. The claim against a
+// real database is proven in `resume-legs-run-source-3745.integration.test.ts`.
+const claimSpy = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => undefined));
+vi.mock("../run-transition", () => ({ transitionRunStatus: claimSpy }));
 
 import {
   deliverArtifactReviewResumeIntent,
@@ -158,6 +163,40 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
 
     expect(handleWayflowTaskStateSpy).toHaveBeenCalledTimes(1);
     expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-1", "lease-abc");
+  });
+
+  it("cinatra#3745: claims the run running before it sends, and hands the handler the run where it is", async () => {
+    const order: string[] = [];
+    claimSpy.mockImplementation(async (...args: unknown[]) => { order.push(`${args[1]}->${args[2]}`); return undefined; });
+    sendTaskSpy.mockImplementationOnce(async () => { order.push("send"); return { id: "task-x", status: { state: "completed" } }; });
+    expect(await deliverArtifactReviewResumeIntent(intent())).toBe("delivered");
+    expect(order).toEqual(["pending_approval->running", "send"]);
+    expect(handleWayflowTaskStateSpy).toHaveBeenCalledWith(expect.objectContaining({ fromStatus: "running" }));
+    claimSpy.mockImplementation(async () => undefined);
+  });
+
+  it("cinatra#3745: a failed send puts the gate back and leaves the intent pending", async () => {
+    const order: string[] = [];
+    claimSpy.mockImplementation(async (...args: unknown[]) => { order.push(`${args[1]}->${args[2]}`); return undefined; });
+    sendTaskSpy.mockRejectedValueOnce(new Error("wayflow unreachable"));
+    await expect(deliverArtifactReviewResumeIntent(intent())).rejects.toThrow("wayflow unreachable");
+    expect(order).toEqual(["pending_approval->running", "running->pending_approval"]);
+    expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+    claimSpy.mockImplementation(async () => undefined);
+  });
+
+  it("cinatra#3745: a lost claim sends nothing and closes the intent as already advanced", async () => {
+    claimSpy.mockRejectedValueOnce(Object.assign(new Error("stale"), { code: "stale_from_status" }));
+    expect(await deliverArtifactReviewResumeIntent(intent())).toBe("already-advanced");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-1", "lease-abc");
+  });
+
+  it("cinatra#3745: a claim that fails for any other reason sends nothing and leaves the intent pending", async () => {
+    claimSpy.mockRejectedValueOnce(new Error("db unavailable"));
+    await expect(deliverArtifactReviewResumeIntent(intent())).rejects.toThrow("db unavailable");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
   });
 
   it("resolves a suffixed artifact leg through its original paused task", async () => {

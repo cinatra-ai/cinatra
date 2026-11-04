@@ -871,3 +871,57 @@ export type {
   DeclaredIndexDeclaration,
   DeclaredTableDeclaration,
 } from "./manifest";
+
+
+
+/** An extension-owned CHECK, not an approval or an effectful host port. */
+export type ActionJson = null | boolean | number | string | readonly ActionJson[] |
+  { readonly [key: string]: ActionJson };
+export type ArtifactActionIdentity = {
+  readonly packageName: string; readonly version: string; readonly installId: string;
+  readonly digest: string; readonly generation: number; readonly toolName: string;
+  readonly wrapper: "primitive" | "extension_tool" | "instance_tool";
+  readonly instanceId?: string; readonly serverId?: string; readonly endpoint?: string; readonly connectorKey?: string;
+};
+export type PinnedActionRevision = {
+  readonly artifactId: string; readonly representationRevisionId: string;
+  readonly contentSha256: string; readonly artifactType: string; readonly content: ActionJson;
+};
+export type ArtifactActionCheckInput = {
+  readonly action: ArtifactActionIdentity; readonly arguments: ActionJson;
+  readonly revisions: readonly PinnedActionRevision[];
+};
+export type ArtifactActionCheckResult =
+  | { readonly kind: "refused"; readonly reason: string }
+  | { readonly kind: "checked"; readonly actual: ActionJson; readonly pinned: ActionJson;
+      readonly usedRevisionIds: readonly string[] };
+export type ArtifactActionCheckProvider = {
+  /** Non-host business semantics belong to the actual executed extension.
+   * Missing/incompatible classification remains outward. Delegate means the
+   * callback has no effect: its actual inner host dispatch must be checked. */
+  classify?(input: { readonly action: ArtifactActionIdentity; readonly arguments: ActionJson }):
+    { readonly kind: "read-only" | "delegate" | "outward" };
+  /** Synchronous, deterministic, no DB/network/effect ports. Host validates result. */
+  check(input: ArtifactActionCheckInput): ArtifactActionCheckResult;
+};
+
+/** Structural carrier only; authority comes from loader HMAC + frozen run comparison. */
+export type VerifiedExecutedRunSource = {
+  readonly contextId: string; readonly stepId: string; readonly executionAttemptId: string;
+  readonly sourceSha256: string; readonly executedSourceSha256: string;
+  readonly declarationSourceSha256: string;
+};
+export function parseVerifiedExecutedRunSource(value: unknown): VerifiedExecutedRunSource | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const keys = ["contextId", "stepId", "executionAttemptId", "sourceSha256", "executedSourceSha256", "declarationSourceSha256"];
+  if (Reflect.ownKeys(value).length !== keys.length) return null;
+  const v: Record<string, string> = {};
+  for (const key of keys) {
+    const d = Object.getOwnPropertyDescriptor(value, key);
+    if (!d || !("value" in d) || typeof d.value !== "string" || !d.value ||
+        d.value.length > 512 || /[\r\n]/.test(d.value)) return null;
+    v[key] = d.value;
+  }
+  for (const key of keys.slice(3)) if (!/^[a-f0-9]{64}$/.test(v[key]!)) return null;
+  return Object.freeze(v) as unknown as VerifiedExecutedRunSource;
+}

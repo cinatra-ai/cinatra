@@ -19,6 +19,8 @@ const { kv, orgRef } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/database", () => ({
+  // The guarded run-action consumer reads the schema name when its module loads.
+  postgresSchema: "cinatra",
   readConnectorConfigFromDatabase: <T>(id: string, fallback: T): T =>
     kv.has(id) ? (kv.get(id) as T) : fallback,
   writeConnectorConfigToDatabase: (id: string, value: unknown): void => {

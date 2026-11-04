@@ -34,7 +34,13 @@ type StoreRecord = {
 type GeneratedRecord = { version: string | null; sourceDir: string };
 
 const storeRecords: StoreRecord[] = [];
-const anchors: { version: string | null; digest: string | null; kind: string | null }[] = [];
+const anchors: {
+  version: string | null;
+  digest: string | null;
+  kind: string | null;
+  integrity?: string;
+  contentHash?: string;
+}[] = [];
 const anchorResolverCalls: (string | null)[] = [];
 const generatedManifest: Record<string, GeneratedRecord> = {};
 
@@ -53,6 +59,23 @@ vi.mock("@/lib/extension-install-anchor", () => ({
   makeDefaultInstallAnchorsResolver: async (orgId: string | null) => {
     anchorResolverCalls.push(orgId);
     return async () => anchors;
+  },
+}));
+
+// The materialized package's integrity reading against the trusted anchor
+// (cinatra#3745): the store fixture below carries no tarball or sidecar, so the
+// reading is substituted too, and every call it receives is recorded.
+const integrity = vi.hoisted(() => ({
+  verdict: true,
+  calls: [] as { storeDir: string; trustedIntegrity?: string; trustedContentHash?: string }[],
+}));
+vi.mock("@/lib/extension-package-store", () => ({
+  verifyMaterializedPackageIntegrity: async (
+    record: { storeDir: string },
+    opts: { trustedIntegrity?: string; trustedContentHash?: string },
+  ) => {
+    integrity.calls.push({ storeDir: record.storeDir, ...opts });
+    return integrity.verdict;
   },
 }));
 
@@ -176,6 +199,8 @@ beforeEach(async () => {
   storeRecords.length = 0;
   anchors.length = 0;
   anchorResolverCalls.length = 0;
+  integrity.verdict = true;
+  integrity.calls.length = 0;
   await twoDigestStore();
 });
 
@@ -185,7 +210,13 @@ afterEach(() => {
 
 describe("the declared-module load road binds the trusted install anchor", () => {
   it("loads out of the digest directory the anchor names, never a retained sibling", async () => {
-    anchors.push({ version: PINNED, digest: LIVE_DIGEST, kind: "agent" });
+    anchors.push({
+      version: PINNED,
+      digest: LIVE_DIGEST,
+      kind: "agent",
+      integrity: "sha512-fixture-integrity",
+      contentHash: "fixture-content-hash",
+    });
     const seen: string[] = [];
     await load(async (absPath) => {
       seen.push(absPath);
@@ -196,6 +227,24 @@ describe("the declared-module load road binds the trusted install anchor", () =>
     expect(seen[0]).not.toContain(RETAINED_DIGEST);
     // The anchor is read in the RUN'S OWN organisation, never platform-wide.
     expect(anchorResolverCalls).toEqual([ORG]);
+    // The live digest directory is verified against the anchor's own trusted
+    // values before the import and again after it.
+    const live = { storeDir: expect.stringMatching(new RegExp(`${LIVE_DIGEST}$`)),
+      trustedIntegrity: "sha512-fixture-integrity", trustedContentHash: "fixture-content-hash" };
+    expect(integrity.calls).toEqual([live, live]);
+  });
+
+  it("refuses when the anchor-named directory fails its integrity reading", async () => {
+    anchors.push({ version: PINNED, digest: LIVE_DIGEST, kind: "agent" });
+    integrity.verdict = false;
+    const seen: string[] = [];
+    await expect(
+      load(async (absPath) => {
+        seen.push(absPath);
+        return { extensionTool: () => ({}) };
+      }),
+    ).rejects.toThrow(/not materialized at the pinned version/);
+    expect(seen).toEqual([]);
   });
 
   it("refuses when the anchor names a digest that is not the one on disk", async () => {

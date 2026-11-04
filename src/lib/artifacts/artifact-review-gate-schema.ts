@@ -1116,3 +1116,16 @@ export function runRecommendationOfferedSetSchemaQueries(schemaName: string): Qu
     },
   ];
 }
+
+/** Bootstrap twin of reserved core__0115; no data backfill grants authority. */
+export function outwardActionPolicySchemaQueries(schemaName: string): QueryInput[] {
+  const q = schemaName.replaceAll('"', '""');
+  return [{ text: `CREATE TABLE IF NOT EXISTS "${q}"."agent_run_outward_action_policies" (
+    run_id text PRIMARY KEY, org_id text NOT NULL, execution_attempt_id text NOT NULL,
+    policy jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
+  )` }, { text: `CREATE TABLE IF NOT EXISTS "${q}"."artifact_review_action_consumptions" (
+    gate_id text PRIMARY KEY, run_id text NOT NULL, org_id text NOT NULL,
+    step_id text NOT NULL, tool_identity jsonb NOT NULL,
+    executed_source_sha256 text NOT NULL, consumed_at timestamptz NOT NULL DEFAULT now()
+  )` }];
+}
