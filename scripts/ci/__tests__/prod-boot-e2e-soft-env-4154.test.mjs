@@ -11,19 +11,23 @@
 // "durable-degraded boot did not list boot-degrade-probe in blockingPhases".
 //
 // HOW THIS FILE PROVES IT. It runs the real script with a stand-in `docker` first on
-// PATH (__fixtures__/prod-boot-e2e-docker-stub/docker.mjs). The stand-in accepts only
-// the call shapes the script uses, records each valid `docker run -d` with its
+// PATH (__fixtures__/prod-boot-e2e-docker-stub/docker.mjs). The stand-in refuses a call
+// of a shape the script does not use, and refuses what real docker refuses: a run on
+// a network not created in the run, or with an empty or malformed `-v`. The commands
+// run inside containers (`probe`, the `node -e` checks, `psql`, `sh -c`) must equal
+// the script's literals in script-calls.json. It records each valid `docker run -d` with its
 // EFFECTIVE env (the last `-e NAME=value` wins; a bare `-e NAME` reads the env of that
 // docker invocation), and models the app from that env: the item-3 preflight failure
-// from the hard-required names it lacks, and /api/health from the rest. The script's
-// own `probe` code runs on the modelled body. This file reads only those recorded
-// runs, so the value it checks is the value the container gets.
+// from the hard-required names it lacks, /api/health from the rest, and the extension
+// volume that each start reconciles. The script's own `probe` code runs on the
+// modelled body. This file reads only those recorded runs and the final state, so the
+// value it checks is the value the container gets.
 //
 // THE INVARIANTS: the script runs to its PASSED line under the stand-in; the main, the
 // durable-degraded, the no-mount and the item-3 boots were recorded; the item-3 boot
-// lacks exactly the two hard-required names its case removes; and every other
+// lacks exactly the two hard-required names its case removes; every other
 // recorded app boot has a non-blank effective value for every SOFT_REQUIRED_ENV and
-// HARD_REQUIRED_ENV name.
+// HARD_REQUIRED_ENV name; and the run leaves no container, network or volume behind.
 //
 // Runner: hosted by the vitest include glob `scripts/ci/__tests__/**/*.test.{ts,mjs}`.
 import { spawnSync } from "node:child_process";
@@ -47,6 +51,7 @@ const ITEM3 = "-app-missing-env";
 let dir;
 let run;
 let appRuns;
+let state;
 
 const blank = (v) => (v ?? "").trim() === "";
 
@@ -69,7 +74,9 @@ beforeAll(() => {
     encoding: "utf8",
     timeout: 120_000,
   });
-  const state = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, "utf8")) : { runs: [] };
+  state = existsSync(stateFile)
+    ? JSON.parse(readFileSync(stateFile, "utf8"))
+    : { runs: [], containers: {}, networks: [], volumes: {} };
   appRuns = state.runs.filter((r) => r.app);
 });
 
@@ -98,6 +105,13 @@ describe("cinatra#4154 — prod-boot e2e boots carry every soft-required env var
     const item3 = appRuns.filter((r) => r.name.endsWith(ITEM3));
     expect(item3.length).toBe(1);
     expect(HARD.filter((n) => blank(item3[0].env[n]))).toEqual(["BETTER_AUTH_SECRET", "CINATRA_ENCRYPTION_KEY"]);
+  });
+
+  it("the run leaves no container, network or volume behind", () => {
+    expect(state.runs.length).toBeGreaterThan(0);
+    expect(Object.keys(state.containers)).toEqual([]);
+    expect(state.networks).toEqual([]);
+    expect(Object.keys(state.volumes)).toEqual([]);
   });
 
   for (const name of [...SOFT, ...HARD]) {
