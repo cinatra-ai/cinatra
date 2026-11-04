@@ -76,12 +76,15 @@ export function redactGitUrl(url) {
     .replace(/(^|[\s'"(])((?:[a-z]:[\\/]|\\\\)[^\s'"?#]*)([?#])[^\s'"]*/gi, "$1$2$3***");
 }
 
-// Whitespace and control characters: C0, DEL, C1 (NEL) and every Unicode
-// space or line separator. A remote that holds one is never printed: a line
-// break would let it print a line of its own (a workflow command in CI), and
-// the redaction rules stop at whitespace.
+// Whitespace and control characters: C0, DEL, C1 (NEL), every Unicode
+// space or line separator, and every Unicode format character (Cf: a soft
+// hyphen, a zero-width character, a bidi mark, embedding or isolate, a word
+// joiner, a byte order mark). A remote that holds one is never printed: a line
+// break would let it print a line of its own (a workflow command in CI), the
+// redaction rules stop at whitespace, and a format character can change how a
+// printed line reads.
 function hasSpaceOrControl(text) {
-  return /\s/.test(text) || [...text].some((c) => {
+  return /[\s\p{Cf}]/u.test(text) || [...text].some((c) => {
     const n = c.codePointAt(0);
     return n < 0x20 || (n >= 0x7f && n <= 0x9f);
   });
@@ -293,10 +296,14 @@ export function shallowSourceDirFor(dest) {
 // objects from another store), no `commondir` (a linked worktree's pointer
 // to another repository), nothing in `.git` but real directories and regular
 // files (a symlink would make upload-pack read outside the copy, and a FIFO
-// or another special file could block it before any fallback), and a config
-// without an `[include]` or `[includeIf]` section (which would make it read a
-// file outside the copy). Nothing here runs git; only an absent path is
-// absent, any other read error refuses the copy.
+// or another special file could block it before any fallback), no
+// `config.worktree` (git reads it as a second config file when
+// `extensions.worktreeConfig` is set), and a config with no `[include` text
+// anywhere (git reads an `[include]` or `[includeIf]` header after another
+// header on the same line or after a byte order mark too, and an include
+// makes it read another config file). Other config keys of the copy are read
+// as they stand. Nothing here runs git; only an absent path is absent, any
+// other read error refuses the copy.
 const SOURCE_ENTRY_LIMIT = 100000;
 function shallowSourceRefusal(source, { lstat, readdir, readFile }) {
   const kind = (p) => {
@@ -311,7 +318,7 @@ function shallowSourceRefusal(source, { lstat, readdir, readFile }) {
   if (kind(source) !== "dir") return "it is not a directory";
   if (kind(gitDir) !== "dir") return ".git is not a directory";
   if (kind(path.join(gitDir, "objects")) !== "dir") return ".git/objects is not a directory";
-  for (const rel of [["objects", "info", "alternates"], ["objects", "info", "http-alternates"], ["commondir"]]) {
+  for (const rel of [["objects", "info", "alternates"], ["objects", "info", "http-alternates"], ["commondir"], ["config.worktree"]]) {
     if (kind(path.join(gitDir, ...rel)) !== "absent") return `it has .git/${rel.join("/")}`;
   }
   const named = (p) => JSON.stringify(`.git/${path.relative(gitDir, p).split(path.sep).join("/")}`.replace(/\/$/, ""));
@@ -344,7 +351,7 @@ function shallowSourceRefusal(source, { lstat, readdir, readFile }) {
     } catch {
       return ".git/config cannot be read";
     }
-    if (/^[ \t]*\[[ \t]*include/im.test(text)) return ".git/config includes another file";
+    if (/\[[ \t\r\n]*include/i.test(text)) return ".git/config includes another file";
   }
   return null;
 }
@@ -362,17 +369,20 @@ function shallowSourceRefusal(source, { lstat, readdir, readFile }) {
  * SOURCE of objects over `file://`. That fetch starts `git upload-pack` in the
  * moved copy, the one git process that opens it: upload-pack reads the copy's
  * config, refs, shallow file and object store (a copy with a symlink, a
- * special file or a config include is not offered), and a hostile copy can
+ * special file, a config include or a config.worktree is not offered; other
+ * config keys of the copy are read as they stand), and a hostile copy can
  * make that fetch fail, which falls back to origin. What
  * holds is on the receiving side: it hashes every object it receives, checks
  * that the pin's commit and its whole tree are present, and the checkout's
  * HEAD must equal the pin. When the copy
  * cannot serve the pin, the pin is fetched from origin. The moved copy is
- * removed after a success and after a failure. Three removals or moves can
+ * removed after a success and after a failure. Four removals or moves can
  * fail and stop the sync with what they touched left in place: a failing
- * move, a failing removal of a stale copy before it, and a failing removal of
- * the copy after a verified checkout (the sync then throws with the new
- * checkout and the copy both present).
+ * removal of a stale copy, a failing removal of an empty destination, a
+ * failing move, and a failing removal of the copy after a verified checkout
+ * (the sync then throws with the new checkout and the copy both present). A
+ * removal that fails after a git failure leaves what it could not remove and
+ * throws the git failure.
  *
  * Returns the result, or null when origin answered the depth-1 fetch with
  * anything but a transient network failure (for example a server that refuses
