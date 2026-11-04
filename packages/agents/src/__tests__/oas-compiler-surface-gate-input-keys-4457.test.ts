@@ -30,7 +30,7 @@ const DECLARED_INPUTS: unknown[] = [
 
 function buildGateOas(
   cinatraFlag: Record<string, unknown>,
-  gateInputs: unknown[] = DECLARED_INPUTS,
+  gateInputs: unknown = DECLARED_INPUTS,
 ): Record<string, unknown> {
   return {
     agentspec_version: "26.1.0",
@@ -89,7 +89,7 @@ afterEach(() => {
 
 async function compileGateStep(
   cinatraFlag: Record<string, unknown>,
-  gateInputs?: unknown[],
+  gateInputs?: unknown,
 ): Promise<CompiledAgentOasStep> {
   const oasPath = path.join(tempDir, "oas.json");
   writeFileSync(oasPath, JSON.stringify(buildGateOas(cinatraFlag, gateInputs), null, 2));
@@ -144,6 +144,14 @@ describe("cinatra#4457 — compiled surfaceGateInputKeys", () => {
     ["no declared input", []],
     ["only unusable titles", [{ title: "", type: "string" }, { title: 5, type: "number" }]],
   ])("a flagged gate with %s carries no keys (the field is not written)", async (_label, inputs) => {
+    const step = await compileGateStep({ surfaceGateInputs: true }, inputs);
+    expect(Object.prototype.hasOwnProperty.call(step, "surfaceGateInputKeys")).toBe(false);
+  });
+
+  it.each([
+    ["a string", "candidateMembers"],
+    ["an object", { title: "candidateMembers", type: "array" }],
+  ])("a flagged gate whose inputs is %s (not an array) compiles and carries no keys", async (_label, inputs) => {
     const step = await compileGateStep({ surfaceGateInputs: true }, inputs);
     expect(Object.prototype.hasOwnProperty.call(step, "surfaceGateInputKeys")).toBe(false);
   });
