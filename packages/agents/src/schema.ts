@@ -436,7 +436,7 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // {connectorKey, instanceId}. Set ONLY by the dispatcher
   // (setAgentRunConnectorInstanceBinding) after the per-instance use gate;
   // write-once; never a run-creation input. Signed into the run's MCP actor
-  // token as its pin. Migration core__0114 + agentRunConnectorInstanceBindingSchemaQueries.
+  // token as its pin. Migration core__0122 + agentRunConnectorInstanceBindingSchemaQueries.
   connectorInstanceBinding: text("connector_instance_binding"),
   // dependent_install_id: the installed_extension row id a run executes AS
   // (cinatra#1392 Gap 2). Threaded onto the signed run lineage (ActorContext)

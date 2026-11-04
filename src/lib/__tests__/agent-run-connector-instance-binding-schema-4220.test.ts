@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { agentRuns } from "../../../packages/agents/src/schema";
 import { agentRunConnectorInstanceBindingSchemaQueries } from "../agent-run-created-at-schema";
 import { buildCreateStoreSchemaQueries } from "../drizzle-store";
-import { up, down } from "../../../migrations/core/core__0114_agent-run-connector-instance-binding.mjs";
+import { up, down } from "../../../migrations/core/core__0122_agent-run-connector-instance-binding.mjs";
 
 const normalized = (sql: string) => sql.replaceAll(/"cinatra_fixture"\./g, "").replaceAll('"agent_runs"', "agent_runs").replaceAll(/\s+/g, " ").trim().replace(/;$/, "");
 
