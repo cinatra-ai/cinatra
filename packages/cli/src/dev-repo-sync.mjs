@@ -147,7 +147,6 @@ export function defaultRepoSyncDeps() {
     mkdirp: (p) => mkdirSync(p, { recursive: true }),
     unlink: (p) => rmSync(p, { force: true }),
     removeTree: (p) => rmSync(p, { recursive: true, force: true }),
-    rename: (from, to) => renameSync(from, to),
     sleep: (ms) => sleepSync(ms),
   };
 }
@@ -376,11 +375,15 @@ function shallowSourceRefusal(source, { lstat, readdir, readFile }) {
  * that the pin's commit and its whole tree are present, and the checkout's
  * HEAD must equal the pin. When the copy
  * cannot serve the pin, the pin is fetched from origin. The moved copy is
- * removed after a success and after a failure. Four removals or moves can
- * fail and stop the sync with what they touched left in place: a failing
- * removal of a stale copy, a failing removal of an empty destination, a
- * failing move, and a failing removal of the copy after a verified checkout
- * (the sync then throws with the new checkout and the copy both present). A
+ * removed after a success and after a failure. A move that answers EXDEV
+ * (possible inside one directory, for example on overlayfs) is not a failure:
+ * the checkout is removed instead and the pin is fetched from origin. Four
+ * removals or moves can fail and stop the sync with what they touched left in
+ * place: a failing removal of a stale copy, a failing removal of an empty
+ * destination or of a checkout that could not be moved, a move that fails
+ * other than with EXDEV, and a failing removal of the copy after a verified
+ * checkout (the sync then throws with the new checkout and the copy both
+ * present). A
  * removal that fails after a git failure leaves what it could not remove and
  * throws the git failure.
  *
@@ -394,7 +397,8 @@ function shallowSourceRefusal(source, { lstat, readdir, readFile }) {
 function syncShallowPinned({ pkgName, url, sha, dest, deps, log }) {
   const { git } = deps;
   const removeTree = deps.removeTree ?? ((p) => rmSync(p, { recursive: true, force: true }));
-  const rename = deps.rename ?? ((from, to) => renameSync(from, to));
+  // Only moveAside below calls it: a move that answers EXDEV is handled there.
+  const doRename = deps.rename ?? renameSync;
   const sourceFs = {
     lstat: deps.lstat ?? ((p) => lstatSync(p)),
     readdir: deps.readdir ?? ((p) => readdirSync(p)),
@@ -402,6 +406,22 @@ function syncShallowPinned({ pkgName, url, sha, dest, deps, log }) {
   };
   const pin12 = sha.slice(0, 12);
   const source = shallowSourceDirFor(dest);
+  // The EXDEV-safe move of the existing checkout to its sibling `source`.
+  // rename(2) can answer EXDEV even inside one directory (overlayfs, for a
+  // directory of a lower layer when redirect_dir is off). The moved copy is
+  // only a source of objects, so on EXDEV the checkout is removed and the pin
+  // is fetched from origin. Answers whether the checkout was moved.
+  const moveAside = () => {
+    try {
+      doRename(dest, source);
+      return true;
+    } catch (err) {
+      if (err?.code !== "EXDEV") throw err;
+    }
+    log(`  ${pkgName}: the existing checkout cannot be moved aside (EXDEV); it is removed and ${pin12} is fetched from origin at depth 1.`);
+    removeTree(dest);
+    return false;
+  };
   // A moved copy left by an interrupted earlier run is this road's own.
   if (deps.exists(source)) removeTree(source);
   let haveSource = false;
@@ -417,8 +437,7 @@ function syncShallowPinned({ pkgName, url, sha, dest, deps, log }) {
     if (empty) {
       removeTree(dest);
     } else {
-      rename(dest, source);
-      haveSource = true;
+      haveSource = moveAside();
     }
   }
   log(

@@ -156,7 +156,7 @@ function makeDeps({
     },
     rename: (from, to) => {
       renamed.push([from, to]);
-      if (failRename) throw new Error(`EXDEV: ${from}`);
+      if (failRename) throw Object.assign(new Error(`${failRename}: ${from}`), { code: failRename });
       for (const q of [...state.exists]) {
         if (q === from || q.startsWith(`${from}/`)) {
           state.exists.delete(q);
@@ -775,13 +775,42 @@ describe("syncOneRepo --shallow — an existing (cache-restored) checkout is onl
     expect(deps.state.exists.has(DEST)).toBe(true);
   });
 
-  it("a move of the existing checkout that fails stops the sync before any git call, with the checkout left in place", () => {
-    const deps = makeDeps({ existing: true, failRename: true });
+  it("a move of the existing checkout that fails other than EXDEV stops the sync before any git call, with the checkout left in place", () => {
+    const deps = makeDeps({ existing: true, failRename: "EACCES" });
     const { result, thrown } = run(deps);
     expect(result).toBeNull();
-    expect(String(thrown?.message)).toMatch(/EXDEV/);
+    expect(thrown?.code).toBe("EACCES");
     expect(deps.calls).toEqual([]);
     expect(deps.removed).toEqual([]);
+    expect(deps.state.exists.has(path.join(DEST, ".git"))).toBe(true);
+    expect(deps.state.exists.has(SOURCE)).toBe(false);
+  });
+
+  // rename(2) answers EXDEV for a move inside one directory too, for example
+  // on overlayfs for a directory of a lower layer. The moved copy is only a
+  // source of objects, so the checkout is removed and the pin comes from origin.
+  it("a move of the existing checkout that answers EXDEV removes the checkout and fetches the pin from origin", () => {
+    const deps = makeDeps({ existing: true, failRename: "EXDEV" });
+    const { result, thrown, lines } = run(deps);
+    expect(thrown).toBeNull();
+    expect(result).toEqual(CLONED);
+    expect(deps.renamed).toEqual([[DEST, SOURCE]]);
+    expect(deps.removed).toEqual([DEST]);
+    expect(deps.calls).toEqual([...MADE_NEW, ORIGIN_FETCH, ...CHECKED_OUT]);
+    expect(deps.state.exists.has(SOURCE)).toBe(false);
+    expect(lines).toEqual([
+      `  ${PKG}: the existing checkout cannot be moved aside (EXDEV); it is removed and ${PIN.slice(0, 12)} is fetched from origin at depth 1.`,
+      `  ${PKG}: fetching ${URL} at ${PIN.slice(0, 12)} at depth 1 -> ${DEST}`,
+    ]);
+  });
+
+  it("a removal of the checkout that fails after an EXDEV move stops the sync before any git call, with the checkout left in place", () => {
+    const deps = makeDeps({ existing: true, failRename: "EXDEV", failRemoval: DEST });
+    const { result, thrown } = run(deps);
+    expect(result).toBeNull();
+    expect(String(thrown?.message)).toMatch(/EBUSY/);
+    expect(deps.calls).toEqual([]);
+    expect(deps.removed).toEqual([DEST]);
     expect(deps.state.exists.has(path.join(DEST, ".git"))).toBe(true);
     expect(deps.state.exists.has(SOURCE)).toBe(false);
   });
