@@ -181,17 +181,23 @@ export type DrupalInstanceAdminClient = {
     instanceCount: number;
     instances: Array<{ id: string; name: string; siteUrl: string; lastValidatedAt?: string }>;
   }>;
+  /** `orgId`/`runBy`: the explicit cinatra#274 binding the connector's save
+   * prefers over the session (the host's dev members pass it, cinatra#4387). */
   saveInstance(input: {
     id?: string;
     name: string;
     siteUrl: string;
     mcpApiKey?: string;
+    orgId?: string;
+    runBy?: string;
   }): Promise<DrupalInstanceRow>;
   deleteInstance(id: string): Promise<void>;
   devPersistLocalInstanceUnvalidated(input: {
     id?: string;
     name: string;
     siteUrl: string;
+    orgId?: string;
+    runBy?: string;
   }): Promise<{ id: string }>;
 };
 

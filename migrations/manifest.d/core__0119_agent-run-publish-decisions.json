@@ -1,0 +1,9 @@
+{
+  "seq": "0119",
+  "file": "core/core__0119_agent-run-publish-decisions.mjs",
+  "summary": "The publish-decision record (cinatra#4150). Adds one brand-new table, agent_run_publish_decisions: one row per stop in front of a declared publishing step, with a closed status set, a unique key per stop and a partial due index for the expiry sweep. Additive; no host reads or writes the table yet.",
+  "destructive": false,
+  "tables": [
+    "agent_run_publish_decisions"
+  ]
+}
