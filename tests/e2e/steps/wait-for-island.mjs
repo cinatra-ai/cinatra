@@ -14,9 +14,19 @@
 // `loaded` once the frame's own load event has landed, and `timed-out` past the
 // card's own bound. `timed-out` is not the end: the frame stays mounted and a late
 // load heals the card, so the step keeps reading until `loaded` or its own bound.
-// Its own readings are `absent` (no island framing that path on the page),
-// `unmarked` (an island without the attribute) and `unreadable` (the page could
-// not be read at that moment, for example mid-navigation).
+// Its own readings are `absent` (no island on the page, or only islands framing
+// another document), `unmarked` (an island without the attribute) and
+// `unreadable` (the page could not be read at that moment, for example
+// mid-navigation).
+//
+// EVERY ISLAND, NOT THE FIRST. A pending gate that pins several targets draws one
+// island per target, each under its own header (cinatra#4129), and the later ones
+// can still be loading when the first has loaded: a frame taken then shows their
+// skeletons. So the step reads every island that frames the path, and every
+// island that frames nothing yet (a target whose own address was refused, one
+// that awaits its address, the empty region off a cookie session), settles only
+// when all of them read `loaded`, and its state is the first one's, in page
+// order, that does not.
 import { isPagePath, pollUntilSettled, refuse, refuseFrameScope, requireMs, requireRecord, takeFrame } from "./step-kit.mjs";
 
 const STEP = "waitForIsland";
@@ -43,7 +53,7 @@ export const ISLAND_POLL_MS = 250;
 function readIsland({ selector, attribute, framePath }) {
   const islands = Array.from(document.querySelectorAll(selector)).filter(function framesThePath(island) {
     const frame = island.querySelector("iframe");
-    if (!frame) return false;
+    if (!frame) return true;
     try {
       return new URL(frame.getAttribute("src") || "", location.href).pathname === framePath;
     } catch {
@@ -51,14 +61,22 @@ function readIsland({ selector, attribute, framePath }) {
     }
   });
   if (islands.length === 0) return { state: "absent", islands: 0 };
-  return { state: islands[0].getAttribute(attribute) || "unmarked", islands: islands.length };
+  const states = islands.map(function stateOf(island) {
+    return island.getAttribute(attribute) || "unmarked";
+  });
+  const holding = states.find(function notLoaded(state) {
+    return state !== "loaded";
+  });
+  return { state: holding === undefined ? "loaded" : holding, islands: islands.length };
 }
 
 /**
  * Wait for the review island on the caller's page, and take the frame when the
- * island has loaded or when the bound runs out. The island is the first one on
- * the page whose frame shows `frameSrcPath`. Writes exactly one line (settled or
- * ran out, with the elapsed time and the state) and resolves
+ * island has loaded or when the bound runs out. Every island on the page whose
+ * frame shows `frameSrcPath`, or that frames nothing yet, is read: the wait
+ * settles when all of them have loaded, and its state is the first one's, in
+ * page order, that has not. Writes exactly one line (settled or ran out, with
+ * the elapsed time and the state) and resolves
  * `{ state, settled, elapsedMs, path }`, where `path` is the frame the shutter
  * answered. Refuses, as a StepRefusal, arguments it cannot use and a shutter that
  * takes no frame.
@@ -97,7 +115,7 @@ export async function waitForIsland(
   const state = reading.state;
   const path = await takeFrame(STEP, record, shutter, { step: STEP, state, settled, elapsedMs });
   const count = /** @type {{ islands?: number }} */ (reading).islands ?? 0;
-  const which = count > 1 ? ` (the first of ${count} islands)` : "";
+  const which = count > 1 ? (settled ? ` (all ${count} islands)` : ` (the first of ${count} islands not loaded)`) : "";
   record(`${STEP}: ${settled ? "settled" : "ran out"} after ${elapsedMs} ms (state ${state})${which}; frame ${path}`);
   return { state, settled, elapsedMs, path };
 }

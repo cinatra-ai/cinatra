@@ -14,7 +14,6 @@ import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-conf
 import { listActiveAssertions, type AssertionRecord } from "./semantic-assertion-store";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
-import { runPostgresQueriesAsync } from "@/lib/postgres-async";
 import { buildArtifactWriterWitnessOpIfAbsent } from "./artifact-writer-witness";
 
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
@@ -187,85 +186,6 @@ export function readPersonAssertion(input: {
   );
 }
 
-/**
- * THE PROMOTION'S INTENT, as the retype's own change-event key (cinatra#3319).
- *
- * The retype and the append are two transactions, and the binding reconcile the
- * retype queues may archive the person's own assertion before a re-run reaches
- * the converging branch. The retype's change event commits in the same
- * statement as the type change, so a key that names the source the plan read —
- * this extension, this target type, the base version and the base revision —
- * survives the interruption. It is only ever recomputed and compared by
- * equality, never parsed.
- */
-export function promotionRetypeKey(input: {
-  artifactId: string;
-  extension: string;
-  toType: string;
-  baseVersion: number;
-  sourceRevisionId: string;
-}): string {
-  return `typed-promotion:${input.artifactId}:${input.extension}:${input.toType}:v${input.baseVersion}:${input.sourceRevisionId}`;
-}
-
-/**
- * Did THIS promotion's retype land on the row as it stands now?
- *
- * One equality-only read of the retype's change event: the key the road
- * recorded for the row's current head and base version, an `update` from
- * `rowVersion - 1` to `rowVersion` (the canonical writer moves `version` by one
- * against its compare-and-set), by the acting user, not tombstoned.
- *
- * WHAT IT DOES NOT PROVE: who wrote the event. The key and the actor fields are
- * the caller's, so any host writer holding an org-write authority for this org
- * could stamp the same ones. It is a convention among host writers, recorded
- * and read back, never an exclusivity proof.
- *
- * ASYNCHRONOUS, on `@/lib/postgres-async`: the one caller is the converging
- * branch, which has an `await` to give.
- */
-export async function readPromotionRetypeEvent(input: {
-  orgId: string;
-  artifactId: string;
-  extension: string;
-  toType: string;
-  rowVersion: number;
-  sourceRevisionId: string;
-  actorUserId: string;
-}): Promise<boolean> {
-  ensurePostgresSchema();
-  const s = schema();
-  const baseVersion = input.rowVersion - 1;
-  const [res] = await runPostgresQueriesAsync({
-    connectionString: conn(),
-    queries: [
-      {
-        text: `SELECT 1 AS present FROM "${s}"."object_change_event"
-WHERE idempotency_key = $1 AND org_id = $2 AND object_id = $3 AND object_type = $4
-  AND operation = 'update' AND base_version = $5 AND result_version = $6
-  AND actor_kind = 'user' AND actor_id = $7 AND tombstoned_at IS NULL
-LIMIT 1`,
-        values: [
-          promotionRetypeKey({
-            artifactId: input.artifactId,
-            extension: input.extension,
-            toType: input.toType,
-            baseVersion,
-            sourceRevisionId: input.sourceRevisionId,
-          }),
-          input.orgId,
-          input.artifactId,
-          input.toType,
-          baseVersion,
-          input.rowVersion,
-          input.actorUserId,
-        ],
-      },
-    ],
-  });
-  return (res?.rows?.length ?? 0) > 0;
-}
-
 export type PromoteMatchedArtifactTypeResult =
   | {
       ok: true;
@@ -278,7 +198,133 @@ export type PromoteMatchedArtifactTypeResult =
        *  append an interrupted promotion left behind. */
       retyped: boolean;
     }
-  | { ok: false; reason: TypedPromotionRefusal | "row-moved" | "not-authorized" };
+  | {
+      ok: false;
+      /** `promotion-unproven`: the retype committed, but the row's latest type
+       *  change is not this promotion's own keyed retype, so nothing was
+       *  appended. `representation-moved`: the retype committed, but a content
+       *  writer appended after the row was read, so nothing was appended. */
+      reason: TypedPromotionRefusal | "row-moved" | "not-authorized" | "promotion-unproven" | "representation-moved";
+    };
+
+/**
+ * THE KEY A PROMOTION'S OWN RETYPE RECORDS on its change event (cinatra#3319,
+ * cinatra#4266). Only this module makes it, and only for the retype it runs:
+ * the promotion revision's own id plus the version the retype's compare-and-set
+ * was anchored on. Every other writer of a type change (a restore, a merge, the
+ * CMS state machine, a native create) records another key, so its event is
+ * never read as a promotion.
+ */
+function promotionRetypeKey(input: {
+  artifactId: string;
+  sharedResourceId: string;
+  toType: string;
+  baseVersion: number;
+}): string {
+  return `typed-promotion:${promotionRevisionId(input)}:${input.baseVersion}`;
+}
+
+/** A version column as the driver answers it: a nonnegative safe integer, or
+ *  its digits. A sign, a fraction, an exponent, a space, an unsafe or
+ *  non-finite value and any other type are no version. */
+function readVersion(value: unknown): number | null {
+  const n = typeof value === "string" && /^[0-9]+$/.test(value) ? Number(value) : value;
+  return typeof n === "number" && Number.isSafeInteger(n) && n >= 0 ? n : null;
+}
+
+/** One type-change event of the row, as the proof read selects it. */
+type TypeChangeEvent = {
+  object_type: unknown;
+  before_type: unknown;
+  base_version: unknown;
+  result_version: unknown;
+  idempotency_key: unknown;
+  org_id: unknown;
+};
+
+/**
+ * Does the row's history PROVE that this promotion retyped it?
+ *
+ * Only the row's LATEST type change counts (the highest result version): an
+ * older promotion that a restore, a merge or another move later overwrote is no
+ * proof. It proves only when it landed in the target type, in this
+ * organization, and carries exactly the key this promotion's retype records
+ * for that event's own base version. A restore, a merge, a native type, the
+ * person's standing assertion or a later move away is therefore never a proof.
+ * A failed read throws: an error is never a proof.
+ */
+function readPromotionProof(input: {
+  orgId: string;
+  artifactId: string;
+  sharedResourceId: string;
+  toType: string;
+}): boolean {
+  ensurePostgresSchema();
+  const s = schema();
+  const [res] = runPostgresQueriesSync({
+    connectionString: conn(),
+    queries: [
+      {
+        text: `SELECT object_type, before_snapshot->>'type' AS before_type,
+  base_version, result_version, idempotency_key, org_id
+FROM "${s}"."object_change_event"
+WHERE object_id = $1 AND org_id = $2
+  AND (before_snapshot->>'type') IS DISTINCT FROM object_type
+ORDER BY result_version DESC, created_at DESC, sequence DESC
+LIMIT 1`,
+        values: [input.artifactId, input.orgId],
+      },
+    ],
+  });
+  let latest: { event: TypeChangeEvent; version: number } | null = null;
+  for (const event of (res?.rows ?? []) as TypeChangeEvent[]) {
+    if (event.before_type === event.object_type) continue;
+    const version = readVersion(event.result_version);
+    if (version === null) continue;
+    if (latest === null || version > latest.version) latest = { event, version };
+  }
+  if (latest === null) return false;
+  const { event } = latest;
+  const baseVersion = readVersion(event.base_version);
+  return (
+    event.org_id === input.orgId &&
+    event.object_type === input.toType &&
+    baseVersion !== null &&
+    event.idempotency_key ===
+      promotionRetypeKey({
+        artifactId: input.artifactId,
+        sharedResourceId: input.sharedResourceId,
+        toType: input.toType,
+        baseVersion,
+      })
+  );
+}
+
+/**
+ * THE ONLY ROAD TO THE APPEND: the promotion revision is appended only when the
+ * row's history proves that this promotion retyped it ({@link readPromotionProof}).
+ * Without that proof it writes nothing and answers null. Both the fresh
+ * promotion and the converging completion of an interrupted one append here.
+ */
+function appendProvenPromotionRevision(
+  input: Parameters<typeof appendPromotionRevision>[0],
+): ReturnType<typeof appendPromotionRevision> | null {
+  // ACCEPTED WINDOW, TYPE ONLY: the append's lock (per artifact) is not the canonical
+  // writer's (org write lock), so a writer can move the row between this read
+  // and the append. The revision then lands on a row that has left the type:
+  // the state of "promote, append, move away". The retype did happen, the
+  // revision is deterministic (ON CONFLICT DO NOTHING) and shares the base
+  // resource, and no later decision reads a revision as proof (events do).
+  // A CONTENT writer cannot be superseded: the append lands only over the
+  // revision the row read named, under the lock content writers take.
+  const proven = readPromotionProof({
+    orgId: input.orgId,
+    artifactId: input.artifactId,
+    sharedResourceId: input.sharedResourceId,
+    toType: input.toType,
+  });
+  return proven ? appendPromotionRevision(input) : null;
+}
 
 /**
  * THE ROAD, END TO END: read the row, read the matcher's association, decide,
@@ -326,12 +372,6 @@ export async function promoteMatchedArtifactType(input: {
    * the same compare-and-set; nothing else does.
    */
   retype?: TypedPromotionRetype;
-  /**
-   * A test seam, awaited right before the converging branch's append. Same
-   * posture as `retype`: a test substitutes it to commit a concurrent edit
-   * between the branch's read and its append; no production caller passes it.
-   */
-  beforeConvergingAppend?: () => Promise<void>;
 }): Promise<PromoteMatchedArtifactTypeResult> {
   const row = readPromotableRow({ orgId: input.orgId, artifactId: input.artifactId });
   const matcher =
@@ -381,49 +421,25 @@ export async function promoteMatchedArtifactType(input: {
       // read as if it stood on its own here, which is an asymmetry and not a
       // second rule.
       input.confirmed &&
-      mimeAccepted(input.ownType.acceptsMimes, row.latestRevision.mime) &&
-      // THE THIRD AUTHORITY, read last (cinatra#3319): this promotion's own
-      // retype event for the row's current head. The binding reconcile the
-      // retype queued may already have archived the person's assertion, so an
-      // interrupted promotion on the person's road would otherwise strand.
-      (personAsserted ||
-        (matcher !== null && matcher.confidence >= matcher.threshold) ||
-        (await readPromotionRetypeEvent({
-          orgId: input.orgId,
-          artifactId: input.artifactId,
-          extension: input.extension,
-          toType: input.ownType.typeId,
-          rowVersion: row.version,
-          sourceRevisionId: row.latestRevision.representationRevisionId,
-          actorUserId: input.actor.userId,
-        })))
+      (personAsserted || (matcher !== null && matcher.confidence >= matcher.threshold)) &&
+      mimeAccepted(input.ownType.acceptsMimes, row.latestRevision.mime)
     ) {
-      await input.beforeConvergingAppend?.();
-      const landed = appendPromotionRevision({
+      // AND ONLY ON PROOF (cinatra#3319, cinatra#4266): the conditions above
+      // also hold for a row that carried this type from the start, or that a
+      // restore moved back into it. Only this promotion's own keyed retype,
+      // still the row's latest type change, makes the row an interrupted one.
+      const landed = appendProvenPromotionRevision({
         orgId: input.orgId,
         artifactId: input.artifactId,
         sharedResourceId: row.latestRevision.resourceId,
+        baseRevisionId: row.latestRevision.representationRevisionId,
         toType: input.ownType.typeId,
         form: row.latestRevision.form,
         createdBy: input.createdBy ?? null,
         mime: row.latestRevision.mime,
-        // The snapshot this branch decided on, re-checked under the append's
-        // own lock: an edit that committed since the read refuses the append.
-        expectHead: {
-          type: input.ownType.typeId,
-          version: row.version,
-          headRepresentationId: row.latestRevision.representationRevisionId,
-        },
       });
-      if (landed.moved) return { ok: false, reason: "row-moved" };
-      if (landed.revision !== null) {
-        return {
-          ok: true,
-          representationRevisionId: landed.representationRevisionId,
-          revision: landed.revision,
-          toType: input.ownType.typeId,
-          retyped: false,
-        };
+      if (landed !== null && landed !== "representation-moved" && landed.revision !== null) {
+        return { ok: true, ...landed, toType: input.ownType.typeId, retyped: false };
       }
     }
     return { ok: false, reason: plan.reason };
@@ -439,31 +455,34 @@ export async function promoteMatchedArtifactType(input: {
     data: row!.data,
     toType: plan.toType,
     expectedVersion: plan.expectedVersion,
-    // The promotion's intent, recorded in the retype's own change event: the
-    // converging branch reads it back when an interruption strands the append.
+    // The key its change event records: what makes this retype readable as the
+    // promotion's own, now and on a later converging confirmation.
     idempotencyKey: promotionRetypeKey({
       artifactId: input.artifactId,
-      extension: input.extension,
+      sharedResourceId: plan.sharedResourceId,
       toType: plan.toType,
       baseVersion: plan.expectedVersion,
-      sourceRevisionId: plan.baseRevisionId,
     }),
     actor: input.actor,
     authority: input.authority,
   });
   if (!retyped.ok) return { ok: false, reason: retyped.reason };
 
-  // 2. THE APPEND. The retype has committed, so the row carries the target type
-  //    and this needs no guard of its own.
-  const landed = appendPromotionRevision({
+  // 2. THE APPEND, on the same proof as the converging road: another writer may
+  //    have moved the row between the retype and here, and then the revision
+  //    would name a type change this promotion no longer made.
+  const landed = appendProvenPromotionRevision({
     orgId: input.orgId,
     artifactId: input.artifactId,
     sharedResourceId: plan.sharedResourceId,
+    baseRevisionId: plan.baseRevisionId,
     toType: plan.toType,
     form: plan.form,
     createdBy: input.createdBy ?? null,
     mime: row?.latestRevision?.mime ?? null,
   });
+  if (landed === null) return { ok: false, reason: "promotion-unproven" };
+  if (landed === "representation-moved") return { ok: false, reason: landed };
   return {
     ok: true,
     representationRevisionId: landed.representationRevisionId,
@@ -480,7 +499,7 @@ export type TypedPromotionRetype = (input: {
   data: unknown;
   toType: string;
   expectedVersion: number;
-  /** The change event's key: `promotionRetypeKey` of this promotion. */
+  /** The key the retype's change event must record (`typed-promotion:…`). */
   idempotencyKey: string;
   actor: { userId: string; orgId: string };
   authority: OrgWriteAuthority;
@@ -546,19 +565,10 @@ const canonicalRetype: TypedPromotionRetype = async (input) => {
  * The witness is the CONVERGING form because the representation INSERT is: both
  * halves of a re-run promotion must be able to land exactly once, and a
  * revision an earlier promotion appended without a witness is repaired by the
- * same re-run.
+ * same re-run (a re-run that the row's history proves, cinatra#3319).
  *
  * Pure so the one-transaction composition is fixture-provable, the same shape
  * the other host writers' witness proofs take.
- *
- * `expectHead` (cinatra#3319) is the snapshot the converging branch decided on.
- * With it, the transaction re-checks that snapshot right after taking the lock
- * — the row's type and version and its head revision — and a moved row makes
- * the check a division by zero, which aborts the transaction before the
- * revision and the witness. An edit save takes the same per-artifact lock, so it
- * either committed before the check (which then refuses) or waits for this
- * commit (and its own compare-and-set then refuses it). Without `expectHead`
- * the list is the three queries it always was.
  */
 export function buildPromotionAppendQueries(
   schema: string,
@@ -571,61 +581,32 @@ export function buildPromotionAppendQueries(
     createdBy: string | null;
     toType: string;
     mime?: string | null;
-    expectHead?: { type: string; version: number; headRepresentationId: string };
+    /** The latest revision when the promotion read the row. */
+    baseRevisionId: string;
   },
 ): Array<{ text: string; values: unknown[] }> {
   const s = schema.replaceAll('"', '""');
-  const lock = { text: `SELECT pg_advisory_xact_lock(hashtext($1))`, values: [input.artifactId] };
-  const append = buildPromotionRepresentationAppend(schema, {
-    orgId: input.orgId,
-    artifactId: input.artifactId,
-    representationRevisionId: input.representationRevisionId,
-    sharedResourceId: input.sharedResourceId,
-    form: input.form,
-    createdBy: input.createdBy,
-  });
-  const witness = buildArtifactWriterWitnessOpIfAbsent(s, {
-    orgId: input.orgId,
-    artifactId: input.artifactId,
-    representationRevisionId: input.representationRevisionId,
-    actor: input.createdBy,
-    // Provenance detail only — the witness is the EXISTENCE of the row, never
-    // its payload.
-    detail: { road: "typed-promotion", toType: input.toType, mime: input.mime ?? null },
-  });
-  if (!input.expectHead) return [lock, append, witness];
   return [
-    lock,
-    {
-      text: `SELECT 1 / COUNT(*)::int AS head_unmoved FROM "${s}"."objects" o
-WHERE o.id = $1 AND o.org_id = $2 AND o.deleted_at IS NULL
-  AND o.type = $3 AND o.version = $4
-  AND (SELECT id FROM "${s}"."representation" WHERE org_id = $2 AND artifact_id = $1 ORDER BY revision DESC LIMIT 1) = $5`,
-      values: [
-        input.artifactId,
-        input.orgId,
-        input.expectHead.type,
-        input.expectHead.version,
-        input.expectHead.headRepresentationId,
-      ],
-    },
-    append,
-    witness,
+    { text: `SELECT pg_advisory_xact_lock(hashtext($1))`, values: [input.artifactId] },
+    buildPromotionRepresentationAppend(schema, {
+      orgId: input.orgId,
+      artifactId: input.artifactId,
+      representationRevisionId: input.representationRevisionId,
+      sharedResourceId: input.sharedResourceId,
+      form: input.form,
+      createdBy: input.createdBy,
+      baseRevisionId: input.baseRevisionId,
+    }),
+    buildArtifactWriterWitnessOpIfAbsent(s, {
+      orgId: input.orgId,
+      artifactId: input.artifactId,
+      representationRevisionId: input.representationRevisionId,
+      actor: input.createdBy,
+      // Provenance detail only — the witness is the EXISTENCE of the row, never
+      // its payload.
+      detail: { road: "typed-promotion", toType: input.toType, mime: input.mime ?? null },
+    }),
   ];
-}
-
-/** Postgres' code for the head re-check's refusal. */
-const DIVISION_BY_ZERO = "22012";
-
-/** Read the way `representation-store.ts` reads its own `1 / COUNT(*)` guard:
- *  the driver's code, else the message the sync/async bridges preserve. */
-function isDivisionByZero(error: unknown): boolean {
-  if (error && typeof error === "object" && "code" in error) {
-    const code = (error as { code?: unknown }).code;
-    if (typeof code === "string") return code === DIVISION_BY_ZERO;
-  }
-  const message = error instanceof Error ? error.message : String(error ?? "");
-  return message.includes("division by zero");
 }
 
 function appendPromotionRevision(input: {
@@ -637,45 +618,45 @@ function appendPromotionRevision(input: {
   createdBy: string | null;
   /** The shared content's MIME, for the witness's provenance detail. */
   mime?: string | null;
-  /** The snapshot to re-check under the lock; see `buildPromotionAppendQueries`. */
-  expectHead?: { type: string; version: number; headRepresentationId: string };
-}): { representationRevisionId: string; revision: number | null; moved: boolean } {
+  /** The latest revision when the promotion read the row. */
+  baseRevisionId: string;
+}): { representationRevisionId: string; revision: number | null } | "representation-moved" {
   ensurePostgresSchema();
   const representationRevisionId = promotionRevisionId({
     artifactId: input.artifactId,
     sharedResourceId: input.sharedResourceId,
     toType: input.toType,
   });
-  let results: Array<{ rows?: unknown[] }>;
-  try {
-    results = runPostgresQueriesSync({
-      connectionString: conn(),
-      transaction: true,
-      queries: buildPromotionAppendQueries(postgresSchema, {
-        orgId: input.orgId,
-        artifactId: input.artifactId,
-        representationRevisionId,
-        sharedResourceId: input.sharedResourceId,
-        form: input.form,
-        createdBy: input.createdBy,
-        toType: input.toType,
-        mime: input.mime ?? null,
-        expectHead: input.expectHead,
-      }),
-    });
-  } catch (error) {
-    if (input.expectHead && isDivisionByZero(error)) {
-      return { representationRevisionId, revision: null, moved: true };
-    }
-    throw error;
-  }
-  // The insert sits after the re-check when there is one.
-  const appended = results?.[input.expectHead ? 2 : 1]?.rows?.[0] as
-    | { revision?: unknown }
-    | undefined;
+  const results = unlessRepresentationMoved(() => runPostgresQueriesSync({
+    connectionString: conn(),
+    transaction: true,
+    queries: buildPromotionAppendQueries(postgresSchema, {
+      orgId: input.orgId,
+      artifactId: input.artifactId,
+      representationRevisionId,
+      sharedResourceId: input.sharedResourceId,
+      form: input.form,
+      createdBy: input.createdBy,
+      toType: input.toType,
+      mime: input.mime ?? null,
+      baseRevisionId: input.baseRevisionId,
+    }),
+  }));
+  if (results === "representation-moved") return results;
+  const appended = results?.[1]?.rows?.[0] as { revision?: unknown } | undefined;
   return {
     representationRevisionId,
     revision: appended ? Number(appended.revision) : null,
-    moved: false,
   };
+}
+
+/** The append's own guard (`1 / 0`) aborted it: the latest revision is no longer
+ *  the one the row read named, and the transaction wrote nothing. */
+function unlessRepresentationMoved<T>(run: () => T): T | "representation-moved" {
+  try {
+    return run();
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("division by zero")) return "representation-moved";
+    throw error;
+  }
 }

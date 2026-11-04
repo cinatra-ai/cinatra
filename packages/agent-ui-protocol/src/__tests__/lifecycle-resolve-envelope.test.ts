@@ -12,11 +12,15 @@ import {
   LIFECYCLE_CARD_CARRIAGE,
   LIFECYCLE_DATA_PART_VIEW_TYPES,
   LIFECYCLE_INTERRUPT_KINDS,
+  LIFECYCLE_TARGET_HEADER_MAX_TEXT,
   VERIFICATION_SUMMARY_MAX_FIELD_DIFF,
   VERIFICATION_SUMMARY_PATH_MAX_LENGTH,
   VERIFICATION_SUMMARY_VALUE_MAX_LENGTH,
   VERIFICATION_SUMMARY_VIEW_VERSION,
   parseLifecycleResolveEnvelope,
+  reviewGateTargetsDrawnAsPairs,
+  reviewIslandTargetSelector,
+  reviewTargetIslandAddressesWire,
   verificationSummaryBodySchema,
   type LifecycleCardBodyByKind,
   type LifecycleDataPartViewType,
@@ -719,5 +723,244 @@ describe("approved app-artifact-review §VI envelope-only producer Note", () => 
   });
   it("does not disclose a review Note beside another card kind", () => {
     expect(parseLifecycleResolveEnvelope("verification_summary", { kind: "verification_summary", state: { state: "advisory" }, body: VERIFICATION_BODY, recordedPrompt: "private producer words" })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4129 — the per-target island map
+// ---------------------------------------------------------------------------
+//
+// A pending gate that pins several targets is drawn as pairs on every host, and
+// where a frame is authenticated by a single-use credential each pinned target
+// needs its own address: one grant paints one document. The answer carries them
+// as one map from each pinned revision to its own address, read as ONE bounded
+// shape, and refused whole for anything else — exactly as the single address is.
+
+describe("cinatra#4129 — the per-target island map", () => {
+  const pending = (extra: Record<string, unknown>) => ({
+    kind: "artifact_review_gate",
+    state: { state: "pending", canDecide: true, canComment: true },
+    body: null,
+    ...extra,
+  });
+  const MAP = {
+    rev_8f3a1c2d4e5f6a7b: "/lifecycle/review-island?ref=r&ic=sealed-one&target=rev_8f3a1c2d4e5f6a7b",
+    rev_11223344556677: null,
+  };
+
+  it("keeps a valid map — a failed target's entry stays null", () => {
+    const wire = pending({ islandSrcByRevision: MAP });
+    const parsed = parseLifecycleResolveEnvelope("artifact_review_gate", JSON.parse(JSON.stringify(wire)));
+    expect(parsed).not.toBeNull();
+    // Read back as the section's own keyed set, never as the wire's plain
+    // object, and carried back to the very same wire.
+    const addresses = parsed!.islandSrcByRevision;
+    expect(addresses).toBeInstanceOf(Map);
+    expect(reviewTargetIslandAddressesWire(addresses!)).toEqual(MAP);
+    expect({ ...parsed!, islandSrcByRevision: reviewTargetIslandAddressesWire(addresses!) }).toEqual({
+      ...wire,
+      islandSrc: null,
+      targetHeaders: null,
+      aside: null,
+    });
+  });
+
+  it("adds no such key to an answer that carried none", () => {
+    const parsed = parseLifecycleResolveEnvelope("artifact_review_gate", pending({}));
+    expect(parsed).not.toBeNull();
+    expect("islandSrcByRevision" in parsed!).toBe(false);
+  });
+
+  it("REFUSES the whole answer for a map beside `absent`", () => {
+    expect(
+      parseLifecycleResolveEnvelope("artifact_review_gate", {
+        kind: "artifact_review_gate",
+        state: { state: "absent" },
+        body: null,
+        islandSrcByRevision: MAP,
+      }),
+    ).toBeNull();
+  });
+
+  it("REFUSES the whole answer for a map on another kind", () => {
+    const answer = {
+      kind: "verification_summary" as const,
+      state: { state: "advisory" as const },
+      body: VERIFICATION_BODY,
+    };
+    // The control first: the same answer without the map parses.
+    expect(parseLifecycleResolveEnvelope("verification_summary", answer)).not.toBeNull();
+    expect(
+      parseLifecycleResolveEnvelope("verification_summary", { ...answer, islandSrcByRevision: MAP }),
+    ).toBeNull();
+  });
+
+  it("REFUSES the whole answer for a map that is not one bounded shape", () => {
+    const thirteen = Object.fromEntries(
+      Array.from({ length: 13 }, (_, i) => [`rev-${i}`, null]),
+    );
+    for (const bad of [
+      [MAP.rev_8f3a1c2d4e5f6a7b],
+      thirteen,
+      { "": MAP.rev_8f3a1c2d4e5f6a7b },
+      { rev_8f3a1c2d4e5f6a7b: "//evil.example/x" },
+    ]) {
+      expect(
+        parseLifecycleResolveEnvelope("artifact_review_gate", pending({ islandSrcByRevision: bad })),
+        JSON.stringify(bad).slice(0, 80),
+      ).toBeNull();
+    }
+  });
+});
+
+describe("the headers say whether they are complete", () => {
+  const ONE = {
+    title: "Q3 re-engagement email",
+    typeLabel: "Email",
+    objectType: "@cinatra-ai/email:draft",
+    revisionId: "rev_8f3a1c2d4e5f6a7b",
+    facts: ["team", "private"],
+  };
+  const TWO = { ...ONE, title: "Q3 cohort brief", revisionId: "rev_11223344556677" };
+  const pending = (extra: Record<string, unknown>) => ({
+    kind: "artifact_review_gate",
+    state: { state: "pending", canDecide: true, canComment: true },
+    body: null,
+    ...extra,
+  });
+
+  it("carries the completeness through, either way, beside the headers it is about", () => {
+    for (const complete of [true, false]) {
+      const wire = pending({ targetHeaders: [ONE, TWO], targetHeadersComplete: complete });
+      const parsed = parseLifecycleResolveEnvelope("artifact_review_gate", JSON.parse(JSON.stringify(wire)));
+      expect(parsed).toEqual({ ...wire, islandSrc: null, aside: null });
+    }
+  });
+
+  it("adds no such key to an answer that carried none", () => {
+    const parsed = parseLifecycleResolveEnvelope("artifact_review_gate", pending({ targetHeaders: [ONE, TWO] }));
+    expect(parsed).not.toBeNull();
+    expect("targetHeadersComplete" in parsed!).toBe(false);
+  });
+
+  it("REFUSES the whole answer for a completeness that is not a boolean", () => {
+    for (const bad of ["true", 1, null, {}, []]) {
+      expect(
+        parseLifecycleResolveEnvelope(
+          "artifact_review_gate",
+          pending({ targetHeaders: [ONE], targetHeadersComplete: bad }),
+        ),
+        JSON.stringify(bad),
+      ).toBeNull();
+    }
+  });
+
+  it("REFUSES a complete set of NO headers — the claim is about the headers carried", () => {
+    expect(
+      parseLifecycleResolveEnvelope("artifact_review_gate", pending({ targetHeadersComplete: true })),
+    ).toBeNull();
+  });
+
+  it("reads an older server's revision cut through a surrogate pair as U+FFFD, and never as a complete reading", () => {
+    // An older server cut the id with `.slice(0, 200)`: an astral character
+    // across the bound leaves its high surrogate alone at the end.
+    const pinned = `${"r".repeat(LIFECYCLE_TARGET_HEADER_MAX_TEXT - 1)}😀`;
+    const cut = pinned.slice(0, LIFECYCLE_TARGET_HEADER_MAX_TEXT);
+    expect(cut.endsWith("\uD83D")).toBe(true);
+    const shown = `${"r".repeat(LIFECYCLE_TARGET_HEADER_MAX_TEXT - 1)}�`;
+    const older = parseLifecycleResolveEnvelope(
+      "artifact_review_gate",
+      pending({ targetHeaders: [ONE, { ...TWO, revisionId: cut }] }),
+    );
+    expect(older?.targetHeaders?.map((header) => header.revisionId)).toEqual([ONE.revisionId, shown]);
+    // The same header beside a claim of completeness: the claim does not hold.
+    const claimed = parseLifecycleResolveEnvelope(
+      "artifact_review_gate",
+      pending({ targetHeaders: [ONE, { ...TWO, revisionId: cut }], targetHeadersComplete: true }),
+    );
+    expect(claimed?.targetHeaders?.[1]?.revisionId).toBe(shown);
+    expect(claimed?.targetHeadersComplete).toBe(false);
+  });
+
+  it("REFUSES it beside `absent`, and on another kind", () => {
+    expect(
+      parseLifecycleResolveEnvelope("artifact_review_gate", {
+        kind: "artifact_review_gate",
+        state: { state: "absent" },
+        body: null,
+        targetHeadersComplete: false,
+      }),
+    ).toBeNull();
+    const answer = {
+      kind: "verification_summary" as const,
+      state: { state: "advisory" as const },
+      body: VERIFICATION_BODY,
+    };
+    expect(parseLifecycleResolveEnvelope("verification_summary", answer)).not.toBeNull();
+    expect(
+      parseLifecycleResolveEnvelope("verification_summary", { ...answer, targetHeadersComplete: false }),
+    ).toBeNull();
+  });
+
+  it("a gate is drawn as pairs ONLY over a complete set of several headers", () => {
+    expect(reviewGateTargetsDrawnAsPairs([ONE, TWO], true)).toBe(true);
+    // Two headers the answer says are not complete (one carried inexactly).
+    expect(reviewGateTargetsDrawnAsPairs([ONE, TWO], false)).toBe(false);
+    // A gate that pins sixteen: twelve headers at the bound, not complete.
+    expect(reviewGateTargetsDrawnAsPairs(Array.from({ length: 12 }, () => ONE), false)).toBe(false);
+    // An answer that did not say.
+    expect(reviewGateTargetsDrawnAsPairs([ONE, TWO], undefined)).toBe(false);
+    // One target, or none, is never pairs.
+    expect(reviewGateTargetsDrawnAsPairs([ONE], true)).toBe(false);
+    expect(reviewGateTargetsDrawnAsPairs(null, true)).toBe(false);
+  });
+
+  it("pairs only where each revision id selects its own target alone: distinct, and within the key bound", () => {
+    // Two pins of different artifacts that carry the same revision id.
+    expect(reviewGateTargetsDrawnAsPairs([ONE, { ...TWO, revisionId: ONE.revisionId }], true)).toBe(false);
+    /** Two headers whose revision ids are `length` characters long and differ. */
+    const keyed = (length: number) => [
+      { ...ONE, revisionId: `a${"7".repeat(length - 1)}` },
+      { ...TWO, revisionId: `b${"7".repeat(length - 1)}` },
+    ];
+    // At the per-target key bound: still pairs.
+    expect(reviewGateTargetsDrawnAsPairs(keyed(128), true)).toBe(true);
+    // One character past it: the one aggregate island.
+    expect(reviewGateTargetsDrawnAsPairs(keyed(129), true)).toBe(false);
+    expect(reviewGateTargetsDrawnAsPairs([ONE, keyed(129)[1]!], true)).toBe(false);
+    // A revision id the header cut at its own bound.
+    expect(reviewGateTargetsDrawnAsPairs(keyed(LIFECYCLE_TARGET_HEADER_MAX_TEXT), true)).toBe(false);
+  });
+
+  // The id reaches the island through an ADDRESS, not as itself: the route and
+  // the card encode it into `?target=` and the island reads it back out.
+  it("pairs only where each revision id travels as one exact selector: an ill-formed id is rewritten on the way", () => {
+    const lone = "rev-\uD800-a";
+    // The encoding rewrites a lone surrogate, so the island would read another name.
+    expect(new URLSearchParams(new URLSearchParams([["target", lone]]).toString()).get("target")).not.toBe(lone);
+    expect(reviewIslandTargetSelector(lone)).toBeNull();
+    expect(reviewGateTargetsDrawnAsPairs([ONE, { ...TWO, revisionId: lone }], true)).toBe(false);
+    // A well-formed id beyond ASCII travels: a surrogate PAIR is one character.
+    const astral = "rev-\uD83D\uDE00";
+    expect(reviewIslandTargetSelector(astral)).toBe("rev-%F0%9F%98%80");
+    expect(reviewGateTargetsDrawnAsPairs([ONE, { ...TWO, revisionId: astral }], true)).toBe(true);
+  });
+
+  it("pairs only where each revision id's ENCODED value fits the key bound, not only the raw id", () => {
+    // "é" is one character and six once encoded (%C3%A9).
+    const encodedAt = (length: number) => `${"x".repeat(length % 6)}${"é".repeat(Math.floor(length / 6))}`;
+    expect(encodedAt(128).length).toBe(23);
+    expect(reviewIslandTargetSelector(encodedAt(128))).toHaveLength(128);
+    expect(reviewGateTargetsDrawnAsPairs([ONE, { ...TWO, revisionId: encodedAt(128) }], true)).toBe(true);
+    // One encoded character past the bound: the one aggregate island.
+    expect(reviewIslandTargetSelector(`${encodedAt(128)}x`)).toBeNull();
+    expect(reviewGateTargetsDrawnAsPairs([ONE, { ...TWO, revisionId: `${encodedAt(128)}x` }], true)).toBe(false);
+    // A multibyte id of exactly 128 characters (the raw bound) is 768 once encoded.
+    const wide = "é".repeat(128);
+    expect(wide.length).toBe(128);
+    expect(reviewIslandTargetSelector(wide)).toBeNull();
+    expect(reviewGateTargetsDrawnAsPairs([ONE, { ...TWO, revisionId: wide }], true)).toBe(false);
+    // An ASCII id of exactly 128 travels unchanged.
+    expect(reviewIslandTargetSelector("r".repeat(128))).toBe("r".repeat(128));
   });
 });

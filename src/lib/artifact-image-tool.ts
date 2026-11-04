@@ -12,6 +12,7 @@ import {
   postgresSchema,
 } from "@/lib/database";
 import { runPostgresQueriesAsync } from "@/lib/postgres-async";
+import { logFailure, logFixedLine } from "@/lib/failure-log";
 import { registerAllObjectTypes } from "@/lib/register-all-object-types";
 import { createSemanticArtifact } from "@/lib/artifacts/artifact-creation";
 import { isArtifactExtensionWriteAllowed } from "@/lib/artifacts/artifact-extension-access";
@@ -22,6 +23,7 @@ import {
   claimMaterialization,
   isMaterializationFinalizeConflict,
   readFinalizedMaterialization,
+  readRevisionImageProvenance,
   type ImageGenerationProvenance,
 } from "@/lib/artifacts/materialization-ledger";
 import { resolveBoundArtifactTarget } from "@/lib/artifacts/resolve-bound-artifact-type";
@@ -66,6 +68,13 @@ import {
 // NEVER THROWS. Every failure is a returned refusal with the reason it was
 // refused, so the calling node fails visibly with a sentence rather than a
 // stack.
+//
+// NO EXCEPTION TEXT IN A REFUSAL (cinatra#4223). A refusal reaches the calling
+// node, and through the passthrough the flow. A provider's or a store's
+// exception can name a credential, a schema, a table or a connection, so a
+// failure that comes from a throw answers a fixed sentence. The server log
+// records the run, the node and a word for the error's class from a fixed
+// list, never text taken from the error (src/lib/failure-log.ts), and logging never throws or changes the answer.
 // ---------------------------------------------------------------------------
 
 /**
@@ -329,6 +338,9 @@ export async function generateArtifactImage(
       bindingObjectTypeId: input.objectTypeId,
       producesObjectTypeId:
         producesObjectTypeIdForExtension(producesRefs, input.extension) ?? undefined,
+      // The install-state explanation of a zero-claim extension is built from
+      // the store's own read errors; on this road it answers a fixed sentence.
+      deps: { explainAbsentClaims: (arg) => explainAbsentClaimsFixed(input, arg) },
     });
     if (!resolvedTarget.ok) {
       return { ok: false, reason: "type_unresolved", error: resolvedTarget.error };
@@ -353,12 +365,11 @@ export async function generateArtifactImage(
         ...(input.model ? { model: input.model } : {}),
       });
     } catch (err) {
+      logFilingFailure("artifact_image_generate", input, err);
       return {
         ok: false,
         reason: "provider_failed",
-        error: `the ${provider.provider} image provider failed: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+        error: `the ${provider.provider} image provider failed; ${PROVIDER_FAILED_DETAIL}`,
       };
     }
     if (!generated || typeof generated.imageData !== "string" || generated.imageData.length === 0) {
@@ -442,6 +453,16 @@ export async function generateArtifactImage(
           error: appended.error,
         };
       }
+      // A re-drive of this exact append is served by the write that landed:
+      // it reports the facts stored with that revision.
+      if (appended.deduped) {
+        return storedPictureResult(input, {
+          artifactId: appended.artifactId,
+          representationRevisionId: appended.representationRevisionId,
+          revision: appended.revision,
+          mime,
+        });
+      }
       return {
         ok: true,
         artifactId: appended.artifactId,
@@ -483,16 +504,14 @@ export async function generateArtifactImage(
       };
     }
     if (claim.kind === "finalized") {
-      return {
-        ok: true,
+      // A re-drive of this node with these bytes: the first write serves it,
+      // with the facts stored with that write — never this attempt's.
+      return storedPictureResult(input, {
         artifactId: claim.artifactId,
         representationRevisionId: claim.representationRevisionId,
         revision: 1,
-        provider: provenance.provider,
-        model: provenance.model,
         mime,
-        deduped: true,
-      };
+      });
     }
 
     const ownership = await deps.resolveOwnership({
@@ -544,29 +563,23 @@ export async function generateArtifactImage(
           ledgerId: claim.ledgerId,
         });
         if (winner) {
-          return {
-            ok: true,
+          // The winner's facts, as stored with its write.
+          return storedPictureResult(input, {
             artifactId: winner.artifactId,
             representationRevisionId: winner.representationRevisionId,
             revision: 1,
-            provider: provenance.provider,
-            model: provenance.model,
             mime,
-            deduped: true,
-          };
+          });
         }
       }
-      const message = err instanceof Error ? err.message : String(err);
-      return {
-        ok: false,
-        // A payload the type's schema rejects is a DIFFERENT answer from a
-        // write that failed: the caller sent data the picture's type does not
-        // declare, and restating it correctly is the fix.
-        reason: /does not satisfy the declared schema/.test(message)
-          ? "data_rejected"
-          : "write_refused",
-        error: `filing the picture failed: ${message}`,
-      };
+      const schemaRefusal = isSchemaRefusal(err);
+      logFilingFailure("artifact_image_generate", input, err);
+      // A payload the type's schema rejects is a DIFFERENT answer from a write
+      // that failed: the caller sent data the picture's type does not declare,
+      // and restating it correctly is the fix. Both answers are fixed texts.
+      return schemaRefusal
+        ? { ok: false, reason: "data_rejected", error: FILING_DATA_REJECTED_ERROR }
+        : { ok: false, reason: "write_refused", error: FILING_WRITE_FAILED_ERROR };
     }
 
     // The meaning matcher, post-commit and best-effort — the same enqueue the
@@ -594,10 +607,169 @@ export async function generateArtifactImage(
       deduped: false,
     };
   } catch (err) {
-    return {
-      ok: false,
-      reason: "write_refused",
-      error: `filing the picture failed: ${err instanceof Error ? err.message : String(err)}`,
-    };
+    logFilingFailure("artifact_image_generate", input, err);
+    return { ok: false, reason: "write_refused", error: FILING_UNEXPECTED_ERROR };
   }
+}
+
+/** The fixed second half of a provider failure's sentence. */
+export const PROVIDER_FAILED_DETAIL =
+  "the failure is logged on the server, and no picture was made";
+
+/**
+ * THE FIXED REFUSAL TEXTS OF A FAILED FILING (cinatra#4223).
+ *
+ * THE WRITE FAILURE SAYS WHAT IS KEPT. The artifact write runs in two
+ * transactions: the stored bytes and their content record commit first, and
+ * the artifact itself, with its ledger finalize, second. When the second fails
+ * no artifact exists, but the bytes, their record and this node's unfinalized
+ * claim stay, by the writer's contract, so that a retry of the same node with
+ * the same bytes re-uses them instead of storing them twice. The sentence says
+ * so instead of claiming that nothing was kept.
+ */
+export const FILING_WRITE_FAILED_ERROR =
+  "filing the picture failed: the write did not complete and no artifact was filed; " +
+  "bytes it had already stored and this node's claim are kept, and a retry of this " +
+  "node with the same picture re-uses them";
+
+/** The fixed text of a tool that stopped on an error outside the write itself. */
+export const FILING_UNEXPECTED_ERROR =
+  "filing the picture failed on an unexpected error; the failure is logged on the server";
+
+/** The fixed text of a filing whose typed data the target type's schema refused. */
+export const FILING_DATA_REJECTED_ERROR =
+  "filing the picture failed: the object payload does not satisfy the declared schema " +
+  "of the target type, and no artifact was filed";
+
+/** The fixed text of a re-drive whose first write's stored facts do not read. */
+export const FILING_STORED_FACTS_UNREADABLE_ERROR =
+  "this node already filed this picture, but the provider and model stored with that " +
+  "revision could not be read; no second picture was filed";
+
+/**
+ * THE FIXED INSTALL-STATE SENTENCE (cinatra#4223). When the extension has no
+ * artifact-safe claim in the organisation, the shared target resolver asks an
+ * explainer what is missing in the install state, and that explanation quotes
+ * the store's own read errors. On the image tool's road the explanation is
+ * logged on the server and the result says this sentence instead.
+ */
+export function installStateUnresolvedError(extension: string): string {
+  return (
+    `no artifact-safe claim resolved for extension "${extension}" in this organisation: its ` +
+    "install state is incomplete or could not be read; the failure is logged on the server, " +
+    "and no picture was made"
+  );
+}
+
+/**
+ * The explainer seam of the shared resolver, answered with the fixed sentence.
+ * The explanation quotes the store's read errors, so its text is never logged:
+ * the log says the install state was incomplete or unreadable, or, when the
+ * explainer throws, the error's class word. The seam never throws, so the
+ * resolver's own catch, which quotes an exception's text, is not reached.
+ */
+async function explainAbsentClaimsFixed(
+  input: { orgId: string; runId: string; nodeId: string; extension: string },
+  arg: { orgId: string; extension: string; declaredObjectTypeIds?: readonly string[] },
+): Promise<string> {
+  // input.extension equals one of the run package's declared extension strings
+  // (the declared check above runs before the resolver).
+  const sentence = installStateUnresolvedError(input.extension);
+  try {
+    const { explainAbsentArtifactSafeClaims } = await import("@/lib/extension-install-anchor");
+    await explainAbsentArtifactSafeClaims(arg);
+    logFixedLine(
+      "[artifact_image_generate] the install state is incomplete or unreadable; " +
+        "the explanation is not logged",
+      filingLogFields(input),
+    );
+  } catch (err) {
+    logFailure(
+      "[artifact_image_generate] reading the install state failed; the error's own text is not logged",
+      filingLogFields(input),
+      err,
+    );
+  }
+  return sentence;
+}
+
+/** The caller's own identifiers a failure's log line carries. Never a throw. */
+function filingLogFields(input: {
+  orgId: string;
+  runId: string;
+  nodeId: string;
+  extension: string;
+}): Record<string, string> {
+  try {
+    return {
+      orgId: input.orgId,
+      runId: input.runId,
+      nodeId: input.nodeId,
+      extension: input.extension,
+    };
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Log a failure on the server: the tool, the run, the node and the error's
+ * class word, never text taken from the error. Never a throw (src/lib/failure-log.ts).
+ */
+export function logFilingFailure(
+  tool: string,
+  input: { orgId: string; runId: string; nodeId: string; extension: string },
+  err: unknown,
+): void {
+  logFailure(`[${tool}] failed; the error's own text is not logged`, filingLogFields(input), err);
+}
+
+/** A writer's schema refusal, read from a plain message only. Never a throw. */
+function isSchemaRefusal(err: unknown): boolean {
+  try {
+    const message: unknown =
+      typeof err === "string" ? err : err instanceof Error ? err.message : undefined;
+    return typeof message === "string" && /does not satisfy the declared schema/.test(message);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * THE ANSWER TO A RE-DRIVE (cinatra#4223). The ledger key is the run, the
+ * node and the bytes, so a re-drive can reach the provider again, get the same
+ * bytes from another provider or model, and be served by the revision the
+ * first write filed. That revision's facts are the ones stored with it: the
+ * answer reads them from its finalized ledger row and never reports this
+ * attempt's provider and model against an older revision. A row that does not
+ * read is a fixed refusal; the facts are never guessed.
+ */
+async function storedPictureResult(
+  input: { orgId: string; runId: string; nodeId: string; extension: string },
+  filed: { artifactId: string; representationRevisionId: string; revision: number; mime: string },
+): Promise<ArtifactImageResult> {
+  let stored: { provider: string; model: string | null } | null;
+  try {
+    stored = await readRevisionImageProvenance({
+      orgId: input.orgId,
+      artifactId: filed.artifactId,
+      representationRevisionId: filed.representationRevisionId,
+    });
+  } catch (err) {
+    logFilingFailure("artifact_image_generate", input, err);
+    stored = null;
+  }
+  if (!stored) {
+    return { ok: false, reason: "write_refused", error: FILING_STORED_FACTS_UNREADABLE_ERROR };
+  }
+  return {
+    ok: true,
+    artifactId: filed.artifactId,
+    representationRevisionId: filed.representationRevisionId,
+    revision: filed.revision,
+    provider: stored.provider,
+    model: stored.model,
+    mime: filed.mime,
+    deduped: true,
+  };
 }

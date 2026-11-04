@@ -6,7 +6,7 @@ vi.mock("@/lib/assistant-widget-handles", () => ({ resolveAssistantWidgetBinding
 vi.mock("@/lib/lifecycle/lifecycle-card-refetch", () => ({ resolveLifecycleCardState: d.resolve }));
 vi.mock("@/lib/lifecycle/lifecycle-suggestion-chips", () => ({ attachLifecycleSuggestions: async (s: unknown) => s }));
 vi.mock("@/lib/lifecycle/lifecycle-settled-outcome", () => ({ attachLifecycleSettledOutcome: async (s: unknown) => s }));
-vi.mock("@/lib/lifecycle/lifecycle-target-headers", () => ({ readReviewTargetHeaders: async () => null }));
+vi.mock("@/lib/lifecycle/lifecycle-target-headers", () => ({ readReviewTargetHeadersReading: async () => ({ headers: null, pinnedCount: 0, complete: false }) }));
 vi.mock("@/lib/lifecycle/trigger-schedule-proposal-card", () => ({ resolveTriggerScheduleProposalCard: vi.fn() }));
 vi.mock("@/app/artifacts/[id]/review-gate-ports", () => ({ readReviewGateRecordedPrompt: d.prompt }));
 import { encodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";

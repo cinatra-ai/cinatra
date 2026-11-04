@@ -5,7 +5,11 @@
 // the client component so it can be asserted without a full DOM render.)
 
 import { AGENT_SETTINGS_SEGMENT } from "./agent-url";
-import type { CrumbContribution } from "./breadcrumb-contributions";
+import {
+  canonicalCrumbPath,
+  sameCrumbPath,
+  type CrumbContribution,
+} from "./breadcrumb-contributions";
 import { LEGACY_NANOID_RE } from "./id-policy";
 
 export type BreadcrumbCrumb = {
@@ -16,7 +20,7 @@ export type BreadcrumbCrumb = {
 };
 
 export function humanizePathSegment(segment: string): string {
-  return decodeURIComponent(segment)
+  return safelyDecodePathSegment(segment)
     .replace(/[-_]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
@@ -31,6 +35,20 @@ export function humanizePathSegment(segment: string): string {
 // obvious short-id placeholder instead.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LONG_HEX_RE = /^[0-9a-f]{16,}$/i;
+// The supported seed namespace (cinatra#4295): `org-*`, `team-*` and `proj-*`
+// ids from scripts/seed.mjs, which src/lib/id-policy.ts keeps valid. Without
+// this they title-case into words ("Org Acme Group"). The shape alone does not
+// make an id: a connector slug ("team-connector"), a package or marketplace
+// name, or a run name ("team-lead") can have it too. So it is read ONLY at the
+// scope id position — segment 1 of `/organizations/<id>`, `/teams/<id>` and
+// `/projects/<id>`, each with its own prefix (`isIdLikeSegmentAt`) — and never
+// by `isIdLikeSegment`, which also judges resolved labels.
+const SEED_ID_RE = /^(?:org|team|proj)-[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const SEED_ID_PREFIX_BY_SCOPE_CONTAINER: ReadonlyMap<string, string> = new Map([
+  ["organizations", "org-"],
+  ["teams", "team-"],
+  ["projects", "proj-"],
+]);
 
 // Malformed percent-encoding ("%", truncated UTF-8 escapes) makes
 // decodeURIComponent THROW — and these helpers run while rendering the shell,
@@ -51,6 +69,27 @@ export function isIdLikeSegment(segment: string): boolean {
     LONG_HEX_RE.test(decoded) ||
     LEGACY_NANOID_RE.test(decoded)
   );
+}
+
+/**
+ * Is `segments[i]` an id IN ITS POSITION? Every id `isIdLikeSegment` knows,
+ * plus a seed id at the scope id position whose prefix belongs to that scope
+ * container (`/teams/team-rob-hardware`, never `/teams/org-acme-group`). Any
+ * other position keeps its word: a seed-shaped slug there is a name.
+ */
+export function isIdLikeSegmentAt(segments: readonly string[], i: number): boolean {
+  const segment = segments[i];
+  if (segment === undefined) return false;
+  if (isIdLikeSegment(segment)) return true;
+  if (i !== 1) return false;
+  // The container is read decoded, as the router reads it: `/%74eams/<id>` is
+  // `/teams/<id>`. A malformed escape stays raw and so matches no container.
+  const prefix = SEED_ID_PREFIX_BY_SCOPE_CONTAINER.get(
+    safelyDecodePathSegment(segments[0] ?? ""),
+  );
+  if (prefix === undefined) return false;
+  const decoded = safelyDecodePathSegment(segment);
+  return decoded.startsWith(prefix) && SEED_ID_RE.test(decoded);
 }
 
 /** The obvious short-id placeholder for an unresolved id crumb — never
@@ -284,7 +323,9 @@ const SCOPE_BASE_SINGLETONS = new Set(["workspace", "personal"]);
 export function scopeBaseFromSegments(segments: string[]): string | null {
   if (segments.length === 0) return null;
   if (SCOPE_BASE_SINGLETONS.has(segments[0])) return `/${segments[0]}`;
-  if (SCOPE_BASE_CONTAINERS.has(segments[0]) && segments.length >= 2 && segments[1]) {
+  // Decoded, like `isIdLikeSegmentAt` (cinatra#4295): `/%74eams/<id>` is a scope.
+  const container = safelyDecodePathSegment(segments[0]);
+  if (SCOPE_BASE_CONTAINERS.has(container) && segments.length >= 2 && segments[1]) {
     return `/${segments[0]}/${segments[1]}`;
   }
   return null;
@@ -324,8 +365,9 @@ export function isPagelessContainerCrumb(segments: string[], i: number): boolean
   // link to a 404. It renders as a plain label instead — deliberately NOT
   // relinked at the entity landing, which is already the immediately preceding
   // crumb (two adjacent crumbs pointing at one href is worse than one label).
+  const container = safelyDecodePathSegment(segments[0] ?? "");
   if (
-    (segments[0] === "organizations" || segments[0] === "teams") &&
+    (container === "organizations" || container === "teams") &&
     depth === 3 &&
     segments[2] === "dashboards"
   ) {
@@ -478,6 +520,13 @@ const UNRESOLVED_AGENT_INSTANCE_LABEL = AGENT_RUN_LABEL;
 // readings that still draw a trail" and this one draws none.
 export const PAGE_NOT_FOUND_CRUMB_LABEL = "Page not found";
 
+/** The index of the crumb whose path is `path`, read canonically
+ *  (cinatra#4295: an encoded address and a publisher's prefix are one path). */
+function indexOfCrumbPath(crumbPaths: readonly string[], path: string): number {
+  const key = canonicalCrumbPath(path);
+  return crumbPaths.findIndex((p) => canonicalCrumbPath(p) === key);
+}
+
 /**
  * POSITION APPENDS (cinatra#3068 fix leg 2): a contribution with `appendAfter`
  * puts a NEW crumb immediately after the crumb whose path equals that prefix,
@@ -503,11 +552,12 @@ function applyCrumbAppends(
   const appendedPerTarget = new Map<string, number>();
   for (const c of contributions) {
     if (!c.appendAfter) continue;
-    const target = crumbPaths.indexOf(c.appendAfter);
+    const target = indexOfCrumbPath(crumbPaths, c.appendAfter);
     if (target === -1) continue;
-    const already = appendedPerTarget.get(c.appendAfter) ?? 0;
+    const targetKey = canonicalCrumbPath(c.appendAfter);
+    const already = appendedPerTarget.get(targetKey) ?? 0;
     const at = target + already;
-    appendedPerTarget.set(c.appendAfter, already + 1);
+    appendedPerTarget.set(targetKey, already + 1);
     crumbPaths.splice(at + 1, 0, c.prefix);
     crumbs.splice(at + 1, 0, {
       label: c.label,
@@ -555,7 +605,8 @@ export function buildBreadcrumbTrail(
 
   const replacementFor = (crumbPath: string): CrumbContribution | undefined => {
     // Last matching replacement wins (publish already dedupes; this guards
-    // callers passing raw arrays).
+    // callers passing raw arrays). Matched canonically (cinatra#4295): on
+    // `/%74eams/<id>` the name published for `/teams/<id>` still wins.
     for (let j = contributions.length - 1; j >= 0; j--) {
       const c = contributions[j];
       // A POSITION-TARGETED entry is never a replacement (cinatra#3068 fix leg
@@ -563,7 +614,7 @@ export function buildBreadcrumbTrail(
       // its mirror and must be excluded with it, or an append whose prefix
       // happens to equal a real crumb path would BOTH relabel that crumb and be
       // appended beside it -- one contribution drawn twice.
-      if (!c.insertBefore && !c.appendAfter && c.prefix === crumbPath) return c;
+      if (!c.insertBefore && !c.appendAfter && sameCrumbPath(c.prefix, crumbPath)) return c;
     }
     return undefined;
   };
@@ -588,11 +639,15 @@ export function buildBreadcrumbTrail(
    */
   const scopeCrumb = (base: string): BreadcrumbCrumb => {
     const contributed = replacementFor(base);
-    const last = base.split("/").filter(Boolean).at(-1) ?? "";
+    const baseSegments = base.split("/").filter(Boolean);
+    const lastAt = baseSegments.length - 1;
+    const last = baseSegments[lastAt] ?? "";
     return {
       label:
         contributed?.label ??
-        (isIdLikeSegment(last) ? idSegmentPlaceholder(last) : humanizePathSegment(last)),
+        (isIdLikeSegmentAt(baseSegments, lastAt)
+          ? idSegmentPlaceholder(last)
+          : humanizePathSegment(last)),
       href: contributed?.href ?? base,
     };
   };
@@ -736,9 +791,9 @@ export function buildBreadcrumbTrail(
     const contributed = replacementFor(crumbPath);
     const label =
       contributed?.label ??
-      (isLast && !isAreaRoot && pageTitle && pageTitle.pathname === pathname
+      (isLast && !isAreaRoot && pageTitle && sameCrumbPath(pageTitle.pathname, pathname)
         ? pageTitle.title
-        : isIdLikeSegment(seg)
+        : isIdLikeSegmentAt(segments, i)
           ? idSegmentPlaceholder(seg)
           : (connectorNameCrumbFallbackLabel(segments, i) ??
             humanizePathSegment(seg)));
@@ -775,9 +830,9 @@ export function buildBreadcrumbTrail(
   // run" - so the trail states it too, from the first render, and the page's
   // own title still wins wherever it says something different.
   const areaRootOwnPageTitle =
-    isAreaRoot && pageTitle && pageTitle.pathname === pathname
+    isAreaRoot && pageTitle && sameCrumbPath(pageTitle.pathname, pathname)
       ? pageTitle.title
-      : isAreaRoot && pathname === "/agents"
+      : isAreaRoot && sameCrumbPath(pathname, "/agents")
         ? AGENT_RUN_LABEL
         : null;
   if (areaRootOwnPageTitle !== null) {
@@ -794,7 +849,7 @@ export function buildBreadcrumbTrail(
   // insertion. Applied BEFORE truncation.
   for (const c of contributions) {
     if (!c.insertBefore) continue;
-    const at = crumbPaths.indexOf(c.insertBefore);
+    const at = indexOfCrumbPath(crumbPaths, c.insertBefore);
     if (at === -1) continue;
     crumbPaths.splice(at, 0, c.prefix);
     crumbs.splice(at, 0, {
@@ -812,7 +867,7 @@ export function buildBreadcrumbTrail(
   // stays and the tab's own crumb is the one that goes.
   const tabCrumbPath = connectorTabCrumbPathToDrop(segments);
   if (tabCrumbPath !== null) {
-    const at = crumbPaths.indexOf(tabCrumbPath);
+    const at = indexOfCrumbPath(crumbPaths, tabCrumbPath);
     if (at !== -1) {
       crumbPaths.splice(at, 1);
       crumbs.splice(at, 1);
@@ -828,7 +883,9 @@ export function buildBreadcrumbTrail(
   // and crumb 0 everywhere else.
   if (crumbs.length <= 4) return crumbs;
   const truncationScopeBase = scopeBaseFromSegments(segments);
-  const scopeAt = truncationScopeBase ? crumbPaths.indexOf(truncationScopeBase) : -1;
+  const scopeAt = truncationScopeBase
+    ? indexOfCrumbPath(crumbPaths, truncationScopeBase)
+    : -1;
   const headAt = scopeAt > 0 ? scopeAt : 0;
   const cutAt = Math.min(headAt + 1, crumbs.length - 3);
   return [
@@ -908,7 +965,9 @@ export function connectorRouteTabLabel(
   const routePath = "/" + pathname.split("/").filter(Boolean).join("/");
   let label: string | null = null;
   for (const entry of contributions) {
-    if (entry.insertBefore || entry.appendAfter || entry.prefix !== routePath) continue;
+    if (entry.insertBefore || entry.appendAfter || !sameCrumbPath(entry.prefix, routePath)) {
+      continue;
+    }
     label = entry.label || null;
   }
   return label;

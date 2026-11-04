@@ -14,6 +14,7 @@ import {
 } from "./cms-preview-capture-policy";
 import { findInertnessViolations, sanitizeCapturedHtml } from "./cms-preview-inertness";
 import { composeProposedRegions } from "./cms-preview-region-composition";
+import { allowsLoopbackHttp } from "../loopback-http-policy";
 import {
   writePinnedPreviewCapture,
   type CmsPreviewCaptureGeometry,
@@ -47,10 +48,10 @@ import {
 //     internal-alias / IP-range / DNS-rebind pinning) before a byte is sent, and
 //     redirects are NOT followed (`redirect: "manual"`), so an open redirect on
 //     the site cannot walk the signed request somewhere else. The one carve-out
-//     is a LOOPBACK http origin on a non-production instance — precisely the
-//     origin class `validateWidgetOrigin` already accepts at connect time under
-//     the same `NODE_ENV !== "production"` rule, so the capture honours the
-//     registration decision rather than inventing a second policy.
+//     is a LOOPBACK http origin while the instance runs in development mode
+//     (`allowsLoopbackHttp`, the runtime-mode rule) — precisely the origin
+//     class `validateWidgetOrigin` accepts as a connect origin, so the capture
+//     honours the registration decision rather than inventing a second policy.
 //  4. INERTNESS. The fetched page is sanitized (`cms-preview-inertness.ts`) and
 //     RE-CHECKED before anything is stored or rendered; a page that still
 //     carries an executable construct is refused, not stored.
@@ -917,13 +918,13 @@ export async function captureRepairedPreview(
 // The REAL host deps.
 // ---------------------------------------------------------------------------
 
-/** Loopback hosts a NON-PRODUCTION instance may capture — the exact class
- * `validateWidgetOrigin` already accepts as a connect origin under the same
- * `NODE_ENV !== "production"` rule. */
+/** Loopback hosts an instance in DEVELOPMENT MODE may capture — the exact class
+ * `validateWidgetOrigin` accepts as a connect origin; whether the mode allows
+ * the exception at all is `allowsLoopbackHttp`'s runtime-mode rule. */
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "::1"]);
 
 function isDevLoopbackOrigin(url: URL): boolean {
-  if (process.env.NODE_ENV === "production") return false;
+  if (!allowsLoopbackHttp()) return false;
   if (url.protocol !== "http:") return false;
   return LOOPBACK_HOSTS.has(url.hostname.toLowerCase());
 }

@@ -232,11 +232,15 @@ describe("the repository's own pin is untouched by this suite", () => {
     // The adoption HAS run on this branch, so the re-examination array is
     // recorded — sorted and without a repeat. This suite still writes only to
     // its own temporary trees; what it asserts here is that it left the
-    // repository's record alone, not that the record never moved.
+    // repository's record alone, not that the record never moved. Since
+    // cinatra#3677 the recorded set is EMPTY at this pin — still present, in the
+    // one-line shape `upsertJsonStringArrayField` writes for no values.
     const recorded = contract.anchorsUnresolvedAtPin;
     expect(Array.isArray(recorded)).toBe(true);
-    expect(recorded.length).toBeGreaterThan(0);
-    expect([...recorded]).toEqual([...new Set(recorded)].sort());
+    expect(recorded).toEqual([]);
+    expect(
+      readFileSync(join(REPO_ROOT, "scripts/audit/chat-hitl-anchor-contract.json"), "utf8"),
+    ).toContain('\n "anchorsUnresolvedAtPin": [],\n');
   });
 });
 
@@ -366,11 +370,16 @@ describe("the resolution subprocess is the real one, and the transaction survive
     else process.env.DESIGN_DRAWINGS_DIR = previous;
   });
 
-  /** A local design copy carrying exactly the drawing this repository's pin governs. */
-  const copyDrawing = (text) => {
+  /** Both drawings governed by this repository's current pin are real subprocess inputs. */
+  const copyDrawing = (text, { includeSibling = true } = {}) => {
     const dir = mkdtempSync(join(tmpdir(), "adopt-seam-drawings-"));
     mkdirSync(join(dir, "specs"), { recursive: true });
     writeFileSync(join(dir, "specs", "app-lifecycle-cards.html"), text, "utf8");
+    if (includeSibling) {
+      // Empty on purpose: this fixture supplies the required input, without
+      // inventing a drawn HITL card or field to satisfy the assertions below.
+      writeFileSync(join(dir, "specs", "app-artifact-review.html"), "<main>empty sibling drawing</main>", "utf8");
+    }
     drawings.push(dir);
     return dir;
   };
@@ -398,11 +407,10 @@ describe("the resolution subprocess is the real one, and the transaction survive
     return { result, err: err.join("\n"), files };
   }
 
-  it("completes and records what the re-examination found, both recorded forms decided", () => {
-    // The drawing draws the widget frame class, and carries the embed
-    // declaration WITHOUT the active phase on the same element. So the class
-    // selector resolves, the compound predicate does not, and both are
-    // DECIDED — which is what lets this transaction finish at all.
+  it("records drawn parts while retaining the decided widget markers as capture requirements", () => {
+    // #3555's recorded decision classifies these two widget markers as passive
+    // capture requirements. Drawing or omitting their attributes cannot turn
+    // either one into an unresolved drawn part. Visible HITL parts still are.
     const dir = copyDrawing(
       '<!doctype html><html><body><div class="cw-frame">' +
         "<span data-embed-assistant>the widget</span></div></body></html>",
@@ -412,19 +420,32 @@ describe("the resolution subprocess is the real one, and the transaction survive
     expect(result.exitCode).toBe(0);
     expect(Array.isArray(result.unresolved)).toBe(true);
     expect(result.unresolved).not.toContain(".cw-frame");
-    expect(result.unresolved).toContain('[data-embed-assistant][data-phase="active"]');
+    expect(result.unresolved).not.toContain('[data-embed-assistant][data-phase="active"]');
+    expect(result.unresolved).toContain('[data-conformance-id="agent-hitl-screen-card"]');
+    expect(result.unresolved).toContain('[data-conformance-id="hitl-screen-fields"]');
     const contract = JSON.parse(files.get(join(REPO_ROOT, "scripts/audit/chat-hitl-anchor-contract.json")));
     expect(contract.specCommit).toBe(`design@${NEW} specs/app-lifecycle-cards.html`);
     expect(contract.anchorsUnresolvedAtPin).toEqual(result.unresolved);
     expect(contract.digest).toBe(DIGEST_NEW);
   });
 
-  it("records the class selector as unresolved when the drawing draws no such frame", () => {
+  it("keeps absent passive markers out of drawing records without hiding absent HITL parts", () => {
     const dir = copyDrawing("<!doctype html><html><body><main>a drawing</main></body></html>");
     const { result } = adoptAgainst(dir);
     expect(result.exitCode).toBe(0);
-    expect(result.unresolved).toContain(".cw-frame");
-    expect(result.unresolved).toContain('[data-embed-assistant][data-phase="active"]');
+    expect(result.unresolved).not.toContain(".cw-frame");
+    expect(result.unresolved).not.toContain('[data-embed-assistant][data-phase="active"]');
+    expect(result.unresolved).toContain('[data-conformance-id="agent-hitl-screen-card"]');
+    expect(result.unresolved).toContain('[data-conformance-id="hitl-screen-fields"]');
+  });
+
+  it("refuses and rolls back when just the governed sibling drawing is missing", () => {
+    const dir = copyDrawing("<main>lifecycle drawing</main>", { includeSibling: false });
+    const { result, err, files } = adoptAgainst(dir);
+    expect(result.exitCode).toBe(1);
+    expect(err).toContain("rolled back");
+    expect(files.get(join(REPO_ROOT, "scripts/audit/chat-hitl-acceptance-manifest.json"))).toBe(manifestText());
+    expect(files.get(join(REPO_ROOT, "scripts/audit/chat-hitl-anchor-contract.json"))).toBe(contractText());
   });
 
   it("still rolls the tree back when the subprocess itself cannot run", () => {

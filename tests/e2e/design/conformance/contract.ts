@@ -22,6 +22,7 @@ import { expect, request as playwrightRequest, test, type Locator, type Page } f
 import { RUN_ELIGIBILITY_AGENT, RUN_ELIGIBILITY_CONNECTOR, RUN_ELIGIBILITY_MISSING } from "../../../../src/app/design-fixtures/conformance/agent-run-eligibility-fixture-data";
 import { HYDRATION_TIMEOUT_MS } from "../../config/hydration";
 import { TOAST_DRIVER } from "./toast-driver";
+import { recurrenceSelectorsDriver } from "./scheduling-recurrence-driver";
 import { AGENT_ASSIGNMENT_SKILLS_DRIVER } from "./scope-assignment-skills-driver";
 import {
   BUTTON_SURFACE_DRIVER,
@@ -98,13 +99,17 @@ import {
 // The PRODUCT's own readings, read here so the driver's expectation is derived
 // the way the shipped composer derives it and never restated by the test.
 import { artifactKindLabelFor } from "../../../../src/lib/artifacts/artifact-kind-label";
-import { reviewRevisionMarker } from "../../../../src/lib/artifacts/review-surface-model";
+import {
+  projectReviewTargetHeaderRevision,
+  reviewTargetRevisionMarker,
+} from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { reviewTargetRowFacts } from "../../../../src/lib/artifacts/review-target-row-facts";
 import {
   ARTIFACT_KIND_DISPLAY_ROWS,
   type ArtifactKindDisplay,
   type ArtifactKindDisplaySurfaceId,
 } from "./artifact-review-displays";
+import { kindDisplayFieldDrivers } from "./artifact-review-display-readings";
 import {
   LIFECYCLE_CHAT_COMPOSER_MOUNT,
   type LifecycleComposerRowMount,
@@ -645,30 +650,27 @@ export function suggestionChipDriver(fixture: LifecycleSuggestionChipFixture): S
 //   • It asserts §IV per kind against the SHIPPED CHAIN: the title, the type tag
 //     (attribute AND visible text, both derived by the product's own
 //     `artifactKindLabelFor` from the row's type id), the type id on the meta line,
-//     the pinned revision (addressed by the exact id, read as the elided marker
-//     the shipped `reviewRevisionMarker` rule produces) with its pinned marker,
+//     the pinned revision (addressed by the revision the header carries, read
+//     as the elided marker the shipped `reviewTargetRevisionMarker` produces)
+//     with its pinned marker,
 //     each authorized row fact as the product's own `reviewTargetRowFacts`
 //     composes it from the stored row, and the inertness — no control, no link,
 //     no revision picker anywhere inside it.
 //
 //     THE FIXTURE SEEDS THE ARTIFACT, NOT THE READING. A row carries only what a
-//     stored artifact row carries; both readings the header draws over it are
-//     composed by the two product functions the server-side composer calls. That
-//     is what keeps this a driver and not an echo test: a fixture that named a
-//     finished fact could assert a line the shipped composer cannot produce, and
-//     the assertion would pass on the component printing its own props back.
+//     stored artifact row carries; every reading the header draws over it is
+//     composed by the product's own functions: `artifactKindLabelFor`,
+//     `reviewTargetRowFacts`, and the section's header projection and revision
+//     marker. That is what keeps this a driver and not an echo test: a fixture
+//     that named a finished fact could assert a line the shipped composer cannot
+//     produce, and the assertion would pass on the component printing its own
+//     props back.
 //
 //   • It does NOT assert the plural ORDERING of several pinned targets. Every
 //     surface of this wave pins one target: the mixed-kind gate draws the same
 //     artifact at the same revision under two content forms, and target
 //     normalization (src/lib/artifacts/artifact-review-target.ts) treats that as
 //     one target, so seeding two would seed a gate the product does not compose.
-//     Reported with it: `ReviewTargetHeaders` keys its list on
-//     `${revisionId}:${objectType}` alone (packages/agents/src/review-gate-card.tsx),
-//     which omits the artifact id that is part of a target's identity, so two
-//     distinct artifacts sharing a type and a revision string would collide.
-//     That is a product change, not a drivers-wave change; it is on the wave's
-//     readiness list with the ordering reading that would exercise it.
 //
 //   • TWO DRAWN READINGS IT REPORTS RATHER THAN ASSERTS, because the shipped
 //     composer has no reading for them: the scope pair's CASING (the drawing
@@ -757,18 +759,21 @@ export function reviewTargetHeaderDriver(
         await expect(tag).toHaveText(artifactKindLabelFor(seed.objectType));
         await expect(header).toContainText(seed.objectType);
         // "… the pinned representation revision (shown as a mono revision id
-        // with a pinned marker) …". Addressed by the EXACT revision the gate
-        // pinned, so a card drawing a different revision cannot resolve at all,
-        // while the VISIBLE reading is the elided one the product draws — the
-        // shipped truncation rule (`reviewRevisionMarker`), not the full id,
-        // which for an id past the bound is not what the header prints at all.
+        // with a pinned marker) …". Both readings are derived through the
+        // projection section the product draws with: the revision the header
+        // carries is the section's header projection of the pinned id, so a
+        // card drawing a different revision cannot resolve at all, and the
+        // VISIBLE reading is the section's own marker over it
+        // (`reviewTargetRevisionMarker`), not the full id, which for an id past
+        // the marker's bound is not what the header prints at all.
+        const marker = reviewTargetRevisionMarker(
+          projectReviewTargetHeaderRevision(seed.revisionId).revisionId,
+        );
         const revision = header.locator(
-          `[data-review-target-revision="${seed.revisionId}"]`,
+          `[data-review-target-revision="${marker.full}"]`,
         );
         await expect(revision).toHaveCount(1);
-        await expect(revision).toHaveText(
-          `revision ${reviewRevisionMarker(seed.revisionId).short}`,
-        );
+        await expect(revision).toHaveText(`revision ${marker.short}`);
         await expect(header).toContainText("· pinned");
         // "… and the read-only row facts the host authorized". The expected
         // line is composed from the row by the PRODUCT's own
@@ -2434,6 +2439,29 @@ const SCHEDULING_STEP_CONFIGURED_DRIVER: SurfaceDriver = {
 };
 
 // ---------------------------------------------------------------------------
+// The scheduling step's recurrence selectors: four surfaces of the components
+// drawing that declare fields only, driven by recurrenceSelectorsDriver
+// (scheduling-recurrence-driver.ts) from the readings of
+// src/app/design-fixtures/conformance/scheduling-recurrence-fixture-data.ts.
+//
+// The component they bind, the shared `RecurrenceFrequencySelectors` that the
+// in-flow scheduling step and the schedule card both draw, is NOT on the
+// default branch: it arrives with cinatra#4280. Until it does, nothing on the
+// conformance harness carries these surface ids. So, exactly as with the
+// Workspace surfaces of the application drawing (below, `awaitingMount`), each
+// driver is written in full but guarded by `awaitingMount`: it SKIPS with the
+// reason below while the harness mounts nothing, and runs unchanged the moment
+// the mount exists. scripts/design/__tests__/awaiting-mount-guard.test.mjs
+// holds the arrangement honest.
+// ---------------------------------------------------------------------------
+/** Why the four recurrence drivers skip, named on every skipped test. */
+const AWAITING_RECURRENCE_SELECTORS =
+  "the shared recurrence selectors are not on the default branch yet — they " +
+  "arrive with cinatra#4280 — so the conformance harness mounts none of the " +
+  "four recurrence readings. Every assertion in this driver is written and runs " +
+  "unchanged the moment the mount exists.";
+
+// ---------------------------------------------------------------------------
 // App-shell drivers adopted with the cinatra#3057 pin reconciliation:
 // `sidebar-assistants-entry` (conformance/app.json) and
 // `breadcrumb-entity-resolution` (conformance/app-components.json). Both name
@@ -3000,10 +3028,14 @@ function kindDisplayKindState(surface: string, kind: string): StateAssert {
  *     all."
  *   - §XI: "Where a display divides one artifact into readings, they are the
  *     design system's tabs … never a toggle and never a segmented control."
- *   - the one field the manifest binds, addressed through the binding the
+ *   - every field the manifest binds, addressed through the binding the
  *     display names on itself — the `data-field="<name>=<source>"` convention the
  *     shipped review target already carries — so a display bound to the wrong
- *     source cannot resolve the locator at all.
+ *     source cannot resolve the locator at all. A field the drawing binds only
+ *     once the review is continued is read on the continued mount, and its
+ *     absence on the open one (`continuedOnlyField`). A field the drawing binds
+ *     in several readings gets one driver, from all of its declarations
+ *     (`kindDisplayFieldDrivers` in artifact-review-display-readings.ts).
  *   - the one action the manifest declares, pressed on the control that declares
  *     exactly that action AND that outcome (`declaredAction`), so a driver
  *     cannot press one control and report another one's outcome.
@@ -3034,19 +3066,20 @@ function artifactKindDisplayDriver(row: ArtifactKindDisplay): SurfaceDriver {
     states: {},
   };
 
-  const field = row.field;
-  if (field !== null) {
-    driver.fields[field.name] = {
-      source: field.source,
-      assert: async (_page, root) => {
-        const bound = kindDisplayPanel(root, row.surface).locator(
-          `[data-field="${field.name}=${field.source}"]`,
-        );
-        await expect(bound).toHaveCount(1);
-        await expect(bound).toBeVisible();
-      },
-    };
-  }
+  // artifact-review-display-readings.ts groups the row's declarations by name
+  // and picks the assertion for each name's reading; this map only says what
+  // each of the three assertions does.
+  driver.fields = kindDisplayFieldDrivers(row.surface, row.fields, {
+    present: (binding) => async (_page: Page, root: Locator) => {
+      const bound = kindDisplayPanel(root, row.surface).locator(binding);
+      await expect(bound).toHaveCount(1);
+      await expect(bound).toBeVisible();
+    },
+    continuedOnly: (binding) => continuedOnlyField(row.surface, binding),
+    skip: (reason) => async () => {
+      test.skip(true, reason);
+    },
+  });
 
   const action = row.action;
   if (action !== null) {
@@ -3060,6 +3093,31 @@ function artifactKindDisplayDriver(row: ArtifactKindDisplay): SurfaceDriver {
   }
 
   return driver;
+}
+
+/**
+ * A field the drawing binds only in the continued reading. §XI.5 and §XI.6 draw
+ * "Open live dashboard" (open-live = artifact.sourceUrl) only once the review
+ * is continued: "while a decision is still open the proposal is not the live
+ * dashboard, so the display offers no way to open one". So the binding is
+ * asserted ABSENT on the open reading, which must itself be drawn (on a missing
+ * mount a zero count proves nothing), and PRESENT once on the settled mount.
+ */
+function continuedOnlyField(
+  surface: string,
+  binding: string,
+): (page: Page, root: Locator) => Promise<void> {
+  return async (page, root) => {
+    await expect(page.locator(kindDisplayMount(surface, "populated"))).toHaveCount(1);
+    await expect(kindDisplayPanel(root, surface)).toBeVisible();
+    await expect(kindDisplayPanel(root, surface).locator(binding)).toHaveCount(0);
+    const settled = page.locator(kindDisplayMount(surface, "continued"));
+    await expect(settled).toHaveCount(1);
+    await expect(settled.locator('[data-conformance-id="settled-marker"]')).toBeVisible();
+    const bound = kindDisplayPanel(settled, surface).locator(binding);
+    await expect(bound).toHaveCount(1);
+    await expect(bound).toBeVisible();
+  };
 }
 
 /** Assert the display draws no tab strip at all — a surface the drawing gives
@@ -3527,10 +3585,11 @@ const RUN_STEP_KIND_ASSERT: Record<RunStepKind, (row: RunStepRailRow) => RunStep
     }
   },
 
-  // Section I.1 — "one row per stored idea no draft has used ... the idea's
-  // first line as its title over the idea's own text", with "Generate new ideas"
-  // and the primary Continue over a hairline floor, and "Nothing is selected for
-  // them".
+  // Section I.1 — "one row per entry the agent's declared list offers ... each
+  // row carrying the title the declaration binds over the entry's own detail
+  // line", and "Nothing is selected for them". Under the rows sits the primary
+  // Continue "and nothing else, because the host draws one control on a gate
+  // page" — so the host draws no Generate new ideas of its own.
   idea: (row) => async (_page, root) => {
     const panel = runStepPanel(root, row.surface);
     const rows = panel.locator('[data-conformance-id="run-idea-row"]');
@@ -3538,7 +3597,7 @@ const RUN_STEP_KIND_ASSERT: Record<RunStepKind, (row: RunStepRailRow) => RunStep
     await expect(panel.locator('[data-conformance-id="run-idea-row"][aria-selected="true"]')).toHaveCount(0);
     await expect(
       panel.locator('[data-action="generate-ideas -> ideas-stored"]'),
-    ).toBeVisible();
+    ).toHaveCount(0);
   },
 
   // Section I.2 — "Every row carries the artifact's title, the type that owns
@@ -8000,6 +8059,10 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "approvals-marketplace-states": APPROVALS_MARKETPLACE_STATES_DRIVER,
   "scheduling-step": SCHEDULING_STEP_DRIVER,
   "scheduling-step-configured": SCHEDULING_STEP_CONFIGURED_DRIVER,
+  "scheduling-step-quarterly": awaitingMount("scheduling-step-quarterly", recurrenceSelectorsDriver("scheduling-step-quarterly"), AWAITING_RECURRENCE_SELECTORS),
+  "scheduling-step-yearly": awaitingMount("scheduling-step-yearly", recurrenceSelectorsDriver("scheduling-step-yearly"), AWAITING_RECURRENCE_SELECTORS),
+  "scheduling-step-configured-monthly": awaitingMount("scheduling-step-configured-monthly", recurrenceSelectorsDriver("scheduling-step-configured-monthly"), AWAITING_RECURRENCE_SELECTORS),
+  "scheduling-step-configured-quarterly": awaitingMount("scheduling-step-configured-quarterly", recurrenceSelectorsDriver("scheduling-step-configured-quarterly"), AWAITING_RECURRENCE_SELECTORS),
   "sidebar-assistants-entry": SIDEBAR_ASSISTANTS_ENTRY_DRIVER,
   "breadcrumb-entity-resolution": BREADCRUMB_ENTITY_RESOLUTION_DRIVER,
   "button": BUTTON_SURFACE_DRIVER, // The components drawing's shared primitives, one mount each (cinatra#3189).

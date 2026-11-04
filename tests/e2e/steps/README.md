@@ -143,8 +143,11 @@ frame when the state is `loaded`, or when the bound runs out. The card's own
 it. Either way it writes exactly one line (settled or ran out, the elapsed time and
 the state) and answers `{ state, settled, elapsedMs, path }`.
 
-The island is the first on the page whose frame shows `frameSrcPath`
-(`/lifecycle/review-island` by default). Other readings: `absent`, `unmarked`,
+Every island on the page whose frame shows `frameSrcPath`
+(`/lifecycle/review-island` by default), or that frames nothing yet, is read: a
+pending gate that pins several targets draws one island per target, so the wait
+settles only when all of them have loaded, and the state it answers is the first
+one's, in page order, that has not. Other readings: `absent`, `unmarked`,
 `unreadable`. A frame the browser loads lazily does not start loading off screen,
 so bring the card into view before waiting.
 

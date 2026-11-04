@@ -65,6 +65,7 @@ import {
   type ArtifactRepresentationForm,
 } from "@/lib/artifacts/artifact-content-channel";
 import { createPinnedSubstanceReader } from "@/lib/artifacts/artifact-content-substance-reader";
+import { reviewTargetVersionPath } from "@cinatra-ai/agent-ui-protocol/renderable-views/lifecycle-cards";
 // The ROADS themselves stay type-only: they are CONSTRUCTED on the surfaces
 // that choose them (`./review-surface-roads`), none of which is a locked
 // route, and named here by type alone, which the compiler erases.
@@ -329,6 +330,21 @@ export function bindArtifactReviewPorts(ctx: {
       return absentArtifactContent(input.representationRevisionId, "absent");
     }
   };
+  /**
+   * One version-pinned session address (cinatra#4129), composed by the review
+   * target's projection module: each id is ONE path segment that the version
+   * route reads back as the very id that was pinned. An id the module refuses
+   * (empty, `.` or `..`, which URL resolution would remove, or ill-formed
+   * text) gets no address (`null`), never a rewritten one.
+   */
+  const versionPinnedHref = (
+    artifactId: string,
+    revisionId: string,
+    leaf: "preview" | "content",
+  ): string | null => {
+    const path = reviewTargetVersionPath(artifactId, revisionId, leaf);
+    return path.ok ? path.value : null;
+  };
   const buildProps = async (input: {
     artifact: ArtifactSummary;
     representationRevisionId: string;
@@ -348,10 +364,10 @@ export function bindArtifactReviewPorts(ctx: {
     const { artifact, representationRevisionId, mime } = input;
     const fileBacked = isFileFormMember(input.member);
     const previewHref = fileBacked
-      ? `/api/artifacts/${artifact.artifactId}/versions/${representationRevisionId}/preview`
+      ? versionPinnedHref(artifact.artifactId, representationRevisionId, "preview")
       : null;
     const downloadHref = fileBacked
-      ? `/api/artifacts/${artifact.artifactId}/versions/${representationRevisionId}/content`
+      ? versionPinnedHref(artifact.artifactId, representationRevisionId, "content")
       : null;
     // THE BYTE REFERENCE (wave 3, cinatra#3091). A non-file revision has no
     // bytes at all and therefore no road: enabler 0.10's rule that "non-file

@@ -184,8 +184,11 @@ type ToolbarButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
 // Per spec: hover and selected are background tints only (7px radius). Font
 // weight and color stay constant across states. Height comes from the level
 // context (34px in the primary bar, 30px inside a child toolbar).
+// Face: the example writes `font:500 12.5px var(--font-sans)`, and the
+// drawing's `--font-sans` is Archivo (specs/app-components.html:486, :41); the
+// app's Archivo token is `--font-display` (cinatra#4289).
 const TOOLBAR_BUTTON_CLASSES =
-  "inline-flex items-center gap-1.5 whitespace-nowrap rounded-[7px] px-3 text-[12.5px] leading-[normal] font-medium text-muted-foreground transition-colors hover:bg-foreground/[0.06] data-[active=true]:bg-primary/[0.14] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50";
+  "inline-flex items-center gap-1.5 whitespace-nowrap rounded-[7px] px-3 font-display text-[12.5px] leading-[normal] font-medium text-muted-foreground transition-colors hover:bg-foreground/[0.06] data-[active=true]:bg-primary/[0.14] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50";
 
 function ToolbarButton({
   className,
@@ -248,7 +251,11 @@ function ToolbarSearchInput({
         // text in a centred flex row — the identical geometry. Preflight gives
         // the nested <input> `font: inherit`, so declaring it here reaches the
         // value and the placeholder as well.
-        "flex w-full min-w-0 items-center gap-2 rounded-[7px] bg-surface-strong px-3 leading-[normal]",
+        // The input itself is `outline-none`, so the keyboard focus ring sits on
+        // the pill: the drawing's --ring, at the strength the toolbar buttons use
+        // (TOOLBAR_BUTTON_CLASSES; specs/app-components.html says an input's focus
+        // ring picks up --ring).
+        "flex w-full min-w-0 items-center gap-2 rounded-[7px] bg-surface-strong px-3 leading-[normal] focus-within:ring-2 focus-within:ring-ring/40",
         TOOLBAR_CONTROL_HEIGHT[level]
       )}
     >

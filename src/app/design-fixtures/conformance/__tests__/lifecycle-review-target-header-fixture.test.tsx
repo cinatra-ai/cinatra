@@ -14,10 +14,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 
+import {
+  LIFECYCLE_TARGET_HEADER_MAX_TEXT,
+  reviewTargetRevisionMarker,
+} from "@cinatra-ai/agent-ui-protocol/renderable-views";
+import { ReviewTargetHeaders } from "@cinatra-ai/agents/review-gate-card";
+
 import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
 import { reviewTargetRowFacts } from "@/lib/artifacts/review-target-row-facts";
 
-import { LifecycleReviewTargetHeaderFixtures } from "../lifecycle-review-target-header-fixtures";
+import {
+  LifecycleReviewTargetHeaderFixtures,
+  reviewTargetFixtureHeader,
+} from "../lifecycle-review-target-header-fixtures";
 import {
   LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES,
   LIFECYCLE_REVIEW_TARGET_HEADER_NOW,
@@ -104,6 +113,36 @@ describe("the conformance harness mount for the artifact-kind cards", () => {
         const text = headers[index]!.textContent ?? "";
         expect(text).toContain(facts.join(" · "));
       });
+    }
+  });
+
+  it("shows the revision through the section's header projection: at the bound, past it, and across an astral character", () => {
+    const now = new Date(LIFECYCLE_REVIEW_TARGET_HEADER_NOW);
+    const seed = LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES[0]!.headers[0]!;
+    const shownFor = (revisionId: string) => reviewTargetFixtureHeader({ ...seed, revisionId }, now).revisionId;
+    // The boundary: an id of exactly the header's bound is shown whole, and
+    // one unit past it is cut at the bound.
+    const atBound = "r".repeat(LIFECYCLE_TARGET_HEADER_MAX_TEXT);
+    expect(shownFor(atBound)).toBe(atBound);
+    expect(shownFor(`${atBound}r`)).toBe(atBound);
+    // An astral character across the bound is dropped whole, never split.
+    const astral = `${"r".repeat(LIFECYCLE_TARGET_HEADER_MAX_TEXT - 1)}\uD83D\uDE00`;
+    const shown = "r".repeat(LIFECYCLE_TARGET_HEADER_MAX_TEXT - 1);
+    expect(shownFor(astral)).toBe(shown);
+    // And the shipped header draws the projected text, not the stored id, in
+    // all three readings: its attribute and its visible marker.
+    for (const [stored, expected] of [
+      [atBound, atBound],
+      [`${atBound}r`, atBound],
+      [astral, shown],
+    ] as const) {
+      const { container, unmount } = render(
+        <ReviewTargetHeaders headers={[reviewTargetFixtureHeader({ ...seed, revisionId: stored }, now)]} />,
+      );
+      const revision = container.querySelector("[data-review-target-revision]");
+      expect(revision?.getAttribute("data-review-target-revision")).toBe(expected);
+      expect(revision?.textContent).toBe(`revision ${reviewTargetRevisionMarker(expected).short}`);
+      unmount();
     }
   });
 

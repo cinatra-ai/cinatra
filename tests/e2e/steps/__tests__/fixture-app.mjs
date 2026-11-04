@@ -52,7 +52,16 @@ const island = (state, framePath = ISLAND_FRAME_PATH) =>
   `<div data-conformance-id="review-target-island" data-island-load-state="${state}">` +
   `<iframe src="${framePath}?target=fixture" title="Review target"></iframe></div>`;
 const ISLAND = '[data-conformance-id="review-target-island"]';
-const toState = (at, value) => ({ at, target: ISLAND, attr: "data-island-load-state", value });
+const toState = (at, value, target = ISLAND) => ({ at, target, attr: "data-island-load-state", value });
+// A gate that pins several targets draws one island per target (cinatra#4129): each
+// pair's island is marked by its place, so a timeline can move a later one.
+const pairIsland = (pair, state) =>
+  `<div data-conformance-id="review-target-island" data-island-load-state="${state}" data-fixture-pair="${pair}">` +
+  `<iframe src="${ISLAND_FRAME_PATH}?target=fixture-${pair}" title="Review target ${pair}"></iframe></div>`;
+// A pair whose own address was refused frames nothing and draws its failed state.
+const refusedPairIsland = (pair) =>
+  `<div data-conformance-id="review-target-island" data-island-load-state="timed-out" data-fixture-pair="${pair}"></div>`;
+const PAIR_2 = '[data-fixture-pair="2"]';
 
 /** The island pages: the markup and the timeline that changes it. */
 export const ISLAND_SCENARIOS = Object.freeze({
@@ -64,6 +73,12 @@ export const ISLAND_SCENARIOS = Object.freeze({
   absent: { body: "<p>No review card on this page.</p>", timeline: [] },
   // An island whose frame shows another document: not the island the wait names.
   elsewhere: { body: island("loaded", "/some/other/frame"), timeline: [] },
+  // Two pairs: the first has loaded, the second loads after it.
+  pairs: { body: pairIsland(1, "loaded") + pairIsland(2, "loading"), timeline: [toState(400, "loaded", PAIR_2)] },
+  // Two pairs: the first has loaded, the second never does.
+  "pairs-stall": { body: pairIsland(1, "loaded") + pairIsland(2, "loading"), timeline: [] },
+  // Two pairs: the first has loaded, the second's own address was refused.
+  "pairs-refused": { body: pairIsland(1, "loaded") + refusedPairIsland(2), timeline: [] },
 });
 
 // The run detail is swapped whole, so a reading never falls between two halves of one change.

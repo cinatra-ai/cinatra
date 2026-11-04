@@ -686,3 +686,120 @@ describe("cinatra#974 — WordPress standard-contract negotiation (webhook_contr
     }
   });
 });
+
+describe("exchange of a loopback http grant (development runtime mode)", () => {
+  // The exchange re-checks no scheme: it compares the redirect_uri the grant
+  // stored, as an exact string. A grant the consent took for a loopback http
+  // callback on a production build in development mode (the runtime-mode cases
+  // in connect-provisioning-validation.test.ts) therefore exchanges there, and a
+  // different redirect_uri still fails.
+  const LOOPBACK_CALLBACK =
+    "http://localhost:8080/wp-admin/admin-post.php?action=cinatra_connect_callback";
+  const verifier = "verifier-" + "y".repeat(40);
+
+  beforeEach(() => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("CINATRA_RUNTIME_MODE", "development");
+    vi.stubEnv("APP_RUNTIME_MODE", "");
+    store.upsertConnectSiteCredential.mockReturnValue({
+      siteId: "site-uuid-loopback",
+      client: "wordpress",
+      widgetOrigin: "http://localhost:8080",
+      callbackOrigin: "http://localhost:8080",
+      credentialHash: "hash",
+      credentialVersion: 1,
+      webhookSecretHash: null,
+      adminUserId: "u1",
+      orgId: "o1",
+      createdAt: "t0",
+      lastExchangedAt: "t0",
+      lastUsedAt: null,
+      revokedAt: null,
+      revokedBy: null,
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  /** Issue a grant for the loopback callback; the store hands back exactly the
+   * row the issuance wrote, once, for that code's hash. */
+  function issueLoopbackGrant(): string {
+    const { code, codeHash } = issueAuthorizationCode({
+      params: {
+        client: "wordpress",
+        redirectUri: LOOPBACK_CALLBACK,
+        widgetOrigin: "http://localhost:8080",
+        callbackOrigin: "http://localhost:8080",
+        state: "state",
+        scope: CONNECT_SCOPE,
+        codeChallenge: sha256Base64Url(verifier),
+        requestId: "request-id",
+      },
+      adminUserId: "u1",
+      orgId: "o1",
+    });
+    const written = store.insertAuthorizationCode.mock.calls.at(-1)?.[0];
+    expect(written.redirectUri).toBe(LOOPBACK_CALLBACK);
+    let consumed = false;
+    store.consumeAuthorizationCode.mockImplementation(
+      (input: { codeHash: string; grantType: string }) => {
+        if (consumed || input.codeHash !== codeHash || input.grantType !== "auth_code") return null;
+        consumed = true;
+        return {
+          codeHash: written.codeHash,
+          grantType: written.grantType,
+          client: written.client,
+          redirectUri: written.redirectUri,
+          widgetOrigin: written.widgetOrigin,
+          callbackOrigin: written.callbackOrigin,
+          codeChallenge: written.codeChallenge,
+          adminUserId: written.adminUserId,
+          orgId: written.orgId,
+          scope: written.scope,
+          createdAt: "t0",
+          expiresAt: written.expiresAtIso,
+          consumedAt: "t2",
+        };
+      },
+    );
+    return code;
+  }
+
+  it("exchanges a code issued for a loopback http redirect_uri when the request names it exactly", async () => {
+    const code = issueLoopbackGrant();
+    const r = await exchangeAuthorizationCode({
+      code,
+      client: "wordpress",
+      redirectUri: LOOPBACK_CALLBACK,
+      codeVerifier: verifier,
+      webhookSecret: "hex32",
+      tokenBrokerAvailable: false,
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.response.siteId).toBe("site-uuid-loopback");
+    const upsertArg = store.upsertConnectSiteCredential.mock.calls[0][0];
+    expect(upsertArg.widgetOrigin).toBe("http://localhost:8080");
+    expect(upsertArg.callbackOrigin).toBe("http://localhost:8080");
+  });
+
+  it("fails generically when the request names another redirect_uri, loopback or https", async () => {
+    for (const other of [
+      "http://127.0.0.1:8080/wp-admin/admin-post.php?action=cinatra_connect_callback",
+      "https://localhost:8080/wp-admin/admin-post.php?action=cinatra_connect_callback",
+      "http://localhost:8081/wp-admin/admin-post.php?action=cinatra_connect_callback",
+    ]) {
+      const code = issueLoopbackGrant();
+      const r = await exchangeAuthorizationCode({
+        code,
+        client: "wordpress",
+        redirectUri: other,
+        codeVerifier: verifier,
+        webhookSecret: "hex32",
+        tokenBrokerAvailable: false,
+      });
+      expect(r.ok).toBe(false);
+    }
+    expect(store.upsertConnectSiteCredential).not.toHaveBeenCalled();
+  });
+});

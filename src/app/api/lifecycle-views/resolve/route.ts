@@ -5,14 +5,19 @@ import { z } from "zod";
 import {
   LIFECYCLE_DATA_PART_VIEW_TYPES,
   LIFECYCLE_VIEW_REF_MAX_LENGTH,
+  mintReviewTargetIslandAddresses,
+  reviewGateTargetPairKeys,
+  reviewTargetIslandAddressesWire,
   type LifecycleCardState,
   type LifecycleDataPartViewType,
+  type ReviewTargetIslandAddresses,
+  type ReviewTargetKey,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import { resolveLifecycleCardState } from "@/lib/lifecycle/lifecycle-card-refetch";
 import { attachLifecycleSuggestions } from "@/lib/lifecycle/lifecycle-suggestion-chips";
 import { attachLifecycleSettledOutcome } from "@/lib/lifecycle/lifecycle-settled-outcome";
-import { readReviewTargetHeaders } from "@/lib/lifecycle/lifecycle-target-headers";
+import { readReviewTargetHeadersReading } from "@/lib/lifecycle/lifecycle-target-headers";
 import { resolveTriggerScheduleProposalCard } from "@/lib/lifecycle/trigger-schedule-proposal-card";
 import {
   mintWidgetReviewIslandUrl,
@@ -186,6 +191,52 @@ function mintIslandSrcForWidget(
   });
 }
 
+/**
+ * Mint ONE island address PER PINNED TARGET for a WIDGET reader whose card
+ * draws the gate as pairs (cinatra#4129): a pending or restricted gate whose
+ * answer carries more than one target header.
+ *
+ * WHY ONE PER TARGET. The card draws each pinned target's header directly above
+ * its own island frame, on every host alike, and each frame names the one
+ * pinned revision it draws. A credentialed address is worth exactly ONE paint,
+ * so a single address cannot serve two frames: the second would present a spent
+ * grant and draw nothing. Each target therefore gets its own call of the same,
+ * unchanged minter — its own credential and its own grant — and its address
+ * names that target's revision. The credential still authorizes the gate and
+ * nothing more; the target is the frame's selector, and the island draws only a
+ * revision the gate pins.
+ *
+ * A FAILED MINT IS `null` for that target only. The card draws that target's
+ * preview-failed state under its own header and frames nothing there; it never
+ * hands one target's address to another.
+ *
+ * AN ADDRESS THAT CANNOT BE EXPRESSED IS `null` FOR THAT TARGET ONLY. The
+ * review target's projection section builds the set
+ * (`mintReviewTargetIslandAddresses`) and proves each address before it is
+ * handed out: its `target` must read back as the very revision it was minted
+ * for, and the whole address must fit the bound the card reads it under. An
+ * address that fails its proof never leaves the section, so no frame can take
+ * it; that target draws its failed state, and every other target keeps its own
+ * address. No gate-wide address is minted beside the set.
+ */
+function mintIslandSrcByRevisionForWidget(
+  branch: WidgetBranch,
+  ref: string,
+  targets: readonly ReviewTargetKey[],
+): ReviewTargetIslandAddresses | null {
+  const gate = decodeLifecycleGateRef(ref);
+  return mintReviewTargetIslandAddresses(targets, () =>
+    gate
+      ? mintWidgetReviewIslandUrl({
+          claims: branch.claims,
+          ref,
+          runId: gate.runId,
+          reviewTaskId: gate.reviewTaskId,
+        })
+      : null,
+  );
+}
+
 export async function POST(request: Request): Promise<Response> {
   // A presented widget user token SELECTS the widget branch and there is no
   // session fallback behind it: this endpoint is same-origin to the embed
@@ -322,12 +373,19 @@ export async function POST(request: Request): Promise<Response> {
   // top of that. The header rides the resolve answer rather than the wire
   // payload, so the DATA_PART in the persisted, LLM-visible transcript still
   // carries a ref and nothing else.
-  const targetHeaders = await readReviewTargetHeaders({
+  //
+  // THE HEADERS TRAVEL WITH WHETHER THEY ARE COMPLETE. A target this reader
+  // cannot read names nothing, the list stops at its bound and a header can
+  // show a revision that is not its pin's id exactly, so the headers alone never
+  // say whether they name every target this reader may read; the answer says it.
+  const targetReading = await readReviewTargetHeadersReading({
     viewType: parsed.data.viewType,
     ref: parsed.data.ref,
     state: withOutcome,
     actorCtx,
   });
+  const targetHeaders = targetReading.headers;
+  const targetHeadersComplete = targetHeaders !== null && targetReading.complete;
 
   // §VI producer prefill belongs beside the envelope, not inside the versioned
   // card body. The same run/artifact authorization applies to cookie and widget
@@ -345,9 +403,41 @@ export async function POST(request: Request): Promise<Response> {
   // only on the widget arm. A first-party answer omits the key entirely, so the
   // three cookie hosts receive the byte-identical response they received
   // before this slice and keep composing their own island URL.
-  const islandSrc = widgetBranch
-    ? mintIslandSrcForWidget(widgetBranch, parsed.data.viewType, parsed.data.ref, withOutcome)
-    : null;
+  //
+  // ONE ADDRESS PER PINNED TARGET WHERE THE CARD PAIRS (cinatra#4129). A
+  // pending or restricted gate whose headers are complete (every target this
+  // reader may read, each by its exact id), and name several targets, is drawn
+  // as pairs on every host — each target's header directly above its own frame
+  // — and one grant paints one document, so each pinned target gets its own
+  // address, minted by the same minter. A failed mint, and a per-target address
+  // that cannot carry its target exactly or does not fit the bound the card
+  // reads it under, is `null` for that target and the card refuses that pair
+  // alone. No gate-wide address is minted beside them: a bearer that no frame
+  // takes is a bearer for free. Every other answer — more targets than the
+  // headers' bound, a header that does not carry its pin's id exactly, two
+  // targets that share one revision id, or a revision id past the map's key
+  // bound — keeps the gate's one aggregate island and its single address, or
+  // none. The card reads the same rule (`reviewGateTargetPairKeys`) over the
+  // same two fields. The rule
+  // admits only selectors whose encoded value fits the key bound (128), and a
+  // decodable ref (base64url, at most 512) and a credential (base64url, at
+  // most 1024) are not re-encoded, so every address the rule admits is at most
+  // 24 + 5 + 512 + 4 + 1024 + 8 + 128 = 1705 characters; the proof in
+  // `withReviewIslandTarget` is the guard for an address that still does not fit.
+  const pairTargets =
+    widgetBranch !== null &&
+    parsed.data.viewType === "artifact_review_gate" &&
+    (withOutcome.state === "pending" || withOutcome.state === "restricted")
+      ? reviewGateTargetPairKeys(targetHeaders, targetHeadersComplete)
+      : null;
+  const islandSrcByRevision =
+    pairTargets !== null && widgetBranch !== null
+      ? mintIslandSrcByRevisionForWidget(widgetBranch, parsed.data.ref, pairTargets)
+      : null;
+  const islandSrc =
+    widgetBranch && islandSrcByRevision === null
+      ? mintIslandSrcForWidget(widgetBranch, parsed.data.viewType, parsed.data.ref, withOutcome)
+      : null;
 
   return Response.json(
     {
@@ -355,7 +445,10 @@ export async function POST(request: Request): Promise<Response> {
       state: withOutcome,
       body: envelope.body,
       ...(islandSrc ? { islandSrc } : {}),
-      ...(targetHeaders ? { targetHeaders } : {}),
+      ...(islandSrcByRevision
+        ? { islandSrcByRevision: reviewTargetIslandAddressesWire(islandSrcByRevision) }
+        : {}),
+      ...(targetHeaders ? { targetHeaders, targetHeadersComplete } : {}),
       ...(recordedPrompt === null ? {} : { recordedPrompt }),
     },
     { headers: { "Cache-Control": "no-store" } },

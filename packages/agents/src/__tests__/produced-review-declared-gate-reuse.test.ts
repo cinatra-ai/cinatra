@@ -157,7 +157,13 @@ vi.mock("../lifecycle-continuation-park-store", () => ({
   sweepParks: vi.fn(),
 }));
 const notify = vi.fn<(input: unknown) => Promise<undefined>>(async () => undefined);
-vi.mock("../run-wait-notifier", () => ({ dispatchAutoGateOpen: (input: unknown) => notify(input), dispatchAutoGateResolved: vi.fn() }));
+// Partial: the executor's import graph reads the notifier leaf's real exports at
+// module initialization (RECOMMENDATION_HOLD_CHECKPOINT, setRunWaitNotifier).
+vi.mock("../run-wait-notifier", async (orig) => ({
+  ...((await orig()) as Record<string, unknown>),
+  dispatchAutoGateOpen: (input: unknown) => notify(input),
+  dispatchAutoGateResolved: vi.fn(),
+}));
 const suggest = vi.fn<(input: unknown) => Promise<undefined>>(async () => undefined);
 vi.mock("../lifecycle-suggestion-producer-lane", () => ({ produceSuggestionsForGateTargets: (input: unknown) => suggest(input) }));
 const seal = vi.fn(async (input: { candidateMembers: Target[] }) => {
@@ -174,8 +180,20 @@ vi.mock("../lifecycle-repair-store", () => ({
   listOpenBatchEpochs: vi.fn(async () => []),
 }));
 vi.mock("../lifecycle-repair-dispatch-store", () => ({ repairIdFromRunId: () => null, dispatchPendingProducerRepairs: vi.fn() }));
-const transition = vi.fn();
-vi.mock("../run-transition", () => ({ transitionRunStatus: (...args: unknown[]) => transition(...args) }));
+const transition = vi.fn<(...args: unknown[]) => Promise<undefined>>(async () => undefined);
+vi.mock("../run-transition", () => ({
+  transitionRunStatus: (...args: unknown[]) => transition(...args),
+  updateAgentRunStatus: vi.fn(),
+  updateAgentRunStatusConditional: vi.fn(),
+}));
+// The executor's terminal announcement and its autosave sidecar (item 5 reads the
+// terminal write the executor itself makes once nothing holds the run).
+const publish = vi.fn<(...args: unknown[]) => Promise<undefined>>(async () => undefined);
+vi.mock("@cinatra-ai/agent-ui-protocol/server", async (orig) => ({
+  ...((await orig()) as Record<string, unknown>),
+  publishAgUiEvent: (...args: unknown[]) => publish(...args),
+}));
+vi.mock("../skill-autosave", () => ({ runSkillAutosaveOnRunCompletion: vi.fn(async () => undefined) }));
 
 import {
   drainProducedProductionForRun,
@@ -185,6 +203,7 @@ import {
   sweepReviewOrchestration,
 } from "../lifecycle-review-orchestration-store";
 import { holdRunForProducedReview } from "../run-produced-review-hold";
+import { recoverProducedReviewHold } from "../execution";
 
 function event(artifactId: string, revision = "r1", destinationClass: Event["destinationClass"] = "none"): Event {
   return {
@@ -331,6 +350,44 @@ describe("the batch path (sweepReviewOrchestration) keeps a declared pair out of
       expect(u.continuationAddress).toBe(state.gates.get(`run/${autoReviewTaskId(u.eventId)}`)!.gateId);
       expect(u.status).toBe("processed");
     }
+
+    // An epoch sealed by an earlier pass (a crash before its close) whose frozen
+    // membership holds a pair a declared gate now pins. Mixed membership: the
+    // declared member has no fired plan, so its partition opens no gate; the
+    // other member still gets its own automatic gate and the epoch closes.
+    vi.clearAllMocks();
+    state.gates.clear(); state.phase = [];
+    const d2 = event("declared-2"), u3 = event("u3");
+    state.events = [d2, u3];
+    const declared2 = declare([pair(d2)]);
+    state.epoch = { id: "epoch-earlier", membership: [pair(d2), pair(u3)] };
+    const recovered = await sweepReviewOrchestration();
+    expect(recovered.failed).toBe(0);
+    expect(seal).toHaveBeenCalledTimes(1);
+    await expect(seal.mock.results[0].value).resolves.toMatchObject({ reused: true, epoch: { id: "epoch-earlier" } });
+    expect(d2.continuationAddress).toBe(declared2.gateId);
+    expect(d2.status).toBe("processed");
+    expect(autoGates().map(g => g.targets)).toEqual([[pair(u3)]]);
+    expect(u3.continuationAddress).toBe(state.gates.get(`run/${autoReviewTaskId(u3.eventId)}`)!.gateId);
+    expect(u3.status).toBe("processed");
+    expect(state.epoch).toBeNull();
+
+    // The same earlier epoch holding only the declared pair: nothing fires, no
+    // seal and no emit; the event links to the declared gate and the epoch closes.
+    vi.clearAllMocks();
+    state.gates.clear(); state.phase = [];
+    const d3 = event("declared-3");
+    state.events = [d3];
+    const declared3 = declare([pair(d3)]);
+    state.epoch = { id: "epoch-earlier-2", membership: [pair(d3)] };
+    const drained = await sweepReviewOrchestration();
+    expect(drained.failed).toBe(0);
+    expect(seal).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalled();
+    expect(autoGates()).toHaveLength(0);
+    expect(d3.continuationAddress).toBe(declared3.gateId);
+    expect(d3.status).toBe("processed");
+    expect(state.epoch).toBeNull();
   });
 });
 
@@ -352,5 +409,20 @@ describe("a run whose declared gate is approved finishes with no automatic gate"
     expect(autoGates()).toHaveLength(0);
     expect(emit).not.toHaveBeenCalled();
     expect(transition).not.toHaveBeenCalled();
+
+    // The terminal status itself: the executor asks the same hold again and, as
+    // nothing holds the run, makes the withheld `completed` write (execution.ts,
+    // recoverProducedReviewHold). Still no `lifecycle-review:` gate after it.
+    await recoverProducedReviewHold({
+      runId: "run",
+      run: { orgId: "org", status: "running" },
+      recovery: { withheld: { status: "completed" }, stepResults: [{ type: "wayflow_response" }] },
+      authority: undefined,
+    });
+    expect(transition).toHaveBeenCalledTimes(1);
+    expect(transition.mock.calls[0].slice(0, 3)).toEqual(["run", "running", "completed"]);
+    expect(publish).toHaveBeenCalledWith("run", expect.objectContaining({ type: "RUN_FINISHED", status: "completed" }));
+    expect(autoGates()).toHaveLength(0);
+    expect(emit).not.toHaveBeenCalled();
   });
 });

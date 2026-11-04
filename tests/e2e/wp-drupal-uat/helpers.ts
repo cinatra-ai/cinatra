@@ -5,6 +5,7 @@ import { expect, type FrameLocator, type Page } from "@playwright/test";
 
 import { readDevActorPassword } from "./global-setup";
 import type { DevActor, UatSeed } from "./global-setup";
+import { allIslandsLoaded, pollIslandPaint } from "./island-paint";
 
 export const WP_BASE = process.env.UAT_WP_BASE_URL ?? "http://localhost:8080";
 export const DRUPAL_BASE = process.env.UAT_DRUPAL_BASE_URL ?? "http://localhost:8082";
@@ -424,14 +425,18 @@ export function embedFrame(page: Page): FrameLocator {
  * before any screenshot/proof capture of a card that carries a review-target
  * island (the review gate card, on any host — chat thread, run card, page
  * gate region, or here, the site widget).
+ *
+ * EVERY ISLAND, NOT THE FIRST: a pending gate that pins several targets draws
+ * one island per target (cinatra#4129), so the wait holds until ONE reading,
+ * taken inside the frame in one call, finds at least one island on the card
+ * and every island `"loaded"` (`allIslandsLoaded`, ./island-paint). An island
+ * that detaches before it loads leaves an empty card, which never passes.
  */
 export async function waitForIslandPaint(frame: FrameLocator, timeoutMs = 20_000): Promise<void> {
-  await expect(
-    frame.locator('[data-conformance-id="review-target-island"]'),
-    "the review card's §III island did not reach " +
-      'data-island-load-state="loaded" in time — a screenshot taken now would ' +
-      "recreate the V5 blank-frame defect (cinatra#2713)",
-  ).toHaveAttribute("data-island-load-state", "loaded", { timeout: timeoutMs });
+  await pollIslandPaint(
+    (selector, remainingMs) => frame.locator("html").evaluate(allIslandsLoaded, selector, { timeout: remainingMs }),
+    timeoutMs,
+  );
 }
 
 /**
