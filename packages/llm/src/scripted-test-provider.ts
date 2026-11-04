@@ -1125,6 +1125,53 @@ export function isScriptedLlmRuntime(
 const SCRIPTED_SCHEMA_MAX_DEPTH = 6;
 
 /**
+ * How many members a STRING array answers with. A list output that a run fans
+ * out, one artifact per member, and a list step that offers its rows for one
+ * pick both need more than one member to be read at all; five is the fixed,
+ * documented count (see the contract below). It is a constant, not a reading
+ * of `minItems` / `maxItems`, so the payload stays bounded and deterministic.
+ */
+export const SCRIPTED_STRING_ARRAY_MEMBERS = 5;
+
+/**
+ * The marker a string-array member's first line opens with. A run's fan-out
+ * binding reads each member's title from its first line behind a declared
+ * prefix (the blog idea generator declares `"Title:"`); a member that does not
+ * open with it is refused at materialisation.
+ */
+const SCRIPTED_MEMBER_TITLE_PREFIX = "Title:";
+
+/**
+ * Is this node an UNADORNED string declaration? Its `type` (or the first entry
+ * of a type list) is `"string"`, and it carries NO `enum`, `const`, `oneOf`,
+ * `anyOf` or `allOf` keyword at all, not even an empty or non-array one. Every
+ * other node (one with any of those keywords, an untyped node, a non-object
+ * node) is not, and its array takes the unchanged old road.
+ */
+function isScriptedStringNode(schema: unknown): boolean {
+  // A non-object node (a boolean schema, say) is no string declaration; it
+  // takes the old road unchanged (a boolean still throws there, as before).
+  if (typeof schema !== "object" || schema === null) return false;
+  const node = schema as Record<string, unknown>;
+  // The keyword's presence decides, whatever its value: an empty `enum: []`
+  // or `anyOf: []` keeps the one-element answer too.
+  if (["enum", "const", "oneOf", "anyOf", "allOf"].some((k) => k in node)) return false;
+  const type = Array.isArray(node.type) ? node.type[0] : node.type;
+  return type === "string";
+}
+
+/**
+ * Member `n` (1-based) of a string array named `propertyName`: a title line,
+ * then a newline and one body line. Both lines carry the sentinel.
+ */
+function scriptedStringArrayMember(propertyName: string, n: number): string {
+  return (
+    `${SCRIPTED_MEMBER_TITLE_PREFIX} ${UAT_SENTINEL} scripted ${propertyName} item ${n}\n` +
+    `${UAT_SENTINEL}: scripted ${propertyName} item ${n} body`
+  );
+}
+
+/**
  * A deterministic value for one JSON-schema node — CONFORMING BY TYPE, not by
  * constraint.
  *
@@ -1149,17 +1196,35 @@ const SCRIPTED_SCHEMA_MAX_DEPTH = 6;
  *    first member's shape;
  *  - `type` — `object` (the members named in `required`, or every declared
  *    property when `required` is absent; a required name with no declared
- *    property schema still appears), `array` (EXACTLY ONE element),
- *    `string`, `number` / `integer`, `boolean`, `null`. A node with no usable
- *    type yields a string;
+ *    property schema still appears), `array` (see below), `string`,
+ *    `number` / `integer`, `boolean`, `null`. A node with no usable type
+ *    yields a string;
+ *  - `array` — a STRING array (its `items` declares `type: "string"`, or a
+ *    type list whose first entry is `"string"`, and carries no `enum`,
+ *    `const`, `oneOf`, `anyOf` or `allOf` keyword at all, not even an empty
+ *    one) answers EXACTLY
+ *    `SCRIPTED_STRING_ARRAY_MEMBERS` (5) members. Member `n` (1-based) is two
+ *    lines: `Title: CINATRA_UAT_OK scripted <prop> item <n>`, a newline, then
+ *    `CINATRA_UAT_OK: scripted <prop> item <n> body`, where `<prop>` is the
+ *    array's own property name (`output` at the root). The first line is what a
+ *    run's fan-out binding reads a member's title from (`titlePrefix
+ *    "Title:"`), and five rows give a list step more than one to pick from.
+ *    It holds when the members fall past the depth cap too (they are strings
+ *    either way); an array node that is itself past the cap is a string, as
+ *    the depth rule below says.
+ *    EVERY OTHER array (numbers, objects, items carrying any `enum`, `const`
+ *    or union keyword, even an empty one, untyped, `null` or absent `items`)
+ *    answers EXACTLY ONE element, as before (a boolean `items` still throws,
+ *    as before);
  *  - depth — a node deeper than `SCRIPTED_SCHEMA_MAX_DEPTH` yields a STRING
  *    whatever its declared type, so a deeply nested or recursive schema stops
  *    matching its own declaration at that depth.
  *
  * Everything else is IGNORED, and the value is only conforming-by-type:
  * numeric bounds (`minimum` / `maximum` / `multipleOf` — numbers are always
- * `0`), size bounds (`minItems` / `maxItems` — arrays are always length 1;
- * `minLength` / `maxLength` — strings are always the sentinel string),
+ * `0`), size bounds (`minItems` / `maxItems` — a string array is always 5
+ * members and every other array length 1; `minLength` / `maxLength` — a
+ * string is always its scripted text),
  * `pattern` / `format`, `additionalProperties`, `not`, `if` / `then` / `else`,
  * `dependent*`, and `$ref` / `$defs`. A caller that validates a scripted
  * response against a schema carrying any of those may see it rejected — which
@@ -1212,9 +1277,18 @@ function scriptedValueForSchema(
       return out;
     }
     case "array":
-      // ONE element, ALWAYS: enough for a consumer that iterates, small enough
-      // that a scripted payload never grows unbounded — and `minItems` is not
-      // consulted, so a schema demanding more is not satisfied.
+      // A STRING array: a fixed five members, each opening with a `Title:`
+      // line, so a fan-out binding can title every member and a list step has
+      // rows to pick from. `minItems` / `maxItems` are still not consulted.
+      if (isScriptedStringNode(node.items)) {
+        return Array.from({ length: SCRIPTED_STRING_ARRAY_MEMBERS }, (_, i) =>
+          scriptedStringArrayMember(propertyName, i + 1),
+        );
+      }
+      // Every other array: ONE element, ALWAYS: enough for a consumer that
+      // iterates, small enough that a scripted payload never grows unbounded —
+      // and `minItems` is not consulted, so a schema demanding more is not
+      // satisfied.
       return [scriptedValueForSchema(node.items, `${propertyName} item`, depth + 1)];
     case "number":
     case "integer":

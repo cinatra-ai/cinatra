@@ -39,9 +39,13 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { Toolbar, ToolbarGroup, ToolbarSeparator } from "@/components/ui/toolbar";
+import {
+  Toolbar,
+  ToolbarGroup,
+  ToolbarSearchInput,
+  ToolbarSeparator,
+} from "@/components/ui/toolbar";
 import { ScopeFilterCombobox } from "@/components/scope-filter-combobox";
 import type { AvailableScopes } from "@/components/access-combobox";
 import type { AssistantDirectoryRow } from "@/lib/assistants-directory.server";
@@ -156,14 +160,19 @@ export function AssistantsDirectoryClient({
         </ToolbarGroup>
         <ToolbarSeparator />
         <ToolbarGroup>
-          <div className="relative">
-            <Input
+          {/* The toolbar's own search pill (app-components.html §Toolbar:
+              "embedded controls: borderless"; the search field keeps its white
+              surface), not a standalone bordered Input. `type="text"` keeps
+              the browser's own search clear glyph off, so only the ✕ shows. */}
+          <div className="relative w-[180px] lg:w-[260px]">
+            <ToolbarSearchInput
+              type="text"
               placeholder="Search assistants"
               // A placeholder is only a FALLBACK accessible name and drops out
               // of the accessibility tree in some AT configurations, so the
               // field carries its own label like the sort control does.
               aria-label="Search assistants"
-              className="h-8 w-[180px] pr-7 lg:w-[260px]"
+              className="pr-4"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
