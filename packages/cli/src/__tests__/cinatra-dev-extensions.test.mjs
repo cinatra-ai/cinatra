@@ -420,6 +420,31 @@ describe("syncCinatraDevExtensions --pinned — sha plumbing + override semantic
     expect(gitCalls).toContain(`checkout --quiet --detach ${SHA_B}`);
   });
 
+  it("--pinned --shallow refuses --select, --kind and --exclude before any prune or git call: every declared checkout is rebuilt (cinatra#4484)", async () => {
+    for (const filter of [
+      ["--select", "resend-connector"],
+      ["--select", "no-such-extension"],
+      ["--kind", "connector"],
+      ["--exclude", "no-such-extension"],
+    ]) {
+      const gitCalls = [];
+      const prunes = [];
+      await expect(
+        syncCinatraDevExtensions({
+          repoRoot: "/repo",
+          targetRoot: "/repo",
+          argv: ["--pinned", "--shallow", ...filter],
+          env: { CI: "true" },
+          log: () => {},
+          deps: { ...makeDeps(gitCalls), pruneToDeclaredCheckouts: (a) => prunes.push(a) },
+        }),
+        filter.join(" "),
+      ).rejects.toThrow(/--shallow rebuilds every declared checkout: --select, --kind and --exclude are refused/);
+      expect(gitCalls, filter.join(" ")).toEqual([]);
+      expect(prunes, filter.join(" ")).toEqual([]);
+    }
+  });
+
   it("--pinned without --shallow never prunes the tree (cinatra#4484)", async () => {
     const prunes = [];
     await syncCinatraDevExtensions({

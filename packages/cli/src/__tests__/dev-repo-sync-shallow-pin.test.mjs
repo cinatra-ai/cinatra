@@ -9,11 +9,13 @@
 //     a detached checkout of the pin; when origin refuses a fetch by sha, the
 //     sync falls back to the full branch clone (an unreachable pin still fails
 //     loud there); a crawling network is never retried as a full clone;
-//   - an existing checkout (in CI: one the cache restored) is never used as a
-//     repository: it is moved aside, the destination is made new the same way,
-//     and the pin is fetched at depth 1 over file:// from the moved copy (the
-//     receiving git hashes every object itself), else from origin. The moved
-//     copy is removed in every case; no git command runs inside it.
+//   - an existing checkout (in CI: one the cache restored) is never the cwd
+//     or git dir of a git call of the sync: it is moved aside, the
+//     destination is made new the same way, and, when the moved copy is a
+//     plain repository directory, the pin is fetched at depth 1 over file://
+//     from it (the upload-pack that fetch starts reads its config, refs and
+//     objects; the receiving git hashes every object itself), else from
+//     origin. The moved copy is removed after a success and after a failure.
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import {
@@ -79,10 +81,13 @@ function makeDeps({
   plan = {},
   landsOn,
   failRemoval,
+  gitShape,
 } = {}) {
   const state = {
     exists: new Set(),
     dirEntries: {},
+    // What lstat reads for a path: "dir", "file" or "link"; a path not here is absent.
+    types: {},
     head,
     hasPin: false,
   };
@@ -90,6 +95,10 @@ function makeDeps({
     state.exists.add(DEST);
     state.exists.add(path.join(DEST, ".git"));
     state.dirEntries[DEST] = [".git", "package.json"];
+    state.types[DEST] = "dir";
+    state.types[path.join(DEST, ".git")] = "dir";
+    state.types[path.join(DEST, ".git", "objects")] = "dir";
+    gitShape?.(state.types, path.join(DEST, ".git"));
   }
   if (emptyDir) {
     state.exists.add(DEST);
@@ -111,6 +120,11 @@ function makeDeps({
     renamed,
     sleeps,
     exists: (p) => state.exists.has(p),
+    lstat: (p) => {
+      const t = state.types[p];
+      if (!t) throw Object.assign(new Error(`ENOENT: ${p}`), { code: "ENOENT" });
+      return { isDirectory: () => t === "dir", isSymbolicLink: () => t === "link", isFile: () => t === "file" };
+    },
     readdir: (p) => {
       if (!state.exists.has(p)) throw new Error(`ENOENT: ${p}`);
       if (unreadable && p === DEST) throw new Error(`EACCES: ${p}`);
@@ -122,6 +136,7 @@ function makeDeps({
       removed.push(p);
       if (failRemoval === p) throw new Error(`EBUSY: ${p}`);
       for (const q of [...state.exists]) if (q === p || q.startsWith(`${p}/`)) state.exists.delete(q);
+      for (const q of Object.keys(state.types)) if (q === p || q.startsWith(`${p}/`)) delete state.types[q];
       delete state.dirEntries[p];
     },
     rename: (from, to) => {
@@ -130,6 +145,12 @@ function makeDeps({
         if (q === from || q.startsWith(`${from}/`)) {
           state.exists.delete(q);
           state.exists.add(to + q.slice(from.length));
+        }
+      }
+      for (const q of Object.keys(state.types)) {
+        if (q === from || q.startsWith(`${from}/`)) {
+          state.types[to + q.slice(from.length)] = state.types[q];
+          delete state.types[q];
         }
       }
       state.dirEntries[to] = state.dirEntries[from];
@@ -367,6 +388,48 @@ describe("syncOneRepo --shallow — an absent checkout fetches the pin at depth 
     expect(thrown).toBeNull();
     expect(result).toEqual(CLONED);
   });
+
+  it("refuses a remote URL with a query, a fragment or user info in any case, before any git call, and never prints it", () => {
+    for (const url of [
+      "https://github.com/cinatra-ai/blog-pipeline-agent.git?access_token=secret123",
+      "https://github.com/cinatra-ai/blog-pipeline-agent.git#secret123",
+      "HTTPS://secret123@github.com/cinatra-ai/blog-pipeline-agent.git",
+      "ssh://deploy:secret123@github.com/cinatra-ai/blog-pipeline-agent.git",
+      "file:///srv/mirror/blog-pipeline-agent.git?secret123",
+    ]) {
+      const deps = makeDeps();
+      const { thrown, lines } = run(deps, { url });
+      expect(String(thrown?.message), url).toMatch(/carries credentials, a query or a fragment|refusing a git remote/);
+      expect(String(thrown?.message), url).not.toMatch(/secret123/);
+      expect(lines.join("\n"), url).not.toMatch(/secret123/);
+      expect(deps.calls, url).toEqual([]);
+      expect(deps.state.exists.size, url).toBe(0);
+    }
+  });
+
+  it("lets the plain forms through: https and ssh://git@ to github.com, git@github.com:, file:// and an absolute path", () => {
+    for (const url of [
+      "https://github.com/cinatra-ai/blog-pipeline-agent.git",
+      "ssh://git@github.com/cinatra-ai/blog-pipeline-agent.git",
+      "git@github.com:cinatra-ai/blog-pipeline-agent.git",
+      "file:///srv/mirror/blog-pipeline-agent.git",
+      "/srv/mirror/blog-pipeline-agent.git",
+    ]) {
+      const deps = makeDeps();
+      const { result, thrown } = run(deps, { url });
+      expect(thrown, url).toBeNull();
+      expect(result, url).toEqual(CLONED);
+    }
+  });
+
+  it("a HEAD read that fails throws, with the new checkout removed and no fallback", () => {
+    const deps = makeDeps({ plan: { "rev-parse": [STDERR.locked] } });
+    const { thrown } = run(deps);
+    expect(String(thrown?.message)).toMatch(/Permission denied/);
+    expect(starts(deps.calls, "clone")).toEqual([]);
+    expect(deps.removed).toEqual([DEST]);
+    expect(deps.state.exists.has(DEST)).toBe(false);
+  });
 });
 
 describe("syncOneRepo --shallow — an existing (cache-restored) checkout is only a source of objects", () => {
@@ -465,6 +528,29 @@ describe("syncOneRepo --shallow — an existing (cache-restored) checkout is onl
     expect(deps.renamed).toEqual([[DEST, SOURCE]]);
   });
 
+  it("a moved copy that is not a plain repository directory is never fetched from: origin serves the pin", () => {
+    const shapes = {
+      "a symlinked checkout": (t, g) => (t[path.dirname(g)] = "link"),
+      "a symlinked .git": (t, g) => (t[g] = "link"),
+      "a .git file (gitfile)": (t, g) => (t[g] = "file"),
+      "a symlinked .git/objects": (t, g) => (t[path.join(g, "objects")] = "link"),
+      "no .git/objects": (t, g) => delete t[path.join(g, "objects")],
+      "a .git/objects/info/alternates": (t, g) => (t[path.join(g, "objects", "info", "alternates")] = "file"),
+      "a .git/objects/info/http-alternates": (t, g) => (t[path.join(g, "objects", "info", "http-alternates")] = "file"),
+      "a .git/commondir": (t, g) => (t[path.join(g, "commondir")] = "file"),
+    };
+    for (const [label, gitShape] of Object.entries(shapes)) {
+      const deps = makeDeps({ existing: true, gitShape });
+      const { result, thrown, lines } = run(deps);
+      expect(thrown, label).toBeNull();
+      expect(result, label).toEqual(CLONED);
+      expect(deps.calls, label).toEqual([...MADE_NEW, ORIGIN_FETCH, ...CHECKED_OUT]);
+      expect(deps.sleeps, label).toEqual([]);
+      expect(deps.removed, label).toEqual([SOURCE]);
+      expect(lines.some((l) => /is not read as a source of objects/.test(l)), label).toBe(true);
+    }
+  });
+
   it("without --shallow the pinned at-pin path is unchanged: nothing is moved or made new", () => {
     const deps = makeDeps({ existing: true, head: PIN });
     const { result, thrown } = run(deps, { shallow: undefined });
@@ -473,6 +559,31 @@ describe("syncOneRepo --shallow — an existing (cache-restored) checkout is onl
     expect(deps.renamed).toEqual([]);
     expect(starts(deps.calls, "init")).toEqual([]);
     expect(deps.removed).toEqual([]);
+  });
+});
+
+describe("redactGitUrl — a query, a fragment and scp-style user info are never printed", () => {
+  it("hides them in a URL and in a git failure line, and keeps the plain forms", () => {
+    const r = repoSync.redactGitUrl;
+    expect(r("https://github.com/cinatra-ai/x.git?access_token=secret123")).toBe("https://github.com/cinatra-ai/x.git?***");
+    expect(r("https://github.com/cinatra-ai/x.git#secret123")).toBe("https://github.com/cinatra-ai/x.git#***");
+    expect(r("secret123@github.com:cinatra-ai/x.git")).toBe("***@github.com:cinatra-ai/x.git");
+    expect(r("user:secret123@github.com:cinatra-ai/x.git")).toBe("***@github.com:cinatra-ai/x.git");
+    expect(r("git@github.com:cinatra-ai/x.git")).toBe("git@github.com:cinatra-ai/x.git");
+    expect(r("https://github.com/cinatra-ai/x.git")).toBe("https://github.com/cinatra-ai/x.git");
+    const line = r("fatal: unable to access 'https://github.com/cinatra-ai/x.git/?access_token=secret123': The requested URL returned error: 403");
+    expect(line).not.toMatch(/secret123/);
+    expect(line).toMatch(/^fatal: unable to access 'https:\/\/github\.com\/cinatra-ai\/x\.git\/\?\*\*\*': The requested URL returned error: 403$/);
+  });
+
+  it("a refused scp-style remote with user info never prints it (any road)", () => {
+    for (const shallow of [false, true]) {
+      const deps = makeDeps();
+      const { thrown } = run(deps, { url: "secret123@github.com:cinatra-ai/blog-pipeline-agent.git", shallow });
+      expect(String(thrown?.message)).toMatch(/refusing a git remote/);
+      expect(String(thrown?.message)).not.toMatch(/secret123/);
+      expect(deps.calls).toEqual([]);
+    }
   });
 });
 
@@ -641,6 +752,38 @@ describe("syncOneRepo --shallow on real git", () => {
     expect(existsSync(marker)).toBe(false);
     // The new checkout's config is git's own, none of the planted keys.
     expect(readFileSync(path.join(dest, ".git", "config"), "utf8")).not.toMatch(/fsmonitor|hookspath|packobjectshook/i);
+  });
+
+  it("a restored checkout that borrows objects through alternates is not read as a source: origin serves the pin", () => {
+    const { url, oldPin } = makeOrigin();
+    const lender = path.join(work, `lender-${counter}.git`);
+    execFileSync("git", ["clone", "-q", "--bare", url.slice("file://".length), lender]);
+    const dest = path.join(work, "alternates", "fixture");
+    realSync(url, oldPin, dest);
+    writeFileSync(path.join(dest, ".git", "objects", "info", "alternates"), `${path.join(lender, "objects")}\n`);
+    const lines = [];
+    const r = realSync(url, oldPin, dest, (m) => lines.push(m));
+    expect(r).toMatchObject({ action: "cloned", pinnedSha: oldPin });
+    expect(lines.some((l) => /is not read as a source of objects/.test(l))).toBe(true);
+    expect(existsSync(path.join(dest, ".git", "objects", "info", "alternates"))).toBe(false);
+    expect(g(dest, ["rev-parse", "HEAD"])).toBe(oldPin);
+    expect(existsSync(repoSync.shallowSourceDirFor(dest))).toBe(false);
+  });
+
+  it("a restored checkout whose .git is a gitfile is not read as a source: origin serves the pin", () => {
+    const { url, oldPin } = makeOrigin();
+    const elsewhere = path.join(work, `elsewhere-${counter}`);
+    realSync(url, oldPin, elsewhere);
+    const dest = path.join(work, "gitfile", "fixture");
+    mkdirSync(dest, { recursive: true });
+    writeFileSync(path.join(dest, ".git"), `gitdir: ${path.join(elsewhere, ".git")}\n`);
+    writeFileSync(path.join(dest, "package.json"), "{}\n");
+    const lines = [];
+    const r = realSync(url, oldPin, dest, (m) => lines.push(m));
+    expect(r).toMatchObject({ action: "cloned", pinnedSha: oldPin });
+    expect(lines.some((l) => /is not read as a source of objects/.test(l))).toBe(true);
+    expect(g(dest, ["rev-parse", "HEAD"])).toBe(oldPin);
+    expect(readFileSync(path.join(dest, "src", "a.txt"), "utf8")).toBe("one\n");
   });
 
   it("a restored checkout at another commit is rebuilt at the pin, fetched from origin", () => {
