@@ -86,7 +86,7 @@ describe("toolbar control typography", () => {
     const html = renderToStaticMarkup(
       <Toolbar aria-label="Bar">
         <ToolbarSearchGroup>
-          <ToolbarSearchInput placeholder="Search by name…" />
+          <ToolbarSearchInput aria-label="Search by name…" placeholder="Search by name…" />
         </ToolbarSearchGroup>
       </Toolbar>,
     );
@@ -100,7 +100,7 @@ describe("toolbar control typography", () => {
       <Toolbar aria-label="Bar">
         <ToolbarButton>Add portlet</ToolbarButton>
         <ToolbarSearchGroup>
-          <ToolbarSearchInput placeholder="Search…" />
+          <ToolbarSearchInput aria-label="Search…" placeholder="Search…" />
         </ToolbarSearchGroup>
       </Toolbar>,
     );
