@@ -6,7 +6,9 @@
  * These cases drive the real issuer and verifier.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
-import { createHmac } from "node:crypto";
+import { createHmac, createHash } from "node:crypto";
+
+vi.mock("server-only", () => ({}));
 
 const PUBLIC_BASE_URL = "https://example.test";
 const PUBLIC_MCP_URL = `${PUBLIC_BASE_URL}/api/mcp`;
@@ -115,6 +117,35 @@ describe("the on-behalf-of token's step claim", () => {
 
 // Leave the module registry as this file found it.
 afterAll(() => {
+  vi.doUnmock("server-only");
   vi.doUnmock("@cinatra-ai/mcp-server/credentials");
   vi.resetModules();
+});
+
+const producerInputsJson = '{"note":"draft the reviewed story","topic":"Launch"}';
+const producerHash = (s: string) => createHash("sha256").update(s).digest("hex");
+const productionBinding = { version: 2 as const, producerKind: "llm" as const, producerStepId: "step-node-1", noteInputPath: "note", sourceSha256: "a".repeat(64), graphSha256: "b".repeat(64), effectiveInputsJson: producerInputsJson, effectiveInputsSha256: producerHash(producerInputsJson), inputParams: JSON.parse(producerInputsJson), inputParamsSha256: producerHash(producerInputsJson) };
+
+describe("signed OBO production binding v2", () => {
+  it("carries the exact authenticated v2 claim with its verified step", () => {
+    const token = issueAgentRunMcpActorToken({ ...ACTOR, verifiedStepId: "step-node-1", verifiedProducerBinding: productionBinding });
+    expect(decodePayload(token).prb).toEqual(productionBinding);
+    expect(verify(token)?.verifiedProducerBinding).toEqual(productionBinding);
+  });
+  it("missing production binding stays absent; v1 step cannot manufacture it", () => {
+    const token = issueAgentRunMcpActorToken({ ...ACTOR, verifiedStepId: "step-node-1" });
+    expect(verify(token)?.verifiedProducerBinding).toBeUndefined();
+    const base = decodePayload(token);
+    for (const prb of [{...productionBinding, version:1}, null]) expect(verify(signPayload({...base, prb}))).toBeNull();
+  });
+  it("tampered JWT, changed effective digest and wrong graph pin fail closed", () => {
+    const token=issueAgentRunMcpActorToken({...ACTOR,verifiedStepId:"step-node-1",verifiedProducerBinding:productionBinding});
+    const base=decodePayload(token); const [head,,sig]=token.split(".");
+    const changed={...base,prb:{...productionBinding,graphSha256:"c".repeat(64)}};
+    expect(verify(`${head}.${Buffer.from(JSON.stringify(changed)).toString("base64url")}.${sig}`)).toBeNull();
+    for(const prb of [{...productionBinding,effectiveInputsSha256:"c".repeat(64)}, {...productionBinding,inputParams:{note:"other"}}, {...productionBinding,producerStepId:"other"}]) expect(verify(signPayload({...base,prb}))).toBeNull();
+  });
+  it("issuer refuses malformed claims rather than silently emitting an ordinary token", () => {
+    expect(()=>issueAgentRunMcpActorToken({...ACTOR,verifiedStepId:"other",verifiedProducerBinding:productionBinding})).toThrow();
+  });
 });

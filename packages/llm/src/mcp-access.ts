@@ -1,3 +1,4 @@
+import type { VerifiedProducerStepBinding } from "@cinatra-ai/mcp-server/request-context";
 /**
  * LLM MCP access — thin adapter that re-exports credential helpers from
  * @cinatra-ai/mcp-server (the authoritative owner of MCP OAuth credentials)
@@ -248,6 +249,7 @@ export type AgentRunMcpActor = {
    * Optional; mirrors the app-layer type.
    */
   verifiedStepId?: string;
+  verifiedProducerBinding?: VerifiedProducerStepBinding;
 };
 
 export type AgentRunMcpActorTokenIssuer = (actor: AgentRunMcpActor) => string;

@@ -4,6 +4,7 @@
  * its neighbours, and the resolved context returns it. Exercises the real
  * module against a Map-backed fake store.
  */
+import { createHash } from "node:crypto";
 import { afterAll, describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("server-only", () => ({}));
@@ -94,4 +95,26 @@ describe("durable binding step field", () => {
 afterAll(() => {
   vi.doUnmock("server-only");
   vi.resetModules();
+});
+
+const producerInputsJson = '{"note":"draft the reviewed story","topic":"Launch"}';
+const producerHash = (s: string) => createHash("sha256").update(s).digest("hex");
+const productionBinding = { version: 2 as const, producerKind: "llm" as const, producerStepId: "step-node-1", noteInputPath: "note", sourceSha256: "a".repeat(64), graphSha256: "b".repeat(64), effectiveInputsJson: producerInputsJson, effectiveInputsSha256: producerHash(producerInputsJson), inputParams: JSON.parse(producerInputsJson), inputParamsSha256: producerHash(producerInputsJson) };
+
+describe("authenticated durable production binding v2", () => {
+  it("preserves the equivalent verified claim through the actual durable resolver", async () => {
+    expect(await writeDurableRunContextBinding(BEARER,{tokenHash:HASH,stepId:"step-node-1",verifiedProducerBinding:productionBinding},redis)).not.toBeNull();
+    const result=await resolveDurableRunContext(BEARER,lookup,redis);
+    expect(result.outcome==="resolved" ? result.ctx.verifiedProducerBinding : null).toEqual(productionBinding);
+  });
+  it("v1, tampered digest and mismatched step are corrupt, never a fallback", async () => {
+    for(const verifiedProducerBinding of [{...productionBinding,version:1},{...productionBinding,effectiveInputsSha256:"c".repeat(64)},{...productionBinding,producerStepId:"other"},null]) {
+      redis.store.set(durableRunContextKey(BEARER),{value:JSON.stringify({tokenHash:HASH,stepId:"step-node-1",verifiedProducerBinding}),ttlSeconds:300});
+      expect(await resolveDurableRunContext(BEARER,lookup,redis)).toEqual({outcome:"invalid"});
+    }
+  });
+  it("the write refuses invalid claims without a Redis effect", async () => {
+    expect(await writeDurableRunContextBinding(BEARER,{tokenHash:HASH,stepId:"other",verifiedProducerBinding:productionBinding},redis)).toBeNull();
+    expect(redis.store.size).toBe(0);
+  });
 });

@@ -1,4 +1,5 @@
 import "server-only";
+import { validateProducerStepBinding, type VerifiedProducerStepBinding } from "@cinatra-ai/mcp-server/request-context";
 
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
@@ -208,6 +209,75 @@ export function verifyRunStepAttestation(input: {
   if (nowMs > expiryMs + RUN_STEP_ATTESTATION_SKEW_MS) return null;
   if (expiryMs > nowMs + RUN_STEP_ATTESTATION_MAX_FUTURE_MS) return null;
   return node;
+}
+
+/** Production inputs are captured by the mounted host, never the request body.
+ * s2 is the producer-binding claim version 2; s1 step identities are unchanged.
+ * JSON bytes are signed before parsing, avoiding cross-language number encoding
+ * differences. The parsed inputs additionally get the existing replay digest. */
+export const RUN_PRODUCER_BINDING_HEADER = "x-cinatra-producer-binding";
+export const RUN_PRODUCER_ATTESTATION_HEADER = "x-cinatra-producer-attestation";
+export type VerifiedRunProducerBinding = VerifiedProducerStepBinding;
+const PRODUCER_SHA = /^[a-f0-9]{64}$/;
+const PRODUCER_PATH = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const PRODUCER_UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+function producerCanonicalJson(value: unknown): string {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
+  if (typeof value === "number" && Number.isFinite(value)) return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(producerCanonicalJson).join(",")}]`;
+  if (typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${producerCanonicalJson((value as Record<string, unknown>)[key])}`).join(",")}}`;
+  }
+  throw new Error("producer inputs must be finite JSON");
+}
+
+/** Authenticate the NEW production claim with the SAME key/algorithm/window.
+ * Missing/invalid v2 never falls back to a v1 step identity or body inputs.
+ * expectedGraphSha256 is the recorded graph pin when verifying a replay. */
+export function verifyRunProducerBinding(input: {
+  key: string | null | undefined;
+  contextId: string | null | undefined;
+  node: string | null | undefined;
+  binding: string | null | undefined;
+  attestation: string | null | undefined;
+  expectedGraphSha256?: string;
+  nowMs?: number;
+}): VerifiedRunProducerBinding | null {
+  const { key, contextId, node, binding, attestation } = input;
+  if (![key, contextId, node, binding, attestation].every(nonEmptyString)) return null;
+  if (binding!.length > 65536 || !/^[A-Za-z0-9_-]+$/.test(binding!)) return null;
+  const match = /^s2:([0-9]+):([0-9a-fA-F]{64})$/.exec(attestation!);
+  if (!match) return null;
+  const expiry = Number(match[1]);
+  if (!Number.isSafeInteger(expiry)) return null;
+  const nowMs = input.nowMs ?? Date.now();
+  if (nowMs > expiry * 1000 + RUN_STEP_ATTESTATION_SKEW_MS || expiry * 1000 > nowMs + RUN_STEP_ATTESTATION_MAX_FUTURE_MS) return null;
+  try {
+    const bytes = Buffer.from(binding!, "base64url");
+    if (bytes.toString("base64url") !== binding) return null;
+    const claim = JSON.parse(bytes.toString("utf8")) as Record<string, unknown>;
+    if (!claim || Array.isArray(claim) || claim.version !== 2 || claim.producerStepId !== node) return null;
+    if (typeof claim.sourceSha256 !== "string" || !PRODUCER_SHA.test(claim.sourceSha256)
+      || typeof claim.graphSha256 !== "string" || !PRODUCER_SHA.test(claim.graphSha256)
+      || typeof claim.effectiveInputsSha256 !== "string" || !PRODUCER_SHA.test(claim.effectiveInputsSha256)
+      || typeof claim.effectiveInputsJson !== "string"
+      || typeof claim.noteInputPath !== "string" || !PRODUCER_PATH.test(claim.noteInputPath)
+      || PRODUCER_UNSAFE_KEYS.has(claim.noteInputPath)) return null;
+    if (input.expectedGraphSha256 !== undefined && input.expectedGraphSha256 !== claim.graphSha256) return null;
+    const rawDigest = createHash("sha256").update(claim.effectiveInputsJson, "utf8").digest("hex");
+    if (rawDigest !== claim.effectiveInputsSha256) return null;
+    const material = `s2\n${contextId}\n${node}\n${expiry}\n${claim.sourceSha256}\n${claim.graphSha256}\n${claim.noteInputPath}\n${rawDigest}`;
+    if (!hexEquals(match[2]!, hmacHex(key!, material))) return null;
+    const inputs = JSON.parse(claim.effectiveInputsJson) as Record<string, unknown>;
+    if (!inputs || Array.isArray(inputs) || typeof inputs !== "object") return null;
+    // WayFlow external Step inputs use declared top-level keys, not paths.
+    if (!Object.hasOwn(inputs, claim.noteInputPath) || typeof inputs[claim.noteInputPath] !== "string") return null;
+    const inputParamsSha256 = createHash("sha256").update(producerCanonicalJson(inputs), "utf8").digest("hex");
+    return validateProducerStepBinding({ version: 2, producerKind: "llm", producerStepId: node!, noteInputPath: claim.noteInputPath,
+      sourceSha256: claim.sourceSha256, graphSha256: claim.graphSha256, inputParams: inputs,
+      inputParamsSha256, effectiveInputsSha256: rawDigest, effectiveInputsJson: claim.effectiveInputsJson }, node!);
+  } catch { return null; }
 }
 
 /**

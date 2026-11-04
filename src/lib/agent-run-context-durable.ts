@@ -1,3 +1,4 @@
+import { validateProducerStepBinding, type VerifiedProducerStepBinding } from "@cinatra-ai/mcp-server/request-context";
 import "server-only";
 
 import { createHash } from "node:crypto";
@@ -71,6 +72,7 @@ export type DurableRunContextBinding = {
    *  the bridge only from the flow runtime's signed step pair it verified;
    *  unlike the provenance fields above it is a verified value. */
   stepId?: string;
+  verifiedProducerBinding?: VerifiedProducerStepBinding;
 };
 
 export type DurableRunContextResolution =
@@ -83,6 +85,7 @@ export type DurableRunContextResolution =
         agentSpecVersion?: string;
         /** The binding's verified step (cinatra#3745), when it carries one. */
         stepId?: string;
+        verifiedProducerBinding?: VerifiedProducerStepBinding;
       };
     }
   | { outcome: "invalid" }
@@ -240,6 +243,7 @@ export async function writeDurableRunContextBinding(
   client: DurableBindingRedis = getClient(),
 ): Promise<string | null> {
   if (!rawBearerToken || !SHA256_HEX.test(binding.tokenHash)) return null;
+  if (binding.verifiedProducerBinding !== undefined && !validateProducerStepBinding(binding.verifiedProducerBinding,binding.stepId ?? "")) return null;
   const key = durableRunContextKey(rawBearerToken);
   try {
     await client.set(
@@ -297,12 +301,17 @@ function parseBinding(raw: string): DurableRunContextBinding | null {
   const optional = (v: unknown): string | undefined =>
     typeof v === "string" && v.length > 0 ? v : undefined;
   const stepId = optional(candidate.stepId);
+  const producerBinding = Object.hasOwn(candidate,"verifiedProducerBinding")
+    ? validateProducerStepBinding(candidate.verifiedProducerBinding,stepId ?? "")
+    : undefined;
+  if (Object.hasOwn(candidate,"verifiedProducerBinding") && !producerBinding) return null;
   return {
     tokenHash: candidate.tokenHash,
     agentId: optional(candidate.agentId),
     packageVersion: optional(candidate.packageVersion),
     agentSpecVersion: optional(candidate.agentSpecVersion),
     ...(stepId ? { stepId } : {}),
+    ...(producerBinding ? { verifiedProducerBinding: producerBinding } : {}),
   };
 }
 
@@ -371,6 +380,7 @@ export async function resolveDurableRunContext(
       packageVersion: binding.packageVersion,
       agentSpecVersion: binding.agentSpecVersion,
       ...(binding.stepId ? { stepId: binding.stepId } : {}),
+      ...(binding.verifiedProducerBinding ? { verifiedProducerBinding: binding.verifiedProducerBinding } : {}),
     },
   };
 }
