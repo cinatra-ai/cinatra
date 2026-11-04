@@ -310,13 +310,13 @@ describe("repair start inputs satisfy the actual producing root contracts", () =
   });
 
   it("a declared input named like a run field reaches only inputParams, never the run's authority", async () => {
-    for (const name of ["orgId", "runBy", "templateId", "parentRunId"]) {
+    for (const name of ["orgId", "runBy", "templateId", "parentRunId", "parentOboCeiling", "idempotencyKey"]) {
       ports.created = [];
       arrangeProducer({ custom: "retained" }, {}, JSON.stringify({ repairFindingsInput: { input: name } }));
       await dispatchPendingProducerRepairs();
       const created = ports.created[0].input;
       expect(created).toMatchObject({ orgId: "repair-org", runBy: "human-origin", templateId: "template-producing",
-        parentRunId: "producer-original" });
+        parentRunId: "producer-original", parentOboCeiling: null, idempotencyKey: "lifecycle-repair:repair-current" });
       expect(inputParams()[name]).toBe(FINDINGS_TEXT);
       expect(inputParams().lifecycleRepairRequest).toEqual(deliveredRequest());
     }
@@ -331,6 +331,25 @@ describe("repair start inputs satisfy the actual producing root contracts", () =
     expect(delivered.instructions).not.toBe(FINDINGS_TEXT);
     expect(delivered.task).toBe(delivered.instructions);
     expect(ports.readBack).toHaveBeenCalledOnce();
+  });
+
+  it("a producer that declares nothing on a captured CMS base gets, byte for byte, its own inputs, the bridge's additions and the typed request", async () => {
+    const original = { instanceId: "cms-site", instructions: "Old producing instructions", custom: { kept: true } };
+    arrangeProducer(original, {}, JSON.stringify({ repairCapable: true })); ports.target = cmsTarget();
+    await dispatchPendingProducerRepairs();
+    const bridge = await projectCmsRepairInputParams(deliveredRequest() as never);
+    expect(Object.keys(bridge).sort()).toEqual(["instructions", "task"]);
+    expect(JSON.stringify(inputParams())).toBe(JSON.stringify({ ...original, ...bridge, lifecycleRepairRequest: deliveredRequest() }));
+  });
+
+  it("a declared input replaces whatever value of any type the producing run recorded under that name", async () => {
+    for (const recorded of [123, { nested: "old" }, ["old"], null, true]) {
+      ports.created = [];
+      arrangeProducer({ instructions: recorded, custom: "retained" }, {}, DECLARES_INSTRUCTIONS);
+      await dispatchPendingProducerRepairs();
+      expect(JSON.stringify(inputParams())).toBe(JSON.stringify({ instructions: FINDINGS_TEXT, custom: "retained",
+        lifecycleRepairRequest: deliveredRequest() }));
+    }
   });
 
   it("returns no CMS additions for a non-CMS target", async () => {
@@ -388,6 +407,14 @@ describe("input data cannot become repair authorization", () => {
     arrangeProducer({ custom: "retained" }); ports.reads[3] = [{ id: repairRunId("repair-current") }];
     const result = await dispatchPendingProducerRepairs();
     expect(result.dispatched).toBe(1); expect(ports.created).toHaveLength(0); expect(ports.queued).toHaveBeenCalledOnce();
+  });
+
+  it("enqueues an existing deterministic run of a declaring producer as it is: the run start binds its findings input", async () => {
+    arrangeProducer({ custom: "retained" }, {}, DECLARES_INSTRUCTIONS); ports.reads[3] = [{ id: repairRunId("repair-current") }];
+    const result = await dispatchPendingProducerRepairs();
+    expect(result.dispatched).toBe(1); expect(ports.created).toHaveLength(0); expect(ports.queued).toHaveBeenCalledOnce();
+    // The only write is the requested-to-dispatched CAS of the repair row.
+    expect(ports.writes.map((write) => write.values)).toEqual([expect.objectContaining({ status: "dispatched" })]);
   });
 
   it("retains the requested-to-dispatched CAS rather than overwriting a concurrent decision", async () => {

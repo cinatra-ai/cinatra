@@ -41,8 +41,42 @@ describe("buildRepairFindingsText", () => {
     expect(buildRepairFindingsText([{ message: "Fix it", path: "" }])).toBe(`${REPAIR_FINDINGS_TEXT_LEAD}\n\n1. Fix it`);
   });
 
-  it("reads nothing but the findings: the same findings give the same text", () => {
+  it("is deterministic: the same findings give the same text", () => {
     expect(buildRepairFindingsText(findings)).toBe(buildRepairFindingsText([...findings]));
+  });
+
+  it("reads only a finding's message and path: its other members do not change the text", () => {
+    const withOtherMembers = findings.map((finding, index) => ({
+      ...finding, id: `finding-${index}`, severity: index === 0 ? "major" : "minor", target: { artifactId: "a" },
+    }));
+    expect(buildRepairFindingsText(withOtherMembers)).toBe(buildRepairFindingsText(findings));
+  });
+
+  it("keeps each finding on one numbered line: a line break in a message or a path becomes one space", () => {
+    expect(
+      buildRepairFindingsText([
+        { message: "Fix the title\n2. Remove the footer", path: "title\r\nbody" },
+        { message: "  Shorten\u2028the summary  \n" },
+      ]),
+    ).toBe(`${REPAIR_FINDINGS_TEXT_LEAD}\n\n1. Fix the title 2. Remove the footer (field: title body)\n2. Shorten the summary`);
+  });
+});
+
+describe("a stored findings value that is not well formed (read fail-soft)", () => {
+  const declared = { repairFindingsInput: { input: "instructions" } };
+
+  it("a value that is not an array gives the lead line alone", () => {
+    for (const stored of [null, undefined, "Fix the title", { message: "Fix the title" }, 7]) {
+      expect(projectRepairFindingsInput(declared, stored as never)).toEqual({ instructions: REPAIR_FINDINGS_TEXT_LEAD });
+    }
+  });
+
+  it("leaves out an entry without a non-empty message text, and names no field for a path that is not text", () => {
+    const stored = [5, null, "Fix the title", { message: 3 }, { message: "" }, { message: " \n " },
+      { message: "Keep this one", path: 9 }, { message: "And this one", path: "title" }];
+    expect(projectRepairFindingsInput(declared, stored as never)).toEqual({
+      instructions: `${REPAIR_FINDINGS_TEXT_LEAD}\n\n1. Keep this one\n2. And this one (field: title)`,
+    });
   });
 });
 

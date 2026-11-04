@@ -192,13 +192,16 @@ describe("cinatra#4424 — the declared repair findings input", () => {
       { input: "toString" },
       { input: "hasOwnProperty" },
       { input: "x".repeat(129) },
+      { input: 5 },
+      { input: null },
+      { input: ["instructions"] },
       {},
     ]) {
       expect(agentLifecycleDeclarationSchema.safeParse({ repairFindingsInput }).success).toBe(false);
     }
   });
 
-  it("the reader keeps a well-formed declaration and drops a malformed one", () => {
+  it("the reader keeps an admissible input name, ignores any other member, and drops a declaration without one", () => {
     expect(
       readManifestLifecycle({
         cinatra: { lifecycle: { repairCapable: true, repairFindingsInput: { input: "instructions" } } },
