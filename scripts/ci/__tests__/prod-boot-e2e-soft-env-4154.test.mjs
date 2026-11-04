@@ -11,73 +11,66 @@
 // "durable-degraded boot did not list boot-degrade-probe in blockingPhases".
 //
 // HOW THIS FILE PROVES IT. It runs the real script with a stand-in `docker` first on
-// PATH (__fixtures__/prod-boot-e2e-docker-stub/docker.mjs). The stand-in records the
-// argv of every `docker run` and models /api/health from each container's EFFECTIVE
-// env (the last `-e NAME=value` wins), and the script's own `probe` code runs on the
-// modelled body. So a value that the script reassigns later, sets only in a function
-// that never runs, overrides through a caller's `"$@"`, or passes only in a block that
-// never runs, is read as the container would see it.
+// PATH (__fixtures__/prod-boot-e2e-docker-stub/docker.mjs). The stand-in accepts only
+// the call shapes the script uses, records each valid `docker run -d` with its
+// EFFECTIVE env (the last `-e NAME=value` wins; a bare `-e NAME` reads the env of that
+// docker invocation), and models the app from that env: the item-3 preflight failure
+// from the hard-required names it lacks, and /api/health from the rest. The script's
+// own `probe` code runs on the modelled body. This file reads only those recorded
+// runs, so the value it checks is the value the container gets.
 //
-// THE INVARIANTS: the script runs to its PASSED line under the stand-in, and every
-// `docker run -d` of the image except the item-3 boot (`-app-missing-env`) carries a
-// non-blank effective value for every SOFT_REQUIRED_ENV name.
+// THE INVARIANTS: the script runs to its PASSED line under the stand-in; the main, the
+// durable-degraded, the no-mount and the item-3 boots were recorded; the item-3 boot
+// lacks exactly the two hard-required names its case removes; and every other
+// recorded app boot has a non-blank effective value for every SOFT_REQUIRED_ENV and
+// HARD_REQUIRED_ENV name.
 //
 // Runner: hosted by the vitest include glob `scripts/ci/__tests__/**/*.test.{ts,mjs}`.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { SOFT_REQUIRED_ENV } from "../../../src/lib/boot/required-env-preflight";
+import { HARD_REQUIRED_ENV, SOFT_REQUIRED_ENV } from "../../../src/lib/boot/required-env-preflight";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.join(here, "..", "prod-boot-e2e.sh");
 const STUB = path.join(here, "__fixtures__", "prod-boot-e2e-docker-stub", "docker.mjs");
 const IMAGE = "cinatra-prod-boot-e2e:stub";
 const SOFT = SOFT_REQUIRED_ENV.map((v) => v.name);
+const HARD = HARD_REQUIRED_ENV.map((v) => v.name);
+const ITEM3 = "-app-missing-env";
 
 let dir;
 let run;
-let calls;
+let appRuns;
 
-/** The value a container sees for `name` from its `run` argv: the last -e wins. */
-function effective(argv, name) {
-  let val;
-  for (let i = 0; i < argv.length - 1; i++) {
-    if (argv[i] !== "-e") continue;
-    const e = argv[i + 1];
-    const eq = e.indexOf("=");
-    if (eq < 0 ? e === name : e.slice(0, eq) === name) val = eq < 0 ? process.env[name] : e.slice(eq + 1);
-  }
-  return val;
-}
-
-const nameOf = (argv) => argv[argv.indexOf("--name") + 1];
+const blank = (v) => (v ?? "").trim() === "";
 
 beforeAll(() => {
   dir = mkdtempSync(path.join(tmpdir(), "prod-boot-e2e-stub-"));
   const wrapper = path.join(dir, "docker");
   writeFileSync(wrapper, `#!/bin/sh\nexec "${process.execPath}" "${STUB}" "$@"\n`);
   chmodSync(wrapper, 0o755);
-  const log = path.join(dir, "calls.jsonl");
-  writeFileSync(log, "");
+  const stateFile = path.join(dir, "state.json");
   run = spawnSync("bash", [SCRIPT], {
     env: {
       ...process.env,
       PATH: `${dir}${path.delimiter}${process.env.PATH}`,
       IMAGE,
-      STUB_STATE: path.join(dir, "state.json"),
-      STUB_LOG: log,
+      STUB_STATE: stateFile,
       STUB_IMAGE: IMAGE,
       STUB_SOFT_ENV: SOFT.join(","),
+      STUB_HARD_ENV: HARD.join(","),
     },
     encoding: "utf8",
     timeout: 120_000,
   });
-  calls = readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  const state = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, "utf8")) : { runs: [] };
+  appRuns = state.runs.filter((r) => r.app);
 });
 
 afterAll(() => {
@@ -95,22 +88,23 @@ describe("cinatra#4154 — prod-boot e2e boots carry every soft-required env var
     expect(run.stdout).toContain("==> prod-boot e2e PASSED");
   });
 
-  it("the main boot, the durable-degraded boot and the no-mount boot ran, and the item-3 boot", () => {
-    const names = calls.filter((a) => a[0] === "run" && a.includes("-d")).map(nameOf);
-    for (const suffix of ["-app", "-app-degraded", "-app-no-mount", "-app-missing-env"]) {
-      expect(names.some((n) => n.endsWith(suffix)), `no docker run -d of a container ending ${suffix}`).toBe(true);
+  it("the main, durable-degraded, no-mount and item-3 boots were recorded", () => {
+    for (const suffix of ["-app", "-app-degraded", "-app-no-mount", ITEM3]) {
+      expect(appRuns.some((r) => r.name.endsWith(suffix)), `no recorded boot ending ${suffix}`).toBe(true);
     }
   });
 
-  for (const name of SOFT) {
-    it(`every settled-health app boot gets a non-blank effective ${name}`, () => {
-      const boots = calls.filter(
-        (a) => a[0] === "run" && a.includes("-d") && a.includes(IMAGE) && !nameOf(a).endsWith("-app-missing-env"),
-      );
+  it("the item-3 boot lacks exactly the two hard-required names its case removes", () => {
+    const item3 = appRuns.filter((r) => r.name.endsWith(ITEM3));
+    expect(item3.length).toBe(1);
+    expect(HARD.filter((n) => blank(item3[0].env[n]))).toEqual(["BETTER_AUTH_SECRET", "CINATRA_ENCRYPTION_KEY"]);
+  });
+
+  for (const name of [...SOFT, ...HARD]) {
+    it(`every other recorded app boot has a non-blank effective ${name}`, () => {
+      const boots = appRuns.filter((r) => !r.name.endsWith(ITEM3));
       expect(boots.length).toBeGreaterThanOrEqual(3);
-      for (const a of boots) {
-        expect((effective(a, name) ?? "").trim(), `${nameOf(a)} has no non-blank ${name}`).not.toBe("");
-      }
+      for (const r of boots) expect(blank(r.env[name]), `${r.name} has no non-blank ${name}`).toBe(false);
     });
   }
 });
