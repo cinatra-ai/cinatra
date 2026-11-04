@@ -410,7 +410,9 @@ function syncShallowPinned({ pkgName, url, sha, dest, deps, log }) {
   // rename(2) can answer EXDEV even inside one directory (overlayfs, for a
   // directory of a lower layer when redirect_dir is off). The moved copy is
   // only a source of objects, so on EXDEV the checkout is removed and the pin
-  // is fetched from origin. Answers whether the checkout was moved.
+  // is fetched from origin. Any other throw (another code, an error with no
+  // code, a value that is not an Error) is rethrown unchanged. Answers whether
+  // the checkout was moved.
   const moveAside = () => {
     try {
       doRename(dest, source);
@@ -418,8 +420,9 @@ function syncShallowPinned({ pkgName, url, sha, dest, deps, log }) {
     } catch (err) {
       if (err?.code !== "EXDEV") throw err;
     }
-    log(`  ${pkgName}: the existing checkout cannot be moved aside (EXDEV); it is removed and ${pin12} is fetched from origin at depth 1.`);
+    // Logged only after the removal: a failing removal throws without it.
     removeTree(dest);
+    log(`  ${pkgName}: the existing checkout could not be moved aside (EXDEV) and was removed; ${pin12} is fetched from origin at depth 1.`);
     return false;
   };
   // A moved copy left by an interrupted earlier run is this road's own.

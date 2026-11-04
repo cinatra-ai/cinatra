@@ -83,6 +83,7 @@ function makeDeps({
   landsOn,
   failRemoval,
   failRename = false,
+  renameThrows,
   failMkdirp = false,
   gitShape,
 } = {}) {
@@ -156,6 +157,7 @@ function makeDeps({
     },
     rename: (from, to) => {
       renamed.push([from, to]);
+      if (renameThrows !== undefined) throw renameThrows;
       if (failRename) throw Object.assign(new Error(`${failRename}: ${from}`), { code: failRename });
       for (const q of [...state.exists]) {
         if (q === from || q.startsWith(`${from}/`)) {
@@ -777,13 +779,28 @@ describe("syncOneRepo --shallow — an existing (cache-restored) checkout is onl
 
   it("a move of the existing checkout that fails other than EXDEV stops the sync before any git call, with the checkout left in place", () => {
     const deps = makeDeps({ existing: true, failRename: "EACCES" });
-    const { result, thrown } = run(deps);
+    const { result, thrown, lines } = run(deps);
     expect(result).toBeNull();
     expect(thrown?.code).toBe("EACCES");
     expect(deps.calls).toEqual([]);
     expect(deps.removed).toEqual([]);
+    expect(lines).toEqual([]);
     expect(deps.state.exists.has(path.join(DEST, ".git"))).toBe(true);
     expect(deps.state.exists.has(SOURCE)).toBe(false);
+  });
+
+  it("a move that throws an error with no code, or a value that is not an Error, is rethrown unchanged and stops the sync before any git call", () => {
+    const noCode = new Error("EXDEV: no code on this error");
+    for (const value of [noCode, "EXDEV"]) {
+      const deps = makeDeps({ existing: true, renameThrows: value });
+      const { result, thrown, lines } = run(deps);
+      expect(result).toBeNull();
+      expect(thrown).toBe(value);
+      expect(deps.calls).toEqual([]);
+      expect(deps.removed).toEqual([]);
+      expect(lines).toEqual([]);
+      expect(deps.state.exists.has(path.join(DEST, ".git"))).toBe(true);
+    }
   });
 
   // rename(2) answers EXDEV for a move inside one directory too, for example
@@ -799,18 +816,20 @@ describe("syncOneRepo --shallow — an existing (cache-restored) checkout is onl
     expect(deps.calls).toEqual([...MADE_NEW, ORIGIN_FETCH, ...CHECKED_OUT]);
     expect(deps.state.exists.has(SOURCE)).toBe(false);
     expect(lines).toEqual([
-      `  ${PKG}: the existing checkout cannot be moved aside (EXDEV); it is removed and ${PIN.slice(0, 12)} is fetched from origin at depth 1.`,
+      `  ${PKG}: the existing checkout could not be moved aside (EXDEV) and was removed; ${PIN.slice(0, 12)} is fetched from origin at depth 1.`,
       `  ${PKG}: fetching ${URL} at ${PIN.slice(0, 12)} at depth 1 -> ${DEST}`,
     ]);
   });
 
   it("a removal of the checkout that fails after an EXDEV move stops the sync before any git call, with the checkout left in place", () => {
     const deps = makeDeps({ existing: true, failRename: "EXDEV", failRemoval: DEST });
-    const { result, thrown } = run(deps);
+    const { result, thrown, lines } = run(deps);
     expect(result).toBeNull();
     expect(String(thrown?.message)).toMatch(/EBUSY/);
     expect(deps.calls).toEqual([]);
     expect(deps.removed).toEqual([DEST]);
+    // The removal failed, so no line says the checkout was removed.
+    expect(lines).toEqual([]);
     expect(deps.state.exists.has(path.join(DEST, ".git"))).toBe(true);
     expect(deps.state.exists.has(SOURCE)).toBe(false);
   });
