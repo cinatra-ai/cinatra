@@ -364,6 +364,15 @@ export async function syncCinatraDevExtensions({
       "[cinatra dev-extensions] --shallow runs in CI only (CI=true): it replaces every existing checkout, local edits included.",
     );
   }
+  // The shallow road keeps every declared checkout it finds (in CI, restored
+  // from the actions/cache entry), so it must rebuild every one of them: a
+  // filter would keep an unselected restored checkout unverified, and an empty
+  // selection would return before the prune.
+  if (flags.shallow && (flags.select.length > 0 || flags.kinds.length > 0 || flags.exclude.length > 0)) {
+    throw new Error(
+      "[cinatra dev-extensions] --shallow rebuilds every declared checkout: --select, --kind and --exclude are refused.",
+    );
+  }
   // Fail-closed BEFORE any git work: every config entry must be pinnable, or
   // pinned sync refuses outright (a partially-pinned universe would mix
   // committed state with floating tips).
@@ -395,7 +404,8 @@ export async function syncCinatraDevExtensions({
   // surface (`exists`/`git`/`mkdirp`/`readdir`) that `syncOneRepo` needs.
   const realDeps = deps ? { ...defaultRepoSyncDeps(), ...deps } : defaultRepoSyncDeps();
   if (flags.shallow) {
-    // Every declared entry, selected or not, keeps its checkout.
+    // Every declared entry keeps its checkout; with no filter (refused above)
+    // every one of them is selected and rebuilt below.
     const declaredDests = Object.entries(config).map(([pkgName, spec]) => destDirForExtension(pkgName, spec, targetRoot));
     const prune = deps?.pruneToDeclaredCheckouts ?? pruneToDeclaredCheckouts;
     prune({ extRoot: path.join(targetRoot, "extensions"), declaredDests, log });

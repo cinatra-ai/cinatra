@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
 import path from "node:path";
 
 // ---------------------------------------------------------------------------
@@ -57,10 +57,34 @@ export function isLocalGitRemote(url) {
 }
 
 // Strip credentials embedded in a URL before logging (e.g. a
-// `https://<token>@github.com/...` override leaks a PAT into CI/dev logs).
+// `https://<token>@github.com/...` override leaks a PAT into CI/dev logs):
+// the user info of a scheme URL, its query and fragment (`?access_token=`),
+// and the user info of an scp-style remote (`<token>@github.com:`), except
+// the conventional `git@`. Works on a bare URL and on a git failure line.
 export function redactGitUrl(url) {
   if (typeof url !== "string") return String(url);
-  return url.replace(/(\bhttps?:\/\/)[^@/\s]*@/gi, "$1***@").replace(/(\bssh:\/\/)[^@/\s]*@/gi, "$1***@");
+  return url
+    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^@/\s]*@/gi, "$1***@")
+    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/[^\s?#'"]*)([?#])[^\s'"]*/gi, "$1$2***")
+    .replace(/(^|[\s'"(])([^\s'"()@/]+)@([a-z0-9.-]+):/gi, (m, pre, user, host) =>
+      user === "git" ? m : `${pre}***@${host}:`,
+    );
+}
+
+// The shallow road stores the URL in a checkout that CI saves to the
+// actions/cache entry, so only a plain form is accepted there: GitHub over
+// https (no user info), ssh://git@ or git@github.com:, file:// or an absolute
+// path, with no further "@", no query and no fragment. Returns why a URL is
+// refused, or null.
+export function shallowRemoteRefusal(url) {
+  const u = String(url).trim();
+  const m = u.match(/^(?:https:\/\/github\.com\/|ssh:\/\/git@github\.com\/|git@github\.com:|file:\/\/)(.*)$/s);
+  const rest = m ? m[1] : path.isAbsolute(u) ? u : null;
+  if (rest === null) {
+    return "it is not in a plain form (https://github.com/, ssh://git@github.com/, git@github.com:, file:// or an absolute path) that can be checked for them";
+  }
+  if (/[@?#]/.test(rest)) return "it carries user info, a query or a fragment";
+  return null;
 }
 
 // Remote allowlist: GitHub over https/ssh/scp (real extension + app repos) OR a
@@ -234,19 +258,50 @@ export function shallowSourceDirFor(dest) {
   return path.join(path.dirname(dest), `.${path.basename(dest)}.restored`);
 }
 
+// Why a moved copy is not offered as a source of objects, or null. Only a
+// plain repository directory is: itself and its `.git` real directories, with a real
+// `objects` directory, no alternates (which would make upload-pack serve
+// objects from another store) and no `commondir` (a linked worktree's pointer
+// to another repository). Nothing here runs git; only an absent path is
+// absent, any other read error refuses the copy.
+function shallowSourceRefusal(source, lstat) {
+  const kind = (rel) => {
+    try {
+      const st = lstat(path.join(source, ...rel));
+      return st.isSymbolicLink() ? "link" : st.isDirectory() ? "dir" : "file";
+    } catch (err) {
+      return err?.code === "ENOENT" ? "absent" : "unreadable";
+    }
+  };
+  if (kind([]) !== "dir") return "it is not a directory";
+  if (kind([".git"]) !== "dir") return ".git is not a directory";
+  if (kind([".git", "objects"]) !== "dir") return ".git/objects is not a directory";
+  for (const rel of [["objects", "info", "alternates"], ["objects", "info", "http-alternates"], ["commondir"]]) {
+    if (kind([".git", ...rel]) !== "absent") return `it has .git/${rel.join("/")}`;
+  }
+  return null;
+}
+
 /**
  * Shallow pinned sync of one repository (cinatra#4484, CI only). The
  * destination is always made new: `git init`, `git remote add origin <url>`, a
  * depth-1 fetch of exactly `sha`, a detached checkout and a HEAD read.
  *
  * An existing checkout (in CI, one the clone-extensions action restored from
- * the actions/cache entry) is never used as a repository: no git command runs
- * in it, so its config, hooks, index, replace refs and files are never read.
- * It is moved aside and offered only as a SOURCE of objects, over `file://`:
- * `git upload-pack` serves it (it is built to serve untrusted repositories),
- * and the receiving side hashes every object itself and checks that the pin's
- * commit and tree are complete. When it cannot serve the pin, the pin is
- * fetched from origin. The moved copy is removed in every case.
+ * the actions/cache entry) is never the cwd or git dir of a git call of this
+ * sync: every call runs in the new destination or its parent, so no checkout,
+ * status or index command ever runs in it. It is moved aside and, when it is
+ * a plain repository directory (shallowSourceRefusal), offered only as a
+ * SOURCE of objects over `file://`. That fetch starts `git upload-pack` in the
+ * moved copy, the one git process that opens it: upload-pack reads the copy's
+ * config (with its includes), refs, shallow file and object store, and a
+ * hostile copy can make that fetch fail, which falls back to origin. What
+ * holds is on the receiving side: it hashes every object it receives, checks
+ * that the pin's commit and its whole tree are present, and the checkout's
+ * HEAD must equal the pin. Config includes are not tested. When the copy
+ * cannot serve the pin, the pin is fetched from origin. The moved copy is
+ * removed after a success and after a failure; a failing move, or a failing
+ * removal of a stale copy before it, stops the sync with it left in place.
  *
  * Returns the result, or null when origin answered the depth-1 fetch with
  * anything but a transient network failure (for example a server that refuses
@@ -259,6 +314,7 @@ function syncShallowPinned({ pkgName, url, sha, dest, deps, log }) {
   const { git } = deps;
   const removeTree = deps.removeTree ?? ((p) => rmSync(p, { recursive: true, force: true }));
   const rename = deps.rename ?? ((from, to) => renameSync(from, to));
+  const lstat = deps.lstat ?? ((p) => lstatSync(p));
   const pin12 = sha.slice(0, 12);
   const source = shallowSourceDirFor(dest);
   // A moved copy left by an interrupted earlier run is this road's own.
@@ -291,7 +347,10 @@ function syncShallowPinned({ pkgName, url, sha, dest, deps, log }) {
     git(["init", "--quiet", "--", dest], path.dirname(dest));
     git(["remote", "add", "origin", url], dest);
     let fetched = false;
-    if (haveSource) {
+    const refused = haveSource ? shallowSourceRefusal(source, lstat) : null;
+    if (refused !== null) {
+      log(`  ${pkgName}: the existing checkout is not read as a source of objects (${refused}); fetching ${pin12} from origin at depth 1.`);
+    } else if (haveSource) {
       stage = "source";
       try {
         git(["fetch", "--quiet", "--depth", "1", "--no-tags", `file://${path.resolve(source)}`, sha], dest);
@@ -424,10 +483,11 @@ export function syncOneRepo({
     }
     // The URL is stored in the new checkout's .git/config, and in CI that tree
     // is saved to the actions/cache entry: never with a credential in it.
-    if (/^[a-z][a-z0-9+.-]*:\/\/[^/@\s]+@/i.test(url.trim()) && !/^ssh:\/\/git@github\.com\//i.test(url.trim())) {
+    const why = shallowRemoteRefusal(url);
+    if (why !== null) {
       throw new Error(
-        `${pkgName}: refusing a shallow sync of a remote URL that carries credentials ("${redactGitUrl(url)}") — ` +
-          `the checkout is cached in CI.`,
+        `${pkgName}: refusing a shallow sync of a remote URL that carries credentials, a query or a fragment ` +
+          `("${redactGitUrl(url)}": ${why}) — the checkout is cached in CI.`,
       );
     }
     const done = syncShallowPinned({ pkgName, url, sha, dest, deps, log });
