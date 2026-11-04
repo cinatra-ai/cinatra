@@ -445,6 +445,24 @@ describe("syncCinatraDevExtensions --pinned — sha plumbing + override semantic
     }
   });
 
+  it("--pinned --shallow with an empty filter value is no filter: every declared checkout is rebuilt (cinatra#4484)", async () => {
+    for (const filter of [["--select", ""], ["--select", ","], ["--select"]]) {
+      const gitCalls = [];
+      const prunes = [];
+      const r = await syncCinatraDevExtensions({
+        repoRoot: "/repo",
+        targetRoot: "/repo",
+        argv: ["--pinned", "--shallow", ...filter],
+        env: { CI: "true" },
+        log: () => {},
+        deps: { ...makeDeps(gitCalls), pruneToDeclaredCheckouts: (a) => prunes.push(a) },
+      });
+      expect(prunes.length, filter.join(" ")).toBe(1);
+      expect(r.results.map((x) => x.pkgName), filter.join(" ")).toEqual(["@cinatra-ai/resend-connector"]);
+      expect(gitCalls, filter.join(" ")).toContain(`fetch --quiet --depth 1 --no-tags origin ${SHA_B}`);
+    }
+  });
+
   it("--pinned without --shallow never prunes the tree (cinatra#4484)", async () => {
     const prunes = [];
     await syncCinatraDevExtensions({

@@ -123,6 +123,7 @@ function makeDeps({
     lstat: (p) => {
       const t = state.types[p];
       if (!t) throw Object.assign(new Error(`ENOENT: ${p}`), { code: "ENOENT" });
+      if (t === "eacces") throw Object.assign(new Error(`EACCES: ${p}`), { code: "EACCES" });
       return { isDirectory: () => t === "dir", isSymbolicLink: () => t === "link", isFile: () => t === "file" };
     },
     readdir: (p) => {
@@ -538,6 +539,11 @@ describe("syncOneRepo --shallow — an existing (cache-restored) checkout is onl
       "a .git/objects/info/alternates": (t, g) => (t[path.join(g, "objects", "info", "alternates")] = "file"),
       "a .git/objects/info/http-alternates": (t, g) => (t[path.join(g, "objects", "info", "http-alternates")] = "file"),
       "a .git/commondir": (t, g) => (t[path.join(g, "commondir")] = "file"),
+      "a checkout that is a file": (t, g) => (t[path.dirname(g)] = "file"),
+      "no .git": (t, g) => delete t[g],
+      "a .git/objects that is a file": (t, g) => (t[path.join(g, "objects")] = "file"),
+      "a .git that cannot be read": (t, g) => (t[g] = "eacces"),
+      "an alternates path that cannot be read": (t, g) => (t[path.join(g, "objects", "info", "alternates")] = "eacces"),
     };
     for (const [label, gitShape] of Object.entries(shapes)) {
       const deps = makeDeps({ existing: true, gitShape });
@@ -574,6 +580,40 @@ describe("redactGitUrl — a query, a fragment and scp-style user info are never
     const line = r("fatal: unable to access 'https://github.com/cinatra-ai/x.git/?access_token=secret123': The requested URL returned error: 403");
     expect(line).not.toMatch(/secret123/);
     expect(line).toMatch(/^fatal: unable to access 'https:\/\/github\.com\/cinatra-ai\/x\.git\/\?\*\*\*': The requested URL returned error: 403$/);
+  });
+
+  it("hides a query or fragment of an scp-style or absolute-path remote, and a password that holds an @", () => {
+    const r = repoSync.redactGitUrl;
+    expect(r("git@github.com:cinatra-ai/x.git?access_token=secret123")).toBe("git@github.com:cinatra-ai/x.git?***");
+    expect(r("tok:secret@123@github.com:cinatra-ai/x.git#secret123")).toBe("***@github.com:cinatra-ai/x.git#***");
+    expect(r("https://user:p@ssword123@github.com/cinatra-ai/x.git")).toBe("https://***@github.com/cinatra-ai/x.git");
+    expect(r("/srv/mirror/x.git?secret123")).toBe("/srv/mirror/x.git?***");
+    expect(r("file:///srv/mirror/x.git#secret123")).toBe("file:///srv/mirror/x.git#***");
+    const line = r("fatal: 'secret123@github.com:cinatra-ai/x.git?t=secret456' does not appear to be a git repository");
+    expect(line).toBe("fatal: '***@github.com:cinatra-ai/x.git?***' does not appear to be a git repository");
+    expect(r("/srv/mirror/x.git")).toBe("/srv/mirror/x.git");
+    expect(r("fatal: unable to read /srv/mirror/x.git/config")).toBe("fatal: unable to read /srv/mirror/x.git/config");
+  });
+
+  it("a remote with a query on the scp or absolute-path form, or a password with an @, is never printed on any road", () => {
+    // The scp and path forms pass the GitHub-or-local allowlist and are refused by the shallow check; the https form with an
+    // "@" in its password reads as another host, so the allowlist refuses it first, on both roads.
+    for (const [url, shallowRefusal] of [
+      ["git@github.com:cinatra-ai/blog-pipeline-agent.git?access_token=secret123", /carries credentials, a query or a fragment/],
+      ["/srv/mirror/blog-pipeline-agent.git?secret123", /carries credentials, a query or a fragment/],
+      ["https://user:p@ssword123@github.com/cinatra-ai/blog-pipeline-agent.git", /refusing a git remote that is not GitHub or a local path/],
+    ]) {
+      for (const shallow of [false, true]) {
+        const deps = makeDeps();
+        const { thrown, lines } = run(deps, { url, shallow });
+        const said = `${String(thrown?.message ?? "")}\n${lines.join("\n")}`;
+        expect(said, `${url} shallow=${shallow}`).not.toMatch(/secret123|ssword123/);
+        if (shallow) {
+          expect(String(thrown?.message), url).toMatch(shallowRefusal);
+          expect(deps.calls, url).toEqual([]);
+        }
+      }
+    }
   });
 
   it("a refused scp-style remote with user info never prints it (any road)", () => {
