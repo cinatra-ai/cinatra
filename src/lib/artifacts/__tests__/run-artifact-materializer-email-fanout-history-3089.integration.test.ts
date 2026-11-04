@@ -67,18 +67,32 @@
  * built, connected and closed under one failure-collecting road: a malformed
  * setting (the pg constructor parses the URL at once), a refused connection, a
  * failed body or a failed close each fail the run, and a client that was built
- * is closed whatever failed after it. Each client reads the application name
- * of its session after the connect, and a session that carries another name
- * (a URL's own `application_name` wins over the Client option) fails the run:
- * the teardown finds the tier's sessions by that name. The teardown runs every
- * step (schema drop, a check that no session of the tier is left open, blob
- * root, process state) whatever fails, and then fails the run naming each step
- * that failed: a tier that cannot drop its schema, or that leaves a session
- * open, does not finish green.
+ * is closed whatever failed after it. Each client reads its own session after
+ * the connect: a session that carries another name (a URL's own
+ * `application_name` wins over the Client option) fails the run, and the
+ * session's backend (its pid and start time) is recorded. The teardown finds a
+ * session of the tier that was left open by that backend, so a session that
+ * changed its name after the connect is still found. The teardown runs every
+ * step (schema drop, a check that nothing outside the tier's schema changed, a
+ * check that no session of the tier is left open, blob root, process state)
+ * whatever fails, and then fails the run naming each step that failed: a tier
+ * that cannot drop its schema, that changes a shared object, or that leaves a
+ * session open, does not finish green.
  *
- * ISOLATION (the #3030 / #3032 pattern): a fresh schema from the CANONICAL
- * `buildCreateStoreSchemaQueries` DDL; the artifact blob root is a temp dir;
- * every app module is imported in `beforeAll` after the env is set, because
+ * ISOLATION: a fresh schema from the CANONICAL `buildCreateStoreSchemaQueries`
+ * DDL, of which the setup runs only the statements aimed at that schema. The
+ * canonical build also alters tables of `public` (Better Auth's `team`,
+ * `member`, `user`, `organization` and `session`) and puts triggers on them.
+ * The setup takes the repository's replay selection (`selectReplayStatements`,
+ * cinatra#3559, which leaves out the statements on shared `public` tables),
+ * then runs a statement only when its target is in the fixture schema, and
+ * refuses to run the build when it cannot read a statement's target. Before the build, the setup reads every
+ * object outside the fixture schema (schemas, relations, columns, constraints,
+ * indexes, triggers, functions, types, policies, rules, extensions, event
+ * triggers, foreign data wrappers and servers, and each ordinary table's rows
+ * as a digest); the teardown reads them again after the drop and fails on any
+ * difference. The artifact blob root is a temp dir; every
+ * app module is imported in `beforeAll` after the env is set, because
  * `postgresSchema` is a module-load const.
  */
 import { mkdtempSync, rmSync } from "node:fs";
@@ -89,6 +103,7 @@ import { Client } from "pg";
 import { z } from "zod";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
+import { selectReplayStatements } from "@/lib/test-support/store-schema-replay";
 
 // PARTIAL mock, the #3030 posture: only the schema/connection the throwaway
 // schema needs and the metadata reads the data root consults are substituted;
@@ -272,6 +287,22 @@ type TierClient = {
  *  do not carry it. */
 const TIER_APPLICATION_NAME = "cinatra-3089-history-tier";
 
+/** A session of the tier, known by its backend: the pid and the backend's
+ *  start time. A later backend can reuse a pid, not also its start time; and
+ *  unlike the name, neither can change after the connect. */
+type TierSession = { pid: number; started: string };
+
+/** Every session the tier opened, recorded as its client connects. The
+ *  teardown finds a session of the tier that was left open by its backend,
+ *  whatever name the session carries by then. */
+const TIER_SESSIONS: TierSession[] = [];
+
+/** What each client reads of its own session after the connect: the name the
+ *  session carries, and its backend. */
+const SESSION_READ =
+  "SELECT current_setting('application_name') AS application_name, a.pid, a.backend_start::text AS started " +
+  "FROM pg_stat_activity a WHERE a.pid = pg_backend_pid()";
+
 /** A client on the tier's database. The pg constructor parses the URL at once,
  *  so a malformed setting throws here, inside the road below. The name given
  *  here is only asked for: the road below reads the name the session has. */
@@ -285,29 +316,44 @@ const NAME_REFUSED =
   `the session's application_name is not ${TIER_APPLICATION_NAME} (the connection string or the server ` +
   "set another), so the teardown could not find a session of the tier that was left open";
 
+/** Why a client whose session's backend cannot be read is refused. */
+const BACKEND_UNREAD =
+  "the session's backend (its pid and start time) could not be read, so the teardown could not find " +
+  "the session if it were left open";
+
 /**
- * Build and connect one client, then read the application name of its session.
- * A build failure leaves nothing to close; a client that was built and failed
- * after that is closed here, and the call fails naming the failed stage and any
- * failed close.
+ * Build and connect one client, then read its own session: the name it carries
+ * and its backend. A build failure leaves nothing to close; a client that was
+ * built and failed after that is closed here, and the call fails naming the
+ * failed stage and any failed close.
  *
  * The name is read from the session, not trusted from the option: pg merges
  * the connection string's own parameters over the Client options, so a URL
  * with an `application_name` of its own gives every session of the tier that
- * name instead. The teardown counts the sessions left open by the tier's name,
- * and would then count none, whatever was left open.
+ * name instead. The name is checked here once; the session can still change it
+ * later (a `SET application_name`), so the session's backend is recorded in
+ * `record` too, and the teardown finds a session left open by that backend.
  */
-async function openTierClient<C extends TierClient>(label: string, open: () => C): Promise<C> {
+async function openTierClient<C extends TierClient>(
+  label: string,
+  open: () => C,
+  record: TierSession[] = TIER_SESSIONS,
+): Promise<C> {
   let client: C | undefined;
   let stage = "build";
   try {
     client = open();
     stage = "connect";
     await client.connect();
-    stage = "name";
-    const res = await client.query("SHOW application_name");
-    const name = (res.rows[0] as { application_name?: unknown } | undefined)?.application_name;
-    if (name !== TIER_APPLICATION_NAME) throw new Error(NAME_REFUSED);
+    stage = "session";
+    const res = await client.query(SESSION_READ);
+    const row = (res.rows[0] ?? {}) as { application_name?: unknown; pid?: unknown; started?: unknown };
+    if (row.application_name !== TIER_APPLICATION_NAME) throw new Error(NAME_REFUSED);
+    const { pid, started } = row;
+    if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0 || typeof started !== "string" || started === "") {
+      throw new Error(BACKEND_UNREAD);
+    }
+    record.push({ pid, started });
     return client;
   } catch (err) {
     const failed = [`${stage}: ${message(err)}`];
@@ -331,8 +377,9 @@ async function withTierClient<C extends TierClient, T>(
   label: string,
   open: () => C,
   body: (client: C) => Promise<T>,
+  record: TierSession[] = TIER_SESSIONS,
 ): Promise<T> {
-  const client = await openTierClient(label, open);
+  const client = await openTierClient(label, open, record);
   const failed: string[] = [];
   let out: T | undefined;
   try {
@@ -349,24 +396,180 @@ async function withTierClient<C extends TierClient, T>(
   return out as T;
 }
 
-/** The sessions of the tier still open on its database, other than the
- *  asking one. A closed client's backend ends a moment after the close, so the
- *  count is read again for up to five seconds before a session is called left
- *  open. */
+/** The pids of the tier's sessions open now, other than the asking one: each
+ *  session in `sessions` found by its backend (pid and start time), whatever
+ *  name it carries now, and each session on this database that carries the
+ *  tier's name. One session counts once. */
+async function tierSessionsOpen(client: Client, sessions: readonly TierSession[] = TIER_SESSIONS): Promise<number[]> {
+  const res = await client.query<{ pid: number }>(
+    `SELECT a.pid FROM pg_stat_activity a
+      WHERE a.pid <> pg_backend_pid()
+        AND ((a.datname = current_database() AND a.application_name = $1)
+             OR EXISTS (SELECT 1 FROM unnest($2::int[], $3::timestamptz[]) AS s(pid, started)
+                         WHERE s.pid = a.pid AND s.started = a.backend_start))
+      ORDER BY a.pid`,
+    [TIER_APPLICATION_NAME, sessions.map((s) => s.pid), sessions.map((s) => s.started)],
+  );
+  return res.rows.map((r) => Number(r.pid));
+}
+
+/** How many sessions of the tier are still open, other than the asking one.
+ *  A closed client's backend ends a moment after the close, so the count is
+ *  read again for up to five seconds before a session is called left open. */
 async function tierSessionsLeft(client: Client): Promise<number> {
   let left = 0;
   for (let i = 0; i < 50; i += 1) {
-    const res = await client.query<{ n: number }>(
-      `SELECT count(*)::int AS n FROM pg_stat_activity
-        WHERE datname = current_database() AND application_name = $1 AND pid <> pg_backend_pid()`,
-      [TIER_APPLICATION_NAME],
-    );
-    left = Number(res.rows[0]?.n ?? 0);
+    left = (await tierSessionsOpen(client)).length;
     if (left === 0) return 0;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   return left;
 }
+
+// ---------------------------------------------------------------------------
+// The setup's reach: the statements of the canonical build it runs, and a
+// reading of every object outside the fixture schema.
+// ---------------------------------------------------------------------------
+
+/** One identifier, quoted or not. */
+const IDENT = String.raw`(?:"(?:[^"]|"")+"|[\w$]+)`;
+/** How the setup reads where a statement of the canonical build writes, by its
+ *  shape: an index or a trigger writes the table it is ON; any other object
+ *  writes the name that follows its kind. */
+const DDL_TARGETS: readonly RegExp[] = [
+  new RegExp(String.raw`^CREATE (?:UNIQUE )?INDEX (?:CONCURRENTLY )?(?:IF NOT EXISTS )?(?:${IDENT} )?ON (?:ONLY )?(\S+)`, "i"),
+  new RegExp(String.raw`^(?:CREATE (?:OR REPLACE )?(?:CONSTRAINT )?|DROP )TRIGGER (?:IF EXISTS )?${IDENT} (?:.*? )?ON (\S+)`, "i"),
+  new RegExp(
+    String.raw`^(?:CREATE (?:OR REPLACE )?|ALTER |DROP )(?:TABLE|FUNCTION|VIEW|MATERIALIZED VIEW|SEQUENCE|TYPE|SCHEMA|DOMAIN|EXTENSION|INDEX)(?: IF (?:NOT )?EXISTS)? (?:ONLY )?(\S+)`,
+    "i",
+  ),
+];
+
+/** The target of one statement as written (schema-qualified or not), or
+ *  undefined for a shape the setup does not read. */
+function ddlTarget(text: string): string | undefined {
+  const flat = text.trim().replace(/\s+/g, " ");
+  for (const shape of DDL_TARGETS) {
+    const m = shape.exec(flat);
+    if (m) return m[1];
+  }
+  return undefined;
+}
+
+/**
+ * Whether the setup runs one statement of the canonical build: only when its
+ * target is the fixture schema or an object qualified by it. A target in
+ * `public`, in another schema, or unqualified (it would land in the session's
+ * `search_path`, `public` first) is skipped. A statement whose target the setup
+ * cannot read stops the build: the setup never runs a statement it cannot place.
+ */
+function aimedAtFixture(text: string): boolean {
+  const target = ddlTarget(text);
+  if (target === undefined) {
+    throw new Error(
+      `the setup cannot tell which schema this statement writes, so it does not run the schema build: ${text.trim().slice(0, 80)}`,
+    );
+  }
+  return target === q(TEST_SCHEMA) || target.startsWith(`${q(TEST_SCHEMA)}.`);
+}
+
+/** The schemas the shared reading leaves out: the catalog's own and the
+ *  fixture schema, the one schema the tier may change. Toast and temporary
+ *  schemas are left out by their prefix. */
+const NOT_SHARED: readonly string[] = ["pg_catalog", "information_schema", TEST_SCHEMA];
+
+/** Every object outside the fixture schema, one line each. */
+const SHARED_CATALOG = `
+WITH ns AS (
+  SELECT oid, nspname FROM pg_namespace WHERE nspname <> ALL($1::text[]) AND nspname !~ '^pg_(toast|temp_)'
+)
+SELECT 'schema ' || ns.nspname AS line FROM ns
+UNION ALL
+SELECT 'relation ' || ns.nspname || '.' || c.relname || ' kind ' || c.relkind::text
+  FROM pg_class c JOIN ns ON ns.oid = c.relnamespace
+UNION ALL
+SELECT 'column ' || ns.nspname || '.' || c.relname || '.' || a.attname || ' ' || format_type(a.atttypid, a.atttypmod)
+       || CASE WHEN a.attnotnull THEN ' not null' ELSE '' END
+       || coalesce(' default ' || pg_get_expr(d.adbin, d.adrelid), '')
+  FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN ns ON ns.oid = c.relnamespace
+  LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+ WHERE a.attnum > 0 AND NOT a.attisdropped
+UNION ALL
+SELECT 'constraint ' || ns.nspname || '.' || coalesce(c.relname, '-') || ' ' || o.conname || ' ' || pg_get_constraintdef(o.oid)
+  FROM pg_constraint o JOIN ns ON ns.oid = o.connamespace LEFT JOIN pg_class c ON c.oid = o.conrelid
+UNION ALL
+SELECT 'index ' || ns.nspname || '.' || c.relname || ' ' || pg_get_indexdef(c.oid)
+  FROM pg_class c JOIN ns ON ns.oid = c.relnamespace WHERE c.relkind IN ('i', 'I')
+UNION ALL
+SELECT 'trigger ' || ns.nspname || '.' || c.relname || ' ' || t.tgname || ' ' || t.tgenabled::text || ' ' || pg_get_triggerdef(t.oid)
+  FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN ns ON ns.oid = c.relnamespace
+UNION ALL
+SELECT 'function ' || ns.nspname || '.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ') '
+       || md5(coalesce(p.prosrc, ''))
+  FROM pg_proc p JOIN ns ON ns.oid = p.pronamespace
+UNION ALL
+SELECT 'type ' || ns.nspname || '.' || t.typname || ' ' || t.typtype::text
+  FROM pg_type t JOIN ns ON ns.oid = t.typnamespace WHERE t.typtype IN ('d', 'e', 'r', 'm')
+UNION ALL
+SELECT 'enum ' || ns.nspname || '.' || t.typname || ' ' || e.enumlabel
+  FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid JOIN ns ON ns.oid = t.typnamespace
+UNION ALL
+SELECT 'policy ' || ns.nspname || '.' || c.relname || ' ' || p.polname || ' ' || p.polcmd::text
+       || coalesce(' using ' || pg_get_expr(p.polqual, p.polrelid), '')
+       || coalesce(' check ' || pg_get_expr(p.polwithcheck, p.polrelid), '')
+  FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid JOIN ns ON ns.oid = c.relnamespace
+UNION ALL
+SELECT 'rule ' || ns.nspname || '.' || c.relname || ' ' || r.rulename || ' ' || md5(pg_get_ruledef(r.oid))
+  FROM pg_rewrite r JOIN pg_class c ON c.oid = r.ev_class JOIN ns ON ns.oid = c.relnamespace
+UNION ALL
+SELECT 'extension ' || e.extname || ' ' || e.extversion || ' in ' || n.nspname
+  FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace
+UNION ALL
+SELECT 'event trigger ' || evtname || ' ' || evtevent || ' ' || evtenabled::text FROM pg_event_trigger
+UNION ALL
+SELECT 'foreign data wrapper ' || fdwname FROM pg_foreign_data_wrapper
+UNION ALL
+SELECT 'foreign server ' || s.srvname || ' on ' || w.fdwname
+  FROM pg_foreign_server s JOIN pg_foreign_data_wrapper w ON w.oid = s.srvfdw`;
+
+/**
+ * Read every object outside the fixture schema: each catalog line above, and
+ * each ordinary table's rows there as a count and a digest of their text
+ * forms. Sorted, so two readings compare as multisets. Not read: privileges,
+ * owners, roles, a sequence's value, settings of the database or a role,
+ * operators, casts, collations, text-search objects, publications, and the
+ * rows of a materialized view or a foreign table.
+ */
+async function readShared(client: Client): Promise<string[]> {
+  const catalog = await client.query<{ line: string }>(SHARED_CATALOG, [NOT_SHARED]);
+  const lines = catalog.rows.map((r) => r.line);
+  const tables = await client.query<{ ns: string; rel: string }>(
+    `SELECT n.nspname AS ns, c.relname AS rel FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE c.relkind = 'r' AND n.nspname <> ALL($1::text[]) AND n.nspname !~ '^pg_(toast|temp_)'
+      ORDER BY 1, 2`,
+    [NOT_SHARED],
+  );
+  for (const { ns, rel } of tables.rows) {
+    const res = await client.query<{ n: number; h: string }>(
+      `SELECT count(*)::int AS n, md5(coalesce(string_agg(t::text, chr(10) ORDER BY t::text), '')) AS h
+         FROM ${q(ns)}.${q(rel)} t`,
+    );
+    lines.push(`rows ${ns}.${rel} ${res.rows[0]?.n} ${res.rows[0]?.h}`);
+  }
+  return lines.sort();
+}
+
+/** The lines of one shared reading that the other lacks: "- line" for a line
+ *  only `before` has, "+ line" for one only `after` has (multiset). */
+function sharedChanges(before: readonly string[], after: readonly string[]): string[] {
+  const as = (lines: readonly string[]): Tables => new Map([["shared", { columns: [], rows: [...lines] }]]);
+  const gone = rowsGone(as(before), as(after)).shared ?? [];
+  const added = rowsAdded(as(before), as(after)).shared ?? [];
+  return [...gone.map((l) => `- ${l}`), ...added.map((l) => `+ ${l}`)].sort();
+}
+
+/** The shared reading the setup took before the schema build. */
+let sharedBefore: string[] | undefined;
 
 // ---------------------------------------------------------------------------
 // The byte reading: every relation of the schema by its kind, and every row of
@@ -765,16 +968,20 @@ beforeAll(async () => {
   process.env.CINATRA_ARTIFACT_DATA_ROOT = BLOB_ROOT;
 
   // The setup client is closed whatever the schema build does; a failed build
-  // fails the run, and the teardown below still runs every step.
+  // fails the run, and the teardown below still runs every step. The shared
+  // reading is taken once no schema of the tier exists, before the build.
   await withTierClient("setup", newTierClient, async (client) => {
     await client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`);
+    sharedBefore = await readShared(client);
     await client.query(`CREATE SCHEMA "${TEST_SCHEMA}"`);
     const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
-    for (const qy of buildCreateStoreSchemaQueries(TEST_SCHEMA)) {
-      const head = qy.text.trim().slice(0, 6).toUpperCase();
-      if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S") continue;
+    // The repository's one replay selection (cinatra#3559: the four statement
+    // heads, without the build's statements on shared `public` tables), and of
+    // that only what is aimed at the fixture schema.
+    for (const qy of selectReplayStatements(buildCreateStoreSchemaQueries(TEST_SCHEMA))) {
+      if (!aimedAtFixture(qy.text)) continue;
       try {
-        await client.query(qy.text, (qy as { values?: unknown[] }).values as never[]);
+        await client.query(qy.text, qy.values as never[]);
       } catch (err) {
         if (!message(err).includes("does not exist")) throw err;
       }
@@ -838,6 +1045,21 @@ afterAll(async () => {
         withTierClient("teardown", newTierClient, (client) =>
           client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`),
         ),
+    ],
+    [
+      "leave every object outside the tier's schema as the setup found it",
+      () =>
+        withTierClient("teardown", newTierClient, async (client) => {
+          if (sharedBefore === undefined) {
+            throw new Error("the objects outside the tier's schema were not read before the schema build");
+          }
+          const changes = sharedChanges(sharedBefore, await readShared(client));
+          if (changes.length > 0) {
+            throw new Error(
+              `${changes.length} line(s) of the reading outside the tier's schema changed: ${changes.slice(0, 20).join("; ")}`,
+            );
+          }
+        }),
     ],
     [
       "leave no session of the tier open",
@@ -1112,8 +1334,8 @@ describe.skipIf(!HAS_REAL_DB)(
           if (fail.connect) throw new Error(fail.connect);
         },
         query: async () => {
-          calls.push("name");
-          return { rows: [{ application_name: TIER_APPLICATION_NAME }] };
+          calls.push("session");
+          return { rows: [{ application_name: TIER_APPLICATION_NAME, pid: 4242, started: "2026-11-04 10:00:00.000001+00" }] };
         },
         end: async () => {
           calls.push("end");
@@ -1124,47 +1346,64 @@ describe.skipIf(!HAS_REAL_DB)(
         throw new Error("Invalid URL");
       };
       const take = () => calls.splice(0, calls.length);
+      // The stand-ins' sessions are kept here, never in the tier's own record.
+      const sessions: TierSession[] = [];
 
       // A malformed setting: the build throws, the body never runs, nothing is left to close.
       await expect(
-        withTierClient("teardown", malformed, async () => {
-          calls.push("run");
-        }),
+        withTierClient(
+          "teardown",
+          malformed,
+          async () => {
+            calls.push("run");
+          },
+          sessions,
+        ),
       ).rejects.toThrow("the teardown client failed (build: Invalid URL)");
       expect(take()).toEqual([]);
       // A refused connection: the body never runs, and the built client is closed.
       await expect(
-        withTierClient("setup", () => stand({ connect: "refused" }), async () => {
-          calls.push("run");
-        }),
+        withTierClient(
+          "setup",
+          () => stand({ connect: "refused" }),
+          async () => {
+            calls.push("run");
+          },
+          sessions,
+        ),
       ).rejects.toThrow("the setup client failed (connect: refused)");
       expect(take()).toEqual(["connect", "end"]);
       // A failed body and a failed close: the close still runs, and both are named.
       await expect(
-        withTierClient("setup", () => stand({ end: "the close was refused" }), async () => {
-          calls.push("run");
-          throw new Error("the schema build was refused");
-        }),
+        withTierClient(
+          "setup",
+          () => stand({ end: "the close was refused" }),
+          async () => {
+            calls.push("run");
+            throw new Error("the schema build was refused");
+          },
+          sessions,
+        ),
       ).rejects.toThrow("the setup client failed (run: the schema build was refused; close: the close was refused)");
-      expect(take()).toEqual(["connect", "name", "run", "end"]);
+      expect(take()).toEqual(["connect", "session", "run", "end"]);
       // A failed close alone fails the call.
       await expect(
-        withTierClient("teardown", () => stand({ end: "the close was refused" }), async () => "dropped"),
+        withTierClient("teardown", () => stand({ end: "the close was refused" }), async () => "dropped", sessions),
       ).rejects.toThrow("the teardown client failed (close: the close was refused)");
-      expect(take()).toEqual(["connect", "name", "end"]);
+      expect(take()).toEqual(["connect", "session", "end"]);
       // The reader's road: a refused connection closes the client and fails, naming a failed close too.
       await expect(
-        openTierClient("reader", () => stand({ connect: "refused", end: "the close was refused" })),
+        openTierClient("reader", () => stand({ connect: "refused", end: "the close was refused" }), sessions),
       ).rejects.toThrow("the reader client failed (connect: refused; close: the close was refused)");
       expect(take()).toEqual(["connect", "end"]);
       // A good client: the body's result, and one close.
-      await expect(withTierClient("teardown", () => stand(), async () => "dropped")).resolves.toBe("dropped");
-      expect(take()).toEqual(["connect", "name", "end"]);
+      await expect(withTierClient("teardown", () => stand(), async () => "dropped", sessions)).resolves.toBe("dropped");
+      expect(take()).toEqual(["connect", "session", "end"]);
       // In the teardown, a client that cannot be built is one failed step; the later steps run.
       const ran: string[] = [];
       await expect(
         runTeardown([
-          ["drop the tier's schema", () => withTierClient("teardown", malformed, async () => {})],
+          ["drop the tier's schema", () => withTierClient("teardown", malformed, async () => {}, sessions)],
           [
             "remove the blob root",
             () => {
@@ -1176,6 +1415,12 @@ describe.skipIf(!HAS_REAL_DB)(
         "the tier's teardown failed (1 step(s)): drop the tier's schema: the teardown client failed (build: Invalid URL)",
       );
       expect(ran).toEqual(["remove"]);
+      // Each client whose session was read, and only those, was recorded by its backend.
+      expect(sessions).toEqual([
+        { pid: 4242, started: "2026-11-04 10:00:00.000001+00" },
+        { pid: 4242, started: "2026-11-04 10:00:00.000001+00" },
+        { pid: 4242, started: "2026-11-04 10:00:00.000001+00" },
+      ]);
     });
 
     it("reads an ordinary table's rows, keeps an index or a sequence as shape, and refuses every other relation kind", () => {
@@ -1213,39 +1458,202 @@ describe.skipIf(!HAS_REAL_DB)(
         },
       });
       const take = () => calls.splice(0, calls.length);
-      const show = "SHOW application_name";
+      // The stand-ins' sessions are kept here, never in the tier's own record.
+      const sessions: TierSession[] = [];
+      const backend = { pid: 4242, started: "2026-11-04 10:00:00.000001+00" };
 
-      // The session carries the tier's name: the client is handed over open.
-      const good = stand({ rows: [{ application_name: TIER_APPLICATION_NAME }] });
-      await expect(openTierClient("reader", () => good)).resolves.toBe(good);
-      expect(take()).toEqual(["connect", show]);
+      // The session carries the tier's name: the client is handed over open,
+      // and its backend is recorded.
+      const good = stand({ rows: [{ application_name: TIER_APPLICATION_NAME, ...backend }] });
+      await expect(openTierClient("reader", () => good, sessions)).resolves.toBe(good);
+      expect(take()).toEqual(["connect", SESSION_READ]);
+      expect(sessions.splice(0, sessions.length)).toEqual([backend]);
       // Another name, as a URL with its own application_name gives the session:
       // the client is closed, the body never runs, and the call fails.
       await expect(
-        withTierClient("teardown", () => stand({ rows: [{ application_name: "another-app" }] }), async () => {
-          calls.push("run");
-        }),
-      ).rejects.toThrow(`the teardown client failed (name: ${NAME_REFUSED})`);
-      expect(take()).toEqual(["connect", show, "end"]);
+        withTierClient(
+          "teardown",
+          () => stand({ rows: [{ application_name: "another-app", ...backend }] }),
+          async () => {
+            calls.push("run");
+          },
+          sessions,
+        ),
+      ).rejects.toThrow(`the teardown client failed (session: ${NAME_REFUSED})`);
+      expect(take()).toEqual(["connect", SESSION_READ, "end"]);
       // No row, an empty name or no name column: refused as well.
-      for (const rows of [[], [{ application_name: "" }], [{}]]) {
-        await expect(openTierClient("setup", () => stand({ rows }))).rejects.toThrow(
-          `the setup client failed (name: ${NAME_REFUSED})`,
+      for (const rows of [[], [{ application_name: "", ...backend }], [{ ...backend }]]) {
+        await expect(openTierClient("setup", () => stand({ rows }), sessions)).rejects.toThrow(
+          `the setup client failed (session: ${NAME_REFUSED})`,
         );
-        expect(take()).toEqual(["connect", show, "end"]);
+        expect(take()).toEqual(["connect", SESSION_READ, "end"]);
+      }
+      // The tier's name, but a backend the teardown could not find it by: no
+      // pid, a pid that is not a positive whole number, no start time.
+      for (const read of [
+        { started: backend.started },
+        { pid: 0, started: backend.started },
+        { pid: -1, started: backend.started },
+        { pid: 42.5, started: backend.started },
+        { pid: "4242", started: backend.started },
+        { pid: 4242 },
+        { pid: 4242, started: "" },
+        { pid: 4242, started: 1730714400 },
+      ]) {
+        await expect(
+          openTierClient("setup", () => stand({ rows: [{ application_name: TIER_APPLICATION_NAME, ...read }] }), sessions),
+        ).rejects.toThrow(`the setup client failed (session: ${BACKEND_UNREAD})`);
+        expect(take()).toEqual(["connect", SESSION_READ, "end"]);
       }
       // The read itself fails, and so does the close: both are named.
       await expect(
-        openTierClient("reader", () => stand({ read: "the read was refused", end: "the close was refused" })),
-      ).rejects.toThrow("the reader client failed (name: the read was refused; close: the close was refused)");
-      expect(take()).toEqual(["connect", show, "end"]);
+        openTierClient("reader", () => stand({ read: "the read was refused", end: "the close was refused" }), sessions),
+      ).rejects.toThrow("the reader client failed (session: the read was refused; close: the close was refused)");
+      expect(take()).toEqual(["connect", SESSION_READ, "end"]);
       // The refusal never repeats the session's name.
-      const err = await openTierClient("reader", () => stand({ rows: [{ application_name: "another-app" }] })).catch(
-        (e: unknown) => e,
-      );
+      const err = await openTierClient(
+        "reader",
+        () => stand({ rows: [{ application_name: "another-app", ...backend }] }),
+        sessions,
+      ).catch((e: unknown) => e);
       expect(err).toBeInstanceOf(Error);
       expect(message(err)).not.toContain("another-app");
       take();
+      // A refused client is never recorded.
+      expect(sessions).toEqual([]);
+    });
+
+    it("runs only the build's statements aimed at the fixture schema, and refuses one whose target it cannot read", () => {
+      const F = q(TEST_SCHEMA);
+      for (const text of [
+        `CREATE SCHEMA IF NOT EXISTS ${F}`,
+        `CREATE TABLE IF NOT EXISTS ${F}."objects" (id text PRIMARY KEY)`,
+        `ALTER TABLE ${F}."objects"\n      ADD COLUMN IF NOT EXISTS x text`,
+        `CREATE UNIQUE INDEX IF NOT EXISTS objects_x_idx ON ${F}."objects" (x)`,
+        `CREATE INDEX IF NOT EXISTS objects_data_thread_idx ON ${F}."objects" (org_id, (data->>'threadId'))`,
+        `CREATE OR REPLACE FUNCTION ${F}.enqueue_team_slug_move() RETURNS trigger LANGUAGE plpgsql AS $body$
+          BEGIN PERFORM 1 FROM public."organization"; RETURN NEW; END; $body$`,
+        `CREATE TRIGGER trg_x BEFORE UPDATE OR DELETE ON ${F}."representation" FOR EACH ROW EXECUTE FUNCTION ${F}.f()`,
+        `DROP TRIGGER IF EXISTS trg_x ON ${F}."representation"`,
+        `DROP TABLE IF EXISTS ${F}."legacy" CASCADE`,
+      ]) {
+        expect(aimedAtFixture(text), text).toBe(true);
+      }
+      // The canonical build's statements on public, another schema, a name that
+      // only starts like the fixture's, an unqualified name, an extension.
+      for (const text of [
+        `ALTER TABLE public."team" ADD COLUMN IF NOT EXISTS slug text`,
+        `ALTER TABLE public."team" ALTER COLUMN slug SET NOT NULL`,
+        `ALTER TABLE IF EXISTS "public"."session" ADD COLUMN IF NOT EXISTS cinatra_db_created_at timestamptz DEFAULT now()`,
+        `CREATE UNIQUE INDEX IF NOT EXISTS member_org_user_uniq ON public."member" ("organizationId", "userId")`,
+        `DROP TRIGGER IF EXISTS user_slug_move_trg ON public."user"`,
+        `CREATE TRIGGER user_slug_move_trg AFTER UPDATE OF username ON public."user"
+        FOR EACH ROW EXECUTE FUNCTION ${F}.enqueue_user_slug_move()`,
+        `CREATE TABLE IF NOT EXISTS "cinatra_test_another_tier"."objects" (id text)`,
+        `CREATE TABLE IF NOT EXISTS ${q(`${TEST_SCHEMA}_probe`)}."objects" (id text)`,
+        `CREATE TABLE IF NOT EXISTS assistant_profiles (id text PRIMARY KEY)`,
+        `CREATE INDEX IF NOT EXISTS objects_x_idx ON objects (x)`,
+        `CREATE EXTENSION IF NOT EXISTS pgcrypto`,
+        `CREATE SCHEMA IF NOT EXISTS "cinatra"`,
+      ]) {
+        expect(aimedAtFixture(text), text).toBe(false);
+      }
+      for (const text of [
+        "ALTER DATABASE postgres SET search_path = public",
+        "ALTER ROLE postgres SET search_path = public",
+        "ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO PUBLIC",
+        "CREATE UNLOGGED TABLE scratch (id text)",
+        'CREATE POLICY p ON public."user" USING (true)',
+      ]) {
+        expect(() => aimedAtFixture(text), text).toThrow("the setup cannot tell which schema this statement writes");
+      }
+    });
+
+    it("reads every object outside the fixture schema, and finds a change to one and to a table's rows there", async () => {
+      // Two readings compare as multisets, naming each line one of them lacks.
+      expect(sharedChanges(["a", "a", "b"], ["a", "c"])).toEqual(["+ c", "- a", "- b"]);
+      expect(sharedChanges(["a", "b"], ["b", "a"])).toEqual([]);
+
+      // A schema outside the fixture schema, as another tier's schema or
+      // public would be, made inside one transaction that is rolled back: the
+      // reading sees the session's own changes, and nothing is ever committed.
+      const PROBE = `${TEST_SCHEMA}_probe`;
+      const P = q(PROBE);
+      await withTierClient("probe", newTierClient, async (client) => {
+        const start = await readShared(client);
+        // Nothing outside the fixture schema moved since the setup's reading.
+        expect(sharedBefore).toBeDefined();
+        expect(sharedChanges(sharedBefore ?? [], start)).toEqual([]);
+        await client.query("BEGIN");
+        try {
+          await client.query(`CREATE SCHEMA ${P}`);
+          await client.query(`CREATE TABLE ${P}."t" (id text PRIMARY KEY, v integer NOT NULL DEFAULT 1)`);
+          await client.query(`CREATE FUNCTION ${P}."f"() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN RETURN NEW; END $f$`);
+          await client.query(`CREATE TRIGGER t_touch BEFORE INSERT ON ${P}."t" FOR EACH ROW EXECUTE FUNCTION ${P}."f"()`);
+          const made = await readShared(client);
+          const added = sharedChanges(start, made);
+          for (const prefix of [
+            `+ schema ${PROBE}`,
+            `+ relation ${PROBE}.t kind r`,
+            `+ relation ${PROBE}.t_pkey kind i`,
+            `+ column ${PROBE}.t.v integer not null default 1`,
+            `+ constraint ${PROBE}.t t_pkey PRIMARY KEY (id)`,
+            `+ index ${PROBE}.t_pkey CREATE UNIQUE INDEX t_pkey ON `,
+            `+ trigger ${PROBE}.t t_touch O CREATE TRIGGER t_touch BEFORE INSERT ON `,
+            `+ function ${PROBE}.f() `,
+            `+ rows ${PROBE}.t 0 `,
+          ]) {
+            expect(added.some((line) => line.startsWith(prefix)), prefix).toBe(true);
+          }
+          expect(added.every((line) => line.startsWith("+ ") && line.includes(PROBE))).toBe(true);
+          // A row added there.
+          await client.query(`INSERT INTO ${P}."t" (id) VALUES ('one')`);
+          const filled = await readShared(client);
+          expect(sharedChanges(made, filled).map((line) => line.split(" ").slice(0, 4).join(" "))).toEqual([
+            `+ rows ${PROBE}.t 1`,
+            `- rows ${PROBE}.t 0`,
+          ]);
+          // A trigger there turned off, as a trigger replaced by another would read.
+          await client.query(`ALTER TABLE ${P}."t" DISABLE TRIGGER t_touch`);
+          expect(sharedChanges(filled, await readShared(client)).map((line) => line.split(" ").slice(0, 5).join(" "))).toEqual([
+            `+ trigger ${PROBE}.t t_touch D`,
+            `- trigger ${PROBE}.t t_touch O`,
+          ]);
+        } finally {
+          await client.query("ROLLBACK");
+        }
+        // Rolled back, the probe leaves the reading as it started.
+        expect(sharedChanges(start, await readShared(client))).toEqual([]);
+      });
+    });
+
+    it("finds a session of the tier by its backend after the session changed its name", async () => {
+      const renamed = await openTierClient("renamed", newTierClient);
+      let open = true;
+      try {
+        const pid = Number(((await renamed.query("SELECT pg_backend_pid() AS pid")).rows[0] as { pid: number }).pid);
+        // A reader's own SET, after the name was checked at the connect.
+        await renamed.query("SET application_name = 'k3089-renamed-after-connect'");
+        const now = ((await renamed.query("SHOW application_name")).rows[0] as { application_name: string }).application_name;
+        expect(now).toBe("k3089-renamed-after-connect");
+        await withTierClient("session check", newTierClient, async (client) => {
+          // The teardown's reading finds it by its backend; a reading by the
+          // tier's name alone does not.
+          expect(await tierSessionsOpen(client)).toContain(pid);
+          expect(await tierSessionsOpen(client, [])).not.toContain(pid);
+          await renamed.end();
+          open = false;
+          // Closed, it is gone: its backend ends a moment after the close.
+          let still = true;
+          for (let i = 0; i < 50 && still; i += 1) {
+            still = (await tierSessionsOpen(client)).includes(pid);
+            if (still) await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+          expect(still).toBe(false);
+        });
+      } finally {
+        if (open) await renamed.end();
+      }
     });
   },
 );
