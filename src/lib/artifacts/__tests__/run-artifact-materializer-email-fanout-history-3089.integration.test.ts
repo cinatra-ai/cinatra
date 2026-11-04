@@ -67,11 +67,14 @@
  * built, connected and closed under one failure-collecting road: a malformed
  * setting (the pg constructor parses the URL at once), a refused connection, a
  * failed body or a failed close each fail the run, and a client that was built
- * is closed whatever failed after it. The teardown runs every step (schema
- * drop, a check that no session of the tier is left open, blob root, process
- * state) whatever fails, and then fails the run naming each step that failed:
- * a tier that cannot drop its schema, or that leaves a session open, does not
- * finish green.
+ * is closed whatever failed after it. Each client reads the application name
+ * of its session after the connect, and a session that carries another name
+ * (a URL's own `application_name` wins over the Client option) fails the run:
+ * the teardown finds the tier's sessions by that name. The teardown runs every
+ * step (schema drop, a check that no session of the tier is left open, blob
+ * root, process state) whatever fails, and then fails the run naming each step
+ * that failed: a tier that cannot drop its schema, or that leaves a session
+ * open, does not finish green.
  *
  * ISOLATION (the #3030 / #3032 pattern): a fresh schema from the CANONICAL
  * `buildCreateStoreSchemaQueries` DDL; the artifact blob root is a temp dir;
@@ -257,8 +260,12 @@ async function sql(text: string, values: unknown[] = []) {
 // ---------------------------------------------------------------------------
 
 /** What the tier needs of a client: the pg Client, or a stand-in in the
- *  in-file test of this road. */
-type TierClient = { connect(): Promise<unknown>; end(): Promise<unknown> };
+ *  in-file tests of this road. */
+type TierClient = {
+  connect(): Promise<unknown>;
+  query(text: string): Promise<{ rows: unknown[] }>;
+  end(): Promise<unknown>;
+};
 
 /** Every client the tier opens carries this name, so the teardown can find a
  *  session of the tier that was left open. The production write path's pools
@@ -266,24 +273,44 @@ type TierClient = { connect(): Promise<unknown>; end(): Promise<unknown> };
 const TIER_APPLICATION_NAME = "cinatra-3089-history-tier";
 
 /** A client on the tier's database. The pg constructor parses the URL at once,
- *  so a malformed setting throws here, inside the road below. */
+ *  so a malformed setting throws here, inside the road below. The name given
+ *  here is only asked for: the road below reads the name the session has. */
 const newTierClient = () => new Client({ connectionString: DB_URL, application_name: TIER_APPLICATION_NAME });
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
+/** Why a client whose session carries another name is refused. The message
+ *  never repeats that name: it comes from the URL or the server. */
+const NAME_REFUSED =
+  `the session's application_name is not ${TIER_APPLICATION_NAME} (the connection string or the server ` +
+  "set another), so the teardown could not find a session of the tier that was left open";
+
 /**
- * Build and connect one client. A build failure leaves nothing to close; a
- * client that was built and did not connect is closed here, and the call fails
- * naming the failed stage and any failed close.
+ * Build and connect one client, then read the application name of its session.
+ * A build failure leaves nothing to close; a client that was built and failed
+ * after that is closed here, and the call fails naming the failed stage and any
+ * failed close.
+ *
+ * The name is read from the session, not trusted from the option: pg merges
+ * the connection string's own parameters over the Client options, so a URL
+ * with an `application_name` of its own gives every session of the tier that
+ * name instead. The teardown counts the sessions left open by the tier's name,
+ * and would then count none, whatever was left open.
  */
 async function openTierClient<C extends TierClient>(label: string, open: () => C): Promise<C> {
   let client: C | undefined;
+  let stage = "build";
   try {
     client = open();
+    stage = "connect";
     await client.connect();
+    stage = "name";
+    const res = await client.query("SHOW application_name");
+    const name = (res.rows[0] as { application_name?: unknown } | undefined)?.application_name;
+    if (name !== TIER_APPLICATION_NAME) throw new Error(NAME_REFUSED);
     return client;
   } catch (err) {
-    const failed = [`${client === undefined ? "build" : "connect"}: ${message(err)}`];
+    const failed = [`${stage}: ${message(err)}`];
     if (client !== undefined) {
       try {
         await client.end();
@@ -1084,6 +1111,10 @@ describe.skipIf(!HAS_REAL_DB)(
           calls.push("connect");
           if (fail.connect) throw new Error(fail.connect);
         },
+        query: async () => {
+          calls.push("name");
+          return { rows: [{ application_name: TIER_APPLICATION_NAME }] };
+        },
         end: async () => {
           calls.push("end");
           if (fail.end) throw new Error(fail.end);
@@ -1115,12 +1146,12 @@ describe.skipIf(!HAS_REAL_DB)(
           throw new Error("the schema build was refused");
         }),
       ).rejects.toThrow("the setup client failed (run: the schema build was refused; close: the close was refused)");
-      expect(take()).toEqual(["connect", "run", "end"]);
+      expect(take()).toEqual(["connect", "name", "run", "end"]);
       // A failed close alone fails the call.
       await expect(
         withTierClient("teardown", () => stand({ end: "the close was refused" }), async () => "dropped"),
       ).rejects.toThrow("the teardown client failed (close: the close was refused)");
-      expect(take()).toEqual(["connect", "end"]);
+      expect(take()).toEqual(["connect", "name", "end"]);
       // The reader's road: a refused connection closes the client and fails, naming a failed close too.
       await expect(
         openTierClient("reader", () => stand({ connect: "refused", end: "the close was refused" })),
@@ -1128,7 +1159,7 @@ describe.skipIf(!HAS_REAL_DB)(
       expect(take()).toEqual(["connect", "end"]);
       // A good client: the body's result, and one close.
       await expect(withTierClient("teardown", () => stand(), async () => "dropped")).resolves.toBe("dropped");
-      expect(take()).toEqual(["connect", "end"]);
+      expect(take()).toEqual(["connect", "name", "end"]);
       // In the teardown, a client that cannot be built is one failed step; the later steps run.
       const ran: string[] = [];
       await expect(
@@ -1163,6 +1194,58 @@ describe.skipIf(!HAS_REAL_DB)(
       expect([...before.tables.keys()]).toEqual(
         [...before.shape].filter(([, r]) => r.kind === "r").map(([name]) => name),
       );
+    });
+
+    it("reads each client's application name from its session and refuses a client whose session carries another", async () => {
+      const calls: string[] = [];
+      const stand = (answer: { rows?: unknown[]; read?: string; end?: string }) => ({
+        connect: async () => {
+          calls.push("connect");
+        },
+        query: async (text: string) => {
+          calls.push(text);
+          if (answer.read) throw new Error(answer.read);
+          return { rows: answer.rows ?? [] };
+        },
+        end: async () => {
+          calls.push("end");
+          if (answer.end) throw new Error(answer.end);
+        },
+      });
+      const take = () => calls.splice(0, calls.length);
+      const show = "SHOW application_name";
+
+      // The session carries the tier's name: the client is handed over open.
+      const good = stand({ rows: [{ application_name: TIER_APPLICATION_NAME }] });
+      await expect(openTierClient("reader", () => good)).resolves.toBe(good);
+      expect(take()).toEqual(["connect", show]);
+      // Another name, as a URL with its own application_name gives the session:
+      // the client is closed, the body never runs, and the call fails.
+      await expect(
+        withTierClient("teardown", () => stand({ rows: [{ application_name: "another-app" }] }), async () => {
+          calls.push("run");
+        }),
+      ).rejects.toThrow(`the teardown client failed (name: ${NAME_REFUSED})`);
+      expect(take()).toEqual(["connect", show, "end"]);
+      // No row, an empty name or no name column: refused as well.
+      for (const rows of [[], [{ application_name: "" }], [{}]]) {
+        await expect(openTierClient("setup", () => stand({ rows }))).rejects.toThrow(
+          `the setup client failed (name: ${NAME_REFUSED})`,
+        );
+        expect(take()).toEqual(["connect", show, "end"]);
+      }
+      // The read itself fails, and so does the close: both are named.
+      await expect(
+        openTierClient("reader", () => stand({ read: "the read was refused", end: "the close was refused" })),
+      ).rejects.toThrow("the reader client failed (name: the read was refused; close: the close was refused)");
+      expect(take()).toEqual(["connect", show, "end"]);
+      // The refusal never repeats the session's name.
+      const err = await openTierClient("reader", () => stand({ rows: [{ application_name: "another-app" }] })).catch(
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(Error);
+      expect(message(err)).not.toContain("another-app");
+      take();
     });
   },
 );
