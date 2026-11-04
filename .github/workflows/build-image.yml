@@ -4055,11 +4055,13 @@ jobs:
       #
       # APPENDED, after the one-card gate, for the reason that gate records:
       # adding a step after the last one is the one placement that cannot have
-      # changed the measured order of the steps above. The tier writes only its
-      # own schema (it creates and drops `cinatra_test_email_fanout_history_3089`)
-      # and names no `public.*` relation, so it can neither disturb an earlier
-      # step nor be disturbed by one. `shell: bash` and `!cancelled()` are the
-      # siblings' and load-bearing for the same reasons stated at the tiers above.
+      # changed the measured order of the steps above. The tier creates and
+      # drops its own schema (`cinatra_test_email_fanout_history_3089`). It also
+      # reads objects and table rows outside that schema, `public` included,
+      # and fails when its teardown reads them differently than its setup did,
+      # so a change made there while it runs can fail it. `shell: bash` and
+      # `!cancelled()` are the siblings' and load-bearing for the same reasons
+      # stated at the tiers above.
       - name: Email fan-out history byte-identical - real-DB tier (cinatra#3089, item 5)
         if: ${{ !cancelled() && needs.detect.outputs.skip_runtime != 'true' }}
         shell: bash

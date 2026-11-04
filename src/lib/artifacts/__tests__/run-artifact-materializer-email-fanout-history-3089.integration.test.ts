@@ -73,11 +73,9 @@
  * session's backend (its pid and start time) is recorded. The teardown finds a
  * session of the tier that was left open by that backend, so a session that
  * changed its name after the connect is still found. The teardown runs every
- * step (schema drop, a check that nothing outside the tier's schema changed, a
- * check that no session of the tier is left open, blob root, process state)
- * whatever fails, and then fails the run naming each step that failed: a tier
- * that cannot drop its schema, that changes a shared object, or that leaves a
- * session open, does not finish green.
+ * step (schema drop, a check that the reading outside the tier's schema did not
+ * change, a check that no session of the tier is left open, blob root, process
+ * state) whatever fails, and then fails the run naming each step that failed.
  *
  * ISOLATION: a fresh schema from the CANONICAL `buildCreateStoreSchemaQueries`
  * DDL, of which the setup runs only the statements aimed at that schema. The
@@ -86,12 +84,18 @@
  * The setup takes the repository's replay selection (`selectReplayStatements`,
  * cinatra#3559, which leaves out the statements on shared `public` tables),
  * then runs a statement only when its target is in the fixture schema, and
- * refuses to run the build when it cannot read a statement's target. Before the build, the setup reads every
- * object outside the fixture schema (schemas, relations, columns, constraints,
- * indexes, triggers, functions, types, policies, rules, extensions, event
- * triggers, foreign data wrappers and servers, and each ordinary table's rows
- * as a digest); the teardown reads them again after the drop and fails on any
- * difference. The artifact blob root is a temp dir; every
+ * refuses to run the build when it cannot read a statement's target. The
+ * shared reading (`readShared`) reads the schemas other than the catalog's, the
+ * toast and temporary ones and the fixture schema: their relations, columns,
+ * constraints, indexes, triggers, functions, types, policies and rules, the
+ * database's extensions, event triggers, foreign data wrappers and servers, and
+ * each ordinary table's rows as a count and a digest. The setup takes it before
+ * it drops a fixture schema an earlier run left. Each drop of the fixture
+ * schema (the setup's and the teardown's) runs in a transaction and is rolled
+ * back, keeping the schema and failing the run, when the reading after it
+ * differs from the reading before it: a `CASCADE` that would take with it an
+ * object outside the schema that the reading sees. The teardown reads it once
+ * more and fails when it differs from the setup's reading. The artifact blob root is a temp dir; every
  * app module is imported in `beforeAll` after the env is set, because
  * `postgresSchema` is a module-load const.
  */
@@ -282,9 +286,10 @@ type TierClient = {
   end(): Promise<unknown>;
 };
 
-/** Every client the tier opens carries this name, so the teardown can find a
+/** Every client the tier opens asks for this name, so the teardown can find a
  *  session of the tier that was left open. The production write path's pools
- *  do not carry it. */
+ *  open their sessions from the same connection string: when that string sets
+ *  this name itself, their sessions carry it too, and the teardown counts them. */
 const TIER_APPLICATION_NAME = "cinatra-3089-history-tier";
 
 /** A session of the tier, known by its backend: the pid and the backend's
@@ -428,7 +433,7 @@ async function tierSessionsLeft(client: Client): Promise<number> {
 
 // ---------------------------------------------------------------------------
 // The setup's reach: the statements of the canonical build it runs, and a
-// reading of every object outside the fixture schema.
+// reading of the objects outside the fixture schema.
 // ---------------------------------------------------------------------------
 
 /** One identifier, quoted or not. */
@@ -473,12 +478,14 @@ function aimedAtFixture(text: string): boolean {
   return target === q(TEST_SCHEMA) || target.startsWith(`${q(TEST_SCHEMA)}.`);
 }
 
-/** The schemas the shared reading leaves out: the catalog's own and the
- *  fixture schema, the one schema the tier may change. Toast and temporary
- *  schemas are left out by their prefix. */
-const NOT_SHARED: readonly string[] = ["pg_catalog", "information_schema", TEST_SCHEMA];
+/** The schemas a shared reading leaves out by name: the catalog's own and the
+ *  one schema of the tier it reads around (the fixture schema, unless a caller
+ *  names another). Toast and temporary schemas are left out by their prefix in
+ *  the queries below. */
+const notShared = (fixture: string): string[] => ["pg_catalog", "information_schema", fixture];
 
-/** Every object outside the fixture schema, one line each. */
+/** The catalog lines of a shared reading: one line per object of the kinds
+ *  below, in each schema the reading does not leave out. */
 const SHARED_CATALOG = `
 WITH ns AS (
   SELECT oid, nspname FROM pg_namespace WHERE nspname <> ALL($1::text[]) AND nspname !~ '^pg_(toast|temp_)'
@@ -533,21 +540,23 @@ SELECT 'foreign server ' || s.srvname || ' on ' || w.fdwname
   FROM pg_foreign_server s JOIN pg_foreign_data_wrapper w ON w.oid = s.srvfdw`;
 
 /**
- * Read every object outside the fixture schema: each catalog line above, and
- * each ordinary table's rows there as a count and a digest of their text
- * forms. Sorted, so two readings compare as multisets. Not read: privileges,
- * owners, roles, a sequence's value, settings of the database or a role,
- * operators, casts, collations, text-search objects, publications, and the
- * rows of a materialized view or a foreign table.
+ * The shared reading around one schema of the tier (the fixture schema unless
+ * a caller names another): each catalog line above, and each ordinary table's
+ * rows in the schemas it reads as a count and a digest of their text forms.
+ * Sorted, so two readings compare as multisets. The tables are read one query
+ * at a time, without a lock. Not read: privileges, owners, roles, a sequence's
+ * value, settings of the database or a role, operators, casts, collations,
+ * text-search objects, publications, and the rows of a materialized view or a
+ * foreign table.
  */
-async function readShared(client: Client): Promise<string[]> {
-  const catalog = await client.query<{ line: string }>(SHARED_CATALOG, [NOT_SHARED]);
+async function readShared(client: Client, fixture: string = TEST_SCHEMA): Promise<string[]> {
+  const catalog = await client.query<{ line: string }>(SHARED_CATALOG, [notShared(fixture)]);
   const lines = catalog.rows.map((r) => r.line);
   const tables = await client.query<{ ns: string; rel: string }>(
     `SELECT n.nspname AS ns, c.relname AS rel FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE c.relkind = 'r' AND n.nspname <> ALL($1::text[]) AND n.nspname !~ '^pg_(toast|temp_)'
       ORDER BY 1, 2`,
-    [NOT_SHARED],
+    [notShared(fixture)],
   );
   for (const { ns, rel } of tables.rows) {
     const res = await client.query<{ n: number; h: string }>(
@@ -566,6 +575,55 @@ function sharedChanges(before: readonly string[], after: readonly string[]): str
   const gone = rowsGone(as(before), as(after)).shared ?? [];
   const added = rowsAdded(as(before), as(after)).shared ?? [];
   return [...gone.map((l) => `- ${l}`), ...added.map((l) => `+ ${l}`)].sort();
+}
+
+/**
+ * Run `body` in one transaction on `client`: committed when it succeeds, rolled
+ * back when it or the commit fails. The call fails with that error, and names a
+ * failed rollback too.
+ */
+async function inTransaction<T>(client: Client, body: () => Promise<T>): Promise<T> {
+  await client.query("BEGIN");
+  try {
+    const out = await body();
+    await client.query("COMMIT");
+    return out;
+  } catch (err) {
+    try {
+      await client.query("ROLLBACK");
+    } catch (rollbackErr) {
+      throw new Error(`${message(err)}; rollback: ${message(rollbackErr)}`);
+    }
+    throw err;
+  }
+}
+
+/**
+ * Drop one schema of the tier, if it exists, only when the drop leaves the
+ * shared reading around it as it was. Called inside the caller's transaction:
+ * the drop runs under a savepoint, and when the reading after it differs from
+ * the reading before it (a `CASCADE` reached an object outside the schema that
+ * depends on one inside it, such as a trigger on a `public` table that runs a
+ * function of a schema an earlier run left), it is rolled back to the
+ * savepoint, the schema is kept, and the call fails naming up to twenty of the
+ * changed lines. Returns the reading taken before the drop.
+ */
+async function dropSchemaKeepingShared(client: Client, schema: string): Promise<string[]> {
+  const before = await readShared(client, schema);
+  const found = await client.query("SELECT 1 FROM pg_namespace WHERE nspname = $1", [schema]);
+  if (found.rows.length === 0) return before;
+  await client.query("SAVEPOINT tier_schema_drop");
+  await client.query(`DROP SCHEMA ${q(schema)} CASCADE`);
+  const changes = sharedChanges(before, await readShared(client, schema));
+  if (changes.length > 0) {
+    await client.query("ROLLBACK TO SAVEPOINT tier_schema_drop");
+    throw new Error(
+      `the schema ${schema} was kept: dropping it would change ${changes.length} line(s) of the reading outside it: ` +
+        changes.slice(0, 20).join("; "),
+    );
+  }
+  await client.query("RELEASE SAVEPOINT tier_schema_drop");
+  return before;
 }
 
 /** The shared reading the setup took before the schema build. */
@@ -969,10 +1027,11 @@ beforeAll(async () => {
 
   // The setup client is closed whatever the schema build does; a failed build
   // fails the run, and the teardown below still runs every step. The shared
-  // reading is taken once no schema of the tier exists, before the build.
+  // reading is taken first, before a fixture schema an earlier run left is
+  // dropped (a drop that would change it is rolled back and fails the run), and
+  // before the build.
   await withTierClient("setup", newTierClient, async (client) => {
-    await client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`);
-    sharedBefore = await readShared(client);
+    sharedBefore = await inTransaction(client, () => dropSchemaKeepingShared(client, TEST_SCHEMA));
     await client.query(`CREATE SCHEMA "${TEST_SCHEMA}"`);
     const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
     // The repository's one replay selection (cinatra#3559: the four statement
@@ -1043,15 +1102,15 @@ afterAll(async () => {
       "drop the tier's schema",
       () =>
         withTierClient("teardown", newTierClient, (client) =>
-          client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`),
+          inTransaction(client, () => dropSchemaKeepingShared(client, TEST_SCHEMA)),
         ),
     ],
     [
-      "leave every object outside the tier's schema as the setup found it",
+      "leave the reading outside the tier's schema as the setup found it",
       () =>
         withTierClient("teardown", newTierClient, async (client) => {
           if (sharedBefore === undefined) {
-            throw new Error("the objects outside the tier's schema were not read before the schema build");
+            throw new Error("the reading outside the tier's schema was not taken before the schema build");
           }
           const changes = sharedChanges(sharedBefore, await readShared(client));
           if (changes.length > 0) {
@@ -1569,7 +1628,7 @@ describe.skipIf(!HAS_REAL_DB)(
       }
     });
 
-    it("reads every object outside the fixture schema, and finds a change to one and to a table's rows there", async () => {
+    it("reads the objects outside the fixture schema, and finds a change to one and to a table's rows there", async () => {
       // Two readings compare as multisets, naming each line one of them lacks.
       expect(sharedChanges(["a", "a", "b"], ["a", "c"])).toEqual(["+ c", "- a", "- b"]);
       expect(sharedChanges(["a", "b"], ["b", "a"])).toEqual([]);
@@ -1654,6 +1713,53 @@ describe.skipIf(!HAS_REAL_DB)(
       } finally {
         if (open) await renamed.end();
       }
+    });
+
+    it("keeps a left schema whose drop would take an object outside it, and drops one whose drop changes nothing outside it", async () => {
+      // A schema an earlier run left, whose function a trigger on a table of
+      // another schema runs, as an earlier build's trigger on public.user ran
+      // the fixture schema's function. Made inside one transaction that is
+      // rolled back, so nothing is ever committed.
+      const STALE = `${TEST_SCHEMA}_stale`;
+      const PROBE = `${TEST_SCHEMA}_probe`;
+      const [ST, P] = [q(STALE), q(PROBE)];
+      await withTierClient("probe", newTierClient, async (client) => {
+        const start = await readShared(client);
+        const left = async () =>
+          (
+            await client.query(
+              `SELECT (SELECT count(*)::int FROM pg_namespace WHERE nspname = $1) AS schemas,
+                      (SELECT count(*)::int FROM pg_trigger WHERE tgname = 't_stale' AND tgrelid = to_regclass($2)) AS triggers`,
+              [STALE, `${P}."t"`],
+            )
+          ).rows[0];
+        await client.query("BEGIN");
+        try {
+          await client.query(`CREATE SCHEMA ${P}`);
+          await client.query(`CREATE TABLE ${P}."t" (id text PRIMARY KEY)`);
+          await client.query(`CREATE SCHEMA ${ST}`);
+          await client.query(`CREATE FUNCTION ${ST}."f"() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN RETURN NEW; END $f$`);
+          await client.query(`CREATE TRIGGER t_stale AFTER UPDATE ON ${P}."t" FOR EACH ROW EXECUTE FUNCTION ${ST}."f"()`);
+          // The drop would take the trigger outside the left schema with it:
+          // it is rolled back, both stay, and the call names the trigger.
+          await expect(dropSchemaKeepingShared(client, STALE)).rejects.toThrow(
+            `the schema ${STALE} was kept: dropping it would change 1 line(s) of the reading outside it: ` +
+              `- trigger ${PROBE}.t t_stale O CREATE TRIGGER t_stale AFTER UPDATE ON `,
+          );
+          expect(await left()).toEqual({ schemas: 1, triggers: 1 });
+          // Without that dependent, the drop goes through and returns the
+          // reading taken before it; a schema that is not there is no drop.
+          await client.query(`DROP TRIGGER t_stale ON ${P}."t"`);
+          const read = await dropSchemaKeepingShared(client, STALE);
+          expect(read.some((line) => line.startsWith(`relation ${PROBE}.t kind r`))).toBe(true);
+          expect(await left()).toEqual({ schemas: 0, triggers: 0 });
+          await expect(dropSchemaKeepingShared(client, STALE)).resolves.toEqual(read);
+        } finally {
+          await client.query("ROLLBACK");
+        }
+        // Rolled back, the probe leaves the reading as it started.
+        expect(sharedChanges(start, await readShared(client))).toEqual([]);
+      });
     });
   },
 );
