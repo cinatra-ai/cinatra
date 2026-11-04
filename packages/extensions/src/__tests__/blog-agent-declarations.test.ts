@@ -137,7 +137,7 @@ describe("the blog agents' declarations (plan section 5.3.2)", () => {
 
   it("declares the thirteen dependency edges the pinned packs declare", () => {
     // Thirteen at the current pins: the publish agent declares only the blog
-    // post it publishes, no longer the retired blog picture type.
+    // post it publishes. The image agent still declares the blog image type.
     const total = TABLE.reduce((n, row) => n + row.edges.length, 0);
     expect(total).toBe(13);
   });
