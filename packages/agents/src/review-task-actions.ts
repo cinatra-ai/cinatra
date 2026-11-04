@@ -1137,6 +1137,10 @@ export async function approveReviewTaskInternal(
       // run-token-store.ts).
       const { mintResumeRunTokenMetadata } = await import("./wayflow-run-token-carrier");
       const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
+      // The message id is drawn before the fence too: past the fence a failure
+      // counts as possibly sent, so nothing that can fail before the send may wait
+      // there to be drawn (cinatra#4245).
+      const messageId = randomUUID();
       // THE FENCE: a stop or a lease takeover since the claim loses here, and
       // nothing is sent.
       try {
@@ -1163,8 +1167,8 @@ export async function approveReviewTaskInternal(
       // won. A claimer whose lease expired and was taken over stops at the fence
       // above, so it writes no answered-gate digest over the winner's, no latest-task
       // key over the run's next pause, and no prompt row for an answer it never sent
-      // (the rows stay one per sent answer: `buildSubmissionMapByStepIndex` reads
-      // them by position).
+      // (`buildSubmissionMapByStepIndex` reads the rows by position; the capture
+      // below stays best-effort, so a sent answer can still lack its row).
       //
       // #1987 (F1 deferred from #1960) — mint the ANSWERED-gate-submission
       // provenance BEFORE the WayFlow resume dispatch, so the post-resume `apply`
@@ -1242,7 +1246,7 @@ export async function approveReviewTaskInternal(
         message: {
           role: "user",
           kind: "message",
-          messageId: randomUUID(),
+          messageId,
           contextId: run.a2aContextId,
           parts: [{ kind: "text", text: resumeText }],
           metadata: resumeMetadata,

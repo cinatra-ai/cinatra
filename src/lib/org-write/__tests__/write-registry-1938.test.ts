@@ -204,6 +204,29 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
     }
   });
 
+  it("cinatra#4245: an importer allowlisted for a pause claim writer really imports it", () => {
+    // The same ratchet for the four writers of run-pause-claim.ts: the release and
+    // the settle moved into run-resume-under-claim.ts, so a road that no longer
+    // imports one of them must not stay allowed to (a direct import there would
+    // pass the import ban unseen). Only the import specifiers from the claim module
+    // count, never a mention in prose.
+    const CLAIM_MODULE = "packages/agents/src/run-pause-claim.ts";
+    const rows = ORG_WRITE_REGISTRY.filter((r) => r.module === CLAIM_MODULE);
+    expect(rows.map((r) => r.exportName).sort()).toEqual(["claimPause", "fencePauseInPlace", "releasePauseClaim", "settlePauseSend"]);
+    for (const r of rows) {
+      for (const f of r.allowedImporters ?? []) {
+        const imported = new Set<string>();
+        for (const m of readFileSync(f, "utf-8").matchAll(/\bimport\s*(?:type\s+)?\{([^}]*)\}\s*from\s*["']\.\/run-pause-claim["']/g)) {
+          for (const spec of m[1].split(",")) {
+            const name = spec.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0].trim();
+            if (name) imported.add(name);
+          }
+        }
+        expect(imported.has(r.exportName), `${r.exportName} allowlists ${f}, which does not import it from run-pause-claim`).toBe(true);
+      }
+    }
+  });
+
   it("the exception ledger is EXACTLY the workflows-extension + Stage-D-deferred + edge-family-sweep rows (#1940 P3 flipped the new-run rows out)", () => {
     // COMBINED truth after the #2201 merge:
     // - cinatra#1940 P3 (Decision 2): the two new-run creation rows

@@ -165,4 +165,24 @@ describe("cinatra#4245 — the delivery worker and the pause claim", () => {
     expect(await deliver()).toBe("retryable");
     expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
   });
+
+  // Kept LAST: it reloads the module under test with an answer handler that cannot
+  // be loaded, then puts the file's own mock back.
+  it("a handler that cannot be loaded after a successful send still settles the lease", async () => {
+    vi.resetModules();
+    vi.doMock("../execution", () => {
+      throw new Error("the answer handler could not be loaded");
+    });
+    try {
+      const fresh = await import("../artifact-review-resume-delivery");
+      await expect(fresh.deliverArtifactReviewResumeIntent(intent)).rejects.toThrow();
+      expect(sendTask).toHaveBeenCalledTimes(1);
+      expect(order).toEqual(["fence", "send", "settle"]);
+      expect(claims.releasePauseClaim).not.toHaveBeenCalled();
+      expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+    } finally {
+      vi.doMock("../execution", () => ({ handleWayflowTaskState: handle }));
+      vi.resetModules();
+    }
+  });
 });

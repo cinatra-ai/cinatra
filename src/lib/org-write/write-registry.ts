@@ -423,10 +423,12 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
   //   run-pause-claim.ts. Each writes only the claim columns of ONE run row
   //   (pause_claim_token / _phase / _expires_at, and pause_generation at the
   //   in-place fence), inside guardedRunWrite with run.execute; the org axis is
-  //   the authority's org and every UPDATE is org-scoped. The allowlists name the
-  //   resume roads that take the claim (the MCP resume in
-  //   run-resume-under-claim.ts, the review page's Continue, the resume delivery
-  //   worker); only the delivery worker fences in place.
+  //   the authority's org and every UPDATE is org-scoped. Each allowlist names
+  //   the modules that import that writer: the three resume roads take the claim
+  //   (the MCP resume in run-resume-under-claim.ts, the review page's Continue,
+  //   the resume delivery worker); only the delivery worker fences in place; the
+  //   release and the settle are reached only through run-resume-under-claim.ts,
+  //   whose two shared steps every road calls.
   {
     module: "packages/agents/src/run-pause-claim.ts",
     exportName: "claimPause",
@@ -459,11 +461,7 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     storageReferences: ["agent_runs"],
     cascadeOwnership: "inert-history",
     importBanned: true,
-    allowedImporters: [
-      "packages/agents/src/run-resume-under-claim.ts",
-      "packages/agents/src/review-task-actions.ts",
-      "packages/agents/src/artifact-review-resume-delivery.ts",
-    ],
+    allowedImporters: ["packages/agents/src/run-resume-under-claim.ts"],
   },
   {
     module: "packages/agents/src/run-pause-claim.ts",
@@ -473,11 +471,7 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     storageReferences: ["agent_runs"],
     cascadeOwnership: "inert-history",
     importBanned: true,
-    allowedImporters: [
-      "packages/agents/src/run-resume-under-claim.ts",
-      "packages/agents/src/review-task-actions.ts",
-      "packages/agents/src/artifact-review-resume-delivery.ts",
-    ],
+    allowedImporters: ["packages/agents/src/run-resume-under-claim.ts"],
   },
   // — new-run creation (#1940 P3, Decision 2): the exemption above is FLIPPED
   //   — both are now guarded inserts (guardedRunWrite, capability run.execute)

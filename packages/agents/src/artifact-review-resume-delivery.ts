@@ -407,35 +407,36 @@ export async function deliverArtifactReviewResumeIntent(
     settleFailure = await settleSendOrDescribe(claimRef, authority, fencedAt);
     if (settleFailure !== null) console.error(`[artifact-review-resume] gate=${gateId} run=${run.id}: ${settleFailure}`);
   };
-  const task = await client.sendTask({
-    message: {
-      role: "user",
-      kind: "message",
-      metadata: resumeMetadata,
-      // DETERMINISTIC per-gate messageId (not random): a gate resumes exactly
-      // once, so a stable id lets a dedup-aware receiver drop a duplicate re-send
-      // (the at-least-once redelivery of the SAME gate's intent). Harmless if the
-      // receiver does not dedup — the guards above already suppress the common
-      // redelivery cases.
-      messageId: `artifact-review-resume-${gateId}`,
-      contextId: run.a2aContextId,
-      parts: [{ kind: "text", text: responseText }],
-    },
-    configuration: { acceptedOutputModes: ["text"] },
-  }).catch(async (sendError) => {
-    await settle();
-    throw sendError;
-  });
-
-  // Drive the returned Task through the canonical state machine (advances the
-  // run past the gate — to the next gate or to terminal). fromStatus is the
-  // literal "pending_approval" (guarded above), matching the human resume path.
-  const { handleWayflowTaskState } = await import("./execution");
-  // cinatra#1939 wave 2: the delivery worker advances the run with no session in
-  // scope — it grounds the transition on the system dispatch mint, scoped to the
-  // run's org (the human approval already happened when the intent row was written).
+  // The send, the import of the handler and the handling sit in ONE try: whatever
+  // fails after the send (the handler's lazy import included) still settles the
+  // lease, so a delivered answer never leaves the run under a live `sending` lease.
+  let resultState: string | undefined;
   try {
+    const task = await client.sendTask({
+      message: {
+        role: "user",
+        kind: "message",
+        metadata: resumeMetadata,
+        // DETERMINISTIC per-gate messageId (not random): a gate resumes exactly
+        // once, so a stable id lets a dedup-aware receiver drop a duplicate re-send
+        // (the at-least-once redelivery of the SAME gate's intent). Harmless if the
+        // receiver does not dedup — the guards above already suppress the common
+        // redelivery cases.
+        messageId: `artifact-review-resume-${gateId}`,
+        contextId: run.a2aContextId,
+        parts: [{ kind: "text", text: responseText }],
+      },
+      configuration: { acceptedOutputModes: ["text"] },
+    });
+    // Drive the returned Task through the canonical state machine (advances the
+    // run past the gate — to the next gate or to terminal). fromStatus is the
+    // literal "pending_approval" (guarded above), matching the human resume path.
+    const { handleWayflowTaskState } = await import("./execution");
+    // cinatra#1939 wave 2: the delivery worker advances the run with no session in
+    // scope — it grounds the transition on the system dispatch mint, scoped to the
+    // run's org (the human approval already happened when the intent row was written).
     await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task, authority, pauseClaimToken: claim.token });
+    resultState = task.status?.state;
   } finally {
     await settle();
   }
@@ -444,7 +445,7 @@ export async function deliverArtifactReviewResumeIntent(
   const marked = await markResumeIntentDelivered(gateId, leaseToken);
   console.log(
     `[artifact-review-resume] gate=${gateId} run=${run.id} DELIVERED ${kind} resume ` +
-      `(resultState=${task.status?.state}) — marked ${marked ? "done" : "LEASE-LOST"}`,
+      `(resultState=${resultState}) — marked ${marked ? "done" : "LEASE-LOST"}`,
   );
   return marked ? "delivered" : "lease-lost";
 }

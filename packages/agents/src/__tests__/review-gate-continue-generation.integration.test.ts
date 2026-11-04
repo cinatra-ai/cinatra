@@ -303,18 +303,35 @@ describe.skipIf(!HAS_DB)("cinatra#4245 change B — Continue under the pause cla
     expect(await promptRows(s.runId)).toBe(1);
   });
 
-  it("spec-rev1 MF3: a Redis failure after the fence puts the gate back; nothing is sent or recorded", async () => {
+  it("spec-rev1 MF3: the digest write fails after the fence: the gate is put back, nothing is sent, no digest or prompt row is recorded, and the latest-task key was re-asserted to this gate's own task", async () => {
     const s = await seed();
     const r = await redis();
     r.rememberAnsweredGateSubmission.mockRejectedValueOnce(new Error("redis is down"));
     await expect(answer(s.gate, JSON.stringify({ pick: "one" }))).rejects.toThrow("redis is down");
     expect(sendTask).not.toHaveBeenCalled();
+    // The first write succeeded: it re-asserts the task the run already waits at,
+    // which the put-back below keeps. The second write is the one that failed.
+    expect(r.rememberLatestWayflowGateTask.mock.calls).toEqual([[s.runId, s.task]]);
+    expect(r.rememberAnsweredGateSubmission).toHaveBeenCalledTimes(1);
     expect(await statusOf(s.runId)).toBe("pending_approval");
     const back = (await pool(`SELECT a2a_task_id, pause_claim_token FROM ${RUNS} WHERE id=$1`, [s.runId])).rows[0];
     expect(back).toEqual({ a2a_task_id: s.task, pause_claim_token: null });
     expect(await promptRows(s.runId)).toBe(0);
     await answer(s.gate, JSON.stringify({ pick: "two" }));
     expect(sendTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("spec-rev1 MF3: the latest-task write fails after the fence: the gate is put back, and no digest, prompt row or send follows", async () => {
+    const s = await seed();
+    const r = await redis();
+    r.rememberLatestWayflowGateTask.mockRejectedValueOnce(new Error("redis is down"));
+    await expect(answer(s.gate, JSON.stringify({ pick: "one" }))).rejects.toThrow("redis is down");
+    expect(r.rememberAnsweredGateSubmission).not.toHaveBeenCalled();
+    expect(sendTask).not.toHaveBeenCalled();
+    expect(await statusOf(s.runId)).toBe("pending_approval");
+    const back = (await pool(`SELECT a2a_task_id, pause_claim_token FROM ${RUNS} WHERE id=$1`, [s.runId])).rows[0];
+    expect(back).toEqual({ a2a_task_id: s.task, pause_claim_token: null });
+    expect(await promptRows(s.runId)).toBe(0);
   });
 
   it("a Redis failure and a failed put-back: the error says both, nothing was sent", async () => {

@@ -14,12 +14,14 @@ import "server-only";
 //
 // What records the answer (the prompt row) runs only after a fence this claimer
 // won. A claimer whose lease expired and was taken over stops at its fence, so it
-// never adds a row for an answer it did not send: the rows of a run stay one per
-// sent answer, in the order of its gates (`buildSubmissionMapByStepIndex` reads
-// them by position). The credential mint stays before the fence, because a failure
-// there must still give the pause back. A mint of a claimer that then loses its
-// fence only adds a credential of the same run that is never sent
-// (run-token-store.ts: the credential set is additive by design).
+// never adds a row for an answer it did not send. The capture stays best-effort,
+// as it was before the claim: a failed capture leaves a sent answer without its
+// row (`buildSubmissionMapByStepIndex` reads the rows by position). The
+// credential mint and the whole message, its id included, come before the fence,
+// because a failure there must still give the pause back: past the fence every
+// failure counts as possibly sent. A mint of a claimer that then loses its fence
+// only adds a credential of the same run that is never sent (run-token-store.ts:
+// the credential set is additive by design).
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
@@ -96,12 +98,22 @@ export async function resumeWayflowUnderPauseClaim(args: {
   }
   const ref = { runId: run.id, orgId: run.orgId, token: claim.token };
 
-  let resumeMetadata: unknown;
+  let resumeMessage: Record<string, unknown> | undefined;
   try {
     // #1193 resume carrier: the leg's credential goes in the message METADATA,
     // because `resumeText` reaches the gate's InputMessageNode VERBATIM.
     const { mintResumeRunTokenMetadata } = await import("./wayflow-run-token-carrier");
-    resumeMetadata = await mintResumeRunTokenMetadata(run.id);
+    const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
+    // The message is complete before the fence (see the header). Into the existing
+    // context, so fasta2a routes to the paused conversation.
+    resumeMessage = {
+      role: "user",
+      kind: "message",
+      messageId: randomUUID(),
+      contextId: run.a2aContextId,
+      parts: [{ kind: "text", text: resumeText }],
+      metadata: resumeMetadata,
+    };
     await transitionRunStatus(run.id, "pending_approval", "running", { pauseFence: { token: claim.token, generation: claim.generation } }, authority);
   } catch (stepError) {
     if (!(stepError instanceof RunTransitionError && stepError.code === "stale_from_status")) {
@@ -132,16 +144,8 @@ export async function resumeWayflowUnderPauseClaim(args: {
   let finalState: string | undefined;
   let failure: { error: unknown } | null = null;
   try {
-    // Into the existing context, so fasta2a routes to the paused conversation.
     const task = (await client.sendTask({
-      message: {
-        role: "user",
-        kind: "message",
-        messageId: randomUUID(),
-        contextId: run.a2aContextId,
-        parts: [{ kind: "text", text: resumeText }],
-        metadata: resumeMetadata,
-      },
+      message: resumeMessage,
       configuration: { acceptedOutputModes: ["text"] },
     } as never)) as WayflowTask;
     // The fence moved the row to `running`, so the handler's edges start there.
