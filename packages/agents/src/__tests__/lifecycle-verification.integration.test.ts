@@ -31,7 +31,7 @@ import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-ac
 import type { ChangesRequestedRequest } from "@/lib/lifecycle/lifecycle-repair";
 import type { VerificationFieldProjector, VerificationTargetRef } from "../lifecycle-verification-store";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
-import { up as upgrade0117, down as downgrade0117, verificationReopenedGateBackfillSql } from "../../../../migrations/core/core__0117_verification-reopened-gate.mjs";
+import { up as upgrade0121, down as downgrade0121, verificationReopenedGateBackfillSql } from "../../../../migrations/core/core__0121_verification-reopened-gate.mjs";
 
 const TEST_SCHEMA = "cinatra_test_lifecycle_2042";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
@@ -621,13 +621,13 @@ describe.skipIf(!HAS_DB)("cinatra#2042 — post-change verification (real store)
     return statements.join("\n");
   }
 
-  /** Run core__0117's `up` on the test schema, in a transaction. */
-  const upgrade = () => pool(`BEGIN; SET LOCAL search_path TO "${q(TEST_SCHEMA)}"; ${statementsOf(upgrade0117)} COMMIT;`);
+  /** Run core__0121's `up` on the test schema, in a transaction. */
+  const upgrade = () => pool(`BEGIN; SET LOCAL search_path TO "${q(TEST_SCHEMA)}"; ${statementsOf(upgrade0121)} COMMIT;`);
 
   const clearName = (successorGateId: string) =>
     pool(`UPDATE "${q(TEST_SCHEMA)}"."artifact_verification_records" SET reopened_gate_id=NULL WHERE id=$1`, [`verify:${successorGateId}`]);
 
-  it("THE UPGRADE BACKFILL (cinatra#4312, core__0117): names a gate that already carries a repair row at attempt 2 or later, in the record's slot, on its run and org, created at or after it, and only that; a rerun changes nothing", async () => {
+  it("THE UPGRADE BACKFILL (cinatra#4312, core__0121): names a gate that already carries a repair row at attempt 2 or later, in the record's slot, on its run and org, created at or after it, and only that; a rerun changes nothing", async () => {
     const emit = (v: ReturnType<typeof slotOf>, runId: string, orgId: string) =>
       gateStore.emitArtifactReviewGate({ runId, orgId, reviewTaskId: v.reopenTask, targets: [v.pin] });
 
@@ -670,7 +670,7 @@ describe.skipIf(!HAS_DB)("cinatra#2042 — post-change verification (real store)
     expect(await namedGate(before.successorGateId)).toBeNull();
   });
 
-  it("A CALLER'S GATE BEFORE THE UPGRADE (cinatra#4312, core__0117): a gate in the slot, after the record, with no repair row stays unnamed, and a note on it is refused (lineage-unbound)", async () => {
+  it("A CALLER'S GATE BEFORE THE UPGRADE (cinatra#4312, core__0121): a gate in the slot, after the record, with no repair row stays unnamed, and a note on it is refused (lineage-unbound)", async () => {
     const v = slotOf(await landRepair());
     const forged = await reserveSlot(v);
     await upgrade();
@@ -678,7 +678,7 @@ describe.skipIf(!HAS_DB)("cinatra#2042 — post-change verification (real store)
     await expectCallerGateRefused(v, forged);
   });
 
-  it("AN HONEST GATE PENDING AT THE UPGRADE (cinatra#4312, core__0117): with no repair row it stays unnamed: a re-drive answers reopen-conflict and a note is refused, the lineage stays readable and open, and Continue still resolves the gate", async () => {
+  it("AN HONEST GATE PENDING AT THE UPGRADE (cinatra#4312, core__0121): with no repair row it stays unnamed: a re-drive answers reopen-conflict and a note is refused, the lineage stays readable and open, and Continue still resolves the gate", async () => {
     const v = await failedVerificationOfLandedRepair();
     await clearName(v.successorGateId);
     await upgrade();
@@ -770,7 +770,7 @@ describe.skipIf(!HAS_DB)("cinatra#2042 — post-change verification (real store)
     }
   });
 
-  it("ONE STATEMENT (cinatra#4312): the sweep's naming statement equals the frozen backfill of core__0117", () => {
+  it("ONE STATEMENT (cinatra#4312): the sweep's naming statement equals the frozen backfill of core__0121", () => {
     expect((verifStore as { verificationReopenNamesSql?: string }).verificationReopenNamesSql?.trim()).toBe(verificationReopenedGateBackfillSql.trim());
   });
 
@@ -780,7 +780,7 @@ describe.skipIf(!HAS_DB)("cinatra#2042 — post-change verification (real store)
     expect(await namedGate(v.successorGateId)).toBeNull();
   });
 
-  it("THE MIGRATION'S DOWN AND UP (cinatra#4312, core__0117): in a transaction down drops the column, up adds it with a foreign key that sets a deleted gate's name to null, and a rollback brings the column and its names back", async () => {
+  it("THE MIGRATION'S DOWN AND UP (cinatra#4312, core__0121): in a transaction down drops the column, up adds it with a foreign key that sets a deleted gate's name to null, and a rollback brings the column and its names back", async () => {
     const v = await failedVerificationOfLandedRepair();
     const client = await dbMod.agentBuilderPool.connect();
     const hasColumn = async () =>
@@ -792,9 +792,9 @@ describe.skipIf(!HAS_DB)("cinatra#2042 — post-change verification (real store)
       await client.query(`BEGIN`);
       await client.query(`SET LOCAL search_path TO "${q(TEST_SCHEMA)}"`);
       expect(await hasColumn()).toBe(true);
-      await client.query(statementsOf(downgrade0117));
+      await client.query(statementsOf(downgrade0121));
       expect(await hasColumn()).toBe(false);
-      await client.query(statementsOf(upgrade0117));
+      await client.query(statementsOf(upgrade0121));
       expect(await hasColumn()).toBe(true);
       const nameOf = async () =>
         (await client.query(`SELECT reopened_gate_id FROM artifact_verification_records WHERE id=$1`, [`verify:${v.successorGateId}`])).rows[0];

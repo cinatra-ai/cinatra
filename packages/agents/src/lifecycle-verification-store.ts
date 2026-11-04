@@ -110,7 +110,7 @@ export type VerificationRecordResult =
   | { ok: false; code: string; error: string };
 
 /**
- * cinatra#4312 — the backfill of core__0117, equal to the migration's frozen statement
+ * cinatra#4312 — the backfill of core__0121, equal to the migration's frozen statement
  * (a test pins the two). The old application can still serve after the migration ran,
  * and it can write a note on an unnamed reopen gate. The new code writes no repair row
  * on an unnamed gate, so this names only what an old writer or a manual write joined.
