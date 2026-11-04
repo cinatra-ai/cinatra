@@ -331,13 +331,13 @@ describe("loadDevExtensionPins — fail-closed lock partition", () => {
 
 describe("syncCinatraDevExtensions --pinned — sha plumbing + override semantics", () => {
   const SHA_B = "b".repeat(40);
-  const DEV_URL = "https://github.com/cinatra-ai/resend-connector.git";
-  const config = { "@cinatra-ai/resend-connector": { url: DEV_URL } };
+  const DEV_URL = "https://github.com/example-vendor/resend-connector.git";
+  const config = { "@example-vendor/resend-connector": { url: DEV_URL } };
   const required = {
     packages: [{ packageName: "@cinatra-ai/anthropic-connector", repo: "cinatra-ai/anthropic-connector", resolvedSha: "a".repeat(40) }],
   };
   const dev = {
-    packages: [{ packageName: "@cinatra-ai/resend-connector", repo: "cinatra-ai/resend-connector", resolvedSha: SHA_B }],
+    packages: [{ packageName: "@example-vendor/resend-connector", repo: "example-vendor/resend-connector", resolvedSha: SHA_B }],
   };
   // Required-lock packages need not be cinatra.devExtensions entries (prod-only
   // packages are simply not cloned back), so `required` above referencing a
@@ -412,7 +412,7 @@ describe("syncCinatraDevExtensions --pinned — sha plumbing + override semantic
     });
     // The tree is pruned to the declared checkouts once, before any git call.
     expect(prunes).toEqual([
-      { extRoot: "/repo/extensions", declaredDests: ["/repo/extensions/cinatra-ai/resend-connector"], gitCallsBefore: 0 },
+      { extRoot: "/repo/extensions", declaredDests: ["/repo/extensions/example-vendor/resend-connector"], gitCallsBefore: 0 },
     ]);
     expect(r.results[0]).toMatchObject({ action: "cloned", pinnedSha: SHA_B });
     expect(gitCalls).toContain(`fetch --quiet --depth 1 --no-tags origin ${SHA_B}`);
@@ -458,7 +458,7 @@ describe("syncCinatraDevExtensions --pinned — sha plumbing + override semantic
         deps: { ...makeDeps(gitCalls), pruneToDeclaredCheckouts: (a) => prunes.push(a) },
       });
       expect(prunes.length, filter.join(" ")).toBe(1);
-      expect(r.results.map((x) => x.pkgName), filter.join(" ")).toEqual(["@cinatra-ai/resend-connector"]);
+      expect(r.results.map((x) => x.pkgName), filter.join(" ")).toEqual(["@example-vendor/resend-connector"]);
       expect(gitCalls, filter.join(" ")).toContain(`fetch --quiet --depth 1 --no-tags origin ${SHA_B}`);
     }
   });
