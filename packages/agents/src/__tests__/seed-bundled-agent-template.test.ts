@@ -235,3 +235,20 @@ it("refuses an undeclared visible input before bundled seeding creates a record"
   expect(createLocalAgentTemplateVersion).not.toHaveBeenCalled();
   expect(claimAgentTemplateIdentity).not.toHaveBeenCalled();
 });
+
+it("cinatra#4150: the seeded row carries the compile's publishing steps", async () => {
+  const oas = JSON.parse(VALID_OAS_FIXTURE);
+  oas.$referenced_components.call_llm_bridge.metadata = {
+    ...oas.$referenced_components.call_llm_bridge.metadata,
+    cinatra: { ...oas.$referenced_components.call_llm_bridge.metadata?.cinatra, publishes: true },
+  };
+  const { seedDir } = await stageSeed({ oas: JSON.stringify(oas) });
+  await ensureBundledAgentTemplateRecord({ packageName: PACKAGE_NAME, packageVersion: VERSION, seedDir });
+  expect(seedArg().publishingSteps).toEqual(["call_llm_bridge"]);
+});
+
+it("cinatra#4150: a pack that declares nothing seeds an empty list", async () => {
+  const { seedDir } = await stageSeed();
+  await ensureBundledAgentTemplateRecord({ packageName: PACKAGE_NAME, packageVersion: VERSION, seedDir });
+  expect(seedArg().publishingSteps).toEqual([]);
+});

@@ -170,7 +170,7 @@ async function discoverDeclaringExtensions(errors: string[]): Promise<DeclaringE
         (p): p is HostPortName => typeof p === "string" && (HOST_PORT_NAMES as readonly string[]).includes(p),
       );
       try {
-        const fileRaw = await readFile(path.join(root, vendor, slug, devFixturesPath), "utf8");
+        const fileRaw = await readFile(path.join(/* turbopackIgnore: true */ root, vendor, slug, devFixturesPath), "utf8");
         const fixtures = parseDevFixtures(JSON.parse(fileRaw));
         out.push({ packageName: name, grantedPorts, fixtures });
       } catch (err) {
