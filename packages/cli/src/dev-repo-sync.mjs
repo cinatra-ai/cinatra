@@ -58,17 +58,21 @@ export function isLocalGitRemote(url) {
 
 // Strip credentials embedded in a URL before logging (e.g. a
 // `https://<token>@github.com/...` override leaks a PAT into CI/dev logs):
-// the user info of a scheme URL, its query and fragment (`?access_token=`),
-// and the user info of an scp-style remote (`<token>@github.com:`), except
-// the conventional `git@`. Works on a bare URL and on a git failure line.
+// the whole user info of a scheme URL (a password may hold "@"), and the
+// query and fragment (`?access_token=`) of a scheme URL, of an scp-style
+// remote and of an absolute path; the user info of an scp-style remote
+// (`<token>@github.com:`), except the conventional `git@`. Works on a bare
+// URL and on a git failure line.
 export function redactGitUrl(url) {
   if (typeof url !== "string") return String(url);
+  const hideQuery = (rest) => rest.replace(/([?#])[^\s'"]*$/, "$1***");
   return url
-    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^@/\s]*@/gi, "$1***@")
+    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^/\s'"]*@/gi, "$1***@")
     .replace(/(\b[a-z][a-z0-9+.-]*:\/\/[^\s?#'"]*)([?#])[^\s'"]*/gi, "$1$2***")
-    .replace(/(^|[\s'"(])([^\s'"()@/]+)@([a-z0-9.-]+):/gi, (m, pre, user, host) =>
-      user === "git" ? m : `${pre}***@${host}:`,
-    );
+    .replace(/(^|[\s'"(])([^\s'"()/]+)@([a-z0-9.-]+):([^\s'"]*)/gi, (m, pre, user, host, rest) =>
+      `${pre}${user === "git" ? "git" : "***"}@${host}:${hideQuery(rest)}`,
+    )
+    .replace(/(^|[\s'"(])(\/[^\s'"?#]*)([?#])[^\s'"]*/g, "$1$2$3***");
 }
 
 // The shallow road stores the URL in a checkout that CI saves to the
