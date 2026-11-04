@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgSchema, text, integer, boolean, timestamp, index, uniqueIndex, primaryKey, jsonb } from "drizzle-orm/pg-core";
+import { pgSchema, text, integer, boolean, timestamp, index, uniqueIndex, primaryKey, jsonb, check } from "drizzle-orm/pg-core";
 
 // ---------------------------------------------------------------------------
 // Extension registry origin coordinates.
@@ -840,6 +840,28 @@ export const lifecycleContinuationPark = cinatraSchema.table("lifecycle_continua
   holdNotifyIdx: index("lifecycle_continuation_park_hold_notify_idx")
     .on(t.holdNotification, t.status)
     .where(sql`hold_notification = 'live'`),
+}));
+
+/** One stop in front of a declared publishing step (cinatra#4150). `parked` is the only open status;
+ * a row leaves it once, through publish-decision-store.ts. `surfaced_values` is JSON-as-text. */
+export const agentRunPublishDecisions = cinatraSchema.table("agent_run_publish_decisions", {
+  id:             text("id").primaryKey(),
+  orgId:          text("org_id"),
+  runId:          text("run_id").notNull(),
+  nodeId:         text("node_id").notNull(),
+  gateTaskId:     text("gate_task_id").notNull(),
+  a2aContextId:   text("a2a_context_id"),
+  status:         text("status").notNull().default("parked"), // parked | released | declined | expired | run_ended
+  surfacedValues: text("surfaced_values").notNull(),
+  decidedBy:      text("decided_by"),
+  decidedAt:      timestamp("decided_at", { withTimezone: true }),
+  decisionNote:   text("decision_note"),
+  createdAt:      timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  expiresAt:      timestamp("expires_at", { withTimezone: true }).notNull(),
+}, (t) => ({
+  parkUniq: uniqueIndex("agent_run_publish_decisions_park_uniq").on(t.runId, t.nodeId, t.gateTaskId),
+  dueIdx:   index("agent_run_publish_decisions_due_idx").on(t.expiresAt).where(sql`status = 'parked'`),
+  statusCheck: check("agent_run_publish_decisions_status_check", sql`status IN ('parked', 'released', 'declined', 'expired', 'run_ended')`),
 }));
 
 /** The zero-authority advisory seam — gate-bound, provenance-stamped, idempotent,

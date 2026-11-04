@@ -88,3 +88,40 @@ export function publicationOperationLedgerSchemaQueries(
     },
   ];
 }
+
+// Bootstrap DDL for the publish-decision record (cinatra#4150): one row per stop in front of a
+// declared publishing step. The DB enforces one row per stop (park_uniq) and the closed status
+// set (the status CHECK). No foreign keys, as for artifact_publication_operations: the history
+// outlives the run row. In this leaf so no new module joins a route's graph; an existing
+// deployment gets the table through migration core__0119.
+export function publishDecisionSchemaQueries(schemaName: string): { text: string }[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier
+  return [
+    {
+      text: `CREATE TABLE IF NOT EXISTS "${q}"."agent_run_publish_decisions" (
+  id               text PRIMARY KEY,
+  org_id           text,
+  run_id           text NOT NULL,
+  node_id          text NOT NULL,
+  gate_task_id     text NOT NULL,
+  a2a_context_id   text,
+  status           text NOT NULL DEFAULT 'parked',
+  surfaced_values  text NOT NULL,
+  decided_by       text,
+  decided_at       timestamptz,
+  decision_note    text,
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  expires_at       timestamptz NOT NULL,
+  CONSTRAINT agent_run_publish_decisions_status_check
+    CHECK (status IN ('parked', 'released', 'declined', 'expired', 'run_ended'))
+)`,
+    },
+    {
+      text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_run_publish_decisions_park_uniq ON "${q}"."agent_run_publish_decisions" (run_id, node_id, gate_task_id)`,
+    },
+    {
+      // The expiry sweep finds due open decisions without touching settled rows.
+      text: `CREATE INDEX IF NOT EXISTS agent_run_publish_decisions_due_idx ON "${q}"."agent_run_publish_decisions" (expires_at) WHERE status = 'parked'`,
+    },
+  ];
+}
