@@ -922,7 +922,7 @@ describe("cinatra#3319 — listInstalledTypesForArtifact answers the derived mea
     expect(hostReads()).toBe(0);
   });
 
-  it("C2a: the list reads the claims leniently: a failed claim read keeps the ordinary list, and the confirmation then refuses", async () => {
+  it("C2a: the list reads the claims leniently: a failed claim read still answers the list, without the row's own claiming pack, and the confirmation then refuses", async () => {
     presentedBaseRow(
       { tier: "matcher", identity: PACK, preselect: PACK, suggestions: [] },
       { claimBacked: true },
@@ -934,8 +934,11 @@ describe("cinatra#3319 — listInstalledTypesForArtifact answers the derived mea
       "../upload-typing-actions"
     );
     const res = await listInstalledTypesForArtifact("a-3319");
-    expect(res).toMatchObject({ ok: true, meaning: { preselect: PACK } });
-    expect(extensionsOf(res)).toContain(PACK);
+    // The ordinary list never held the claiming pack: the claim-backed reading
+    // excludes the row's own type, and with the claim read failing the
+    // presented-base check cannot name its definer. The list still answers.
+    expect(res).toMatchObject({ ok: true, meaning: { preselect: null } });
+    expect(extensionsOf(res)).toEqual([IDEA, POST]);
     expect(readArtifactSafeClaimWinnerForType).toHaveBeenCalledWith("org-1", CLAIM_TYPE);
     const confirmed = await assertUploadMeaning({ artifactId: "a-3319", extension: PACK });
     expect(confirmed).toMatchObject({ ok: false, reason: "invalid-type" });
@@ -1209,6 +1212,10 @@ describe("cinatra#3319 — listInstalledTypesForArtifact answers the derived mea
       { tier: "classic", identity: PACK, preselect: null, suggestions: [{ extension: POST, confidence: 0.4 }] },
       { claimBacked: true, promotion: INTERRUPTED },
     );
+    // The pack declares matchers, so it is no claim-backed meaning type
+    // (cinatra#3319): its claim wins the row's type, yet it owns no type the
+    // promotion road could promote into.
+    readClaimBackedMeaningTypesForOrg.mockImplementation(async () => []);
     expect(await confirmPack()).toEqual({ ok: true });
     expect(assertSemanticType).not.toHaveBeenCalled();
     expect(promoteMatchedArtifactType).not.toHaveBeenCalled();

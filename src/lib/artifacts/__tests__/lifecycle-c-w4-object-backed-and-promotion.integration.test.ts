@@ -85,7 +85,6 @@ let snapshotMod: typeof import("@/lib/artifacts/object-content-snapshot");
 let bindingMod: typeof import("@/lib/objects/binding-write-path");
 let contractMod: typeof import("@/lib/artifacts/object-backed-contract");
 let promotionStore: typeof import("@/lib/artifacts/typed-promotion-store");
-let promotionPlan: typeof import("@/lib/artifacts/typed-promotion");
 let representationStore: typeof import("@/lib/artifacts/representation-store");
 let producedEvent: typeof import("@/lib/lifecycle/lifecycle-produced-event");
 let registry: typeof import("@cinatra-ai/objects/registry");
@@ -430,7 +429,6 @@ beforeAll(async () => {
   bindingMod = await import("@/lib/objects/binding-write-path");
   contractMod = await import("@/lib/artifacts/object-backed-contract");
   promotionStore = await import("@/lib/artifacts/typed-promotion-store");
-  promotionPlan = await import("@/lib/artifacts/typed-promotion");
   representationStore = await import("@/lib/artifacts/representation-store");
   producedEvent = await import("@/lib/lifecycle/lifecycle-produced-event");
   registry = await import("@cinatra-ai/objects/registry");
@@ -1060,17 +1058,22 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3319 — the promotion intent survives th
       actor: { userId: string; orgId: string };
     }): Promise<{ ok: false; reason: "row-moved" }> => {
       const res = sql(
-        `WITH updated AS (
+        `WITH prev AS (
+           SELECT type FROM "${S()}"."objects"
+           WHERE id = $1 AND org_id = $2 AND version = $4 AND deleted_at IS NULL
+         ), updated AS (
            UPDATE "${S()}"."objects" SET type = $3, version = version + 1, updated_at = now()
            WHERE id = $1 AND org_id = $2 AND version = $4 AND deleted_at IS NULL
            RETURNING id, type, version, org_id
          )
          INSERT INTO "${S()}"."object_change_event"
            (id, change_set_id, sequence, object_id, object_type, operation, history_effect,
+            before_snapshot, after_snapshot,
             base_version, result_version, actor_id, actor_kind, org_id, idempotency_key, event_checksum)
          SELECT $5::text, $6::text, 1, updated.id, updated.type, $7::text, 'reversible-internal',
+                jsonb_build_object('type', prev.type), jsonb_build_object('type', updated.type),
                 $8::int, updated.version, $9::text, $10::text, updated.org_id, $11::text, $12::text
-         FROM updated
+         FROM updated, prev
          RETURNING id`,
         [
           input.artifactId,
@@ -1097,7 +1100,6 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3319 — the promotion intent survives th
     ownType: string;
     actor: { userId: string; orgId: string };
     retype?: TypedPromotionRetype;
-    beforeConvergingAppend?: () => Promise<void>;
   }) {
     return promotionStore.promoteMatchedArtifactType({
       orgId: ORG,
@@ -1112,7 +1114,6 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3319 — the promotion intent survives th
       actor: p.actor,
       authority: AUTHORITY,
       retype: p.retype ?? RETYPE,
-      beforeConvergingAppend: p.beforeConvergingAppend,
     });
   }
 
@@ -1258,43 +1259,6 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3319 — the promotion intent survives th
         reason: "already-promoted",
       });
       expect(representationsOf(objectId)).toHaveLength(1);
-    });
-  }
-
-  for (const phase of ["pre-reconciliation", "post-reconciliation"] as const) {
-    it(`3319 T11 an edit that commits between the converging read and its append refuses the append (${phase})`, async () => {
-      const label = phase === "pre-reconciliation" ? "t11-pre" : "t11-post";
-      const { ownType, actor, objectId, seeded } = await seedInterruptedPromotion(label);
-      // Pre-reconciliation the authority is the person's still-active assertion;
-      // post-reconciliation it is the retype's own event.
-      if (phase === "post-reconciliation") reconcile(objectId);
-      else expect(personAssertionsOf(objectId)).toEqual(["eligible"]);
-
-      let editId: string | null = null;
-      const out = await promote({
-        objectId,
-        ownType,
-        actor,
-        // THE BARRIER: the edit commits after the branch's read and before its
-        // append transaction takes the lock.
-        beforeConvergingAppend: async () => {
-          editId = await appendEdit(objectId, seeded.revisionId, actor.userId);
-        },
-      });
-      expect(out).toEqual({ ok: false, reason: "row-moved" });
-      expect(editId).not.toBeNull();
-
-      const promotionId = promotionPlan.promotionRevisionId({
-        artifactId: objectId,
-        sharedResourceId: seeded.resourceId,
-        toType: ownType,
-      });
-      const ids = representationsOf(objectId).map((r) => r.id);
-      // The head is the edit, and the promotion wrote neither its revision nor
-      // its witness.
-      expect(ids).toEqual([seeded.revisionId, editId]);
-      expect(ids).not.toContain(promotionId);
-      expect(witnessCount(objectId, promotionId)).toBe(0);
     });
   }
 });

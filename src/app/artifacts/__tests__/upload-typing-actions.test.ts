@@ -31,12 +31,25 @@ vi.mock("@/lib/artifacts/installed-type-picker", () => ({
 }));
 
 // The claim-backed meaning-type reader (cinatra#3319), dynamic-imported by both
-// actions. Defaults to [] in the top-level beforeEach, so every case that does
-// not name a claim reads exactly the registry channels it read before.
+// actions, and the pack whose claim wins the row's type. The reader defaults to
+// [] and the winner to none in the top-level beforeEach, so every case that
+// does not name a claim reads exactly the registry channels it read before.
 const readClaimBackedMeaningTypesForOrg = vi.fn();
+const readArtifactSafeClaimWinnerForType = vi.fn();
 vi.mock("@/lib/artifacts/resolve-bound-artifact-type", () => ({
   readClaimBackedMeaningTypesForOrg: (...a: unknown[]) =>
     readClaimBackedMeaningTypesForOrg(...a),
+  readArtifactSafeClaimWinnerForType: (...a: unknown[]) =>
+    readArtifactSafeClaimWinnerForType(...a),
+}));
+
+// The row's one presentation reading, which the confirmation's presented-base
+// check takes once a definer's type accepts the file. Defaults to a complete
+// reading that presents nothing.
+const resolveArtifactPresentationReading = vi.fn();
+vi.mock("@/lib/objects/presentation-identity", () => ({
+  resolveArtifactPresentationReading: (...a: unknown[]) =>
+    resolveArtifactPresentationReading(...a),
 }));
 
 const resolveActiveInstallForActor = vi.fn();
@@ -107,11 +120,6 @@ const verifySessionAuthority = vi.fn();
 vi.mock("@/lib/org-write/authority", () => ({
   verifySessionAuthority: (...a: unknown[]) => verifySessionAuthority(...a),
 }));
-// The pack whose claim wins the row's type (cinatra#3319): none in this suite.
-vi.mock("@/lib/artifacts/resolve-bound-artifact-type", () => ({
-  readArtifactSafeClaimWinnerForType: () => null,
-}));
-
 // `@/lib/artifacts/type-install-request` is deliberately NOT mocked: the real
 // pure notification builder runs (its href-org behavior is asserted in
 // type-install-request.test.ts).
@@ -137,6 +145,11 @@ beforeEach(() => {
   getAuthSession.mockResolvedValue(authedSession());
   getActorContext.mockResolvedValue(ACTOR);
   readClaimBackedMeaningTypesForOrg.mockResolvedValue([]);
+  readArtifactSafeClaimWinnerForType.mockReturnValue(null);
+  resolveArtifactPresentationReading.mockReturnValue({
+    offer: { preselect: null, suggestions: [] },
+    complete: true,
+  });
 });
 afterEach(() => vi.resetModules());
 
@@ -540,6 +553,10 @@ describe("3319 claim-backed meaning types reach the upload picker and its promot
     objectTypeRegistry._clearForTests();
     matcherManifestRegistry._clearForTests();
     readClaimBackedMeaningTypesForOrg.mockResolvedValue([ENTRY]);
+    // The same arbitration names the pack as the winner of its claimed type.
+    readArtifactSafeClaimWinnerForType.mockImplementation((_orgId: string, objectTypeId: string) =>
+      objectTypeId === POST_DRAFT ? LINKEDIN_PACK : null,
+    );
     // The picker as the cure draws it: a claim-backed entry is a candidate only
     // when the caller hands it in, and the row's own type is never offered.
     listInstalledMeaningTypesAcceptingMime.mockImplementation(
@@ -648,5 +665,56 @@ describe("3319 claim-backed meaning types reach the upload picker and its promot
     });
     // The call that retyped the row wrote the person's meaning already.
     expect(assertSemanticType).not.toHaveBeenCalled();
+    // The presented-base check read the claim-backed type with the claim-backed
+    // population, and the row's reading presents no draft of the pack.
+    expect(listInstalledMeaningTypesAcceptingMime).toHaveBeenCalledWith("text/markdown", {
+      claimBacked: [ENTRY],
+    });
+    expect(resolveArtifactPresentationReading).toHaveBeenCalledTimes(1);
+  });
+
+  it("3319 T12: a row already typed post-draft is not converged for a person the access gate refuses the pack: refused, nothing promoted", async () => {
+    readArtifactForMeaningWrite.mockReturnValue({
+      kind: "ok",
+      artifact: { mime: "text/markdown", objectType: POST_DRAFT },
+    });
+    // The pack is neither a system extension nor installed for this person.
+    isSystemExtension.mockReturnValue(false);
+    resolveActiveInstallForActor.mockResolvedValue(null);
+    const { assertUploadMeaning } = await import("../upload-typing-actions");
+    const res = await assertUploadMeaning({ artifactId: "a1", extension: LINKEDIN_PACK });
+    expect(res).toMatchObject({ ok: false, reason: "invalid-type" });
+    expect(promoteMatchedArtifactType).not.toHaveBeenCalled();
+    expect(assertSemanticType).not.toHaveBeenCalled();
+    // Refused by the access gate, before the row's reading.
+    expect(resolveArtifactPresentationReading).not.toHaveBeenCalled();
+  });
+
+  it("3319 T13: a failed claim-backed read still answers the list, without the claim-backed types", async () => {
+    readArtifactForDetail.mockReturnValue({
+      kind: "ok",
+      artifact: { mime: "text/markdown", objectType: TEXT_TYPE },
+    });
+    readClaimBackedMeaningTypesForOrg.mockRejectedValue(new Error("claim store unavailable"));
+    const { listInstalledTypesForArtifact } = await import("../upload-typing-actions");
+    const res = await listInstalledTypesForArtifact("a1");
+    expect(res).toMatchObject({ ok: true, mime: "text/markdown", types: [] });
+    expect(listInstalledMeaningTypesAcceptingMime).toHaveBeenCalledWith("text/markdown", {
+      excludeTypeId: TEXT_TYPE,
+      claimBacked: [],
+    });
+  });
+
+  it("3319 T14: a failed claim-backed read refuses the confirmation and writes nothing", async () => {
+    readArtifactForMeaningWrite.mockReturnValue({
+      kind: "ok",
+      artifact: { mime: "text/markdown", objectType: TEXT_TYPE },
+    });
+    readClaimBackedMeaningTypesForOrg.mockRejectedValue(new Error("claim store unavailable"));
+    const { assertUploadMeaning } = await import("../upload-typing-actions");
+    const res = await assertUploadMeaning({ artifactId: "a1", extension: LINKEDIN_PACK });
+    expect(res).toMatchObject({ ok: false, reason: "invalid-type" });
+    expect(assertSemanticType).not.toHaveBeenCalled();
+    expect(promoteMatchedArtifactType).not.toHaveBeenCalled();
   });
 });
