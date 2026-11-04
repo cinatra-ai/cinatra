@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { matcherManifestRegistry } from "@cinatra-ai/objects/registry";
 
 import {
   selectMeaningTypesAcceptingMime,
@@ -215,8 +217,15 @@ describe("unionMeaningTypesAcceptingMime", () => {
 
 const POST_DRAFT = "@cinatra-ai/linkedin:post-draft";
 const LINKEDIN = "@cinatra-ai/linkedin-artifacts";
+/** The winning claim's identity each entry carries (cinatra#3319). */
+const WINNER = { extensionVersion: "1.0.0", installId: "inst-linkedin-1", scope: "org:org-1" };
 const claimBacked: ClaimBackedMeaningType[] = [
-  { objectTypeId: POST_DRAFT, extension: LINKEDIN, acceptMimes: ["text/markdown", "text/plain"] },
+  {
+    objectTypeId: POST_DRAFT,
+    extension: LINKEDIN,
+    acceptMimes: ["text/markdown", "text/plain"],
+    ...WINNER,
+  },
 ];
 
 describe("selectClaimBackedMeaningTypesAcceptingMime (cinatra#3319)", () => {
@@ -238,7 +247,7 @@ describe("selectClaimBackedMeaningTypesAcceptingMime (cinatra#3319)", () => {
       }),
     ).toEqual([]);
     const catchAll: ClaimBackedMeaningType[] = [
-      { objectTypeId: "@x/floor:object", extension: "@x/floor-artifacts", acceptMimes: ["*/*"] },
+      { objectTypeId: "@x/floor:object", extension: "@x/floor-artifacts", acceptMimes: ["*/*"], ...WINNER },
     ];
     expect(picker.selectClaimBackedMeaningTypesAcceptingMime(catchAll, "text/markdown")).toEqual([]);
   });
@@ -277,5 +286,32 @@ describe("unionMeaningTypesAcceptingMime — claim-backed candidates (cinatra#33
       claimBackedCandidates: [claimX, claimY],
     });
     expect(got).toEqual([claimY]);
+  });
+});
+
+describe("listInstalledMeaningTypesAcceptingMime — a matcher entry under a claim-backed pack's name (cinatra#3319)", () => {
+  afterEach(() => matcherManifestRegistry._clearForTests());
+
+  it("3319 T16: the claim-backed candidate stands and the matcher entry under the same package name is no candidate", () => {
+    // Another version of the pack, installed elsewhere, registered matchers in
+    // the process-global registry, which is keyed by package only.
+    matcherManifestRegistry.register({
+      packageName: LINKEDIN,
+      matcherSkillIds: [`${LINKEDIN}:match`],
+      matcherConfidenceThreshold: 0.5,
+      fileMimeTypes: ["text/markdown"],
+    });
+    const got = picker.listInstalledMeaningTypesAcceptingMime("text/markdown", { claimBacked });
+    expect(got.filter((t) => t.extension === LINKEDIN)).toEqual([
+      {
+        objectTypeId: POST_DRAFT,
+        extension: LINKEDIN,
+        displayName: "Post draft",
+        extensionLabel: "LinkedIn post",
+      },
+    ]);
+    // Without a claim-backed entry the matcher entry is a candidate, as before.
+    const plain = picker.listInstalledMeaningTypesAcceptingMime("text/markdown");
+    expect(plain.filter((t) => t.extension === LINKEDIN).map((t) => t.objectTypeId)).toEqual([null]);
   });
 });
