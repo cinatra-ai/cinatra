@@ -62,21 +62,27 @@ vi.mock("../db", () => {
     },
     select: () => {
       calls.via.push(`${name}.select`);
+      const where = (w: unknown) => {
+        calls.where.push(w);
+        const limit = (n: number) => {
+          calls.limit.push(n);
+          return answers.select();
+        };
+        return {
+          limit,
+          orderBy: () => {
+            calls.orderBy += 1;
+            return { limit };
+          },
+        };
+      };
       return {
         from: () => ({
-          where: (w: unknown) => {
-            calls.where.push(w);
-            const limit = (n: number) => {
-              calls.limit.push(n);
-              return answers.select();
-            };
-            return {
-              limit,
-              orderBy: () => {
-                calls.orderBy += 1;
-                return { limit };
-              },
-            };
+          where,
+          // cinatra#4150 PR 3a: the one read that joins the run, for its status.
+          innerJoin: () => {
+            calls.via.push(`${name}.innerJoin`);
+            return { where };
           },
         }),
       };
@@ -111,7 +117,9 @@ import {
   decide,
   insertParkedDecision,
   listDueParked,
+  listSettledWithWaitingRun,
   readDecisionForRunNode,
+  readLatestDecisionForRun,
   readOpenDecisionForRun,
 } from "../publish-decision-store";
 import { endPublishDecisionSuite } from "./__fixtures__/publish-decision-suite-teardown";
@@ -813,5 +821,55 @@ describe("the integration file's teardown (publish-decision-suite-teardown)", ()
       expect(shared.__cinatraAgentBuilderPool).toBeUndefined();
       expect(shared.__cinatraPostgresSchemaInitialized).toBeUndefined();
     });
+  });
+});
+
+describe("cinatra#4150 PR 3a: the newest decision of a run, the one every resume road reads", () => {
+  it("asks for the run only, newest first, one row, and answers it whatever its status", async () => {
+    expect(await readLatestDecisionForRun("run-1")).toBeNull();
+    expect(rendered(calls.where[0]).params).toEqual(["run-1"]);
+    expect(calls.orderBy).toBe(1);
+    expect(calls.limit).toEqual([1]);
+    for (const status of ["parked", "released", "declined", "expired", "run_ended"]) {
+      answers.select = async () => [stored({ status })];
+      expect((await readLatestDecisionForRun("run-1"))?.status).toBe(status);
+    }
+  });
+
+  it("refuses an empty run id, throws on a read error and on a malformed row", async () => {
+    expect(await codeOf(readLatestDecisionForRun(""))).toBe("invalid-input");
+    answers.select = async () => [stored({ status: "approved" })];
+    expect(await codeOf(readLatestDecisionForRun("run-1"))).toBe("malformed-row");
+    answers.select = async () => {
+      throw new Error("db down");
+    };
+    await expect(readLatestDecisionForRun("run-1")).rejects.toThrow("db down");
+  });
+});
+
+describe("cinatra#4150 PR 3a: the stops a decline or an expiry decided but did not make", () => {
+  it("joins the run and asks for declined or expired decisions whose run is in pending_approval", async () => {
+    answers.select = async () => [{ decision: stored({ id: "d1", status: "declined" }) }, { decision: stored({ id: "d2", status: "expired" }) }];
+    const rows = await listSettledWithWaitingRun(50);
+    expect(rows.map((r) => [r.id, r.status])).toEqual([["d1", "declined"], ["d2", "expired"]]);
+    expect(rows[0]!.surfacedValues).toEqual({ what: "the post" });
+    expect(calls.via).toEqual(["db.select", "db.innerJoin"]);
+    expect(rendered(calls.where[0]).params).toEqual(["declined", "expired", "pending_approval"]);
+    expect(calls.orderBy).toBe(1);
+    expect(calls.limit).toEqual([50]);
+  });
+
+  it.each([0, PUBLISH_DECISION_MAX_DUE_PAGE + 1, 1.5])("refuses the limit %s before any read", async (limit) => {
+    expect(await codeOf(listSettledWithWaitingRun(limit))).toBe("invalid-input");
+    expect(calls.via).toEqual([]);
+  });
+
+  it("throws on a malformed row and on a read error", async () => {
+    answers.select = async () => [{ decision: stored({ status: "approved" }) }];
+    expect(await codeOf(listSettledWithWaitingRun(1))).toBe("malformed-row");
+    answers.select = async () => {
+      throw new Error("db down");
+    };
+    await expect(listSettledWithWaitingRun(1)).rejects.toThrow("db down");
   });
 });
