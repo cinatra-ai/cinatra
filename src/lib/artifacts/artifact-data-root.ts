@@ -64,5 +64,5 @@ export function writeArtifactDataRoot(value: string): void {
  *  configured as `/data/artifacts/`. */
 export function resolveArtifactDataRoot(): string {
   const cfg = readArtifactDataRoot();
-  return path.isAbsolute(cfg) ? path.resolve(cfg) : path.resolve(process.cwd(), cfg);
+  return path.isAbsolute(cfg) ? path.resolve(cfg) : path.resolve(/* turbopackIgnore: true */ process.cwd(), cfg);
 }
