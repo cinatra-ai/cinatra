@@ -34,9 +34,10 @@ import { StatusPill, type StatusPillStatus } from "@/components/ui/status-pill";
 afterEach(cleanup);
 
 // The states the clause's "tinted from the status colour" recipe governs: the
-// six that carry a STATUS colour. `queued`, `idle`, `archived`, `withdrawn`
-// and `reset` are the neutral states — they carry no status colour to tint
-// from — and `failed` /
+// six that carry a STATUS colour. Queued is one of them: the roster draws it
+// as `pill running`, the indigo family (specs/app.html, the status-pills
+// roster; cinatra#3189). `idle`, `archived`, `withdrawn` and `reset` are the
+// neutral states — they carry no status colour to tint from — and `failed` /
 // `declined` are the terminal states the drawing's §V draws solid rather than
 // tinted. Each of those two groups is graded in its own block below, so the
 // relation asserted here stays the relation the clause actually states.
@@ -46,9 +47,10 @@ const TINTED: StatusPillStatus[] = [
   "hold",
   "needs-review",
   "scheduled",
+  "queued",
 ];
 
-const NEUTRAL: StatusPillStatus[] = ["queued", "idle", "archived", "withdrawn", "reset"];
+const NEUTRAL: StatusPillStatus[] = ["idle", "archived", "withdrawn", "reset"];
 
 // `hold` is tinted from the mustard too, but the drawing writes its label in
 // the darker MUSTARD INK, the readable shade of that mustard on its own tint
@@ -122,9 +124,10 @@ describe("the neutral states, which the clause's tint recipe does not reach", ()
   it.each(NEUTRAL)(
     "draws '%s' in the muted ink rather than borrowing a status colour it does not have",
     (status) => {
-      // The clause says a status pill is "tinted from the status colour". A
-      // queued, idle or archived run has no status colour, so there is nothing
-      // to tint from; these draw the muted ink on a near-transparent ground.
+      // The clause says a status pill is "tinted from the status colour". An
+      // idle, archived, withdrawn or reset state has no status colour, so there
+      // is nothing to tint from; these draw the muted ink on a near-transparent
+      // ground.
       // Grading them against the tint relation would invent a clause the
       // drawing does not state.
       const cls = renderPill(status).className;

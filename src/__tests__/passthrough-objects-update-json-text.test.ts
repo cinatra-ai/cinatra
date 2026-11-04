@@ -262,13 +262,15 @@ describe("G0 — what the seam must not change", () => {
     expect("data" in parsedInputs[0]).toBe(false);
   });
 
-  it("a call with no objectId keeps the handler's own schema refusal", async () => {
+  it("a call with no objectId answers the handler's schema refusal by its issues (cinatra#4465)", async () => {
     const input = { data: { linkedinPublishedUrl: "https://example.com/p" } };
     const expected = objectsUpdateSchema.safeParse(input);
     expect(expected.success).toBe(false);
     const res = await POST(post(updateBody(input)));
     expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({ error: expected.error?.message });
+    expect(await res.json()).toEqual({
+      error: "the input does not match the tool's input schema: objectId: invalid_type, expected string",
+    });
     expect(parsedInputs).toHaveLength(0);
   });
 });
