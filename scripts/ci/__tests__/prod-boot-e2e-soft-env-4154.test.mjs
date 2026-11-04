@@ -66,6 +66,9 @@ beforeAll(() => {
       ...process.env,
       PATH: `${dir}${path.delimiter}${process.env.PATH}`,
       IMAGE,
+      // The stand-in answers at once; a short health budget makes a boot that never
+      // turns healthy fail the script in seconds instead of at the spawn timeout.
+      BOOT_TIMEOUT_SECS: "15",
       STUB_STATE: stateFile,
       STUB_IMAGE: IMAGE,
       STUB_SOFT_ENV: SOFT.join(","),
@@ -78,7 +81,7 @@ beforeAll(() => {
     ? JSON.parse(readFileSync(stateFile, "utf8"))
     : { runs: [], containers: {}, networks: [], volumes: {} };
   appRuns = state.runs.filter((r) => r.app);
-});
+}, 150_000);
 
 afterAll(() => {
   if (dir) rmSync(dir, { recursive: true, force: true });
