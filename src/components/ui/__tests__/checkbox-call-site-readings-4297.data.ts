@@ -178,6 +178,26 @@ export const CHECKBOX_CALL_SITE_READINGS: FileReading[] = [
     ],
   },
   {
+    file: "src/components/extensions/schema-config-connector-form.tsx",
+    tokens: 3,
+    sites: [
+      {
+        anchor: "id={boxId}",
+        tag: "Checkbox",
+        drawn: "checkbox",
+        effect: "confirmed",
+        reading:
+          "an on / off row of an extension's settings form (BooleanRow): a change only sets local state and the hidden input's value, and only one of the form's own action buttons writes it, by reading the form's named inputs (collectFormInputs) and posting them to the extension's action",
+        tagIncludes: ["onCheckedChange={(next) => setChecked(next === true)}"],
+        fileIncludes: [
+          '<Input type="hidden" name={field.key} value={checked ? "true" : "false"} readOnly />',
+          "onClick={(e) => void run(e.currentTarget)}",
+          "const r = await invokeAction(installId, field.actionId, collectFormInputs(origin));",
+        ],
+      },
+    ],
+  },
+  {
     file: "src/app/configuration/development/page.tsx",
     tokens: 3,
     sites: [
