@@ -3,7 +3,7 @@
   "routes": {
     "/sign-in": 165,
     "/api/mcp": 1310,
-    "/chat": 1410,
+    "/chat": 1411,
     "/api/a2a": 1318,
     "/api/llm-bridge": 1328
   },
@@ -28,8 +28,8 @@
     },
     "/chat": {
       "from": 1409,
-      "to": 1410,
-      "reason": "Pull request 3079 (issue 3062) adds exactly one core module to this route, packages/agents/src/run-recommendation-reading-register.ts: the reading the skills card drew is remembered in its own module so the settled card can be drawn read-only without the decision core. Measured, not argued: with the companion extension fleet cloned pinned and the merged scripts/route-graph.mjs, main at b3a72b71d016fe9c39e1c5705a2ed849db2ef8a6 reads 1394 and the merged tree reads 1395, the one added module being that file; the growth is additive and no module leaves the route.",
+      "to": 1411,
+      "reason": "Pull request 3079 (issue 3062) adds exactly two core modules to this route: packages/agents/src/run-recommendation-reading-register.ts, where the reading the skills card drew is remembered in its own module so the settled card can be drawn read-only without the decision core, and packages/chat/src/run-start-line-order.ts, the order in which the conversation draws the platform's start line above the run's slot. Measured, not argued: with the companion extension fleet cloned pinned and the merged scripts/route-graph.mjs, main at 7809657c29f0255e594c3af8f3ecdb9f14a18e11 reads 1409 and the merged tree reads 1411, the two added modules being those files; the growth is additive and no module leaves the route.",
       "pr": 3079
     },
     "/sign-in": {
