@@ -1,6 +1,11 @@
-import { describe, it, expect, vi, beforeAll } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
+
+import * as auditModule from "@/lib/authz/audit";
+import * as actorModule from "@/lib/extension-host-actor";
+import * as authorityModule from "@/lib/connector-authority";
+import { POLICY_VERSION } from "@/lib/authz/actor-context";
 
 // Host per-concern service publication (register-host-connector-services):
 // pins (a) the `@cinatra-ai/host:connector-config` PHYSICAL `delete` member
@@ -51,6 +56,13 @@ const EXT_MCP_ROW = {
   updatedAt: "2026-01-02T00:00:00Z",
 };
 const extMcpCalls: Record<string, unknown[][]> = { resolveBearer: [], devAttachTwentyBearerFromMintedKey: [] };
+// cinatra#4387: the dev-boot state the Drupal dev-owner binding reads. Defaults
+// (production runtime, no owner, no membership) keep every other case as it was.
+const devBootState: {
+  dev: boolean;
+  owner: { userId: string; organizationId: string } | null;
+  orgRole: string | undefined;
+} = { dev: false, owner: null, orgRole: undefined };
 vi.mock("@/lib/external-mcp-registry", () => ({
   EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY: "cinatra-external-mcp",
   upsertExternalMcpServer: async () => ({}),
@@ -65,6 +77,8 @@ vi.mock("@/lib/external-mcp-registry", () => ({
     extMcpCalls.devAttachTwentyBearerFromMintedKey.push(args);
     return { resolved: true, connectionId: "unit-connection" };
   },
+  // cinatra#4387: the boot's install-connection owner holder (null by default).
+  getDevInstallConnectionOwner: () => devBootState.owner,
 }));
 // mcp-server-connector setup-page surface (cinatra#612): the host binds the
 // create/delete server actions, the viewer-context resolver, the Nango
@@ -101,13 +115,13 @@ vi.mock("@/lib/auth-session", () => ({
   // role through this. undefined = non-member ⇒ the gate denies fail-closed
   // (this suite only asserts member PRESENCE; behavior is pinned in
   // connector-instance-native-injection-consent.test.ts).
-  resolveOrgRoleForUser: async () => undefined,
+  resolveOrgRoleForUser: async () => devBootState.orgRole,
 }));
 vi.mock("@/lib/nango-system", () => ({ getNangoStatus: () => ({ status: "connected" }) }));
 vi.mock("@/lib/instance-secrets", () => ({ encryptSecret: (v: string) => v, decryptSecret: (v: string) => v }));
 vi.mock("@/lib/mcp-self-client", () => ({ buildAppMcpSelfClientHeaders: () => ({}) }));
 vi.mock("@/lib/instance-identity-store", () => ({ readInstanceIdentity: () => null }));
-vi.mock("@/lib/runtime-mode", () => ({ isAppDevelopmentMode: () => false }));
+vi.mock("@/lib/runtime-mode", () => ({ isAppDevelopmentMode: () => devBootState.dev }));
 vi.mock("@/lib/notifications", () => ({ createNotification: async () => {} }));
 vi.mock("@/lib/openai-connection-store", () => ({
   readOpenAIConnection: () => ({}),
@@ -258,8 +272,10 @@ const drupalApiCalls: Record<string, unknown[][]> = { save: [], delete: [], devP
 // The relocated Drupal instance client the drupal-mcp-connector registers
 // under `@cinatra-ai/host:drupal-mcp` (cinatra#975 Wave 3) — the host
 // publication DELEGATES its client-backed members here.
+// cinatra#4387: the rows the connector would hold (empty unless a case adds one).
+const drupalRows: Array<Record<string, unknown>> = [];
 const drupalConnectorClient = {
-  listInstances: () => [] as unknown[],
+  listInstances: () => drupalRows as unknown[],
   getAPIStatus: async () => ({ instanceCount: 0, instances: [] }),
   saveInstance: async (...args: unknown[]) => {
     drupalApiCalls.save.push(args);
@@ -1218,5 +1234,552 @@ describe("dev-only devSetup writers on a preview instance (cinatra#4098)", () =>
       await expect(attachUnder(values)).rejects.toThrow(/refused outside development/);
     }
     expect(extMcpCalls.devAttachTwentyBearerFromMintedKey.length).toBe(before);
+  });
+});
+
+describe("drupal-mcp dev writers bind the dev owner host-side (cinatra#4387)", () => {
+  const DEV_OWNER = { userId: "dev-admin-1", organizationId: "dev-org-1" };
+  const PREVIEW_ENV = ["CINATRA_RUNTIME_MODE", "CINATRA_INSTALL_PROFILE"] as const;
+  const savedEnv: Record<string, string | undefined> = {};
+
+  // `devSaveInstance` is host-local (not in the SDK contract): the dev hook
+  // reads it structurally, as this shape does.
+  type DrupalDevSurface = HostDrupalMcpService & {
+    devSaveInstance?(input: { id?: string; name: string; siteUrl: string; mcpApiKey?: string }): Promise<unknown>;
+  };
+  function drupal(): DrupalDevSurface {
+    return resolveSingle<DrupalDevSurface>(HOST_CONNECTOR_SERVICE_CAPABILITIES.drupalMcp);
+  }
+  function devBoot(owner: typeof DEV_OWNER | null) {
+    devBootState.dev = true;
+    devBootState.owner = owner;
+  }
+  function previewBoot(owner: typeof DEV_OWNER | null) {
+    devBootState.dev = false;
+    devBootState.owner = owner;
+    for (const k of PREVIEW_ENV) savedEnv[k] = process.env[k];
+    process.env.CINATRA_RUNTIME_MODE = "production";
+    process.env.CINATRA_INSTALL_PROFILE = "preview";
+  }
+
+  afterEach(() => {
+    devBootState.dev = false;
+    devBootState.owner = null;
+    devBootState.orgRole = undefined;
+    drupalRows.length = 0;
+    for (const k of PREVIEW_ENV) {
+      if (k in savedEnv) {
+        if (savedEnv[k] === undefined) delete process.env[k];
+        else process.env[k] = savedEnv[k];
+        delete savedEnv[k];
+      }
+    }
+    vi.restoreAllMocks();
+  });
+
+  it("dev boot with an owner: the persist wrapper hands the connector the owner's orgId and runBy", async () => {
+    devBoot(DEV_OWNER);
+    await expect(
+      drupal().devPersistLocalInstanceUnvalidated!({ name: "Local", siteUrl: "http://localhost:8082" }),
+    ).resolves.toEqual({ id: "i-1" });
+    expect(drupalApiCalls.devPersist.at(-1)).toEqual([
+      { name: "Local", siteUrl: "http://localhost:8082", orgId: "dev-org-1", runBy: "dev-admin-1" },
+    ]);
+  });
+
+  it("dev boot with an owner: devSaveInstance is bound and hands the validated save the same binding", async () => {
+    devBoot(DEV_OWNER);
+    const service = drupal();
+    expect(typeof service.devSaveInstance).toBe("function");
+    await expect(
+      service.devSaveInstance!({ name: "Local", siteUrl: "http://localhost:8082", mcpApiKey: "k".repeat(12) }),
+    ).resolves.toEqual({ id: "i-1" });
+    expect(drupalApiCalls.save.at(-1)).toEqual([
+      {
+        name: "Local",
+        siteUrl: "http://localhost:8082",
+        mcpApiKey: "k".repeat(12),
+        orgId: "dev-org-1",
+        runBy: "dev-admin-1",
+      },
+    ]);
+  });
+
+  it("preview boot with an owner: both dev writers hand the same binding", async () => {
+    previewBoot(DEV_OWNER);
+    await drupal().devPersistLocalInstanceUnvalidated!({ id: "i-1", name: "Local", siteUrl: "http://localhost:8082" });
+    expect(drupalApiCalls.devPersist.at(-1)).toEqual([
+      { id: "i-1", name: "Local", siteUrl: "http://localhost:8082", orgId: "dev-org-1", runBy: "dev-admin-1" },
+    ]);
+    await drupal().devSaveInstance!({ id: "i-1", name: "Local", siteUrl: "http://localhost:8082" });
+    expect(drupalApiCalls.save.at(-1)).toEqual([
+      { id: "i-1", name: "Local", siteUrl: "http://localhost:8082", orgId: "dev-org-1", runBy: "dev-admin-1" },
+    ]);
+  });
+
+  it("no owner on the boot: no orgId and no runBy reach the connector", async () => {
+    devBoot(null);
+    await drupal().devPersistLocalInstanceUnvalidated!({ name: "Local", siteUrl: "http://localhost:8082" });
+    expect(drupalApiCalls.devPersist.at(-1)).toEqual([{ name: "Local", siteUrl: "http://localhost:8082" }]);
+    await drupal().devSaveInstance!({ id: "i-1", name: "Local", siteUrl: "http://localhost:8082" });
+    expect(drupalApiCalls.save.at(-1)).toEqual([{ id: "i-1", name: "Local", siteUrl: "http://localhost:8082" }]);
+  });
+
+  it("an owner holder with only one id binds nothing (never half a binding)", async () => {
+    // Each half on its own, and both ids whitespace only (trimmed to empty).
+    const halves = [
+      { userId: "dev-admin-1", organizationId: "" },
+      { userId: "", organizationId: "dev-org-1" },
+      { userId: "   ", organizationId: "dev-org-1" },
+      { userId: "dev-admin-1", organizationId: "   " },
+      { userId: "  ", organizationId: "\t " },
+    ];
+    for (const half of halves) {
+      devBoot(half);
+      await drupal().devPersistLocalInstanceUnvalidated!({ name: "Local", siteUrl: "http://localhost:8082" });
+      expect(drupalApiCalls.devPersist.at(-1)).toEqual([{ name: "Local", siteUrl: "http://localhost:8082" }]);
+      await drupal().devSaveInstance!({ id: "i-1", name: "Local", siteUrl: "http://localhost:8082" });
+      expect(drupalApiCalls.save.at(-1)).toEqual([{ id: "i-1", name: "Local", siteUrl: "http://localhost:8082" }]);
+    }
+  });
+
+  it("production boot: both dev writers refuse and nothing reaches the connector", async () => {
+    // A production runtime with a non-preview install profile is forced here
+    // (no profile, then "demo"), whatever the ambient environment holds; the
+    // afterEach restores both variables.
+    for (const k of PREVIEW_ENV) savedEnv[k] = process.env[k];
+    for (const profile of [undefined, "demo"]) {
+      devBootState.dev = false;
+      devBootState.owner = DEV_OWNER;
+      process.env.CINATRA_RUNTIME_MODE = "production";
+      if (profile === undefined) delete process.env.CINATRA_INSTALL_PROFILE;
+      else process.env.CINATRA_INSTALL_PROFILE = profile;
+      const persists = drupalApiCalls.devPersist.length;
+      const saves = drupalApiCalls.save.length;
+      await expect(
+        drupal().devPersistLocalInstanceUnvalidated!({ name: "Local", siteUrl: "http://localhost:8082" }),
+      ).rejects.toThrow(/dev-only devSetup provisioning member/);
+      await expect(
+        drupal().devSaveInstance!({ name: "Local", siteUrl: "http://localhost:8082" }),
+      ).rejects.toThrow(/drupal-mcp\.devSaveInstance is a dev-only devSetup provisioning member/);
+      expect(drupalApiCalls.devPersist).toHaveLength(persists);
+      expect(drupalApiCalls.save).toHaveLength(saves);
+    }
+  });
+
+  it("a caller-supplied orgId and runBy never reach the connector (only the host names the owner)", async () => {
+    const forged = { name: "Local", siteUrl: "http://localhost:8082", orgId: "evil-org", runBy: "evil-user" };
+    devBoot(DEV_OWNER);
+    await drupal().devSaveInstance!(forged as never);
+    expect(drupalApiCalls.save.at(-1)).toEqual([
+      { name: "Local", siteUrl: "http://localhost:8082", orgId: "dev-org-1", runBy: "dev-admin-1" },
+    ]);
+    devBoot(null);
+    await drupal().devPersistLocalInstanceUnvalidated!(forged as never);
+    expect(drupalApiCalls.devPersist.at(-1)).toEqual([{ name: "Local", siteUrl: "http://localhost:8082" }]);
+  });
+
+  it("the row the wrapper binds passes the write-authority gate for the dev admin; the same row unbound is denied instance_unbound", async () => {
+    devBoot(DEV_OWNER);
+    await drupal().devPersistLocalInstanceUnvalidated!({ id: "dev-row", name: "Local", siteUrl: "http://localhost:8082" });
+    // The connector persists the input it is handed (drupal-mcp-connector#101 pins that side).
+    const handed = drupalApiCalls.devPersist.at(-1)![0] as Record<string, unknown>;
+    drupalRows.push({ ...handed, nangoConnectionId: "dev-row", providerConfigKey: "cinatra-drupal" });
+
+    const devAdmin = {
+      principalType: "HumanUser",
+      principalId: DEV_OWNER.userId,
+      authSource: "mcp",
+      policyVersion: POLICY_VERSION,
+      organizationId: DEV_OWNER.organizationId,
+      orgRole: "owner",
+    };
+    vi.spyOn(auditModule, "logAuditEvent").mockResolvedValue(undefined);
+    vi.spyOn(actorModule, "resolveExtensionActorContext").mockResolvedValue(devAdmin as never);
+    vi.spyOn(actorModule, "resolveExtensionActorSummary").mockResolvedValue({
+      userId: DEV_OWNER.userId,
+      organizationId: DEV_OWNER.organizationId,
+      orgRole: "owner",
+    } as never);
+    const authority = vi.spyOn(authorityModule, "requireConnectorAuthority").mockResolvedValue({ allowed: true } as never);
+    devBootState.orgRole = "owner";
+
+    const guard = resolveSingle<HostInstanceWriteAuthorityService>(
+      HOST_CONNECTOR_SERVICE_CAPABILITIES.instanceWriteAuthority,
+    ).selectForConnector("drupal").requireWrite;
+    await expect(
+      guard({ instanceId: "dev-row", primitiveName: "drupal_node_create_draft_revision" }),
+    ).resolves.toBeUndefined();
+    expect(authority).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ principalId: DEV_OWNER.userId, organizationId: DEV_OWNER.organizationId }),
+      expect.objectContaining({ instanceId: "dev-row" }),
+    );
+
+    // The same row without the binding (what the wrapper handed before #4387).
+    drupalRows.length = 0;
+    const { orgId: _o, runBy: _r, ...unbound } = handed;
+    drupalRows.push({ ...unbound, nangoConnectionId: "dev-row", providerConfigKey: "cinatra-drupal" });
+    await expect(
+      guard({ instanceId: "dev-row", primitiveName: "drupal_node_create_draft_revision" }),
+    ).rejects.toMatchObject({ reason: "instance_unbound" });
+  });
+
+  it("the dev writers never read the caller's orgId or runBy (a throwing getter there is not run)", async () => {
+    const input = { name: "Local", siteUrl: "http://localhost:8082" };
+    for (const key of ["orgId", "runBy"]) {
+      Object.defineProperty(input, key, {
+        enumerable: true,
+        get() {
+          throw new Error(`the caller's ${key} was read`);
+        },
+      });
+    }
+    devBoot(DEV_OWNER);
+    await drupal().devSaveInstance!(input);
+    expect(drupalApiCalls.save.at(-1)).toEqual([
+      { name: "Local", siteUrl: "http://localhost:8082", orgId: "dev-org-1", runBy: "dev-admin-1" },
+    ]);
+    devBoot(null);
+    await drupal().devPersistLocalInstanceUnvalidated!(input);
+    expect(drupalApiCalls.devPersist.at(-1)).toEqual([{ name: "Local", siteUrl: "http://localhost:8082" }]);
+  });
+
+  it("the dev writers hand the connector a new object and leave the caller's object unchanged", async () => {
+    const forged = { id: "i-1", name: "Local", siteUrl: "http://localhost:8082", orgId: "evil-org", runBy: "evil-user" };
+    const before = { ...forged };
+    devBoot(DEV_OWNER);
+    await drupal().devSaveInstance!(forged as never);
+    expect(drupalApiCalls.save.at(-1)![0]).not.toBe(forged);
+    expect(forged).toEqual(before);
+    devBoot(null);
+    await drupal().devPersistLocalInstanceUnvalidated!(forged as never);
+    expect(drupalApiCalls.devPersist.at(-1)![0]).not.toBe(forged);
+    expect(forged).toEqual(before);
+  });
+
+  it("only the caller's own enumerable fields are copied: a field inherited from a class prototype is not", async () => {
+    class DevInput {
+      siteUrl = "http://localhost:8082";
+      get name(): string {
+        return "Local";
+      }
+    }
+    const input = new DevInput();
+    devBoot(DEV_OWNER);
+    await drupal().devSaveInstance!(input);
+    const handed = drupalApiCalls.save.at(-1)![0] as Record<string, unknown>;
+    expect(Object.getPrototypeOf(handed)).toBe(Object.prototype);
+    expect("name" in handed).toBe(false);
+    expect(Object.keys(handed).sort()).toEqual(["orgId", "runBy", "siteUrl"]);
+  });
+
+  it("an own __proto__ field cannot carry a caller pair: the copy keeps the plain prototype and only the host's pair", async () => {
+    const input = JSON.parse(
+      '{"id":"i-1","name":"Local","siteUrl":"http://localhost:8082","__proto__":{"orgId":"evil-org","runBy":"evil-user"}}',
+    ) as { id: string; name: string; siteUrl: string };
+    expect(Object.prototype.hasOwnProperty.call(input, "__proto__")).toBe(true);
+    devBoot(null);
+    await drupal().devSaveInstance!(input);
+    await drupal().devPersistLocalInstanceUnvalidated!(input);
+    for (const handed of [drupalApiCalls.save.at(-1)![0], drupalApiCalls.devPersist.at(-1)![0]] as Array<
+      Record<string, unknown>
+    >) {
+      expect(Object.getPrototypeOf(handed)).toBe(Object.prototype);
+      expect(handed.orgId).toBeUndefined();
+      expect(handed.runBy).toBeUndefined();
+      // The own field is copied as an ordinary field, as every own enumerable field is.
+      expect(Object.prototype.hasOwnProperty.call(handed, "__proto__")).toBe(true);
+    }
+    devBoot(DEV_OWNER);
+    await drupal().devSaveInstance!(input);
+    const bound = drupalApiCalls.save.at(-1)![0] as Record<string, unknown>;
+    expect(Object.getPrototypeOf(bound)).toBe(Object.prototype);
+    expect(bound).toMatchObject({ orgId: "dev-org-1", runBy: "dev-admin-1" });
+  });
+
+  // Object.prototype is shared by the whole test process: each case that can
+  // put orgId/runBy on it saves the previous state and restores it in
+  // `finally`, and reads what it asserts BEFORE the restore, asserting after.
+  const PAIR = ["orgId", "runBy"] as const;
+  function saveObjectPrototypePair() {
+    return PAIR.map((key) => [key, Object.getOwnPropertyDescriptor(Object.prototype, key)] as const);
+  }
+  function restoreObjectPrototypePair(saved: ReturnType<typeof saveObjectPrototypePair>) {
+    for (const [key, field] of saved) {
+      if (field) Object.defineProperty(Object.prototype, key, field);
+      else Reflect.deleteProperty(Object.prototype, key);
+    }
+  }
+  function plantInheritedEvilPair() {
+    for (const [key, value] of [
+      ["orgId", "evil-org"],
+      ["runBy", "evil-user"],
+    ]) {
+      Object.defineProperty(Object.prototype, key, {
+        configurable: true,
+        get: () => value,
+        set() {}, // would swallow an ordinary assignment of the host's value
+      });
+    }
+  }
+
+  it("an accessor field of the caller's input is never run: a getter that defines an inherited orgId/runBy is refused, with and without an owner", async () => {
+    const saved = saveObjectPrototypePair();
+    let getterRuns = 0;
+    const outcomes: Array<{ owner: boolean; save: string; persist: string; saves: number; persists: number }> = [];
+    let planted: Array<PropertyDescriptor | undefined> = [];
+    try {
+      for (const owner of [DEV_OWNER, null]) {
+        const input = {
+          get name() {
+            getterRuns += 1;
+            for (const [key, value] of [
+              ["orgId", "evil-org"],
+              ["runBy", "evil-user"],
+            ]) {
+              Object.defineProperty(Object.prototype, key, {
+                configurable: true,
+                get: () => value,
+                set() {}, // suppresses out[key] = hostValue
+              });
+            }
+            return "Local";
+          },
+          siteUrl: "http://localhost:8082",
+          mcpApiKey: "valid-key-123",
+        };
+        devBoot(owner);
+        const saves = drupalApiCalls.save.length;
+        const persists = drupalApiCalls.devPersist.length;
+        const settle = (p: Promise<unknown>) =>
+          p.then(
+            () => "resolved",
+            (e: unknown) => `rejected: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        const save = await settle(drupal().devSaveInstance!(input));
+        const persist = await settle(drupal().devPersistLocalInstanceUnvalidated!(input));
+        outcomes.push({
+          owner: owner !== null,
+          save,
+          persist,
+          saves: drupalApiCalls.save.length - saves,
+          persists: drupalApiCalls.devPersist.length - persists,
+        });
+      }
+      planted = PAIR.map((key) => Object.getOwnPropertyDescriptor(Object.prototype, key));
+    } finally {
+      restoreObjectPrototypePair(saved);
+    }
+    const refused = "rejected: A drupal-mcp dev instance save takes data fields only; the accessor field name is refused.";
+    expect(outcomes).toEqual([
+      { owner: true, save: refused, persist: refused, saves: 0, persists: 0 },
+      { owner: false, save: refused, persist: refused, saves: 0, persists: 0 },
+    ]);
+    expect(getterRuns).toBe(0);
+    expect(planted).toEqual([undefined, undefined]);
+  });
+
+  it("an inherited orgId/runBy setter and getter defined before the call cannot drop or replace the host's pair (dev owner)", async () => {
+    const saved = saveObjectPrototypePair();
+    const seen: Array<{ own: Array<PropertyDescriptor | undefined>; read: unknown[] }> = [];
+    try {
+      plantInheritedEvilPair();
+      devBoot(DEV_OWNER);
+      await drupal().devSaveInstance!({ name: "Local", siteUrl: "http://localhost:8082" });
+      await drupal().devPersistLocalInstanceUnvalidated!({ name: "Local", siteUrl: "http://localhost:8082" });
+      for (const handed of [drupalApiCalls.save.at(-1)![0], drupalApiCalls.devPersist.at(-1)![0]] as Array<
+        Record<string, unknown>
+      >) {
+        seen.push({
+          own: PAIR.map((key) => Object.getOwnPropertyDescriptor(handed, key)),
+          read: PAIR.map((key) => handed[key]),
+        });
+      }
+    } finally {
+      restoreObjectPrototypePair(saved);
+    }
+    const own = (value: string) => ({ value, enumerable: true, writable: true, configurable: true });
+    expect(seen).toEqual([
+      { own: [own("dev-org-1"), own("dev-admin-1")], read: ["dev-org-1", "dev-admin-1"] },
+      { own: [own("dev-org-1"), own("dev-admin-1")], read: ["dev-org-1", "dev-admin-1"] },
+    ]);
+  });
+
+  it("an inherited orgId/runBy getter defined before the call is not read through the copy (no owner: both are own and undefined)", async () => {
+    const saved = saveObjectPrototypePair();
+    const seen: Array<{ own: boolean[]; read: unknown[] }> = [];
+    try {
+      plantInheritedEvilPair();
+      devBoot(null);
+      await drupal().devSaveInstance!({ id: "i-1", name: "Local", siteUrl: "http://localhost:8082" });
+      await drupal().devPersistLocalInstanceUnvalidated!({ name: "Local", siteUrl: "http://localhost:8082" });
+      for (const handed of [drupalApiCalls.save.at(-1)![0], drupalApiCalls.devPersist.at(-1)![0]] as Array<
+        Record<string, unknown>
+      >) {
+        seen.push({
+          own: PAIR.map((key) => Object.prototype.hasOwnProperty.call(handed, key)),
+          read: PAIR.map((key) => handed[key]),
+        });
+      }
+    } finally {
+      restoreObjectPrototypePair(saved);
+    }
+    expect(seen).toEqual([
+      { own: [true, true], read: [undefined, undefined] },
+      { own: [true, true], read: [undefined, undefined] },
+    ]);
+  });
+
+  it("a Proxy input is refused before any of its traps runs, and nothing reaches the connector", async () => {
+    const trapped: string[] = [];
+    const input = new Proxy(
+      { name: "Local", siteUrl: "http://localhost:8082" },
+      {
+        ownKeys(target) {
+          trapped.push("ownKeys");
+          return Reflect.ownKeys(target);
+        },
+        getOwnPropertyDescriptor(target, key) {
+          trapped.push("getOwnPropertyDescriptor");
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+        get(target, key, receiver) {
+          trapped.push("get");
+          return Reflect.get(target, key, receiver);
+        },
+      },
+    );
+    for (const owner of [DEV_OWNER, null]) {
+      devBoot(owner);
+      const saves = drupalApiCalls.save.length;
+      const persists = drupalApiCalls.devPersist.length;
+      await expect(drupal().devSaveInstance!(input)).rejects.toThrow(/a Proxy is refused/);
+      await expect(drupal().devPersistLocalInstanceUnvalidated!(input)).rejects.toThrow(/a Proxy is refused/);
+      expect(drupalApiCalls.save).toHaveLength(saves);
+      expect(drupalApiCalls.devPersist).toHaveLength(persists);
+    }
+    expect(trapped).toEqual([]);
+  });
+
+  // Fields a property descriptor is read for. Each case below that defines one
+  // of them on Object.prototype saves the previous state and restores it in
+  // `finally`, reading what it asserts before the restore.
+  const DESCRIPTOR_KEYS = ["value", "get", "set"] as const;
+  function saveObjectPrototypeDescriptorKeys() {
+    return DESCRIPTOR_KEYS.map((key) => [key, Object.getOwnPropertyDescriptor(Object.prototype, key)] as const);
+  }
+  function restoreObjectPrototypeDescriptorKeys(saved: ReturnType<typeof saveObjectPrototypeDescriptorKeys>) {
+    for (const [key, field] of saved) {
+      if (field) Object.defineProperty(Object.prototype, key, field);
+      else Reflect.deleteProperty(Object.prototype, key);
+    }
+  }
+  // Defines `key` on Object.prototype as a getter that answers only a property
+  // descriptor (a receiver with an own `configurable`): it counts that read and
+  // returns `value`. Any other receiver reads `undefined`, so code outside a
+  // descriptor read is not handed the planted value.
+  function plantDescriptorReader(key: (typeof DESCRIPTOR_KEYS)[number], value: unknown, runs: { n: number }) {
+    Object.defineProperty(Object.prototype, key, {
+      configurable: true,
+      get(this: unknown) {
+        if (this === null || typeof this !== "object" || !Object.hasOwn(this, "configurable")) return undefined;
+        runs.n += 1;
+        return value;
+      },
+    });
+  }
+
+  it("a `value` defined on Object.prototype does not let an accessor field through: it is still refused and no getter runs", async () => {
+    const saved = saveObjectPrototypeDescriptorKeys();
+    const polluterRuns = { n: 0 };
+    let callerRuns = 0;
+    const outcomes: Array<{ owner: boolean; save: string; persist: string; saves: number; persists: number }> = [];
+    // Resolved before anything is defined on Object.prototype: resolveSingle
+    // runs vitest's expect, which defines properties with plain descriptors.
+    const service = drupal();
+    try {
+      plantDescriptorReader("value", "evil-value", polluterRuns);
+      for (const owner of [DEV_OWNER, null]) {
+        const input = {
+          get name() {
+            callerRuns += 1;
+            return "Local";
+          },
+          siteUrl: "http://localhost:8082",
+        };
+        devBoot(owner);
+        const saves = drupalApiCalls.save.length;
+        const persists = drupalApiCalls.devPersist.length;
+        const settle = (p: Promise<unknown>) =>
+          p.then(
+            () => "resolved",
+            (e: unknown) => `rejected: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        const save = await settle(service.devSaveInstance!(input));
+        const persist = await settle(service.devPersistLocalInstanceUnvalidated!(input));
+        outcomes.push({
+          owner: owner !== null,
+          save,
+          persist,
+          saves: drupalApiCalls.save.length - saves,
+          persists: drupalApiCalls.devPersist.length - persists,
+        });
+      }
+    } finally {
+      restoreObjectPrototypeDescriptorKeys(saved);
+    }
+    const refused = "rejected: A drupal-mcp dev instance save takes data fields only; the accessor field name is refused.";
+    expect(outcomes).toEqual([
+      { owner: true, save: refused, persist: refused, saves: 0, persists: 0 },
+      { owner: false, save: refused, persist: refused, saves: 0, persists: 0 },
+    ]);
+    expect(callerRuns).toBe(0);
+    expect(polluterRuns.n).toBe(0);
+  });
+
+  it("a `get` or `set` defined on Object.prototype is never read into the copy's descriptors: both writers hand the data fields and the host's pair", async () => {
+    const saved = saveObjectPrototypeDescriptorKeys();
+    const polluterRuns = { n: 0 };
+    const seen: Array<{ owner: boolean; save: string; persist: string; handed: Array<Record<string, unknown>> }> = [];
+    // Resolved before anything is defined on Object.prototype (see the case above).
+    const service = drupal();
+    try {
+      plantDescriptorReader("get", () => "evil-get", polluterRuns);
+      plantDescriptorReader("set", () => {}, polluterRuns);
+      for (const owner of [DEV_OWNER, null]) {
+        devBoot(owner);
+        const saves = drupalApiCalls.save.length;
+        const persists = drupalApiCalls.devPersist.length;
+        const settle = (p: Promise<unknown>) =>
+          p.then(
+            () => "resolved",
+            (e: unknown) => `rejected: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        const save = await settle(service.devSaveInstance!({ name: "Local", siteUrl: "http://localhost:8082" }));
+        const persist = await settle(
+          service.devPersistLocalInstanceUnvalidated!({ name: "Local", siteUrl: "http://localhost:8082" }),
+        );
+        // Only the calls this case made (none when a writer rejected).
+        const handed = [...drupalApiCalls.save.slice(saves), ...drupalApiCalls.devPersist.slice(persists)].map(
+          (call) => {
+            const h = call[0] as Record<string, unknown>;
+            return Object.fromEntries(
+              ["name", "siteUrl", "orgId", "runBy"].map((key) => [key, Object.getOwnPropertyDescriptor(h, key)?.value]),
+            );
+          },
+        );
+        seen.push({ owner: owner !== null, save, persist, handed });
+      }
+    } finally {
+      restoreObjectPrototypeDescriptorKeys(saved);
+    }
+    const bound = { name: "Local", siteUrl: "http://localhost:8082", orgId: "dev-org-1", runBy: "dev-admin-1" };
+    const unbound = { name: "Local", siteUrl: "http://localhost:8082", orgId: undefined, runBy: undefined };
+    expect(seen).toEqual([
+      { owner: true, save: "resolved", persist: "resolved", handed: [bound, bound] },
+      { owner: false, save: "resolved", persist: "resolved", handed: [unbound, unbound] },
+    ]);
+    expect(polluterRuns.n).toBe(0);
   });
 });

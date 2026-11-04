@@ -8,6 +8,7 @@ import {
 } from "@/lib/connect-provisioning";
 import { requireWordPressWidgetAuth } from "@/lib/widget-auth-provider";
 import { allowConnectTokenRequest } from "@/lib/connect-rate-limit";
+import { rateLimitClientAddress } from "@/lib/rate-limit-client-address";
 import { emitConnectAudit } from "@/lib/connect-audit";
 
 export const runtime = "nodejs";
@@ -37,12 +38,6 @@ const INVALID_GRANT = { error: "invalid_grant" } as const;
 
 function genericInvalidGrant(): NextResponse {
   return NextResponse.json(INVALID_GRANT, { status: 400 });
-}
-
-function clientIp(request: Request): string {
-  const fwd = request.headers.get("x-forwarded-for");
-  if (fwd) return fwd.split(",")[0]?.trim() || "unknown";
-  return request.headers.get("x-real-ip")?.trim() || "unknown";
 }
 
 // The webhook secret returned to the CMS. For v1 we reuse the existing
@@ -76,7 +71,7 @@ function tokenBrokerAvailable(): boolean {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  const ip = clientIp(request);
+  const ip = rateLimitClientAddress(request);
   const ua = request.headers.get("user-agent");
 
   let body: Record<string, unknown>;
