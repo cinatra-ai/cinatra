@@ -178,6 +178,114 @@ export interface CompiledManifestLifecycle {
   /** Whether this producer can implement a typed repair (S2). Recorded here;
    * unused by the lattice at S0. */
   repairCapable?: boolean;
+  /** The input of this producer's template that a dispatched repair run gets
+   * the reviewer's findings in (cinatra#4424). The dispatch drain builds the
+   * text from the findings with one generic function and puts it in exactly
+   * this input. Absent ⇒ the repair run gets its own inputs plus the typed
+   * request, as before. */
+  repairFindingsInput?: RepairFindingsInputDeclaration;
+}
+
+/**
+ * The declaration of the input a repair run gets the reviewer's findings in
+ * (cinatra#4424). `input` names one root input of the producing template, as
+ * the template's own input title (the name its prompt reads, e.g.
+ * `instructions`).
+ *
+ * An object, not a bare string, so the declaration can grow without a second
+ * key: cinatra#4264 lets a producing STEP name its own text input for
+ * Regenerate, which is the same "the reviewer's words go into exactly this
+ * input" rule scoped to one step.
+ */
+export interface RepairFindingsInputDeclaration {
+  input: string;
+}
+
+/** The names a declared findings input may take: an identifier (an input title
+ * a template prompt can read as a variable). Mirrored by
+ * `agentLifecycleDeclarationSchema` in `packages/agents/src/verdaccio/package-contract.ts`;
+ * the two are pinned equal by `lifecycle-repair-findings-input.test.ts`. */
+export const REPAIR_FINDINGS_INPUT_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** Input names a findings declaration may never take: the typed request the
+ * dispatch drain delivers itself, and every property name of `Object.prototype`
+ * (`__proto__`, `constructor`, `toString`, `hasOwnProperty`, ...). */
+export const RESERVED_REPAIR_FINDINGS_INPUT_NAMES: readonly string[] = [
+  "lifecycleRepairRequest",
+  ...Object.getOwnPropertyNames(Object.prototype),
+];
+
+/** Whether `name` is an admissible declared findings input. */
+export function isRepairFindingsInputName(name: unknown): name is string {
+  return (
+    typeof name === "string" &&
+    name.length <= 128 &&
+    REPAIR_FINDINGS_INPUT_NAME_PATTERN.test(name) &&
+    !RESERVED_REPAIR_FINDINGS_INPUT_NAMES.includes(name)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The declared findings projection (cinatra#4424, #3862 leg 7).
+//
+// The ONE generic projection of a reviewer's findings onto the input a
+// producer declares for its repair runs. The repair dispatch drain
+// (`packages/agents/src/lifecycle-repair-dispatch-store.ts`) puts the text built
+// here into exactly the declared input, for every base the repair is anchored
+// to. Nothing here reads the base's kind, a package name or a stored row: the
+// text is built from the findings alone, the same for every producer.
+// ---------------------------------------------------------------------------
+
+/** One finding as the projection reads it (`RepairFinding` in
+ * `./lifecycle-repair`): its message and the field it names, if any. */
+export interface RepairFindingText {
+  message: string;
+  path?: string | null;
+}
+
+/** The opening line of every findings text. */
+export const REPAIR_FINDINGS_TEXT_LEAD =
+  "A reviewer requested changes to the work you produced. Apply the following requested changes:";
+
+/**
+ * Build the findings text a repair run reads from its declared input: the
+ * lead line, then one numbered line per finding (its message, and the field it
+ * names when it names one). With no findings the text is the lead line alone.
+ * Pure and deterministic.
+ */
+export function buildRepairFindingsText(findings: readonly RepairFindingText[]): string {
+  if (findings.length === 0) return REPAIR_FINDINGS_TEXT_LEAD;
+  const lines = findings.map(
+    (finding, index) => `${index + 1}. ${finding.message}${finding.path ? ` (field: ${finding.path})` : ""}`,
+  );
+  return [REPAIR_FINDINGS_TEXT_LEAD, lines.join("\n")].join("\n\n");
+}
+
+/**
+ * The input a producer's compiled lifecycle declares for its repair findings,
+ * or null when it declares none, or names an input that is not admissible (the
+ * persisted text is read fail-soft, so a hand-edited row can never name the
+ * drain's own request field).
+ */
+export function readRepairFindingsInput(
+  lifecycle: Pick<CompiledManifestLifecycle, "repairFindingsInput"> | null | undefined,
+): string | null {
+  const input = lifecycle?.repairFindingsInput?.input;
+  return isRepairFindingsInputName(input) ? input : null;
+}
+
+/**
+ * The `inputParams` addition for a repair run of a producer with this compiled
+ * lifecycle: `{ [declared input]: findings text }`, or null when the producer
+ * declares no findings input (the drain then dispatches it as before).
+ */
+export function projectRepairFindingsInput(
+  lifecycle: Pick<CompiledManifestLifecycle, "repairFindingsInput"> | null | undefined,
+  findings: readonly RepairFindingText[],
+): Record<string, string> | null {
+  const input = readRepairFindingsInput(lifecycle);
+  if (!input) return null;
+  return { [input]: buildRepairFindingsText(findings) };
 }
 
 // ---------------------------------------------------------------------------
@@ -589,6 +697,12 @@ export function normalizeLifecycle(raw: unknown): CompiledManifestLifecycle | nu
 
   if (typeof src.repairCapable === "boolean") out.repairCapable = src.repairCapable;
 
+  const findingsInput = src.repairFindingsInput;
+  if (findingsInput && typeof findingsInput === "object" && !Array.isArray(findingsInput)) {
+    const input = (findingsInput as { input?: unknown }).input;
+    if (isRepairFindingsInputName(input)) out.repairFindingsInput = { input };
+  }
+
   return Object.keys(out).length > 0 ? out : null;
 }
 
@@ -621,6 +735,9 @@ export function serializeLifecycleConfig(
     ordered.producedTypes = [...lifecycle.producedTypes];
   }
   if (lifecycle.repairCapable !== undefined) ordered.repairCapable = lifecycle.repairCapable;
+  if (lifecycle.repairFindingsInput) {
+    ordered.repairFindingsInput = { input: lifecycle.repairFindingsInput.input };
+  }
   if (lifecycle.requestedSkips && lifecycle.requestedSkips.length > 0) {
     ordered.requestedSkips = [...lifecycle.requestedSkips];
   }

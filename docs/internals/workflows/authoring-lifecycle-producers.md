@@ -84,6 +84,7 @@ JSON-as-text — the same compiled-config column shape `trigger_mode` /
 | `requestedSkips` | array of checkpoint names (`recommendation`, `review`, `verification`) | Checkpoints the producer asks to have skipped. A **request**, honoured only under the conditions in §3. |
 | `producedTypes` | array of strings | The artifact types the producer declares it creates. The lattice does not branch on it. |
 | `repairCapable` | boolean | Whether this producer implements the typed repair round-trip (§4). |
+| `repairFindingsInput` | object `{ "input": "<name>" }` | The input of this producer's template that a dispatched repair run gets the reviewer's findings in (§4). `input` is an identifier, and is never `lifecycleRepairRequest` or a property name of `Object.prototype`. |
 
 **Reading is tolerant.** Neither reader throws on a malformed value: an absent,
 empty or non-object value yields no declarations, and the producer gets pure core
@@ -165,6 +166,32 @@ total mapping over the capability flag and an optional organization repair route
 
 Nothing silently drops: every `changes_requested` lands on one of the three, and
 the capability flag is the only one of the two inputs a producer controls.
+
+### Where a repair run gets the findings
+
+A `producer_repair` repair is delivered as a new run of the producing template,
+with the producing run's own inputs plus the typed `lifecycleRepairRequest`.
+A producer whose template reads the reviewer's findings from one of its own
+inputs declares that input:
+
+```json
+{
+  "repairCapable": true,
+  "repairFindingsInput": { "input": "instructions" }
+}
+```
+
+The dispatch drain then puts a text built from the findings
+(`buildRepairFindingsText`, `src/lib/lifecycle/lifecycle-policy.ts`)
+into exactly that input, whatever the kind of the reviewed base. The text is the
+same for every producer: a lead line, then one numbered line per finding with the
+field it names. A producer that declares nothing gets its own inputs plus the
+typed request, and, until the application's pins name CMS agent releases that
+declare the input, also the CMS bridge's `task` and `instructions` when its base
+is a captured CMS snapshot (`projectCmsRepairInputParams`,
+`packages/agents/src/lifecycle-repair-cms-production-bridge.ts`). The drain does not
+check that the declared name is an input of the template: a name the template
+does not read adds an input that no prompt reads.
 
 ### The round-trip a repair-capable producer must satisfy
 
