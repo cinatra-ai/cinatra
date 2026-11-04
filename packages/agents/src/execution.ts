@@ -509,6 +509,7 @@ import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask, rememberLate
 // enums resolve registration-driven.
 import { resolveEmailSendProviders } from "@/lib/email-send-providers";
 import { mintRunToken } from "@/lib/agent-run-token";
+import { holdRunAtPublishGate } from "./publish-decision-actions";
 // cinatra#2566 — the lifecycle card REF CODEC only (node:crypto + the app
 // secret). Deliberately NOT the refetch resolver: importing that here would pull
 // the review-gate + verification store graph into the run executor to mint one
@@ -2257,6 +2258,10 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         );
       }
     }
+    // cinatra#4150: a publish gate is classified first. It parks on its decision record
+    // only: no renderer, no generic review task. A missing or unverified claim on a
+    // publishing template ends the run failed.
+    if (await holdRunAtPublishGate({ run, fromStatus, task, claim: gateNodeClaim, authority })) return;
     const adapter = new DualAdapterDispatch(
       new AgUiAdapter(runId, run.templateId, (event) => publishAgUiEvent(runId, event)),
       new A2UiAdapter(

@@ -342,6 +342,18 @@ export async function deliverArtifactReviewResumeIntent(
     return ok ? "already-advanced" : "lease-lost";
   }
 
+  // cinatra#4150: a run held at a publish decision goes on only by that decision. The
+  // intent stays pending; a decline or an expiry stops the run, and the status guard
+  // above then closes it.
+  const publishHold = await import("./publish-decision-actions");
+  try {
+    await publishHold.assertNoOpenPublishDecision(run.id);
+  } catch (err) {
+    if (!publishHold.isPublishDecisionRequired(err)) throw err;
+    console.warn(`[artifact-review-resume] a resume was refused: ${publishHold.PUBLISH_DECISION_REQUIRED}`);
+    return "retryable";
+  }
+
   // Deliver the typed decision verbatim as the WayFlow resume message. Dynamic
   // import mirrors review-task-actions.ts (circular-dep avoidance:
   // agents ← @cinatra-ai/a2a ← mcp-server ← agent-builder).
@@ -526,4 +538,16 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
   // candidate query returns only runs that are actually releasable.
   await releaseDecidedProducedReviewParks(PRODUCED_REVIEW_RELEASE_LIMIT, summary);
   return summary;
+}
+
+/** cinatra#4150: one pass of the publish-decision expiry on this unfenced ~30-second loop, under
+ *  the loop's system dispatch authority: due decisions close and their runs stop; unmade stops finish. */
+export async function sweepExpiredPublishDecisionsOnce(): Promise<void> {
+  const { sweepExpiredPublishDecisions } = await import("./publish-decision-actions");
+  const s = await sweepExpiredPublishDecisions({ authorityFor: mintAgentRunExecutionAuthority });
+  if (s.due + s.stopped + s.failed > 0) {
+    console.log(
+      `[publish-decision-expiry] due=${s.due} expired=${s.expired} run_ended=${s.runEnded} lost=${s.lost} failed=${s.failed} stopped=${s.stopped}`,
+    );
+  }
 }

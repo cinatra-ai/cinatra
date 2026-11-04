@@ -1,6 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { GateNotPendingError, RunTransitionError } from "./run-status";
+import { assertNoOpenPublishDecision } from "./publish-decision-actions";
 
 import { sql, type SQL } from "drizzle-orm";
 
@@ -958,6 +959,8 @@ export async function approveReviewTaskInternal(
       );
     }
     const resumeAuthority = sessionAuthorityFromResolvedRole(run.orgId, resumeRole);
+    // cinatra#4150: a run held at a publish decision goes on only by that decision.
+    await assertNoOpenPublishDecision(run.id);
 
     // -------------------------------------------------------------------
     // THE GATE IS DECIDED ONCE (cinatra#3423).

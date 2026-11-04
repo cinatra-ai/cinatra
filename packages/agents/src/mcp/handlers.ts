@@ -2124,10 +2124,7 @@ async function handleAgentBuilderRunResume(
 
     // WayFlow resume path keyed by agent_runs.a2aTaskId.
     // WayFlow is the only execution path.
-    if (
-      run.a2aTaskId &&
-      template.sourceType === "internal"
-) {
+    if (run.a2aTaskId && template.sourceType === "internal") {
       const packageName = template.packageName;
       if (!packageName) {
         return { error: `template.packageName is null for templateId=${template.id}; cannot route WayFlow resume` };
@@ -2149,6 +2146,9 @@ async function handleAgentBuilderRunResume(
       if (!run.a2aContextId) {
         return { error: `Run ${runId} has no a2aContextId. Cannot resume WayFlow task without context ID.` };
       }
+      // cinatra#4150: a run held at a publish decision goes on only by that decision.
+      const publishHold = await import("../publish-decision-actions");
+      try { await publishHold.assertNoOpenPublishDecision(run.id); } catch (e) { if (publishHold.isPublishDecisionRequired(e)) return { error: (e as Error).message, code: publishHold.PUBLISH_DECISION_REQUIRED }; throw e; }
       const { createExternalA2AClient } = await import("@cinatra-ai/a2a");
       const client = await createExternalA2AClient({
         agentUrl: wayflowUrl,

@@ -35,6 +35,11 @@ import {
   RunTransitionError,
 } from "./store";
 import { cancelOrchestratorRun } from "./orchestrator-execution";
+import {
+  PUBLISH_DECISION_REQUIRED,
+  assertNoOpenPublishDecision,
+  isPublishDecisionRequired,
+} from "./publish-decision-actions";
 import { mintResumeRunTokenMetadata } from "./wayflow-run-token-carrier";
 import {
   WAYFLOW_A2A_TIMEOUT_MS,
@@ -185,6 +190,7 @@ export async function revalidateOrchestratorStatusAction(
  *   - "template not found"
  *   - "no-package-name"     — template.packageName is null; cannot derive vendor/slug
  *   - "no-wayflow-url"      — WAYFLOW_BASE_URL is unset or resolveWayflowUrl rejected the packageName
+ *   - "publish_decision_required" — the run waits or ended at a publish decision
  *   - "race condition — run status changed"
  *   - "resume failed"
  */
@@ -233,6 +239,15 @@ export async function resumeStoppedOrchestratorAction(
   } catch (err) {
     console.error("[resumeStoppedOrchestratorAction] resolveWayflowUrl failed", err);
     return { ok: false, error: "no-wayflow-url" };
+  }
+
+  // cinatra#4150: a run that waits or ended at a publish decision is never resumed here:
+  // its context still holds the publish gate.
+  try {
+    await assertNoOpenPublishDecision(run.id);
+  } catch (err) {
+    if (isPublishDecisionRequired(err)) return { ok: false, error: PUBLISH_DECISION_REQUIRED };
+    throw err;
   }
 
   // Race-safe state transition.

@@ -7,10 +7,10 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 import { types } from "node:util";
-import { and, asc, desc, eq, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lte, sql } from "drizzle-orm";
 
 import { db } from "./db";
-import { agentRunPublishDecisions } from "./schema";
+import { agentRunPublishDecisions, agentRuns } from "./schema";
 
 export const PUBLISH_DECISION_STATUSES = ["parked", "released", "declined", "expired", "run_ended"] as const;
 export type PublishDecisionStatus = (typeof PUBLISH_DECISION_STATUSES)[number];
@@ -260,6 +260,32 @@ export async function readOpenDecisionForRun(runId: string): Promise<PublishDeci
     .orderBy(desc(agentRunPublishDecisions.createdAt), desc(agentRunPublishDecisions.id))
     .limit(1);
   return row ? deserialize(row) : null;
+}
+
+/** The newest decision of this run, whatever its status: the one a resume of the run must read. */
+export async function readLatestDecisionForRun(runId: string): Promise<PublishDecisionRow | null> {
+  const [row] = await db
+    .select()
+    .from(agentRunPublishDecisions)
+    .where(eq(agentRunPublishDecisions.runId, requireText(runId, "runId")))
+    .orderBy(desc(agentRunPublishDecisions.createdAt), desc(agentRunPublishDecisions.id))
+    .limit(1);
+  return row ? deserialize(row) : null;
+}
+
+/** Declined or expired decisions whose run is still in pending_approval, oldest answer first: stops left unmade. */
+export async function listSettledWithWaitingRun(limit: number): Promise<PublishDecisionRow[]> {
+  if (!Number.isInteger(limit) || limit < 1 || limit > PUBLISH_DECISION_MAX_DUE_PAGE) {
+    throw new PublishDecisionError("invalid-input", `limit must be from 1 to ${PUBLISH_DECISION_MAX_DUE_PAGE}`);
+  }
+  const rows = await db
+    .select({ decision: agentRunPublishDecisions })
+    .from(agentRunPublishDecisions)
+    .innerJoin(agentRuns, eq(agentRuns.id, agentRunPublishDecisions.runId))
+    .where(and(inArray(agentRunPublishDecisions.status, ["declined", "expired"]), eq(agentRuns.status, "pending_approval")))
+    .orderBy(asc(agentRunPublishDecisions.decidedAt), asc(agentRunPublishDecisions.id))
+    .limit(limit);
+  return rows.map((row) => deserialize(row.decision));
 }
 
 /** Open decisions past their expiry, oldest first. `now` is injectable for the sweep's tests. */
