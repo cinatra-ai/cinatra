@@ -147,13 +147,16 @@ export function buildCron(c: RecurringConfig): string {
  * cron is not read back (null), rather than drawn as a day with no option. A
  * saved day 29-31 is read back as it is.
  *
- * EVERY DAY THAT A LIST, A RANGE OR A STEP NAMES IS CHECKED (cinatra#4407), not
- * only the first: `0 9 0,15 * *`, `0 9 0-5 * *` and `0 9 1,32 * *` are not read
- * back. The count after a `/` is a step, not a day, and is not checked
- * (`1-20/45` reads as the 1st). The day that is read is held to 1-31 as well:
- * a field that starts with a minus (`-5`, `-1,15`) would read as a negative
- * day, so such a cron is not read back. A field whose day part has no digit
- * (an every-N-days step, `L`, `?`) still reads as the 1st.
+ * EVERY ELEMENT OF A LIST, A RANGE OR A STEP IS CHECKED (cinatra#4407), not
+ * only the first: every number that an element writes in digits before any
+ * `/` must be 1-31, and an element that starts with a `-` or `+` sign is no
+ * day. So `0 9 0,15 * *`, `0 9 0-5 * *`, `0 9 1,32 * *`, `0 9 1,-5 * *`,
+ * `0 9 5,-1 * *` and `0 9 +5 * *` are not read back. The count after a `/` is
+ * a step, not a day, and is not checked (`1-20/45` reads as the 1st). The day
+ * that is read is held to 1-31 as a last guard: a field that starts with a
+ * minus (`-5`, `-1,15`) is refused by the sign check before it, and would
+ * otherwise read as a negative day. A field whose day part has no digit (an
+ * every-N-days step, `L`, `?`) still reads as the 1st.
  */
 function dateCronDay(domStr: string): number | null {
   if (/^\d+$/.test(domStr)) {
@@ -162,6 +165,7 @@ function dateCronDay(domStr: string): number | null {
   }
   for (const element of domStr.split(",")) {
     const base = element.split("/")[0];
+    if (/^[+-]/.test(base)) return null;
     for (const digits of base.match(/\d+/g) ?? []) {
       const n = Number(digits);
       if (n < 1 || n > 31) return null;

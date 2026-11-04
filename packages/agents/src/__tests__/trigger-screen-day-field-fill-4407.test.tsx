@@ -4,16 +4,19 @@
 //
 // The scheduling step applies a filled cron only when `parseCronToRecurring`
 // reads it back (and the day it names is one the select offers as a new
-// choice, 1-28). The reader now checks every day that a list, a range or a
-// step in the day field names, and the day it reads, so these crons are
-// refused and neither the select nor the stored cron moves:
+// choice, 1-28). The reader now checks every number that an element of a
+// list, a range or a step in the day field writes in digits, refuses an
+// element that starts with a sign, and holds the day it reads to 1-31, so
+// these crons are refused and neither the select nor the stored cron moves:
 //
 //   0 9 0,15 * *    0 9 0-5 * *    0 9 1,32 * *    0 9 -5 * *
+//   0 9 1,-5 * *    0 9 5,-1 * *   0 9 5,-1 1,4,7,10 *    0 9 +5 * *
 //
 // A day range on the quarter months with a day-of-week of `*` names no weekday;
 // its range is checked the same way, so these are refused too:
 //
 //   0 9 32-40 1,4,7,10 *    0 9 0-5 1,4,7,10 *    0 9 1-40 3,6,9,12 *
+//   0 9 32-40 3,6,9,12 *
 //
 // A cron that has a day-of-week field (a weekday number in the fifth field) is
 // not a date cron; its day field is not checked, and the fill applies it as
@@ -126,12 +129,17 @@ describe("a filled date cron with a day outside 1-31 in a list or range is refus
     "0 9 0,15 * *",
     "0 9 0-5 * *",
     "0 9 1,32 * *",
-    // a field that starts with a minus
+    // a field that starts with a minus, a sign on a later element, a plus sign
     "0 9 -5 * *",
+    "0 9 1,-5 * *",
+    "0 9 5,-1 * *",
+    "0 9 5,-1 1,4,7,10 *",
+    "0 9 +5 * *",
     // a day range on the quarter months with a day-of-week of `*`
     "0 9 32-40 1,4,7,10 *",
     "0 9 0-5 1,4,7,10 *",
     "0 9 1-40 3,6,9,12 *",
+    "0 9 32-40 3,6,9,12 *",
   ]) {
     it(`"${cron}" moves neither the select nor the stored cron`, async () => {
       const container = await renderThenFillCron(cron);

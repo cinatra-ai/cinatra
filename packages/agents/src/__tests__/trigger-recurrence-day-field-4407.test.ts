@@ -1,15 +1,16 @@
-// EVERY DAY THAT A DAY FIELD'S LIST, RANGE OR STEP NAMES IS CHECKED (cinatra#4407).
+// EVERY ELEMENT OF A DAY FIELD'S LIST, RANGE OR STEP IS CHECKED (cinatra#4407).
 //
 // `parseCronToRecurring` read a day field that is not written in digits only (a
 // list, a range or a step) by the number it starts with, and read a first
 // number of 0, or none, as the 1st. So `0 9 0,15 * *` and `0 9 0-5 * *` read
 // as day 1, and `0 9 1,32 * *` was read as day 1 with its later element never
-// looked at. The decision of cinatra#4407 is to CHECK: every number a list, a
-// range or a step names as a day (the step's own count is no day) must be from
-// 1 to 31, otherwise the cron is not read back. The day that is read is held
-// to 1-31 too, so a field that starts with a minus (`-5`) is not read back. A
-// field whose day part has no digit (`*/4`, `L`, `?`, `abc`) keeps the earlier
-// reading as the 1st, which is pinned below.
+// looked at. The decision of cinatra#4407 is to CHECK: every number that an
+// element of a list, a range or a step writes in digits before any slash (the
+// step's own count is no day) must be from 1 to 31, and an element that starts
+// with a `-` or `+` sign is no day, otherwise the cron is not read back. So
+// `0 9 1,-5 * *`, `0 9 5,-1 * *` and `0 9 +5 * *` are not read back, and
+// neither is `0 9 -5 * *`. A field whose day part has no digit (`*/4`, `L`,
+// `?`, `abc`) keeps the earlier reading as the 1st, which is pinned below.
 //
 // A day range on the quarter months with a day-of-week of `*` names no
 // weekday, so the range is the only day the cron names: it is CHECKED the same
@@ -27,7 +28,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_RECURRING_CONFIG, parseCronToRecurring } from "../trigger-recurrence";
 import { selectionsFromInstalled } from "../trigger-schedule-proposal-service";
 
-describe("a date cron whose list, range or step names a day outside 1-31 is not read back (cinatra#4407)", () => {
+describe("a date cron whose list, range or step names a day outside 1-31, or starts an element with a sign, is not read back (cinatra#4407)", () => {
   for (const cron of [
     // a leading 0 (it used to read as day 1)
     "0 9 0,15 * *",
@@ -52,6 +53,12 @@ describe("a date cron whose list, range or step names a day outside 1-31 is not 
     "0 9 -1,15 * *",
     "0 9 -5 1,4,7,10 *",
     "0 9 -5 6 *",
+    // a sign on a later element, or a plus sign (the digits of `-5` are 5, so
+    // each of these read as the first element's day or as day 5)
+    "0 9 1,-5 * *",
+    "0 9 5,-1 * *",
+    "0 9 5,-1 1,4,7,10 *",
+    "0 9 +5 * *",
     // a day range on the quarter months with a day-of-week of `*` (it read as
     // an Nth weekday, the 1st Sunday or a week 0)
     "0 9 32-40 1,4,7,10 *",
@@ -70,6 +77,9 @@ describe("a date cron whose list, range or step names a day outside 1-31 is not 
     "0 9 1,32 * *",
     "0 9 -5 * *",
     "0 9 -1,15 * *",
+    "0 9 1,-5 * *",
+    "0 9 5,-1 1,4,7,10 *",
+    "0 9 +5 * *",
     "0 9 32-40 1,4,7,10 *",
     "0 9 0-5 1,4,7,10 *",
   ]) {
@@ -179,6 +189,27 @@ describe("a cron with a day-of-week field: its day field is not checked, the pre
       frequency: "monthly",
       monthlyMode: "weekday",
       nthWeek: 4,
+      monthlyWeekday: 1,
+      dayOfMonth: 1,
+    });
+  });
+
+  it("0 9 0-5 * 1 reads as monthly on week 0, a week the select does not offer (pinned, not endorsed)", () => {
+    expect(parseCronToRecurring("0 9 0-5 * 1")).toMatchObject({
+      frequency: "monthly",
+      monthlyMode: "weekday",
+      nthWeek: 0,
+      monthlyWeekday: 1,
+      dayOfMonth: 1,
+    });
+  });
+
+  it("0 9 0-5 6 1 reads as yearly in June on week 0, a week the select does not offer (pinned, not endorsed)", () => {
+    expect(parseCronToRecurring("0 9 0-5 6 1")).toMatchObject({
+      frequency: "yearly",
+      yearlyMonth: 6,
+      monthlyMode: "weekday",
+      nthWeek: 0,
       monthlyWeekday: 1,
       dayOfMonth: 1,
     });
