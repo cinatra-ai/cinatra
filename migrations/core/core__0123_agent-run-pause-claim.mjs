@@ -1,4 +1,4 @@
-// core__0116 — the pause claim columns (cinatra#4245, PR A1: columns only).
+// core__0123 — the pause claim columns (cinatra#4245, PR A1: columns only).
 // Operator-upgrade twin of the fresh-install bootstrap DDL
 // (`agentRunPauseClaimSchemaQueries` in src/lib/agent-run-created-at-schema.ts
 // and the `paused_run_generation` line of `lifecycleRepairSchemaQueries` in
