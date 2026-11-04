@@ -504,7 +504,8 @@ import {
 import { stepFiresRendererGate } from "./orchestrator-gate-predicate";
 import {
   GATE_KEYS_NOT_FROM_RUN_INPUTS,
-  readKeyList,
+  readStoredKeyList,
+  readTemplateGateKeys,
   withoutGateKeysList,
   withoutKeys,
 } from "./gate-keys-not-from-run-inputs";
@@ -1771,8 +1772,11 @@ async function resolveWayflowXRenderer(
   runId: string,
   taskId: string,
   approvalPolicySteps: Array<{ stepNumber?: number; requiresApproval?: boolean; hitlOwnedBy?: string; xRenderer?: string; gateCount?: number; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>; skipLlm?: boolean; firesRendererGate?: boolean; artifactReviewTargetsInput?: string; surfaceGateInputKeys?: unknown }>,
-): Promise<{ xRenderer: string; stepNumber: number | null; schema: Record<string, unknown> | null; artifactReviewTargetsInput: string | null; surfaceGateInputKeys: string[] }> {
+): Promise<{ xRenderer: string; stepNumber: number | null; schema: Record<string, unknown> | null; artifactReviewTargetsInput: string | null; surfaceGateInputKeys: string[] | null }> {
   const fallback = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
+  // cinatra#4457 — a gate the walk below cannot pin to one step withholds every
+  // key that any step lists (null: a list is unreadable, every run input).
+  const unpinnedKeys = (): string[] | null => readTemplateGateKeys(approvalPolicySteps);
   // All WayFlow-gated steps ordered by appearance: both self-owned (orchestrator
   // InputMessageNode gates) and child-agent steps. Steps without xRenderer still
   // advance the accumulator correctly (e.g. email-reviewer with no approval gate).
@@ -1811,7 +1815,7 @@ async function resolveWayflowXRenderer(
   // (blog-pipeline's idea_selection_gate) onto a phantom's null schema. Shared
   // predicate keeps this walk in lockstep with run-actions + instance-screens.
   const childSteps = approvalPolicySteps.filter(stepFiresRendererGate);
-  if (childSteps.length === 0) return { xRenderer: fallback, stepNumber: null, schema: null, artifactReviewTargetsInput: null, surfaceGateInputKeys: [] };
+  if (childSteps.length === 0) return { xRenderer: fallback, stepNumber: null, schema: null, artifactReviewTargetsInput: null, surfaceGateInputKeys: unpinnedKeys() };
 
   // #1625 — SINGLE-RENDERER-GATE SHORT-CIRCUIT (contract (1)).
   // When the flow has EXACTLY ONE xRenderer-bearing gate, resolution is
@@ -1847,7 +1851,7 @@ async function resolveWayflowXRenderer(
       schema: step.schema ?? step.inputMessageSchema ?? null,
       artifactReviewTargetsInput:
         typeof step.artifactReviewTargetsInput === "string" ? step.artifactReviewTargetsInput : null,
-      surfaceGateInputKeys: readKeyList(step.surfaceGateInputKeys),
+      surfaceGateInputKeys: readStoredKeyList(step.surfaceGateInputKeys),
     };
   }
 
@@ -1885,12 +1889,12 @@ async function resolveWayflowXRenderer(
         schema: step.schema ?? step.inputMessageSchema ?? null,
         artifactReviewTargetsInput:
           typeof step.artifactReviewTargetsInput === "string" ? step.artifactReviewTargetsInput : null,
-        surfaceGateInputKeys: readKeyList(step.surfaceGateInputKeys),
+        surfaceGateInputKeys: readStoredKeyList(step.surfaceGateInputKeys),
       };
     }
     accumulated += gateCount;
   }
-  return { xRenderer: fallback, stepNumber: null, schema: null, artifactReviewTargetsInput: null, surfaceGateInputKeys: [] };
+  return { xRenderer: fallback, stepNumber: null, schema: null, artifactReviewTargetsInput: null, surfaceGateInputKeys: unpinnedKeys() };
 }
 
 // ---------------------------------------------------------------------------
@@ -2360,15 +2364,20 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // review surface); null leaves every path byte-identical.
     let wayflowArtifactReviewTargetsInput: string | null = null;
     // cinatra#4457 — the keys of a value-surfacing gate's message (the compiled
-    // step's surfaceGateInputKeys); empty for every other gate.
-    let wayflowSurfaceGateInputKeys: string[] = [];
+    // step's surfaceGateInputKeys); empty for every other gate. FAIL CLOSED:
+    // null until the host has read them, and null means that no run input fills
+    // the gate (the template could not be read, is absent, or holds a list that
+    // is not an array of strings). A gate the host cannot pin to one step takes
+    // every key that any step of its template lists (`templateGateKeys`).
+    let wayflowSurfaceGateInputKeys: string[] | null = null;
+    let templateGateKeys: string[] | null = null;
     // #1625 (contract (1)) — SAFE CATCH: the sole renderer gate (when
     // the flow has exactly one xRenderer-bearing gate) is the unambiguous
     // resolution under ANY resolver fault. Computed up-front from the template so
     // the catch below never falls to the schema-field fallback for a
     // single-renderer-gate agent — the "never fallback for a sole-renderer gate"
     // guarantee holds even when the positional resolve throws (e.g. Redis fault).
-    let soleRendererGate: { xRenderer: string; stepNumber: number | null; schema: Record<string, unknown> | null; artifactReviewTargetsInput: string | null; surfaceGateInputKeys: string[] } | null = null;
+    let soleRendererGate: { xRenderer: string; stepNumber: number | null; schema: Record<string, unknown> | null; artifactReviewTargetsInput: string | null; surfaceGateInputKeys: string[] | null } | null = null;
     // IS THIS GATE THE AGENT ASKING FOR CONTEXT? (cinatra#3221, fix leg 6.)
     //
     // READ HERE, ABOVE THE RESOLVER, so the answer survives the catch below: the
@@ -2378,12 +2387,28 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     const gateAsksForContext = isContextSelectorInterruptPayload(spreadFromOutput);
     try {
       if (gateAsksForContext) {
+        // cinatra#4457 — a context ask names no step, and a flagged gate can
+        // send a context-shaped message: withhold every key the template lists.
+        // Read first and on its own, so that neither a template fault nor a
+        // fault below lets a run input fill the gate (null stays).
+        try {
+          const contextTmpl = await readAgentTemplateById(run.templateId);
+          wayflowSurfaceGateInputKeys = contextTmpl
+            ? readTemplateGateKeys(contextTmpl.approvalPolicy?.steps ?? [])
+            : null;
+        } catch {
+          wayflowSurfaceGateInputKeys = null;
+        }
         wayflowXRenderer =
           resolveRendererIdForKind("context-selector") ?? SCHEMA_FIELD_FALLBACK_RENDERER_ID;
         await rememberWayflowGateTask(runId, task.id);
       } else {
         const tmpl = await readAgentTemplateById(run.templateId);
-        const policySteps = (tmpl?.approvalPolicy?.steps ?? []) as Array<{
+        const rawPolicySteps: unknown = tmpl?.approvalPolicy?.steps ?? [];
+        // Read before anything can throw on these steps, so the catch below
+        // keeps it; an absent template leaves it null.
+        templateGateKeys = tmpl ? readTemplateGateKeys(rawPolicySteps) : null;
+        const policySteps = rawPolicySteps as Array<{
           stepNumber?: number; requiresApproval?: boolean; hitlOwnedBy?: string; xRenderer?: string; gateCount?: number; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>; firesRendererGate?: boolean; artifactReviewTargetsInput?: string; surfaceGateInputKeys?: unknown;
         }>;
         const rendererGateSteps = policySteps.filter(stepFiresRendererGate);
@@ -2395,11 +2420,15 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
             schema: s.schema ?? s.inputMessageSchema ?? null,
             artifactReviewTargetsInput:
               typeof s.artifactReviewTargetsInput === "string" ? s.artifactReviewTargetsInput : null,
-            surfaceGateInputKeys: readKeyList(s.surfaceGateInputKeys),
+            surfaceGateInputKeys: readStoredKeyList(s.surfaceGateInputKeys),
           };
         }
-        ({ xRenderer: wayflowXRenderer, stepNumber: wayflowStepNumber, schema: wayflowSchema, artifactReviewTargetsInput: wayflowArtifactReviewTargetsInput, surfaceGateInputKeys: wayflowSurfaceGateInputKeys } =
-          await resolveWayflowXRenderer(runId, task.id, policySteps));
+        const resolved = await resolveWayflowXRenderer(runId, task.id, policySteps);
+        ({ xRenderer: wayflowXRenderer, stepNumber: wayflowStepNumber, schema: wayflowSchema, artifactReviewTargetsInput: wayflowArtifactReviewTargetsInput } =
+          resolved);
+        // An absent template has no compiled step to say which keys are the
+        // gate's: no run input fills it.
+        wayflowSurfaceGateInputKeys = tmpl ? resolved.surfaceGateInputKeys : null;
       }
     } catch {
       // non-fatal. For a single-renderer-gate agent, resolve to that one gate
@@ -2411,6 +2440,10 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         wayflowSchema = soleRendererGate.schema;
         wayflowArtifactReviewTargetsInput = soleRendererGate.artifactReviewTargetsInput;
         wayflowSurfaceGateInputKeys = soleRendererGate.surfaceGateInputKeys;
+      } else if (!gateAsksForContext) {
+        // cinatra#4457 — no step is pinned: every key any step of the template
+        // lists, or null (every run input) when the template was not read.
+        wayflowSurfaceGateInputKeys = templateGateKeys;
       }
     }
     // ------------------------------------------------------------------------
@@ -2839,13 +2872,18 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // next step receives another. So the gate's keys are left out of the run's
     // inputs here; each takes the gate's own value or stays absent, and the keys
     // left absent ride in the gate's schema so the readers that merge the run's
-    // inputs again (hitl-context.ts) leave them out too. Every gate without the
-    // flag has no keys here and keeps its values byte-identical.
+    // inputs again (hitl-context.ts) leave them out too. A gate without the flag
+    // whose template the host read has no keys here and keeps its values
+    // byte-identical. When the keys could not be read (null), every run input
+    // is withheld and listed.
+    const gateRunInputs = (run.inputParams ?? {}) as Record<string, unknown>;
+    const keysWithheldFromRunInputs =
+      wayflowSurfaceGateInputKeys ?? Object.keys(gateRunInputs);
     const gateOwnValueKeys = new Set([
       ...Object.keys(gateInputValues),
       ...Object.keys(spreadSafe),
     ]);
-    const gateKeysNotFromRunInputs = wayflowSurfaceGateInputKeys.filter(
+    const gateKeysNotFromRunInputs = keysWithheldFromRunInputs.filter(
       (k) => !gateOwnValueKeys.has(k),
     );
     // Only the host writes the list: a schema source that already holds the
@@ -2854,10 +2892,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     const gateSchemaSource = (wayflowSchema ?? interruptPayload) as Record<string, unknown>;
     const gateSchemaBase = withoutGateKeysList(gateSchemaSource);
     const enrichedValues: Record<string, unknown> = {
-      ...withoutKeys(
-        (run.inputParams ?? {}) as Record<string, unknown>,
-        wayflowSurfaceGateInputKeys,
-      ),
+      ...withoutKeys(gateRunInputs, keysWithheldFromRunInputs),
       ...gateInputValues,
       ...spreadSafe,
       ...(wayflowStepNumber !== null ? { stepNumber: wayflowStepNumber } : {}),
