@@ -159,6 +159,7 @@ async function presentedBaseCandidates(input: {
   objectType: string | null | undefined;
   actor: ActorContext;
   orgId: string;
+  claimBacked: readonly ClaimBackedMeaningType[];
 }): Promise<InstalledMeaningType[]> {
   return (
     await screenPresentedBase(input, (extension, objectType) =>
@@ -181,6 +182,9 @@ async function screenPresentedBase(
     objectType: string | null | undefined;
     actor: ActorContext;
     orgId: string;
+    /** The organisation's claim-backed meaning types (cinatra#3319), so a
+     *  claim-backed type is admitted through the same list the picker draws. */
+    claimBacked: readonly ClaimBackedMeaningType[];
   },
   definesType: (extension: string, objectType: string) => Promise<boolean>,
 ): Promise<{ admitted: InstalledMeaningType[]; accessible: InstalledMeaningType[] }> {
@@ -191,9 +195,9 @@ async function screenPresentedBase(
     if (await definesType(extension, objectType)) definers.add(extension);
   }
   if (definers.size === 0) return { admitted: [], accessible: [] };
-  const admitted = listInstalledMeaningTypesAcceptingMime(input.mime).filter((t) =>
-    definers.has(t.extension),
-  );
+  const admitted = listInstalledMeaningTypesAcceptingMime(input.mime, {
+    claimBacked: input.claimBacked,
+  }).filter((t) => definers.has(t.extension));
   return {
     admitted,
     accessible: await filterCandidatesByActorAccess(admitted, input.actor, input.orgId),
@@ -241,6 +245,7 @@ async function confirmsPresentedBaseMeaning(input: {
   objectType: string;
   actor: ActorContext;
   orgId: string;
+  claimBacked: readonly ClaimBackedMeaningType[];
 }): Promise<"presented" | "absent" | "refused"> {
   try {
     const { admitted, accessible } = await screenPresentedBase(
@@ -250,6 +255,7 @@ async function confirmsPresentedBaseMeaning(input: {
         objectType: input.objectType,
         actor: input.actor,
         orgId: input.orgId,
+        claimBacked: input.claimBacked,
       },
       (extension, objectType) => readExtensionDefinesType(extension, objectType, input.orgId),
     );
@@ -337,11 +343,18 @@ export async function listInstalledTypesForArtifact(
   // THE CLAIM-BACKED MEANING TYPES (cinatra#3319): a host-registered type an
   // artifact-safe claim of this organisation admits, which neither registry
   // channel lists. Read through the ONE claim arbitration the writer and the
-  // byte-serve reader use, after the gates and the warm above.
+  // byte-serve reader use, after the gates and the warm above. The list reads
+  // them leniently: a failed read offers no claim-backed type and still answers
+  // the ordinary list (the confirmation below refuses on the same failure).
   const { readClaimBackedMeaningTypesForOrg } = await import(
     "@/lib/artifacts/resolve-bound-artifact-type"
   );
-  const claimBacked = await readClaimBackedMeaningTypesForOrg(orgId);
+  let claimBacked: ClaimBackedMeaningType[];
+  try {
+    claimBacked = await readClaimBackedMeaningTypesForOrg(orgId);
+  } catch {
+    claimBacked = [];
+  }
   const raw = listInstalledMeaningTypesAcceptingMime(mime, {
     ...(objectType ? { excludeTypeId: objectType } : {}),
     claimBacked,
@@ -389,6 +402,7 @@ export async function listInstalledTypesForArtifact(
             objectType,
             actor,
             orgId,
+            claimBacked,
           }),
         );
   if (offered.length === 0) return { ok: true, types: offered, mime };
@@ -482,11 +496,17 @@ export async function assertUploadMeaning(input: {
   await ensureArtifactTypesRegisteredWithStore();
   const { mime, objectType } = read.artifact;
   // The same claim-backed population the candidate LIST offered (cinatra#3319),
-  // so the validation gate decides against what the picker drew.
+  // so the validation gate decides against what the picker drew. A failed read
+  // refuses: the population the confirmation decides against cannot be told.
   const { readClaimBackedMeaningTypesForOrg } = await import(
     "@/lib/artifacts/resolve-bound-artifact-type"
   );
-  const claimBacked = await readClaimBackedMeaningTypesForOrg(orgId);
+  let claimBacked: ClaimBackedMeaningType[];
+  try {
+    claimBacked = await readClaimBackedMeaningTypesForOrg(orgId);
+  } catch {
+    return { ...INVALID_TYPE_REFUSAL };
+  }
   const raw = listInstalledMeaningTypesAcceptingMime(mime, {
     ...(objectType ? { excludeTypeId: objectType } : {}),
     claimBacked,
@@ -524,6 +544,7 @@ export async function assertUploadMeaning(input: {
           objectType,
           actor,
           orgId,
+          claimBacked,
         })
       : "absent";
     // A failed or denied verification refuses the confirmation here: it never
