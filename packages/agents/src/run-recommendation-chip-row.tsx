@@ -1548,9 +1548,7 @@ export function RunRecommendationChipRow({
             // `inFlightRef` is what keeps a press inside it to one decision;
             // the control itself reads only who may answer.
             disabled={!canDecide}
-            // WRAPPED, not passed by reference: `onContinue` takes no argument
-            // and a bare `onClick={onContinue}` would hand it the click event.
-            onClick={() => onContinue()}
+            onClick={onContinue}
           >
             Continue
             {/* THE ANCHOR IS THE SPAN, NOT THE ICON — the same rule the rail's
