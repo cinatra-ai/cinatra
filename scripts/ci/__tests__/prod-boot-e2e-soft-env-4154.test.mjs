@@ -27,7 +27,11 @@
 // durable-degraded, the no-mount and the item-3 boots were recorded; the item-3 boot
 // lacks exactly the two hard-required names its case removes; every other
 // recorded app boot has a non-blank effective value for every SOFT_REQUIRED_ENV and
-// HARD_REQUIRED_ENV name; and the run leaves no container, network or volume behind.
+// HARD_REQUIRED_ENV name; the run leaves no container, network or volume behind; and
+// the literal calls (the `psql` queries, the `sh -c` bodies and the `node -e` checks)
+// came in the script's order, each at its own call. A second run, in which the
+// stand-in reports one anchor without a digest, proves that the script then sends
+// the exact digest query and stops at its digest check.
 //
 // Runner: hosted by the vitest include glob `scripts/ci/__tests__/**/*.test.{ts,mjs}`.
 import { spawnSync } from "node:child_process";
@@ -48,20 +52,29 @@ const SOFT = SOFT_REQUIRED_ENV.map((v) => v.name);
 const HARD = HARD_REQUIRED_ENV.map((v) => v.name);
 const ITEM3 = "-app-missing-env";
 
+// The literal calls of a passing run, in the script's order (script-calls.json keys).
+const CALL_ORDER = [
+  "preseedSh",
+  "anchorCountsSql",
+  "declaredRequired",
+  "requiredSql",
+  "materialize",
+  "newerSeedSh",
+  "rollback",
+];
+
 let dir;
 let run;
 let appRuns;
 let state;
+let digestless;
 
 const blank = (v) => (v ?? "").trim() === "";
 
-beforeAll(() => {
-  dir = mkdtempSync(path.join(tmpdir(), "prod-boot-e2e-stub-"));
-  const wrapper = path.join(dir, "docker");
-  writeFileSync(wrapper, `#!/bin/sh\nexec "${process.execPath}" "${STUB}" "$@"\n`);
-  chmodSync(wrapper, 0o755);
-  const stateFile = path.join(dir, "state.json");
-  run = spawnSync("bash", [SCRIPT], {
+/** Run the script against the stand-in; returns the spawn result and the final state. */
+function runScript(name, extraEnv) {
+  const stateFile = path.join(dir, `${name}-state.json`);
+  const result = spawnSync("bash", [SCRIPT], {
     env: {
       ...process.env,
       PATH: `${dir}${path.delimiter}${process.env.PATH}`,
@@ -74,15 +87,26 @@ beforeAll(() => {
       STUB_IMAGE: IMAGE,
       STUB_SOFT_ENV: SOFT.join(","),
       STUB_HARD_ENV: HARD.join(","),
+      ...extraEnv,
     },
     encoding: "utf8",
     timeout: 120_000,
   });
-  state = existsSync(stateFile)
+  const final = existsSync(stateFile)
     ? JSON.parse(readFileSync(stateFile, "utf8"))
-    : { runs: [], containers: {}, networks: [], volumes: {} };
+    : { runs: [], containers: {}, networks: [], volumes: {}, calls: [] };
+  return { result, final };
+}
+
+beforeAll(() => {
+  dir = mkdtempSync(path.join(tmpdir(), "prod-boot-e2e-stub-"));
+  const wrapper = path.join(dir, "docker");
+  writeFileSync(wrapper, `#!/bin/sh\nexec "${process.execPath}" "${STUB}" "$@"\n`);
+  chmodSync(wrapper, 0o755);
+  ({ result: run, final: state } = runScript("pass", {}));
   appRuns = state.runs.filter((r) => r.app);
-}, 150_000);
+  digestless = runScript("digestless", { STUB_DIGESTLESS: "1" });
+}, 270_000);
 
 afterAll(() => {
   if (dir) rmSync(dir, { recursive: true, force: true });
@@ -116,6 +140,18 @@ describe("cinatra#4154 — prod-boot e2e boots carry every soft-required env var
     expect(Object.keys(state.containers)).toEqual([]);
     expect(state.networks).toEqual([]);
     expect(Object.keys(state.volumes)).toEqual([]);
+  });
+
+  it("the literal calls came in the script's order, each at its own call", () => {
+    expect(state.calls).toEqual(CALL_ORDER);
+  });
+
+  it("with an anchor without a digest, the script sends the exact digest query and stops", () => {
+    const { result, final } = digestless;
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("bundled anchor rows missing the image-recorded content digest (count=1)");
+    expect(final.calls).toEqual(["preseedSh", "anchorCountsSql", "digestlessSql"]);
+    expect(Object.keys(final.containers)).toEqual([]);
   });
 
   for (const name of [...SOFT, ...HARD]) {

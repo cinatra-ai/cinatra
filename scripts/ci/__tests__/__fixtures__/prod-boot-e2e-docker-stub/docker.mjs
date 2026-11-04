@@ -16,7 +16,11 @@
 // literals in script-calls.json: the `probe` code, the three `node -e` checks, the
 // `psql` argument lists and SQL, and the two `sh -c` bodies (as bash expands them).
 // A change to one of those literals in the script is refused here until the file is
-// updated, so the test fails instead of passing on a canned answer.
+// updated, so the test fails instead of passing on a canned answer. Each accepted
+// call other than the probe also appends the name of its literal to `calls` in the
+// state, so the test can compare the order with the script's: a literal used at the
+// wrong call fails there. The probe code is exact at every probe; how often the
+// script probes is not pinned.
 //
 // State (STUB_STATE) holds the networks, the volumes and the containers of the run,
 // and every valid `docker run -d` in `runs`, with its EFFECTIVE env resolved once:
@@ -40,11 +44,17 @@
 //     materialized, the user dir stays. The materialize and rollback checks answer
 //     from that volume state.
 // The script's own `probe` code runs for real under node, with `fetch` replaced by
-// fetch-preload.mjs, which answers only a GET of the probed URL; so the 300-character
+// fetch-preload.mjs, which answers only a GET of the probed URL, and only when the
+// probe container runs on the network of the app it probes; so the 300-character
 // cut of `probe` applies to the modelled body.
 //
+// The `psql`, `sh -c` and `node -e` checks are not run: an exact call gets a fixed
+// answer. The anchor-count query answers `2 2 2 0`, or `2 2 2 1` (one anchor without
+// a digest, which drives the script's digest query) when STUB_DIGESTLESS=1.
+//
 // Env: STUB_STATE (state file), STUB_IMAGE (the IMAGE the script boots),
-// STUB_SOFT_ENV and STUB_HARD_ENV (comma-separated SOFT_ and HARD_REQUIRED_ENV names).
+// STUB_SOFT_ENV and STUB_HARD_ENV (comma-separated SOFT_ and HARD_REQUIRED_ENV names),
+// STUB_DIGESTLESS (optional, "1").
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -68,7 +78,7 @@ if (!STUB_STATE || !STUB_IMAGE || STUB_SOFT_ENV === undefined || STUB_HARD_ENV =
 const CALLS = JSON.parse(readFileSync(path.join(here, "script-calls.json"), "utf8"));
 const state = existsSync(STUB_STATE)
   ? JSON.parse(readFileSync(STUB_STATE, "utf8"))
-  : { runs: [], containers: {}, networks: [], volumes: {} };
+  : { runs: [], containers: {}, networks: [], volumes: {}, calls: [] };
 const save = () => writeFileSync(STUB_STATE, JSON.stringify(state));
 const names = (list) => list.split(",").filter(Boolean);
 const blank = (v) => (v ?? "").trim() === "";
@@ -168,20 +178,26 @@ function health(c) {
   return { status: blocked ? 503 : 200, body };
 }
 
-/** The response a probe of `url` gets, or null when nothing serves there. */
-function respond(url) {
+/** Record that the call of the literal `key` was accepted, in the order of the run. */
+function record(key) {
+  state.calls.push(key);
+  save();
+}
+
+/** The response a probe of `url` from `net` gets, or null when nothing serves there. */
+function respond(url, net) {
   const u = new URL(url);
   if (u.protocol !== "http:" || u.port !== "3000") return null;
   const c = state.containers[u.hostname];
-  if (!c || !c.running || !c.app || !state.networks.includes(c.network)) return null;
+  if (!c || !c.running || !c.app || c.network !== net || !state.networks.includes(net)) return null;
   if (u.pathname === "/api/health") return { ...health(c), url };
   if (u.pathname === "/") return { status: 200, url: `${u.origin}/setup/account`, body: "<html></html>" };
   return null;
 }
 
-function runProbe(cmd) {
-  // cmd = ["node", "-e", <the script's probe code>, <url>]
-  const r = respond(cmd[3]);
+function runProbe(cmd, net) {
+  // cmd = ["node", "-e", <the script's probe code>, <url>]; net = the probe's network
+  const r = respond(cmd[3], net);
   const p = spawnSync(
     process.execPath,
     ["--import", pathToFileURL(path.join(here, "fetch-preload.mjs")).href, "-e", cmd[2], cmd[3]],
@@ -205,6 +221,7 @@ function execApp(c, cmd) {
   const code = cmd[2];
   const v = state.volumes[dataVolume(c)] ?? null;
   if (code === CALLS.declaredRequired) {
+    record("declaredRequired");
     process.stdout.write("@acme/a\n@acme/b\n");
     process.exit(0);
   }
@@ -212,6 +229,7 @@ function execApp(c, cmd) {
     if (v === null || !v.materialized) refuse(1, "MISSING @acme/a");
     if (v.stale) refuse(1, "STALE-NOT-PRUNED zz-stale/gone-agent");
     if (!v.user) refuse(1, "USER-DIR-PRUNED acme/user-agent");
+    record("materialize");
     process.stdout.write("seeded=2 pruned-stale preserved-user\n");
     process.exit(0);
   }
@@ -219,6 +237,7 @@ function execApp(c, cmd) {
     if (v === null || !v.materialized) refuse(1, "CURRENT-SEED-MISSING @acme/a");
     if (v.newer) refuse(1, "NEWER-SEED-NOT-PRUNED zz-newer/future-agent");
     if (!v.user) refuse(1, "USER-DIR-PRUNED-ON-ROLLBACK acme/user-agent");
+    record("rollback");
     process.stdout.write("current-seed-kept newer-pruned user-preserved\n");
     process.exit(0);
   }
@@ -230,14 +249,20 @@ function execPg(cmd) {
   const base = ["psql", "-U", "postgres", "-d", "postgres"];
   if (equal(cmd, ["pg_isready", "-U", "postgres", "-q"])) process.exit(0);
   if (equal(cmd, [...base, "-tA", "-F", " ", "-c", CALLS.anchorCountsSql])) {
-    process.stdout.write("2 2 2 0\n");
+    record("anchorCountsSql");
+    process.stdout.write(process.env.STUB_DIGESTLESS === "1" ? "2 2 2 1\n" : "2 2 2 0\n");
     process.exit(0);
   }
   if (equal(cmd, [...base, "-tA", "-c", CALLS.requiredSql])) {
+    record("requiredSql");
     process.stdout.write("@acme/a\n@acme/b\n");
     process.exit(0);
   }
-  if (equal(cmd, [...base, "-c", CALLS.digestlessSql])) process.exit(0);
+  if (equal(cmd, [...base, "-c", CALLS.digestlessSql])) {
+    record("digestlessSql");
+    process.stdout.write(" package_name | digest\n--------------+--------\n @acme/a      |\n(1 row)\n");
+    process.exit(0);
+  }
   die("unknown exec in postgres");
 }
 
@@ -346,7 +371,7 @@ switch (verb) {
     }
     if (r.network !== null && r.mounts.length === 0 && r.cmd.length === 4 && r.cmd[0] === "node" && r.cmd[1] === "-e") {
       if (r.cmd[2] !== CALLS.probe) die("unknown probe code");
-      runProbe(r.cmd);
+      runProbe(r.cmd, r.network);
     }
     if (r.network === null && r.mounts.length === 1 && r.mounts[0].split(":")[1] === DATA_ROOT
       && r.cmd.length === 3 && r.cmd[0] === "sh" && r.cmd[1] === "-c") {
@@ -355,9 +380,11 @@ switch (verb) {
         state.volumes[vol] ??= { stale: false, newer: false, user: false, materialized: false };
         state.volumes[vol].stale = true;
         state.volumes[vol].user = true;
+        state.calls.push("preseedSh");
       } else if (r.cmd[2] === CALLS.newerSeedSh) {
         state.volumes[vol] ??= { stale: false, newer: false, user: false, materialized: false };
         state.volumes[vol].newer = true;
+        state.calls.push("newerSeedSh");
       } else die("unknown sh -c body");
       save();
       process.exit(0);
