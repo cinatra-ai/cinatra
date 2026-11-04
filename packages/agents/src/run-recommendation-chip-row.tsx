@@ -692,7 +692,7 @@ function SkillsStepPill({
       // var(--surface-strong)` — and gives it NO checked variant anywhere in the
       // stylesheet. Its only checked accent is on the box itself, `.skchip
       // .cbx.on { background: var(--blue); border-color: var(--blue) }`, which
-      // the vendored `Checkbox` draws.
+      // the vendored checkbox primitive draws.
       //
       // The row used to tint the pill when its box was set, and it carried
       // `rounded-chip` — the design package's SHARED chip radius (`--r-chip:
