@@ -14,7 +14,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 //   - the DURABLE road: the row the park seam wrote, after a JSON round trip
 //     (what the jsonb columns store), with no readable frame.
 // When the message is absent or does not parse, the screen gets NO value for a
-// gate key; a gate without the flag keeps its present values.
+// gate key; a gate without the flag keeps its present values. When the host
+// cannot read the gate's key list (the template is unreadable or absent, its
+// steps are not a list, a stored list is not an array of strings), no run input
+// fills the gate; when it cannot tell which step the gate is (a context ask, an
+// index fault or an index past the last gate), every key that any step of the
+// template lists is withheld.
 // ---------------------------------------------------------------------------
 
 const { enrichSpy, onInterruptSpy, frameRoad, gateIndex } = vi.hoisted(() => ({
@@ -22,7 +27,8 @@ const { enrichSpy, onInterruptSpy, frameRoad, gateIndex } = vi.hoisted(() => ({
   onInterruptSpy: vi.fn(),
   // "frame": the reader serves the last emitted frame; "none": no frame.
   frameRoad: { mode: "frame" as "frame" | "none" },
-  gateIndex: { value: 0 },
+  // `fail`: the renderer-gate index read throws (a Redis fault).
+  gateIndex: { value: 0, fail: false },
 }));
 
 const roundTrip = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
@@ -115,7 +121,10 @@ vi.mock("@cinatra-ai/a2a", () => {
     rememberLatestWayflowGateTask: vi.fn(async () => undefined),
     rememberWayflowGateTask: vi.fn(async () => undefined),
     rememberWayflowGateNodeClaim: vi.fn(async () => undefined),
-    getOrAddWayflowRendererGateIndex: vi.fn(async () => gateIndex.value),
+    getOrAddWayflowRendererGateIndex: vi.fn(async () => {
+      if (gateIndex.fail) throw new Error("renderer-gate index unavailable");
+      return gateIndex.value;
+    }),
   };
 });
 
@@ -125,10 +134,13 @@ import { deriveRunHitlContext } from "../hitl-context";
 // red against the base for its assertions, not for a missing module.
 const GATE_KEYS_NOT_FROM_RUN_INPUTS = "x-gate-keys-not-from-run-inputs";
 import type { AgentRunRecord } from "../store";
+import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 
 const TEST_AUTHORITY = { orgId: "org-1", can: () => true };
 
 const SCHEMA_RENDERER = "@cinatra-ai/list-curator-agent:scrape-schema";
+// The renderer a gate resolves to when the host cannot pin it to one step.
+const FALLBACK_RENDERER = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
 const LIST_RENDERER = "@cinatra-ai/list-curator-agent:list-review";
 const GATE_SCHEMA = { type: "object" };
 const SCHEMA_GATE_KEYS = ["outputSchema", "seedUrls", "plan"];
@@ -276,12 +288,23 @@ const UNPARSEABLE: Array<[string, string | undefined]> = [
 ];
 const ROADS: Road[] = ["interrupt", "durable"];
 
+const hasKey = (o: Record<string, unknown>, k: string) => Object.prototype.hasOwnProperty.call(o, k);
+/** No stored run input reaches the emitted values or the screen; the schema lists them all. */
+function expectNoRunInput(emitted: { values: Record<string, unknown> }, ctx: { currentValues: Record<string, unknown>; inputSchema: Record<string, unknown> }) {
+  for (const k of Object.keys(STORED)) {
+    expect(hasKey(emitted.values, k), `emitted ${k}`).toBe(false);
+    expect(hasKey(ctx.currentValues, k), `screen ${k}`).toBe(false);
+  }
+  expect(ctx.inputSchema[GATE_KEYS_NOT_FROM_RUN_INPUTS]).toEqual(Object.keys(STORED));
+}
+
 describe("cinatra#4457 — a value-surfacing gate's keys never come from run inputs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     storeMock.rows.length = 0;
     frameRoad.mode = "frame";
     gateIndex.value = 0;
+    gateIndex.fail = false;
     enrichSpy.mockImplementation(async (schema: unknown) => ({ ...(schema as object) }));
     storeMock.readAgentTemplateById.mockResolvedValue(
       makeTemplate([gateStep(6, LIST_RENDERER, LIST_GATE_KEYS)]),
@@ -399,18 +422,155 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
       for (const k of LIST_GATE_KEYS) {
         expect(Object.prototype.hasOwnProperty.call(ctx.currentValues, k), `screen ${k}`).toBe(false);
       }
+      // Only the sole gate's keys: a run input that is not one still reaches the screen.
+      expect(ctx.currentValues.campaignNote).toBe("kept");
+      expect(ctx.inputSchema[GATE_KEYS_NOT_FROM_RUN_INPUTS]).toEqual(LIST_GATE_KEYS);
     });
 
-    it("a stored step whose key list holds no usable key (an empty string, a number, null): nothing is withheld", async () => {
+    const BAD_STORED_LISTS: Array<[string, unknown]> = [
+      ["an entry that is not a string", ["candidateMembers", 5, null]],
+      ["a string, not an array", "candidateMembers"],
+      ["null", null],
+    ];
+    it.each(BAD_STORED_LISTS)("a stored step whose key list is %s: no run input fills the gate", async (_l, list) => {
+      const step: Record<string, unknown> = gateStep(6, LIST_RENDERER);
+      step.surfaceGateInputKeys = list;
+      storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate([step]));
+      const { emitted, ctx } = await emitAndRead(road, gateTask("cut {"));
+      expect(ctx.xRenderer).toBe(LIST_RENDERER);
+      expectNoRunInput(emitted, ctx);
+      expect(ctx.currentValues.output).toBe("cut {");
+    });
+
+    it("the template read fails before the sole gate is known: no run input fills the gate", async () => {
+      storeMock.readAgentTemplateById.mockRejectedValue(new Error("template store unavailable"));
+      const { emitted, ctx } = await emitAndRead(road, gateTask(undefined));
+      expect(ctx.xRenderer).toBe(FALLBACK_RENDERER);
+      expectNoRunInput(emitted, ctx);
+    });
+
+    it("the run's template is absent: no run input fills the gate", async () => {
+      storeMock.readAgentTemplateById.mockResolvedValue(null);
+      const { emitted, ctx } = await emitAndRead(road, gateTask(undefined));
+      expect(ctx.xRenderer).toBe(FALLBACK_RENDERER);
+      expectNoRunInput(emitted, ctx);
+    });
+
+    it("the template's steps are not a list: no run input fills the gate", async () => {
+      storeMock.readAgentTemplateById.mockResolvedValue({
+        ...makeTemplate([]),
+        approvalPolicy: { steps: { 0: gateStep(6, LIST_RENDERER, LIST_GATE_KEYS) } },
+      });
+      const { emitted, ctx } = await emitAndRead(road, gateTask(undefined));
+      expect(ctx.xRenderer).toBe(FALLBACK_RENDERER);
+      expectNoRunInput(emitted, ctx);
+    });
+
+    const UNION_KEYS = [...SCHEMA_GATE_KEYS, ...LIST_GATE_KEYS];
+    it("a two-gate flow whose renderer-gate index read fails: every key either gate lists is withheld", async () => {
       storeMock.readAgentTemplateById.mockResolvedValue(
-        makeTemplate([gateStep(6, LIST_RENDERER, ["", 5, null] as unknown as string[])]),
+        makeTemplate([
+          gateStep(3, SCHEMA_RENDERER, SCHEMA_GATE_KEYS),
+          gateStep(6, LIST_RENDERER, LIST_GATE_KEYS),
+        ]),
       );
-      const run = makeRun({ ...STORED, "": "empty-named" });
-      const { emitted, ctx } = await emitAndRead(road, gateTask("cut {"), run);
-      expect(ctx.currentValues[""]).toBe("empty-named");
+      gateIndex.fail = true;
+      const { emitted, ctx } = await emitAndRead(road, gateTask(""));
+      expect(ctx.xRenderer).toBe(FALLBACK_RENDERER);
+      for (const k of UNION_KEYS) {
+        expect(hasKey(emitted.values, k), `emitted ${k}`).toBe(false);
+        expect(hasKey(ctx.currentValues, k), `screen ${k}`).toBe(false);
+      }
+      expect(ctx.currentValues.campaignNote).toBe("kept");
+      expect(ctx.inputSchema[GATE_KEYS_NOT_FROM_RUN_INPUTS]).toEqual(UNION_KEYS);
+    });
+
+    it("a two-gate flow whose index read fails, with one gate's stored list unreadable: no run input fills the gate", async () => {
+      const listStep: Record<string, unknown> = gateStep(6, LIST_RENDERER);
+      listStep.surfaceGateInputKeys = "candidateMembers";
+      storeMock.readAgentTemplateById.mockResolvedValue(
+        makeTemplate([gateStep(3, SCHEMA_RENDERER, SCHEMA_GATE_KEYS), listStep]),
+      );
+      gateIndex.fail = true;
+      const { emitted, ctx } = await emitAndRead(road, gateTask(""));
+      expect(ctx.xRenderer).toBe(FALLBACK_RENDERER);
+      expectNoRunInput(emitted, ctx);
+    });
+
+    it("a two-gate flow whose index points past the last gate: every key either gate lists is withheld", async () => {
+      storeMock.readAgentTemplateById.mockResolvedValue(
+        makeTemplate([
+          gateStep(3, SCHEMA_RENDERER, SCHEMA_GATE_KEYS),
+          gateStep(6, LIST_RENDERER, LIST_GATE_KEYS),
+        ]),
+      );
+      gateIndex.value = 5;
+      const { ctx } = await emitAndRead(road, gateTask(""));
+      expect(ctx.xRenderer).toBe(FALLBACK_RENDERER);
+      for (const k of UNION_KEYS) {
+        expect(hasKey(ctx.currentValues, k), `screen ${k}`).toBe(false);
+      }
+      expect(ctx.currentValues.campaignNote).toBe("kept");
+      expect(ctx.inputSchema[GATE_KEYS_NOT_FROM_RUN_INPUTS]).toEqual(UNION_KEYS);
+    });
+
+    it("a template whose steps fire no renderer gate: every key a step lists is withheld", async () => {
+      storeMock.readAgentTemplateById.mockResolvedValue(
+        makeTemplate([{ ...gateStep(6, LIST_RENDERER, LIST_GATE_KEYS), firesRendererGate: false }]),
+      );
+      const { emitted, ctx } = await emitAndRead(road, gateTask(""));
+      expect(ctx.xRenderer).toBe(FALLBACK_RENDERER);
+      for (const k of LIST_GATE_KEYS) {
+        expect(hasKey(emitted.values, k), `emitted ${k}`).toBe(false);
+        expect(hasKey(ctx.currentValues, k), `screen ${k}`).toBe(false);
+      }
+      expect(ctx.currentValues.campaignNote).toBe("kept");
+      expect(ctx.inputSchema[GATE_KEYS_NOT_FROM_RUN_INPUTS]).toEqual(LIST_GATE_KEYS);
+    });
+
+    it("a two-gate flow without the flag whose index read fails: the run inputs fill the gate as before", async () => {
+      storeMock.readAgentTemplateById.mockResolvedValue(
+        makeTemplate([gateStep(3, SCHEMA_RENDERER), gateStep(6, LIST_RENDERER)]),
+      );
+      gateIndex.fail = true;
+      const { emitted, ctx } = await emitAndRead(road, gateTask(""));
+      expect(ctx.xRenderer).toBe(FALLBACK_RENDERER);
+      for (const [k, v] of Object.entries(STORED)) expect(ctx.currentValues[k], `screen ${k}`).toEqual(v);
+      expect(hasKey(emitted.schema, GATE_KEYS_NOT_FROM_RUN_INPUTS)).toBe(false);
+      expect(hasKey(ctx.inputSchema, GATE_KEYS_NOT_FROM_RUN_INPUTS)).toBe(false);
+    });
+
+    const CONTEXT_KEYS = ["slotMeta", "candidates", "selectedRefs", "campaignId"];
+    const CONTEXT_MESSAGE = JSON.stringify({
+      slotMeta: { slotId: "s", resolutionMode: "accumulate" },
+      candidates: [],
+      selectedRefs: [],
+    });
+    it("a context-shaped message that lacks a declared key: a run input does not fill that key", async () => {
+      storeMock.readAgentTemplateById.mockResolvedValue(
+        makeTemplate([gateStep(6, LIST_RENDERER, CONTEXT_KEYS)]),
+      );
+      const run = makeRun({ ...STORED, campaignId: "stored" });
+      const { emitted, ctx } = await emitAndRead(road, gateTask(CONTEXT_MESSAGE), run);
+      expect(hasKey(emitted.values, "campaignId")).toBe(false);
+      expect(hasKey(ctx.currentValues, "campaignId")).toBe(false);
+      expect(ctx.currentValues.slotMeta).toEqual({ slotId: "s", resolutionMode: "accumulate" });
       expect(ctx.currentValues.candidateMembers).toEqual(STORED.candidateMembers);
-      expect(emitted.schema).toEqual(GATE_SCHEMA);
-      expect(ctx.inputSchema).toEqual(GATE_SCHEMA);
+      expect(ctx.inputSchema[GATE_KEYS_NOT_FROM_RUN_INPUTS]).toEqual(["campaignId"]);
+    });
+
+    it("a context-shaped message whose template read fails: no run input fills it", async () => {
+      storeMock.readAgentTemplateById.mockRejectedValue(new Error("template store unavailable"));
+      const { emitted, ctx } = await emitAndRead(road, gateTask(CONTEXT_MESSAGE));
+      expect(ctx.currentValues.selectedRefs).toEqual([]);
+      expectNoRunInput(emitted, ctx);
+    });
+
+    it("a context-shaped message whose template is absent: no run input fills it", async () => {
+      storeMock.readAgentTemplateById.mockResolvedValue(null);
+      const { emitted, ctx } = await emitAndRead(road, gateTask(CONTEXT_MESSAGE));
+      expect(ctx.currentValues.selectedRefs).toEqual([]);
+      expectNoRunInput(emitted, ctx);
     });
 
     it("a flagged gate with the artifact-review marker whose review core opens no review: the ordinary gate withholds the keys", async () => {
@@ -497,7 +657,7 @@ describe("cinatra#4457 — the readers honour the schema's list on both roads", 
     expect(ctx.currentValues.output).toBe("x");
   });
 
-  it.each(ROADS)("%s road: a list that is not an array of strings withholds nothing it does not name", async (road) => {
+  it.each(ROADS)("%s road: a list that is not an array withholds every run input", async (road) => {
     const schema = { type: "object", [GATE_KEYS_NOT_FROM_RUN_INPUTS]: "candidateMembers" };
     if (road === "interrupt") {
       frameRoad.mode = "frame";
@@ -513,16 +673,35 @@ describe("cinatra#4457 — the readers honour the schema's list on both roads", 
       });
     }
     const ctx = (await deriveRunHitlContext(parked))!;
-    expect(ctx.currentValues.candidateMembers).toEqual(STORED.candidateMembers);
+    expect(ctx.currentValues).toEqual({});
   });
 
-  it.each(ROADS)("%s road: a list entry that is an empty string or not a string withholds nothing", async (road) => {
+  it.each(ROADS)("%s road: a list with an entry that is not a string withholds every run input", async (road) => {
+    const schema = { type: "object", [GATE_KEYS_NOT_FROM_RUN_INPUTS]: ["candidateMembers", 7, null] };
+    if (road === "interrupt") {
+      frameRoad.mode = "frame";
+      onInterruptSpy(schema, LIST_RENDERER, { output: "x" }, "wayflow-task-x");
+    } else {
+      frameRoad.mode = "none";
+      storeMock.rows.push({
+        runId: parked.id,
+        reviewTaskId: "wayflow-task-x",
+        xRenderer: LIST_RENDERER,
+        inputSchema: schema,
+        values: { output: "x" },
+      });
+    }
+    const ctx = (await deriveRunHitlContext(parked))!;
+    expect(ctx.currentValues).toEqual({ output: "x" });
+  });
+
+  it.each(ROADS)("%s road: a list entry that is an empty string is a key like any other", async (road) => {
     const parkedEmpty = {
       ...makeRun({ ...STORED, "": "empty-named" }),
       status: "pending_approval",
       a2aTaskId: "task-x",
     } as AgentRunRecord;
-    const schema = { type: "object", [GATE_KEYS_NOT_FROM_RUN_INPUTS]: ["candidateMembers", "", 7, null] };
+    const schema = { type: "object", [GATE_KEYS_NOT_FROM_RUN_INPUTS]: ["candidateMembers", ""] };
     if (road === "interrupt") {
       frameRoad.mode = "frame";
       onInterruptSpy(schema, LIST_RENDERER, {}, "wayflow-task-x");
@@ -537,8 +716,8 @@ describe("cinatra#4457 — the readers honour the schema's list on both roads", 
       });
     }
     const ctx = (await deriveRunHitlContext(parkedEmpty))!;
-    expect(Object.prototype.hasOwnProperty.call(ctx.currentValues, "candidateMembers")).toBe(false);
-    expect(ctx.currentValues[""]).toBe("empty-named");
+    expect(hasKey(ctx.currentValues, "candidateMembers")).toBe(false);
+    expect(hasKey(ctx.currentValues, "")).toBe(false);
     expect(ctx.currentValues.listName).toBe(STORED.listName);
   });
 });
