@@ -66,8 +66,9 @@ beforeAll(() => {
       ...process.env,
       PATH: `${dir}${path.delimiter}${process.env.PATH}`,
       IMAGE,
-      // The stand-in answers at once; a short health budget makes a boot that never
-      // turns healthy fail the script in seconds instead of at the spawn timeout.
+      // The stand-in answers at once; a short budget makes the main health gate and
+      // the wait after the rollback restart fail in seconds when the app never turns
+      // healthy. The negative cases keep their fixed 90 s and 60 s budgets.
       BOOT_TIMEOUT_SECS: "15",
       STUB_STATE: stateFile,
       STUB_IMAGE: IMAGE,

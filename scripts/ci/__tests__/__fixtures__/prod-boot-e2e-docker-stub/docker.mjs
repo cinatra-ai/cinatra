@@ -4,9 +4,13 @@
 // Each call is checked before it changes anything. A call of a shape the script does
 // not use exits 97. A call that real docker refuses exits as docker does: a `run` on a
 // network that was not created in this run, or with an empty or malformed `-v`, exits
-// 125; a name that is not a recorded container, network or volume exits 1. A call
-// whose `--env-file` names a missing file never reaches this file: node reads that
-// option from its whole argument list and exits 9. A refused call records nothing.
+// 125; a name that is not a recorded container, network or volume, a `network rm`
+// with containers still on it and a `volume rm` of a volume a container still
+// mounts exit 1. A probe of another scheme or port than http on 3000 gets no answer.
+// A call whose `--env-file` names a missing file never reaches this file: node reads
+// that option from its whole argument list and exits 9. A refused call records nothing,
+// except that `rm -f` removes the recorded names it is given and then exits 1 for
+// the others, as docker does.
 //
 // The commands the script runs inside containers must equal, byte for byte, the
 // literals in script-calls.json: the `probe` code, the three `node -e` checks, the
@@ -167,6 +171,7 @@ function health(c) {
 /** The response a probe of `url` gets, or null when nothing serves there. */
 function respond(url) {
   const u = new URL(url);
+  if (u.protocol !== "http:" || u.port !== "3000") return null;
   const c = state.containers[u.hostname];
   if (!c || !c.running || !c.app || !state.networks.includes(c.network)) return null;
   if (u.pathname === "/api/health") return { ...health(c), url };
@@ -257,6 +262,9 @@ switch (verb) {
   case "volume": {
     if (rest.length !== 2 || rest[0] !== "rm" || !NAME.test(rest[1])) die("unknown volume call");
     if (!state.volumes[rest[1]]) refuse(1, `Error response from daemon: get ${rest[1]}: no such volume`);
+    if (Object.values(state.containers).some((c) => c.mounts.some((m) => m.split(":")[0] === rest[1]))) {
+      refuse(1, `Error response from daemon: remove ${rest[1]}: volume is in use`);
+    }
     delete state.volumes[rest[1]];
     save();
     process.exit(0);
