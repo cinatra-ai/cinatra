@@ -32,7 +32,10 @@
  * discover the branches its inputs reach, the case table is ALSO typed
  * `Record<ArtifactRenderDispatch["kind"], ...>`, so a variant added to the union
  * that no probe reaches fails this file at TYPECHECK rather than slipping past
- * the way the drop did.
+ * the way the drop did. The page writes one literal the resolver never
+ * produces, `dashboard-pointer`, on the dashboard pointer's own frame, which
+ * stands only where the dispatch answered a floor for a dashboard row
+ * (cinatra#4311 deletes it); `core-data-road-artifact-page.test.tsx` drives it.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";

@@ -286,7 +286,7 @@ describe("(e) the surface loader sets the reading from the gate", () => {
   };
   const MIME: Record<string, string> = { rev_text: "text/markdown", rev_image: "image/png" };
 
-  function wireGate(status: "pending" | "resolved", disposition: string | null) {
+  function wireGate(status: "pending" | "resolved", disposition: string | null | undefined) {
     vi.mocked(enforceReviewRunAccess).mockResolvedValue({ ok: true, orgId: ORG } as never);
     vi.mocked(readReviewGateState).mockResolvedValue(
       (status === "pending"
@@ -296,7 +296,7 @@ describe("(e) the surface loader sets the reading from the gate", () => {
     vi.mocked(readGatePinnedTargets).mockResolvedValue({ status, targets: TARGETS } as never);
     vi.mocked(readReviewGate).mockResolvedValue({
       id: "gate_3092",
-      disposition,
+      ...(disposition === undefined ? {} : { disposition }),
       pinnedTargets: TARGETS,
     } as never);
     const read = (({ artifactId }: { artifactId: string }) => ({
@@ -361,25 +361,35 @@ describe("(e) the surface loader sets the reading from the gate", () => {
     }
   });
 
-  it("a settled gate whose row cannot be read hands its targets the pending reading", async () => {
-    wireGate("resolved", null);
+  // A readable settled row whose disposition is null or missing. This is not a
+  // row that cannot be read: `loadReviewGateSurface` answers blocked where the
+  // settled gate's pinned set is gone, and a read that throws rejects the load.
+  it.each([
+    ["null", null],
+    ["missing", undefined],
+  ])("a settled gate whose disposition is %s hands its targets the pending reading", async (_label, disposition) => {
+    wireGate("resolved", disposition);
     for (const props of await load()) {
       expect(props.review).toEqual({ reading: "pending", openLive: null });
     }
   });
 });
 
-describe("(f) the artifact page dispatches every row and hands every display the data road", () => {
+describe("(f) the artifact page dispatches every admitted row and hands every display the data road", () => {
   const PAGE = readFileSync(path.join(__dirname, "..", "page.tsx"), "utf8");
   const CODE = PAGE.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
 
-  it("carries no type check, no pointer import and no pointer boundary before the dispatch", () => {
+  it("carries no type check, no pointer resolver and no pointer boundary, and nothing of the pointer before the dispatch", () => {
     expect(CODE).not.toMatch(/isDashboardArtifactType/);
     expect(CODE).not.toMatch(/resolveDashboardArtifactPointer/);
-    expect(CODE).not.toMatch(/dashboard-pointer-detail/);
-    expect(CODE).not.toMatch(/DashboardPointer/);
-    expect(CODE).not.toMatch(/"dashboard-pointer"/);
-    expect(CODE).toMatch(/resolveArtifactDisplayMount\(/);
+    expect(CODE).not.toMatch(/DashboardPointerBoundary/);
+    expect(CODE).not.toMatch(/DashboardPointerLoading|DashboardPointerError/);
+    const dispatchAt = CODE.indexOf("resolveArtifactDisplayMount(");
+    expect(dispatchAt).toBeGreaterThan(-1);
+    // The pointer (cinatra#4311 deletes it) is drawn only after the dispatch, on its floor.
+    for (const pointer of ["<DashboardPointerDetail", '"dashboard-pointer"', "typeGate.dashboardPointer"]) {
+      expect(CODE.indexOf(pointer), pointer).toBeGreaterThan(dispatchAt);
+    }
   });
 
   // What the reading holds is proven on the rendered page

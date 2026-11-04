@@ -11,7 +11,10 @@
  * (the resolver and failure policy in `./renderer-resolution`, the mount in
  * `./artifact-display-mount`): the semantic winner's `detail` display, then
  * an installed representation provider, then the floor. Core draws no artifact
- * content on any of those roads — the floor is a host diagnostic.
+ * content on any of those roads — the floor is a host diagnostic. One exception
+ * stands until the pointer slice of cinatra#4311: a dashboard row that no
+ * installed display claims draws core's dashboard pointer in place of the floor
+ * (see the branch after the dispatch).
  *
  * `PageHeader.actions` carries the artifact-level actions:
  *   - "Open in source application" — only when `artifact.sourceUrl` is
@@ -66,6 +69,7 @@ import {
 } from "@cinatra-ai/sdk-extensions/artifact-edit-channel";
 
 import { ArtifactReadDeniedPanel } from "./read-denied-panel";
+import { DashboardPointerDetail } from "./dashboard-pointer-detail";
 import { ArtifactStructuredDataView } from "@/components/artifacts/artifact-structured-data-view";
 import { isSelectionPreparing } from "./renderer-dispatch";
 import { ArtifactDisplayMountPoint } from "./artifact-display-mount";
@@ -95,15 +99,19 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
   const artifact: ArtifactSummary = access.artifact;
   // THE TYPE'S OWN READ GATE (cinatra#3092): a row that is the twin of a record
   // with its own authorization (a dashboard) keeps it here. Not found hides the
-  // row, denied draws the not-authorized panel, and a gate that cannot be read
-  // throws to the route's error boundary. It decides access, never the drawing.
+  // row, denied draws the not-authorized panel, and a gate that cannot be read,
+  // or that answers anything but those and ok, throws to the route's error
+  // boundary, which draws its own diagnostic and no artifact display or content.
   const typeGate = await readArtifactTypeGate(artifact);
-  if (typeGate === "not-found") notFound();
-  if (typeGate === "denied") return <ArtifactReadDeniedPanel />;
+  if (typeGate.access === "not-found") notFound();
+  if (typeGate.access === "denied") return <ArtifactReadDeniedPanel />;
 
-  // EVERY ROW REACHES THE ONE DISPLAY DISPATCH BELOW, whatever its type
-  // (cinatra#3092). The page holds no drawing branch for any one type: a type's
-  // own display draws it, and a type with none draws the generic floor.
+  // EVERY ROW ADMITTED BY BOTH GATES ABOVE REACHES THE ONE DISPLAY DISPATCH
+  // BELOW, whatever its type (cinatra#3092): nothing intercepts a row before it.
+  // A type's own display draws it. Where no installed display claims the row,
+  // the dispatch answers a floor; a dashboard row then keeps its pointer (below)
+  // until the dashboard's own display is installed, and every other row draws
+  // the generic floor.
 
   // THE EDITOR OPENS ON THE HEAD REVISION, read from the store.
   //
@@ -265,8 +273,8 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
         );
 
   // THE REVIEW READING (cinatra#3092). Read here, past the row's own read
-  // authorization above, so a reader the row is hidden from learns nothing of
-  // its reviews.
+  // authorization and the type's own read gate above, so a reader the row is
+  // hidden from learns nothing of its reviews.
   const review = await readArtifactPageReviewReading({ orgId, artifactId: id });
 
   // The normalized, serializable renderer props snapshot (AC-5) — supplied to an
@@ -299,8 +307,8 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
 
   // THE DISPLAY, resolved through the ONE primitive the lifecycle review also
   // resolves through, at the props version the snapshot above was built at.
-  // Read authorization is already enforced above — a row the viewer may not read
-  // never reaches here.
+  // Read authorization and the type's own read gate are already enforced above:
+  // a row the viewer may not read never reaches here.
   const mount = await resolveArtifactDisplayMount({
     orgId,
     baseType: artifact.objectType,
@@ -312,6 +320,33 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
     mime,
     propsApiVersion: rendererProps.propsApiVersion,
   });
+
+  // THE DASHBOARD POINTER STAYS UNTIL THE DASHBOARD'S OWN DISPLAY IS INSTALLED
+  // (cinatra#4311). This is not an interception: the dispatch above has already
+  // run, and it answered a floor, so no installed display claims this dashboard.
+  // The page then draws the pointer it has drawn for a dashboard row since
+  // cinatra#1895 (its header and its Open dashboard affordance) instead of the
+  // generic floor, so an admitted dashboard keeps its way to its canonical
+  // surface. The pointer comes from the
+  // type's read gate, which already authorized it. Once a display claims the
+  // dashboard, the dispatch answers that display and this branch is not reached;
+  // the pointer slice of cinatra#4311 then deletes it.
+  if (mount.kind === "floor" && typeGate.dashboardPointer) {
+    return (
+      <Main className="min-h-screen">
+        <PageHeader
+          title={artifactDisplayTitle(artifact)}
+          description="A dashboard artifact — opens at its canonical surface."
+        />
+        <PageContent
+          className="flex flex-col gap-6 pb-8"
+          data-render-dispatch="dashboard-pointer"
+        >
+          <DashboardPointerDetail pointer={typeGate.dashboardPointer} />
+        </PageContent>
+      </Main>
+    );
+  }
 
   return (
     <Main className="min-h-screen">

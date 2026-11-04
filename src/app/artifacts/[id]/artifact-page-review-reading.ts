@@ -6,15 +6,20 @@ import type { ArtifactRendererReviewReading } from "@/lib/artifacts/artifact-ren
 
 const PENDING: ArtifactRendererReviewReading = { reading: "pending", openLive: null };
 
+/** The whole warning of a failed read: a fixed text, and nothing of the error. */
+const OPEN_REVIEW_READ_FAILED_WARNING =
+  "[artifact-page] the open review read failed; drawing the pending reading";
+
 /**
  * THE REVIEW READING OF THE ARTIFACT'S OWN PAGE (cinatra#3092). An open gate on
  * the artifact reads pending. No open gate hands no reading, which a display
- * reads as no review standing. A read that fails reads pending: a display treats
- * a snapshot with no reading as free to offer the live link, so "cannot tell"
- * must not look like "no review".
+ * reads as no review standing. A read that rejects reads pending, whatever it
+ * rejects with: a display treats a snapshot with no reading as free to offer the
+ * live link, so "cannot tell" must not look like "no review".
  *
- * The page calls this only after the row's own read authorization, so a reader
- * who may not read the row learns nothing about its reviews.
+ * The page calls this only after the row's own read authorization and the type's
+ * own read gate, so a reader who may not read the row learns nothing about its
+ * reviews.
  */
 export async function readArtifactPageReviewReading(args: {
   orgId: string;
@@ -22,20 +27,22 @@ export async function readArtifactPageReviewReading(args: {
 }): Promise<ArtifactRendererReviewReading | undefined> {
   try {
     return (await isArtifactUnderOpenReview(args)) ? PENDING : undefined;
-  } catch (err) {
-    // The class of the error and a fixed text, never its message: a driver's
-    // message carries the failed query and its parameters ("Failed query: ...
-    // params: ..."), so the organization and the artifact would reach the log.
-    console.warn(
-      "[artifact-page] the open review read failed; drawing the pending reading:",
-      errorClassOf(err),
-    );
+  } catch {
+    // NOTHING OF THE ERROR IS READ OR LOGGED: not its message, which a driver
+    // fills with the failed query and its parameters ("Failed query: ...
+    // params: ..."), and not its class name, which the thrower controls (an own
+    // `constructor` can carry any value, and a getter on it can throw). The
+    // catch touches the error not at all, so it cannot itself throw on one.
+    warnOpenReviewReadFailed();
     return PENDING;
   }
 }
 
-/** A class name made only of identifier characters, or a fixed word. */
-function errorClassOf(err: unknown): string {
-  const name = err instanceof Error ? err.constructor?.name : undefined;
-  return typeof name === "string" && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name) ? name : "UnknownError";
+/** The fixed warning. A log sink that throws never changes the reading. */
+function warnOpenReviewReadFailed(): void {
+  try {
+    console.warn(OPEN_REVIEW_READ_FAILED_WARNING);
+  } catch {
+    // The reading stays pending; there is nothing safe left to report.
+  }
 }

@@ -15,7 +15,8 @@
  * component and its wiring stay until cinatra#4311: its done-when deletes
  * `src/app/artifacts/[id]/dashboard-pointer-detail.tsx` and leaves no
  * production source under `src` that names `DashboardPointerDetail`. The
- * routing test below holds that wiring until then.
+ * routing test below holds that wiring until then: the page draws the pointer
+ * only where its one display dispatch answered a floor for a dashboard row.
  * The repo runs vitest in node without @testing-library/react,
  * so server-component wiring is pinned via source assertions (the established
  * pattern — see `surface-conformance.test.ts`); the live bidirectional
@@ -90,15 +91,25 @@ describe("§VIII routing — library rows render as dashboard pointers, dual-aut
     expect(LIB).not.toMatch(/buildFacetOptions\(all\)/);
   });
 
-  it("the detail route dispatches every row, whatever its type, through the one display dispatch", () => {
+  it("the detail route dispatches every admitted row, and draws the pointer only where that dispatch floors", () => {
     // cinatra#3092 acceptance 2: "the page's pre-dispatch interception of the
-    // dashboard row is gone". The page carries no branch on the type, no
-    // pointer resolver and no pointer element, so a dashboard row reaches
-    // `resolveArtifactDisplayMount(...)` (the CALL, not the import) like every other.
-    expect(DETAIL).not.toMatch(/isDashboardArtifactType/);
-    expect(DETAIL).not.toMatch(/resolveDashboardArtifactPointer/);
-    expect(DETAIL).not.toMatch(/<DashboardPointerDetail/);
-    expect(DETAIL.indexOf("resolveArtifactDisplayMount(")).toBeGreaterThan(-1);
+    // dashboard row is gone". The page carries no branch on the type and no
+    // pointer resolver (the type's read gate holds both), so a dashboard row
+    // reaches `resolveArtifactDisplayMount(...)` (the CALL, not the import)
+    // like every other. The pointer wiring stays until cinatra#4311 deletes it,
+    // but only AFTER that call and only on a floor: while no installed display
+    // claims the dashboard, an admitted dashboard keeps its Open dashboard
+    // affordance instead of the generic floor.
+    const code = DETAIL.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    expect(code).not.toMatch(/isDashboardArtifactType/);
+    expect(code).not.toMatch(/resolveDashboardArtifactPointer/);
+    const dispatchCallIdx = code.indexOf("resolveArtifactDisplayMount(");
+    const guardIdx = code.indexOf('if (mount.kind === "floor" && typeGate.dashboardPointer)');
+    const pointerIdx = code.indexOf("<DashboardPointerDetail");
+    expect(dispatchCallIdx).toBeGreaterThan(-1);
+    expect(guardIdx).toBeGreaterThan(dispatchCallIdx);
+    expect(pointerIdx).toBeGreaterThan(guardIdx);
+    expect(code.match(/<DashboardPointerDetail/g) ?? []).toHaveLength(1);
   });
 });
 

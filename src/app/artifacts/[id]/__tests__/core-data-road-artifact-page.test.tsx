@@ -34,9 +34,9 @@ const mocks = vi.hoisted(() => ({
   can: vi.fn(() => false),
   resolveArtifactDisplayMount: vi.fn(),
   isDashboardArtifactType: vi.fn((_objectType: string | null | undefined): boolean => false),
-  resolveDashboardArtifactPointer: vi.fn(async (_artifactId: string): Promise<{ access: string; pointer?: unknown }> => ({
+  resolveDashboardArtifactPointer: vi.fn(async (_artifactId: string): Promise<{ access?: unknown; pointer?: unknown }> => ({
     access: "ok",
-    pointer: { artifactId: "a-1", dashboardId: "d-1", name: "A dashboard" },
+    pointer: { dashboardId: "d-1", name: "A dashboard" },
   })),
   mounted: [] as Array<Record<string, unknown>>,
   isArtifactUnderOpenReview: vi.fn(async () => false),
@@ -68,6 +68,8 @@ vi.mock("@cinatra-ai/agents/artifact-open-review-read", () => ({
 }));
 vi.mock("@/lib/dashboards/dashboard-artifact-surface", () => ({
   isDashboardArtifactType: mocks.isDashboardArtifactType,
+  // Read by the pointer frame's meta line.
+  DASHBOARD_ARTIFACT_OBJECT_TYPE: "@cinatra-ai/dashboard-artifact:dashboard",
 }));
 vi.mock("@/lib/dashboards/dashboard-artifact-pointer-resolvers", () => ({
   resolveDashboardArtifactPointer: mocks.resolveDashboardArtifactPointer,
@@ -243,52 +245,97 @@ describe("the artifact page's review reading (cinatra#3092)", () => {
   });
 });
 
-describe("the open review read's warning carries no query text (cinatra#3092)", () => {
-  it("logs the error's class and a fixed text, never a driver message with its parameters", async () => {
+describe("the open review read's warning carries nothing of the error (cinatra#3092)", () => {
+  // The whole warning, one argument: a fixed text, never the message, the class
+  // name or any other value of what was thrown.
+  const WARNING = ["[artifact-page] the open review read failed; drawing the pending reading"];
+  const PENDING = { reading: "pending", openLive: null };
+  function handedReview(): unknown {
+    return (mocks.mounted[0]?.props as { review?: unknown } | undefined)?.review;
+  }
+
+  it("logs the fixed text only, never a driver message with its parameters", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     mocks.isArtifactUnderOpenReview.mockRejectedValue(
       new Error('Failed query: select "id" from "artifact_review_gates" where ... params: org-1,pending,[{"artifactId":"a-1"}]'),
     );
     await renderPage();
-    expect(warn).toHaveBeenCalledTimes(1);
-    const logged = warn.mock.calls[0].map(String).join(" ");
-    expect(logged).not.toMatch(/Failed query|params|org-1|a-1|artifact_review_gates/);
-    expect(warn.mock.calls[0][1]).toBe("Error");
+    expect(warn.mock.calls).toEqual([WARNING]);
     warn.mockRestore();
   });
 
-  it("logs a fixed word, never the thrown value, when the read throws something that is not an Error", async () => {
+  it("logs the fixed text only when the read throws something that is not an Error", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     mocks.isArtifactUnderOpenReview.mockRejectedValue("org-1 params a-1");
     await renderPage();
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0][1]).toBe("UnknownError");
-    expect(warn.mock.calls[0].map(String).join(" ")).not.toMatch(/org-1|params|a-1/);
-    expect((mocks.mounted[0]?.props as { review?: unknown } | undefined)?.review).toEqual({
-      reading: "pending",
-      openLive: null,
-    });
+    expect(warn.mock.calls).toEqual([WARNING]);
+    expect(handedReview()).toEqual(PENDING);
     warn.mockRestore();
   });
 
-  it("logs a fixed word, never the class name, when the class name is not an identifier of at most 64 characters", async () => {
+  it("never logs a class name, whatever its shape", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const named = (name: string) => {
       const C = class extends Error {};
       Object.defineProperty(C, "name", { value: name });
       return new C("x");
     };
-    for (const name of ["org-1 a-1", "a".repeat(65), "1Error", ""]) {
+    for (const name of ["Error", "org-1 a-1", "a".repeat(65), "1Error", "", "A".repeat(64), "sk_PRIVATE_ABC123"]) {
       warn.mockClear();
       mocks.isArtifactUnderOpenReview.mockRejectedValueOnce(named(name));
       await renderPage();
-      expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls[0][1]).toBe("UnknownError");
+      expect(warn.mock.calls, name).toEqual([WARNING]);
     }
-    warn.mockClear();
-    mocks.isArtifactUnderOpenReview.mockRejectedValueOnce(named("A".repeat(64)));
+    warn.mockRestore();
+  });
+
+  it("never logs a value an Error's own constructor carries", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const err = new Error("x");
+    Object.defineProperty(err, "constructor", { value: { name: "sk_PRIVATE_ABC123" } });
+    mocks.isArtifactUnderOpenReview.mockRejectedValue(err);
     await renderPage();
-    expect(warn.mock.calls[0][1]).toBe("A".repeat(64));
+    expect(warn.mock.calls).toEqual([WARNING]);
+    expect(handedReview()).toEqual(PENDING);
+    warn.mockRestore();
+  });
+
+  it("still hands the pending reading when the Error's constructor getter throws", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const err = new Error("x");
+    Object.defineProperty(err, "constructor", {
+      get() {
+        throw new Error("constructor getter");
+      },
+    });
+    mocks.isArtifactUnderOpenReview.mockRejectedValue(err);
+    await renderPage();
+    expect(handedReview()).toEqual(PENDING);
+    expect(warn.mock.calls).toEqual([WARNING]);
+    warn.mockRestore();
+  });
+
+  it("still hands the pending reading when the thrown value is a proxy whose every trap throws", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const trap = () => {
+      throw new Error("trap");
+    };
+    const hostile = new Proxy(new Error("x"), { get: trap, getPrototypeOf: trap, has: trap, ownKeys: trap });
+    mocks.isArtifactUnderOpenReview.mockRejectedValue(hostile);
+    await renderPage();
+    expect(handedReview()).toEqual(PENDING);
+    expect(warn.mock.calls).toEqual([WARNING]);
+    warn.mockRestore();
+  });
+
+  it("still hands the pending reading when the log itself throws", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {
+      throw new Error("log sink down");
+    });
+    mocks.isArtifactUnderOpenReview.mockRejectedValue(new Error("the read failed"));
+    await renderPage();
+    expect(handedReview()).toEqual(PENDING);
+    expect(warn).toHaveBeenCalledTimes(1);
     warn.mockRestore();
   });
 });
@@ -323,21 +370,80 @@ describe("the dashboard's own read gate on the artifact page (cinatra#3092)", ()
     expect(mocks.isArtifactUnderOpenReview).not.toHaveBeenCalled();
   });
 
-  it("a gate that cannot be read throws and draws nothing", async () => {
+  it("a gate that cannot be read throws, so no artifact display is drawn", async () => {
     dashboardRow();
     mocks.resolveDashboardArtifactPointer.mockRejectedValue(new Error("store down"));
     await expect(renderPage()).rejects.toThrow("store down");
     expect(mocks.mounted).toHaveLength(0);
   });
 
-  it("a dashboard the gate admits draws through the one dispatch", async () => {
+  it.each([
+    ["an unknown access word", { access: "timeout" }],
+    ["no access", { access: undefined }],
+    ["ok without a pointer", { access: "ok" }],
+  ])("a gate that answers %s throws: nothing is mounted and no review is read", async (_label, answer) => {
     dashboardRow();
-    mocks.resolveDashboardArtifactPointer.mockResolvedValue({
-      access: "ok",
-      pointer: { artifactId: "a-1", dashboardId: "a-1", name: "A dashboard" },
-    });
-    await renderPage();
+    mocks.resolveDashboardArtifactPointer.mockResolvedValue(answer);
+    await expect(renderPage()).rejects.toThrow("the dashboard read gate answered no known access");
+    expect(mocks.mounted).toHaveLength(0);
+    expect(mocks.isArtifactUnderOpenReview).not.toHaveBeenCalled();
+    expect(mocks.resolveArtifactDisplayMount).not.toHaveBeenCalled();
+  });
+
+  const POINTER = {
+    dashboardId: "a-1",
+    name: "A dashboard",
+    ownerLevel: "team",
+    projectId: null,
+    updatedAt: null,
+    canonicalHref: "/dashboards/a-1",
+    scopeChips: [],
+  };
+
+  it("a dashboard the gate admits and an installed display claims draws through that display, not the pointer", async () => {
+    dashboardRow();
+    mocks.resolveDashboardArtifactPointer.mockResolvedValue({ access: "ok", pointer: POINTER });
+    const html = await renderPage();
+    expect(mocks.resolveArtifactDisplayMount).toHaveBeenCalledTimes(1);
     expect(mocks.mounted).toHaveLength(1);
+    expect(html).not.toContain('data-testid="artifact-dashboard-pointer"');
+    expect(html).not.toContain('data-render-dispatch="dashboard-pointer"');
+  });
+
+  // cinatra#4311: until the dashboard's own display is installed, the dispatch
+  // answers a floor for the dashboard, and the page keeps the pointer, so an
+  // admitted dashboard keeps its Open dashboard affordance.
+  it("a dashboard the gate admits and no installed display claims keeps its pointer, never the generic floor", async () => {
+    dashboardRow();
+    mocks.resolveDashboardArtifactPointer.mockResolvedValue({ access: "ok", pointer: POINTER });
+    mocks.resolveArtifactDisplayMount.mockResolvedValue({
+      dispatch: "fallback",
+      kind: "floor",
+      slot: "detail",
+      packageName: "@cinatra-ai/dashboard-artifact",
+      reason: "no-display",
+    });
+    const html = await renderPage();
+    expect(mocks.resolveArtifactDisplayMount).toHaveBeenCalledTimes(1);
+    expect(html).toContain('data-render-dispatch="dashboard-pointer"');
+    expect(html).toContain('data-testid="artifact-dashboard-pointer"');
+    expect(html).toContain('href="/dashboards/a-1"');
+    expect(html).toContain("Open dashboard");
+    expect(mocks.mounted).toHaveLength(0);
+  });
+
+  it("a row of another type that no installed display claims still draws the generic floor through the mount", async () => {
+    mocks.resolveArtifactDisplayMount.mockResolvedValue({
+      dispatch: "fallback",
+      kind: "floor",
+      slot: "detail",
+      packageName: "@acme/notes",
+      reason: "no-display",
+    });
+    const html = await renderPage();
+    expect(mocks.mounted).toHaveLength(1);
+    expect(html).not.toContain('data-testid="artifact-dashboard-pointer"');
+    expect(mocks.resolveDashboardArtifactPointer).not.toHaveBeenCalled();
   });
 
   it("a row of another type never asks the dashboard gate", async () => {
