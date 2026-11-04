@@ -389,6 +389,17 @@ export function SchemaFieldRenderer(props: Props) {
     return "";
   });
 
+  // cinatra#4310 — THE BOOLEAN QUESTION'S STAGED ANSWER. Where this field draws
+  // its own Continue, the box only stages the answer and the Continue sends it,
+  // as the Continue of the number, array and string kinds does. On that road
+  // only a real boolean ticks the box: the per-field setup panels hand a
+  // non-object field the whole values envelope as `value`, and an object is not
+  // an answer. So an untouched box is `false`, and the Continue sends what it shows.
+  const [stagedChecked, setStagedChecked] = useState<boolean>(() => value === true);
+  // One send per press, held on a ref: `submitting` is React state, so a second
+  // press in the same tick would still find the control enabled.
+  const booleanSendRef = useRef(false);
+
   // Sync localValue when the parent externally changes value (e.g. AI suggestions via
   // form.setValue). Safe alongside user typing because this component never calls
   // field.onChange while typing — it uses registerFlush — so field.value only changes
@@ -397,6 +408,7 @@ export function SchemaFieldRenderer(props: Props) {
     if (typeof value === "string") setLocalValue(value);
     else if (typeof value === "number") setLocalValue(String(value));
     else if (Array.isArray(value)) setLocalValue(value.map((v) => String(v)).join("\n"));
+    else if (typeof value === "boolean") setStagedChecked(value);
   }, [value]);
 
   // THE WINDOW'S FILL REACHES THIS FIELD (cinatra#2934). The shared props
@@ -432,7 +444,9 @@ export function SchemaFieldRenderer(props: Props) {
   // When inside a grouped form, register a flush that pushes buffered localValue
   // into react-hook-form's internal store before Zod validation runs.
   // Registry-matched renderers register their own flush; boolean/enum call onChange
-  // directly and need no flush.
+  // directly and need no flush. (A boolean that draws its own Continue,
+  // cinatra#4310, is mounted without a flush registration: a host that asks for
+  // a flush also passes `hideSubmit`, and that box writes through at once.)
   useEffect(() => {
     if (!registerFlush) return;
     // Bypass floors own their flush directly — they never delegate to a
@@ -585,20 +599,49 @@ export function SchemaFieldRenderer(props: Props) {
   }
 
   // Boolean -> Checkbox
+  //
+  // cinatra#4310 — where another owner draws the one control (`hideSubmit`: a
+  // grouped setup form, a structured object's sub-field, the HITL screen card
+  // on a conversation host), the box writes through at once, exactly as before.
+  // Everywhere else this field draws its own Continue (the fallback entry
+  // declares `drawsOwnSubmit`, so no surface draws one beside it): the box
+  // stages the answer, the Continue sends it once, and a box left clear is `false`.
   if (type === "boolean") {
-    const boolValue = Boolean(value);
-    return (
+    const ownsContinue = !hideSubmit;
+    const submitBoolean = async () => {
+      if (booleanSendRef.current) return;
+      booleanSendRef.current = true;
+      try {
+        await handleSubmit(stagedChecked);
+      } finally {
+        booleanSendRef.current = false;
+      }
+    };
+    const boxRow = (
       <div className="flex items-start gap-3">
         <Checkbox
           id={`field-${fieldName}`}
-          checked={boolValue}
-          onCheckedChange={(next) => onChange(Boolean(next))}
-          disabled={disabled}
+          checked={ownsContinue ? stagedChecked : Boolean(value)}
+          onCheckedChange={(next) => (ownsContinue ? setStagedChecked(next === true) : onChange(Boolean(next)))}
+          disabled={ownsContinue ? disabled || submitting : disabled}
         />
         <div className="flex flex-col">
           <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{declaredRequired ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
           {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
         </div>
+      </div>
+    );
+    if (!ownsContinue) return boxRow;
+    return (
+      <div className="flex flex-col gap-2">
+        {boxRow}
+        {submitError ? <p className="text-xs text-destructive">{submitError}</p> : null}
+        <GateControlFloor>
+          <Button className="gap-1.5" size="sm" disabled={disabled || submitting} onClick={() => void submitBoolean()}>
+            {submitting ? "Submitting…" : "Continue"}
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Button>
+        </GateControlFloor>
       </div>
     );
   }
