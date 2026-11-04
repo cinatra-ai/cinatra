@@ -34,7 +34,7 @@ import {
   buildBreadcrumbTrail,
   breadcrumbCrumbKey,
   humanizePathSegment,
-  isIdLikeSegment,
+  isIdLikeSegmentAt,
   type BreadcrumbCrumb,
   documentTitleLabelFromTrail,
   documentTitleLabelForAgentInstance,
@@ -710,10 +710,12 @@ export function AppShell({
       // Until the server-authorized publisher lands, preserve its metadata.
       // Neither the selected tab nor a raw connector slug is a title source.
       resolved = null;
-    } else if (segments.some((seg) => isIdLikeSegment(seg))) {
+    } else if (segments.some((_seg, i) => isIdLikeSegmentAt(segments, i))) {
       // Id-bearing route (cinatra#1737): the gate-repeating `generateMetadata`
       // on the route owns the tab title — clobbering it here would replace a
-      // correct server title with humanized hex. Deliberately no write.
+      // correct server title with humanized hex. Deliberately no write. Read
+      // by position (cinatra#4295): a seed scope id (`/teams/team-rob-hardware`)
+      // counts, a seed-shaped slug at any other position does not.
       resolved = null;
     } else {
       // THE TAB MIRRORS THE RESOLVED TRAIL HERE TOO (cinatra#2934, fix leg 11).
