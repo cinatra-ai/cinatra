@@ -55,6 +55,7 @@ import {
   collectArtifactMaterializeNodesFromOasDocument,
 } from "./artifact-binding";
 import type { PersistedArtifactBindingDeclaration } from "./artifact-binding";
+import { readKeyList } from "./gate-keys-not-from-run-inputs";
 
 // ---------------------------------------------------------------------------
 // OAS Flow compiler
@@ -1218,6 +1219,13 @@ export type CompiledAgentOasStep = {
   // surface instead of the legacy reviewer envelope. Absent (the default) means
   // the gate is an ordinary HITL gate and every code path stays byte-identical.
   artifactReviewTargetsInput?: string;
+  // cinatra#4457: set ONLY on an InputMessageNode gate whose
+  // `metadata.cinatra.surfaceGateInputs` is strictly `true`. It lists the titles
+  // of the gate's declared inputs: the keys of the one JSON object the WayFlow
+  // loader writes as that gate's message. At runtime a run input never fills one
+  // of these keys in the review values (gate-keys-not-from-run-inputs.ts).
+  // Absent (the default) leaves every other gate byte-identical.
+  surfaceGateInputKeys?: string[];
 };
 
 export type CompiledAgentOas = {
@@ -1599,8 +1607,8 @@ export async function compileOasAgentJson(opts: {
       const ime = localRefs[id] as {
         name?: string;
         outputs?: Array<{ id?: string; title?: string }>;
-        inputs?: Array<{ id?: string; schema?: Record<string, unknown> }>;
-        metadata?: { cinatra?: { description?: string; inputRenderers?: Record<string, string>; renderer?: string; inputMessageSchema?: Record<string, unknown>; artifactReview?: { targetsInput?: unknown } } };
+        inputs?: Array<{ id?: string; title?: unknown; schema?: Record<string, unknown> }>;
+        metadata?: { cinatra?: { description?: string; inputRenderers?: Record<string, string>; renderer?: string; inputMessageSchema?: Record<string, unknown>; artifactReview?: { targetsInput?: unknown }; surfaceGateInputs?: unknown } };
       };
       const out0 = ime.outputs?.[0] ?? {};
       const field = out0.title ?? out0.id ?? id;
@@ -1624,6 +1632,13 @@ export async function compileOasAgentJson(opts: {
         typeof targetsInputRaw === "string" && targetsInputRaw.length > 0
           ? targetsInputRaw
           : undefined;
+      // cinatra#4457: the keys of a value-surfacing gate's message. The flag is
+      // read with the loader's own strict identity (`=== true`, never a truthy
+      // coercion); each declared input's title is a key of the message.
+      const surfaceGateInputKeys =
+        ime.metadata?.cinatra?.surfaceGateInputs === true
+          ? readKeyList((ime.inputs ?? []).map((i) => i?.title))
+          : [];
       return {
         nodeType: "input_message",
         stepNumber,
@@ -1637,6 +1652,7 @@ export async function compileOasAgentJson(opts: {
         inputMessageField: field,
         inputMessageSchema: inputSchema,
         ...(artifactReviewTargetsInput ? { artifactReviewTargetsInput } : {}),
+        ...(surfaceGateInputKeys.length > 0 ? { surfaceGateInputKeys } : {}),
       };
     }
 
