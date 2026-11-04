@@ -42,23 +42,23 @@ import * as repoSync from "../dev-repo-sync.mjs";
 
 const { syncOneRepo, defaultRepoSyncDeps } = repoSync;
 
-const DEST = "/repo/extensions/cinatra-ai/blog-pipeline-agent";
+const DEST = "/repo/extensions/example-vendor/blog-pipeline-agent";
 const PARENT = path.dirname(DEST);
-const SOURCE = "/repo/extensions/cinatra-ai/.blog-pipeline-agent.restored";
-const URL = "https://github.com/cinatra-ai/blog-pipeline-agent.git";
+const SOURCE = "/repo/extensions/example-vendor/.blog-pipeline-agent.restored";
+const URL = "https://github.com/example-vendor/blog-pipeline-agent.git";
 const PIN = "0123456789abcdef0123456789abcdef01234567";
 const OTHER = "fedcba9876543210fedcba9876543210fedcba98";
 
 const STDERR = {
-  reset: "fatal: unable to access 'https://github.com/cinatra-ai/blog-pipeline-agent.git/': Recv failure: Connection reset by peer\n",
-  resolve: "fatal: unable to access 'https://github.com/cinatra-ai/blog-pipeline-agent.git/': Could not resolve host: github.com\n",
-  timedOut: "fatal: unable to access 'https://github.com/cinatra-ai/blog-pipeline-agent.git/': Connection timed out after 300000 milliseconds\n",
-  tooSlow: "fatal: unable to access 'https://github.com/cinatra-ai/blog-pipeline-agent.git/': Operation too slow. Less than 1000 bytes/sec transferred the last 60 seconds\n",
+  reset: "fatal: unable to access 'https://github.com/example-vendor/blog-pipeline-agent.git/': Recv failure: Connection reset by peer\n",
+  resolve: "fatal: unable to access 'https://github.com/example-vendor/blog-pipeline-agent.git/': Could not resolve host: github.com\n",
+  timedOut: "fatal: unable to access 'https://github.com/example-vendor/blog-pipeline-agent.git/': Connection timed out after 300000 milliseconds\n",
+  tooSlow: "fatal: unable to access 'https://github.com/example-vendor/blog-pipeline-agent.git/': Operation too slow. Less than 1000 bytes/sec transferred the last 60 seconds\n",
   unadvertised: `error: Server does not allow request for unadvertised object ${PIN}\n`,
   notOurRef: `fatal: remote error: upload-pack: not our ref ${PIN}\n`,
   sourceNotOurRef: `fatal: git upload-pack: not our ref ${PIN}\nfatal: remote error: upload-pack: not our ref ${PIN}\n`,
   locked: "fatal: cannot mkdir .git: Permission denied\n",
-  forbidden: "fatal: unable to access 'https://github.com/cinatra-ai/blog-pipeline-agent.git/': The requested URL returned error: 403\n",
+  forbidden: "fatal: unable to access 'https://github.com/example-vendor/blog-pipeline-agent.git/': The requested URL returned error: 403\n",
   noSpace: "error: unable to write file: No space left on device\n",
 };
 
@@ -397,9 +397,9 @@ describe("syncOneRepo --shallow — an absent checkout fetches the pin at depth 
 
   it("refuses a remote URL with credentials, before any git call, and never prints them", () => {
     for (const url of [
-      "https://x-access-token:secret123@github.com/cinatra-ai/blog-pipeline-agent.git",
-      "https://secret123@github.com/cinatra-ai/blog-pipeline-agent.git",
-      "ssh://git:secret123@github.com/cinatra-ai/blog-pipeline-agent.git",
+      "https://x-access-token:secret123@github.com/example-vendor/blog-pipeline-agent.git",
+      "https://secret123@github.com/example-vendor/blog-pipeline-agent.git",
+      "ssh://git:secret123@github.com/example-vendor/blog-pipeline-agent.git",
     ]) {
       const deps = makeDeps();
       const { thrown } = run(deps, { url });
@@ -412,17 +412,17 @@ describe("syncOneRepo --shallow — an absent checkout fetches the pin at depth 
 
   it("lets the plain ssh://git@github.com form through (a user name, no credential)", () => {
     const deps = makeDeps();
-    const { result, thrown } = run(deps, { url: "ssh://git@github.com/cinatra-ai/blog-pipeline-agent.git" });
+    const { result, thrown } = run(deps, { url: "ssh://git@github.com/example-vendor/blog-pipeline-agent.git" });
     expect(thrown).toBeNull();
     expect(result).toEqual(CLONED);
   });
 
   it("refuses a remote URL with a query, a fragment or user info in any case, before any git call, and never prints it", () => {
     for (const url of [
-      "https://github.com/cinatra-ai/blog-pipeline-agent.git?access_token=secret123",
-      "https://github.com/cinatra-ai/blog-pipeline-agent.git#secret123",
-      "HTTPS://secret123@github.com/cinatra-ai/blog-pipeline-agent.git",
-      "ssh://deploy:secret123@github.com/cinatra-ai/blog-pipeline-agent.git",
+      "https://github.com/example-vendor/blog-pipeline-agent.git?access_token=secret123",
+      "https://github.com/example-vendor/blog-pipeline-agent.git#secret123",
+      "HTTPS://secret123@github.com/example-vendor/blog-pipeline-agent.git",
+      "ssh://deploy:secret123@github.com/example-vendor/blog-pipeline-agent.git",
       "file:///srv/mirror/blog-pipeline-agent.git?secret123",
     ]) {
       const deps = makeDeps();
@@ -437,9 +437,9 @@ describe("syncOneRepo --shallow — an absent checkout fetches the pin at depth 
 
   it("lets the plain forms through: https and ssh://git@ to github.com, git@github.com:, file:// and an absolute path", () => {
     for (const url of [
-      "https://github.com/cinatra-ai/blog-pipeline-agent.git",
-      "ssh://git@github.com/cinatra-ai/blog-pipeline-agent.git",
-      "git@github.com:cinatra-ai/blog-pipeline-agent.git",
+      "https://github.com/example-vendor/blog-pipeline-agent.git",
+      "ssh://git@github.com/example-vendor/blog-pipeline-agent.git",
+      "git@github.com:example-vendor/blog-pipeline-agent.git",
       "file:///srv/mirror/blog-pipeline-agent.git",
       "/srv/mirror/blog-pipeline-agent.git",
     ]) {
@@ -452,9 +452,9 @@ describe("syncOneRepo --shallow — an absent checkout fetches the pin at depth 
 
   it("refuses whitespace or a control character anywhere in a plain form, before any git call, and never prints the URL", () => {
     const plain = [
-      "https://github.com/cinatra-ai/blog-pipeline-agent.git",
-      "ssh://git@github.com/cinatra-ai/blog-pipeline-agent.git",
-      "git@github.com:cinatra-ai/blog-pipeline-agent.git",
+      "https://github.com/example-vendor/blog-pipeline-agent.git",
+      "ssh://git@github.com/example-vendor/blog-pipeline-agent.git",
+      "git@github.com:example-vendor/blog-pipeline-agent.git",
       "file:///srv/mirror/blog-pipeline-agent.git",
       "/srv/mirror/blog-pipeline-agent.git",
     ];
@@ -493,9 +493,9 @@ describe("syncOneRepo --shallow — an absent checkout fetches the pin at depth 
 
   it("refuses a Unicode format character (soft hyphen, zero-width, bidi, word joiner, BOM) anywhere in a plain form, and never prints the URL", () => {
     const plain = [
-      "https://github.com/cinatra-ai/blog-pipeline-agent.git",
-      "ssh://git@github.com/cinatra-ai/blog-pipeline-agent.git",
-      "git@github.com:cinatra-ai/blog-pipeline-agent.git",
+      "https://github.com/example-vendor/blog-pipeline-agent.git",
+      "ssh://git@github.com/example-vendor/blog-pipeline-agent.git",
+      "git@github.com:example-vendor/blog-pipeline-agent.git",
       "file:///srv/mirror/blog-pipeline-agent.git",
       "/srv/mirror/blog-pipeline-agent.git",
     ];
@@ -726,7 +726,7 @@ describe("syncOneRepo --shallow — an existing (cache-restored) checkout is onl
         for (const f of [["config"], ["HEAD"], ["shallow"], ["refs", "heads", "main"], ["objects", "pack", "pack-1.pack"], ["hooks", "pre-commit.sample"]]) {
           t[path.join(g, ...f)] = "file";
         }
-        s.files[path.join(g, "config")] = "[core]\n\trepositoryformatversion = 0\n[remote \"origin\"]\n\turl = https://github.com/cinatra-ai/x.git\n";
+        s.files[path.join(g, "config")] = "[core]\n\trepositoryformatversion = 0\n[remote \"origin\"]\n\turl = https://github.com/example-vendor/x.git\n";
         s.dirEntries[g] = ["HEAD", "config", "hooks", "objects", "refs", "shallow"];
         s.dirEntries[path.join(g, "refs")] = ["heads"];
         s.dirEntries[path.join(g, "refs", "heads")] = ["main"];
@@ -892,26 +892,26 @@ describe("syncOneRepo --shallow — an existing (cache-restored) checkout is onl
 describe("redactGitUrl — a query, a fragment and scp-style user info are never printed", () => {
   it("hides them in a URL and in a git failure line, and keeps the plain forms", () => {
     const r = repoSync.redactGitUrl;
-    expect(r("https://github.com/cinatra-ai/x.git?access_token=secret123")).toBe("https://github.com/cinatra-ai/x.git?***");
-    expect(r("https://github.com/cinatra-ai/x.git#secret123")).toBe("https://github.com/cinatra-ai/x.git#***");
-    expect(r("secret123@github.com:cinatra-ai/x.git")).toBe("***@github.com:cinatra-ai/x.git");
-    expect(r("user:secret123@github.com:cinatra-ai/x.git")).toBe("***@github.com:cinatra-ai/x.git");
-    expect(r("git@github.com:cinatra-ai/x.git")).toBe("git@github.com:cinatra-ai/x.git");
-    expect(r("https://github.com/cinatra-ai/x.git")).toBe("https://github.com/cinatra-ai/x.git");
-    const line = r("fatal: unable to access 'https://github.com/cinatra-ai/x.git/?access_token=secret123': The requested URL returned error: 403");
+    expect(r("https://github.com/example-vendor/x.git?access_token=secret123")).toBe("https://github.com/example-vendor/x.git?***");
+    expect(r("https://github.com/example-vendor/x.git#secret123")).toBe("https://github.com/example-vendor/x.git#***");
+    expect(r("secret123@github.com:example-vendor/x.git")).toBe("***@github.com:example-vendor/x.git");
+    expect(r("user:secret123@github.com:example-vendor/x.git")).toBe("***@github.com:example-vendor/x.git");
+    expect(r("git@github.com:example-vendor/x.git")).toBe("git@github.com:example-vendor/x.git");
+    expect(r("https://github.com/example-vendor/x.git")).toBe("https://github.com/example-vendor/x.git");
+    const line = r("fatal: unable to access 'https://github.com/example-vendor/x.git/?access_token=secret123': The requested URL returned error: 403");
     expect(line).not.toMatch(/secret123/);
-    expect(line).toMatch(/^fatal: unable to access 'https:\/\/github\.com\/cinatra-ai\/x\.git\/\?\*\*\*': The requested URL returned error: 403$/);
+    expect(line).toMatch(/^fatal: unable to access 'https:\/\/github\.com\/example-vendor\/x\.git\/\?\*\*\*': The requested URL returned error: 403$/);
   });
 
   it("hides a query or fragment of an scp-style or absolute-path remote, and a password that holds an @", () => {
     const r = repoSync.redactGitUrl;
-    expect(r("git@github.com:cinatra-ai/x.git?access_token=secret123")).toBe("git@github.com:cinatra-ai/x.git?***");
-    expect(r("tok:secret@123@github.com:cinatra-ai/x.git#secret123")).toBe("***@github.com:cinatra-ai/x.git#***");
-    expect(r("https://user:p@ssword123@github.com/cinatra-ai/x.git")).toBe("https://***@github.com/cinatra-ai/x.git");
+    expect(r("git@github.com:example-vendor/x.git?access_token=secret123")).toBe("git@github.com:example-vendor/x.git?***");
+    expect(r("tok:secret@123@github.com:example-vendor/x.git#secret123")).toBe("***@github.com:example-vendor/x.git#***");
+    expect(r("https://user:p@ssword123@github.com/example-vendor/x.git")).toBe("https://***@github.com/example-vendor/x.git");
     expect(r("/srv/mirror/x.git?secret123")).toBe("/srv/mirror/x.git?***");
     expect(r("file:///srv/mirror/x.git#secret123")).toBe("file:///srv/mirror/x.git#***");
-    const line = r("fatal: 'secret123@github.com:cinatra-ai/x.git?t=secret456' does not appear to be a git repository");
-    expect(line).toBe("fatal: '***@github.com:cinatra-ai/x.git?***' does not appear to be a git repository");
+    const line = r("fatal: 'secret123@github.com:example-vendor/x.git?t=secret456' does not appear to be a git repository");
+    expect(line).toBe("fatal: '***@github.com:example-vendor/x.git?***' does not appear to be a git repository");
     expect(r("/srv/mirror/x.git")).toBe("/srv/mirror/x.git");
     expect(r("fatal: unable to read /srv/mirror/x.git/config")).toBe("fatal: unable to read /srv/mirror/x.git/config");
   });
@@ -920,9 +920,9 @@ describe("redactGitUrl — a query, a fragment and scp-style user info are never
     // The scp and path forms pass the GitHub-or-local allowlist and are refused by the shallow check; the https form with an
     // "@" in its password reads as another host, so the allowlist refuses it first, on both roads.
     for (const [url, shallowRefusal] of [
-      ["git@github.com:cinatra-ai/blog-pipeline-agent.git?access_token=secret123", /carries credentials, a query or a fragment/],
+      ["git@github.com:example-vendor/blog-pipeline-agent.git?access_token=secret123", /carries credentials, a query or a fragment/],
       ["/srv/mirror/blog-pipeline-agent.git?secret123", /carries credentials, a query or a fragment/],
-      ["https://user:p@ssword123@github.com/cinatra-ai/blog-pipeline-agent.git", /refusing a git remote that is not GitHub or a local path/],
+      ["https://user:p@ssword123@github.com/example-vendor/blog-pipeline-agent.git", /refusing a git remote that is not GitHub or a local path/],
     ]) {
       for (const shallow of [false, true]) {
         const deps = makeDeps();
@@ -940,7 +940,7 @@ describe("redactGitUrl — a query, a fragment and scp-style user info are never
   it("a refused scp-style remote with user info never prints it (any road)", () => {
     for (const shallow of [false, true]) {
       const deps = makeDeps();
-      const { thrown } = run(deps, { url: "secret123@github.com:cinatra-ai/blog-pipeline-agent.git", shallow });
+      const { thrown } = run(deps, { url: "secret123@github.com:example-vendor/blog-pipeline-agent.git", shallow });
       expect(String(thrown?.message)).toMatch(/refusing a git remote/);
       expect(String(thrown?.message)).not.toMatch(/secret123/);
       expect(deps.calls).toEqual([]);
@@ -963,10 +963,10 @@ describe("redactGitUrl — a query, a fragment and scp-style user info are never
       "C:\\mirror\\blog-pipeline-agent.git#access_token=secret123",
       "C:/mirror/blog-pipeline-agent.git?access_token=secret123",
       "\\\\server\\share\\blog-pipeline-agent.git?secret123",
-      "github.com:cinatra-ai/blog-pipeline-agent.git?access_token=secret123",
-      "https://github.com/cinatra-ai/blog-pipeline-agent.git?access_token=x\nsecret123",
-      "https://github.com/cinatra-ai/blog-pipeline-agent.git#\tsecret123",
-      "-https://user:secret123@github.com/cinatra-ai/blog-pipeline-agent.git",
+      "github.com:example-vendor/blog-pipeline-agent.git?access_token=secret123",
+      "https://github.com/example-vendor/blog-pipeline-agent.git?access_token=x\nsecret123",
+      "https://github.com/example-vendor/blog-pipeline-agent.git#\tsecret123",
+      "-https://user:secret123@github.com/example-vendor/blog-pipeline-agent.git",
       "--upload-pack=secret123",
     ]) {
       for (const shallow of [false, true]) {
@@ -980,8 +980,8 @@ describe("redactGitUrl — a query, a fragment and scp-style user info are never
 
   it("no remote makes the sync print a line of its own, on any road", () => {
     for (const url of [
-      "https://github.com/cinatra-ai/blog-pipeline-agent.git\n::error::forged",
-      "https://github.com/cinatra-ai/blog-pipeline-agent.git\r::error::forged",
+      "https://github.com/example-vendor/blog-pipeline-agent.git\n::error::forged",
+      "https://github.com/example-vendor/blog-pipeline-agent.git\r::error::forged",
       "/srv/mirror/blog-pipeline-agent.git\n::add-mask::forged",
       "-x\n::error::forged",
     ]) {
@@ -996,9 +996,9 @@ describe("redactGitUrl — a query, a fragment and scp-style user info are never
 
   it("the branch-road clone log, the non-git-directory refusal and the origin-mismatch refusal never print a query, a password or a line of their own", () => {
     const hostile = [
-      "https://github.com/cinatra-ai/blog-pipeline-agent.git?access_token=secret123",
-      "https://user:secret123@github.com/cinatra-ai/blog-pipeline-agent.git",
-      "https://github.com/cinatra-ai/blog-pipeline-agent.git\n::error::secret123",
+      "https://github.com/example-vendor/blog-pipeline-agent.git?access_token=secret123",
+      "https://user:secret123@github.com/example-vendor/blog-pipeline-agent.git",
+      "https://github.com/example-vendor/blog-pipeline-agent.git\n::error::secret123",
     ];
     const said = ({ thrown, lines }) => [String(thrown?.message ?? ""), ...lines].join("\n");
     const check = (text, label) => {

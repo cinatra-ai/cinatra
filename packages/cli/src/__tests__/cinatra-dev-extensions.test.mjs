@@ -553,13 +553,13 @@ describe("pruneToDeclaredCheckouts — a --shallow sync keeps only the declared 
     n += 1;
     const root = path.join(work, `case-${n}`);
     const ext = path.join(root, "extensions");
-    mkdirSync(path.join(ext, "cinatra-ai", "kept-connector", "src"), { recursive: true });
-    writeFileSync(path.join(ext, "cinatra-ai", "kept-connector", "src", "a.txt"), "kept\n");
-    mkdirSync(path.join(ext, "cinatra-ai", "kept-agent"), { recursive: true });
+    mkdirSync(path.join(ext, "example-vendor", "kept-connector", "src"), { recursive: true });
+    writeFileSync(path.join(ext, "example-vendor", "kept-connector", "src", "a.txt"), "kept\n");
+    mkdirSync(path.join(ext, "example-vendor", "kept-agent"), { recursive: true });
     const outside = path.join(root, "outside");
     mkdirSync(outside);
     writeFileSync(path.join(outside, "package.json"), "{}\n");
-    return { root, ext, outside, declared: [path.join(ext, "cinatra-ai", "kept-connector"), path.join(ext, "cinatra-ai", "kept-agent")] };
+    return { root, ext, outside, declared: [path.join(ext, "example-vendor", "kept-connector"), path.join(ext, "example-vendor", "kept-agent")] };
   };
   const tree = (ext) =>
     readdirSync(ext, { recursive: true })
@@ -569,14 +569,14 @@ describe("pruneToDeclaredCheckouts — a --shallow sync keeps only the declared 
   it("removes undeclared directories, files, symlinks and dot entries, keeps the declared checkouts and never follows a link", () => {
     const { ext, outside, declared } = fresh();
     // An undeclared restored repository with a planted fsmonitor: removed without any git call.
-    const planted = path.join(ext, "cinatra-ai", "planted-connector");
+    const planted = path.join(ext, "example-vendor", "planted-connector");
     mkdirSync(planted);
     execFileSync("git", ["init", "-q", planted]);
     const marker = path.join(outside, "ran");
     execFileSync("git", ["-C", planted, "config", "core.fsmonitor", `touch ${marker}`]);
-    symlinkSync(outside, path.join(ext, "cinatra-ai", "linked-connector"));
-    writeFileSync(path.join(ext, "cinatra-ai", "stray.json"), "{}\n");
-    mkdirSync(path.join(ext, "cinatra-ai", ".kept-connector.restored"));
+    symlinkSync(outside, path.join(ext, "example-vendor", "linked-connector"));
+    writeFileSync(path.join(ext, "example-vendor", "stray.json"), "{}\n");
+    mkdirSync(path.join(ext, "example-vendor", ".kept-connector.restored"));
     mkdirSync(path.join(ext, "other-vendor", "x-connector"), { recursive: true });
     writeFileSync(path.join(ext, "README.md"), "x\n");
     const lines = [];
@@ -584,15 +584,15 @@ describe("pruneToDeclaredCheckouts — a --shallow sync keeps only the declared 
     expect(removed.sort()).toEqual(
       [
         "README.md",
-        "cinatra-ai/.kept-connector.restored",
-        "cinatra-ai/linked-connector",
-        "cinatra-ai/planted-connector",
-        "cinatra-ai/stray.json",
+        "example-vendor/.kept-connector.restored",
+        "example-vendor/linked-connector",
+        "example-vendor/planted-connector",
+        "example-vendor/stray.json",
         "other-vendor",
       ].sort(),
     );
-    expect(tree(ext)).toEqual(["cinatra-ai", "cinatra-ai/kept-agent", "cinatra-ai/kept-connector", "cinatra-ai/kept-connector/src", "cinatra-ai/kept-connector/src/a.txt"]);
-    expect(readFileSync(path.join(ext, "cinatra-ai", "kept-connector", "src", "a.txt"), "utf8")).toBe("kept\n");
+    expect(tree(ext)).toEqual(["example-vendor", "example-vendor/kept-agent", "example-vendor/kept-connector", "example-vendor/kept-connector/src", "example-vendor/kept-connector/src/a.txt"]);
+    expect(readFileSync(path.join(ext, "example-vendor", "kept-connector", "src", "a.txt"), "utf8")).toBe("kept\n");
     // The link was removed, not its target.
     expect(existsSync(path.join(outside, "package.json"))).toBe(true);
     expect(existsSync(marker)).toBe(false);
@@ -601,16 +601,16 @@ describe("pruneToDeclaredCheckouts — a --shallow sync keeps only the declared 
 
   it("a symlinked declared checkout or scope directory is removed, its target kept", () => {
     const { root, ext, outside, declared } = fresh();
-    rmSync(path.join(ext, "cinatra-ai", "kept-agent"), { recursive: true });
-    symlinkSync(outside, path.join(ext, "cinatra-ai", "kept-agent"));
-    expect(pruneToDeclaredCheckouts({ extRoot: ext, declaredDests: declared })).toEqual(["cinatra-ai/kept-agent"]);
+    rmSync(path.join(ext, "example-vendor", "kept-agent"), { recursive: true });
+    symlinkSync(outside, path.join(ext, "example-vendor", "kept-agent"));
+    expect(pruneToDeclaredCheckouts({ extRoot: ext, declaredDests: declared })).toEqual(["example-vendor/kept-agent"]);
     const ext2 = path.join(root, "ext2");
     mkdirSync(ext2);
-    symlinkSync(path.join(ext, "cinatra-ai"), path.join(ext2, "cinatra-ai"));
-    expect(pruneToDeclaredCheckouts({ extRoot: ext2, declaredDests: [path.join(ext2, "cinatra-ai", "kept-connector")] })).toEqual([
-      "cinatra-ai",
+    symlinkSync(path.join(ext, "example-vendor"), path.join(ext2, "example-vendor"));
+    expect(pruneToDeclaredCheckouts({ extRoot: ext2, declaredDests: [path.join(ext2, "example-vendor", "kept-connector")] })).toEqual([
+      "example-vendor",
     ]);
-    expect(lstatSync(path.join(ext, "cinatra-ai", "kept-connector")).isDirectory()).toBe(true);
+    expect(lstatSync(path.join(ext, "example-vendor", "kept-connector")).isDirectory()).toBe(true);
     expect(existsSync(path.join(outside, "package.json"))).toBe(true);
   });
 
@@ -623,12 +623,12 @@ describe("pruneToDeclaredCheckouts — a --shallow sync keeps only the declared 
 
   it("a regular file where a declared checkout belongs is removed, and a hostile entry name is logged escaped", () => {
     const { ext, declared } = fresh();
-    rmSync(path.join(ext, "cinatra-ai", "kept-agent"), { recursive: true });
-    writeFileSync(path.join(ext, "cinatra-ai", "kept-agent"), "not a checkout\n");
-    mkdirSync(path.join(ext, "cinatra-ai", "evil\n::error::forged"));
+    rmSync(path.join(ext, "example-vendor", "kept-agent"), { recursive: true });
+    writeFileSync(path.join(ext, "example-vendor", "kept-agent"), "not a checkout\n");
+    mkdirSync(path.join(ext, "example-vendor", "evil\n::error::forged"));
     const lines = [];
     const removed = pruneToDeclaredCheckouts({ extRoot: ext, declaredDests: declared, log: (m) => lines.push(m) });
-    expect(removed.sort()).toEqual(["cinatra-ai/evil\n::error::forged", "cinatra-ai/kept-agent"].sort());
+    expect(removed.sort()).toEqual(["example-vendor/evil\n::error::forged", "example-vendor/kept-agent"].sort());
     expect(lines).toHaveLength(2);
     // One line per removal: a newline in a restored name never starts a line of its own.
     for (const l of lines) expect(l).not.toMatch(/\n/);
