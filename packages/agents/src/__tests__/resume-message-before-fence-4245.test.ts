@@ -205,7 +205,12 @@ describe("cinatra#4245 — a failed message id is a failure before the fence", (
 
 describe("cinatra#4245 — a failed prompt capture after the fence", () => {
   it("the MCP resume: the answer is still sent once and settled, and the pause is not given back", async () => {
-    storeMock.writeHitlPrompt.mockRejectedValueOnce(new Error("the prompt store is down"));
+    // The fences that landed before the capture: one, or none when the capture comes first or no fence lands.
+    let fencesAtCapture: number | undefined;
+    storeMock.writeHitlPrompt.mockImplementationOnce(async () => {
+      fencesAtCapture = fenceCalls().length;
+      throw new Error("the prompt store is down");
+    });
     const answer = await resumeWayflowUnderPauseClaim({
       run: { ...RUN, status: "pending_approval" } as never,
       client: { sendTask } as never,
@@ -216,6 +221,7 @@ describe("cinatra#4245 — a failed prompt capture after the fence", () => {
     });
     expect(answer.error).toBeUndefined();
     expect(storeMock.writeHitlPrompt).toHaveBeenCalledTimes(1);
+    expect(fencesAtCapture).toBe(1);
     expect(sendTask).toHaveBeenCalledTimes(1);
     expect(pauseClaimFake.settlePauseSend).toHaveBeenCalledTimes(1);
     expect(pauseClaimFake.releasePauseClaim).not.toHaveBeenCalled();
