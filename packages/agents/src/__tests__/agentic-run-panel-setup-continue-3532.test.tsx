@@ -914,10 +914,14 @@ describe("AgenticRunPanel — a renderer that reports its value unsendable (cina
  * `drawsOwnSubmit` does: ticks kept in its own state, a report of whether
  * anything is ticked, and a "Send picks" button that hands the picks over
  * through `onChange`, which is the send on the roads it is drawn on.
+ * It reports in a layout effect, so the report lands in the commit that draws
+ * "Send picks": a case that finds the button and presses it at once never
+ * presses before the first report (a report in a passive effect can come
+ * after that press, and the press is then not held).
  */
 function OwnSubmitRenderer({ schema, onChange, onValidityChange }: FieldRendererProps) {
   const [ticked, setTicked] = React.useState<string[]>([]);
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     onValidityChange?.(ticked.length > 0);
   }, [onValidityChange, ticked]);
   const picks = { type: "list", listIds: ticked, listNames: ticked.map((t) => `View ${t}`) };
@@ -1251,7 +1255,8 @@ describe("AgenticRunPanel — every send of a held gate sends nothing (cinatra#3
       await act(async () => {});
       fireEvent.click(view.getByRole("button", { name: "Send picks" }));
       await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
-      expect(hitlActions.approveReviewTask.mock.calls[0]![0]).toBe("setup-run-3532");
+      const [taskId] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [string];
+      expect(taskId).toBe("setup-run-3532");
     });
   }
 
