@@ -34,11 +34,15 @@ vi.mock("@/lib/artifacts/installed-type-picker", () => ({
 // actions, and the pack whose claim wins the row's type. The reader defaults to
 // [] and the winner to none in the top-level beforeEach, so every case that
 // does not name a claim reads exactly the registry channels it read before.
-// The packages that win a claim are read only after a failed claim-backed read
-// (cinatra#3319 T21 to T23); none by default.
+// The packages that could be claim-backed (every rule but the manifest read)
+// are read only after a failed claim-backed read (cinatra#3319 T21 to T23,
+// T34); none by default. The packages that win any claim, which the actions
+// read for that before (cinatra#3319 T24), are mocked beside them with their
+// own meaning, so each case reads the same claims through either function.
 const readClaimBackedMeaningTypesForOrg = vi.fn();
 const readArtifactSafeClaimWinnerForType = vi.fn();
 const readArtifactSafeClaimWinnerPackagesForOrg = vi.fn();
+const readClaimBackedCandidatePackagesForOrg = vi.fn();
 vi.mock("@/lib/artifacts/resolve-bound-artifact-type", () => ({
   readClaimBackedMeaningTypesForOrg: (...a: unknown[]) =>
     readClaimBackedMeaningTypesForOrg(...a),
@@ -46,6 +50,8 @@ vi.mock("@/lib/artifacts/resolve-bound-artifact-type", () => ({
     readArtifactSafeClaimWinnerForType(...a),
   readArtifactSafeClaimWinnerPackagesForOrg: (...a: unknown[]) =>
     readArtifactSafeClaimWinnerPackagesForOrg(...a),
+  readClaimBackedCandidatePackagesForOrg: (...a: unknown[]) =>
+    readClaimBackedCandidatePackagesForOrg(...a),
 }));
 
 // The row's one presentation reading, which the confirmation's presented-base
@@ -157,6 +163,7 @@ beforeEach(() => {
   readClaimBackedMeaningTypesForOrg.mockResolvedValue([]);
   readArtifactSafeClaimWinnerForType.mockReturnValue(null);
   readArtifactSafeClaimWinnerPackagesForOrg.mockReturnValue([]);
+  readClaimBackedCandidatePackagesForOrg.mockReturnValue([]);
   canActorAccessClaimedArtifactExtension.mockResolvedValue(true);
   resolveArtifactPresentationReading.mockReturnValue({
     offer: { preselect: null, suggestions: [] },
@@ -604,6 +611,8 @@ describe("3319 claim-backed meaning types reach the upload picker and its promot
       objectTypeId === POST_DRAFT ? LINKEDIN_PACK : null,
     );
     readArtifactSafeClaimWinnerPackagesForOrg.mockReturnValue([LINKEDIN_PACK]);
+    // The pack passes every rule but the manifest read: it could be claim-backed.
+    readClaimBackedCandidatePackagesForOrg.mockReturnValue([LINKEDIN_PACK]);
     // The picker as the cure draws it: a claim-backed entry is a candidate only
     // when the caller hands it in, and the row's own type is never offered.
     listInstalledMeaningTypesAcceptingMime.mockImplementation(
@@ -874,6 +883,9 @@ describe("3319 claim-backed meaning types reach the upload picker and its promot
     readArtifactSafeClaimWinnerPackagesForOrg.mockImplementation(() => {
       throw new Error("claim store unavailable");
     });
+    readClaimBackedCandidatePackagesForOrg.mockImplementation(() => {
+      throw new Error("claim store unavailable");
+    });
     readArtifactForDetail.mockReturnValue({
       kind: "ok",
       artifact: { mime: "text/markdown", objectType: TEXT_TYPE },
@@ -971,27 +983,95 @@ describe("3319 claim-backed meaning types reach the upload picker and its promot
     });
   });
 
-  it("3319 T29: during a failed claim-backed read, the matcher entry of a claim-winning pack that registers an artifact type of its own keeps the org-wide matcher gate: listed and confirmed", async () => {
+  it("3319 T29: during a failed claim-backed read, the matcher entry of a claim-winning pack that registers an artifact type of its own keeps the org-wide matcher gate: listed and confirmed, whether the claims read or not", async () => {
     const OWNING_PACK = "@acme/voice-artifacts";
-    objectTypeRegistry.register(
-      {
-        type: `${OWNING_PACK}:brief`,
-        category: "data",
-        isArtifact: { accepts: { file: { mimeTypes: ["text/markdown"] } } },
-      } as never,
-      OWNING_PACK,
-    );
+    const register = () => {
+      objectTypeRegistry.register(
+        {
+          type: `${OWNING_PACK}:brief`,
+          category: "data",
+          isArtifact: { accepts: { file: { mimeTypes: ["text/markdown"] } } },
+        } as never,
+        OWNING_PACK,
+      );
+      matcherManifestRegistry.register({
+        packageName: OWNING_PACK,
+        matcherSkillIds: [`${OWNING_PACK}:match`],
+        matcherConfidenceThreshold: 0.7,
+        fileMimeTypes: ["text/markdown"],
+      });
+    };
+    listDrawsTheMatcherChannel();
+    isArtifactExtensionWriteAllowed.mockResolvedValue(true);
+    readClaimBackedMeaningTypesForOrg.mockRejectedValue(new Error("install manifest unreadable"));
+    readArtifactForDetail.mockReturnValue({
+      kind: "ok",
+      artifact: { mime: "text/markdown", objectType: TEXT_TYPE },
+    });
+    readArtifactForMeaningWrite.mockReturnValue({
+      kind: "ok",
+      artifact: { mime: "text/markdown", objectType: TEXT_TYPE },
+    });
+    assertSemanticType.mockReturnValue({ blockedByPrecedence: false });
+    const claimsRead = () => {
+      // The claims read: the pack wins a claim too, and registers an artifact
+      // type of its own, so it can never be claim-backed (rule 1).
+      readArtifactSafeClaimWinnerPackagesForOrg.mockReturnValue([LINKEDIN_PACK, OWNING_PACK]);
+      readClaimBackedCandidatePackagesForOrg.mockReturnValue([LINKEDIN_PACK]);
+    };
+    // The package reads fail too (the row's claimant still reads: a failed
+    // claimant read refuses a typed row's confirmation, T22).
+    const claimsUnreadable = () => {
+      for (const read of [
+        readArtifactSafeClaimWinnerPackagesForOrg,
+        readClaimBackedCandidatePackagesForOrg,
+      ]) {
+        read.mockImplementation(() => {
+          throw new Error("claim store unavailable");
+        });
+      }
+    };
+    for (const claims of [claimsRead, claimsUnreadable]) {
+      objectTypeRegistry._clearForTests();
+      matcherManifestRegistry._clearForTests();
+      register();
+      claims();
+      isArtifactExtensionWriteAllowed.mockClear();
+      assertSemanticType.mockClear();
+      const { listInstalledTypesForArtifact, assertUploadMeaning } = await import(
+        "../upload-typing-actions"
+      );
+      const listed = await listInstalledTypesForArtifact("a1");
+      expect(listed).toMatchObject({
+        ok: true,
+        types: [expect.objectContaining({ objectTypeId: null, extension: OWNING_PACK })],
+      });
+      const res = await assertUploadMeaning({ artifactId: "a1", extension: OWNING_PACK });
+      expect(res).toMatchObject({ ok: true });
+      expect(isArtifactExtensionWriteAllowed).toHaveBeenCalledWith(OWNING_PACK, "org-1");
+      expect(assertSemanticType).toHaveBeenCalledTimes(1);
+      expect(assertSemanticType).toHaveBeenCalledWith(
+        expect.objectContaining({ orgId: "org-1", extension: OWNING_PACK, assertedBy: "user" }),
+      );
+    }
+  });
+
+  it("3319 T34: during a failed claim-backed read, a matcher pack that wins a claim but can never be claim-backed (it wins two types) keeps the org-wide matcher gate: listed and confirmed", async () => {
+    const TWO_CLAIMS_PACK = "@acme/two-claims-artifacts";
     matcherManifestRegistry.register({
-      packageName: OWNING_PACK,
-      matcherSkillIds: [`${OWNING_PACK}:match`],
+      packageName: TWO_CLAIMS_PACK,
+      matcherSkillIds: [`${TWO_CLAIMS_PACK}:match`],
       matcherConfidenceThreshold: 0.7,
       fileMimeTypes: ["text/markdown"],
     });
     listDrawsTheMatcherChannel();
     isArtifactExtensionWriteAllowed.mockResolvedValue(true);
-    readClaimBackedMeaningTypesForOrg.mockRejectedValue(new Error("install manifest unreadable"));
-    // The winners read succeeds and names the pack: it wins a claim too.
-    readArtifactSafeClaimWinnerPackagesForOrg.mockReturnValue([LINKEDIN_PACK, OWNING_PACK]);
+    readClaimBackedMeaningTypesForOrg.mockRejectedValue(new Error("install row unreadable"));
+    // The claims read: the pack wins two claims (rule 3 drops it before any
+    // manifest read), so it registers no artifact type and is still no
+    // claim-backed candidate.
+    readArtifactSafeClaimWinnerPackagesForOrg.mockReturnValue([LINKEDIN_PACK, TWO_CLAIMS_PACK]);
+    readClaimBackedCandidatePackagesForOrg.mockReturnValue([LINKEDIN_PACK]);
     readArtifactForDetail.mockReturnValue({
       kind: "ok",
       artifact: { mime: "text/markdown", objectType: TEXT_TYPE },
@@ -1007,15 +1087,203 @@ describe("3319 claim-backed meaning types reach the upload picker and its promot
     const listed = await listInstalledTypesForArtifact("a1");
     expect(listed).toMatchObject({
       ok: true,
-      types: [expect.objectContaining({ objectTypeId: null, extension: OWNING_PACK })],
+      types: [expect.objectContaining({ objectTypeId: null, extension: TWO_CLAIMS_PACK })],
     });
-    const res = await assertUploadMeaning({ artifactId: "a1", extension: OWNING_PACK });
+    const res = await assertUploadMeaning({ artifactId: "a1", extension: TWO_CLAIMS_PACK });
     expect(res).toMatchObject({ ok: true });
-    expect(readArtifactSafeClaimWinnerPackagesForOrg).toHaveBeenCalledWith("org-1");
-    expect(isArtifactExtensionWriteAllowed).toHaveBeenCalledWith(OWNING_PACK, "org-1");
-    expect(assertSemanticType).toHaveBeenCalledTimes(1);
+    expect(readClaimBackedCandidatePackagesForOrg).toHaveBeenCalledWith("org-1");
+    expect(isArtifactExtensionWriteAllowed).toHaveBeenCalledWith(TWO_CLAIMS_PACK, "org-1");
     expect(assertSemanticType).toHaveBeenCalledWith(
-      expect.objectContaining({ orgId: "org-1", extension: OWNING_PACK, assertedBy: "user" }),
+      expect.objectContaining({ orgId: "org-1", extension: TWO_CLAIMS_PACK, assertedBy: "user" }),
     );
+  });
+
+  it("3319 T35: when the claim store cannot be read, the package that registers the row's own type (no isArtifact) keeps its presented base meaning: offered pre-selected and confirmed, as on main", async () => {
+    const NOTES_PACK = "@acme/notes-artifacts";
+    const NOTE_TYPE = `${NOTES_PACK}:note`;
+    objectTypeRegistry.register({ type: NOTE_TYPE, category: "data" } as never, NOTES_PACK);
+    matcherManifestRegistry.register({
+      packageName: NOTES_PACK,
+      matcherSkillIds: [`${NOTES_PACK}:match`],
+      matcherConfidenceThreshold: 0.7,
+      fileMimeTypes: ["text/markdown"],
+    });
+    // The list as the real one draws it: the matcher channel, without the
+    // entry of the package that registers the excluded base type.
+    listInstalledMeaningTypesAcceptingMime.mockImplementation(
+      (_mime: string, opts?: { excludeTypeId?: string }) => {
+        const baseDefiner = opts?.excludeTypeId
+          ? objectTypeRegistry.getRegisteringPackage(opts.excludeTypeId)
+          : null;
+        return matcherManifestRegistry
+          .list()
+          .filter((e) => e.packageName !== baseDefiner)
+          .map((e) => ({
+            objectTypeId: null,
+            extension: e.packageName,
+            displayName: e.packageName,
+            extensionLabel: e.packageName,
+          }));
+      },
+    );
+    isArtifactExtensionWriteAllowed.mockResolvedValue(true);
+    readClaimBackedMeaningTypesForOrg.mockRejectedValue(new Error("claim store unavailable"));
+    for (const read of [
+      readArtifactSafeClaimWinnerPackagesForOrg,
+      readClaimBackedCandidatePackagesForOrg,
+      readArtifactSafeClaimWinnerForType,
+    ]) {
+      read.mockImplementation(() => {
+        throw new Error("claim store unavailable");
+      });
+    }
+    const row = { mime: "text/markdown", objectType: NOTE_TYPE };
+    const offer = { preselect: NOTES_PACK, suggestions: [] };
+    readArtifactForDetail.mockReturnValue({
+      kind: "ok",
+      artifact: row,
+      readPresentation: () => ({ artifact: row, meaningOffer: offer }),
+    });
+    readArtifactForMeaningWrite.mockReturnValue({ kind: "ok", artifact: row });
+    resolveArtifactPresentationReading.mockReturnValue({ offer, complete: true });
+    assertSemanticType.mockReturnValue({ blockedByPrecedence: false });
+    const { listInstalledTypesForArtifact, assertUploadMeaning } = await import(
+      "../upload-typing-actions"
+    );
+    const listed = await listInstalledTypesForArtifact("a1");
+    expect(listed).toMatchObject({
+      ok: true,
+      types: [expect.objectContaining({ extension: NOTES_PACK })],
+      meaning: { preselect: NOTES_PACK },
+    });
+    const res = await assertUploadMeaning({ artifactId: "a1", extension: NOTES_PACK });
+    expect(res).toEqual({ ok: true });
+    expect(isArtifactExtensionWriteAllowed).toHaveBeenCalledWith(NOTES_PACK, "org-1");
+    expect(assertSemanticType).toHaveBeenCalledWith(
+      expect.objectContaining({ orgId: "org-1", extension: NOTES_PACK, assertedBy: "user" }),
+    );
+    expect(promoteMatchedArtifactType).not.toHaveBeenCalled();
+  });
+
+  it("3319 T36: a claim-backed promotion follows the claim that admitted the choice, though an activation registers an artifact type and a matcher under the pack's name during the request", async () => {
+    readArtifactForMeaningWrite.mockReturnValue({
+      kind: "ok",
+      artifact: { mime: "text/markdown", objectType: TEXT_TYPE },
+    });
+    // Another version of the pack activates while the person's meaning is
+    // written, after the candidate gate admitted the claim-backed entry.
+    assertSemanticType.mockImplementation(() => {
+      objectTypeRegistry.register(
+        {
+          type: `${LINKEDIN_PACK}:brief`,
+          category: "data",
+          isArtifact: { accepts: { file: { mimeTypes: ["text/markdown"] } } },
+        } as never,
+        LINKEDIN_PACK,
+      );
+      registerOtherVersionMatcher();
+      return { blockedByPrecedence: false };
+    });
+    const { assertUploadMeaning } = await import("../upload-typing-actions");
+    const res = await assertUploadMeaning({ artifactId: "a1", extension: LINKEDIN_PACK });
+    expect(res).toMatchObject({ ok: true });
+    expect(promoteMatchedArtifactType).toHaveBeenCalledTimes(1);
+    expect(promoteMatchedArtifactType).toHaveBeenCalledWith(
+      expect.objectContaining({
+        extension: LINKEDIN_PACK,
+        ownType: { typeId: POST_DRAFT, acceptsMimes: ["text/markdown", "text/plain"] },
+        threshold: null,
+      }),
+    );
+  });
+
+  it("3319 T37: a hot rescan between the list and its access gate never turns a matcher entry into an object-type candidate: during a failed claim-backed read the entry stays refused", async () => {
+    // The org-wide matcher gate and the A4 gate would both admit the pack.
+    isArtifactExtensionWriteAllowed.mockResolvedValue(true);
+    isSystemExtension.mockReturnValue(true);
+    readClaimBackedMeaningTypesForOrg.mockRejectedValue(new Error("install row unreadable"));
+    // The list draws the matcher channel; the registry is then rescanned (here:
+    // emptied) before the next step of the request.
+    listInstalledMeaningTypesAcceptingMime.mockImplementation(() => {
+      const drawn = matcherManifestRegistry.list().map((e) => ({
+        objectTypeId: null,
+        extension: e.packageName,
+        displayName: e.packageName,
+        extensionLabel: e.packageName,
+      }));
+      queueMicrotask(() => matcherManifestRegistry._clearForTests());
+      return drawn;
+    });
+    readArtifactForDetail.mockReturnValue({
+      kind: "ok",
+      artifact: { mime: "text/markdown", objectType: TEXT_TYPE },
+    });
+    readArtifactForMeaningWrite.mockReturnValue({
+      kind: "ok",
+      artifact: { mime: "text/markdown", objectType: TEXT_TYPE },
+    });
+    assertSemanticType.mockReturnValue({ blockedByPrecedence: false });
+    const { listInstalledTypesForArtifact, assertUploadMeaning } = await import(
+      "../upload-typing-actions"
+    );
+    registerOtherVersionMatcher();
+    const listed = await listInstalledTypesForArtifact("a1");
+    expect(listed).toMatchObject({ ok: true, types: [] });
+    registerOtherVersionMatcher();
+    const res = await assertUploadMeaning({ artifactId: "a1", extension: LINKEDIN_PACK });
+    expect(res).toMatchObject({ ok: false, reason: "invalid-type" });
+    expect(assertSemanticType).not.toHaveBeenCalled();
+    expect(promoteMatchedArtifactType).not.toHaveBeenCalled();
+    expect(isArtifactExtensionWriteAllowed).not.toHaveBeenCalledWith(LINKEDIN_PACK, "org-1");
+  });
+
+  it("3319 T38: a claim-backed system pack passes the A4 gate without an install of the person's and is then decided by the claim's gate", async () => {
+    readArtifactForDetail.mockReturnValue({
+      kind: "ok",
+      artifact: { mime: "text/markdown", objectType: TEXT_TYPE },
+    });
+    resolveActiveInstallForActor.mockResolvedValue(null);
+    const { listInstalledTypesForArtifact } = await import("../upload-typing-actions");
+    isSystemExtension.mockReturnValue(true);
+    expect(await listInstalledTypesForArtifact("a1")).toMatchObject({
+      ok: true,
+      types: [expect.objectContaining({ objectTypeId: POST_DRAFT, extension: LINKEDIN_PACK })],
+    });
+    expect(canActorAccessClaimedArtifactExtension).toHaveBeenCalledWith(
+      { extensionPackage: LINKEDIN_PACK, installId: "inst-linkedin-1", scope: "org:org-1" },
+      ACTOR,
+      "read",
+    );
+    canActorAccessClaimedArtifactExtension.mockResolvedValue(false);
+    expect(await listInstalledTypesForArtifact("a1")).toMatchObject({ ok: true, types: [] });
+    canActorAccessClaimedArtifactExtension.mockResolvedValue(true);
+    isSystemExtension.mockReturnValue(false);
+    expect(await listInstalledTypesForArtifact("a1")).toMatchObject({ ok: true, types: [] });
+  });
+
+  it("3319 T39: an untyped row's confirmation of a pack whose claim state is unknown is refused while both claim reads fail, and nothing is written", async () => {
+    registerOtherVersionMatcher();
+    listDrawsTheMatcherChannel();
+    isArtifactExtensionWriteAllowed.mockResolvedValue(true);
+    readClaimBackedMeaningTypesForOrg.mockRejectedValue(new Error("claim store unavailable"));
+    for (const read of [
+      readArtifactSafeClaimWinnerPackagesForOrg,
+      readClaimBackedCandidatePackagesForOrg,
+      readArtifactSafeClaimWinnerForType,
+    ]) {
+      read.mockImplementation(() => {
+        throw new Error("claim store unavailable");
+      });
+    }
+    readArtifactForMeaningWrite.mockReturnValue({
+      kind: "ok",
+      artifact: { mime: "text/markdown", objectType: null },
+    });
+    const { assertUploadMeaning } = await import("../upload-typing-actions");
+    const res = await assertUploadMeaning({ artifactId: "a1", extension: LINKEDIN_PACK });
+    expect(res).toMatchObject({ ok: false, reason: "invalid-type" });
+    expect(assertSemanticType).not.toHaveBeenCalled();
+    expect(promoteMatchedArtifactType).not.toHaveBeenCalled();
+    expect(isArtifactExtensionWriteAllowed).not.toHaveBeenCalledWith(LINKEDIN_PACK, "org-1");
   });
 });
