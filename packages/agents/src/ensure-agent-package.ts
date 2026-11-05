@@ -775,7 +775,7 @@ export async function ensureAgentPackageFromGitFile(opts: {
       // try sibling-dir variant (flat layout: agent.json next to LICENSE)
       try {
         const licenseContent = await readFile(
-          join(dirname(opts.oasSourcePath), licenseFile),
+          join(/* turbopackIgnore: true */ dirname(opts.oasSourcePath), licenseFile),
           "utf8",
         );
         licenseEntries.push({ name: licenseFile, content: licenseContent });
