@@ -11,18 +11,22 @@
  * strictly, before any repair run is launched.
  *
  * REAL: the store, the claim module, the status seam, the coordinator's release
- * and clear, the guard. MOCKED: the latest-task record in Redis (`ctl.latest`),
- * the run-wait notices, the repair run's launch and enqueue (the launch records
- * the paused run's status at the moment it is called), the member check and
- * actor context of the drain, the CMS input projection.
+ * and clear, the guard, and (G11) the resume delivery worker with the gate
+ * store. MOCKED: the latest-task record in Redis (`ctl.latest`), the run-wait
+ * notices, the repair run's launch and enqueue (the launch records the paused
+ * run's status at the moment it is called), the member check and actor context
+ * of the drain, the CMS input projection, and for the worker the WayFlow URL,
+ * its dispatch scope check and the A2A client (`ctl.sent` records a send).
  *
  * Forced failures are database triggers armed per run (`arm`): a failed stop, a
  * failed clear, a failed repair insert. Each is armed for one pass and disarmed
- * before the next.
+ * before the next. A `hold` on a gate keeps a repair insert waiting (C1).
  *
  * Red at df923329 (change B's head): recordChangesRequested writes no end mark
  * and keeps no generation, and the drain stops no run. Cases marked "guard
- * (green at base)" hold at the base too.
+ * (green at base)" hold at the base too. The cases of the fold of the first
+ * pre-review (R1, R3, R4, C1, B1, M11's answer) are red at 69a6bf3c too; R2 is
+ * a guard there.
  *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided. With
  * X4245_PAUSE_CLAIM_REALDB=1 a missing database throws instead of skipping.
@@ -31,11 +35,13 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vites
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
+import { declaredReviewPlan } from "@/lib/artifacts/artifact-review-target";
 
 const ctl = vi.hoisted(() => ({
   latest: null as null | string,
   statusOf: null as null | ((runId: string) => Promise<string | null>),
   launched: [] as { runId: string; parentRunId: string | null; parentStatus: string | null }[],
+  sent: [] as unknown[],
 }));
 
 vi.mock("@cinatra-ai/a2a", async (orig) => {
@@ -43,6 +49,12 @@ vi.mock("@cinatra-ai/a2a", async (orig) => {
   return {
     ...actual,
     expireRunStream: vi.fn(async () => undefined),
+    createExternalA2AClient: vi.fn(async () => ({
+      sendTask: vi.fn(async (req: unknown) => {
+        ctl.sent.push(req);
+        return { id: "task-sent", status: { state: "completed" } };
+      }),
+    })),
     resolveLatestWayflowGateTaskId: vi.fn(async () => {
       if (ctl.latest === "throw") throw new Error("redis is down");
       return ctl.latest;
@@ -69,6 +81,18 @@ vi.mock("../lifecycle-coordinator", async (orig) => {
     }),
   };
 });
+vi.mock("../wayflow-url", async (orig) => ({
+  ...(await orig<typeof import("../wayflow-url")>()),
+  resolveWayflowUrl: vi.fn(() => "http://wayflow.test"),
+}));
+vi.mock("../agent-run-serde", async (orig) => ({
+  ...(await orig<typeof import("../agent-run-serde")>()),
+  assertAgentRunDispatchAuthorized: vi.fn(async () => undefined),
+}));
+vi.mock("../wayflow-run-token-carrier", async (orig) => ({
+  ...(await orig<typeof import("../wayflow-run-token-carrier")>()),
+  mintResumeRunTokenMetadata: vi.fn(async () => ({})),
+}));
 vi.mock("@/lib/agent-run-enqueue", async (orig) => ({
   ...(await orig<typeof import("@/lib/agent-run-enqueue")>()),
   enqueueAgentRun: vi.fn(async () => undefined),
@@ -105,6 +129,7 @@ let repairStore: typeof import("../lifecycle-repair-store");
 let drain: typeof import("../lifecycle-repair-dispatch-store");
 let claims: typeof import("../run-pause-claim");
 let store: typeof import("../store");
+let worker: typeof import("../artifact-review-resume-delivery");
 let templateId = "";
 
 const pool = (text: string, values: unknown[] = []) => dbMod.agentBuilderPool.query(text, values);
@@ -134,12 +159,16 @@ async function seedPaused(opts: { generation?: number; task?: string; column?: s
   return { runId, task, gateId, artifactId, rev };
 }
 
-/** The change request on the gate of `p` (or of `gateOf`, another run's); `declared` names the pause of `p` it ends. */
-function changeRequest(p: Paused, over: { authority?: never; repairCapable?: boolean; declared?: boolean; gateOf?: Paused } = {}) {
+/** The change request on the gate of `p` (or of `gateOf`, another gate); `declared` names the pause of `p` it ends
+ *  (`pauseTask` overrides that task). */
+function changeRequest(
+  p: Paused,
+  over: { authority?: never; repairCapable?: boolean; declared?: boolean; gateOf?: Pick<Paused, "gateId" | "artifactId" | "rev">; pauseTask?: string; reviewTaskId?: string } = {},
+) {
   const g = over.gateOf ?? p;
   return repairStore.recordChangesRequested({
     runId: p.runId,
-    reviewTaskId: `wayflow-${p.task}`,
+    reviewTaskId: over.reviewTaskId ?? `wayflow-${p.task}`,
     orgId: ORG,
     request: {
       gateId: g.gateId,
@@ -155,7 +184,7 @@ function changeRequest(p: Paused, over: { authority?: never; repairCapable?: boo
     producerRunId: p.runId,
     currentBaseRevisionId: g.rev,
     decidedBy: USER,
-    ...(over.declared === false ? {} : { declaredPause: { pauseTaskId: p.task, authority: over.authority ?? SESSION } }),
+    ...(over.declared === false ? {} : { declaredPause: { pauseTaskId: over.pauseTask ?? p.task, authority: over.authority ?? SESSION } }),
   } as never);
 }
 
@@ -191,6 +220,15 @@ async function setClaim(id: string, token: string, phase: string, secondsLeft: n
 async function arm(key: string, kind: "stop" | "clear" | "repair", on = true) {
   if (on) await pool(`INSERT INTO ${S()}."fail_4245d1" (key, kind) VALUES ($1, $2)`, [key, kind]);
   else await pool(`DELETE FROM ${S()}."fail_4245d1" WHERE key = $1 AND kind = $2`, [key, kind]);
+}
+/** Wait (at most 10 s) until a backend of this database reads `where` in pg_stat_activity. */
+async function waitForBackend(where: string) {
+  for (let i = 0; i < 200; i += 1) {
+    const { rows } = await pool(`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND ${where}`);
+    if ((rows[0] as { n: number }).n > 0) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`no backend reads ${where}`);
 }
 /** Park every other repair the drain would see, so each drain case reads its own row only. */
 async function onlyThisRepair(gateId: string) {
@@ -228,6 +266,11 @@ beforeAll(async () => {
     await admin.query(`CREATE TRIGGER fail_4245d1_run BEFORE UPDATE ON ${sch}."agent_runs" FOR EACH ROW EXECUTE FUNCTION ${sch}."fail_4245d1_run"()`);
     await admin.query(`CREATE FUNCTION ${sch}."fail_4245d1_repair"() RETURNS trigger LANGUAGE plpgsql AS $f$
       BEGIN
+        -- C1: a held gate keeps its repair insert waiting (at most 20 s) until the test lifts the hold.
+        FOR i IN 1..400 LOOP
+          EXIT WHEN NOT EXISTS (SELECT 1 FROM ${sch}."fail_4245d1" WHERE key = NEW.gate_id AND kind = 'hold');
+          PERFORM pg_sleep(0.05);
+        END LOOP;
         IF EXISTS (SELECT 1 FROM ${sch}."fail_4245d1" WHERE key = NEW.gate_id AND kind = 'repair') THEN
           RAISE EXCEPTION 'test 4245-d1: the repair insert fails';
         END IF;
@@ -255,6 +298,7 @@ beforeAll(async () => {
   drain = await import("../lifecycle-repair-dispatch-store");
   claims = await import("../run-pause-claim");
   store = await import("../store");
+  worker = await import("../artifact-review-resume-delivery");
   ctl.statusOf = async (runId) => (await readRun(runId))?.status ?? null;
 }, 90_000);
 
@@ -270,6 +314,7 @@ afterAll(async () => {
 beforeEach(() => {
   ctl.latest = null;
   ctl.launched = [];
+  ctl.sent = [];
 });
 
 describe.skipIf(!HAS_DB)("the change request's end mark (spec 5.2, spec-rev1 MF5)", () => {
@@ -383,14 +428,141 @@ describe.skipIf(!HAS_DB)("the change request's end mark (spec 5.2, spec-rev1 MF5
     expect(await readRun(p.runId)).toMatchObject({ phase: null });
   });
 
-  it("M11: the gate must be the marked run's own: a change request on another run's gate writes nothing", async () => {
+  it("M11: the gate must be the marked run's own: a change request on another run's gate refuses and writes nothing", async () => {
     const a = await seedPaused();
     const b = await seedPaused();
-    await expect(changeRequest(a, { gateOf: b })).rejects.toThrow(/gate CAS conflict/);
+    expect(await changeRequest(a, { gateOf: b })).toMatchObject({ ok: false, code: "pause-gate-mismatch" });
     expect(await gateStatus(b.gateId)).toEqual({ status: "pending", disposition: null });
     expect(await repairsOf(b.gateId)).toEqual([]);
     expect(await readRun(a.runId)).toMatchObject({ status: "pending_approval", token: null, phase: null });
     expect(await readRun(b.runId)).toMatchObject({ status: "pending_approval", token: null, phase: null });
+  });
+
+  it("B1: a gate of an older pause, or a gate that names no pause, cannot end the run's pause; nothing is written", async () => {
+    // The run waits at a later task; its gate is the one of the earlier task.
+    const later = `task-later-${randomUUID()}`;
+    const old = await seedPaused({ column: later });
+    expect(await changeRequest(old, { pauseTask: later })).toMatchObject({ ok: false, code: "pause-gate-mismatch" });
+    expect(await gateStatus(old.gateId)).toEqual({ status: "pending", disposition: null });
+    expect(await repairsOf(old.gateId)).toEqual([]);
+    expect(await readRun(old.runId)).toMatchObject({ status: "pending_approval", task: later, token: null, phase: null });
+    // A gate whose review task is not a wayflow- task of a pause.
+    const p = await seedPaused();
+    await pool(`UPDATE ${S()}."artifact_review_gates" SET review_task_id = $2 WHERE id = $1`, [p.gateId, `lifecycle-review:${randomUUID()}`]);
+    expect(await changeRequest(p)).toMatchObject({ ok: false, code: "pause-gate-mismatch" });
+    expect(await repairsOf(p.gateId)).toEqual([]);
+    expect(await readRun(p.runId)).toMatchObject({ phase: null });
+  });
+
+  it("R1: a retry after a record that ended no pause refuses pause-mode-conflict and marks nothing (requested and escalated)", async () => {
+    for (const repairCapable of [true, false]) {
+      const p = await seedPaused();
+      expect(await changeRequest(p, { declared: false, repairCapable })).toMatchObject({ ok: true, status: repairCapable ? "requested" : "escalated" });
+      expect(await changeRequest(p, { repairCapable })).toMatchObject({ ok: false, code: "pause-mode-conflict" });
+      const [repair, ...more] = await repairsOf(p.gateId);
+      expect(more).toEqual([]);
+      expect(repair.generation).toBeNull();
+      expect(await readRun(p.runId)).toMatchObject({ status: "pending_approval", token: null, phase: null });
+    }
+  });
+
+  it("R2: a retry of a record that ended the pause answers from its repair, at the pause and after a stop (guard)", async () => {
+    const p = await seedPaused({ generation: 7 });
+    const first = await changeRequest(p);
+    expect(first).toMatchObject({ ok: true, status: "requested", idempotent: false });
+    const repairId = (first as { repairId: string }).repairId;
+    expect(await changeRequest(p)).toMatchObject({ ok: true, repairId, idempotent: true });
+    await store.transitionRunStatus(p.runId, "pending_approval", "stopped", undefined, SESSION);
+    expect(await changeRequest(p)).toMatchObject({ ok: true, repairId, idempotent: true });
+    expect(await repairsOf(p.gateId)).toEqual([expect.objectContaining({ id: repairId, generation: 7 })]);
+  });
+
+  it("R3: a retry under another org's authority is refused by the guard before any answer", async () => {
+    const p = await seedPaused();
+    expect(await changeRequest(p)).toMatchObject({ ok: true });
+    await expect(changeRequest(p, { authority: OTHER_SESSION })).rejects.toThrow();
+  });
+
+  it("R4: a retry while the run waits at a pause the recorded change request did not end refuses pause-moved-on", async () => {
+    const p = await seedPaused({ generation: 3 });
+    expect(await changeRequest(p)).toMatchObject({ ok: true });
+    // A later pause the end mark should have made impossible, forced by hand (as G9).
+    await pool(
+      `UPDATE ${S()}."agent_runs" SET pause_generation = 5, pause_claim_token = NULL, pause_claim_phase = NULL,
+         pause_claim_expires_at = NULL WHERE id = $1`,
+      [p.runId],
+    );
+    expect(await changeRequest(p)).toMatchObject({ ok: false, code: "pause-moved-on" });
+    expect(await readRun(p.runId)).toMatchObject({ status: "pending_approval", generation: 5, phase: null });
+  });
+
+  it("C1: a concurrent record that ended no pause wins the repair row: the declared record refuses and its mark rolls back", async () => {
+    const p = await seedPaused({ generation: 4 });
+    await pool(`INSERT INTO ${S()}."fail_4245d1" (key, kind) VALUES ($1, 'hold')`, [p.gateId]);
+    let plain: ReturnType<typeof changeRequest> | undefined;
+    let declared: ReturnType<typeof changeRequest> | undefined;
+    try {
+      // The plain record closes the gate and waits at its repair insert, holding the gate row.
+      plain = changeRequest(p, { declared: false });
+      await waitForBackend(`wait_event = 'PgSleep'`);
+      // The declared record marks the run, then waits at the gate's compare-and-set.
+      declared = changeRequest(p);
+      await waitForBackend(`wait_event_type = 'Lock' AND query ILIKE '%artifact_review_gates%'`);
+    } finally {
+      await pool(`DELETE FROM ${S()}."fail_4245d1" WHERE key = $1 AND kind = 'hold'`, [p.gateId]);
+      // Both records settle before any assertion, whichever way the waits above ended.
+      await Promise.allSettled([plain, declared]);
+    }
+    expect(await plain).toMatchObject({ ok: true, status: "requested", idempotent: false });
+    expect(await declared).toMatchObject({ ok: false, code: "pause-mode-conflict" });
+    const [repair, ...more] = await repairsOf(p.gateId);
+    expect(more).toEqual([]);
+    expect(repair.generation).toBeNull();
+    expect(await readRun(p.runId)).toMatchObject({ status: "pending_approval", generation: 4, token: null, phase: null });
+  });
+});
+
+describe.skipIf(!HAS_DB)("the delivery worker after the end mark (G11, rev1 MF4)", () => {
+  it("G11: a sibling's approval intent pending, a change request on the other leg: the real worker sends nothing and closes the intent", async () => {
+    const task = `task-${randomUUID()}`;
+    const p = await seedPaused({ generation: 9, task });
+    await pool(`UPDATE ${S()}."agent_runs" SET a2a_context_id = $2 WHERE id = $1`, [p.runId, `ctx-${randomUUID()}`]);
+    // Two legs of one pause: A (`wayflow-<task>`, the seeded gate) and B (`wayflow-<task>#2`), each with the plan's witness.
+    const b = { gateId: `gate-${randomUUID()}`, artifactId: `art-${randomUUID()}`, rev: `rev-${randomUUID()}` };
+    const plan = declaredReviewPlan({
+      runId: p.runId, orgId: ORG, reviewTaskId: `wayflow-${task}`,
+      targets: [{ artifactId: p.artifactId, representationRevisionId: p.rev }, { artifactId: b.artifactId, representationRevisionId: b.rev }],
+    })!;
+    expect(plan.legs.map((l) => l.reviewTaskId)).toEqual([`wayflow-${task}`, `wayflow-${task}#2`]);
+    await pool(
+      `UPDATE ${S()}."artifact_review_gates" SET status = 'resolved', disposition = 'approved', pinned_targets = $2::jsonb WHERE id = $1`,
+      [p.gateId, JSON.stringify([{ artifactId: p.artifactId, representationRevisionId: p.rev, declaredReviewPlan: plan }])],
+    );
+    await pool(
+      `INSERT INTO ${S()}."artifact_review_gates" (id, run_id, org_id, review_task_id, status, pinned_targets)
+       VALUES ($1, $2, $3, $4, 'pending', $5::jsonb)`,
+      [b.gateId, p.runId, ORG, `wayflow-${task}#2`, JSON.stringify([{ artifactId: b.artifactId, representationRevisionId: b.rev, declaredReviewPlan: plan }])],
+    );
+    // A's approval intent, leased by the worker.
+    const lease = `lease-${randomUUID()}`;
+    await pool(
+      `INSERT INTO ${S()}."artifact_review_resume_outbox" (gate_id, run_id, review_task_id, kind, response_text, status, attempts, lease_token, lease_expires_at)
+       VALUES ($1, $2, $3, 'approve', '{"approved":true}', 'delivering', 1, $4, now() + interval '60 seconds')`,
+      [p.gateId, p.runId, `wayflow-${task}`, lease],
+    );
+    // The change request on leg B ends the pause.
+    expect(await changeRequest(p, { gateOf: b, reviewTaskId: `wayflow-${task}#2` })).toMatchObject({ ok: true, status: "requested" });
+    expect(await readRun(p.runId)).toMatchObject({ status: "pending_approval", generation: 9, phase: "changes_requested" });
+    ctl.latest = task;
+    const outcome = await worker.deliverArtifactReviewResumeIntent({
+      gateId: p.gateId, runId: p.runId, reviewTaskId: `wayflow-${task}`, kind: "approve", responseText: '{"approved":true}',
+      status: "delivering", attempts: 1, leaseToken: lease, leaseExpiresAt: new Date(Date.now() + 60_000),
+    });
+    expect(outcome).toBe("already-advanced");
+    expect(ctl.sent).toEqual([]);
+    const { rows } = await pool(`SELECT status FROM ${S()}."artifact_review_resume_outbox" WHERE gate_id = $1`, [p.gateId]);
+    expect(rows[0]).toEqual({ status: "done" });
+    expect(await readRun(p.runId)).toMatchObject({ status: "pending_approval", generation: 9, token: "cr:9", phase: "changes_requested" });
   });
 });
 
