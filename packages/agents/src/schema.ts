@@ -899,7 +899,7 @@ export const artifactVerificationRecords = cinatraSchema.table("artifact_verific
   visualDiff:                      jsonb("visual_diff"),
   outcome:                         text("outcome").notNull(), // verified | drifted | unmet
   // cinatra#4312 — the record's reopen gate. The verification writes it in that gate's
-  // insert transaction; core__0121's backfill, repeated by the review orchestration
+  // insert transaction; core__0125's backfill, repeated by the review orchestration
   // sweep, names a gate a repair row at attempt 2 or later rests on (an old writer's,
   // or a caller's gate with a hand-written row). Null when neither named one, and
   // again when the named gate is deleted (the foreign key sets it to null).

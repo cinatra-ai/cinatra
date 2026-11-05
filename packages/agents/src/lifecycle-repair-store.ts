@@ -165,14 +165,14 @@ type ReopenCandidateGate = { id: string; runId: string; orgId: string };
  * writes `reopened_gate_id` in the transaction that inserts the gate, only when it
  * inserted it. A gate that merely occupies the (run, task) slot has no such name,
  * unless a repair row at attempt 2 or later already rests on it: the statement of
- * core__0121's backfill, which the review orchestration sweep repeats, names such
+ * core__0125's backfill, which the review orchestration sweep repeats, names such
  * a gate, and it cannot tell an old writer's row from a hand-written one.
  * All of:
  *   - the repair is `repaired` with a successor gate;
  *   - the record `verify:<successor>` is bound to that gate and names `gate`, so a
  *     verified, withheld or cycle-bound verification (which opens no gate), and a
  *     verification that answered `reopen-conflict`, pass for no gate. A database
- *     upgraded from before the name gets it by the backfill of core__0121, which the
+ *     upgraded from before the name gets it by the backfill of core__0125, which the
  *     upgrade runs once and the sweep repeats; its header states its limit;
  *   - `gate` is on the repair's producing run, or its orphan run id, and in the
  *     repair's org. The external-change road takes its run and org from its caller,

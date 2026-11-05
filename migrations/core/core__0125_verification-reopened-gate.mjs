@@ -1,4 +1,4 @@
-// core__0121 — the verification record names its reopen gate (cinatra#4312).
+// core__0125 — the verification record names its reopen gate (cinatra#4312).
 // The operator-upgrade twin of the fresh-install bootstrap ALTER in
 // `lifecycleInterceptionsSchemaQueries` (src/lib/artifacts/artifact-review-gate-schema.ts),
 // added in the SAME pull request.
@@ -47,8 +47,8 @@
 // DOWN drops the column; the names are not restorable, and the code that reads
 // them goes with the same revert.
 //
-// SEQ 0121 — this change took 0121 when 0118 was the highest on main and open changes
-// claimed 0114 to 0116, 0119 and 0120. If a migration numbered above 0121 reaches main
+// SEQ 0125 — this change took 0125 when 0122 was the highest on main and other changes
+// claimed 0115, 0116, 0120, 0123 and 0124. If a migration numbered above 0125 reaches main
 // before this one, this change takes the next free number before it merges.
 //
 // Unqualified names ride the runner's search_path (the app schema).

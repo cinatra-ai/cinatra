@@ -1179,7 +1179,7 @@ export async function sweepReviewOrchestration(opts?: {
 
   const limit = Math.max(1, Math.min(opts?.limit ?? 50, 200));
 
-  // cinatra#4312 — an old application that still serves after core__0121 can write a
+  // cinatra#4312 — an old application that still serves after core__0125 can write a
   // note on an unnamed reopen gate; name such a gate here. The statement names any gate
   // in the slot that a repair row at attempt 2 or later rests on, a hand-written row's
   // too. A lineage the name makes readable did not start on a later declared leg (the
