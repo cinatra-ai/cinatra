@@ -121,3 +121,10 @@ END $$`;
     { text: guardedValidate("agent_runs_pause_claim_shape_chk") },
   ];
 }
+
+// cinatra#4220: the run's connector-instance binding. Operator-upgrade twin of
+// core__0122. Additive, nullable, no backfill, index or constraint.
+export function agentRunConnectorInstanceBindingSchemaQueries(schemaName: string): { text: string }[] {
+  const s = schemaName.replaceAll('"', '""');
+  return [{ text: `ALTER TABLE "${s}"."agent_runs" ADD COLUMN IF NOT EXISTS connector_instance_binding text` }];
+}
