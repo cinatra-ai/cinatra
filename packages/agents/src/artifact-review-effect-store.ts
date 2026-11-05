@@ -29,9 +29,14 @@ export type ReviewEffectRecordJson =
   | { ok: true; json: string }
   | { ok: false; code: "not-a-plain-object" | "invalid-value" | "too-large" };
 
+/** A string the DB JSON type can hold: no NUL, no lone surrogate. */
+function isJsonSafeString(text: string): boolean {
+  return !text.includes("\u0000") && !LONE_SURROGATE.test(text);
+}
+
 function isPlainJsonValue(value: unknown, ancestors: Set<object>, depth: number): boolean {
   if (value === null || typeof value === "boolean") return true;
-  if (typeof value === "string") return !value.includes("\u0000") && !LONE_SURROGATE.test(value);
+  if (typeof value === "string") return isJsonSafeString(value);
   if (typeof value === "number") return Number.isFinite(value);
   if (typeof value !== "object" || depth > MAX_DEPTH) return false;
   if (utilTypes.isProxy(value) || ancestors.has(value)) return false;
@@ -46,6 +51,7 @@ function isPlainJsonValue(value: unknown, ancestors: Set<object>, depth: number)
   try {
     return (keys as string[]).every((key) => {
       if (isArray && key === "length") return true;
+      if (!isJsonSafeString(key)) return false;
       const d = Object.getOwnPropertyDescriptor(value, key);
       return !!d && "value" in d && d.enumerable === true && isPlainJsonValue(d.value, ancestors, depth + 1);
     });
@@ -58,8 +64,8 @@ function isPlainJsonValue(value: unknown, ancestors: Set<object>, depth: number)
  * Serialize an effect record, or refuse it. The top level must be a plain
  * object. Refused: null, arrays, non-finite numbers, undefined, functions,
  * symbols, bigint, cycles, binary objects, class instances, getters, proxies,
- * `toJSON`, NUL and lone surrogates (the DB JSON type refuses both), and
- * anything over the byte limit.
+ * `toJSON`, NUL and lone surrogates in a value or a key (the DB JSON type
+ * refuses both), and anything over the byte limit.
  */
 export function serializeReviewEffectRecord(value: unknown): ReviewEffectRecordJson {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -74,8 +80,10 @@ export function serializeReviewEffectRecord(value: unknown): ReviewEffectRecordJ
 /** The closed status set of a CMS apply result; an adapter maps its site's word. */
 export const CMS_APPLY_REMOTE_STATUSES = ["published", "scheduled", "draft", "pending", "private"] as const;
 
-/** The CLOSED, credential-free CMS apply result: exactly these keys, no free
- *  text, no address. `remotePublishedAt` is the site's own time, or null. */
+/** The CLOSED CMS apply result: exactly these keys, so no other field (no
+ *  response body, no remote error text) is stored. `remoteId` is checked for
+ *  its form only (1 to 128 of `A-Za-z0-9._:-`), not for what it stands for.
+ *  `remotePublishedAt` is the site's own time, or null. */
 export interface CmsApplyEffectResult {
   remoteId: string;
   remoteStatus: (typeof CMS_APPLY_REMOTE_STATUSES)[number];

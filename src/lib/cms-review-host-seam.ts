@@ -431,9 +431,15 @@ export function buildCmsReviewHostSeam(deps: CmsReviewHostSeamDeps): CmsReviewHo
             effect = written.ok ? written.status : "refused";
           } catch (err) {
             effect = "unrecorded";
+            let errorClass = "non-error";
+            try {
+              if (err instanceof Error) errorClass = "error";
+            } catch {
+              // A thrown value whose prototype cannot be read keeps the fixed class.
+            }
             console.warn(
               "[cms-review] the apply effect could not be recorded (the verification is unaffected):",
-              err instanceof Error ? "error" : "non-error",
+              errorClass,
             );
           }
         }
