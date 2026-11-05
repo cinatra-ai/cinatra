@@ -92,10 +92,10 @@ export async function enqueueArtifactMatchRun(
         inheritActorContext: false,
       },
     );
-  } catch (err) {
+  } catch {
+    // The error's text is not logged (cinatra#4223): a queue message can carry a host or a connection string.
     console.warn(
-      `[artifact-matcher] enqueue failed for ${payload.artifactId} (creation already committed; row stays at structural identity):`,
-      err instanceof Error ? err.message : err,
+      `[artifact-matcher] enqueue failed for ${payload.artifactId} (creation already committed; row stays at structural identity); the error's text is not logged`,
     );
   }
 }
