@@ -632,9 +632,10 @@ for (const { name: palette, theme } of PALETTES) {
       const offGround = await style(off, "background-color");
       const onGround = await style(on, "background-color");
       expect(offGround).not.toBe(onGround);
-      // The on state is the action colour the drawing names for the active state;
-      // it is the same value the primary button fills with.
-      expect(onGround).toBe(await token(page, "--primary"));
+      // The approved indigo is palette-invariant; primary changes in dark.
+      // The off ground is the drawing's named muted surface in each palette.
+      expect(onGround).toBe(await token(page, "--indigo-ink"));
+      expect(offGround).toBe(await token(page, "--surface-muted"));
     });
   });
 
