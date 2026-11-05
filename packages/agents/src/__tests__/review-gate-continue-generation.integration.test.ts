@@ -17,7 +17,6 @@ const ctl = vi.hoisted(() => ({
   mint: null as null | Gate,
   latest: null as null | string,
   reverse: null as null | string,
-  failBack: false,
 }));
 function gate(): Gate {
   let arrive!: () => void;
@@ -56,11 +55,6 @@ vi.mock("../store", async (orig) => {
   const actual = await orig<typeof import("../store")>();
   return {
     ...actual,
-    // `failBack` fails only the edge that puts a gate back (running → pending_approval).
-    transitionRunStatus: vi.fn(async (...args: Parameters<typeof actual.transitionRunStatus>) => {
-      if (ctl.failBack && args[1] === "running" && args[2] === "pending_approval") throw new Error("db blip");
-      return actual.transitionRunStatus(...args);
-    }),
     readRunCoOwners: vi.fn(async () => []),
     readAgentTemplateById: vi.fn(async () => ({
       id: "tmpl-cont",
@@ -155,7 +149,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   ctl.role = ctl.mint = null;
   ctl.latest = ctl.reverse = null;
-  ctl.failBack = false;
   handle.mockImplementation(async ({ runId, task }: { runId: string; task: { id: string } }) => {
     await store.updateAgentRunA2ATaskId(runId, task.id);
     await store.transitionRunStatus(runId, "running", "pending_approval", { pauseTaskId: task.id }, SESSION);
@@ -338,11 +331,26 @@ describe.skipIf(!HAS_DB)("cinatra#4245 change B — Continue under the pause cla
     const s = await seed();
     const r = await redis();
     r.rememberAnsweredGateSubmission.mockRejectedValueOnce(new Error("redis is down"));
-    ctl.failBack = true;
-    const e = await answer(s.gate, JSON.stringify({ pick: "one" })).then(() => null, (err: unknown) => err as Error);
-    expect(e?.message).toMatch(/^redis is down; nothing was sent, and the gate could not be put back \(db blip\)/);
-    expect(e?.message).toMatch(/a stop lands once its send lease ends at \d{4}-/);
-    expect(sendTask).not.toHaveBeenCalled();
-    expect(await statusOf(s.runId)).toBe("running");
+    // The put-back fails in the database itself (a trigger on this run's
+    // running → pending_approval edge), so the failure reaches the store's real
+    // write. The earlier module mock of the store never failed the put-back: the
+    // host kit of bf819734 read the bare "redis is down" here.
+    const fn = `"${q(TEST_SCHEMA)}"."t4245_fail_put_back"`;
+    await pool(`CREATE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN RAISE EXCEPTION 'db blip'; END $f$`);
+    await pool(
+      `CREATE TRIGGER t4245_fail_put_back BEFORE UPDATE ON ${RUNS} FOR EACH ROW
+       WHEN (OLD.status = 'running' AND NEW.status = 'pending_approval' AND OLD.id = '${s.runId.replaceAll("'", "''")}')
+       EXECUTE FUNCTION ${fn}()`,
+    );
+    try {
+      const e = await answer(s.gate, JSON.stringify({ pick: "one" })).then(() => null, (err: unknown) => err as Error);
+      expect(e?.message).toMatch(/^redis is down; nothing was sent, and the gate could not be put back \(/);
+      expect(e?.message).toMatch(/the run stays running, and a stop lands once its send lease ends at \d{4}-/);
+      expect(sendTask).not.toHaveBeenCalled();
+      expect(await statusOf(s.runId)).toBe("running");
+    } finally {
+      await pool(`DROP TRIGGER IF EXISTS t4245_fail_put_back ON ${RUNS}`);
+      await pool(`DROP FUNCTION IF EXISTS ${fn}()`);
+    }
   });
 });
