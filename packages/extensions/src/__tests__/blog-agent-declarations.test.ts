@@ -107,8 +107,9 @@ const TABLE: Array<{
   },
   {
     agent: "blog-wordpress-publish-agent",
+    // At its pin it declares one artifact edge, the blog post it publishes.
     produces: [],
-    edges: [IMAGE, POST].sort(),
+    edges: [POST],
   },
   {
     agent: "blog-pipeline-agent",
@@ -143,16 +144,17 @@ describe("the blog agents' declarations (plan section 5.3.2)", () => {
     });
   }
 
-  it("declares sixteen artifact-kind dependency edges, counted from the manifests", () => {
+  it("declares fifteen artifact-kind dependency edges, counted from the manifests", () => {
     // Section 5.3.2 counted fourteen; the image agent's own package, which
     // replaces the retired prompt writer, brought the last two of them. The
     // brand-voice slot (cinatra#4314) then added three brand-voice edges (the
     // writer, the image generator and the pipeline) and dropped the image
-    // generator's blog-image edge. The total is read from the pinned manifests,
-    // not summed from the table above, so a stale row cannot hide behind its
-    // own sum.
+    // generator's blog-image edge, and the publish agent's pin dropped its
+    // blog-image edge (it declares only the blog post it publishes). The total
+    // is read from the pinned manifests, not summed from the table above, so a
+    // stale row cannot hide behind its own sum.
     const total = TABLE.reduce((n, row) => n + edges(row.agent).length, 0);
-    expect(total).toBe(16);
+    expect(total).toBe(15);
   });
 
   it("declares six of the nine typed produces entries", () => {
