@@ -988,7 +988,10 @@ function HitlApprovalCard({
   // blocks nothing, so no undeclared reason ever stops a reader (cinatra#3532).
   // A report is released with the renderer that made it (`GateValidityOwner`).
   // The drawn control subscribes to the store; the press reads it in the same
-  // turn.
+  // turn, and every send reads it again after the last thing it awaits (the
+  // run-name check, a renderer flush) and right before it sends, so a report
+  // made while the press waited stops the send too. A renderer's own submit
+  // and a grouped form's submit are held the same way.
   const [gateValidity] = useState(createGateValidityStore);
   const gateReportedInvalid = useSyncExternalStore(
     gateValidity.subscribe,
@@ -1001,6 +1004,9 @@ function HitlApprovalCard({
     // the run-name check and the optimistic spinner below.
     if (gateValidity.isHeld(setupGateKey)) return;
     if (!(await checkRunName())) return;
+    // …and again after the run-name check: a report made while it was pending
+    // holds this press too. Nothing below awaits before the send.
+    if (gateValidity.isHeld(setupGateKey)) return;
     // Optimistically switch to SpinnerCard right away — before the API call starts.
     // onApproveRejected rolls back if the call fails.
     onApproved?.();
@@ -1270,6 +1276,9 @@ function HitlApprovalCard({
       // resume on a submission that records nothing.)
       const staged = setupAnswerRef.current;
       if (staged === null || staged.key !== key) return;
+      // HELD AGAIN AFTER THE FLUSH (cinatra#3562): a report the renderer made
+      // while the flush above was awaited holds this press; nothing is sent.
+      if (gateValidity.isHeld(key)) return;
       try {
         const outcome = await submitSetupFieldPayload(
           staged.payload,
@@ -1384,7 +1393,12 @@ function HitlApprovalCard({
                       setBufferedHitlValue(nextBuffered); // visual update
                     }
                     if (isGroupedSetup) {
+                      // Held (cinatra#3562): the form's own submit sends
+                      // nothing while its report is `false`, read before and
+                      // again after the run-name check.
+                      if (gateValidity.isHeld(setupGateKey)) return;
                       if (!(await checkRunName())) return;
+                      if (gateValidity.isHeld(setupGateKey)) return;
                       onApproved?.();
                       try {
                         let approvalPayload: Record<string, unknown> = {
@@ -1465,6 +1479,10 @@ function HitlApprovalCard({
                       setSetupDraft({ key: setupGateKey, value: next });
                       return;
                     }
+                    // A renderer that draws its own submit, or a grouped form
+                    // (cinatra#3562): its own press sends nothing while its
+                    // report is `false`.
+                    if (gateValidity.isHeld(setupGateKey)) return;
                     await submitSetupFieldPayload(payload, payloadFieldName);
                   }
             }

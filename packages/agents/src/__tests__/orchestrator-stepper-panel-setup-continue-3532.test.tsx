@@ -53,6 +53,7 @@ import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import { fieldRendererRegistry } from "../field-renderer-registry";
 import type { FieldRendererProps } from "../field-renderer-registry";
+import { ensureOrCheckRunNameAction } from "../run-name-actions";
 
 // --- Panel mount harness (mirrors orchestrator-stepper-hitl-field-label) ---
 
@@ -261,11 +262,13 @@ async function mountGate(args: {
   reviewTaskId?: string;
   /** Draw the panel under React.StrictMode. */
   strict?: boolean;
+  /** The interrupt's values; `{ stepNumber: 0 }` makes it the run's first step. */
+  values?: Record<string, unknown>;
 }) {
   INTERRUPT = {
     schema: args.schema ?? { type: "string" },
     xRenderer: args.xRenderer,
-    values: {},
+    values: args.values ?? {},
     reviewTaskId: args.reviewTaskId ?? "setup-run-3532",
     fieldName: args.fieldName,
   };
@@ -1284,5 +1287,229 @@ describe("OrchestratorStepperPanel — a renderer that reports its value unsenda
     ];
     expect(taskId).toBe("review-run-3562-attach-b");
     expect(JSON.stringify(payload)).not.toContain("art-3562-attached");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3562, fold 2 — EVERY SEND OF A HELD GATE SENDS NOTHING: a
+// renderer's own submit, a grouped form's submit, and a report made while the
+// press awaited the renderer's flush or the run-name check.
+// ---------------------------------------------------------------------------
+
+/**
+ * A step that draws its OWN send, the way a renderer that declares
+ * `drawsOwnSubmit` does: ticks kept in its own state, a report of whether
+ * anything is ticked, and a "Send picks" button that hands the picks over
+ * through `onChange`, which is the send on the roads it is drawn on.
+ */
+function OwnSubmitRenderer({ schema, onChange, onValidityChange }: FieldRendererProps) {
+  const [ticked, setTicked] = React.useState<string[]>([]);
+  React.useEffect(() => {
+    onValidityChange?.(ticked.length > 0);
+  }, [onValidityChange, ticked]);
+  const picks = { type: "list", listIds: ticked, listNames: ticked.map((t) => `View ${t}`) };
+  return (
+    <div>
+      {["one", "two"].map((id) => (
+        <Input
+          key={id}
+          type="checkbox"
+          aria-label={`View ${id}`}
+          checked={ticked.includes(id)}
+          onChange={() =>
+            setTicked(ticked.includes(id) ? ticked.filter((t) => t !== id) : [...ticked, id])
+          }
+        />
+      ))}
+      <Button
+        type="button"
+        onClick={() => void onChange(schema.type === "string" ? JSON.stringify(picks) : picks)}
+      >
+        Send picks
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * A step that hands its value over only when the Continue asks for it (its
+ * flush), and that reports its value unsendable during that flush: the press
+ * read the gate as open, and the report arrives while the press awaits.
+ */
+function FlushReportsRenderer({ schema, onChange, onValidityChange, registerFlush }: FieldRendererProps) {
+  React.useEffect(() => {
+    onValidityChange?.(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one report, at mount
+  }, []);
+  React.useEffect(() => {
+    registerFlush?.(async () => {
+      onValidityChange?.(false);
+      const picks = { type: "list", listIds: [], listNames: [] };
+      await onChange(schema.type === "string" ? JSON.stringify(picks) : picks);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- registered once, at mount
+  }, [registerFlush]);
+  return <p>Flush step</p>;
+}
+
+/** The run-name check, held open until the case lets it answer. */
+function holdRunNameCheck(): () => Promise<void> {
+  type RunNameAnswer = Awaited<ReturnType<typeof ensureOrCheckRunNameAction>>;
+  let answer: (value: RunNameAnswer) => void = () => {};
+  vi.mocked(ensureOrCheckRunNameAction).mockImplementationOnce(
+    () =>
+      new Promise<RunNameAnswer>((resolve) => {
+        answer = resolve;
+      }),
+  );
+  return async () => {
+    await act(async () => {
+      answer({ ok: true, name: "Run 1", nameChanged: false });
+    });
+  };
+}
+
+describe("OrchestratorStepperPanel — every send of a held gate sends nothing (cinatra#3562)", () => {
+  const OWN_SUBMIT_ID = "@cinatra-test/pack-agent:own-submit";
+  const GROUPED_TICKING_ID = "@cinatra-test/pack-agent-ticking:setup-form";
+
+  beforeEach(() => {
+    fieldRendererRegistry.register({
+      id: OWN_SUBMIT_ID,
+      priority: 100,
+      condition: (_fieldName, schema) =>
+        (schema as { "x-renderer"?: unknown })["x-renderer"] === OWN_SUBMIT_ID,
+      renderer: OwnSubmitRenderer,
+      drawsOwnSubmit: true,
+    });
+    fieldRendererRegistry.register({
+      id: GROUPED_TICKING_ID,
+      priority: 100,
+      condition: (_fieldName, schema) =>
+        (schema as { "x-renderer"?: unknown })["x-renderer"] === GROUPED_TICKING_ID,
+      renderer: OwnSubmitRenderer,
+    });
+    for (const id of [TICKING_RENDERER_ID, MID_RUN_TICKING_RENDERER_ID]) {
+      fieldRendererRegistry.register({
+        id,
+        priority: 100,
+        condition: (_fieldName, schema) =>
+          (schema as { "x-renderer"?: unknown })["x-renderer"] === id,
+        renderer: TickingRenderer,
+      });
+    }
+  });
+
+  it("a renderer's own submit sends nothing while it reports its value unsendable", async () => {
+    const view = await mountGate({ xRenderer: OWN_SUBMIT_ID, fieldName: "accountScope" });
+
+    const send = await view.findByRole("button", { name: "Send picks" });
+    // The renderer keeps its own send: the product draws no Continue beside it.
+    expect(productContinues()).toHaveLength(0);
+    fireEvent.click(send);
+    await act(async () => {});
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await act(async () => {});
+    fireEvent.click(view.getByRole("button", { name: "Send picks" }));
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    expect(hitlActions.approveReviewTask).toHaveBeenCalledWith(
+      "setup-run-3532",
+      { accountScope: JSON.stringify({ type: "list", listIds: ["one"], listNames: ["View one"] }) },
+      "accountScope",
+      { type: "string" },
+    );
+  });
+
+  it("a grouped form's own submit sends nothing while it reports its value unsendable", async () => {
+    const view = await mountGate({
+      xRenderer: GROUPED_TICKING_ID,
+      fieldName: "accountScope",
+      schema: { type: "object" },
+    });
+
+    const send = await view.findByRole("button", { name: "Send picks" });
+    fireEvent.click(send);
+    await act(async () => {});
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await act(async () => {});
+    fireEvent.click(view.getByRole("button", { name: "Send picks" }));
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("setup-run-3532");
+    expect(payload).toMatchObject({ listIds: ["one"], approved: true });
+  });
+
+  it("a grouped form's submit sends nothing when its report turns false while the run-name check is pending", async () => {
+    const view = await mountGate({
+      xRenderer: GROUPED_TICKING_ID,
+      fieldName: "accountScope",
+      schema: { type: "object" },
+      values: { stepNumber: 0 },
+    });
+
+    await view.findByRole("button", { name: "Send picks" });
+    // Held at the press: nothing is sent, and the run-name check (which can
+    // name the run) is not even asked.
+    fireEvent.click(view.getByRole("button", { name: "Send picks" }));
+    await act(async () => {});
+    expect(ensureOrCheckRunNameAction).not.toHaveBeenCalled();
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await act(async () => {});
+    const answerRunName = holdRunNameCheck();
+    fireEvent.click(view.getByRole("button", { name: "Send picks" }));
+    await waitFor(() => expect(ensureOrCheckRunNameAction).toHaveBeenCalled());
+    // Taken back while the check is pending: the report is now false.
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await act(async () => {});
+    await answerRunName();
+    await act(async () => {});
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
+
+  it("a mid-run gate's Continue sends nothing when its report turns false while the run-name check is pending", async () => {
+    const view = await mountGate({
+      xRenderer: MID_RUN_TICKING_RENDERER_ID,
+      fieldName: "accountScope",
+      schema: { type: "object" },
+      reviewTaskId: "review-run-3562",
+      values: { stepNumber: 0 },
+    });
+    const outer = () => view.getByRole("button", { name: /Continue/ }) as HTMLButtonElement;
+
+    await view.findByRole("checkbox", { name: "View one" });
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(outer().disabled).toBe(false));
+    const answerRunName = holdRunNameCheck();
+    fireEvent.click(outer());
+    await waitFor(() => expect(ensureOrCheckRunNameAction).toHaveBeenCalled());
+    // Taken back while the check is pending: the report is now false.
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(outer().disabled).toBe(true));
+    await answerRunName();
+    await act(async () => {});
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
+
+  it("a setup field's Continue sends nothing when the renderer reports false during the flush it awaits", async () => {
+    replaceTickingRenderer(TICKING_RENDERER_ID, FlushReportsRenderer);
+    const view = await mountGate({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+
+    await view.findByText("Flush step");
+    await waitFor(() => expect(productContinues()[0]?.disabled).toBe(false));
+    // Open when pressed; the flush stages a value and reports false while the
+    // press awaits it.
+    fireEvent.click(productContinues()[0]!);
+    await waitFor(() => expect(productContinues()[0]?.disabled).toBe(true));
+    await act(async () => {});
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
   });
 });

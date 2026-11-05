@@ -310,7 +310,10 @@ export function withContextSelectorEnvelope(
  * for the gates whose downstream continuation re-reads exactly what was
  * approved. Returns `{ approvalNote }` to merge into the resume payload,
  * or `null` when the renderer has no lift. The client-side fields are
- * advisory, not trusted — the server re-resolves (e.g. via crm_list_get).
+ * advisory, not trusted. The cinatra server does not re-resolve them:
+ * `approveReviewTaskInternal` (review-task-actions.ts) forwards the note as
+ * the resume text. Resolving each id (e.g. via crm_list_get) is left to the
+ * later workflow step that reads the note.
  *
  * `now` is injectable for tests; defaults to the current time.
  */
@@ -322,15 +325,16 @@ export function liftRendererApprovalNote(
   if (xRenderer.endsWith(":list-picker")) {
     // SEVERAL PICKS (cinatra#3562): a list step declared to take several picks
     // buffers `listIds` (and `listNames`, in the same order). The snapshot then
-    // carries every ticked id in the order ticked, each once, with its name;
-    // the server re-resolves each id via crm_list_get, so a name is advisory.
+    // carries every ticked id in the order ticked, each once, with its name.
+    // An id that is not a string, or is blank (whitespace only), is no pick.
+    // A name is advisory: resolving each id is the later workflow step's job.
     const ticked = (buffered as { listIds?: unknown }).listIds;
     if (Array.isArray(ticked)) {
       const names = (buffered as { listNames?: unknown }).listNames;
       const listIds: string[] = [];
       const listNames: string[] = [];
       ticked.forEach((id, index) => {
-        if (typeof id !== "string" || id.length === 0 || listIds.includes(id)) return;
+        if (typeof id !== "string" || id.trim().length === 0 || listIds.includes(id)) return;
         listIds.push(id);
         const name = Array.isArray(names) ? names[index] : undefined;
         listNames.push(typeof name === "string" ? name : "");
@@ -347,7 +351,7 @@ export function liftRendererApprovalNote(
       }
     }
     // Snapshot the selected list at approval time so downstream stages can
-    // reference it; the server re-resolves via crm_list_get.
+    // reference it; resolving it is the later workflow step's job.
     const { listId, listName, memberCount } = buffered as {
       listId?: string;
       listName?: string;

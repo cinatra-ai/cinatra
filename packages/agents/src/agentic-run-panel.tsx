@@ -84,6 +84,7 @@ import {
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
   isSetupGateTaskId,
+  liftRendererApprovalNote,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
   wrapPrimitiveSetupPayload,
@@ -1216,7 +1217,17 @@ export function AgenticRunPanel({
   //     Continue-style surfaces)
   // An "already resolved" rejection is always swallowed and KEEPS the
   // suppression armed — the gate really is gone.
+  //   - holdKey: the gate a Continue-style send is for (cinatra#3562). While
+  //     a renderer's report on that gate is `false` (see `gateValidity`
+  //     below), the submit sends nothing and changes no state. It is read
+  //     here, after every awaited step of the caller (a renderer flush) and
+  //     with nothing awaited between it and the send, so a report made while
+  //     the caller waited still stops the send. The Reject passes none.
   // ---------------------------------------------------------------------------
+  // THE RENDERER'S OWN READING OF ITS VALUE (cinatra#3562): the store, made
+  // here so that the submit core below can read it; what it holds is
+  // described where the gate on screen reads it.
+  const [gateValidity] = useState(createGateValidityStore);
   const performGateSubmit = useCallback(
     async (args: {
       reviewTaskId: string;
@@ -1227,7 +1238,10 @@ export function AgenticRunPanel({
       suppressGate: boolean;
       clearAttachmentsOnSuccess: boolean;
       errorMode: "rethrow" | "toast";
+      holdKey?: string | null;
     }) => {
+      // Reported unsendable: nothing is sent and nothing is changed.
+      if (args.holdKey !== undefined && gateValidity.isHeld(args.holdKey)) return;
       if (args.trackApproving) setIsApproving(true);
       if (args.suppressGate) {
         justSubmittedXRendererRef.current = args.xRenderer;
@@ -1271,7 +1285,7 @@ export function AgenticRunPanel({
         if (args.trackApproving) setIsApproving(false);
       }
     },
-    [],
+    [gateValidity],
   );
 
   // ---------------------------------------------------------------------------
@@ -1320,8 +1334,10 @@ export function AgenticRunPanel({
   // reports blocks nothing, so no undeclared reason ever stops a reader
   // (cinatra#3532). A report is released with the renderer that made it
   // (`GateValidityOwner`). The drawn control subscribes to the store; the press
-  // reads it in the same turn.
-  const [gateValidity] = useState(createGateValidityStore);
+  // reads it in the same turn, and the submit core reads it again just before
+  // the send (`holdKey`), so a renderer-owned or grouped submit and a report
+  // made during an awaited flush are held too. The store is made above the
+  // submit core.
   const activeGateKey = effectiveHitlContext
     ? [
         effectiveHitlContext.reviewTaskId,
@@ -1371,6 +1387,8 @@ export function AgenticRunPanel({
         // hand over says so itself, inside the field. Nothing is sent, and the
         // screen is left exactly as it was.
         if (staged === null || staged.key !== key) return;
+        // Held again after the flush above: the submit core reads the store
+        // once more, after that await (`holdKey`).
         await performGateSubmit({
           reviewTaskId,
           xRenderer,
@@ -1380,6 +1398,7 @@ export function AgenticRunPanel({
           suppressGate: false,
           clearAttachmentsOnSuccess: false,
           errorMode: "toast",
+          holdKey: key,
         });
       } finally {
         setupPressRef.current = false;
@@ -1415,6 +1434,7 @@ export function AgenticRunPanel({
         suppressGate: true,
         clearAttachmentsOnSuccess: true,
         errorMode: "rethrow",
+        holdKey: gateKey,
       });
     },
     [performGateSubmit, gateValidity],
@@ -2087,6 +2107,20 @@ export function AgenticRunPanel({
             approved: true,
             approvedAt: new Date().toISOString(),
           };
+          // The list step's approvalNote lift (cinatra#3562): snapshot the
+          // picks exactly as approved at this gate, as the stepper's Continue
+          // does, through the same shared helper. A `:list-picker` gate that
+          // is not a setup gate is a mid-run gate here (see `isMidRunHitl`
+          // below), so its buffered picks reach this Continue and leave in the
+          // note, the several ticked ids included. Only the list step is
+          // lifted here: the helper's other renderers keep the send they had
+          // on this panel.
+          const approvalNoteLift = effectiveHitlContext.xRenderer.endsWith(":list-picker")
+            ? liftRendererApprovalNote(effectiveHitlContext.xRenderer, bufferedHitlValue)
+            : null;
+          if (approvalNoteLift) {
+            nextBuffered = { ...nextBuffered, ...approvalNoteLift };
+          }
           if (!isSetupGateTaskId(effectiveHitlContext.reviewTaskId)) {
             nextBuffered = applyAttachmentEnvelopeUserResponseOnly(
               nextBuffered,
@@ -2110,6 +2144,7 @@ export function AgenticRunPanel({
             suppressGate: true,
             clearAttachmentsOnSuccess: true,
             errorMode: "toast",
+            holdKey: activeGateKey,
           });
         }}
       >
@@ -2950,9 +2985,20 @@ export function AgenticRunPanel({
                 // bufferedHitlValue and show a Continue button below. The
                 // context-selector renderer also buffers selections for an outer
                 // Continue; route it through the same mid-run path. Mirrors the
-                // orchestrator-stepper-panel's classifyMidRunHitl entry.
+                // orchestrator-stepper-panel's classifyMidRunHitl entry for
+                // `:output`, `:list-picker` and the manifest flag.
                 const isMidRunHitl =
                   effectiveHitlContext.xRenderer.endsWith(":output") ||
+                  // A list step on a mid-run gate (cinatra#3562): its binding
+                  // declares no `midRunHitl` flag, and the stepper reads it by
+                  // this suffix. It buffers its picks for the outer Continue,
+                  // which lifts them into the approval note. On a SETUP gate
+                  // (`setup-<runId>`) it stays on the setup road below, where
+                  // its answer is sent under the gate's field name, the shape
+                  // the setup loop records. (The stepper classifies by the
+                  // suffix alone, on a setup gate too.)
+                  (effectiveHitlContext.xRenderer.endsWith(":list-picker") &&
+                    !isSetupGateTaskId(effectiveHitlContext.reviewTaskId)) ||
                   // Manifest-flagged mid-run gates (cinatra#151 Stage 5): a
                   // binding declaring `midRunHitl: true` (e.g. the
                   // context-selector) buffers into the outer Continue here
@@ -3067,6 +3113,8 @@ export function AgenticRunPanel({
                         // Grouped-setup forms: approve immediately on form submit so the
                         // user only ever sees one Continue button (no separate row below).
                         if (isGroupedSetup) {
+                          // Held (cinatra#3562): the form's own submit sends
+                          // nothing while its report is `false` (`holdKey`).
                           await performGateSubmit({
                             reviewTaskId: effectiveHitlContext.reviewTaskId,
                             xRenderer: effectiveHitlContext.xRenderer,
@@ -3075,6 +3123,7 @@ export function AgenticRunPanel({
                             suppressGate: true,
                             clearAttachmentsOnSuccess: false,
                             errorMode: "toast",
+                            holdKey: setupGateKey,
                           });
                         }
                       } : async (next: unknown) => {
@@ -3109,6 +3158,9 @@ export function AgenticRunPanel({
                           setSetupDraft({ key: setupGateKey, value: next });
                           return;
                         }
+                        // A renderer that draws its own submit, or a grouped
+                        // form (cinatra#3562): its own press sends nothing
+                        // while its report is `false` (`holdKey`).
                         await performGateSubmit({
                           reviewTaskId: effectiveHitlContext.reviewTaskId,
                           xRenderer: effectiveHitlContext.xRenderer,
@@ -3118,6 +3170,7 @@ export function AgenticRunPanel({
                           suppressGate: false,
                           clearAttachmentsOnSuccess: false,
                           errorMode: "rethrow",
+                          holdKey: setupGateKey,
                         });
                       }}
                       context={hitlRendererEntry.context}

@@ -27,7 +27,7 @@ import {
   type ComponentType,
   type ReactNode,
 } from "react";
-import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { Button } from "@/components/ui/button";
 import {
   fieldRendererRegistry,
@@ -154,7 +154,7 @@ describe("SchemaOnlyFloorRenderer — true registry-bypass floor (no heuristic r
   });
 });
 
-describe("ExtensionFieldRenderer — a crashed component's validity report goes with it (cinatra#3562)", () => {
+describe("ExtensionFieldRenderer — a crash keeps the component's validity report, and closes its road (cinatra#3562)", () => {
   const BINDING_ID = "@cinatra-test/pack-agent:ticking";
 
   /** Reports nothing ticked, and throws while rendering once "Break" is pressed. */
@@ -171,16 +171,48 @@ describe("ExtensionFieldRenderer — a crashed component's validity report goes 
     );
   }
 
-  it("reports true when the floor replaces the crashed component, which reported false", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
+  /**
+   * Reports `initial`, keeps a handle through which a report can still be made
+   * after it has crashed (a callback it scheduled), and throws once "Break" is
+   * pressed.
+   */
+  const late: { report: ((valid: boolean) => void) | null } = { report: null };
+  function ReportsLateAfterCrash({
+    onValidityChange,
+    initial,
+  }: FieldRendererProps & { initial: boolean }) {
+    const [broken, setBroken] = useState(false);
+    useEffect(() => {
+      onValidityChange?.(initial);
+    }, [onValidityChange, initial]);
+    if (broken) throw new Error("render crash");
+    return (
+      <Button
+        type="button"
+        onClick={() => {
+          late.report = (valid) => onValidityChange?.(valid);
+          setBroken(true);
+        }}
+      >
+        Break
+      </Button>
+    );
+  }
+
+  function mapTo(component: ComponentType<FieldRendererProps>) {
     __setFieldRendererComponentMapForTests({
       [BINDING_ID]: {
         resolution: "guardedOptional",
         packageName: "@cinatra-test/pack-agent",
         propsApiVersion: 1,
-        load: async () => ({ default: ReportsThenThrows }),
+        load: async () => ({ default: component }),
       },
     });
+  }
+
+  it("keeps the false report of a component that crashes into the floor: no report of its own is made for it", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mapTo(ReportsThenThrows);
     const Wrapper = makeExtensionFieldRenderer(BINDING_ID);
     const onValidityChange = vi.fn();
     const view = render(
@@ -198,8 +230,47 @@ describe("ExtensionFieldRenderer — a crashed component's validity report goes 
 
     await waitFor(() => expect(view.container.querySelector("#field-accountScope")).toBeTruthy());
     expect(view.queryByRole("button", { name: "Break" })).toBeNull();
-    expect(onValidityChange).toHaveBeenLastCalledWith(true);
+    // Fail-closed: the crash reports nothing, so the component's `false` stands.
+    expect(onValidityChange).toHaveBeenLastCalledWith(false);
+    expect(onValidityChange).not.toHaveBeenCalledWith(true);
   });
+
+  for (const [first, after] of [
+    [false, true],
+    [false, false],
+    [true, false],
+  ] as const) {
+    it(`a component that reported ${first} and crashed: its later ${after} report changes nothing`, async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      late.report = null;
+      const Reporting = (props: FieldRendererProps) => (
+        <ReportsLateAfterCrash {...props} initial={first} />
+      );
+      mapTo(Reporting);
+      const Wrapper = makeExtensionFieldRenderer(BINDING_ID);
+      const onValidityChange = vi.fn();
+      const view = render(
+        <Wrapper
+          {...senderProps()}
+          fieldName="accountScope"
+          context={{ connectedApps: [] } as unknown as FieldRendererProps["context"]}
+          onValidityChange={onValidityChange}
+        />,
+      );
+
+      await view.findByRole("button", { name: "Break" });
+      await waitFor(() => expect(onValidityChange).toHaveBeenLastCalledWith(first));
+      fireEvent.click(view.getByRole("button", { name: "Break" }));
+      await waitFor(() => expect(view.container.querySelector("#field-accountScope")).toBeTruthy());
+      const madeBeforeAndAtTheCrash = onValidityChange.mock.calls.length;
+      expect(onValidityChange.mock.calls.every(([valid]) => valid === first)).toBe(true);
+
+      expect(late.report).not.toBeNull();
+      act(() => late.report!(after));
+      expect(onValidityChange).toHaveBeenCalledTimes(madeBeforeAndAtTheCrash);
+      expect(onValidityChange).toHaveBeenLastCalledWith(first);
+    });
+  }
 
   /** Draws what the wrapper lets escape, so a throw past the wrapper is read here. */
   class EscapeCatcher extends Component<{ children?: ReactNode }, { escaped: boolean }> {

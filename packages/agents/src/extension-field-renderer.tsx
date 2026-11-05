@@ -16,7 +16,9 @@
 import {
   Component as ReactComponent,
   createElement,
+  useCallback,
   useEffect,
+  useRef,
   useState,
   type ComponentType,
   type ReactNode,
@@ -65,6 +67,25 @@ export function makeExtensionFieldRenderer(
       ComponentType<FieldRendererProps> | null
     >(null);
     const [degraded, setDegraded] = useState(false);
+    // THE RESOLVED COMPONENT'S VALIDITY REPORTS (cinatra#3562). The host's
+    // validity owner belongs to this wrapper, which stays on the screen when
+    // the component inside it crashes into the floor. So the wrapper closes
+    // the component's reporting road at the crash: what the component reported
+    // before it crashed stands (a `false` keeps the gate held, which is
+    // fail-closed), and a report that arrives later, `false` or `true`, changes
+    // nothing. The floor itself never reports. Set only in the crash callback,
+    // read only when a report arrives. The guarded report keeps one identity
+    // for as long as the host's own report does, so a component that reports
+    // in an effect keyed on it does not report again on every render.
+    const crashedRef = useRef(false);
+    const reportValidity = props.onValidityChange;
+    const guardedReport = useCallback(
+      (valid: boolean) => {
+        if (crashedRef.current) return;
+        reportValidity?.(valid);
+      },
+      [reportValidity],
+    );
 
     useEffect(() => {
       let alive = true;
@@ -113,13 +134,19 @@ export function makeExtensionFieldRenderer(
     };
     const floor = createElement(SchemaOnlyFloorRenderer, floorProps);
     if (degraded || resolved === null) return floor;
-    // The floor never reports through `onValidityChange` (cinatra#3562). When
-    // it replaces a crashed component, that component's last report goes with
-    // it: `true` leaves the gate as for a renderer that never reports.
+    const resolvedProps: FieldRendererProps =
+      reportValidity === undefined
+        ? props
+        : { ...props, onValidityChange: guardedReport };
     return createElement(
       FieldRendererErrorBoundary,
-      { fallback: floor, onCrash: () => props.onValidityChange?.(true) },
-      createElement(resolved, props),
+      {
+        fallback: floor,
+        onCrash: () => {
+          crashedRef.current = true;
+        },
+      },
+      createElement(resolved, resolvedProps),
     );
   }
   ExtensionFieldRenderer.displayName = `ExtensionFieldRenderer(${bindingId})`;

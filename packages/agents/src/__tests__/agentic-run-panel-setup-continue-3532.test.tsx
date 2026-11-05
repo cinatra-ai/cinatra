@@ -28,11 +28,20 @@ import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
+import {
+  GROUPED_SETUP_FORM_RENDERER_ID,
+  SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+} from "../agent-builder-ids";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import { fieldRendererRegistry } from "../field-renderer-registry";
 import type { FieldRendererProps } from "../field-renderer-registry";
+import { makeExtensionFieldRenderer } from "../extension-field-renderer";
+import {
+  __resetFieldRendererComponentMapForTests,
+  __setFieldRendererComponentMapForTests,
+} from "../field-renderer-components";
 
 vi.mock("@cinatra-ai/sdk-ui", () => ({
   LoadingSpinner: () => null,
@@ -398,8 +407,15 @@ describe("AgenticRunPanel — a setup field whose renderer draws no control (cin
  * receives the object itself.
  */
 const TICKING_RENDERER_ID = "@cinatra-test/pack-agent:ticking";
-/** The same, on a gate this panel classifies as mid-run (`:output`). */
-const MID_RUN_TICKING_RENDERER_ID = "@cinatra-test/pack-agent-ticking:output";
+/**
+ * The same, on a list step: a `:list-picker` gate, which this panel classifies
+ * as mid-run by its suffix, as the stepper does (cinatra#3562).
+ */
+const MID_RUN_TICKING_RENDERER_ID = "@cinatra-test/pack-agent-ticking:list-picker";
+/** The same, on an `:output` gate, the other mid-run suffix. */
+const OUTPUT_TICKING_RENDERER_ID = "@cinatra-test/pack-agent-ticking:output";
+/** The email outreach agent's own list step binding: it declares no `midRunHitl`. */
+const OUTREACH_LIST_PICKER_ID = "@cinatra-ai/email-outreach-agent:list-picker";
 
 function TickingRenderer({ schema, onChange, onValidityChange }: FieldRendererProps) {
   const [ticked, setTicked] = React.useState<string[]>([]);
@@ -542,7 +558,7 @@ async function renderMovablePanel(options: { strict?: boolean } = {}) {
 describe("AgenticRunPanel — a renderer that reports its value unsendable (cinatra#3562)", () => {
   beforeEach(() => {
     unbindStepHandle();
-    for (const id of [TICKING_RENDERER_ID, MID_RUN_TICKING_RENDERER_ID]) {
+    for (const id of [TICKING_RENDERER_ID, MID_RUN_TICKING_RENDERER_ID, OUTPUT_TICKING_RENDERER_ID]) {
       fieldRendererRegistry.register({
         id,
         priority: 100,
@@ -588,7 +604,7 @@ describe("AgenticRunPanel — a renderer that reports its value unsendable (cina
   });
 
   it("holds a mid-run gate's Continue while nothing is ticked and resumes with every tick", async () => {
-    await setGate(MID_RUN_TICKING_RENDERER_ID, "accountScope", { type: "object" });
+    await setGate(MID_RUN_TICKING_RENDERER_ID, "accountScope", { type: "object" }, "review-run-3562");
     const view = await renderPanel();
 
     await view.findByRole("checkbox", { name: "View one" });
@@ -605,17 +621,24 @@ describe("AgenticRunPanel — a renderer that reports its value unsendable (cina
       string,
       Record<string, unknown>,
     ];
-    expect(taskId).toBe("setup-run-3532");
+    expect(taskId).toBe("review-run-3562");
     expect(payload).toMatchObject({
       type: "list",
       listIds: ["two", "one"],
       listNames: ["View two", "View one"],
       approved: true,
     });
+    // THE LIST STEP'S NOTE (cinatra#3562): the Continue lifts every tick into
+    // the approval note, in the order ticked, as the stepper's Continue does.
+    expect(JSON.parse(payload.approvalNote as string)).toMatchObject({
+      type: "list",
+      listIds: ["two", "one"],
+      listNames: ["View two", "View one"],
+    });
   });
 
   it("a mid-run gate held again after a tick is taken back sends nothing until one is ticked", async () => {
-    await setGate(MID_RUN_TICKING_RENDERER_ID, "accountScope", { type: "object" });
+    await setGate(MID_RUN_TICKING_RENDERER_ID, "accountScope", { type: "object" }, "review-run-3562");
     const view = await renderPanel();
 
     await view.findByRole("checkbox", { name: "View one" });
@@ -635,6 +658,11 @@ describe("AgenticRunPanel — a renderer that reports its value unsendable (cina
       Record<string, unknown>,
     ];
     expect(payload).toMatchObject({ type: "list", listIds: ["two"], listNames: ["View two"] });
+    expect(JSON.parse(payload.approvalNote as string)).toMatchObject({
+      type: "list",
+      listIds: ["two"],
+      listNames: ["View two"],
+    });
   });
 
   it("a report belongs to its own gate: the next gate, whose renderer reports nothing, is not held", async () => {
@@ -721,7 +749,7 @@ describe("AgenticRunPanel — a renderer that reports its value unsendable (cina
 
   it("a mid-run gate's Continue pressed in the same turn as a false report sends nothing", async () => {
     replaceTickingRenderer(MID_RUN_TICKING_RENDERER_ID, HandleRenderer);
-    await setGate(MID_RUN_TICKING_RENDERER_ID, "accountScope", { type: "object" });
+    await setGate(MID_RUN_TICKING_RENDERER_ID, "accountScope", { type: "object" }, "review-run-3562");
     const view = await renderPanel();
 
     await view.findByText("Handle step");
@@ -747,8 +775,13 @@ describe("AgenticRunPanel — a renderer that reports its value unsendable (cina
       string,
       Record<string, unknown>,
     ];
-    expect(taskId).toBe("setup-run-3532");
+    expect(taskId).toBe("review-run-3562");
     expect(payload).toMatchObject({ type: "list", listIds: ["two"], listNames: ["View two"], approved: true });
+    expect(JSON.parse(payload.approvalNote as string)).toMatchObject({
+      type: "list",
+      listIds: ["two"],
+      listNames: ["View two"],
+    });
   });
 
   it("a held setup field's Continue is unavailable and carries no credential title", async () => {
@@ -863,5 +896,314 @@ describe("AgenticRunPanel — a renderer that reports its value unsendable (cina
       expect((view.getByRole("checkbox", { name: "View one" }) as HTMLInputElement).checked).toBe(true),
     );
     await waitFor(() => expect(productContinue()!.disabled).toBe(false));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3562, fold 2 — EVERY SEND OF A HELD GATE SENDS NOTHING: the list
+// step's own binding, a renderer's own submit, a grouped form's submit, a
+// report made while the press awaited the renderer's flush, and a component
+// that crashes into the floor.
+// ---------------------------------------------------------------------------
+
+/**
+ * A step that draws its OWN send, the way a renderer that declares
+ * `drawsOwnSubmit` does: ticks kept in its own state, a report of whether
+ * anything is ticked, and a "Send picks" button that hands the picks over
+ * through `onChange`, which is the send on the roads it is drawn on.
+ */
+function OwnSubmitRenderer({ schema, onChange, onValidityChange }: FieldRendererProps) {
+  const [ticked, setTicked] = React.useState<string[]>([]);
+  React.useEffect(() => {
+    onValidityChange?.(ticked.length > 0);
+  }, [onValidityChange, ticked]);
+  const picks = { type: "list", listIds: ticked, listNames: ticked.map((t) => `View ${t}`) };
+  return (
+    <div>
+      {["one", "two"].map((id) => (
+        <Input
+          key={id}
+          type="checkbox"
+          aria-label={`View ${id}`}
+          checked={ticked.includes(id)}
+          onChange={() =>
+            setTicked(ticked.includes(id) ? ticked.filter((t) => t !== id) : [...ticked, id])
+          }
+        />
+      ))}
+      <Button
+        type="button"
+        onClick={() => void onChange(schema.type === "string" ? JSON.stringify(picks) : picks)}
+      >
+        Send picks
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * A step that hands its value over only when the Continue asks for it (its
+ * flush), and that reports its value unsendable during that flush: the press
+ * read the gate as open, and the report arrives while the press awaits.
+ */
+function FlushReportsRenderer({ schema, onChange, onValidityChange, registerFlush }: FieldRendererProps) {
+  React.useEffect(() => {
+    onValidityChange?.(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one report, at mount
+  }, []);
+  React.useEffect(() => {
+    registerFlush?.(async () => {
+      onValidityChange?.(false);
+      const picks = { type: "list", listIds: [], listNames: [] };
+      await onChange(schema.type === "string" ? JSON.stringify(picks) : picks);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- registered once, at mount
+  }, [registerFlush]);
+  return <p>Flush step</p>;
+}
+
+/** The late report of a component that has crashed; set when it breaks. */
+const crashed: { lateReport: ((valid: boolean) => void) | null } = { lateReport: null };
+/** Reports nothing ticked, and throws while rendering once "Break" is pressed. */
+function ReportsFalseThenThrows({ onValidityChange }: FieldRendererProps) {
+  const [broken, setBroken] = React.useState(false);
+  React.useEffect(() => {
+    onValidityChange?.(false);
+  }, [onValidityChange]);
+  if (broken) throw new Error("render crash");
+  return (
+    <Button
+      type="button"
+      onClick={() => {
+        crashed.lateReport = (valid) => onValidityChange?.(valid);
+        setBroken(true);
+      }}
+    >
+      Break
+    </Button>
+  );
+}
+
+describe("AgenticRunPanel — every send of a held gate sends nothing (cinatra#3562)", () => {
+  beforeEach(() => {
+    unbindStepHandle();
+    crashed.lateReport = null;
+    for (const id of [TICKING_RENDERER_ID, OUTPUT_TICKING_RENDERER_ID]) {
+      fieldRendererRegistry.register({
+        id,
+        priority: 100,
+        condition: (_fieldName, schema) =>
+          (schema as { "x-renderer"?: unknown })["x-renderer"] === id,
+        renderer: TickingRenderer,
+      });
+    }
+  });
+
+  it("draws the email outreach agent's own list step as a mid-run gate, holds it, and lifts every tick into the note", async () => {
+    // THE PREMISE: the build's own binding for the step declares no
+    // `midRunHitl` flag, so only the `:list-picker` suffix can make it mid-run.
+    const shipped = fieldRendererRegistry.list().filter((e) => e.id === OUTREACH_LIST_PICKER_ID);
+    expect(shipped).toHaveLength(1);
+    expect(shipped[0]!.midRunHitl).not.toBe(true);
+    // The stand-in takes its place the way an extension-shipped component does,
+    // which keeps its own send (`drawsOwnSubmit: true`, the map-first branch).
+    fieldRendererRegistry.register({
+      id: OUTREACH_LIST_PICKER_ID,
+      priority: 90,
+      condition: (_fieldName, schema) =>
+        (schema as { "x-renderer"?: unknown })["x-renderer"] === OUTREACH_LIST_PICKER_ID,
+      renderer: TickingRenderer,
+      drawsOwnSubmit: true,
+    });
+    await setGate(OUTREACH_LIST_PICKER_ID, "accountScope", { type: "object" }, "review-run-3562");
+    const view = await renderPanel();
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinue()).not.toBeNull());
+    await waitFor(() => expect(productContinue()!.disabled).toBe(true));
+    fireEvent.click(productContinue()!);
+    // A tick buffers for the Continue; it is not itself a send.
+    fireEvent.click(view.getByRole("checkbox", { name: "View two" }));
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(productContinue()!.disabled).toBe(false));
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    fireEvent.click(productContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload, fieldName] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+      string | undefined,
+    ];
+    expect(taskId).toBe("review-run-3562");
+    expect(fieldName).toBeUndefined();
+    expect(payload).toMatchObject({ approved: true });
+    const note = JSON.parse(payload.approvalNote as string) as Record<string, unknown>;
+    expect(note).toMatchObject({
+      type: "list",
+      listIds: ["two", "one"],
+      listNames: ["View two", "View one"],
+    });
+    expect(typeof note.snapshotAt).toBe("string");
+    expect(note).not.toHaveProperty("listId");
+  });
+
+  it("keeps a list step on a setup gate on the setup road: its answer goes under the gate's field name", async () => {
+    fieldRendererRegistry.register({
+      id: MID_RUN_TICKING_RENDERER_ID,
+      priority: 100,
+      condition: (_fieldName, schema) =>
+        (schema as { "x-renderer"?: unknown })["x-renderer"] === MID_RUN_TICKING_RENDERER_ID,
+      renderer: TickingRenderer,
+    });
+    await setGate(MID_RUN_TICKING_RENDERER_ID, "accountScope", { type: "object" });
+    const view = await renderPanel();
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinue()!.disabled).toBe(true));
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(productContinue()!.disabled).toBe(false));
+    fireEvent.click(productContinue()!);
+    await waitFor(() =>
+      expect(hitlActions.approveReviewTask).toHaveBeenCalledWith(
+        "setup-run-3532",
+        { accountScope: { type: "list", listIds: ["one"], listNames: ["View one"] } },
+        "accountScope",
+      ),
+    );
+  });
+
+  it("holds an `:output` gate's Continue the same way", async () => {
+    await setGate(OUTPUT_TICKING_RENDERER_ID, "accountScope", { type: "object" });
+    const view = await renderPanel();
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinue()!.disabled).toBe(true));
+    fireEvent.click(productContinue()!);
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(productContinue()!.disabled).toBe(false));
+    fireEvent.click(productContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+  });
+
+  it("a renderer's own submit sends nothing while it reports its value unsendable", async () => {
+    const OWN_SUBMIT_ID = "@cinatra-test/pack-agent:own-submit";
+    fieldRendererRegistry.register({
+      id: OWN_SUBMIT_ID,
+      priority: 100,
+      condition: (_fieldName, schema) =>
+        (schema as { "x-renderer"?: unknown })["x-renderer"] === OWN_SUBMIT_ID,
+      renderer: OwnSubmitRenderer,
+      drawsOwnSubmit: true,
+    });
+    await setGate(OWN_SUBMIT_ID, "accountScope", { type: "string" });
+    const view = await renderPanel();
+
+    const send = await view.findByRole("button", { name: "Send picks" });
+    // The renderer keeps its own send: the product draws no Continue beside it.
+    expect(productContinue()).toBeNull();
+    fireEvent.click(send);
+    await act(async () => {});
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await act(async () => {});
+    fireEvent.click(view.getByRole("button", { name: "Send picks" }));
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    expect(hitlActions.approveReviewTask).toHaveBeenCalledWith(
+      "setup-run-3532",
+      { accountScope: JSON.stringify({ type: "list", listIds: ["one"], listNames: ["View one"] }) },
+      "accountScope",
+    );
+  });
+
+  for (const [road, xRenderer] of [
+    ["a grouped form", GROUPED_SETUP_FORM_RENDERER_ID],
+    ["a mid-run grouped form", `${GROUPED_SETUP_FORM_RENDERER_ID}:output`],
+  ] as const) {
+    it(`${road}'s own submit sends nothing while it reports its value unsendable`, async () => {
+      fieldRendererRegistry.register({
+        id: xRenderer,
+        priority: 100,
+        condition: (_fieldName, schema) =>
+          (schema as { "x-renderer"?: unknown })["x-renderer"] === xRenderer,
+        renderer: OwnSubmitRenderer,
+      });
+      await setGate(xRenderer, "accountScope", { type: "object" });
+      const view = await renderPanel();
+
+      const send = await view.findByRole("button", { name: "Send picks" });
+      fireEvent.click(send);
+      await act(async () => {});
+      expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+      fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+      await act(async () => {});
+      fireEvent.click(view.getByRole("button", { name: "Send picks" }));
+      await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+      expect(hitlActions.approveReviewTask.mock.calls[0]![0]).toBe("setup-run-3532");
+    });
+  }
+
+  it("a setup field's Continue sends nothing when the renderer reports false during the flush it awaits", async () => {
+    replaceTickingRenderer(TICKING_RENDERER_ID, FlushReportsRenderer);
+    await setGate(TICKING_RENDERER_ID, "accountScope", { type: "string" });
+    const view = await renderPanel();
+
+    await view.findByText("Flush step");
+    await waitFor(() => expect(productContinue()?.disabled).toBe(false));
+    // Open when pressed; the flush stages a value and reports false while the
+    // press awaits it.
+    fireEvent.click(productContinue()!);
+    await waitFor(() => expect(productContinue()?.disabled).toBe(true));
+    await act(async () => {});
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
+
+  it("a component that reported false and crashes into the floor keeps its gate held, and its late report frees nothing", async () => {
+    // React reports the caught render throw; the wrapper logs it as well.
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    const WRAPPED_ID = "@cinatra-test/pack-agent:crash-wrapped";
+    __setFieldRendererComponentMapForTests({
+      [WRAPPED_ID]: {
+        resolution: "guardedOptional",
+        packageName: "@cinatra-test/pack-agent",
+        propsApiVersion: 1,
+        load: async () => ({ default: ReportsFalseThenThrows }),
+      },
+    });
+    try {
+      fieldRendererRegistry.register({
+        id: WRAPPED_ID,
+        priority: 100,
+        condition: (_fieldName, schema) =>
+          (schema as { "x-renderer"?: unknown })["x-renderer"] === WRAPPED_ID,
+        renderer: makeExtensionFieldRenderer(WRAPPED_ID),
+      });
+      await setGate(WRAPPED_ID, "accountScope", { type: "string" });
+      const view = await renderPanel();
+
+      const breakButton = await view.findByRole("button", { name: "Break" });
+      await waitFor(() => expect(productContinue()!.disabled).toBe(true));
+      fireEvent.click(breakButton);
+
+      // The floor replaces the component; the false report it made stands.
+      await waitFor(() => expect(view.queryByRole("button", { name: "Break" })).toBeNull());
+      await waitFor(() => expect(document.querySelector("#field-accountScope")).not.toBeNull());
+      await act(async () => {});
+      expect(productContinue()!.disabled).toBe(true);
+
+      // A report the crashed component makes afterwards changes nothing.
+      expect(crashed.lateReport).not.toBeNull();
+      act(() => crashed.lateReport!(true));
+      await act(async () => {});
+      expect(productContinue()!.disabled).toBe(true);
+      fireEvent.click(productContinue()!);
+      await act(async () => {});
+      expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    } finally {
+      __resetFieldRendererComponentMapForTests();
+      quiet.mockRestore();
+    }
   });
 });

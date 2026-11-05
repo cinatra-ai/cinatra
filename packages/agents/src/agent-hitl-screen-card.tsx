@@ -528,6 +528,14 @@ export function useAgentHitlScreenState(params: {
  * `{ [fieldName]: object }` with the field name beside it, and a card that
  * spread it into its buffer would submit top-level keys with no field name —
  * merging into the wrong inputs, or leaving the setup loop paused for ever.
+ *
+ * ONE DIFFERENCE (cinatra#3562): on a gate that is not a setup gate, the run
+ * panel also reads a `:list-picker` renderer as mid-run, as the stepper does,
+ * and its outer Continue lifts the list step's picks into the approval note.
+ * This card does not: its Continue lifts no approval note, so a list step
+ * here keeps the setup-loop path it had. Moving it belongs with the later
+ * work that holds this card's Continues, which do not read a renderer's
+ * validity report yet.
  */
 function classifyHitlGate(gate: AgentHitlScreenGate): {
   isMidRun: boolean;

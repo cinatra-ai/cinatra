@@ -334,6 +334,34 @@ describe("liftRendererApprovalNote", () => {
     }
   });
 
+  it(":list-picker takes a blank (whitespace-only) id for no pick (cinatra#3562)", () => {
+    // Only blank picks: the one-pick snapshot stays.
+    const blank = liftRendererApprovalNote(
+      "@cinatra-ai/x:list-picker",
+      { listIds: ["   ", "\t\n"], listId: "l1", listName: "My list", memberCount: 5 },
+      NOW,
+    );
+    expect(JSON.parse(blank!.approvalNote)).toEqual({
+      type: "list",
+      listId: "l1",
+      listName: "My list",
+      memberCount: 5,
+      snapshotAt: NOW,
+    });
+    // A blank pick beside a usable one: only the usable one, with its own name.
+    const mixed = liftRendererApprovalNote(
+      "@cinatra-ai/x:list-picker",
+      { listIds: [" ", "v1"], listNames: ["Blank", "First"] },
+      NOW,
+    );
+    expect(JSON.parse(mixed!.approvalNote)).toEqual({
+      type: "list",
+      listIds: ["v1"],
+      listNames: ["First"],
+      snapshotAt: NOW,
+    });
+  });
+
   it(":list-picker gives a pick an empty name where its name is missing or not a string (cinatra#3562)", () => {
     const lift = liftRendererApprovalNote(
       "@cinatra-ai/x:list-picker",

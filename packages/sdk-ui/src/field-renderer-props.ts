@@ -75,12 +75,18 @@ export type FieldRendererProps = {
   /**
    * Report whether the value the renderer holds may be sent. The host keeps
    * this renderer's latest report with its gate: while a report for the gate on
-   * screen is `false`, its Continue is unavailable and a press sends nothing.
+   * screen is `false`, its Continue is unavailable and a press sends nothing,
+   * and a send the renderer makes itself through `onChange` (its own submit, a
+   * grouped form's submit) sends nothing either.
    * The report goes when this renderer unmounts or another takes its place, and
    * no other renderer's report goes with it; a report made after that holds
-   * nothing. A gate of another review task gets a new renderer, which reports
-   * for itself. A renderer that never reports leaves the Continue as it was.
-   * Optional and additive, so the ABI generation stays 1.
+   * nothing. One exception: an extension-shipped component that throws while
+   * rendering is replaced by the host's floor, and its last report stays with
+   * the gate (a `false` keeps it held); a report it makes after the crash
+   * changes nothing. A gate of another review task gets a new renderer, which
+   * reports for itself. A renderer that never reports leaves the Continue as it
+   * was. Not every host reads the report yet: the conversation's screen card
+   * does not. Optional and additive, so the ABI generation stays 1.
    */
   onValidityChange?: (valid: boolean) => void;
   /**
