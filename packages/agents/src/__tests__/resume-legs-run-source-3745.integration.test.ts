@@ -1,21 +1,25 @@
 /**
- * cinatra#3745 — A RESUMED ORCHESTRATOR LEG KEEPS ITS RUN-SOURCE BINDING, ON A REAL DATABASE.
+ * cinatra#3745 — A RESUMED LEG KEEPS ITS RUN-SOURCE BINDING, ON A REAL DATABASE.
  *
  * A run's step-tool policy is bound to the execution attempt that dispatched it
  * (`bindRunStepToolPolicy`, at the first dispatch). The source checks
  * (`verifyRunExecutedSource`, `isRunExecutedSourceCurrent`) admit a callback only
- * while the run is `running` under that bound attempt. A stopped orchestrator
- * resumes under a FRESH attempt, so its resume must carry the binding to that
- * attempt in the same transaction as its `queued -> running` claim, or refuse.
- * This file drives that resume through its REAL status transitions (no mocked
+ * while the run is `running` under that bound attempt; the model bridge and the
+ * passthrough road refuse a run's source-bound callback that the check does not
+ * admit. This file
+ * drives the three resume roads through their REAL status transitions (no mocked
  * "running") and reads the source checks at the moment the resumed leg calls back
  * (inside `sendTask`):
  *
- *   the stopped-orchestrator resume (stopped -> queued -> running, fresh attempt).
+ *   (a) the artifact-review resume delivery (pending_approval -> running, same attempt),
+ *   (b) the MCP `agent_run_resume` primitive (pending_approval -> running, same attempt),
+ *   (c) the stopped-orchestrator resume (stopped -> queued -> running, fresh attempt):
+ *       its resume must carry the binding to that attempt in the same transaction
+ *       as its `queued -> running` claim, or refuse.
  *
- * And that a stale or foreign attempt is still refused, and nothing is sent.
- * Nothing in the request path calls the source checks yet; this file reads them
- * directly, the way the callbacks will.
+ * And, per road, that a stale or foreign attempt is still refused. The routes'
+ * own use of the check is pinned in their unit tests; this file reads the check
+ * directly, the way the routes do.
  *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided. Run with:
  *   CINATRA_TEST_DB_URL=postgres://user:pass@localhost:5432/db \
@@ -248,6 +252,49 @@ async function rebindToForeignAttempt() {
   return foreign;
 }
 
+/** A resolved gate and its intent, leased to this worker: the delivery reads its
+ *  claim columns and writes under that lease (cinatra#3745). */
+async function approveIntent() {
+  const gateId = `gate-${randomUUID()}`;
+  const reviewTaskId = `wayflow-${h.taskId}`;
+  const responseText = JSON.stringify({ approved: true });
+  await pool(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_review_gates"
+       (id, run_id, org_id, review_task_id, status, pinned_targets, disposition, fingerprint, resolved_at)
+     VALUES ($1, $2, $3, $4, 'resolved', '[{"artifactId":"post","representationRevisionId":"r1"}]'::jsonb, 'approve', $5, now())`,
+    [gateId, h.runId, ORG, reviewTaskId, `fp-${gateId}`],
+  );
+  await pool(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_review_resume_outbox"
+       (gate_id, run_id, review_task_id, kind, response_text, status, attempts, lease_token, lease_expires_at)
+     VALUES ($1, $2, $3, 'approve', $4, 'delivering', 1, 'lease-3745', now() + interval '5 minutes')`,
+    [gateId, h.runId, reviewTaskId, responseText],
+  );
+  return {
+    gateId,
+    runId: h.runId,
+    reviewTaskId,
+    kind: "approve" as const,
+    responseText,
+    status: "delivering" as const,
+    attempts: 1,
+    leaseToken: "lease-3745",
+    leaseExpiresAt: new Date(Date.now() + 300_000),
+    runClaimedAt: null,
+    resumeTaskResult: null,
+  };
+}
+
+async function resumeByMcp() {
+  const { createAgentBuilderPrimitiveHandlers } = await import("../mcp/handlers");
+  return (await createAgentBuilderPrimitiveHandlers().agent_run_resume({
+    primitiveName: "agent_run_resume",
+    input: { runId: h.runId, userResponse: JSON.stringify({ approved: true }) },
+    actor: { actorType: "user", source: "mcp", userId: USER },
+    mode: "deterministic",
+  })) as Record<string, unknown>;
+}
+
 beforeAll(async () => {
   if (!HAS_DB) return;
   process.env.SUPABASE_SCHEMA = TEST_SCHEMA;
@@ -296,6 +343,45 @@ beforeEach(() => {
   h.mintError = null;
   h.createError = null;
   h.runPatch = null;
+});
+
+describe.skipIf(!HAS_DB)("(a) the artifact-review resume delivery", () => {
+  it("resumes the run under its bound attempt, so the approved callback is admitted", async () => {
+    const attemptA = await seedDispatchedRun("pending_approval");
+    const { deliverArtifactReviewResumeIntent } = await import("../artifact-review-resume-delivery");
+    expect(await deliverArtifactReviewResumeIntent((await approveIntent()) as never)).toBe("delivered");
+    expect(h.callbacks).toEqual([{ admitted: true, current: true, status: "running", runAttempt: attemptA, boundAttempt: attemptA }]);
+    expect(h.handled).toEqual([{ fromStatus: "running" }]);
+  });
+
+  it("still refuses the callback when the binding belongs to a stale or foreign attempt", async () => {
+    await seedDispatchedRun("pending_approval");
+    const foreign = await rebindToForeignAttempt();
+    const { deliverArtifactReviewResumeIntent } = await import("../artifact-review-resume-delivery");
+    await deliverArtifactReviewResumeIntent((await approveIntent()) as never);
+    expect(h.callbacks).toHaveLength(1);
+    expect(h.callbacks[0]).toMatchObject({ admitted: false, code: "run_source_mismatch",
+      cause: "step_tool_run_source_inactive", boundAttempt: foreign });
+  });
+});
+
+describe.skipIf(!HAS_DB)("(b) the MCP agent_run_resume primitive", () => {
+  it("resumes the run under its bound attempt, so the approved callback is admitted", async () => {
+    const attemptA = await seedDispatchedRun("pending_approval");
+    const result = await resumeByMcp();
+    expect(result).not.toHaveProperty("error");
+    expect(h.callbacks).toEqual([{ admitted: true, current: true, status: "running", runAttempt: attemptA, boundAttempt: attemptA }]);
+    expect(h.handled).toEqual([{ fromStatus: "running" }]);
+  });
+
+  it("still refuses the callback when the binding belongs to a stale or foreign attempt", async () => {
+    await seedDispatchedRun("pending_approval");
+    const foreign = await rebindToForeignAttempt();
+    await resumeByMcp();
+    expect(h.callbacks).toHaveLength(1);
+    expect(h.callbacks[0]).toMatchObject({ admitted: false, code: "run_source_mismatch",
+      cause: "step_tool_run_source_inactive", boundAttempt: foreign });
+  });
 });
 
 describe.skipIf(!HAS_DB)("(c) the stopped-orchestrator resume", () => {

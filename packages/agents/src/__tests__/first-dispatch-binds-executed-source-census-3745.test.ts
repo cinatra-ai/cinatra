@@ -2,9 +2,10 @@
  * cinatra#3745 — CENSUS: every direct first-task send to WayFlow binds the
  * executed source first.
  *
- * A later part of the stack checks a run's callbacks against the source bound
- * to the run. A first task sent without that binding would leave them nothing
- * to be checked against, so each first-task send selects the loader's
+ * The model bridge and the passthrough road check a run's source-bound callbacks
+ * against the source bound to the run, and refuse them without a binding. A first
+ * task sent without that binding would have every such callback refused, so each
+ * first-task send selects the loader's
  * source (`selectWayflowRunStepToolPolicy`) and binds it to the run's attempt
  * (`bindRunStepToolPolicy`) before its `sendTask`.
  *

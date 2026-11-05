@@ -104,6 +104,18 @@ except Exception:  # pragma: no cover — host-side typecheck fallback
 # ApiCallStep._execute_request so it can inject X-Cinatra-A2A-Context-Id.
 # ---------------------------------------------------------------------------
 
+#: cinatra#3745: the source binding of the assistant that executes the current
+#: task (set per task in the patched run_task, read when a step is signed).
+_WAYFLOW_EXECUTED_SOURCE: contextvars.ContextVar[Optional[Mapping[str, str]]] = contextvars.ContextVar("_WAYFLOW_EXECUTED_SOURCE", default=None)
+
+
+def _set_executed_source_for(assistant: Any) -> "contextvars.Token[Optional[Mapping[str, str]]]":
+    """Set the executing assistant's frozen mount binding for this task. Only
+    the read-only snapshot the mount attached counts; anything else gives none."""
+    binding = getattr(assistant, "_cinatra_executed_source", None)
+    return _WAYFLOW_EXECUTED_SOURCE.set(binding if isinstance(binding, MappingProxyType) else None)
+
+
 #: Stores the fasta2a context_id for the task currently executing in this
 #: asyncio task / coroutine chain. Reset to "" between tasks.
 _WAYFLOW_CONTEXT_ID: contextvars.ContextVar[str] = contextvars.ContextVar(
@@ -929,36 +941,45 @@ def _patch_api_call_step_bridge_token() -> None:
                     request["headers"]["X-Cinatra-Context-Attestation"] = (
                         f"v2:{_expiry}:{_sig}"
                     )
-            # cinatra#3745: sign the identity of the executing step on the
-            # model-bridge and passthrough calls, so the application learns
-            # which step of the run makes each call. `self.id` is the executing
-            # compiled step's own id; the material `s1\n<ctx>\n<node>\n<expiry>`
+            # cinatra#3745: sign the identity of the executing step and the
+            # source of the assistant that executes it on the model-bridge and
+            # passthrough calls. `self.id` is the executing compiled step's own
+            # id; the three digests are the executing mount's frozen binding.
+            # The material `s2\n<ctx>\n<node>\n<raw>\n<executed>\n<declaration>\n<expiry>`
             # carries a prefix of its own, distinct from the context pair's.
-            # Step headers of these names that the flow's source declared on
-            # an internal call are replaced by the runtime's values (or
-            # dropped when the runtime has no key, context id or step id).
+            # Step and source headers of these names that the flow's source
+            # declared on an internal call are replaced by the runtime's values
+            # (or dropped when the runtime has no key, context id, step id or
+            # mount binding, or the context or step id holds a line break).
             if "llm-bridge" in _ctx_url or "/agents/passthrough" in _ctx_url:
                 for _hname in list(request["headers"].keys()):
                     if str(_hname).lower() in (
                         "x-cinatra-step-node",
                         "x-cinatra-step-attestation",
+                        "x-cinatra-executed-source",
+                        "x-cinatra-declaration-source",
+                        "x-cinatra-raw-source",
                     ):
                         del request["headers"][_hname]
                 _step_id = getattr(self, "id", "") or ""
-                if attest_key and _ctx_id and _step_id:
+                _loaded = _WAYFLOW_EXECUTED_SOURCE.get()
+                if attest_key and _ctx_id and _step_id and _loaded and "\n" not in _ctx_id + _step_id and "\r" not in _ctx_id + _step_id:
                     _step_expiry = (
                         int(time.time()) + _CONTEXT_ATTESTATION_TTL_SECONDS
                     )
                     _step_sig = hmac.new(
                         attest_key.encode("utf-8"),
-                        f"s1\n{_ctx_id}\n{_step_id}\n{_step_expiry}".encode(
+                        f"s2\n{_ctx_id}\n{_step_id}\n{_loaded['sourceSha256']}\n{_loaded['executedSourceSha256']}\n{_loaded['declarationSourceSha256']}\n{_step_expiry}".encode(
                             "utf-8"
                         ),
                         hashlib.sha256,
                     ).hexdigest()
+                    request["headers"]["X-Cinatra-Raw-Source"] = _loaded["sourceSha256"]
+                    request["headers"]["X-Cinatra-Executed-Source"] = _loaded["executedSourceSha256"]
+                    request["headers"]["X-Cinatra-Declaration-Source"] = _loaded["declarationSourceSha256"]
                     request["headers"]["X-Cinatra-Step-Node"] = _step_id
                     request["headers"]["X-Cinatra-Step-Attestation"] = (
-                        f"s1:{_step_expiry}:{_step_sig}"
+                        f"s2:{_step_expiry}:{_step_sig}"
                     )
         # ApiNode timeout policy — aligned for batch LLM workloads.
         #
@@ -1280,6 +1301,7 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
         _ctx_token = None
         _rt_token = None
         _snap_token = None
+        _source_token = None
 
         try:
             task = await self.storage.load_task(params["id"])
@@ -1323,6 +1345,8 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
             # Propagate context_id to ApiCallStep via ContextVar so
             # X-Cinatra-A2A-Context-Id is injected on llm-bridge calls.
             _ctx_token = _WAYFLOW_CONTEXT_ID.set(task.get("context_id", "") or "")
+            # cinatra#3745: the assistant that executes THIS task, never the active registry.
+            _source_token = _set_executed_source_for(self.assistant)
 
             # cinatra#1194 — template-version-per-run: what executes is no
             # longer byte-identical to the published spec for agents with
@@ -1569,6 +1593,8 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
             # capture never performed. Reset the run token first (LIFO wrt set).
             if _snap_token is not None:
                 _STEP_SNAPSHOT_RECORDER.reset(_snap_token)
+            if _source_token is not None:
+                _WAYFLOW_EXECUTED_SOURCE.reset(_source_token)
             if _rt_token is not None:
                 _WAYFLOW_RUN_TOKEN.reset(_rt_token)
             if _ctx_token is not None:
@@ -5161,8 +5187,8 @@ def _build_composed_oas_handler(
                 "composedSha256": agent.composed_sha256,
                 "composedOas": agent.composed_oas,
                 # The host reads this before a run's first dispatch and binds it
-                # to the run (cinatra#3745); a later part proves which assistant
-                # ran. The substituted text is never returned, only its digest.
+                # to the run (cinatra#3745); each step's s2 signature proves which
+                # assistant ran. The substituted text is never returned, only its digest.
                 "selectedSourceBinding": dict(agent.selected_source_binding) if agent.selected_source_binding is not None else None,
             }
         )

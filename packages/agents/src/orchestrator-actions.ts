@@ -311,8 +311,8 @@ export async function resumeStoppedOrchestratorAction(
   }
 
   // THE RESUME CLAIMS THE RUN AND BINDS ITS ATTEMPT BEFORE IT DISPATCHES
-  // (cinatra#3745). A later part admits the resumed leg's callbacks only while the
-  // run is `running` under the attempt its step policy is bound to. So the dispatch
+  // (cinatra#3745). The model bridge and the passthrough road admit the resumed leg's
+  // source-bound callbacks only while the run is `running` under the attempt its step policy is bound to. So the dispatch
   // edge `queued -> running` (which mints the fresh attempt) is taken BEFORE the
   // send, and in that SAME transaction the run's one bound graph is carried forward
   // to the attempt (`carryBoundStepToolPolicy`). The prior attempt is the locked run

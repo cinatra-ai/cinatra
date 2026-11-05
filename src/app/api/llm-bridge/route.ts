@@ -1,3 +1,5 @@
+import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
+import { verifyRunExecutedSource } from "@cinatra-ai/agents/store";
 import "server-only";
 
 import * as path from "node:path";
@@ -94,6 +96,8 @@ import {
   verifyRunToken,
   RUN_TOKEN_HEADER,
   verifyRunStepAttestation,
+  verifySourceBoundRunStep,
+  RUN_RAW_SOURCE_HEADER, RUN_EXECUTED_SOURCE_HEADER, RUN_DECLARATION_SOURCE_HEADER,
   RUN_STEP_NODE_HEADER,
   RUN_STEP_ATTESTATION_HEADER,
 } from "@/lib/agent-run-token";
@@ -999,9 +1003,16 @@ export async function POST(req: Request): Promise<Response> {
   // dedicated key. The step is read only on a call whose run token resolved a
   // run (a bridge-authorized call) and whose context-id header names that same
   // run, and only from the runtime's signed pair, verified with that context
-  // id. The body and every other header are never read for a step. An absent
-  // or unverified pair gives no step and changes nothing else.
-  const verifiedStepId =
+  // id. The body and every other header are never read for a step. Without
+  // source headers, an absent or unverified `s1` pair gives no step and changes
+  // nothing else. A call whose run token resolved a run and that carries any
+  // source header must present an `s2` pair over the step and the executing
+  // source that verifies, with the context id naming that run, and the run must
+  // be running under the attempt that source is bound to; otherwise it is
+  // refused (403 `run_source_mismatch`, a fixed sentence) before any provider
+  // is reached, and the step is the proof's. A call without a resolved run has
+  // no run to bind a source to: its source headers give no step, as before.
+  let verifiedStepId =
     runFromToken && a2aContextId && runFromContextId?.id === runFromToken.id
       ? (verifyRunStepAttestation({
           key: process.env.CINATRA_CONTEXT_ATTEST_KEY,
@@ -1010,6 +1021,24 @@ export async function POST(req: Request): Promise<Response> {
           attestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER),
         }) ?? undefined)
       : undefined;
+
+  let verifiedExecutedSource: VerifiedExecutedRunSource | undefined;
+  if (runFromToken && (req.headers.get(RUN_RAW_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTED_SOURCE_HEADER) !== null ||
+      req.headers.get(RUN_DECLARATION_SOURCE_HEADER) !== null)) {
+    const sourceAttestation = verifySourceBoundRunStep({ key: process.env.CINATRA_CONTEXT_ATTEST_KEY,
+      contextId: a2aContextId, node: req.headers.get(RUN_STEP_NODE_HEADER),
+      attestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER),
+      sourceSha256: req.headers.get(RUN_RAW_SOURCE_HEADER),
+      executedSourceSha256: req.headers.get(RUN_EXECUTED_SOURCE_HEADER),
+      declarationSourceSha256: req.headers.get(RUN_DECLARATION_SOURCE_HEADER) });
+    try {
+      if (!sourceAttestation || !runFromToken.orgId || runFromContextId?.id !== runFromToken.id) throw new Error("source_binding_invalid");
+      verifiedExecutedSource = await verifyRunExecutedSource(runFromToken.id, runFromToken.orgId, sourceAttestation);
+      verifiedStepId = verifiedExecutedSource.stepId;
+    } catch {
+      return NextResponse.json({ error: "Executing source could not be verified", code: "run_source_mismatch" }, { status: 403 });
+    }
+  }
 
   // cinatra#4150 — no publish without a released decision, enforced at the call,
   // before any provider is reached. The run is the one the token proved, else the

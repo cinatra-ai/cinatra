@@ -7,7 +7,9 @@
  * with the runtime's dedicated key over `s1\n<contextId>\n<nodeId>\n<expiry>`.
  * A gate claim is `{ node, attestation: "g1:<hex>" }` over
  * `g1\n<contextId>\n<taskId>\n<nodeId>`. Each verifier answers the verified
- * node id or null. These cases drive the real functions.
+ * node id or null. A source-bound pair (`s2`) also signs the three digests of
+ * the executing source, sent in their own headers; its verifier answers the
+ * frozen step and digests, or null. These cases drive the real functions.
  */
 import { afterAll, describe, it, expect, vi } from "vitest";
 import { createHmac } from "node:crypto";
@@ -38,11 +40,26 @@ type GateVerifyInput = {
   claim: unknown;
 };
 
+type SourceVerifyInput = {
+  key?: string | null;
+  contextId?: string | null;
+  node?: string | null;
+  attestation?: string | null;
+  sourceSha256?: string | null;
+  executedSourceSha256?: string | null;
+  declarationSourceSha256?: string | null;
+  nowMs?: number;
+};
+
 const api = runToken as unknown as {
   verifyRunStepAttestation: (input: StepVerifyInput) => string | null;
   verifyGateNodeClaim: (input: GateVerifyInput) => string | null;
+  verifySourceBoundRunStep?: (input: SourceVerifyInput) => Record<string, string> | null;
   RUN_STEP_NODE_HEADER: string;
   RUN_STEP_ATTESTATION_HEADER: string;
+  RUN_RAW_SOURCE_HEADER?: string;
+  RUN_EXECUTED_SOURCE_HEADER?: string;
+  RUN_DECLARATION_SOURCE_HEADER?: string;
 };
 
 function hmacHex(key: string, material: string): string {
@@ -193,6 +210,76 @@ describe("recorded pause step verification", () => {
     }
     expect(api.verifyGateNodeClaim({ key: undefined, contextId: CTX, taskId: TASK, claim })).toBeNull();
     expect(api.verifyGateNodeClaim({ key: KEY, contextId: CTX, taskId: "", claim })).toBeNull();
+  });
+});
+
+describe("source-bound step verification (s2)", () => {
+  const RAW = "a".repeat(64);
+  const EXECUTED = "b".repeat(64);
+  const DECLARATION = "c".repeat(64);
+  function signed(opts: { key?: string; expiry?: number } = {}): string {
+    const expiry = opts.expiry ?? NOW_S + 300;
+    return `s2:${expiry}:${hmacHex(opts.key ?? KEY, `s2\n${CTX}\n${NODE}\n${RAW}\n${EXECUTED}\n${DECLARATION}\n${expiry}`)}`;
+  }
+  const input = (): SourceVerifyInput => ({
+    key: KEY, contextId: CTX, node: NODE, attestation: signed(),
+    sourceSha256: RAW, executedSourceSha256: EXECUTED, declarationSourceSha256: DECLARATION, nowMs: NOW_MS,
+  });
+  function verify(value: SourceVerifyInput) {
+    expect(typeof api.verifySourceBoundRunStep).toBe("function");
+    return api.verifySourceBoundRunStep!(value);
+  }
+
+  // (s1)
+  it("names its three source headers", () => {
+    expect([api.RUN_RAW_SOURCE_HEADER, api.RUN_EXECUTED_SOURCE_HEADER, api.RUN_DECLARATION_SOURCE_HEADER])
+      .toEqual(["x-cinatra-raw-source", "x-cinatra-executed-source", "x-cinatra-declaration-source"]);
+  });
+
+  // (s2)
+  it("a pair signed over the step and all three digests answers them, frozen", () => {
+    const proof = verify(input());
+    expect(proof).toEqual({ stepId: NODE, contextId: CTX, sourceSha256: RAW,
+      executedSourceSha256: EXECUTED, declarationSourceSha256: DECLARATION });
+    expect(Object.isFrozen(proof)).toBe(true);
+  });
+
+  // (s3)
+  it("refuses a change of any signed value, another key, an s1 pair, a line break or a malformed digest", () => {
+    for (const change of [
+      { sourceSha256: "f".repeat(64) },
+      { executedSourceSha256: "f".repeat(64) },
+      { declarationSourceSha256: "f".repeat(64) },
+      { contextId: "ctx-run-2" },
+      { node: "step-node-2" },
+      { key: OTHER_KEY },
+      { attestation: stepPair({}).attestation },
+      { attestation: signed().replace(/:[a-f0-9]{64}$/, ":" + "A".repeat(64)) },
+      { attestation: signed() + "0" },
+      { node: "step\nother" },
+      { contextId: "ctx\rother" },
+      { sourceSha256: null },
+      { executedSourceSha256: "B".repeat(64) },
+      { declarationSourceSha256: "c".repeat(63) },
+      { key: null },
+      { attestation: null },
+    ] satisfies SourceVerifyInput[]) {
+      expect(verify({ ...input(), ...change }), JSON.stringify(change)).toBeNull();
+    }
+  });
+
+  // (s4)
+  it("refuses an expiry more than 60 seconds past or more than 600 seconds ahead", () => {
+    expect(verify({ ...input(), attestation: signed({ expiry: NOW_S - 60 }) })).not.toBeNull();
+    expect(verify({ ...input(), attestation: signed({ expiry: NOW_S - 61 }) })).toBeNull();
+    expect(verify({ ...input(), attestation: signed({ expiry: NOW_S + 600 }) })).not.toBeNull();
+    expect(verify({ ...input(), attestation: signed({ expiry: NOW_S + 601 }) })).toBeNull();
+  });
+
+  // (s5)
+  it("an s2 pair is no s1 pair: the step-only verifier refuses it", () => {
+    expect(api.verifyRunStepAttestation({ key: KEY, contextId: CTX, node: NODE, attestation: signed(), nowMs: NOW_MS }))
+      .toBeNull();
   });
 });
 

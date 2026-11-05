@@ -877,8 +877,8 @@ export async function bindRunStepToolPolicy(input: {
  * The prior attempt is read from the run row locked here, never from a caller, and a
  * lost CAS rolls the move back with it. It never selects or replaces a graph. It
  * refuses a binding that another attempt holds than the one the locked run carries,
- * so a stale or foreign attempt cannot move it. An unbound run stays unbound (a later
- * part's source checks refuse its callbacks). Lock order: run, then binding (as bind). */
+ * so a stale or foreign attempt cannot move it. An unbound run stays unbound (the
+ * routes' source checks refuse its source-bound callbacks). Lock order: run, then binding (as bind). */
 export async function carryRunStepToolPolicyInTx(txLike: unknown, input: {
   orgId: string; runId: string; executionAttemptId: string;
 }): Promise<void> {
