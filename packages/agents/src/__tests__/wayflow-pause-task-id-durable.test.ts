@@ -4,8 +4,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // depends on it. A paused run's column is the only thing a change request can trust,
 // so at `input-required` the write is awaited with no catch, before the latest-task
 // record and before any gate is published. And a sender that holds a claim writes
-// only under its own token: 0 rows means the lease was taken over, and the run is
-// someone else's.
+// only under its own token, in every state with no catch: 0 rows means the token
+// no longer holds the run (taken over, or cleared by a stop or another status
+// change), and a write that throws leaves the handler with its error (F3).
 //
 // F1 and F2 drive the REAL `handleWayflowTaskState` with the mocks of
 // `wayflow-reentrant-gate-resolution.test.ts`.
@@ -230,6 +231,33 @@ describe("cinatra#4245 — the durable pause task id", () => {
     storeMock.updateAgentRunA2ATaskId.mockResolvedValueOnce({ written: false } as never);
     await handleWayflowTaskState({ ...pausedAt("task-old"), pauseClaimToken: "tok-old" });
     expect(storeMock.updateAgentRunA2ATaskId).toHaveBeenCalledWith("run-td-1", "task-old", { pauseClaimToken: "tok-old" });
+    expect(onInterruptSpy).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+  });
+
+  it("F2 text: 0 rows is read as a token that no longer holds the run, not only as a takeover", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      storeMock.updateAgentRunA2ATaskId.mockResolvedValueOnce({ written: false } as never);
+      await handleWayflowTaskState({ ...pausedAt("task-old"), pauseClaimToken: "tok-old" });
+      expect(warn).toHaveBeenCalledWith(
+        "[wayflow] run=run-td-1 task=task-old: this sender's claim token no longer holds the run; no transition",
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("F3: a claimer's write that throws at a terminal state throws, and makes no transition", async () => {
+    storeMock.updateAgentRunA2ATaskId.mockRejectedValueOnce(new Error("db blip") as never);
+    await expect(
+      handleWayflowTaskState({
+        ...pausedAt("task-new"),
+        task: { ...sendInterruptTask("task-new"), status: { state: "completed", message: { parts: [] } } },
+        pauseClaimToken: "tok-live",
+      }),
+    ).rejects.toThrow("db blip");
+    expect(storeMock.updateAgentRunA2ATaskId).toHaveBeenCalledWith("run-td-1", "task-new", { pauseClaimToken: "tok-live" });
     expect(onInterruptSpy).not.toHaveBeenCalled();
     expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
   });

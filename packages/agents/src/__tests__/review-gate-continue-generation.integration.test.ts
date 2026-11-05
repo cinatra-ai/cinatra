@@ -358,4 +358,52 @@ describe.skipIf(!HAS_DB)("cinatra#4245 change B — Continue under the pause cla
       await pool(`DROP FUNCTION IF EXISTS ${fn}()`);
     }
   });
+
+  it("a Redis failure and a put-back that lost its compare-and-set: the error says the put-back changed nothing", async () => {
+    const s = await seed();
+    const r = await redis();
+    // Another writer moves the run off `running` (through the real store) between
+    // the fence and the put-back, so the put-back's compare-and-set commits nothing.
+    r.rememberAnsweredGateSubmission.mockImplementationOnce(async () => {
+      await store.transitionRunStatus(s.runId, "running", "failed", { error: "another writer" }, SESSION);
+      throw new Error("redis is down");
+    });
+    const e = await answer(s.gate, JSON.stringify({ pick: "one" })).then(() => null, (err: unknown) => err as Error);
+    expect(e?.message).toBe(
+      "redis is down; nothing was sent, and the put-back of the gate changed nothing: the run was no longer running, " +
+        "so it stays where the writer that moved it left it",
+    );
+    expect(sendTask).not.toHaveBeenCalled();
+    expect(await statusOf(s.runId)).toBe("failed");
+  });
+
+  it("a record error whose cause throws when read is named by a fixed text, and the failed put-back still names both outcomes", async () => {
+    const s = await seed();
+    const r = await redis();
+    const hostile = new Error("redis is down");
+    Object.defineProperty(hostile, "cause", {
+      get() {
+        throw new Error("the cause cannot be read");
+      },
+    });
+    r.rememberAnsweredGateSubmission.mockRejectedValueOnce(hostile);
+    const fn = `"${q(TEST_SCHEMA)}"."t4245_fail_put_back_2"`;
+    await pool(`CREATE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN RAISE EXCEPTION 'db blip'; END $f$`);
+    await pool(
+      `CREATE TRIGGER t4245_fail_put_back_2 BEFORE UPDATE ON ${RUNS} FOR EACH ROW
+       WHEN (OLD.status = 'running' AND NEW.status = 'pending_approval' AND OLD.id = '${s.runId.replaceAll("'", "''")}')
+       EXECUTE FUNCTION ${fn}()`,
+    );
+    try {
+      const e = await answer(s.gate, JSON.stringify({ pick: "one" })).then(() => null, (err: unknown) => err as Error);
+      expect(e?.message).toMatch(
+        /^an error whose text could not be read; nothing was sent, and the put-back of the gate reported an error \(db blip\): if it did not commit, the run stays running, and a stop lands once its send lease ends at \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z; if it committed, the run waits at this task again$/,
+      );
+      expect(sendTask).not.toHaveBeenCalled();
+      expect(await statusOf(s.runId)).toBe("running");
+    } finally {
+      await pool(`DROP TRIGGER IF EXISTS t4245_fail_put_back_2 ON ${RUNS}`);
+      await pool(`DROP FUNCTION IF EXISTS ${fn}()`);
+    }
+  });
 });
