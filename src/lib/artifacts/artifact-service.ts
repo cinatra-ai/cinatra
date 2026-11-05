@@ -801,6 +801,7 @@ export type ArtifactDetailAccess =
   | {
       kind: "ok";
       artifact: ArtifactSummary;
+      liveObjectData?: unknown;
       /** The type picker's DEFERRED presentation reading (spec §VI.1,
        *  cinatra#3319). Present only when the caller asked for it
        *  (`withMeaningOffer`) and the read is org-scoped; `artifact` then
@@ -834,6 +835,7 @@ export function readArtifactForDetail(input: {
 }): ArtifactDetailAccess {
   return readArtifactAccess(input, {
     allowDeleted: false,
+    includeLiveObjectData: true,
     withMeaningOffer: input.withMeaningOffer === true,
   });
 }
@@ -875,7 +877,7 @@ export function readArtifactForSettledReview(input: {
  *  reading answers (cinatra#3319), never which rows pass. */
 function readArtifactAccess(
   input: { artifactId: string; orgId: string | null; actor?: ActorContext },
-  options: { allowDeleted: boolean; withMeaningOffer?: boolean },
+  options: { allowDeleted: boolean; includeLiveObjectData?: boolean; withMeaningOffer?: boolean },
 ): ArtifactDetailAccess {
   const rec = getObjectById(input.artifactId, { orgId: input.orgId }, input.actor, {
     allowDeleted: options.allowDeleted,
@@ -919,6 +921,7 @@ function readArtifactAccess(
         };
         return answered;
       },
+      ...(options.includeLiveObjectData && !options.allowDeleted ? { liveObjectData: rec.data } : {}),
     };
   }
   const presentation =
@@ -929,7 +932,12 @@ function readArtifactAccess(
           baseType: rec.type,
         })
       : undefined;
-  return { kind: "ok", artifact: toSummary(rec, enrichment, presentation) };
+  return {
+    kind: "ok", artifact: toSummary(rec, enrichment, presentation),
+    // Only the live detail reader carries this authorized row. A settled
+    // review must read its immutable pin, never the row's current metadata.
+    ...(options.includeLiveObjectData && !options.allowDeleted ? { liveObjectData: rec.data } : {}),
+  };
 }
 
 /**

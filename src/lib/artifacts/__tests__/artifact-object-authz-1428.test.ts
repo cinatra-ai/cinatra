@@ -251,6 +251,15 @@ describe("cinatra#1428 artifact-surface canonical object authorization", () => {
     const res = readArtifactForDetail({ artifactId: "a1", orgId: ORG, actor: member() });
     expect(res.kind).toBe("ok");
     expect(res.kind === "ok" && res.artifact.artifactId).toBe("a1");
+    expect(res.kind === "ok" && res.liveObjectData).toEqual(row().data);
+  });
+
+  it("settled review reads never carry the live object's data", async () => {
+    const { readArtifactForSettledReview } = await import("../artifact-service");
+    getObjectById.mockReturnValue(row());
+    const res = readArtifactForSettledReview({ artifactId: "a1", orgId: ORG, actor: member() });
+    expect(res.kind).toBe("ok");
+    expect(res).not.toHaveProperty("liveObjectData");
   });
 
   // cinatra#1892 B2 — a USER meaning assertion MUTATES the artifact identity,

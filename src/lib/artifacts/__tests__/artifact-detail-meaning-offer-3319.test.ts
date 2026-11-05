@@ -237,4 +237,20 @@ describe("cinatra#3319 — readArtifactForDetail answers the meaning offer from 
     expect("readPresentation" in res).toBe(false);
     expect("meaningOffer" in res).toBe(false);
   });
+
+  // cinatra#3459: the live detail read carries the authorized row's live record
+  // (artifact-object-authz-1428.test.ts reads it without the flag). The
+  // deferred road returns early, so it must carry the record as well, before
+  // any presentation read.
+  it("S6: the deferred read carries the row's live record, as the read without the flag does", async () => {
+    const read = await detail();
+    getObjectById.mockReturnValue(row());
+    const res = read({ artifactId: "a1", orgId: ORG, actor: member(), withMeaningOffer: true }) as {
+      kind: string;
+      liveObjectData?: unknown;
+    };
+    expect(res.kind).toBe("ok");
+    expect(res.liveObjectData).toEqual(row().data);
+    expect(hostReads()).toBe(0);
+  });
 });
