@@ -22,7 +22,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { matcherManifestRegistry, objectTypeRegistry } from "@cinatra-ai/objects/registry";
+import {
+  artifactPackSurfaceRegistry,
+  matcherManifestRegistry,
+  objectTypeRegistry,
+} from "@cinatra-ai/objects/registry";
+import {
+  registerArtifactExtensionDir,
+  registerArtifactExtensions,
+} from "@cinatra-ai/objects/register-artifact-extensions";
 import {
   claimWinnerProjectionDisposition,
   resolveClaimWinner,
@@ -146,6 +154,9 @@ const t3Store: {
   opCalls: string[];
   /** The journal read throws (cinatra#3319 T30 (g)). */
   opThrows: boolean;
+  /** Journal ops by version namespace (cinatra#3319 T41): when set, a read
+   *  answers the op of exactly that namespace, or none. */
+  opsByNs: Record<string, { phase: string; installOpId: string; digest: string | null }> | null;
 } = {
   dataRoot: null,
   devRoot: null,
@@ -157,7 +168,21 @@ const t3Store: {
   op: undefined,
   opCalls: [],
   opThrows: false,
+  opsByNs: null,
 };
+// cinatra#3319 MF2: the runtime-discovery dispatcher the reader reads the
+// pack surfaces through. A faithful stand-in of the host entry point: the
+// lifecycle-live artifact rows of `t3Store.rows` are its manifests, and its
+// artifact facet is the real facet's rule (the bridge's surfaces of the live,
+// scope-visible packages). The real facet is pinned by the extensions package's
+// own facet test; this suite pins what the reader does with the answer.
+const discoverState = vi.hoisted(() => ({
+  calls: [] as Array<{ kind?: string; scope: unknown }>,
+  throws: false,
+  facetThrows: false,
+  unmigrated: false,
+  registered: [] as string[],
+}));
 // cinatra#3319 T31: failures the store's file system answers, by path (an
 // errno code such as EACCES), and every manifest read, so a case can say which
 // store record was read. Both the reader and the real discovery read through it.
@@ -212,6 +237,7 @@ vi.mock("@/lib/extension-install-ops", () => ({
   readInstallOpForVersion: async (packageName: string, orgId: string | null, version: string) => {
     t3Store.opCalls.push(`${packageName}|${orgId}|${version}`);
     if (t3Store.opThrows) throw new Error("journal unreadable in this case");
+    if (t3Store.opsByNs !== null) return t3Store.opsByNs[version] ?? null;
     if (t3Store.op !== undefined) return t3Store.op;
     const row = Object.values(t3Store.rows).find(
       (r) => (r as { packageName?: unknown }).packageName === packageName,
@@ -224,12 +250,71 @@ vi.mock("@/lib/extension-install-ops", () => ({
     };
   },
 }));
-// The claim's install row, read by its id (cinatra#3319 T15).
+// The claim's install row, read by its id (cinatra#3319 T15), and the rows of
+// one package, which the runtime's multi-version trust gate reads (T41).
 vi.mock("@cinatra-ai/extensions/canonical-store", () => ({
   readInstalledExtensionById: async (id: string) => {
     if (t3Store.rowsThrow) throw new Error("install row read failed in this case");
     return t3Store.rows[id] ?? null;
   },
+  readInstalledExtensionsByPackageName: async (packageName: string) =>
+    Object.values(t3Store.rows).filter(
+      (r) => (r as { packageName?: unknown }).packageName === packageName,
+    ),
+}));
+// The reader never reads a port grant (cinatra#3319 T41): the grant decides
+// approved ports, never whether a row anchors.
+vi.mock("@/lib/extension-host-port-grants", () => ({
+  readGrant: async () => {
+    throw new Error("the reader read a port grant");
+  },
+}));
+vi.mock("@cinatra-ai/extensions/runtime-discovery-host", async () => {
+  const { artifactPackSurfaceRegistry } = await import("@cinatra-ai/objects/registry");
+  const { visibleManifestPackageNames } = await import("@cinatra-ai/extension-types");
+  return {
+    discoverActiveExtensionCapabilities: async (input: {
+      kind?: string;
+      scope: Parameters<typeof visibleManifestPackageNames>[1];
+      onError?: (kind: string, error: unknown) => void;
+    }) => {
+      discoverState.calls.push({ kind: input.kind, scope: input.scope });
+      if (discoverState.throws) throw new Error("dispatcher unreadable in this case");
+      if (discoverState.unmigrated) return { byKind: {}, all: [], unmigratedKinds: ["artifact"] };
+      if (discoverState.facetThrows) {
+        input.onError?.("artifact", new Error("artifact facet failed in this case"));
+        return { byKind: { artifact: [] }, all: [], unmigratedKinds: [] };
+      }
+      const manifests = Object.values(t3Store.rows)
+        .map((r) => r as Record<string, unknown>)
+        .filter((r) => r.kind === "artifact" && (r.status === "active" || r.status === "locked"))
+        .map((r) => ({
+          id: String(r.id),
+          packageName: String(r.packageName),
+          kind: "artifact",
+          ownerLevel: (r.ownerLevel as string | undefined) ?? "platform",
+          ownerId: (r.ownerId as string | null | undefined) ?? null,
+          organizationId: (r.organizationId as string | null | undefined) ?? null,
+          status: String(r.status),
+        }));
+      const live = visibleManifestPackageNames(manifests, input.scope);
+      const packs = artifactPackSurfaceRegistry
+        .list()
+        .filter((surface) => live.has(surface.packageName))
+        .map((surface) => ({ packageName: surface.packageName, artifactPack: surface }));
+      return { byKind: { artifact: packs }, all: packs, unmigratedKinds: [] };
+    },
+  };
+});
+vi.mock("@cinatra-ai/extensions", () => ({
+  extensionRegistry: {
+    registerIfAbsent: (handler: { typeId: string }) => {
+      discoverState.registered.push(handler.typeId);
+    },
+  },
+}));
+vi.mock("@cinatra-ai/extensions/artifact-handler", () => ({
+  createArtifactExtensionHandler: () => ({ typeId: "artifact" }),
 }));
 vi.mock("@cinatra-ai/agents/agent-runtime-mount", () => ({
   resolveDevExtensionSourceRoot: () => {
@@ -506,11 +591,27 @@ describe("cinatra#3319 — readClaimBackedMeaningTypesForOrg", () => {
   const liSlugDir = () =>
     join(t3Store.dataRoot as string, "artifact", "@cinatra-ai", "linkedin-artifacts");
   /** Place fixture records in the store at `<root>/artifact/<slug>/<digest>/`,
-   *  where the reader and the real discovery both find them. */
+   *  where the real discovery finds them. */
   const stock = (dirs: string[]) => {
     for (const dir of dirs) cpSync(dir, join(liSlugDir(), digestOf(dir)), { recursive: true });
     t3Store.records = null;
   };
+  // cinatra#3319 MF2: THE READER READS WHAT THE RUNTIME REGISTERED. The
+  // object-registry bridge is the runtime's registration of an artifact pack:
+  // the store rescan registers an anchor-vetted store record with its digest,
+  // the bundled scan registers the development tree. These two helpers make the
+  // same calls the runtime makes, through the real bridge, so the pack's
+  // surface reaches the dispatcher the way production puts it there.
+  /** The runtime registers the pack from its store record at `dir`'s digest
+   *  (`registerArtifactExtensionDir`, as the store rescan calls it). */
+  const runtimeRegistersStore = (dir: string) =>
+    registerArtifactExtensionDir(join(liSlugDir(), digestOf(dir)), {
+      source: "store",
+      digest: digestOf(dir),
+    });
+  /** The runtime's bundled scan over the development root
+   *  (`registerArtifactExtensions`, as the registry warm calls it). */
+  const runtimeRegistersDevTree = () => registerArtifactExtensions(t3Store.devRoot as string);
 
   beforeAll(() => {
     registerHostShaped(T_POST_DRAFT, "artifact-safe");
@@ -519,13 +620,13 @@ describe("cinatra#3319 — readClaimBackedMeaningTypesForOrg", () => {
     for (const t of T3_MULTI) registerHostShaped(t, "artifact-safe");
     registerHostShaped(T3_NO_ACCEPTS, "artifact-safe");
     registerPackageOwned(T3_OWNED, EXT_T3_OWNER);
-    // Rule 2 reads the manifest, never the mutable matcher registry.
+    // Rule 2 reads the pack's surface, never the mutable matcher registry.
     matcherManifestRegistry._clearForTests();
 
     root = mkdtempSync(join(tmpdir(), "t3319-"));
     t3Store.dataRoot = join(root, "data");
     mkdirSync(t3Store.dataRoot);
-    // The bundled dir fallback: an empty dev root, so only store records answer.
+    // The development root: empty, so only what a case writes is there.
     t3Store.devRoot = join(root, "dev");
     mkdirSync(t3Store.devRoot);
     const accepts = { file: { mimeTypes: POST_DRAFT_ACCEPTS } };
@@ -574,9 +675,20 @@ describe("cinatra#3319 — readClaimBackedMeaningTypesForOrg", () => {
     t3Store.op = undefined;
     t3Store.opCalls = [];
     t3Store.opThrows = false;
+    t3Store.opsByNs = null;
+    discoverState.calls = [];
+    discoverState.throws = false;
+    discoverState.facetThrows = false;
+    discoverState.unmigrated = false;
+    discoverState.registered = [];
     fsFaults.codes.clear();
     fsFaults.reads.length = 0;
+    // What the runtime registered in this case is gone with it.
+    artifactPackSurfaceRegistry?._clearForTests();
+    matcherManifestRegistry._clearForTests();
     rmSync(join(t3Store.dataRoot as string, "artifact"), { recursive: true, force: true });
+    rmSync(join(t3Store.devRoot as string, "cinatra-ai"), { recursive: true, force: true });
+    rmSync(join(t3Store.devRoot as string, "linkedin-artifacts"), { recursive: true, force: true });
   });
 
   afterAll(() => {
@@ -625,14 +737,18 @@ describe("cinatra#3319 — readClaimBackedMeaningTypesForOrg", () => {
       [`${EXT_LINKEDIN}@1.0.0`, `${EXT_T3_MATCHERS}@1.0.0`, `${EXT_T3_NO_ACCEPTS}@1.0.0`].sort(),
     );
     expect(t3Store.discoverCalls).toBe(0);
+    // An injected per-winner read is the whole read: the dispatcher is not asked.
+    expect(discoverState.calls).toEqual([]);
   });
 
   // The store records sit in the store's own layout (cinatra#3319 T31), one
   // folder per digest, so there is no record order to vary.
   it("3319 T3 (ii) the default adapter keeps the pack whose winner is at 1.0.0 while 2.0.0 declares matchers", async () => {
     stock([rec1, rec2]);
-    // The claim's install row pins the 1.0.0 record's digest.
+    // The claim's install row pins the 1.0.0 record's digest, and the runtime
+    // registered the pack from that record.
     t3Store.rows = { [LI_INSTALL]: linkedinRow(digestOf(rec1)) };
+    runtimeRegistersStore(rec1);
     const got = await helperMod.readClaimBackedMeaningTypesForOrg(ORG, {
       readClaimsForOrg: linkedinWinnerAt("1.0.0"),
     });
@@ -643,6 +759,7 @@ describe("cinatra#3319 — readClaimBackedMeaningTypesForOrg", () => {
     stock([rec1, rec2]);
     // The claim's install row pins the 2.0.0 record's digest.
     t3Store.rows = { [LI_INSTALL]: linkedinRow(digestOf(rec2)) };
+    runtimeRegistersStore(rec2);
     const got = await helperMod.readClaimBackedMeaningTypesForOrg(ORG, {
       readClaimsForOrg: linkedinWinnerAt("2.0.0"),
     });
@@ -671,6 +788,7 @@ describe("cinatra#3319 — readClaimBackedMeaningTypesForOrg", () => {
       expect(adapted).toEqual([]);
     }
     expect(t3Store.discoverCalls).toBe(0);
+    expect(discoverState.calls).toEqual([]);
   });
 
   it("3319 T3 (iv) readInstalledPackAcceptedMimeTypes still answers the first readable record, as on main", async () => {
@@ -693,36 +811,42 @@ describe("cinatra#3319 — readClaimBackedMeaningTypesForOrg", () => {
     stock([recA1, rec1]);
     // The install pins the record that declares matchers: no entry.
     t3Store.rows = { [LI_INSTALL]: linkedinRow(digestOf(recA1)) };
+    runtimeRegistersStore(recA1);
     expect(await readLinkedin("1.0.0")).toEqual([]);
     // The install pins the record that declares none: the entry, naming its winner.
     t3Store.rows = { [LI_INSTALL]: linkedinRow(digestOf(rec1)) };
+    runtimeRegistersStore(rec1);
     expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
   });
 
-  it("3319 T15 (c) the development tree answers an install with no recorded digest when the store read succeeded and holds no record of the pack", async () => {
-    const devDir = join(t3Store.devRoot as string, "cinatra-ai", "linkedin-artifacts");
-    mkdirSync(devDir, { recursive: true });
+  /** A development-tree manifest of the LinkedIn pack at `version` under `rel`. */
+  const writeDevManifest = (rel: string[], version: string, cinatraExtra: Record<string, unknown> = {}) => {
+    const dir = join(t3Store.devRoot as string, ...rel);
+    mkdirSync(dir, { recursive: true });
     writeFileSync(
-      join(devDir, "package.json"),
+      join(dir, "package.json"),
       JSON.stringify({
         name: EXT_LINKEDIN,
-        version: "1.0.0",
-        cinatra: { kind: "artifact", artifact: { accepts: { file: { mimeTypes: POST_DRAFT_ACCEPTS } } } },
+        version,
+        cinatra: {
+          kind: "artifact",
+          artifact: { accepts: { file: { mimeTypes: POST_DRAFT_ACCEPTS } } },
+          ...cinatraExtra,
+        },
       }),
     );
-    try {
-      // A bundled install and a store that holds nothing of the pack: the dev
-      // tree. A failed store read, or a store record of the pack, makes the
-      // reader throw instead (T27 (a), T27 (g), T31).
-      t3Store.rows = { [LI_INSTALL]: linkedinRow(null) };
-      expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
-    } finally {
-      rmSync(join(t3Store.devRoot as string, "cinatra-ai"), { recursive: true, force: true });
-    }
+  };
+
+  it("3319 T15 (c) a bundled install answers through the development tree the runtime registered the pack from", async () => {
+    writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0");
+    t3Store.rows = { [LI_INSTALL]: linkedinRow(null) };
+    runtimeRegistersDevTree();
+    expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
   });
 
   it("3319 T15 (d) an unbound claim, or one whose install row is not a live artifact row of the pack, gets no entry", async () => {
     stock([rec1]);
+    runtimeRegistersStore(rec1);
     t3Store.rows = { [LI_INSTALL]: linkedinRow(digestOf(rec1)) };
     expect(await readLinkedin("1.0.0", null)).toEqual([]);
     for (const rows of [
@@ -766,198 +890,116 @@ describe("cinatra#3319 — readClaimBackedMeaningTypesForOrg", () => {
     ]);
   });
 
-  /** A development-tree manifest of the LinkedIn pack at `version` under `rel`. */
-  const writeDevManifest = (rel: string[], version: string) => {
-    const dir = join(t3Store.devRoot as string, ...rel);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(
-      join(dir, "package.json"),
-      JSON.stringify({
-        name: EXT_LINKEDIN,
-        version,
-        cinatra: { kind: "artifact", artifact: { accepts: { file: { mimeTypes: POST_DRAFT_ACCEPTS } } } },
-      }),
-    );
-  };
-  const clearDevTree = () => {
-    rmSync(join(t3Store.devRoot as string, "cinatra-ai"), { recursive: true, force: true });
-    rmSync(join(t3Store.devRoot as string, "linkedin-artifacts"), { recursive: true, force: true });
-  };
-
   it("3319 T26 (a) a locked install row answers like an active one", async () => {
     stock([rec1]);
+    runtimeRegistersStore(rec1);
     t3Store.rows = { [LI_INSTALL]: linkedinRow(digestOf(rec1), { status: "locked" }) };
     expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
   });
 
-  it("3319 T26 (b) the one store record at the install's digest answers (the store's layout holds one folder per digest; a digest that is no store digest makes the reader throw: T27 (c))", async () => {
+  it("3319 T26 (b) the surface the runtime registered from the store record at the install's digest answers (a digest that is no store digest makes the reader throw: T27 (c))", async () => {
     stock([rec1]);
+    runtimeRegistersStore(rec1);
     t3Store.rows = { [LI_INSTALL]: linkedinRow(digestOf(rec1)) };
     expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
   });
 
-  it("3319 T26 (c) a manifest at the claim's version answers, at the install's digest and in the development tree (another version makes the reader throw: T27 (e))", async () => {
+  it("3319 T26 (c) a surface at the claim's version answers, from the install's store record and from the development tree (another version makes the reader throw: T27 (e))", async () => {
     const at101 = { ...POST_DRAFT_ENTRY_AT_1, extensionVersion: "1.0.1" };
     stock([recV101]);
+    runtimeRegistersStore(recV101);
     t3Store.rows = { [LI_INSTALL]: linkedinRow(digestOf(recV101)) };
     expect(await readLinkedin("1.0.1")).toEqual([at101]);
     writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.1");
     rmSync(liSlugDir(), { recursive: true, force: true });
-    try {
-      t3Store.rows = { [LI_INSTALL]: linkedinRow(null) };
-      expect(await readLinkedin("1.0.1")).toEqual([at101]);
-    } finally {
-      clearDevTree();
-    }
-  });
-
-  it("3319 T26 (d) exactly one readable development manifest answers (none or two make the reader throw: T27 (h))", async () => {
+    runtimeRegistersDevTree();
     t3Store.rows = { [LI_INSTALL]: linkedinRow(null) };
-    try {
-      writeDevManifest(["linkedin-artifacts"], "1.0.0");
-      expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
-    } finally {
-      clearDevTree();
-    }
+    expect(await readLinkedin("1.0.1")).toEqual([at101]);
   });
 
-  it("3319 T26 (f) an empty or non-string activeDigest makes the reader throw: the runtime's trust gate refuses it, so the development tree never answers for it", async () => {
+  it("3319 T26 (d) an unscoped development folder of the pack answers like a vendor folder", async () => {
+    t3Store.rows = { [LI_INSTALL]: linkedinRow(null) };
+    writeDevManifest(["linkedin-artifacts"], "1.0.0");
+    runtimeRegistersDevTree();
+    expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
+  });
+
+  it("3319 T26 (f) an empty or non-string activeDigest makes the reader throw: the runtime's trust gate refuses it, so the development-tree surface never answers for it", async () => {
     writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0");
-    try {
-      for (const activeDigest of ["", 42]) {
-        t3Store.rows = {
-          [LI_INSTALL]: linkedinRow(null, {
-            source: { type: "verdaccio", activeDigest, ...PIPELINE },
-          }),
-        };
-        // The store holds none, and a valid development manifest is there.
-        await expect(readLinkedin("1.0.0")).rejects.toThrow(
-          "the manifest of the claim's install cannot be read",
-        );
-      }
-    } finally {
-      clearDevTree();
+    runtimeRegistersDevTree();
+    for (const activeDigest of ["", 42]) {
+      t3Store.rows = {
+        [LI_INSTALL]: linkedinRow(null, {
+          source: { type: "verdaccio", activeDigest, ...PIPELINE },
+        }),
+      };
+      await expect(readLinkedin("1.0.0")).rejects.toThrow(
+        "the manifest of the claim's install cannot be read",
+      );
     }
   });
 
   it("3319 T26 (g) a failed install-row read makes the reader throw", async () => {
     stock([rec1]);
+    runtimeRegistersStore(rec1);
     t3Store.rowsThrow = true;
     await expect(readLinkedin("1.0.0")).rejects.toThrow("install row read failed in this case");
   });
 
-  // cinatra#3319 T27: A LIVE INSTALL WHOSE MANIFEST CANNOT BE READ MAKES THE
-  // READER THROW. Answering nothing would make the pack "not claim-backed", and
-  // a matcher entry under its name would then reach the org-wide matcher gate.
-  // A throw is the failed claim-backed read the upload actions refuse such an
-  // entry on (upload-typing-actions T21, T22). A readable manifest that breaks a
-  // rule (matchers, no accepts) and an install row that is not a live artifact
-  // row of the pack still answer nothing (T3 (ii), T15 (a), T15 (d)).
+  // cinatra#3319 T27: A SURFACE THAT IS NOT THE LIVE INSTALL'S MAKES THE READER
+  // THROW. Answering nothing would make the pack "not claim-backed", and a
+  // matcher entry under its name would then reach the org-wide matcher gate. A
+  // throw is the failed claim-backed read the upload actions refuse such an
+  // entry on (upload-typing-actions T21, T22). A surface that breaks a rule
+  // (matchers, no accepts) and an install row that is not a live artifact row
+  // of the pack still answer nothing (T3 (ii), T15 (a), T15 (d)).
   const UNREADABLE = "the manifest of the claim's install cannot be read";
-
-  it("3319 T27 (a) a store whose data root cannot be located makes the reader throw, with a recorded digest and without one", async () => {
-    const dataRoot = t3Store.dataRoot;
-    writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0");
-    t3Store.dataRoot = null;
-    try {
-      for (const digest of [digestOf(rec1), null]) {
-        t3Store.rows = { [LI_INSTALL]: linkedinRow(digest) };
-        await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
-      }
-    } finally {
-      t3Store.dataRoot = dataRoot;
-      clearDevTree();
-    }
-  });
-
-  it("3319 T27 (b) no store record at the install's digest makes the reader throw", async () => {
-    stock([rec1, rec2]);
-    t3Store.rows = { [LI_INSTALL]: linkedinRow(digestOf("store-3.0.0")) };
-    await expect(readLinkedin("3.0.0")).rejects.toThrow(UNREADABLE);
-  });
 
   it("3319 T27 (c) an install digest that is no store digest makes the reader throw", async () => {
     stock([rec1]);
+    runtimeRegistersStore(rec1);
     t3Store.rows = { [LI_INSTALL]: linkedinRow("dup-digest") };
     await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
   });
 
-  it("3319 T27 (d) an unreadable record, a missing manifest or a manifest that is no artifact manifest at the install's digest makes the reader throw, though another record of that version is valid", async () => {
+  it("3319 T27 (d) an install pinned to an unreadable record, a record with no manifest or a record that is no artifact manifest makes the reader throw while the runtime's surface is another record's", async () => {
+    stock([rec1]);
+    runtimeRegistersStore(rec1);
     for (const bad of [recBad, recGone, recWrongKind]) {
-      stock([bad, rec1]);
+      stock([bad]);
       t3Store.rows = { [LI_INSTALL]: linkedinRow(digestOf(bad)) };
       await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
-      rmSync(liSlugDir(), { recursive: true, force: true });
+      rmSync(join(liSlugDir(), digestOf(bad)), { recursive: true, force: true });
     }
   });
 
-  it("3319 T27 (e) a manifest at another version than the claim's makes the reader throw, at the install's digest and in the development tree", async () => {
+  it("3319 T27 (e) a surface at another version than the claim's makes the reader throw, from the install's store record and from the development tree", async () => {
     stock([recV101]);
+    runtimeRegistersStore(recV101);
     t3Store.rows = { [LI_INSTALL]: linkedinRow(digestOf(recV101)) };
     await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
     writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.1");
     rmSync(liSlugDir(), { recursive: true, force: true });
-    try {
-      t3Store.rows = { [LI_INSTALL]: linkedinRow(null) };
-      await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
-    } finally {
-      clearDevTree();
-    }
+    runtimeRegistersDevTree();
+    t3Store.rows = { [LI_INSTALL]: linkedinRow(null) };
+    await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
   });
 
   it("3319 T27 (f) a manifest whose version is not a string makes the reader throw", async () => {
     stock([recNumVersion]);
+    runtimeRegistersStore(recNumVersion);
     t3Store.rows = { [LI_INSTALL]: linkedinRow(digestOf(recNumVersion)) };
     await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
   });
 
-  it("3319 T27 (g) an install with no recorded digest while the store holds a record of the pack makes the reader throw, for a missing, empty or non-string activeDigest", async () => {
-    writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0");
-    try {
-      stock([rec1]);
-      for (const source of [
-        { type: "bundled" },
-        { type: "verdaccio", activeDigest: "" },
-        { type: "verdaccio", activeDigest: 42 },
-      ]) {
-        t3Store.rows = { [LI_INSTALL]: linkedinRow(null, { source }) };
-        await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
-      }
-    } finally {
-      clearDevTree();
-    }
-  });
-
-  it("3319 T27 (h) an install with no recorded digest and no or two readable development manifests makes the reader throw", async () => {
-    t3Store.rows = { [LI_INSTALL]: linkedinRow(null) };
-    try {
-      await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
-      writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0");
-      writeDevManifest(["linkedin-artifacts"], "1.0.0");
-      await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
-    } finally {
-      clearDevTree();
-    }
-  });
-
-  it("3319 T27 (i) an install with no recorded digest and an unavailable development root makes the reader throw", async () => {
-    const devRoot = t3Store.devRoot;
-    t3Store.rows = { [LI_INSTALL]: linkedinRow(null) };
-    t3Store.devRoot = null;
-    try {
-      await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
-    } finally {
-      t3Store.devRoot = devRoot;
-    }
-  });
-
-  // cinatra#3319 T30: THE STORE INSTALL IS READ THROUGH THE RUNTIME'S OWN TRUST
-  // GATE (`resolveInstallAnchor`): the finalized install-op journal, read in the
-  // namespace the multi-version anchor resolver reads, selects the digest; the
-  // row's `activeDigest` alone never does. An install that gate refuses can
-  // never be activated, so its manifest is never read as the pack's.
+  // cinatra#3319 T30: THE STORE INSTALL IS BOUND THROUGH THE RUNTIME'S OWN TRUST
+  // GATE: the finalized install-op journal, read in the namespace the
+  // multi-version anchor resolver reads, selects the digest; the row's
+  // `activeDigest` alone never does. An install that gate refuses can never be
+  // activated, so no surface is read as the install's.
   it("3319 T30 (a) a row digest the finalized journal does not confirm (a torn restore) makes the reader throw", async () => {
     stock([rec1, rec2]);
+    runtimeRegistersStore(rec1);
     t3Store.rows = { [LI_INSTALL]: linkedinRow(digestOf(rec1)) };
     t3Store.op = { phase: "finalized", installOpId: "op-old", digest: digestOf(rec2) };
     await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
@@ -965,6 +1007,7 @@ describe("cinatra#3319 — readClaimBackedMeaningTypesForOrg", () => {
 
   it("3319 T30 (b) no journal row, or a journal that is not finalized, makes the reader throw", async () => {
     stock([rec1]);
+    runtimeRegistersStore(rec1);
     t3Store.rows = { [LI_INSTALL]: linkedinRow(digestOf(rec1)) };
     for (const op of [null, { phase: "materialized", installOpId: "op-mid", digest: digestOf(rec1) }]) {
       t3Store.op = op;
@@ -974,6 +1017,7 @@ describe("cinatra#3319 — readClaimBackedMeaningTypesForOrg", () => {
 
   it("3319 T30 (c) a placeholder integrity or no content hash makes the reader throw", async () => {
     stock([rec1]);
+    runtimeRegistersStore(rec1);
     for (const source of [
       { type: "verdaccio", activeDigest: digestOf(rec1), integrity: "dispatcher-install", contentHash: "h" },
       { type: "verdaccio", activeDigest: digestOf(rec1), integrity: "sha512-t3" },
@@ -984,125 +1028,76 @@ describe("cinatra#3319 — readClaimBackedMeaningTypesForOrg", () => {
     }
   });
 
-  it("3319 T30 (d) a row with no source, or a source the runtime anchors no install from, makes the reader throw though a valid development manifest is there", async () => {
+  it("3319 T30 (d) a row with no source, or a source the runtime anchors no install from, makes the reader throw though the runtime registered the development tree", async () => {
     writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0");
-    try {
-      for (const source of [null, { type: "t30-unknown-source" }]) {
-        t3Store.rows = { [LI_INSTALL]: linkedinRow(null, { source }) };
-        await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
-      }
-    } finally {
-      clearDevTree();
+    runtimeRegistersDevTree();
+    for (const source of [null, { type: "t30-unknown-source" }]) {
+      t3Store.rows = { [LI_INSTALL]: linkedinRow(null, { source }) };
+      await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
     }
   });
 
-  it("3319 T30 (e) the journal is read in the default row's namespace (0.0.0) and in a non-default row's own version", async () => {
+  it("3319 T30 (e) the journal is read in the default row's namespace (0.0.0) and in a non-default row's own version, for every live version row of the package (fold 5)", async () => {
     stock([rec1]);
+    runtimeRegistersStore(rec1);
     t3Store.rows = { [LI_INSTALL]: linkedinRow(digestOf(rec1)) };
     expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
+    expect(t3Store.opCalls).toEqual([`${EXT_LINKEDIN}|null|0.0.0`]);
+    // A non-default 1.0.0 row beside the package's default 2.0.0 row: the
+    // runtime's resolver reads each row in its own namespace.
+    t3Store.opCalls = [];
     t3Store.rows = {
+      "inst-li-default": linkedinRow(digestOf(rec2), { id: "inst-li-default", version: "2.0.0" }),
       [LI_INSTALL]: linkedinRow(digestOf(rec1), { isDefault: false, version: "1.0.0" }),
     };
+    t3Store.opsByNs = {
+      "0.0.0": { phase: "finalized", installOpId: "op-default", digest: digestOf(rec2) },
+      "1.0.0": { phase: "finalized", installOpId: "op-sbs", digest: digestOf(rec1) },
+    };
     expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
-    expect(t3Store.opCalls).toEqual([`${EXT_LINKEDIN}|null|0.0.0`, `${EXT_LINKEDIN}|null|1.0.0`]);
+    expect([...t3Store.opCalls].sort()).toEqual(
+      [`${EXT_LINKEDIN}|null|0.0.0`, `${EXT_LINKEDIN}|null|1.0.0`].sort(),
+    );
   });
 
   it("3319 T30 (f) a row that records no digest takes the digest the finalized journal records, as the runtime does", async () => {
     stock([rec1, rec2]);
+    runtimeRegistersStore(rec1);
     t3Store.rows = {
       [LI_INSTALL]: linkedinRow(null, { source: { type: "verdaccio", ...PIPELINE } }),
     };
     t3Store.op = { phase: "finalized", installOpId: "op-t30", digest: digestOf(rec1) };
     expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
+    // The journal selects the 2.0.0 record while the runtime registered the
+    // 1.0.0 one: not the install's surface.
+    t3Store.op = { phase: "finalized", installOpId: "op-t30", digest: digestOf(rec2) };
+    await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
   });
 
-  it("3319 T30 (g) a gate that selects no digest takes the one store record of the package, and throws on two", async () => {
+  it("3319 T30 (g) a gate that selects no digest takes the store record the runtime registered the pack from (fold 5)", async () => {
     t3Store.rows = {
       [LI_INSTALL]: linkedinRow(null, { source: { type: "verdaccio", ...PIPELINE } }),
     };
     t3Store.op = { phase: "finalized", installOpId: "op-legacy", digest: null };
     stock([rec1]);
+    runtimeRegistersStore(rec1);
     expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
-    stock([recV101]);
+    // A development-tree surface is not a store install's.
+    artifactPackSurfaceRegistry?._clearForTests();
+    writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0");
+    runtimeRegistersDevTree();
     await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
   });
 
   it("3319 T30 (h) a journal that cannot be read makes the reader throw", async () => {
     stock([rec1]);
+    runtimeRegistersStore(rec1);
     t3Store.rows = { [LI_INSTALL]: linkedinRow(digestOf(rec1)) };
     t3Store.opThrows = true;
     await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
   });
 
-  // cinatra#3319 T31: A STORE READ THAT FAILS IS A FAILURE, NEVER "NO RECORD".
-  // Only the absence of the package's store folder reads as "none"; the reader
-  // reads the store by path and never lists or opens another record.
-  it("3319 T31 (a) a store folder of the package that cannot be listed makes the reader throw, and the development tree does not answer", async () => {
-    writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0");
-    try {
-      stock([rec1]);
-      fsFaults.codes.set(liSlugDir(), "EACCES");
-      t3Store.rows = { [LI_INSTALL]: linkedinRow(null) };
-      await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
-    } finally {
-      clearDevTree();
-    }
-  });
-
-  it("3319 T31 (b) a store record whose folder cannot be read or whose manifest cannot be opened is still a record: a bundled install makes the reader throw", async () => {
-    writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0");
-    try {
-      stock([rec1]);
-      t3Store.rows = { [LI_INSTALL]: linkedinRow(null) };
-      const recordDir = join(liSlugDir(), digestOf(rec1));
-      for (const at of [recordDir, join(recordDir, "package.json")]) {
-        fsFaults.codes.clear();
-        fsFaults.codes.set(at, "EACCES");
-        await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
-      }
-    } finally {
-      clearDevTree();
-    }
-  });
-
-  it("3319 T31 (c) a manifest at the install's digest that cannot be opened makes the reader throw", async () => {
-    stock([rec1]);
-    t3Store.rows = { [LI_INSTALL]: linkedinRow(digestOf(rec1)) };
-    fsFaults.codes.set(join(liSlugDir(), digestOf(rec1), "package.json"), "EACCES");
-    await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
-  });
-
-  it("3319 T31 (d) a store install reads the one manifest at its digest and no other store record", async () => {
-    stock([rec1, rec2, recA1]);
-    t3Store.rows = { [LI_INSTALL]: linkedinRow(digestOf(rec1)) };
-    expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
-    const storeReads = fsFaults.reads.filter((p) => p.startsWith(t3Store.dataRoot as string));
-    expect(storeReads).toEqual([join(liSlugDir(), digestOf(rec1), "package.json")]);
-    expect(t3Store.discoverCalls).toBe(0);
-  });
-
-  // cinatra#3319 T32: A MANIFEST ANSWERS ONLY FOR THE PACKAGE IT NAMES.
-  it("3319 T32 (a) a development manifest that names another package, or none, does not answer: the reader throws", async () => {
-    t3Store.rows = { [LI_INSTALL]: linkedinRow(null) };
-    const devDir = join(t3Store.devRoot as string, "cinatra-ai", "linkedin-artifacts");
-    try {
-      for (const name of ["@t32-evil/linkedin-artifacts", undefined]) {
-        mkdirSync(devDir, { recursive: true });
-        writeFileSync(
-          join(devDir, "package.json"),
-          JSON.stringify({
-            ...(name ? { name } : {}),
-            version: "1.0.0",
-            cinatra: { kind: "artifact", artifact: { accepts: { file: { mimeTypes: POST_DRAFT_ACCEPTS } } } },
-          }),
-        );
-        await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
-      }
-    } finally {
-      clearDevTree();
-    }
-  });
-
+  // cinatra#3319 T32: A SURFACE ANSWERS ONLY FOR THE PACKAGE IT NAMES.
   it("3319 T32 (b) another package's development manifest beside the pack's own does not count: the pack's own answers", async () => {
     t3Store.rows = { [LI_INSTALL]: linkedinRow(null) };
     writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0");
@@ -1116,40 +1111,8 @@ describe("cinatra#3319 — readClaimBackedMeaningTypesForOrg", () => {
         cinatra: { kind: "artifact", artifact: { accepts: { file: { mimeTypes: ["image/png"] } } } },
       }),
     );
-    try {
-      expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
-    } finally {
-      clearDevTree();
-    }
-  });
-
-  it("3319 T32 (c) an unparsable development manifest beside the pack's own makes the reader throw: whose it is cannot be told", async () => {
-    t3Store.rows = { [LI_INSTALL]: linkedinRow(null) };
-    writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0");
-    const otherDir = join(t3Store.devRoot as string, "linkedin-artifacts");
-    mkdirSync(otherDir, { recursive: true });
-    writeFileSync(join(otherDir, "package.json"), "{ not json");
-    try {
-      await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
-    } finally {
-      clearDevTree();
-    }
-  });
-
-  it("3319 T32 (d) a store record at the install's digest whose manifest names another package makes the reader throw", async () => {
-    const evil = join(root, "store-t32-evil");
-    mkdirSync(evil, { recursive: true });
-    writeFileSync(
-      join(evil, "package.json"),
-      JSON.stringify({
-        name: "@t32-evil/linkedin-artifacts",
-        version: "1.0.0",
-        cinatra: { kind: "artifact", artifact: { accepts: { file: { mimeTypes: POST_DRAFT_ACCEPTS } } } },
-      }),
-    );
-    stock([evil]);
-    t3Store.rows = { [LI_INSTALL]: linkedinRow(digestOf(evil)) };
-    await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
+    runtimeRegistersDevTree();
+    expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
   });
 
   it("3319 T32 (e) an unscoped pack's bundled install answers through its one development path", async () => {
@@ -1176,6 +1139,7 @@ describe("cinatra#3319 — readClaimBackedMeaningTypesForOrg", () => {
       }),
     );
     try {
+      runtimeRegistersDevTree();
       const got = await helperMod.readClaimBackedMeaningTypesForOrg(ORG, {
         readClaimsForOrg: () => [
           claim({ id: "t32-plain", type: typePlain, ext: extPlain, status: "active", installId: "inst-t32-plain" }),
@@ -1232,7 +1196,7 @@ describe("cinatra#3319 — readClaimBackedMeaningTypesForOrg", () => {
   });
 
   // cinatra#3319 T24: the packages that could be claim-backed are exactly the
-  // packages that pass every rule but the manifest read.
+  // packages that pass every rule but the surface read.
   it("3319 T24: readClaimBackedCandidatePackagesForOrg names each package that passes every rule but the manifest read, and a failed claim read throws", () => {
     const bound = { installId: "inst-t24" };
     const claims = [
@@ -1265,5 +1229,234 @@ describe("cinatra#3319 — readClaimBackedMeaningTypesForOrg", () => {
         throw new Error("claim store unavailable");
       }),
     ).toThrow("claim store unavailable");
+  });
+
+  // ---------------------------------------------------------------------------
+  // cinatra#3319 fold 5 (pre-review 3).
+  // ---------------------------------------------------------------------------
+
+  // MUST-FIX 1: the install is bound through the runtime's MULTI-VERSION trust
+  // gate (`makeDefaultInstallAnchorsResolver`), never through one row alone.
+  it("3319 T41 (a) a version two live owner rows share has no anchor in the runtime's resolver: the reader throws though the claim's own row passes the gate alone", async () => {
+    stock([rec1]);
+    runtimeRegistersStore(rec1);
+    const nonDefault = { isDefault: false, version: "1.0.0" };
+    const defaultRow = linkedinRow(digestOf(rec2), { id: "inst-li-default", version: "2.0.0" });
+    t3Store.opsByNs = {
+      "0.0.0": { phase: "finalized", installOpId: "op-default", digest: digestOf(rec2) },
+      "1.0.0": { phase: "finalized", installOpId: "op-sbs", digest: digestOf(rec1) },
+    };
+    // Control: the claim's 1.0.0 row beside the package's default answers.
+    t3Store.rows = {
+      "inst-li-default": defaultRow,
+      [LI_INSTALL]: linkedinRow(digestOf(rec1), nonDefault),
+    };
+    expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
+    // A second live owner row at 1.0.0 in the same organisation: the runtime
+    // skips the version (activates neither row), so the reader answers nothing.
+    t3Store.rows = {
+      "inst-li-default": defaultRow,
+      [LI_INSTALL]: linkedinRow(digestOf(rec1), nonDefault),
+      "inst-li-other-owner": linkedinRow(digestOf(rec1), { ...nonDefault, id: "inst-li-other-owner" }),
+    };
+    await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
+  });
+
+  it("3319 T41 (b) two live default rows of the package: the runtime's resolver activates no version, so the reader throws", async () => {
+    stock([rec1]);
+    runtimeRegistersStore(rec1);
+    t3Store.rows = {
+      [LI_INSTALL]: linkedinRow(digestOf(rec1), { version: "1.0.0" }),
+      "inst-li-second-default": linkedinRow(digestOf(rec1), {
+        id: "inst-li-second-default",
+        version: "2.0.0",
+      }),
+    };
+    await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
+  });
+
+  // MUST-FIX 3: a store folder is not the reader's to list. A store entry is a
+  // record only when the runtime's store discovery takes it as one (a digest
+  // named directory with a readable, valid manifest of the folder's kind and
+  // package: `collectSlugDirRecords`), and the reader answers only from the
+  // record or development tree the runtime registered the pack from.
+  it("3319 T42 a store folder of the package that holds only current, a .tgz or a temporary entry holds no record: a bundled install answers from the development tree the runtime registered", async () => {
+    writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0");
+    mkdirSync(liSlugDir(), { recursive: true });
+    writeFileSync(join(liSlugDir(), "current"), digestOf(rec1));
+    writeFileSync(join(liSlugDir(), `${digestOf(rec1)}.tgz`), "tarball");
+    mkdirSync(join(liSlugDir(), `.tmp-${digestOf(rec1)}`), { recursive: true });
+    const { discoverStoreRecordsV2 } = await import("@/lib/extension-store-io");
+    expect(
+      (await discoverStoreRecordsV2(t3Store.dataRoot as string)).filter(
+        (r) => r.packageName === EXT_LINKEDIN,
+      ),
+    ).toEqual([]);
+    runtimeRegistersDevTree();
+    t3Store.rows = { [LI_INSTALL]: linkedinRow(null) };
+    expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
+  });
+
+  it("3319 T43 a digest-named record the runtime's discovery skips (a malformed manifest or an ordinary file) does not count: an install with no selected digest answers from the one record the runtime takes", async () => {
+    stock([rec1, recBad]);
+    writeFileSync(join(liSlugDir(), digestOf(join(root, "store-plain-file"))), "not a record");
+    const { discoverStoreRecordsV2 } = await import("@/lib/extension-store-io");
+    const taken = (await discoverStoreRecordsV2(t3Store.dataRoot as string)).filter(
+      (r) => r.packageName === EXT_LINKEDIN,
+    );
+    expect(taken.map((r) => r.declaredDigest)).toEqual([digestOf(rec1)]);
+    // The store rescan registers the one record of a package whose anchor
+    // selects no digest.
+    for (const rec of taken) {
+      registerArtifactExtensionDir(rec.storeDir, { source: "store", digest: rec.declaredDigest as string });
+    }
+    t3Store.rows = {
+      [LI_INSTALL]: linkedinRow(null, { source: { type: "verdaccio", ...PIPELINE } }),
+    };
+    t3Store.op = { phase: "finalized", installOpId: "op-legacy", digest: null };
+    expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
+  });
+
+  // MUST-FIX 2: the picker's capabilities come from the one runtime-discovery
+  // road. A pack the runtime registered no capability of is offered nothing,
+  // whatever its manifest declares on disk.
+  it("3319 T44 a bundled install whose development manifest declares Markdown acceptance but which the runtime did not register is offered nothing", async () => {
+    t3Store.rows = { [LI_INSTALL]: linkedinRow(null) };
+    // The bridge refuses the manifest (a key an artifact manifest may not
+    // carry), as it refuses any manifest it cannot register.
+    writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0", { serverEntry: "./server.js" });
+    runtimeRegistersDevTree();
+    expect(artifactPackSurfaceRegistry?.listForPackage(EXT_LINKEDIN) ?? []).toEqual([]);
+    expect(await readLinkedin("1.0.0")).toEqual([]);
+    // A valid manifest the runtime never registered (no scan ran) is offered
+    // nothing either.
+    writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0");
+    expect(await readLinkedin("1.0.0")).toEqual([]);
+    // Once the runtime registers it, it is offered.
+    runtimeRegistersDevTree();
+    expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
+  });
+
+  it("3319 T49 (a) the reader asks the dispatcher once per answer, for the artifact kind, in the organisation's own scope, registers the artifact facet if absent, and opens no store or development file", async () => {
+    stock([rec1]);
+    runtimeRegistersStore(rec1);
+    t3Store.rows = { [LI_INSTALL]: linkedinRow(digestOf(rec1)) };
+    fsFaults.reads.length = 0;
+    expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
+    expect(discoverState.calls).toEqual([
+      {
+        kind: "artifact",
+        scope: { userId: null, organizationId: ORG, teamIds: [], orgRole: "org_admin" },
+      },
+    ]);
+    expect(discoverState.registered).toEqual(["artifact"]);
+    const fileReads = fsFaults.reads.filter(
+      (p) => p.startsWith(t3Store.dataRoot as string) || p.startsWith(t3Store.devRoot as string),
+    );
+    expect(fileReads).toEqual([]);
+  });
+
+  it("3319 T49 (b) a pack whose install another organisation owns is not in this organisation's discovery: no entry", async () => {
+    stock([rec1]);
+    runtimeRegistersStore(rec1);
+    t3Store.rows = {
+      [LI_INSTALL]: linkedinRow(digestOf(rec1), {
+        ownerLevel: "organization",
+        organizationId: "org-3319-other",
+      }),
+    };
+    expect(await readLinkedin("1.0.0")).toEqual([]);
+    t3Store.rows = {
+      [LI_INSTALL]: linkedinRow(digestOf(rec1), { ownerLevel: "organization", organizationId: ORG }),
+    };
+    t3Store.opsByNs = {
+      "0.0.0": { phase: "finalized", installOpId: "op-org", digest: digestOf(rec1) },
+    };
+    expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
+  });
+
+  it("3319 T49 (c) a failed dispatcher read, a failed artifact facet and a missing artifact facet make the reader throw: none is \"no surface\"", async () => {
+    stock([rec1]);
+    runtimeRegistersStore(rec1);
+    t3Store.rows = { [LI_INSTALL]: linkedinRow(digestOf(rec1)) };
+    for (const flag of ["throws", "facetThrows", "unmigrated"] as const) {
+      discoverState[flag] = true;
+      await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
+      discoverState[flag] = false;
+    }
+    expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
+  });
+
+  it("3319 T49 (d) a store install whose surface the runtime registered from the development tree, or from another store record of that version, makes the reader throw; a bundled install whose surface is a store record's does too", async () => {
+    stock([recA1, rec1]);
+    // The anchor selects the matcher-free record; the runtime registered the other.
+    runtimeRegistersStore(recA1);
+    t3Store.rows = { [LI_INSTALL]: linkedinRow(digestOf(rec1)) };
+    await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
+    // The development tree is no store install's record.
+    writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0");
+    runtimeRegistersDevTree();
+    await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
+    // A bundled install whose pack the runtime registered from a store record only.
+    artifactPackSurfaceRegistry?._clearForTests();
+    runtimeRegistersStore(rec1);
+    t3Store.rows = { [LI_INSTALL]: linkedinRow(null) };
+    await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
+  });
+
+  // The registry warm (registerAllObjectTypes) runs the bundled scan again on
+  // every call, after the boot's store rescan, and the store rescan runs again
+  // on an install: a pack with a store record and a development tree has both
+  // surfaces registered, in either order. Each install binds to its own record.
+  it("3319 T50 a pack the runtime registered from a store record and from the development tree, in either order: a store install answers from its store record, a bundled install from the development tree", async () => {
+    stock([rec1]);
+    writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0", {
+      artifact: { accepts: { file: { mimeTypes: ["text/markdown"] } }, skills: { matchers: ["t50-dev-matcher"] } },
+    });
+    for (const order of ["store-then-dev", "dev-then-store"] as const) {
+      artifactPackSurfaceRegistry?._clearForTests();
+      if (order === "store-then-dev") {
+        runtimeRegistersStore(rec1);
+        runtimeRegistersDevTree();
+      } else {
+        runtimeRegistersDevTree();
+        runtimeRegistersStore(rec1);
+      }
+      // The store install answers from the matcher-free store record.
+      t3Store.rows = { [LI_INSTALL]: linkedinRow(digestOf(rec1)) };
+      expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
+      // The bundled install reads the development tree's surface, which
+      // declares matchers (rule 2): no entry, and no throw.
+      t3Store.rows = { [LI_INSTALL]: linkedinRow(null) };
+      expect(await readLinkedin("1.0.0")).toEqual([]);
+    }
+  });
+
+  it("3319 T49 (e) a bundled install whose store folder holds a record answers from the development tree the runtime registered (the store rescan registers no record of a governed package it cannot anchor)", async () => {
+    stock([rec1]);
+    writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0");
+    runtimeRegistersDevTree();
+    t3Store.rows = { [LI_INSTALL]: linkedinRow(null) };
+    expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
+  });
+
+  it("3319 T49 (f) a development manifest that names another package, or none, registers no surface of the pack: no entry", async () => {
+    t3Store.rows = { [LI_INSTALL]: linkedinRow(null) };
+    const devDir = join(t3Store.devRoot as string, "cinatra-ai", "linkedin-artifacts");
+    for (const name of ["@t32-evil/linkedin-artifacts", undefined]) {
+      artifactPackSurfaceRegistry?._clearForTests();
+      mkdirSync(devDir, { recursive: true });
+      writeFileSync(
+        join(devDir, "package.json"),
+        JSON.stringify({
+          ...(name ? { name } : {}),
+          version: "1.0.0",
+          cinatra: { kind: "artifact", artifact: { accepts: { file: { mimeTypes: POST_DRAFT_ACCEPTS } } } },
+        }),
+      );
+      runtimeRegistersDevTree();
+      expect(artifactPackSurfaceRegistry?.listForPackage(EXT_LINKEDIN) ?? []).toEqual([]);
+      expect(await readLinkedin("1.0.0")).toEqual([]);
+    }
   });
 });
