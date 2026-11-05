@@ -145,8 +145,11 @@ def _agent_oas_params() -> list["pytest.ParameterSet"]:
 
 
 def _runtime_preload(raw_text: str, label: str) -> str:
-    """Apply the same pre-``load_json`` transforms as ``_mount_one_sync``:
-    context-subflow injection, HITL gate reconcile, then env substitution."""
+    """Apply the pre-``load_json`` transforms of ``_mount_one_sync``, in its
+    order: context-subflow injection, HITL gate reconcile, then env
+    substitution. It omits the bridge ``output_schema`` derivation
+    (``_derive_bridge_output_schemas``), which only adds ``data.output_schema``
+    to model-bridge ApiNodes."""
     parsed = json.loads(raw_text)
     if isinstance(parsed, dict):
         if inject_context_subflows is not None:
@@ -184,21 +187,35 @@ def test_oas_loads_via_agentspec_loader(oas_path: Path, slug: str) -> None:
 # ---------------------------------------------------------------------------
 # cinatra#4154 — the signed step id IS the flow document's node id.
 #
-# The runtime signs the executing step's own id (`self.id`) on every call to the
-# passthrough road (agent_loader.py, cinatra#3745), and the application decides
-# which package's tool such a call reaches by finding that id in the INSTALLED
-# flow document. That holds only if the real loader compiles each passthrough
-# ApiNode to a step whose `id` is the node's own `id`. The in-repository
+# On a passthrough call to the application's own host (CINATRA_BASE_URL), the
+# runtime signs the executing step's own id (`self.id`) when the bridge token,
+# the attestation key, the run's context id and that step id are all set;
+# otherwise it signs nothing (agent_loader.py, cinatra#3745). The application
+# decides which package's tool a signed call reaches by finding that id in the
+# INSTALLED flow document. That holds only if the real loader compiles each
+# passthrough ApiNode to a step whose `id` is the node's own `id`. The in-repository
 # pre-load transforms write no existing `id`; the mapping inside
 # `AgentSpecLoader` is the library's, so it is pinned here, per mounted agent,
-# after the same pre-load pipeline as the mount test above.
+# after the same pre-load pipeline as the mount test above. That pipeline omits
+# one of the four transforms of `_mount_one_sync`: `_derive_bridge_output_schemas`
+# only adds `data.output_schema` to model-bridge ApiNodes and writes no id.
 #
-# Not vacuous: an agent whose document holds a passthrough ApiNode fails when the
-# walk below finds no compiled step with that id, so a walker that sees nothing
-# is red, not green.
+# Where this can fail: an agent whose document holds a passthrough ApiNode is
+# red when the walk below finds no compiled step with that id. An agent whose
+# document holds none passes with two EMPTY sets, so a tree without such an
+# agent proves nothing here (the single-agent fixture tree of the works-after
+# proof is one). The one anchor is the outreach agent at the disk path
+# `cinatra-ai/email-outreach-agent`: its document must hold the passthrough
+# node `sender-file_recipients` and the walk must find it, so a walker that
+# sees nothing is red there. In the mount-guard job, assert_mount_health.py
+# requires that path in the tree before this file runs.
 # ---------------------------------------------------------------------------
 
 _PASSTHROUGH_PATH = "/agents/passthrough"
+#: The disk label (`<vendor>/<slug dir>`, the basis of assert_mount_health.py's
+#: REQUIRED_LABELS) of the agent that anchors the test, and its passthrough node.
+_ANCHOR_DISK_LABEL = "cinatra-ai/email-outreach-agent"
+_ANCHOR_NODE_ID = "sender-file_recipients"
 
 
 def _oas_passthrough_node_ids(doc: object) -> set[str]:
@@ -268,8 +285,12 @@ def test_passthrough_step_ids_are_the_document_node_ids(oas_path: Path, slug: st
         f"{slug}: compiled passthrough step ids differ from the document's node ids; "
         f"only in the document: {sorted(expected - compiled)}; only compiled: {sorted(compiled - expected)}"
     )
-    if slug == "email-outreach-agent":
-        assert "sender-file_recipients" in compiled, (
-            "email-outreach-agent: the embedded delivery step `sender-file_recipients` must compile "
+    if f"{oas_path.parents[2].name}/{oas_path.parents[1].name}" == _ANCHOR_DISK_LABEL:
+        assert _ANCHOR_NODE_ID in expected, (
+            f"{_ANCHOR_DISK_LABEL}: the document holds no passthrough node `{_ANCHOR_NODE_ID}`, "
+            "so the test has no non-empty anchor (cinatra#4154)"
+        )
+        assert _ANCHOR_NODE_ID in compiled, (
+            f"{_ANCHOR_DISK_LABEL}: the embedded delivery step `{_ANCHOR_NODE_ID}` must compile "
             "to a step of that id (cinatra#4154)"
         )
