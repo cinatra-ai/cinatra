@@ -73,6 +73,14 @@ export type FieldRendererProps = {
    */
   onBusyChange?: (busy: boolean) => void;
   /**
+   * Report whether the value the renderer holds may be sent. The host keeps
+   * the latest report per gate: while the last report for the gate on screen
+   * is `false`, its Continue is unavailable and a press sends nothing. A
+   * renderer that never reports leaves the Continue as it was. Optional and
+   * additive, so the ABI generation stays 1.
+   */
+  onValidityChange?: (valid: boolean) => void;
+  /**
    * Immediately persist the given value to the DB (bypasses the normal
    * "Save & continue" flow). Use for values that must survive a page reload,
    * e.g. a campaignId created by the renderer on mount.

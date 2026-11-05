@@ -1279,11 +1279,43 @@ export function AgenticRunPanel({
   >(null);
   const setupFlushRef = useRef<{ key: string; fn: () => Promise<void> } | null>(null);
   const setupPressRef = useRef(false);
+  // THE RENDERER'S OWN READING OF ITS VALUE (cinatra#3562). A renderer may
+  // report through `onValidityChange` that what it holds may not be sent (a
+  // list step with nothing ticked); the latest report is kept per gate, keyed
+  // by the same three parts the setup field's staged answer is keyed by. While
+  // the last report for the gate on screen is `false`, the Continue drawn for
+  // it (the setup field's or the mid-run one) is unavailable and a press sends
+  // nothing. A renderer that never reports blocks nothing, so no undeclared
+  // reason ever stops a reader (cinatra#3532). State for the drawn control, a
+  // ref for the press, which reads it in the same turn.
+  const [gateValidity, setGateValidity] = useState<{ key: string; valid: boolean } | null>(null);
+  const gateValidityRef = useRef<{ key: string; valid: boolean } | null>(null);
+  const activeGateKey = effectiveHitlContext
+    ? [
+        effectiveHitlContext.reviewTaskId,
+        effectiveHitlContext.xRenderer,
+        effectiveHitlContext.fieldName ?? "",
+      ].join("::")
+    : null;
+  const reportGateValidity = useCallback((valid: boolean) => {
+    if (activeGateKey === null) return;
+    gateValidityRef.current = { key: activeGateKey, valid };
+    setGateValidity((previous) => previous?.key === activeGateKey && previous.valid === valid
+      ? previous : { key: activeGateKey, valid });
+  }, [activeGateKey]);
+  const activeGateReportedInvalid =
+    activeGateKey !== null &&
+    gateValidity !== null &&
+    gateValidity.key === activeGateKey &&
+    !gateValidity.valid;
   const registerSetupFlush = useCallback((key: string, fn: () => Promise<void>) => {
     setupFlushRef.current = { key, fn };
   }, []);
   const submitStagedSetupAnswer = useCallback(
     async (key: string, reviewTaskId: string, xRenderer: string) => {
+      // Reported unsendable (see `gateValidity`): the press sends nothing.
+      const validity = gateValidityRef.current;
+      if (validity !== null && validity.key === key && !validity.valid) return;
       // ONE PRESS AT A TIME, on a ref rather than the rendered `disabled` alone:
       // the flush is asynchronous and `isApproving` is React state, so two
       // presses in one tick would both reach the submit core.
@@ -1993,7 +2025,9 @@ export function AgenticRunPanel({
       ) : null}
       <Button
         size="sm"
-        disabled={isApproving}
+        // Unavailable while the gate's renderer reports its value unsendable
+        // (see `gateValidity`); a renderer that never reports changes nothing.
+        disabled={isApproving || activeGateReportedInvalid}
         className="gap-1.5"
         // THE HITL SCREEN'S ONE DECISION (cinatra#2930). Named on the row this
         // panel draws INSIDE the screen card, and deliberately not on the
@@ -2002,6 +2036,10 @@ export function AgenticRunPanel({
         // anchor there would be reading a control the screen does not offer.
         {...(opts?.withReject ? {} : { "data-action": "submit-hitl-screen" })}
         onClick={async () => {
+          // Reported unsendable: the press sends nothing (the drawn state can
+          // lag the report by one frame; the ref cannot).
+          const validity = gateValidityRef.current;
+          if (validity !== null && validity.key === activeGateKey && !validity.valid) return;
           // The visible Continue may need to wrap the WayFlow `userResponse`
           // with the envelope when paperclip attachments are pending, but must
           // preserve any renderer-authored `userResponse` already on
@@ -3050,6 +3088,10 @@ export function AgenticRunPanel({
                       mode="edit"
                       onApply={handleApply}
                       aiSuggestions={aiSuggestions}
+                      // Any gate's renderer may report its value unsendable;
+                      // the report holds the Continue drawn for this gate
+                      // (see `gateValidity`), on the setup road and mid-run.
+                      onValidityChange={reportGateValidity}
                       // cinatra#3532 — where the product owns the send, the
                       // renderer's own submit is not drawn inside the field
                       // (the shared props contract says a renderer that draws
@@ -3073,7 +3115,7 @@ export function AgenticRunPanel({
                     {productOwnsSetupSend ? (
                       <AgentHitlScreenSetupContinue
                         submitting={isApproving}
-                        blocked={false}
+                        blocked={activeGateReportedInvalid}
                         onContinue={() =>
                           submitStagedSetupAnswer(
                             setupGateKey,
