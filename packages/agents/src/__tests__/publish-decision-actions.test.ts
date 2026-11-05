@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { AuthzError } from "@/lib/authz/errors";
+import { RunTransitionError } from "../run-status";
 
 const storeMock = vi.hoisted(() => ({
   readAgentRunById: vi.fn(),
@@ -432,6 +433,8 @@ describe("Do not publish binds every check and the record to one person (finding
     ["an agent acting for a person", { ...ACTOR, oboCeiling: [{ tier: "organization", id: "org-1" }] }],
     ["a person with no user id", { actorType: "human", source: "ui" }],
     ["a person with an empty user id", { ...ACTOR, userId: "" }],
+    ["no actor context (null)", null],
+    ["no actor context (absent)", undefined],
   ])("%s is refused before anything is read or written", async (_label, actorContext) => {
     await expect(
       declinePublishDecision({ runId: "run-1", actorContext: actorContext as never }),
@@ -458,6 +461,29 @@ describe("Do not publish answers a store fault with a fixed text (finding 5)", (
     expect(err.code).toBe("publish_decision_unavailable");
     expect(err.message).not.toMatch(/failed|d1|run-1|user-a|not today/);
     expect("cause" in err).toBe(false);
+  });
+
+  // The independent self-check of pre-review 2's fold (C2): every store code passes, and a run move's own refusal does not.
+  it.each(["invalid-transition", "malformed-row", "not-found", "conflict"])(
+    "the store's own %s refusal of the decision write passes unchanged, and the run is not moved",
+    async (code) => {
+      const refusal = Object.assign(new Error(`the store refused: ${code}`), { code });
+      decisions.decide.mockRejectedValueOnce(refusal);
+      const err = await declinePublishDecision({ runId: "run-1", actorContext: ACTOR }).catch((e: unknown) => e);
+      expect(err).toBe(refusal);
+      expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    },
+  );
+
+  it("a run move refused as an illegal transition (not a stale answer) answers the fixed text, with no run id", async () => {
+    storeMock.transitionRunStatus.mockRejectedValueOnce(
+      new RunTransitionError({ code: "illegal_transition", runId: "run-1", from: "pending_approval", to: "stopped" }),
+    );
+    const err = (await declinePublishDecision({ runId: "run-1", actorContext: ACTOR }).catch((e: unknown) => e)) as Error & { code?: string };
+    expect(err.code).toBe("publish_decision_unavailable");
+    expect(err.message).not.toMatch(/run-1|illegal|transitionRunStatus/);
+    expect("cause" in err).toBe(false);
+    expect(decisions.decide).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -128,9 +128,13 @@ describe("the generic approve road and a publish decision", () => {
     },
   );
 
-  it("an unreadable decision record refuses too, and the claim is put back", async () => {
-    decisions.readLatestDecisionForRun.mockRejectedValue(new Error("db down"));
-    await expect(approveReviewTaskInternal("wayflow-task-4150", "reader-a")).rejects.toThrow("db down");
+  it("an unreadable decision record refuses too with one fixed text that names no run or store error, and the claim is put back", async () => {
+    decisions.readLatestDecisionForRun.mockRejectedValue(new Error(`db down: select ... where run_id = ${RUN.id}`));
+    const err = (await approveReviewTaskInternal("wayflow-task-4150", "reader-a").catch((e: unknown) => e)) as Error & { code?: string };
+    expect(err.code).toBe("publish_decision_unavailable");
+    expect(err.message).toBe("Resume failed: the publish hold could not be checked.");
+    expect(err.message).not.toMatch(/db down|run-4150|select/);
+    expect("cause" in err).toBe(false);
     expect(sendTask).not.toHaveBeenCalled();
     expect(row.status).toBe("pending_approval");
   });

@@ -213,9 +213,13 @@ describe("the stopped-orchestrator resume and a publish decision", () => {
     },
   );
 
-  it("an unreadable decision record refuses too, and the run is put back to stopped", async () => {
-    decisions.readLatestDecisionForRun.mockRejectedValue(new Error("db down"));
-    await expect(resumeStoppedOrchestratorAction("run-1")).rejects.toThrow("db down");
+  it("an unreadable decision record refuses too with one fixed text that names no run or store error, and the run is put back to stopped", async () => {
+    decisions.readLatestDecisionForRun.mockRejectedValue(new Error("db down: select ... where run_id = run-1"));
+    const err = (await resumeStoppedOrchestratorAction("run-1").catch((e: unknown) => e)) as Error & { code?: string };
+    expect(err.code).toBe("publish_decision_unavailable");
+    expect(err.message).toBe("Resume failed: the publish hold could not be checked.");
+    expect(err.message).not.toMatch(/db down|run-1|select/);
+    expect("cause" in err).toBe(false);
     expect(sendTask).not.toHaveBeenCalled();
     expect(moves().at(-1)).toEqual(["run-1", "queued", "stopped"]);
   });
