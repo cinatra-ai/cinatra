@@ -1210,7 +1210,16 @@ export async function approveReviewTaskInternal(
           try {
             await transitionRunStatus(run.id, "running", "pending_approval", { pauseTaskId: taskId }, resumeAuthority);
           } catch (backError) {
-            const describe = (x: unknown) => (x instanceof Error ? x.message : String(x));
+            // A failed database write arrives wrapped ("Failed query: <SQL> params:
+            // <values>", the values carrying the run's and its organization's ids)
+            // with the database's own error as its cause. Each cause is named by its
+            // innermost cause (at most five levels down): the database's reason, not
+            // the query and its values.
+            const describe = (x: unknown) => {
+              let e: unknown = x;
+              for (let i = 0; i < 5 && e instanceof Error && e.cause instanceof Error; i += 1) e = e.cause;
+              return e instanceof Error ? e.message : String(e);
+            };
             throw new Error(
               `${describe(recordError)}; nothing was sent, and the gate could not be put back (${describe(backError)}): ` +
                 `the run stays running, and a stop lands once its send lease ends at ` +
