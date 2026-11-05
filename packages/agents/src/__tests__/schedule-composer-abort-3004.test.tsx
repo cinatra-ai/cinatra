@@ -47,7 +47,14 @@ vi.mock("@cinatra-ai/sdk-ui", () => ({
   LoadingSpinner: () => null,
 }));
 
+import { RunPageChrome } from "../run-page-chrome";
 import { SchedulePromptWindow } from "../schedule-prompt-window";
+
+// THE PAGE OWNS THE WINDOW (cinatra#3487): the schedule screen registers, and
+// the run page's chrome draws the one window. The claim under test — a question
+// already sent is dropped the moment the schedule ends — is the SCREEN's, and it
+// is unchanged; the chrome is the frame it is read in.
+const inChrome = (node: React.ReactElement) => <RunPageChrome>{node}</RunPageChrome>;
 
 afterEach(() => {
   cleanup();
@@ -62,7 +69,7 @@ describe("the composer's one road, when the schedule ends", () => {
     globalThis.fetch = anyCall as unknown as typeof fetch;
 
     const { rerender } = render(
-      <SchedulePromptWindow templateId={TEMPLATE} readOnly={false} />,
+      inChrome(<SchedulePromptWindow templateId={TEMPLATE} readOnly={false} />),
     );
     (await screen.findByTestId("prompt-field")).click();
     await waitFor(() => expect(screen.queryByTestId("prompt-field")).toBeTruthy());
@@ -71,7 +78,7 @@ describe("the composer's one road, when the schedule ends", () => {
     expect(anyCall).not.toHaveBeenCalled();
 
     // The schedule ends: the composer goes with the form it sits under…
-    rerender(<SchedulePromptWindow templateId={TEMPLATE} readOnly={true} />);
+    rerender(inChrome(<SchedulePromptWindow templateId={TEMPLATE} readOnly={true} />));
     await waitFor(() => expect(screen.queryByTestId("prompt-field")).toBeNull());
     // …and still nothing of this window's own was ever in flight to cancel.
     expect(anyCall).not.toHaveBeenCalled();
@@ -82,12 +89,12 @@ describe("the composer's one road, when the schedule ends", () => {
     globalThis.fetch = anyCall as unknown as typeof fetch;
 
     const { rerender } = render(
-      <SchedulePromptWindow templateId={TEMPLATE} readOnly={false} />,
+      inChrome(<SchedulePromptWindow templateId={TEMPLATE} readOnly={false} />),
     );
     (await screen.findByTestId("prompt-field")).click();
 
     // A re-render that does not end the schedule changes nothing.
-    rerender(<SchedulePromptWindow templateId={TEMPLATE} readOnly={false} />);
+    rerender(inChrome(<SchedulePromptWindow templateId={TEMPLATE} readOnly={false} />));
     await waitFor(() => expect(screen.queryByTestId("prompt-field")).toBeTruthy());
     expect(anyCall).not.toHaveBeenCalled();
   });
