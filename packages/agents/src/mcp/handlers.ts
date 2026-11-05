@@ -48,6 +48,7 @@ import {
   readAgentRunsByTemplateRaw,
   type AgentRunRecord,
 } from "../store";
+import { claimGateForResume } from "../run-status";
 // Run-scoped test-delivery send + parse primitives (#1625): the two handlers
 // live in ./test-delivery-handlers (extracted to keep this primitive hub under
 // the file-size ratchet). The send PORT, ledger store, and port types are
@@ -2073,8 +2074,8 @@ async function handleAgentBuilderRunResume(
 
     // cinatra#2485 C — the install-scope run gate. A resume DRIVES execution,
     // and this handler's WayFlow branch does so through a DIRECT `sendTask`:
-    // it enqueues nothing and transitions nothing, so it reaches neither
-    // layer-2 chokepoint. Without this, a principal authorized on the run by
+    // it enqueues nothing and its gate claim is no `→queued` edge, so it reaches
+    // neither layer-2 chokepoint. Without this, a principal authorized on the run by
     // policy (an org admin, a co-owner) could resume a team-/project-scoped
     // agent's run from outside that scope. Both the RESUMING principal and the
     // run owner must be inside the agent's scope; asserted before
@@ -2190,6 +2191,35 @@ async function handleAgentBuilderRunResume(
         }
       }
 
+      // #1193 resume carrier + cinatra#3745 claim: claim THIS gate (`pending_approval -> running`,
+      // bound to the a2a task and attempt read above; the attempt is kept), then mint this leg's
+      // per-run credential, BEFORE anything is recorded or sent; a lost claim means the gate was
+      // already answered. The RAW token rides in the A2A message METADATA (not text: `resumeText`
+      // reaches the gate's InputMessageNode VERBATIM).
+      const { mintResumeRunTokenMetadata } = await import("../wayflow-run-token-carrier");
+      const gate = { a2aTaskId: run.a2aTaskId, executionAttemptId: run.executionAttemptId ?? null };
+      // cinatra#4150 (A5): on a publishing template, or for a run with a decision (it met a publish gate, whatever the
+      // list says), the hold is read again under the claim, before the send; a refused or unreadable hold releases the
+      // claim (claimGateForResume puts the run back at the gate) and answers as the hold check above does.
+      const publishes = (template.publishingSteps?.length ?? 0) > 0 || decided;
+      const hold: { answer: { error: string; code?: string } | null } = { answer: null };
+      const claim = await claimGateForResume(transitionRunStatus, run.id, gate, resumeAuthority, async () => {
+        if (publishes) {
+          try {
+            await publishHold.assertNoOpenPublishDecision(run.id);
+          } catch (e) {
+            hold.answer = publishHold.publishHoldAnswer(e);
+            throw e;
+          }
+        }
+        return mintResumeRunTokenMetadata(run.id);
+      }).catch((e: unknown) => {
+        if (hold.answer) return null;
+        throw e;
+      });
+      if (hold.answer) return hold.answer;
+      if (!claim || !claim.claimed) return { error: `Run is not pending approval: gate ${run.a2aTaskId} on run ${run.id} was already answered.` };
+      const resumeMetadata = claim.value;
       await writeHitlPrompt({
         runId: run.id,
         agentId: packageName,                          // existing local var; do NOT change to template.packageName
@@ -2202,17 +2232,7 @@ async function handleAgentBuilderRunResume(
       }).catch((e) => {
         console.warn(`[handleAgentBuilderRunResume] writeHitlPrompt failed run=${run.id}`, e);
       });
-      // #1193 resume carrier: mint this leg's per-run credential and persist its
-      // hash BEFORE the blocking sendTask, then carry the RAW token in the A2A
-      // message METADATA. Kept in lockstep with the UI resume path
-      // (review-task-actions.ts) — both drive the same HITL gate, so both must
-      // carry run identity into the resumed leg. Metadata (not text) because
-      // `resumeText` reaches the gate's InputMessageNode VERBATIM.
-      const { mintResumeRunTokenMetadata } = await import("../wayflow-run-token-carrier");
-      const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
-      // cinatra#4150 (A5): on a publishing template, or for a run with a decision (it met a publish gate, whatever the list says), the run is claimed and the hold read again before the send.
-      const sendFrom = await publishHold.claimRunBeforeSend(run.id, (template.publishingSteps?.length ?? 0) > 0 || decided, resumeAuthority).catch((e: unknown) => publishHold.publishHoldAnswer(e));
-      if (typeof sendFrom !== "string") return sendFrom ?? { error: "Run is not pending approval: another resume holds it." };
+
       // Send into the existing context so fasta2a routes to the paused conversation.
       const task = await client.sendTask({
         message: {
@@ -2226,10 +2246,10 @@ async function handleAgentBuilderRunResume(
         configuration: { acceptedOutputModes: ["text"] },
       });
 
-      // multi-gate handler; lazy import (this file lives in packages/agents/src/mcp/). fromStatus: "pending_approval" (a2aTaskId
-      // is set only when the run paused at an A2A gate), or "running" after the cinatra#4150 claim above.
+      // multi-gate handler (lazy: "../execution"). fromStatus "running": the claim moved the row.
+      // claimedGate: the answer applies only while the run still holds THIS claim (cinatra#3745).
       const { handleWayflowTaskState } = await import("../execution");
-      await handleWayflowTaskState({ runId: run.id, run, fromStatus: sendFrom, task, authority: resumeAuthority });
+      await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task, authority: resumeAuthority, claimedGate: gate });
 
       const finalState = task.status?.state;
       return {
