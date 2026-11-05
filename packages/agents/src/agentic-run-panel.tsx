@@ -80,9 +80,11 @@ import {
   applyAttachmentEnvelopeUserResponseOnly,
   buildChatGateSubmitPayload,
   createGateValidityStore,
+  hasUsableListPick,
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
+  isMidRunListStepGate,
   isSetupGateTaskId,
   liftRendererApprovalNote,
   setupFieldRendererValue,
@@ -1950,6 +1952,21 @@ export function AgenticRunPanel({
     return null;
   })();
 
+  // THE LIST STEP DRAWN AS A MID-RUN GATE (cinatra#3562): the gate's renderer
+  // is drawn (no presentation hint) and the gate is a list step that is not a
+  // setup gate (`isMidRunListStepGate`, the same reading `isMidRunHitl` uses
+  // below). Only then does the outer Continue lift the picks into the approval
+  // note, and send nothing while nothing is picked. The tool-call approval
+  // banner is drawn only when no renderer is, so its Approve is never this.
+  const drawsMidRunListStep =
+    Boolean(effectiveHitlContext) &&
+    hitlPresentationHint === null &&
+    Boolean(hitlRendererEntry?.entry) &&
+    isMidRunListStepGate(
+      effectiveHitlContext?.xRenderer ?? "",
+      effectiveHitlContext?.reviewTaskId ?? "",
+    );
+
   // Bottom-of-page prompt handler. Sends the message on the ONE ROAD and writes
   // the fill that comes back into
   // the buffer (handleApply), and exposes the suggestion payload to the renderer
@@ -2088,6 +2105,11 @@ export function AgenticRunPanel({
           // Reported unsendable: the press sends nothing (the drawn state can
           // lag the report by one frame; the store cannot).
           if (gateValidity.isHeld(activeGateKey)) return;
+          // A LIST STEP WITH NOTHING PICKED (cinatra#3562) sends nothing: its
+          // snapshot would name no list (`listId: ""`). The list step reports
+          // nothing yet, so the Continue stays drawn, and a press is refused
+          // here, as the setup road refused it before (nothing staged).
+          if (drawsMidRunListStep && !hasUsableListPick(bufferedHitlValue)) return;
           // The visible Continue may need to wrap the WayFlow `userResponse`
           // with the envelope when paperclip attachments are pending, but must
           // preserve any renderer-authored `userResponse` already on
@@ -2109,13 +2131,13 @@ export function AgenticRunPanel({
           };
           // The list step's approvalNote lift (cinatra#3562): snapshot the
           // picks exactly as approved at this gate, as the stepper's Continue
-          // does, through the same shared helper. A `:list-picker` gate that
-          // is not a setup gate is a mid-run gate here (see `isMidRunHitl`
-          // below), so its buffered picks reach this Continue and leave in the
-          // note, the several ticked ids included. Only the list step is
-          // lifted here: the helper's other renderers keep the send they had
-          // on this panel.
-          const approvalNoteLift = effectiveHitlContext.xRenderer.endsWith(":list-picker")
+          // does, through the same shared helper. The list step drawn as a
+          // mid-run gate (`drawsMidRunListStep`) buffers its picks for this
+          // Continue, and they leave in the note, the several ticked ids
+          // included. Only that list step is lifted here: a list step on a
+          // setup gate, and the helper's other renderers, keep the send they
+          // had on this panel.
+          const approvalNoteLift = drawsMidRunListStep
             ? liftRendererApprovalNote(effectiveHitlContext.xRenderer, bufferedHitlValue)
             : null;
           if (approvalNoteLift) {
@@ -2997,8 +3019,10 @@ export function AgenticRunPanel({
                   // its answer is sent under the gate's field name, the shape
                   // the setup loop records. (The stepper classifies by the
                   // suffix alone, on a setup gate too.)
-                  (effectiveHitlContext.xRenderer.endsWith(":list-picker") &&
-                    !isSetupGateTaskId(effectiveHitlContext.reviewTaskId)) ||
+                  isMidRunListStepGate(
+                    effectiveHitlContext.xRenderer,
+                    effectiveHitlContext.reviewTaskId,
+                  ) ||
                   // Manifest-flagged mid-run gates (cinatra#151 Stage 5): a
                   // binding declaring `midRunHitl: true` (e.g. the
                   // context-selector) buffers into the outer Continue here

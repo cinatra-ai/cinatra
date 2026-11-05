@@ -23,6 +23,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   Component,
   useEffect,
+  useLayoutEffect,
   useState,
   type ComponentType,
   type ReactNode,
@@ -271,6 +272,48 @@ describe("ExtensionFieldRenderer — a crash keeps the component's validity repo
       expect(onValidityChange).toHaveBeenLastCalledWith(first);
     });
   }
+
+  /**
+   * Reports nothing ticked when it is drawn, and `true` from the cleanup of
+   * that layout effect, which runs while the crashed component is removed, in
+   * the same commit that draws the floor and before `componentDidCatch`.
+   */
+  function ReportsTrueWhileRemoved({ onValidityChange }: FieldRendererProps) {
+    const [broken, setBroken] = useState(false);
+    useLayoutEffect(() => {
+      onValidityChange?.(false);
+      return () => onValidityChange?.(true);
+    }, [onValidityChange]);
+    if (broken) throw new Error("render crash");
+    return (
+      <Button type="button" onClick={() => setBroken(true)}>
+        Break
+      </Button>
+    );
+  }
+
+  it("drops a report the crashed component makes while it is removed (a layout-effect cleanup)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mapTo(ReportsTrueWhileRemoved);
+    const Wrapper = makeExtensionFieldRenderer(BINDING_ID);
+    const onValidityChange = vi.fn();
+    const view = render(
+      <Wrapper
+        {...senderProps()}
+        fieldName="accountScope"
+        context={{ connectedApps: [] } as unknown as FieldRendererProps["context"]}
+        onValidityChange={onValidityChange}
+      />,
+    );
+
+    await view.findByRole("button", { name: "Break" });
+    await waitFor(() => expect(onValidityChange).toHaveBeenLastCalledWith(false));
+    fireEvent.click(view.getByRole("button", { name: "Break" }));
+    await waitFor(() => expect(view.container.querySelector("#field-accountScope")).toBeTruthy());
+
+    expect(onValidityChange).not.toHaveBeenCalledWith(true);
+    expect(onValidityChange).toHaveBeenLastCalledWith(false);
+  });
 
   /** Draws what the wrapper lets escape, so a throw past the wrapper is read here. */
   class EscapeCatcher extends Component<{ children?: ReactNode }, { escaped: boolean }> {

@@ -630,6 +630,7 @@ describe("AgenticRunPanel — a renderer that reports its value unsendable (cina
     });
     // THE LIST STEP'S NOTE (cinatra#3562): the Continue lifts every tick into
     // the approval note, in the order ticked, as the stepper's Continue does.
+    expect(typeof payload.approvalNote).toBe("string");
     expect(JSON.parse(payload.approvalNote as string)).toMatchObject({
       type: "list",
       listIds: ["two", "one"],
@@ -658,6 +659,7 @@ describe("AgenticRunPanel — a renderer that reports its value unsendable (cina
       Record<string, unknown>,
     ];
     expect(payload).toMatchObject({ type: "list", listIds: ["two"], listNames: ["View two"] });
+    expect(typeof payload.approvalNote).toBe("string");
     expect(JSON.parse(payload.approvalNote as string)).toMatchObject({
       type: "list",
       listIds: ["two"],
@@ -777,6 +779,7 @@ describe("AgenticRunPanel — a renderer that reports its value unsendable (cina
     ];
     expect(taskId).toBe("review-run-3562");
     expect(payload).toMatchObject({ type: "list", listIds: ["two"], listNames: ["View two"], approved: true });
+    expect(typeof payload.approvalNote).toBe("string");
     expect(JSON.parse(payload.approvalNote as string)).toMatchObject({
       type: "list",
       listIds: ["two"],
@@ -984,6 +987,29 @@ function ReportsFalseThenThrows({ onValidityChange }: FieldRendererProps) {
   );
 }
 
+/**
+ * A list step like the shipped one: one pick, buffered by `listId`, and no
+ * validity report.
+ */
+function SilentListRenderer({ onChange }: FieldRendererProps) {
+  return (
+    <div>
+      <Button
+        type="button"
+        onClick={() => void onChange({ scope: "list", listId: "   ", listName: "Blank", memberCount: 0 })}
+      >
+        Pick blank
+      </Button>
+      <Button
+        type="button"
+        onClick={() => void onChange({ scope: "list", listId: "l1", listName: "List one", memberCount: 3 })}
+      >
+        Pick list one
+      </Button>
+    </div>
+  );
+}
+
 describe("AgenticRunPanel — every send of a held gate sends nothing (cinatra#3562)", () => {
   beforeEach(() => {
     unbindStepHandle();
@@ -1037,6 +1063,7 @@ describe("AgenticRunPanel — every send of a held gate sends nothing (cinatra#3
     expect(taskId).toBe("review-run-3562");
     expect(fieldName).toBeUndefined();
     expect(payload).toMatchObject({ approved: true });
+    expect(typeof payload.approvalNote).toBe("string");
     const note = JSON.parse(payload.approvalNote as string) as Record<string, unknown>;
     expect(note).toMatchObject({
       type: "list",
@@ -1085,6 +1112,89 @@ describe("AgenticRunPanel — every send of a held gate sends nothing (cinatra#3
     fireEvent.click(productContinue()!);
     await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
   });
+
+  it("a list step that reports nothing sends nothing while nothing is picked, and resumes with its pick in the note", async () => {
+    const SILENT_LIST_ID = "@cinatra-test/pack-agent-silent:list-picker";
+    fieldRendererRegistry.register({
+      id: SILENT_LIST_ID,
+      priority: 100,
+      condition: (_fieldName, schema) =>
+        (schema as { "x-renderer"?: unknown })["x-renderer"] === SILENT_LIST_ID,
+      renderer: SilentListRenderer,
+    });
+    await setGate(SILENT_LIST_ID, "accountScope", { type: "object" }, "review-run-3562");
+    const view = await renderPanel();
+
+    await view.findByRole("button", { name: "Pick list one" });
+    await waitFor(() => expect(productContinue()).not.toBeNull());
+    // Nothing reports, so the Continue stays drawn; with nothing picked a
+    // press sends nothing (no `approved: true`, no empty snapshot).
+    expect(productContinue()!.disabled).toBe(false);
+    fireEvent.click(productContinue()!);
+    await act(async () => {});
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    // A blank id is no pick either.
+    fireEvent.click(view.getByRole("button", { name: "Pick blank" }));
+    await act(async () => {});
+    fireEvent.click(productContinue()!);
+    await act(async () => {});
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    fireEvent.click(view.getByRole("button", { name: "Pick list one" }));
+    await act(async () => {});
+    fireEvent.click(productContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("review-run-3562");
+    expect(payload).toMatchObject({ approved: true, listId: "l1" });
+    expect(typeof payload.approvalNote).toBe("string");
+    expect(JSON.parse(payload.approvalNote as string)).toMatchObject({
+      type: "list",
+      listId: "l1",
+      listName: "List one",
+      memberCount: 3,
+    });
+  });
+
+  for (const [what, xRenderer, flagged] of [
+    ["an `:output` gate", OUTPUT_TICKING_RENDERER_ID, false],
+    [
+      "a gate flagged mid-run whose renderer the stepper lifts",
+      "@cinatra-test/pack-agent-ticking:scrape-schema-review",
+      true,
+    ],
+  ] as const) {
+    it(`lifts no approval note on ${what}: the run panel lifts the list step only`, async () => {
+      if (flagged) {
+        fieldRendererRegistry.register({
+          id: xRenderer,
+          priority: 100,
+          condition: (_fieldName, schema) =>
+            (schema as { "x-renderer"?: unknown })["x-renderer"] === xRenderer,
+          renderer: TickingRenderer,
+          midRunHitl: true,
+        });
+      }
+      await setGate(xRenderer, "accountScope", { type: "object" }, "review-run-3562");
+      const view = await renderPanel();
+
+      await view.findByRole("checkbox", { name: "View one" });
+      fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+      await waitFor(() => expect(productContinue()!.disabled).toBe(false));
+      fireEvent.click(productContinue()!);
+      await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+      const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+        string,
+        Record<string, unknown>,
+      ];
+      expect(taskId).toBe("review-run-3562");
+      expect(payload).toMatchObject({ approved: true, listIds: ["one"] });
+      expect(payload).not.toHaveProperty("approvalNote");
+    });
+  }
 
   it("a renderer's own submit sends nothing while it reports its value unsendable", async () => {
     const OWN_SUBMIT_ID = "@cinatra-test/pack-agent:own-submit";

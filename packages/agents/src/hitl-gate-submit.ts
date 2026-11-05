@@ -306,6 +306,35 @@ export function withContextSelectorEnvelope(
 // ---------------------------------------------------------------------------
 
 /**
+ * THE RUN PANEL'S MID-RUN LIST STEP (cinatra#3562): a `:list-picker` gate that
+ * is not a setup gate. The run panel draws it as a mid-run gate (its picks
+ * buffer for the outer Continue) and lifts its picks into the approval note;
+ * the same reading decides both, so they cannot disagree. On a setup gate the
+ * list step stays on the setup road, where its answer is sent under the gate's
+ * field name.
+ */
+export function isMidRunListStepGate(xRenderer: string, reviewTaskId: string): boolean {
+  return xRenderer.endsWith(":list-picker") && !isSetupGateTaskId(reviewTaskId);
+}
+
+/** A list id that names a pick: a string that is not blank (whitespace only). */
+function isUsableListId(id: unknown): id is string {
+  return typeof id === "string" && id.trim().length > 0;
+}
+
+/**
+ * Whether a list step's buffer holds a pick (cinatra#3562): a usable id in
+ * `listIds`, or a usable `listId`. A buffer without one would resume the run
+ * with an empty snapshot (`listId: ""`), so the run panel's Continue sends
+ * nothing for it.
+ */
+export function hasUsableListPick(buffered: Record<string, unknown> | null | undefined): boolean {
+  if (!buffered) return false;
+  const { listIds, listId } = buffered as { listIds?: unknown; listId?: unknown };
+  return (Array.isArray(listIds) && listIds.some(isUsableListId)) || isUsableListId(listId);
+}
+
+/**
  * Lift renderer-buffered values into a structured `approvalNote` snapshot
  * for the gates whose downstream continuation re-reads exactly what was
  * approved. Returns `{ approvalNote }` to merge into the resume payload,
@@ -334,7 +363,7 @@ export function liftRendererApprovalNote(
       const listIds: string[] = [];
       const listNames: string[] = [];
       ticked.forEach((id, index) => {
-        if (typeof id !== "string" || id.trim().length === 0 || listIds.includes(id)) return;
+        if (!isUsableListId(id) || listIds.includes(id)) return;
         listIds.push(id);
         const name = Array.isArray(names) ? names[index] : undefined;
         listNames.push(typeof name === "string" ? name : "");
