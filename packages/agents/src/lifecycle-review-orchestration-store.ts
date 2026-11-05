@@ -1179,6 +1179,27 @@ export async function sweepReviewOrchestration(opts?: {
 
   const limit = Math.max(1, Math.min(opts?.limit ?? 50, 200));
 
+  // cinatra#4312 — an old application that still serves after core__0125 can write a
+  // note on an unnamed reopen gate; name such a gate here. The statement names any gate
+  // in the slot that a repair row at attempt 2 or later rests on, a hand-written row's
+  // too. A lineage the name makes readable did not start on a later declared leg (the
+  // declared-lineage check of the reopen binding refuses those), but it can have started
+  // on the post's own leg of a declared review, and a run that leg's lineage kept parked
+  // has no gate decision left to resume it. So, in the naming's transaction, a declared
+  // family whose lineage now reads closed gets one new resume intent that carries its
+  // latest decision (`carryDeclaredReviewDecision`, an insert only). A failure rolls the
+  // names and the inserts back together and stops nothing else; the next sweep tries
+  // again.
+  try {
+    const { nameVerificationReopensThatRepairRowsRestOn } = await import("./lifecycle-verification-store");
+    await nameVerificationReopensThatRepairRowsRestOn();
+  } catch (err) {
+    console.warn(
+      "[lifecycle-review-orchestration] the verification reopen names were not written:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+
   // 1. Run-backed PRODUCTIONS with pending events (oldest production first, bounded
   //    by the pass budget). Grouping in SQL means the coalescing membership never
   //    depends on a raw-event fetch window.
