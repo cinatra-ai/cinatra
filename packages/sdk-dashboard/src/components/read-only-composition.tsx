@@ -38,9 +38,41 @@
 // without one. Without a road it renders exactly what it renders today. The road
 // is an ADDRESS: it carries no credential, and it adds no toolbar, filter,
 // modal, drag or save.
+//
+// THE NO-SERIES ROAD (cinatra#3092). A reading that holds no series still draws
+// the dashboard's chrome, titles and layout, with no numbers. Road `none` mounts
+// the same providers over a query client on which no query reaches the cube
+// client: a query of a family the road knows (a `cube` key of the family
+// `load`, `multiLoad`, `funnel`, `flow`, `retention` or `meta`) is born settled
+// with its EMPTY answer, so the grid lays the portlets out by the
+// configuration's own `grid`, `layoutMode` and `rows`, each portlet settles to
+// its empty state, and nothing is fetched and no address is read. A query of
+// any other key holds no answer, stays off and, if it is fetched, settles with
+// an error.
+//
+// ONLY THE TWO NAMED ROADS. The road is read by equality against `"none"` and
+// `"session"` and nothing else. Any other value — a missing or malformed road, a
+// case-varied or future name, a session road without an address, a non-object —
+// draws a settled refusal and mounts no provider: it never falls through to the
+// session road, which sends the reader's credentials.
+//
+// THE SERVER WAITS FOR THE PAGE'S ORIGIN (#4118). The session road's address is
+// resolved against the page's own origin, which only the browser knows. A server
+// render therefore draws the session road as a neutral pending placeholder (no
+// provider, no address, no refusal), and so does the first client render while
+// it hydrates that markup; the road is resolved right after. A client without a
+// usable origin then draws the refusal. The `none` road and a value that cannot
+// be an address at all read the same on both sides and are drawn at once.
 
-import { useState, type ComponentProps, type ReactNode } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
+import {
+  QueryClient,
+  QueryClientProvider,
+  type DefaultError,
+  type DefaultedQueryObserverOptions,
+  type QueryKey,
+  type QueryObserverOptions,
+} from "@tanstack/react-query";
 import { CubeProvider, DashboardGridSurface, DashboardProvider } from "drizzle-cube/client";
 
 import {
@@ -49,14 +81,15 @@ import {
 } from "./narrow-to-single-portlet";
 
 /**
- * The data road a display hands the composition: the address its series are
- * fetched from. `session` is the application's own cube route, reached with the
- * reader's session. (The island's sealed road is a later leg.)
+ * The data road a display hands the composition. `session` is the address its
+ * series are fetched from: the application's own cube route, reached with the
+ * reader's session. `none` is a reading with no series: the dashboard's chrome,
+ * titles and layout are drawn, and nothing is fetched. (The island's sealed road
+ * is a later leg.)
  */
-export type ReadOnlyCompositionDataRoad = {
-  readonly road: "session";
-  readonly apiUrl: string;
-};
+export type ReadOnlyCompositionDataRoad =
+  | { readonly road: "session"; readonly apiUrl: string }
+  | { readonly road: "none" };
 
 /** The props the read-only dashboard takes — the provider's, minus every
  *  editing-shaped one the composition deliberately does not mount, plus the
@@ -65,8 +98,9 @@ export type ReadOnlyComposedDashboardProps = Omit<
   ComponentProps<typeof DashboardProvider>,
   "children" | "dashboardModes" | "hideToolbar" | "editable"
 > & {
-  /** Given, the view mounts its own query client and cube provider over it;
-   *  absent, it draws inside the providers its caller already mounts. */
+  /** Given, the view mounts its own query client and cube provider over it
+   *  (road `none`: over no address, with no query run); absent, it draws inside
+   *  the providers its caller already mounts. */
   dataRoad?: ReadOnlyCompositionDataRoad;
 };
 
@@ -82,30 +116,274 @@ function DataRoadProviders({
   dataRoad: ReadOnlyCompositionDataRoad | undefined;
   children: ReactNode;
 }) {
-  if (!dataRoad) return <>{children}</>;
-  return <MountedDataRoad dataRoad={dataRoad}>{children}</MountedDataRoad>;
+  // Read on every render, road or not (a hook): the server's snapshot is
+  // "pending", the client's is the page's origin or "absent".
+  const pageOrigin = useSyncExternalStore(subscribeToNothing, readPageOrigin, pendingPageOrigin);
+  if (dataRoad === undefined) return <>{children}</>;
+  const road = readDataRoad(dataRoad, pageOrigin);
+  if (road.road === "none") return <MountedNoSeriesRoad>{children}</MountedNoSeriesRoad>;
+  if (road.road === "session") return <MountedDataRoad apiUrl={road.apiUrl}>{children}</MountedDataRoad>;
+  if (road.road === "pending") return <PendingDataRoad />;
+  return <RefusedDataRoad />;
+}
+
+type ReadDataRoad =
+  | { readonly road: "none" }
+  | { readonly road: "session"; /** the resolved href */ readonly apiUrl: string }
+  | { readonly road: "pending" }
+  | { readonly road: "refused" };
+
+const REFUSED: ReadDataRoad = { road: "refused" };
+const PENDING: ReadDataRoad = { road: "pending" };
+
+/**
+ * THE PAGE'S ORIGIN, AS EACH SIDE READS IT. The client reads
+ * `window.location.origin` once per render: a usable origin is a non-empty
+ * string other than the opaque "null"; no window, no location, a read that
+ * throws and every other value are `null` (absent, so the session road is
+ * refused). The server, and the client while it hydrates the server's markup,
+ * read `undefined` (pending), so both draw the same placeholder. A page's
+ * origin does not change while the page lives, so there is nothing to
+ * subscribe to.
+ */
+type PageOrigin = string | null | undefined;
+
+function readPageOrigin(): string | null {
+  try {
+    const origin: unknown = typeof window === "undefined" ? undefined : window.location?.origin;
+    return typeof origin === "string" && origin.length > 0 && origin !== "null" ? origin : null;
+  } catch {
+    return null;
+  }
+}
+
+function pendingPageOrigin(): undefined {
+  return undefined;
+}
+
+function subscribeToNothing(): () => void {
+  return () => {};
+}
+
+/** An own DATA property of a plain object, read once; an accessor, an inherited
+ *  property or a read that throws reads as absent. */
+function ownValue(value: object, key: string): unknown {
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor && "value" in descriptor ? descriptor.value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A value that may hold no backslash, whitespace or control character. */
+const UNSAFE_CHARACTER = /[\\\s\u0000-\u001f\u007f]/;
+/** A root-relative path ("/x", never "//x") or an absolute URL with a scheme. */
+const ADDRESS_SHAPE = /^(?:\/(?!\/)|[a-z][a-z0-9+.-]*:)/i;
+/** The only schemes the reader's session goes to, read from the parsed URL. */
+const SESSION_PROTOCOLS: ReadonlySet<string> = new Set(["http:", "https:"]);
+
+/** A value that may be an address at all, before any origin is read. */
+function isAddressShaped(apiUrl: string): boolean {
+  return !UNSAFE_CHARACTER.test(apiUrl) && ADDRESS_SHAPE.test(apiUrl);
+}
+
+/**
+ * THE ADDRESS THE READER'S SESSION GOES TO, RESOLVED ONCE. The session road
+ * sends the reader's credentials (`credentials: "include"`), so its address
+ * must be the page's own origin. The value is resolved exactly once, against
+ * the page's origin as `readPageOrigin` reads it from `window.location.origin`
+ * (never `document.baseURI`, so a `<base>` element cannot move it), and the
+ * RESOLVED href is the one handed on: the provider never receives a path a
+ * browser would resolve again. Admitted is a value of the address shape whose
+ * parsed scheme is http or https and whose resolved origin EQUALS the page's
+ * origin, with no user name and no password. Refused (`undefined`) is
+ * everything else: no usable page origin (`null`), a value that does not
+ * parse, a backslash, whitespace or control character, "//host", a bare
+ * relative path, another origin, port or scheme, every scheme but http and
+ * https ("blob:" of the page's own origin, "data:", "javascript:", "file:"
+ * included), and any user name or password (an empty user name with a
+ * password included).
+ */
+function sameOriginHref(apiUrl: string, pageOrigin: string | null): string | undefined {
+  if (!isAddressShaped(apiUrl) || pageOrigin === null) return undefined;
+  try {
+    const url = new URL(apiUrl, pageOrigin);
+    if (!SESSION_PROTOCOLS.has(url.protocol)) return undefined;
+    if (url.origin !== pageOrigin || url.username !== "" || url.password !== "") return undefined;
+    return url.href;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * THE ROAD, READ FAIL-CLOSED. A road is admitted only when it is a non-array
+ * object whose own `road` equals `"none"`, or equals `"session"` with an own
+ * string `apiUrl` that resolves to the page's own origin (`sameOriginHref`);
+ * the session road then carries that resolved href, never the value as given.
+ * While the page's origin is pending (the server, and the client's hydrating
+ * render), a session road whose address is shaped like one reads as pending.
+ * Everything else is refused, and so is a value whose read throws — the
+ * composition does not guess which road a value it cannot read meant, and
+ * never sends the reader's session to another origin.
+ */
+function readDataRoad(dataRoad: unknown, pageOrigin: PageOrigin): ReadDataRoad {
+  // Every read of the value sits inside this guard, so a read that throws is
+  // the refusal: a revoked Proxy throws even for `Array.isArray`.
+  try {
+    if (typeof dataRoad !== "object" || dataRoad === null || Array.isArray(dataRoad)) return REFUSED;
+    const road = ownValue(dataRoad, "road");
+    if (road === "none") return { road: "none" };
+    if (road === "session") {
+      const apiUrl = ownValue(dataRoad, "apiUrl");
+      if (typeof apiUrl === "string" && isAddressShaped(apiUrl)) {
+        if (pageOrigin === undefined) return PENDING;
+        const href = sameOriginHref(apiUrl, pageOrigin);
+        if (href !== undefined) return { road: "session", apiUrl: href };
+      }
+    }
+    return REFUSED;
+  } catch {
+    return REFUSED;
+  }
+}
+
+/** The pending placeholder: no provider, no address, no refusal, no text. The
+ *  server and the hydrating client draw the same one. */
+function PendingDataRoad() {
+  return <div aria-busy="true" data-cinatra-read-only-composition-pending="data-road" />;
+}
+
+/** The settled refusal: no provider, no grid, no request — a visible notice. */
+function RefusedDataRoad() {
+  return (
+    <div role="alert" data-cinatra-read-only-composition-refused="data-road">
+      This view cannot be drawn: its data road is not one this composition knows.
+    </div>
+  );
+}
+
+/** The shell's own query settings, shared by both roads. */
+const ROAD_QUERY_DEFAULTS = {
+  defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false } },
+};
+
+/** An empty reading in drizzle-cube 0.6.6's own result-set shape
+ *  (`CubeResultSet`, src/client/types.ts:523-530; the client's `ResultSet`,
+ *  src/client/client/CubeClient.ts:249-295): no rows, no annotation. */
+function emptyResultSet() {
+  return {
+    loadResponse: { data: [], annotation: {} },
+    rawData: () => [],
+    tablePivot: () => [],
+    series: () => [],
+    annotation: () => ({}),
+    cacheInfo: () => undefined,
+  };
+}
+
+/**
+ * THE SETTLED, EMPTY ANSWER FOR A QUERY OF THE GRID, by the query family
+ * drizzle-cube 0.6.6 names in the key's second place — each in the shape that
+ * family's own query function returns when the server answers with no rows:
+ *   `load`       → a result set (hooks/queries/useCubeLoadQuery.ts:32-36, 198-224)
+ *   `multiLoad`  → the merged reading (hooks/queries/useMultiCubeLoadQuery.ts:26-31, 203-209)
+ *   `funnel`, `flow`, `retention` → `{ rawData, executionTime, cacheInfo }`
+ *                  (useFunnelQuery.ts:207-211, 262-266; useFlowQuery.ts:187-190,
+ *                  243-251; useRetentionQuery.ts:256-259, 304-308)
+ *   `meta`       → `{ meta, labelMap }` (hooks/queries/useCubeMetaQuery.ts:19, 93-98)
+ * A portlet with a result set and no error is done (components/analyticsPortlet/
+ * portletRenderState.ts:74, 78), and its chart draws its own "No data available".
+ * A key this road does not know has no answer: its query stays off and, if it is
+ * ever fetched, settles with an error.
+ */
+function emptyAnswerFor(queryKey: readonly unknown[] | undefined): unknown {
+  if (!Array.isArray(queryKey) || queryKey[0] !== "cube") return undefined;
+  const family = queryKey[1];
+  if (family === "load") return emptyResultSet();
+  if (family === "multiLoad") {
+    return { data: [], resultSets: [], perQueryData: [], errors: [], firstError: null };
+  }
+  if (family === "funnel" || family === "flow" || family === "retention") {
+    return { rawData: [], executionTime: 0, cacheInfo: undefined };
+  }
+  if (family === "meta") return { meta: { cubes: [] }, labelMap: {} };
+  return undefined;
+}
+
+/** The answer to a query this road does not know: settled, never a request. */
+function refuseUnknownQuery(): Promise<never> {
+  return Promise.reject(new Error("The no-series road answers no such query."));
+}
+
+/**
+ * THE NO-SERIES ROAD'S QUERY CLIENT. drizzle-cube 0.6.6 builds its cube client
+ * from `apiOptions` inside its provider and does not read a `cubeApi` it is
+ * given (providers/CubeApiProvider.tsx:69-73), so the one seam that every query
+ * of the grid passes through is the query client the provider is given
+ * (`queryClient`): each portlet's series, the cube metadata and a portlet's
+ * refresh, including the `fetchQuery` a cache-busting refresh calls. On this
+ * client every query is off. A query of a family `emptyAnswerFor` names is born
+ * holding that family's empty answer (`initialData`), and its function answers
+ * that same empty answer at once; any other query holds no answer and its
+ * function rejects. So no query reaches the cube client, the road fetches
+ * nothing, and every portlet settles to its empty state instead of loading
+ * forever.
+ */
+class NoSeriesQueryClient extends QueryClient {
+  override defaultQueryOptions<
+    TQueryFnData = unknown,
+    TError = DefaultError,
+    TData = TQueryFnData,
+    TQueryData = TQueryFnData,
+    TQueryKey extends QueryKey = QueryKey,
+    TPageParam = never,
+  >(
+    options:
+      | QueryObserverOptions<TQueryFnData, TError, TData, TQueryData, TQueryKey, TPageParam>
+      | DefaultedQueryObserverOptions<TQueryFnData, TError, TData, TQueryData, TQueryKey>,
+  ): DefaultedQueryObserverOptions<TQueryFnData, TError, TData, TQueryData, TQueryKey> {
+    const defaulted = super.defaultQueryOptions(options);
+    const answer = emptyAnswerFor(defaulted.queryKey);
+    return {
+      ...defaulted,
+      enabled: false,
+      retry: false,
+      initialData: answer as TQueryData | undefined,
+      queryFn: answer === undefined ? refuseUnknownQuery : () => Promise.resolve(answer as TQueryFnData),
+    };
+  }
+}
+
+/** The no-series road: the session road's providers over a query client on
+ *  which no query runs, and no address. */
+function MountedNoSeriesRoad({ children }: { children: ReactNode }) {
+  // One query client per mount, created once — the shell's own lifetime rule.
+  const [queryClient] = useState(() => new NoSeriesQueryClient(ROAD_QUERY_DEFAULTS));
+  return (
+    <QueryClientProvider client={queryClient}>
+      <CubeProvider
+        queryClient={queryClient}
+        apiOptions={{ credentials: "omit" }}
+        features={{ enableAI: false }}
+        enableBatching={false}
+      >
+        {children}
+      </CubeProvider>
+    </QueryClientProvider>
+  );
 }
 
 /** The query client and the cube provider over the road's address — the
  *  dashboards shell's own settings. */
-function MountedDataRoad({
-  dataRoad,
-  children,
-}: {
-  dataRoad: ReadOnlyCompositionDataRoad;
-  children: ReactNode;
-}) {
+function MountedDataRoad({ apiUrl, children }: { apiUrl: string; children: ReactNode }) {
   // One query client per mount, created once — the shell's own lifetime rule.
-  const [queryClient] = useState(
-    () =>
-      new QueryClient({
-        defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false } },
-      }),
-  );
+  const [queryClient] = useState(() => new QueryClient(ROAD_QUERY_DEFAULTS));
   return (
     <QueryClientProvider client={queryClient}>
       <CubeProvider
-        apiOptions={{ apiUrl: dataRoad.apiUrl, credentials: "include" }}
+        apiOptions={{ apiUrl, credentials: "include" }}
         features={{ enableAI: false }}
         enableBatching={false}
       >
