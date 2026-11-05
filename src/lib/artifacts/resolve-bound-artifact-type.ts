@@ -134,6 +134,24 @@ export function readEffectiveArtifactSafeTypeIdsForExtension(
     .sort();
 }
 
+/**
+ * The package whose WINNING artifact-safe claim in this organisation is over
+ * `objectTypeId`, or null when no such claim wins it (cinatra#3319). The same
+ * arbitration as both functions above. A claim-backed type is registered by the
+ * host, so the object-type registry names no pack for it: this is how a caller
+ * learns which pack owns the row's type. A failed claim read throws.
+ */
+export function readArtifactSafeClaimWinnerForType(
+  orgId: string,
+  objectTypeId: string,
+  readClaimsForOrg?: (orgId: string) => readonly ArbitrableClaim[],
+): string | null {
+  const winner = readArtifactSafeClaimWinners(orgId, readClaimsForOrg).find(
+    (w) => w.objectTypeId === objectTypeId,
+  );
+  return winner ? winner.extensionPackage : null;
+}
+
 // ---------------------------------------------------------------------------
 // THE ADMISSIBLE ARTIFACT TYPES OF ONE ORGANISATION (cinatra#3603).
 //

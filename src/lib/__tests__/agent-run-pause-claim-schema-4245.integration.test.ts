@@ -1,5 +1,5 @@
 /**
- * cinatra#4245 PR A1, DB tier: core__0116 and its bootstrap twin applied to a
+ * cinatra#4245 PR A1, DB tier: core__0126 and its bootstrap twin applied to a
  * real Postgres.
  *
  *   - UPGRADE: on a table that already holds a paused run, `up` adds the
@@ -24,13 +24,24 @@
  * both quote characters boots (C5). No CI job runs this file: every DB job
  * pins literal paths and none names it, so its reading is a recorded host run
  * (C2/C9).
+ *
+ * Pre-2 fold: up and the bootstrap leaf finish from the crash
+ * state the migration header promises to repair (columns added, both CHECKs
+ * present NOT VALID); with both CHECKs absent the two validate statements are
+ * no-ops; an empty phase is refused. Those three pin behaviour 675c2bfc already
+ * has (green there too). Red at 675c2bfc: up waits for a lock past
+ * PAUSE_CLAIM_LOCK_TIMEOUT_MS instead of failing with 55P03.
+ *
+ * Red at 07f5d27b: with the phase CHECK dropped, the shape CHECK alone
+ * admitted a claim with an unknown, an empty or a case-varied phase and an
+ * expiry. Its claim branch now requires one of the three phases.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client } from "pg";
 import { agentRunPauseClaimSchemaQueries } from "@/lib/agent-run-created-at-schema";
 import { lifecycleRepairSchemaQueries } from "@/lib/artifacts/artifact-review-gate-schema";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
-import * as migration from "../../../migrations/core/core__0116_agent-run-pause-claim.mjs";
+import * as migration from "../../../migrations/core/core__0126_agent-run-pause-claim.mjs";
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 const HAS_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
@@ -44,6 +55,11 @@ const UPGRADE = `x4245_up_${suffix}`;
 const FRESH = `x4245_fresh_${suffix}`;
 const LOCKS = `x4245_lk_${suffix}`;
 const QUOTED = `x4245_q"u'o_${suffix}`;
+const CRASH = `x4245_cr_${suffix}`;
+const CRASH_LEAF = `x4245_cl_${suffix}`;
+const WAIT = `x4245_lw_${suffix}`;
+const SHAPE_UP = `x4245_su_${suffix}`;
+const SHAPE_LEAF = `x4245_sl_${suffix}`;
 const qi = (name: string) => `"${name.replaceAll('"', '""')}"`;
 const NEW_COLUMNS = ["pause_claim_expires_at", "pause_claim_phase", "pause_claim_token", "pause_generation"];
 const CHECKS = ["agent_runs_pause_claim_phase_chk", "agent_runs_pause_claim_shape_chk"];
@@ -168,11 +184,11 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!HAS_DB) return;
-  for (const schema of [UPGRADE, FRESH, LOCKS, QUOTED]) await client.query(`DROP SCHEMA IF EXISTS ${qi(schema)} CASCADE`);
+  for (const schema of [UPGRADE, FRESH, LOCKS, QUOTED, CRASH, CRASH_LEAF, WAIT, SHAPE_UP, SHAPE_LEAF]) await client.query(`DROP SCHEMA IF EXISTS ${qi(schema)} CASCADE`);
   await client.end();
 });
 
-describeDb("core__0116 on a real database (cinatra#4245)", () => {
+describeDb("core__0126 on a real database (cinatra#4245)", () => {
   it("upgrades a table holding a paused run to generation 0 with no claim, and a second up changes nothing", async () => {
     await minimalTables(UPGRADE);
     await client.query(`INSERT INTO "${UPGRADE}"."agent_runs" (id, status) VALUES ('run-old', 'pending_approval')`);
@@ -209,6 +225,7 @@ describeDb("core__0116 on a real database (cinatra#4245)", () => {
     ["a phase without a token", null, "claimed", "now()"],
     ["an unknown phase", "tok", "held", "now()"],
     ["a case-varied phase", "tok", "Claimed", "now()"],
+    ["an empty phase", "tok", "", "now()"],
     ["a claim without an expiry", "tok", "claimed", null],
     ["a send without an expiry", "tok", "sending", null],
     ["an end mark with an expiry", "cr:3", "changes_requested", "now()"],
@@ -258,8 +275,8 @@ describeDb("core__0116 on a real database (cinatra#4245)", () => {
     pending = [];
     migration.up(pgm);
     const statements = [...pending];
-    expect(statements).toHaveLength(6);
-    const [columnsAdd, phaseAdd, shapeAdd, phaseValidate, shapeValidate, repairAdd] = statements;
+    expect(statements).toHaveLength(8);
+    const [, columnsAdd, phaseAdd, shapeAdd, phaseValidate, shapeValidate, repairAdd] = statements;
     await client.query(`SET search_path TO ${qi(LOCKS)}`);
 
     // The column add holds ACCESS EXCLUSIVE, and the probe sees it block.
@@ -289,6 +306,115 @@ describeDb("core__0116 on a real database (cinatra#4245)", () => {
     expect(await validated(LOCKS)).toEqual(CHECKS.map((conname) => ({ conname, convalidated: true })));
     expect(await checks(LOCKS)).toEqual(await checks(UPGRADE));
   }, 60_000);
+
+  it.each<[string, string, (schema: string) => string[]]>([
+    ["up", CRASH, () => migration.pauseClaimDdlStatements],
+    ["the bootstrap leaf", CRASH_LEAF, (schema) => agentRunPauseClaimSchemaQueries(schema).map((row) => row.text)],
+  ])("%s finishes from the crash state: columns added, both CHECKs present NOT VALID", async (label, schema, ddl) => {
+    await minimalTables(schema);
+    await client.query(`SET search_path TO ${qi(schema)}`);
+    // The crash window: the column add and both NOT VALID adds ran, no VALIDATE.
+    for (const text of ddl(schema).slice(0, 3)) await client.query(text);
+    expect(await validated(schema)).toEqual(CHECKS.map((conname) => ({ conname, convalidated: false })));
+    if (label === "up") await runMigration(migration.up, schema);
+    else for (const text of ddl(schema)) await client.query(text);
+    expect(await validated(schema)).toEqual(CHECKS.map((conname) => ({ conname, convalidated: true })));
+    expect(await checks(schema)).toEqual(await checks(UPGRADE));
+  });
+
+  it.each<[string, string, (schema: string) => string[]]>([
+    ["up", CRASH, () => migration.pauseClaimDdlStatements],
+    ["the bootstrap leaf", CRASH_LEAF, (schema) => agentRunPauseClaimSchemaQueries(schema).map((row) => row.text)],
+  ])("%s: with both CHECKs absent, the two validate statements are no-ops", async (_label, schema, ddl) => {
+    await client.query(`SET search_path TO ${qi(schema)}`);
+    await client.query(
+      `ALTER TABLE ${qi(schema)}."agent_runs" DROP CONSTRAINT ${CHECKS[0]}, DROP CONSTRAINT ${CHECKS[1]}`,
+    );
+    const [, , , validatePhase, validateShape] = ddl(schema);
+    for (const text of [validatePhase, validateShape]) {
+      expect(text).toContain("VALIDATE CONSTRAINT");
+      expect(await sqlState(text)).toBeNull();
+    }
+    expect(await checks(schema)).toEqual([]);
+  });
+
+  it("up fails with 55P03 within lock_timeout behind a long reader, and the replay finishes", async () => {
+    await minimalTables(WAIT);
+    const reader = new Client({ connectionString: DB_URL });
+    await reader.connect();
+    let code: string | null = null;
+    const started = Date.now();
+    // At 675c2bfc up would wait for the reader; the reader gives up its lock
+    // after 15 s, so the old code ends with no error and this test is red.
+    const release = setTimeout(() => {
+      reader.query("COMMIT").catch(() => {});
+    }, 15_000);
+    try {
+      await reader.query("BEGIN");
+      await reader.query(`SELECT count(*) FROM ${qi(WAIT)}."agent_runs"`);
+      try {
+        await runMigration(migration.up, WAIT);
+      } catch (error) {
+        code = (error as { code?: string }).code ?? "unknown";
+      }
+    } finally {
+      clearTimeout(release);
+      await reader.query("COMMIT").catch(() => {});
+      await reader.end();
+    }
+    const waited = Date.now() - started;
+    // The runner's session ends after a failed migration; this harness reuses its client.
+    await client.query("RESET lock_timeout");
+    expect(code).toBe("55P03");
+    expect(waited).toBeLessThan(migration.PAUSE_CLAIM_LOCK_TIMEOUT_MS + 5_000);
+    expect((await columns(WAIT, "agent_runs")).map((row) => row.column_name)).toEqual(["id", "status"]);
+    await runMigration(migration.up, WAIT);
+    expect(await validated(WAIT)).toEqual(CHECKS.map((conname) => ({ conname, convalidated: true })));
+    const { rows } = await client.query("SHOW lock_timeout");
+    expect(rows[0].lock_timeout).toBe("0");
+  }, 60_000);
+
+  // The shape CHECK ALONE: each arm applies its DDL, then drops the phase
+  // CHECK, so only the shape CHECK stands between a row and the table.
+  const SHAPE_ARMS: [string, string][] = [["up", SHAPE_UP], ["the bootstrap leaf", SHAPE_LEAF]];
+  it.each(SHAPE_ARMS)("%s with its phase CHECK dropped: the shape CHECK alone still admits the four lease shapes", async (label, schema) => {
+    await minimalTables(schema);
+    if (label === "up") await runMigration(migration.up, schema);
+    else for (const { text } of agentRunPauseClaimSchemaQueries(schema)) await client.query(text);
+    await client.query(`ALTER TABLE ${qi(schema)}."agent_runs" DROP CONSTRAINT ${CHECKS[0]}`);
+    expect((await checks(schema)).map((row) => row.conname)).toEqual([CHECKS[1]]);
+    for (const [id, token, phase, expiry] of [
+      ["ok-none", null, null, "NULL"],
+      ["ok-claimed", "tok-a", "claimed", "now()"],
+      ["ok-sending", "tok-b", "sending", "now()"],
+      ["ok-cr", "cr:3", "changes_requested", "NULL"],
+    ] as const) {
+      expect(await sqlState(
+        `INSERT INTO ${qi(schema)}."agent_runs" (id, status, pause_claim_token, pause_claim_phase, pause_claim_expires_at)
+         VALUES ($1, 'pending_approval', $2, $3, ${expiry})`,
+        [id, token, phase],
+      ), id).toBeNull();
+    }
+  });
+
+  const SHAPE_OUTSIDE: [string, string][] = [
+    ["an unknown phase", "held"],
+    ["an empty phase", ""],
+    ["a case-varied claim", "Claimed"],
+    ["an upper-case send", "SENDING"],
+    ["a case-varied end mark", "Changes_Requested"],
+  ];
+  it.each<[string, string, string, string]>(
+    SHAPE_ARMS.flatMap(([label, schema]) =>
+      SHAPE_OUTSIDE.map(([what, phase]): [string, string, string, string] => [label, what, schema, phase])),
+  )("%s with its phase CHECK dropped: the shape CHECK alone refuses %s with an expiry", async (_label, what, schema, phase) => {
+    const state = await sqlState(
+      `INSERT INTO ${qi(schema)}."agent_runs" (id, status, pause_claim_token, pause_claim_phase, pause_claim_expires_at)
+       VALUES ($1, 'pending_approval', 'tok', $2, now())`,
+      [`bad-${what}`, phase],
+    );
+    expect(state).toBe("23514");
+  });
 
   it("boots a schema whose name holds a double quote and a single quote, and replays cleanly", async () => {
     await minimalTables(QUOTED);

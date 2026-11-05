@@ -1,4 +1,4 @@
-// core__0116 — the pause claim columns (cinatra#4245, PR A1: columns only).
+// core__0126 — the pause claim columns (cinatra#4245, PR A1: columns only).
 // Operator-upgrade twin of the fresh-install bootstrap DDL
 // (`agentRunPauseClaimSchemaQueries` in src/lib/agent-run-created-at-schema.ts
 // and the `paused_run_generation` line of `lifecycleRepairSchemaQueries` in
@@ -10,7 +10,9 @@
 // the claim triple (`pause_claim_token`, `pause_claim_phase`,
 // `pause_claim_expires_at`) says who holds the pause and until when.
 // `lifecycle_repair.paused_run_generation` records which generation a change
-// request ended. NOTHING READS OR WRITES THEM YET: this change is inert.
+// request ended. NO DECISION READS OR WRITES THEM YET: the run record (and so
+// the MCP agent_run_get result) carries pauseGeneration, 0 on existing runs, and
+// nothing else changes.
 //
 // NO BACKFILL. Existing rows read generation 0 and no claim. The CHECKs are
 // added over columns that are NULL on every existing row, so they cannot fail
@@ -27,6 +29,26 @@
 // EXCLUSIVE, so reads and writes go on while it runs. Both CHECKs end
 // validated. A crash between two statements leaves no ledger row; the replay
 // finishes the work, because every statement is guarded.
+//
+// LOCK WAIT. A statement that waits for ACCESS EXCLUSIVE (behind a long reader)
+// makes every later statement on the table queue behind it, the application's
+// included. `up` therefore sets lock_timeout = PAUSE_CLAIM_LOCK_TIMEOUT_MS on its
+// session first and resets it last, as the runner does with statement_timeout
+// around its advisory lock (packages/migrations/src/core-migrations.mjs). The
+// value is derived from the application's own bound: a pooled transaction's
+// statement is cancelled by the server at 27 s (0.9 x the 30 s
+// POSTGRES_ASYNC_TIMEOUT_MS default, src/lib/db/pooled.ts). 5 s is under a fifth
+// of it, so a request queued behind the waiting ALTER keeps over four fifths of
+// its budget; once granted, each ACCESS EXCLUSIVE statement here is catalog-only
+// and holds the lock for milliseconds. A wait past 5 s fails the statement
+// (55P03), the migration stops with no ledger row, and the next run replays it.
+// The bootstrap leaf sets no lock_timeout: it runs at start-up under the
+// bootstrap's own advisory lock and 120 s budget (src/lib/postgres-schema-init.ts).
+//
+// SAME-NAME CONSTRAINT (pre-1 NOTE C6). Each guard reads pg_constraint by name
+// on agent_runs only. A constraint of that name with another body, made by hand
+// outside this chain, is left as it stands and is not compared: the two names
+// are new with this change and no earlier code creates them.
 //
 // IDEMPOTENT. ADD COLUMN IF NOT EXISTS; each CHECK is added only while
 // pg_constraint holds no constraint of its name, and validated only while it
@@ -45,10 +67,14 @@ const phaseList = PAUSE_CLAIM_PHASES.map((p) => `'${p}'`).join(",");
 /** The CHECKs, by name; the bootstrap leaf carries the same two. */
 export const pauseClaimPhaseCheckSql = `pause_claim_phase IS NULL OR pause_claim_phase IN (${phaseList})`;
 // No claim: token, phase and expiry are all NULL (pre-1 MUST-FIX C1/C6: an
-// expiry alone is refused). A claim: token and phase are set, and only the
-// changes_requested end mark has no expiry.
+// expiry alone is refused). A claim: the token is set, the phase is one of
+// PAUSE_CLAIM_PHASES, and only the changes_requested end mark has no expiry.
+// So the shape CHECK alone admits exactly the four lease shapes; it does not
+// lean on the phase CHECK to refuse an unknown, empty or case-varied phase.
+// The phase IS NOT NULL test stays: for a NULL phase the IN test is NULL, and
+// a claim branch that reads NULL would let the CHECK pass.
 export const pauseClaimShapeCheckSql =
-  `(pause_claim_token IS NULL AND pause_claim_phase IS NULL AND pause_claim_expires_at IS NULL) OR (pause_claim_token IS NOT NULL AND pause_claim_phase IS NOT NULL AND (pause_claim_phase = 'changes_requested') = (pause_claim_expires_at IS NULL))`;
+  `(pause_claim_token IS NULL AND pause_claim_phase IS NULL AND pause_claim_expires_at IS NULL) OR (pause_claim_token IS NOT NULL AND pause_claim_phase IS NOT NULL AND pause_claim_phase IN (${phaseList}) AND (pause_claim_phase = 'changes_requested') = (pause_claim_expires_at IS NULL))`;
 
 const guardedCheck = (name, body) => `DO $$
 BEGIN
@@ -91,11 +117,17 @@ export const pauseClaimDownStatements = [
   `ALTER TABLE lifecycle_repair DROP COLUMN IF EXISTS paused_run_generation`,
 ];
 
+/** The longest wait for any lock `up` takes (LOCK WAIT above), in ms. */
+export const PAUSE_CLAIM_LOCK_TIMEOUT_MS = 5_000;
+
 /** @param {Pick<import("node-pg-migrate").MigrationBuilder, "sql" | "noTransaction">} pgm */
 export function up(pgm) {
-  // One autocommit statement each: see LOCKS above.
+  // One autocommit statement each: see LOCKS above. The lock_timeout is the
+  // session's, so it binds every statement between the SET and the RESET.
   pgm.noTransaction();
+  pgm.sql(`SET lock_timeout = ${PAUSE_CLAIM_LOCK_TIMEOUT_MS}`);
   for (const statement of pauseClaimDdlStatements) pgm.sql(statement);
+  pgm.sql("RESET lock_timeout");
 }
 
 /** @param {Pick<import("node-pg-migrate").MigrationBuilder, "sql">} pgm */
