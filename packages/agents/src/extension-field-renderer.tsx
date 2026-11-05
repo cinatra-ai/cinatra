@@ -40,6 +40,25 @@ class FieldRendererErrorBoundary extends ReactComponent<
     return { crashed: true };
   }
 
+  // THE CRASH IS MARKED IN THE COMMIT ONLY (cinatra#3562), never in a render:
+  // React can run a render and then throw it away (a transition that is
+  // interrupted or waits for data, for example), and a mark set in such a
+  // render would close the road of a component that is still drawn and
+  // working. `getSnapshotBeforeUpdate` runs in the commit that swaps in the
+  // floor, before that commit removes the crashed component, so a report the
+  // component makes while it is removed (a layout-effect cleanup) already
+  // finds the mark. A component that crashes in its first render was never
+  // drawn and makes no such report: `componentDidCatch` marks it.
+  getSnapshotBeforeUpdate(): null {
+    if (this.state.crashed) this.props.onCrash?.();
+    return null;
+  }
+
+  componentDidUpdate(): void {
+    // React wants `componentDidUpdate` beside `getSnapshotBeforeUpdate` (it
+    // warns otherwise); there is nothing more to do in it.
+  }
+
   componentDidCatch(error: unknown): void {
     // Diagnostic only — the floor is already rendered by the fallback branch.
     console.error(
@@ -50,16 +69,7 @@ class FieldRendererErrorBoundary extends ReactComponent<
   }
 
   render(): ReactNode {
-    if (this.state.crashed) {
-      // THE CRASH IS MARKED HERE, in the render that swaps in the floor
-      // (cinatra#3562), and not only in `componentDidCatch`: this render runs
-      // before the commit that removes the crashed component, so a report the
-      // component makes while it is removed (a layout-effect cleanup) already
-      // finds the mark. Marking twice is harmless.
-      this.props.onCrash?.();
-      return this.props.fallback;
-    }
-    return this.props.children;
+    return this.state.crashed ? this.props.fallback : this.props.children;
   }
 }
 
@@ -83,13 +93,14 @@ export function makeExtensionFieldRenderer(
     // before it crashed stands (a `false` keeps the gate held, which is
     // fail-closed), and a report that arrives later, `false` or `true`, changes
     // nothing. The floor itself never reports. The mark is set by the
-    // boundary's crash callback, from the render that swaps in the floor, so
-    // every report from that render on is dropped, the crashed component's
-    // own layout-effect cleanup included; a report the component made before
-    // it threw (in its render too) counts as its last. It is read only when a
-    // report arrives. The guarded report keeps one identity
-    // for as long as the host's own report does, so a component that reports
-    // in an effect keyed on it does not report again on every render.
+    // boundary in the commit that swaps in the floor, before that commit
+    // removes the crashed component, so every report from that commit on is
+    // dropped, the crashed component's own layout-effect cleanup included; a
+    // report the component made before that commit (in the render that threw
+    // too) counts as its last. A render that React throws away sets no mark.
+    // It is read only when a report arrives. The guarded report keeps one
+    // identity for as long as the host's own report does, so a component that
+    // reports in an effect keyed on it does not report again on every render.
     const crashedRef = useRef(false);
     const reportValidity = props.onValidityChange;
     const guardedReport = useCallback(

@@ -15,6 +15,7 @@ import {
   applyAttachmentEnvelopeUserResponseOnly,
   buildChatGateSubmitPayload,
   createGateValidityStore,
+  hasUsableListPick,
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
@@ -420,6 +421,40 @@ describe("liftRendererApprovalNote", () => {
   it("returns null for renderers without a lift", () => {
     expect(liftRendererApprovalNote("@cinatra-ai/x:output", { a: 1 }, NOW)).toBeNull();
     expect(liftRendererApprovalNote(GROUPED_SETUP_FORM_RENDERER_ID, {}, NOW)).toBeNull();
+  });
+});
+
+describe("hasUsableListPick (cinatra#3562)", () => {
+  it("reads no buffer, an empty one and one with only blank or non-string ids as no pick", () => {
+    expect(typeof hasUsableListPick).toBe("function");
+    expect(hasUsableListPick(null)).toBe(false);
+    expect(hasUsableListPick(undefined)).toBe(false);
+    expect(hasUsableListPick({})).toBe(false);
+    expect(hasUsableListPick({ listIds: [] })).toBe(false);
+    expect(hasUsableListPick({ listIds: ["", "  ", "\t\n"] })).toBe(false);
+    expect(hasUsableListPick({ listIds: [1, null, { id: "l1" }] })).toBe(false);
+    expect(hasUsableListPick({ listId: "" })).toBe(false);
+    expect(hasUsableListPick({ listId: "   " })).toBe(false);
+    expect(hasUsableListPick({ listId: 7 })).toBe(false);
+    expect(hasUsableListPick({ listIds: ["  "], listId: " " })).toBe(false);
+  });
+
+  it("reads a usable id in listIds as a pick, also among blank and non-string ids", () => {
+    expect(typeof hasUsableListPick).toBe("function");
+    expect(hasUsableListPick({ listIds: ["l1"] })).toBe(true);
+    expect(hasUsableListPick({ listIds: ["", 3, " ", "l2"] })).toBe(true);
+    expect(hasUsableListPick({ listIds: ["l1"], listId: "" })).toBe(true);
+  });
+
+  it("reads a usable listId as a pick when listIds is empty, holds only blank ids or is not an array", () => {
+    expect(typeof hasUsableListPick).toBe("function");
+    expect(hasUsableListPick({ listId: "l1" })).toBe(true);
+    expect(hasUsableListPick({ listIds: [], listId: "l1" })).toBe(true);
+    expect(hasUsableListPick({ listIds: [" ", ""], listId: "l1" })).toBe(true);
+    expect(hasUsableListPick({ listIds: "l9", listId: "l1" })).toBe(true);
+    // A non-array listIds is no pick of its own, even when it is a usable string.
+    expect(hasUsableListPick({ listIds: "l9" })).toBe(false);
+    expect(hasUsableListPick({ listIds: { 0: "l9" } })).toBe(false);
   });
 });
 

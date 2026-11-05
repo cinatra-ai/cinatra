@@ -22,6 +22,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   Component,
+  startTransition,
+  use,
   useEffect,
   useLayoutEffect,
   useState,
@@ -312,6 +314,71 @@ describe("ExtensionFieldRenderer — a crash keeps the component's validity repo
     await waitFor(() => expect(view.container.querySelector("#field-accountScope")).toBeTruthy());
 
     expect(onValidityChange).not.toHaveBeenCalledWith(true);
+    expect(onValidityChange).toHaveBeenLastCalledWith(false);
+  });
+
+  /**
+   * Reports `true` when it is drawn and `false` when "Untick" is pressed, and
+   * throws while rendering the value "crash".
+   */
+  function ThrowsOnCrashValue({ value, onValidityChange }: FieldRendererProps) {
+    useEffect(() => {
+      onValidityChange?.(true);
+    }, [onValidityChange]);
+    if (value === "crash") throw new Error("render crash");
+    return (
+      <Button type="button" onClick={() => onValidityChange?.(false)}>
+        Untick
+      </Button>
+    );
+  }
+
+  /** Data that never comes: a render that reads it is never committed. */
+  const neverSettles = new Promise<never>(() => {});
+  function WaitsForever({ when }: { when: boolean }) {
+    if (when) use(neverSettles);
+    return null;
+  }
+
+  it("a crash in a render that React throws away closes nothing: the drawn component's later report counts", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mapTo(ThrowsOnCrashValue);
+    const Wrapper = makeExtensionFieldRenderer(BINDING_ID);
+    const onValidityChange = vi.fn();
+    function Screen() {
+      const [thrownAway, setThrownAway] = useState(false);
+      return (
+        <>
+          <Button type="button" onClick={() => startTransition(() => setThrownAway(true))}>
+            Throw away
+          </Button>
+          <Wrapper
+            {...senderProps()}
+            fieldName="accountScope"
+            value={thrownAway ? "crash" : "fine"}
+            context={{ connectedApps: [] } as unknown as FieldRendererProps["context"]}
+            onValidityChange={onValidityChange}
+          />
+          <WaitsForever when={thrownAway} />
+        </>
+      );
+    }
+    const view = render(<Screen />);
+
+    await view.findByRole("button", { name: "Untick" });
+    await waitFor(() => expect(onValidityChange).toHaveBeenLastCalledWith(true));
+
+    // A transition renders the crash (the boundary draws the floor in that
+    // render), then waits for data that never comes, so React keeps the drawn
+    // screen and never commits that render.
+    await act(async () => {
+      fireEvent.click(view.getByRole("button", { name: "Throw away" }));
+    });
+    expect(view.getByRole("button", { name: "Untick" })).toBeTruthy();
+    expect(view.container.querySelector("#field-accountScope")).toBeNull();
+
+    // The component that is still drawn reports, and its report reaches the host.
+    fireEvent.click(view.getByRole("button", { name: "Untick" }));
     expect(onValidityChange).toHaveBeenLastCalledWith(false);
   });
 
