@@ -4055,8 +4055,11 @@ jobs:
       #
       # APPENDED, after the one-card gate, for the reason that gate records:
       # adding a step after the last one is the one placement that cannot have
-      # changed the measured order of the steps above. The tier creates and
-      # drops its own schema (`cinatra_test_email_fanout_history_3089`). It also
+      # changed the measured order of the steps above. The tier creates a schema
+      # under a name it draws for the run
+      # (`cinatra_test_email_fanout_history_3089_<pid>_<random>`) and at its end
+      # drops that schema without `CASCADE`, keeping it, and failing, when an
+      # object outside it depends on one inside it. It also
       # reads objects and table rows outside that schema, `public` included,
       # and fails when its teardown reads them differently than its setup did,
       # so a change made there while it runs can fail it. `shell: bash` and

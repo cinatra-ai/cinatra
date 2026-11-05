@@ -77,8 +77,10 @@
  * change, a check that no session of the tier is left open, blob root, process
  * state) whatever fails, and then fails the run naming each step that failed.
  *
- * ISOLATION: a fresh schema from the CANONICAL `buildCreateStoreSchemaQueries`
- * DDL, of which the setup runs only the statements aimed at that schema. The
+ * ISOLATION: a fresh schema under a name drawn for this run (the fixed prefix,
+ * the process id and eight random hex digits), from the CANONICAL
+ * `buildCreateStoreSchemaQueries` DDL, of which the setup runs only the
+ * statements aimed at that schema. The
  * canonical build also alters tables of `public` (Better Auth's `team`,
  * `member`, `user`, `organization` and `session`) and puts triggers on them.
  * The setup takes the repository's replay selection (`selectReplayStatements`,
@@ -90,15 +92,27 @@
  * constraints, indexes, triggers, functions, types, policies and rules, the
  * database's extensions, event triggers, foreign data wrappers and servers, and
  * each ordinary table's rows as a count and a digest. The setup takes it before
- * it drops a fixture schema an earlier run left. Each drop of the fixture
- * schema (the setup's and the teardown's) runs in a transaction and is rolled
- * back, keeping the schema and failing the run, when the reading after it
- * differs from the reading before it: a `CASCADE` that would take with it an
- * object outside the schema that the reading sees. The teardown reads it once
- * more and fails when it differs from the setup's reading. The artifact blob root is a temp dir; every
- * app module is imported in `beforeAll` after the env is set, because
- * `postgresSchema` is a module-load const.
+ * the schema build, and the teardown reads it once more and fails when it
+ * differs from the setup's reading.
+ *
+ * THE SETUP DROPS NO SCHEMA. It creates the run's schema with `CREATE SCHEMA`,
+ * which fails when the name exists, and runs the build's statements only when
+ * they are aimed at that schema (the build's own drops of its tables and
+ * triggers included). A schema an earlier or a killed run left keeps its own
+ * name, and the tier never drops or writes it. The teardown drops only the schema
+ * this run created, in one transaction and without `CASCADE`: it locks the
+ * schema's tables, refuses the drop when an object outside the schema depends
+ * on the schema or an object inside it by any dependency but an internal one
+ * (read from `pg_depend`, whatever the object's kind and whether the shared
+ * reading reads it or not), then drops the schema's objects kind by kind and
+ * the schema itself, each with `RESTRICT`, so that Postgres itself refuses, at
+ * the moment of each drop, a normal dependent outside the schema that it finds
+ * then (one added after that reading too). A refused drop is rolled back,
+ * keeps the schema and fails the run, naming the dependents. The artifact blob
+ * root is a temp dir; every app module is imported in `beforeAll` after the env
+ * is set, because `postgresSchema` is a module-load const.
  */
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -200,7 +214,16 @@ if (process.env.CINATRA_EMAIL_FANOUT_HISTORY_REALDB === "1" && !HAS_REAL_DB) {
   );
 }
 
-const TEST_SCHEMA = "cinatra_test_email_fanout_history_3089";
+/** The tier's schema: a name drawn once for this run, so a run does not meet a
+ *  schema an earlier run left. On a clash of names the setup's `CREATE SCHEMA`
+ *  fails, and the run fails without dropping the schema it met. */
+const TEST_SCHEMA = `cinatra_test_email_fanout_history_3089_${process.pid}_${randomBytes(4).toString("hex")}`;
+// Postgres cuts a longer name to 63 bytes without an error, and the readings
+// below would then name another schema than the one they read: the longest
+// name the tier makes (`${TEST_SCHEMA}_probe`) must fit.
+if (Buffer.byteLength(`${TEST_SCHEMA}_probe`) > 63) {
+  throw new Error(`the tier's schema name ${TEST_SCHEMA} leaves no room for its probe schemas within 63 bytes`);
+}
 const ORG = "org-3089";
 const TEMPLATE = "tpl-3089";
 const USER = "user-3089";
@@ -479,10 +502,9 @@ function aimedAtFixture(text: string): boolean {
 }
 
 /** The schemas a shared reading leaves out by name: the catalog's own and the
- *  one schema of the tier it reads around (the fixture schema, unless a caller
- *  names another). Toast and temporary schemas are left out by their prefix in
+ *  tier's schema. Toast and temporary schemas are left out by their prefix in
  *  the queries below. */
-const notShared = (fixture: string): string[] => ["pg_catalog", "information_schema", fixture];
+const NOT_SHARED: readonly string[] = ["pg_catalog", "information_schema", TEST_SCHEMA];
 
 /** The catalog lines of a shared reading: one line per object of the kinds
  *  below, in each schema the reading does not leave out. */
@@ -540,23 +562,24 @@ SELECT 'foreign server ' || s.srvname || ' on ' || w.fdwname
   FROM pg_foreign_server s JOIN pg_foreign_data_wrapper w ON w.oid = s.srvfdw`;
 
 /**
- * The shared reading around one schema of the tier (the fixture schema unless
- * a caller names another): each catalog line above, and each ordinary table's
- * rows in the schemas it reads as a count and a digest of their text forms.
- * Sorted, so two readings compare as multisets. The tables are read one query
- * at a time, without a lock. Not read: privileges, owners, roles, a sequence's
- * value, settings of the database or a role, operators, casts, collations,
- * text-search objects, publications, and the rows of a materialized view or a
- * foreign table.
+ * The shared reading around the tier's schema: each catalog line above (of the
+ * types, only domains, enums, ranges and multiranges), and each ordinary
+ * table's rows in the schemas it reads as a count and a digest of their text
+ * forms. Sorted, so two readings compare as multisets. The tables are read one
+ * query at a time, without a lock. Among what it does not read: privileges,
+ * owners, roles, a sequence's value, settings of the database or a role,
+ * operators, casts, collations, text-search objects, publications, and the
+ * rows of a materialized view or a foreign table. The teardown's drop does not
+ * rely on it: it reads the dependents of the tier's schema from `pg_depend`.
  */
-async function readShared(client: Client, fixture: string = TEST_SCHEMA): Promise<string[]> {
-  const catalog = await client.query<{ line: string }>(SHARED_CATALOG, [notShared(fixture)]);
+async function readShared(client: Client): Promise<string[]> {
+  const catalog = await client.query<{ line: string }>(SHARED_CATALOG, [NOT_SHARED]);
   const lines = catalog.rows.map((r) => r.line);
   const tables = await client.query<{ ns: string; rel: string }>(
     `SELECT n.nspname AS ns, c.relname AS rel FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE c.relkind = 'r' AND n.nspname <> ALL($1::text[]) AND n.nspname !~ '^pg_(toast|temp_)'
       ORDER BY 1, 2`,
-    [notShared(fixture)],
+    [NOT_SHARED],
   );
   for (const { ns, rel } of tables.rows) {
     const res = await client.query<{ n: number; h: string }>(
@@ -598,32 +621,112 @@ async function inTransaction<T>(client: Client, body: () => Promise<T>): Promise
   }
 }
 
+/** Whether the setup created the tier's schema: the teardown drops only a
+ *  schema this run created. */
+let schemaCreated = false;
+
 /**
- * Drop one schema of the tier, if it exists, only when the drop leaves the
- * shared reading around it as it was. Called inside the caller's transaction:
- * the drop runs under a savepoint, and when the reading after it differs from
- * the reading before it (a `CASCADE` reached an object outside the schema that
- * depends on one inside it, such as a trigger on a `public` table that runs a
- * function of a schema an earlier run left), it is rolled back to the
- * savepoint, the schema is kept, and the call fails naming up to twenty of the
- * changed lines. Returns the reading taken before the drop.
+ * The schema an object lives in, as SQL over its catalog (`cls`) and oid: the
+ * schema `pg_identify_object` names, or, for a trigger, a policy, a rewrite
+ * rule or a column default, which have no schema of their own, the schema of
+ * their table. NULL for an object of no schema (a cast, an extension, a
+ * publication's table entry, an event trigger).
  */
-async function dropSchemaKeepingShared(client: Client, schema: string): Promise<string[]> {
-  const before = await readShared(client, schema);
-  const found = await client.query("SELECT 1 FROM pg_namespace WHERE nspname = $1", [schema]);
-  if (found.rows.length === 0) return before;
-  await client.query("SAVEPOINT tier_schema_drop");
-  await client.query(`DROP SCHEMA ${q(schema)} CASCADE`);
-  const changes = sharedChanges(before, await readShared(client, schema));
-  if (changes.length > 0) {
-    await client.query("ROLLBACK TO SAVEPOINT tier_schema_drop");
+const homeOf = (cls: string, oid: string): string => `coalesce((pg_identify_object(${cls}, ${oid}, 0)).schema,
+  (SELECT n.nspname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE c.oid = CASE ${cls}
+      WHEN 'pg_trigger'::regclass THEN (SELECT x.tgrelid FROM pg_trigger x WHERE x.oid = ${oid})
+      WHEN 'pg_policy'::regclass THEN (SELECT x.polrelid FROM pg_policy x WHERE x.oid = ${oid})
+      WHEN 'pg_rewrite'::regclass THEN (SELECT x.ev_class FROM pg_rewrite x WHERE x.oid = ${oid})
+      WHEN 'pg_attrdef'::regclass THEN (SELECT x.adrelid FROM pg_attrdef x WHERE x.oid = ${oid})
+    END))`;
+
+/** Every object outside the schema ($1) that depends on the schema or on an
+ *  object inside it, by any dependency but an internal one, whatever its kind:
+ *  one line per dependency, as Postgres describes both objects. */
+const OUTSIDE_DEPENDENTS = `
+SELECT DISTINCT pg_describe_object(d.classid, d.objid, d.objsubid) || ' depends on '
+       || pg_describe_object(d.refclassid, d.refobjid, d.refobjsubid) AS line
+  FROM pg_depend d
+ WHERE d.deptype <> 'i'
+   AND ((d.refclassid = 'pg_namespace'::regclass AND d.refobjid = (SELECT oid FROM pg_namespace WHERE nspname = $1))
+        OR ${homeOf("d.refclassid", "d.refobjid")} = $1)
+   AND ${homeOf("d.classid", "d.objid")} IS DISTINCT FROM $1
+ ORDER BY 1`;
+
+/** The relations of the given kinds in the schema ($1), as names a statement takes. */
+const relationsOf = (kinds: string): string =>
+  `SELECT format('%I.%I', n.nspname, c.relname) AS name FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = $1 AND c.relkind IN (${kinds}) ORDER BY 1`;
+/** The types of the given kinds in the schema ($1), as names a statement takes. */
+const typesOf = (kinds: string): string =>
+  `SELECT format('%I.%I', n.nspname, t.typname) AS name FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+    WHERE n.nspname = $1 AND t.typtype IN (${kinds}) ORDER BY 1`;
+
+/** What the teardown drops of its schema, kind by kind, in this order. One
+ *  statement names every object of its kind, so objects of one kind may depend
+ *  on each other. An index, a constraint, a trigger, a policy, a rule, a column
+ *  default and an owned sequence go with their table. A kind not listed here
+ *  (an operator, a collation, a range or a composite type) stays, and the
+ *  schema's own drop then refuses. */
+const OWN_SCHEMA_KINDS: ReadonlyArray<readonly [string, string]> = [
+  ["MATERIALIZED VIEW", relationsOf("'m'")],
+  ["VIEW", relationsOf("'v'")],
+  ["FOREIGN TABLE", relationsOf("'f'")],
+  ["TABLE", relationsOf("'r', 'p'")],
+  ["SEQUENCE", relationsOf("'S'")],
+  [
+    "ROUTINE",
+    `SELECT format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)) AS name
+       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1 ORDER BY 1`,
+  ],
+  ["DOMAIN", typesOf("'d'")],
+  ["TYPE", typesOf("'e'")],
+];
+
+/**
+ * Drop the tier's schema without `CASCADE`. Called inside the caller's
+ * transaction, which a failure rolls back, keeping the schema. In order:
+ *   1. lock the schema's tables, so that until the transaction ends no session
+ *      can add an object that needs a lock on one of them (a view over it, a
+ *      foreign key to it, a partition of it, statistics on its columns); a lock
+ *      not granted within 30 seconds fails the drop;
+ *   2. read from `pg_depend` every object outside the schema that depends on
+ *      the schema or an object inside it, and refuse the drop, naming up to
+ *      twenty of them, when there is one;
+ *   3. drop the schema's objects kind by kind and then the schema, each with
+ *      `RESTRICT`: Postgres itself refuses a drop that a normal dependent outside
+ *      the schema blocks, one that another session added and committed after
+ *      step 2 too, and the call fails with Postgres's message and detail, which
+ *      name it.
+ */
+async function dropOwnSchema(client: Client, schema: string): Promise<void> {
+  const run = async <R = unknown>(text: string, values: unknown[] = []): Promise<R[]> => {
+    try {
+      return (await client.query(text, values)).rows as R[];
+    } catch (err) {
+      const detail = (err as { detail?: unknown }).detail;
+      throw new Error(
+        `the schema ${schema} was kept: Postgres refused its drop: ${message(err)}` +
+          (typeof detail === "string" && detail !== "" ? ` (${detail.split("\n").join("; ")})` : ""),
+      );
+    }
+  };
+  const names = async (text: string) => (await run<{ name: string }>(text, [schema])).map((r) => r.name);
+  await run("SET LOCAL lock_timeout = '30s'");
+  const tables = await names(relationsOf("'r', 'p'"));
+  if (tables.length > 0) await run(`LOCK TABLE ${tables.join(", ")} IN ACCESS EXCLUSIVE MODE`);
+  const outside = (await run<{ line: string }>(OUTSIDE_DEPENDENTS, [schema])).map((r) => r.line);
+  if (outside.length > 0) {
     throw new Error(
-      `the schema ${schema} was kept: dropping it would change ${changes.length} line(s) of the reading outside it: ` +
-        changes.slice(0, 20).join("; "),
+      `the schema ${schema} was kept: objects outside it depend on it (${outside.length} line(s)): ${outside.slice(0, 20).join("; ")}`,
     );
   }
-  await client.query("RELEASE SAVEPOINT tier_schema_drop");
-  return before;
+  for (const [kind, list] of OWN_SCHEMA_KINDS) {
+    const found = await names(list);
+    if (found.length > 0) await run(`DROP ${kind} ${found.join(", ")} RESTRICT`);
+  }
+  await run(`DROP SCHEMA ${q(schema)} RESTRICT`);
 }
 
 /** The shared reading the setup took before the schema build. */
@@ -1027,12 +1130,12 @@ beforeAll(async () => {
 
   // The setup client is closed whatever the schema build does; a failed build
   // fails the run, and the teardown below still runs every step. The shared
-  // reading is taken first, before a fixture schema an earlier run left is
-  // dropped (a drop that would change it is rolled back and fails the run), and
-  // before the build.
+  // reading is taken first, before the build. The setup drops no schema: the
+  // run's schema is new, and `CREATE SCHEMA` fails when the name exists.
   await withTierClient("setup", newTierClient, async (client) => {
-    sharedBefore = await inTransaction(client, () => dropSchemaKeepingShared(client, TEST_SCHEMA));
-    await client.query(`CREATE SCHEMA "${TEST_SCHEMA}"`);
+    sharedBefore = await readShared(client);
+    await client.query(`CREATE SCHEMA ${q(TEST_SCHEMA)}`);
+    schemaCreated = true;
     const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
     // The repository's one replay selection (cinatra#3559: the four statement
     // heads, without the build's statements on shared `public` tables), and of
@@ -1100,10 +1203,14 @@ afterAll(async () => {
     ["clear the type registry", () => objectTypeRegistry._clearForTests()],
     [
       "drop the tier's schema",
-      () =>
-        withTierClient("teardown", newTierClient, (client) =>
-          inTransaction(client, () => dropSchemaKeepingShared(client, TEST_SCHEMA)),
-        ),
+      async () => {
+        // Only the schema this run created; a setup that failed before it
+        // created one leaves nothing to drop.
+        if (!schemaCreated) return;
+        await withTierClient("teardown", newTierClient, (client) =>
+          inTransaction(client, () => dropOwnSchema(client, TEST_SCHEMA)),
+        );
+      },
     ],
     [
       "leave the reading outside the tier's schema as the setup found it",
@@ -1715,45 +1822,83 @@ describe.skipIf(!HAS_REAL_DB)(
       }
     });
 
-    it("keeps a left schema whose drop would take an object outside it, and drops one whose drop changes nothing outside it", async () => {
-      // A schema an earlier run left, whose function a trigger on a table of
-      // another schema runs, as an earlier build's trigger on public.user ran
-      // the fixture schema's function. Made inside one transaction that is
-      // rolled back, so nothing is ever committed.
-      const STALE = `${TEST_SCHEMA}_stale`;
-      const PROBE = `${TEST_SCHEMA}_probe`;
-      const [ST, P] = [q(STALE), q(PROBE)];
+    it("refuses to drop its schema while an object outside it depends on one inside it, of any kind, and drops it without CASCADE when none does", async () => {
+      // A schema of the tier's kind and a schema outside it, made inside one
+      // transaction that is rolled back, so nothing is ever committed. Each
+      // refused drop runs under a savepoint, so the transaction goes on.
+      const OWN = `${TEST_SCHEMA}_own`;
+      const OUT = `${TEST_SCHEMA}_probe`;
+      const [O, P] = [q(OWN), q(OUT)];
       await withTierClient("probe", newTierClient, async (client) => {
         const start = await readShared(client);
         const left = async () =>
           (
             await client.query(
-              `SELECT (SELECT count(*)::int FROM pg_namespace WHERE nspname = $1) AS schemas,
-                      (SELECT count(*)::int FROM pg_trigger WHERE tgname = 't_stale' AND tgrelid = to_regclass($2)) AS triggers`,
-              [STALE, `${P}."t"`],
+              `SELECT (SELECT count(*)::int FROM pg_namespace WHERE nspname = $1) AS own,
+                      (SELECT count(*)::int FROM pg_class WHERE oid = to_regclass($2)) AS outside`,
+              [OWN, `${P}."t"`],
             )
           ).rows[0];
+        const refusal = async () => {
+          await client.query("SAVEPOINT own_drop");
+          const err = await dropOwnSchema(client, OWN).then(
+            () => undefined,
+            (e: unknown) => e,
+          );
+          await client.query("ROLLBACK TO SAVEPOINT own_drop");
+          expect(await left()).toEqual({ own: 1, outside: 1 });
+          return err === undefined ? "the drop went through" : message(err);
+        };
+        const kept = `the schema ${OWN} was kept: objects outside it depend on it (1 line(s)): `;
         await client.query("BEGIN");
         try {
           await client.query(`CREATE SCHEMA ${P}`);
-          await client.query(`CREATE TABLE ${P}."t" (id text PRIMARY KEY)`);
-          await client.query(`CREATE SCHEMA ${ST}`);
-          await client.query(`CREATE FUNCTION ${ST}."f"() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN RETURN NEW; END $f$`);
-          await client.query(`CREATE TRIGGER t_stale AFTER UPDATE ON ${P}."t" FOR EACH ROW EXECUTE FUNCTION ${ST}."f"()`);
-          // The drop would take the trigger outside the left schema with it:
-          // it is rolled back, both stay, and the call names the trigger.
-          await expect(dropSchemaKeepingShared(client, STALE)).rejects.toThrow(
-            `the schema ${STALE} was kept: dropping it would change 1 line(s) of the reading outside it: ` +
-              `- trigger ${PROBE}.t t_stale O CREATE TRIGGER t_stale AFTER UPDATE ON `,
+          await client.query(`CREATE TABLE ${P}."t" (id integer PRIMARY KEY)`);
+          await client.query(`CREATE SCHEMA ${O}`);
+          await client.query(`CREATE TYPE ${O}."k" AS ENUM ('a', 'b')`);
+          await client.query(`CREATE TABLE ${O}."t" (id integer PRIMARY KEY, n bigserial, k ${O}."k")`);
+          await client.query(`CREATE FUNCTION ${O}."f"() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN RETURN NEW; END $f$`);
+          await client.query(`CREATE TRIGGER t_own BEFORE INSERT ON ${O}."t" FOR EACH ROW EXECUTE FUNCTION ${O}."f"()`);
+          await client.query(
+            `CREATE FUNCTION ${O}."eq"(integer, integer) RETURNS boolean LANGUAGE sql IMMUTABLE AS $f$ SELECT $1 = $2 $f$`,
           );
-          expect(await left()).toEqual({ schemas: 1, triggers: 1 });
-          // Without that dependent, the drop goes through and returns the
-          // reading taken before it; a schema that is not there is no drop.
-          await client.query(`DROP TRIGGER t_stale ON ${P}."t"`);
-          const read = await dropSchemaKeepingShared(client, STALE);
-          expect(read.some((line) => line.startsWith(`relation ${PROBE}.t kind r`))).toBe(true);
-          expect(await left()).toEqual({ schemas: 0, triggers: 0 });
-          await expect(dropSchemaKeepingShared(client, STALE)).resolves.toEqual(read);
+          // A trigger outside it that runs its function: a kind the shared reading reads.
+          await client.query(`CREATE TRIGGER t_dep AFTER UPDATE ON ${P}."t" FOR EACH ROW EXECUTE FUNCTION ${O}."f"()`);
+          expect(await refusal()).toBe(`${kept}trigger t_dep on table ${OUT}.t depends on function ${OWN}.f()`);
+          await client.query(`DROP TRIGGER t_dep ON ${P}."t"`);
+          // An operator outside it over its function: a kind the shared reading does not read.
+          await client.query(`CREATE OPERATOR ${P}.=== (LEFTARG = integer, RIGHTARG = integer, FUNCTION = ${O}."eq")`);
+          const op = await refusal();
+          expect(op.startsWith(`${kept}operator ${OUT}.`), op).toBe(true);
+          expect(op.endsWith(` depends on function ${OWN}.eq(integer,integer)`), op).toBe(true);
+          await client.query(`DROP OPERATOR ${P}.=== (integer, integer)`);
+          // A statistics object outside it on two of its columns: a drop of its
+          // table, even with RESTRICT, would take that object along unasked.
+          await client.query(`CREATE STATISTICS ${P}."st" ON id, n FROM ${O}."t"`);
+          expect(await refusal()).toBe(
+            `the schema ${OWN} was kept: objects outside it depend on it (2 line(s)): ` +
+              `statistics object ${OUT}.st depends on column id of table ${OWN}.t; ` +
+              `statistics object ${OUT}.st depends on column n of table ${OWN}.t`,
+          );
+          await client.query(`DROP STATISTICS ${P}."st"`);
+          // An object inside it of a kind the drop does not list (a collation):
+          // the schema's own drop, without CASCADE, refuses, and the call fails
+          // with Postgres's message and detail.
+          await client.query(`CREATE COLLATION ${O}."c" FROM "C"`);
+          const inside = await refusal();
+          expect(
+            inside.startsWith(
+              `the schema ${OWN} was kept: Postgres refused its drop: cannot drop schema ${OWN} because other objects ` +
+                "depend on it (collation ",
+            ),
+            inside,
+          ).toBe(true);
+          await client.query(`DROP COLLATION ${O}."c"`);
+          // With no dependent outside it, the schema goes with its table, its
+          // sequence, its trigger, its functions and its type, without CASCADE,
+          // and the schema outside it stays.
+          await dropOwnSchema(client, OWN);
+          expect(await left()).toEqual({ own: 0, outside: 1 });
         } finally {
           await client.query("ROLLBACK");
         }

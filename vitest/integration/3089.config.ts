@@ -25,7 +25,9 @@ const root = path.resolve(__dirname, "..", "..");
 const rootAlias = ((rootConfig as { resolve?: { alias?: unknown } }).resolve?.alias ??
   []) as Array<{ find: string | RegExp; replacement: string }>;
 
-/** The throwaway schema this tier builds and drops. */
+/** The prefix of the throwaway schema's name. The suite draws the run's own
+ *  name under it (the prefix, the process id and random hex digits) and sets
+ *  SUPABASE_SCHEMA to that name before it imports any app module. */
 const TEST_SCHEMA = "cinatra_test_email_fanout_history_3089";
 
 export default defineConfig({
