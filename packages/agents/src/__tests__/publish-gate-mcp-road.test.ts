@@ -266,3 +266,96 @@ describe("agent_run_resume and a publish decision", () => {
     expect(sendTaskSpy).toHaveBeenCalledTimes(2);
   });
 });
+
+// cinatra#4150 PR 3a, pre-review 2 findings 2, 3 and 5: on a template that lists publishing steps the run is claimed
+// (pending_approval -> running) right before the send and the hold is read again, so a decision another resume parked
+// after this road's first read refuses the send; a send that fails after the claim leaves the run running, where no
+// road resumes it; an unreadable hold answers a fixed text.
+describe("agent_run_resume on a publishing template", () => {
+  const row = { status: "pending_approval" };
+  const moves = () => storeMock.transitionRunStatus.mock.calls.map((c) => (c as unknown[]).slice(0, 3));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Once-answers a case leaves (a red run over older code) must not feed the next case.
+    for (const m of [storeMock.readAgentRunById, storeMock.transitionRunStatus, decisions.readLatestDecisionForRun, sendTaskSpy]) m.mockReset();
+    row.status = "pending_approval";
+    authSessionMock.resolveOrgRoleForUser.mockResolvedValue("member");
+    enforceRunAccessSpy.mockResolvedValue(undefined);
+    storeMock.readAgentRunById.mockImplementation(async () => ({ ...pausedRun(), status: row.status }));
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tmpl-1",
+      packageName: "test-publishing-agent",
+      sourceType: "internal",
+      agentAuthPolicy: null,
+      publishingSteps: ["publish"],
+    });
+    storeMock.transitionRunStatus.mockImplementation((async (_runId: string, from: string, to: string) => {
+      if (row.status !== from) throw Object.assign(new Error("stale"), { code: "stale_from_status" });
+      row.status = to;
+    }) as never);
+    sendTaskSpy.mockResolvedValue({
+      id: "task-1",
+      contextId: "ctx-1",
+      status: { state: "completed", message: { parts: [] } },
+      metadata: {},
+      history: [{ role: "agent", parts: [{ kind: "text", text: "done" }] }],
+    });
+    holdSpy.mockResolvedValue({ held: false, reason: "no-review" });
+    decisions.readLatestDecisionForRun.mockResolvedValue(null);
+  });
+
+  it("claims the run before the send and reads the hold after the claim", async () => {
+    await resume();
+    expect(moves()[0]).toEqual(["run-1", "pending_approval", "running"]);
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+    expect(decisions.readLatestDecisionForRun).toHaveBeenCalledTimes(2);
+    expect(storeMock.transitionRunStatus.mock.invocationCallOrder[0]!).toBeLessThan(
+      decisions.readLatestDecisionForRun.mock.invocationCallOrder[1]!,
+    );
+    expect(decisions.readLatestDecisionForRun.mock.invocationCallOrder[1]!).toBeLessThan(sendTaskSpy.mock.invocationCallOrder[0]!);
+    // The task is then handled from where the claim put the run, never from pending_approval.
+    expect(moves().slice(1).every(([, from]) => from !== "pending_approval")).toBe(true);
+  });
+
+  it("a decision parked by another resume after the first read refuses the send and puts the run back", async () => {
+    decisions.readLatestDecisionForRun.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: "d1", runId: "run-1", status: "parked" });
+    const answer = (await resume()) as { error?: string; code?: string };
+    expect(answer.code).toBe("publish_decision_required");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"]]);
+    expect(row.status).toBe("pending_approval");
+  });
+
+  it("a run another resume holds is sent nothing", async () => {
+    row.status = "running"; // the claim of the other resume; this one read the run before it
+    storeMock.readAgentRunById.mockResolvedValueOnce({ ...pausedRun(), status: "pending_approval" });
+    const answer = (await resume()) as { error?: string };
+    expect(typeof answer.error).toBe("string");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(row.status).toBe("running");
+  });
+
+  it("a send that fails after the claim leaves the run running, and a retry is refused and sends nothing", async () => {
+    sendTaskSpy.mockRejectedValueOnce(new Error("socket hang up"));
+    await resume().catch(() => undefined);
+    expect(row.status).toBe("running");
+    expect(moves()).toEqual([["run-1", "pending_approval", "running"]]);
+    const retry = (await resume()) as { error?: string };
+    expect(retry.error).toMatch(/not pending approval/);
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("an unreadable hold answers a fixed text that names no run and no store error", async () => {
+    decisions.readLatestDecisionForRun.mockRejectedValue(new Error("db down: run-1"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const answer = (await resume()) as { error?: string };
+      expect(answer.error).toMatch(/publish hold could not be checked/);
+      expect(answer.error).not.toMatch(/db down|run-1/);
+    } finally {
+      warn.mockRestore();
+    }
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+  });
+});

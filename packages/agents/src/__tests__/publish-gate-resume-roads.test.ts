@@ -1,7 +1,7 @@
 // cinatra#4150 (A5): before a publish decision is released, no road sends a message into
 // the run's held context. This file pins the road list against every product
 // `.sendTask(` call site (so a new send cannot land without a decision about it), pins the
-// hold before the send on every resume road, drives the stopped-orchestrator resume,
+// hold after the claim and before the send on every resume road, drives the stopped-orchestrator resume,
 // and pins the two facts the rest of the change rests on: the gate prefix matches the
 // compiler's, and the expiry rides a loop that no feature fence switches off.
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -56,19 +56,21 @@ const ROADS: Record<string, "resume" | "initial-dispatch" | "new-conversation"> 
   "src/lib/host-content-editor-dispatch.ts": "new-conversation",
 };
 
-/** Where each resume road claims or moves the run; the hold comes before it. */
-const RESUME_ROAD_ANCHORS: Record<string, { from: string; claim: string | null }> = {
+/** Where each resume road claims the run before its send. The hold is read AFTER the claim (pre-review 2 finding 3): a
+ *  decision parked by another resume before the claim is then seen. The two roads that keep the run in pending_approval
+ *  while they send claim through claimRunBeforeSend, which reads the hold itself after its claim. */
+const RESUME_ROAD_ANCHORS: Record<string, { from: string; claim: string }> = {
   "packages/agents/src/review-task-actions.ts": {
     from: 'if (reviewTaskId.startsWith("wayflow-"))',
     claim: "THE GATE IS DECIDED ONCE",
   },
   "packages/agents/src/mcp/handlers.ts": {
     from: "async function handleAgentBuilderRunResume(",
-    claim: "await writeHitlPrompt(",
+    claim: "claimRunBeforeSend(",
   },
   "packages/agents/src/artifact-review-resume-delivery.ts": {
     from: "export async function deliverArtifactReviewResumeIntent(",
-    claim: null,
+    claim: "claimRunBeforeSend(",
   },
   "packages/agents/src/orchestrator-actions.ts": {
     from: "export async function resumeStoppedOrchestratorAction(",
@@ -81,14 +83,15 @@ describe("the road list equals the product sendTask call sites", () => {
     expect(productSendTaskCalls()).toEqual(Object.fromEntries(Object.keys(ROADS).map((f) => [f, 1])));
   });
 
-  it.each(Object.keys(RESUME_ROAD_ANCHORS))("%s reads the hold before it claims the run or sends", (file) => {
+  it.each(Object.keys(RESUME_ROAD_ANCHORS))("%s claims the run, then reads the hold, then sends", (file) => {
     const src = read(file);
     const { from, claim } = RESUME_ROAD_ANCHORS[file]!;
     const start = at(src, from);
     const send = at(src, ".sendTask(", start);
-    const hold = at(src, "assertNoOpenPublishDecision(", start);
+    const claimed = at(src, claim, start);
+    const hold = claim === "claimRunBeforeSend(" ? claimed : at(src, "assertNoOpenPublishDecision(", claimed);
+    expect(claimed).toBeLessThan(send);
     expect(hold).toBeLessThan(send);
-    if (claim) expect(hold).toBeLessThan(at(src, claim, start));
   });
 
   it("the content-editor send carries no context id", () => {
@@ -198,20 +201,30 @@ describe("the stopped-orchestrator resume and a publish decision", () => {
     decisions.readLatestDecisionForRun.mockResolvedValue(null);
   });
 
+  const moves = () => storeMock.transitionRunStatus.mock.calls.map((c) => (c as unknown[]).slice(0, 3));
+
   it.each(["declined", "expired", "run_ended", "parked"])(
-    "a run whose newest decision is %s is refused publish_decision_required and is sent nothing",
+    "a run whose newest decision is %s is refused publish_decision_required, sent nothing, and put back to stopped",
     async (status) => {
       decisions.readLatestDecisionForRun.mockResolvedValue({ id: "d1", runId: "run-1", status });
       expect(await resumeStoppedOrchestratorAction("run-1")).toEqual({ ok: false, error: "publish_decision_required" });
-      expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+      expect(moves()).toEqual([["run-1", "stopped", "queued"], ["run-1", "queued", "stopped"]]);
       expect(sendTask).not.toHaveBeenCalled();
     },
   );
 
-  it("an unreadable decision record refuses too", async () => {
+  it("an unreadable decision record refuses too, and the run is put back to stopped", async () => {
     decisions.readLatestDecisionForRun.mockRejectedValue(new Error("db down"));
     await expect(resumeStoppedOrchestratorAction("run-1")).rejects.toThrow("db down");
     expect(sendTask).not.toHaveBeenCalled();
+    expect(moves().at(-1)).toEqual(["run-1", "queued", "stopped"]);
+  });
+
+  it("the hold is read after the claim (pre-review 2 finding 3)", async () => {
+    await resumeStoppedOrchestratorAction("run-1");
+    expect(storeMock.transitionRunStatus.mock.invocationCallOrder[0]!).toBeLessThan(
+      decisions.readLatestDecisionForRun.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("a run with no decision, or a released one, is resumed as before", async () => {

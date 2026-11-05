@@ -1,7 +1,8 @@
 // cinatra#4150 (A5): the generic approve road refuses a run held at a publish decision.
 // A run waiting at a publish gate is resumed only by that decision; the generic
-// `wayflow-` approve claims nothing, records nothing and sends nothing into the held
-// context. The harness is the one of review-gate-decided-once-3423.test.ts.
+// `wayflow-` approve reads the hold AFTER its claim (so a decision parked before the
+// claim is seen), then puts the claim back, records nothing and sends nothing into the
+// held context. The harness is the one of review-gate-decided-once-3423.test.ts.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RunTransitionError } from "../run-status";
@@ -108,9 +109,11 @@ beforeEach(() => {
   decisions.readLatestDecisionForRun.mockResolvedValue(null);
 });
 
+const moves = () => storeMock.transitionRunStatus.mock.calls.map((c) => (c as unknown[]).slice(0, 3));
+
 describe("the generic approve road and a publish decision", () => {
   it.each(["parked", "declined", "expired", "run_ended"])(
-    "a run whose newest decision is %s is refused with publish_decision_required, and nothing moves",
+    "a run whose newest decision is %s is refused with publish_decision_required, and the claim is put back",
     async (status) => {
       decisions.readLatestDecisionForRun.mockResolvedValue({ id: "d1", runId: RUN.id, status });
       await expect(approveReviewTaskInternal("wayflow-task-4150", "reader-a")).rejects.toMatchObject({
@@ -118,18 +121,35 @@ describe("the generic approve road and a publish decision", () => {
       });
       expect(decisions.readLatestDecisionForRun).toHaveBeenCalledWith(RUN.id);
       expect(sendTask).not.toHaveBeenCalled();
-      expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+      expect(moves()).toEqual([[RUN.id, "pending_approval", "running"], [RUN.id, "running", "pending_approval"]]);
       expect(storeMock.writeHitlPrompt).not.toHaveBeenCalled();
       expect(handleWayflowTaskState).not.toHaveBeenCalled();
       expect(row.status).toBe("pending_approval");
     },
   );
 
-  it("an unreadable decision record refuses too, and nothing moves", async () => {
+  it("an unreadable decision record refuses too, and the claim is put back", async () => {
     decisions.readLatestDecisionForRun.mockRejectedValue(new Error("db down"));
     await expect(approveReviewTaskInternal("wayflow-task-4150", "reader-a")).rejects.toThrow("db down");
     expect(sendTask).not.toHaveBeenCalled();
-    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    expect(row.status).toBe("pending_approval");
+  });
+
+  it("the hold is read after the claim (pre-review 2 finding 3): a decision parked before the claim is seen", async () => {
+    // Another resume parks a publish decision between this road's read of the run and its claim.
+    storeMock.transitionRunStatus.mockImplementationOnce(async (_runId: string, from: string, to: string) => {
+      decisions.readLatestDecisionForRun.mockResolvedValue({ id: "d1", runId: RUN.id, status: "parked" });
+      if (row.status !== from) throw new RunTransitionError({ code: "stale_from_status", runId: RUN.id, from: from as never, to: to as never });
+      row.status = to;
+    });
+    await expect(approveReviewTaskInternal("wayflow-task-4150", "reader-a")).rejects.toMatchObject({
+      code: "publish_decision_required",
+    });
+    expect(sendTask).not.toHaveBeenCalled();
+    expect(row.status).toBe("pending_approval");
+    expect(storeMock.transitionRunStatus.mock.invocationCallOrder[0]!).toBeLessThan(
+      decisions.readLatestDecisionForRun.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("a run with no decision, or a released one, is answered as before", async () => {

@@ -848,15 +848,33 @@ describe("cinatra#4150 PR 3a: the newest decision of a run, the one every resume
 });
 
 describe("cinatra#4150 PR 3a: the stops a decline or an expiry decided but did not make", () => {
-  it("joins the run and asks for declined or expired decisions whose run is in pending_approval", async () => {
+  it("joins the run and asks for the newest decision of each held run, when it is declined or expired", async () => {
     answers.select = async () => [{ decision: stored({ id: "d1", status: "declined" }) }, { decision: stored({ id: "d2", status: "expired" }) }];
     const rows = await listSettledWithWaitingRun(50);
     expect(rows.map((r) => [r.id, r.status])).toEqual([["d1", "declined"], ["d2", "expired"]]);
     expect(rows[0]!.surfacedValues).toEqual({ what: "the post" });
     expect(calls.via).toEqual(["db.select", "db.innerJoin"]);
-    expect(rendered(calls.where[0]).params).toEqual(["declined", "expired", "pending_approval"]);
+    const where = rendered(calls.where[0]);
+    expect(where.params).toEqual(["declined", "expired", "pending_approval", "running"]);
+    // Only a row no newer decision of the same run follows (created_at, then id: the order every newest read uses).
+    expect(where.sql.replace(/\s+/g, " ")).toMatch(
+      /not exists \(select 1 from .*"agent_run_publish_decisions" newer where newer\.run_id = .*"agent_run_publish_decisions"\."run_id" and \(newer\.created_at, newer\.id\) > \(.*"agent_run_publish_decisions"\."created_at", .*"agent_run_publish_decisions"\."id"\)\)/,
+    );
     expect(calls.orderBy).toBe(1);
     expect(calls.limit).toEqual([50]);
+  });
+
+  it("reads the next page after the last id it was given", async () => {
+    await listSettledWithWaitingRun(2, "d2");
+    const where = rendered(calls.where[0]);
+    expect(where.params).toEqual(["declined", "expired", "pending_approval", "running", "d2"]);
+    expect(where.sql).toMatch(/"agent_run_publish_decisions"\."id" > \$5/);
+    expect(calls.limit).toEqual([2]);
+  });
+
+  it("refuses an empty last id before any read", async () => {
+    expect(await codeOf(listSettledWithWaitingRun(2, ""))).toBe("invalid-input");
+    expect(calls.via).toEqual([]);
   });
 
   it.each([0, PUBLISH_DECISION_MAX_DUE_PAGE + 1, 1.5])("refuses the limit %s before any read", async (limit) => {

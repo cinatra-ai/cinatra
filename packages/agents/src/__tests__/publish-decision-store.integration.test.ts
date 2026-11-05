@@ -224,7 +224,7 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     expect(await store.readLatestDecisionForRun(`run-${randomUUID()}`)).toBeNull();
   });
 
-  it("cinatra#4150 PR 3a: the expiry finds every stop a decline or an expiry decided but did not make", async () => {
+  it("cinatra#4150 PR 3a: the expiry finds every stop a decline or an expiry decided but did not make, page by page", async () => {
     const RUNS = `"${q(TEST_SCHEMA)}"."agent_runs"`;
     const run = async (status: string) => {
       const id = `run-${randomUUID()}`;
@@ -232,24 +232,36 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
       return id;
     };
     const settle = async (runId: string, to: "declined" | "expired" | "released" | "run_ended" | null) => {
-      const { decision } = await store.insertParkedDecision(park({ runId }));
+      const { decision } = await store.insertParkedDecision(park({ runId, gateTaskId: `task-${randomUUID()}` }));
       if (to) await store.decide(decision.id, to === "declined" || to === "released" ? { from: "parked", to, actor: "user-1" } : { from: "parked", to, actor: null });
       return decision.id;
     };
     const declinedWaiting = await settle(await run("pending_approval"), "declined");
     const expiredWaiting = await settle(await run("pending_approval"), "expired");
+    const declinedRunning = await settle(await run("running"), "declined");
     const declinedStopped = await settle(await run("stopped"), "declined");
     const releasedWaiting = await settle(await run("pending_approval"), "released");
     const endedWaiting = await settle(await run("pending_approval"), "run_ended");
     const parkedWaiting = await settle(await run("pending_approval"), null);
     const noRun = await settle(`run-${randomUUID()}`, "declined");
-    await admin.query(`UPDATE ${TABLE} SET decided_at = now() - interval '1 hour' WHERE id = $1`, [expiredWaiting]);
+    // A run whose older decision is declined but whose NEWER decision is parked is governed by the newer one.
+    const governedRun = await run("pending_approval");
+    const olderDeclined = await settle(governedRun, "declined");
+    await admin.query(`UPDATE ${TABLE} SET created_at = now() - interval '1 hour' WHERE id = $1`, [olderDeclined]);
+    await settle(governedRun, null);
 
     const ids = (await store.listSettledWithWaitingRun(1000)).map((r) => r.id);
-    expect(ids).toContain(declinedWaiting);
-    expect(ids.indexOf(expiredWaiting)).toBeGreaterThanOrEqual(0);
-    expect(ids.indexOf(expiredWaiting)).toBeLessThan(ids.indexOf(declinedWaiting));
-    for (const id of [declinedStopped, releasedWaiting, endedWaiting, parkedWaiting, noRun]) expect(ids).not.toContain(id);
+    for (const id of [declinedWaiting, expiredWaiting, declinedRunning]) expect(ids).toContain(id);
+    for (const id of [declinedStopped, releasedWaiting, endedWaiting, parkedWaiting, noRun, olderDeclined]) expect(ids).not.toContain(id);
     expect(await store.listSettledWithWaitingRun(1)).toHaveLength(1);
+    // Page by page after the last id reads the same rows, each once.
+    const paged: string[] = [];
+    for (let after: string | undefined = undefined, n = 0; n < 500; n += 1) {
+      const page = (await store.listSettledWithWaitingRun(2, after)).map((r) => r.id);
+      paged.push(...page);
+      if (page.length < 2) break;
+      after = page[page.length - 1];
+    }
+    expect(paged).toEqual(ids);
   });
 });

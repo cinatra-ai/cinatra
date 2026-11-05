@@ -130,9 +130,17 @@ describe("the resume delivery and a publish decision", () => {
     },
   );
 
-  it("an unreadable decision record sends nothing either", async () => {
-    decisions.readLatestDecisionForRun.mockRejectedValue(new Error("db down"));
-    await expect(deliverArtifactReviewResumeIntent(intent())).rejects.toThrow("db down");
+  it("an unreadable decision record sends nothing either: the intent stays pending, and no id or store error is logged", async () => {
+    decisions.readLatestDecisionForRun.mockRejectedValue(new Error("db down: run-1"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(await deliverArtifactReviewResumeIntent(intent())).toBe("retryable");
+      const lines = warn.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+      expect(lines).toContain("the publish hold could not be checked");
+      expect(lines).not.toMatch(/db down|gate-1|run-1/);
+    } finally {
+      warn.mockRestore();
+    }
     expect(sendTaskSpy).not.toHaveBeenCalled();
     expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
   });
@@ -160,7 +168,7 @@ describe("the publish-decision expiry pass of the resume-delivery loop", () => {
       log.mockRestore();
     }
     expect(decisions.listDueParked).toHaveBeenCalledWith(50, undefined);
-    expect(decisions.listSettledWithWaitingRun).toHaveBeenCalledWith(50);
+    expect(decisions.listSettledWithWaitingRun).toHaveBeenCalledWith(50, undefined);
     expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
   });
 
@@ -186,5 +194,62 @@ describe("the publish-decision expiry pass of the resume-delivery loop", () => {
   it("a pass whose due list cannot be read rejects (the boot wrapper logs it and drains the intents)", async () => {
     decisions.listDueParked.mockRejectedValueOnce(new Error("db down"));
     await expect(sweepExpiredPublishDecisionsOnce()).rejects.toThrow("db down");
+  });
+});
+
+// cinatra#4150 PR 3a, pre-review 2 finding 3: on a template that lists publishing steps the delivery claims the run
+// (pending_approval -> running) right before the send and reads the hold again, so a decision another resume parked
+// after the first read refuses the send. A send that fails after the claim leaves the run running (finding 2).
+describe("the resume delivery on a publishing template", () => {
+  const moves = () => storeMock.transitionRunStatus.mock.calls.map((c) => (c as unknown[]).slice(0, 3));
+
+  beforeEach(() => {
+    // Once-answers a case leaves (a red run over older code) must not feed the next case.
+    storeMock.transitionRunStatus.mockReset().mockResolvedValue(undefined);
+    decisions.readLatestDecisionForRun.mockReset().mockResolvedValue(null);
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tmpl-1",
+      packageName: "test-publishing-agent",
+      sourceType: "internal",
+      publishingSteps: ["publish"],
+    });
+  });
+
+  it("claims the run before the send, reads the hold after the claim, and hands running to the task handler", async () => {
+    expect(await deliverArtifactReviewResumeIntent(intent())).toBe("delivered");
+    expect(moves()).toEqual([["run-1", "pending_approval", "running"]]);
+    expect(decisions.readLatestDecisionForRun).toHaveBeenCalledTimes(2);
+    expect(storeMock.transitionRunStatus.mock.invocationCallOrder[0]!).toBeLessThan(
+      decisions.readLatestDecisionForRun.mock.invocationCallOrder[1]!,
+    );
+    expect(decisions.readLatestDecisionForRun.mock.invocationCallOrder[1]!).toBeLessThan(sendTaskSpy.mock.invocationCallOrder[0]!);
+    expect(handleWayflowTaskStateSpy).toHaveBeenCalledWith(expect.objectContaining({ fromStatus: "running" }));
+  });
+
+  it("a decision parked by another resume after the first read keeps the intent pending, sends nothing and puts the run back", async () => {
+    decisions.readLatestDecisionForRun.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: "d1", runId: "run-1", status: "parked" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(await deliverArtifactReviewResumeIntent(intent())).toBe("retryable");
+    } finally {
+      warn.mockRestore();
+    }
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+    expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"]]);
+  });
+
+  it("a run another resume holds keeps the intent pending and is sent nothing", async () => {
+    storeMock.transitionRunStatus.mockRejectedValueOnce(Object.assign(new Error("stale"), { code: "stale_from_status" }));
+    expect(await deliverArtifactReviewResumeIntent(intent())).toBe("retryable");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(decisions.readLatestDecisionForRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("a send that fails after the claim is not put back: the run stays running", async () => {
+    sendTaskSpy.mockRejectedValueOnce(new Error("socket hang up"));
+    await expect(deliverArtifactReviewResumeIntent(intent())).rejects.toThrow("socket hang up");
+    expect(moves()).toEqual([["run-1", "pending_approval", "running"]]);
+    expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
   });
 });
