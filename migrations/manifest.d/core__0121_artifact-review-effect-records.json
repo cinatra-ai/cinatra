@@ -1,0 +1,9 @@
+{
+  "seq": "0121",
+  "file": "core/core__0121_artifact-review-effect-records.mjs",
+  "summary": "The one effect record of a reviewed target (cinatra#3978). Adds artifact_review_effect_records: ONE row per (gate_id, reviewed_artifact_id, reviewed_representation_revision_id), holding the actual result of the call that carried out the reviewed change as compact JSON text (record_json, at most 8192 UTF-8 bytes, a JSON object), the writer kind (cms_apply or dashboard_publish), the source reference (the CMS operation id) and the time the row was stored (recorded_at, never a remote time). The gate FK cascades. WHY: the verification record holds a field verdict, never the call's result, so no stored fact could carry what happened at the site. The writer is first-write-wins and derives org, run, target and writer kind from stored state. ADDITIVE ONLY: a new table and its unique index; nothing is touched or backfilled. Mirrors the idempotent bootstrap DDL in artifactReviewGateSchemaQueries (src/lib/artifacts/artifact-review-gate-schema.ts), shipped in the SAME pull request (core__0113 precedent). down() drops the table only when it is empty. SEQ 0121: 0113 is the highest sequence on main at authoring time, and open changes claim 0114 to 0120.",
+  "destructive": false,
+  "tables": [
+    "artifact_review_effect_records"
+  ]
+}

@@ -886,6 +886,25 @@ export const gateAdvisoryComments = cinatraSchema.table("gate_advisory_comments"
   gateIdx:  index("gate_advisory_comments_gate_idx").on(t.gateId, t.createdAt),
 }));
 
+/** The ONE effect record of a reviewed target (cinatra#3978): the actual result
+ * of the call that carried out the reviewed change, as compact JSON text. The
+ * only writer is `artifact-review-effect-store`; first write wins. */
+export const artifactReviewEffectRecords = cinatraSchema.table("artifact_review_effect_records", {
+  id:                               text("id").primaryKey(),
+  gateId:                           text("gate_id").notNull().references(() => artifactReviewGates.id, { onDelete: "cascade" }),
+  orgId:                            text("org_id").notNull(),
+  runId:                            text("run_id").notNull(),
+  reviewedArtifactId:               text("reviewed_artifact_id").notNull(),
+  reviewedRepresentationRevisionId: text("reviewed_representation_revision_id").notNull(),
+  writer:                           text("writer").notNull(), // cms_apply | dashboard_publish
+  sourceRef:                        text("source_ref").notNull(),
+  recordJson:                       text("record_json").notNull(),
+  recordedAt:                       timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  targetUniq: uniqueIndex("artifact_review_effect_records_target_uniq")
+    .on(t.gateId, t.reviewedArtifactId, t.reviewedRepresentationRevisionId),
+}));
+
 /** DECIDED SCHEMA (S4): post-change verification records. */
 export const artifactVerificationRecords = cinatraSchema.table("artifact_verification_records", {
   id:                              text("id").primaryKey(),

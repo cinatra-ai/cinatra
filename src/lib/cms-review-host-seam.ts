@@ -87,6 +87,9 @@ export interface CmsReviewReadbackInput {
   gateId: string;
   runId: string;
   postApplyFields: Record<string, string>;
+  /** cinatra#3978: the site tool's apply result in the CLOSED schema of
+   * `artifact-review-effect-store`; recorded only on a `verified` read-back. */
+  effect?: unknown;
 }
 
 /** Post-apply read-back result — mirrors the connector's `CmsReviewReadbackResult`. */
@@ -96,6 +99,9 @@ export interface CmsReviewReadbackResult {
   outOfScope?: string[];
   code?: string;
   error?: string;
+  /** Only when the input carried `effect`: `refused` stores nothing; after
+   * `unrecorded` the verification stands and a retry may record it. */
+  effect?: "recorded" | "already-recorded" | "refused" | "unrecorded";
 }
 
 /** The published host seam — mirrors the connector's `CmsReviewSeam` structurally
@@ -229,6 +235,15 @@ export interface CmsReviewHostSeamDeps {
     projectFields: (t: CmsReviewVerificationTargetRef) => Record<string, string>;
     representationMatches?: boolean;
   }) => Promise<CmsReviewVerificationResult>;
+  /** cinatra#3978: `orgId` is the frame's org; the writer derives every other
+   * binding from stored state. Absent, an input `effect` reads `unrecorded`. */
+  recordCmsApplyEffect?: (input: {
+    orgId: string;
+    runId: string;
+    gateId: string;
+    operationId: string;
+    result: unknown;
+  }) => Promise<{ ok: true; status: "recorded" | "already-recorded" } | { ok: false; code: string }>;
 }
 
 /**
@@ -396,6 +411,33 @@ export function buildCmsReviewHostSeam(deps: CmsReviewHostSeamDeps): CmsReviewHo
         representationMatches: inScopeFaithful,
       });
       if (!res.ok) return { ok: false, code: res.code, error: res.error };
+      // cinatra#3978: the effect only after a VERIFIED read-back. Its failure never
+      // fails the verification; the log has a fixed text and class, never the error.
+      let effect: CmsReviewReadbackResult["effect"];
+      if (input.effect !== undefined) {
+        if (res.verdict.outcome !== "verified") {
+          effect = "refused";
+        } else if (!deps.recordCmsApplyEffect) {
+          effect = "unrecorded";
+        } else {
+          try {
+            const written = await deps.recordCmsApplyEffect({
+              orgId,
+              runId: input.runId,
+              gateId: input.gateId,
+              operationId: input.operationId,
+              result: input.effect,
+            });
+            effect = written.ok ? written.status : "refused";
+          } catch (err) {
+            effect = "unrecorded";
+            console.warn(
+              "[cms-review] the apply effect could not be recorded (the verification is unaffected):",
+              err instanceof Error ? "error" : "non-error",
+            );
+          }
+        }
+      }
       // S6 (#2044 L-D): the verification's field diff gains its VISUAL
       // counterpart. The apply has landed, so the site now really carries the
       // applied content — this is a straight fetched render of the page the
@@ -418,7 +460,12 @@ export function buildCmsReviewHostSeam(deps: CmsReviewHostSeamDeps): CmsReviewHo
           );
         }
       }
-      return { ok: true, outcome: res.verdict.outcome, outOfScope: res.verdict.outOfScopePaths };
+      return {
+        ok: true,
+        outcome: res.verdict.outcome,
+        outOfScope: res.verdict.outOfScopePaths,
+        ...(effect !== undefined ? { effect } : {}),
+      };
     },
   };
 }

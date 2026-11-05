@@ -175,6 +175,31 @@ in-scope deletion or an in-scope rewrite by the site cannot read as faithful.
 
 `outOfScope` returns the offending paths.
 
+### The apply effect
+
+The adapter may also pass `effect`: the site tool's result of the apply, in a
+**closed** schema with exactly three keys and no free text.
+
+| Key | Value |
+|---|---|
+| `remoteId` | The site's id of the changed item: 1 to 128 of `A-Z a-z 0-9 . _ : -`. |
+| `remoteStatus` | One of `published`, `scheduled`, `draft`, `pending`, `private`. The adapter maps its site's status word. |
+| `remotePublishedAt` | The site's own publication time as a canonical ISO time (`2026-11-03T09:20:00.000Z`), or `null`. |
+
+Any other key, value or shape is refused, and nothing is stored. The host
+records the effect only when the read-back is `verified`; a `drifted` or
+`unmet` apply records none. The record binds to the gate and the snapshot from
+stored state: the gate must be resolved with `approve` on the named run and
+the caller's org, pin the operation's snapshot, and hold a `verified`
+verification of it. The first record wins.
+
+The result carries `effect`: `recorded`, `already-recorded` (an identical
+retry), `refused` (nothing stored), or `unrecorded` (the store could not be
+written; the verification stands). The apply and the record are not one
+transaction: after `unrecorded`, retry `recordApplyVerification` with the same
+operation and the same result, and never apply the change again. Until a record
+exists, a display draws no sentence about the site.
+
 ## 7. Region anchors
 
 Anchors come **exclusively from the adapter**. The site emits them server-side in
