@@ -967,9 +967,9 @@ export type DeclaredTableDeclaration = {
 //   - the module's CALLABLE EXPORT is the named export
 //     `EXTENSION_TOOL_MODULE_EXPORT`: one function of ONE argument,
 //     `{ input, ports }`, returning the result (or a promise of it);
-//   - `embeddable` (cinatra#4154) is this package's own consent that an agent
-//     embedding its flow may reach the tool from a step of that flow. Only an own
-//     data `true` consents; an inherited key is never read; any other own value refuses.
+//   - `embeddable` (cinatra#4154) is this package's own consent that an agent embedding its flow
+//     may reach the tool from a step of that flow. Only an own data `true` consents; an own `false`
+//     is kept, no consent; an inherited key is never read; any other own value refuses the list.
 //
 // ADDITIVE, like every field before it: one new key under `cinatra`, no shape
 // change, so the frozen ABI is untouched.
