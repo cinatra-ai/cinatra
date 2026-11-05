@@ -3,7 +3,8 @@
 //
 // Co-located slice extracted VERBATIM from store.ts (no behavior change) to keep
 // store.ts under the file-size ratchet ceiling (a thin-facade vertical slice).
-// Holds three helpers store.ts re-imports:
+// It also holds the run's step-tool source binding of cinatra#3745 (below the
+// three helpers), which store.ts re-exports. The three helpers store.ts re-imports:
 //   - parseAuthPolicySafe: defensive AgentAuthPolicy JSON parser (shared by the
 //     run + template deserializers).
 //   - deserializeRun: agent_runs row -> AgentRunRecord mapper.
@@ -804,7 +805,9 @@ export function withRunActionPolicyTransaction<T>(input: {
   return guardedRunWrite(input.authority, { orgId: input.orgId, runId: input.runId,
     capability: "run.execute" }, (tx) => body(tx as unknown as RunActionPolicyTx));
 }
-/** First bind only. A restart/retry cannot silently replace the selected graph. */
+/** First bind, or the SAME graph moved to the run's current attempt. A run that dispatches again under a fresh
+ * attempt (the failed-run retry: reset, then run) re-selects; the binding moves to that attempt only when the fresh
+ * selection is the bound policy byte for byte. A restart or retry can never replace the selected graph. */
 export async function bindRunStepToolPolicy(input: {
   orgId: string; runId: string; executionAttemptId: string;
   policy: RunStepToolPolicy; authority: OrgWriteAuthority;
@@ -821,10 +824,17 @@ export async function bindRunStepToolPolicy(input: {
       executionAttemptId: input.executionAttemptId, policy }).onConflictDoNothing();
     const [bound] = await tx.select().from(agentRunOutwardActionPolicies)
       .where(eq(agentRunOutwardActionPolicies.runId, input.runId)).for("update");
-    if (!bound || bound.orgId !== input.orgId || bound.executionAttemptId !== input.executionAttemptId ||
+    if (!bound || bound.orgId !== input.orgId ||
         JSON.stringify(parseRunStepToolPolicy(bound.policy)) !== JSON.stringify(policy)) {
       throw new RunStepToolPolicyRefusal("step_tool_dispatch_rebind_refused");
     }
+    if (bound.executionAttemptId === input.executionAttemptId) return;
+    // The run row is locked and runs under input.executionAttemptId, so the older attempt holds no live dispatch.
+    const moved = await tx.update(agentRunOutwardActionPolicies).set({ executionAttemptId: input.executionAttemptId })
+      .where(and(eq(agentRunOutwardActionPolicies.runId, input.runId), eq(agentRunOutwardActionPolicies.orgId, input.orgId),
+        eq(agentRunOutwardActionPolicies.executionAttemptId, bound.executionAttemptId)))
+      .returning({ runId: agentRunOutwardActionPolicies.runId });
+    if (moved.length !== 1) throw new RunStepToolPolicyRefusal("step_tool_dispatch_rebind_refused");
   });
 }
 /** A resumed run dispatches under a FRESH attempt (a stopped run's queued->running
@@ -834,8 +844,8 @@ export async function bindRunStepToolPolicy(input: {
  * The prior attempt is read from the run row locked here, never from a caller, and a
  * lost CAS rolls the move back with it. It never selects or replaces a graph. It
  * refuses a binding that another attempt holds than the one the locked run carries,
- * so a stale or foreign attempt cannot move it. An unbound run stays unbound, and its
- * source checks keep refusing its callbacks. Lock order: run, then binding (as bind). */
+ * so a stale or foreign attempt cannot move it. An unbound run stays unbound (a later
+ * part's source checks refuse its callbacks). Lock order: run, then binding (as bind). */
 export async function carryRunStepToolPolicyInTx(txLike: unknown, input: {
   orgId: string; runId: string; executionAttemptId: string;
 }): Promise<void> {

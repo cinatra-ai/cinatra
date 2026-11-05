@@ -2,9 +2,9 @@
  * cinatra#3745 — CENSUS: every direct first-task send to WayFlow binds the
  * executed source first.
  *
- * A run's later callbacks are checked against the source bound to the run. A
- * first task sent without that binding would leave the run's callbacks with
- * nothing to be checked against, so each first-task send selects the loader's
+ * A later part of the stack checks a run's callbacks against the source bound
+ * to the run. A first task sent without that binding would leave them nothing
+ * to be checked against, so each first-task send selects the loader's
  * source (`selectWayflowRunStepToolPolicy`) and binds it to the run's attempt
  * (`bindRunStepToolPolicy`) before its `sendTask`.
  *
@@ -13,15 +13,18 @@
  * so it carries the run's one binding to that attempt in its `queued -> running`
  * claim, before its send.
  *
- * A new `sendTask` call site anywhere under `src/` or `packages/` fails this
- * census until it is classified here.
+ * A new `sendTask` call site in any file git tracks under `src/` or `packages/` (dot-directories, `build` and
+ * `dist` included; test files excluded) fails this census until it is classified here. A site is a member call
+ * (`.sendTask(`, `.sendTask?.(`) or a destructured `sendTask`; comment lines are not sites.
  */
 import { describe, expect, it } from "vitest";
-import { readdirSync, readFileSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
-const SEND = ".sendTask(";
+/** A member call of sendTask (optional call included), or sendTask taken out of an object by destructuring. */
+const SITE = /\.sendTask\s*(?:\?\.)?\s*\(|[{,]\s*sendTask\s*[,}:]/g;
 
 /** First-task sends: each one must bind before it sends. */
 const FIRST_TASK_SENDS = ["packages/agents/src/execution.ts", "src/lib/host-content-editor-dispatch.ts"];
@@ -33,39 +36,27 @@ const RESUME_SENDS = [
   "packages/agents/src/review-task-actions.ts",
 ];
 
-const SKIP_DIRS = new Set(["node_modules", "__tests__", "dist", "build", ".next", "coverage", "generated-fixtures"]);
-
-function sourceFiles(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.isDirectory()) {
-      if (!SKIP_DIRS.has(entry.name) && !entry.name.startsWith(".")) sourceFiles(join(dir, entry.name), out);
-    } else if (/\.(ts|tsx|mts|js|mjs)$/.test(entry.name) && !/\.(test|spec)\.[cm]?[jt]sx?$/.test(entry.name) && !entry.name.endsWith(".d.ts")) {
-      out.push(join(dir, entry.name));
-    }
-  }
-  return out;
+/** Every tracked source file under src/ and packages/ (the index, so a file in any directory is seen). */
+function sourceFiles(): string[] {
+  return execFileSync("git", ["ls-files", "-z", "--", "src", "packages"], { cwd: REPO_ROOT, maxBuffer: 1 << 28 })
+    .toString("utf8").split("\0").filter(Boolean)
+    .filter((f) => /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(f) && !f.endsWith(".d.ts"))
+    .filter((f) => !/(^|\/)__tests__\//.test(f) && !/\.(test|spec)\.[cm]?[jt]sx?$/.test(f));
 }
 
-const rel = (abs: string) => relative(REPO_ROOT, abs).split(sep).join("/");
 const read = (relPath: string) => readFileSync(join(REPO_ROOT, relPath), "utf8");
+const isComment = (line: string) => { const lead = line.trimStart(); return lead.startsWith("//") || lead.startsWith("*") || lead.startsWith("/*"); };
+/** The text with its comment lines blanked (offsets kept), so a commented-out call is no call. */
+const code = (text: string) => text.split("\n").map((line) => (isComment(line) ? " ".repeat(line.length) : line)).join("\n");
 
-/** The offsets of every `.sendTask(` in a file's code (comment lines are not call sites). */
+/** The offsets of every send site in a file's code. */
 function sends(text: string): number[] {
-  const at: number[] = [];
-  let lineStart = 0;
-  for (const line of text.split("\n")) {
-    const lead = line.trimStart();
-    if (!lead.startsWith("//") && !lead.startsWith("*") && !lead.startsWith("/*")) {
-      for (let i = line.indexOf(SEND); i !== -1; i = line.indexOf(SEND, i + 1)) at.push(lineStart + i);
-    }
-    lineStart += line.length + 1;
-  }
-  return at;
+  return [...code(text).matchAll(SITE)].map((m) => m.index!);
 }
 
-/** The text of the top-level function that holds `offset`, up to `offset`. */
+/** The code of the top-level function that holds `offset`, up to `offset`. */
 function functionPrefix(text: string, offset: number): string {
-  const head = text.slice(0, offset);
+  const head = code(text).slice(0, offset);
   const starts = [...head.matchAll(/^(?:export\s+)?(?:async\s+)?function\s/gm)];
   const start = starts.at(-1)?.index;
   if (start === undefined) throw new Error("a send outside any top-level function");
@@ -73,13 +64,11 @@ function functionPrefix(text: string, offset: number): string {
 }
 
 describe("T-P1a-census: every direct first-task send to WayFlow binds the executed source first", () => {
-  it("every sendTask call site under src/ and packages/ is classified as a first task or a resume", () => {
+  it("every tracked sendTask call site under src/ and packages/ is classified as a first task or a resume", () => {
     const found = new Map<string, number>();
-    for (const root of ["src", "packages"]) {
-      for (const file of sourceFiles(join(REPO_ROOT, root))) {
-        const n = sends(readFileSync(file, "utf8")).length;
-        if (n > 0) found.set(rel(file), n);
-      }
+    for (const file of sourceFiles()) {
+      const n = sends(read(file)).length;
+      if (n > 0) found.set(file, n);
     }
     const classified = [...FIRST_TASK_SENDS, ...RESUME_SENDS].sort();
     expect([...found.keys()].sort()).toEqual(classified);
@@ -96,7 +85,7 @@ describe("T-P1a-census: every direct first-task send to WayFlow binds the execut
       expect(select, "the send's function selects the loader's source").toBeGreaterThan(-1);
       expect(bind, "the send's function awaits the bind").toBeGreaterThan(select);
       // Nothing between the bind and the send skips the bind: no early send.
-      expect(prefix.slice(bind)).not.toContain(SEND);
+      expect(prefix.slice(bind).match(SITE)).toBeNull();
     });
   }
 

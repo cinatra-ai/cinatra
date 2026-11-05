@@ -311,13 +311,13 @@ export async function resumeStoppedOrchestratorAction(
   }
 
   // THE RESUME CLAIMS THE RUN AND BINDS ITS ATTEMPT BEFORE IT DISPATCHES
-  // (cinatra#3745). The resumed leg's callbacks are admitted only while the run is
-  // `running` under the attempt its step policy is bound to. So the dispatch edge
-  // `queued -> running` (which mints the fresh attempt) is taken BEFORE the send,
-  // and in that SAME transaction the run's one bound graph is carried forward to
-  // the attempt (`carryBoundStepToolPolicy`). The prior attempt is the locked run
+  // (cinatra#3745). A later part admits the resumed leg's callbacks only while the
+  // run is `running` under the attempt its step policy is bound to. So the dispatch
+  // edge `queued -> running` (which mints the fresh attempt) is taken BEFORE the
+  // send, and in that SAME transaction the run's one bound graph is carried forward
+  // to the attempt (`carryBoundStepToolPolicy`). The prior attempt is the locked run
   // row's, so a binding held by any other attempt is refused. A failure here
-  // commits nothing, sends nothing and puts the run back.
+  // commits nothing and sends nothing; a run still `queued` is put back to `stopped`.
   const attemptId = randomUUID();
   try {
     await transitionRunStatus(runId, "queued", "running", {

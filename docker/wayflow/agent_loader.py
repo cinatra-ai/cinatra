@@ -5087,8 +5087,9 @@ def _build_composed_oas_handler(
                 "injectedSlots": agent.context_injection or [],
                 "composedSha256": agent.composed_sha256,
                 "composedOas": agent.composed_oas,
-                # Host selects before dispatch; callback HMAC proves which
-                # assistant actually executed. No substituted secrets exposed.
+                # The host reads this before a run's first dispatch and binds it
+                # to the run (cinatra#3745); a later part proves which assistant
+                # ran. The substituted text is never returned, only its digest.
                 "selectedSourceBinding": dict(agent.selected_source_binding) if agent.selected_source_binding is not None else None,
             }
         )

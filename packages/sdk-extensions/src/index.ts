@@ -872,7 +872,7 @@ export type {
   DeclaredTableDeclaration,
 } from "./manifest";
 
-/** Structural carrier only; authority comes from loader HMAC + frozen run comparison. */
+/** Structural carrier only (cinatra#3745): the parser checks the shape and grants nothing; a later part proves the values. */
 export type VerifiedExecutedRunSource = {
   readonly contextId: string; readonly stepId: string; readonly executionAttemptId: string;
   readonly sourceSha256: string; readonly executedSourceSha256: string;

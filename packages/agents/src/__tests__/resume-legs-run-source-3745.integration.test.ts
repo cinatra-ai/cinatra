@@ -221,7 +221,7 @@ async function callback(): Promise<Callback> {
 
 /** A run that dispatched for real: running under attempt A, its graph bound to A
  *  by the real first-dispatch bind, then moved to `toStatus` by the real CAS. */
-async function seedDispatchedRun(toStatus: "pending_approval" | "stopped") {
+async function seedDispatchedRun(toStatus: "pending_approval" | "stopped" | "failed") {
   h.runId = `run-${randomUUID()}`;
   h.contextId = `ctx-${randomUUID()}`;
   h.taskId = `task-${randomUUID()}`;
@@ -365,6 +365,42 @@ describe.skipIf(!HAS_DB)("the claim's other exits", () => {
     const { resumeStoppedOrchestratorAction } = await import("../orchestrator-actions");
     expect(await resumeStoppedOrchestratorAction(h.runId)).toEqual({ ok: true });
     expect(h.callbacks).toMatchObject([{ admitted: false, code: "run_source_mismatch", boundAttempt: null }]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("a failed run retried under a fresh attempt (reset, then run again)", () => {
+  /** A dispatched run that failed, was reset (`failed -> pending_input`) and run again (`-> queued`), now
+   *  claimed `queued -> running` by the canonical dispatch under a fresh attempt B, before its select and bind. */
+  async function retried() {
+    const attemptA = await seedDispatchedRun("failed");
+    await transitions.transitionRunStatus(h.runId, "failed", "pending_input", undefined, AUTHORITY as never);
+    await transitions.transitionRunStatus(h.runId, "pending_input", "queued", undefined, AUTHORITY as never);
+    const attemptB = randomUUID();
+    await transitions.transitionRunStatus(h.runId, "queued", "running", { dispatch: { attemptId: attemptB } }, AUTHORITY as never);
+    return { attemptA, attemptB };
+  }
+  const otherGraph = () => {
+    const graph = JSON.parse(RAW_SOURCE) as { $referenced_components: Record<string, Record<string, unknown>> };
+    graph.$referenced_components[STEP]!.metadata = { cinatra: { tools: ["objects_get"] } };
+    return JSON.stringify(graph);
+  };
+
+  it("the identical graph moves to the new attempt, so the retry dispatches and its callback is admitted", async () => {
+    const { attemptA, attemptB } = await retried();
+    expect(await rows()).toEqual({ status: "running", runAttempt: attemptB, boundAttempt: attemptA });
+    await serde.bindRunStepToolPolicy({ orgId: ORG, runId: h.runId, executionAttemptId: attemptB,
+      policy: attestation().policy, authority: AUTHORITY as never });
+    expect(await rows()).toEqual({ status: "running", runAttempt: attemptB, boundAttempt: attemptB });
+    expect(await callback()).toMatchObject({ admitted: true, current: true });
+  });
+
+  it("another graph is refused, and the binding stays on the attempt that dispatched it", async () => {
+    const { attemptA, attemptB } = await retried();
+    const other = serde.createRunStepToolPolicy({ contextId: h.contextId, rawSource: otherGraph() });
+    await expect(serde.bindRunStepToolPolicy({ orgId: ORG, runId: h.runId, executionAttemptId: attemptB,
+      policy: other, authority: AUTHORITY as never })).rejects.toThrow("step_tool_dispatch_rebind_refused");
+    expect(await rows()).toEqual({ status: "running", runAttempt: attemptB, boundAttempt: attemptA });
+    expect(await callback()).toMatchObject({ admitted: false, code: "run_source_mismatch" });
   });
 });
 
