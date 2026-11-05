@@ -414,14 +414,21 @@ describe("cinatra#4223 page capture: the size cap and the target's accepts", () 
     expect(edge.ok).toBe(true);
   });
 
-  it("refuses a type that does not accept image/png, and files nothing", async () => {
+  it("refuses a type that does not accept image/png before a lease or a request, and files nothing", async () => {
     h.resolveBoundArtifactTarget.mockResolvedValue({
       ok: true,
       target: { objectTypeId: SHOT_TYPE, acceptedFileMimeTypes: ["text/plain"] },
     });
-    const outcome = await captureArtifactPage(call, toolDeps(captureSeams([]).deps));
+    const events: string[] = [];
+    const b = budget();
+    const outcome = await captureArtifactPage(call, toolDeps(captureSeams(events).deps, b));
     expect(outcome).toMatchObject({ ok: false, reason: "write_refused" });
+    expect((outcome as { error: string }).error).toContain("accepts [text/plain]");
+    // A capture is always image/png, so the answer is known before the budget or the page is touched.
+    expect(b.acquired).toEqual([]);
+    expect(events).toEqual([]);
     expect(h.claimMaterialization).not.toHaveBeenCalled();
+    expect(h.createSemanticArtifact).not.toHaveBeenCalled();
   });
 });
 
@@ -660,5 +667,55 @@ describe("cinatra#4223 captureRegisteredPage: the url's own origin must be a reg
       reason: "origin-not-registered",
     });
     expect(events).toEqual(["sites"]);
+  });
+});
+
+describe("cinatra#4223 page capture: a lease release that throws does not change the answer", () => {
+  const SECRET = "release-throw-secret-host";
+  /** A replaced budget seam whose release throws; the production release never throws. */
+  const throwingRelease = (b: Budget): ArtifactPageCaptureToolDeps["acquireLease"] => async (i) => {
+    b.acquired.push(i);
+    const answer: PageCaptureBudgetAnswer = {
+      ok: true,
+      lease: {
+        leaseId: "lease-1",
+        release: async () => {
+          b.released += 1;
+          throw new Error(`connect ECONNREFUSED ${SECRET}:5432`);
+        },
+      },
+    };
+    return answer;
+  };
+
+  it("answers the filed capture when the release throws after it, and logs no error text", async () => {
+    const b = budget();
+    const deps = { ...toolDeps(captureSeams([]).deps, b), acquireLease: throwingRelease(b) };
+    const outcome = await captureArtifactPage(call, deps);
+    expect(outcome).toEqual({ ok: true, artifactId: "art-1", representationRevisionId: "rev-1", ...FACTS, deduped: false });
+    expect(written).toHaveLength(1);
+    expect(b.released).toBe(1);
+    expect(JSON.stringify(logged.mock.calls)).toContain('"errorClass":"Error"');
+    expect(JSON.stringify(logged.mock.calls)).not.toContain(SECRET);
+  });
+
+  it("answers the capture refusal when the release throws after it, and logs no error text", async () => {
+    const b = budget();
+    const deps = { ...toolDeps(captureSeams([], renderRefusal("render-failed")).deps, b), acquireLease: throwingRelease(b) };
+    const outcome = await captureArtifactPage(call, deps);
+    expect(outcome).toEqual({ ok: false, reason: "render-failed", error: captureDegradeCopy("render-failed") });
+    expect(b.released).toBe(1);
+    expect(JSON.stringify(logged.mock.calls)).not.toContain(SECRET);
+  });
+});
+
+describe("cinatra#4223 page capture: a refusal sentence promises no log line", () => {
+  // A log line that cannot be written is dropped (failure-log.ts), so no answer may say that one was written.
+  it.each([
+    ["the budget that could not be read", BUDGET_REFUSAL_ERRORS.budget_unavailable],
+    ["an unexpected error", PAGE_CAPTURE_UNEXPECTED_ERROR],
+    ["an install state that could not be read", pageCaptureInstallStateError(EXT)],
+  ])("says nothing of a log line for %s", (_l, text) => {
+    expect(text).not.toMatch(/\blog/i);
   });
 });
