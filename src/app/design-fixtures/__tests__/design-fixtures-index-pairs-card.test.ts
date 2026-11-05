@@ -56,4 +56,17 @@ describe("cinatra#4188 — the index card and the pixel settle wait", () => {
     ];
     expect(shots.map((m) => m[1])).toEqual(["cinatra", "dark"]);
   });
+
+  it("the pixel spec's theme reload waits for the load event, never for network idle", () => {
+    const spec = read("tests/e2e/design/design-fixtures.spec.ts");
+    const setTheme = spec.slice(
+      spec.indexOf("async function setTheme"),
+      spec.indexOf("async function expectAxeClean"),
+    );
+    // Network idle never came in CI once the pairs card's island frames load
+    // after hydration (cinatra#4188); the settle wait of steps 4 and 5 is the
+    // page's readiness reading.
+    expect(setTheme).toMatch(/await page\.reload\( ?\{ ?waitUntil: ?"load",? ?\} ?\)/);
+    expect(setTheme).not.toContain("networkidle");
+  });
 });

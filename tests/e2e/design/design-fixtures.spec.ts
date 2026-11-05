@@ -31,8 +31,12 @@ async function setTheme(page: import("@playwright/test").Page, theme: "cinatra" 
     window.localStorage.setItem("theme", t);
   }, theme);
   // 3. Reload so SSR + the inline anti-flicker script pick up the new
-  //    value before paint.
-  await page.reload({ waitUntil: "networkidle" });
+  //    value before paint. The reload waits for the load event only, not for
+  //    network idle: once the pairs card's island frames load after
+  //    hydration, Playwright's network idle never came in CI (cinatra#4188).
+  //    Steps 4 and 5 (fonts ready, both islands `timed-out`) are the page's
+  //    readiness reading, and `toHaveScreenshot` waits for two equal frames.
+  await page.reload({ waitUntil: "load" });
   // 4. Wait for fonts to settle so AA hinting is stable across runs.
   await page.evaluate(() => document.fonts?.ready ?? Promise.resolve());
   // 5. Wait until the pairs card's two islands both read `timed-out`
