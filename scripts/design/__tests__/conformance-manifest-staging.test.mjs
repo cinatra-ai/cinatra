@@ -50,29 +50,37 @@ const STAGED = {
   // tablist the five-entry strip and added the workspace scope (epic cinatra#2806),
   // and re-copied verbatim at version 0.12.0 (design@bda0cf8d, cinatra#4126): the copy carries
   // every surface the drawing has added since, among them the console's fourth tab,
-  // review-policy, and its gate-volume.
+  // review-policy, and its gate-volume. Re-copied verbatim again at version 0.13.0
+  // (design@67ecd66d, cinatra#4388): the dashboard's artifact page draws the dashboard
+  // extension's own display, so the two surfaces of the core pointer (the pointer detail
+  // and its scope chips) are no longer declared.
   // Unpinned because only one of its surfaces is in scope for that adoption; it
   // joins the pin gate when every surface of the drawing has a driver.
   "app-artifacts.json": {
     spec: "specs/app-artifacts.html",
-    manifestSha256: "213e69761afecc68527cd97ca1bfdd9d2f6af011c1209026f43146f2eb7c0ae4",
-    contentHash: "sha256:f1d26ced35085568cc8286365a625939d77021d7836e03c46e0871468f415de9",
+    manifestSha256: "9be0560000ad449b9c75167c726ca44c51efcd5e6eea1497cdb8691b34e1f05b",
+    contentHash: "sha256:dd0eeaf1e9aaeede212214e7711e57a7c76fa3d000a501c13266da971a0e70c6",
   },
   // The lifecycle-cards drawing, staged by cinatra#3156 (the suggestion-chip wave).
+  // Re-copied verbatim at design@f77ea323 (cinatra#3978): the copy carries the
+  // continued readings that design#191 placed inside the email and post displays,
+  // and every surface the drawing has added since. No surface is removed or changed.
   "app-lifecycle-cards.json": {
     spec: "specs/app-lifecycle-cards.html",
-    manifestSha256: "983fd9fdaa49f4d0749c4637c2ede51ce0b0cd1dc858a92e4d7e63080a4e6af3",
-    contentHash: "sha256:218bf86ae8e105d9279aaf8f6e8ecfc8612ec70b5f7d982aecd94491f728ca10",
+    manifestSha256: "2f9879e8e2a829fb5524f6ac44ea1b50b5e182792a918032658080f42da84f25",
+    contentHash: "sha256:48b868de1d67def632f060c694d49f36caa683e941c3d6794d88de24c4e4996e",
   },
   // The artifact-review drawing, staged by cinatra#3158 (the artifact-kind
   // display wave). First-time adoption: the drawing has never been committed
   // here, so there is no earlier record to move. Re-copied verbatim from the
   // published body (design@70c209dd), which declares fifty-nine surfaces; it joins
-  // the pin gate when every one of them is covered.
+  // the pin gate when every one of them is covered. Re-copied verbatim at
+  // design@67ecd66d (cinatra#4388): dashboard-display draws six readings and binds
+  // open-live once for each of the four that draw the live dashboard link.
   "app-artifact-review.json": {
     spec: "specs/app-artifact-review.html",
-    manifestSha256: "21c21430bf3932219a9ffc4ff315449c1db6909c0181a0585bb983aaacc12c27",
-    contentHash: "sha256:cc1ba264246997f63ed7711c8bee635d9911ce1b18ab794994efda9cf41d5c0d",
+    manifestSha256: "641bcfff84564190321abfff34c55321ae7c7c15e8d820c505a6552f2c5b6a6c",
+    contentHash: "sha256:6d519e1e4611425263875da940529f526867b664931356be9774a85ee66d198d",
   },
 };
 
@@ -175,6 +183,37 @@ describe("the artifacts drawing carries the ratified five-entry tab strip", () =
 
   it("declares the empty, error, artifact-kind and loading state variants", () => {
     expect(scopeDashboardsTab().states).toEqual(["empty", "error", "kind:artifact", "loading"]);
+  });
+});
+
+describe("the lifecycle-cards drawing carries the continued readings inside the displays", () => {
+  // The adoption cinatra#3978 needs: design#191 draws each display's own continued
+  // reading inside the display, bound to the review reading and the decision time,
+  // beneath which the host draws only the generic settled marker. Asserting the four
+  // surfaces here means a later re-copy that drops them cannot land unnoticed while
+  // the drawing is still unpinned. Read at assertion time, for the reason the
+  // artifacts block above gives.
+  const CONTINUED_READINGS = [
+    "email-continued-reading-in-thread",
+    "email-continued-reading-outside-thread",
+    "post-continued-reading",
+    "regenerated-post-continued-reading",
+  ];
+  const surfaceOf = (id) => {
+    const abs = path.join(MANIFEST_DIR, "app-lifecycle-cards.json");
+    expect(existsSync(abs), "manifests/app-lifecycle-cards.json is not committed.").toBe(true);
+    return readJson(abs).surfaces.find((s) => s.id === id);
+  };
+
+  it.each(CONTINUED_READINGS)("declares %s with the reading and the decision time", (id) => {
+    const surface = surfaceOf(id);
+    expect(surface, `app-lifecycle-cards.json does not declare ${id}`).toBeDefined();
+    expect(surface.fields).toEqual([
+      { field: "reading", source: "review.reading" },
+      { field: "decision", source: "review.decidedAt" },
+    ]);
+    expect(surface.actions).toEqual([]);
+    expect(surface.states).toEqual(["empty"]);
   });
 });
 
