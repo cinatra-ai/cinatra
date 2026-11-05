@@ -6,7 +6,9 @@ import { createHmac } from "node:crypto";
 // its decision record (written first and awaited) and offers no renderer and no generic
 // review task. A record fault, or a missing or unverified claim on a template that lists
 // publishing steps, ends the run failed. A template that lists none keeps today's road.
-// These tests drive the real handleWayflowTaskState and the real claim verifier.
+// A template that cannot be read fails only a pause that claims a publish gate; any other
+// pause keeps today's road, where the interrupt is offered. These tests drive the real
+// handleWayflowTaskState and the real claim verifier.
 
 const { onInterruptSpy } = vi.hoisted(() => ({ onInterruptSpy: vi.fn() }));
 
@@ -362,10 +364,14 @@ describe("a publish gate that cannot be held ends the run failed (A10)", () => {
     expect(onInterruptSpy).not.toHaveBeenCalled();
   });
 
-  it("a template that cannot be read for the question fails closed too", async () => {
+  it("a template that cannot be read fails closed for a pause that claims a publish gate it cannot prove", async () => {
     storeMock.readAgentTemplateById.mockRejectedValue(new Error("template store down"));
-    await pause(undefined);
-    expect(transitions().map((m) => m.to)).toEqual(["failed"]);
+    await pause(sign(GATE, "another-key"));
+    const moves = transitions();
+    expect(moves.map((m) => m.to)).toEqual(["failed"]);
+    expect(moves[0]!.error).toMatch(/^publish_gate_unverified/);
+    expect(moves[0]!.error).not.toContain("template store down");
+    expect(decisions.insertParkedDecision).not.toHaveBeenCalled();
     expect(onInterruptSpy).not.toHaveBeenCalled();
   });
 
@@ -388,6 +394,18 @@ describe("every other pause keeps today's road", () => {
     ["a verified claim of another step on a publishing template", ["publish"], sign("review_step")],
   ])("%s: no decision, the interrupt is offered", async (_label, steps, claim) => {
     storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(steps as string[] | null));
+    await pause(claim);
+    expect(decisions.insertParkedDecision).not.toHaveBeenCalled();
+    expect(transitions().map((m) => m.to)).not.toContain("failed");
+    expect(onInterruptSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["no claim", undefined],
+    ["an unverified claim of another step", sign("review_step", "another-key")],
+    ["a verified claim of another step", sign("review_step")],
+  ])("a template that cannot be read keeps today's road for %s: no decision, the interrupt is offered", async (_label, claim) => {
+    storeMock.readAgentTemplateById.mockRejectedValue(new Error("template store down"));
     await pause(claim);
     expect(decisions.insertParkedDecision).not.toHaveBeenCalled();
     expect(transitions().map((m) => m.to)).not.toContain("failed");
