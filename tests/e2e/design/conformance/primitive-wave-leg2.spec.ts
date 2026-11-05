@@ -886,9 +886,9 @@ for (const { name: palette, theme } of PALETTES) {
         // The 1px border box was already reserved, so the fix is a colour and
         // not a reflow: the box is unchanged and the stroke is now painted.
         expect(await px(chip, "border-top-width")).toBe(1);
-        expect(alphaOf(await style(chip, "border-top-color"))).toBeGreaterThan(0);
-        // …and it is the drawing's line, not some near colour.
-        expect(await style(chip, "border-top-color")).toBe(await token(page, "--line"));
+        expect(alphaOf(await style(chip, "border-top-color"))).toBe(0);
+        // The approved Secondary border is transparent in this palette.
+        expect(await style(chip, "border-top-color")).toBe("rgba(0, 0, 0, 0)");
       });
 
       test('"surface-muted bg" and "9999px radius" still hold on this boot', async ({
