@@ -370,10 +370,10 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       // (`sessionAuthorityFromResolvedRole(run.orgId, resumeRole)`), resolves no
       // identity of its own and adds no client-reachable surface.
       "packages/agents/src/review-task-actions.ts",
-      // cinatra#4150 — the publish gate: -> pending_approval / -> failed under the caller's
-      // authority; pending_approval -> stopped on "Do not publish" (the decider's member-session
-      // authority) and on the expiry (the resume-delivery loop's system dispatch authority,
-      // handed in). It mints no authority of its own.
+      // cinatra#4150 — the publish gate: -> pending_approval / -> failed, and the resume claim
+      // pending_approval <-> running, under the caller's authority; -> stopped on "Do not publish"
+      // (the decider's member-session authority) and on the expiry (the resume-delivery loop's
+      // system dispatch authority, handed in). It mints no authority of its own.
       "packages/agents/src/publish-decision-actions.ts",
       "src/lib/host-content-editor-dispatch.ts",
       // opaque store.ts / agents-barrel accessors (also on updateAgentRunStatus):

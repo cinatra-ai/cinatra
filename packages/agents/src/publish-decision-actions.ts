@@ -34,6 +34,7 @@ export const PUBLISH_GATE_NODE_PREFIX = "cinatra_publish_gate__";
 export const PUBLISH_DECISION_REQUIRED = "publish_decision_required";
 export const PUBLISH_DECISION_NOT_OPEN = "publish_decision_not_open";
 export const PUBLISH_GATE_UNVERIFIED = "publish_gate_unverified";
+export const PUBLISH_DECISION_UNAVAILABLE = "publish_decision_unavailable";
 const EXPIRY_PAGE = 50;
 
 /** A resume of a run held at a publish decision. The text names no run, step or value. */
@@ -56,6 +57,33 @@ const nameOf = (err: unknown): string => (err instanceof Error ? err.name : "err
 export async function assertNoOpenPublishDecision(runId: string): Promise<void> {
   const latest = await readLatestDecisionForRun(runId);
   if (latest && latest.status !== "released") throw new PublishDecisionRequiredError();
+}
+
+/** agent_run_resume's answer to a refused or unreadable hold. Neither text carries an id, a value or the store's error. */
+export function publishHoldAnswer(err: unknown): { error: string; code?: string } {
+  if (isPublishDecisionRequired(err)) return { error: (err as Error).message, code: PUBLISH_DECISION_REQUIRED };
+  console.warn(`[publish-decision] a resume could not check the publish hold: ${nameOf(err)}`);
+  return { error: "Resume failed: the publish hold could not be checked." };
+}
+
+/**
+ * A5 for the two roads that resume from pending_approval and keep the run there while they send (agent_run_resume and
+ * the artifact-review delivery). On a template that lists publishing steps the road claims the run (pending_approval ->
+ * running) right before it sends, then reads the hold again: a decision parked by another resume after the road's first
+ * read refuses the send. A refusal or a read error puts the run back and propagates. Answers the status the road hands to
+ * handleWayflowTaskState, or null when another road holds the run. A send that fails after the claim leaves the run
+ * running, as the generic approve does (cinatra#3423): the runtime may have taken the message.
+ */
+export async function claimRunBeforeSend(runId: string, publishes: boolean, authority: OrgWriteAuthority): Promise<AgentRunStatus | null> {
+  if (!publishes) return "pending_approval";
+  if (!(await moveRun(runId, "pending_approval", "running", undefined, authority))) return null;
+  try {
+    await assertNoOpenPublishDecision(runId);
+  } catch (err) {
+    await moveRun(runId, "running", "pending_approval", undefined, authority).catch(() => false);
+    throw err;
+  }
+  return "running";
 }
 
 type GateTask = {
@@ -89,8 +117,14 @@ async function moveRun(runId: string, from: AgentRunStatus, to: AgentRunStatus, 
     return false;
   }
 }
-const stopHeldRun = (runId: string, authority: OrgWriteAuthority) =>
-  moveRun(runId, "pending_approval", "stopped", { completedAt: new Date() }, authority);
+const stopHeldRun = (runId: string, from: AgentRunStatus, authority: OrgWriteAuthority) =>
+  moveRun(runId, from, "stopped", { completedAt: new Date() }, authority);
+/** A run a publish decision holds: waiting at the gate, or `running` when a hold wrote its row but not its move. */
+const heldStatus = (status: AgentRunStatus | undefined): boolean => status === "pending_approval" || status === "running";
+/** The store's own refusals name no id or value; any other fault becomes one fixed text (no id, note or query value). */
+const STORE_CODES = new Set(["invalid-input", "invalid-transition", "malformed-row", "not-found", "conflict"]);
+const opaque = (err: unknown): unknown => STORE_CODES.has((err as { code?: unknown } | null)?.code as string) ? err
+  : Object.assign(new Error("The publish decision could not be read or written."), { code: PUBLISH_DECISION_UNAVAILABLE });
 
 /**
  * The publish classification of the input-required branch, run before anything else there.
@@ -158,19 +192,25 @@ export type PublishDecisionAnswer =
   | { ok: false; code: typeof PUBLISH_DECISION_NOT_OPEN; currentStatus: PublishDecisionStatus | null };
 
 /**
- * "Do not publish" (its surface is the decision card, a later part). Authority: run.execute and
- * run.approveHitl on the run, then membership of the run's org. Then ONE decision write
- * (parked -> declined, with the decider and the optional note), then the run moves
- * pending_approval -> stopped. It never sends anything to the run's context. A late answer
- * is reported as publish_decision_not_open with the decision's current status.
+ * "Do not publish" (its surface is the decision card, a later part). The decider is ONE principal: the person of
+ * `actorContext` (a human actor with a user id and no delegated agent ceiling; a model, a peer, the system or an agent
+ * acting for a person is refused). Authority: run.execute and run.approveHitl on the run, then membership of the run's
+ * org, each for that person. Then ONE decision write (parked -> declined, with that person and the optional note), then
+ * the run moves pending_approval -> stopped. It never sends anything to the run's context. A late answer is reported as
+ * publish_decision_not_open with the decision's current status. A fault after the authority check surfaces as
+ * publish_decision_unavailable with a fixed text.
  */
 export async function declinePublishDecision(input: {
   runId: string;
-  actorId: string;
   actorContext: PrimitiveActorContext;
   roleHints?: ActorRoleHints;
   note?: string | null;
 }): Promise<PublishDecisionAnswer> {
+  const actor = input.actorContext;
+  if (actor?.actorType !== "human" || typeof actor.userId !== "string" || actor.userId.length === 0 || actor.oboCeiling) {
+    throw new AuthzError({ statusCode: 403, reason: "forbidden", message: "Only a person can decide a publish." });
+  }
+  const deciderId = actor.userId;
   const run = await readAgentRunById(input.runId);
   const { enforceRunAccess, resolveEffectivePolicy } = await import("./auth-policy");
   const template = run ? await readAgentTemplateById(run.templateId) : null;
@@ -179,26 +219,30 @@ export async function declinePublishDecision(input: {
     ? { id: run.id, runBy: run.runBy, orgId: run.orgId, effectivePolicy: resolveEffectivePolicy(run, template),
       coOwnerUserIds: coOwners.map((r) => r.userId) }
     : null;
-  await enforceRunAccess(runForCheck, input.actorContext, "execute", input.roleHints);
-  await enforceRunAccess(runForCheck, input.actorContext, "approveHitl", input.roleHints);
+  await enforceRunAccess(runForCheck, actor, "execute", input.roleHints);
+  await enforceRunAccess(runForCheck, actor, "approveHitl", input.roleHints);
   if (!run) throw new AuthzError({ statusCode: 404, reason: "hidden" });
   const { resolveOrgRoleForUser } = await import("@/lib/auth-session");
-  const role = await resolveOrgRoleForUser(run.orgId, input.actorId);
+  const role = await resolveOrgRoleForUser(run.orgId, deciderId);
   if (role === undefined) {
     throw new AuthzError({ statusCode: 403, reason: "forbidden", message: "Deciding a publish needs membership of the run's organization." });
   }
   const authority = sessionAuthorityFromResolvedRole(run.orgId, role);
 
-  const open = await readOpenDecisionForRun(run.id);
-  if (!open) {
-    const latest = await readLatestDecisionForRun(run.id);
-    return { ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: latest?.status ?? null };
+  try {
+    const open = await readOpenDecisionForRun(run.id);
+    if (!open) {
+      const latest = await readLatestDecisionForRun(run.id);
+      return { ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: latest?.status ?? null };
+    }
+    const note = typeof input.note === "string" && input.note.trim().length > 0 ? input.note : null;
+    const answer = await decide(open.id, { from: "parked", to: "declined", actor: deciderId, note });
+    if (answer.outcome === "lost") return { ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: answer.currentStatus };
+    // false: the run is not waiting at the gate. A fault here, or a run still running, leaves the stop to the expiry pass.
+    return { ok: true, runStopped: await stopHeldRun(run.id, "pending_approval", authority) };
+  } catch (err) {
+    throw opaque(err);
   }
-  const note = typeof input.note === "string" && input.note.trim().length > 0 ? input.note : null;
-  const answer = await decide(open.id, { from: "parked", to: "declined", actor: input.actorId, note });
-  if (answer.outcome === "lost") return { ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: answer.currentStatus };
-  // false: the run had already left the gate. A fault here leaves the stop to the expiry pass.
-  return { ok: true, runStopped: await stopHeldRun(run.id, authority) };
 }
 
 export interface PublishExpirySweepSummary {
@@ -211,11 +255,12 @@ export interface PublishExpirySweepSummary {
 }
 
 /**
- * The 24-hour expiry. A due open decision closes with no person: `expired` when its run waits at
- * the gate (the run then moves pending_approval -> stopped), else `run_ended`. Then a run still in
- * pending_approval whose newest decision is declined or expired (a fault or crash between the two
- * writes) moves to stopped. No row resumes a run; no feature fence is read. `authorityFor` is the
- * caller's dispatch authority for the run's org; `now` is the clock the tests inject.
+ * The 24-hour expiry. A due open decision closes with no person: `expired` when its run is held (pending_approval, or
+ * running when a hold wrote its row but not its move), and the run then moves from that status to stopped; else
+ * `run_ended`. Then it reads, page by page to the end, every held run whose newest decision is declined or expired (a fault
+ * or a crash between the decision write and the run move) and moves it to stopped; a run whose stop faults is counted
+ * failed and tried again next pass. No row resumes a run; no feature fence is read. `authorityFor` is the caller's
+ * dispatch authority for the run's org; `now` is the clock the tests inject.
  */
 export async function sweepExpiredPublishDecisions(opts: {
   authorityFor: (orgId: string) => OrgWriteAuthority;
@@ -227,31 +272,38 @@ export async function sweepExpiredPublishDecisions(opts: {
     summary.failed += 1;
     console.error(`[publish-decision-expiry] a decision was not closed this pass: ${nameOf(err)}`);
   };
-  for (const row of await listDueParked(opts.limit ?? EXPIRY_PAGE, opts.now)) {
+  const limit = opts.limit ?? EXPIRY_PAGE;
+  for (const row of await listDueParked(limit, opts.now)) {
     summary.due += 1;
     try {
       const run = await readAgentRunById(row.runId);
-      const waiting = run?.status === "pending_approval";
+      const waiting = heldStatus(run?.status);
       const answer = await decide(row.id, { from: "parked", to: waiting ? "expired" : "run_ended", actor: null });
       if (answer.outcome === "lost") summary.lost += 1;
       else if (!waiting || !run) summary.runEnded += 1;
       else {
-        await stopHeldRun(run.id, opts.authorityFor(run.orgId)); // a stale answer: the run left meanwhile
+        await stopHeldRun(run.id, run.status, opts.authorityFor(run.orgId)); // a stale answer: the run left meanwhile
         summary.expired += 1;
       }
     } catch (err) {
       fault(err);
     }
   }
-  for (const row of await listSettledWithWaitingRun(opts.limit ?? EXPIRY_PAGE)) {
-    try {
-      const run = await readAgentRunById(row.runId);
-      const latest = await readLatestDecisionForRun(row.runId);
-      if (run?.status !== "pending_approval" || latest?.id !== row.id) continue; // the run moved, or a newer decision governs it
-      if (await stopHeldRun(run.id, opts.authorityFor(run.orgId))) summary.stopped += 1;
-    } catch (err) {
-      fault(err);
+  // The store lists only the newest decision of each run, so an old row never takes a place on a page.
+  let after: string | undefined = undefined;
+  for (;;) {
+    const page = await listSettledWithWaitingRun(limit, after);
+    for (const row of page) {
+      try {
+        const run = await readAgentRunById(row.runId);
+        if (!run || !heldStatus(run.status)) continue; // the run moved meanwhile
+        if (await stopHeldRun(run.id, run.status, opts.authorityFor(run.orgId))) summary.stopped += 1;
+      } catch (err) {
+        fault(err);
+      }
     }
+    if (page.length < limit) break;
+    after = page[page.length - 1]!.id;
   }
   return summary;
 }

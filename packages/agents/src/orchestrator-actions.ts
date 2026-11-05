@@ -241,15 +241,6 @@ export async function resumeStoppedOrchestratorAction(
     return { ok: false, error: "no-wayflow-url" };
   }
 
-  // cinatra#4150: a run that waits or ended at a publish decision is never resumed here:
-  // its context still holds the publish gate.
-  try {
-    await assertNoOpenPublishDecision(run.id);
-  } catch (err) {
-    if (isPublishDecisionRequired(err)) return { ok: false, error: PUBLISH_DECISION_REQUIRED };
-    throw err;
-  }
-
   // Race-safe state transition.
   try {
     // cinatra#2485 C — thread the RESUMING human into the `→queued` dispatch
@@ -281,6 +272,17 @@ export async function resumeStoppedOrchestratorAction(
       );
       return { ok: false, error: "Forbidden" };
     }
+    throw err;
+  }
+
+  // cinatra#4150: a run that waits or ended at a publish decision is never resumed here:
+  // its context still holds the publish gate. Read after the claim above, so a decision
+  // written before it is seen; a refusal puts the run back to stopped.
+  try {
+    await assertNoOpenPublishDecision(run.id);
+  } catch (err) {
+    await transitionRunStatus(runId, "queued", "stopped", undefined, authority).catch(() => undefined);
+    if (isPublishDecisionRequired(err)) return { ok: false, error: PUBLISH_DECISION_REQUIRED };
     throw err;
   }
 

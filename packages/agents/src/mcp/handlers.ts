@@ -2148,7 +2148,7 @@ async function handleAgentBuilderRunResume(
       }
       // cinatra#4150: a run held at a publish decision goes on only by that decision.
       const publishHold = await import("../publish-decision-actions");
-      try { await publishHold.assertNoOpenPublishDecision(run.id); } catch (e) { if (publishHold.isPublishDecisionRequired(e)) return { error: (e as Error).message, code: publishHold.PUBLISH_DECISION_REQUIRED }; throw e; }
+      try { await publishHold.assertNoOpenPublishDecision(run.id); } catch (e) { return publishHold.publishHoldAnswer(e); }
       const { createExternalA2AClient } = await import("@cinatra-ai/a2a");
       const client = await createExternalA2AClient({
         agentUrl: wayflowUrl,
@@ -2210,6 +2210,9 @@ async function handleAgentBuilderRunResume(
       // `resumeText` reaches the gate's InputMessageNode VERBATIM.
       const { mintResumeRunTokenMetadata } = await import("../wayflow-run-token-carrier");
       const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
+      // cinatra#4150 (A5): on a publishing template the run is claimed here and the hold is read again before the send.
+      const sendFrom = await publishHold.claimRunBeforeSend(run.id, (template.publishingSteps?.length ?? 0) > 0, resumeAuthority).catch((e: unknown) => publishHold.publishHoldAnswer(e));
+      if (typeof sendFrom !== "string") return sendFrom ?? { error: "Run is not pending approval: another resume holds it." };
       // Send into the existing context so fasta2a routes to the paused conversation.
       const task = await client.sendTask({
         message: {
@@ -2223,13 +2226,10 @@ async function handleAgentBuilderRunResume(
         configuration: { acceptedOutputModes: ["text"] },
       });
 
-      // multi-gate handler. Lazy import (relative path
-      // is "../execution" because this file lives in packages/agents/src/mcp/).
-      // fromStatus is "pending_approval" — the resume handler reached this branch
-      // because run.a2aTaskId was set, which only happens when the run paused at
-      // an A2A gate (status === "pending_approval").
+      // multi-gate handler; lazy import (this file lives in packages/agents/src/mcp/). fromStatus: "pending_approval" (a2aTaskId
+      // is set only when the run paused at an A2A gate), or "running" after the cinatra#4150 claim above.
       const { handleWayflowTaskState } = await import("../execution");
-      await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task, authority: resumeAuthority });
+      await handleWayflowTaskState({ runId: run.id, run, fromStatus: sendFrom, task, authority: resumeAuthority });
 
       const finalState = task.status?.state;
       return {

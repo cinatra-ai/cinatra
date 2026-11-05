@@ -959,8 +959,6 @@ export async function approveReviewTaskInternal(
       );
     }
     const resumeAuthority = sessionAuthorityFromResolvedRole(run.orgId, resumeRole);
-    // cinatra#4150: a run held at a publish decision goes on only by that decision.
-    await assertNoOpenPublishDecision(run.id);
 
     // -------------------------------------------------------------------
     // THE GATE IS DECIDED ONCE (cinatra#3423).
@@ -1092,6 +1090,9 @@ export async function approveReviewTaskInternal(
     let dispatchStarted = false;
     let capturedPromptId: string | null = null;
     try {
+      // cinatra#4150: a run held at a publish decision goes on only by that decision. Read
+      // after the claim, so a decision parked before it is seen; a refusal releases the claim.
+      await assertNoOpenPublishDecision(run.id);
       // UNCONDITIONAL write. Empty `message` is allowed (column NOT NULL accepts
       // ""). Bare-approval flagged excluded=true.
       capturedPromptId = await captureHitlPromptForContinue({
