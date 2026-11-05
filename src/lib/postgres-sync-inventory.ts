@@ -416,6 +416,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Policy-aware content snapshots for claimed typed object rows (cinatra#1430): captures an immutable JSON snapshot of a typed row's normalized data at resolution time as a representation revision over a blob resource, keyed for reuse in object_content_snapshots. Composed at context-resolution request time; the write branch runs under a per-artifact advisory-locked transaction (re-read under the lock). Sync leaf mirroring representation-store/resource-store so it composes into the synchronous store graph; migratable to async pooled access with the artifacts subsystem.",
   },
+  "src/lib/artifacts/page-capture-facts-record.ts": {
+    class: "migratable-request-path",
+    justification:
+      "cinatra#4223 page capture facts: one bounded SELECT (at most two rows) of a revision's host-written artifact_audit record, read where an artifact display or a review target is prepared. Sync leaf so it composes with the synchronous artifact reads; migratable to async pooled access with the artifacts subsystem.",
+  },
   "src/lib/artifacts/object-backed-contract.ts": {
     class: "migratable-request-path",
     justification:

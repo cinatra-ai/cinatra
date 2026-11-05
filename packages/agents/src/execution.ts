@@ -13,6 +13,7 @@ import {
   updateAgentRunA2ATaskId,
   updateAgentRunA2AContextId,
   updateAgentRunStreamedText,
+  updateAgentRunInputParams,
   setAgentRunTokenHash,
   writeDurableHitlGateArtifact,
 } from "./store";
@@ -60,6 +61,13 @@ import {
   autoApplyHeadlessRecommendation,
   parseLifecycleConfig,
 } from "./recommendation-interception";
+// cinatra#4424: the run start binds a repair run's findings input to the
+// template it executes (already in this module's graph through
+// ./recommendation-interception).
+import {
+  parseLifecycleConfigText,
+  reconcileRepairFindingsInput,
+} from "@/lib/lifecycle/lifecycle-policy";
 import {
   GROUPED_SETUP_FORM_RENDERER_ID,
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
@@ -3656,6 +3664,69 @@ export async function runAgentBuilderExecutionJob(
   );
 }
 
+/** The class name of a thrown value, for a log line that must not carry the
+ * value's own text (a storage error can carry the statement's parameters). */
+function thrownClassName(err: unknown): string {
+  const name = err instanceof Error ? err.name : typeof err;
+  return /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/.test(name) ? name : "Error";
+}
+
+/**
+ * cinatra#4424: a lifecycle repair run gets the reviewer's findings in the
+ * input that the template it EXECUTES declares (`repairFindingsInput`). The
+ * dispatch drain projected them under the declaration it read when it created
+ * the run; a re-import between that read and this start (a crash and re-drain
+ * over the existing deterministic run, or a run that waited in the queue) can
+ * change it. Given the lifecycle_config of the template the run start loaded,
+ * this writes the difference (`reconcileRepairFindingsInput`) and updates
+ * `run.inputParams` in place. A no-op for a run that is not a lifecycle
+ * repair, for a template that declares no findings input, and when the run
+ * already carries the text there.
+ *
+ * Returns false when it has moved the run queued -> failed: the write failed,
+ * or the template declares a findings input and the run carries no repair
+ * request object to build the text from. The stored error is a fixed message
+ * that names the input; the cause is logged by its class name only, never by
+ * its text. A failed write is terminal for the run (it does not park and
+ * retry), also when the row was written and only the read-back after it
+ * failed. If that status write fails too, its error propagates to the job
+ * runner, as for the other pre-dispatch failures. `updateAgentRunInputParams`
+ * reads the row, merges and writes the whole value: it is not a compare-and-set,
+ * so a second writer of the same run's inputs at the same moment (a duplicate
+ * delivery of this job) can overwrite the key.
+ */
+async function bindRepairFindingsInputAtStart(
+  runId: string,
+  run: AgentRunRecord,
+  lifecycleConfig: string | null,
+  executionAuthority: ReturnType<typeof mintAgentRunExecutionAuthority>,
+): Promise<boolean> {
+  if (run.sourceType !== "lifecycle_repair") return true;
+  const reconciliation = reconcileRepairFindingsInput(
+    parseLifecycleConfigText(lifecycleConfig),
+    run.inputParams ?? {},
+  );
+  if (!reconciliation) return true;
+  const fail = async (message: string, logLine: string): Promise<false> => {
+    console.error(`[agent-builder] run ${runId} rejected before dispatch: ${logLine}`);
+    await transitionRunStatus(runId, "queued", "failed", { error: message }, executionAuthority);
+    return false;
+  };
+  if ("noRequest" in reconciliation) {
+    const message =
+      `Repair run cannot start: it carries no repair request for its findings input "${reconciliation.input}"`;
+    return fail(message, message);
+  }
+  try {
+    const updated = await updateAgentRunInputParams(runId, reconciliation.write);
+    run.inputParams = updated.inputParams;
+    return true;
+  } catch (err) {
+    const message = `Repair run cannot start: its findings input "${reconciliation.input}" could not be written`;
+    return fail(message, `${message} (${thrownClassName(err)})`);
+  }
+}
+
 // Extracted inner. The outer wraps in the
 // ProjectContext frame; the inner contains the job body, unchanged except for
 // the moved run-row read (probeRun above is re-read here for clarity).
@@ -3833,6 +3904,17 @@ async function runAgentBuilderExecutionJobInner(
       cause: err,
       nextAttempt: currentScopeRecheckPark + 1,
     });
+  }
+
+  // cinatra#4424: a lifecycle repair run gets the reviewer's findings in the
+  // input that the template loaded above declares. Right after the fire-time
+  // scope recheck, so nothing is written for a refused or unverified run, and
+  // before the headless recommendation, the version pinning, the input gates
+  // and every dispatch branch read the inputs.
+  if (
+    !(await bindRepairFindingsInputAtStart(runId, run, template.lifecycleConfig ?? null, executionAuthority))
+  ) {
+    return;
   }
 
   // ---------------------------------------------------------------------------
@@ -4811,6 +4893,31 @@ async function runAgentBuilderExecutionJobInner(
     ).catch(() => undefined);
 
     try {
+      // cinatra#4220 — the run's connector-instance binding, HOST-DERIVED here
+      // once from the run row's start input `instanceId` and authorized by the
+      // per-instance use gate for the run's own user and org. The llm-bridge
+      // signs it into the run's MCP actor token as its pin. No instanceId, no
+      // starting user, or an id no connector knows: no binding, behavior
+      // unchanged. A deny throws into the catch below, which fails the run with
+      // the gate's reason before anything is sent to the runtime. It runs FIRST
+      // in this try, before the A2A client is built: createExternalA2AClient
+      // fetches the agent card at once, so a refused run contacts nothing.
+      const startInstanceId = run.inputParams?.instanceId;
+      if (typeof startInstanceId === "string" && startInstanceId.length > 0 && run.runBy) {
+        const { deriveAgentRunConnectorInstanceBinding } = await import(
+          "@/lib/connector-instance-write-authority"
+        );
+        const binding = await deriveAgentRunConnectorInstanceBinding({
+          runId,
+          runBy: run.runBy,
+          orgId: run.orgId,
+          inputParams: run.inputParams,
+        });
+        if (binding) {
+          const { setAgentRunConnectorInstanceBinding } = await import("./run-token-store");
+          await setAgentRunConnectorInstanceBinding(runId, binding);
+        }
+      }
       // WayFlow A2AServer: one agent per container instance — served at root.
       // wayflowUrl already points to the container running `slug` (per-slug
       // routing handled above).
