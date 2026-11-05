@@ -100,7 +100,7 @@
     {
       "packageName": "@cinatra-ai/blog-wordpress-publish-agent",
       "repo": "cinatra-ai/blog-wordpress-publish-agent",
-      "resolvedSha": "415114bdf4f7c76a8a17d5a0bcb94e111fa6dd52"
+      "resolvedSha": "f49bd8909c36b2a4926c4bb437f11b41a29efc9b"
     },
     {
       "packageName": "@cinatra-ai/blog-writing-skill",
@@ -230,7 +230,7 @@
     {
       "packageName": "@cinatra-ai/gemini-connector",
       "repo": "cinatra-ai/gemini-connector",
-      "resolvedSha": "29e0909da0e056097f0d82345e25ca8f44bdaaae"
+      "resolvedSha": "fe8e282517f611cddb0c8f71d94c6a83bdad0485"
     },
     {
       "packageName": "@cinatra-ai/github-connector",

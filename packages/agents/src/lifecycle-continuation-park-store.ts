@@ -62,6 +62,11 @@ export type MaybeParkResult =
   | { parked: false; reason: string }
   | { parked: true; parkId: string; reevaluationIntent: boolean };
 
+/** The query handle the park runs through: the module `db`, or a caller's open
+ * transaction (cinatra#4245: the sweep parks a reused event under its row lock, so
+ * the park, the link and the mark commit together). */
+type ParkExecutor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 /**
  * Evaluate-then-park: given the pure outcome, park ONLY when it says `park`. A
  * `proceed` outcome returns `parked: false` and writes NO row — the AC invariant
@@ -72,6 +77,7 @@ export type MaybeParkResult =
 export async function maybeParkCheckpoint(
   outcome: EvaluateThenParkOutcome,
   input: MaybeParkInput,
+  executor: ParkExecutor = db,
 ): Promise<MaybeParkResult> {
   if (outcome.kind === "proceed") {
     return { parked: false, reason: outcome.reason };
@@ -87,7 +93,7 @@ export async function maybeParkCheckpoint(
   // names no row, we RE-ATTEMPT the insert into the now-free slot.
   for (let attempt = 0; attempt < 2; attempt++) {
     const id = randomUUID();
-    const [row] = await db
+    const [row] = await executor
       .insert(lifecycleContinuationPark)
       .values({
         id,
@@ -114,7 +120,7 @@ export async function maybeParkCheckpoint(
     }
     // Conflict — the slot is occupied. Return the existing park (idempotent) IFF
     // it is still present; if it vanished (concurrently stranded), loop and retry.
-    const existing = await db
+    const existing = await executor
       .select({ id: lifecycleContinuationPark.id })
       .from(lifecycleContinuationPark)
       .where(
