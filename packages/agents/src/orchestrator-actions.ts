@@ -39,6 +39,7 @@ import {
   PUBLISH_DECISION_REQUIRED,
   assertNoOpenPublishDecision,
   isPublishDecisionRequired,
+  publishHoldFault,
 } from "./publish-decision-actions";
 import { mintResumeRunTokenMetadata } from "./wayflow-run-token-carrier";
 import {
@@ -277,13 +278,14 @@ export async function resumeStoppedOrchestratorAction(
 
   // cinatra#4150: a run that waits or ended at a publish decision is never resumed here:
   // its context still holds the publish gate. Read after the claim above, so a decision
-  // written before it is seen; a refusal puts the run back to stopped.
+  // written before it is seen; a refusal puts the run back to stopped. A hold that cannot be
+  // read throws one fixed text that names no run and carries no store error.
   try {
     await assertNoOpenPublishDecision(run.id);
   } catch (err) {
     await transitionRunStatus(runId, "queued", "stopped", undefined, authority).catch(() => undefined);
     if (isPublishDecisionRequired(err)) return { ok: false, error: PUBLISH_DECISION_REQUIRED };
-    throw err;
+    throw publishHoldFault(err);
   }
 
   // Split try/catch so post-sendTask errors never revert to "stopped"

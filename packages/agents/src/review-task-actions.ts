@@ -1,7 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { GateNotPendingError, RunTransitionError } from "./run-status";
-import { assertNoOpenPublishDecision } from "./publish-decision-actions";
+import { assertNoOpenPublishDecision, publishHoldFault } from "./publish-decision-actions";
 
 import { sql, type SQL } from "drizzle-orm";
 
@@ -1091,8 +1091,9 @@ export async function approveReviewTaskInternal(
     let capturedPromptId: string | null = null;
     try {
       // cinatra#4150: a run held at a publish decision goes on only by that decision. Read
-      // after the claim, so a decision parked before it is seen; a refusal releases the claim.
-      await assertNoOpenPublishDecision(run.id);
+      // after the claim, so a decision parked before it is seen; a refusal releases the claim. A hold
+      // that cannot be read answers one fixed text that names no run and carries no store error.
+      await assertNoOpenPublishDecision(run.id).catch((err: unknown) => { throw publishHoldFault(err); });
       // UNCONDITIONAL write. Empty `message` is allowed (column NOT NULL accepts
       // ""). Bare-approval flagged excluded=true.
       capturedPromptId = await captureHitlPromptForContinue({

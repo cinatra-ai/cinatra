@@ -59,11 +59,21 @@ export async function assertNoOpenPublishDecision(runId: string): Promise<void> 
   if (latest && latest.status !== "released") throw new PublishDecisionRequiredError();
 }
 
+const HOLD_UNREADABLE = "Resume failed: the publish hold could not be checked.";
+
 /** agent_run_resume's answer to a refused or unreadable hold. Neither text carries an id, a value or the store's error. */
 export function publishHoldAnswer(err: unknown): { error: string; code?: string } {
   if (isPublishDecisionRequired(err)) return { error: (err as Error).message, code: PUBLISH_DECISION_REQUIRED };
   console.warn(`[publish-decision] a resume could not check the publish hold: ${nameOf(err)}`);
-  return { error: "Resume failed: the publish hold could not be checked." };
+  return { error: HOLD_UNREADABLE };
+}
+
+/** The fault the generic approve and the stopped-orchestrator resume throw for a hold they could not check: the refusal
+ *  unchanged, any other fault one fixed text (publish_decision_unavailable) with no id, value or store error. */
+export function publishHoldFault(err: unknown): unknown {
+  if (isPublishDecisionRequired(err)) return err;
+  console.warn(`[publish-decision] a resume could not check the publish hold: ${nameOf(err)}`);
+  return Object.assign(new Error(HOLD_UNREADABLE), { code: PUBLISH_DECISION_UNAVAILABLE });
 }
 
 /**
