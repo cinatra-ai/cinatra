@@ -130,6 +130,11 @@ vi.mock("@cinatra-ai/a2a", () => {
 
 import { handleWayflowTaskState } from "../execution";
 import { deriveRunHitlContext } from "../hitl-context";
+import {
+  compileNestedGateSteps,
+  NESTED_GATE_KEYS,
+  NESTED_RENDERER,
+} from "./helpers/nested-value-gate-oas-4457";
 // The schema key that carries the withheld keys, spelled out so this file runs
 // red against the base for its assertions, not for a missing module.
 const GATE_KEYS_NOT_FROM_RUN_INPUTS = "x-gate-keys-not-from-run-inputs";
@@ -719,5 +724,33 @@ describe("cinatra#4457 — the readers honour the schema's list on both roads", 
     expect(hasKey(ctx.currentValues, "candidateMembers")).toBe(false);
     expect(hasKey(ctx.currentValues, "")).toBe(false);
     expect(ctx.currentValues.listName).toBe(STORED.listName);
+  });
+});
+
+// A gate inside a FlowNode's subflow: the host reads the steps the real
+// compiler writes for the neutral nested-gate fixture (its FlowNode gate step),
+// not a hand-written step. The gate's message is absent and the run stores the
+// root start input `campaignId`, which has the name of a gate key.
+describe("cinatra#4457 — a value-surfacing gate inside a FlowNode subflow, from the compiled steps", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    storeMock.rows.length = 0;
+    frameRoad.mode = "frame";
+    gateIndex.value = 0;
+    gateIndex.fail = false;
+    enrichSpy.mockImplementation(async (schema: unknown) => ({ ...(schema as object) }));
+  });
+
+  it.each(ROADS)("%s road: a stored start input does not fill the nested gate's key", async (road) => {
+    const steps = await compileNestedGateSteps();
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(steps));
+    const run = makeRun({ campaignId: "stored", campaignNote: "kept" });
+    const { emitted, ctx } = await emitAndRead(road, gateTask(undefined), run);
+    expect(hasKey(emitted.values, "campaignId"), "emitted campaignId").toBe(false);
+    expect(hasKey(ctx.currentValues, "campaignId"), "screen campaignId").toBe(false);
+    // A run input that is not a key of the nested gate still reaches the screen.
+    expect(ctx.currentValues.campaignNote).toBe("kept");
+    expect(ctx.xRenderer).toBe(NESTED_RENDERER);
+    expect(ctx.inputSchema[GATE_KEYS_NOT_FROM_RUN_INPUTS]).toEqual(NESTED_GATE_KEYS);
   });
 });

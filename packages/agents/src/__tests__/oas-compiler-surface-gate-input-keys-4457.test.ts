@@ -7,6 +7,14 @@ import {
   __resetRegistryCacheForTests,
   type CompiledAgentOasStep,
 } from "../oas-compiler";
+import {
+  compileNestedGateSteps,
+  GATE_STEP_NAMES,
+  NESTED_GATE_KEYS,
+  NESTED_RENDERER,
+  NO_FLAG,
+  PLAIN_STEP_NAME,
+} from "./helpers/nested-value-gate-oas-4457";
 
 // ---------------------------------------------------------------------------
 // cinatra#4457 — the compiled gate step names the keys of a value-surfacing
@@ -153,6 +161,62 @@ describe("cinatra#4457 — compiled surfaceGateInputKeys", () => {
     ["an object", { title: "candidateMembers", type: "array" }],
   ])("a flagged gate whose inputs is %s (not an array) compiles and carries no keys", async (_label, inputs) => {
     const step = await compileGateStep({ surfaceGateInputs: true }, inputs);
+    expect(Object.prototype.hasOwnProperty.call(step, "surfaceGateInputKeys")).toBe(false);
+  });
+});
+
+// A gate inside a FlowNode's subflow reaches the root approval policy only as a
+// step of that FlowNode (a gateStep, or the plain FlowNode step). That step
+// lists the keys of every flagged gate in the INLINED subflow, so the host
+// withholds them as it does for a gate at the root.
+describe("cinatra#4457 — compiled surfaceGateInputKeys of a gate inside a FlowNode subflow", () => {
+  const stepNamed = (steps: CompiledAgentOasStep[], name: string) => {
+    const step = steps.find((s) => s.name === name);
+    expect(step, `no compiled step named ${name}`).toBeTruthy();
+    return step!;
+  };
+
+  it("a FlowNode gate step whose inlined subflow holds a flagged gate lists that gate's input titles", async () => {
+    const steps = await compileNestedGateSteps();
+    const step = stepNamed(steps, GATE_STEP_NAMES[0]!);
+    expect(step.nodeType).toBe("agent");
+    expect(step.xRenderer).toBe(NESTED_RENDERER);
+    expect(step.surfaceGateInputKeys).toEqual(NESTED_GATE_KEYS);
+  });
+
+  it("a plain FlowNode step whose inlined subflow holds a flagged gate lists that gate's input titles", async () => {
+    const steps = await compileNestedGateSteps({ plain: true });
+    const step = stepNamed(steps, PLAIN_STEP_NAME);
+    expect(step.nodeType).toBe("agent");
+    expect(step.xRenderer).toBe(NESTED_RENDERER);
+    expect(step.surfaceGateInputKeys).toEqual(NESTED_GATE_KEYS);
+  });
+
+  it("every gate step of the FlowNode lists the keys of every flagged gate in its subflow, each key once", async () => {
+    const steps = await compileNestedGateSteps({ gateStepCount: 2, secondGate: true });
+    for (const name of GATE_STEP_NAMES) {
+      expect(stepNamed(steps, name).surfaceGateInputKeys, name).toEqual([
+        "campaignId",
+        "reviewBundle",
+        "reviewNote",
+      ]);
+    }
+  });
+
+  it.each([
+    ["absent", NO_FLAG],
+    ["false", false],
+    ["the string 'true'", "true"],
+    ["the number 1", 1],
+  ])("a FlowNode gate step whose nested gate's flag is %s carries no keys (strict identity)", async (_label, flag) => {
+    const steps = await compileNestedGateSteps({ flag });
+    const step = stepNamed(steps, GATE_STEP_NAMES[0]!);
+    expect(Object.prototype.hasOwnProperty.call(step, "surfaceGateInputKeys")).toBe(false);
+  });
+
+  it("a FlowNode whose subflow is not inlined compiles and its step carries no keys", async () => {
+    const steps = await compileNestedGateSteps({ inlined: false });
+    const step = stepNamed(steps, GATE_STEP_NAMES[0]!);
     expect(Object.prototype.hasOwnProperty.call(step, "surfaceGateInputKeys")).toBe(false);
   });
 });
