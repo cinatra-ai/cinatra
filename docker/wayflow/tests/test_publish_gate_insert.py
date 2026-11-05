@@ -9,8 +9,9 @@ puts ONE host-owned ``InputMessageNode`` with the fixed id
     edge goes from the gate to the node;
   - each data edge into the node gets a twin from the same source output into a
     same-named input of the gate, and the gate opts into value surfacing, so the
-    pause carries exactly the values handed to the node (they are not proof of
-    what goes out: the node itself still makes the publishing call);
+    pause carries exactly the values handed to the node, a falsy one included
+    (they are not proof of what goes out: the node itself still makes the
+    publishing call);
   - the gate has one string output that nothing consumes.
 
 The flag may only ADD a stop. Anything else that carries the key refuses the
@@ -215,6 +216,38 @@ def test_a_publishing_node_first_after_start_and_a_second_one_each_get_a_gate():
     assert [_ref(e["from_node"]) for e in _cf_into(doc, "post")] == [second]
 
 
+def test_three_adjacent_publishing_nodes_each_get_their_own_gate():
+    doc = _flow("two-publishing-steps")
+    doc["$referenced_components"]["between"]["metadata"]["cinatra"]["publishes"] = True
+    report = agent_loader._insert_publish_gates(doc, "adjacent")
+    assert [r["node"] for r in report] == ["announce", "between", "post"]
+    for node, before in (("announce", "start"), ("between", "announce"), ("post", "between")):
+        assert [_ref(e["from_node"]) for e in _cf_into(doc, PREFIX + node)] == [before]
+        assert [_ref(e["from_node"]) for e in _cf_into(doc, node)] == [PREFIX + node]
+    order = [_ref(n) for n in doc["nodes"]]
+    assert order == ["start", PREFIX + "announce", "announce", PREFIX + "between", "between",
+                     PREFIX + "post", "post", "end"]
+
+
+def test_a_refusal_of_a_later_declared_node_leaves_the_document_unchanged():
+    doc = _flow("two-publishing-steps")
+    doc["data_flow_connections"] = [
+        e for e in doc["data_flow_connections"] if _ref(e["destination_node"]) != "post"
+    ]
+    before = copy.deepcopy(doc)
+    with pytest.raises(agent_loader.PublishGateError, match="'post'"):
+        agent_loader._insert_publish_gates(doc, "two")
+    assert doc == before
+
+
+@pytest.mark.parametrize("kind", ["AgentNode", "FlowNode", "ParallelFlowNode"])
+def test_every_other_kind_the_compiler_lists_gets_a_gate(kind):
+    doc = _flow("wordpress-publish-shape")
+    doc["$referenced_components"]["publish"]["component_type"] = kind
+    report = agent_loader._insert_publish_gates(doc, "wp")
+    assert [r["gate"] for r in report] == [PREFIX + "publish"]
+
+
 def test_an_input_the_node_does_not_declare_gets_a_plain_string_input_on_the_gate():
     doc = _branching_flow()
     doc["data_flow_connections"].append(
@@ -225,6 +258,20 @@ def test_an_input_the_node_does_not_declare_gets_a_plain_string_input_on_the_gat
     agent_loader._insert_publish_gates(doc, "branching")
     gate = doc["$referenced_components"][PREFIX + "publish"]
     assert gate["inputs"][1] == {"title": "extra", "type": "string"}
+
+
+@pytest.mark.parametrize("inputs", ["absent", "not a list", "no usable entry"])
+def test_a_node_with_no_usable_input_descriptor_gives_the_gate_plain_string_inputs(inputs):
+    doc = _branching_flow()
+    node = doc["$referenced_components"]["publish"]
+    if inputs == "absent":
+        node.pop("inputs")
+    elif inputs == "not a list":
+        node["inputs"] = {"body": {"type": "string", "description": "the text"}}
+    else:
+        node["inputs"] = ["body", {"type": "string"}, {"title": 5}]
+    agent_loader._insert_publish_gates(doc, "branching")
+    assert doc["$referenced_components"][PREFIX + "publish"]["inputs"] == [{"title": "body", "type": "string"}]
 
 
 def test_two_identical_data_edges_give_one_twin():
@@ -294,6 +341,21 @@ def test_a_malformed_flag_refuses(value):
     assert "PUBLISHES_MALFORMED" in _refused(doc)
 
 
+@pytest.mark.parametrize("where", ["the flow root", "a node of a nested subflow"])
+def test_a_malformed_flag_on_the_root_or_in_a_subflow_refuses(where):
+    doc = _flow("wordpress-publish-shape")
+    if where == "the flow root":
+        doc["metadata"]["cinatra"]["publishes"] = "true"
+    else:
+        inner = _flow("two-publishing-steps")
+        for n in inner["$referenced_components"].values():
+            n.get("metadata", {}).get("cinatra", {}).pop("publishes", None)
+        inner["id"] = inner["name"] = "inner_flow"
+        inner["$referenced_components"]["between"]["metadata"]["cinatra"]["publishes"] = 1
+        doc["$referenced_components"]["inner_flow"] = inner
+    assert "PUBLISHES_MALFORMED" in _refused(doc)
+
+
 def test_a_malformed_flag_on_a_node_that_does_not_publish_refuses_too():
     doc = _flow("wordpress-publish-shape")
     doc["$referenced_components"]["write_address"]["metadata"]["cinatra"]["publishes"] = "no"
@@ -301,7 +363,9 @@ def test_a_malformed_flag_on_a_node_that_does_not_publish_refuses_too():
 
 
 @pytest.mark.parametrize(
-    "kind", ["StartNode", "EndNode", "InputMessageNode", "OutputMessageNode", "BranchingNode", "SomethingNew", None]
+    "kind",
+    ["StartNode", "EndNode", "InputMessageNode", "OutputMessageNode", "BranchingNode", "SomethingNew", None, 5,
+     ["ApiNode"]],
 )
 def test_true_on_a_node_that_cannot_be_the_publishing_action_refuses(kind):
     doc = _flow("wordpress-publish-shape")
@@ -335,7 +399,7 @@ def test_true_on_a_root_component_that_is_not_a_listed_node_refuses():
     assert "PUBLISHES_MISPLACED" in _refused(doc)
 
 
-@pytest.mark.parametrize("where", ["top-level key", "nested id", "listed node ref"])
+@pytest.mark.parametrize("where", ["top-level key", "nested id", "listed node ref", "start node", "edge end"])
 def test_a_pack_id_with_the_reserved_prefix_refuses(where):
     doc = _flow("wordpress-publish-shape")
     if where == "top-level key":
@@ -346,8 +410,12 @@ def test_a_pack_id_with_the_reserved_prefix_refuses(where):
             n.get("metadata", {}).get("cinatra", {}).pop("publishes", None)
         inner["$referenced_components"]["between"]["id"] = PREFIX + "between"
         doc["$referenced_components"]["inner_flow"] = inner
-    else:
+    elif where == "listed node ref":
         doc["nodes"].append({"$component_ref": PREFIX + "y"})
+    elif where == "start node":
+        doc["start_node"] = {"$component_ref": PREFIX + "z"}
+    else:
+        doc["control_flow_connections"][0]["to_node"] = {"$component_ref": PREFIX + "z"}
     assert "RESERVED_NODE_ID" in _refused(doc)
 
 
@@ -366,9 +434,13 @@ def test_a_publishing_node_with_no_incoming_control_edge_refuses():
     assert "PUBLISH_GATE_NO_ENTRY" in _refused(doc)
 
 
-def test_a_flow_with_no_control_edges_at_all_refuses():
+@pytest.mark.parametrize("shape", ["no edge list", "a null edge list"])
+def test_a_flow_with_no_control_edges_at_all_refuses(shape):
     doc = _flow("wordpress-publish-shape")
-    del doc["control_flow_connections"]
+    if shape == "no edge list":
+        del doc["control_flow_connections"]
+    else:
+        doc["control_flow_connections"] = None
     assert "PUBLISH_GATE_NO_ENTRY" in _refused(doc)
 
 
@@ -380,7 +452,7 @@ def test_an_edge_list_that_is_not_a_list_refuses(which, value):
     assert f"PUBLISH_GATE_UNSUPPORTED: the flow's {which} is not a list" in _refused(doc)
 
 
-@pytest.mark.parametrize("shape", ["no edge into the node", "no edge list", "an empty edge list"])
+@pytest.mark.parametrize("shape", ["no edge into the node", "no edge list", "an empty edge list", "a null edge list"])
 def test_a_publishing_node_with_no_data_edge_in_refuses(shape):
     """The stop would surface nothing, and a flow with no data edge list may be
     wired by name, which the pass cannot read."""
@@ -391,6 +463,8 @@ def test_a_publishing_node_with_no_data_edge_in_refuses(shape):
         ]
     elif shape == "no edge list":
         del doc["data_flow_connections"]
+    elif shape == "a null edge list":
+        doc["data_flow_connections"] = None
     else:
         doc["data_flow_connections"] = []
     assert "no data edge feeds it" in _refused(doc)
@@ -474,8 +548,8 @@ def test_a_node_id_is_quoted_on_one_line_and_cut_at_120_characters():
     q = agent_loader._quote_node_id
     assert q("x" * 120) == repr("x" * 120)
     assert q("x" * 121) == repr("x" * 120 + "...")
-    for raw in ("a\nb", "a\u2028b", "a\rb"):
-        assert "\n" not in q(raw) and "\u2028" not in q(raw) and "\r" not in q(raw)
+    for raw in ("a\nb", "a\u2028b", "a\u2029b", "a\rb"):
+        assert all(c not in q(raw) for c in ("\n", "\u2028", "\u2029", "\r"))
     assert q("a\nb") == "'a\\nb'"
 
 
@@ -525,12 +599,41 @@ def test_the_mount_inserts_the_gate_and_the_reconcile_makes_it_surface_values(tm
     loaded = json.loads(loader.text)
     gate = loaded["$referenced_components"][PREFIX + "publish"]
     # The reconcile ran AFTER the insertion: the gate is the pin-accepted form,
-    # and its template renders every surfaced value.
+    # and its template renders every surfaced value, a falsy one included.
     assert gate["component_type"] == "PluginInputMessageNode"
     assert "inputs" not in gate
+    assert gate["message_template"] == _exact_template(_wp_titles())
+
+
+def _wp_titles() -> list:
     titles = [e["destination_input"] for e in _df_into(_flow("wordpress-publish-shape"), "publish")]
-    for t in titles:
-        assert '"' + t + '": {% if ' + t + " %}{{ " + t + " | tojson }}" in gate["message_template"]
+    assert len(titles) == len(set(titles)) == 6
+    return titles
+
+
+def _exact_template(titles: list) -> str:
+    return "{" + ", ".join(
+        '"' + t + '": {% if ' + t + " is none %}null{% else %}{{ " + t + " | tojson }}{% endif %}" for t in titles
+    ) + "}"
+
+
+def test_the_publish_gate_surfaces_falsy_values_and_a_pack_gate_keeps_its_template():
+    """The reconcile gives the exact-value template only to a gate whose id
+    takes the reserved prefix; the same gate under a pack id keeps the
+    template of every pack gate (a falsy value reads null there)."""
+    doc = _flow("wordpress-publish-shape")
+    agent_loader._insert_publish_gates(doc, "wp")
+    gid = PREFIX + "publish"
+    pack_gate = copy.deepcopy(doc["$referenced_components"][gid])
+    pack_gate["id"] = pack_gate["name"] = "pack_gate"
+    agent_loader._reconcile_input_message_gates(doc, "wp")
+    titles = _wp_titles()
+    assert doc["$referenced_components"][gid]["message_template"] == _exact_template(titles)
+    other = {"pack_gate": pack_gate}
+    agent_loader._reconcile_input_message_gates(other, "wp")
+    assert other["pack_gate"]["message_template"] == "{" + ", ".join(
+        '"' + t + '": {% if ' + t + " %}{{ " + t + " | tojson }}{% else %}null{% endif %}" for t in titles
+    ) + "}"
 
 
 def test_the_mount_refuses_a_malformed_declaration_before_the_runtime_sees_it(tmp_path):
@@ -552,6 +655,8 @@ def test_the_mount_of_a_flow_with_no_declaration_hands_the_runtime_no_gate(tmp_p
     doc["$referenced_components"]["publish"]["metadata"]["cinatra"].pop("publishes")
     loader = _mount(tmp_path, doc)
     assert PREFIX not in loader.text
+    # No pass changed the document, so the runtime gets the pack's own text.
+    assert loader.text == agent_loader._substitute_placeholders(json.dumps(doc))
 
 
 def _renamed(doc: dict, old: str, new: str) -> dict:
@@ -568,11 +673,22 @@ def _renamed(doc: dict, old: str, new: str) -> dict:
     return doc
 
 
-def test_the_mount_log_quotes_and_cuts_the_gate_id(tmp_path, capsys):
+def test_every_mount_log_line_quotes_and_cuts_the_node_and_gate_ids(tmp_path, capsys):
+    """The whole captured output of a gated mount: the publish-gates line, the
+    gate-reconcile line and the output-schema line (the publishing node here
+    calls the LLM bridge) each print the ids quoted on one line and cut at 120
+    characters, and no line prints a raw newline of an id or an uncut id."""
     odd = "pub\nlish" + "x" * 130
-    _mount(tmp_path, _renamed(_flow("wordpress-publish-shape"), "publish", odd))
-    line = next(x for x in capsys.readouterr().out.splitlines() if "publish gates vendor/slug" in x)
-    assert "lish" in line and "..." in line and "x" * 130 not in line
+    doc = _renamed(_flow("wordpress-publish-shape"), "publish", odd)
+    doc["$referenced_components"][odd]["url"] = "https://example.invalid/api/llm-bridge"
+    capsys.readouterr()
+    _mount(tmp_path, doc)
+    out = capsys.readouterr().out
+    for marker in ("publish gates vendor/slug", "HITL gate reconcile vendor/slug",
+                   "bridge output_schema derived vendor/slug"):
+        line = next(x for x in out.splitlines() if marker in x)
+        assert "pub\\nlish" in line and "..." in line
+    assert "pub\nlish" not in out and "x" * 113 not in out
 
 
 def test_a_mount_with_a_context_injection_records_the_gated_document(tmp_path, monkeypatch):
@@ -676,3 +792,35 @@ def test_a_run_stops_at_the_gate_before_the_publishing_call_and_names_the_gate()
     assert agent_loader._find_yielding_step_id(status, conversation) == PREFIX + "announce"
     surfaced = json.loads(conversation.get_messages()[-1].content)
     assert surfaced == {"message": "hello"}
+
+
+@pytest.mark.skipif(AgentSpecLoader is None, reason="wayflowcore not installed (run inside the wayflow image)")
+def test_a_run_surfaces_an_empty_value_at_the_gate_as_it_is():
+    """An empty string handed to the publishing node reads as an empty
+    string at the pause, not as null."""
+    flow = _load(_preloaded("two-publishing-steps"))
+    conversation = flow.start_conversation(inputs={"message": "", "cinatra_run_id": "run-1"})
+    status = conversation.execute()
+    assert isinstance(status, UserMessageRequestStatus)
+    assert agent_loader._find_yielding_step_id(status, conversation) == PREFIX + "announce"
+    assert json.loads(conversation.get_messages()[-1].content) == {"message": ""}
+
+
+@pytest.mark.skipif(AgentSpecLoader is None, reason="wayflowcore not installed (run inside the wayflow image)")
+def test_the_publish_gate_renders_falsy_values_exactly_with_the_pinned_renderer():
+    """The gate's template, rendered by the runtime's own render, gives back
+    false, 0, "", [], {} and null exactly; its inputs stay optional."""
+    from wayflowcore._utils._templating_helpers import render_template  # type: ignore[import-not-found]
+
+    doc = _preloaded("wordpress-publish-shape")
+    gid = PREFIX + "publish"
+    tpl = doc["$referenced_components"][gid]["message_template"]
+    titles = _wp_titles()
+    for values in ([False, 0, "", [], {}, None], [True, 7, "text", ["a"], {"k": "v"}, 0.5]):
+        inputs = dict(zip(titles, values))
+        rendered = json.loads(render_template(tpl, inputs))
+        # json.dumps tells false from 0, which a dict comparison does not.
+        assert json.dumps(rendered, sort_keys=True) == json.dumps(inputs, sort_keys=True)
+    gate = _load(doc).steps[gid]
+    assert sorted(d.name for d in gate.input_descriptors) == sorted(titles)
+    assert all(d.has_default for d in gate.input_descriptors)
