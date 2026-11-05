@@ -195,6 +195,7 @@ const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures/run-step-rail",
   "/design-fixtures/overlay-header-band",
   "/design-fixtures/conformance/upload",
+  "/design-fixtures/conformance/calendar", // Static local-day Calendar conformance fixture (cinatra#3189).
 ];
 function isDevOnlyPublicPath(pathname: string) {
   if (!DEV_ONLY_PUBLIC_EXACT_PATHS.includes(pathname)) return false;

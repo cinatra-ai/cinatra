@@ -1667,3 +1667,53 @@ describe("auth-route-guard - /api/cli control-plane exemption (behavioral + pin)
     expect(guardSource).not.toMatch(/"\/api"\s*,/);
   });
 });
+
+/** Calendar's dataless fixture adds exactly one leaf to the existing dev-only contract. */
+describe("Calendar conformance fixture admission stays exact and development-only", () => {
+  const fixture = "/design-fixtures/conformance/calendar";
+  async function readIn(environment: string, bypass: string | undefined, paths: string[]) {
+    const previousEnvironment = process.env.NODE_ENV;
+    const previousBypass = process.env.CINATRA_E2E_SETUP_BYPASS;
+    vi.stubEnv("NODE_ENV", environment);
+    vi.stubEnv("CINATRA_E2E_SETUP_BYPASS", bypass);
+    try {
+      return await Promise.all(paths.map((pathname) => guardAppRoute(fakeRequest(pathname))));
+    } finally {
+      vi.stubEnv("NODE_ENV", previousEnvironment);
+      vi.stubEnv("CINATRA_E2E_SETUP_BYPASS", previousBypass);
+    }
+  }
+  it("the exact leaf is reachable on the existing non-production fixture road", async () => {
+    const [response] = await readIn("test", undefined, [fixture]);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+  });
+  it("production with no fixture bypass stays protected", async () => {
+    const [response] = await readIn("production", undefined, [fixture]);
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toContain("/sign-in");
+  });
+  it("production with bypass=false stays protected", async () => {
+    const [response] = await readIn("production", "false", [fixture]);
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toContain("/sign-in");
+  });
+  it("production admits only the exact leaf when the existing fixture bypass is explicitly true", async () => {
+    const [response] = await readIn("production", "true", [fixture]);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+  });
+  it("bypass=true opens no Calendar descendant, string sibling or unlisted neighbor", async () => {
+    const responses = await readIn("production", "true", [
+      `${fixture}/private`, `${fixture}-private`, "/design-fixtures/calendar", "/design-fixtures/conformance/private",
+    ]);
+    for (const response of responses) {
+      expect(response.status).toBe(307);
+      expect(response.headers.get("location")).toContain("/sign-in");
+    }
+  });
+  it("bypass off keeps the existing namespace parents protected in production", async () => {
+    const responses = await readIn("production", "false", ["/design-fixtures", "/design-fixtures/conformance"]);
+    for (const response of responses) expect(response.status).toBe(307);
+  });
+});
