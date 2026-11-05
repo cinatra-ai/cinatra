@@ -8,8 +8,14 @@
  *   - on a MID-RUN gate (an `:output` renderer drawn by the schema floor, asked
  *     with a boolean schema and no field name) the card's own Continue stays
  *     the gate's one control, on a primary host and on a conversation host: the
- *     field draws no Continue beside it, a tick sends nothing, and the card's
- *     Continue sends the gate's approval once;
+ *     field draws no Continue beside it, and the card's Continue sends the
+ *     gate's approval once. The box hands its change to the card's mid-run
+ *     `onChange`, which keeps only an object answer, so the box's `false` is
+ *     dropped: the box stays ticked on the values envelope and the approval
+ *     goes without it. That loss is the same on main and is cinatra#4506; it is
+ *     pinned here as it is, so a change to it is seen;
+ *   - a custom renderer on a mid-run gate is told `hideSubmit` exactly when the
+ *     rule answers `true` for its schema;
  *   - on a per-field SETUP gate on a primary host (the run card), the fallback
  *     field keeps the Continue it draws itself, so the card draws none: the
  *     gate shows one Continue, and an untouched press sends `false` under the
@@ -54,11 +60,18 @@ import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { fieldRendererRegistry } from "../field-renderer-registry";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import { SchemaOnlyFloorRenderer } from "../schema-field-renderer";
+import type { FieldRendererProps } from "../field-renderer-registry";
 import { AgentHitlScreenCard } from "../agent-hitl-screen-card";
 
 const RUN_ID = "run-4310";
 const FIELD = "sendFollowUps";
 const MID_RUN_RENDERER_ID = "@cinatra-test/pack-agent:output";
+
+/** A custom renderer on a mid-run gate that shows the `hideSubmit` it was told. */
+const PROBE_RENDERER_ID = "@cinatra-test/probe-agent:output";
+function HideSubmitProbe({ hideSubmit }: FieldRendererProps) {
+  return <div data-testid="mid-run-probe" data-hide-submit={hideSubmit === true ? "true" : "false"} />;
+}
 
 /** A MID-RUN gate asked with a boolean schema and no field name. */
 const MID_RUN_ASKING = {
@@ -88,7 +101,15 @@ const SETUP_ASKING = {
   },
 };
 
-let asking: typeof MID_RUN_ASKING | typeof SETUP_ASKING = MID_RUN_ASKING;
+/** The same mid-run gate drawn by the probe, with a schema set per case. */
+function probeAsking(inputSchema: Record<string, unknown>) {
+  return {
+    ...MID_RUN_ASKING,
+    gate: { ...MID_RUN_ASKING.gate, xRenderer: PROBE_RENDERER_ID, inputSchema },
+  };
+}
+
+let asking: typeof MID_RUN_ASKING | typeof SETUP_ASKING | ReturnType<typeof probeAsking> = MID_RUN_ASKING;
 let originalFetch: typeof globalThis.fetch;
 
 beforeEach(() => {
@@ -102,6 +123,14 @@ beforeEach(() => {
     renderer: SchemaOnlyFloorRenderer,
     credentialSafe: true,
     drawsOwnSubmit: true,
+  });
+  fieldRendererRegistry.register({
+    id: PROBE_RENDERER_ID,
+    priority: 100,
+    condition: (_fieldName, schema) =>
+      (schema as { "x-renderer"?: unknown })["x-renderer"] === PROBE_RENDERER_ID,
+    renderer: HideSubmitProbe,
+    credentialSafe: true,
   });
   asking = MID_RUN_ASKING;
   screenStateMock.mockImplementation(async () => asking);
@@ -163,13 +192,16 @@ describe("AgentHitlScreenCard — a boolean asked on a mid-run gate (cinatra#431
       expect(continues(container)[0]!.getAttribute("data-action")).toBe("submit-hitl-screen");
     });
 
-    it(`${host}: a tick sends nothing, and the card's Continue sends the gate's approval once`, async () => {
+    it(`${host}: the box opens ticked on the values envelope, a click sends nothing and leaves it ticked, and the card's Continue sends the approval once without the box's answer (cinatra#4506)`, async () => {
       const { container } = mountOn(host);
       await settle();
       await waitFor(() => expect(box(container)).not.toBeNull());
+      expect(box(container)!.getAttribute("aria-checked")).toBe("true");
       fireEvent.click(box(container)!);
       await settle();
       expect(approveMock).not.toHaveBeenCalled();
+      // The box's `false` reached a handler that keeps only an object answer.
+      expect(box(container)!.getAttribute("aria-checked")).toBe("true");
       await waitFor(() => expect(continues(container)).toHaveLength(1));
       fireEvent.click(continues(container)[0]!);
       await waitFor(() => expect(approveMock).toHaveBeenCalledTimes(1));
@@ -178,8 +210,24 @@ describe("AgentHitlScreenCard — a boolean asked on a mid-run gate (cinatra#431
         expect.objectContaining({ approved: true }),
         undefined,
       );
+      const payload = (approveMock.mock.calls[0] as unknown[])[1] as Record<string, unknown>;
+      expect(Object.keys(payload).sort()).toEqual(["approved", "approvedAt"]);
       await settle();
       expect(approveMock).toHaveBeenCalledTimes(1);
+    });
+  }
+
+  for (const [title, schema, told] of [
+    ["a boolean schema is told hideSubmit", { type: "boolean" }, "true"],
+    ["a boolean schema with a non-empty enum is not", { type: "boolean", enum: [true, false] }, "false"],
+    ["a string schema is not", { type: "string" }, "false"],
+  ] as const) {
+    it(`run_card: a custom renderer on a mid-run gate: ${title}`, async () => {
+      asking = probeAsking({ ...schema });
+      const { container } = mountOn("run_card");
+      await settle();
+      await waitFor(() => expect(container.querySelector('[data-testid="mid-run-probe"]')).not.toBeNull());
+      expect(container.querySelector('[data-testid="mid-run-probe"]')!.getAttribute("data-hide-submit")).toBe(told);
     });
   }
 });

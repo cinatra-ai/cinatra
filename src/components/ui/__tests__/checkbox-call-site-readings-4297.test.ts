@@ -85,6 +85,30 @@ describe("the recorded readings hold for the live tree", () => {
     expect(row?.sites.map((s) => [s.tag, s.drawn, s.effect])).toEqual([["DropdownMenuCheckboxItem", "switch", "immediate"]]);
   });
 
+  it("the schema-drawn boolean's box (cinatra#4310) is read as lost on a mid-run gate, pinned to each surface's object-only mid-run buffer (cinatra#4506)", () => {
+    const row = CHECKBOX_CALL_SITE_READINGS.find((r) => r.file === "packages/agents/src/schema-field-renderer.tsx");
+    expect(row?.sites).toHaveLength(1);
+    const site = row!.sites[0]!;
+    // No road applies the box's change at once: the per-field Continue and the
+    // form's submit hold it, and on a mid-run gate it is lost, not applied.
+    expect(site.effect).toBe("confirmed");
+    expect(site.reading).toContain("cinatra#4506");
+    expect(site.reading).toContain("drops the box's answer");
+    // The outer Continue applies no boolean answer, so the reading never says it confirms one.
+    expect(site.reading).not.toMatch(/outer Continue is the step's only control/);
+    // Each surface's mid-run handler keeps only a non-array object; the evidence
+    // must stand in its code, so a change to that line fails the reading until
+    // the site is read again.
+    const objectOnly = 'if (next && typeof next === "object" && !Array.isArray(next)) {';
+    for (const file of [
+      "packages/agents/src/agentic-run-panel.tsx",
+      "packages/agents/src/orchestrator-stepper-panel.tsx",
+      "packages/agents/src/agent-hitl-screen-card.tsx",
+    ]) {
+      expect(site.evidence).toContainEqual({ file, text: objectOnly });
+    }
+  });
+
   it("the immediate-effect sites drawn as a checkbox are exactly the ones with a recorded reason", () => {
     const stays = [
       ...CHECKBOX_CALL_SITE_READINGS.flatMap((r) =>

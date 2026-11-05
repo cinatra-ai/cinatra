@@ -18,8 +18,13 @@
  *
  * And on a MID-RUN gate (an `:output` renderer drawn by the schema floor) whose
  * schema is a boolean: the panel's own outer Continue stays the gate's one
- * control, so the field draws no Continue beside it and the box writes through
- * to the gate as it did before cinatra#4310.
+ * control, so the field draws no Continue beside it. The box hands its change
+ * to the gate's `onChange` as it did before cinatra#4310, and that handler keeps
+ * only an object answer, so the box's `false` is dropped: the box stays ticked
+ * on the values envelope and the Continue sends the approval without it. That
+ * loss is the same on main and is cinatra#4506; it is pinned here as it is, so
+ * a change to it is seen. A custom renderer on a mid-run gate is told
+ * `hideSubmit` exactly when the rule answers `true` for its schema.
  *
  * Harness mirrors agentic-run-panel-setup-continue-3532.test.tsx.
  *
@@ -29,12 +34,13 @@
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import { fieldRendererRegistry } from "../field-renderer-registry";
 import { SchemaOnlyFloorRenderer } from "../schema-field-renderer";
+import type { FieldRendererProps } from "../field-renderer-registry";
 
 vi.mock("@cinatra-ai/sdk-ui", () => ({
   LoadingSpinner: () => null,
@@ -119,6 +125,12 @@ const MID_RUN_INTERRUPT = {
   reviewTaskId: MID_RUN_TASK_ID,
 };
 
+/** A custom renderer on a mid-run gate that shows the `hideSubmit` it was told. */
+const PROBE_RENDERER_ID = "@cinatra-test/probe-agent:output";
+function HideSubmitProbe({ hideSubmit }: FieldRendererProps) {
+  return <div data-testid="mid-run-probe" data-hide-submit={hideSubmit === true ? "true" : "false"} />;
+}
+
 /** The live interrupt the mocked stream hands the panel. Set per test. */
 let INTERRUPT: Record<string, unknown> = SETUP_INTERRUPT;
 
@@ -172,6 +184,13 @@ beforeEach(() => {
       (schema as { "x-renderer"?: unknown })["x-renderer"] === MID_RUN_RENDERER_ID,
     renderer: SchemaOnlyFloorRenderer,
     drawsOwnSubmit: true,
+  });
+  fieldRendererRegistry.register({
+    id: PROBE_RENDERER_ID,
+    priority: 100,
+    condition: (_fieldName, schema) =>
+      (schema as { "x-renderer"?: unknown })["x-renderer"] === PROBE_RENDERER_ID,
+    renderer: HideSubmitProbe,
   });
   cleanup();
 });
@@ -293,23 +312,41 @@ describe("AgenticRunPanel — a boolean asked on a mid-run gate (cinatra#4310)",
     expect(continues()[0]!.getAttribute("data-action")).toBe("submit-hitl-screen");
   });
 
-  it("a tick sends nothing, and the one Continue sends the gate's approval once", async () => {
+  it("the box opens ticked on the values envelope, a click sends nothing and leaves it ticked, and the one Continue sends the approval once without the box's answer (cinatra#4506)", async () => {
     INTERRUPT = MID_RUN_INTERRUPT;
     await renderPanel();
     await waitFor(() => expect(midRunBox()).not.toBeNull());
+    expect(midRunBox()!.getAttribute("aria-checked")).toBe("true");
     fireEvent.click(midRunBox()!);
     await settle();
     expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    // The box's `false` reached a handler that keeps only an object answer.
+    expect(midRunBox()!.getAttribute("aria-checked")).toBe("true");
     await waitFor(() => expect(continues()).toHaveLength(1));
     fireEvent.click(continues()[0]!);
     await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
-    // The panel's own approval of the gate, under no field name.
+    // The panel's own approval of the gate, under no field name, and nothing else.
     expect(hitlActions.approveReviewTask).toHaveBeenLastCalledWith(
       MID_RUN_TASK_ID,
       expect.objectContaining({ approved: true }),
       undefined,
     );
+    const payload = (hitlActions.approveReviewTask.mock.calls[0] as unknown[])[1] as Record<string, unknown>;
+    expect(Object.keys(payload).sort()).toEqual(["approved", "approvedAt"]);
     await settle();
     expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1);
   });
+
+  for (const [title, schema, told] of [
+    ["a boolean schema is told hideSubmit", { type: "boolean" }, "true"],
+    ["a boolean schema with a non-empty enum is not", { type: "boolean", enum: [true, false] }, "false"],
+    ["a string schema is not", { type: "string" }, "false"],
+  ] as const) {
+    it(`a custom renderer on a mid-run gate: ${title}`, async () => {
+      INTERRUPT = { ...MID_RUN_INTERRUPT, schema, xRenderer: PROBE_RENDERER_ID };
+      await renderPanel();
+      await waitFor(() => expect(screen.queryByTestId("mid-run-probe")).not.toBeNull());
+      expect(screen.getByTestId("mid-run-probe").getAttribute("data-hide-submit")).toBe(told);
+    });
+  }
 });

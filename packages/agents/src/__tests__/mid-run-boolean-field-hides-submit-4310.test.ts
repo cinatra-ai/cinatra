@@ -3,10 +3,13 @@
  * the orchestrator stepper and the HITL screen card read before they hand a
  * mid-run gate's field `hideSubmit`.
  *
- * A boolean field on a mid-run gate that is not a grouped setup form is told
- * `hideSubmit`, so the surface's own outer Continue is that gate's one control.
- * Nothing else changes: a setup gate, a grouped setup form and every other kind
- * are answered `false`, which leaves the surface's own reading as it was.
+ * A field on a mid-run gate that is not a grouped setup form, whose schema the
+ * schema-field renderer draws with its boolean branch (`type` is exactly
+ * `"boolean"` and no non-empty `enum` sends it to the Select branch first), is
+ * told `hideSubmit`, so the surface's own outer Continue is that gate's one
+ * control. A setup gate, a grouped setup form and every schema the renderer
+ * draws with another branch are answered `false`, which leaves the surface's
+ * own reading as it was.
  *
  *   pnpm --filter @cinatra-ai/agents exec vitest run \
  *     src/__tests__/mid-run-boolean-field-hides-submit-4310.test.ts
@@ -46,7 +49,43 @@ describe("midRunBooleanFieldHidesSubmit (cinatra#4310)", () => {
     ).toBe(false);
   });
 
-  it("every other kind on a mid-run gate is not", () => {
+  it("a boolean with a non-empty enum is not: the renderer draws it with the Select branch, which has no Continue", () => {
+    for (const fieldSchema of [
+      { type: "boolean", enum: [true, false] },
+      { type: "boolean", enum: [true] },
+    ]) {
+      expect(
+        midRunBooleanFieldHidesSubmit({ isMidRun: true, isGroupedSetup: false, fieldSchema }),
+      ).toBe(false);
+    }
+  });
+
+  it("a boolean with an empty or non-array enum is: the renderer's Select branch needs a non-empty list, so its boolean branch draws it", () => {
+    for (const fieldSchema of [
+      { type: "boolean", enum: [] },
+      { type: "boolean", enum: "yes" },
+    ]) {
+      expect(
+        midRunBooleanFieldHidesSubmit({ isMidRun: true, isGroupedSetup: false, fieldSchema }),
+      ).toBe(true);
+    }
+  });
+
+  it("a type the renderer does not read as exactly boolean is not", () => {
+    for (const fieldSchema of [
+      { type: "Boolean" },
+      { type: ["boolean", "null"] },
+      { type: " boolean" },
+      "boolean",
+      5,
+    ]) {
+      expect(
+        midRunBooleanFieldHidesSubmit({ isMidRun: true, isGroupedSetup: false, fieldSchema }),
+      ).toBe(false);
+    }
+  });
+
+  it("every kind the renderer draws with another branch, on a mid-run gate, is not", () => {
     for (const fieldSchema of [
       { type: "string" },
       { type: "number" },
