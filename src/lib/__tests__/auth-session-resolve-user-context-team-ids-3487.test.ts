@@ -219,6 +219,27 @@ describe("resolveUserContextForUserId carries the person's team ids (window line
     expect(io.readProjectGrantsForUser.mock.calls).toEqual([[USER, "", {}]]);
   });
 
+  it("f: with an active org and NO team in it, teamIds is [] (resolved-empty, not undefined) and equals the chat composer's", async () => {
+    // A membership in another org only: the one team read for ORG_A answers [].
+    io.memberships = [{ id: TEAM_B1, name: "Other org team", orgId: ORG_B, role: "admin" }];
+    io.session = chatSession(ORG_A);
+
+    const chatRequired = await requireActorContext();
+    const { actorContext: windowActor, sessionOrgId } = await resolveUserContextForUserId(USER, {
+      activeOrganizationId: ORG_A,
+    });
+
+    expect(sessionOrgId).toBe(ORG_A);
+    const teamReads = io.readTeamsForUser.mock.calls;
+    expect(teamReads[teamReads.length - 1]).toEqual([USER, ORG_A]);
+    // An org road with zero teams is RESOLVED, so a reader of the actor never
+    // falls back as if the axis were unknown.
+    expect(windowActor.teamIds).toStrictEqual([]);
+    expect(windowActor.teamRoles).toBeUndefined();
+    expect(windowActor.teamIds).toStrictEqual(chatRequired.teamIds);
+    expect(windowActor).toStrictEqual(chatRequired);
+  });
+
   it("e: one resolution makes exactly ONE team read (org supplied, and org from the session row)", async () => {
     io.memberships = [
       { id: TEAM_A1, name: "Team one", orgId: ORG_A, role: "admin" },
