@@ -345,9 +345,10 @@ describe.skipIf(!HAS_DB)("cinatra#4245 change B — Continue under the pause cla
     try {
       const e = await answer(s.gate, JSON.stringify({ pick: "one" })).then(() => null, (err: unknown) => err as Error);
       // Both causes by their own reasons: the database's "db blip", never the
-      // wrapped query text with its values.
+      // wrapped query text with its values. The put-back could have committed
+      // before its error, so the message names both outcomes.
       expect(e?.message).toMatch(
-        /^redis is down; nothing was sent, and the gate could not be put back \(db blip\): the run stays running, and a stop lands once its send lease ends at \d{4}-/,
+        /^redis is down; nothing was sent, and the put-back of the gate reported an error \(db blip\): if it did not commit, the run stays running, and a stop lands once its send lease ends at \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z; if it committed, the run waits at this task again$/,
       );
       expect(e?.message).not.toMatch(/Failed query|params:/);
       expect(sendTask).not.toHaveBeenCalled();

@@ -1212,18 +1212,19 @@ export async function approveReviewTaskInternal(
           } catch (backError) {
             // A failed database write arrives wrapped ("Failed query: <SQL> params:
             // <values>", the values carrying the run's and its organization's ids)
-            // with the database's own error as its cause. Each cause is named by its
-            // innermost cause (at most five levels down): the database's reason, not
-            // the query and its values.
+            // with the database's own error as its cause. A cause is followed while it
+            // is an `Error` (at most five levels down): the database's reason, not the
+            // query and its values. The put-back can commit and still fail to answer
+            // (a connection lost before the commit's reply), so both outcomes are named.
             const describe = (x: unknown) => {
               let e: unknown = x;
               for (let i = 0; i < 5 && e instanceof Error && e.cause instanceof Error; i += 1) e = e.cause;
               return e instanceof Error ? e.message : String(e);
             };
             throw new Error(
-              `${describe(recordError)}; nothing was sent, and the gate could not be put back (${describe(backError)}): ` +
-                `the run stays running, and a stop lands once its send lease ends at ` +
-                `${new Date(fencedAt + PAUSE_SEND_LEASE_SECONDS * 1000).toISOString()}`,
+              `${describe(recordError)}; nothing was sent, and the put-back of the gate reported an error (${describe(backError)}): ` +
+                `if it did not commit, the run stays running, and a stop lands once its send lease ends at ` +
+                `${new Date(fencedAt + PAUSE_SEND_LEASE_SECONDS * 1000).toISOString()}; if it committed, the run waits at this task again`,
               { cause: recordError },
             );
           }
