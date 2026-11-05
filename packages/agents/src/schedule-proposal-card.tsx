@@ -988,7 +988,7 @@ function ProposalPhase({
         <Button
           type="button"
           size="sm"
-          data-action="confirm-schedule-proposal"
+          data-action="confirm-schedule -> scheduled"
           disabled={!canConfirm || pending}
           onClick={confirm}
         >
@@ -1065,7 +1065,7 @@ function ExpiredPhase({
         <Button
           type="button"
           size="sm"
-          data-action="confirm-schedule-proposal"
+          data-action="confirm-schedule -> scheduled"
           disabled={pending}
           onClick={repropose}
         >

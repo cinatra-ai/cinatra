@@ -37,6 +37,10 @@
 //      absent, so that row is MAPPED again. The conformance-matrix row is
 //      UNTOUCHED by this round and stays MISSING: it asks for the S0 spec-
 //      matrix capture sweep specifically, which is a different round's work.
+//      cinatra#4390 (2026-10-27) then gave the schedule card's Confirm the
+//      value the drawing names. The ten S9d records counted the earlier value
+//      and never observed the drawn one, so they are withdrawn and AC-3 stays
+//      MAPPED but `partial`, its gap naming the re-shoot #4390 still owes.
 //
 //      THE EVIDENCE HALF. The manifest's chat_thread cells point at screenshots
 //      the canonical capture index never validated, and an unindexed screenshot
@@ -54,6 +58,13 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  CAPTURE_HOSTS,
+  CAPTURE_INDEX_PATH,
+  CARD_KINDS,
+  captureHostAdmissibility,
+  captureStatesFor,
+} from "../../ci/lib/capture-record-contract.mjs";
 import { parseSpecCommit } from "../../ci/lib/design-pin.mjs";
 import { captureAnchorExpectations } from "../lib/anchor-contract.mjs";
 
@@ -214,6 +225,259 @@ describe("--strict means DONE, not merely 'no false claim'", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// ROW 15'S CENSUS, READ WHOLE. Row 15's gap says its census is COUNTED, not
+// recited, off the capture index, and strict mode prints it. A reader that
+// picks out only the counts it recognises lets a stale number stand beside a
+// true one, so this one reads the census sentence from end to end and refuses
+// whatever it cannot read: a bucket stated twice, a bucket left out, a host or
+// a state the capture vocabulary does not have, and any text after a count.
+// The bucket set is the vocabulary's own (every kind x every host it may be
+// photographed on x every state it resolves), not the set the index happens
+// to hold. Clauses (a), (c) and (d) are held WHOLE, word for word, with each
+// count in them taken from the index (or, for the walk's cells, from the walk
+// plan): a reader that looks for numbers in prose misses the number forms it
+// does not know ("dozen", "thousand", Roman numerals, non-ASCII digits), so
+// none is looked for. Clauses (b) and (e) are not read here, except that
+// clause (d)'s pair of counts, in any decimal digits, must be in the whole gap
+// exactly once. It returns its problems instead of asserting, so each mutant
+// below is held to it on its own.
+// ---------------------------------------------------------------------------
+const NUMBER_WORDS = [
+  "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+  "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen",
+  "nineteen", "twenty",
+];
+const numberWord = (n) => (n <= 20 ? NUMBER_WORDS[n] : String(n));
+// The two hosts the census calls "the two page hosts".
+const PAGE_HOSTS = ["site_widget", "page_gate_region"];
+const CENSUS_OPEN = "per kind x host x state: ";
+const CENSUS_CLOSE = " STILL ABSENT, with the exact obstacle: ";
+// `\p{Nd}` is every decimal digit Unicode has, so a pair written in other digits is still counted.
+const CLAUSE_D_PAIR =
+  /chat_thread (\p{Nd}+) pending \/ (\p{Nd}+) decided, site_widget (\p{Nd}+) pending \/ (\p{Nd}+) decided/gu;
+// The whole text of clauses (a), (c) and (d), each up to the next clause's "(x) " and with its trailing space; every
+// count is a parameter, taken from the index or the walk plan by the reader below.
+const CLAUSE_TEXT = {
+  a: ({ schedule, walkCells }) =>
+    `(a) trigger_schedule_proposal on every host in every state — ${schedule} records. The card is drawn and ` +
+    "dispatched on main (packages/chat/src/renderable-views/registry.tsx maps the kind to ScheduleProposalCard, " +
+    `cinatra#2788), so what is owed here is the picture, not the card. The ${walkCells} records of the S9d rework ` +
+    "walk on chat_thread and run_card counted the card's earlier Confirm value, not the " +
+    '`[data-action="confirm-schedule -> scheduled"]` that §VI draws, and were withdrawn on 2026-10-27; their ' +
+    "re-shoot is the open item of cinatra#4390 (row 3's gap). site_widget and page_gate_region in every state, and " +
+    "the run_card PENDING reading, had no record before that either. ",
+  c: ({ siteDecided, runDecided, pageDecided }) =>
+    `(c) artifact_review_gate DECIDED on site_widget — ${siteDecided} records. The run_card DECIDED reading is ` +
+    `answered by ${runDecided} records (cinatra#2936 W6 part 2b batch 2), and the settled card on ` +
+    `page_gate_region is DELIVERED, ${pageDecided} records, so the route no longer blocks before the card mounts. ` +
+    "On site_widget a real widget-started run opened its review gate and the widget drew no review card, live or " +
+    "after a reload (cinatra#2936 W6 part 2b batch 3, recorded in the census ratchet of " +
+    "scripts/ci/__tests__/capture-record-contract.test.mjs). ",
+  d: ([chatPending, chatDecided, widgetPending, widgetDecided]) =>
+    "(d) recommendation_hold — the 'RATCHETED AS OWED … those cells must NOT be observed yet' this clause carried " +
+    "is WITHDRAWN: both mounts landed (cinatra#2786 S9b for chat_thread, cinatra#2790/#2890 S9f for site_widget) " +
+    `and both are photographed in both states (chat_thread ${chatPending} pending / ${chatDecided} decided, ` +
+    `site_widget ${widgetPending} pending / ${widgetDecided} decided). What is absent on this kind is the PENDING ` +
+    "reading on page_gate_region, which carries decided records only. ",
+};
+
+function row15CensusProblems(gap, index, walkPlan) {
+  const problems = [];
+  const actual = {};
+  const cells = {};
+  for (const r of index.records) {
+    const k = `${r.declaredKind} | ${r.declaredHost} | ${r.declaredState}`;
+    actual[k] = (actual[k] ?? 0) + 1;
+    (cells[k] ??= []).push(r.cell);
+  }
+  const count = (k) => actual[k] ?? 0;
+
+  const totals = [...gap.matchAll(/\(scripts\/ci\/chat-hitl-capture-index\.json, (\d+) records\)/g)];
+  if (totals.length !== 1) problems.push(`the record total is stated ${totals.length} times, not once`);
+  else if (Number(totals[0][1]) !== index.records.length) {
+    problems.push(`the record total says ${totals[0][1]}; the index holds ${index.records.length}`);
+  }
+
+  const opened = gap.split(CENSUS_OPEN);
+  const closed = gap.split(CENSUS_CLOSE);
+  if (opened.length !== 2 || closed.length !== 2) {
+    problems.push("the census sentence and the STILL ABSENT list are not each there exactly once");
+    return problems;
+  }
+  const census = opened[1].slice(0, opened[1].indexOf(CENSUS_CLOSE));
+  if (!census.endsWith(".")) problems.push(`the census sentence does not end with a full stop: "${census.slice(-40)}"`);
+
+  // --- the census, every item consumed -------------------------------------------------------------------------
+  const stated = new Map();
+  const compositionOnly = {};
+  const kinds = [];
+  const put = (kind, host, state, n) => {
+    if (!CAPTURE_HOSTS.includes(host)) return problems.push(`${kind}: "${host}" is not a capture host`);
+    if (!captureStatesFor(kind).includes(state)) return problems.push(`${kind}: "${state}" is not a state it resolves`);
+    if (!captureHostAdmissibility(kind, host).capturable) {
+      return problems.push(`${kind} | ${host} is composition-only, and the census gives it a count`);
+    }
+    const k = `${kind} | ${host} | ${state}`;
+    if (stated.has(k)) return problems.push(`${k} is stated twice`);
+    stated.set(k, n);
+  };
+  for (const clause of census.replace(/\.$/, "").split("; ")) {
+    const head = clause.match(/^([a-z_]+) — /);
+    if (!head || !Object.hasOwn(CARD_KINDS, head[1])) {
+      problems.push(`a census clause names no card kind: "${clause.slice(0, 50)}"`);
+      continue;
+    }
+    const kind = head[1];
+    if (kinds.includes(kind)) problems.push(`${kind} has two census clauses`);
+    kinds.push(kind);
+    let readingState = null;
+    const items = [
+      [/^(\w+) pending (\d+) \/ decided (\d+)/, (m) => {
+        put(kind, m[1], "pending", Number(m[2]));
+        put(kind, m[1], "decided", Number(m[3]));
+      }],
+      [/^none on (\w+)/, (m) => captureStatesFor(kind).forEach((s) => put(kind, m[1], s, 0))],
+      [/^(\w+) none/, (m) => captureStatesFor(kind).forEach((s) => put(kind, m[1], s, 0))],
+      [/^(?:and|(\w+)) on (\w+) (\d+) \(([A-Z]\d+)\)/, (m) => {
+        if (m[1]) readingState = m[1];
+        if (!readingState) return problems.push(`${kind}: "${m[0]}" names no state`);
+        put(kind, m[2], readingState, Number(m[3]));
+        const k = `${kind} | ${m[2]} | ${readingState}`;
+        if (!(cells[k] ?? []).length || !cells[k].every((c) => c.startsWith(`${m[4]}__`))) {
+          problems.push(`${k}: the label (${m[4]}) is not the group of its records`);
+        }
+      }],
+      [/^and the two page hosts recorded as composition-only with their reasons/, () => {
+        compositionOnly[kind] = [...PAGE_HOSTS];
+      }],
+    ];
+    let rest = clause.slice(head[0].length);
+    while (rest.length) {
+      const hit = items.map(([re, take]) => [rest.match(re), take]).find(([m]) => m);
+      if (!hit) {
+        problems.push(`${kind}: text the census does not read: "${rest.slice(0, 50)}"`);
+        break;
+      }
+      hit[1](hit[0]);
+      rest = rest.slice(hit[0][0].length);
+      if (!rest.length) break;
+      const sep = rest.match(/^(?:, | (?=and ))/);
+      if (!sep) {
+        problems.push(`${kind}: text after "${hit[0][0]}": "${rest.slice(0, 50)}"`);
+        break;
+      }
+      rest = rest.slice(sep[0].length);
+      if (!rest.length) problems.push(`${kind}: a separator after "${hit[0][0]}" leads to no item`);
+    }
+  }
+  for (const kind of Object.keys(CARD_KINDS)) {
+    const unreachable = CAPTURE_HOSTS.filter((h) => !captureHostAdmissibility(kind, h).capturable);
+    if (String(compositionOnly[kind] ?? []) !== String(unreachable)) {
+      problems.push(`${kind}: the census names [${compositionOnly[kind] ?? []}] composition-only; the contract, [${unreachable}]`);
+    }
+    for (const host of CAPTURE_HOSTS.filter((h) => !unreachable.includes(h))) {
+      for (const state of captureStatesFor(kind)) {
+        const k = `${kind} | ${host} | ${state}`;
+        if (!stated.has(k)) problems.push(`${k} is left out of the census`);
+        else if (stated.get(k) !== count(k)) problems.push(`${k}: the census says ${stated.get(k)}, the index holds ${count(k)}`);
+      }
+    }
+  }
+  for (const k of Object.keys(actual)) {
+    if (!stated.has(k)) problems.push(`${k}: the index holds ${actual[k]} records the census has no bucket for`);
+  }
+
+  // --- the clauses, (a) to (e) once each and in order ------------------------------------------------------------
+  const absent = closed[1];
+  const at = [..."abcde"].map((l) => absent.split(`(${l}) `).length === 2 ? absent.indexOf(`(${l}) `) : -1);
+  if (at.includes(-1) || at.some((p, i) => i && p < at[i - 1])) {
+    problems.push(`clauses (a) to (e) are not each there once and in order: ${at}`);
+    return problems;
+  }
+  const clause = (l) => {
+    const i = "abcde".indexOf(l);
+    return absent.slice(at[i], at[i + 1] ?? absent.length);
+  };
+  const held = (l, want) => {
+    const got = clause(l);
+    if (got === want) return;
+    let i = 0;
+    while (got[i] === want[i]) i += 1;
+    problems.push(`clause (${l}) is not its text: at ${i} it reads "${got.slice(i, i + 40)}", not "${want.slice(i, i + 40)}"`);
+  };
+  const ARG = "artifact_review_gate";
+  const HOLD = "recommendation_hold";
+  const schedule = Object.keys(actual)
+    .filter((k) => k.startsWith("trigger_schedule_proposal | "))
+    .reduce((n, k) => n + actual[k], 0);
+  const walkCells = walkPlan.steps.flatMap((s) => s.cells ?? []).length;
+  held("a", CLAUSE_TEXT.a({ schedule: numberWord(schedule), walkCells: numberWord(walkCells) }));
+  held("c", CLAUSE_TEXT.c({
+    siteDecided: numberWord(count(`${ARG} | site_widget | decided`)),
+    runDecided: numberWord(count(`${ARG} | run_card | decided`)),
+    pageDecided: numberWord(count(`${ARG} | page_gate_region | decided`)),
+  }));
+  const holdCounts = ["chat_thread | pending", "chat_thread | decided", "site_widget | pending", "site_widget | decided"]
+    .map((hs) => String(count(`${HOLD} | ${hs}`)));
+  held("d", CLAUSE_TEXT.d(holdCounts));
+  const pairs = [...gap.matchAll(CLAUSE_D_PAIR)];
+  if (pairs.length !== 1) problems.push(`clause (d)'s pair of counts is stated ${pairs.length} times, not once`);
+  else if (String(pairs[0].slice(1)) !== String(holdCounts)) {
+    problems.push(`clause (d)'s counts are ${pairs[0].slice(1)}; the index holds ${holdCounts}`);
+  }
+  if (/records are in the index/.test(gap)) problems.push(`the gap still says "records are in the index"`);
+  return problems;
+}
+
+// Each mutant puts a stale number into the gap in a form the pre-2 review of
+// cinatra#4392 found the earlier reader passing (the ninth and the eighth it
+// already refused), and the last five in a form the pre-3 review found the
+// next reader passing: a number word it did not know ("dozen") in clauses (a),
+// (c) and (d), a second clause (d) pair in non-ASCII digits, and a census
+// separator that leads to no item. Each returns the mutated gap, or null when
+// its anchor is not in the gap exactly once: then the census has moved and the
+// mutant must be re-aimed.
+const once = (re, to) => (gap) => {
+  const all = gap.match(new RegExp(re.source, "g")) ?? [];
+  return all.length === 1 ? gap.replace(re, to) : null;
+};
+const first = (re, to) => (gap) => (re.test(gap) ? gap.replace(re, to) : null);
+const ROW15_MUTANTS = [
+  ["a stale bucket stated before the true one",
+    once(/recommendation_hold — (\w+) pending (\d+) \/ decided (\d+)/,
+      (m, h, p, d) => `recommendation_hold — ${h} pending ${Number(p) + 2} / decided ${Number(d) + 2}, ${h} pending ${p} / decided ${d}`)],
+  ["a zero bucket left out", once(/, run_card none(?=,)/, "")],
+  ["a zero bucket under a misspelled host", once(/\bsite_widget none\b/, "site_wdiget none")],
+  ["a stale count after a bucket", once(/\bchat_thread none(?=,)/, "chat_thread none (4 records remain)")],
+  ["a second, stale clause (d) pair",
+    once(/(chat_thread \d+ pending \/ \d+ decided, site_widget \d+ pending \/ \d+ decided)\)/,
+      "$1) (was chat_thread 5 pending / 4 decided, site_widget 5 pending / 2 decided)")],
+  ["a stale count in clause (a)", once(/\bThe (\w+) records of the S9d rework walk/, "The twelve records of the S9d rework walk")],
+  ["a stale count in clause (c)",
+    once(/answered by (\w+) records/, (m, w) => `answered by ${w === "two" ? "three" : "two"} records`)],
+  ["a stale record total",
+    once(/(chat-hitl-capture-index\.json, )(\d+)( records\))/, (m, a, n, b) => `${a}${Number(n) - 1}${b}`)],
+  ["one census count moved by one",
+    first(/(run_card pending \d+ \/ decided )(\d+)/, (m, a, n) => `${a}${Number(n) + 1}`)],
+  ["a dozen-fold count in clause (a)",
+    once(/\bThe (\w+) records of the S9d rework walk/, (m, w) => `The ${w} dozen records of the S9d rework walk`)],
+  ["a dozen-fold count in clause (c)", once(/answered by (\w+) records/, (m, w) => `answered by ${w} dozen records`)],
+  ["older records added after clause (d)'s pair",
+    once(/(site_widget \d+ pending \/ \d+ decided\))/, "$1 plus a dozen older records")],
+  ["a second clause (d) pair in non-ASCII digits",
+    once(/does not re-open them\.$/,
+      "does not re-open them. Before: chat_thread ٥ pending / ٤ decided, site_widget ٥ pending / ٢ decided.")],
+  ["a census separator that leads to no item",
+    once(/(page_gate_region pending \d+ \/ decided \d+)(; recommendation_hold)/, "$1, $2")],
+];
+
+const captureIndex = () => JSON.parse(readFileSync(CAPTURE_INDEX_PATH, "utf8"));
+const walkPlan = () =>
+  JSON.parse(
+    readFileSync(join(REPO_ROOT, "scripts", "audit", "__fixtures__", "capture-walk", "s9d-rework-walk-plan.json"), "utf8"),
+  );
+
 describe("the REAL manifest", () => {
   it("passes audit — every named proof exists in the tree", () => {
     expect(auditManifest()).toEqual([]);
@@ -268,7 +532,7 @@ describe("the REAL manifest", () => {
     ).toBe(0);
   });
 
-  it("the criteria half reports the program NOT READY — one proof gap and one partial row, named", () => {
+  it("the criteria half reports the program NOT READY — one proof gap and two partial rows, named", () => {
     // The honest state of the program at this commit, and the THIRD time this
     // expectation has been inverted. It read NOT READY until the finisher round
     // flipped it, a code-grounded audit flipped it back for two rows, and this
@@ -287,7 +551,12 @@ describe("the REAL manifest", () => {
     expect(violations).toEqual([]);
     expect(total).toBe(CANONICAL_CRITERIA.length);
     expect(unproven).toHaveLength(1);
-    expect(partial).toHaveLength(1);
+    // The second partial row is AC-3 (cinatra#4390): its ten picture proofs
+    // were withdrawn with the records that never observed the drawn Confirm,
+    // and its gap names the re-shoot. The first is the one-implementation row.
+    expect(partial).toHaveLength(2);
+    expect(partial.map((r) => r.criterion)).toContain(CANONICAL_CRITERIA[2]);
+    expect(partial.find((r) => r.criterion === CANONICAL_CRITERIA[2]).gap).toMatch(/cinatra#4390/);
     // "CARD AXIS MISSING" became "CARD AXIS PARTIAL" with cinatra#2791 (S9g):
     // six cells landed — the review gate on chat_thread pending AND decided, the
     // review gate on the page gate region, the audit card on two hosts, the chip
@@ -305,7 +574,7 @@ describe("the REAL manifest", () => {
     // The line the CLI would print, spelled out here so a regression in either
     // count is still legible as the sentence a reader sees.
     expect(`${total - unproven.length}/${total} criteria proven, ${unproven.length} MISSING, ${partial.length} partial`).toBe(
-      "15/16 criteria proven, 1 MISSING, 1 partial",
+      "15/16 criteria proven, 1 MISSING, 2 partial",
     );
   });
 
@@ -495,31 +764,48 @@ describe("the REAL manifest", () => {
     expect(row.gap.length).toBeGreaterThan(200);
   });
 
-  it("row 3 is MAPPED again and kept every proof it had before the UI gap existed", () => {
-    // The mirror of the test above: this flip runs the OTHER way, and the same
-    // rule holds regardless of direction. The transaction proofs cinatra#2573's
+  it("row 15's census is the capture index's census, count for count", () => {
+    // The gap says its census is COUNTED, not recited, and strict mode prints
+    // it. cinatra#4390 (2026-10-27) withdrew ten schedule records and the gap
+    // went on counting them, beside counts of an index of 93 records. The
+    // reader above holds the whole census sentence and the whole text of
+    // clauses (a), (c) and (d) to the index as it stands.
+    expect(row15CensusProblems(manifest().rows[14].gap, captureIndex(), walkPlan())).toEqual([]);
+  });
+
+  it.each(ROW15_MUTANTS)("row 15's census reader refuses %s", (name, mutate) => {
+    // A reader is only as good as the stale numbers it refuses (pre-2 of
+    // cinatra#4392 found seven forms the earlier reader passed, pre-3 five
+    // more that the next one passed).
+    const gap = manifest().rows[14].gap;
+    const mutated = mutate(gap);
+    expect(mutated, `${name}: the anchor is not in the gap exactly once; re-aim the mutant`).not.toBeNull();
+    expect(mutated).not.toBe(gap);
+    expect(row15CensusProblems(mutated, captureIndex(), walkPlan()), name).not.toEqual([]);
+  });
+
+  it("row 3 is MAPPED and partial: every transaction proof stands, and the withdrawn picture proofs are named in its gap", () => {
+    // The mirror of the test above, and the rule holds in both directions: no
+    // proof already earned is thrown away. The transaction proofs cinatra#2573's
     // acceptance round wrote are untouched below — mint/consume identity,
     // arm-before-expose, single-use, replay, the concurrent double-Confirm and
-    // drain reconciliation — and cinatra#2788 (PR #2939) adds the UI proof
-    // beside them rather than replacing anything.
+    // drain reconciliation. cinatra#2788 (PR #2939) added ten S9d picture
+    // proofs beside them. cinatra#4390 (2026-10-27) gave the card's Confirm
+    // the value the drawing names; the ten records counted the earlier value
+    // and never observed the drawn one, so the capture contract no longer
+    // accepts them and they are withdrawn, from the index and from this row.
+    // The row says so in `partial` and `gap` rather than rounding itself up.
     const row = manifest().rows[2];
     expect(row.disposition).toBe("MAPPED");
-    expect(row.partial).toBeUndefined();
-    expect(row.gap).toBeUndefined();
+    expect(row.partial).toBe(true);
+    expect(row.gap).toMatch(/cinatra#4390/);
+    expect(row.gap).toContain('[data-action="confirm-schedule -> scheduled"]');
+    expect(row.gap).toMatch(/re-shoot/);
     expect(row.unitProofs).toHaveLength(3);
     expect(row.integrationProofs).toHaveLength(6);
-    // The S9d rework round produced exactly ten records (five cells, light +
-    // dark) and this row cites all ten — pinned exactly, not merely "some",
-    // so a future citation dropped or silently added is caught here.
-    expect(row.e2eProofs).toHaveLength(10);
-    expect(row.e2eProofs.every((p) => p.file === "https://github.com/cinatra-ai/cinatra/blob/35e369ed68a6446b0125cfecaee6aa993742a961/evidence/2788-s9d-rework/README.md")).toBe(
-      true,
-    );
-    expect(new Set(row.e2eProofs.map((p) => p.testName)).size).toBe(10);
-    for (const stem of ["C1", "C2", "C3", "C5", "C6"]) {
-      const cell = row.e2eProofs.filter((p) => p.testName.startsWith(`S9d-${stem}__`));
-      expect(cell, stem).toHaveLength(2); // light + dark
-    }
+    // No picture proof is cited until the re-shoot lands: a citation of a
+    // withdrawn record is the unindexed screenshot the binding refuses.
+    expect(row.e2eProofs).toBeUndefined();
   });
 
   it("every row carries the ruling that moved it, wherever one did", () => {
