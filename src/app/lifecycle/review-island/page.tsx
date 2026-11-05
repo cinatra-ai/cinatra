@@ -137,6 +137,7 @@ import {
 // road. The island is the ONE surface whose reader holds no cookie, so it is
 // the one surface that has to name a road at all.
 import {
+  cookieIslandReviewSurfaceRoads,
   islandReviewSurfaceRoads,
   type ReviewSurfaceRoads,
 } from "@/app/artifacts/[id]/review-surface-roads";
@@ -224,10 +225,12 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
   let actorCtx: Awaited<ReturnType<typeof resolveReviewActorContext>> = null;
   let runId: string;
   let reviewTaskId: string;
-  // THE ROAD THIS PAINT IS ON (wave 3). Set only on the credential branch,
-  // because only that branch has a principal to seal capabilities to: a
-  // same-site first-party frame reaching the cookie branch below keeps the
-  // session addresses, which work there and are the narrower grant.
+  // THE ROAD THIS PAINT IS ON (wave 3). The sealed roads are set only on the
+  // credential branch, because only that branch has a principal to seal
+  // capabilities to: a same-site first-party frame reaching the cookie branch
+  // below keeps the session addresses, which work there and are the narrower
+  // grant. The cookie branch names the session DATA road only (cinatra#4311):
+  // its reader carries the cookie that road is reached with.
   let roads: ReviewSurfaceRoads | null = null;
   if (credential) {
     const reader = await resolveIslandCredentialReader({ credential, ref });
@@ -302,6 +305,12 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
     if (!payload) return empty;
     runId = payload.runId;
     reviewTaskId = payload.reviewTaskId;
+    // THE SESSION DATA ROAD (cinatra#4311). This reader was authenticated by
+    // its session cookie, so its displays read live series from the
+    // application's own route with that cookie. Every other road of this
+    // branch is unchanged: the session byte addresses, the content channel's
+    // named absence and the first-party capture pair.
+    roads = cookieIslandReviewSurfaceRoads();
   }
   if (!selector.ok) return empty;
 

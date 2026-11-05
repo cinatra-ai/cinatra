@@ -44,6 +44,7 @@ import {
 import {
   absentArtifactContent,
   buildArtifactRendererProps,
+  type ArtifactRendererDataRoad,
   type ArtifactRendererProps,
   readOnlyArtifactEdit,
 } from "@/lib/artifacts/artifact-renderer-props";
@@ -125,6 +126,15 @@ export function bindArtifactReviewPorts(ctx: {
    * the browser fetch that dies inside a third-party application.
    */
   buildContent?: ArtifactContentBuilder;
+  /**
+   * WHERE THIS SURFACE'S DISPLAYS READ LIVE SERIES (props v3, cinatra#4311).
+   *
+   * Absent and the snapshot carries no data road, so a display draws its own
+   * no-series reading. Present (a cookie surface) and the builder writes it for
+   * a display that declared version 3 or later. The SURFACE's, like the two
+   * roads above: the island names none, because its reader holds no cookie.
+   */
+  dataRoad?: ArtifactRendererDataRoad;
 }): Pick<
   PrepareReviewPorts,
   | "readArtifact"
@@ -455,6 +465,9 @@ export function bindArtifactReviewPorts(ctx: {
       // before this builder ran.
       propsApiVersion: input.propsApiVersion,
       ...(input.propsApiVersion >= 5 && input.review ? { review: input.review } : {}),
+      // THE DATA ROAD the surface named (cinatra#4311); the builder drops it
+      // below version 3.
+      ...(ctx.dataRoad ? { data: ctx.dataRoad } : {}),
       content,
       bytes,
     });
@@ -501,12 +514,16 @@ export async function prepareArtifactReviewTargets(args: {
   /** How this surface reads content (wave 3). Absent on a surface that has not
    *  named a road. */
   buildContent?: ArtifactContentBuilder;
+  /** Where this surface's displays read live series (cinatra#4311). Absent on
+   *  a surface that has not named one, and on the island. */
+  dataRoad?: ArtifactRendererDataRoad;
 }): Promise<PrepareReviewResult> {
   const artifactPorts = bindArtifactReviewPorts({
     orgId: args.orgId,
     actor: args.actor,
     byteMinter: args.byteMinter,
     buildContent: args.buildContent,
+    dataRoad: args.dataRoad,
   });
   return prepareReviewTargetsCore(args.input, { ...artifactPorts, ...args.runGatePorts });
 }
@@ -528,6 +545,9 @@ export async function beginArtifactReviewTargets(args: {
   /** How this surface reads content (wave 3). Absent on a surface that has not
    *  named a road. */
   buildContent?: ArtifactContentBuilder;
+  /** Where this surface's displays read live series (cinatra#4311). Absent on
+   *  a surface that has not named one, and on the island. */
+  dataRoad?: ArtifactRendererDataRoad;
 }): Promise<BeginReviewResult> {
   // THE ROADS TRAVEL THE STREAMING ARM TOO. The island is the one surface that
   // names a road and, since cinatra#3334, the one surface that enters through
@@ -538,6 +558,7 @@ export async function beginArtifactReviewTargets(args: {
     actor: args.actor,
     byteMinter: args.byteMinter,
     buildContent: args.buildContent,
+    dataRoad: args.dataRoad,
   });
   return beginReviewTargetsCore(args.input, { ...artifactPorts, ...args.runGatePorts });
 }
