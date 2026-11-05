@@ -829,7 +829,7 @@ export async function bindRunStepToolPolicy(input: {
       throw new RunStepToolPolicyRefusal("step_tool_dispatch_rebind_refused");
     }
     if (bound.executionAttemptId === input.executionAttemptId) return;
-    // The run row is locked and runs under input.executionAttemptId, so the older attempt holds no live dispatch.
+    // The run row is locked and runs under input.executionAttemptId, so the move is for the run's current attempt.
     const moved = await tx.update(agentRunOutwardActionPolicies).set({ executionAttemptId: input.executionAttemptId })
       .where(and(eq(agentRunOutwardActionPolicies.runId, input.runId), eq(agentRunOutwardActionPolicies.orgId, input.orgId),
         eq(agentRunOutwardActionPolicies.executionAttemptId, bound.executionAttemptId)))
