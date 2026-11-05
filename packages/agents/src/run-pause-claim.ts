@@ -21,8 +21,12 @@ import { PAUSE_CLAIM_LEASE_SECONDS, PAUSE_SEND_LEASE_SECONDS } from "./run-statu
 // `pause_claim_phase` `claimed` | `sending` | `changes_requested`,
 // `pause_claim_expires_at`, compared with the database clock).
 //
-// This module writes only those non-status columns, each in one guarded
-// statement. The status edges and their claim rules are in the status seam
+// This module writes those claim columns and never the status. Each claimer's
+// write is one guarded statement. The change request's end mark
+// (markPauseChangesRequestedInTx) is the exception: it runs on its caller's
+// guarded transaction, locks and reads the run row first, may read the
+// latest-task record, and its one UPDATE also rewrites a stale `a2a_task_id`
+// (the heal). The status edges and their claim rules are in the status seam
 // (run-transition.ts, rules 1-5). The order every claimer follows:
 //   1. read the run (status, generation, the pause's task);
 //   2. claimPause at the generation read; a refusal answers the caller;

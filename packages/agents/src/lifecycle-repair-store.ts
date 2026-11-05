@@ -44,6 +44,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 
 import { db } from "./db";
 import {
+  agentRuns,
   artifactReviewGates,
   artifactReviewAudit,
   artifactProducedOutbox,
@@ -55,6 +56,7 @@ import { emitArtifactReviewGate, ArtifactReviewGateError } from "./artifact-revi
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 import { guardedRunWrite } from "./org-write-run-seam";
 import { markPauseChangesRequestedInTx, type PauseEndMarkRefusal } from "./run-pause-claim";
+import { baseReviewTaskId } from "@/lib/artifacts/artifact-review-target";
 import { dispatchAutoGateOpen, dispatchAutoGateResolved } from "./run-wait-notifier";
 
 import {
@@ -140,24 +142,38 @@ export interface RecordChangesRequestedInput {
   decidedBy?: string | null;
   /**
    * cinatra#4245: the change request ENDS the pause of `runId` at a review step
-   * the flow declares itself (`pauseTaskId` is the A2A task of that pause). The
-   * record then runs in ONE transaction guarded for `runId` under `authority`:
-   * the run's end mark (markPauseChangesRequestedInTx, which locks the run row
-   * first), the gate's compare-and-set (bound to `runId` and the org too) and the
-   * repair row, which keeps the generation the mark ended. That row is the
-   * instruction to stop the run; the repair drain carries it out. A refusal of the
-   * mark writes nothing and answers `pause-*`. Absent for every other change
-   * request, whose road is unchanged.
+   * the flow declares itself (`pauseTaskId` is the A2A task of that pause). Only
+   * `invalid-request` and a new record's `tombstoned-base` or `stale-base` answer
+   * before the guard. The record writes only inside ONE transaction guarded for
+   * `runId` under `authority` (the best-effort clear of the gate's notification
+   * follows the commit). There the gate must be a `wayflow-` gate of this run,
+   * org and task (a leg `#<n>` included), a retry answers from an existing
+   * repair only when that repair ended the pause, and a new record writes the
+   * run's end mark, the gate's compare-and-set (bound to `runId`, the org and
+   * the gate's review task) and the repair row, which keeps the generation the
+   * mark ended (the drain's order to stop the run). A `pause-*` refusal writes
+   * nothing; a guard refusal throws. Absent for every other change request,
+   * whose road is unchanged; no caller passes it yet.
    */
   declaredPause?: { pauseTaskId: string; authority: OrgWriteAuthority | undefined };
 }
 
-/** A refusal of the end mark, carried out of the guarded transaction so it rolls back. */
+/** A refusal of a change request that names its pause, carried out of the guarded
+ * transaction so it rolls back. `pause-gate-mismatch`: the gate is not a gate of
+ * the run, its org and the named pause task. `pause-mode-conflict`: the gate's
+ * repair was opened by a change request that ended no pause. `pause-not-repairable`:
+ * the repair would escalate, and only a requested repair is drained. */
 class PauseEndMarkRefused extends Error {
-  constructor(readonly code: PauseEndMarkRefusal) {
+  constructor(readonly code: PauseEndMarkRefusal | "pause-gate-mismatch" | "pause-mode-conflict" | "pause-not-repairable") {
     super(`the change request cannot end this pause (${code})`);
     this.name = "PauseEndMarkRefused";
   }
+}
+
+/** The pause task of a `wayflow-<task>` gate or of its leg `wayflow-<task>#<n>`
+ * (read as the delivery worker reads it); null for any other review task. */
+function pauseTaskOfGate(reviewTaskId: string): string | null {
+  return reviewTaskId.startsWith("wayflow-") ? baseReviewTaskId(reviewTaskId.slice("wayflow-".length)) : null;
 }
 
 /** The transaction the record writes on: plain, or the guarded one of a declared pause. */
@@ -204,7 +220,9 @@ export async function recordChangesRequested(
     .from(lifecycleRepair)
     .where(eq(lifecycleRepair.gateId, request.gateId))
     .limit(1);
-  if (existing[0]) {
+  // cinatra#4245: a change request that names its pause decides on an existing
+  // repair inside its guarded transaction (below), never before the guard.
+  if (existing[0] && !input.declaredPause) {
     // cinatra#2864 — a RE-DRIVE clears too. A repair row exists for this gate only
     // because a prior call's transaction committed, and that transaction CASed the
     // gate to `resolved` in the same breath — so the gate is closed, whatever this
@@ -224,10 +242,11 @@ export async function recordChangesRequested(
 
   // 2. Base-revision CAS at FIRST-record time (the same TOCTOU the decision core
   //    guards): the base must still be the revision the reviewer saw.
-  if (input.currentBaseRevisionId === null) {
+  const retry = existing[0] !== undefined;
+  if (!retry && input.currentBaseRevisionId === null) {
     return { ok: false, code: "tombstoned-base", error: "base target tombstoned/absent — changes_requested rejected" };
   }
-  if (input.currentBaseRevisionId !== request.expectedBaseRevisionId) {
+  if (!retry && input.currentBaseRevisionId !== request.expectedBaseRevisionId) {
     return { ok: false, code: "stale-base", error: "base revision moved since the review (CAS witness mismatch) — stale changes_requested rejected" };
   }
 
@@ -252,15 +271,17 @@ export async function recordChangesRequested(
   const status: "requested" | "escalated" = escalated ? "escalated" : "requested";
   const repairId = randomUUID();
   const fingerprint = changesRequestedFingerprint(request);
-  // cinatra#4245: a change request that ends a pause needs a repair the drain
-  // carries out, because the drain is what stops the run. An escalated repair is
-  // never drained, so the run would wait at an ended pause forever: refused, and
-  // nothing is written.
-  if (input.declaredPause && status !== "requested") {
-    return { ok: false, code: "pause-not-repairable", error: "this change request would end the pause with no repair run to stop the run" };
-  }
 
-  const writeRecord = async (tx: RepairRecordTx, pausedRunGeneration: number | null) => {
+  const writeRecord = async (tx: RepairRecordTx, ended: { generation: number; reviewTaskId: string } | null) => {
+    // cinatra#4245: the gate of an ended pause is the marked run's own gate, at that pause.
+    const bound =
+      ended === null
+        ? []
+        : [
+            eq(artifactReviewGates.runId, input.runId),
+            eq(artifactReviewGates.orgId, input.orgId),
+            eq(artifactReviewGates.reviewTaskId, ended.reviewTaskId),
+          ];
     // CLOSE the review attempt: CAS the base gate pending → resolved with the
     // 'changes_requested' terminal disposition. A gate already resolved by THIS
     // decision (matching fingerprint) is idempotent; a different terminal state is
@@ -280,10 +301,7 @@ export async function recordChangesRequested(
         and(
           eq(artifactReviewGates.id, request.gateId),
           eq(artifactReviewGates.status, "pending"),
-          // cinatra#4245: the gate of an ended pause is the marked run's own gate.
-          ...(pausedRunGeneration === null
-            ? []
-            : [eq(artifactReviewGates.runId, input.runId), eq(artifactReviewGates.orgId, input.orgId)]),
+          ...bound,
         ),
       )
       .returning({ id: artifactReviewGates.id, orgId: artifactReviewGates.orgId });
@@ -291,7 +309,7 @@ export async function recordChangesRequested(
       const [gate] = await tx
         .select({ status: artifactReviewGates.status, disposition: artifactReviewGates.disposition, fingerprint: artifactReviewGates.fingerprint })
         .from(artifactReviewGates)
-        .where(eq(artifactReviewGates.id, request.gateId))
+        .where(and(eq(artifactReviewGates.id, request.gateId), ...bound))
         .limit(1);
       if (!(gate && gate.status === "resolved" && gate.disposition === "changes_requested" && gate.fingerprint === fingerprint)) {
         throw new Error("changes_requested gate CAS conflict — the gate is not pending");
@@ -344,7 +362,7 @@ export async function recordChangesRequested(
         route: route.kind,
         status,
         idempotencyKey: request.idempotencyKey,
-        pausedRunGeneration,
+        pausedRunGeneration: ended?.generation ?? null,
       })
       .onConflictDoNothing({ target: [lifecycleRepair.gateId] })
       .returning();
@@ -367,13 +385,44 @@ export async function recordChangesRequested(
         authority,
         { orgId: input.orgId, runId: input.runId, capability: "run.execute" },
         async (tx) => {
+          const rtx = tx as unknown as RepairRecordTx;
+          const [gate] = await rtx
+            .select({ reviewTaskId: artifactReviewGates.reviewTaskId })
+            .from(artifactReviewGates)
+            .where(and(eq(artifactReviewGates.id, request.gateId), eq(artifactReviewGates.runId, input.runId), eq(artifactReviewGates.orgId, input.orgId)))
+            .limit(1);
+          if (!gate || pauseTaskOfGate(gate.reviewTaskId) !== pauseTaskId) throw new PauseEndMarkRefused("pause-gate-mismatch");
+          // A retry answers from the existing repair only when that repair ended
+          // this pause, and the run still carries its end mark or left the pause.
+          const [prior] = await rtx.select().from(lifecycleRepair).where(eq(lifecycleRepair.gateId, request.gateId)).limit(1);
+          if (prior) {
+            if (prior.pausedRunGeneration === null) throw new PauseEndMarkRefused("pause-mode-conflict");
+            const [run] = await rtx
+              .select({ status: agentRuns.status, generation: agentRuns.pauseGeneration, phase: agentRuns.pauseClaimPhase })
+              .from(agentRuns)
+              .where(and(eq(agentRuns.id, input.runId), eq(agentRuns.orgId, input.orgId)))
+              .limit(1);
+            if (run?.status === "pending_approval" && !(run.phase === "changes_requested" && Number(run.generation) === prior.pausedRunGeneration)) {
+              throw new PauseEndMarkRefused("pause-moved-on");
+            }
+            return { row: prior, fresh: false as const };
+          }
+          // The repair row this call read before the guard is gone: no fresh record past a skipped base check.
+          if (retry) throw new Error("lifecycle_repair row vanished before the guarded record");
+          // A change request that ends a pause needs a repair the drain carries out,
+          // because the drain is what stops the run. An escalated repair is never
+          // drained, so the run would wait at an ended pause forever: refused.
+          if (status !== "requested") throw new PauseEndMarkRefused("pause-not-repairable");
           const mark = await markPauseChangesRequestedInTx(tx, {
             runId: input.runId,
             orgId: input.orgId,
             gatePauseTaskId: pauseTaskId,
           });
           if (mark.kind === "refused") throw new PauseEndMarkRefused(mark.code);
-          return writeRecord(tx as unknown as RepairRecordTx, mark.generation);
+          const written = await writeRecord(rtx, { generation: mark.generation, reviewTaskId: gate.reviewTaskId });
+          // A concurrent record won the gate's repair row: it must have ended this same pause.
+          if (!written.fresh && written.row?.pausedRunGeneration !== mark.generation) throw new PauseEndMarkRefused("pause-mode-conflict");
+          return written;
         },
       );
     } catch (err) {
