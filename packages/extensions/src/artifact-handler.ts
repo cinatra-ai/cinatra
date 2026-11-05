@@ -173,7 +173,7 @@ export function createArtifactExtensionHandler(): ExtensionTypeHandler {
   return {
     typeId: "artifact",
 
-    async install(ref: PackageRef, _actor: Actor): Promise<void> {
+    async install(ref: PackageRef): Promise<void> {
       // Descriptor (re)registration is owned by the registry bridge at
       // load/boot. The handler call is recorded for audit parity with the
       // other kinds; no bundle work and nothing to throw.
@@ -182,13 +182,13 @@ export function createArtifactExtensionHandler(): ExtensionTypeHandler {
       );
     },
 
-    async update(ref: PackageRef, _actor: Actor): Promise<void> {
+    async update(ref: PackageRef): Promise<void> {
       console.info(
         `[artifactExtensionHandler] update recorded for "${ref.packageName}" (descriptor refreshed via the object-registry bridge)`,
       );
     },
 
-    async uninstall(ref: PackageRef, _actor: Actor): Promise<void> {
+    async uninstall(ref: PackageRef): Promise<void> {
       // The handler itself does no descriptor/claim work (it has no scope). The
       // durable claim retirement + governed-row archival for `kind:"artifact"` is
       // fired by the DISPATCHER, scope-resolved from the canonical row, via the
@@ -199,7 +199,7 @@ export function createArtifactExtensionHandler(): ExtensionTypeHandler {
       );
     },
 
-    async archive(ref: PackageRef, _actor: Actor): Promise<void> {
+    async archive(ref: PackageRef): Promise<void> {
       // Same as uninstall: the durable, scope-resolved claim retirement + governed-
       // row archival is fired by the dispatcher's fail-closed claim-archival seam
       // (cinatra#1454), not by this metadata-only handler.
@@ -208,7 +208,7 @@ export function createArtifactExtensionHandler(): ExtensionTypeHandler {
       );
     },
 
-    async restore(ref: PackageRef, _actor: Actor): Promise<void> {
+    async restore(ref: PackageRef): Promise<void> {
       console.info(
         `[artifactExtensionHandler] restore recorded for "${ref.packageName}" (artifact type marked available)`,
       );
