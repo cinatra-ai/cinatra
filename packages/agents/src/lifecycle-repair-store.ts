@@ -52,6 +52,9 @@ import {
   lifecycleBatchDisposition,
 } from "./schema";
 import { emitArtifactReviewGate, ArtifactReviewGateError } from "./artifact-review-gate-store";
+import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
+import { guardedRunWrite } from "./org-write-run-seam";
+import { markPauseChangesRequestedInTx, type PauseEndMarkRefusal } from "./run-pause-claim";
 import { dispatchAutoGateOpen, dispatchAutoGateResolved } from "./run-wait-notifier";
 
 import {
@@ -135,7 +138,30 @@ export interface RecordChangesRequestedInput {
    * the approve/reject commit now leaves: `resolved_by` on the gate. Null where
    * the host cannot name an actor (a worker-driven record). */
   decidedBy?: string | null;
+  /**
+   * cinatra#4245: the change request ENDS the pause of `runId` at a review step
+   * the flow declares itself (`pauseTaskId` is the A2A task of that pause). The
+   * record then runs in ONE transaction guarded for `runId` under `authority`:
+   * the run's end mark (markPauseChangesRequestedInTx, which locks the run row
+   * first), the gate's compare-and-set (bound to `runId` and the org too) and the
+   * repair row, which keeps the generation the mark ended. That row is the
+   * instruction to stop the run; the repair drain carries it out. A refusal of the
+   * mark writes nothing and answers `pause-*`. Absent for every other change
+   * request, whose road is unchanged.
+   */
+  declaredPause?: { pauseTaskId: string; authority: OrgWriteAuthority | undefined };
 }
+
+/** A refusal of the end mark, carried out of the guarded transaction so it rolls back. */
+class PauseEndMarkRefused extends Error {
+  constructor(readonly code: PauseEndMarkRefusal) {
+    super(`the change request cannot end this pause (${code})`);
+    this.name = "PauseEndMarkRefused";
+  }
+}
+
+/** The transaction the record writes on: plain, or the guarded one of a declared pause. */
+type RepairRecordTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 export type RecordChangesRequestedResult =
   | {
@@ -226,8 +252,15 @@ export async function recordChangesRequested(
   const status: "requested" | "escalated" = escalated ? "escalated" : "requested";
   const repairId = randomUUID();
   const fingerprint = changesRequestedFingerprint(request);
+  // cinatra#4245: a change request that ends a pause needs a repair the drain
+  // carries out, because the drain is what stops the run. An escalated repair is
+  // never drained, so the run would wait at an ended pause forever: refused, and
+  // nothing is written.
+  if (input.declaredPause && status !== "requested") {
+    return { ok: false, code: "pause-not-repairable", error: "this change request would end the pause with no repair run to stop the run" };
+  }
 
-  const persisted = await db.transaction(async (tx) => {
+  const writeRecord = async (tx: RepairRecordTx, pausedRunGeneration: number | null) => {
     // CLOSE the review attempt: CAS the base gate pending → resolved with the
     // 'changes_requested' terminal disposition. A gate already resolved by THIS
     // decision (matching fingerprint) is idempotent; a different terminal state is
@@ -247,6 +280,10 @@ export async function recordChangesRequested(
         and(
           eq(artifactReviewGates.id, request.gateId),
           eq(artifactReviewGates.status, "pending"),
+          // cinatra#4245: the gate of an ended pause is the marked run's own gate.
+          ...(pausedRunGeneration === null
+            ? []
+            : [eq(artifactReviewGates.runId, input.runId), eq(artifactReviewGates.orgId, input.orgId)]),
         ),
       )
       .returning({ id: artifactReviewGates.id, orgId: artifactReviewGates.orgId });
@@ -307,6 +344,7 @@ export async function recordChangesRequested(
         route: route.kind,
         status,
         idempotencyKey: request.idempotencyKey,
+        pausedRunGeneration,
       })
       .onConflictDoNothing({ target: [lifecycleRepair.gateId] })
       .returning();
@@ -319,7 +357,32 @@ export async function recordChangesRequested(
       .where(eq(lifecycleRepair.gateId, request.gateId))
       .limit(1);
     return { row: won ?? null, fresh: false as const };
-  });
+  };
+
+  let persisted: Awaited<ReturnType<typeof writeRecord>>;
+  if (input.declaredPause) {
+    const { pauseTaskId, authority } = input.declaredPause;
+    try {
+      persisted = await guardedRunWrite(
+        authority,
+        { orgId: input.orgId, runId: input.runId, capability: "run.execute" },
+        async (tx) => {
+          const mark = await markPauseChangesRequestedInTx(tx, {
+            runId: input.runId,
+            orgId: input.orgId,
+            gatePauseTaskId: pauseTaskId,
+          });
+          if (mark.kind === "refused") throw new PauseEndMarkRefused(mark.code);
+          return writeRecord(tx as unknown as RepairRecordTx, mark.generation);
+        },
+      );
+    } catch (err) {
+      if (err instanceof PauseEndMarkRefused) return { ok: false, code: err.code, error: err.message };
+      throw err;
+    }
+  } else {
+    persisted = await db.transaction((tx) => writeRecord(tx, null));
+  }
 
   if (!persisted.row) throw new Error("lifecycle_repair row vanished after insert-conflict");
   // cinatra#2864 — `changes_requested` is a TERMINAL disposition: the CAS above

@@ -4,7 +4,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { OrgWriteAuthority, OrgWriteDb, OrgWriteTx } from "@cinatra-ai/org-write-kernel";
 import { db } from "./db";
 import { agentRuns } from "./schema";
-import { guardedRunWrite } from "./org-write-run-seam";
+import { guardedRunWrite, type GuardedRunTx } from "./org-write-run-seam";
 import { PAUSE_CLAIM_LEASE_SECONDS, PAUSE_SEND_LEASE_SECONDS } from "./run-status";
 
 // ---------------------------------------------------------------------------
@@ -262,6 +262,110 @@ export async function settlePauseSend(
   opts?: Pick<PauseClaimWriteOptions, "db">,
 ): Promise<"settled" | "already-cleared"> {
   return (await clearOwnLease(ref, "sending", authority, opts)) ? "settled" : "already-cleared";
+}
+
+/** Why a change request may not end the pause; the caller rolls its transaction back. */
+export type PauseEndMarkRefusal =
+  /** The run is not `pending_approval` (or there is no such run in this org). */
+  | "pause-not-pending"
+  /** A live `claimed` or `sending` lease: a resume holds the pause. */
+  | "pause-held"
+  /** The run waits at another task than the gate's. */
+  | "pause-moved-on"
+  /** The task the run waits at cannot be read (no latest-task record, or Redis failed). */
+  | "pause-unverifiable";
+
+/**
+ * End the pause by a change request: the end mark (`changes_requested`, token
+ * `cr:<generation>`, no expiry). It never expires; only a status change clears
+ * it, so no claimer can resume this pause after the mark commits.
+ *
+ * It runs on the CALLER's transaction (spec-rev1 MF5): the caller opened it with
+ * guardedRunWrite for this run's org, and the gate's compare-and-set and the
+ * repair row commit or roll back with the mark. It locks the run row first and
+ * reads it again under the lock:
+ *   1. not `pending_approval` -> `pause-not-pending`;
+ *   2. a live `claimed` or `sending` lease -> `pause-held` (an expired lease is
+ *      overwritten by the mark, so its holder's fence and release find it gone);
+ *   3. the end mark already set for the gate's task -> the same generation (a
+ *      second record of the same pause); set for another task -> `pause-moved-on`;
+ *   4. `a2a_task_id` names the gate's task -> the mark;
+ *   5. otherwise the Redis latest-task record decides: the gate's task -> the
+ *      mark rewrites the stale column (heal); another task -> `pause-moved-on`;
+ *      none, or a Redis error -> `pause-unverifiable`.
+ * The returned generation is the one the mark holds: the drain's stop is
+ * conditioned on it. A database error throws.
+ */
+export async function markPauseChangesRequestedInTx(
+  tx: GuardedRunTx,
+  args: { readonly runId: string; readonly orgId: string; readonly gatePauseTaskId: string },
+): Promise<{ readonly kind: "marked"; readonly generation: number } | { readonly kind: "refused"; readonly code: PauseEndMarkRefusal }> {
+  if (typeof args.gatePauseTaskId !== "string" || args.gatePauseTaskId.length === 0) {
+    throw new Error(`run-pause-claim: empty pause task id for run ${args.runId}`);
+  }
+  const refused = (code: PauseEndMarkRefusal) => ({ kind: "refused", code }) as const;
+  const dtx = tx as unknown as typeof db;
+  const rows = await dtx
+    .select({
+      status: agentRuns.status,
+      generation: agentRuns.pauseGeneration,
+      phase: agentRuns.pauseClaimPhase,
+      live: sql<boolean | null>`${agentRuns.pauseClaimExpiresAt} > now()`,
+      task: agentRuns.a2aTaskId,
+    })
+    .from(agentRuns)
+    .where(and(eq(agentRuns.id, args.runId), eq(agentRuns.orgId, args.orgId)))
+    .limit(1)
+    .for("update");
+  const row = rows[0];
+  if (!row || row.status !== "pending_approval") return refused("pause-not-pending");
+  const generation = typeof row.generation === "number" ? row.generation : Number(row.generation);
+  if (!Number.isSafeInteger(generation) || generation < 0) {
+    throw new Error(`run-pause-claim: unreadable pause generation for run ${args.runId}`);
+  }
+  if (row.phase === "changes_requested") {
+    return row.task === args.gatePauseTaskId ? { kind: "marked", generation } : refused("pause-moved-on");
+  }
+  if (row.phase !== null) {
+    if (row.phase !== "claimed" && row.phase !== "sending") {
+      throw new Error(`run-pause-claim: unknown claim phase on run ${args.runId}`);
+    }
+    // An expiry that does not read as passed holds the pause (fail closed).
+    if (row.live !== false) return refused("pause-held");
+  }
+  if (row.task !== args.gatePauseTaskId) {
+    let latest: string | null;
+    try {
+      const { resolveLatestWayflowGateTaskId } = await import("@cinatra-ai/a2a");
+      latest = await resolveLatestWayflowGateTaskId(args.runId);
+    } catch {
+      return refused("pause-unverifiable");
+    }
+    if (latest === null) return refused("pause-unverifiable");
+    if (latest !== args.gatePauseTaskId) return refused("pause-moved-on");
+  }
+  const marked = await dtx
+    .update(agentRuns)
+    .set({
+      a2aTaskId: args.gatePauseTaskId,
+      pauseClaimToken: `cr:${generation}`,
+      pauseClaimPhase: "changes_requested",
+      pauseClaimExpiresAt: null,
+    })
+    .where(
+      and(
+        eq(agentRuns.id, args.runId),
+        eq(agentRuns.orgId, args.orgId),
+        eq(agentRuns.status, "pending_approval"),
+        eq(agentRuns.pauseGeneration, generation),
+      ),
+    )
+    .returning({ id: agentRuns.id });
+  if (marked.length !== 1) {
+    // The row is locked by this transaction; anything but its one row is not a mark.
+    throw new Error(`run-pause-claim: the locked run ${args.runId} did not take the end mark`);
+  }
+  return { kind: "marked", generation };
 }
 
 /**

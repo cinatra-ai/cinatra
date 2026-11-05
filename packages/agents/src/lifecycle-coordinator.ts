@@ -64,7 +64,7 @@ import {
 } from "./store";
 import type { GuardedRunCompanionWrite } from "./org-write-run-seam";
 import { maybeHoldRunForRecommendation } from "./recommendation-hold";
-import type { AgentRunStatus } from "./run-status";
+import type { AgentRunStatus, PauseEndMark } from "./run-status";
 
 import { emitLifecycleMomentOpened } from "./lifecycle-part-outbox";
 
@@ -944,23 +944,7 @@ export async function clearRunLifecycleMoment(
   // released the run and had not yet enqueued it — leaving exactly the run this
   // clear exists to tidy up after: released, with no job behind it.
   try {
-    const run = await readAgentRunById(runId);
-    if (!run) return;
-    // NOTHING TO CLEAR. Not an error and not worth a write.
-    if (run.lifecycleMoment === null) return;
-    // COMPARE AND CLEAR. The read and the write are two statements, so the
-    // moment can change between them — a run released and parked again at
-    // something new. Naming the moment this call SAW is what keeps the clear
-    // from taking the newer card off: it removes the moment it read, or nothing.
-    await recordRunLifecycleMoment(
-      {
-        runId: run.id,
-        orgId: run.orgId,
-        moment: null,
-        onlyWhileMoment: run.lifecycleMoment,
-      },
-      authority,
-    );
+    await clearRunLifecycleMomentOrThrow(runId, authority);
   } catch (err) {
     console.warn(
       "[lifecycle-coordinator] could not clear the moment on run",
@@ -969,6 +953,36 @@ export async function clearRunLifecycleMoment(
       err instanceof Error ? err.message : String(err),
     );
   }
+}
+
+/**
+ * The same clear, STRICT: a failed read or write throws (cinatra#4245, spec-rev1
+ * MF6). For a caller that holds a durable duty to retry, so a run is never left
+ * stating a moment that is over: the repair drain stops a run whose pause a
+ * change request ended, and its repair row stays `requested` (the duty) until
+ * this clear has succeeded too.
+ */
+export async function clearRunLifecycleMomentOrThrow(
+  runId: string,
+  authority: OrgWriteAuthority | undefined,
+): Promise<void> {
+  const run = await readAgentRunById(runId);
+  if (!run) return;
+  // NOTHING TO CLEAR. Not an error and not worth a write.
+  if (run.lifecycleMoment === null) return;
+  // COMPARE AND CLEAR. The read and the write are two statements, so the
+  // moment can change between them — a run released and parked again at
+  // something new. Naming the moment this call SAW is what keeps the clear
+  // from taking the newer card off: it removes the moment it read, or nothing.
+  await recordRunLifecycleMoment(
+    {
+      runId: run.id,
+      orgId: run.orgId,
+      moment: null,
+      onlyWhileMoment: run.lifecycleMoment,
+    },
+    authority,
+  );
 }
 
 /**
@@ -1050,7 +1064,10 @@ export type ReleaseReason =
   | "continue"
   | "trigger_fired"
   | "approval_resumed"
-  | "recommendation_decided";
+  | "recommendation_decided"
+  /** cinatra#4245: a change request ended the run's pause at a review step the
+   *  flow declares itself; the run is stopped (the repair is a separate run). */
+  | "changes_requested";
 
 export type AdvanceInput = {
   run: Pick<AgentRunRecord, "id" | "orgId" | "status">;
@@ -1076,6 +1093,12 @@ export type AdvanceInput = {
      * revert the run to a state it was never in.
      */
     onLostRace?: "answer" | "throw";
+    /**
+     * cinatra#4245: the stop of a pause a change request ended lands only while
+     * the run still carries that end mark at this generation (the status seam's
+     * rule 5). Legal only on a `→ stopped` release.
+     */
+    pauseEndMark?: PauseEndMark;
   };
   authority: OrgWriteAuthority | undefined;
 };
@@ -1103,7 +1126,13 @@ export async function advanceAgentRun(input: AdvanceInput): Promise<CoordinatorA
   const { run, release, authority } = input;
 
   try {
-    await transitionRunStatus(run.id, release.from, release.to, undefined, authority);
+    await transitionRunStatus(
+      run.id,
+      release.from,
+      release.to,
+      release.pauseEndMark ? { pauseEndMark: release.pauseEndMark } : undefined,
+      authority,
+    );
   } catch (err) {
     if (
       err instanceof RunTransitionError &&

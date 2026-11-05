@@ -473,6 +473,20 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     importBanned: true,
     allowedImporters: ["packages/agents/src/run-resume-under-claim.ts"],
   },
+  {
+    // The change request's end mark: it writes the claim columns (and heals
+    // a2a_task_id) of ONE run row, on the guarded transaction its only caller
+    // opens with guardedRunWrite (run.execute) for that run's org, together with
+    // the gate's compare-and-set and the repair row (spec-rev1 MF5).
+    module: "packages/agents/src/run-pause-claim.ts",
+    exportName: "markPauseChangesRequestedInTx",
+    capability: "run.execute",
+    orgIdExtractor: "agent_runs.org_id (the caller's guarded transaction for the run's org; the UPDATE is org-scoped, NOT NULL)",
+    storageReferences: ["agent_runs"],
+    cascadeOwnership: "inert-history",
+    importBanned: true,
+    allowedImporters: ["packages/agents/src/lifecycle-repair-store.ts"],
+  },
   // — new-run creation (#1940 P3, Decision 2): the exemption above is FLIPPED
   //   — both are now guarded inserts (guardedRunWrite, capability run.execute)
   //   into agent_runs (store.ts). Allowlist = the named callers (the full

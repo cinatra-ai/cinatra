@@ -86,9 +86,10 @@ import "server-only";
 import { and, asc, eq, sql } from "drizzle-orm";
 
 import { db } from "./db";
-import { agentRuns, agentTemplates, lifecycleRepair } from "./schema";
-import { launchAgentRun } from "./lifecycle-coordinator";
+import { agentRuns, agentTemplates, artifactReviewGates, lifecycleRepair } from "./schema";
+import { advanceAgentRun, clearRunLifecycleMomentOrThrow, launchAgentRun } from "./lifecycle-coordinator";
 import { markRepairDispatched } from "./lifecycle-repair-store";
+import { RunTransitionError } from "./run-status";
 
 import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
 
@@ -223,6 +224,22 @@ export async function dispatchPendingProducerRepairs(opts?: {
   for (const row of pending) {
     summary.scanned += 1;
     try {
+      // cinatra#4245: a change request that ended a run's pause (its repair row
+      // keeps the generation the end mark holds) stops that run FIRST, before
+      // any other branch and before any repair run starts. A failure throws: the
+      // row stays `requested` and the next pass tries again.
+      if (typeof row.pausedRunGeneration === "number") {
+        const stop = await stopRunAtEndedPause(row.gateId, row.orgId, row.pausedRunGeneration);
+        if (stop === "not-paused") {
+          const escalated = await escalateRepair(
+            row.id,
+            "the run whose pause this change request ended was no longer at that pause, so no repair run is started",
+          );
+          if (escalated) summary.escalated += 1;
+          else summary.raced += 1;
+          continue;
+        }
+      }
       if (row.continuationMode === "checkpointed") {
         // The checkpointed half of the delivery contract is a RESUME, not a new
         // run. Escalate rather than apply the wrong mechanism.
@@ -412,6 +429,61 @@ export async function dispatchPendingProducerRepairs(opts?: {
   }
 
   return summary;
+}
+
+/**
+ * Stop the run whose pause a change request ended (cinatra#4245, spec 3.6). The
+ * run is the gate's own run (the change request bound its compare-and-set to
+ * it). The stop is the coordinator's release `pending_approval → stopped` under
+ * the end mark at `generation` (status seam rule 5), so it can never stop a
+ * later pause: no claimer can take a pause that carries the end mark, and only
+ * a status change clears it. There is no waiting state.
+ *
+ * `stopped` — the stop won, or the run reads `stopped` after a lost
+ * compare-and-set (a concurrent drain, or a stop of its own: converged); the
+ * moment and card are then cleared STRICTLY (spec-rev1 MF6), so a failed clear
+ * throws and the next pass retries it. `not-paused` — the run left the pause
+ * some other way (the caller escalates). Any other error throws.
+ */
+async function stopRunAtEndedPause(
+  gateId: string,
+  orgId: string,
+  generation: number,
+): Promise<"stopped" | "not-paused"> {
+  const [gate] = await db
+    .select({ runId: artifactReviewGates.runId })
+    .from(artifactReviewGates)
+    .where(and(eq(artifactReviewGates.id, gateId), eq(artifactReviewGates.orgId, orgId)))
+    .limit(1);
+  if (!gate) return "not-paused";
+  const authority = mintLifecycleRepairDispatchAuthority(orgId);
+  try {
+    await advanceAgentRun({
+      run: { id: gate.runId, orgId, status: "pending_approval" },
+      release: {
+        reason: "changes_requested",
+        from: "pending_approval",
+        to: "stopped",
+        pauseEndMark: { generation },
+        dispatch: {
+          kind: "caller_dispatches",
+          why: "the stop dispatches nothing; this drain starts the separate repair run itself",
+        },
+        onLostRace: "throw",
+      },
+      authority,
+    });
+  } catch (err) {
+    if (!(err instanceof RunTransitionError) || err.code !== "stale_from_status") throw err;
+    const [now] = await db
+      .select({ status: agentRuns.status })
+      .from(agentRuns)
+      .where(and(eq(agentRuns.id, gate.runId), eq(agentRuns.orgId, orgId)))
+      .limit(1);
+    if (now?.status !== "stopped") return "not-paused";
+  }
+  await clearRunLifecycleMomentOrThrow(gate.runId, authority);
+  return "stopped";
 }
 
 /** Resolve the producing run's template (the agent that must repair). */
