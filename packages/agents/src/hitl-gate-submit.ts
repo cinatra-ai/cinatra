@@ -394,6 +394,44 @@ export function liftRendererApprovalNote(
   return null;
 }
 
+/** A new literal choice replaces its old response; unrelated field edits keep it. */
+export function mergeGateRendererValues(
+  reviewTaskId: string,
+  buffered: Record<string, unknown>,
+  next: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged = { ...buffered, ...next };
+  if (!isSetupGateTaskId(reviewTaskId) &&
+      typeof next.approved === "boolean" && next.approved !== buffered.approved &&
+      (typeof next.userResponse !== "string" || !next.userResponse.trim())) {
+    // Do not parse response text or guess the decision from it. The new
+    // boolean choice is authoritative; an old response belongs to the old one.
+    delete merged.userResponse;
+  }
+  return merged;
+}
+
+/** Carry a renderer's literal decision through Continue without treating setup data as approval. */
+export function buildGateContinuePayload(
+  reviewTaskId: string,
+  values: Record<string, unknown>,
+  now: string = new Date().toISOString(),
+): Record<string, unknown> {
+  if (isSetupGateTaskId(reviewTaskId)) return { ...values };
+  const payload: Record<string, unknown> = {
+    ...values,
+    approved: values.approved !== false,
+    approvedAt: now,
+  };
+  // The server's fallback text otherwise says approval even when the stored
+  // decision is false. Keep authored response bytes; synthesize only absence.
+  if (payload.approved === false &&
+      (typeof payload.userResponse !== "string" || !payload.userResponse.trim())) {
+    payload.userResponse = JSON.stringify(payload);
+  }
+  return payload;
+}
+
 // ---------------------------------------------------------------------------
 // Chat-gate submit payload (AgenticRunPanel — the single discriminated
 // resume-payload builder behind submitActiveGate / ChatGateDescriptor.submit)
@@ -454,14 +492,20 @@ export function buildChatGateSubmitPayload(args: {
   // Compute the `userResponse` text first, then wrap with the WayFlow
   // envelope when paperclip attachments are pending. No attachments means
   // the wrapper returns the text verbatim (back-compat invariant).
-  const legacyUserResponseText = JSON.stringify(
-    Object.keys(obj).length > 0
-      ? obj
-      : typeof value === "string" ||
-          typeof value === "number" ||
-          typeof value === "boolean"
-        ? value
-        : { approved: true },
+  const merged = mergeGateRendererValues(reviewTaskId, buffered, obj);
+  const approved = merged.approved !== false;
+  const scalar = typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+  const authoredResponse = typeof merged.userResponse === "string" && merged.userResponse.trim()
+    ? merged.userResponse
+    : null;
+  const legacyUserResponseText = authoredResponse ?? JSON.stringify(
+    !approved
+      // Typed composer text is data alongside the stored refusal, never a
+      // new authorization. An explicit object choice can replace that refusal.
+      ? { ...merged, ...(scalar ? { userResponse: value } : {}), approved: false }
+      : Object.keys(obj).length > 0
+        ? obj
+        : scalar ? value : { approved: true },
   );
   const wrapped = wrapUserResponseWithAttachments(
     legacyUserResponseText,
@@ -469,9 +513,8 @@ export function buildChatGateSubmitPayload(args: {
   );
   return {
     payload: {
-      ...buffered,
-      ...obj,
-      approved: true,
+      ...merged,
+      approved,
       approvedAt: args.now ?? new Date().toISOString(),
       // WayFlow resume-text contract — without userResponse the server
       // forwards only "[Approved by operator]" to the flow.

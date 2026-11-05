@@ -25,6 +25,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -107,6 +108,8 @@ import { applyAttachmentEnvelope } from "./attachment-envelope-payload";
 // #817 context-selector envelope synthesis are shared with
 // agentic-run-panel so both surfaces submit byte-identical payloads.
 import {
+  buildGateContinuePayload,
+  mergeGateRendererValues,
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
@@ -710,12 +713,28 @@ function HitlApprovalCard({
   // sequential per-field setup gates all reuse the SAME xRenderer
   // (schema-field-fallback), so an xRenderer-only key never fires on a
   // field→field advance (postTitle → blogPostUrl) and field 1's buffered
-  // value bleeds into field 2. fieldName is undefined outside the setup loop,
-  // so non-setup gate transitions keep their existing xRenderer-only behavior.
+  // value bleeds into field 2. fieldName is undefined outside the setup loop.
+  //
+  // The key also carries the review task (cinatra#3650): Continue sends the
+  // choice the renderer stored, and a following mid-run gate often reuses its
+  // renderer (see the gate-identity block below), so a refusal stored for one
+  // task must not be sent for the next. Setup fields share one review task
+  // and still reset per field.
+  //
+  // The reset happens during render, before the next gate commits, so that
+  // gate's renderer reads an empty buffer and any choice it stages as it opens
+  // (a layout effect runs in that same commit) is kept. A clear queued for
+  // later would wipe that choice and send the default instead.
+  //
+  // The ref holds the last COMMITTED non-null key. It advances in a layout
+  // effect, never during render: a render that React discards keeps the old
+  // key, so the next render clears the buffer again. The renderer's layout
+  // effects run before this card's own, and the update they stage renders
+  // only after the ref has advanced, so that update is kept.
   const prevBufferKeyRef = useRef<string | null>(null);
   const bufferKey =
     interruptContext != null
-      ? `${interruptContext.xRenderer}::${interruptContext.fieldName ?? ""}`
+      ? `${interruptContext.reviewTaskId}::${interruptContext.xRenderer}::${interruptContext.fieldName ?? ""}`
       : null;
   if (
     bufferKey !== null &&
@@ -724,14 +743,16 @@ function HitlApprovalCard({
   ) {
     // Real gate→gate transition — clear the previous gate's buffer.
     if (Object.keys(bufferedHitlValue).length > 0) {
-      queueMicrotask(() => setBufferedHitlValue({}));
+      setBufferedHitlValue({});
     }
   }
-  // Advance the ref only on non-null keys so a transient null doesn't
-  // poison the next real comparison.
-  if (bufferKey !== null) {
-    prevBufferKeyRef.current = bufferKey;
-  }
+  // Advance only on non-null keys so a transient null doesn't poison the next
+  // real comparison.
+  useLayoutEffect(() => {
+    if (bufferKey !== null) {
+      prevBufferKeyRef.current = bufferKey;
+    }
+  }, [bufferKey]);
 
   // The block belongs to ONE gate, so it is released on GATE IDENTITY — the
   // review-task id — and not on the buffer key above (cinatra#3219 convergence).
@@ -950,11 +971,10 @@ function HitlApprovalCard({
     // Calling approveReviewTask after a setState would risk reading stale `bufferedHitlValue`
     // because React batches updates. handleContinue is terminal (renderer unmounts on success),
     // so no setState is needed here — just capture the merged object as a local.
-    let nextBuffered: Record<string, unknown> = {
-      ...bufferedHitlValue,
-      approved: true,
-      approvedAt: new Date().toISOString(),
-    };
+    let nextBuffered = buildGateContinuePayload(
+      interruptContext.reviewTaskId,
+      bufferedHitlValue,
+    );
     // Renderer-specific approvalNote lifts (list-picker / setup-form /
     // scrape-schema-review / final-list-review) — snapshot exactly what was
     // approved at this gate for the downstream continuation. Shared with
@@ -1316,18 +1336,17 @@ function HitlApprovalCard({
                     let nextBuffered = bufferedHitlValue;
                     if (next && typeof next === "object" && !Array.isArray(next)) {
                       const newValues = next as Record<string, unknown>;
-                      nextBuffered = { ...bufferedHitlValue, ...newValues };
+                      nextBuffered = mergeGateRendererValues(interruptContext.reviewTaskId, bufferedHitlValue, newValues);
                       setBufferedHitlValue(nextBuffered); // visual update
                     }
                     if (isGroupedSetup) {
                       if (!(await checkRunName())) return;
                       onApproved?.();
                       try {
-                        let approvalPayload: Record<string, unknown> = {
-                          ...nextBuffered,
-                          approved: true,
-                          approvedAt: new Date().toISOString(),
-                        };
+                        let approvalPayload = buildGateContinuePayload(
+                          interruptContext.reviewTaskId,
+                          nextBuffered,
+                        );
                         // Renderer approvalNote lift — for the grouped-setup
                         // path only the `:setup-form` suffix matches (the
                         // other lifted renderers are never grouped-setup).
