@@ -27,7 +27,7 @@ import {
   objectContentSnapshotSchemaQueries,
   runContextSelectionsSchemaQueries,
 } from "@/lib/artifact-claim-schema";
-import { publicationOperationLedgerSchemaQueries, publishDecisionSchemaQueries } from "@/lib/artifacts/publication-operation-schema";
+import { publicationOperationLedgerSchemaQueries, publishDecisionSchemaQueries, pageCaptureLeasesSchemaQueries } from "@/lib/artifacts/publication-operation-schema";
 import { environmentLayerStoreSchemaQueries, agentExecutionConfigSchemaQueries } from "@/lib/execution/environment-layer-schema";
 import { auditEventsSchemaQueries } from "@/lib/authz/audit-events-schema";
 import { auditorSnapshotSchemaQueries } from "@/lib/auditor-snapshot-schema";
@@ -3928,7 +3928,7 @@ END $$` },
       created_at timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `CREATE INDEX IF NOT EXISTS widget_stream_tokens_expires_at_idx ON "${schemaName.replaceAll('"', '""')}"."widget_stream_tokens" (expires_at)` },
-    ...extensionUpdateReadModelSchemaQueries(schemaName), ...skillEfficacySchemaQueries(schemaName), ...connectorInstanceToolPolicySchemaQueries(schemaName), ...connectorInstanceServerSchemaQueries(schemaName), ...connectorInstancePendingCallSchemaQueries(schemaName), ...connectorInstanceConfirmationPolicySchemaQueries(schemaName), ...connectorInstanceNativeInjectionSchemaQueries(schemaName), // DDL in pure-strings leaves for file-size-ratchet headroom (#1041 outcome-3 / #1317 / #1405 pattern): extension update read-model + cinatra#1368 skill-efficacy exposure telemetry + cinatra#2017 S2 connector_instance_tool_policy + cinatra#2018 S3 connector_instance_server & site_inventory + cinatra#2020 S5 connector_instance_pending_call & confirmation_policy + cinatra#2019 S4 connector_instance_native_injection_policy opt-in (additive bootstrap DDL, no numbered migration; all run late)
+    ...extensionUpdateReadModelSchemaQueries(schemaName), ...skillEfficacySchemaQueries(schemaName), ...connectorInstanceToolPolicySchemaQueries(schemaName), ...connectorInstanceServerSchemaQueries(schemaName), ...connectorInstancePendingCallSchemaQueries(schemaName), ...pageCaptureLeasesSchemaQueries(schemaName), ...connectorInstanceConfirmationPolicySchemaQueries(schemaName), ...connectorInstanceNativeInjectionSchemaQueries(schemaName), // DDL in pure-strings leaves for file-size-ratchet headroom (#1041 outcome-3 / #1317 / #1405 pattern): extension update read-model + cinatra#1368 skill-efficacy exposure telemetry + cinatra#2017 S2 connector_instance_tool_policy + cinatra#2018 S3 connector_instance_server & site_inventory + cinatra#2020 S5 connector_instance_pending_call & confirmation_policy + cinatra#4223 page_capture_leases + cinatra#2019 S4 connector_instance_native_injection_policy opt-in (additive bootstrap DDL, no numbered migration; all run late)
     // -----------------------------------------------------------------------
     // cinatra#407 — hosted /widget-auth PKCE login + user-scoped widget token.
     //

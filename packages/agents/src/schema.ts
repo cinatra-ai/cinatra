@@ -911,6 +911,12 @@ export const artifactVerificationRecords = cinatraSchema.table("artifact_verific
   fieldDiff:                       jsonb("field_diff").notNull().default(sql`'[]'::jsonb`),
   visualDiff:                      jsonb("visual_diff"),
   outcome:                         text("outcome").notNull(), // verified | drifted | unmet
+  // cinatra#4312 — the record's reopen gate. The verification writes it in that gate's
+  // insert transaction; core__0125's backfill, repeated by the review orchestration
+  // sweep, names a gate a repair row at attempt 2 or later rests on (an old writer's,
+  // or a caller's gate with a hand-written row). Null when neither named one, and
+  // again when the named gate is deleted (the foreign key sets it to null).
+  reopenedGateId:                  text("reopened_gate_id").references(() => artifactReviewGates.id, { onDelete: "set null" }),
   createdAt:                       timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   gateIdx: index("artifact_verification_records_gate_idx").on(t.gateId),
