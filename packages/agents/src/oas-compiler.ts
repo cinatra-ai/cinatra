@@ -1220,11 +1220,14 @@ export type CompiledAgentOasStep = {
   // the gate is an ordinary HITL gate and every code path stays byte-identical.
   artifactReviewTargetsInput?: string;
   // cinatra#4457: set ONLY on an InputMessageNode gate whose
-  // `metadata.cinatra.surfaceGateInputs` is strictly `true`. It lists the titles
-  // of the gate's declared inputs: the keys of the one JSON object the WayFlow
-  // loader writes as that gate's message. At runtime a run input never fills one
-  // of these keys in the review values (gate-keys-not-from-run-inputs.ts).
-  // Absent (the default) leaves every other gate byte-identical.
+  // `metadata.cinatra.surfaceGateInputs` is strictly `true`, and on a FlowNode
+  // step (a gateStep or the plain step) whose INLINED subflow holds such a gate
+  // (subflowSurfaceGateInputKeys). It lists the titles of the gate's declared
+  // inputs: the keys of the one JSON object the WayFlow loader writes as that
+  // gate's message (for a FlowNode step, the keys of every such gate in the
+  // subflow). At runtime a run input never fills one of these keys in the review
+  // values (gate-keys-not-from-run-inputs.ts). Absent (the default) leaves
+  // every other gate byte-identical.
   surfaceGateInputKeys?: string[];
 };
 
@@ -1308,6 +1311,50 @@ function assertHandledComponentType(
         `Update COMPONENT_TYPES_HANDLED + add a matching branch in the steppableNodeIds.map body.`,
     );
   }
+}
+
+// cinatra#4457: the keys of every value-surfacing gate inside a FlowNode's
+// wrapped subflow. A gate in a subflow reaches the root approval policy only as
+// a step of its FlowNode (a gateStep, or the plain FlowNode step), so that step
+// lists the declared input titles of every InputMessageNode in the INLINED
+// subflow whose `metadata.cinatra.surfaceGateInputs` is strictly `true` (the
+// loader's identity), with the walk of subflowFiresNonContextRuntimeGate. The
+// host cannot tell which gate of the subflow paused, so every step of the
+// FlowNode lists the keys of all of them. When the ref is absent or not
+// inlined, there are no keys and the step is as before (no list).
+function subflowSurfaceGateInputKeys(
+  subflowRef: string | undefined,
+  localRefs: Record<string, unknown>,
+): string[] {
+  if (!subflowRef) return [];
+  const subflow = localRefs[subflowRef];
+  if (!subflow || typeof subflow !== "object") return [];
+  const keys: string[] = [];
+  const visit = (o: unknown): void => {
+    if (o === null || typeof o !== "object") return;
+    if (Array.isArray(o)) {
+      for (const v of o) visit(v);
+      return;
+    }
+    const node = o as Record<string, unknown>;
+    if (node["component_type"] === "InputMessageNode") {
+      const cin =
+        ((node["metadata"] as { cinatra?: Record<string, unknown> } | undefined)?.cinatra) ??
+        {};
+      if (cin["surfaceGateInputs"] === true) {
+        const inputs = node["inputs"];
+        const titles = Array.isArray(inputs)
+          ? (inputs as unknown[]).map((i) =>
+              i !== null && typeof i === "object" ? (i as { title?: unknown }).title : undefined,
+            )
+          : [];
+        for (const k of readKeyList(titles)) if (!keys.includes(k)) keys.push(k);
+      }
+    }
+    for (const v of Object.values(node)) visit(v);
+  };
+  visit(subflow);
+  return keys;
 }
 
 // #839: does a FlowNode's wrapped subflow fire a real (non-context) runtime
@@ -1754,6 +1801,9 @@ export async function compileOasAgentJson(opts: {
       // No leaf to merge — pass undefined and let the merge function project
       // parentCinatra fields through the same 5-key surface as AgentNode.
       const effective = mergeParentLeafCinatra(parentCinatra, undefined);
+      // cinatra#4457: the keys of the value-surfacing gates in the subflow,
+      // written on the gateStep return and on the plain FlowNode return below.
+      const nestedGateKeys = subflowSurfaceGateInputKeys(node.subflow?.$component_ref, localRefs);
 
       // Build inputMapping from data_flow_connections targeting this FlowNode.
       // Same logic as the AgentNode arm.
@@ -1817,6 +1867,7 @@ export async function compileOasAgentJson(opts: {
         if (!subflowFiresNonContextRuntimeGate(node.subflow?.$component_ref, localRefs)) {
           step.firesRendererGate = false;
         }
+        if (nestedGateKeys.length > 0) step.surfaceGateInputKeys = nestedGateKeys;
         return step;
       }
 
@@ -1834,6 +1885,7 @@ export async function compileOasAgentJson(opts: {
         if (derived?.renderer) step.xRenderer = derived.renderer;
         if (derived?.riskClass && step.riskClass === undefined) step.riskClass = derived.riskClass;
       }
+      if (nestedGateKeys.length > 0) step.surfaceGateInputKeys = nestedGateKeys;
 
       return step;
     }
