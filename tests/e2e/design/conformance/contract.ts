@@ -4827,7 +4827,7 @@ const CONNECTOR_CONFIG_TAB_DRIVER: SurfaceDriver = {
           panel.locator(`input[name="${CONNECTOR_CONFIG_TAB.fields.shellEnabled.key}"]`),
         ).toHaveValue(CONNECTOR_CONFIG_TAB.fields.shellEnabled.value);
         await expect(
-          panel.getByRole("switch", { name: CONNECTOR_CONFIG_TAB.fields.shellEnabled.label }),
+          panel.getByRole("checkbox", { name: CONNECTOR_CONFIG_TAB.fields.shellEnabled.label }),
         ).toBeChecked();
       },
     },

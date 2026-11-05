@@ -171,7 +171,7 @@ export type DynamicSelectOptionsField = {
   description?: string;
 };
 
-/** A boolean toggle (rendered as a Switch), persisted like other config values. */
+/** An on / off choice (rendered as a checkbox), persisted like other config values. */
 export type BooleanField = {
   kind: "boolean";
   key: string;
