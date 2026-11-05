@@ -691,6 +691,42 @@ def test_every_mount_log_line_quotes_and_cuts_the_node_and_gate_ids(tmp_path, ca
     assert "pub\nlish" not in out and "x" * 113 not in out
 
 
+@pytest.mark.parametrize("line", ["WARNING", "NOTE"])
+def test_the_output_schema_warning_and_note_lines_quote_and_cut_the_node_id(line, capsys):
+    """The two other lines of the output-schema pass that name a node: the
+    WARNING for an output with no usable title, and the NOTE for an object
+    output that declares no members. Each prints the id repr-escaped on one
+    line (a newline and U+2028 in the id included) and cut at 120 characters."""
+    odd = "pub\nlish " + "x" * 130
+    outputs = (
+        [{"title": "ok", "type": "string"}, {"type": "string"}]
+        if line == "WARNING"
+        else [{"title": "draft", "type": "object"}]
+    )
+    doc = {
+        "component_type": "Flow",
+        "id": "flow",
+        "name": "flow",
+        "$referenced_components": {
+            odd: {
+                "component_type": "ApiNode",
+                "id": odd,
+                "name": odd,
+                "url": "https://example.invalid/api/llm-bridge",
+                "data": {"user": "{{ idea }}"},
+                "outputs": outputs,
+            }
+        },
+    }
+    capsys.readouterr()
+    agent_loader._derive_bridge_output_schemas(doc, "vendor/slug")
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    assert len(lines) == 1 and f"] {line}: vendor/slug: bridge ApiNode " in lines[0]
+    assert repr(odd[:120] + "...") in lines[0]
+    assert "x" * 112 not in out
+
+
 def test_a_mount_with_a_context_injection_records_the_gated_document(tmp_path, monkeypatch):
     """With a context-subflow injection, the composed document the debug view
     reads holds the gate, and its fingerprint is that of the document loaded."""
