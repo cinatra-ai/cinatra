@@ -41,6 +41,7 @@
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
+import { projectHitlRenderInputs } from "./hitl-render-input-projection.server";
 import type { ActorRoleHints } from "./auth-policy";
 import { deriveRunHitlContext } from "./hitl-context";
 import { isParkedOnProducedReview } from "./run-produced-review-hold";
@@ -78,6 +79,7 @@ export type AgentHitlScreenActor = {
  */
 export async function agentHitlScreenStateForRun(
   run: AgentRunRecord,
+  who?: AgentHitlScreenActor,
 ): Promise<AgentHitlScreenState> {
   // THE GATE IS THE RUN PANEL'S GATE, AND DELIBERATELY NOT A SECOND ONE.
   //
@@ -125,17 +127,19 @@ export async function agentHitlScreenStateForRun(
   // the panel and this reader cannot drift into two ideas of what a park is. It
   // costs no read: the record is already in hand.
   if (isParkedOnProducedReview(run)) return AGENT_HITL_SCREEN_NONE;
+  const gate = {
+    reviewTaskId: context.reviewTaskId,
+    xRenderer: context.xRenderer,
+    inputSchema: context.inputSchema ?? {},
+    currentValues: context.currentValues ?? {},
+    fieldName: context.fieldName ?? null,
+  };
+  const renderInputs = who ? await projectHitlRenderInputs(run, gate, who) : undefined;
   return {
     state: "asking",
     runId: run.id,
     screenRef: runStatesHitlMoment(run) ? (run.lifecycleCardRef ?? null) : null,
-    gate: {
-      reviewTaskId: context.reviewTaskId,
-      xRenderer: context.xRenderer,
-      inputSchema: context.inputSchema ?? {},
-      currentValues: context.currentValues ?? {},
-      fieldName: context.fieldName ?? null,
-    },
+    gate: { ...gate, ...(renderInputs ? { renderInputs } : {}) },
   };
 }
 
@@ -154,5 +158,5 @@ export async function resolveAgentHitlScreenStateForActor(input: {
     input.who.roleHints,
   ).catch(() => null);
   if (!run) return AGENT_HITL_SCREEN_NONE;
-  return agentHitlScreenStateForRun(run);
+  return agentHitlScreenStateForRun(run, input.who);
 }
