@@ -120,7 +120,10 @@ async function moveRun(runId: string, from: AgentRunStatus, to: AgentRunStatus, 
 const stopHeldRun = (runId: string, from: AgentRunStatus, authority: OrgWriteAuthority) =>
   moveRun(runId, from, "stopped", { completedAt: new Date() }, authority);
 /** A run a publish decision holds: waiting at the gate, or `running` when a hold wrote its row but not its move. */
-const heldStatus = (status: AgentRunStatus | undefined): boolean => status === "pending_approval" || status === "running";
+type HeldRunStatus = Extract<AgentRunStatus, "pending_approval" | "running">;
+/** The stored status (plain text) as a held status, or null for any other status or none: no other text reaches a move. */
+const heldStatusOf = (status: string | undefined): HeldRunStatus | null =>
+  status === "pending_approval" || status === "running" ? status : null;
 /** The store's own refusals name no id or value; any other fault becomes one fixed text (no id, note or query value). */
 const STORE_CODES = new Set(["invalid-input", "invalid-transition", "malformed-row", "not-found", "conflict"]);
 const opaque = (err: unknown): unknown => STORE_CODES.has((err as { code?: unknown } | null)?.code as string) ? err
@@ -277,12 +280,12 @@ export async function sweepExpiredPublishDecisions(opts: {
     summary.due += 1;
     try {
       const run = await readAgentRunById(row.runId);
-      const waiting = heldStatus(run?.status);
-      const answer = await decide(row.id, { from: "parked", to: waiting ? "expired" : "run_ended", actor: null });
+      const held = heldStatusOf(run?.status);
+      const answer = await decide(row.id, { from: "parked", to: held ? "expired" : "run_ended", actor: null });
       if (answer.outcome === "lost") summary.lost += 1;
-      else if (!waiting || !run) summary.runEnded += 1;
+      else if (!held || !run) summary.runEnded += 1;
       else {
-        await stopHeldRun(run.id, run.status, opts.authorityFor(run.orgId)); // a stale answer: the run left meanwhile
+        await stopHeldRun(run.id, held, opts.authorityFor(run.orgId)); // a stale answer: the run left meanwhile
         summary.expired += 1;
       }
     } catch (err) {
@@ -296,8 +299,9 @@ export async function sweepExpiredPublishDecisions(opts: {
     for (const row of page) {
       try {
         const run = await readAgentRunById(row.runId);
-        if (!run || !heldStatus(run.status)) continue; // the run moved meanwhile
-        if (await stopHeldRun(run.id, run.status, opts.authorityFor(run.orgId))) summary.stopped += 1;
+        const held = heldStatusOf(run?.status);
+        if (!run || !held) continue; // the run moved meanwhile
+        if (await stopHeldRun(run.id, held, opts.authorityFor(run.orgId))) summary.stopped += 1;
       } catch (err) {
         fault(err);
       }
