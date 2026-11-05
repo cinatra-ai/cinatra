@@ -133,15 +133,22 @@ export function launchScopeAnchorBaseCopy(raw: unknown): string | null {
 // Exported so service.ts's `emitAgentCreationProgress` can reuse the same
 // in-package helper instead of importing the host's `@/lib/agent-url`
 // (which would violate the package's no-`@/` rule).
+// cinatra#3080 - THE INSTANCE ID IS A PATH SEGMENT, SO IT IS ENCODED AS ONE.
+// Every ordinary run id is a uuid, which encodes to itself, so every link the
+// product has ever drawn is byte-identical. A repair run's id is not: it is
+// derived from its repair (`lifecycle-repair-run:` plus the repair id) and
+// carries a character a path segment must escape, so the link the product built
+// for it was not a URL for that run at all.
 export function buildAgentInstancePath(
   agentPackageName: string,
   instanceId: string,
   opts?: { readonly launchScopeAnchor?: unknown },
 ): string {
   const base = launchScopeAnchorBaseCopy(opts?.launchScopeAnchor) ?? "";
+  const segment = encodeURIComponent(instanceId);
   const match = agentPackageName.match(/^@([^/]+)\/(.+)$/);
-  if (match) return `${base}/agents/${match[1]}/${match[2]}/${instanceId}`;
-  return `${base}/agents/${agentPackageName}/${instanceId}`;
+  if (match) return `${base}/agents/${match[1]}/${match[2]}/${segment}`;
+  return `${base}/agents/${agentPackageName}/${segment}`;
 }
 
 /**

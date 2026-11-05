@@ -259,7 +259,11 @@ describe("a refused /new run explains the refusal (cinatra#3961)", () => {
     mocks.createAndTriggerRunWithContext.mockResolvedValue({ ok: true, runId });
     const result = await outcome({ agentId: AGENT_ID, instanceId: "new", launchScope: scope, scopeBase });
     expect(mocks.createAndTriggerRunWithContext).toHaveBeenCalledExactlyOnceWith("user-1", "scope-org", TEMPLATE, launchScopeAnchorForScope(scope, "user-1"));
-    expect(result.navigation).toBe(`REDIRECT:${buildAgentInstancePath(AGENT_ID, encodeURIComponent(runId), { scopeBase })}`);
+    // The address helper writes the run id as ONE escaped path segment (cinatra#3080),
+    // so the case hands it the raw id, as the product does, and pins the literal
+    // address with a single escape.
+    expect(result.navigation).toBe(`REDIRECT:${buildAgentInstancePath(AGENT_ID, runId, { scopeBase })}`);
+    expect(result.navigation).toBe("REDIRECT:/organizations/scope-org/agents/fixture-vendor/blog-idea-generator/created%20run%2F3961");
   });
 
   it("does not translate a thrown backend failure into a returned refusal or reveal it", async () => {
