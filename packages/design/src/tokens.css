@@ -107,6 +107,11 @@
   --warning-foreground: #15213a;
   --info: #364e81;
   --info-foreground: #ffffff;
+  /* The indigo ink a highlighted dropdown row is tinted with (the drawing's
+     #364e81 at 6%). Declared in :root only, like the host's `--indigo-ink`
+     in `src/app/globals.css`: no `.cinatra` and no `.dark` override, so the
+     literal inherits into every palette unchanged. */
+  --indigo-ink: #364e81;
   /* Dedicated brand mustard for page-title display and wordmark on light
      surfaces. Shares the hex value of --warning but stays separate so status
      semantics are not hijacked by brand chrome. */
