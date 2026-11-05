@@ -281,6 +281,21 @@ describe("source-bound step verification (s2)", () => {
     expect(api.verifyRunStepAttestation({ key: KEY, contextId: CTX, node: NODE, attestation: signed(), nowMs: NOW_MS }))
       .toBeNull();
   });
+
+  // (s6)
+  it("refuses a line break in the context id or the step id even when the signature covers the joined values", () => {
+    const expiry = NOW_S + 300;
+    const over = (contextId: string, node: string) =>
+      `s2:${expiry}:${hmacHex(KEY, `s2\n${contextId}\n${node}\n${RAW}\n${EXECUTED}\n${DECLARATION}\n${expiry}`)}`;
+    // Control: the same signing answers a pair without a line break, so a null below comes from the line-break refusal.
+    expect(verify({ ...input(), contextId: "ctx-a", node: "step-b", attestation: over("ctx-a", "step-b") }))
+      .not.toBeNull();
+    // "ctx\nother" + "step" and "ctx" + "other\nstep" join to the same signed text; each split is refused.
+    const joined = over("ctx\nother", "step");
+    expect(over("ctx", "other\nstep")).toBe(joined);
+    expect(verify({ ...input(), contextId: "ctx\nother", node: "step", attestation: joined })).toBeNull();
+    expect(verify({ ...input(), contextId: "ctx", node: "other\nstep", attestation: joined })).toBeNull();
+  });
 });
 
 // Leave the module registry as this file found it.
