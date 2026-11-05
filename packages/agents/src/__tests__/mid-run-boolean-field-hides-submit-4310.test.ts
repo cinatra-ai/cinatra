@@ -29,11 +29,18 @@ describe("midRunBooleanFieldHidesSubmit (cinatra#4310)", () => {
     ).toBe(true);
   });
 
-  it("a boolean field on a setup gate is not: it draws its own Continue there", () => {
+  it("a boolean field on a setup gate is not, in a grouped setup form or not: its own Continue or its form's submit sends it there", () => {
     expect(
       midRunBooleanFieldHidesSubmit({
         isMidRun: false,
         isGroupedSetup: false,
+        fieldSchema: { type: "boolean" },
+      }),
+    ).toBe(false);
+    expect(
+      midRunBooleanFieldHidesSubmit({
+        isMidRun: false,
+        isGroupedSetup: true,
         fieldSchema: { type: "boolean" },
       }),
     ).toBe(false);
@@ -64,6 +71,8 @@ describe("midRunBooleanFieldHidesSubmit (cinatra#4310)", () => {
     for (const fieldSchema of [
       { type: "boolean", enum: [] },
       { type: "boolean", enum: "yes" },
+      { type: "boolean", enum: null },
+      { type: "boolean", enum: { a: true } },
     ]) {
       expect(
         midRunBooleanFieldHidesSubmit({ isMidRun: true, isGroupedSetup: false, fieldSchema }),
@@ -71,7 +80,7 @@ describe("midRunBooleanFieldHidesSubmit (cinatra#4310)", () => {
     }
   });
 
-  it("a type the renderer does not read as exactly boolean is not", () => {
+  it("a schema whose type is not exactly the string \"boolean\", or that is not an object, is not", () => {
     for (const fieldSchema of [
       { type: "Boolean" },
       { type: ["boolean", "null"] },

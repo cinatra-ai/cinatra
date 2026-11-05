@@ -90,7 +90,8 @@ describe("the recorded readings hold for the live tree", () => {
     expect(row?.sites).toHaveLength(1);
     const site = row!.sites[0]!;
     // No road applies the box's change at once: the per-field Continue and the
-    // form's submit hold it, and on a mid-run gate it is lost, not applied.
+    // form's submit hold it, and on a mid-run gate it is lost, not applied. That
+    // is `confirmed` by the definition of the effect, which the next case pins.
     expect(site.effect).toBe("confirmed");
     expect(site.reading).toContain("cinatra#4506");
     expect(site.reading).toContain("drops the box's answer");
@@ -107,6 +108,23 @@ describe("the recorded readings hold for the live tree", () => {
     ]) {
       expect(site.evidence).toContainEqual({ file, text: objectOnly });
     }
+  });
+
+  it("the definition of the effect `confirmed` covers a site that a road drops, as the renderer's box on a mid-run gate (cinatra#4506)", () => {
+    // The box's change is held for a confirm on every road that applies it and
+    // dropped on a mid-run gate. `confirmed` fits that site only because its
+    // definition counts the roads that apply the change and has the reading
+    // name a road that drops it.
+    const scan = readRepo("src/components/ui/__tests__/checkbox-call-site-scan.ts");
+    const at = scan.indexOf("export type Effect =");
+    expect(at).toBeGreaterThan(0);
+    const doc = scan.slice(scan.lastIndexOf("/**", at), at).replace(/\s*\n\s*\*\/?\s?/g, " ");
+    expect(doc).toContain("A site drawn on several roads is `confirmed` when at least one road applies its change and every road that applies it holds it for such a confirm.");
+    expect(doc).toContain("A road that drops the change, so that nothing applies it there, does not make the site `immediate` or `none`");
+    expect(doc).toContain("the site's reading names that road, and its evidence pins the code that drops it");
+    const site = CHECKBOX_CALL_SITE_READINGS.find((r) => r.file === "packages/agents/src/schema-field-renderer.tsx")!.sites[0]!;
+    expect(site.reading).toContain("On a mid-run step");
+    expect(site.reading).toContain("drops the box's answer");
   });
 
   it("the immediate-effect sites drawn as a checkbox are exactly the ones with a recorded reason", () => {
