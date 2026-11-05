@@ -68,6 +68,7 @@ import {
   type ChatRoute,
 } from "@cinatra-ai/chat/chat-path-codec";
 import type { AssistantRegistryEntry } from "@/lib/assistant-registry-reader";
+import type { ChatThreadName } from "@/lib/chat-shell-bus";
 import {
   remoteConnectorKindForProvider,
   type RemoteConnectorKind,
@@ -482,6 +483,39 @@ export function resolveChatContainerForCurrentActor(
   assertion: ChatContainerAssertion | null | undefined,
 ): Promise<ResolveChatContainerResult> {
   return resolveChatContainer(assertion, DEFAULT_CHAT_ROUTE_RESOLVER_DEPS);
+}
+
+/**
+ * The thread's name for the breadcrumb, read in the /chat route's server render
+ * (cinatra#4453). The drawing: "Names come from the owning page's server render,
+ * strictly after its access checks".
+ *
+ * The route guard proves only that the thread lives in the addressed container.
+ * A title is a disclosure, so this calls THE thread read the read route calls
+ * (`readAssistantThreadPayloadForActor`): its access matrix and its
+ * durable-content gate. The answer is typed (`ChatThreadName`): `named`, `blank`
+ * for a readable thread whose title is empty, and `unavailable` for a refusal, a
+ * missing thread, a thread the read route would not return, or any failure.
+ */
+export async function readChatThreadNameForCurrentActor(threadId: string): Promise<ChatThreadName> {
+  const unavailable: ChatThreadName = { state: "unavailable" };
+  try {
+    const { getAuthSession, isPlatformAdmin } = await import("@/lib/auth-session");
+    const session = await getAuthSession();
+    const actorUserId = session?.user?.id ?? "";
+    if (!session || !actorUserId) return unavailable;
+    const { readAssistantThreadPayloadForActor } = await import("@/lib/assistant-thread-read");
+    const payload = readAssistantThreadPayloadForActor({
+      threadId,
+      actorUserId,
+      isPlatformAdmin: isPlatformAdmin(session),
+    });
+    if (!payload) return unavailable;
+    const title = typeof payload.title === "string" ? payload.title.trim() : "";
+    return title ? { state: "named", name: title } : { state: "blank" };
+  } catch {
+    return unavailable;
+  }
 }
 
 /** Resolve using the production deps — the entry the /chat route calls. */

@@ -10,7 +10,7 @@ import {
   readLaunchScopeAnchor,
   successorLaunchBase,
 } from "@/lib/launch-scope-anchor";
-import { scopeSurfaceCrumbEntries, type ScopeSurfaceRef } from "@/lib/scope-surfaces";
+import { scopeSurfaceCrumbEntries, type ScopeSurfaceNameInput, type ScopeSurfaceRef } from "@/lib/scope-surfaces";
 import Link from "next/link";
 import { inArray } from "drizzle-orm";
 import { Main } from "@/components/layout/main";
@@ -28,7 +28,8 @@ import {
   readOrgsWithTeamsForUserActiveOnly,
   readProjectsForUser,
 } from "@/lib/better-auth-db";
-import { readAgentTemplateBySlug, readAgentRunById, readAgentRunMessages, readAgentTemplates, ensureRunTitle, readRunCoOwners } from "./store";
+import { readAgentTemplateBySlug, readAgentRunById, readAgentRunMessages, readAgentTemplates, readRunCoOwners } from "./store";
+import { readRunCrumbIdentity } from "./run-crumb-identity";
 import { randomUUID } from "node:crypto";
 import { RunStartedRuns } from "./run-started-runs";
 import { resolveEffectivePolicy, buildScopeReason, resolveTemplateVisibilityActor, buildActorContextFromPrimitive } from "./auth-policy";
@@ -1420,12 +1421,12 @@ export type ScreenProps = {
    */
   launchScope?: ScopeSurfaceRef | null;
   /**
-   * The scope's own resolved name, read by the scoped route behind that scope's
-   * read gate (cinatra#2809 fix leg 2). `null` or absent where the reader may
-   * not be told it; the crumb then falls back to the id's first eight
-   * characters plus an ellipsis, never a title-cased raw id.
+   * The scope's own name, read by the scoped route behind that scope's read
+   * gate (cinatra#2809 fix leg 2), as the read's typed answer (cinatra#4453).
+   * The crumb draws what the drawing draws for each answer; absent, it draws
+   * the scope's fixed word, never any part of the id.
    */
-  scopeTitle?: string | null;
+  scopeTitle?: ScopeSurfaceNameInput;
 };
 
 /**
@@ -1679,7 +1680,7 @@ export async function SetupScreen({
         requirementsHref={buildExtensionHeaderLink(template.packageName, isPlatformAdmin(session))?.extensionHref ?? null}
         agentsHref={`${scopeBase ?? ""}/agents`}
         crumbEntries={[
-          ...(launchScope ? scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle ?? undefined) : []),
+          ...(launchScope ? scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle) : []),
           { prefix: buildAgentWorkspacePath(agentId, { scopeBase: scopeBase ?? null }), label: "Agent run" },
         ]}
       />;
@@ -1712,7 +1713,7 @@ export async function SetupScreen({
         agentName={template.name} connector={{ packageId: refusal.packageId, displayName, settingsHref }}
         agentsHref={`${scopeBase ?? ""}/agents`}
         crumbEntries={[
-          ...(launchScope ? scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle ?? undefined) : []),
+          ...(launchScope ? scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle) : []),
           { prefix: buildAgentWorkspacePath(agentId, { scopeBase: scopeBase ?? null }), label: "Agent run" },
         ]}
       />;
@@ -2094,11 +2095,11 @@ export async function SetupScreen({
 
   // Pre-generate a unique run name so the title shows immediately on load.
   // Only runs that have started (not pending_input) get a name here; abandoned
-  // pending_input runs skip auto-naming to avoid wasting numbered slots.
-  const runName =
-    run && run.status !== "pending_input"
-      ? await ensureRunTitle(run, template.name)
-      : run?.title ?? "";
+  // pending_input runs skip auto-naming to avoid wasting numbered slots. The
+  // skills pane names the run with the same read, which reads the run's own
+  // template by its id, not the template this route resolved (cinatra#4453).
+  const runIdentity = run ? await readRunCrumbIdentity(run) : null;
+  const runName = runIdentity?.runName ?? "";
   const extensionHeaderLink = buildExtensionHeaderLink(
     template.packageName,
     isPlatformAdmin(await getAuthSession().catch(() => null)),
@@ -2711,7 +2712,7 @@ export async function SetupScreen({
         scopeBase={scopeBase ?? null}
         scopeCrumbEntries={
           launchScope
-            ? scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle ?? undefined)
+            ? scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle)
             : undefined
         }
         ownerLabel={run ? personalOwnerLabel(run.launchScopeAnchor) : null}
@@ -2726,6 +2727,7 @@ export async function SetupScreen({
         })}
         templateName={template.name}
         initialRunName={runName}
+        runFallbackName={runIdentity?.fallbackName}
         runId={run?.id ?? null}
         isPublished={template.status === "published"}
         showTriggerTab={showTriggerTab}
@@ -3866,7 +3868,7 @@ export async function PermissionsScreen({
         scopeBase={scopeBase ?? null}
         scopeCrumbEntries={
           launchScope
-            ? scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle ?? undefined)
+            ? scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle)
             : undefined
         }
         ownerLabel={personalOwnerLabel(run.launchScopeAnchor)}
@@ -4521,7 +4523,7 @@ export async function TriggerScreen({
         scopeBase={scopeBase ?? null}
         scopeCrumbEntries={
           launchScope
-            ? scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle ?? undefined)
+            ? scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle)
             : undefined
         }
         ownerLabel={run ? personalOwnerLabel(run.launchScopeAnchor) : null}
