@@ -416,6 +416,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Policy-aware content snapshots for claimed typed object rows (cinatra#1430): captures an immutable JSON snapshot of a typed row's normalized data at resolution time as a representation revision over a blob resource, keyed for reuse in object_content_snapshots. Composed at context-resolution request time; the write branch runs under a per-artifact advisory-locked transaction (re-read under the lock). Sync leaf mirroring representation-store/resource-store so it composes into the synchronous store graph; migratable to async pooled access with the artifacts subsystem.",
   },
+  "src/lib/artifacts/page-capture-facts-record.ts": {
+    class: "migratable-request-path",
+    justification:
+      "cinatra#4223 page capture facts: one bounded SELECT (at most two rows) of a revision's host-written artifact_audit record, read where an artifact display or a review target is prepared. Sync leaf so it composes with the synchronous artifact reads; migratable to async pooled access with the artifacts subsystem.",
+  },
   "src/lib/artifacts/object-backed-contract.ts": {
     class: "migratable-request-path",
     justification:
@@ -424,7 +429,7 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   "src/lib/artifacts/typed-promotion-store.ts": {
     class: "migratable-request-path",
     justification:
-      "The typed promotion road's store half (cinatra#3028, epic #3023 — enabler 0.14). Three sync call sites, all on the library's Confirm request path: the base-typed row read (with its latest representation and the blob's own detected mime, because the promotion re-validates the shared content against the target type's accepted forms), the matcher-association read, and the append-only representation revision the promotion adds over the base revision's own resource. The retype itself is NOT here — it goes through the canonical history-aware objects writer. Sync leaf mirroring representation-store / semantic-assertion-store so it composes into the synchronous store graph; migratable to async pooled access with the artifacts subsystem.",
+      "The typed promotion road's store half (cinatra#3028, epic #3023 — enabler 0.14). Four sync call sites, all on the library's Confirm request path: the base-typed row read (with its latest representation and the blob's own detected mime, because the promotion re-validates the shared content against the target type's accepted forms), the matcher-association read, the proof read of the row's latest type change (the promotion appends only when that change is its own keyed retype, cinatra#3319), and the append-only representation revision the promotion adds over the base revision's own resource. The retype itself is NOT here — it goes through the canonical history-aware objects writer. Sync leaf mirroring representation-store / semantic-assertion-store so it composes into the synchronous store graph; migratable to async pooled access with the artifacts subsystem.",
   },
   "src/lib/artifacts/context-selection-finalize.ts": {
     class: "migratable-request-path",

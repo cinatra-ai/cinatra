@@ -64,6 +64,7 @@ import {
   ArtifactReviewGateError,
 } from "./artifact-review-gate-store";
 import { markProducedEventProcessed } from "./lifecycle-produced-outbox-store";
+import { findDeclaredGateForPair, lockProducedEventLink } from "./lifecycle-declared-review-gate";
 import { dispatchAutoGateOpen, dispatchAutoGateResolved } from "./run-wait-notifier";
 import { resolveOrgPolicyRule } from "./lifecycle-policy-store";
 import { maybeParkCheckpoint, sweepParks } from "./lifecycle-continuation-park-store";
@@ -562,74 +563,115 @@ export type OrchestrateOutcome =
   | "not-classifiable"
   | "already-processed";
 
-/** The review-task prefix of a template-declared review gate: `wayflow-<taskId>`,
- * and `wayflow-<taskId>#<n>` for its per-artifact legs (execution.ts). */
-const DECLARED_REVIEW_TASK_PREFIX = "wayflow-";
-
-/**
- * The template-declared review gate that already reviews this event's EXACT
- * revision, or null (cinatra#4225).
- *
- * A declared gate is minted by the run's own review step and pins the revisions
- * it reviews. Opening an automatic gate over a revision such a gate pins makes
- * the person review the same revision twice: one Approve resolves the declared
- * gate and the run then waits on the automatic one. So the produced path reuses
- * the declared gate instead. The match is strict: the SAME run and org, a
- * `wayflow-` task id, and a pin on the exact artifact AND representation
- * revision. A pending or a resolved declared gate both count — either way the
- * revision has its review. Anything else returns null and the automatic gate
- * opens exactly as before.
- */
-async function findDeclaredGateForPair(row: ProducedEventRow): Promise<string | null> {
-  if (!row.producerRunId) return null;
-  const gates = await db
-    .select({
-      id: artifactReviewGates.id,
-      orgId: artifactReviewGates.orgId,
-      reviewTaskId: artifactReviewGates.reviewTaskId,
-      pinnedTargets: artifactReviewGates.pinnedTargets,
-    })
-    .from(artifactReviewGates)
-    .where(and(eq(artifactReviewGates.runId, row.producerRunId), eq(artifactReviewGates.orgId, row.orgId)))
-    .orderBy(asc(artifactReviewGates.createdAt));
-  for (const gate of gates) {
-    if (gate.orgId !== row.orgId) continue;
-    if (typeof gate.reviewTaskId !== "string" || !gate.reviewTaskId.startsWith(DECLARED_REVIEW_TASK_PREFIX)) continue;
-    const pins: unknown[] = Array.isArray(gate.pinnedTargets) ? gate.pinnedTargets : [];
-    const pinsPair = pins.some((t) => {
-      if (typeof t !== "object" || t === null) return false;
-      const pin = t as { artifactId?: unknown; representationRevisionId?: unknown };
-      return pin.artifactId === row.artifactId && pin.representationRevisionId === row.representationRevisionId;
-    });
-    if (pinsPair) return gate.id;
-  }
-  return null;
-}
+/** What a reuse did with the event (see `reuseDeclaredGate`). */
+type ReuseResult = "linked" | "settled" | "absent" | "unpinned";
 
 /**
  * Link a produced event to the declared gate that already reviews its revision,
  * in the automatic road's own order: park (checkpointed) -> link -> mark. No
  * notification and no suggestions: the declared gate is not new, and its own
  * road already announced it.
+ *
+ * cinatra#4245: the row this sweep read may be stale, so the link is decided under
+ * the event's row lock, and the park, the link and the mark are written in the
+ * transaction that holds it: a second decider waits for the commit and then reads
+ * the event linked and processed. Under the lock:
+ *   - an event that names a gate by now stays on THAT gate (`settled`; a still
+ *     pending one is finished park-safe after the commit);
+ *   - an event row that is gone gets no link and no park (`absent`);
+ *   - an event whose revision no declared gate pins any more gets no link and stays
+ *     pending, so the next sweep plans it again (`unpinned`);
+ *   - otherwise the event is linked to the declared gate read under the lock (the
+ *     oldest that pins the revision), not to the caller's earlier lookup.
+ * Returns what happened, so that only `linked` counts as a reuse.
  */
 async function reuseDeclaredGate(
   row: ProducedEventRow,
   plan: Extract<ReviewOrchestrationPlan, { action: "create-gate" }>,
-  gateId: string,
-): Promise<void> {
-  if (plan.continuationMode === "checkpointed" && plan.park) {
-    await maybeParkCheckpoint(plan.park, {
-      runId: row.producerRunId ?? orphanRunId(row.eventId),
-      eventId: row.eventId,
-      policyDecisionId: gateId,
-    });
+): Promise<ReuseResult> {
+  const decided = await db.transaction(async (tx) => {
+    const link = await lockProducedEventLink(tx, row.eventId);
+    if (link.kind !== "unlinked") return link;
+    const gateId = link.declaredGateId;
+    if (!gateId) return { kind: "unpinned" as const };
+    if (plan.continuationMode === "checkpointed" && plan.park) {
+      await maybeParkCheckpoint(plan.park, {
+        runId: row.producerRunId ?? orphanRunId(row.eventId),
+        eventId: row.eventId,
+        policyDecisionId: gateId,
+      }, tx);
+    }
+    await tx
+      .update(artifactProducedOutbox)
+      .set({ continuationAddress: gateId })
+      .where(and(eq(artifactProducedOutbox.eventId, row.eventId), isNull(artifactProducedOutbox.continuationAddress)));
+    await markProducedEventProcessed(row.eventId, tx);
+    return { kind: "linked" as const };
+  });
+  if (decided.kind === "absent") return "absent";
+  if (decided.kind === "settled") {
+    if (decided.status === "pending") await settleAlreadyLinkedEvent({ ...row, continuationAddress: decided.continuationAddress });
+    return "settled";
   }
-  await db
-    .update(artifactProducedOutbox)
-    .set({ continuationAddress: gateId })
-    .where(and(eq(artifactProducedOutbox.eventId, row.eventId), isNull(artifactProducedOutbox.continuationAddress)));
-  await markProducedEventProcessed(row.eventId);
+  return decided.kind;
 }
+
+/** The per-event outcome of a reuse: only a made link is `gate-reused`; an event
+ * left pending for the next sweep is `no-gate`; a settled or gone event is
+ * `already-processed`. */
+function reuseOutcome(result: ReuseResult): OrchestrateOutcome {
+  if (result === "linked") return "gate-reused";
+  if (result === "unpinned") return "no-gate";
+  return "already-processed";
+}
+
+/**
+ * Emit an automatic gate only under the event's row lock (cinatra#4245).
+ *
+ * The declared-gate lookup runs before the automatic gate opens, and a review
+ * step can open its declared gate in between. So the emit runs in one
+ * transaction that first locks the event's row and reads its link there:
+ *   - an event that names a gate by now, or that is not pending, is `settled`;
+ *   - an event whose row is gone is `settled` as `absent`: a gate emitted for it
+ *     would name no event and could never be linked or released;
+ *   - an event whose revision a declared gate pins by now is `declared`;
+ *   - only an event still unlinked with no declared gate gets the automatic
+ *     gate, emitted in this transaction, so an emit error leaves no gate.
+ */
+type EventLockState =
+  | { kind: "settled"; status: string; continuationAddress: string | null }
+  | { kind: "declared"; gateId: string }
+  | { kind: "free" };
+
+type EventLockTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+async function readEventLockState(tx: EventLockTx, eventId: string): Promise<EventLockState> {
+  const link = await lockProducedEventLink(tx, eventId);
+  if (link.kind === "absent") return { kind: "settled", status: "absent", continuationAddress: null };
+  if (link.kind === "settled") return link;
+  return link.declaredGateId ? { kind: "declared", gateId: link.declaredGateId } : { kind: "free" };
+}
+
+/** The batch form too: lock every member's row, in event-id order, and emit only
+ * when every member is free. Otherwise emit nothing and hand back each member's
+ * state. A gone row is not pending, so it never holds the epoch open. */
+async function emitUnderEventLocks<T>(
+  rows: ProducedEventRow[],
+  emit: (tx: EventLockTx) => Promise<T>,
+): Promise<{ kind: "emitted"; emitted: T } | { kind: "withheld"; states: Map<string, EventLockState> }> {
+  return db.transaction(async (tx) => {
+    const states = new Map<string, EventLockState>();
+    for (const row of [...rows].sort((a, b) => (a.eventId < b.eventId ? -1 : a.eventId > b.eventId ? 1 : 0))) {
+      states.set(row.eventId, await readEventLockState(tx, row.eventId));
+    }
+    if ([...states.values()].some((state) => state.kind !== "free")) return { kind: "withheld" as const, states };
+    return { kind: "emitted" as const, emitted: await emit(tx) };
+  });
+}
+
+/** Test seam (cinatra#4245): the batch lock is reached by the sweep with one row per
+ * gate today, so the real-store suite calls it directly to pin its lock order. */
+export const __testOnly = { emitUnderEventLocks };
 
 /**
  * Orchestrate ONE produced event: resolve context, plan the REVIEW checkpoint,
@@ -810,8 +852,7 @@ export async function orchestrateProducedEvent(row: ProducedEventRow): Promise<O
   // reuse it rather than open a second review of the same revision (cinatra#4225).
   const declaredGateId = await findDeclaredGateForPair(row);
   if (declaredGateId) {
-    await reuseDeclaredGate(row, plan, declaredGateId);
-    return "gate-reused";
+    return reuseOutcome(await reuseDeclaredGate(row, plan));
   }
 
   // create-gate. The producing run is the gate's run when known; a run-less
@@ -819,13 +860,26 @@ export async function orchestrateProducedEvent(row: ProducedEventRow): Promise<O
   const runId = row.producerRunId ?? orphanRunId(row.eventId);
   let gateId: string;
   try {
-    const emitted = await emitArtifactReviewGate({
-      runId,
-      orgId: row.orgId,
-      reviewTaskId: plan.reviewTaskId,
-      targets: [{ artifactId: row.artifactId, representationRevisionId: row.representationRevisionId }],
-      expiresAt: new Date(Date.now() + AUTO_REVIEW_GATE_TTL_MS),
-    });
+    const decided = await emitUnderEventLocks([row], (tx) =>
+      emitArtifactReviewGate({
+        runId,
+        orgId: row.orgId,
+        reviewTaskId: plan.reviewTaskId,
+        targets: [{ artifactId: row.artifactId, representationRevisionId: row.representationRevisionId }],
+        expiresAt: new Date(Date.now() + AUTO_REVIEW_GATE_TTL_MS),
+      }, tx),
+    );
+    if (decided.kind === "withheld") {
+      const state = decided.states.get(row.eventId);
+      if (state?.kind === "declared") {
+        return reuseOutcome(await reuseDeclaredGate(row, plan));
+      }
+      if (state?.kind === "settled" && state.status === "pending") {
+        await settleAlreadyLinkedEvent({ ...row, continuationAddress: state.continuationAddress });
+      }
+      return "already-processed";
+    }
+    const emitted = decided.emitted;
     gateId = emitted.gateId;
     // cinatra#2066 C2 — a NEW auto-gate just opened: fire the run-view
     // notification for its reviewer-resolvable audience. Only on a genuinely new
@@ -1125,6 +1179,27 @@ export async function sweepReviewOrchestration(opts?: {
 
   const limit = Math.max(1, Math.min(opts?.limit ?? 50, 200));
 
+  // cinatra#4312 — an old application that still serves after core__0125 can write a
+  // note on an unnamed reopen gate; name such a gate here. The statement names any gate
+  // in the slot that a repair row at attempt 2 or later rests on, a hand-written row's
+  // too. A lineage the name makes readable did not start on a later declared leg (the
+  // declared-lineage check of the reopen binding refuses those), but it can have started
+  // on the post's own leg of a declared review, and a run that leg's lineage kept parked
+  // has no gate decision left to resume it. So, in the naming's transaction, a declared
+  // family whose lineage now reads closed gets one new resume intent that carries its
+  // latest decision (`carryDeclaredReviewDecision`, an insert only). A failure rolls the
+  // names and the inserts back together and stops nothing else; the next sweep tries
+  // again.
+  try {
+    const { nameVerificationReopensThatRepairRowsRestOn } = await import("./lifecycle-verification-store");
+    await nameVerificationReopensThatRepairRowsRestOn();
+  } catch (err) {
+    console.warn(
+      "[lifecycle-review-orchestration] the verification reopen names were not written:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+
   // 1. Run-backed PRODUCTIONS with pending events (oldest production first, bounded
   //    by the pass budget). Grouping in SQL means the coalescing membership never
   //    depends on a raw-event fetch window.
@@ -1358,7 +1433,9 @@ async function orchestrateProducedBatch(
     // and keep it OUT of the sealed membership, so no automatic gate pins it.
     const declaredGateId = await findDeclaredGateForPair(row);
     if (declaredGateId) {
-      await reuseDeclaredGate(row, plan, declaredGateId);
+      // Every answer counts as noGate, as the per-event road's tally does for
+      // gate-reused, already-processed and no-gate alike.
+      await reuseDeclaredGate(row, plan);
       summary.noGate += 1;
       continue;
     }
@@ -1430,7 +1507,28 @@ async function orchestrateProducedBatch(
         gateId = unit.gateId;
         gateIdempotent = true;
       } else {
-        const emitted = await emitArtifactReviewGate({ runId, orgId, reviewTaskId, targets: partition, expiresAt });
+        // cinatra#4245: the same locked decision as the per-event road. A member
+        // that a declared gate took meanwhile is linked there, or settled, and no
+        // gate pins it; a member still free waits for the next pass, and the
+        // epoch stays open until it is gated.
+        const decided = await emitUnderEventLocks(members.map((m) => m.row), (tx) =>
+          emitArtifactReviewGate({ runId, orgId, reviewTaskId, targets: partition, expiresAt }, tx),
+        );
+        if (decided.kind === "withheld") {
+          for (const m of members) {
+            const state = decided.states.get(m.row.eventId);
+            if (state?.kind === "settled" && state.status === "pending") {
+              await settleAlreadyLinkedEvent({ ...m.row, continuationAddress: state.continuationAddress });
+            } else if (state?.kind === "declared") {
+              await reuseDeclaredGate(m.row, m.plan);
+              summary.noGate += 1;
+            } else if (state?.kind === "free") {
+              anyConflict = true;
+            }
+          }
+          continue;
+        }
+        const emitted = decided.emitted;
         gateId = emitted.gateId;
         gateIdempotent = emitted.idempotent;
       }

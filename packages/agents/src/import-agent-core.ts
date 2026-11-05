@@ -501,6 +501,8 @@ export async function importAgentTemplateCore(
           // result on re-import, exactly as installAgentFromPackage's upsert
           // branch does.
           hasArtifactBindings: compiled.hasArtifactBindings,
+          // cinatra#4150: and its publishing-step declaration.
+          publishingSteps: compiled.publishingSteps,
           // cinatra#3208: and the DECLARATION that presence flag is about, from
           // the same compile, in the same patch as packageVersion. The two move
           // together or the row contradicts itself — claiming bindings exist
@@ -636,6 +638,8 @@ export async function importAgentTemplateCore(
       // cinatra#2498: the OAS compiler's own binding-presence result rides
       // the fresh create too, for the same reason.
       hasArtifactBindings: compiled.hasArtifactBindings,
+      // cinatra#4150: so does its publishing-step declaration.
+      publishingSteps: compiled.publishingSteps,
       // cinatra#3208: the executed declaration rides the fresh create too, so a
       // first install through the loader / ZIP path (dev-boot git-file scan,
       // hot-reload watcher, `cinatra setup`, the data/downloads system-agent

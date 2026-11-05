@@ -455,6 +455,14 @@ export function lifecycleInterceptionsSchemaQueries(schemaName: string): QueryIn
     // cinatra#3745 (core__0120): the delivery's durable claim mark and send witness.
     { text: `ALTER TABLE "${q}"."artifact_review_resume_outbox" ADD COLUMN IF NOT EXISTS run_claimed_at timestamptz` },
     { text: `ALTER TABLE "${q}"."artifact_review_resume_outbox" ADD COLUMN IF NOT EXISTS resume_task_result jsonb` },
+    // cinatra#4312 — the record's reopen gate (core__0125). No backfill here: the writer
+    // names the gate it inserted, and the review orchestration sweep names a gate that a
+    // repair row at attempt 2 or later rests on (an old writer's, or a hand-written row's).
+    {
+      text: `ALTER TABLE "${q}"."artifact_verification_records"
+  ADD COLUMN IF NOT EXISTS reopened_gate_id text
+  REFERENCES "${q}"."artifact_review_gates" (id) ON DELETE SET NULL`,
+    },
     {
       text: `CREATE INDEX IF NOT EXISTS artifact_review_resume_outbox_dead_idx
   ON "${q}"."artifact_review_resume_outbox" (dead_lettered_at) WHERE dead_lettered_at IS NOT NULL`,
