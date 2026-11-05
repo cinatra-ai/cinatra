@@ -205,14 +205,14 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
   });
 
   it("cinatra#4245: an importer allowlisted for a pause claim writer really imports it", () => {
-    // The same ratchet for the four writers of run-pause-claim.ts: the release and
+    // The same ratchet for the five writers of run-pause-claim.ts: the release and
     // the settle moved into run-resume-under-claim.ts, so a road that no longer
     // imports one of them must not stay allowed to (a direct import there would
     // pass the import ban unseen). Only the import specifiers from the claim module
     // count, never a mention in prose.
     const CLAIM_MODULE = "packages/agents/src/run-pause-claim.ts";
     const rows = ORG_WRITE_REGISTRY.filter((r) => r.module === CLAIM_MODULE);
-    expect(rows.map((r) => r.exportName).sort()).toEqual(["claimPause", "fencePauseInPlace", "releasePauseClaim", "settlePauseSend"]);
+    expect(rows.map((r) => r.exportName).sort()).toEqual(["claimPause", "fencePauseInPlace", "markPauseChangesRequestedInTx", "releasePauseClaim", "settlePauseSend"]);
     for (const r of rows) {
       for (const f of r.allowedImporters ?? []) {
         const imported = new Set<string>();
@@ -337,6 +337,8 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
       // the pause claim writers of run-pause-claim.ts (cinatra#4245 A2 — banned
       // from day one to the resume roads that take the claim)
       "claimPause", "fencePauseInPlace", "releasePauseClaim", "settlePauseSend",
+      // the change request's end mark (cinatra#4245 D1), banned to its one caller
+      "markPauseChangesRequestedInTx",
     ]) {
       expect(banned.has(w), `${w} must be import-banned`).toBe(true);
     }
@@ -355,8 +357,9 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
     // kernel's invalidateLeasesBeforeEpochQuery registered with its first
     // production caller); cinatra#4245 A2 added 4 (the pause claim writers
     // claimPause, fencePauseInPlace, releasePauseClaim and settlePauseSend,
-    // enumerated above). 20 + 8 + 2 + 3 + 3 + 3 + 4 = 43.
-    expect(banned.size).toBe(43);
+    // enumerated above); cinatra#4245 D1 added 1 (the change request's end mark
+    // markPauseChangesRequestedInTx). 20 + 8 + 2 + 3 + 3 + 3 + 4 + 1 = 44.
+    expect(banned.size).toBe(44);
   });
 });
 
