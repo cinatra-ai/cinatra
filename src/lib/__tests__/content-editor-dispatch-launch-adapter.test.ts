@@ -43,6 +43,32 @@ vi.mock("@cinatra-ai/agents", () => ({
   transitionRunStatus: (...a: unknown[]) => transitionRunStatus(...(a as [])),
 }));
 vi.mock("@cinatra-ai/llm", () => ({ buildA2aBearerToken: vi.fn(async () => null) }));
+// The run's selected flow source is bound before the task is sent (cinatra#3745):
+// explicit storage and selected-source ports, so no PostgreSQL or loader request.
+// The policy reader's own refusals are exercised by run-step-tool-policy.test.ts.
+const readSourceRun = vi.fn(async () => {
+  const launch = launchAgentRun.mock.calls.at(-1)?.[0] as
+    | { create: { input: { orgId?: string } } }
+    | undefined;
+  return { orgId: launch?.create.input.orgId, executionAttemptId: "attempt", a2aContextId: "dispatch-context" };
+});
+const selectSourcePolicy = vi.fn(async (input: { contextId: string }) => ({
+  version: 1,
+  contextId: input.contextId,
+  source: "{}",
+  sourceSha256: "a".repeat(64),
+  executedSourceSha256: "b".repeat(64),
+  declarationSourceSha256: "c".repeat(64),
+}));
+const bindSourcePolicy = vi.fn(async (input: unknown) => {
+  void input;
+});
+vi.mock("@cinatra-ai/agents/store", () => ({
+  readAgentRunById: () => readSourceRun(),
+  updateAgentRunA2AContextId: vi.fn(),
+  selectWayflowRunStepToolPolicy: (input: { contextId: string }) => selectSourcePolicy(input),
+  bindRunStepToolPolicy: (input: unknown) => bindSourcePolicy(input),
+}));
 vi.mock("@cinatra-ai/a2a", () => ({
   createExternalA2AClient: (...a: unknown[]) => createExternalA2AClient(...(a as [])),
 }));

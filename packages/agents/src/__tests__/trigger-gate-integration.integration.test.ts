@@ -42,6 +42,10 @@ const hoisted = vi.hoisted(() => ({
   transitionRunStatus: vi.fn(),
   templateOverride: null as null | Record<string, unknown>,
   runOverride: null as null | Record<string, unknown>,
+  // cinatra#3745: the first dispatch selects the loader's source and binds it
+  // to the run's attempt before the send (explicit ports: no loader request).
+  selectRunStepToolPolicy: vi.fn(),
+  bindRunStepToolPolicy: vi.fn(),
 }));
 
 // Mock store.ts — replace template + run getters and transitions.
@@ -64,6 +68,8 @@ vi.mock("../store", async () => {
     findSavedConnectionForAgentUrl: vi.fn(() => null),
     updateAgentRunA2ATaskId: vi.fn(async () => undefined),
     updateAgentRunA2AContextId: vi.fn(async () => undefined),
+    selectWayflowRunStepToolPolicy: hoisted.selectRunStepToolPolicy,
+    bindRunStepToolPolicy: hoisted.bindRunStepToolPolicy,
   };
 });
 
@@ -129,6 +135,7 @@ function makeRun(overrides: Partial<Record<string, unknown>> = {}): Record<strin
     a2aTaskId: null,
     parentRunId: null,
     timeoutSeconds: null,
+    executionAttemptId: "attempt-test-1",
     ...overrides,
   };
 }
@@ -178,6 +185,13 @@ beforeEach(() => {
   hoisted.sendTask.mockResolvedValue({ id: "task-1", status: { state: "completed" } });
   hoisted.templateOverride = null;
   hoisted.runOverride = null;
+  hoisted.selectRunStepToolPolicy.mockReset();
+  hoisted.selectRunStepToolPolicy.mockImplementation(async (input: { contextId: string }) => ({
+    version: 1, contextId: input.contextId, source: "{}",
+    sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: "c".repeat(64),
+  }));
+  hoisted.bindRunStepToolPolicy.mockReset();
+  hoisted.bindRunStepToolPolicy.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -342,5 +356,51 @@ describe("runAgentBuilderExecutionJob — side-effects gate", () => {
     const e = caught as TriggerGateClosedError;
     expect(e.nextAttempt).toBe(1);
     expect(e.delayMs).toBe(30_000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3745 — the canonical first dispatch binds the loader's source first
+// ---------------------------------------------------------------------------
+describe("runAgentBuilderExecutionJob — the first dispatch binds the executed source before it sends", () => {
+  it("selects the loader's source for the dispatch context and binds it to the run's attempt, then sends", async () => {
+    hoisted.runOverride = makeRun({ orgId: "org-test-1" });
+    hoisted.templateOverride = makeTemplate({ gatedSteps: [] });
+
+    await runAgentBuilderExecutionJob({ runId: "run-test-1" }, "job-1");
+
+    expect(hoisted.selectRunStepToolPolicy).toHaveBeenCalledTimes(1);
+    const [selection] = hoisted.selectRunStepToolPolicy.mock.calls[0]! as [{ agentUrl: string; contextId: string }];
+    expect(selection.agentUrl).toBe("http://localhost:9999");
+    expect(hoisted.bindRunStepToolPolicy).toHaveBeenCalledWith(expect.objectContaining({
+      runId: "run-test-1", orgId: "org-test-1", executionAttemptId: "attempt-test-1",
+      policy: expect.objectContaining({ contextId: selection.contextId }),
+    }));
+    expect(hoisted.sendTask).toHaveBeenCalledTimes(1);
+    const [message] = hoisted.sendTask.mock.calls[0]! as [{ message: { contextId: string } }];
+    expect(message.message.contextId).toBe(selection.contextId);
+    expect(hoisted.bindRunStepToolPolicy.mock.invocationCallOrder[0]!).toBeLessThan(hoisted.sendTask.mock.invocationCallOrder[0]!);
+  });
+
+  it("sends nothing when the loader answers without a binding, or the bind refuses", async () => {
+    for (const refuse of [
+      () => hoisted.selectRunStepToolPolicy.mockRejectedValueOnce(new Error("step_tool_loader_binding_missing")),
+      () => hoisted.bindRunStepToolPolicy.mockRejectedValueOnce(new Error("step_tool_dispatch_rebind_refused")),
+    ]) {
+      hoisted.sendTask.mockClear();
+      hoisted.runOverride = makeRun({ orgId: "org-test-1" });
+      hoisted.templateOverride = makeTemplate({ gatedSteps: [] });
+      refuse();
+      await runAgentBuilderExecutionJob({ runId: "run-test-1" }, "job-1").catch(() => undefined);
+      expect(hoisted.sendTask).not.toHaveBeenCalled();
+    }
+  });
+
+  it("sends nothing when the dispatching run carries no attempt", async () => {
+    hoisted.runOverride = makeRun({ orgId: "org-test-1", executionAttemptId: null });
+    hoisted.templateOverride = makeTemplate({ gatedSteps: [] });
+    await runAgentBuilderExecutionJob({ runId: "run-test-1" }, "job-1").catch(() => undefined);
+    expect(hoisted.bindRunStepToolPolicy).not.toHaveBeenCalled();
+    expect(hoisted.sendTask).not.toHaveBeenCalled();
   });
 });

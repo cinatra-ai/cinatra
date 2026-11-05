@@ -1,6 +1,8 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
+// cinatra#3745: the carrier run binds the loader's selected source before its first send.
+import { readAgentRunById, updateAgentRunA2AContextId, selectWayflowRunStepToolPolicy, bindRunStepToolPolicy } from "@cinatra-ai/agents/store";
 import { buildA2aBearerToken } from "@cinatra-ai/llm";
 import { createExternalA2AClient, type Task } from "@cinatra-ai/a2a";
 import {
@@ -609,11 +611,23 @@ export async function dispatchContentEditorViaA2A(
 
   let task: Task;
   try {
+    let dispatchContextId: string | undefined;
+    if (runId) {
+      if (!dispatchAuthority) throw new Error("step_tool_dispatch_authority_missing");
+      const run = await readAgentRunById(runId);
+      if (!run?.orgId || !run.executionAttemptId) throw new Error("step_tool_dispatch_attempt_missing");
+      dispatchContextId = run.a2aContextId ?? randomUUID();
+      if (dispatchContextId !== run.a2aContextId) await updateAgentRunA2AContextId(runId, dispatchContextId);
+      const policy = await selectWayflowRunStepToolPolicy({ agentUrl: input.agentUrl, contextId: dispatchContextId });
+      await bindRunStepToolPolicy({ runId, orgId: run.orgId, executionAttemptId: run.executionAttemptId,
+        policy, authority: dispatchAuthority });
+    }
     task = await client.sendTask({
       message: {
         role: "user",
         kind: "message",
         messageId: randomUUID(),
+        ...(dispatchContextId ? { contextId: dispatchContextId } : {}),
         parts: [{ kind: "text", text }],
       },
       configuration: { acceptedOutputModes: ["text"] },

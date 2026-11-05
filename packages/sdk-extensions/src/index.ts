@@ -871,3 +871,24 @@ export type {
   DeclaredIndexDeclaration,
   DeclaredTableDeclaration,
 } from "./manifest";
+
+/** Structural carrier only; authority comes from loader HMAC + frozen run comparison. */
+export type VerifiedExecutedRunSource = {
+  readonly contextId: string; readonly stepId: string; readonly executionAttemptId: string;
+  readonly sourceSha256: string; readonly executedSourceSha256: string;
+  readonly declarationSourceSha256: string;
+};
+export function parseVerifiedExecutedRunSource(value: unknown): VerifiedExecutedRunSource | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const keys = ["contextId", "stepId", "executionAttemptId", "sourceSha256", "executedSourceSha256", "declarationSourceSha256"];
+  if (Reflect.ownKeys(value).length !== keys.length) return null;
+  const v: Record<string, string> = {};
+  for (const key of keys) {
+    const d = Object.getOwnPropertyDescriptor(value, key);
+    if (!d || !("value" in d) || typeof d.value !== "string" || !d.value ||
+        d.value.length > 512 || /[\r\n]/.test(d.value)) return null;
+    v[key] = d.value;
+  }
+  for (const key of keys.slice(3)) if (!/^[a-f0-9]{64}$/.test(v[key]!)) return null;
+  return Object.freeze(v) as unknown as VerifiedExecutedRunSource;
+}

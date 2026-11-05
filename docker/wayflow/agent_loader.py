@@ -63,6 +63,8 @@ import datetime as _datetime
 import hashlib
 import hmac
 import inspect
+from types import MappingProxyType
+from collections.abc import Mapping
 import json
 import os
 import re
@@ -3408,6 +3410,7 @@ class MountedAgent:
         "composed_oas",
         "composed_sha256",
         "context_injection",
+        "selected_source_binding",
     )
 
     def __init__(
@@ -3422,6 +3425,7 @@ class MountedAgent:
         composed_oas: Optional[Dict[str, Any]] = None,
         composed_sha256: Optional[str] = None,
         context_injection: Optional[List[Dict[str, Any]]] = None,
+        selected_source_binding: Optional[Mapping[str, str]] = None,
     ) -> None:
         self.label = f"{vendor}/{slug}"
         self.vendor = vendor
@@ -3432,6 +3436,7 @@ class MountedAgent:
         self.sub_app = sub_app
         self.stack: Optional[contextlib.AsyncExitStack] = None
         self.mount = mount
+        self.selected_source_binding = selected_source_binding
         # cinatra#1194 — mount-time context-subflow injection sidecar. When the
         # loader injected declared slots, `composed_oas` holds the PRE-
         # placeholder-substitution composed document (what actually executes,
@@ -4498,6 +4503,17 @@ def _mount_one_sync(
 
     substituted = _substitute_placeholders(raw_text)
     agent = loader.load_json(substituted)
+    source_binding = MappingProxyType({
+        "sourceSha256": fingerprint,
+        "executedSourceSha256": hashlib.sha256(substituted.encode("utf-8")).hexdigest(),
+        "declarationSourceSha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
+        "declarationSource": raw_text,
+    })
+    # Frozen host-only selection snapshot; a failed attachment
+    # refuses the mount rather than minting step-only authority.
+    setattr(agent, "_cinatra_executed_source", source_binding)
+    if getattr(agent, "_cinatra_executed_source", None) is not source_binding:
+        raise ValueError("executed_source_sidecar_unavailable")
 
     if injection_report:
         # Per-run template-version logging needs the injection info at
@@ -4546,6 +4562,7 @@ def _mount_one_sync(
         composed_oas=composed_oas,
         composed_sha256=composed_sha256,
         context_injection=injection_report or None,
+        selected_source_binding=source_binding,
     )
 
 
@@ -5070,6 +5087,9 @@ def _build_composed_oas_handler(
                 "injectedSlots": agent.context_injection or [],
                 "composedSha256": agent.composed_sha256,
                 "composedOas": agent.composed_oas,
+                # Host selects before dispatch; callback HMAC proves which
+                # assistant actually executed. No substituted secrets exposed.
+                "selectedSourceBinding": dict(agent.selected_source_binding) if agent.selected_source_binding is not None else None,
             }
         )
 

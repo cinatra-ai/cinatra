@@ -791,6 +791,88 @@ def test_mount_malformed_declaration_raises(monkeypatch, tmp_path: Path) -> None
         _mount(monkeypatch, tmp_path, doc)
 
 
+def test_mount_records_the_selected_source_binding(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """cinatra#3745: the mount freezes the source it hands the loader.
+
+    The binding names three digests: the published file (the fingerprint), the
+    text load_json received (after placeholder substitution), and the
+    pre-substitution graph whose bytes it carries. The same frozen object rides
+    on the mounted record and on the deserialized assistant.
+    """
+    import hashlib
+    from types import MappingProxyType
+
+    doc = _slim_spec([_slot()])
+    raw, fake_loader, mounted = _mount(monkeypatch, tmp_path, doc)
+
+    binding = mounted.selected_source_binding
+    assert isinstance(binding, MappingProxyType)
+    assert set(binding) == {
+        "sourceSha256",
+        "executedSourceSha256",
+        "declarationSourceSha256",
+        "declarationSource",
+    }
+    assert binding["sourceSha256"] == mounted.fingerprint
+    assert binding["sourceSha256"] == hashlib.sha256(raw.encode()).hexdigest()
+    executed = fake_loader.loaded[0]
+    assert binding["executedSourceSha256"] == hashlib.sha256(
+        executed.encode("utf-8")
+    ).hexdigest()
+    assert binding["declarationSourceSha256"] == hashlib.sha256(
+        binding["declarationSource"].encode("utf-8")
+    ).hexdigest()
+    # The carried graph is the pre-substitution one: no substituted value leaves.
+    assert "{{CINATRA_BASE_URL}}" in binding["declarationSource"]
+    assert "{{CINATRA_BASE_URL}}" not in executed
+    assert json.loads(binding["declarationSource"]) == mounted.composed_oas
+    assert binding["declarationSourceSha256"] == mounted.composed_sha256
+    with pytest.raises(TypeError):
+        binding["sourceSha256"] = "0" * 64  # type: ignore[index]
+    assert getattr(mounted.server.agent, "_cinatra_executed_source") is binding
+
+
+def test_mount_refuses_an_assistant_that_cannot_carry_the_binding(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """cinatra#3745: no binding on the assistant, no mount."""
+
+    class _SealedAgent:
+        __slots__ = ()
+
+    class _SealedLoader(_FakeLoader):
+        def load_json(self, text: str) -> Any:
+            self.loaded.append(text)
+            return _SealedAgent()
+
+    import agent_loader as al
+
+    oas_path = tmp_path / "cinatra" / "oas.json"
+    oas_path.parent.mkdir(parents=True)
+    raw = json.dumps(_slim_spec([_slot()]), indent=1)
+    oas_path.write_text(raw)
+    import hashlib
+
+    class _FakeServer:
+        def serve_agent(self, agent: Any, url: str) -> None:
+            self.agent = agent
+
+    # Everything else of the mount succeeds, so only the binding can refuse it.
+    monkeypatch.setattr(al, "A2AServer", _FakeServer)
+    monkeypatch.setattr(al, "_discover_a2a_asgi_app", lambda server, label: object())
+    with pytest.raises((AttributeError, ValueError)):
+        al._mount_one_sync(
+            _SealedLoader(),
+            "cinatra-ai",
+            "under-test",
+            oas_path,
+            hashlib.sha256(raw.encode()).hexdigest(),
+            "http://x",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Composed-OAS debug endpoint (auth contract mirrors the reload endpoint).
 # ---------------------------------------------------------------------------
@@ -798,6 +880,7 @@ def test_mount_malformed_declaration_raises(monkeypatch, tmp_path: Path) -> None
 
 def test_composed_oas_handler_auth_and_lookup(monkeypatch) -> None:
     import asyncio
+    from types import MappingProxyType
 
     import agent_loader as al
 
@@ -813,6 +896,7 @@ def test_composed_oas_handler_auth_and_lookup(monkeypatch) -> None:
         fingerprint = "f" * 64
         composed_oas = {"id": "x"}
         composed_sha256 = "c" * 64
+        selected_source_binding = None
         context_injection = [
             {
                 "slot": "s",
@@ -822,7 +906,8 @@ def test_composed_oas_handler_auth_and_lookup(monkeypatch) -> None:
             }
         ]
 
-    handler = al._build_composed_oas_handler(_FakeRegistry(_FakeAgent()))
+    agent = _FakeAgent()
+    handler = al._build_composed_oas_handler(_FakeRegistry(agent))
 
     class _Req:
         def __init__(self, token: str, vendor: str = "cinatra-ai", slug: str = "known"):
@@ -845,6 +930,15 @@ def test_composed_oas_handler_auth_and_lookup(monkeypatch) -> None:
     assert body["injected"] is True
     assert body["templateVersion"] == CONTEXT_SUBFLOW_TEMPLATE_VERSION
     assert body["composedOas"] == {"id": "x"}
+    assert body["selectedSourceBinding"] is None
+
+    binding = {"packageName": "@cinatra-ai/known", "sourceSha256": "s" * 64}
+    agent.selected_source_binding = MappingProxyType(binding)
+    bound = asyncio.run(handler(_Req("sekrit")))
+    assert bound.status_code == 200
+    bound_body = json.loads(bound.body)
+    assert bound_body["selectedSourceBinding"] == binding
+    assert bound_body["composedOas"] == {"id": "x"}
 
 
 # ---------------------------------------------------------------------------
@@ -871,6 +965,14 @@ def test_composed_slim_doc_deserializes_with_real_pyagentspec() -> None:
     )
     agent = AgentSpecLoader().load_json(text)
     assert agent is not None
+    # cinatra#3745: the mount attaches its frozen source binding to the REAL
+    # deserialized assistant and refuses the mount when it cannot. Prove the
+    # pinned wayflowcore class accepts the attribute, so no agent fails to mount.
+    from types import MappingProxyType
+
+    marker = MappingProxyType({"probe": "3745"})
+    setattr(agent, "_cinatra_executed_source", marker)
+    assert getattr(agent, "_cinatra_executed_source", None) is marker
 
 
 # ---------------------------------------------------------------------------
