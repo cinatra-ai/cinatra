@@ -246,7 +246,7 @@ export async function updateAgentRunStatusConditional(
 // ---------------------------------------------------------------------------
 //
 // A run paused at `pending_approval` carries a generation-stamped lease on its
-// own row (core__0116; the claim writers are ./run-pause-claim). The rules sit in
+// own row (core__0126; the claim writers are ./run-pause-claim). The rules sit in
 // the ONE status compare-and-set, so no status writer that goes through it can
 // skip them:
 //   1. every status change clears the claim (token, phase, expiry), except the

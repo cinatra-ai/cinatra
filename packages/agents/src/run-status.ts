@@ -233,7 +233,7 @@ export type RunTransitionErrorCode =
 
 // ---------------------------------------------------------------------------
 // THE PAUSE CLAIM (cinatra#4245): the lease constants and the two control
-// fields of the status seam. The claim lives on the run row (core__0116); its
+// fields of the status seam. The claim lives on the run row (core__0126); its
 // writers are packages/agents/src/run-pause-claim.ts and the seam rules in
 // run-transition.ts. Every expiry is compared with the database clock.
 // ---------------------------------------------------------------------------

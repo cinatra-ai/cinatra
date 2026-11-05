@@ -15,7 +15,7 @@ import { PAUSE_CLAIM_LEASE_SECONDS, PAUSE_SEND_LEASE_SECONDS } from "./run-statu
 // resume, the review page's Continue, the resume delivery worker), stopped, or
 // ended by a change request. They must exclude each other on ONE pause, and a
 // resume must never act on a later pause than the one it read. Every one of
-// them serializes on the run row: the columns of core__0116 hold the pause's
+// them serializes on the run row: the columns of core__0126 hold the pause's
 // generation (`pause_generation`, raised on every entry into
 // `pending_approval` and at every fence) and its holder (`pause_claim_token`,
 // `pause_claim_phase` `claimed` | `sending` | `changes_requested`,
