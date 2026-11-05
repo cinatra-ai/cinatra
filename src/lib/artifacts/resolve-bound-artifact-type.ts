@@ -1,5 +1,5 @@
 import "server-only";
-import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
+import { objectTypeRegistry, type ArtifactPackSurfaceEntry } from "@cinatra-ai/objects/registry";
 import { parseSemanticArtifactManifest } from "@cinatra-ai/objects/semantic-manifest";
 import {
   resolveClaimWinner,
@@ -12,8 +12,6 @@ import {
 } from "@cinatra-ai/agents/artifact-binding";
 import { isExactVersion } from "@cinatra-ai/registries/src/version-compare";
 import { readArtifactTypeClaimsForOrg } from "@/lib/objects/artifact-claim-store";
-import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types";
-import type { InstallAnchorRow } from "@/lib/extension-install-anchor";
 import { ensureArtifactTypesRegistered } from "./ensure-artifact-registry";
 import type { ClaimBackedMeaningType } from "./installed-type-picker";
 
@@ -172,7 +170,7 @@ export function readArtifactSafeClaimWinnerForType(
 
 /**
  * The packages that pass every rule of `readClaimBackedMeaningTypesForOrg`
- * except the manifest read (cinatra#3319): rules 0, 1, 3, 4 and 6, through the
+ * except the surface read (cinatra#3319): rules 0, 1, 3, 4 and 6, through the
  * same code (`readClaimBackedCandidates`). Sorted. Only such a package can be
  * claim-backed, so the upload actions read it after the claim-backed read
  * failed, to tell which matcher entries could be a claim-backed pack's; a
@@ -198,7 +196,7 @@ type ClaimBackedCandidate = ArtifactSafeClaimWinner & { installId: string };
  * from THE ONE arbitration, grouped by the winning extension, the one winner of
  * each extension that wins exactly one type (3) at an exact version (0), is
  * bound to an install row (6), registers no type with `isArtifact` (1), and
- * whose type is host-registered (4). No manifest is read. A failed claim read
+ * whose type is host-registered (4). No surface is read. A failed claim read
  * throws.
  */
 function readClaimBackedCandidates(
@@ -303,35 +301,44 @@ export function readAdmissibleArtifactTypeIdsForOrg(
  * winning extension, keep an extension only when all seven hold:
  *   0. its winner's `extensionVersion` is an exact version (not `"0.0.0"`);
  *   1. it registered no type with `isArtifact`;
- *   2. the manifest of the winner's install declares no `skills.matchers`;
+ *   2. the pack's surface declares no matcher skills;
  *   3. it won exactly one type;
  *   4. that type is host-registered (no registering package);
- *   5. that manifest's `accepts` is non-empty;
+ *   5. the pack's surface accepts a file MIME type;
  *   6. the winning claim is bound to an install row (`installId`).
  * Rules 0, 1, 3, 4 and 6 read the claims and the registry only
  * (`readClaimBackedCandidates`, which `readClaimBackedCandidatePackagesForOrg`
- * reads too); the manifest is read only for an extension that passes them, and
- * only through the winner's own install row (`readClaimWinnerManifestFields`):
- * for a store install, the one store record at the digest the runtime's own
- * trust gate selects for that row, and no other store record; for a bundled
- * install, the development tree, through the manifest that names the package.
- * Each entry names the winner it was read for: version, install and scope. The
- * install row's organisation is not compared with the claim's scope here; the
+ * reads too). Rules 2 and 5 read the pack's surface, and only for an extension
+ * that passes them: the capabilities the runtime-discovery dispatcher reports
+ * for the pack (`readOrgPackSurfaces`, read once per call and only when an
+ * extension reaches it), bound to the winner's own install row
+ * (`readClaimWinnerSurfaceFields`). The reader opens no manifest. Each entry
+ * names the winner it was read for: version, install and scope. The
+ * dispatcher is read in this organisation's visibility scope, so a pack whose
+ * live installs this organisation cannot see reports no surface. The install
+ * row's organisation is not compared with the claim's scope here; the
  * claim-scoped gate the upload actions ask
  * (`canActorAccessClaimedArtifactExtension`) refuses a bound row that does not
- * govern that scope. The caller warms the registry. Both reads are injectable
- * for unit tests. A failed claim read or install-row read throws, and so does a
- * live install whose manifest cannot be read at the claim's version: the
- * pack's claim state is then unknown, and the caller must read the whole
- * answer as failed, never as "not claim-backed" (the upload actions then refuse
- * a matcher entry whose claim state is unknown). An extension that a rule
- * other than 2 and 5 drops is dropped before its manifest is read, so its
- * install is never read and cannot fail the answer.
+ * govern that scope. The caller warms the registry. The claim read, the
+ * surface read and the per-winner read are injectable for unit tests. A failed
+ * claim read, install-row read, dispatcher read or trust-gate read throws, and
+ * so does a reported surface that is not the surface of the claim's install at
+ * the claim's version: the pack's claim state is then unknown, and the caller
+ * must read the whole answer as failed, never as "not claim-backed" (the
+ * upload actions then refuse a matcher entry whose claim state is unknown). An
+ * extension that a rule other than 2 and 5 drops is dropped before its surface
+ * is read, so it cannot fail the answer.
  */
 export async function readClaimBackedMeaningTypesForOrg(
   orgId: string,
   deps?: {
     readClaimsForOrg?: (orgId: string) => readonly ClaimRowForOrg[];
+    /** The organisation's pack surfaces; the runtime-discovery dispatcher by
+     *  default (`readOrgPackSurfaces`). */
+    readPackSurfaces?: (orgId: string) => Promise<readonly ArtifactPackSurfaceEntry[]>;
+    /** The per-winner read in place of `readClaimWinnerSurfaceFields` (which
+     *  reads the surfaces above): the pack's accepts and matcher skills for the
+     *  winner's install, or null for no entry. */
     readManifestFields?: (winner: {
       extension: string;
       extensionVersion: string;
@@ -339,16 +346,22 @@ export async function readClaimBackedMeaningTypesForOrg(
     }) => Promise<{ accepts: string[]; objectTypeIds: string[]; matchers: string[] } | null>;
   },
 ): Promise<ClaimBackedMeaningType[]> {
-  const readManifestFields = deps?.readManifestFields ?? readClaimWinnerManifestFields;
+  const readPackSurfaces = deps?.readPackSurfaces ?? readOrgPackSurfaces;
+  let surfaces: Promise<readonly ArtifactPackSurfaceEntry[]> | null = null;
+  const surfacesOnce = () => (surfaces ??= readPackSurfaces(orgId));
+  const readManifestFields =
+    deps?.readManifestFields ??
+    ((winner: { extension: string; extensionVersion: string; installId: string }) =>
+      readClaimWinnerSurfaceFields(winner, surfacesOnce));
   const out: ClaimBackedMeaningType[] = [];
   for (const candidate of readClaimBackedCandidates(orgId, deps?.readClaimsForOrg)) {
     const { objectTypeId, extensionPackage: extension, extensionVersion, installId, scope } =
       candidate;
-    // Null: the claim names no live artifact install of the pack. A live install
-    // whose manifest cannot be read throws (the reader fails closed).
+    // Null: the claim names no live artifact install of the pack, or the
+    // runtime reports no surface of the pack. A reported surface that is not
+    // the install's throws (the reader fails closed).
     const fields = await readManifestFields({ extension, extensionVersion, installId });
-    // 2. no matchers, read from the manifest (not the mutable matcher registry);
-    // 5. the manifest accepts something.
+    // 2. no matcher skills; 5. the surface accepts something.
     if (!fields || fields.matchers.length > 0 || fields.accepts.length === 0) continue;
     out.push({
       objectTypeId,
@@ -386,60 +399,30 @@ export async function readInstalledPackDeclaredObjectTypeIds(
   return (await readInstalledPackManifestFields(extension))?.objectTypeIds ?? null;
 }
 
-type InstalledPackManifestFields = {
-  accepts: string[];
-  objectTypeIds: string[];
-  matchers: string[];
-  /** The manifest's own `version`, or null when it is not a string. */
-  version: string | null;
-  /** The manifest's own `name`, or null when it is not a string. */
-  name: string | null;
-};
-
-/** Parse one `package.json` text into the manifest fields, or null when it is
- *  not a readable, valid `kind:"artifact"` manifest. */
-function parsePackManifestFields(raw: string): InstalledPackManifestFields | null {
-  let pkg: { name?: unknown; version?: unknown; cinatra?: { kind?: unknown; artifact?: unknown } };
-  try {
-    pkg = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (pkg?.cinatra?.kind !== "artifact") return null;
-  const parsed = parseSemanticArtifactManifest(pkg.cinatra?.artifact);
-  if (!parsed.ok) return null;
-  return {
-    accepts: parsed.manifest.accepts?.file?.mimeTypes ?? [],
-    objectTypeIds: (parsed.manifest.objectTypes ?? []).map((c) => c.type),
-    matchers: parsed.manifest.skills?.matchers ?? [],
-    version: typeof pkg.version === "string" ? pkg.version : null,
-    name: typeof pkg.name === "string" ? pkg.name : null,
-  };
-}
-
-/** The bundled/in-tree `package.json` paths of a package (dev / verify stack):
- *  <root>/<vendor>/<slug> and <root>/<slug>. Throws when the dev root is
- *  unavailable. */
-async function devTreeManifestPaths(extension: string): Promise<string[]> {
-  const path = await import("node:path");
-  const { resolveDevExtensionSourceRoot } = await import("@cinatra-ai/agents/agent-runtime-mount");
-  const root = resolveDevExtensionSourceRoot();
-  const slug = extension.split("/").pop() ?? extension;
-  const scope = extension.startsWith("@") ? extension.slice(1).split("/")[0] : null;
-  return [
-    ...(scope ? [path.join(root, scope, slug, "package.json")] : []),
-    path.join(root, slug, "package.json"),
-  ];
-}
-
 /** ONE read of the pack manifest yielding every field the callers above need.
  *  Same discovery order as before: SRI-vetted store records first, then the
  *  bundled/in-tree extension dir (dev/verify). Reads `package.json` only. */
 async function readInstalledPackManifestFields(
   extension: string,
-): Promise<InstalledPackManifestFields | null> {
+): Promise<{ accepts: string[]; objectTypeIds: string[] } | null> {
   const { readFile } = await import("node:fs/promises");
   const path = await import("node:path");
+
+  const parseAccepts = (raw: string): { accepts: string[]; objectTypeIds: string[] } | null => {
+    let pkg: { cinatra?: { kind?: unknown; artifact?: unknown } };
+    try {
+      pkg = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+    if (pkg?.cinatra?.kind !== "artifact") return null;
+    const parsed = parseSemanticArtifactManifest(pkg.cinatra?.artifact);
+    if (!parsed.ok) return null;
+    return {
+      accepts: parsed.manifest.accepts?.file?.mimeTypes ?? [],
+      objectTypeIds: (parsed.manifest.objectTypes ?? []).map((c) => c.type),
+    };
+  };
 
   // 1. Store records (production): prefer any readable materialized record for
   //    this package (a version-matched select would need the run's pinned
@@ -452,7 +435,7 @@ async function readInstalledPackManifestFields(
     for (const rec of records) {
       if (rec.packageName !== extension) continue;
       try {
-        const accepts = parsePackManifestFields(await readFile(path.join(rec.storeDir, "package.json"), "utf8"));
+        const accepts = parseAccepts(await readFile(path.join(rec.storeDir, "package.json"), "utf8"));
         if (accepts) return accepts;
       } catch {
         // next record
@@ -462,11 +445,20 @@ async function readInstalledPackManifestFields(
     // store unavailable — fall through to the bundled dir
   }
 
-  // 2. Bundled extension dir (dev / verify stack).
+  // 2. Bundled extension dir (dev / verify stack): <root>/<vendor>/<slug> and
+  //    <root>/<slug>.
   try {
-    for (const cand of await devTreeManifestPaths(extension)) {
+    const { resolveDevExtensionSourceRoot } = await import("@cinatra-ai/agents/agent-runtime-mount");
+    const root = resolveDevExtensionSourceRoot();
+    const slug = extension.split("/").pop() ?? extension;
+    const scope = extension.startsWith("@") ? extension.slice(1).split("/")[0] : null;
+    const candidates = [
+      ...(scope ? [path.join(root, scope, slug, "package.json")] : []),
+      path.join(root, slug, "package.json"),
+    ];
+    for (const cand of candidates) {
       try {
-        const accepts = parsePackManifestFields(await readFile(cand, "utf8"));
+        const accepts = parseAccepts(await readFile(cand, "utf8"));
         if (accepts) return accepts;
       } catch {
         // next candidate
@@ -479,48 +471,91 @@ async function readInstalledPackManifestFields(
 }
 
 /**
- * THE MANIFEST OF THE WINNING CLAIM'S OWN INSTALL (cinatra#3319): read through
- * the install row the claim is bound to, the way the runtime pairs that row
- * with its bytes, and never from another store record of the same package.
- * The claim's install row (`installId`) must be a live (`active` or `locked`)
- * `kind:"artifact"` row of this package; any other row, or none, answers null
- * (the claim names no live install of the pack). Then, by the row's source:
- *   - a STORE install (`verdaccio`, `local` or `github`) is first passed
- *     through the runtime's own trust gate, `resolveInstallAnchor`, with the
- *     row and its finalized install-op journal, read in the namespace the
- *     multi-version anchor resolver reads for that row (`0.0.0` for the default
- *     row, else the row's version). A row that gate refuses (no finalized
- *     journal, a row digest the journal does not confirm, placeholder
- *     integrity, no content hash) can never be activated by the runtime, so
- *     the reader throws. The digest the gate selects must be a store digest
- *     segment (an empty or malformed one throws) and names the one store
- *     record that answers, `<root>/artifact/<slug>/<digest>/package.json`, read by its path:
- *     no other record is listed or read. A gate that selects no digest (a
- *     legacy row the journal pins no digest for) takes, as the runtime loader
- *     does, the one record of the package in the store, and throws when the
- *     store holds none or more than one.
- *   - a BUNDLED install (`bundled`) answers through the development tree only
- *     when the store holds no record of the package at all, and exactly one
- *     development manifest names the package. That tree carries no install
- *     identity: it is taken as the bundled install's bytes, bound to the claim
- *     by the manifest's package name and the version check below.
- *   - any other source, or none, is no install the runtime anchors: the reader
- *     throws.
- * In every case the manifest must be a valid `kind:"artifact"` manifest that
- * names this package, at the claim's version.
- * FAIL CLOSED: a failed install-row read throws, and so does every case in
- * which the live install's manifest cannot be read in that way. A store
- * read that fails for any reason but the absence of the package's folder is a
- * failure, never "the store holds no record": an unreadable folder, a record
- * whose manifest cannot be opened and a data root that cannot be located all
- * throw. The pack's claim state is then unknown, so the answer must never read
- * as "not claim-backed" (see `readClaimBackedMeaningTypesForOrg`).
+ * The pack surfaces the runtime-discovery dispatcher reports for one
+ * organisation (cinatra#3319): `discoverActiveExtensionCapabilities` for the
+ * artifact kind, whose reader facet lists the surfaces the object-registry
+ * bridge recorded for each lifecycle-live pack it registered, one per kind of
+ * record (`artifactPackSurfaceRegistry`, written from the manifest the bridge
+ * validated, with the store record or development tree it read). This is the
+ * one road the reader takes to a pack's capabilities: it opens no manifest
+ * itself. The artifact handler is registered first if this process has not
+ * registered one (`registerIfAbsent`; the handler bootstrap registers the same
+ * handler, and a later `register` there replaces it), so the facet is there in
+ * a worker the bootstrap has not reached. The visibility scope is the
+ * organisation's own: a system read that admits every install anchored to the
+ * organisation and the deployment-wide ones, never another organisation's.
+ * Which actor may use an entry is decided later, by the claim-scoped gate of
+ * the upload actions. A failed dispatcher read, a facet that throws and a
+ * facet that is not there all throw: none of them is "no surface".
  */
-async function readClaimWinnerManifestFields(winner: {
-  extension: string;
-  extensionVersion: string;
-  installId: string;
-}): Promise<InstalledPackManifestFields | null> {
+async function readOrgPackSurfaces(orgId: string): Promise<ArtifactPackSurfaceEntry[]> {
+  const [{ discoverActiveExtensionCapabilities }, { extensionRegistry }, { createArtifactExtensionHandler }] =
+    await Promise.all([
+      import("@cinatra-ai/extensions/runtime-discovery-host"),
+      import("@cinatra-ai/extensions"),
+      import("@cinatra-ai/extensions/artifact-handler"),
+    ]);
+  extensionRegistry.registerIfAbsent(createArtifactExtensionHandler());
+  const facet: { failed: boolean; error: unknown } = { failed: false, error: null };
+  const discovered = await discoverActiveExtensionCapabilities({
+    kind: "artifact",
+    actor: { actorType: "system", source: "worker" },
+    scope: { userId: null, organizationId: orgId, teamIds: [], orgRole: "org_admin" },
+    onError: (_kind, error) => {
+      facet.failed = true;
+      facet.error = error;
+    },
+  });
+  if (facet.failed) {
+    throw facet.error instanceof Error ? facet.error : new Error("the artifact reader facet failed");
+  }
+  if (discovered.unmigratedKinds.includes("artifact")) {
+    throw new Error("the runtime-discovery dispatcher has no artifact reader facet");
+  }
+  const out: ArtifactPackSurfaceEntry[] = [];
+  for (const descriptor of discovered.byKind.artifact ?? []) {
+    const surface = (descriptor as { artifactPack?: unknown } | null)?.artifactPack;
+    if (surface && typeof surface === "object") out.push(surface as ArtifactPackSurfaceEntry);
+  }
+  return out;
+}
+
+/**
+ * THE CAPABILITIES OF THE WINNING CLAIM'S OWN INSTALL (cinatra#3319), as the
+ * runtime registered them. The claim's install row (`installId`) must be a live
+ * (`active` or `locked`) `kind:"artifact"` row of this package; any other row,
+ * or none, answers null (the claim names no live install of the pack). The
+ * answer is the pack's surface as the runtime-discovery dispatcher reports it
+ * (`readOrgPackSurfaces`), and null when the dispatcher reports none for the
+ * package: the runtime registered no capability of the pack, so the picker
+ * offers none (the bridge's registration of a manifest file writes a pack's
+ * matcher entry only on a pass that also writes its surface). The dispatcher
+ * can report a store surface and a development-tree surface of one pack; the
+ * install's own kind of record picks one. It answers only when it is the
+ * surface of this install's bytes:
+ *   - its manifest is at the claim's version;
+ *   - for a STORE install (`verdaccio`, `local` or `github`), the runtime's own
+ *     multi-version trust gate (`makeDefaultInstallAnchorsResolver`, as boot
+ *     builds it, with a read of no port grant: the grant decides approved
+ *     ports, never whether a row anchors) must anchor this row: a row it
+ *     refuses, or skips because two live owner rows share its version, or a
+ *     package it refuses for two resolved defaults, can never be activated by
+ *     the runtime. The surface must be the one the bridge registered from a
+ *     store record at the digest that anchor selects (any store record of the
+ *     package when the anchor selects none: the store rescan then registers a
+ *     package only from its one store record);
+ *   - for a BUNDLED install (`bundled`), the surface must be the one the bridge
+ *     registered from the development tree;
+ *   - any other source, or none, is no install the runtime anchors.
+ * FAIL CLOSED: in every case where a surface of the pack is reported but none
+ * is this install's, and on a failed install-row, dispatcher or trust-gate
+ * read, the reader throws. The pack's claim state is then unknown, so the answer must
+ * never read as "not claim-backed" (see `readClaimBackedMeaningTypesForOrg`).
+ */
+async function readClaimWinnerSurfaceFields(
+  winner: { extension: string; extensionVersion: string; installId: string },
+  surfaces: () => Promise<readonly ArtifactPackSurfaceEntry[]>,
+): Promise<{ accepts: string[]; objectTypeIds: string[]; matchers: string[] } | null> {
   const { readInstalledExtensionById } = await import("@cinatra-ai/extensions/canonical-store");
   const row = await readInstalledExtensionById(winner.installId);
   if (
@@ -537,177 +572,72 @@ async function readClaimWinnerManifestFields(winner: {
         `(${winner.extension}@${winner.extensionVersion}, install ${winner.installId})`,
     );
   };
-  const atVersion = (fields: InstalledPackManifestFields | null): InstalledPackManifestFields => {
-    if (!fields) return unreadable("no valid artifact manifest");
-    if (fields.name !== winner.extension) {
-      return unreadable("the manifest names another package");
-    }
-    if (fields.version !== winner.extensionVersion) {
-      return unreadable("the manifest is at another version than the claim");
-    }
-    return fields;
-  };
+  let reported: readonly ArtifactPackSurfaceEntry[];
+  try {
+    reported = await surfaces();
+  } catch {
+    return unreadable("the runtime-discovery dispatcher cannot be read");
+  }
+  const own = reported.filter((s) => s.packageName === winner.extension);
+  if (own.length === 0) return null;
+  // The pack's surface from this install's own kind of record: the registry
+  // keeps a store surface and a development-tree surface side by side.
+  let surface: ArtifactPackSurfaceEntry | undefined;
   const sourceType = (row.source as { type?: unknown } | null | undefined)?.type;
   if (sourceType === "bundled") {
-    return atVersion(await readBundledInstallManifest(winner.extension, unreadable));
-  }
-  if (sourceType !== "verdaccio" && sourceType !== "local" && sourceType !== "github") {
+    surface = own.find((s) => s.record?.source === "bundled");
+    if (!surface) {
+      return unreadable("the runtime registered the pack from no development tree");
+    }
+  } else if (sourceType === "verdaccio" || sourceType === "local" || sourceType === "github") {
+    const digest = await readAnchoredStoreDigest(row.packageName, row.id, unreadable);
+    surface = own.find((s) => s.record?.source === "store");
+    const record = surface?.record;
+    if (!surface || record?.source !== "store" || (digest !== null && record.digest !== digest)) {
+      return unreadable("the runtime registered the pack from another record than the install's");
+    }
+  } else {
     return unreadable("the install row has no source the runtime anchors");
   }
-  const digest = await readAnchoredStoreDigest(row, unreadable);
-  return atVersion(await readStoreInstallManifest(winner.extension, digest, unreadable));
+  if (surface.version !== winner.extensionVersion) {
+    return unreadable("the runtime registered the pack at another version than the claim");
+  }
+  return {
+    accepts: [...surface.fileMimeTypes],
+    objectTypeIds: [],
+    matchers: [...surface.matcherSkillIds],
+  };
 }
 
 /**
- * The store digest the runtime's own trust gate selects for one live install
- * row (cinatra#3319): `resolveInstallAnchor` over exactly this row, with the
- * finalized install-op journal read in the namespace
- * `makeDefaultInstallAnchorsResolver` reads for it. Null when the gate selects
- * no digest. A refused row, and a failed journal read, throw through
- * `unreadable`.
+ * The store digest the runtime's own multi-version trust gate selects for one
+ * live install row (cinatra#3319): the anchor `makeDefaultInstallAnchorsResolver`
+ * (platform-global, as boot builds it) resolves for the row `installId`. Null
+ * when that anchor selects no digest. No anchor for the row (refused, skipped
+ * as an ambiguous version, or every version refused for two resolved
+ * defaults), and a failed read, throw through `unreadable`. The port grant is
+ * not read: it decides approved ports only.
  */
 async function readAnchoredStoreDigest(
-  row: InstalledExtension,
+  packageName: string,
+  installId: string,
   unreadable: (why: string) => never,
 ): Promise<string | null> {
-  const { resolveInstallAnchor } = await import("@/lib/extension-install-anchor");
-  const { readInstallOpForVersion } = await import("@/lib/extension-install-ops");
-  const namespace = row.isDefault !== false ? "0.0.0" : (row.version ?? "0.0.0");
-  let anchor: Awaited<ReturnType<typeof resolveInstallAnchor>>;
+  const { makeDefaultInstallAnchorsResolver } = await import("@/lib/extension-install-anchor");
+  let anchors: readonly { installId?: string | null; digest?: string | null }[];
   try {
-    anchor = await resolveInstallAnchor(row.packageName, {
-      orgId: row.organizationId ?? null,
-      readActiveInstall: async () => ({
-        id: row.id,
-        status: row.status,
-        kind: row.kind,
-        isDefault: row.isDefault,
-        organizationId: row.organizationId ?? null,
-        widgetAuthTokenKeys: row.widgetAuthTokenKeys ?? null,
-        // The anchor reads the source defensively, field by field.
-        source: row.source as unknown as InstallAnchorRow["source"],
-      }),
-      // The port grant decides approved ports only, never whether the bytes
-      // are trusted, so the reader does not read it.
+    const resolve = await makeDefaultInstallAnchorsResolver(null, "platform-global", {
       readGrant: async () => null,
-      readInstallOp: (pkg, oid) => readInstallOpForVersion(pkg, oid, namespace),
     });
+    anchors = await resolve(packageName);
   } catch {
-    return unreadable("the install's journal cannot be read");
+    return unreadable("the install's trust anchor cannot be read");
   }
+  const anchor = anchors.find((a) => a.installId === installId);
   if (!anchor) {
-    return unreadable("the runtime's trust gate refuses the install");
+    return unreadable("the runtime's trust gate anchors no version of the install");
   }
   return anchor.digest ?? null;
-}
-
-/** The package's store folder, `<root>/artifact/<slug>` (the row's kind is
- *  `artifact`, and the store is kind-segregated). */
-async function storeSlugDir(
-  extension: string,
-  unreadable: (why: string) => never,
-): Promise<string> {
-  try {
-    const { resolveExtensionDataRoot } = await import("@/lib/extension-data-root");
-    const { storeSlugDirV2 } = await import("@/lib/extension-package-store-core");
-    return storeSlugDirV2(resolveExtensionDataRoot(), "artifact", extension);
-  } catch {
-    return unreadable("the store cannot be located");
-  }
-}
-
-/** The digests of the package's store records. The folder's absence is the
- *  only "none": every other failure to list it throws through `unreadable`. */
-async function listStoreRecordDigests(
-  slugDir: string,
-  unreadable: (why: string) => never,
-): Promise<string[]> {
-  const { readdir } = await import("node:fs/promises");
-  const { isStoreDigestSegment } = await import("@/lib/extension-package-store-core");
-  let entries: string[];
-  try {
-    entries = await readdir(slugDir);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException | null)?.code === "ENOENT") return [];
-    return unreadable("the store folder of the package cannot be listed");
-  }
-  return entries.filter((entry) => isStoreDigestSegment(entry));
-}
-
-/** The manifest of a store install's record at `digest` (or, for no digest,
- *  of the package's one store record), read by its path. */
-async function readStoreInstallManifest(
-  extension: string,
-  digest: string | null,
-  unreadable: (why: string) => never,
-): Promise<InstalledPackManifestFields | null> {
-  const { readFile } = await import("node:fs/promises");
-  const path = await import("node:path");
-  const { isStoreDigestSegment } = await import("@/lib/extension-package-store-core");
-  const slugDir = await storeSlugDir(extension, unreadable);
-  let recordDigest: string;
-  if (digest !== null) {
-    if (!isStoreDigestSegment(digest)) return unreadable("the install's digest is no store digest");
-    recordDigest = digest;
-  } else {
-    const digests = await listStoreRecordDigests(slugDir, unreadable);
-    if (digests.length !== 1) {
-      return unreadable(`the install pins no digest and the store holds ${digests.length} records of the package`);
-    }
-    recordDigest = digests[0];
-  }
-  let raw: string;
-  try {
-    raw = await readFile(path.join(slugDir, recordDigest, "package.json"), "utf8");
-  } catch {
-    return unreadable("the manifest of the install's store record cannot be opened");
-  }
-  return parsePackManifestFields(raw);
-}
-
-/** The manifest of a bundled install: the one development manifest that names
- *  the package, read only when the store holds no record of the package. */
-async function readBundledInstallManifest(
-  extension: string,
-  unreadable: (why: string) => never,
-): Promise<InstalledPackManifestFields> {
-  const { readFile } = await import("node:fs/promises");
-  const slugDir = await storeSlugDir(extension, unreadable);
-  if ((await listStoreRecordDigests(slugDir, unreadable)).length > 0) {
-    return unreadable("the install records no digest while the store holds a record of the package");
-  }
-  let paths: string[];
-  try {
-    paths = await devTreeManifestPaths(extension);
-  } catch {
-    return unreadable("the development root is unavailable");
-  }
-  const found: InstalledPackManifestFields[] = [];
-  for (const cand of paths) {
-    let raw: string;
-    try {
-      raw = await readFile(cand, "utf8");
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException | null)?.code;
-      if (code === "ENOENT" || code === "ENOTDIR") continue;
-      return unreadable("a development manifest cannot be opened");
-    }
-    let name: unknown;
-    try {
-      name = (JSON.parse(raw) as { name?: unknown } | null)?.name;
-    } catch {
-      return unreadable("a development manifest is not readable");
-    }
-    // Another package's manifest at the same folder name is not this one's.
-    if (name !== extension) continue;
-    const fields = parsePackManifestFields(raw);
-    if (!fields) return unreadable("a development manifest of the package is no valid artifact manifest");
-    found.push(fields);
-  }
-  if (found.length !== 1) {
-    return unreadable(`${found.length} development manifests name the package`);
-  }
-  return found[0];
 }
 
 /**

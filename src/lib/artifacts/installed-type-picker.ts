@@ -91,7 +91,8 @@ export type MatcherChannelMeaningType = {
 };
 
 /** One claim-backed meaning surface (cinatra#3319): the claimed host type, the
- *  claiming extension, the accepts of the winner's own install manifest, and the
+ *  claiming extension, the accepts the runtime reports for the winner's own
+ *  install (the pack's surface on the runtime-discovery dispatcher), and the
  *  winning claim's identity (its version, its install row and its scope), which
  *  the package-keyed registries cannot tell apart. Injectable so selection is
  *  unit-testable without the claim store. */

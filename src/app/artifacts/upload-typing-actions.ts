@@ -189,7 +189,7 @@ async function filterCandidatesByActorAccess(
  * longer dropped from the list, and under the org-scoped matcher gate it would
  * be admitted on another version's entry. This answers true for a package that
  * could be such a pack: one that passes every rule of the claim-backed reader
- * but the manifest read (`readClaimBackedCandidatePackagesForOrg`: one winning
+ * but the surface read (`readClaimBackedCandidatePackagesForOrg`: one winning
  * claim, at an exact version, bound to an install row, over a host-registered
  * type, by a package that registers no artifact type of its own). When the
  * claims cannot be read either, any package that registers no artifact type
@@ -971,10 +971,11 @@ async function promoteOnConfirmedMeaning(input: {
     // A CLAIM-BACKED OWN TYPE (cinatra#3319). A pack whose type the host
     // registers (no `isArtifact`, no package) owns no registered artifact type,
     // yet the organisation's artifact-safe claim winner names its one type and
-    // the accepts of that version's manifest. A claim-backed entry exists only
-    // for a pack that registered no artifact type when the claims were read
-    // (rule 1), so a pack with its own registered type is unchanged; the
-    // registry is not read again for a pack that has one.
+    // the accepts the runtime reports for the pack at that version. A
+    // claim-backed entry exists only for a pack that registered no artifact
+    // type when the claims were read (rule 1), so a pack with its own
+    // registered type is unchanged; the registry is not read again for a pack
+    // that has one.
     const owned = claimEntry
       ? []
       : objectTypeRegistry

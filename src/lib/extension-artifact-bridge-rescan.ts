@@ -261,7 +261,13 @@ export async function rescanArtifactBridgeFromStore(
     }
 
     try {
-      if (registerArtifactExtensionDir(rec.storeDir)) {
+      // The record identity rides the pack's surface (cinatra#3319), so a reader
+      // of the runtime-discovery dispatcher can tell which store record the
+      // runtime registered the pack from.
+      const record = rec.declaredDigest
+        ? ({ source: "store", digest: rec.declaredDigest } as const)
+        : undefined;
+      if (registerArtifactExtensionDir(rec.storeDir, record)) {
         registered.push(rec.packageName);
         registeredRecords.push({ packageName: rec.packageName, storeDir: rec.storeDir });
       }

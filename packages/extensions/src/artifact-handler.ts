@@ -9,7 +9,7 @@ import type {
   ValidationResult,
 } from "@cinatra-ai/extension-types";
 import { visibleManifestPackageNames } from "@cinatra-ai/extension-types";
-import { objectTypeRegistry } from "@cinatra-ai/objects";
+import { artifactPackSurfaceRegistry, objectTypeRegistry } from "@cinatra-ai/objects";
 import {
   artifactObjectTypeClaimManifestSchema,
   validateObjectTypeClaimSchemaSources,
@@ -224,6 +224,15 @@ export function createArtifactExtensionHandler(): ExtensionTypeHandler {
     // (`@scope/pkg:slug` -> `@scope/pkg`); we keep only descriptors whose
     // package is BOTH lifecycle-live AND owner-visible per the shared gate, so
     // a row is never surfaced just because its package name is live elsewhere.
+    //
+    // After the object-type descriptors come the PACK descriptors
+    // (cinatra#3319), one per manifest surface the bridge registered for a
+    // lifecycle-live, owner-visible package (a pack can have a store surface
+    // and a development-tree surface): `{ packageName, artifactPack }`, the
+    // surface as the bridge recorded it (version, file accepts, matcher skill
+    // ids, and the record it read). A pack whose types the host registers has
+    // no object-type descriptor, so this is the only capability the
+    // dispatcher reports for it. Package-level, like the `listArchived` rows.
     async listActive({
       scope,
       manifests,
@@ -233,9 +242,14 @@ export function createArtifactExtensionHandler(): ExtensionTypeHandler {
       manifests: ActiveExtensionManifest[];
     }) {
       const live = visibleManifestPackageNames(manifests, scope);
-      return objectTypeRegistry
+      const typeDescriptors: unknown[] = objectTypeRegistry
         .listArtifacts()
         .filter((def) => live.has(def.type.split(":")[0]));
+      const packDescriptors = artifactPackSurfaceRegistry
+        .list()
+        .filter((surface) => live.has(surface.packageName))
+        .map((surface) => ({ packageName: surface.packageName, artifactPack: surface }));
+      return [...typeDescriptors, ...packDescriptors];
     },
 
     // Archived twin of listActive (cinatra#948). The in-memory object-type
