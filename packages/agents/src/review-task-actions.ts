@@ -1,6 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { GateNotPendingError, RunTransitionError } from "./run-status";
+import { GateNotPendingError, PAUSE_SEND_LEASE_SECONDS, RunTransitionError } from "./run-status";
 
 import { sql, type SQL } from "drizzle-orm";
 
@@ -27,6 +27,8 @@ import {
   // setup- branch already runs through `resumeRunFromSetupApproval`.
   transitionRunStatus,
 } from "./store";
+import { claimPause } from "./run-pause-claim";
+import { failPreSendStep, settleSendOrDescribe } from "./run-resume-under-claim";
 import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuccessfulContinue, continueBindingDigest, continueGateDigest } from "./agent-run-hitl-prompts";
 // cinatra#1939 wave 2 (§7.1): the guarded setup-resume writer — the setup-*
 // inputParams-merge + pending_approval->queued CAS now runs inside the org-write
@@ -864,6 +866,7 @@ export async function approveReviewTaskInternal(
   if (reviewTaskId.startsWith("wayflow-")) {
     const taskId = reviewTaskId.slice("wayflow-".length);
     let run = await readAgentRunByTaskId(taskId);
+    let foundThroughReverseMap = false;
     if (!run) {
       // `agent_runs.a2a_task_id` is a single column that `handleWayflowTaskState`
       // overwrites per gate; that overwrite races the worker's status transition
@@ -880,6 +883,7 @@ export async function approveReviewTaskInternal(
       if (fallbackRunId) {
         run = await readAgentRunById(fallbackRunId);
         if (run) {
+          foundThroughReverseMap = true;
           console.log(
             `[approveReviewTaskInternal] wayflow- reverse-lookup recovered run=${run.id} ` +
             `from Redis task-run map (a2a_task_id column was stale for task=${taskId})`,
@@ -970,40 +974,47 @@ export async function approveReviewTaskInternal(
     // "WayFlow task failed". A read-then-check is not a decision.
     //
     // So the answer CLAIMS the gate before it records anything and before it
-    // dispatches: ONE conditional statement on the gate row's status
-    // (`pending_approval -> running`, the resume edge the state machine already
-    // carries, org-scoped and guarded like every other run write). Exactly one
-    // caller can win it.
+    // dispatches: ONE conditional statement on the run row, at the generation this
+    // answer read (`claimPause`, cinatra#4245). Exactly one caller can win it, and
+    // a delayed answer cannot act on a later pause. A run found through the reverse
+    // map may wait at a later task: the latest-task key names the one it waits at.
     //
-    // The loser reads the winner's disposition back off the row and is refused
+    // The loser is refused
     // with the TYPED no-longer-pending outcome — the one the boundary in
     // `hitl-actions.ts` turns into `{ ok: false, blocked: "no-longer-pending" }`
     // and the run surface draws its blocked state from. Nothing of the loser's
     // answer is recorded, nothing is dispatched, and the run goes on with the
     // first answer rather than failing.
-    try {
-      await transitionRunStatus(
-        run.id,
-        "pending_approval",
-        "running",
-        undefined,
-        resumeAuthority,
-      );
-    } catch (e) {
-      if (e instanceof RunTransitionError && e.code === "stale_from_status") {
-        // The winner's disposition, read back off the row the CAS lost to.
-        const decided = await readAgentRunById(run.id).catch(() => null);
-        const currentStatus = decided?.status ?? "unknown";
-        throw new GateNotPendingError({
-          runId: run.id,
-          currentStatus,
-          message:
-            `WayFlow approval rejected: gate ${taskId} on run ${run.id} was already ` +
-            `decided (status: ${currentStatus})`,
-        });
-      }
-      throw e;
+    const refuse = (currentStatus: string, why: string) =>
+      new GateNotPendingError({
+        runId: run.id,
+        currentStatus,
+        message: `WayFlow approval rejected: gate ${taskId} on run ${run.id} ${why}`,
+      });
+    //
+    // The latest-task key is read on BOTH roads (cinatra#4245). Found through the
+    // reverse map, the column did not name this task, so only the key can prove it
+    // is the current pause: no key, no answer. Found by the column, the column is
+    // durable since the pause write is (execution.ts), and the key, which expires
+    // after 7 days, can only refuse: a key that names ANOTHER task means the run has
+    // moved on to a later pause; no key or a Redis failure leaves the column's word.
+    // The import is inside the guarded call, so a missing export reads as no key.
+    const latestTaskId = await (async () =>
+      (await import("@cinatra-ai/a2a")).resolveLatestWayflowGateTaskId(run.id))().catch(() => null);
+    if (foundThroughReverseMap ? latestTaskId !== taskId : latestTaskId != null && latestTaskId !== taskId) {
+      throw refuse(run.status, `is no longer the pause the run waits at`);
     }
+    const claim = await claimPause(
+      { runId: run.id, orgId: run.orgId, generation: run.pauseGeneration as number },
+      resumeAuthority,
+    );
+    if (claim.kind === "refused") {
+      if (claim.reason === "held") throw refuse("running", "is being answered by another request");
+      if (claim.reason === "moved-on") throw refuse(claim.status, "is no longer the pause the run waits at");
+      if (claim.reason === "changes-requested") throw refuse("pending_approval", "had changes requested on its review");
+      throw refuse(claim.status, `was already decided (status: ${claim.status})`);
+    }
+    const claimRef = { runId: run.id, orgId: run.orgId, token: claim.token };
 
     // Precedence for the WayFlow resume message:
     //   1. values.userResponse (string, non-empty after trim)  — structured-form path
@@ -1087,58 +1098,10 @@ export async function approveReviewTaskInternal(
     let gateSnapshot: Awaited<ReturnType<typeof readDurableHitlGateForContinue>> = null;
     try { gateSnapshot = await readDurableHitlGateForContinue(run.id,reviewTaskId); } catch { /* Missing durable evidence stays unconfirmed. */ }
     let dispatchStarted = false;
+    let fencedAt = 0;
+    let settled = false;
     let capturedPromptId: string | null = null;
     try {
-      // UNCONDITIONAL write. Empty `message` is allowed (column NOT NULL accepts
-      // ""). Bare-approval flagged excluded=true.
-      capturedPromptId = await captureHitlPromptForContinue({
-        runId: run.id,
-        agentId: template.packageName,
-        stepKey: taskId,
-        message: trimmedNote,                          // empty string when bare approval — never null (Pitfall 2)
-        submittedValues,                                // null when no structured payload at all
-        schemaSnapshot: schemaSnapshot ?? null,
-        excluded: trimmedNote.length === 0,             // Pattern 4(b): autosave skips bare-approval rows
-      }).catch((e) => {
-        // The first argument of a console call is a CONSTANT: a caller-derived
-        // value in it is read as a format string, not as text (cinatra#3423).
-        console.warn("[approveReviewTaskInternal] writeHitlPrompt failed", { runId: run.id }, e);
-        return null;
-      });
-
-      // #1987 (F1 deferred from #1960) — mint the ANSWERED-gate-submission
-      // provenance BEFORE the WayFlow resume dispatch, so the post-resume `apply`
-      // node's run-scoped PERSIST primitive can bind its write to THIS operator
-      // answer (run + exact gate task id + canonical payload), single-use. Only the
-      // STRUCTURED userResponse path is minted — the persist-driving gates
-      // (#1959/#1960/#1961) always carry one; a bare click-to-approve / note has no
-      // structured payload to persist and needs no binding. Keyed by the bare gate
-      // `taskId` (== the passthrough seam's `verifiedSubmissionId`, which resolves
-      // the same latest-task id set at this gate's interrupt-emit). AWAITED and
-      // fail-closed: a Redis failure THROWS and the resume is NOT dispatched (an
-      // unrecorded answer means the persist denies rather than persisting an unbound
-      // write), mirroring `rememberLatestWayflowGateTask`. The digest hashes
-      // `userResponseRaw` — the exact byte string WayFlow forwards VERBATIM to the
-      // apply node as `resumePayloadJson`, which the persist seam re-hashes.
-      if (typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0) {
-        const { rememberAnsweredGateSubmission, rememberLatestWayflowGateTask } =
-          await import("@cinatra-ai/a2a");
-        // RE-ASSERT the latest-task join key to THIS answered gate before minting.
-        // The passthrough seam derives the persist's `verifiedSubmissionId` from the
-        // latest-task map, stamped at interrupt-EMIT with a TTL; a gate that stays
-        // pending PAST that TTL before the operator answers would leave the key
-        // expired, so the post-resume consume would resolve no `verifiedSubmissionId`
-        // and FALSELY deny a genuine answer. Re-asserting it here guarantees the
-        // immediate post-resume consume resolves the same gate identity we mint
-        // under. It is IDEMPOTENT: a WayFlow run is suspended at exactly ONE gate at
-        // a time and `taskId` IS that gate, so this only re-writes the value already
-        // present (or restores it after a TTL expiry); concurrent answers to the
-        // same gate write the identical `taskId`, and the next gate's interrupt-emit
-        // legitimately advances the key afterwards.
-        await rememberLatestWayflowGateTask(run.id, taskId);
-        await rememberAnsweredGateSubmission(run.id, taskId, userResponseRaw);
-      }
-
       // Dynamic imports mirror mcp/handlers.ts:625-628 — avoids circular dep at
       // module load time (review-task-actions is imported by actions.ts which is
       // re-exported from index.ts; @cinatra-ai/a2a pulls in mcp-server which depends
@@ -1168,8 +1131,140 @@ export async function approveReviewTaskInternal(
       // /api/context-finalize executes — without the carrier the interactive
       // context selection has no run identity at all. Metadata (not text) because
       // `resumeText` is passed to the gate's InputMessageNode VERBATIM.
+      // cinatra#4245: the mint stays before the fence, so its failure gives the
+      // claim back, unless that release fails too: then the claim frees itself
+      // when its lease ends. A claimer that then loses its fence leaves one more
+      // credential of this run that is never sent (the credential set is additive
+      // by design, run-token-store.ts).
       const { mintResumeRunTokenMetadata } = await import("./wayflow-run-token-carrier");
       const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
+      // The message id is drawn before the fence too: past the fence a failure
+      // counts as possibly sent, so nothing that can fail before the send may wait
+      // there to be drawn (cinatra#4245).
+      const messageId = randomUUID();
+      // THE FENCE: a stop or a lease takeover since the claim loses here, and
+      // nothing is sent.
+      try {
+        await transitionRunStatus(
+          run.id,
+          "pending_approval",
+          "running",
+          { pauseFence: { token: claim.token, generation: claim.generation } },
+          resumeAuthority,
+        );
+      } catch (e) {
+        if (!(e instanceof RunTransitionError && e.code === "stale_from_status")) throw e;
+        const now = await readAgentRunById(run.id).catch(() => null);
+        const stopped = now?.status === "stopped";
+        settled = true; // This claimer no longer holds a lease to give back.
+        throw refuse(
+          stopped ? "stopped" : (now?.status ?? "unknown"),
+          stopped ? "was refused: the run was stopped before the answer was sent" : "was refused: the claim expired before the send",
+        );
+      }
+      fencedAt = Date.now();
+
+      // cinatra#4245: what records THIS answer runs only under a fence this answer
+      // won. A claimer whose lease expired and was taken over stops at the fence
+      // above, so it writes no answered-gate digest over the winner's, no latest-task
+      // key over the run's next pause, and no prompt row for an answer it never sent
+      // (`buildSubmissionMapByStepIndex` reads the rows by position; the capture
+      // below stays best-effort, so a sent answer can still lack its row).
+      //
+      // #1987 (F1 deferred from #1960) — mint the ANSWERED-gate-submission
+      // provenance BEFORE the WayFlow resume dispatch, so the post-resume `apply`
+      // node's run-scoped PERSIST primitive can bind its write to THIS operator
+      // answer (run + exact gate task id + canonical payload), single-use. Only the
+      // STRUCTURED userResponse path is minted — the persist-driving gates
+      // (#1959/#1960/#1961) always carry one; a bare click-to-approve / note has no
+      // structured payload to persist and needs no binding. Keyed by the bare gate
+      // `taskId` (== the passthrough seam's `verifiedSubmissionId`, which resolves
+      // the same latest-task id set at this gate's interrupt-emit). AWAITED and
+      // fail-closed: a Redis failure THROWS and the resume is NOT dispatched (an
+      // unrecorded answer means the persist denies rather than persisting an unbound
+      // write), mirroring `rememberLatestWayflowGateTask`. The digest hashes
+      // `userResponseRaw` — the exact byte string WayFlow forwards VERBATIM to the
+      // apply node as `resumePayloadJson`, which the persist seam re-hashes.
+      if (typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0) {
+        try {
+          const { rememberAnsweredGateSubmission, rememberLatestWayflowGateTask } =
+            await import("@cinatra-ai/a2a");
+          // RE-ASSERT the latest-task join key to THIS answered gate before minting.
+          // The passthrough seam derives the persist's `verifiedSubmissionId` from the
+          // latest-task map, stamped at interrupt-EMIT with a TTL; a gate that stays
+          // pending PAST that TTL before the operator answers would leave the key
+          // expired, so the post-resume consume would resolve no `verifiedSubmissionId`
+          // and FALSELY deny a genuine answer. Re-asserting it here guarantees the
+          // immediate post-resume consume resolves the same gate identity we mint
+          // under. It is IDEMPOTENT: a WayFlow run is suspended at exactly ONE gate at
+          // a time and `taskId` IS that gate, so this only re-writes the value already
+          // present (or restores it after a TTL expiry); concurrent answers to the
+          // same gate write the identical `taskId`, and the next gate's interrupt-emit
+          // legitimately advances the key afterwards.
+          await rememberLatestWayflowGateTask(run.id, taskId);
+          await rememberAnsweredGateSubmission(run.id, taskId, userResponseRaw);
+        } catch (recordError) {
+          // Nothing was sent. The fence already moved the run to `running`, so the
+          // gate is put back by the status edge (#3423's release edge): the run waits
+          // at this task again, its claim is cleared, and the person can answer again.
+          settled = true;
+          try {
+            await transitionRunStatus(run.id, "running", "pending_approval", { pauseTaskId: taskId }, resumeAuthority);
+          } catch (backError) {
+            // A failed database write arrives wrapped ("Failed query: <SQL> params:
+            // <values>", the values carrying the run's and its organization's ids)
+            // with the database's own error as its cause. A cause is followed while it
+            // is an `Error` (at most five levels down): the database's reason, not the
+            // query and its values. An error whose cause or text throws when read is
+            // named by a fixed text instead.
+            const describe = (x: unknown): string => {
+              try {
+                let e: unknown = x;
+                for (let i = 0; i < 5 && e instanceof Error && e.cause instanceof Error; i += 1) e = e.cause;
+                return e instanceof Error ? String(e.message) : String(e);
+              } catch {
+                return "an error whose text could not be read";
+              }
+            };
+            // A lost compare-and-set commits nothing: another writer moved the run
+            // off `running` first, and the run stays where that writer left it.
+            if (backError instanceof RunTransitionError && backError.code === "stale_from_status") {
+              throw new Error(
+                `${describe(recordError)}; nothing was sent, and the put-back of the gate changed nothing: the run was no ` +
+                  `longer running, so it stays where the writer that moved it left it`,
+                { cause: recordError },
+              );
+            }
+            // Any other error: the put-back can commit and still fail to answer (a
+            // connection lost before the commit's reply), so both outcomes are named.
+            throw new Error(
+              `${describe(recordError)}; nothing was sent, and the put-back of the gate reported an error (${describe(backError)}): ` +
+                `if it did not commit, the run stays running, and a stop lands once its send lease ends at ` +
+                `${new Date(fencedAt + PAUSE_SEND_LEASE_SECONDS * 1000).toISOString()}; if it committed, the run waits at this task again`,
+              { cause: recordError },
+            );
+          }
+          throw recordError;
+        }
+      }
+
+      // UNCONDITIONAL write. Empty `message` is allowed (column NOT NULL accepts
+      // ""). Bare-approval flagged excluded=true.
+      capturedPromptId = await captureHitlPromptForContinue({
+        runId: run.id,
+        agentId: template.packageName,
+        stepKey: taskId,
+        message: trimmedNote,                          // empty string when bare approval — never null (Pitfall 2)
+        submittedValues,                                // null when no structured payload at all
+        schemaSnapshot: schemaSnapshot ?? null,
+        excluded: trimmedNote.length === 0,             // Pattern 4(b): autosave skips bare-approval rows
+      }).catch((e) => {
+        // The first argument of a console call is a CONSTANT: a caller-derived
+        // value in it is read as a format string, not as text (cinatra#3423).
+        console.warn("[approveReviewTaskInternal] writeHitlPrompt failed", { runId: run.id }, e);
+        return null;
+      });
+
       // Past this line the answer is on the wire.
       dispatchStarted = true;
       const deadline = Date.now() + WAYFLOW_A2A_TIMEOUT_MS;
@@ -1177,7 +1272,7 @@ export async function approveReviewTaskInternal(
         message: {
           role: "user",
           kind: "message",
-          messageId: randomUUID(),
+          messageId,
           contextId: run.a2aContextId,
           parts: [{ kind: "text", text: resumeText }],
           metadata: resumeMetadata,
@@ -1189,14 +1284,14 @@ export async function approveReviewTaskInternal(
       // Lazy import to avoid circular dep (review-task-actions ← actions.ts ←
       // index.ts ← @cinatra-ai/a2a).
       //
-      // `fromStatus` is "running" because the claim above already moved the row off
+      // `fromStatus` is "running" because the fence above already moved the row off
       // `pending_approval` (cinatra#3423): the handler's park and terminal
       // transitions are taken from where the run ACTUALLY is, and every edge it
       // needs out of `running` — to `pending_approval` for the next gate, to
       // `completed`, `failed` or `waiting_trigger` — the state machine already
       // carries. resumeAuthority was minted above (before sendTask).
       const { handleWayflowTaskState } = await import("./execution");
-      await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task, authority: resumeAuthority });
+      await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task, authority: resumeAuthority, pauseClaimToken: claim.token });
 
       const state=task.status?.state;
       if(capturedPromptId && gateSnapshot && submittedValues !== null
@@ -1215,24 +1310,17 @@ export async function approveReviewTaskInternal(
         actorId,
         resultState: task.status?.state,
       });
+      settled = true;
+      const settleFailure = await settleSendOrDescribe(claimRef, resumeAuthority, fencedAt);
+      if (settleFailure !== null) throw new Error(`The answer was sent, but ${settleFailure}`);
       return;
     } catch (e) {
-      if (!dispatchStarted) {
-        await transitionRunStatus(
-          run.id,
-          "running",
-          "pending_approval",
-          undefined,
-          resumeAuthority,
-        ).catch((releaseError) => {
-          console.warn(
-            "[approveReviewTaskInternal] could not release the gate claim",
-            { runId: run.id, taskId },
-            releaseError,
-          );
-        });
-      }
-      throw e;
+      if (settled) throw e;
+      if (!dispatchStarted) return await failPreSendStep({ ...claimRef, expiresAt: claim.expiresAt }, resumeAuthority, e);
+      // A failed send is not given back (WayFlow may hold the message): it is settled.
+      const settleFailure = await settleSendOrDescribe(claimRef, resumeAuthority, fencedAt);
+      if (settleFailure === null) throw e;
+      throw new Error(`${e instanceof Error ? e.message : String(e)}; ${settleFailure}`, { cause: e });
     }
   }
 

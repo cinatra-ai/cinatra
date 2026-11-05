@@ -163,7 +163,7 @@ describe("every WayFlow resume sendTask site is wired to the carrier", () => {
     "orchestrator-actions.ts",
     "review-task-actions.ts",
     "artifact-review-resume-delivery.ts",
-    "mcp/handlers.ts",
+    "run-resume-under-claim.ts",
   ];
 
   it.each(SITES)("%s mints resume metadata and attaches it", async (site) => {

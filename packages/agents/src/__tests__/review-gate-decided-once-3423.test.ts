@@ -40,6 +40,20 @@ const storeMock = vi.hoisted(() => ({
   transitionRunStatus: vi.fn(),
 }));
 vi.mock("../store", () => storeMock);
+// cinatra#4245: the answer takes the pause claim. An in-memory lease over `row`:
+// one holder, given back by a release or a settle.
+const lease = vi.hoisted(() => ({ holder: null as string | null, n: 0 }));
+vi.mock("../run-pause-claim", () => ({
+  claimPause: async () => {
+    if (row.status !== "pending_approval") return { kind: "refused", reason: "not-pending", status: row.status, generation: 1 };
+    if (lease.holder) return { kind: "refused", reason: "held", status: row.status, generation: 1 };
+    lease.holder = `tok-${(lease.n += 1)}`;
+    return { kind: "claimed", token: lease.holder, generation: 1, expiresAt: new Date(0) };
+  },
+  releasePauseClaim: async () => { lease.holder = null; return "released"; },
+  settlePauseSend: async () => { lease.holder = null; return "settled"; },
+  PauseClaimReleaseError: class extends Error {},
+}));
 vi.mock("../agent-run-hitl-prompts", () => ({
   captureHitlPromptForContinue: async (input: never) => {
     await (storeMock.writeHitlPrompt as unknown as (value: unknown) => Promise<void>)(input); return "captured-prompt";
@@ -91,6 +105,9 @@ vi.mock("@cinatra-ai/a2a", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   createExternalA2AClient: vi.fn(async () => ({ sendTask })),
   resolveRunIdByWayflowTaskId: vi.fn(async () => null),
+  // cinatra#4245: Continue reads the latest-task key on the column road too; no key
+  // leaves the column's word, and this file reaches no Redis.
+  resolveLatestWayflowGateTaskId: vi.fn(async () => null),
 }));
 
 const handleWayflowTaskState = vi.hoisted(() => vi.fn(async () => undefined));
@@ -124,6 +141,7 @@ describe("approveReviewTaskInternal — two concurrent decisions on one gate", (
 
   function arrange() {
     row.status = "pending_approval";
+    lease.holder = null;
     storeMock.readAgentRunByTaskId.mockImplementation(async () => liveRun());
     storeMock.readAgentRunById.mockImplementation(async () => liveRun());
     storeMock.readAgentTemplateById.mockResolvedValue({

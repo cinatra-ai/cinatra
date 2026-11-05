@@ -50,6 +50,8 @@ import {
   readAgentRunByTaskId,
   readAgentTemplateById,
 } from "./store";
+import { claimPause, fencePauseInPlace, PauseClaimReleaseError } from "./run-pause-claim";
+import { failPreSendStep, settleSendOrDescribe } from "./run-resume-under-claim";
 import {
   WAYFLOW_A2A_TIMEOUT_MS,
   createWayflowFetch,
@@ -342,57 +344,110 @@ export async function deliverArtifactReviewResumeIntent(
     return ok ? "already-advanced" : "lease-lost";
   }
 
-  // Deliver the typed decision verbatim as the WayFlow resume message. Dynamic
-  // import mirrors review-task-actions.ts (circular-dep avoidance:
-  // agents ← @cinatra-ai/a2a ← mcp-server ← agent-builder).
-  const { createExternalA2AClient } = await import("@cinatra-ai/a2a");
-  const client = await createExternalA2AClient({
-    agentUrl: wayflowUrl,
-    timeoutMs: WAYFLOW_A2A_TIMEOUT_MS,
-    fetchImpl: createWayflowFetch(),
-  });
-  // #1193 resume carrier: mint this leg's per-run credential and persist its hash
-  // BEFORE the blocking sendTask, then carry the RAW token in the A2A message
-  // METADATA. Metadata is required here rather than the text: this path delivers
-  // the typed decision VERBATIM by contract, so the text cannot be wrapped.
-  //
-  // Rotation is ADDITIVE (agent_run_tokens keeps earlier legs valid), which
-  // matters most on THIS path — delivery is at-least-once by design, so a lease
-  // that lapses mid-send can redeliver while the first accepted task is still
-  // executing. An overwrite-in-place rotation would 403 that live task.
-  const { mintResumeRunTokenMetadata } = await import("./wayflow-run-token-carrier");
-  const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
-  const task = await client.sendTask({
-    message: {
-      role: "user",
-      kind: "message",
-      metadata: resumeMetadata,
-      // DETERMINISTIC per-gate messageId (not random): a gate resumes exactly
-      // once, so a stable id lets a dedup-aware receiver drop a duplicate re-send
-      // (the at-least-once redelivery of the SAME gate's intent). Harmless if the
-      // receiver does not dedup — the guards above already suppress the common
-      // redelivery cases.
-      messageId: `artifact-review-resume-${gateId}`,
-      contextId: run.a2aContextId,
-      parts: [{ kind: "text", text: responseText }],
-    },
-    configuration: { acceptedOutputModes: ["text"] },
-  });
-
-  // Drive the returned Task through the canonical state machine (advances the
-  // run past the gate — to the next gate or to terminal). fromStatus is the
-  // literal "pending_approval" (guarded above), matching the human resume path.
-  const { handleWayflowTaskState } = await import("./execution");
-  // cinatra#1939 wave 2: the delivery worker advances the run with no session in
-  // scope — it grounds the transition on the system dispatch mint, scoped to the
-  // run's org (the human approval already happened when the intent row was written).
+  // cinatra#4245: the same claim as the other resume roads, at the generation read.
+  // A pause that moved on, or that a change request ended, needs no send: the intent
+  // is done. A pause another claimer holds is tried again later.
   const authority = mintAgentRunExecutionAuthority(run.orgId);
-  await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task, authority });
+  const claim = await claimPause({ runId: run.id, orgId: run.orgId, generation: run.pauseGeneration as number }, authority);
+  if (claim.kind === "refused") {
+    if (claim.reason === "held") return "retryable";
+    const ok = await markResumeIntentDelivered(gateId, leaseToken);
+    console.log(`[artifact-review-resume] gate=${gateId} run=${run.id} claim refused (${claim.reason}) — marked ${ok ? "done" : "LEASE-LOST"}`);
+    return ok ? "already-advanced" : "lease-lost";
+  }
+  const claimRef = { runId: run.id, orgId: run.orgId, token: claim.token };
+
+  // The steps before the fence, under the claim: a failure gives it back, and a
+  // release that fails too leaves the intent pending until the lease frees itself.
+  // Every step between the claim and the fence sits in here, the import of the
+  // client included.
+  const preSend = async () => {
+    // Deliver the typed decision verbatim as the WayFlow resume message. Dynamic
+    // import mirrors review-task-actions.ts (circular-dep avoidance:
+    // agents ← @cinatra-ai/a2a ← mcp-server ← agent-builder).
+    const { createExternalA2AClient } = await import("@cinatra-ai/a2a");
+    const preSendClient = await createExternalA2AClient({
+      agentUrl: wayflowUrl,
+      timeoutMs: WAYFLOW_A2A_TIMEOUT_MS,
+      fetchImpl: createWayflowFetch(),
+    });
+    // #1193 resume carrier: mint this leg's per-run credential and persist its hash
+    // BEFORE the blocking sendTask, then carry the RAW token in the A2A message
+    // METADATA. Metadata is required here rather than the text: this path delivers
+    // the typed decision VERBATIM by contract, so the text cannot be wrapped.
+    //
+    // Rotation is ADDITIVE (agent_run_tokens keeps earlier legs valid), which
+    // matters most on THIS path — delivery is at-least-once by design, so a lease
+    // that lapses mid-send can redeliver while the first accepted task is still
+    // executing. An overwrite-in-place rotation would 403 that live task.
+    const { mintResumeRunTokenMetadata } = await import("./wayflow-run-token-carrier");
+    const metadata = await mintResumeRunTokenMetadata(run.id);
+    // THE FENCE, in place: the worker sends while the run stays pending_approval,
+    // so a stop during this send meets the same live `sending` lease.
+    const fence = await fencePauseInPlace({ runId: run.id, orgId: run.orgId, generation: claim.generation, token: claim.token }, authority);
+    return fence === "fenced" ? { client: preSendClient, resumeMetadata: metadata } : null;
+  };
+  let ready: Awaited<ReturnType<typeof preSend>>;
+  try {
+    ready = await preSend();
+  } catch (stepError) {
+    try {
+      return await failPreSendStep({ ...claimRef, expiresAt: claim.expiresAt }, authority, stepError);
+    } catch (surfaced) {
+      if (!(surfaced instanceof PauseClaimReleaseError)) throw surfaced;
+      console.warn(`[artifact-review-resume] gate=${gateId} run=${run.id} left pending: ${surfaced.message}`);
+      return "retryable";
+    }
+  }
+  if (!ready) return "retryable";
+  const { client, resumeMetadata } = ready;
+  const fencedAt = Date.now();
+  // The lease is settled however the send ends. A settle that fails leaves the
+  // intent pending: the guards above read the moved run on the next cycle.
+  let settleFailure: string | null = null;
+  const settle = async () => {
+    settleFailure = await settleSendOrDescribe(claimRef, authority, fencedAt);
+    if (settleFailure !== null) console.error(`[artifact-review-resume] gate=${gateId} run=${run.id}: ${settleFailure}`);
+  };
+  // The send, the import of the handler and the handling sit in ONE try: whatever
+  // fails after the send (the handler's lazy import included) still settles the
+  // lease, so a delivered answer never leaves the run under a live `sending` lease.
+  let resultState: string | undefined;
+  try {
+    const task = await client.sendTask({
+      message: {
+        role: "user",
+        kind: "message",
+        metadata: resumeMetadata,
+        // DETERMINISTIC per-gate messageId (not random): a gate resumes exactly
+        // once, so a stable id lets a dedup-aware receiver drop a duplicate re-send
+        // (the at-least-once redelivery of the SAME gate's intent). Harmless if the
+        // receiver does not dedup — the guards above already suppress the common
+        // redelivery cases.
+        messageId: `artifact-review-resume-${gateId}`,
+        contextId: run.a2aContextId,
+        parts: [{ kind: "text", text: responseText }],
+      },
+      configuration: { acceptedOutputModes: ["text"] },
+    });
+    // Drive the returned Task through the canonical state machine (advances the
+    // run past the gate — to the next gate or to terminal). fromStatus is the
+    // literal "pending_approval" (guarded above), matching the human resume path.
+    const { handleWayflowTaskState } = await import("./execution");
+    // cinatra#1939 wave 2: the delivery worker advances the run with no session in
+    // scope — it grounds the transition on the system dispatch mint, scoped to the
+    // run's org (the human approval already happened when the intent row was written).
+    await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task, authority, pauseClaimToken: claim.token });
+    resultState = task.status?.state;
+  } finally {
+    await settle();
+  }
+  if (settleFailure !== null) return "retryable";
 
   const marked = await markResumeIntentDelivered(gateId, leaseToken);
   console.log(
     `[artifact-review-resume] gate=${gateId} run=${run.id} DELIVERED ${kind} resume ` +
-      `(resultState=${task.status?.state}) — marked ${marked ? "done" : "LEASE-LOST"}`,
+      `(resultState=${resultState}) — marked ${marked ? "done" : "LEASE-LOST"}`,
   );
   return marked ? "delivered" : "lease-lost";
 }

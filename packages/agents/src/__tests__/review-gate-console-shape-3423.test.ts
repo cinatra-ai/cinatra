@@ -38,6 +38,11 @@ const storeMock = vi.hoisted(() => ({
   writeHitlPrompt: vi.fn(async () => undefined),
   transitionRunStatus: vi.fn(),
 }));
+// cinatra#4245: the resume road's pause claim always wins here.
+vi.mock("../run-pause-claim", async (orig) => ({
+  ...(await orig<typeof import("../run-pause-claim")>()),
+  ...(await import("./pause-claim-test-fake")).pauseClaimFake,
+}));
 vi.mock("../store", () => storeMock);
 vi.mock("../agent-run-hitl-prompts", () => ({
   captureHitlPromptForContinue: async (input: never) => {
@@ -90,6 +95,9 @@ vi.mock("@cinatra-ai/a2a", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   createExternalA2AClient: vi.fn(async () => ({ sendTask })),
   resolveRunIdByWayflowTaskId: vi.fn(async () => null),
+  // cinatra#4245: Continue reads the latest-task key on the column road too; no key
+  // leaves the column's word, and this file reaches no Redis.
+  resolveLatestWayflowGateTaskId: vi.fn(async () => null),
 }));
 
 const handleWayflowTaskState = vi.hoisted(() => vi.fn(async () => undefined));
@@ -115,7 +123,6 @@ const RUN = {
 /** The messages, as constants. A constant is the whole point. */
 const PROMPT_WRITE_FAILED = "[approveReviewTaskInternal] writeHitlPrompt failed";
 const WAYFLOW_RESUMED = "[approveReviewTaskInternal] wayflow-path resumed";
-const CLAIM_NOT_RELEASED = "[approveReviewTaskInternal] could not release the gate claim";
 
 function liveRun() {
   return { ...RUN, status: row.status };
@@ -197,37 +204,22 @@ describe("approveReviewTaskInternal — the console calls of the claim road are 
       );
   }
 
-  it("warns about a claim it could not release with a CONSTANT first argument and the ids beside it", async () => {
+  it("a claim it could not release fails the answer, and no console call carries an id in its first argument", async () => {
     // Nothing is on the wire yet (the carrier never minted), so the road tries to
     // give the gate back — and that release fails too. This is the catch the
     // format-string rule flagged.
     const releaseError = new Error("release refused");
-    storeMock.transitionRunStatus.mockImplementation(
-      async (runId: string, from: string, to: string) => {
-        if (from === "running" && to === "pending_approval") throw releaseError;
-        if (row.status !== from) {
-          throw new RunTransitionError({
-            code: "stale_from_status",
-            runId,
-            from: from as never,
-            to: to as never,
-          });
-        }
-        row.status = to;
-      },
-    );
+    // cinatra#4245: a claim that could not be given back is no longer only a warning:
+    // the answer fails with both causes and the time the lease frees itself.
+    const { releasePauseClaim } = await import("../run-pause-claim");
+    (releasePauseClaim as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(releaseError);
     const { mintResumeRunTokenMetadata } = await import("../wayflow-run-token-carrier");
     (mintResumeRunTokenMetadata as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new Error("no carrier"),
     );
 
-    await expect(answerTheGate()).rejects.toThrow("no carrier");
+    await expect(answerTheGate()).rejects.toThrow(/no carrier.*it frees itself at/);
 
-    expect(warnSpy).toHaveBeenCalledWith(
-      CLAIM_NOT_RELEASED,
-      { runId: RUN.id, taskId: TASK_ID },
-      releaseError,
-    );
     expect(firstArgumentsCarryingAnId()).toEqual([]);
   });
 

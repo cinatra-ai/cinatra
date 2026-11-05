@@ -1945,6 +1945,8 @@ export type HandleWayflowTaskStateArgs = {
   runId: string;
   run: AgentRunRecord;
   fromStatus: AgentRunStatus;
+  /** cinatra#4245: the claim token of a resume's send; see the resync below. */
+  pauseClaimToken?: string;
   /**
    * cinatra#1939 wave 2 (§2d) — the org-write authority grounding this handler's
    * internal transitions (→pending_approval / →failed / →completed). Each of the
@@ -2209,15 +2211,35 @@ export function declaredOutputsResponseText(
 }
 
 export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): Promise<void> {
-  const { runId, run, fromStatus, task, authority } = args;
+  const { runId, run, fromStatus, task, authority, pauseClaimToken } = args;
   const taskState = task.status?.state;
 
   // Defensive resync (idempotent if unchanged): persist task.id / contextId
   // so the next resume's reverse-lookup by a2aTaskId still finds the run if
   // WayFlow assigned a new task ID. updateAgentRunA2ATaskId is an
   // unconditional overwrite so this persists on every call.
-  if (task.id !== run.a2aTaskId) {
-    await updateAgentRunA2ATaskId(runId, task.id).catch(() => undefined);
+  //
+  // cinatra#4245: at a pause the write is durable. It is awaited with no catch,
+  // before the latest-task record and before any gate is published, so a failure
+  // shows no gate and no change request can meet a stale column. Without a claim
+  // any other state keeps the best-effort resync. A sender that holds a claim
+  // writes only under its own token, even an unchanged id, and in every state
+  // that write is awaited with no catch: a write that fails could not show that
+  // the token still holds the row, so the error leaves this handler before any
+  // output or transition, and the caller settles its lease as after a failed
+  // send. 0 rows means the token no longer holds the row (another claimer took
+  // the lease over, or a stop or another status change cleared it), so this
+  // handler makes no transition.
+  const isPause = taskState === "input-required";
+  if (pauseClaimToken !== undefined) {
+    const { written } = await updateAgentRunA2ATaskId(runId, task.id, { pauseClaimToken });
+    if (!written) {
+      console.warn(`[wayflow] run=${runId} task=${task.id}: this sender's claim token no longer holds the run; no transition`);
+      return;
+    }
+  } else if (task.id !== run.a2aTaskId) {
+    const write = updateAgentRunA2ATaskId(runId, task.id);
+    await (isPause ? write : write.catch(() => undefined));
   }
   if (task.contextId && task.contextId !== run.a2aContextId) {
     await updateAgentRunA2AContextId(runId, task.contextId).catch(() => undefined);
@@ -2769,7 +2791,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         // winning is the only proof the run is really parked here.
         let parkedAtReview = false;
         try {
-          await transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority);
+          await transitionRunStatus(runId, fromStatus, "pending_approval", { pauseTaskId: task.id }, authority);
           parkedAtReview = true;
         } catch (e) {
           if (!(e instanceof RunTransitionError && e.code === "stale_from_status")) throw e;
@@ -2874,7 +2896,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         }),
       parkRun: async () => {
         try {
-          await transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority);
+          await transitionRunStatus(runId, fromStatus, "pending_approval", { pauseTaskId: task.id }, authority);
         } catch (e) {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
           throw e;
