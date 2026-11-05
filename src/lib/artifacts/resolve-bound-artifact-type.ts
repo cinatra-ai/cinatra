@@ -12,6 +12,8 @@ import {
 } from "@cinatra-ai/agents/artifact-binding";
 import { isExactVersion } from "@cinatra-ai/registries/src/version-compare";
 import { readArtifactTypeClaimsForOrg } from "@/lib/objects/artifact-claim-store";
+import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types";
+import type { InstallAnchorRow } from "@/lib/extension-install-anchor";
 import { ensureArtifactTypesRegistered } from "./ensure-artifact-registry";
 import type { ClaimBackedMeaningType } from "./installed-type-picker";
 
@@ -169,21 +171,65 @@ export function readArtifactSafeClaimWinnerForType(
 }
 
 /**
- * The packages that win at least one artifact-safe claim in this organisation
- * (cinatra#3319), sorted and de-duplicated: the same arbitration as the
- * functions above. The upload actions read it only after the claim-backed read
- * failed, to tell which matcher entries could be a claim-backed pack's. A
- * failed claim read throws.
+ * The packages that pass every rule of `readClaimBackedMeaningTypesForOrg`
+ * except the manifest read (cinatra#3319): rules 0, 1, 3, 4 and 6, through the
+ * same code (`readClaimBackedCandidates`). Sorted. Only such a package can be
+ * claim-backed, so the upload actions read it after the claim-backed read
+ * failed, to tell which matcher entries could be a claim-backed pack's; a
+ * package this list does not name can never be claim-backed under the same
+ * arbitration. Reads the claims and the registry only. A failed claim read
+ * throws.
  */
-export function readArtifactSafeClaimWinnerPackagesForOrg(
+export function readClaimBackedCandidatePackagesForOrg(
   orgId: string,
-  readClaimsForOrg?: (orgId: string) => readonly ArbitrableClaim[],
+  readClaimsForOrg?: (orgId: string) => readonly ClaimRowForOrg[],
 ): string[] {
-  return [
-    ...new Set(
-      readArtifactSafeClaimWinners(orgId, readClaimsForOrg).map((w) => w.extensionPackage),
-    ),
-  ].sort();
+  return readClaimBackedCandidates(orgId, readClaimsForOrg)
+    .map((w) => w.extensionPackage)
+    .sort();
+}
+
+/** A claim winner that passes rules 0, 1, 3, 4 and 6 of
+ *  `readClaimBackedMeaningTypesForOrg`: bound to an install row. */
+type ClaimBackedCandidate = ArtifactSafeClaimWinner & { installId: string };
+
+/**
+ * Rules 0, 1, 3, 4 and 6 of `readClaimBackedMeaningTypesForOrg`, written once:
+ * from THE ONE arbitration, grouped by the winning extension, the one winner of
+ * each extension that wins exactly one type (3) at an exact version (0), is
+ * bound to an install row (6), registers no type with `isArtifact` (1), and
+ * whose type is host-registered (4). No manifest is read. A failed claim read
+ * throws.
+ */
+function readClaimBackedCandidates(
+  orgId: string,
+  readClaimsForOrg?: (orgId: string) => readonly ClaimRowForOrg[],
+): ClaimBackedCandidate[] {
+  const byExtension = new Map<string, ArtifactSafeClaimWinner[]>();
+  for (const winner of readArtifactSafeClaimWinners(orgId, readClaimsForOrg)) {
+    const group = byExtension.get(winner.extensionPackage);
+    if (group) group.push(winner);
+    else byExtension.set(winner.extensionPackage, [winner]);
+  }
+  const out: ClaimBackedCandidate[] = [];
+  for (const [extension, winners] of byExtension) {
+    // 3. exactly one winning type, so exactly one version.
+    if (winners.length !== 1) continue;
+    const winner = winners[0];
+    // 0. a versionless claim has no manifest version to bind to.
+    if (winner.extensionVersion === "0.0.0" || !isExactVersion(winner.extensionVersion)) continue;
+    // 6. an unbound claim names no install whose bytes could answer.
+    if (winner.installId === null) continue;
+    // 1. the pack mints no own artifact type.
+    const ownsArtifactType = objectTypeRegistry
+      .getTypesForPackage(extension)
+      .some((typeId) => objectTypeRegistry.resolve(typeId)?.isArtifact != null);
+    if (ownsArtifactType) continue;
+    // 4. the claimed type is host-registered.
+    if (objectTypeRegistry.getRegisteringPackage(winner.objectTypeId) !== null) continue;
+    out.push({ ...winner, installId: winner.installId });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -262,22 +308,25 @@ export function readAdmissibleArtifactTypeIdsForOrg(
  *   4. that type is host-registered (no registering package);
  *   5. that manifest's `accepts` is non-empty;
  *   6. the winning claim is bound to an install row (`installId`).
- * Rules 0, 1, 3, 4 and 6 read the claims and the registry only; the manifest is
- * read only for an extension that passes them, and only through the winner's
- * own install row (`readClaimWinnerManifestFields`): the store record at the
- * row's recorded digest, never another store record of the same package; a row
- * with no recorded digest reads the development tree, which is bound to the
- * claim by the package name and the claim's version only. Each entry names the
- * winner it was read for: version, install and scope. The install row's
- * organisation is not compared with the claim's scope here; the claim-scoped
- * gate the upload actions ask (`canActorAccessClaimedArtifactExtension`)
- * refuses a bound row that does not govern that scope. The caller warms the
- * registry. Both reads are injectable for unit tests. A failed claim read or
- * install-row read throws, and so does a live install whose manifest cannot be
- * read at the claim's version: the pack's claim state is then unknown, and the
- * caller must read the whole answer as failed, never as "not claim-backed"
- * (the upload actions then refuse a matcher entry whose claim state is
- * unknown).
+ * Rules 0, 1, 3, 4 and 6 read the claims and the registry only
+ * (`readClaimBackedCandidates`, which `readClaimBackedCandidatePackagesForOrg`
+ * reads too); the manifest is read only for an extension that passes them, and
+ * only through the winner's own install row (`readClaimWinnerManifestFields`):
+ * for a store install, the one store record at the digest the runtime's own
+ * trust gate selects for that row, and no other store record; for a bundled
+ * install, the development tree, through the manifest that names the package.
+ * Each entry names the winner it was read for: version, install and scope. The
+ * install row's organisation is not compared with the claim's scope here; the
+ * claim-scoped gate the upload actions ask
+ * (`canActorAccessClaimedArtifactExtension`) refuses a bound row that does not
+ * govern that scope. The caller warms the registry. Both reads are injectable
+ * for unit tests. A failed claim read or install-row read throws, and so does a
+ * live install whose manifest cannot be read at the claim's version: the
+ * pack's claim state is then unknown, and the caller must read the whole
+ * answer as failed, never as "not claim-backed" (the upload actions then refuse
+ * a matcher entry whose claim state is unknown). An extension that a rule
+ * other than 2 and 5 drops is dropped before its manifest is read, so its
+ * install is never read and cannot fail the answer.
  */
 export async function readClaimBackedMeaningTypesForOrg(
   orgId: string,
@@ -291,28 +340,10 @@ export async function readClaimBackedMeaningTypesForOrg(
   },
 ): Promise<ClaimBackedMeaningType[]> {
   const readManifestFields = deps?.readManifestFields ?? readClaimWinnerManifestFields;
-  const byExtension = new Map<string, ArtifactSafeClaimWinner[]>();
-  for (const winner of readArtifactSafeClaimWinners(orgId, deps?.readClaimsForOrg)) {
-    const group = byExtension.get(winner.extensionPackage);
-    if (group) group.push(winner);
-    else byExtension.set(winner.extensionPackage, [winner]);
-  }
   const out: ClaimBackedMeaningType[] = [];
-  for (const [extension, winners] of byExtension) {
-    // 3. exactly one winning type, so exactly one version.
-    if (winners.length !== 1) continue;
-    const { objectTypeId, extensionVersion, installId, scope } = winners[0];
-    // 0. a versionless claim has no manifest version to bind to.
-    if (extensionVersion === "0.0.0" || !isExactVersion(extensionVersion)) continue;
-    // 6. an unbound claim names no install whose bytes could answer.
-    if (installId === null) continue;
-    // 1. the pack mints no own artifact type.
-    const ownsArtifactType = objectTypeRegistry
-      .getTypesForPackage(extension)
-      .some((typeId) => objectTypeRegistry.resolve(typeId)?.isArtifact != null);
-    if (ownsArtifactType) continue;
-    // 4. the claimed type is host-registered.
-    if (objectTypeRegistry.getRegisteringPackage(objectTypeId) !== null) continue;
+  for (const candidate of readClaimBackedCandidates(orgId, deps?.readClaimsForOrg)) {
+    const { objectTypeId, extensionPackage: extension, extensionVersion, installId, scope } =
+      candidate;
     // Null: the claim names no live artifact install of the pack. A live install
     // whose manifest cannot be read throws (the reader fails closed).
     const fields = await readManifestFields({ extension, extensionVersion, installId });
@@ -361,12 +392,14 @@ type InstalledPackManifestFields = {
   matchers: string[];
   /** The manifest's own `version`, or null when it is not a string. */
   version: string | null;
+  /** The manifest's own `name`, or null when it is not a string. */
+  name: string | null;
 };
 
 /** Parse one `package.json` text into the manifest fields, or null when it is
  *  not a readable, valid `kind:"artifact"` manifest. */
 function parsePackManifestFields(raw: string): InstalledPackManifestFields | null {
-  let pkg: { version?: unknown; cinatra?: { kind?: unknown; artifact?: unknown } };
+  let pkg: { name?: unknown; version?: unknown; cinatra?: { kind?: unknown; artifact?: unknown } };
   try {
     pkg = JSON.parse(raw);
   } catch {
@@ -380,6 +413,7 @@ function parsePackManifestFields(raw: string): InstalledPackManifestFields | nul
     objectTypeIds: (parsed.manifest.objectTypes ?? []).map((c) => c.type),
     matchers: parsed.manifest.skills?.matchers ?? [],
     version: typeof pkg.version === "string" ? pkg.version : null,
+    name: typeof pkg.name === "string" ? pkg.name : null,
   };
 }
 
@@ -446,37 +480,47 @@ async function readInstalledPackManifestFields(
 
 /**
  * THE MANIFEST OF THE WINNING CLAIM'S OWN INSTALL (cinatra#3319): read through
- * the install row the claim is bound to, never from another store record of the
- * same package.
+ * the install row the claim is bound to, the way the runtime pairs that row
+ * with its bytes, and never from another store record of the same package.
  * The claim's install row (`installId`) must be a live (`active` or `locked`)
  * `kind:"artifact"` row of this package; any other row, or none, answers null
- * (the claim names no live install of the pack). Then:
- *   - a row that records `source.activeDigest` answers only through the ONE
- *     store record of the package at exactly that digest. No other record and
- *     no development tree is read.
- *   - a row that records no digest (for example a bundled or development
- *     install) answers through the development tree only when the store read
- *     succeeded and holds no record of the package at all, and exactly one
- *     development manifest of the package is readable. That tree carries no
- *     install identity: it is taken as the bundled install's bytes, bound to
- *     the claim by the package name and the version check below only.
- * In both cases the manifest's own `version` must be the claim's version.
+ * (the claim names no live install of the pack). Then, by the row's source:
+ *   - a STORE install (`verdaccio`, `local` or `github`) is first passed
+ *     through the runtime's own trust gate, `resolveInstallAnchor`, with the
+ *     row and its finalized install-op journal, read in the namespace the
+ *     multi-version anchor resolver reads for that row (`0.0.0` for the default
+ *     row, else the row's version). A row that gate refuses (no finalized
+ *     journal, a row digest the journal does not confirm, placeholder
+ *     integrity, no content hash) can never be activated by the runtime, so
+ *     the reader throws. The digest the gate selects must be a store digest
+ *     segment (an empty or malformed one throws) and names the one store
+ *     record that answers, `<root>/artifact/<slug>/<digest>/package.json`, read by its path:
+ *     no other record is listed or read. A gate that selects no digest (a
+ *     legacy row the journal pins no digest for) takes, as the runtime loader
+ *     does, the one record of the package in the store, and throws when the
+ *     store holds none or more than one.
+ *   - a BUNDLED install (`bundled`) answers through the development tree only
+ *     when the store holds no record of the package at all, and exactly one
+ *     development manifest names the package. That tree carries no install
+ *     identity: it is taken as the bundled install's bytes, bound to the claim
+ *     by the manifest's package name and the version check below.
+ *   - any other source, or none, is no install the runtime anchors: the reader
+ *     throws.
+ * In every case the manifest must be a valid `kind:"artifact"` manifest that
+ * names this package, at the claim's version.
  * FAIL CLOSED: a failed install-row read throws, and so does every case in
- * which the live install's manifest cannot be read: a store that cannot be
- * listed, no or two store records at the digest, an unreadable or invalid
- * manifest there, a manifest at another version (or with no string version),
- * no recorded digest while the store holds a record of the package, an
- * unavailable development root, or no or two readable development manifests.
- * The pack's claim state is then unknown, so the answer must never read as
- * "not claim-backed" (see `readClaimBackedMeaningTypesForOrg`).
+ * which the live install's manifest cannot be read in that way. A store
+ * read that fails for any reason but the absence of the package's folder is a
+ * failure, never "the store holds no record": an unreadable folder, a record
+ * whose manifest cannot be opened and a data root that cannot be located all
+ * throw. The pack's claim state is then unknown, so the answer must never read
+ * as "not claim-backed" (see `readClaimBackedMeaningTypesForOrg`).
  */
 async function readClaimWinnerManifestFields(winner: {
   extension: string;
   extensionVersion: string;
   installId: string;
 }): Promise<InstalledPackManifestFields | null> {
-  const { readFile } = await import("node:fs/promises");
-  const path = await import("node:path");
   const { readInstalledExtensionById } = await import("@cinatra-ai/extensions/canonical-store");
   const row = await readInstalledExtensionById(winner.installId);
   if (
@@ -487,8 +531,6 @@ async function readClaimWinnerManifestFields(winner: {
   ) {
     return null;
   }
-  const rawDigest = (row.source as { activeDigest?: unknown } | null | undefined)?.activeDigest;
-  const digest = typeof rawDigest === "string" && rawDigest.length > 0 ? rawDigest : null;
   const unreadable = (why: string): never => {
     throw new Error(
       `the manifest of the claim's install cannot be read: ${why} ` +
@@ -497,61 +539,175 @@ async function readClaimWinnerManifestFields(winner: {
   };
   const atVersion = (fields: InstalledPackManifestFields | null): InstalledPackManifestFields => {
     if (!fields) return unreadable("no valid artifact manifest");
+    if (fields.name !== winner.extension) {
+      return unreadable("the manifest names another package");
+    }
     if (fields.version !== winner.extensionVersion) {
       return unreadable("the manifest is at another version than the claim");
     }
     return fields;
   };
+  const sourceType = (row.source as { type?: unknown } | null | undefined)?.type;
+  if (sourceType === "bundled") {
+    return atVersion(await readBundledInstallManifest(winner.extension, unreadable));
+  }
+  if (sourceType !== "verdaccio" && sourceType !== "local" && sourceType !== "github") {
+    return unreadable("the install row has no source the runtime anchors");
+  }
+  const digest = await readAnchoredStoreDigest(row, unreadable);
+  return atVersion(await readStoreInstallManifest(winner.extension, digest, unreadable));
+}
 
-  let records: Array<{ packageName: string; storeDir: string; declaredDigest?: string }>;
+/**
+ * The store digest the runtime's own trust gate selects for one live install
+ * row (cinatra#3319): `resolveInstallAnchor` over exactly this row, with the
+ * finalized install-op journal read in the namespace
+ * `makeDefaultInstallAnchorsResolver` reads for it. Null when the gate selects
+ * no digest. A refused row, and a failed journal read, throw through
+ * `unreadable`.
+ */
+async function readAnchoredStoreDigest(
+  row: InstalledExtension,
+  unreadable: (why: string) => never,
+): Promise<string | null> {
+  const { resolveInstallAnchor } = await import("@/lib/extension-install-anchor");
+  const { readInstallOpForVersion } = await import("@/lib/extension-install-ops");
+  const namespace = row.isDefault !== false ? "0.0.0" : (row.version ?? "0.0.0");
+  let anchor: Awaited<ReturnType<typeof resolveInstallAnchor>>;
+  try {
+    anchor = await resolveInstallAnchor(row.packageName, {
+      orgId: row.organizationId ?? null,
+      readActiveInstall: async () => ({
+        id: row.id,
+        status: row.status,
+        kind: row.kind,
+        isDefault: row.isDefault,
+        organizationId: row.organizationId ?? null,
+        widgetAuthTokenKeys: row.widgetAuthTokenKeys ?? null,
+        // The anchor reads the source defensively, field by field.
+        source: row.source as unknown as InstallAnchorRow["source"],
+      }),
+      // The port grant decides approved ports only, never whether the bytes
+      // are trusted, so the reader does not read it.
+      readGrant: async () => null,
+      readInstallOp: (pkg, oid) => readInstallOpForVersion(pkg, oid, namespace),
+    });
+  } catch {
+    return unreadable("the install's journal cannot be read");
+  }
+  if (!anchor) {
+    return unreadable("the runtime's trust gate refuses the install");
+  }
+  return anchor.digest ?? null;
+}
+
+/** The package's store folder, `<root>/artifact/<slug>` (the row's kind is
+ *  `artifact`, and the store is kind-segregated). */
+async function storeSlugDir(
+  extension: string,
+  unreadable: (why: string) => never,
+): Promise<string> {
   try {
     const { resolveExtensionDataRoot } = await import("@/lib/extension-data-root");
-    const { discoverStoreRecordsV2 } = await import("@/lib/extension-store-io");
-    records = (await discoverStoreRecordsV2(resolveExtensionDataRoot())).filter(
-      (rec) => rec.packageName === winner.extension,
-    );
+    const { storeSlugDirV2 } = await import("@/lib/extension-package-store-core");
+    return storeSlugDirV2(resolveExtensionDataRoot(), "artifact", extension);
   } catch {
-    return unreadable("the store cannot be listed");
+    return unreadable("the store cannot be located");
   }
+}
 
+/** The digests of the package's store records. The folder's absence is the
+ *  only "none": every other failure to list it throws through `unreadable`. */
+async function listStoreRecordDigests(
+  slugDir: string,
+  unreadable: (why: string) => never,
+): Promise<string[]> {
+  const { readdir } = await import("node:fs/promises");
+  const { isStoreDigestSegment } = await import("@/lib/extension-package-store-core");
+  let entries: string[];
+  try {
+    entries = await readdir(slugDir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | null)?.code === "ENOENT") return [];
+    return unreadable("the store folder of the package cannot be listed");
+  }
+  return entries.filter((entry) => isStoreDigestSegment(entry));
+}
+
+/** The manifest of a store install's record at `digest` (or, for no digest,
+ *  of the package's one store record), read by its path. */
+async function readStoreInstallManifest(
+  extension: string,
+  digest: string | null,
+  unreadable: (why: string) => never,
+): Promise<InstalledPackManifestFields | null> {
+  const { readFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const { isStoreDigestSegment } = await import("@/lib/extension-package-store-core");
+  const slugDir = await storeSlugDir(extension, unreadable);
+  let recordDigest: string;
   if (digest !== null) {
-    const bound = records.filter((rec) => rec.declaredDigest === digest);
-    if (bound.length !== 1) {
-      return unreadable(`${bound.length} store records at the install's digest`);
+    if (!isStoreDigestSegment(digest)) return unreadable("the install's digest is no store digest");
+    recordDigest = digest;
+  } else {
+    const digests = await listStoreRecordDigests(slugDir, unreadable);
+    if (digests.length !== 1) {
+      return unreadable(`the install pins no digest and the store holds ${digests.length} records of the package`);
     }
-    let raw: string;
-    try {
-      raw = await readFile(path.join(bound[0].storeDir, "package.json"), "utf8");
-    } catch {
-      return unreadable("the manifest at the install's digest cannot be opened");
-    }
-    return atVersion(parsePackManifestFields(raw));
+    recordDigest = digests[0];
   }
+  let raw: string;
+  try {
+    raw = await readFile(path.join(slugDir, recordDigest, "package.json"), "utf8");
+  } catch {
+    return unreadable("the manifest of the install's store record cannot be opened");
+  }
+  return parsePackManifestFields(raw);
+}
 
-  // No recorded digest: only a package the store holds nothing of reads the
-  // development tree, and only one readable manifest there answers.
-  if (records.length > 0) {
+/** The manifest of a bundled install: the one development manifest that names
+ *  the package, read only when the store holds no record of the package. */
+async function readBundledInstallManifest(
+  extension: string,
+  unreadable: (why: string) => never,
+): Promise<InstalledPackManifestFields> {
+  const { readFile } = await import("node:fs/promises");
+  const slugDir = await storeSlugDir(extension, unreadable);
+  if ((await listStoreRecordDigests(slugDir, unreadable)).length > 0) {
     return unreadable("the install records no digest while the store holds a record of the package");
   }
   let paths: string[];
   try {
-    paths = await devTreeManifestPaths(winner.extension);
+    paths = await devTreeManifestPaths(extension);
   } catch {
     return unreadable("the development root is unavailable");
   }
   const found: InstalledPackManifestFields[] = [];
   for (const cand of paths) {
+    let raw: string;
     try {
-      const fields = parsePackManifestFields(await readFile(cand, "utf8"));
-      if (fields) found.push(fields);
-    } catch {
-      // not there
+      raw = await readFile(cand, "utf8");
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | null)?.code;
+      if (code === "ENOENT" || code === "ENOTDIR") continue;
+      return unreadable("a development manifest cannot be opened");
     }
+    let name: unknown;
+    try {
+      name = (JSON.parse(raw) as { name?: unknown } | null)?.name;
+    } catch {
+      return unreadable("a development manifest is not readable");
+    }
+    // Another package's manifest at the same folder name is not this one's.
+    if (name !== extension) continue;
+    const fields = parsePackManifestFields(raw);
+    if (!fields) return unreadable("a development manifest of the package is no valid artifact manifest");
+    found.push(fields);
   }
   if (found.length !== 1) {
-    return unreadable(`${found.length} readable development manifests`);
+    return unreadable(`${found.length} development manifests name the package`);
   }
-  return atVersion(found[0]);
+  return found[0];
 }
 
 /**
