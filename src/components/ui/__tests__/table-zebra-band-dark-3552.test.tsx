@@ -1,48 +1,41 @@
 // @vitest-environment jsdom
 //
 // ---------------------------------------------------------------------------
-// THE TABLE ZEBRA'S ALTERNATE-ROW BAND, IN BOTH PALETTES (cinatra#3552).
+// THE TABLE ZEBRA'S ALTERNATE ROWS, IN BOTH PALETTES (cinatra#3552, reworked
+// for the seersucker stripe of cinatra#4286).
 // ---------------------------------------------------------------------------
-// WHAT A PERSON SEES. On the Skills directory in the DARK palette every second
-// body row sits on a pale grey slab while its ink stays pale, so the extension,
-// used-in, skill-id and description cells of those rows are hard to read. The
-// light palette is fine.
+// WHAT A PERSON SAW. On the Skills directory in the DARK palette every second
+// body row sat on a pale grey slab while its ink stayed pale, so the extension,
+// used-in, skill-id and description cells of those rows were hard to read. The
+// cause was the token: `--stripe-light: #e3e8ee` was declared for the LIGHT
+// palette only, so the dark palette inherited the light literal from `:root`.
 //
-// THE ZEBRA IS ONE UTILITY ON ONE SHARED PRIMITIVE. `TableBody` carries
-// "[&_tr:last-child]:border-0 [&_tr:nth-child(even)]:bg-stripe-light/50"
-// (src/components/ui/table.tsx:43, intent stated at :35-37), and the band
-// composites over the table frame's own ground, `bg-background`
-// (src/components/ui/paginated-table.tsx:116-120). No page overrides it and no
-// `dark:` variant of it exists anywhere in the product.
+// WHAT THE PRIMITIVE PAINTS NOW (cinatra#4286). `TableBody` no longer paints a
+// flat band. It carries the drawing's seersucker stripe as ONE arbitrary-value
+// utility on the even rows (src/components/ui/table.tsx):
+//   [&_tr:nth-child(even)]:bg-[image:repeating-linear-gradient(90deg,
+//     transparent_0_6px,var(--stripe-light)_6px_7px,transparent_7px_13px,
+//     var(--stripe-mid)_13px_14px)]
+// so an even row is two 1px threads over the row's own ground (the table
+// frame's `bg-background`, src/components/ui/paginated-table.tsx), and the
+// ground shows between them. The threads are opaque; nothing is composited.
 //
-// THE CAUSE IS THE TOKEN, NOT THE UTILITY. `--stripe-light: #e3e8ee` is
-// declared for the LIGHT palette only — src/app/globals.css:35 (`:root`) and
-// :204 (`.cinatra`), mirrored at packages/design/src/tokens.css:42 and :158 —
-// and AT THE BRANCH BASE neither `.dark` block declared it. So in the dark
-// palette the band inherited the light-palette literal from `:root` and painted
-// it at 50 percent over a near-black ground: a mid grey that sat ABOVE the page
-// it is meant to whisper against, carrying the muted cells at 1.71:1. Each
-// `.dark` block now declares the token as that palette's own surface step, and
-// the cases below read the declaration rather than a line number, because a
-// line range quoted in a comment goes stale the moment either sheet moves.
+// WHAT THIS FILE KEEPS OF cinatra#3552. The dark palette declares BOTH thread
+// tokens itself, in both token layers, with one declaration text; no dark
+// thread is lighter than the palette's own `--surface-muted` step or as dark
+// as the un-banded ground; and the muted and body inks of those rows clear the
+// body-text floor over EVERY thread, not only over the ground between them.
+// The light palette keeps the drawing's two literals. The pattern itself, stop
+// for stop, is pinned through Tailwind's own compile in
+// src/components/ui/__tests__/table-seersucker-stripe-4286.test.tsx.
 //
 // WHY THIS READS THE STYLESHEET RATHER THAN A BROWSER. jsdom implements
 // neither Tailwind's utility generation nor custom-property substitution, so no
 // `getComputedStyle` in this environment can tell a wrong colour from NO
-// declaration at all — the reason
-// packages/agents/src/__tests__/schedule-card-chosen-row-indigo-3279.test.tsx
-// reads the same two halves, and the machinery below is that file's. This file
-// computes the band the way the cascade does: it takes the band UTILITY off the
-// rendered `[data-slot="table-body"]`, maps it through the `@theme inline`
-// registration, resolves the token inside each palette block, and composites it
-// over that palette's `--background` with the repository's own colour maths
+// declaration at all. This file takes the stripe utility off the rendered
+// `[data-slot="table-body"]`, reads its thread tokens, resolves each inside
+// each palette block, and measures it with the repository's own colour maths
 // (src/lib/color-contrast.ts).
-//
-// ONE ADAPTATION OF THAT FILE'S `utility()` IS REQUIRED. It drops any class
-// matching /^(?:.*-)?\[/, and the band class IS such a class, so a verbatim
-// copy would silently read no utility at all (section 5 exercises exactly
-// that). `bandUtility` below takes the class by its arbitrary-variant prefix
-// and fails loudly when that prefix is absent or carried more than once.
 //
 //   pnpm exec vitest run \
 //     src/components/ui/__tests__/table-zebra-band-dark-3552.test.tsx --maxWorkers=2
@@ -60,7 +53,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
-  compositeOver,
   contrastRatio,
   parseCssColor,
   relativeLuminance,
@@ -146,7 +138,6 @@ function blockOf(rules: Rule[], selector: string, where: string): Map<string, st
 const GLOBALS_RULES = topLevelRules(GLOBALS_CSS);
 const TOKENS_RULES = topLevelRules(TOKENS_CSS);
 
-const THEME = blockOf(GLOBALS_RULES, "@theme inline", "globals.css");
 const ROOT_TOKENS = blockOf(GLOBALS_RULES, ":root", "globals.css");
 const PALETTE = {
   light: blockOf(GLOBALS_RULES, ".cinatra", "globals.css"),
@@ -201,38 +192,24 @@ function colour(literal: string): Rgba {
   return parsed!;
 }
 
-/** The literal a colour token paints in one palette, through the `@theme
- *  inline` registration that makes the utility real at all. */
-function registered(token: string, palette: Palette, sheet: Sheet = "host"): string {
-  const reg = THEME.get(`--color-${token}`);
-  expect(
-    reg,
-    `\`--color-${token}\` is not registered in @theme inline, so the utility emits no rule at all`,
-  ).toBeDefined();
-  const varName = /^var\(\s*(--[A-Za-z0-9-]+)\s*\)$/.exec(reg!);
-  if (!varName) return reg!;
-  return resolve(SHEETS[sheet].palette[palette], varName[1]!, sheet);
-}
-
 // ---------------------------------------------------------------------------
-// The band utility, taken off the primitive the product actually paints.
+// The stripe utility, taken off the primitive the product actually paints.
 // ---------------------------------------------------------------------------
-
-type Utility = { token: string; alpha: number | null };
 
 /** The arbitrary variant the zebra is drawn through. */
 const BAND_VARIANT = "[&_tr:nth-child(even)]:";
 
-/** The band colour utility a `TableBody` class list carries, split into the
- *  colour name and its opacity modifier (`bg-stripe-light/50` → 50).
- *
- *  This is `utility()` of schedule-card-chosen-row-indigo-3279.test.tsx with
- *  ONE required adaptation: that helper drops every class matching
- *  /^(?:.*-)?\[/ and the band class IS one, so a verbatim copy would read no
- *  utility at all. A missing prefix, a second carrier of it, or a
- *  variant-qualified sibling that would outrank the plain reading FAILS here
- *  rather than being ignored. */
-function bandUtility(className: string): Utility {
+/** The function the stripe utility paints, with its Tailwind type hint. */
+const STRIPE_OPEN = "bg-[image:repeating-linear-gradient(";
+
+type Thread = { token: string; from: string; to: string };
+
+/** The threads of the alternate-row stripe a `TableBody` class list carries:
+ *  every non-transparent stop of the gradient, as its token and its span.
+ *  A missing prefix, a second carrier, a variant-qualified sibling, a flat
+ *  colour utility, or a thread that is not a token FAILS here rather than
+ *  being ignored. */
+function stripeThreads(className: string): Thread[] {
   const classes = className.split(/\s+/).filter(Boolean);
   const carriers = classes.filter(
     (c) => c.includes("nth-child(even)") && /(?:^|:)bg-/.test(c),
@@ -244,15 +221,34 @@ function bandUtility(className: string): Utility {
   const carrier = carriers[0]!;
   expect(
     carrier.startsWith(BAND_VARIANT),
-    `the alternate-row band carries a qualifier ahead of \`${BAND_VARIANT}\` in: ${carrier}`,
+    `the alternate-row stripe carries a qualifier ahead of \`${BAND_VARIANT}\` in: ${carrier}`,
   ).toBe(true);
   const rest = carrier.slice(BAND_VARIANT.length);
   expect(
-    rest.startsWith("bg-"),
-    `the alternate-row band is qualified after \`${BAND_VARIANT}\` in: ${carrier}`,
+    rest.startsWith(STRIPE_OPEN) && rest.endsWith(")]"),
+    `the alternate-row background is not the seersucker gradient in: ${carrier}`,
   ).toBe(true);
-  const [name, mod] = rest.slice("bg-".length).split("/");
-  return { token: name!, alpha: mod === undefined ? null : Number(mod) };
+  const args = rest.slice(STRIPE_OPEN.length, -2).replace(/_/g, " ");
+  const stops: string[] = [];
+  let depth = 0;
+  let cur = "";
+  for (const ch of args) {
+    if (ch === "(") depth += 1;
+    if (ch === ")") depth -= 1;
+    if (ch === "," && depth === 0) {
+      stops.push(cur.trim());
+      cur = "";
+    } else cur += ch;
+  }
+  stops.push(cur.trim());
+  const threads: Thread[] = [];
+  for (const stop of stops.slice(1)) {
+    if (stop.startsWith("transparent ")) continue;
+    const m = /^var\((--[A-Za-z0-9-]+)\) (\S+) (\S+)$/.exec(stop);
+    expect(m, `a stripe thread that is not a token at a span: ${stop}`).not.toBeNull();
+    threads.push({ token: m![1]!, from: m![2]!, to: m![3]! });
+  }
+  return threads;
 }
 
 /** The table body the product paints, mounted from the primitive itself so the
@@ -275,26 +271,23 @@ function tableBody(): HTMLElement {
   return body!;
 }
 
-/** The band as a person sees it: the token at its opacity, composited over the
- *  table frame's own ground (`bg-background`, paginated-table.tsx:116-120). */
-function paintedBand(
+/** Each thread as a person sees it (opaque, so its own colour), and the
+ *  un-banded ground the stripe sits on and that shows between the threads. */
+function paintedThreads(
   palette: Palette,
   sheet: Sheet = "host",
-): { band: Rgba; ground: Rgba; util: Utility } {
-  const util = bandUtility(tableBody().className);
-  expect(util.alpha, "the zebra band is painted at an opacity").not.toBeNull();
+): { threads: Rgba[]; ground: Rgba } {
   const tokens = SHEETS[sheet].palette[palette];
-  const ground = colour(resolve(tokens, "--background", sheet));
-  const ink = {
-    ...colour(registered(util.token, palette, sheet)),
-    a: util.alpha! / 100,
-  };
-  return { band: compositeOver(ink, ground), ground, util };
+  const threads = stripeThreads(tableBody().className).map((t) =>
+    colour(resolve(tokens, t.token, sheet)),
+  );
+  expect(threads.length, "the stripe has its two threads").toBe(2);
+  return { threads, ground: colour(resolve(tokens, "--background", sheet)) };
 }
 
 /** The inks the Skills directory puts on those rows: the four muted cells take
  *  `text-muted-foreground` and the skill-name cell inherits the body ink
- *  (packages/skills/src/plugin-pages.tsx:326-338). */
+ *  (packages/skills/src/plugin-pages.tsx). */
 function inks(palette: Palette, sheet: Sheet = "host"): { muted: Rgba; body: Rgba } {
   const tokens = SHEETS[sheet].palette[palette];
   return {
@@ -306,29 +299,33 @@ function inks(palette: Palette, sheet: Sheet = "host"): { muted: Rgba; body: Rgb
 /** WCAG 2.x body-text floor. */
 const BODY_TEXT_FLOOR = 4.5;
 
+const THREAD_TOKENS = ["--stripe-light", "--stripe-mid"] as const;
+
 // ---------------------------------------------------------------------------
-// 1. THE DARK PALETTE — the band the proof round graded false.
+// 1. THE DARK PALETTE.
 // ---------------------------------------------------------------------------
-describe("the alternate-row band in the DARK palette", () => {
-  it("is declared for the dark palette at all, in BOTH token layers, with one declaration text", () => {
-    const inGlobals = PALETTE.dark.get("--stripe-light");
-    const inTokens = TOKENS_PALETTE.dark.get("--stripe-light");
-    expect(
-      inGlobals,
-      "the `.dark` block of src/app/globals.css does not declare --stripe-light, so the band inherits the light literal from :root",
-    ).toBeDefined();
-    expect(
-      inTokens,
-      "the `.dark` block of packages/design/src/tokens.css does not declare --stripe-light, so the portable layer carries the same defect",
-    ).toBeDefined();
-    expect(
-      inTokens,
-      "the host layer and the portable layer must carry the SAME declaration text",
-    ).toBe(inGlobals);
+describe("the alternate-row stripe in the DARK palette", () => {
+  it("declares both thread tokens for the dark palette, in BOTH token layers, with one declaration text", () => {
+    for (const name of THREAD_TOKENS) {
+      const inGlobals = PALETTE.dark.get(name);
+      const inTokens = TOKENS_PALETTE.dark.get(name);
+      expect(
+        inGlobals,
+        `the \`.dark\` block of src/app/globals.css does not declare ${name}, so the thread inherits the light literal from :root`,
+      ).toBeDefined();
+      expect(
+        inTokens,
+        `the \`.dark\` block of packages/design/src/tokens.css does not declare ${name}, so the portable layer carries the same defect`,
+      ).toBeDefined();
+      expect(
+        inTokens,
+        `the host layer and the portable layer must carry the SAME declaration text for ${name}`,
+      ).toBe(inGlobals);
+    }
   });
 
-  it("draws a DARK band: below the palette's own --surface-muted step and above the un-banded ground", () => {
-    const { band, ground } = paintedBand("dark");
+  it("draws DARK threads: none lighter than the palette's own --surface-muted step, each lighter than the un-banded ground", () => {
+    const { threads, ground } = paintedThreads("dark");
     const surfaceMuted = relativeLuminance(
       colour(resolve(PALETTE.dark, "--surface-muted")),
     );
@@ -336,50 +333,50 @@ describe("the alternate-row band in the DARK palette", () => {
     // --surface 0.0044, --surface-strong 0.0092, --surface-muted 0.0216.
     expect(surfaceMuted).toBeCloseTo(0.0216, 4);
     expect(relativeLuminance(ground)).toBeCloseTo(0.0021, 4);
-    // At the branch base this reads 0.1843 — a mid grey 4.50:1 ABOVE the page
-    // it is supposed to whisper against.
-    expect(relativeLuminance(band)).toBeLessThan(surfaceMuted);
+    for (const thread of threads) {
+      // The light literal #e3e8ee would read 0.79 here, #b8c4d4 0.54.
+      expect(relativeLuminance(thread)).toBeLessThanOrEqual(surfaceMuted);
+      expect(relativeLuminance(thread)).toBeGreaterThan(relativeLuminance(ground));
+    }
   });
 
-  it("is still a zebra: the band is strictly lighter than the un-banded ground", () => {
-    const { band, ground } = paintedBand("dark");
-    expect(relativeLuminance(band)).toBeGreaterThan(relativeLuminance(ground));
+  it("carries the muted cells (extension, used in, skill id, description) over the body-text floor on every thread", () => {
+    const { threads } = paintedThreads("dark");
+    for (const thread of threads) {
+      expect(contrastRatio(inks("dark").muted, thread)).toBeGreaterThanOrEqual(
+        BODY_TEXT_FLOOR,
+      );
+    }
   });
 
-  it("carries the muted cells — extension, used in, skill id, description — over the body-text floor", () => {
-    const { band } = paintedBand("dark");
-    // At the branch base this reads 1.71:1.
-    expect(contrastRatio(inks("dark").muted, band)).toBeGreaterThanOrEqual(
-      BODY_TEXT_FLOOR,
-    );
+  it("carries the skill-name cell's body ink over the same floor on every thread", () => {
+    const { threads } = paintedThreads("dark");
+    for (const thread of threads) {
+      expect(contrastRatio(inks("dark").body, thread)).toBeGreaterThanOrEqual(
+        BODY_TEXT_FLOOR,
+      );
+    }
   });
 
-  it("carries the skill-name cell's body ink over the same floor", () => {
-    const { band } = paintedBand("dark");
-    // At the branch base this reads 4.28:1.
-    expect(contrastRatio(inks("dark").body, band)).toBeGreaterThanOrEqual(
-      BODY_TEXT_FLOOR,
-    );
-  });
-
-  it("draws that same dark band in the PORTABLE token layer, resolved through that layer's own tokens", () => {
+  it("draws the same dark threads in the PORTABLE token layer, resolved through that layer's own tokens", () => {
     // The declaration-text case above proves the two sheets carry the same
     // WORDS. This one proves the portable sheet's own values make those words
-    // mean the same thing: a broken portable `--surface-muted` or `--background`
-    // would leave every other case here green.
-    const { band, ground } = paintedBand("dark", "portable");
+    // mean the same thing.
+    const { threads, ground } = paintedThreads("dark", "portable");
     const { muted, body } = inks("dark", "portable");
     const surfaceMuted = relativeLuminance(
       colour(resolve(TOKENS_PALETTE.dark, "--surface-muted", "portable")),
     );
-    expect(relativeLuminance(band)).toBeLessThan(surfaceMuted);
-    expect(relativeLuminance(band)).toBeGreaterThan(relativeLuminance(ground));
-    expect(contrastRatio(muted, band)).toBeGreaterThanOrEqual(BODY_TEXT_FLOOR);
-    expect(contrastRatio(body, band)).toBeGreaterThanOrEqual(BODY_TEXT_FLOOR);
+    for (const thread of threads) {
+      expect(relativeLuminance(thread)).toBeLessThanOrEqual(surfaceMuted);
+      expect(relativeLuminance(thread)).toBeGreaterThan(relativeLuminance(ground));
+      expect(contrastRatio(muted, thread)).toBeGreaterThanOrEqual(BODY_TEXT_FLOOR);
+      expect(contrastRatio(body, thread)).toBeGreaterThanOrEqual(BODY_TEXT_FLOOR);
+    }
   });
 
-  it("leaves the UN-banded rows where they already read", () => {
-    const { ground } = paintedBand("dark");
+  it("leaves the ground between the threads, and the odd rows, where they already read", () => {
+    const { ground } = paintedThreads("dark");
     const { muted, body } = inks("dark");
     expect(contrastRatio(muted, ground)).toBeGreaterThanOrEqual(BODY_TEXT_FLOOR);
     expect(contrastRatio(body, ground)).toBeGreaterThanOrEqual(BODY_TEXT_FLOOR);
@@ -387,10 +384,10 @@ describe("the alternate-row band in the DARK palette", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 2. THE LIGHT PALETTE IS UNCHANGED — the reading the proof round graded true.
+// 2. THE LIGHT PALETTE KEEPS THE DRAWING'S TWO LITERALS.
 // ---------------------------------------------------------------------------
-describe("the alternate-row band in the LIGHT palette", () => {
-  it("keeps the fabric stripe literal in every light block of both token layers", () => {
+describe("the alternate-row stripe in the LIGHT palette", () => {
+  it("keeps the fabric stripe literals in every light block of both token layers", () => {
     for (const [where, tokens] of [
       ["globals.css :root", ROOT_TOKENS],
       ["globals.css .cinatra", PALETTE.light],
@@ -398,60 +395,43 @@ describe("the alternate-row band in the LIGHT palette", () => {
       ["tokens.css .cinatra", TOKENS_PALETTE.light],
     ] as const) {
       expect(tokens.get("--stripe-light")?.toLowerCase(), where).toBe("#e3e8ee");
+      expect(tokens.get("--stripe-mid")?.toLowerCase(), where).toBe("#b8c4d4");
     }
   });
 
-  it("still composites to the same whisper over its own ground", () => {
-    const { band, ground } = paintedBand("light");
-    // #e3e8ee at 50 percent over #f1f1ed. The checklist quotes this band as
-    // rgb(234, 236, 238); the exact composite is (234, 236.5, 237.5) — the same
-    // colour, the checklist's triple truncating the green channel's half and
-    // carrying the blue channel's up.
-    expect(band.r).toBeCloseTo(234, 6);
-    expect(band.g).toBeCloseTo(236.5, 6);
-    expect(band.b).toBeCloseTo(237.5, 6);
-    expect(contrastRatio(band, ground)).toBeCloseTo(1.04, 2);
+  it("paints those literals as its two threads", () => {
+    const { threads } = paintedThreads("light");
+    expect(threads).toEqual([colour("#e3e8ee"), colour("#b8c4d4")]);
   });
 
-  it("keeps its muted and body inks exactly where they read", () => {
-    const { band } = paintedBand("light");
+  it("keeps its muted and body inks over the floor on the ground between the threads", () => {
+    // The threads are 1px hairlines; the cell text sits on the row's ground,
+    // which the stripe leaves as it is.
+    const { ground } = paintedThreads("light");
     const { muted, body } = inks("light");
-    expect(contrastRatio(muted, band)).toBeCloseTo(5.05, 2);
-    expect(contrastRatio(body, band)).toBeCloseTo(13.57, 2);
+    expect(contrastRatio(muted, ground)).toBeGreaterThanOrEqual(BODY_TEXT_FLOOR);
+    expect(contrastRatio(body, ground)).toBeGreaterThanOrEqual(BODY_TEXT_FLOOR);
   });
 });
 
 // ---------------------------------------------------------------------------
-// 3. THE FIX IS IN THE TOKEN, NOT IN THE UTILITY.
+// 3. THE UTILITY THE SHARED PRIMITIVE CARRIES.
 // ---------------------------------------------------------------------------
 describe("the utility the shared primitive carries", () => {
-  it("still names the stripe token at its own opacity", () => {
-    const util = bandUtility(tableBody().className);
-    expect(util.token).toBe("stripe-light");
-    expect(util.alpha).toBe(50);
-  });
-
-  it("still registers the stripe tokens as colour utilities, so the class emits a real rule", () => {
-    expect(THEME.get("--color-stripe-light")).toBe("var(--stripe-light)");
+  it("names the two stripe tokens as its threads, at the drawn spans, with no flat band", () => {
+    expect(stripeThreads(tableBody().className)).toEqual([
+      { token: "--stripe-light", from: "6px", to: "7px" },
+      { token: "--stripe-mid", from: "13px", to: "14px" },
+    ]);
   });
 });
 
 // ---------------------------------------------------------------------------
-// 4. THE READING REFUSES THE WAYS IT COULD LIE. A substitute for a browser is
-//    only worth the cases it cannot be fooled by, and each case below is
-//    SYNTHETIC, so none of them is pinned to a live token's state.
+// 4. THE READING REFUSES THE WAYS IT COULD LIE. Each case below is SYNTHETIC,
+//    so none of them is pinned to a live token's state.
 // ---------------------------------------------------------------------------
 describe("the reading itself", () => {
-  it("would have read NOTHING through the helper it adapts, which is why it adapts it", () => {
-    // `utility()` of schedule-card-chosen-row-indigo-3279.test.tsx drops any
-    // class matching this pattern; the band class is exactly such a class.
-    expect(/^(?:.*-)?\[/.test(`${BAND_VARIANT}bg-stripe-light/50`)).toBe(true);
-  });
-
   it("sees a token re-declared by a GROUPED palette selector, through the reader itself", () => {
-    // Read through `blockOf`, not by splitting the selector here: a reader that
-    // lost its grouped-selector support would keep a hand-split check green
-    // while a grouped re-declaration hid from every other case in this file.
     const grouped = topLevelRules(
       ".dark { --stripe-light: #000000; } .dark, .dark * { --stripe-light: #ffffff; }",
     );
@@ -466,24 +446,37 @@ describe("the reading itself", () => {
 
   it("reports the :root fallback a palette block leaves undeclared, which is the shape of this defect", () => {
     const rules = topLevelRules(
-      ":root { --stripe-light: #e3e8ee; } .dark { --background: #020618; }",
+      ":root { --stripe-mid: #b8c4d4; } .dark { --background: #020618; }",
     );
     const root = blockOf(rules, ":root", "synthetic");
     const dark = blockOf(rules, ".dark", "synthetic");
-    expect(dark.has("--stripe-light")).toBe(false);
-    expect(resolveIn(root, dark, "--stripe-light")).toBe("#e3e8ee");
+    expect(dark.has("--stripe-mid")).toBe(false);
+    expect(resolveIn(root, dark, "--stripe-mid")).toBe("#b8c4d4");
   });
 
-  it("refuses a dark-qualified band utility instead of ignoring it", () => {
+  it("refuses the former flat band instead of reading it as a stripe", () => {
+    expect(() => stripeThreads(`${BAND_VARIANT}bg-stripe-light/50`)).toThrow();
+  });
+
+  it("refuses a dark-qualified sibling instead of ignoring it", () => {
+    const stripe =
+      `${BAND_VARIANT}${STRIPE_OPEN}90deg,transparent_0_6px,var(--stripe-light)_6px_7px,transparent_7px_13px,var(--stripe-mid)_13px_14px)]`;
+    expect(stripeThreads(stripe)).toHaveLength(2);
     expect(() =>
-      bandUtility(`${BAND_VARIANT}bg-stripe-light/50 dark:${BAND_VARIANT}bg-surface-muted`),
+      stripeThreads(`${stripe} dark:${BAND_VARIANT}bg-surface-muted`),
     ).toThrow();
+    expect(() => stripeThreads(`dark:${stripe}`)).toThrow();
+  });
+
+  it("refuses a thread drawn as a literal colour instead of a token", () => {
     expect(() =>
-      bandUtility(`${BAND_VARIANT}dark:bg-surface-muted`),
+      stripeThreads(
+        `${BAND_VARIANT}${STRIPE_OPEN}90deg,transparent_0_6px,#e3e8ee_6px_7px)]`,
+      ),
     ).toThrow();
   });
 
-  it("refuses a class list that carries no band utility at all", () => {
-    expect(() => bandUtility("[&_tr:last-child]:border-0")).toThrow();
+  it("refuses a class list that carries no stripe utility at all", () => {
+    expect(() => stripeThreads("[&_tr:last-child]:border-0")).toThrow();
   });
 });

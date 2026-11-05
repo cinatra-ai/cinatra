@@ -248,21 +248,22 @@
      pinned to the value `--input` carried before the boundary was raised.
      Consumed via `bg-input-fill` through the theme layer. */
   --input-fill: var(--line);
-  /* Fabric stripe for the seersucker zebra treatment (cinatra#3552). The zebra
-     is ONE utility on the shared primitive — `[&_tr:nth-child(even)]:bg-stripe-light/50`
-     in `src/components/ui/table.tsx` — so the band it paints is whatever this
-     token says in the palette that is on, composited over the table frame's own
-     `bg-background`. Declared for the light palette only, it inherited the light
-     literal #e3e8ee from `:root` here and washed a pale slab at 50 percent over
-     the near-black page: relative luminance 0.1843, a mid grey 4.50:1 ABOVE the
-     ground it is meant to whisper against, carrying the muted cells at 1.71:1.
-     The dark band is this palette's own surface step instead — composited,
-     relative luminance 0.0090 against the un-banded ground's 0.0021, so the
-     zebra still reads as a zebra while the muted ink returns to 6.77:1 and the
-     body ink to 17.00:1. `--stripe-mid` is drawn by no utility in the product
-     and is deliberately not declared here. Pinned by
+  /* Fabric stripe for the seersucker zebra treatment, dark palette
+     (specs/app-components.html, Table: "Alternate rows carry the seersucker
+     stripe in both palettes"; cinatra#4286). `TableBody` in
+     `src/components/ui/table.tsx` draws every even body row as two 1px threads
+     over the row's own ground: `--stripe-light` at 6px and `--stripe-mid` at
+     13px, repeating every 14px, with no flat band under them. The drawing gives
+     the dark threads as this palette's two upper surface steps, in the same
+     order: `--surface-strong` for the first thread and `--surface-muted` for
+     the second. The light literals (#e3e8ee, #b8c4d4) are never carried into
+     this palette: over the near-black page a light thread reads as a bright
+     rule across the row (cinatra#3552). Both tokens are declared here, so
+     neither falls back to the `:root` light literal. Pinned by
+     src/components/ui/__tests__/table-seersucker-stripe-4286.test.tsx and
      src/components/ui/__tests__/table-zebra-band-dark-3552.test.tsx. */
-  --stripe-light: var(--surface-muted);
+  --stripe-light: var(--surface-strong);
+  --stripe-mid: var(--surface-muted);
   --cinatra-shadow-soft: 0 1px 3px rgba(0, 0, 0, 0.4);
   --cinatra-shadow-strong: 0 4px 8px rgba(0, 0, 0, 0.5);
 
