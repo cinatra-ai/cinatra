@@ -189,15 +189,22 @@ field it names (a line break inside a message or a field becomes one space, and 
 stored finding without a message text is left out).
 
 The drain reads the declaration when it creates the repair run, but the worker
-runs the template as it is when the run starts. A re-import in between can change
+reads the template's declaration again when the run starts. A re-import in between can change
 the declaration: a crash between creation and enqueue, after which a re-drain
 enqueues the existing run as it is, or a run that waits in the queue. So the run
-start (`runAgentBuilderExecutionJob`, `packages/agents/src/execution.ts`) reads the
+start (`bindRepairFindingsInputAtStart`, `packages/agents/src/execution.ts`) reads the
 declaration of the template it loaded and, when the run does not already carry the
-text in that input, writes it there before the run's input gates read them. A run whose
-input cannot be written fails at start with a message that names the input. The
-run start removes nothing: an input that an earlier declaration named keeps the
-text, also when the template now declares no findings input.
+text in that input, writes it there. It does this right after the fire-time scope
+recheck (a refused or unverified run gets no write) and before the headless skill
+recommendation, the version pinning and the run's input gates read the inputs.
+The run is failed at start, with a fixed message that names the input, when the
+write fails (the message keeps no text of the storage error, and the run does not
+retry) or when the template declares a findings input and the run carries no
+`lifecycleRepairRequest` object. The write merges one key over the inputs the
+run start reads, so it removes no other input: an input that an earlier
+declaration named keeps the text, also when the template now declares no findings
+input. It is not a compare-and-set: a second writer of the same run's inputs at
+the same moment, such as a duplicate delivery of the job, can overwrite it.
 
 A producer that declares nothing gets its own inputs plus the
 typed request, and, until the application's pins name CMS agent releases that

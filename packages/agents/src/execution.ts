@@ -3589,6 +3589,69 @@ export async function runAgentBuilderExecutionJob(
   );
 }
 
+/** The class name of a thrown value, for a log line that must not carry the
+ * value's own text (a storage error can carry the statement's parameters). */
+function thrownClassName(err: unknown): string {
+  const name = err instanceof Error ? err.name : typeof err;
+  return /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/.test(name) ? name : "Error";
+}
+
+/**
+ * cinatra#4424: a lifecycle repair run gets the reviewer's findings in the
+ * input that the template it EXECUTES declares (`repairFindingsInput`). The
+ * dispatch drain projected them under the declaration it read when it created
+ * the run; a re-import between that read and this start (a crash and re-drain
+ * over the existing deterministic run, or a run that waited in the queue) can
+ * change it. Given the lifecycle_config of the template the run start loaded,
+ * this writes the difference (`reconcileRepairFindingsInput`) and updates
+ * `run.inputParams` in place. A no-op for a run that is not a lifecycle
+ * repair, for a template that declares no findings input, and when the run
+ * already carries the text there.
+ *
+ * Returns false when it has moved the run queued -> failed: the write failed,
+ * or the template declares a findings input and the run carries no repair
+ * request object to build the text from. The stored error is a fixed message
+ * that names the input; the cause is logged by its class name only, never by
+ * its text. A failed write is terminal for the run (it does not park and
+ * retry), also when the row was written and only the read-back after it
+ * failed. If that status write fails too, its error propagates to the job
+ * runner, as for the other pre-dispatch failures. `updateAgentRunInputParams`
+ * reads the row, merges and writes the whole value: it is not a compare-and-set,
+ * so a second writer of the same run's inputs at the same moment (a duplicate
+ * delivery of this job) can overwrite the key.
+ */
+async function bindRepairFindingsInputAtStart(
+  runId: string,
+  run: AgentRunRecord,
+  lifecycleConfig: string | null,
+  executionAuthority: ReturnType<typeof mintAgentRunExecutionAuthority>,
+): Promise<boolean> {
+  if (run.sourceType !== "lifecycle_repair") return true;
+  const reconciliation = reconcileRepairFindingsInput(
+    parseLifecycleConfigText(lifecycleConfig),
+    run.inputParams ?? {},
+  );
+  if (!reconciliation) return true;
+  const fail = async (message: string, logLine: string): Promise<false> => {
+    console.error(`[agent-builder] run ${runId} rejected before dispatch: ${logLine}`);
+    await transitionRunStatus(runId, "queued", "failed", { error: message }, executionAuthority);
+    return false;
+  };
+  if ("noRequest" in reconciliation) {
+    const message =
+      `Repair run cannot start: it carries no repair request for its findings input "${reconciliation.input}"`;
+    return fail(message, message);
+  }
+  try {
+    const updated = await updateAgentRunInputParams(runId, reconciliation.write);
+    run.inputParams = updated.inputParams;
+    return true;
+  } catch (err) {
+    const message = `Repair run cannot start: its findings input "${reconciliation.input}" could not be written`;
+    return fail(message, `${message} (${thrownClassName(err)})`);
+  }
+}
+
 // Extracted inner. The outer wraps in the
 // ProjectContext frame; the inner contains the job body, unchanged except for
 // the moved run-row read (probeRun above is re-read here for clarity).
@@ -3768,6 +3831,17 @@ async function runAgentBuilderExecutionJobInner(
     });
   }
 
+  // cinatra#4424: a lifecycle repair run gets the reviewer's findings in the
+  // input that the template loaded above declares. Right after the fire-time
+  // scope recheck, so nothing is written for a refused or unverified run, and
+  // before the headless recommendation, the version pinning, the input gates
+  // and every dispatch branch read the inputs.
+  if (
+    !(await bindRepairFindingsInputAtStart(runId, run, template.lifecycleConfig ?? null, executionAuthority))
+  ) {
+    return;
+  }
+
   // ---------------------------------------------------------------------------
   // Per-run skill-usage ledger (agent_run_skills_used) — snapshot the resolved
   // skill set at run start. This is THE run-start write path for the ledger:
@@ -3863,42 +3937,6 @@ async function runAgentBuilderExecutionJobInner(
         `[agent-builder] skill-usage ledger snapshot failed for run ${runId}:`,
         err instanceof Error ? err.message : String(err),
       );
-    }
-  }
-
-  // cinatra#4424: a lifecycle repair run gets the reviewer's findings in the
-  // input that the template it EXECUTES declares (`repairFindingsInput`). The
-  // dispatch drain projected them under the declaration it read when it
-  // created the run; a re-import between that read and this start (a crash
-  // and re-drain over the existing deterministic run, or a run that waited in
-  // the queue) can change it. Re-derive the input from the template loaded
-  // above, which every branch below runs, and write the difference before the
-  // input gates and any dispatch read the inputs. A no-op when the run already
-  // carries the text there, and for a template that declares no findings
-  // input. (It follows the fire-time scope recheck, which precedes every side
-  // effect; the headless recommendation above reads the inputs only as its
-  // best-effort intent text.)
-  if (run.sourceType === "lifecycle_repair") {
-    const findingsInput = reconcileRepairFindingsInput(
-      parseLifecycleConfigText(template.lifecycleConfig ?? null),
-      run.inputParams ?? {},
-    );
-    if (findingsInput) {
-      const [inputName] = Object.keys(findingsInput);
-      try {
-        const updated = await updateAgentRunInputParams(runId, findingsInput);
-        run.inputParams = updated.inputParams;
-      } catch (err) {
-        // Never start a repair run without its findings in the input its
-        // template declares. A bare throw would leave the run queued forever
-        // (see the pre-dispatch failure handling below), so land it failed.
-        const message =
-          `Repair run cannot start: its findings input "${inputName}" could not be written ` +
-          `(${err instanceof Error ? err.message : String(err)})`;
-        console.error(`[agent-builder] run ${runId} rejected before dispatch: ${message}`);
-        await transitionRunStatus(runId, "queued", "failed", { error: message }, executionAuthority);
-        return;
-      }
     }
   }
 

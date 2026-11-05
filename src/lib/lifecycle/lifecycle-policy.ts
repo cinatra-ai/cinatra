@@ -251,10 +251,15 @@ export interface RepairFindingText {
 export const REPAIR_FINDINGS_TEXT_LEAD =
   "A reviewer requested changes to the work you produced. Apply the following requested changes:";
 
-/** `text` on one line: each line break, with the blanks around it, becomes
- * one space, and the ends are trimmed. */
+/** The characters the findings text treats as a line break. */
+const LINE_BREAK = /[\n\r\v\f\u0085\u2028\u2029]/;
+
+/** `text` on one line: each run of blanks that holds a line break becomes
+ * one space, and the ends are trimmed; a run of blanks without a line break
+ * stays as it is. One pass with no backtracking: a finding's message has no
+ * length bound, and a long run of blanks costs time linear in its length. */
 function asOneLine(text: string): string {
-  return text.split(/\s*(?:\r\n|[\n\r\v\f\u0085\u2028\u2029])\s*/).join(" ").trim();
+  return text.replace(/[\s\u0085]+/g, (blanks) => (LINE_BREAK.test(blanks) ? " " : blanks)).trim();
 }
 
 /**
@@ -323,28 +328,42 @@ export function projectRepairFindingsInput(
   return { [input]: buildRepairFindingsText(findings as readonly RepairFindingText[]) };
 }
 
+/** What the run start does for a lifecycle repair run (`reconcileRepairFindingsInput`). */
+export type RepairFindingsInputReconciliation =
+  | { input: string; write: Record<string, string> }
+  | { input: string; noRequest: true };
+
 /**
  * The run-start half of the projection (cinatra#4424). The drain projects the
  * findings under the declaration it reads when it creates the repair run; the
  * worker executes the template it loads later, and a re-import in between
  * (a crash and re-drain over the existing deterministic run, or a run that
  * waits in the queue) can change that declaration. Given the lifecycle of the
- * template the run EXECUTES and the run's own inputs, this is the addition
- * that puts the findings text of the run's `lifecycleRepairRequest` into the
- * input that template declares, or null when it declares none or the input
- * already carries that text. The caller applies it to lifecycle repair runs
- * only (`sourceType` `lifecycle_repair`).
+ * template the run EXECUTES and the run's own inputs, this says what the run
+ * start does:
+ * - null: nothing, because that template declares no findings input, or the
+ *   input already carries the findings text of the run's request;
+ * - `{ input, write }`: write `write` (`{ [input]: findings text }`) into the
+ *   run's inputs;
+ * - `{ input, noRequest: true }`: refuse the run, because the template
+ *   declares a findings input but the run's `lifecycleRepairRequest` is
+ *   absent or not an object (a row the drain did not write as it writes
+ *   every repair run), so no findings text can be built for it.
+ * The caller applies it to lifecycle repair runs only (`sourceType`
+ * `lifecycle_repair`).
  */
 export function reconcileRepairFindingsInput(
   lifecycle: Pick<CompiledManifestLifecycle, "repairFindingsInput"> | null | undefined,
   inputParams: Record<string, unknown>,
-): Record<string, string> | null {
+): RepairFindingsInputReconciliation | null {
+  const input = readRepairFindingsInput(lifecycle);
+  if (!input) return null;
   const request = inputParams.lifecycleRepairRequest;
-  if (!request || typeof request !== "object" || Array.isArray(request)) return null;
-  const projected = projectRepairFindingsInput(lifecycle, (request as { findings?: unknown }).findings);
-  if (!projected) return null;
-  const [input, text] = Object.entries(projected)[0];
-  return Object.prototype.hasOwnProperty.call(inputParams, input) && inputParams[input] === text ? null : projected;
+  if (!request || typeof request !== "object" || Array.isArray(request)) return { input, noRequest: true };
+  // buildRepairFindingsText reads the stored findings fail-soft itself.
+  const text = buildRepairFindingsText((request as { findings?: unknown }).findings as readonly RepairFindingText[]);
+  if (Object.prototype.hasOwnProperty.call(inputParams, input) && inputParams[input] === text) return null;
+  return { input, write: { [input]: text } };
 }
 
 // ---------------------------------------------------------------------------

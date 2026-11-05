@@ -333,8 +333,8 @@ export async function dispatchPendingProducerRepairs(opts?: {
       // The drain applies the declaration it reads here only to a run it
       // creates. A run that already exists (a re-drain after a crash between creation and enqueue)
       // is enqueued with the inputs it was created with, and any run can wait
-      // in the queue while the template is re-imported: the run start
-      // (`runAgentBuilderExecutionJob`, `./execution.ts`) re-derives the
+      // in the queue while the template is re-imported: the worker's run start
+      // (`bindRepairFindingsInputAtStart`, `./execution.ts`) re-derives the
       // findings input from the template it executes.
       const declaredFindingsInput = projectRepairFindingsInput(producer.lifecycle, request.findings);
       let findingsInputParams: Record<string, unknown>;
