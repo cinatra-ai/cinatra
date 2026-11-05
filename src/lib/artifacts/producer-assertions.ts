@@ -32,6 +32,10 @@ import {
 // malformed/absent manifest). Any missing link => structured log +
 // empty produces (the artifact still persists; the LLM matcher still
 // runs as the fallback).
+//
+// A failed read's log line names the read and the caller's ids, never text
+// taken from the thrown value (cinatra#4223): a store or registry message can
+// carry a host, a url or a credential.
 // ---------------------------------------------------------------------------
 
 export type ProducerAssertionPlan = {
@@ -86,10 +90,9 @@ FROM "${schema}"."agent_runs" WHERE id = $1 LIMIT 1`,
       ],
     });
     runRow = res?.rows?.[0] as typeof runRow;
-  } catch (err) {
+  } catch {
     console.warn(
-      "[producer-assertions] agent_runs lookup failed:",
-      err instanceof Error ? err.message : err,
+      `[producer-assertions] agent_runs lookup failed for createdByRunId ${input.createdByRunId} -- no producer assertions; the error's text is not logged`,
     );
     return empty;
   }
@@ -127,10 +130,9 @@ FROM "${schema}"."agent_templates" WHERE id = $1 LIMIT 1`,
     });
     const row = res?.rows?.[0] as { package_name?: string | null } | undefined;
     packageName = row?.package_name ?? undefined;
-  } catch (err) {
+  } catch {
     console.warn(
-      "[producer-assertions] agent_templates lookup failed:",
-      err instanceof Error ? err.message : err,
+      `[producer-assertions] agent_templates lookup failed for template ${runRow.template_id} -- no producer assertions (provenance still recorded); the error's text is not logged`,
     );
     return { validatedRunId, produces: [] };
   }
@@ -193,10 +195,9 @@ FROM "${schema}"."agent_templates" WHERE id = $1 LIMIT 1`,
     );
     const produces = candidateProduces.filter((_, i) => allowed[i]);
     return { validatedRunId, produces };
-  } catch (err) {
+  } catch {
     console.warn(
-      `[producer-assertions] manifest read failed for ${packageName}@${runRow.package_version ?? "(default)"}:`,
-      err instanceof Error ? err.message : err,
+      `[producer-assertions] manifest read failed for ${packageName}@${runRow.package_version ?? "(default)"} -- no producer assertions (provenance still recorded); the error's text is not logged`,
     );
     return { validatedRunId, produces: [] };
   }

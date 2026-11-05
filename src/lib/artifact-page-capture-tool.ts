@@ -24,6 +24,7 @@ import {
   MAX_PAGE_CAPTURES_PER_RUN,
   type PageCaptureBudgetAnswer,
   type PageCaptureBudgetRefusal,
+  type PageCaptureLease,
 } from "@/lib/artifacts/page-capture-budget";
 import {
   buildPageCaptureFactsRecordOp,
@@ -54,11 +55,14 @@ import {
 // the image tool's, with no image provenance on the ledger row.
 //
 // The shared Postgres budget (page-capture-budget.ts) leases one capture of the
-// server-resolved organisation and run, released after the capture is filed or
-// refused. The facts record (page-capture-facts-record.ts) commits with the
+// organisation and run the caller passes. The lease's release is called on every
+// exit after the lease is taken. The budget's release never throws: when its
+// update fails, the lease stays in flight until its TTL ends. A capture is always
+// image/png, so the type's accepts are read before the lease, with the other write
+// questions. The facts record (page-capture-facts-record.ts) commits with the
 // revision; a re-drive answers the facts recorded with the revision that serves
-// it. NEVER THROWS, and no refusal or log line carries text of an exception. A
-// capture refusal keeps its own reason name and its existing sentence.
+// it. NEVER THROWS, and no refusal or log line of this module carries text of an
+// exception. A capture refusal keeps its own reason name and its existing sentence.
 // ---------------------------------------------------------------------------
 
 const CAPTURE_MIME = "image/png";
@@ -130,8 +134,7 @@ export const BUDGET_REFUSAL_ERRORS: Record<PageCaptureBudgetRefusal, string> = {
   concurrency_exceeded:
     `this run already has ${MAX_CONCURRENT_PAGE_CAPTURES_PER_RUN} page captures in flight, the most one run may ` +
     "have at once; the page was not captured",
-  budget_unavailable:
-    "the page capture budget could not be read; the failure is logged on the server, and the page was not captured",
+  budget_unavailable: "the page capture budget could not be read, and the page was not captured",
 };
 
 export const PAGE_CAPTURE_URL_UNRECORDABLE_ERROR =
@@ -143,8 +146,7 @@ export const PAGE_CAPTURE_WRITE_FAILED_ERROR =
 export const PAGE_CAPTURE_DATA_REJECTED_ERROR =
   "filing the page capture failed: the object payload does not satisfy the declared schema of the target type, " +
   "and no artifact was filed";
-export const PAGE_CAPTURE_UNEXPECTED_ERROR =
-  "filing the page capture failed on an unexpected error; the failure is logged on the server";
+export const PAGE_CAPTURE_UNEXPECTED_ERROR = "filing the page capture failed on an unexpected error";
 export const PAGE_CAPTURE_STORED_FACTS_UNREADABLE_ERROR =
   "this node already filed this capture, but the facts recorded with that revision could not be read; no " +
   "second capture was filed";
@@ -152,7 +154,7 @@ export const PAGE_CAPTURE_STORED_FACTS_UNREADABLE_ERROR =
 export function pageCaptureInstallStateError(extension: string): string {
   return (
     `no artifact-safe claim resolved for extension "${extension}" in this organisation: its install state is ` +
-    "incomplete or could not be read; the failure is logged on the server, and the page was not captured"
+    "incomplete or could not be read, and the page was not captured"
   );
 }
 
@@ -193,6 +195,15 @@ export async function captureArtifactPage(
           "(archived/ungoverned-denied install state)",
       };
     }
+    if (!mimeAcceptedByAccepts(resolved.target.acceptedFileMimeTypes, CAPTURE_MIME)) {
+      return {
+        ok: false,
+        reason: "write_refused",
+        error:
+          `object type "${resolved.target.objectTypeId}" (extension "${input.extension}") accepts ` +
+          `[${resolved.target.acceptedFileMimeTypes.join(", ")}]; a page capture is "${CAPTURE_MIME}", and the page was not captured`,
+      };
+    }
     // The facts record takes only some http(s) urls (page-capture-facts-record.ts); a url it cannot record is
     // refused here, before a lease is taken or a byte is sent. The viewport and time are fixed valid values.
     if (parsePageCaptureFacts({ capturedUrl: input.url, viewport: { width: 1, height: 1 }, capturedAt: "2000-01-01T00:00:00Z" }) === null) {
@@ -203,7 +214,7 @@ export async function captureArtifactPage(
     try {
       return await captureAndFile(input, deps, resolved.target);
     } finally {
-      await lease.lease.release();
+      await releaseLease(input, lease.lease);
     }
   } catch (err) {
     logToolFailure(input, err);
@@ -223,15 +234,6 @@ async function captureAndFile(
       ok: false,
       reason: "capture_too_large",
       error: `the captured page is ${captured.png.byteLength} bytes; a page capture may be at most ${MAX_PAGE_CAPTURE_PNG_BYTES} bytes`,
-    };
-  }
-  if (!mimeAcceptedByAccepts(target.acceptedFileMimeTypes, CAPTURE_MIME)) {
-    return {
-      ok: false,
-      reason: "write_refused",
-      error:
-        `object type "${target.objectTypeId}" (extension "${input.extension}") accepts ` +
-        `[${target.acceptedFileMimeTypes.join(", ")}]; the captured page is "${CAPTURE_MIME}"`,
     };
   }
   const facts: CapturedFacts = { capturedUrl: input.url, viewport: captured.viewport, capturedAt: captured.capturedAt };
@@ -337,6 +339,18 @@ function storedCaptureResult(
     ...recorded.facts,
     deduped: true,
   };
+}
+
+/**
+ * Calls the lease's release, and never lets it change the answer. The production release never throws (a failed
+ * update leaves the lease in flight until its TTL); a release that throws anyway is logged by its class word only.
+ */
+async function releaseLease(input: CaptureArtifactPageInput, lease: PageCaptureLease): Promise<void> {
+  try {
+    await lease.release();
+  } catch (err) {
+    logToolFailure(input, err);
+  }
 }
 
 /** The resolver's explainer seam, answered with the fixed sentence. Never throws; the explanation is never logged. */
