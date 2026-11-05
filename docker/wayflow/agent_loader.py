@@ -3749,7 +3749,7 @@ def _derive_bridge_output_schemas(
             if shape is None:
                 print(
                     f"[agent_loader] WARNING: {label}: bridge ApiNode "
-                    f"{node.get('id') or node.get('name')!r} declares an output "
+                    f"{_quote_node_id(node.get('id') or node.get('name'))} declares an output "
                     f"without a usable title/type ({prop!r}); deriving NO "
                     f"output_schema for it — it keeps asking for free text."
                 )
@@ -3771,7 +3771,7 @@ def _derive_bridge_output_schemas(
             # it is exactly what an answer will come back EMPTY inside — and
             # because the fix is one declaration in the agent's own OAS.
             print(
-                f"[agent_loader] NOTE: {label}: bridge ApiNode {node_id!r} "
+                f"[agent_loader] NOTE: {label}: bridge ApiNode {_quote_node_id(node_id)} "
                 f"declares no members for {', '.join(free_form)}; the request "
                 f"can promise nothing about them. An object level with no "
                 f"declared members is sent CLOSED and EMPTY (the strict "
@@ -3836,7 +3836,11 @@ def _reconcile_input_message_gates(
     input values reach the renderer only as the assistant-message JSON the host
     parses via its generic ``historyText → spreadFromOutput`` merge. Every gate
     WITHOUT the flag keeps the byte-identical empty-guard template, so no other
-    gate-bearing agent's behavior changes.
+    gate-bearing agent's behavior changes. A publish gate (cinatra#4150: an id
+    with ``PUBLISH_GATE_ID_PREFIX``, which only ``_insert_publish_gates`` can
+    give) renders each value exactly, a falsy one included
+    (``"<name>": {% if <name> is none %}null{% else %}{{ <name> | tojson }}{%
+    endif %}``); ``is none`` keeps the input optional on the pin.
 
     Idempotent (skips a node already at ``PluginInputMessageNode`` or one that
     already carries a ``message_template``) and conservative (a node whose
@@ -3906,9 +3910,22 @@ def _reconcile_input_message_gates(
                     and isinstance(node_meta.get("cinatra"), dict)
                     and node_meta["cinatra"].get("surfaceGateInputs") is True
                 )
+                publish_gate = isinstance(obj.get("id"), str) and obj["id"].startswith(
+                    PUBLISH_GATE_ID_PREFIX
+                )
                 if all_ok and not already_templated:
                     obj["component_type"] = "PluginInputMessageNode"
-                    if surface_gate_inputs:
+                    if surface_gate_inputs and publish_gate:
+                        obj["message_template"] = (
+                            "{"
+                            + ", ".join(
+                                '"' + t + '": {% if ' + t + " is none %}null{% else %}{{ "
+                                + t + " | tojson }}{% endif %}"
+                                for t in titles
+                            )
+                            + "}"
+                        )
+                    elif surface_gate_inputs:
                         obj["message_template"] = (
                             "{"
                             + ", ".join(
@@ -4091,7 +4108,8 @@ def _insert_publish_gates(doc: Any, label: str) -> List[Dict[str, Any]]:
                             f"but is not a top-level node of the flow; a stop could not be inserted "
                             f"in front of it"
                         )
-                    if obj.get("component_type") not in _PUBLISH_ACTION_KINDS:
+                    kind = obj.get("component_type")
+                    if not (isinstance(kind, str) and kind in _PUBLISH_ACTION_KINDS):
                         raise PublishGateError(
                             f"{label}: PUBLISHES_MISPLACED: {who} declares metadata.cinatra.publishes, "
                             f"but only a node of kind ApiNode, AgentNode, FlowNode or "
@@ -4383,7 +4401,7 @@ def _mount_one_sync(
                 ).hexdigest()
             print(
                 f"[agent_loader] HITL gate reconcile {label}: "
-                f"gates={[r['node'] for r in gate_report]} "
+                f"gates=[{', '.join(_quote_node_id(r['node']) for r in gate_report)}] "
                 f"(InputMessageNode → PluginInputMessageNode, "
                 f"inputs folded into message_template)"
             )
@@ -4408,7 +4426,7 @@ def _mount_one_sync(
             print(
                 f"[agent_loader] bridge output_schema derived {label}: "
                 + ", ".join(
-                    f"{r['node']}({'/'.join(r['outputs'])})" for r in schema_report
+                    f"{_quote_node_id(r['node'])}({'/'.join(r['outputs'])})" for r in schema_report
                 )
             )
 
