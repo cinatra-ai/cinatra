@@ -14,6 +14,7 @@ import {
   normalizeLifecycle,
   projectRepairFindingsInput,
   readRepairFindingsInput,
+  reconcileRepairFindingsInput,
 } from "@/lib/lifecycle/lifecycle-policy";
 import { agentLifecycleDeclarationSchema } from "../verdaccio/package-contract";
 
@@ -60,6 +61,19 @@ describe("buildRepairFindingsText", () => {
       ]),
     ).toBe(`${REPAIR_FINDINGS_TEXT_LEAD}\n\n1. Fix the title 2. Remove the footer (field: title body)\n2. Shorten the summary`);
   });
+
+  it("keeps a long run of blanks without a line break as it is, in time linear in its length", () => {
+    // A finding's message has no length bound (lifecycle-repair.ts checks only
+    // that it is there). A pattern that backtracks over a run of blanks with no
+    // line break after it takes seconds on this input; one pass takes well
+    // under a millisecond.
+    const blanks = " ".repeat(100_000);
+    const started = performance.now();
+    const text = buildRepairFindingsText([{ message: `a${blanks}b`, path: `title${blanks}x` }]);
+    const elapsedMs = performance.now() - started;
+    expect(text).toBe(`${REPAIR_FINDINGS_TEXT_LEAD}\n\n1. a${blanks}b (field: title${blanks}x)`);
+    expect(elapsedMs).toBeLessThan(500);
+  });
 });
 
 describe("a stored findings value that is not well formed (read fail-soft)", () => {
@@ -100,6 +114,26 @@ describe("projectRepairFindingsInput", () => {
     for (const input of ["lifecycleRepairRequest", "__proto__", "constructor", "toString", "valueOf", "hasOwnProperty", "isPrototypeOf", "", "a b"]) {
       expect(readRepairFindingsInput({ repairFindingsInput: { input } })).toBeNull();
       expect(projectRepairFindingsInput({ repairFindingsInput: { input } }, findings)).toBeNull();
+    }
+  });
+});
+
+describe("reconcileRepairFindingsInput (the run start)", () => {
+  const declared = { repairFindingsInput: { input: "instructions" } };
+
+  it("refuses a run without a repair request object when the template declares a findings input", () => {
+    for (const request of [undefined, null, [], "Fix the title", 7]) {
+      const inputParams: Record<string, unknown> = { instructions: "Old producing instructions" };
+      if (request !== undefined) inputParams.lifecycleRepairRequest = request;
+      expect(reconcileRepairFindingsInput(declared, inputParams)).toEqual({ input: "instructions", noRequest: true });
+    }
+  });
+
+  it("is null for a template that declares no admissible findings input, with or without a repair request", () => {
+    for (const lifecycle of [null, undefined, {}, { repairFindingsInput: { input: "lifecycleRepairRequest" } }]) {
+      expect(reconcileRepairFindingsInput(lifecycle, { instructions: "Old producing instructions" })).toBeNull();
+      expect(reconcileRepairFindingsInput(lifecycle, { lifecycleRepairRequest: [] })).toBeNull();
+      expect(reconcileRepairFindingsInput(lifecycle, { lifecycleRepairRequest: { findings } })).toBeNull();
     }
   });
 });

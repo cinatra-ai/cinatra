@@ -10,10 +10,11 @@
  * finds the existing deterministic run and enqueues it as it is; or a queued
  * run that waits while an agent release changes. The run start re-derives the
  * findings input from the template it loaded and writes the difference before
- * any gate reads the inputs.
+ * the headless recommendation and the input gates read the inputs.
  *
- * Only the persistence, queue and event ports are replaced; the worker, the
- * compiled-lifecycle reader and the findings projection execute.
+ * Mocks: the store, the scope and trigger gates, the skill path, skill
+ * autosave, WayFlow, A2A and the UI protocol. The worker, the compiled-lifecycle
+ * reader and the findings projection execute.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -67,6 +68,24 @@ vi.mock("@cinatra-ai/a2a", async (orig) => {
   const actual = (await orig()) as Record<string, unknown>;
   return { ...actual, rememberLatestWayflowGateTask: vi.fn(async () => undefined) };
 });
+// The skill path of a packaged template (cinatra#2041): the recommendation case
+// below reads the intent text the worker hands the headless recommendation.
+vi.mock("../recommendation-interception", async (orig) => ({
+  ...(await orig<typeof import("../recommendation-interception")>()),
+  autoApplyHeadlessRecommendation: vi.fn(async () => ({ mode: "skipped", reason: "test", written: 0 })),
+}));
+vi.mock("@/lib/agents-store", async (orig) => ({
+  ...(await orig<typeof import("@/lib/agents-store")>()),
+  getAssignedSkillIdsForAgent: vi.fn(async () => [] as string[]),
+}));
+vi.mock("@/lib/agent-run-skills-used", async (orig) => ({
+  ...(await orig<typeof import("@/lib/agent-run-skills-used")>()),
+  snapshotSkillsAtRunStart: vi.fn(() => undefined),
+}));
+vi.mock("@/lib/run-selected-skill-revisions", async (orig) => ({
+  ...(await orig<typeof import("@/lib/run-selected-skill-revisions")>()),
+  readRunSelectedSkillRevisions: vi.fn(() => []),
+}));
 // Every case below stops at the per-field setup gate (the required `brief` is
 // never supplied), so no dispatch branch runs. The gate's read-back answers
 // the synthetic setup gate id so the park reaches its verified transition.
@@ -93,7 +112,9 @@ vi.mock("@cinatra-ai/agent-ui-protocol/server", async (orig) => {
   };
 });
 
-import { runAgentBuilderExecutionJob } from "../execution";
+import { ScopeRecheckUnavailableError, runAgentBuilderExecutionJob } from "../execution";
+import { assertAgentRunScopeAuthorized } from "../agent-run-serde";
+import { autoApplyHeadlessRecommendation } from "../recommendation-interception";
 
 const RUN_ID = "lifecycle-repair-run:repair-4424";
 const finding = { id: "finding-current", path: "title", message: "Use the current reviewed title", severity: "minor" };
@@ -127,7 +148,11 @@ function makeRun(inputParams: Record<string, unknown>, overrides: Record<string,
   };
 }
 
-function makeTemplate(lifecycleConfig: string | null, properties: Record<string, unknown> = {}) {
+function makeTemplate(
+  lifecycleConfig: string | null,
+  properties: Record<string, unknown> = {},
+  overrides: Record<string, unknown> = {},
+) {
   return {
     id: "tmpl-4424", orgId: "org-4424", creatorId: null, name: "Repair Producer Fixture", description: "",
     sourceNl: "", compiledPlan: [],
@@ -137,7 +162,7 @@ function makeTemplate(lifecycleConfig: string | null, properties: Record<string,
     },
     outputSchema: null, taskSpec: null, status: "published", packageName: null, packageVersion: null,
     gatedSteps: [], triggerMode: "full", approvalPolicy: null, agentDependencies: null, lifecycleConfig,
-    createdAt: new Date("2026-01-01"), updatedAt: new Date("2026-01-01"),
+    createdAt: new Date("2026-01-01"), updatedAt: new Date("2026-01-01"), ...overrides,
   };
 }
 
@@ -191,21 +216,66 @@ describe("a repair run gets the findings in the input the template it executes d
     expect(edges()).toEqual(["queued->pending_approval"]);
   });
 
-  it("a run whose findings input cannot be written lands failed, naming the input, and runs no gate", async () => {
+  it("a run whose findings input cannot be written lands failed with a fixed message that names the input and keeps no text of the storage error", async () => {
     const inputs = { instructions: "Old producing instructions", lifecycleRepairRequest: request() };
     arrange(makeRun(inputs), makeTemplate(declares("instructions")));
-    storeMock.updateAgentRunInputParams.mockRejectedValue(new Error("write refused"));
+    // A driver error can carry the statement's bound parameters: here the
+    // run's whole merged inputs, with a private value in them.
+    storeMock.updateAgentRunInputParams.mockRejectedValue(
+      new Error('Failed query: update "agent_runs" set "input_params" = $1 params: {"apiKey":"private-4424"}'),
+    );
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    let logged = "";
     try {
       await runAgentBuilderExecutionJob({ runId: RUN_ID }, "job-4424");
+      logged = JSON.stringify(error.mock.calls);
     } finally {
       error.mockRestore();
     }
 
     expect(edges()).toEqual(["queued->failed"]);
     const failure = storeMock.transitionRunStatus.mock.calls[0] as unknown as [string, string, string, { error: string }];
-    expect(failure[3].error).toContain('"instructions"');
-    expect(failure[3].error).toContain("write refused");
+    expect(failure[3].error).toBe('Repair run cannot start: its findings input "instructions" could not be written');
+    expect(logged).toContain("could not be written");
+    expect(logged).not.toContain("private-4424");
+    expect(logged).not.toContain("Failed query");
+  });
+
+  it("a repair run without a repair request object lands failed, naming the input, when its template declares a findings input", async () => {
+    for (const repairRequest of [undefined, null, [], "Fix the title"]) {
+      vi.clearAllMocks();
+      const inputs: Record<string, unknown> = { instructions: "Old producing instructions" };
+      if (repairRequest !== undefined) inputs.lifecycleRepairRequest = repairRequest;
+      arrange(makeRun(inputs), makeTemplate(declares("instructions")));
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await runAgentBuilderExecutionJob({ runId: RUN_ID }, "job-4424");
+      } finally {
+        error.mockRestore();
+      }
+
+      expect(storeMock.updateAgentRunInputParams).not.toHaveBeenCalled();
+      expect(edges()).toEqual(["queued->failed"]);
+      const failure = storeMock.transitionRunStatus.mock.calls[0] as unknown as [string, string, string, { error: string }];
+      expect(failure[3].error).toBe(
+        'Repair run cannot start: it carries no repair request for its findings input "instructions"',
+      );
+    }
+  });
+
+  it("the headless recommendation of a packaged template reads the findings text the run executes with", async () => {
+    const inputs = { instructions: "Old producing instructions", lifecycleRepairRequest: request() };
+    arrange(makeRun(inputs), makeTemplate(declares("instructions"), {}, { packageName: "repair-producer-fixture" }));
+
+    await runAgentBuilderExecutionJob({ runId: RUN_ID }, "job-4424");
+
+    expect(storeMock.updateAgentRunInputParams).toHaveBeenCalledOnce();
+    const recommend = vi.mocked(autoApplyHeadlessRecommendation);
+    expect(recommend).toHaveBeenCalledOnce();
+    const intentText = recommend.mock.calls[0][0].intent.promptText ?? "";
+    expect(intentText).toContain(JSON.stringify(FINDINGS_TEXT).slice(1, -1));
+    expect(intentText).not.toContain("Old producing instructions");
+    expect(edges()).toEqual(["queued->pending_approval"]);
   });
 
   // Guards: these hold before and after the change.
@@ -224,6 +294,42 @@ describe("a repair run gets the findings in the input the template it executes d
       await runAgentBuilderExecutionJob({ runId: RUN_ID }, "job-4424");
       expect(storeMock.updateAgentRunInputParams).not.toHaveBeenCalled();
     }
+  });
+
+  it("writes nothing for a run that the fire-time scope recheck refuses", async () => {
+    arrange(
+      makeRun({ instructions: "Old producing instructions", lifecycleRepairRequest: request() }),
+      makeTemplate(declares("instructions")),
+    );
+    vi.mocked(assertAgentRunScopeAuthorized).mockRejectedValueOnce(
+      Object.assign(new Error("scope denied"), { code: "AGENT_TEMPLATE_SCOPE_DENIED", reason: "the agent was re-scoped" }),
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await runAgentBuilderExecutionJob({ runId: RUN_ID }, "job-4424");
+    } finally {
+      warn.mockRestore();
+    }
+    expect(storeMock.updateAgentRunInputParams).not.toHaveBeenCalled();
+    expect(edges()).toEqual(["queued->failed"]);
+  });
+
+  it("writes nothing for a run whose fire-time scope recheck cannot be read: the run parks", async () => {
+    arrange(
+      makeRun({ instructions: "Old producing instructions", lifecycleRepairRequest: request() }),
+      makeTemplate(declares("instructions")),
+    );
+    vi.mocked(assertAgentRunScopeAuthorized).mockRejectedValueOnce(new Error("scope rows unreadable"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await expect(runAgentBuilderExecutionJob({ runId: RUN_ID }, "job-4424")).rejects.toBeInstanceOf(
+        ScopeRecheckUnavailableError,
+      );
+    } finally {
+      warn.mockRestore();
+    }
+    expect(storeMock.updateAgentRunInputParams).not.toHaveBeenCalled();
+    expect(edges()).toEqual([]);
   });
 
   it("writes nothing for a run that is not a lifecycle repair, even when its inputs carry a repair request", async () => {
