@@ -496,7 +496,7 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // sending, changes_requested) and until when (DB-clock expiry; NULL only for
   // the changes_requested end mark). CHECKs agent_runs_pause_claim_phase_chk and
   // agent_runs_pause_claim_shape_chk. A row from before the columns reads
-  // generation 0 and no claim. Migration: core__0123 + the bootstrap leaf
+  // generation 0 and no claim. Migration: core__0126 + the bootstrap leaf
   // agentRunPauseClaimSchemaQueries.
   pauseGeneration: bigint("pause_generation", { mode: "number" }).notNull().default(0),
   pauseClaimToken: text("pause_claim_token"),
@@ -1107,7 +1107,7 @@ export const lifecycleRepair = cinatraSchema.table("lifecycle_repair", {
   idempotencyKey:                  text("idempotency_key").notNull(),
   createdAt:                       timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt:                       timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-  // cinatra#4245: the run's pause_generation the change request ended (core__0123).
+  // cinatra#4245: the run's pause_generation the change request ended (core__0126).
   pausedRunGeneration:             bigint("paused_run_generation", { mode: "number" }),
 }, (t) => ({
   gateUniq:    uniqueIndex("lifecycle_repair_gate_uniq").on(t.gateId),

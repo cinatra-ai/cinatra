@@ -79,7 +79,7 @@ export function agentRunStartedBySchemaQueries(schemaName: string): { text: stri
 }
 
 // The PAUSE CLAIM columns (cinatra#4245): a generation-stamped lease on a paused
-// run's own row. Migration twin core__0123, which carries the same statements
+// run's own row. Migration twin core__0126, which carries the same statements
 // and explains them. No decision reads them yet, and there is no backfill. Each
 // statement runs on its own (the bootstrap runs no transaction), so the table
 // scan happens only in VALIDATE CONSTRAINT under SHARE UPDATE EXCLUSIVE; each

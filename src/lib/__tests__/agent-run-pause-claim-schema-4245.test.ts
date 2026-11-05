@@ -1,7 +1,7 @@
 /**
  * cinatra#4245 PR A1: the pause claim columns, inert.
  *
- * The operator upgrade (core__0123) and the fresh-install bootstrap must give a
+ * The operator upgrade (core__0126) and the fresh-install bootstrap must give a
  * database the same four agent_runs columns, the same two CHECKs and the same
  * lifecycle_repair column; Drizzle must declare what the DDL creates. No
  * database is started here: the DB tier beside this file applies the DDL.
@@ -26,7 +26,7 @@ import { agentRuns, lifecycleRepair } from "../../../packages/agents/src/schema"
 import { agentRunPauseClaimSchemaQueries } from "../agent-run-created-at-schema";
 import { lifecycleRepairSchemaQueries } from "../artifacts/artifact-review-gate-schema";
 import { buildCreateStoreSchemaQueries } from "../drizzle-store";
-import * as migration from "../../../migrations/core/core__0123_agent-run-pause-claim.mjs";
+import * as migration from "../../../migrations/core/core__0126_agent-run-pause-claim.mjs";
 import { readManifestUnion } from "../../../migrations/manifest-reader.mjs";
 
 const FIXTURE = "cinatra_fixture";
@@ -143,7 +143,7 @@ describe("pause claim columns: Drizzle declares what the DDL creates (cinatra#42
 });
 
 describe("pause claim columns: operator upgrade and bootstrap parity (cinatra#4245)", () => {
-  it("core__0123 up emits exactly the bootstrap leaf's statements, then the lifecycle_repair column", () => {
+  it("core__0126 up emits exactly the bootstrap leaf's statements, then the lifecycle_repair column", () => {
     const operator = operatorDdl().map(normalized);
     const bootstrap = [
       ...agentRunPauseClaimSchemaQueries(FIXTURE).map((row) => row.text),
@@ -328,8 +328,8 @@ describe("pause claim columns: rollback and ledger (cinatra#4245)", () => {
   it("ships its manifest fragment naming the module and both tables", () => {
     const { entries, errors } = readManifestUnion(path.resolve(__dirname, "../../../migrations"));
     expect(errors).toEqual([]);
-    const entry = entries.find((row: Record<string, unknown>) => row.seq === "0123");
-    expect(entry?.file).toBe("core/core__0123_agent-run-pause-claim.mjs");
+    const entry = entries.find((row: Record<string, unknown>) => row.seq === "0126");
+    expect(entry?.file).toBe("core/core__0126_agent-run-pause-claim.mjs");
     expect(entry?.tables).toEqual(["agent_runs", "lifecycle_repair"]);
     // The convention counts a NOT NULL column and a CHECK on an existing table
     // as user-land-affecting, so the fragment says so (schema-migration-gate).

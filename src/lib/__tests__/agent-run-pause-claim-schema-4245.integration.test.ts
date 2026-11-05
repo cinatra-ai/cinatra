@@ -1,5 +1,5 @@
 /**
- * cinatra#4245 PR A1, DB tier: core__0123 and its bootstrap twin applied to a
+ * cinatra#4245 PR A1, DB tier: core__0126 and its bootstrap twin applied to a
  * real Postgres.
  *
  *   - UPGRADE: on a table that already holds a paused run, `up` adds the
@@ -41,7 +41,7 @@ import { Client } from "pg";
 import { agentRunPauseClaimSchemaQueries } from "@/lib/agent-run-created-at-schema";
 import { lifecycleRepairSchemaQueries } from "@/lib/artifacts/artifact-review-gate-schema";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
-import * as migration from "../../../migrations/core/core__0123_agent-run-pause-claim.mjs";
+import * as migration from "../../../migrations/core/core__0126_agent-run-pause-claim.mjs";
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 const HAS_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
@@ -188,7 +188,7 @@ afterAll(async () => {
   await client.end();
 });
 
-describeDb("core__0123 on a real database (cinatra#4245)", () => {
+describeDb("core__0126 on a real database (cinatra#4245)", () => {
   it("upgrades a table holding a paused run to generation 0 with no claim, and a second up changes nothing", async () => {
     await minimalTables(UPGRADE);
     await client.query(`INSERT INTO "${UPGRADE}"."agent_runs" (id, status) VALUES ('run-old', 'pending_approval')`);
