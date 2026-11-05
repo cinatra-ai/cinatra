@@ -320,6 +320,32 @@ export function liftRendererApprovalNote(
   now: string = new Date().toISOString(),
 ): { approvalNote: string } | null {
   if (xRenderer.endsWith(":list-picker")) {
+    // SEVERAL PICKS (cinatra#3562): a list step declared to take several picks
+    // buffers `listIds` (and `listNames`, in the same order). The snapshot then
+    // carries every ticked id in the order ticked, each once, with its name;
+    // the server re-resolves each id via crm_list_get, so a name is advisory.
+    const ticked = (buffered as { listIds?: unknown }).listIds;
+    if (Array.isArray(ticked)) {
+      const names = (buffered as { listNames?: unknown }).listNames;
+      const listIds: string[] = [];
+      const listNames: string[] = [];
+      ticked.forEach((id, index) => {
+        if (typeof id !== "string" || id.length === 0 || listIds.includes(id)) return;
+        listIds.push(id);
+        const name = Array.isArray(names) ? names[index] : undefined;
+        listNames.push(typeof name === "string" ? name : "");
+      });
+      if (listIds.length > 0) {
+        return {
+          approvalNote: JSON.stringify({
+            type: "list" as const,
+            listIds,
+            listNames,
+            snapshotAt: now,
+          }),
+        };
+      }
+    }
     // Snapshot the selected list at approval time so downstream stages can
     // reference it; the server re-resolves via crm_list_get.
     const { listId, listName, memberCount } = buffered as {
@@ -506,4 +532,91 @@ export function applyAttachmentEnvelopeUserResponseOnly(
       : "[Approved by operator]";
   const wrapped = wrapUserResponseWithAttachments(existing, attachments);
   return { ...payload, userResponse: wrapped.userResponse };
+}
+
+// ---------------------------------------------------------------------------
+// The renderer's own reading of its value (cinatra#3562)
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a run surface keeps what its field renderers reported through
+ * `onValidityChange`. Each drawn renderer reports under an owner of its own and
+ * keeps one report, its latest, made on the gate it is drawn for. While any
+ * report on the gate on screen is anything but `true`, the Continue drawn for
+ * that gate is unavailable and a press sends nothing.
+ *
+ * Only the report of an attached owner counts. Each surface attaches the owner
+ * while its renderer is on the screen and releases it when the renderer leaves
+ * or another renderer takes its place. The release drops that owner's report
+ * and no other, so a renderer that never reports blocks nothing (cinatra#3532)
+ * even where an earlier one reported `false`. A report made while the owner is
+ * not attached, before the attach or after the release, holds nothing; the
+ * owner keeps it, and it counts when the same owner is attached again (as
+ * StrictMode and a hidden subtree that is shown again do). A surface attaches a
+ * new owner for each renderer, so a report that arrives after its renderer has
+ * left the screen never holds a gate again.
+ */
+export type GateValidityStore = {
+  /** The renderer drawn under `owner` is on the screen: its report counts from now on. */
+  attach: (owner: object) => void;
+  /** The renderer drawn under `owner`, on gate `key`, reports whether its value may be sent. */
+  report: (owner: object, key: string, valid: boolean) => void;
+  /** The renderer drawn under `owner` has left the screen: its report goes, and no other. */
+  release: (owner: object) => void;
+  /** True while any report of an attached owner on `key` is anything but `true`. */
+  isHeld: (key: string | null) => boolean;
+  subscribe: (listener: () => void) => () => void;
+};
+
+type GateValidityReport = { key: string; valid: boolean };
+
+export function createGateValidityStore(): GateValidityStore {
+  /** The reports of the attached owners: only these hold a gate. */
+  const reports = new Map<object, GateValidityReport>();
+  const attached = new WeakSet<object>();
+  /** The latest report of an owner that is not attached; it holds nothing. */
+  const kept = new WeakMap<object, GateValidityReport>();
+  const listeners = new Set<() => void>();
+  const changed = () => {
+    for (const listener of listeners) listener();
+  };
+  return {
+    attach: (owner) => {
+      if (attached.has(owner)) return;
+      attached.add(owner);
+      const last = kept.get(owner);
+      if (last === undefined) return;
+      kept.delete(owner);
+      reports.set(owner, last);
+      changed();
+    },
+    report: (owner, key, valid) => {
+      const next = { key, valid: valid === true };
+      if (!attached.has(owner)) {
+        kept.set(owner, next);
+        return;
+      }
+      const last = reports.get(owner);
+      if (last !== undefined && last.key === next.key && last.valid === next.valid) return;
+      reports.set(owner, next);
+      changed();
+    },
+    release: (owner) => {
+      if (!attached.has(owner)) return;
+      attached.delete(owner);
+      const last = reports.get(owner);
+      if (last === undefined) return;
+      reports.delete(owner);
+      kept.set(owner, last);
+      changed();
+    },
+    isHeld: (key) =>
+      key !== null && [...reports.values()].some((r) => r.key === key && !r.valid),
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
 }
