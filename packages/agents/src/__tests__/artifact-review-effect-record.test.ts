@@ -57,10 +57,15 @@ describe("serializeReviewEffectRecord — the persisted JSON contract", () => {
   const getter = Object.defineProperty({}, "a", { get: () => 1, enumerable: true });
   const hidden = Object.defineProperty({}, "a", { value: 1, enumerable: false });
   const sym = { [Symbol("s")]: 1 };
-  const holey = { a: [1, , 3] }; // eslint-disable-line no-sparse-arrays
+  const holey = { a: [1, , 3] };
   const extraKey = Object.assign([1], { extra: 2 });
-  let deep: Record<string, unknown> = { leaf: 1 };
-  for (let i = 0; i < 40; i += 1) deep = { d: deep };
+  /** A plain object `levels` objects deep below the top-level object. */
+  function nest(levels: number): Record<string, unknown> {
+    let v: Record<string, unknown> = { leaf: 1 };
+    for (let i = 0; i < levels; i += 1) v = { d: v };
+    return v;
+  }
+  const deep = nest(40);
 
   it.each([
     ["NaN", { a: Number.NaN }],
@@ -88,9 +93,18 @@ describe("serializeReviewEffectRecord — the persisted JSON contract", () => {
     ["a NUL character", { a: "x\u0000y" }],
     ["a lone high surrogate", { a: "\ud800" }],
     ["a lone low surrogate", { a: "x\udc00" }],
+    ["a NUL character in a key", { "a\u0000b": 1 }],
+    ["a lone high surrogate in a key", { "\ud800": 1 }],
+    ["a lone low surrogate in a nested key", { a: { "x\udc00": 1 } }],
     ["nesting past the depth limit", deep],
   ])("refuses %s", (_n, value) => {
     expect(serializeReviewEffectRecord(value)).toEqual({ ok: false, code: "invalid-value" });
+  });
+
+  it("accepts a key with a surrogate pair, and nesting 32 levels deep but not 33", () => {
+    expect(serializeReviewEffectRecord({ "😀": 1 })).toEqual({ ok: true, json: '{"😀":1}' });
+    expect(serializeReviewEffectRecord(nest(32)).ok).toBe(true);
+    expect(serializeReviewEffectRecord(nest(33))).toEqual({ ok: false, code: "invalid-value" });
   });
 
   it("runs no getter while it reads", () => {
@@ -116,7 +130,7 @@ describe("serializeReviewEffectRecord — the persisted JSON contract", () => {
   });
 });
 
-describe("parseCmsApplyEffectResult — the CLOSED, credential-free apply result", () => {
+describe("parseCmsApplyEffectResult — the CLOSED apply result", () => {
   it("accepts the three keys and rebuilds them in a fixed order", () => {
     const shuffled = { remotePublishedAt: VALID.remotePublishedAt, remoteStatus: "published", remoteId: "42" };
     const parsed = parseCmsApplyEffectResult(shuffled);
@@ -129,6 +143,18 @@ describe("parseCmsApplyEffectResult — the CLOSED, credential-free apply result
     for (const s of ["published", "scheduled", "draft", "pending", "private"]) {
       expect(parseCmsApplyEffectResult({ ...VALID, remoteStatus: s, remotePublishedAt: null })?.remoteStatus).toBe(s);
     }
+  });
+
+  it("accepts an id of exactly 128 characters of its set", () => {
+    const id = "Az09._:-".repeat(16);
+    expect(id).toHaveLength(128);
+    expect(parseCmsApplyEffectResult({ ...VALID, remoteId: id })?.remoteId).toBe(id);
+  });
+
+  it("checks the id's form only: any text of the set and length passes, whatever it means", () => {
+    // The closed schema keeps out every other field (no response body, no remote
+    // error text); it cannot tell what an id of the allowed form stands for.
+    expect(parseCmsApplyEffectResult({ ...VALID, remoteId: "sk-live-123" })?.remoteId).toBe("sk-live-123");
   });
 
   it.each([
@@ -173,6 +199,7 @@ describe("storedPinnedTargets — the gate's stored pinned set, fail-closed", ()
     ["a null element", [null]],
     ["an array element", [["a", "r"]]],
     ["an empty artifact id", [{ artifactId: "", representationRevisionId: "r" }]],
+    ["an empty revision id", [{ artifactId: "a", representationRevisionId: "" }]],
     ["a numeric revision id", [{ artifactId: "a", representationRevisionId: 7 }]],
     ["one bad element among good ones", [{ artifactId: "a", representationRevisionId: "r" }, { artifactId: "b" }]],
   ])("refuses %s as a whole", (_n, value) => {

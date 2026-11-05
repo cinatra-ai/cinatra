@@ -67,6 +67,7 @@ describe("cinatra#3978 — the read-back records the apply effect", () => {
     };
     const res = await buildCmsReviewHostSeam(makeDeps({ recordCmsApplyEffect: write })).recordApplyVerification(plain);
     expect(res).toEqual({ ok: true, outcome: "verified", outOfScope: [] });
+    expect(res).not.toHaveProperty("effect");
     expect(write).not.toHaveBeenCalled();
   });
 
@@ -118,6 +119,21 @@ describe("cinatra#3978 — the read-back records the apply effect", () => {
     },
   );
 
+  it("an outcome it does not know records nothing and reports refused", async () => {
+    const write = writer();
+    const seam = buildCmsReviewHostSeam(
+      makeDeps({
+        recordCmsApplyEffect: write,
+        recordCmsApplyVerification: async () =>
+          ({ ok: true, verdict: { outcome: "partial", outOfScopePaths: [] } }) as unknown as Awaited<
+            ReturnType<CmsReviewHostSeamDeps["recordCmsApplyVerification"]>
+          >,
+      }),
+    );
+    expect((await seam.recordApplyVerification(INPUT)).effect).toBe("refused");
+    expect(write).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["no org in the frame", { resolveIdentity: async () => ({ orgId: null, runId: null, createdBy: null }) }, "no-org"],
     ["no captured target", { readCmsSnapshotTargetByOperation: async () => null }, "target-not-found"],
@@ -155,10 +171,13 @@ describe("cinatra#3978 — the read-back records the apply effect", () => {
     get message(): string { throw new Error("message read"); },
     toString() { return "sk-live-SECRET"; },
   };
+  // A thrown proxy whose prototype read throws: even `instanceof` cannot read it.
+  const unreadable = new Proxy({}, { getPrototypeOf() { throw new Error("prototype read"); } });
   it.each([
     ["an Error", new Error("connection to db-host:5432 refused, password=hunter2"), "error"],
     ["a non-Error", "sk-live-SECRET", "non-error"],
     ["a hostile object", hostile, "non-error"],
+    ["a proxy whose prototype cannot be read", unreadable, "non-error"],
   ])("a writer that throws %s leaves the verification standing and logs a fixed text and class only", async (_n, thrown, cls) => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const seam = buildCmsReviewHostSeam(makeDeps({ recordCmsApplyEffect: async () => { throw thrown; } }));

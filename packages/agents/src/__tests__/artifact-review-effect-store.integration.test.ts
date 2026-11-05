@@ -4,7 +4,10 @@
  *   BINDINGS   every binding is read from stored state: the operation's
  *              snapshot, the gate's org, run, status, disposition and pinned
  *              set, and the gate's verification of that snapshot.
- *   FIRST WRITE WINS   identical retry, conflicting retry, concurrent writers.
+ *   FIRST WRITE WINS   identical retry, conflicting retry, concurrent writers,
+ *              and a key already held by another writer or another source.
+ *   COMPOSED   the real read-back verification (recordCmsApplyVerification)
+ *              followed by the writer: one verification per gate.
  *   TABLE      the CHECKs (writer, source, the 8192-byte JSON object), the gate
  *              cascade, and the migration twin (idempotent up; down refuses a
  *              non-empty table and drops an empty one).
@@ -31,6 +34,7 @@ const FP = "a".repeat(64);
 const RESULT = { remoteId: "42", remoteStatus: "published", remotePublishedAt: "2026-11-03T09:20:00.000Z" };
 
 let store: typeof import("../artifact-review-effect-store");
+let readback: typeof import("../cms-snapshot-readback-store");
 let client: Client;
 
 async function sql(text: string, values: unknown[] = []) {
@@ -107,6 +111,19 @@ function write(s: Seed, over: Partial<{ orgId: string; runId: string; gateId: st
   });
 }
 
+/** A row written past the store (a raw INSERT); `key` replaces the revision of the unique key. */
+async function insertRaw(s: Seed, over: { writer?: string; sourceRef?: string; recordJson?: string; key?: string }) {
+  return sql(
+    `INSERT INTO ${T("artifact_review_effect_records")}
+       (id, gate_id, org_id, run_id, reviewed_artifact_id, reviewed_representation_revision_id, writer, source_ref, record_json)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [
+      `raw-${randomUUID()}`, s.gateId, ORG, s.runId, s.artifactId, over.key ?? s.revisionId,
+      over.writer ?? "cms_apply", over.sourceRef ?? s.operationId, over.recordJson ?? "{}",
+    ],
+  );
+}
+
 async function rowsFor(gateId: string) {
   const r = await sql(
     `SELECT id, gate_id, org_id, run_id, reviewed_artifact_id, reviewed_representation_revision_id,
@@ -130,6 +147,7 @@ beforeAll(async () => {
   await admin.end();
   (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized = true;
   store = await import("../artifact-review-effect-store");
+  readback = await import("../cms-snapshot-readback-store");
   client = new Client({ connectionString: DB_URL });
   await client.connect();
 }, 90_000);
@@ -262,6 +280,17 @@ describe.skipIf(!HAS_DB)("cinatra#3978 — first write wins", () => {
     expect(await rowsFor(s.gateId)).toEqual(before);
   });
 
+  it.each([
+    ["another writer's record", { writer: "dashboard_publish" }],
+    ["the same bytes from another source", { sourceRef: "op-other" }],
+  ])("answers conflict when the key already holds %s, and keeps that row", async (_n, over) => {
+    const s = await seed();
+    await insertRaw(s, { recordJson: JSON.stringify(RESULT), ...over });
+    const before = await rowsFor(s.gateId);
+    expect(await write(s)).toEqual({ ok: false, code: "conflict" });
+    expect(await rowsFor(s.gateId)).toEqual(before);
+  });
+
   it("lets exactly one of two concurrent identical writers record, the other reads already-recorded", async () => {
     const s = await seed();
     const answers = await Promise.all([write(s), write(s)]);
@@ -281,18 +310,77 @@ describe.skipIf(!HAS_DB)("cinatra#3978 — first write wins", () => {
   });
 });
 
-describe.skipIf(!HAS_DB)("cinatra#3978 — the table's own checks", () => {
-  async function insertRaw(s: Seed, over: { writer?: string; sourceRef?: string; recordJson?: string; key?: string }) {
-    return sql(
-      `INSERT INTO ${T("artifact_review_effect_records")}
-         (id, gate_id, org_id, run_id, reviewed_artifact_id, reviewed_representation_revision_id, writer, source_ref, record_json)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [
-        `raw-${randomUUID()}`, s.gateId, ORG, s.runId, s.artifactId, over.key ?? s.revisionId,
-        over.writer ?? "cms_apply", over.sourceRef ?? s.operationId, over.recordJson ?? "{}",
-      ],
-    );
+describe.skipIf(!HAS_DB)("cinatra#3978 — the real read-back verification feeds the writer", () => {
+  /** The site read-back: `title` (in scope) goes Old -> New; with `drift`, the out-of-scope `body` changes too. */
+  function verify(s: Seed, over: { drift?: boolean; operationId?: string; artifactId?: string; revisionId?: string } = {}) {
+    const base = over.revisionId ?? s.revisionId;
+    return readback.recordCmsApplyVerification({
+      operationId: over.operationId ?? s.operationId,
+      gateId: s.gateId,
+      orgId: ORG,
+      runId: s.runId,
+      repairedTarget: { artifactId: over.artifactId ?? s.artifactId, representationRevisionId: `${base}:post-apply` },
+      acceptedFindings: [{ id: "f1", path: "title" }],
+      projectFields: (t) =>
+        t.representationRevisionId === base ? { title: "Old", body: "b" } : { title: "New", body: over.drift ? "changed" : "b" },
+      // At the cycle bound a failed verdict is recorded and reopens no gate.
+      attempt: 1,
+      maxCycles: 1,
+    });
   }
+  async function storedOutcomes(gateId: string) {
+    const r = await sql(
+      `SELECT reviewed_artifact_id, outcome FROM ${T("artifact_verification_records")} WHERE gate_id = $1`,
+      [gateId],
+    );
+    return r.rows;
+  }
+
+  it("records the effect after a verified read-back the verification store wrote", async () => {
+    const s = await seed({ outcome: null });
+    const v = await verify(s);
+    expect(v.ok && v.verdict.outcome).toBe("verified");
+    expect(await write(s)).toEqual({ ok: true, status: "recorded", effectId: store.reviewEffectId(s.gateId, s.artifactId, s.revisionId) });
+  });
+
+  it("records nothing after a drifted read-back, and a verified retry of the read-back does not change that", async () => {
+    const s = await seed({ outcome: null });
+    const first = await verify(s, { drift: true });
+    expect(first.ok && first.verdict.outcome).toBe("drifted");
+    expect(await write(s)).toEqual({ ok: false, code: "not-verified" });
+    await verify(s);
+    // One verification per gate: the first stored outcome stands.
+    expect(await storedOutcomes(s.gateId)).toEqual([{ reviewed_artifact_id: s.artifactId, outcome: "drifted" }]);
+    expect(await write(s)).toEqual({ ok: false, code: "not-verified" });
+    expect(await rowsFor(s.gateId)).toHaveLength(0);
+  });
+
+  it("records only the first verified target of a gate that pins two", async () => {
+    const s = await seed({ outcome: null });
+    const t2 = { artifactId: `art-${randomUUID()}`, revisionId: `rev-${randomUUID()}`, operationId: `op-${randomUUID()}` };
+    await sql(`UPDATE ${T("artifact_review_gates")} SET pinned_targets = $2::jsonb WHERE id = $1`, [
+      s.gateId,
+      JSON.stringify([
+        { artifactId: s.artifactId, representationRevisionId: s.revisionId },
+        { artifactId: t2.artifactId, representationRevisionId: t2.revisionId },
+      ]),
+    ]);
+    await sql(
+      `INSERT INTO ${T("cms_snapshot_targets")}
+         (id, artifact_id, snapshot_revision_id, scope_manifest, connector_instance, resource_type, resource_id, operation_id)
+       VALUES ($1, $2, $3, '{"paths":["title"]}'::jsonb, 'site-connector:inst-1', 'post', '43', $4)`,
+      [randomUUID(), t2.artifactId, t2.revisionId, t2.operationId],
+    );
+    await verify(s);
+    await verify(s, t2);
+    expect(await storedOutcomes(s.gateId)).toEqual([{ reviewed_artifact_id: s.artifactId, outcome: "verified" }]);
+    expect(await write(s, { operationId: t2.operationId })).toEqual({ ok: false, code: "not-verified" });
+    expect((await write(s)).ok).toBe(true);
+    expect(await rowsFor(s.gateId)).toHaveLength(1);
+  });
+});
+
+describe.skipIf(!HAS_DB)("cinatra#3978 — the table's own checks", () => {
   /** Compact JSON text of exactly `bytes` UTF-8 bytes, made of `ch`. */
   function textOfBytes(bytes: number, ch: string): string {
     const room = bytes - Buffer.byteLength('{"k":""}', "utf8");
@@ -323,6 +411,14 @@ describe.skipIf(!HAS_DB)("cinatra#3978 — the table's own checks", () => {
       await expect(insertRaw(s, { recordJson })).rejects.toThrow(/check constraint/i);
     },
   );
+
+  it("admits a source of 256 bytes and refuses 257, multibyte counted in bytes", async () => {
+    const s = await seed();
+    await expect(insertRaw(s, { sourceRef: "a".repeat(256), key: "k-256" })).resolves.toBeTruthy();
+    await expect(insertRaw(s, { sourceRef: "ü".repeat(128), key: "k-256u" })).resolves.toBeTruthy();
+    await expect(insertRaw(s, { sourceRef: "a".repeat(257), key: "k-257" })).rejects.toThrow(/check constraint/i);
+    await expect(insertRaw(s, { sourceRef: `${"ü".repeat(128)}a`, key: "k-257u" })).rejects.toThrow(/check constraint/i);
+  });
 
   it("refuses text that is not JSON, and an empty source", async () => {
     const s = await seed();
@@ -383,6 +479,21 @@ describe.skipIf(!HAS_DB)("cinatra#3978 — the migration twin core__0129", () =>
   it("down drops an empty table, and up makes it again", async () => {
     await sql(`DELETE FROM ${T("artifact_review_effect_records")}`);
     await runDown();
+    expect(await tableExists()).toBe(false);
+    await sql(`SET search_path TO "${q(TEST_SCHEMA)}"`);
+    try {
+      await sql(artifactReviewEffectRecordsDdlSql);
+    } finally {
+      await sql(`RESET search_path`);
+    }
+    expect(await tableExists()).toBe(true);
+  });
+
+  it("down on a database without the table changes nothing", async () => {
+    await sql(`DELETE FROM ${T("artifact_review_effect_records")}`);
+    await runDown();
+    expect(await tableExists()).toBe(false);
+    await expect(runDown()).resolves.toBeUndefined();
     expect(await tableExists()).toBe(false);
     await sql(`SET search_path TO "${q(TEST_SCHEMA)}"`);
     try {
