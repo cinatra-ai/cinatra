@@ -41,6 +41,7 @@ import {
   resolveTimezoneField,
 } from "./trigger-timezone";
 import { TimezoneField } from "./timezone-field";
+import { RecurrenceFrequencySelectors } from "./schedule-proposal-card";
 import { declaredDurationEstimate } from "./duration-declared";
 // THE SCHEDULE DEFAULT IS THE RUNNER'S, NOT THIS FORM'S (cinatra#2936).
 // `scheduleScreenSelection` applies `scheduleDefaultForLaunch` — the decision
@@ -54,8 +55,6 @@ import {
   DEFAULT_RECURRING_CONFIG,
   parseCronToRecurring,
   WEEKDAY_LABELS,
-  MONTH_LABELS,
-  NTH_LABELS,
   type RecurringConfig,
   type RecurringFrequency,
 } from "./trigger-recurrence";
@@ -867,47 +866,6 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                       </SelectContent>
                     </Select>
                   </div>
-                  {recurring.frequency === "quarterly" && (
-                    <div className="flex items-center gap-2">
-                      <Label className="shrink-0 font-normal">Quarter</Label>
-                      <div className="flex rounded-control border border-input overflow-hidden text-sm">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => updateRecurring({ quarterAnchor: "start" })}
-                          className={`rounded-none border-0 px-3 py-1 transition-colors ${recurring.quarterAnchor === "start" ? "bg-primary text-primary-foreground" : "bg-background text-foreground hover:bg-muted"}`}
-                        >
-                          Start
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => updateRecurring({ quarterAnchor: "end" })}
-                          className={`rounded-none border-0 px-3 py-1 transition-colors ${recurring.quarterAnchor === "end" ? "bg-primary text-primary-foreground" : "bg-background text-foreground hover:bg-muted"}`}
-                        >
-                          End
-                        </Button>
-                      </div>
-                      <span className="text-xs text-muted-foreground">
-                        {recurring.quarterAnchor === "start" ? "Jan / Apr / Jul / Oct" : "Mar / Jun / Sep / Dec"}
-                      </span>
-                    </div>
-                  )}
-                  {recurring.frequency === "yearly" && (
-                    <div className="flex items-center gap-2">
-                      <Label className="shrink-0 font-normal">Month</Label>
-                      <Select value={String(recurring.yearlyMonth)} onValueChange={(v) => updateRecurring({ yearlyMonth: Number(v) })}>
-                        <SelectTrigger aria-label="Month" className="w-24"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          {MONTH_LABELS.map((label, i) => (
-                            <SelectItem key={i + 1} value={String(i + 1)}>{label}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  )}
                   {recurring.frequency === "weekly" && (
                     <div className="flex items-center gap-2">
                       <Label className="shrink-0 font-normal">On</Label>
@@ -953,63 +911,15 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                       </div>
                     </div>
                   )}
-                  {(recurring.frequency === "monthly" || recurring.frequency === "quarterly" || recurring.frequency === "yearly") && (
-                    <>
-                      <div className="flex items-center gap-2">
-                        <Label className="shrink-0 font-normal">On</Label>
-                        <div className="flex rounded-control border border-input overflow-hidden text-sm">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => updateRecurring({ monthlyMode: "date" })}
-                            className={`rounded-none border-0 px-3 py-1 transition-colors ${recurring.monthlyMode === "date" ? "bg-primary text-primary-foreground" : "bg-background text-foreground hover:bg-muted"}`}
-                          >
-                            Day
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => updateRecurring({ monthlyMode: "weekday" })}
-                            className={`rounded-none border-0 px-3 py-1 transition-colors ${recurring.monthlyMode === "weekday" ? "bg-primary text-primary-foreground" : "bg-background text-foreground hover:bg-muted"}`}
-                          >
-                            Weekday
-                          </Button>
-                        </div>
-                        {recurring.monthlyMode === "date" && (
-                          <Select value={String(recurring.dayOfMonth)} onValueChange={(v) => updateRecurring({ dayOfMonth: Number(v) })}>
-                            <SelectTrigger aria-label="Day of month" className="w-20"><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
-                                <SelectItem key={d} value={String(d)}>{d}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        )}
-                        {recurring.monthlyMode === "weekday" && (
-                          <>
-                            <Select value={String(recurring.nthWeek)} onValueChange={(v) => updateRecurring({ nthWeek: Number(v) as 1|2|3|4 })}>
-                              <SelectTrigger aria-label="Week of month" className="w-24"><SelectValue /></SelectTrigger>
-                              <SelectContent>
-                                {([1,2,3,4] as const).map((n) => (
-                                  <SelectItem key={n} value={String(n)}>{NTH_LABELS[n-1]}</SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                            <Select value={String(recurring.monthlyWeekday)} onValueChange={(v) => updateRecurring({ monthlyWeekday: Number(v) })}>
-                              <SelectTrigger aria-label="Weekday" className="w-28"><SelectValue /></SelectTrigger>
-                              <SelectContent>
-                                {WEEKDAY_LABELS.map((label, i) => (
-                                  <SelectItem key={i} value={String(i)}>{label}</SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </>
-                        )}
-                      </div>
-                    </>
-                  )}
+                  {/* Quarter anchor, month, and Day / Weekday for the month-style
+                      frequencies, drawn by the component the schedule card renders
+                      too (cinatra#3189). */}
+                  <RecurrenceFrequencySelectors
+                    selection={recurring}
+                    onChange={updateRecurring}
+                    disabled={false}
+                    readOnly={false}
+                  />
                   <div className="flex items-center gap-2">
                     <Label className="shrink-0 font-normal">At</Label>
                     <Select value={String(recurring.hour)} onValueChange={(v) => updateRecurring({ hour: Number(v) })}>

@@ -214,8 +214,11 @@ import {
   type LifecycleCardAuth,
 } from "./lifecycle-card-runtime";
 import {
+  MONTH_LABELS,
+  NTH_LABELS,
   WEEKDAY_LABELS,
   applyArmedScheduleFill,
+  type RecurringConfig,
   // The SERVER'S OWN sentences for a schedule that can no longer be changed
   // (cinatra#2934), from the leaf both sides already share — so this card draws
   // the words the write guard answers with and no second wording exists.
@@ -1629,15 +1632,18 @@ function ScheduleOptionRows({
             <span className="text-sm text-muted-foreground">Repeat every</span>
             {readOnly ? (
               <>
-                <ReadOnlyValue field="recurring-interval" width="w-20" label="Repeat every">
-                  {String(recurring.interval)}
-                </ReadOnlyValue>
+                {repeatsWithInterval(recurring.frequency) && (
+                  <ReadOnlyValue field="recurring-interval" width="w-20" label="Repeat every">
+                    {String(recurring.interval)}
+                  </ReadOnlyValue>
+                )}
                 <ReadOnlyValue field="recurring-frequency" width="w-32" label="Frequency">
                   {FREQUENCY_LABELS[recurring.frequency]}
                 </ReadOnlyValue>
               </>
             ) : (
               <>
+            {repeatsWithInterval(recurring.frequency) && (
             <Select
               disabled={!editable}
               value={String(recurring.interval)}
@@ -1654,6 +1660,7 @@ function ScheduleOptionRows({
                 ))}
               </SelectContent>
             </Select>
+            )}
             <Select
               disabled={!editable}
               value={recurring.frequency}
@@ -1735,6 +1742,15 @@ function ScheduleOptionRows({
               </div>
             </div>
           ) : null}
+
+          {/* Quarter anchor, month, and Day / Weekday for the month-style
+              frequencies — the in-flow step's own controls (cinatra#3189). */}
+          <RecurrenceFrequencySelectors
+            selection={recurring}
+            onChange={updateRecurring}
+            disabled={!editable}
+            readOnly={readOnly}
+          />
 
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm text-muted-foreground">At</span>
@@ -1901,6 +1917,18 @@ function Field({ label, children }: { label: string; children: ReactElement }): 
       {children}
     </div>
   );
+}
+
+/**
+ * Whether "Repeat every" carries a number for this frequency. A quarter and a
+ * year always repeat every 1, so the scheduling step draws the unit alone for
+ * them, in flow and once a schedule is set; days, weeks and months keep the
+ * interval beside the unit. The in-flow step hides it on the same condition.
+ * Saving is unchanged: the recurrence parser forces interval 1 for a quarter
+ * and a year whatever the state holds.
+ */
+function repeatsWithInterval(frequency: RecurringSelection["frequency"]): boolean {
+  return frequency === "daily" || frequency === "weekly" || frequency === "monthly";
 }
 
 /** The words the frequency picker itself draws, so a spent schedule reads back
@@ -2106,5 +2134,231 @@ function OptionRow({
           drawn at all, so there is never more than one live set of inputs. */}
       {chosen ? children ?? null : null}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// THE FREQUENCY-DEPENDENT SELECTORS OF A RECURRING SCHEDULE, DRAWN IN ONE PLACE
+// (cinatra#3189).
+//
+// Components, the standard scheduling step: the recurring row carries "a
+// day-of-month or nth-weekday choice for monthly, quarterly and yearly; a
+// quarter anchor; a month". The in-flow scheduling step drew these; the
+// conversational schedule card drew weekday toggles only, so a monthly,
+// quarterly or yearly proposal could be neither read nor corrected on the card.
+// Both hosts now render THIS component, so neither can restate the controls
+// differently:
+//
+//   - quarterly: the quarter anchor (Start / End);
+//   - yearly: the month;
+//   - monthly, quarterly and yearly: Day or Weekday, then the day of month, or
+//     the week of month and the weekday.
+//
+// Each host keeps its own Repeat every, unit, weekly toggles, At row and
+// Timezone. The values stay the host's (`selection`) and a change is handed
+// back as a patch (`onChange`), so the cron, the wire body and the submit road
+// are exactly the host's as before. The markup is the in-flow step's.
+//
+// THEY LIVE IN THIS MODULE, and the in-flow step imports them from here: a
+// module of their own would add one more module to every route that reaches
+// the card.
+// ---------------------------------------------------------------------------
+
+/** The selections this component draws — `RecurringConfig`'s names, which the
+ *  wire's `RecurringSelection` matches field for field. */
+export type RecurrenceFrequencySelection = Pick<
+  RecurringConfig,
+  | "frequency"
+  | "monthlyMode"
+  | "dayOfMonth"
+  | "nthWeek"
+  | "monthlyWeekday"
+  | "quarterAnchor"
+  | "yearlyMonth"
+>;
+
+/**
+ * The day-of-month options for a stated value: 1-28, as the in-flow step has
+ * always offered. The wire admits up to 31, so a stated value outside the list
+ * is ADDED as one more option and drawn, never blanked — the rule cinatra#3278
+ * set for the minute: the value the schedule holds has to be one the control
+ * can draw.
+ */
+export function dayOfMonthOptions(stated: number): number[] {
+  const days = Array.from({ length: 28 }, (_, i) => i + 1);
+  if (!Number.isInteger(stated) || days.includes(stated)) return days;
+  return [...days, stated].sort((a, b) => a - b);
+}
+
+/**
+ * A HALF OF A SEGMENTED PAIR (Quarter Start / End, On Day / Weekday), AS THE
+ * SCHEDULING STEP DRAWS IT: the pressed half is filled indigo with white ink,
+ * the other half stands on the reserved surface in the ink colour.
+ *
+ * THE VARIANT CARRIES THE STATE, as it does for the weekday chips. The
+ * `outline` variant brings `dark:bg-input-fill/30`, `dark:hover:bg-input-fill/50`
+ * and `hover:bg-muted hover:text-foreground`; tailwind-merge keeps those beside
+ * an unprefixed fill (different modifier), so a pressed half drawn on `outline`
+ * lost its fill in the dark palette and on hover and could not be told
+ * from the other half. A pressed half is therefore the `default` variant, which
+ * has no themed or hover fill of a button's own. Its fill is `indigo-ink`, the
+ * colour that marks a choice in both palettes (`primary` moves to near-white in
+ * the dark palette). The other half stays `outline` and names the surface under
+ * `dark:` and the hover fill under `dark:hover:` too, so tailwind-merge drops
+ * the variant's own control fills and the half stands where the drawing stands
+ * it on both grounds.
+ */
+const segmentVariant = (on: boolean): "default" | "outline" => (on ? "default" : "outline");
+const segmentClass = (on: boolean) =>
+  `rounded-none border-0 px-3 py-1 transition-colors ${
+    on
+      ? "bg-indigo-ink text-white"
+      : "bg-surface-strong text-foreground hover:bg-muted dark:bg-surface-strong dark:hover:bg-muted"
+  }`;
+
+export function RecurrenceFrequencySelectors({
+  selection,
+  onChange,
+  disabled,
+  readOnly,
+}: {
+  selection: RecurrenceFrequencySelection;
+  onChange: (patch: Partial<RecurrenceFrequencySelection>) => void;
+  /** Every control stays drawn and refuses (the reader who may see but not act). */
+  disabled: boolean;
+  /** The schedule is over: the values are drawn as text and nothing is pressable. */
+  readOnly: boolean;
+}): ReactElement | null {
+  const { frequency } = selection;
+  const monthStyle =
+    frequency === "monthly" || frequency === "quarterly" || frequency === "yearly";
+  if (!monthStyle) return null;
+
+  return (
+    <>
+      {frequency === "quarterly" && (
+        <div className="flex items-center gap-2">
+          <Label className="shrink-0 font-normal">Quarter</Label>
+          {readOnly ? (
+            <ReadOnlyValue field="recurring-quarter-anchor" width="w-24" label="Quarter">
+              {selection.quarterAnchor === "start" ? "Start" : "End"}
+            </ReadOnlyValue>
+          ) : (
+            <div className="flex rounded-control border border-input overflow-hidden text-sm">
+              {(["start", "end"] as const).map((anchor) => (
+                <Button
+                  key={anchor}
+                  type="button"
+                  variant={segmentVariant(selection.quarterAnchor === anchor)}
+                  size="sm"
+                  data-field="recurring-quarter-anchor"
+                  data-anchor={anchor}
+                  aria-pressed={selection.quarterAnchor === anchor}
+                  disabled={disabled}
+                  onClick={() => onChange({ quarterAnchor: anchor })}
+                  className={segmentClass(selection.quarterAnchor === anchor)}
+                >
+                  {anchor === "start" ? "Start" : "End"}
+                </Button>
+              ))}
+            </div>
+          )}
+          <span className="text-xs text-muted-foreground">
+            {selection.quarterAnchor === "start" ? "Jan / Apr / Jul / Oct" : "Mar / Jun / Sep / Dec"}
+          </span>
+        </div>
+      )}
+      {frequency === "yearly" && (
+        <div className="flex items-center gap-2">
+          <Label className="shrink-0 font-normal">Month</Label>
+          {readOnly ? (
+            <ReadOnlyValue field="recurring-yearly-month" width="w-24" label="Month">
+              {MONTH_LABELS[selection.yearlyMonth - 1] ?? String(selection.yearlyMonth)}
+            </ReadOnlyValue>
+          ) : (
+            <Select disabled={disabled} value={String(selection.yearlyMonth)} onValueChange={(v) => onChange({ yearlyMonth: Number(v) })}>
+              <SelectTrigger data-field="recurring-yearly-month" aria-label="Month" className="w-24"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {MONTH_LABELS.map((label, i) => (
+                  <SelectItem key={i + 1} value={String(i + 1)}>{label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <Label className="shrink-0 font-normal">On</Label>
+        {readOnly ? (
+          <ReadOnlyValue field="recurring-monthly-mode" width="w-24" label="On">
+            {selection.monthlyMode === "date" ? "Day" : "Weekday"}
+          </ReadOnlyValue>
+        ) : (
+          <div className="flex rounded-control border border-input overflow-hidden text-sm">
+            {(["date", "weekday"] as const).map((mode) => (
+              <Button
+                key={mode}
+                type="button"
+                variant={segmentVariant(selection.monthlyMode === mode)}
+                size="sm"
+                data-field="recurring-monthly-mode"
+                data-mode={mode}
+                aria-pressed={selection.monthlyMode === mode}
+                disabled={disabled}
+                onClick={() => onChange({ monthlyMode: mode })}
+                className={segmentClass(selection.monthlyMode === mode)}
+              >
+                {mode === "date" ? "Day" : "Weekday"}
+              </Button>
+            ))}
+          </div>
+        )}
+        {selection.monthlyMode === "date" &&
+          (readOnly ? (
+            <ReadOnlyValue field="recurring-day-of-month" width="w-20" label="Day of month">
+              {String(selection.dayOfMonth)}
+            </ReadOnlyValue>
+          ) : (
+            <Select disabled={disabled} value={String(selection.dayOfMonth)} onValueChange={(v) => onChange({ dayOfMonth: Number(v) })}>
+              <SelectTrigger data-field="recurring-day-of-month" aria-label="Day of month" className="w-20"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {dayOfMonthOptions(selection.dayOfMonth).map((d) => (
+                  <SelectItem key={d} value={String(d)}>{d}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ))}
+        {selection.monthlyMode === "weekday" &&
+          (readOnly ? (
+            <>
+              <ReadOnlyValue field="recurring-nth-week" width="w-24" label="Week of month">
+                {NTH_LABELS[selection.nthWeek - 1] ?? String(selection.nthWeek)}
+              </ReadOnlyValue>
+              <ReadOnlyValue field="recurring-monthly-weekday" width="w-28" label="Weekday">
+                {WEEKDAY_LABELS[selection.monthlyWeekday] ?? String(selection.monthlyWeekday)}
+              </ReadOnlyValue>
+            </>
+          ) : (
+            <>
+              <Select disabled={disabled} value={String(selection.nthWeek)} onValueChange={(v) => onChange({ nthWeek: Number(v) as 1 | 2 | 3 | 4 })}>
+                <SelectTrigger data-field="recurring-nth-week" aria-label="Week of month" className="w-24"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {([1, 2, 3, 4] as const).map((n) => (
+                    <SelectItem key={n} value={String(n)}>{NTH_LABELS[n - 1]}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select disabled={disabled} value={String(selection.monthlyWeekday)} onValueChange={(v) => onChange({ monthlyWeekday: Number(v) })}>
+                <SelectTrigger data-field="recurring-monthly-weekday" aria-label="Weekday" className="w-28"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {WEEKDAY_LABELS.map((label, i) => (
+                    <SelectItem key={i} value={String(i)}>{label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </>
+          ))}
+      </div>
+    </>
   );
 }
