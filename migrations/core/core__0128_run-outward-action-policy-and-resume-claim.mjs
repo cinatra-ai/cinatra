@@ -61,7 +61,7 @@ BEGIN
   END IF;
   IF draft THEN
     IF NOT ack THEN
-      RAISE EXCEPTION 'core__0120: this database booted an unreleased draft of this migration; stop every draft worker, then boot again with ${DRAFT_DB_ACK_ENV}=${DRAFT_DB_ACK_VALUE}';
+      RAISE EXCEPTION 'core__0128: this database booted an unreleased draft of this migration; stop every draft worker, then boot again with ${DRAFT_DB_ACK_ENV}=${DRAFT_DB_ACK_VALUE}';
     END IF;
     SELECT count(*) INTO unmarked
       FROM artifact_review_resume_outbox o
@@ -69,7 +69,7 @@ BEGIN
      WHERE o.run_claimed_at IS NULL AND r.status = 'running'
        AND (o.status = 'delivering' OR o.dead_lettered_at IS NOT NULL);
     IF unmarked > 0 THEN
-      RAISE EXCEPTION 'core__0120: % resume intent(s) of a running run carry no claim mark (a draft delivery may have claimed them); stop those runs with agent_run_stop, then boot again', unmarked;
+      RAISE EXCEPTION 'core__0128: % resume intent(s) of a running run carry no claim mark (a draft delivery may have claimed them); stop those runs with agent_run_stop, then boot again', unmarked;
     END IF;
   END IF;
 END

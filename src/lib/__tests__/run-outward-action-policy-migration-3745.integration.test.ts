@@ -1,5 +1,5 @@
 /**
- * cinatra#3745 — the run outward-action policy migration (core__0120), driven
+ * cinatra#3745 — the run outward-action policy migration (core__0128), driven
  * through the REAL core migration runner over this repository's migrations
  * folder, on a real Postgres.
  *
@@ -21,7 +21,7 @@
  *   - every refusal leaves the schema and the ledger exactly as they were.
  *
  * The test never imports the migration module: it runs the runner over the
- * folder, so on a tree without core__0120 the runner completes and the refusal
+ * folder, so on a tree without core__0128 the runner completes and the refusal
  * assertions fail on behaviour.
  *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided. Run with:
@@ -51,7 +51,7 @@ function shippedCoreMigrationNames(): string[] {
   return readdirSync(path.join(ROOT, "migrations/core"))
     .filter((f) => /^core__\d{4}_[a-z0-9-]+\.mjs$/.test(f))
     .map((f) => f.replace(/\.mjs$/, ""))
-    .filter((name) => !name.startsWith("core__0120_"))
+    .filter((name) => !name.startsWith("core__0128_"))
     .sort();
 }
 
@@ -67,7 +67,7 @@ async function withClient<T>(fn: (c: Client) => Promise<T>): Promise<T> {
 
 /**
  * A schema that every shipped migration has already run on (ledger only),
- * with the two tables the guard reads in their pre-0120 shape. `draft` adds
+ * with the two tables the guard reads in their pre-0128 shape. `draft` adds
  * the ledger rows a draft head left behind.
  */
 async function seed(opts: { draft: boolean; draftNames?: string[] }): Promise<void> {
@@ -152,7 +152,7 @@ async function expectRefusedUnchanged(message: RegExp): Promise<void> {
 
 /**
  * The two tables as the bootstrap twin (or the draft's first migration)
- * creates them, each with one row, before core__0120 runs.
+ * creates them, each with one row, before core__0128 runs.
  */
 async function preCreateTables(): Promise<void> {
   await withClient(async (c) => {
@@ -197,9 +197,9 @@ const FULL_SHAPE = {
   tables: ["agent_run_outward_action_policies", "artifact_review_action_consumptions"],
   outboxColumns: ["resume_task_result", "run_claimed_at"],
 };
-const MIGRATION = "core__0120_run-outward-action-policy-and-resume-claim";
+const MIGRATION = "core__0128_run-outward-action-policy-and-resume-claim";
 
-describe.skipIf(!HAS_DB)("core__0120 on the real runner: additive on main, guarded on a draft database", () => {
+describe.skipIf(!HAS_DB)("core__0128 on the real runner: additive on main, guarded on a draft database", () => {
   let savedAck: string | undefined;
   beforeEach(() => {
     savedAck = process.env[ACK_ENV];
@@ -223,7 +223,7 @@ describe.skipIf(!HAS_DB)("core__0120 on the real runner: additive on main, guard
 
   it("a draft database without the stopped-workers statement is refused before any change", async () => {
     await seed({ draft: true });
-    await expectRefusedUnchanged(/core__0120: this database booted an unreleased draft.*CINATRA_3745_DRAFT_DB_ACK=workers-stopped/);
+    await expectRefusedUnchanged(/core__0128: this database booted an unreleased draft.*CINATRA_3745_DRAFT_DB_ACK=workers-stopped/);
     expect((await shape()).tables).toEqual([]);
   });
 
@@ -231,7 +231,7 @@ describe.skipIf(!HAS_DB)("core__0120 on the real runner: additive on main, guard
     await seed({ draft: true });
     await addIntent({ gateId: "draft-delivering", runStatus: "running", status: "delivering" });
     process.env[ACK_ENV] = "workers-stopped";
-    await expectRefusedUnchanged(/core__0120: 1 resume intent\(s\) .*no claim mark.*agent_run_stop/);
+    await expectRefusedUnchanged(/core__0128: 1 resume intent\(s\) .*no claim mark.*agent_run_stop/);
     expect((await shape()).tables).toEqual([]);
   });
 
@@ -239,7 +239,7 @@ describe.skipIf(!HAS_DB)("core__0120 on the real runner: additive on main, guard
     await seed({ draft: true });
     await addIntent({ gateId: "draft-dead", runStatus: "running", status: "dead_lettered", deadLettered: true });
     process.env[ACK_ENV] = "workers-stopped";
-    await expectRefusedUnchanged(/core__0120: 1 resume intent\(s\) .*no claim mark.*agent_run_stop/);
+    await expectRefusedUnchanged(/core__0128: 1 resume intent\(s\) .*no claim mark.*agent_run_stop/);
     expect((await shape()).tables).toEqual([]);
   });
 
@@ -247,7 +247,7 @@ describe.skipIf(!HAS_DB)("core__0120 on the real runner: additive on main, guard
     await seed({ draft: true, draftNames: [DRAFT_0115] });
     await addIntent({ gateId: "draft-no-cols", runStatus: "running", status: "delivering" });
     process.env[ACK_ENV] = "workers-stopped";
-    await expectRefusedUnchanged(/core__0120: 1 resume intent\(s\)/);
+    await expectRefusedUnchanged(/core__0128: 1 resume intent\(s\)/);
     expect(await shape()).toEqual({ tables: [], outboxColumns: [] });
   });
 
@@ -267,15 +267,15 @@ describe.skipIf(!HAS_DB)("core__0120 on the real runner: additive on main, guard
 
   it("either draft name alone marks a draft database", async () => {
     await seed({ draft: true, draftNames: [DRAFT_0116] });
-    await expectRefusedUnchanged(/core__0120: this database booted an unreleased draft/);
+    await expectRefusedUnchanged(/core__0128: this database booted an unreleased draft/);
     await seed({ draft: true, draftNames: [DRAFT_0115] });
-    await expectRefusedUnchanged(/core__0120: this database booted an unreleased draft/);
+    await expectRefusedUnchanged(/core__0128: this database booted an unreleased draft/);
   });
 
   it("an ack value other than the exact statement does not count", async () => {
     await seed({ draft: true });
     process.env[ACK_ENV] = "yes";
-    await expectRefusedUnchanged(/core__0120: this database booted an unreleased draft/);
+    await expectRefusedUnchanged(/core__0128: this database booted an unreleased draft/);
   });
 
   it("a database from main whose bootstrap already created both tables and both columns: the migration passes and keeps their rows", async () => {

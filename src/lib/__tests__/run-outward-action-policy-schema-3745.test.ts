@@ -1,4 +1,4 @@
-// cinatra#3745 — core__0120's DDL, the bootstrap twins and the Drizzle tables
+// cinatra#3745 — core__0128's DDL, the bootstrap twins and the Drizzle tables
 // describe the same two tables and two outbox columns; the migration never
 // backfills authority and never rolls burned gates back. Its guard reads the
 // draft migration names, both legacy claim states and the exact operator
@@ -19,12 +19,12 @@ import {
   draftDatabaseGuardSql,
   up,
   down,
-} from "../../../migrations/core/core__0120_run-outward-action-policy-and-resume-claim.mjs";
+} from "../../../migrations/core/core__0128_run-outward-action-policy-and-resume-claim.mjs";
 
 const normalize = (s: string) =>
   s.replaceAll('"tenant".', "").replaceAll('"', "").replace(/\s+/g, " ").trim().replace(/;$/, "");
 
-describe("core__0120: migration, bootstrap and schema parity", () => {
+describe("core__0128: migration, bootstrap and schema parity", () => {
   it("the two tables have the same contract on the migration and the fresh bootstrap road", () => {
     const migration = outwardActionPolicyDdlSql.trim().split(";").filter((s: string) => s.trim()).map(normalize);
     expect(outwardActionPolicySchemaQueries("tenant").map((x: { text: string }) => normalize(x.text))).toEqual(migration);
