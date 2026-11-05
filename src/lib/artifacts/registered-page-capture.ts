@@ -14,10 +14,11 @@ import { findInertnessViolations, sanitizeCapturedHtml } from "./cms-preview-ine
 //
 // The organisation's active connect-registered sites are the egress allowlist:
 // a page is captured only when its origin equals a registered site's origin
-// (`normalizeOrigin`). The fetch is the existing guarded GET (egress policy, no
-// redirects, size cap) with NO credential headers; the page is sanitized and
-// re-checked for inertness; the render is the existing isolated subprocess,
-// pinned to the addresses the guard validated.
+// (`normalizeOrigin`) and the url's own origin (`new URL(url).origin`) equals
+// it too. The fetch is the existing guarded GET (egress policy, no redirects,
+// size cap) with NO credential headers; the page is sanitized and re-checked
+// for inertness; the render is the existing isolated subprocess, pinned to the
+// addresses the guard validated.
 // ---------------------------------------------------------------------------
 
 const FETCH_TIMEOUT_MS = 10_000;
@@ -50,7 +51,15 @@ export async function captureRegisteredPage(input: {
     const sites = await deps.listRegisteredSites(input.orgId);
     if (sites.length === 0) return { ok: false, reason: "no-registered-site" };
     const want = normalizeOrigin(input.url);
-    if (want === null || !sites.some((site) => normalizeOrigin(site.origin) === want)) {
+    // The url's own origin must BE the normalised one. A host with a trailing dot
+    // (`blog.example.com.`) normalises to the registered origin, but its request
+    // carries another Host and its page has an origin that is not the renderer's
+    // allowed origin; it is refused.
+    if (
+      want === null ||
+      new URL(input.url).origin !== want ||
+      !sites.some((site) => normalizeOrigin(site.origin) === want)
+    ) {
       return { ok: false, reason: "origin-not-registered" };
     }
     // 2. EGRESS: the guarded GET, with no credential headers.
