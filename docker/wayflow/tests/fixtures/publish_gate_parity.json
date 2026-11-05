@@ -1,0 +1,1391 @@
+{
+  "$comment": "cinatra#4150 PR 4 (A3): ONE fixture both sides read. docker/wayflow/tests (the loader inserts a gate in front of each node declared metadata.cinatra.publishes: true) and packages/agents/src/__tests__/publish-gate-parity.test.ts (the host compiler's publishingSteps) both assert their ids equal publishingSteps below, gate ids = gatePrefix + step. The first two flows were copied by hand from the two publish packs at their lock pins (WordPress 415114bd, LinkedIn 11753d6c): the node ids, the control edges and the data edges into the publishing step, with the flag the packs will declare; every value is a string. The third has a publishing step first after start and a second one.",
+  "gatePrefix": "cinatra_publish_gate__",
+  "flows": [
+    {
+      "name": "wordpress-publish-shape",
+      "publishingSteps": [
+        "publish"
+      ],
+      "flow": {
+        "agentspec_version": "26.1.0",
+        "component_type": "Flow",
+        "id": "wordpress-publish-shape",
+        "name": "wordpress-publish-shape",
+        "metadata": {
+          "cinatra": {
+            "type": "flow"
+          }
+        },
+        "inputs": [
+          {
+            "title": "postArtifactId",
+            "type": "string"
+          },
+          {
+            "title": "postRepresentationRevisionId",
+            "type": "string"
+          },
+          {
+            "title": "wordpressInstanceId",
+            "type": "string"
+          },
+          {
+            "title": "cinatra_run_id",
+            "type": "string"
+          }
+        ],
+        "outputs": [],
+        "start_node": {
+          "$component_ref": "start"
+        },
+        "nodes": [
+          {
+            "$component_ref": "start"
+          },
+          {
+            "$component_ref": "read_post_record"
+          },
+          {
+            "$component_ref": "read_post_text"
+          },
+          {
+            "$component_ref": "publish"
+          },
+          {
+            "$component_ref": "write_address"
+          },
+          {
+            "$component_ref": "end"
+          }
+        ],
+        "control_flow_connections": [
+          {
+            "component_type": "ControlFlowEdge",
+            "name": "start_to_read_post_record",
+            "from_node": {
+              "$component_ref": "start"
+            },
+            "to_node": {
+              "$component_ref": "read_post_record"
+            }
+          },
+          {
+            "component_type": "ControlFlowEdge",
+            "name": "read_post_record_to_read_post_text",
+            "from_node": {
+              "$component_ref": "read_post_record"
+            },
+            "to_node": {
+              "$component_ref": "read_post_text"
+            }
+          },
+          {
+            "component_type": "ControlFlowEdge",
+            "name": "read_post_text_to_publish",
+            "from_node": {
+              "$component_ref": "read_post_text"
+            },
+            "to_node": {
+              "$component_ref": "publish"
+            }
+          },
+          {
+            "component_type": "ControlFlowEdge",
+            "name": "publish_to_write_address",
+            "from_node": {
+              "$component_ref": "publish"
+            },
+            "to_node": {
+              "$component_ref": "write_address"
+            }
+          },
+          {
+            "component_type": "ControlFlowEdge",
+            "name": "write_address_to_end",
+            "from_node": {
+              "$component_ref": "write_address"
+            },
+            "to_node": {
+              "$component_ref": "end"
+            }
+          }
+        ],
+        "data_flow_connections": [
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_postArtifactId_to_read_post_record_postArtifactId",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "postArtifactId",
+            "destination_node": {
+              "$component_ref": "read_post_record"
+            },
+            "destination_input": "postArtifactId"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_cinatra_run_id_to_read_post_record_cinatra_run_id",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "cinatra_run_id",
+            "destination_node": {
+              "$component_ref": "read_post_record"
+            },
+            "destination_input": "cinatra_run_id"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_postArtifactId_to_read_post_text_postArtifactId",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "postArtifactId",
+            "destination_node": {
+              "$component_ref": "read_post_text"
+            },
+            "destination_input": "postArtifactId"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_postRepresentationRevisionId_to_read_post_text_postRepresentationRevisionId",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "postRepresentationRevisionId",
+            "destination_node": {
+              "$component_ref": "read_post_text"
+            },
+            "destination_input": "postRepresentationRevisionId"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_cinatra_run_id_to_read_post_text_cinatra_run_id",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "cinatra_run_id",
+            "destination_node": {
+              "$component_ref": "read_post_text"
+            },
+            "destination_input": "cinatra_run_id"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_postArtifactId_to_publish_postArtifactId",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "postArtifactId",
+            "destination_node": {
+              "$component_ref": "publish"
+            },
+            "destination_input": "postArtifactId"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_postRepresentationRevisionId_to_publish_postRepresentationRevisionId",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "postRepresentationRevisionId",
+            "destination_node": {
+              "$component_ref": "publish"
+            },
+            "destination_input": "postRepresentationRevisionId"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_wordpressInstanceId_to_publish_wordpressInstanceId",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "wordpressInstanceId",
+            "destination_node": {
+              "$component_ref": "publish"
+            },
+            "destination_input": "wordpressInstanceId"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "read_post_record_artifact_to_publish_postArtifact",
+            "source_node": {
+              "$component_ref": "read_post_record"
+            },
+            "source_output": "artifact",
+            "destination_node": {
+              "$component_ref": "publish"
+            },
+            "destination_input": "postArtifact"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "read_post_text_text_to_publish_postText",
+            "source_node": {
+              "$component_ref": "read_post_text"
+            },
+            "source_output": "text",
+            "destination_node": {
+              "$component_ref": "publish"
+            },
+            "destination_input": "postText"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "read_post_text_truncated_to_publish_truncated",
+            "source_node": {
+              "$component_ref": "read_post_text"
+            },
+            "source_output": "truncated",
+            "destination_node": {
+              "$component_ref": "publish"
+            },
+            "destination_input": "truncated"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_postArtifactId_to_write_address_postArtifactId",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "postArtifactId",
+            "destination_node": {
+              "$component_ref": "write_address"
+            },
+            "destination_input": "postArtifactId"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_cinatra_run_id_to_write_address_cinatra_run_id",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "cinatra_run_id",
+            "destination_node": {
+              "$component_ref": "write_address"
+            },
+            "destination_input": "cinatra_run_id"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "publish_addressPatch_to_write_address_addressPatch",
+            "source_node": {
+              "$component_ref": "publish"
+            },
+            "source_output": "addressPatch",
+            "destination_node": {
+              "$component_ref": "write_address"
+            },
+            "destination_input": "addressPatch"
+          }
+        ],
+        "$referenced_components": {
+          "start": {
+            "component_type": "StartNode",
+            "id": "start",
+            "name": "start",
+            "inputs": [
+              {
+                "title": "postArtifactId",
+                "type": "string"
+              },
+              {
+                "title": "postRepresentationRevisionId",
+                "type": "string"
+              },
+              {
+                "title": "wordpressInstanceId",
+                "type": "string"
+              },
+              {
+                "title": "cinatra_run_id",
+                "type": "string"
+              }
+            ],
+            "metadata": {
+              "cinatra": {
+                "required": [],
+                "hidden": []
+              }
+            }
+          },
+          "read_post_record": {
+            "component_type": "ApiNode",
+            "id": "read_post_record",
+            "name": "read_post_record",
+            "url": "https://example.invalid/read_post_record",
+            "http_method": "POST",
+            "data": {
+              "input": {
+                "postArtifactId": "{{ postArtifactId }}",
+                "cinatra_run_id": "{{ cinatra_run_id }}"
+              }
+            },
+            "inputs": [
+              {
+                "title": "postArtifactId",
+                "type": "string"
+              },
+              {
+                "title": "cinatra_run_id",
+                "type": "string"
+              }
+            ],
+            "outputs": [
+              {
+                "title": "artifact",
+                "type": "string"
+              }
+            ],
+            "metadata": {
+              "cinatra": {
+                "riskClass": "read_only",
+                "requiresApproval": false
+              }
+            }
+          },
+          "read_post_text": {
+            "component_type": "ApiNode",
+            "id": "read_post_text",
+            "name": "read_post_text",
+            "url": "https://example.invalid/read_post_text",
+            "http_method": "POST",
+            "data": {
+              "input": {
+                "postArtifactId": "{{ postArtifactId }}",
+                "postRepresentationRevisionId": "{{ postRepresentationRevisionId }}",
+                "cinatra_run_id": "{{ cinatra_run_id }}"
+              }
+            },
+            "inputs": [
+              {
+                "title": "postArtifactId",
+                "type": "string"
+              },
+              {
+                "title": "postRepresentationRevisionId",
+                "type": "string"
+              },
+              {
+                "title": "cinatra_run_id",
+                "type": "string"
+              }
+            ],
+            "outputs": [
+              {
+                "title": "text",
+                "type": "string"
+              },
+              {
+                "title": "truncated",
+                "type": "string"
+              }
+            ],
+            "metadata": {
+              "cinatra": {
+                "riskClass": "read_only",
+                "requiresApproval": false
+              }
+            }
+          },
+          "publish": {
+            "component_type": "ApiNode",
+            "id": "publish",
+            "name": "publish",
+            "url": "https://example.invalid/publish",
+            "http_method": "POST",
+            "data": {
+              "input": {
+                "postArtifactId": "{{ postArtifactId }}",
+                "postRepresentationRevisionId": "{{ postRepresentationRevisionId }}",
+                "wordpressInstanceId": "{{ wordpressInstanceId }}",
+                "postText": "{{ postText }}",
+                "postArtifact": "{{ postArtifact }}",
+                "truncated": "{{ truncated }}"
+              }
+            },
+            "inputs": [
+              {
+                "title": "postArtifactId",
+                "type": "string"
+              },
+              {
+                "title": "postRepresentationRevisionId",
+                "type": "string"
+              },
+              {
+                "title": "wordpressInstanceId",
+                "type": "string"
+              },
+              {
+                "title": "postText",
+                "type": "string"
+              },
+              {
+                "title": "postArtifact",
+                "type": "string"
+              },
+              {
+                "title": "truncated",
+                "type": "string"
+              }
+            ],
+            "outputs": [
+              {
+                "title": "addressPatch",
+                "type": "string"
+              },
+              {
+                "title": "publishedUrl",
+                "type": "string"
+              }
+            ],
+            "metadata": {
+              "cinatra": {
+                "riskClass": "write",
+                "requiresApproval": false,
+                "publishes": true
+              }
+            }
+          },
+          "write_address": {
+            "component_type": "ApiNode",
+            "id": "write_address",
+            "name": "write_address",
+            "url": "https://example.invalid/write_address",
+            "http_method": "POST",
+            "data": {
+              "input": {
+                "postArtifactId": "{{ postArtifactId }}",
+                "addressPatch": "{{ addressPatch }}",
+                "cinatra_run_id": "{{ cinatra_run_id }}"
+              }
+            },
+            "inputs": [
+              {
+                "title": "postArtifactId",
+                "type": "string"
+              },
+              {
+                "title": "addressPatch",
+                "type": "string"
+              },
+              {
+                "title": "cinatra_run_id",
+                "type": "string"
+              }
+            ],
+            "outputs": [
+              {
+                "title": "ok",
+                "type": "string"
+              }
+            ],
+            "metadata": {
+              "cinatra": {
+                "riskClass": "write",
+                "requiresApproval": false,
+                "publishes": false
+              }
+            }
+          },
+          "end": {
+            "component_type": "EndNode",
+            "id": "end",
+            "name": "end",
+            "outputs": []
+          }
+        }
+      }
+    },
+    {
+      "name": "linkedin-publish-shape",
+      "publishingSteps": [
+        "publish"
+      ],
+      "flow": {
+        "agentspec_version": "26.1.0",
+        "component_type": "Flow",
+        "id": "linkedin-publish-shape",
+        "name": "linkedin-publish-shape",
+        "metadata": {
+          "cinatra": {
+            "type": "flow"
+          }
+        },
+        "inputs": [
+          {
+            "title": "linkedinArtifactId",
+            "type": "string"
+          },
+          {
+            "title": "linkedinRepresentationRevisionId",
+            "type": "string"
+          },
+          {
+            "title": "linkedinAccountId",
+            "type": "string"
+          },
+          {
+            "title": "linkedinAccountName",
+            "type": "string"
+          },
+          {
+            "title": "destinationType",
+            "type": "string"
+          },
+          {
+            "title": "destinationId",
+            "type": "string"
+          },
+          {
+            "title": "destinationName",
+            "type": "string"
+          },
+          {
+            "title": "blogPostUrl",
+            "type": "string"
+          },
+          {
+            "title": "cinatra_run_id",
+            "type": "string"
+          }
+        ],
+        "outputs": [],
+        "start_node": {
+          "$component_ref": "start"
+        },
+        "nodes": [
+          {
+            "$component_ref": "start"
+          },
+          {
+            "$component_ref": "read_post_record"
+          },
+          {
+            "$component_ref": "read_post_text"
+          },
+          {
+            "$component_ref": "publish"
+          },
+          {
+            "$component_ref": "write_address"
+          },
+          {
+            "$component_ref": "end"
+          }
+        ],
+        "control_flow_connections": [
+          {
+            "component_type": "ControlFlowEdge",
+            "name": "start_to_read_post_record",
+            "from_node": {
+              "$component_ref": "start"
+            },
+            "to_node": {
+              "$component_ref": "read_post_record"
+            }
+          },
+          {
+            "component_type": "ControlFlowEdge",
+            "name": "read_post_record_to_read_post_text",
+            "from_node": {
+              "$component_ref": "read_post_record"
+            },
+            "to_node": {
+              "$component_ref": "read_post_text"
+            }
+          },
+          {
+            "component_type": "ControlFlowEdge",
+            "name": "read_post_text_to_publish",
+            "from_node": {
+              "$component_ref": "read_post_text"
+            },
+            "to_node": {
+              "$component_ref": "publish"
+            }
+          },
+          {
+            "component_type": "ControlFlowEdge",
+            "name": "publish_to_write_address",
+            "from_node": {
+              "$component_ref": "publish"
+            },
+            "to_node": {
+              "$component_ref": "write_address"
+            }
+          },
+          {
+            "component_type": "ControlFlowEdge",
+            "name": "write_address_to_end",
+            "from_node": {
+              "$component_ref": "write_address"
+            },
+            "to_node": {
+              "$component_ref": "end"
+            }
+          }
+        ],
+        "data_flow_connections": [
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_linkedinArtifactId_to_read_post_record_linkedinArtifactId",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "linkedinArtifactId",
+            "destination_node": {
+              "$component_ref": "read_post_record"
+            },
+            "destination_input": "linkedinArtifactId"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_cinatra_run_id_to_read_post_record_cinatra_run_id",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "cinatra_run_id",
+            "destination_node": {
+              "$component_ref": "read_post_record"
+            },
+            "destination_input": "cinatra_run_id"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_linkedinArtifactId_to_read_post_text_linkedinArtifactId",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "linkedinArtifactId",
+            "destination_node": {
+              "$component_ref": "read_post_text"
+            },
+            "destination_input": "linkedinArtifactId"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_linkedinRepresentationRevisionId_to_read_post_text_linkedinRepresentationRevisionId",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "linkedinRepresentationRevisionId",
+            "destination_node": {
+              "$component_ref": "read_post_text"
+            },
+            "destination_input": "linkedinRepresentationRevisionId"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_cinatra_run_id_to_read_post_text_cinatra_run_id",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "cinatra_run_id",
+            "destination_node": {
+              "$component_ref": "read_post_text"
+            },
+            "destination_input": "cinatra_run_id"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_linkedinArtifactId_to_publish_linkedinArtifactId",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "linkedinArtifactId",
+            "destination_node": {
+              "$component_ref": "publish"
+            },
+            "destination_input": "linkedinArtifactId"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_linkedinRepresentationRevisionId_to_publish_linkedinRepresentationRevisionId",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "linkedinRepresentationRevisionId",
+            "destination_node": {
+              "$component_ref": "publish"
+            },
+            "destination_input": "linkedinRepresentationRevisionId"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_linkedinAccountId_to_publish_linkedinAccountId",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "linkedinAccountId",
+            "destination_node": {
+              "$component_ref": "publish"
+            },
+            "destination_input": "linkedinAccountId"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_linkedinAccountName_to_publish_linkedinAccountName",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "linkedinAccountName",
+            "destination_node": {
+              "$component_ref": "publish"
+            },
+            "destination_input": "linkedinAccountName"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_destinationType_to_publish_destinationType",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "destinationType",
+            "destination_node": {
+              "$component_ref": "publish"
+            },
+            "destination_input": "destinationType"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_destinationId_to_publish_destinationId",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "destinationId",
+            "destination_node": {
+              "$component_ref": "publish"
+            },
+            "destination_input": "destinationId"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_destinationName_to_publish_destinationName",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "destinationName",
+            "destination_node": {
+              "$component_ref": "publish"
+            },
+            "destination_input": "destinationName"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_blogPostUrl_to_publish_blogPostUrl",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "blogPostUrl",
+            "destination_node": {
+              "$component_ref": "publish"
+            },
+            "destination_input": "blogPostUrl"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "read_post_record_artifact_to_publish_postArtifact",
+            "source_node": {
+              "$component_ref": "read_post_record"
+            },
+            "source_output": "artifact",
+            "destination_node": {
+              "$component_ref": "publish"
+            },
+            "destination_input": "postArtifact"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "read_post_text_text_to_publish_postText",
+            "source_node": {
+              "$component_ref": "read_post_text"
+            },
+            "source_output": "text",
+            "destination_node": {
+              "$component_ref": "publish"
+            },
+            "destination_input": "postText"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "read_post_text_truncated_to_publish_truncated",
+            "source_node": {
+              "$component_ref": "read_post_text"
+            },
+            "source_output": "truncated",
+            "destination_node": {
+              "$component_ref": "publish"
+            },
+            "destination_input": "truncated"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_linkedinArtifactId_to_write_address_linkedinArtifactId",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "linkedinArtifactId",
+            "destination_node": {
+              "$component_ref": "write_address"
+            },
+            "destination_input": "linkedinArtifactId"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_cinatra_run_id_to_write_address_cinatra_run_id",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "cinatra_run_id",
+            "destination_node": {
+              "$component_ref": "write_address"
+            },
+            "destination_input": "cinatra_run_id"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "publish_addressPatch_to_write_address_addressPatch",
+            "source_node": {
+              "$component_ref": "publish"
+            },
+            "source_output": "addressPatch",
+            "destination_node": {
+              "$component_ref": "write_address"
+            },
+            "destination_input": "addressPatch"
+          }
+        ],
+        "$referenced_components": {
+          "start": {
+            "component_type": "StartNode",
+            "id": "start",
+            "name": "start",
+            "inputs": [
+              {
+                "title": "linkedinArtifactId",
+                "type": "string"
+              },
+              {
+                "title": "linkedinRepresentationRevisionId",
+                "type": "string"
+              },
+              {
+                "title": "linkedinAccountId",
+                "type": "string"
+              },
+              {
+                "title": "linkedinAccountName",
+                "type": "string"
+              },
+              {
+                "title": "destinationType",
+                "type": "string"
+              },
+              {
+                "title": "destinationId",
+                "type": "string"
+              },
+              {
+                "title": "destinationName",
+                "type": "string"
+              },
+              {
+                "title": "blogPostUrl",
+                "type": "string"
+              },
+              {
+                "title": "cinatra_run_id",
+                "type": "string"
+              }
+            ],
+            "metadata": {
+              "cinatra": {
+                "required": [],
+                "hidden": []
+              }
+            }
+          },
+          "read_post_record": {
+            "component_type": "ApiNode",
+            "id": "read_post_record",
+            "name": "read_post_record",
+            "url": "https://example.invalid/read_post_record",
+            "http_method": "POST",
+            "data": {
+              "input": {
+                "linkedinArtifactId": "{{ linkedinArtifactId }}",
+                "cinatra_run_id": "{{ cinatra_run_id }}"
+              }
+            },
+            "inputs": [
+              {
+                "title": "linkedinArtifactId",
+                "type": "string"
+              },
+              {
+                "title": "cinatra_run_id",
+                "type": "string"
+              }
+            ],
+            "outputs": [
+              {
+                "title": "artifact",
+                "type": "string"
+              }
+            ],
+            "metadata": {
+              "cinatra": {
+                "riskClass": "read_only",
+                "requiresApproval": false
+              }
+            }
+          },
+          "read_post_text": {
+            "component_type": "ApiNode",
+            "id": "read_post_text",
+            "name": "read_post_text",
+            "url": "https://example.invalid/read_post_text",
+            "http_method": "POST",
+            "data": {
+              "input": {
+                "linkedinArtifactId": "{{ linkedinArtifactId }}",
+                "linkedinRepresentationRevisionId": "{{ linkedinRepresentationRevisionId }}",
+                "cinatra_run_id": "{{ cinatra_run_id }}"
+              }
+            },
+            "inputs": [
+              {
+                "title": "linkedinArtifactId",
+                "type": "string"
+              },
+              {
+                "title": "linkedinRepresentationRevisionId",
+                "type": "string"
+              },
+              {
+                "title": "cinatra_run_id",
+                "type": "string"
+              }
+            ],
+            "outputs": [
+              {
+                "title": "text",
+                "type": "string"
+              },
+              {
+                "title": "truncated",
+                "type": "string"
+              }
+            ],
+            "metadata": {
+              "cinatra": {
+                "riskClass": "read_only",
+                "requiresApproval": false
+              }
+            }
+          },
+          "publish": {
+            "component_type": "ApiNode",
+            "id": "publish",
+            "name": "publish",
+            "url": "https://example.invalid/publish",
+            "http_method": "POST",
+            "data": {
+              "input": {
+                "linkedinArtifactId": "{{ linkedinArtifactId }}",
+                "linkedinRepresentationRevisionId": "{{ linkedinRepresentationRevisionId }}",
+                "linkedinAccountId": "{{ linkedinAccountId }}",
+                "linkedinAccountName": "{{ linkedinAccountName }}",
+                "destinationType": "{{ destinationType }}",
+                "destinationId": "{{ destinationId }}",
+                "destinationName": "{{ destinationName }}",
+                "blogPostUrl": "{{ blogPostUrl }}",
+                "postText": "{{ postText }}",
+                "postArtifact": "{{ postArtifact }}",
+                "truncated": "{{ truncated }}"
+              }
+            },
+            "inputs": [
+              {
+                "title": "linkedinArtifactId",
+                "type": "string"
+              },
+              {
+                "title": "linkedinRepresentationRevisionId",
+                "type": "string"
+              },
+              {
+                "title": "linkedinAccountId",
+                "type": "string"
+              },
+              {
+                "title": "linkedinAccountName",
+                "type": "string"
+              },
+              {
+                "title": "destinationType",
+                "type": "string"
+              },
+              {
+                "title": "destinationId",
+                "type": "string"
+              },
+              {
+                "title": "destinationName",
+                "type": "string"
+              },
+              {
+                "title": "blogPostUrl",
+                "type": "string"
+              },
+              {
+                "title": "postText",
+                "type": "string"
+              },
+              {
+                "title": "postArtifact",
+                "type": "string"
+              },
+              {
+                "title": "truncated",
+                "type": "string"
+              }
+            ],
+            "outputs": [
+              {
+                "title": "addressPatch",
+                "type": "string"
+              },
+              {
+                "title": "publishedUrl",
+                "type": "string"
+              }
+            ],
+            "metadata": {
+              "cinatra": {
+                "riskClass": "write",
+                "requiresApproval": false,
+                "publishes": true
+              }
+            }
+          },
+          "write_address": {
+            "component_type": "ApiNode",
+            "id": "write_address",
+            "name": "write_address",
+            "url": "https://example.invalid/write_address",
+            "http_method": "POST",
+            "data": {
+              "input": {
+                "linkedinArtifactId": "{{ linkedinArtifactId }}",
+                "addressPatch": "{{ addressPatch }}",
+                "cinatra_run_id": "{{ cinatra_run_id }}"
+              }
+            },
+            "inputs": [
+              {
+                "title": "linkedinArtifactId",
+                "type": "string"
+              },
+              {
+                "title": "addressPatch",
+                "type": "string"
+              },
+              {
+                "title": "cinatra_run_id",
+                "type": "string"
+              }
+            ],
+            "outputs": [
+              {
+                "title": "ok",
+                "type": "string"
+              }
+            ],
+            "metadata": {
+              "cinatra": {
+                "riskClass": "write",
+                "requiresApproval": false,
+                "publishes": false
+              }
+            }
+          },
+          "end": {
+            "component_type": "EndNode",
+            "id": "end",
+            "name": "end",
+            "outputs": []
+          }
+        }
+      }
+    },
+    {
+      "name": "two-publishing-steps",
+      "publishingSteps": [
+        "announce",
+        "post"
+      ],
+      "flow": {
+        "agentspec_version": "26.1.0",
+        "component_type": "Flow",
+        "id": "two-publishing-steps",
+        "name": "two-publishing-steps",
+        "metadata": {
+          "cinatra": {
+            "type": "flow"
+          }
+        },
+        "inputs": [
+          {
+            "title": "message",
+            "type": "string"
+          },
+          {
+            "title": "cinatra_run_id",
+            "type": "string"
+          }
+        ],
+        "outputs": [],
+        "start_node": {
+          "$component_ref": "start"
+        },
+        "nodes": [
+          {
+            "$component_ref": "start"
+          },
+          {
+            "$component_ref": "announce"
+          },
+          {
+            "$component_ref": "between"
+          },
+          {
+            "$component_ref": "post"
+          },
+          {
+            "$component_ref": "end"
+          }
+        ],
+        "control_flow_connections": [
+          {
+            "component_type": "ControlFlowEdge",
+            "name": "start_to_announce",
+            "from_node": {
+              "$component_ref": "start"
+            },
+            "to_node": {
+              "$component_ref": "announce"
+            }
+          },
+          {
+            "component_type": "ControlFlowEdge",
+            "name": "announce_to_between",
+            "from_node": {
+              "$component_ref": "announce"
+            },
+            "to_node": {
+              "$component_ref": "between"
+            }
+          },
+          {
+            "component_type": "ControlFlowEdge",
+            "name": "between_to_post",
+            "from_node": {
+              "$component_ref": "between"
+            },
+            "to_node": {
+              "$component_ref": "post"
+            }
+          },
+          {
+            "component_type": "ControlFlowEdge",
+            "name": "post_to_end",
+            "from_node": {
+              "$component_ref": "post"
+            },
+            "to_node": {
+              "$component_ref": "end"
+            }
+          }
+        ],
+        "data_flow_connections": [
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_message_to_announce_message",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "message",
+            "destination_node": {
+              "$component_ref": "announce"
+            },
+            "destination_input": "message"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_message_to_between_message",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "message",
+            "destination_node": {
+              "$component_ref": "between"
+            },
+            "destination_input": "message"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "between_note_to_post_note",
+            "source_node": {
+              "$component_ref": "between"
+            },
+            "source_output": "note",
+            "destination_node": {
+              "$component_ref": "post"
+            },
+            "destination_input": "note"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_message_to_post_message",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "message",
+            "destination_node": {
+              "$component_ref": "post"
+            },
+            "destination_input": "message"
+          }
+        ],
+        "$referenced_components": {
+          "start": {
+            "component_type": "StartNode",
+            "id": "start",
+            "name": "start",
+            "inputs": [
+              {
+                "title": "message",
+                "type": "string"
+              },
+              {
+                "title": "cinatra_run_id",
+                "type": "string"
+              }
+            ],
+            "metadata": {
+              "cinatra": {
+                "required": [],
+                "hidden": []
+              }
+            }
+          },
+          "announce": {
+            "component_type": "ApiNode",
+            "id": "announce",
+            "name": "announce",
+            "url": "https://example.invalid/announce",
+            "http_method": "POST",
+            "data": {
+              "input": {
+                "message": "{{ message }}"
+              }
+            },
+            "inputs": [
+              {
+                "title": "message",
+                "type": "string"
+              }
+            ],
+            "outputs": [
+              {
+                "title": "announced",
+                "type": "string"
+              }
+            ],
+            "metadata": {
+              "cinatra": {
+                "riskClass": "write",
+                "publishes": true
+              }
+            }
+          },
+          "between": {
+            "component_type": "ApiNode",
+            "id": "between",
+            "name": "between",
+            "url": "https://example.invalid/between",
+            "http_method": "POST",
+            "data": {
+              "input": {
+                "message": "{{ message }}"
+              }
+            },
+            "inputs": [
+              {
+                "title": "message",
+                "type": "string"
+              }
+            ],
+            "outputs": [
+              {
+                "title": "note",
+                "type": "string"
+              }
+            ],
+            "metadata": {
+              "cinatra": {
+                "riskClass": "read_only"
+              }
+            }
+          },
+          "post": {
+            "component_type": "ApiNode",
+            "id": "post",
+            "name": "post",
+            "url": "https://example.invalid/post",
+            "http_method": "POST",
+            "data": {
+              "input": {
+                "note": "{{ note }}",
+                "message": "{{ message }}"
+              }
+            },
+            "inputs": [
+              {
+                "title": "note",
+                "type": "string"
+              },
+              {
+                "title": "message",
+                "type": "string"
+              }
+            ],
+            "outputs": [
+              {
+                "title": "postedUrl",
+                "type": "string"
+              }
+            ],
+            "metadata": {
+              "cinatra": {
+                "riskClass": "write",
+                "publishes": true
+              }
+            }
+          },
+          "end": {
+            "component_type": "EndNode",
+            "id": "end",
+            "name": "end",
+            "outputs": []
+          }
+        }
+      }
+    }
+  ]
+}
