@@ -18,8 +18,9 @@ import "server-only";
 // as it was before the claim: a failed capture leaves a sent answer without its
 // row (`buildSubmissionMapByStepIndex` reads the rows by position). The
 // credential mint and the whole message, its id included, come before the fence,
-// because a failure there must still give the pause back: past the fence every
-// failure counts as possibly sent. A mint of a claimer that then loses its fence
+// because a failure there gives the pause back (unless that release fails too:
+// then the claim frees itself when its lease ends): past the fence every failure
+// counts as possibly sent. A mint of a claimer that then loses its fence
 // only adds a credential of the same run that is never sent (run-token-store.ts:
 // the credential set is additive by design).
 // ---------------------------------------------------------------------------

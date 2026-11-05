@@ -1132,9 +1132,10 @@ export async function approveReviewTaskInternal(
       // context selection has no run identity at all. Metadata (not text) because
       // `resumeText` is passed to the gate's InputMessageNode VERBATIM.
       // cinatra#4245: the mint stays before the fence, so its failure gives the
-      // claim back. A claimer that then loses its fence leaves one more credential
-      // of this run that is never sent (the credential set is additive by design,
-      // run-token-store.ts).
+      // claim back, unless that release fails too: then the claim frees itself
+      // when its lease ends. A claimer that then loses its fence leaves one more
+      // credential of this run that is never sent (the credential set is additive
+      // by design, run-token-store.ts).
       const { mintResumeRunTokenMetadata } = await import("./wayflow-run-token-carrier");
       const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
       // The message id is drawn before the fence too: past the fence a failure
@@ -1214,13 +1215,28 @@ export async function approveReviewTaskInternal(
             // <values>", the values carrying the run's and its organization's ids)
             // with the database's own error as its cause. A cause is followed while it
             // is an `Error` (at most five levels down): the database's reason, not the
-            // query and its values. The put-back can commit and still fail to answer
-            // (a connection lost before the commit's reply), so both outcomes are named.
-            const describe = (x: unknown) => {
-              let e: unknown = x;
-              for (let i = 0; i < 5 && e instanceof Error && e.cause instanceof Error; i += 1) e = e.cause;
-              return e instanceof Error ? e.message : String(e);
+            // query and its values. An error whose cause or text throws when read is
+            // named by a fixed text instead.
+            const describe = (x: unknown): string => {
+              try {
+                let e: unknown = x;
+                for (let i = 0; i < 5 && e instanceof Error && e.cause instanceof Error; i += 1) e = e.cause;
+                return e instanceof Error ? String(e.message) : String(e);
+              } catch {
+                return "an error whose text could not be read";
+              }
             };
+            // A lost compare-and-set commits nothing: another writer moved the run
+            // off `running` first, and the run stays where that writer left it.
+            if (backError instanceof RunTransitionError && backError.code === "stale_from_status") {
+              throw new Error(
+                `${describe(recordError)}; nothing was sent, and the put-back of the gate changed nothing: the run was no ` +
+                  `longer running, so it stays where the writer that moved it left it`,
+                { cause: recordError },
+              );
+            }
+            // Any other error: the put-back can commit and still fail to answer (a
+            // connection lost before the commit's reply), so both outcomes are named.
             throw new Error(
               `${describe(recordError)}; nothing was sent, and the put-back of the gate reported an error (${describe(backError)}): ` +
                 `if it did not commit, the run stays running, and a stop lands once its send lease ends at ` +

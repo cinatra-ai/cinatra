@@ -2221,16 +2221,20 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   //
   // cinatra#4245: at a pause the write is durable. It is awaited with no catch,
   // before the latest-task record and before any gate is published, so a failure
-  // shows no gate and no change request can meet a stale column. Any other state
-  // keeps the best-effort resync. A sender that holds a claim writes only under
-  // its own token, even an unchanged id: 0 rows means the lease was taken over,
-  // so the run is someone else's and this handler makes no transition.
+  // shows no gate and no change request can meet a stale column. Without a claim
+  // any other state keeps the best-effort resync. A sender that holds a claim
+  // writes only under its own token, even an unchanged id, and in every state
+  // that write is awaited with no catch: a write that fails could not show that
+  // the token still holds the row, so the error leaves this handler before any
+  // output or transition, and the caller settles its lease as after a failed
+  // send. 0 rows means the token no longer holds the row (another claimer took
+  // the lease over, or a stop or another status change cleared it), so this
+  // handler makes no transition.
   const isPause = taskState === "input-required";
   if (pauseClaimToken !== undefined) {
-    const write = updateAgentRunA2ATaskId(runId, task.id, { pauseClaimToken });
-    const { written } = isPause ? await write : await write.catch(() => ({ written: true }));
+    const { written } = await updateAgentRunA2ATaskId(runId, task.id, { pauseClaimToken });
     if (!written) {
-      console.warn(`[wayflow] run=${runId} task=${task.id}: this sender's claim was taken over; no transition`);
+      console.warn(`[wayflow] run=${runId} task=${task.id}: this sender's claim token no longer holds the run; no transition`);
       return;
     }
   } else if (task.id !== run.a2aTaskId) {
