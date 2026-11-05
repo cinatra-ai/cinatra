@@ -115,6 +115,7 @@ import { estimateRunDuration } from "./trigger-duration-estimate";
 // run's own schedule tab. Two adapters, one renderer; see the mounts below.
 import { ScheduleRailStepRow, ScheduleStepSurface } from "./schedule-rail-step";
 import { RunScheduleTab } from "./run-schedule-tab";
+import { shouldFreezeFiredOneOffSchedule } from "./schedule-freeze";
 // §V's card at its plan-designated rail position (cinatra#2790, epic #2784 S9f):
 // the recommendation is the run's FIRST step, and it answers the SAME question
 // the setup run page's recommendation row asks (cinatra#2970) — one predicate,
@@ -304,41 +305,7 @@ export function shouldShowFinishedRunNotice(
   return trigger !== null && isTerminalRunStatus(runStatus);
 }
 
-/**
- * Has this run's OWN schedule already fired, so that it can no longer be changed
- * here? (cinatra#2980)
- *
- * Plan (A) §7.2 item 4 (amended 2026-08-25): "You can change the schedule this
- * way for as long as it has not fired; once a one-off has fired it cannot be
- * changed, and a change to a recurring schedule applies to its future runs."
- *
- * **Run right after setup** is a one-off, and its row is `immediate`. The screen
- * used to read that word as "no schedule to speak of" and kept offering the
- * form, so a finished run's own trigger row could be replaced with a recurring
- * schedule — the thing the plan's sentence forbids. The rule is read off the
- * TRIGGER, exactly as the server reads it:
- *
- *   - `releasedAt` is the fired stamp — written when the gate opens, for an
- *     immediate fire as much as for a scheduled one. It is the schedule's own
- *     record, never the run's status, which moves for reasons of its own.
- *   - everything that is NOT recurring is a one-off. Written this way round, a
- *     one-off kind added later is frozen by default instead of slipping through
- *     unnamed, which is how `immediate` slipped through.
- *   - a RECURRING schedule is never frozen by a fire: plan (A) §7.2 keeps its
- *     scheduler editable, "and a change applies to its future runs".
- *
- * The same predicate the server enforces (`setRunTriggerForActor`'s fired-one-off
- * guard), so the screen never offers what the server would refuse.
- */
-export function shouldFreezeFiredOneOffSchedule(
-  trigger: { triggerType: string; releasedAt: Date | null } | null,
-): boolean {
-  return (
-    trigger !== null &&
-    trigger.triggerType !== "recurring" &&
-    trigger.releasedAt !== null
-  );
-}
+export { shouldFreezeFiredOneOffSchedule } from "./schedule-freeze";
 
 /**
  * The words above the standalone schedule form, or none (cinatra#2482, #2980).

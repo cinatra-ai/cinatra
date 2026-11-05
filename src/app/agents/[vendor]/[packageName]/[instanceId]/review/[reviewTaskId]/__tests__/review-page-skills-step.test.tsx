@@ -71,6 +71,7 @@ function renderSurface(opts: {
         recommendationEntry={opts.entry}
         recommendationStepOpens={opts.opens ?? true}
         scheduleCardRef={opts.scheduleCardRef ?? null}
+        scheduleSettled={false}
         rail={
           <ReviewRunSteps
             steps={steps}
