@@ -330,13 +330,23 @@ for (const { name: palette, theme } of PALETTES) {
       }
     });
 
-    test('"destructive = red": the destructive alert\'s type is the destructive colour, not the body ink', async ({
+    test('"ordinary body, status icon": every title is ink and every description muted', async ({
       page,
     }) => {
       await open(page, theme);
-      const destructive = page.locator(`${seam("alert")} [data-wave-variant="destructive"]`);
-      const neutral = page.locator(`${seam("alert")} [data-wave-variant="default"]`);
-      expect(await style(destructive, "color")).not.toBe(await style(neutral, "color"));
+      const ink = await token(page, "--foreground");
+      const muted = await token(page, "--muted-foreground");
+      for (const variant of ["default", "destructive", "warning", "success", "info"]) {
+        const alert = page.locator(`${seam("alert")} [data-wave-variant="${variant}"]`);
+        await expect(alert).toBeVisible();
+        expect(await style(alert.locator('[data-slot="alert-title"]'), "color")).toBe(ink);
+        expect(await style(alert.locator('[data-slot="alert-description"]'), "color")).toBe(muted);
+        if (variant !== "default") {
+          // Status still belongs to the real icon; existing tint, stroke,
+          // text-band and icon-column readings remain separate controls.
+          expect(await style(alert.locator("svg"), "color")).toBe(await token(page, `--${variant}`));
+        }
+      }
     });
 
     test('"icon-led": the icon opens a column, and text-only alerts collapse it', async ({
