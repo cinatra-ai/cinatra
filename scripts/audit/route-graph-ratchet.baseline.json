@@ -3,7 +3,7 @@
   "routes": {
     "/sign-in": 165,
     "/api/mcp": 1314,
-    "/chat": 1414,
+    "/chat": 1417,
     "/api/a2a": 1322,
     "/api/llm-bridge": 1332
   },
@@ -27,8 +27,8 @@
       "pr": 4364
     },
     "/chat": {
-      "from": 1410,
-      "to": 1414,
+      "from": 1413,
+      "to": 1417,
       "reason": "This pull request's four new core modules, src/lib/approvals/approval-pills.tsx, src/lib/approvals/relative-time.ts, src/lib/approvals/repair-stuck.ts and src/lib/approvals/sources/marketplace-state.ts (the approval pill, relative time, repair-stuck and marketplace state helpers of cinatra#4296), reached through the approval source modules in src/lib/approvals/sources that this pull request changes.",
       "pr": 4364
     },
