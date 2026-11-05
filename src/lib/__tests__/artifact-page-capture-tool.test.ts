@@ -53,7 +53,7 @@ import {
 import { captureDegradeCopy, type CaptureDegradeReason } from "@/lib/artifacts/cms-preview-capture";
 import { MATERIALIZATION_FINALIZE_CONFLICT_MARKER } from "@/lib/artifacts/materialization-ledger";
 import type { PageCaptureBudgetAnswer, PageCaptureBudgetRefusal } from "@/lib/artifacts/page-capture-budget";
-import type { RecordedPageCaptureFacts } from "@/lib/artifacts/page-capture-facts-record";
+import { PageCaptureFactsRecordError, type RecordedPageCaptureFacts } from "@/lib/artifacts/page-capture-facts-record";
 import { captureRegisteredPage, type CaptureRegisteredPageDeps } from "@/lib/artifacts/registered-page-capture";
 
 const EXT = "@cinatra-ai/screenshot-artifact";
@@ -526,5 +526,139 @@ describe("cinatra#4223 captureRegisteredPage never throws", () => {
       ok: false,
       reason: "render-failed",
     });
+  });
+});
+
+describe("cinatra#4223 page capture: a throw after the lease is taken still releases the lease", () => {
+  const SECRET = "lease-throw-secret-host";
+  const thrown = () => new Error(`connect ECONNREFUSED ${SECRET}:5432`);
+  const CASES: Array<{ label: string; arrange: (d: ArtifactPageCaptureToolDeps) => ArtifactPageCaptureToolDeps }> = [
+    {
+      label: "the ledger claim rejects",
+      arrange: (d) => {
+        h.claimMaterialization.mockRejectedValueOnce(thrown());
+        return d;
+      },
+    },
+    {
+      label: "the ownership read rejects",
+      arrange: (d) => ({
+        ...d,
+        resolveOwnership: async () => {
+          throw thrown();
+        },
+      }),
+    },
+    {
+      label: "the capture seam rejects",
+      arrange: (d) => ({
+        ...d,
+        capturePage: async () => {
+          throw thrown();
+        },
+      }),
+    },
+  ];
+
+  it.each(CASES.map((c) => [c.label, c] as const))(
+    "releases the lease when %s, and answers the unexpected-error sentence",
+    async (_l, c) => {
+      const b = budget();
+      const outcome = await captureArtifactPage(call, c.arrange(toolDeps(captureSeams([]).deps, b)));
+      expect(outcome).toEqual({ ok: false, reason: "write_refused", error: PAGE_CAPTURE_UNEXPECTED_ERROR });
+      expect(b.acquired).toEqual([{ orgId: "org-1", runId: "run-1" }]);
+      expect(b.released).toBe(1);
+      expect(h.createSemanticArtifact).not.toHaveBeenCalled();
+      expect(JSON.stringify(logged.mock.calls)).not.toContain(SECRET);
+    },
+  );
+});
+
+describe("cinatra#4223 page capture: the Known limit, a renderer viewport that the facts record refuses", () => {
+  it("answers the write-failed sentence when the record op refuses a width-0 viewport, and releases the lease", async () => {
+    // No declared schema runs here (the writer is a spy), as for a type whose schema does not bound viewport.
+    const zeroWidth: Partial<CaptureRegisteredPageDeps> = {
+      renderIsolated: async () => ({
+        ok: true,
+        screenshot: new Uint8Array(PNG),
+        geometry: { regions: [], contentHeight: 900, viewport: { width: 0, height: 900 } },
+        network: { blockedRequests: 0, allowedRequests: 0 },
+      }),
+    };
+    const b = budget();
+
+    const outcome = await captureArtifactPage(call, toolDeps(captureSeams([], zeroWidth).deps, b));
+
+    expect(outcome).toEqual({ ok: false, reason: "write_refused", error: PAGE_CAPTURE_WRITE_FAILED_ERROR });
+    // The claim was taken, and the writer was asked once with the facts as object data. Building its
+    // second-transaction ops threw the facts record's own error, so no write completed and no finalize op
+    // was handed back.
+    expect(h.claimMaterialization).toHaveBeenCalledTimes(1);
+    expect(h.createSemanticArtifact).toHaveBeenCalledTimes(1);
+    expect(h.createSemanticArtifact.mock.calls[0]?.[0]?.typedData).toEqual({
+      ...FACTS,
+      viewport: { width: 0, height: 900 },
+    });
+    await expect(h.createSemanticArtifact.mock.results[0]?.value).rejects.toBeInstanceOf(PageCaptureFactsRecordError);
+    expect(written).toEqual([]);
+    expect(b.released).toBe(1);
+    expect(JSON.stringify(logged.mock.calls)).toContain('"errorClass":"Error"');
+    expect(JSON.stringify(logged.mock.calls)).not.toContain("not a valid record");
+  });
+});
+
+describe("cinatra#4223 captureRegisteredPage: the url's own origin must be a registered site's origin", () => {
+  const site = (origin: string): Partial<CaptureRegisteredPageDeps> => ({
+    listRegisteredSites: async () => [{ siteId: "site-1", client: "wordpress", origin }],
+  });
+
+  it.each([
+    ["an upper-case host", "https://BLOG.Example.COM/about/", ORIGIN],
+    ["the default port written out", "https://blog.example.com:443/about/", ORIGIN],
+    ["a registered origin written with upper case, the default port and a slash", PAGE_URL, "HTTPS://Blog.Example.com:443/"],
+  ])("captures a url with %s", async (_l, url, registered) => {
+    const { deps, fetches, renders } = captureSeams([], site(registered));
+    const outcome = await captureRegisteredPage({ orgId: "org-1", url, deps });
+    expect(outcome).toMatchObject({ ok: true, viewport: { width: 1280, height: 900 }, capturedAt: CLOCK.toISOString() });
+    expect(fetches).toEqual([{ url, headers: {} }]);
+    expect(renders).toEqual([{ documentUrl: url, allowedOrigin: ORIGIN, pinnedAddresses: ["2001:db8::10"] }]);
+  });
+
+  it.each([
+    ["no scheme, so it does not parse", "blog.example.com/about/"],
+    ["a scheme other than http and https", "ftp://blog.example.com/about/"],
+    // Assembled, so no credential-shaped literal sits in the source.
+    ["user information", ["https://user", "pw@blog.example.com/about/"].join(":")],
+    ["another port on the registered host", "https://blog.example.com:8443/about/"],
+    ["http where the registered site is https", "http://blog.example.com/about/"],
+    ["a trailing dot on the host", "https://blog.example.com./about/"],
+    ["the registered host as the start of another host", "https://blog.example.com.attacker.test/about/"],
+  ])("refuses a url with %s as origin-not-registered, and sends no request", async (_l, url) => {
+    const events: string[] = [];
+    const { deps } = captureSeams(events);
+    await expect(captureRegisteredPage({ orgId: "org-1", url, deps })).resolves.toEqual({
+      ok: false,
+      reason: "origin-not-registered",
+    });
+    expect(events).toEqual(["sites"]);
+  });
+
+  it("refuses as origin-not-registered when no registered site's origin normalises, and sends no request", async () => {
+    const events: string[] = [];
+    const { deps } = captureSeams(events, {
+      listRegisteredSites: async () => {
+        events.push("sites");
+        return [
+          { siteId: "site-1", client: "wordpress", origin: "not a url" },
+          { siteId: "site-2", client: "wordpress", origin: "ftp://blog.example.com" },
+          { siteId: "site-3", client: "wordpress", origin: "" },
+        ];
+      },
+    });
+    await expect(captureRegisteredPage({ orgId: "org-1", url: PAGE_URL, deps })).resolves.toEqual({
+      ok: false,
+      reason: "origin-not-registered",
+    });
+    expect(events).toEqual(["sites"]);
   });
 });
