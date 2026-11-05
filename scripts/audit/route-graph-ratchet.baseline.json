@@ -3,7 +3,7 @@
   "routes": {
     "/sign-in": 165,
     "/api/mcp": 1310,
-    "/chat": 1410,
+    "/chat": 1413,
     "/api/a2a": 1318,
     "/api/llm-bridge": 1328
   },
@@ -27,10 +27,10 @@
       "pr": 4339
     },
     "/chat": {
-      "from": 1409,
-      "to": 1410,
-      "reason": "This pull request's one new core module, packages/agents/src/declared-review-pause.ts (the later-pause check of cinatra#4312), reached through one or more of the three modules this pull request changes that import it: packages/agents/src/artifact-review-gate-store.ts, packages/agents/src/artifact-review-resume-delivery.ts and packages/agents/src/lifecycle-repair-store.ts.",
-      "pr": 4339
+      "from": 1410,
+      "to": 1413,
+      "reason": "This pull request's three new core modules on the route (cinatra#4453). src/lib/assistant-thread-read.ts is the thread read that the thread read route and the route's server render both call, so the render names a thread in the breadcrumb only where the read route returns it; it brings src/lib/chat-thread-access.ts (the reader decision that read applies) onto the route, reached through src/lib/chat-route-resolver.ts. packages/chat/src/thread-crumb-name.ts chooses the active thread's crumb name in the chat page.",
+      "pr": 4456
     },
     "/sign-in": {
       "from": 164,
