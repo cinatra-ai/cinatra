@@ -378,7 +378,7 @@ export const CHECKBOX_CALL_SITE_READINGS: FileReading[] = [
         drawn: "checkbox",
         effect: "confirmed",
         reading:
-          "the box of a boolean question in a schema-drawn form: inside a grouped setup form or a structured object's sub-field (hideSubmit) the form's own submit sends it; on a mid-run step (hideSubmit) the box draws no Continue and the step's one outer Continue is the step's only control; and on the per-field setup surfaces the box only stages the answer and the Continue drawn beneath it sends it (cinatra#4310)",
+          "the box of a boolean question in a schema-drawn form: inside a grouped setup form or a structured object's sub-field (hideSubmit) the form's own submit sends it, and on the per-field setup surfaces the box only stages the answer and the Continue drawn beneath it sends it (cinatra#4310). On a mid-run step (hideSubmit) the box draws no Continue and hands its change to the step's handler, which keeps only an object answer and so drops the box's answer: the step's outer Continue sends the approval without it, as on main (cinatra#4506). No road applies the change at once",
         tagIncludes: ["onCheckedChange={(next) => (ownsContinue ? setStagedChecked(next === true) : onChange(Boolean(next)))}"],
         fileIncludes: ['if (type === "boolean") {', "await handleSubmit(stagedChecked);", "onClick={() => void submitBoolean()}"],
         evidence: [
@@ -387,6 +387,9 @@ export const CHECKBOX_CALL_SITE_READINGS: FileReading[] = [
           { file: "packages/agents/src/agentic-run-panel.tsx", text: "midRunBooleanFieldHidesSubmit({" },
           { file: "packages/agents/src/orchestrator-stepper-panel.tsx", text: "midRunBooleanFieldHidesSubmit({" },
           { file: "packages/agents/src/agent-hitl-screen-card.tsx", text: "midRunBooleanFieldHidesSubmit({ isMidRun, isGroupedSetup, fieldSchema: renderSchema })" },
+          { file: "packages/agents/src/agentic-run-panel.tsx", text: 'if (next && typeof next === "object" && !Array.isArray(next)) {' },
+          { file: "packages/agents/src/orchestrator-stepper-panel.tsx", text: 'if (next && typeof next === "object" && !Array.isArray(next)) {' },
+          { file: "packages/agents/src/agent-hitl-screen-card.tsx", text: 'if (next && typeof next === "object" && !Array.isArray(next)) {' },
         ],
       },
     ],

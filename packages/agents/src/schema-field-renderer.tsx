@@ -603,11 +603,13 @@ export function SchemaFieldRenderer(props: Props) {
   // cinatra#4310 — where another owner draws the one control (`hideSubmit`: a
   // grouped setup form, a structured object's sub-field, the HITL screen card
   // on a conversation host, or the outer Continue of a mid-run gate, see
-  // `midRunBooleanFieldHidesSubmit`), the box writes through at once, exactly
-  // as before. On a per-field setup gate this field draws its own Continue (the
-  // fallback entry declares `drawsOwnSubmit`, so the surface draws none beside
-  // it): the box stages the answer, the Continue sends it once, and a box left
-  // clear is `false`.
+  // `midRunBooleanFieldHidesSubmit`), the box hands each change to `onChange`
+  // at once, exactly as before (on a mid-run gate that `onChange` keeps only an
+  // object, so the answer is dropped there, as on main: cinatra#4506). On a
+  // per-field setup gate this field draws its own Continue (the fallback entry
+  // declares `drawsOwnSubmit`, so the surface draws none beside it): the box
+  // stages the answer, the Continue sends it once, and a box left clear is
+  // `false`.
   if (type === "boolean") {
     const ownsContinue = !hideSubmit;
     const submitBoolean = async () => {
