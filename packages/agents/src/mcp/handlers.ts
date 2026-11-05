@@ -2188,7 +2188,7 @@ async function handleAgentBuilderRunResume(
         }
       }
 
-      // cinatra#4245: claim, prompt, token, fence, send, answer, settle.
+      // cinatra#4245: claim, token and message, fence, prompt, send, answer, settle.
       return await resumeWayflowUnderPauseClaim({
         run: { ...run, a2aTaskId: run.a2aTaskId, a2aContextId: run.a2aContextId },
         client,

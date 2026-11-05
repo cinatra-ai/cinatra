@@ -357,13 +357,15 @@ export async function deliverArtifactReviewResumeIntent(
   }
   const claimRef = { runId: run.id, orgId: run.orgId, token: claim.token };
 
-  // Deliver the typed decision verbatim as the WayFlow resume message. Dynamic
-  // import mirrors review-task-actions.ts (circular-dep avoidance:
-  // agents ← @cinatra-ai/a2a ← mcp-server ← agent-builder).
-  const { createExternalA2AClient } = await import("@cinatra-ai/a2a");
   // The steps before the fence, under the claim: a failure gives it back, and a
   // release that fails too leaves the intent pending until the lease frees itself.
+  // Every step between the claim and the fence sits in here, the import of the
+  // client included.
   const preSend = async () => {
+    // Deliver the typed decision verbatim as the WayFlow resume message. Dynamic
+    // import mirrors review-task-actions.ts (circular-dep avoidance:
+    // agents ← @cinatra-ai/a2a ← mcp-server ← agent-builder).
+    const { createExternalA2AClient } = await import("@cinatra-ai/a2a");
     const preSendClient = await createExternalA2AClient({
       agentUrl: wayflowUrl,
       timeoutMs: WAYFLOW_A2A_TIMEOUT_MS,

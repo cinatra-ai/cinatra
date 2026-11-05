@@ -7,7 +7,8 @@
  * when that draw fails, nothing can have been sent, and the pause must be given
  * back with no fence, no prompt row and no send. Read here on both resume roads
  * that draw an id (the MCP resume and the review page's Continue); the delivery
- * worker's id is fixed per gate.
+ * worker's id is fixed per gate. A prompt capture that fails after the fence stays
+ * best-effort: the answer is still sent once and settled.
  *
  * Run: cd packages/agents && pnpm exec vitest run src/__tests__/resume-message-before-fence-4245.test.ts
  */
@@ -195,6 +196,25 @@ describe("cinatra#4245 — a failed message id is a failure before the fence", (
   it("Continue (guard): with a working id it fences, records the answer, sends once and settles", async () => {
     await approveReviewTaskInternal("wayflow-gate-msg-4245", RUN.runBy);
     expect(fenceCalls()).toHaveLength(1);
+    expect(storeMock.writeHitlPrompt).toHaveBeenCalledTimes(1);
+    expect(sendTask).toHaveBeenCalledTimes(1);
+    expect(pauseClaimFake.settlePauseSend).toHaveBeenCalledTimes(1);
+    expect(pauseClaimFake.releasePauseClaim).not.toHaveBeenCalled();
+  });
+});
+
+describe("cinatra#4245 — a failed prompt capture after the fence", () => {
+  it("the MCP resume: the answer is still sent once and settled, and the pause is not given back", async () => {
+    storeMock.writeHitlPrompt.mockRejectedValueOnce(new Error("the prompt store is down"));
+    const answer = await resumeWayflowUnderPauseClaim({
+      run: { ...RUN, status: "pending_approval" } as never,
+      client: { sendTask } as never,
+      resumeText: "go on",
+      prompt: { agentId: "@cinatra-ai/blog-idea-generator", message: "go on", submittedValues: null },
+      authority: { orgId: RUN.orgId } as never,
+      readRun: async () => liveRun(),
+    });
+    expect(answer.error).toBeUndefined();
     expect(storeMock.writeHitlPrompt).toHaveBeenCalledTimes(1);
     expect(sendTask).toHaveBeenCalledTimes(1);
     expect(pauseClaimFake.settlePauseSend).toHaveBeenCalledTimes(1);

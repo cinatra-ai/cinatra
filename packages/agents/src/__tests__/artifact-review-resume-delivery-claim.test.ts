@@ -2,8 +2,9 @@
  * cinatra#4245 — the resume delivery worker takes the pause claim (spec 4.5). D1
  * `held` is retried, D2 a change request ends the intent without a send, and D3 the
  * worker fences before it sends, hands its token to the handler and settles after.
- * A stop during that send is driven against the real seam in
- * agent-run-resume-claim.integration.test.ts (B8).
+ * A stop after an in-place fence like the worker's is read against the real seam in
+ * agent-run-resume-claim.integration.test.ts (B8). B8 calls the claim and the fence
+ * directly: no test here composes the worker's send with a real stop.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { buildReviewApproveEnvelope } from "@/lib/artifacts/artifact-review-rejection";
@@ -48,10 +49,13 @@ const gateStoreMock = vi.hoisted(() => ({
   markResumeIntentDelivered: vi.fn(async () => true),
 }));
 vi.mock("../artifact-review-gate-store", () => gateStoreMock);
-const { sendTask, handle, order, mint } = vi.hoisted(() => {
+const { sendTask, handle, order, mint, a2a } = vi.hoisted(() => {
   const order: string[] = [];
   return {
     order,
+    // armed: reading the client factory off the A2A namespace throws (a module that
+    // cannot be read after the claim).
+    a2a: { armed: false },
     sendTask: vi.fn(async () => {
       order.push("send");
       return { id: "task-x", status: { state: "completed" } };
@@ -62,11 +66,21 @@ const { sendTask, handle, order, mint } = vi.hoisted(() => {
     mint: vi.fn(async () => ({ token: "t" })),
   };
 });
-vi.mock("@cinatra-ai/a2a", () => ({
-  createExternalA2AClient: vi.fn(async () => ({ sendTask })),
-  resolveRunIdByWayflowTaskId: vi.fn(async () => null),
-  resolveLatestWayflowGateTaskId: vi.fn(async () => "task-1"),
-}));
+vi.mock("@cinatra-ai/a2a", () => {
+  const createExternalA2AClient = vi.fn(async () => ({ sendTask }));
+  const namespace = {
+    resolveRunIdByWayflowTaskId: vi.fn(async () => null),
+    resolveLatestWayflowGateTaskId: vi.fn(async () => "task-1"),
+  };
+  Object.defineProperty(namespace, "createExternalA2AClient", {
+    enumerable: true,
+    get() {
+      if (a2a.armed) throw new Error("the A2A client could not be read");
+      return createExternalA2AClient;
+    },
+  });
+  return namespace;
+});
 vi.mock("../wayflow-run-token-carrier", () => ({ mintResumeRunTokenMetadata: mint }));
 vi.mock("../execution", () => ({ handleWayflowTaskState: handle }));
 
@@ -91,6 +105,7 @@ const claimed = { kind: "claimed", token: "tok-w", generation: 5, expiresAt: new
 beforeEach(() => {
   vi.clearAllMocks();
   order.length = 0;
+  a2a.armed = false;
   storeMock.readAgentRunByTaskId.mockResolvedValue({
     id: "run-1", templateId: "tmpl-1", status: "pending_approval", a2aTaskId: "task-1",
     a2aContextId: "ctx-1", orgId: "org-1", pauseGeneration: 5,
@@ -151,6 +166,30 @@ describe("cinatra#4245 — the delivery worker and the pause claim", () => {
     claims.releasePauseClaim.mockRejectedValueOnce(new Error("release down"));
     expect(await deliver()).toBe("retryable");
     expect(sendTask).not.toHaveBeenCalled();
+  });
+
+  it("a pause that moved on, or is no longer pending, marks the intent done, with no send", async () => {
+    for (const reason of ["moved-on", "not-pending"] as const) {
+      claims.claimPause.mockResolvedValueOnce({ kind: "refused", reason, status: "pending_approval", generation: 5 });
+      expect(await deliver()).toBe("already-advanced");
+    }
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledTimes(2);
+    expect(claims.releasePauseClaim).not.toHaveBeenCalled();
+    expect(sendTask).not.toHaveBeenCalled();
+  });
+
+  it("an A2A client that cannot be read after the claim gives the claim back, with no fence and no send", async () => {
+    // Armed only once the claim is taken: the reads of the namespace before the
+    // claim (the latest-task key) are not the case read here.
+    claims.claimPause.mockImplementationOnce(async () => {
+      a2a.armed = true;
+      return claimed;
+    });
+    await expect(deliver()).rejects.toThrow("the A2A client could not be read");
+    expect(claims.releasePauseClaim).toHaveBeenCalledTimes(1);
+    expect(claims.fencePauseInPlace).not.toHaveBeenCalled();
+    expect(sendTask).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
   });
 
   it("a send that fails is settled, not given back", async () => {

@@ -220,7 +220,7 @@ async function handlers() {
 type Answer = { error?: string; status?: string; message?: string; runId?: string; thrown?: string };
 async function resume(runId: string): Promise<Answer> {
   return (await handlers())
-    .agent_run_resume({ primitiveName: "agent_run_resume", input: { runId, note: "go on" }, actor, mode: "deterministic" } as never)
+    .agent_run_resume({ primitiveName: "agent_run_resume", input: { runId, approvalNote: "go on" }, actor, mode: "deterministic" } as never)
     .catch((e: unknown) => ({ thrown: String(e) })) as Promise<Answer>;
 }
 async function stop(runId: string): Promise<Answer> {
