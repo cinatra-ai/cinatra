@@ -101,8 +101,9 @@ const TABLE: Array<{
   },
   {
     agent: "blog-wordpress-publish-agent",
+    // At its pin it declares one artifact edge, the blog post it publishes.
     produces: [],
-    edges: [IMAGE, POST].sort(),
+    edges: [POST],
   },
   {
     agent: "blog-pipeline-agent",
@@ -134,11 +135,11 @@ describe("the blog agents' declarations (plan section 5.3.2)", () => {
     });
   }
 
-  it("declares the fourteen dependency edges section 5.3.2 counts", () => {
-    // All fourteen. The last two arrived with the image agent's own package,
-    // which replaces the retired prompt writer.
+  it("declares the thirteen dependency edges the pinned packs declare", () => {
+    // Thirteen at the current pins: the publish agent declares only the blog
+    // post it publishes. The image agent still declares the blog image type.
     const total = TABLE.reduce((n, row) => n + row.edges.length, 0);
-    expect(total).toBe(14);
+    expect(total).toBe(13);
   });
 
   it("declares six of the nine typed produces entries", () => {
