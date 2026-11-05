@@ -49,6 +49,11 @@ import {
   extensionArtifactsList,
 } from "@/lib/artifacts/extension-artifact-reads";
 import { ArtifactCursorRefusal } from "@/lib/artifacts/artifact-service";
+import {
+  PASSTHROUGH_UNEXPECTED_ERROR,
+  passthroughFixedFailureText,
+} from "@/lib/passthrough-refusal";
+import { logFixedLine } from "@/lib/failure-log";
 
 /** The names W7 adds to the passthrough allowlist, each scoped below. */
 export const EXTENSION_SCOPED_TOOLS = new Set<string>([
@@ -91,6 +96,19 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 /**
  * Dispatch one extension-scoped tool under the run's own identity. Never
  * throws: every refusal is a stated status the calling node fails visibly on.
+ *
+ * cinatra#4471: NO THROW LEAVES THIS FUNCTION, AND NO THROWN TEXT IS THE ANSWER
+ * UNLESS IT IS A STATED REFUSAL. The context resolution and the tool run are
+ * both inside the one `try`. A stated refusal (the classes `statedRefusal`
+ * reads) answers its own sentence. Every other throw (a module's own failure,
+ * a host read inside a port, the context resolution) can name a path, a store
+ * directory or an install id, so it answers the passthrough's fixed sentence
+ * (#4223), and the server log records the stage, the tool, the run and a class
+ * word, never its text. A throw that cannot even be classified (a proxy whose
+ * trap throws, a refusal whose `message` or `reason` getter throws) answers
+ * the same fixed sentence, with the class word `unreadable`. The catch reads
+ * the tool and the run id for the log through `diagnosticFields`, which never
+ * throws.
  */
 export async function dispatchExtensionScopedTool(input: {
   tool: string;
@@ -98,21 +116,20 @@ export async function dispatchExtensionScopedTool(input: {
   run: ExtensionScopedToolRun;
   actor?: ActorContext;
 }): Promise<ExtensionScopedToolOutcome> {
-  const context = await resolveRunExtensionContext({
-    templateId: input.run.templateId,
-    packageVersion: input.run.packageVersion,
-  });
-  if (!context) {
-    return {
-      ok: false,
-      status: 403,
-      error:
-        `${input.tool}: the run resolves to no extension package at a pinned version, so there is ` +
-        `no one declaration to admit this call under`,
-    };
-  }
-
   try {
+    const context = await resolveRunExtensionContext({
+      templateId: input.run.templateId,
+      packageVersion: input.run.packageVersion,
+    });
+    if (!context) {
+      return {
+        ok: false,
+        status: 403,
+        error:
+          `${input.tool}: the run resolves to no extension package at a pinned version, so there is ` +
+          `no one declaration to admit this call under`,
+      };
+    }
     if (input.tool === "extension_data") {
       return { ok: true, result: await runDataTool(context, input) };
     }
@@ -121,6 +138,59 @@ export async function dispatchExtensionScopedTool(input: {
     }
     return { ok: true, result: await runArtifactRead(context, input) };
   } catch (e) {
+    const where = { ...diagnosticFields(input), stage: "extension-scoped tool call" };
+    const stated = statedRefusal(e);
+    if (stated === UNREADABLE) {
+      logFixedLine(
+        `[agents-passthrough] ${where.stage} failed; the error could not be read, ` +
+          `and its text is not logged`,
+        { tool: where.tool, runId: where.runId, errorClass: "unreadable" },
+      );
+      return { ok: false, status: 500, error: PASSTHROUGH_UNEXPECTED_ERROR };
+    }
+    if (stated !== null) return stated;
+    return {
+      ok: false,
+      status: 500,
+      error: passthroughFixedFailureText(e, where, PASSTHROUGH_UNEXPECTED_ERROR),
+    };
+  }
+}
+
+/**
+ * The tool and the run id the failure log names, read so that no getter can
+ * throw out of the catch: a value that is not a string, or a read that throws,
+ * is the word "unreadable".
+ */
+function diagnosticFields(input: { tool: unknown; run: unknown }): { tool: string; runId: string } {
+  let tool = "unreadable";
+  let runId = "unreadable";
+  try {
+    const value: unknown = input.tool;
+    if (typeof value === "string") tool = value;
+  } catch {
+    /* the word stays */
+  }
+  try {
+    const value: unknown = (input.run as { id?: unknown }).id;
+    if (typeof value === "string") runId = value;
+  } catch {
+    /* the word stays */
+  }
+  return { tool, runId };
+}
+
+/** A throw this module could not classify or read: answered as a failure. */
+const UNREADABLE = Symbol("unreadable");
+
+/**
+ * The answer of a stated refusal: its own sentence with 403, or 404 for a
+ * missing artifact. Null for any other throw. UNREADABLE when a class check or
+ * a read of the refusal's `message` or `reason` throws, or the sentence is not
+ * a string. Never a throw.
+ */
+function statedRefusal(e: unknown): ExtensionScopedToolOutcome | null | typeof UNREADABLE {
+  try {
     if (
       e instanceof ExtensionDataRefusal ||
       e instanceof ExtensionToolRefusal ||
@@ -128,12 +198,19 @@ export async function dispatchExtensionScopedTool(input: {
       e instanceof ArtifactAdmissionRefusal ||
       e instanceof ArtifactCursorRefusal
     ) {
-      return { ok: false, status: 403, error: e.message };
+      const message: unknown = e.message;
+      if (typeof message !== "string") return UNREADABLE;
+      return { ok: false, status: 403, error: message };
     }
     if (e instanceof ArtifactContentRefusal) {
-      return { ok: false, status: e.reason === "not-found" ? 404 : 403, error: e.message };
+      const reason: unknown = e.reason;
+      const message: unknown = e.message;
+      if (typeof message !== "string") return UNREADABLE;
+      return { ok: false, status: reason === "not-found" ? 404 : 403, error: message };
     }
-    return { ok: false, status: 500, error: e instanceof Error ? e.message : String(e) };
+    return null;
+  } catch {
+    return UNREADABLE;
   }
 }
 
