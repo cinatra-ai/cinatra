@@ -19,7 +19,7 @@ import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 import {
   artifactReviewEffectRecordsDdlSql,
   down as migrationDown,
-} from "../../../../migrations/core/core__0121_artifact-review-effect-records.mjs";
+} from "../../../../migrations/core/core__0129_artifact-review-effect-records.mjs";
 
 const TEST_SCHEMA = "cinatra_test_review_effect_3978";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
@@ -345,7 +345,7 @@ describe.skipIf(!HAS_DB)("cinatra#3978 — the table's own checks", () => {
   });
 });
 
-describe.skipIf(!HAS_DB)("cinatra#3978 — the migration twin core__0121", () => {
+describe.skipIf(!HAS_DB)("cinatra#3978 — the migration twin core__0129", () => {
   async function tableExists(): Promise<boolean> {
     const r = await sql(`SELECT to_regclass($1) AS t`, [`"${q(TEST_SCHEMA)}".artifact_review_effect_records`]);
     return r.rows[0].t !== null;

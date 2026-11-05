@@ -166,8 +166,9 @@ export function artifactReviewGateSchemaQueries(schemaName: string): QueryInput[
   ON "${q}"."artifact_review_resume_outbox" (status, created_at)`,
     },
     // The ONE effect record of a reviewed target (cinatra#3978); migration twin
-    // core__0121. The record is the exact compact JSON text the writer stored, so
-    // the byte limit is checked over the same bytes the application counted.
+    // core__0129. The record is the exact compact JSON text the writer stored, so
+    // the byte limit is checked over the same bytes the application counted. The
+    // one-row-per-target rule is a constraint of the new table itself.
     {
       text: `CREATE TABLE IF NOT EXISTS "${q}"."artifact_review_effect_records" (
   id                                  text PRIMARY KEY,
@@ -182,12 +183,9 @@ export function artifactReviewGateSchemaQueries(schemaName: string): QueryInput[
   record_json                         text NOT NULL CHECK (
                                         octet_length(record_json) <= 8192
                                         AND jsonb_typeof(record_json::jsonb) = 'object'),
-  recorded_at                         timestamptz NOT NULL DEFAULT now()
+  recorded_at                         timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT artifact_review_effect_records_target_uniq UNIQUE (gate_id, reviewed_artifact_id, reviewed_representation_revision_id)
 )`,
-    },
-    {
-      text: `CREATE UNIQUE INDEX IF NOT EXISTS artifact_review_effect_records_target_uniq
-  ON "${q}"."artifact_review_effect_records" (gate_id, reviewed_artifact_id, reviewed_representation_revision_id)`,
     },
   ];
 }
