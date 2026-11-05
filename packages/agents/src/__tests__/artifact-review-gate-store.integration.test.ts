@@ -81,6 +81,7 @@ const ORG = "org-1796-review-gate";
 const RUN_OWNER = "user-owner-1796";
 
 let gateStore: typeof import("../artifact-review-gate-store");
+let openReviewRead: typeof import("../artifact-open-review-read");
 let store: typeof import("../store");
 let dbMod: typeof import("../db");
 let client: Client;
@@ -224,6 +225,7 @@ beforeAll(async () => {
   (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized = true;
 
   gateStore = await import("../artifact-review-gate-store");
+  openReviewRead = await import("../artifact-open-review-read");
   store = await import("../store");
   dbMod = await import("../db");
   client = new Client({ connectionString: DB_URL });
@@ -304,6 +306,31 @@ afterAll(async () => {
     expect(pinned.status).toBe("pending");
     const state = await gateStore.readReviewGateState(runId, reviewTaskId);
     expect(state.status).toBe("pending");
+  });
+
+  it("OPEN READ: an artifact reads as under review only while a gate of its organization is open on it", async () => {
+    const { runId, reviewTaskId } = freshGateIds();
+    const artifactId = `art-${randomUUID()}`;
+    const read = (orgId: string, id: string) => openReviewRead.isArtifactUnderOpenReview({ orgId, artifactId: id });
+    expect(await read(ORG, artifactId)).toBe(false);
+    await gateStore.emitArtifactReviewGate({
+      runId,
+      orgId: ORG,
+      reviewTaskId,
+      targets: [{ artifactId, representationRevisionId: "rev-1" }],
+    });
+    expect(await read(ORG, artifactId)).toBe(true);
+    expect(await read("org-another", artifactId)).toBe(false);
+    expect(await read(ORG, `art-${randomUUID()}`)).toBe(false);
+    // An id that is a prefix of the pinned id is another artifact.
+    expect(await read(ORG, artifactId.slice(0, -1))).toBe(false);
+    await client.query(
+      `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates"
+          SET status = 'resolved', disposition = 'approve', fingerprint = 'f', resolved_at = now()
+        WHERE run_id = $1 AND review_task_id = $2`,
+      [runId, reviewTaskId],
+    );
+    expect(await read(ORG, artifactId)).toBe(false);
   });
 
   it("PIN: refuses a new combined gate without storing a partial singleton", async () => {
