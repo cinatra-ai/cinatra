@@ -198,6 +198,7 @@ describe("0.14 — the revision that shares the content, and the kept history", 
       sharedResourceId: plan.sharedResourceId,
       form: plan.form,
       createdBy: "user-1",
+      baseRevisionId: plan.baseRevisionId,
     });
     expect(op.text).toContain('INSERT INTO "app"."representation"');
     expect(op.values[3]).toBe("res-shared");
@@ -218,6 +219,7 @@ describe("0.14 — the revision that shares the content, and the kept history", 
       sharedResourceId: "res-shared",
       form: "file",
       createdBy: null,
+      baseRevisionId: "rep-base",
     });
     expect(op.text).toContain("ON CONFLICT (id) DO NOTHING");
   });
