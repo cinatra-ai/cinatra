@@ -254,4 +254,34 @@ describe("resolveUserContextForUserId carries the person's team ids (window line
     await resolveUserContextForUserId(USER);
     expect(io.readTeamsForUser).toHaveBeenCalledTimes(1);
   });
+
+  it("g: every team of the read enters teamIds in the read's order, a team without a role included", async () => {
+    // Read order is not sorted (TEAM_A2 before TEAM_A1), and TEAM_A2 has no
+    // role: a cure that took the ids from the team-role map, or sorted them,
+    // would not give this list.
+    io.memberships = [
+      { id: TEAM_A2, name: "Team two", orgId: ORG_A },
+      { id: TEAM_A1, name: "Team one", orgId: ORG_A, role: "admin" },
+    ];
+
+    const { actorContext } = await resolveUserContextForUserId(USER, {
+      activeOrganizationId: ORG_A,
+    });
+
+    expect(actorContext.teamIds).toEqual([TEAM_A2, TEAM_A1]);
+    const hints = io.readProjectGrantsForUser.mock.calls[0]?.[2] as
+      | { teamIds?: string[] }
+      | undefined;
+    expect(hints?.teamIds).toEqual([TEAM_A2, TEAM_A1]);
+  });
+
+  it("h: a failed team read fails the resolution; it never yields an actor with an empty team list", async () => {
+    io.readTeamsForUser.mockReset();
+    io.readTeamsForUser.mockRejectedValue(new Error("team read failed"));
+
+    await expect(
+      resolveUserContextForUserId(USER, { activeOrganizationId: ORG_A }),
+    ).rejects.toThrow("team read failed");
+    expect(io.readProjectGrantsForUser).not.toHaveBeenCalled();
+  });
 });
