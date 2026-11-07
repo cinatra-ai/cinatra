@@ -25,8 +25,9 @@
  * Red at df923329 (change B's head): recordChangesRequested writes no end mark
  * and keeps no generation, and the drain stops no run. Cases marked "guard
  * (green at base)" hold at the base too. The cases of the fold of the first
- * pre-review (R1, R3, R4, C1, B1, M11's answer) are red at 69a6bf3c too; R2 is
- * a guard there.
+ * pre-review (R1, R3, R4, C1, B1, M11's answer) are red at 69a6bf3c too; R2 and
+ * G11 pass there (G11 fails at change B's head, where no change request marks
+ * the run).
  *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided. With
  * X4245_PAUSE_CLAIM_REALDB=1 a missing database throws instead of skipping.
@@ -534,8 +535,13 @@ describe.skipIf(!HAS_DB)("the delivery worker after the end mark (G11, rev1 MF4)
       targets: [{ artifactId: p.artifactId, representationRevisionId: p.rev }, { artifactId: b.artifactId, representationRevisionId: b.rev }],
     })!;
     expect(plan.legs.map((l) => l.reviewTaskId)).toEqual([`wayflow-${task}`, `wayflow-${task}#2`]);
+    // Leg A is decided: a resolved gate carries its terminal disposition, fingerprint and resolution
+    // time (the table's disposition check and artifact_review_gates_resolved_chk).
     await pool(
-      `UPDATE ${S()}."artifact_review_gates" SET status = 'resolved', disposition = 'approved', pinned_targets = $2::jsonb WHERE id = $1`,
+      `UPDATE ${S()}."artifact_review_gates"
+          SET status = 'resolved', disposition = 'approve', fingerprint = 'fp-g11', resolved_at = now(),
+              pinned_targets = $2::jsonb
+        WHERE id = $1`,
       [p.gateId, JSON.stringify([{ artifactId: p.artifactId, representationRevisionId: p.rev, declaredReviewPlan: plan }])],
     );
     await pool(
