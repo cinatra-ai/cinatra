@@ -64,9 +64,9 @@ export function artifactMatchJobId(payload: {
 }
 
 /**
- * Best-effort POST-COMMIT enqueue of the meaning-matcher for one artifact. Never
- * throws — a failed enqueue is logged and swallowed so it cannot roll back or
- * fail the committed creation. The job is enqueued as a SYSTEM context
+ * Best-effort POST-COMMIT enqueue of the meaning-matcher for one artifact. A
+ * failed enqueue is logged and swallowed so it cannot roll back or fail the
+ * committed creation; the call rejects only if that log line itself throws. The job is enqueued as a SYSTEM context
  * (`inheritActorContext: false`) because the matcher worker anchors its own
  * org-scoped System actor; it must not inherit the uploading user's frame.
  */

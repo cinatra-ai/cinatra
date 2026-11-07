@@ -56,9 +56,11 @@ const q = (): string => postgresSchema.replaceAll('"', '""');
 /**
  * Resolve the trusted producer-assertion plan for an artifact being
  * created by a deterministic agent run. Pure-ish: one or two scoped
- * SELECTs + a registry manifest read. Never throws -- every failure
- * path degrades to `{ validatedRunId: <validated|null>, produces: [] }`
- * so artifact creation is never blocked by producer resolution.
+ * SELECTs + a registry manifest read. A failed lookup or manifest read is
+ * caught and degrades to `{ validatedRunId: <validated|null>, produces: [] }`
+ * so a failed producer read does not block artifact creation. The call can
+ * still reject: the schema setup before the first lookup is not caught, and
+ * neither is a log line that throws.
  */
 export async function resolveProducerAssertionPlan(input: {
   createdByRunId?: string | null;
