@@ -148,12 +148,18 @@ export interface RecordChangesRequestedInput {
    * follows the commit). There the gate must be a `wayflow-` gate of this run,
    * org and task (or its leg `#<n>`, n a decimal from 2 without a leading zero;
    * any other suffix refuses), a retry answers from an existing repair only
-   * when that repair ended the pause, a new record refuses while a gate of the
-   * run (another gate, or this one by a concurrent record) has a requested
-   * repair that ended no pause, and a new record writes the run's end mark, the
-   * gate's compare-and-set (bound to `runId`, the org and the gate's review
-   * task) and the repair row, which keeps the generation the mark ended (the
-   * drain's order to stop the run). A `pause-*` refusal writes
+   * when that repair ended the pause, and a new record writes the run's end
+   * mark (locking the run row), then refuses while a gate of the run (another
+   * gate, or this one by a concurrent record) has a requested repair that ended
+   * no pause, then writes the gate's compare-and-set (bound to `runId`, the org
+   * and the gate's review task) and the repair row, which keeps the generation
+   * the mark ended (the drain's order to stop the run). A record that ends no
+   * pause takes its gate's run row FOR SHARE first, so it commits either before
+   * the declared record's sibling read (which refuses while that repair is still
+   * `requested`; one the drain moved off `requested` first does not refuse it: a
+   * dispatched one started its repair run before the end mark existed, an
+   * escalated one started no run) or after the end mark is committed (and the
+   * drain then holds its repair). A `pause-*` refusal writes
    * nothing; a guard refusal throws. Absent for every other change request,
    * whose road is unchanged; no caller passes it yet.
    */
@@ -419,11 +425,19 @@ export async function recordChangesRequested(
           // because the drain is what stops the run. An escalated repair is never
           // drained, so the run would wait at an ended pause forever: refused.
           if (status !== "requested") throw new PauseEndMarkRefused("pause-not-repairable");
+          const mark = await markPauseChangesRequestedInTx(tx, {
+            runId: input.runId,
+            orgId: input.orgId,
+            gatePauseTaskId: pauseTaskId,
+          });
+          if (mark.kind === "refused") throw new PauseEndMarkRefused(mark.code);
           // A requested repair of a gate of this run that ended no pause would
           // start its repair run without a stop of its own, so the record refuses
-          // to end the pause beside one. A repair that ended no pause and commits
-          // after this read is held by the drain instead, while the run carries
-          // the end mark.
+          // to end the pause beside one (the refusal rolls the mark back). The
+          // read follows the mark: the mark holds the run row, and a record that
+          // ends no pause takes that row FOR SHARE before it writes, so it has
+          // either committed before this read or commits after this transaction,
+          // and the drain then holds its repair while the run carries the end mark.
           const [plainSibling] = await rtx
             .select({ id: lifecycleRepair.id })
             .from(lifecycleRepair)
@@ -438,12 +452,6 @@ export async function recordChangesRequested(
             )
             .limit(1);
           if (plainSibling) throw new PauseEndMarkRefused("pause-mode-conflict");
-          const mark = await markPauseChangesRequestedInTx(tx, {
-            runId: input.runId,
-            orgId: input.orgId,
-            gatePauseTaskId: pauseTaskId,
-          });
-          if (mark.kind === "refused") throw new PauseEndMarkRefused(mark.code);
           const written = await writeRecord(rtx, { generation: mark.generation, reviewTaskId: gate.reviewTaskId });
           // A concurrent record won the gate's repair row: it must have ended this same pause.
           if (!written.fresh && written.row?.pausedRunGeneration !== mark.generation) throw new PauseEndMarkRefused("pause-mode-conflict");
@@ -455,7 +463,19 @@ export async function recordChangesRequested(
       throw err;
     }
   } else {
-    persisted = await db.transaction((tx) => writeRecord(tx, null));
+    persisted = await db.transaction(async (tx) => {
+      // cinatra#4245: the gate's run row FOR SHARE, before any write, so this
+      // record and a declared record of the same run cannot cross (see the
+      // sibling read of the declared road). No row (a gate of no run) locks nothing.
+      await tx
+        .select({ id: agentRuns.id })
+        .from(agentRuns)
+        .where(
+          sql`EXISTS (SELECT 1 FROM ${artifactReviewGates} g WHERE g.id = ${request.gateId} AND g.run_id = ${agentRuns.id} AND g.org_id = ${agentRuns.orgId})`,
+        )
+        .for("share");
+      return writeRecord(tx, null);
+    });
   }
 
   if (!persisted.row) throw new Error("lifecycle_repair row vanished after insert-conflict");

@@ -214,10 +214,16 @@ export async function dispatchPendingProducerRepairs(opts?: {
     failed: 0,
   };
 
-  // cinatra#4245: a repair that ended no pause (no generation) is not taken while
-  // its gate's run carries an end mark, so its repair run never starts while the
-  // run waits at a pause another change request ended; the next pass takes it
-  // once the repair that ended the pause has stopped the run.
+  // cinatra#4245: a repair that ended no pause (no generation) is not selected
+  // while its gate's run carries a committed end mark; a later pass takes it once
+  // the repair that ended the pause has stopped the run. The rows are selected
+  // once: a repair selected here was committed either before the declared
+  // record's sibling read (which then refuses to end the pause while it is
+  // requested) or after the end mark (and is held here), because both records
+  // lock the run row (lifecycle-repair-store). A repair moved off `requested`
+  // before a declared record runs is outside that refusal: a dispatched one
+  // started its run before the end mark existed, and an escalated one started
+  // no run.
   const runAtEndedPause = sql`EXISTS (
     SELECT 1 FROM ${artifactReviewGates} g
     JOIN ${agentRuns} r ON r.id = g.run_id AND r.org_id = g.org_id
