@@ -444,7 +444,9 @@ describe("the marker readers refuse interpolated names and line breaks that only
   });
 
   it("accepts the real docker-compose.yml with CRLF line ends", () => {
-    expect(yaml).toContain("services:\n");
-    expect(markerProblems(yaml.replace(/\n/g, "\r\n"))).toEqual([]);
+    // The working tree may already hold CRLF line ends: read them as LF before building the CRLF copy.
+    const lf = yaml.replace(/\r\n/g, "\n");
+    expect(lf).toContain("services:\n");
+    expect(markerProblems(lf.replace(/\n/g, "\r\n"))).toEqual([]);
   });
 });
