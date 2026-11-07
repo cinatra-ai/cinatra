@@ -656,3 +656,62 @@ describe("the marker readers read interpolation in every value, the root .env an
     expectReason(trackedFileProblems(files), "link");
   });
 });
+
+/** A command that, with A and P unset, exports the marker: `$${B:-x}` inside A's default is a literal. */
+const ESCAPED_IN_DEFAULT = '      - "${A:-$${B:-x}; export CINATRA_DEV_}${P:-SITE}=1"';
+/** A compose-named link whose target goes through another tracked link and then `..`. */
+const HOP_FILES = [
+  { name: "docker/extra/compose.yml", text: "hop/../compose-body.txt", mode: "120000" },
+  { name: "docker/extra/hop", text: "../other/subdir", mode: "120000" },
+  { name: "docker/extra/compose-body.txt", text: "services:\n  wordpress:\n    image: busybox\n" },
+  { name: "docker/other/compose-body.txt", text: COMMAND_FRAGMENT },
+  { name: "docker/other/subdir/keep.txt", text: "keep\n" },
+];
+
+describe("the marker readers refuse a $$ inside a $ form and a link target that is not read as the filesystem reads it", () => {
+  it("refuses a command whose default holds an escaped $$ form that hides the marker", () => {
+    const text = VALID.replace("    image: postgres\n", () => `    image: postgres\n    command:\n${ESCAPED_IN_DEFAULT}\n`);
+    expect(text).toContain("${A:-$${B:-x}; export CINATRA_DEV_}${P:-SITE}=1");
+    expectReason(markerProblems(text), "interpolation");
+  });
+
+  it("refuses a $$ inside a default even when no reading names the marker", () => {
+    const text = VALID.replace("    image: postgres\n", () => '    image: "postgres:${PG_TAG:-$$16}"\n');
+    expect(text).toContain("${PG_TAG:-$$16}");
+    expectReason(markerProblems(text), "interpolation");
+  });
+
+  it("refuses a compose-named link whose target goes through another link and then ..", () => {
+    const problems = trackedFileProblems(HOP_FILES);
+    expect(problems.filter((p) => p.startsWith("link: docker/extra/compose.yml: ")), JSON.stringify(problems)).not.toEqual([]);
+  });
+
+  it("refuses a compose-named link whose target goes through another tracked link", () => {
+    const files = [
+      { name: "docker/extra/compose.yml", text: "hop/compose-body.txt", mode: "120000" },
+      { name: "docker/extra/hop", text: "../other", mode: "120000" },
+      { name: "docker/extra/hop/compose-body.txt", text: "services:\n  wordpress:\n    image: busybox\n" },
+      { name: "docker/other/compose-body.txt", text: COMMAND_FRAGMENT },
+    ];
+    expectReason(trackedFileProblems(files), "link");
+  });
+
+  it("refuses a compose-named link with a .. after a folder of its target", () => {
+    const files = [
+      { name: "docker/extra/compose.yml", text: "sub/../compose-body.txt", mode: "120000" },
+      { name: "docker/extra/sub/keep.txt", text: "keep\n" },
+      { name: "docker/extra/compose-body.txt", text: "services:\n  wordpress:\n    image: busybox\n" },
+    ];
+    expectReason(trackedFileProblems(files), "link");
+  });
+
+  it("reads a compose-named link whose target starts with .. as the compose text of its target", () => {
+    const files = [
+      { name: "docker/extra/compose.yml", text: "../shared/compose-body.txt", mode: "120000" },
+      { name: "docker/shared/compose-body.txt", text: COMMAND_FRAGMENT },
+    ];
+    const problems = trackedFileProblems(files);
+    expect(problems.filter((p) => p.startsWith("link: ")), JSON.stringify(problems)).toEqual([]);
+    expect(problems.filter((p) => p.startsWith("interpolation: docker/extra/compose.yml: ")), JSON.stringify(problems)).not.toEqual([]);
+  });
+});
