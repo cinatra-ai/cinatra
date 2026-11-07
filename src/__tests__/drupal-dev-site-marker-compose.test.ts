@@ -332,3 +332,66 @@ describe("the marker reader refuses look-alikes of the drupal service", () => {
     expect(trackedFileProblems([{ name: "docker/drupal-clone/clone.env", text: `${MARKER}=1\n` }])).not.toEqual([]);
   });
 });
+
+/** A compose text whose wordpress service gets the marker only after Compose interpolates `${CINATRA_G10_PART:-SITE}`. */
+const INTERPOLATED = ["services:", "  wordpress:", "    environment:", "      - CINATRA_DEV_${CINATRA_G10_PART:-SITE}=1", ""].join("\n");
+/** A double-quoted key split by an escaped line break whose break is a lone carriage return, or a NEL. */
+const LONE_CR_KEY = '      "CINATRA_DEV_\\\rSITE": "1"';
+const NEL_KEY = `      "CINATRA_DEV_\\${String.fromCharCode(0x85)}SITE": "1"`;
+
+describe("the marker readers refuse interpolated names and line breaks that only Compose reads, and accept CRLF files", () => {
+  it("refuses an interpolated environment list entry in another service", () => {
+    const text = VALID.replace("    image: postgres\n", "    image: postgres\n    environment:\n      - CINATRA_DEV_${CINATRA_G10_PART:-SITE}=1\n");
+    expect(text).toContain("      - CINATRA_DEV_${CINATRA_G10_PART:-SITE}=1\n");
+    expect(markerProblems(text)).not.toEqual([]);
+  });
+
+  it("refuses an interpolated environment key in another service", () => {
+    const text = VALID.replace("    image: postgres\n", '    image: postgres\n    environment:\n      CINATRA_DEV_${CINATRA_G10_PART:-SITE}: "1"\n');
+    expect(text).toContain('      CINATRA_DEV_${CINATRA_G10_PART:-SITE}: "1"\n');
+    expect(markerProblems(text)).not.toEqual([]);
+  });
+
+  it("refuses an interpolated service key", () => {
+    const text = VALID.replace("volumes:\n  data:", "  drupal${CINATRA_G10_SUFFIX:-}:\n    image: drupal\nvolumes:\n  data:");
+    expect(text).toContain("  drupal${CINATRA_G10_SUFFIX:-}:\n");
+    expect(markerProblems(text)).not.toEqual([]);
+  });
+
+  it("refuses another root compose file with an interpolated environment list entry", () => {
+    expect(rootFileProblems(INTERPOLATED)).not.toEqual([]);
+  });
+
+  it("refuses a tracked compose file with an interpolated environment list entry", () => {
+    expect(trackedFileProblems([{ name: "docker/extra/compose.yaml", text: INTERPOLATED }])).not.toEqual([]);
+  });
+
+  it("refuses an escaped name split by a lone carriage return in another service", () => {
+    const text = VALID.replace("    image: postgres\n", `    image: postgres\n    environment:\n${LONE_CR_KEY}\n`);
+    expect(text).toContain("CINATRA_DEV_\\\rSITE");
+    expect(markerProblems(text)).not.toEqual([]);
+  });
+
+  it("refuses a lone carriage return in a tracked YAML file", () => {
+    expect(trackedFileProblems([{ name: "docker/extra/vars.yml", text: `vars:\n${LONE_CR_KEY}\n` }])).not.toEqual([]);
+  });
+
+  it("refuses a NEL line break in another root compose file", () => {
+    expect(rootFileProblems(`services:\n  wordpress:\n    environment:\n${NEL_KEY}\n`)).not.toEqual([]);
+  });
+
+  it("refuses an explicit tag in another service", () => {
+    const text = VALID.replace("    image: postgres\n", "    image: postgres\n    environment: !override {}\n");
+    expect(text).toContain("    environment: !override {}\n");
+    expect(markerProblems(text)).not.toEqual([]);
+  });
+
+  it("accepts the minimal valid file with CRLF line ends", () => {
+    expect(markerProblems(VALID.replace(/\n/g, "\r\n"))).toEqual([]);
+  });
+
+  it("accepts the real docker-compose.yml with CRLF line ends", () => {
+    expect(yaml).toContain("services:\n");
+    expect(markerProblems(yaml.replace(/\n/g, "\r\n"))).toEqual([]);
+  });
+});
