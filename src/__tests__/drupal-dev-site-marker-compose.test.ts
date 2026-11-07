@@ -10,7 +10,9 @@
  *
  * We do NOT add a YAML parser dependency (as src/__tests__/a2a-peer-compose.test.ts):
  * the checks are string assertions against the raw file content. The readers take
- * the text as an argument, so the look-alike cases below run them on small inputs.
+ * the text as an argument, so the look-alike cases below run them on small inputs. They
+ * read only a plain shape and refuse anything else: the drupal key exactly once in the
+ * top-level `services:` map, one-line environment entries, no `extends` in any service.
  */
 import { describe, it, expect } from "vitest";
 import * as fs from "node:fs";
@@ -21,24 +23,55 @@ const composePath = path.join(root, "docker-compose.yml");
 const yaml = fs.existsSync(composePath) ? fs.readFileSync(composePath, "utf8") : "";
 const MARKER = "CINATRA_DEV_SITE";
 
-/** The text of one top-level service: from its key line to the next top-level service key or comment block. */
-function serviceBlock(text: string, name: string): string {
-  const start = text.indexOf(`\n  ${name}:\n`);
-  if (start < 0) return "";
-  const rest = text.slice(start + 1);
-  const next = rest.slice(1).search(/\n {2}[a-z0-9#-]/);
-  return next < 0 ? rest : rest.slice(0, next + 1);
-}
-
-/** The `environment:` map of a service block, as its indented lines. */
-function environmentLines(block: string): string[] {
-  const lines = block.split("\n");
-  const at = lines.findIndex((l) => l === "    environment:");
+/** The lines of the top-level `services:` map, without its key line: up to the next top-level key. */
+function servicesSection(text: string): string[] {
+  const lines = text.split("\n");
+  const at = lines.indexOf("services:");
   if (at < 0) return [];
   const out: string[] = [];
   for (const l of lines.slice(at + 1)) {
+    if (/^[^\s#]/.test(l)) break;
+    out.push(l);
+  }
+  return out;
+}
+
+/**
+ * The text of one service of the `services:` map: from its exact key line (no anchor, no inline value) to the next
+ * line at the service indent. Empty when the map does not hold the key exactly once.
+ */
+function serviceBlock(text: string, name: string): string {
+  const lines = servicesSection(text);
+  if (lines.filter((l) => l === `  ${name}:`).length !== 1) return "";
+  const at = lines.indexOf(`  ${name}:`);
+  const out = [lines[at]];
+  for (const l of lines.slice(at + 1)) {
+    if (/^ {2}\S/.test(l)) break;
+    out.push(l);
+  }
+  return out.join("\n") + "\n";
+}
+
+/** One entry of an environment map: a one-line `KEY: value`, the value plain or fully quoted, no anchor or alias. */
+const ENTRY = /^[A-Za-z_][A-Za-z0-9_]*: (?:"[^"\\]*"|'[^']*'|[^\s"'|>&*!%@`#{[\]][^#]*)$/;
+
+/**
+ * The `environment:` map of a service block, as its entries. Only lines at the map's own indent (six spaces) are
+ * entries; comment lines are skipped. A deeper line (a value that spans lines) or an entry of another shape makes the
+ * result `null`, as does a second `environment:` key.
+ */
+function environmentLines(block: string): string[] | null {
+  const lines = block.split("\n");
+  if (lines.filter((l) => l === "    environment:").length !== 1) return lines.some((l) => /^ {4}environment\b/.test(l)) ? null : [];
+  const at = lines.indexOf("    environment:");
+  const out: string[] = [];
+  for (const l of lines.slice(at + 1)) {
+    if (l.trim() === "" || /^ {6}#/.test(l)) continue;
     if (!l.startsWith("      ")) break;
-    out.push(l.trim());
+    if (l.startsWith("       ")) return null;
+    const entry = l.slice(6);
+    if (!ENTRY.test(entry)) return null;
+    out.push(entry);
   }
   return out;
 }
@@ -47,14 +80,20 @@ function environmentLines(block: string): string[] {
 function markerProblems(text: string): string[] {
   const problems: string[] = [];
   const block = serviceBlock(text, "drupal");
+  if (block === "") problems.push("the services map has no single plain drupal key");
   const env = environmentLines(block);
-  if (env.length === 0) problems.push("the drupal service has no environment map");
-  const marker = env.filter((l) => l.startsWith(`${MARKER}:`));
+  if (env === null) problems.push("the drupal environment holds a line that is not a one-line KEY: value entry");
+  else if (env.length === 0) problems.push("the drupal service has no environment map");
+  const marker = (env ?? []).filter((l) => l.startsWith(`${MARKER}:`));
   if (JSON.stringify(marker) !== JSON.stringify([`${MARKER}: "1"`])) {
     problems.push(`the drupal environment does not set ${MARKER} exactly once to "1"`);
   }
   const all = text.split("\n").filter((l) => l.includes(MARKER));
-  if (all.length !== 1 || !block.includes(all[0])) problems.push(`not exactly one line names ${MARKER}`);
+  if (all.length !== 1 || all[0] !== `      ${MARKER}: "1"` || !block.split("\n").includes(all[0])) {
+    problems.push(`not exactly one line names ${MARKER}, as the drupal entry`);
+  }
+  const extending = servicesSection(text).filter((l) => !l.trim().startsWith("#") && /\bextends\b/.test(l));
+  if (extending.length > 0) problems.push("a service extends another service");
   return problems;
 }
 
@@ -70,7 +109,7 @@ describe("the drupal compose service carries the development-site marker", () =>
   it("has a drupal service with an environment map", () => {
     expect(fs.existsSync(composePath)).toBe(true);
     expect(serviceBlock(yaml, "drupal")).toContain("container_name: cinatra-drupal-1");
-    expect(environmentLines(serviceBlock(yaml, "drupal")).length).toBeGreaterThan(0);
+    expect(environmentLines(serviceBlock(yaml, "drupal"))?.length ?? 0).toBeGreaterThan(0);
   });
 
   it('sets CINATRA_DEV_SITE to the string "1" in the drupal environment and nowhere else in the file', () => {
