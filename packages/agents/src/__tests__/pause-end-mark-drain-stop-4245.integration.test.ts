@@ -31,7 +31,12 @@
  * 0a6ae45f too: a requested repair that ended no pause on a sibling gate does
  * not refuse the declared record, a leg suffix other than `#<n>` (n from 2) is
  * read as a leg, and the drain starts such a sibling's repair run while the
- * run waits at the ended pause.
+ * run waits at the ended pause. The cases of the third pre-review (M13, M14)
+ * are red at 06a4033c too: a record that ends no pause commits while a declared
+ * record is between its sibling check and its commit, so the declared record
+ * ends the pause beside it (M13), or a drain takes the plain repair before the
+ * end mark is visible and starts its repair run under the parent that then
+ * waits at the ended pause (M14).
  *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided. With
  * X4245_PAUSE_CLAIM_REALDB=1 a missing database throws instead of skipping.
@@ -245,6 +250,18 @@ async function waitForBackend(where: string) {
     await new Promise((r) => setTimeout(r, 50));
   }
   throw new Error(`no backend reads ${where}`);
+}
+/** Wait (at most 10 s) until `p` settles or a backend of this database reads `where`; 06a4033c's records do not wait. */
+async function settledOrWaiting(p: Promise<unknown>, where: string) {
+  let settled = false;
+  void p.then(() => { settled = true; }, () => { settled = true; });
+  for (let i = 0; i < 200; i += 1) {
+    if (settled) return;
+    const { rows } = await pool(`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND ${where}`);
+    if ((rows[0] as { n: number }).n > 0) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`the record neither settled nor reads ${where}`);
 }
 /** Park every other repair the drain would see, so each drain case reads its own row only. */
 async function onlyThisRepair(gateId: string) {
@@ -544,9 +561,10 @@ describe.skipIf(!HAS_DB)("the change request's end mark (spec 5.2, spec-rev1 MF5
       // The plain record closes the gate and waits at its repair insert, holding the gate row.
       plain = changeRequest(p, { declared: false });
       await waitForBackend(`wait_event = 'PgSleep'`);
-      // The declared record marks the run, then waits at the gate's compare-and-set.
+      // The declared record waits for the run row the plain record holds (at 06a4033c: it marks the run, then
+      // waits at the gate's compare-and-set).
       declared = changeRequest(p);
-      await waitForBackend(`wait_event_type = 'Lock' AND query ILIKE '%artifact_review_gates%'`);
+      await waitForBackend(`wait_event_type = 'Lock' AND (query ILIKE '%artifact_review_gates%' OR query ILIKE '%agent_runs%')`);
     } finally {
       await pool(`DELETE FROM ${S()}."fail_4245d1" WHERE key = $1 AND kind = 'hold'`, [p.gateId]);
       // Both records settle before any assertion, whichever way the waits above ended.
@@ -558,6 +576,32 @@ describe.skipIf(!HAS_DB)("the change request's end mark (spec 5.2, spec-rev1 MF5
     expect(more).toEqual([]);
     expect(repair.generation).toBeNull();
     expect(await readRun(p.runId)).toMatchObject({ status: "pending_approval", generation: 4, token: null, phase: null });
+  });
+});
+
+describe.skipIf(!HAS_DB)("a record that ends no pause and a declared record of the same run (third pre-review)", () => {
+  it("M13: a plain record on a sibling gate still open when the declared record checks: the declared record refuses after it commits", async () => {
+    const p = await seedPaused({ generation: 9 });
+    const b = await addLeg(p);
+    await pool(`INSERT INTO ${S()}."fail_4245d1" (key, kind) VALUES ($1, 'hold')`, [b.gateId]);
+    let plain: ReturnType<typeof changeRequest> | undefined;
+    let declared: ReturnType<typeof changeRequest> | undefined;
+    try {
+      // The plain record on leg B closes its gate and waits at its repair insert, uncommitted.
+      plain = changeRequest(p, { declared: false, gateOf: b, reviewTaskId: `wayflow-${p.task}#2` });
+      await waitForBackend(`wait_event = 'PgSleep'`);
+      // The declared record on leg A waits for the run row the plain record holds.
+      declared = changeRequest(p);
+      await settledOrWaiting(declared, `wait_event_type = 'Lock' AND query ILIKE '%agent_runs%'`);
+    } finally {
+      await pool(`DELETE FROM ${S()}."fail_4245d1" WHERE key = $1 AND kind = 'hold'`, [b.gateId]);
+      await Promise.allSettled([plain, declared]);
+    }
+    expect(await plain).toMatchObject({ ok: true, status: "requested", idempotent: false });
+    expect(await declared).toMatchObject({ ok: false, code: "pause-mode-conflict" });
+    expect(await gateStatus(p.gateId)).toEqual({ status: "pending", disposition: null });
+    expect(await repairsOf(p.gateId)).toEqual([]);
+    expect(await readRun(p.runId)).toMatchObject({ status: "pending_approval", generation: 9, token: null, phase: null });
   });
 });
 
@@ -740,6 +784,43 @@ describe.skipIf(!HAS_DB)("the drain stops the run before the repair run (spec 3.
     expect(ctl.launched).toEqual([
       { runId: drain.repairRunId(ended.id), parentRunId: p.runId, parentStatus: "stopped" },
       { runId: drain.repairRunId(plain.id), parentRunId: p.runId, parentStatus: "stopped" },
+    ]);
+  });
+  it("M14: a plain record on a sibling gate while the declared record is open: no drain starts its repair run before the run is stopped", async () => {
+    const p = await seedPaused({ generation: 8 });
+    const b = await addLeg(p);
+    await pool(`UPDATE ${S()}."lifecycle_repair" SET status = 'dispatched' WHERE status = 'requested'`);
+    await pool(`INSERT INTO ${S()}."fail_4245d1" (key, kind) VALUES ($1, 'hold')`, [p.gateId]);
+    let declared: ReturnType<typeof changeRequest> | undefined;
+    let plain: ReturnType<typeof changeRequest> | undefined;
+    let during: Awaited<ReturnType<typeof drain.dispatchPendingProducerRepairs>> | undefined;
+    try {
+      // The declared record on leg A has marked the run and waits at its repair insert, uncommitted.
+      declared = changeRequest(p);
+      await waitForBackend(`wait_event = 'PgSleep'`);
+      // The plain record on leg B waits for the run row (at 06a4033c it commits at once).
+      plain = changeRequest(p, { declared: false, gateOf: b, reviewTaskId: `wayflow-${p.task}#2` });
+      await settledOrWaiting(plain, `wait_event_type = 'Lock' AND query ILIKE '%agent_runs%'`);
+      // A drain in this moment, before the end mark is visible.
+      during = await drain.dispatchPendingProducerRepairs();
+    } finally {
+      await pool(`DELETE FROM ${S()}."fail_4245d1" WHERE key = $1 AND kind = 'hold'`, [p.gateId]);
+      await Promise.allSettled([declared, plain]);
+    }
+    expect(during).toMatchObject({ scanned: 0, dispatched: 0 });
+    expect(ctl.launched).toEqual([]);
+    expect(await declared).toMatchObject({ ok: true, status: "requested" });
+    expect(await plain).toMatchObject({ ok: true, status: "requested" });
+    const [ended] = await repairsOf(p.gateId);
+    const [later] = await repairsOf(b.gateId);
+    expect(ended.generation).toBe(8);
+    expect(later.generation).toBeNull();
+    // The repair that ended the pause stops the run and starts first; the plain one starts under the stopped parent.
+    expect(await drain.dispatchPendingProducerRepairs()).toMatchObject({ scanned: 1, dispatched: 1, failed: 0 });
+    expect(await drain.dispatchPendingProducerRepairs()).toMatchObject({ scanned: 1, dispatched: 1, failed: 0 });
+    expect(ctl.launched).toEqual([
+      { runId: drain.repairRunId(ended.id), parentRunId: p.runId, parentStatus: "stopped" },
+      { runId: drain.repairRunId(later.id), parentRunId: p.runId, parentStatus: "stopped" },
     ]);
   });
 });
