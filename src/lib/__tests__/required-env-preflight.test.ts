@@ -22,6 +22,7 @@ const fullEnv = (): Record<string, string | undefined> => ({
   BETTER_AUTH_SECRET: "s".repeat(32),
   CINATRA_ENCRYPTION_KEY: HEX_32,
   CINATRA_BRIDGE_TOKEN: "bridge-token-value",
+  CINATRA_CONTEXT_ATTEST_KEY: "attest-key-value",
 });
 
 describe("validateEncryptionKey", () => {
@@ -114,5 +115,21 @@ describe("runRequiredEnvPreflight (armed only in app-prod runtime, not build)", 
 
   it("passes cleanly when everything is present in prod", () => {
     expect(() => runRequiredEnvPreflight({ env: fullEnv(), ...prodDeps })).not.toThrow();
+  });
+});
+
+describe("cinatra#4154 — the step attest key", () => {
+  it("a missing attest key is soft-missing by name, never a hard failure", () => {
+    const env = fullEnv();
+    delete env.CINATRA_CONTEXT_ATTEST_KEY;
+    const r = checkRequiredEnv(env);
+    expect(r.hardFailures).toEqual([]);
+    expect(r.softMissing.map((s) => s.name)).toEqual(["CINATRA_CONTEXT_ATTEST_KEY"]);
+    expect(r.softMissing[0]!.why).toMatch(/extension_tool/);
+  });
+
+  it("a whitespace-only attest key counts as missing", () => {
+    const r = checkRequiredEnv({ ...fullEnv(), CINATRA_CONTEXT_ATTEST_KEY: "   " });
+    expect(r.softMissing.map((s) => s.name)).toEqual(["CINATRA_CONTEXT_ATTEST_KEY"]);
   });
 });

@@ -10,8 +10,11 @@ import "server-only";
  * the strip, exactly as the drawing draws it.
  *
  * Naming an entity is a disclosure, so this module repeats each scope's OWN
- * read gate before it returns a name, and returns `null` on any refusal or any
- * failure. It is the SINGLE gated read: each scope landing's gate-repeating
+ * read gate before it returns a name. It answers in three states
+ * (`ScopeSurfaceEntityName`, cinatra#4453): `named`, `blank` for a reader who
+ * may read the entity whose name is genuinely unavailable, and `unavailable`
+ * for a refusal, a missing entity or any failure before the access decision.
+ * It is the SINGLE gated read: each scope landing's gate-repeating
  * `generateMetadata` (cinatra#1737) calls it too, so the browser tab and the
  * page heading can never disagree about what the viewer may be told.
  *
@@ -21,9 +24,10 @@ import "server-only";
  * session has active (the owner's decision on cinatra#3693), and the project gate
  * never compared the active organization in the first place.
  *
- * A `null` is not an error state on the page — the header falls back to the
- * scope's kind noun ("Project", "Team", "Organization"), never to a raw or
- * title-cased id, and never to the tab's name.
+ * An answer that is not `named` is not an error state on the page — the header
+ * falls back to the scope's kind noun ("Project", "Team", "Organization"), never
+ * to a raw or title-cased id, and never to the tab's name. The crumb draws what
+ * the drawing draws for each answer (`scopeSurfaceEntityLabel`).
  */
 import { eq } from "drizzle-orm";
 import { sql } from "drizzle-orm";
@@ -33,29 +37,37 @@ import { betterAuthDb, readUserIsOrgMember } from "@/lib/better-auth-db";
 import { projectsDb, projects } from "@/lib/projects-store";
 import { actorHoldsProjectGrant } from "@/lib/authz/project-read-gate";
 import { resolveTeamSurfaceAccess } from "@/lib/team-surface-access";
-import type { ScopeSurfaceRef } from "@/lib/scope-surfaces";
+import type { ScopeSurfaceEntityName, ScopeSurfaceRef } from "@/lib/scope-surfaces";
+
+const UNAVAILABLE: ScopeSurfaceEntityName = { state: "unavailable" };
+
+/** The answer for a reader the gate allowed: the name, or `blank` (cinatra#4453). */
+function allowedName(name: string | null | undefined): ScopeSurfaceEntityName {
+  const trimmed = name?.trim();
+  return trimmed ? { state: "named", name: trimmed } : { state: "blank" };
+}
 
 /**
- * The project's name, or `null`. Gate: an authenticated caller holding a
+ * The project's name. Gate: an authenticated caller holding a
  * resolved grant for THIS project (the sealed-room read gate, cinatra#1898).
  */
-async function readProjectName(projectId: string): Promise<string | null> {
+async function readProjectName(projectId: string): Promise<ScopeSurfaceEntityName> {
   const session = await getAuthSession();
-  if (!session) return null;
+  if (!session) return UNAVAILABLE;
   const rows = await projectsDb
     .select()
     .from(projects)
     .where(eq(projects.id, projectId))
     .limit(1);
   const project = rows[0];
-  if (!project) return null;
+  if (!project) return UNAVAILABLE;
   const actor = await getActorContext();
-  if (!actor || !actorHoldsProjectGrant(actor, project.id)) return null;
-  return project.name || null;
+  if (!actor || !actorHoldsProjectGrant(actor, project.id)) return UNAVAILABLE;
+  return allowedName(project.name);
 }
 
 /**
- * The team's name, or `null`. Gate: membership or management of the team,
+ * The team's name. Gate: membership or management of the team,
  * resolved against the TEAM's own organization (cinatra#3787).
  *
  * The gate used to require tenant alignment first: the team had to belong to the
@@ -65,9 +77,9 @@ async function readProjectName(projectId: string): Promise<string | null> {
  * The tenant of a team surface is the team's organization, so the name follows
  * the same rule the landing and the team's dashboard actions now follow.
  */
-async function readTeamName(teamId: string): Promise<string | null> {
+async function readTeamName(teamId: string): Promise<ScopeSurfaceEntityName> {
   const session = await getAuthSession();
-  if (!session) return null;
+  if (!session) return UNAVAILABLE;
   const rows = await betterAuthDb.execute<{
     name: string;
     organizationId: string;
@@ -85,7 +97,7 @@ async function readTeamName(teamId: string): Promise<string | null> {
     LIMIT 1
   `);
   const team = rows.rows?.[0];
-  if (!team) return null;
+  if (!team) return UNAVAILABLE;
   const orgRole = await resolveOrgRoleForUser(team.organizationId, session.user.id);
   const access = resolveTeamSurfaceAccess({
     team,
@@ -93,25 +105,35 @@ async function readTeamName(teamId: string): Promise<string | null> {
     platformAdmin: isPlatformAdmin(session),
     orgRole,
   });
-  if (access.outcome !== "allowed") return null;
-  return team.name || null;
-}
-
-/** The organization's name, or `null`. Gate: the caller is a member of it. */
-async function readOrganizationName(id: string): Promise<string | null> {
-  const session = await getAuthSession();
-  const userId = session?.user.id;
-  if (!userId) return null;
-  if (!(await readUserIsOrgMember(userId, id))) return null;
-  const rows = await betterAuthDb.execute<{ name: string | null }>(sql`
-    SELECT name FROM public."organization" WHERE id = ${id} LIMIT 1
-  `);
-  return rows.rows?.[0]?.name || null;
+  if (access.outcome !== "allowed") return UNAVAILABLE;
+  return allowedName(team.name);
 }
 
 /**
- * The entity name a scope's page header reads, or `null` when the caller may
- * not be told it or it is genuinely unavailable.
+ * The organization's name. Gate: the caller is a member of it. The name is read
+ * after the membership decision, so a failure of that one read answers `blank`
+ * to a member: the name is genuinely unavailable to a reader who may read it.
+ */
+async function readOrganizationName(id: string): Promise<ScopeSurfaceEntityName> {
+  const session = await getAuthSession();
+  const userId = session?.user.id;
+  if (!userId) return UNAVAILABLE;
+  if (!(await readUserIsOrgMember(userId, id))) return UNAVAILABLE;
+  let rows: { rows?: { name: string | null }[] };
+  try {
+    rows = await betterAuthDb.execute<{ name: string | null }>(sql`
+      SELECT name FROM public."organization" WHERE id = ${id} LIMIT 1
+    `);
+  } catch {
+    return { state: "blank" };
+  }
+  const row = rows.rows?.[0];
+  if (!row) return UNAVAILABLE;
+  return allowedName(row.name);
+}
+
+/**
+ * The entity name a scope's page header and crumb read, as the typed answer.
  *
  * The workspace and the personal scope are not id-bearing entities: their names
  * are fixed by the drawing itself ("The page's heading reads Workspace"), so
@@ -119,12 +141,12 @@ async function readOrganizationName(id: string): Promise<string | null> {
  */
 export async function readScopeSurfaceEntityName(
   scope: ScopeSurfaceRef,
-): Promise<string | null> {
+): Promise<ScopeSurfaceEntityName> {
   try {
     switch (scope.kind) {
       case "workspace":
       case "personal":
-        return null;
+        return UNAVAILABLE;
       case "project":
         return await readProjectName(scope.id);
       case "team":
@@ -134,7 +156,8 @@ export async function readScopeSurfaceEntityName(
     }
   } catch {
     // A name is a convenience on this surface, never its subject: a store
-    // failure must not take the page down. The header falls back to the kind.
-    return null;
+    // failure must not take the page down. A failure before the access decision
+    // tells the reader nothing, so the header and the crumb fall back to the kind.
+    return UNAVAILABLE;
   }
 }
