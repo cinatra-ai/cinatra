@@ -8,20 +8,28 @@
  * marker has to be in that service's environment; the connector's dev setup
  * passes it only to its own drush calls.
  *
- * We do NOT add a YAML parser dependency (as src/__tests__/a2a-peer-compose.test.ts):
- * the checks are string assertions against the raw file content. The readers take
- * the text as an argument, so the look-alike cases below run them on small inputs. They
- * read a plain shape and refuse these forms: a top-level line that is not a plain, unique,
- * known key (`include` is not one); in the top-level `services:` map, a line indented by a
- * tab or by one or three spaces, a service key or a key of a service that is not plain or is
- * repeated; a drupal environment entry that spans lines or repeats a key; a `<<` merge key or
- * `extends` on a line outside a comment. Escaped spellings (\x, \u, \U and an escaped line
- * break) are decoded before a name is looked for. The other root compose files may not name
- * drupal, the marker, extends or include, and no tracked file other than docker-compose.yml
- * and this test may name the marker.
+ * The readers parse the compose files with the `yaml` package. The root adds no
+ * dependency: the package is loaded through createRequire from packages/skills, a
+ * workspace dependency of the root that depends on `yaml`. CRLF line ends are read as
+ * LF, and aliases are resolved. The readers take the text as an argument, so the
+ * look-alike cases below run them on small inputs; each problem starts with its reason
+ * and a colon. A compose text is refused when it holds a carriage return outside a CRLF
+ * pair or a NEL, LS or PS line break (Compose's YAML reader reads these as line breaks,
+ * the package does not), a parse error or warning, more than one document, an explicit
+ * tag, a `<<` merge key, a top-level key other than name, version, services, networks,
+ * volumes, configs, secrets and `x-*` (`include` loads other files), `extends` in a
+ * service, an environment that is not a map or a list, or a `$` (Compose interpolation)
+ * in a service key, an environment key or an environment list entry. In
+ * docker-compose.yml the drupal environment must set the marker to the string "1", and
+ * the marker may be named once: in the text and in the parsed keys and string values.
+ * The other root compose files may not name drupal, the marker, extends or include, and
+ * no tracked file other than docker-compose.yml and this test may name the marker: in its
+ * text, or, for a YAML file, in a parsed key or string value. A tracked YAML file must
+ * parse, and a tracked file with a compose file name is read as a compose text.
  */
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -33,144 +41,135 @@ const MARKER = "CINATRA_DEV_SITE";
 const MARKER_FILES = ["docker-compose.yml", "src/__tests__/drupal-dev-site-marker-compose.test.ts"];
 /** The top-level keys the readers model, besides `x-` extension keys. `include` is not one: it loads other files. */
 const TOP_KEYS = ["name", "version", "services", "networks", "volumes", "configs", "secrets"];
+/** The names that Compose gives a compose file in a folder. */
+const COMPOSE_NAME = /^(docker-)?compose(\.[A-Za-z0-9_-]+)*\.ya?ml$/;
+/** The line breaks that the package and Compose's YAML reader do not read alike (checked after CRLF is read as LF). */
+const ODD_BREAK = new RegExp("[\\r\\u0085\\u2028\\u2029]");
 
-/** The text with the escapes that can spell a name decoded: `\xNN`, `\uNNNN`, `\UNNNNNNNN` and an escaped line break. */
-function decodeEscapes(text: string): string {
-  return text
-    .replace(/\\\r?\n[ \t]*/g, "")
-    .replace(/\\x([0-9A-Fa-f]{2})|\\u([0-9A-Fa-f]{4})|\\U([0-9A-Fa-f]{8})/g, (_m: string, x?: string, u?: string, w?: string) => {
-      const cp = parseInt(x ?? u ?? w ?? "", 16);
-      return cp <= 0x10ffff ? String.fromCodePoint(cp) : "";
-    });
+/** The parts of the `yaml` package (2.x) that the readers use. */
+interface YamlIssue {
+  code: string;
+}
+interface YamlNode {
+  tag?: string;
+}
+interface YamlDocument {
+  errors: YamlIssue[];
+  warnings: YamlIssue[];
+  toJS(): unknown;
+}
+interface YamlApi {
+  parseAllDocuments(text: string, options: { uniqueKeys: boolean; merge: boolean }): YamlDocument[];
+  visit(doc: YamlDocument, visitor: { Node: (key: unknown, node: YamlNode) => void }): void;
+}
+const YAML = createRequire(path.join(root, "packages", "skills", "package.json"))("yaml") as YamlApi;
+
+function isMap(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
 }
 
-function isComment(l: string): boolean {
-  return l.trim().startsWith("#");
+function own(m: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(m, key);
 }
 
 function occurrences(text: string, word: string): number {
   return text.split(word).length - 1;
 }
 
-/** The lines of the top-level `services:` map, without its key line: up to the next top-level key. */
-function servicesSection(text: string): string[] {
-  const lines = text.split("\n");
-  const at = lines.indexOf("services:");
-  if (at < 0) return [];
-  const out: string[] = [];
-  for (const l of lines.slice(at + 1)) {
-    if (/^[^\s#]/.test(l)) break;
-    out.push(l);
+/** Each key and string value of a parsed value. A value that two aliases share is read at both places; a cycle once. */
+function strings(value: unknown, out: string[] = [], open: unknown[] = []): string[] {
+  if (typeof value === "string") out.push(value);
+  else if (value !== null && typeof value === "object" && !open.includes(value)) {
+    open.push(value);
+    if (Array.isArray(value)) value.forEach((v) => strings(v, out, open));
+    else
+      for (const [k, v] of Object.entries(value)) {
+        out.push(k);
+        strings(v, out, open);
+      }
+    open.pop();
   }
   return out;
 }
 
-/**
- * Every reason why a compose text is not of the plain shape the readers model: top-level lines that are not plain,
- * unique, known keys (a second document, `include`, a flow map); in the `services:` map a line indented by a tab or by
- * one or three spaces, a service key that is not a plain key line (quoted, anchored, aliased, inline), a repeated
- * service key, a service key that is not plain or is repeated in its service; a `<<` merge key or `extends` on any line
- * outside a comment, escaped spellings decoded first.
- */
-function shapeProblems(text: string): string[] {
-  const problems: string[] = [];
-  const topKeys: string[] = [];
-  for (const l of text.split("\n").filter((x) => /^[^\s#]/.test(x))) {
-    const m = /^([A-Za-z0-9_.-]+):(?: |$)/.exec(l);
-    if (!m) problems.push(`a top-level line is not a plain key: ${l.slice(0, 40)}`);
-    else if (!TOP_KEYS.includes(m[1]) && !m[1].startsWith("x-")) problems.push(`the top-level key ${m[1]} is not one the readers model`);
-    if (m) topKeys.push(m[1]);
-  }
-  if (new Set(topKeys).size !== topKeys.length) problems.push("a top-level key is repeated");
-  const serviceKeys: string[] = [];
-  const keysOf = new Map<string, string[]>();
-  let service = "";
-  for (const l of servicesSection(text)) {
-    if (l.trim() === "" || isComment(l)) continue;
-    if (/^ *\t/.test(l) || /^ (?:\S| {2}\S)/.test(l)) {
-      problems.push(`a line of the services map is indented by a tab or by one or three spaces: ${l.trim().slice(0, 40)}`);
-    } else if (/^ {2}\S/.test(l)) {
-      const m = /^ {2}([A-Za-z0-9][A-Za-z0-9_.-]*):$/.exec(l);
-      service = m ? m[1] : "";
-      if (!m) problems.push(`a service key is not a plain key line: ${l.trim().slice(0, 40)}`);
-      else {
-        serviceKeys.push(service);
-        keysOf.set(service, keysOf.get(service) ?? []);
-      }
-    } else if (/^ {4}\S/.test(l)) {
-      const m = /^ {4}([A-Za-z_][A-Za-z0-9_]*):(?: |$)/.exec(l);
-      if (!m || service === "") problems.push(`a key of a service is not a plain key: ${l.trim().slice(0, 40)}`);
-      else keysOf.get(service)?.push(m[1]);
-    }
-  }
-  if (new Set(serviceKeys).size !== serviceKeys.length) problems.push("a service key is repeated in the services map");
-  keysOf.forEach((keys, name) => {
-    if (new Set(keys).size !== keys.length) problems.push(`a key is repeated in the service ${name}`);
+/** True when a map of the parsed value, at any depth, has the key `<<`. */
+function hasMergeKey(value: unknown, open: unknown[] = []): boolean {
+  if (value === null || typeof value !== "object" || open.includes(value)) return false;
+  open.push(value);
+  const found = Array.isArray(value)
+    ? value.some((v) => hasMergeKey(v, open))
+    : Object.entries(value).some(([k, v]) => k === "<<" || hasMergeKey(v, open));
+  open.pop();
+  return found;
+}
+
+/** The documents of a YAML text, CRLF read as LF, and every reason why it is not a clean parse (line breaks, errors). */
+function parse(text: string): { docs: YamlDocument[]; problems: string[] } {
+  const t = text.replace(/\r\n/g, "\n");
+  if (ODD_BREAK.test(t)) return { docs: [], problems: ["line-breaks: a carriage return outside a CRLF pair, or a NEL, LS or PS line break"] };
+  const docs = YAML.parseAllDocuments(t, { uniqueKeys: true, merge: false });
+  return { docs, problems: docs.flatMap((d) => d.errors.map((e) => `yaml: ${e.code}`)) };
+}
+
+/** A compose text's value, aliases resolved, and every reason why it is not of the shape the readers model (see the header). */
+function composeRead(text: string): { value: unknown; problems: string[] } {
+  const { docs, problems } = parse(text);
+  if (problems.length > 0) return { value: undefined, problems };
+  if (docs.length !== 1) return { value: undefined, problems: [`documents: the text holds ${docs.length} YAML documents, not one`] };
+  const doc = docs[0];
+  problems.push(...doc.warnings.map((w) => `yaml: ${w.code}`));
+  YAML.visit(doc, {
+    Node: (_key, node) => {
+      if (node.tag !== undefined) problems.push(`tag: an explicit tag ${node.tag}`);
+    },
   });
-  const body = text.split("\n").filter((l) => !isComment(l));
-  if (body.some((l) => l.includes("<<"))) problems.push("a line holds a << merge key");
-  if (decodeEscapes(body.join("\n")).includes("extends")) problems.push("a line names extends");
-  return problems;
-}
-
-/**
- * The text of one service of the `services:` map: from its exact key line (no anchor, no inline value) to the next
- * line at the service indent. Empty when the map does not hold the key exactly once.
- */
-function serviceBlock(text: string, name: string): string {
-  const lines = servicesSection(text);
-  if (lines.filter((l) => l === `  ${name}:`).length !== 1) return "";
-  const at = lines.indexOf(`  ${name}:`);
-  const out = [lines[at]];
-  for (const l of lines.slice(at + 1)) {
-    if (/^ {2}\S/.test(l)) break;
-    out.push(l);
+  let value: unknown;
+  try {
+    value = doc.toJS();
+  } catch {
+    return { value: undefined, problems: [...problems, "aliases: the aliases do not resolve"] };
   }
-  return out.join("\n") + "\n";
-}
-
-/** One entry of an environment map: a one-line `KEY: value`, the value plain or fully quoted, no anchor or alias. */
-const ENTRY = /^[A-Za-z_][A-Za-z0-9_]*: (?:"[^"\\]*"|'[^']*'|[^\s"'|>&*!%@`#{[\]][^#]*)$/;
-
-/**
- * The `environment:` map of a service block, as its entries. Only lines at the map's own indent (six spaces) are
- * entries; comment lines are skipped. A deeper line (a value that spans lines), an entry of another shape or a repeated
- * key makes the result `null`, as does a second `environment:` key.
- */
-function environmentLines(block: string): string[] | null {
-  const lines = block.split("\n");
-  if (lines.filter((l) => l === "    environment:").length !== 1) return lines.some((l) => /^ {4}environment\b/.test(l)) ? null : [];
-  const at = lines.indexOf("    environment:");
-  const out: string[] = [];
-  for (const l of lines.slice(at + 1)) {
-    if (l.trim() === "" || /^ {6}#/.test(l)) continue;
-    if (!l.startsWith("      ")) break;
-    if (l.startsWith("       ")) return null;
-    const entry = l.slice(6);
-    if (!ENTRY.test(entry)) return null;
-    out.push(entry);
+  if (!isMap(value)) return { value, problems: [...problems, "top: the text is not a map"] };
+  if (hasMergeKey(value)) problems.push("merge: a << merge key");
+  for (const k of Object.keys(value)) {
+    if (!TOP_KEYS.includes(k) && !k.startsWith("x-")) problems.push(`top: the top-level key ${k} is not one the readers model`);
   }
-  const keys = out.map((e) => e.slice(0, e.indexOf(":")));
-  return new Set(keys).size === keys.length ? out : null;
+  const services = value.services;
+  if (services !== undefined && services !== null && !isMap(services)) problems.push("services: the services value is not a map");
+  for (const [name, service] of Object.entries(isMap(services) ? services : {})) {
+    if (name.includes("$")) problems.push(`interpolation: the service key ${name}`);
+    if (service === null) continue;
+    if (!isMap(service)) {
+      problems.push(`service: the service ${name} is not a map`);
+      continue;
+    }
+    if (own(service, "extends")) problems.push(`extends: the service ${name}`);
+    const env = service.environment;
+    if (Array.isArray(env)) {
+      for (const entry of env) {
+        if (typeof entry !== "string") problems.push(`environment: an environment list entry of ${name} is not a string`);
+        else if (entry.includes("$")) problems.push(`interpolation: an environment list entry of ${name}`);
+      }
+    } else if (isMap(env)) {
+      for (const key of Object.keys(env)) if (key.includes("$")) problems.push(`interpolation: an environment key of ${name}`);
+    } else if (env !== undefined && env !== null) problems.push(`environment: the environment of ${name} is not a map or a list`);
+  }
+  return { value, problems };
 }
 
-/** Every reason why a compose text does not set the marker exactly once, as "1", in the drupal service only. */
+/** Every reason why a compose text does not set the marker exactly once, as the string "1", in the drupal service only. */
 function markerProblems(text: string): string[] {
-  const problems: string[] = [...shapeProblems(text)];
-  const block = serviceBlock(text, "drupal");
-  if (block === "") problems.push("the services map has no single plain drupal key");
-  const env = environmentLines(block);
-  if (env === null) problems.push("the drupal environment holds a line that is not a one-line KEY: value entry, or a repeated key");
-  else if (env.length === 0) problems.push("the drupal service has no environment map");
-  const marker = (env ?? []).filter((l) => l.startsWith(`${MARKER}:`));
-  if (JSON.stringify(marker) !== JSON.stringify([`${MARKER}: "1"`])) {
-    problems.push(`the drupal environment does not set ${MARKER} exactly once to "1"`);
-  }
-  const all = text.split("\n").filter((l) => l.includes(MARKER));
-  if (all.length !== 1 || all[0] !== `      ${MARKER}: "1"` || !block.split("\n").includes(all[0])) {
-    problems.push(`not exactly one line names ${MARKER}, as the drupal entry`);
-  }
-  if (occurrences(decodeEscapes(text), MARKER) !== occurrences(text, MARKER)) problems.push(`an escaped spelling names ${MARKER}`);
+  const { value, problems } = composeRead(text);
+  const services = isMap(value) && isMap(value.services) ? value.services : {};
+  const drupal = own(services, "drupal") ? services.drupal : undefined;
+  const env = isMap(drupal) ? drupal.environment : undefined;
+  if (!isMap(drupal)) problems.push("drupal: the services map has no drupal service map");
+  else if (!isMap(env)) problems.push("drupal: the drupal environment is not a map");
+  else if (!own(env, MARKER) || env[MARKER] !== "1") problems.push(`drupal: the drupal environment does not set ${MARKER} to the string "1"`);
+  const named = strings(value).filter((s) => s.includes(MARKER)).length;
+  if (named !== 1) problems.push(`marker: ${named} parsed keys or values name ${MARKER}, not one`);
+  const raw = occurrences(text, MARKER);
+  if (raw !== 1) problems.push(`marker: the text names ${MARKER} ${raw} times, not once`);
   return problems;
 }
 
@@ -178,19 +177,46 @@ function markerProblems(text: string): string[] {
 function otherRootComposeFiles(): string[] {
   return fs
     .readdirSync(root)
-    .filter((n) => /^(docker-)?compose(\.[A-Za-z0-9_-]+)*\.ya?ml$/.test(n) && n !== "docker-compose.yml")
+    .filter((n) => COMPOSE_NAME.test(n) && n !== "docker-compose.yml")
     .sort();
 }
 
-/** Every reason why another root compose file could reach the drupal service: its text names drupal, the marker, extends or include (any case, escapes decoded). */
+/** Every reason why another root compose file could reach the drupal service: its shape, or a name of drupal, the marker, extends or include (any case) in its text or in a parsed key or value. */
 function rootFileProblems(text: string): string[] {
-  const t = decodeEscapes(text).toLowerCase();
-  return ["drupal", MARKER.toLowerCase(), "extends", "include"].filter((w) => t.includes(w)).map((w) => `the file names ${w}`);
+  const { value, problems } = composeRead(text);
+  const raw = text.toLowerCase();
+  const read = strings(value).join("\n").toLowerCase();
+  for (const w of ["drupal", MARKER.toLowerCase(), "extends", "include"]) {
+    if (raw.includes(w) || read.includes(w)) problems.push(`names: the file names ${w}`);
+  }
+  return problems;
 }
 
-/** Every file of the list, other than the files that may, that names the marker (escapes decoded). */
+/** Every reason why a file of the list, other than the files that may, could name the marker (see the header). */
 function trackedFileProblems(files: { name: string; text: string }[]): string[] {
-  return files.filter((f) => !MARKER_FILES.includes(f.name) && decodeEscapes(f.text).includes(MARKER)).map((f) => `${f.name} names ${MARKER}`);
+  const problems: string[] = [];
+  for (const f of files.filter((x) => !MARKER_FILES.includes(x.name))) {
+    const at = (p: string) => p.replace(/^([a-z-]+): /, `$1: ${f.name}: `);
+    if (f.text.includes(MARKER)) problems.push(`names: ${f.name}: the text names ${MARKER}`);
+    if (!/\.ya?ml$/i.test(f.name)) continue;
+    let values: unknown[] = [];
+    if (COMPOSE_NAME.test(path.posix.basename(f.name))) {
+      const read = composeRead(f.text);
+      problems.push(...read.problems.map(at));
+      values = [read.value];
+    } else {
+      const { docs, problems: parsed } = parse(f.text);
+      problems.push(...parsed.map(at));
+      if (parsed.length > 0) continue;
+      try {
+        values = docs.map((d) => d.toJS());
+      } catch {
+        problems.push(`aliases: ${f.name}: the aliases do not resolve`);
+      }
+    }
+    if (values.some((v) => strings(v).some((s) => s.includes(MARKER)))) problems.push(`names: ${f.name}: a parsed key or value names ${MARKER}`);
+  }
+  return problems;
 }
 
 /** The tracked regular files of the repository (`git ls-files`; links and submodules left out). */
@@ -202,11 +228,21 @@ function trackedFileNames(): string[] {
     .map((e) => e.slice(e.indexOf("\t") + 1));
 }
 
+/** The test fails unless one of the problems has the reason (the word before its first colon). */
+function expectReason(problems: string[], reason: string): void {
+  expect(
+    problems.map((p) => p.slice(0, p.indexOf(":"))),
+    JSON.stringify(problems),
+  ).toContain(reason);
+}
+
 describe("the drupal compose service carries the development-site marker", () => {
   it("has a drupal service with an environment map", () => {
     expect(fs.existsSync(composePath)).toBe(true);
-    expect(serviceBlock(yaml, "drupal")).toContain("container_name: cinatra-drupal-1");
-    expect(environmentLines(serviceBlock(yaml, "drupal"))?.length ?? 0).toBeGreaterThan(0);
+    const { value } = composeRead(yaml);
+    const drupal = isMap(value) && isMap(value.services) ? value.services.drupal : undefined;
+    expect(isMap(drupal) ? drupal.container_name : undefined).toBe("cinatra-drupal-1");
+    expect(isMap(drupal) && isMap(drupal.environment) ? Object.keys(drupal.environment).length : 0).toBeGreaterThan(0);
   });
 
   it('sets CINATRA_DEV_SITE to the string "1" in the drupal environment and nowhere else in the file', () => {
@@ -261,75 +297,92 @@ describe("the marker reader refuses look-alikes of the drupal service", () => {
       `      ${MARKER}: "1"`,
       "",
     ].join("\n");
-    expect(markerProblems(text)).not.toEqual([]);
+    expectReason(markerProblems(text), "drupal");
   });
 
   it("refuses the marker inside a block-scalar value of another variable", () => {
     const text = VALID.replace(`      ${MARKER}: "1"`, `      PAYLOAD: |\n        ${MARKER}: "1"`);
-    expect(markerProblems(text)).not.toEqual([]);
+    expectReason(markerProblems(text), "drupal");
   });
 
   it("refuses a service that extends the drupal service", () => {
     const text = VALID.replace("volumes:\n  data:", "  drupal-clone:\n    extends:\n      service: drupal\nvolumes:\n  data:");
     expect(text).toContain("  drupal-clone:\n    extends:");
-    expect(markerProblems(text)).not.toEqual([]);
+    expectReason(markerProblems(text), "extends");
   });
 
   it("refuses an anchored drupal service that another service aliases", () => {
     const text = VALID.replace("  drupal:\n", "  drupal: &drupal\n").replace("volumes:\n  data:", "  drupal-copy: *drupal\nvolumes:\n  data:");
     expect(text).toContain("  drupal-copy: *drupal");
-    expect(markerProblems(text)).not.toEqual([]);
+    expectReason(markerProblems(text), "marker");
   });
 
   it("refuses a second environment key in the drupal service", () => {
     const text = VALID.replace("    volumes:\n      - data:/data\n", "    volumes:\n      - data:/data\n    environment: {}\n");
     expect(text).toContain("      - data:/data\n    environment: {}\n");
-    expect(markerProblems(text)).not.toEqual([]);
+    expect(markerProblems(text)).toContain("yaml: DUPLICATE_KEY");
   });
 
   it("refuses a quoted second drupal key in the services map", () => {
     const text = VALID.replace("volumes:\n  data:", '  "drupal":\n    image: drupal\nvolumes:\n  data:');
     expect(text).toContain('  "drupal":\n');
-    expect(markerProblems(text)).not.toEqual([]);
+    expect(markerProblems(text)).toContain("yaml: DUPLICATE_KEY");
   });
 
   it("refuses a second top-level services map", () => {
     const text = VALID + "services:\n  extra:\n    image: busybox\n";
-    expect(markerProblems(text)).not.toEqual([]);
+    expect(markerProblems(text)).toContain("yaml: DUPLICATE_KEY");
   });
 
-  it("refuses a service that takes extends through a merge key", () => {
-    const text = VALID.replace("services:\n", "x-copy: &copy\n  extends:\n    service: drupal\nservices:\n").replace(
+  it("refuses a service that takes a map through a merge key", () => {
+    const text = VALID.replace("services:\n", "x-copy: &copy\n  image: drupal\nservices:\n").replace(
       "volumes:\n  data:",
       "  drupal-copy:\n    <<: *copy\nvolumes:\n  data:",
     );
     expect(text).toContain("  drupal-copy:\n    <<: *copy\n");
-    expect(markerProblems(text)).not.toEqual([]);
+    expect(text).not.toContain("extends");
+    expectReason(markerProblems(text), "merge");
   });
 
   it("refuses an escaped spelling of extends", () => {
     const text = VALID.replace("volumes:\n  data:", '  drupal-copy:\n    "ext\\u0065nds":\n      service: drupal\nvolumes:\n  data:');
     expect(text).toContain('    "ext\\u0065nds":\n');
-    expect(markerProblems(text)).not.toEqual([]);
+    expectReason(markerProblems(text), "extends");
   });
 
   it("refuses an escaped spelling of the marker in another service", () => {
     const text = VALID.replace("    image: postgres\n", '    image: postgres\n    environment:\n      "CINATRA_DEV_\\u0053ITE": "1"\n');
     expect(text).toContain('      "CINATRA_DEV_\\u0053ITE": "1"\n');
-    expect(markerProblems(text)).not.toEqual([]);
+    expectReason(markerProblems(text), "marker");
   });
 
   it("refuses an include of another compose file", () => {
     const text = "include:\n  - docker-compose.extra.yml\n" + VALID;
-    expect(markerProblems(text)).not.toEqual([]);
+    expectReason(markerProblems(text), "top");
   });
 
   it("refuses another root compose file that defines drupal in flow style", () => {
-    expect(rootFileProblems('services: { drupal: { image: "drupal:11" } }\n')).not.toEqual([]);
+    expectReason(rootFileProblems('services: { drupal: { image: "drupal:11" } }\n'), "names");
   });
 
   it("refuses a tracked file other than the compose file that names the marker", () => {
-    expect(trackedFileProblems([{ name: "docker/drupal-clone/clone.env", text: `${MARKER}=1\n` }])).not.toEqual([]);
+    expectReason(trackedFileProblems([{ name: "docker/drupal-clone/clone.env", text: `${MARKER}=1\n` }]), "names");
+  });
+
+  it("refuses a repeated entry in the drupal environment", () => {
+    const text = VALID.replace("      DRUPAL_ADMIN_USER: admin\n", "      DRUPAL_ADMIN_USER: admin\n      DRUPAL_ADMIN_USER: root\n");
+    expect(text).toContain("      DRUPAL_ADMIN_USER: admin\n      DRUPAL_ADMIN_USER: root\n");
+    expect(markerProblems(text)).toContain("yaml: DUPLICATE_KEY");
+  });
+
+  it("refuses a repeated plain service key", () => {
+    const text = VALID.replace("volumes:\n  data:", "  postgres:\n    image: postgres:16\nvolumes:\n  data:");
+    expect(text).toContain("  postgres:\n    image: postgres:16\n");
+    expect(markerProblems(text)).toContain("yaml: DUPLICATE_KEY");
+  });
+
+  it("refuses a second YAML document", () => {
+    expectReason(markerProblems(VALID + "---\nservices: {}\n"), "documents");
   });
 });
 
@@ -343,47 +396,47 @@ describe("the marker readers refuse interpolated names and line breaks that only
   it("refuses an interpolated environment list entry in another service", () => {
     const text = VALID.replace("    image: postgres\n", "    image: postgres\n    environment:\n      - CINATRA_DEV_${CINATRA_G10_PART:-SITE}=1\n");
     expect(text).toContain("      - CINATRA_DEV_${CINATRA_G10_PART:-SITE}=1\n");
-    expect(markerProblems(text)).not.toEqual([]);
+    expectReason(markerProblems(text), "interpolation");
   });
 
   it("refuses an interpolated environment key in another service", () => {
     const text = VALID.replace("    image: postgres\n", '    image: postgres\n    environment:\n      CINATRA_DEV_${CINATRA_G10_PART:-SITE}: "1"\n');
     expect(text).toContain('      CINATRA_DEV_${CINATRA_G10_PART:-SITE}: "1"\n');
-    expect(markerProblems(text)).not.toEqual([]);
+    expectReason(markerProblems(text), "interpolation");
   });
 
   it("refuses an interpolated service key", () => {
     const text = VALID.replace("volumes:\n  data:", "  drupal${CINATRA_G10_SUFFIX:-}:\n    image: drupal\nvolumes:\n  data:");
     expect(text).toContain("  drupal${CINATRA_G10_SUFFIX:-}:\n");
-    expect(markerProblems(text)).not.toEqual([]);
+    expectReason(markerProblems(text), "interpolation");
   });
 
   it("refuses another root compose file with an interpolated environment list entry", () => {
-    expect(rootFileProblems(INTERPOLATED)).not.toEqual([]);
+    expectReason(rootFileProblems(INTERPOLATED), "interpolation");
   });
 
   it("refuses a tracked compose file with an interpolated environment list entry", () => {
-    expect(trackedFileProblems([{ name: "docker/extra/compose.yaml", text: INTERPOLATED }])).not.toEqual([]);
+    expectReason(trackedFileProblems([{ name: "docker/extra/compose.yaml", text: INTERPOLATED }]), "interpolation");
   });
 
   it("refuses an escaped name split by a lone carriage return in another service", () => {
     const text = VALID.replace("    image: postgres\n", `    image: postgres\n    environment:\n${LONE_CR_KEY}\n`);
     expect(text).toContain("CINATRA_DEV_\\\rSITE");
-    expect(markerProblems(text)).not.toEqual([]);
+    expectReason(markerProblems(text), "line-breaks");
   });
 
   it("refuses a lone carriage return in a tracked YAML file", () => {
-    expect(trackedFileProblems([{ name: "docker/extra/vars.yml", text: `vars:\n${LONE_CR_KEY}\n` }])).not.toEqual([]);
+    expectReason(trackedFileProblems([{ name: "docker/extra/vars.yml", text: `vars:\n${LONE_CR_KEY}\n` }]), "line-breaks");
   });
 
   it("refuses a NEL line break in another root compose file", () => {
-    expect(rootFileProblems(`services:\n  wordpress:\n    environment:\n${NEL_KEY}\n`)).not.toEqual([]);
+    expectReason(rootFileProblems(`services:\n  wordpress:\n    environment:\n${NEL_KEY}\n`), "line-breaks");
   });
 
   it("refuses an explicit tag in another service", () => {
     const text = VALID.replace("    image: postgres\n", "    image: postgres\n    environment: !override {}\n");
     expect(text).toContain("    environment: !override {}\n");
-    expect(markerProblems(text)).not.toEqual([]);
+    expectReason(markerProblems(text), "tag");
   });
 
   it("accepts the minimal valid file with CRLF line ends", () => {
