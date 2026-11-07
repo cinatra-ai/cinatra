@@ -1253,7 +1253,8 @@ describe("cinatra#3319 — readClaimBackedMeaningTypesForOrg", () => {
     };
     expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
     // A second live owner row at 1.0.0 in the same organisation: the runtime
-    // skips the version (activates neither row), so the reader answers nothing.
+    // skips the version (activates neither row), so the reader rejects the
+    // read: it throws, and gives no empty answer.
     t3Store.rows = {
       "inst-li-default": defaultRow,
       [LI_INSTALL]: linkedinRow(digestOf(rec1), nonDefault),
