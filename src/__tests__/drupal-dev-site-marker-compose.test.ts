@@ -18,14 +18,25 @@
  * the package does not), a parse error or warning, more than one document, an explicit
  * tag, a `<<` merge key, a top-level key other than name, version, services, networks,
  * volumes, configs, secrets and `x-*` (`include` loads other files), `extends` in a
- * service, an environment that is not a map or a list, or a `$` (Compose interpolation)
- * in a service key, an environment key or an environment list entry. In
- * docker-compose.yml the drupal environment must set the marker to the string "1", and
- * the marker may be named once: in the text and in the parsed keys and string values.
- * The other root compose files may not name drupal, the marker, extends or include, and
- * no tracked file other than docker-compose.yml and this test may name the marker: in its
- * text, or, for a YAML file, in a parsed key or string value. A tracked YAML file must
- * parse, and a tracked file with a compose file name is read as a compose text.
+ * service, an environment that is not a map or a list (a null environment is read as
+ * none), a `$` in a service key, an environment key or an environment list entry (Compose
+ * does not interpolate keys; the readers refuse a `$` there all the same), or a string
+ * value, at any place of the text, with a `$` form that Compose does not read or whose
+ * interpolation can name the marker. Compose interpolates every string value: the
+ * readers read each `$` form of a value with its variable unset, so a value is read with
+ * each default (`:-` and `-`) or alternative (`:+` and `+`) and with none, nested forms
+ * included, and `$$` as one `$`. A variable's value from the shell or from an untracked
+ * .env file is not read, and a command's shell code is not run. In docker-compose.yml
+ * the drupal environment must set the marker to the string "1", and the marker may be
+ * named once: in the text and in the parsed keys and string values. The other root
+ * compose files may not name drupal, the marker, extends or include, and no tracked file
+ * other than docker-compose.yml and this test may name the marker: in its text, or, for
+ * a YAML file, in a parsed key or string value. A tracked YAML file must parse, a tracked
+ * file with a compose file name is read as a compose text, and no .env file is tracked at
+ * the root (Compose reads it for the values of the variables). A tracked link (git mode
+ * 120000) with a YAML file name is read under its own name with the text of the tracked
+ * regular file it points to, as Compose follows it; such a link that points to no tracked
+ * regular file is refused. Submodules are not read.
  */
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
@@ -43,6 +54,12 @@ const MARKER_FILES = ["docker-compose.yml", "src/__tests__/drupal-dev-site-marke
 const TOP_KEYS = ["name", "version", "services", "networks", "volumes", "configs", "secrets"];
 /** The names that Compose gives a compose file in a folder. */
 const COMPOSE_NAME = /^(docker-)?compose(\.[A-Za-z0-9_-]+)*\.ya?ml$/;
+/** The git mode of a tracked link. */
+const LINK = "120000";
+/** A variable name of a Compose `$` form. */
+const VAR_NAME = /^[_A-Za-z][_A-Za-z0-9]*/;
+/** The most readings of one value that the readers expand; a value with more is refused. */
+const MAX_FORMS = 256;
 /** The line breaks that the package and Compose's YAML reader do not read alike (checked after CRLF is read as LF). */
 const ODD_BREAK = new RegExp("[\\r\\u0085\\u2028\\u2029]");
 
@@ -90,6 +107,74 @@ function strings(value: unknown, out: string[] = [], open: unknown[] = []): stri
     open.pop();
   }
   return out;
+}
+
+/** Each string value of a parsed value (keys left out), with its place: Compose interpolates these. */
+function stringValues(value: unknown, at = "", out: { at: string; s: string }[] = [], open: unknown[] = []): { at: string; s: string }[] {
+  if (typeof value === "string") out.push({ at, s: value });
+  else if (value !== null && typeof value === "object" && !open.includes(value)) {
+    open.push(value);
+    if (Array.isArray(value)) value.forEach((v, i) => stringValues(v, `${at}[${i}]`, out, open));
+    else for (const [k, v] of Object.entries(value)) stringValues(v, at === "" ? k : `${at}.${k}`, out, open);
+    open.pop();
+  }
+  return out;
+}
+
+/**
+ * Every string a value can become when Compose interpolates it with its variables unset: `$$` is one `$`; `$NAME` and
+ * `${NAME}` are empty; `${NAME:-w}`, `${NAME-w}`, `${NAME:+w}`, `${NAME+w}`, `${NAME:?w}` and `${NAME?w}` are empty or a
+ * reading of w (nested forms included). Null when the value holds a `$` form that Compose does not read, or more than
+ * MAX_FORMS readings.
+ */
+function interpolations(s: string): string[] | null {
+  let forms = [""];
+  let i = 0;
+  while (i < s.length) {
+    if (s[i] !== "$") {
+      forms = forms.map((f) => f + s[i]);
+      i++;
+      continue;
+    }
+    if (s[i + 1] === "$") {
+      forms = forms.map((f) => f + "$");
+      i += 2;
+      continue;
+    }
+    const bare = VAR_NAME.exec(s.slice(i + 1));
+    if (bare) {
+      i += 1 + bare[0].length;
+      continue;
+    }
+    if (s[i + 1] !== "{") return null;
+    let depth = 1;
+    let j = i + 2;
+    while (j < s.length && depth > 0) {
+      if (s[j] === "$" && s[j + 1] === "$") j += 2;
+      else if (s[j] === "$" && s[j + 1] === "{") {
+        depth++;
+        j += 2;
+      } else {
+        if (s[j] === "}") depth--;
+        j++;
+      }
+    }
+    if (depth !== 0) return null;
+    const form = /^([_A-Za-z][_A-Za-z0-9]*)(?:(:?[-+?])([\s\S]*))?$/.exec(s.slice(i + 2, j - 1));
+    if (!form) return null;
+    let words = [""];
+    if (form[2] !== undefined) {
+      const inner = interpolations(form[3]);
+      if (inner === null) return null;
+      words = ["", ...inner];
+    }
+    const next = new Set<string>();
+    for (const f of forms) for (const w of words) next.add(f + w);
+    if (next.size > MAX_FORMS) return null;
+    forms = [...next];
+    i = j;
+  }
+  return forms;
 }
 
 /** True when a map of the parsed value, at any depth, has the key `<<`. */
@@ -154,6 +239,12 @@ function composeRead(text: string): { value: unknown; problems: string[] } {
       for (const key of Object.keys(env)) if (key.includes("$")) problems.push(`interpolation: an environment key of ${name}`);
     } else if (env !== undefined && env !== null) problems.push(`environment: the environment of ${name} is not a map or a list`);
   }
+  for (const { at, s } of stringValues(value)) {
+    if (!s.includes("$")) continue;
+    const forms = interpolations(s);
+    if (forms === null) problems.push(`interpolation: the value at ${at} holds a $ form that the readers do not read`);
+    else if (forms.some((f) => f.includes(MARKER))) problems.push(`interpolation: the value at ${at} can name ${MARKER} after interpolation`);
+  }
   return { value, problems };
 }
 
@@ -192,20 +283,47 @@ function rootFileProblems(text: string): string[] {
   return problems;
 }
 
+/** A tracked file: its path, its text (for a link, the link's target) and its git mode (a regular file when none). */
+interface TrackedFile {
+  name: string;
+  text: string;
+  mode?: string;
+}
+
+/** The path inside the repository that a link of the list points to, or null when it points outside it. */
+function linkTarget(link: TrackedFile): string | null {
+  if (path.posix.isAbsolute(link.text)) return null;
+  const to = path.posix.normalize(path.posix.join(path.posix.dirname(link.name), link.text));
+  return to === ".." || to.startsWith("../") ? null : to;
+}
+
 /** Every reason why a file of the list, other than the files that may, could name the marker (see the header). */
-function trackedFileProblems(files: { name: string; text: string }[]): string[] {
+function trackedFileProblems(files: TrackedFile[]): string[] {
   const problems: string[] = [];
+  const regular = new Map(files.filter((x) => x.mode !== LINK).map((x) => [x.name, x.text]));
   for (const f of files.filter((x) => !MARKER_FILES.includes(x.name))) {
     const at = (p: string) => p.replace(/^([a-z-]+): /, `$1: ${f.name}: `);
+    if (f.name === ".env") problems.push(`env: ${f.name}: Compose reads the root .env file for the values of the variables`);
     if (f.text.includes(MARKER)) problems.push(`names: ${f.name}: the text names ${MARKER}`);
     if (!/\.ya?ml$/i.test(f.name)) continue;
+    let text = f.text;
+    if (f.mode === LINK) {
+      const to = linkTarget(f);
+      const target = to === null ? undefined : regular.get(to);
+      if (target === undefined) {
+        problems.push(`link: ${f.name}: the link points to no tracked regular file of the list`);
+        continue;
+      }
+      text = target;
+      if (text.includes(MARKER)) problems.push(`names: ${f.name}: the text of the link's target names ${MARKER}`);
+    }
     let values: unknown[] = [];
     if (COMPOSE_NAME.test(path.posix.basename(f.name))) {
-      const read = composeRead(f.text);
+      const read = composeRead(text);
       problems.push(...read.problems.map(at));
       values = [read.value];
     } else {
-      const { docs, problems: parsed } = parse(f.text);
+      const { docs, problems: parsed } = parse(text);
       problems.push(...parsed.map(at));
       if (parsed.length > 0) continue;
       try {
@@ -219,13 +337,16 @@ function trackedFileProblems(files: { name: string; text: string }[]): string[] 
   return problems;
 }
 
-/** The tracked regular files of the repository (`git ls-files`; links and submodules left out). */
-function trackedFileNames(): string[] {
+/** The tracked regular files and links of the repository (`git ls-files -s`: mode, object and path; submodules left out). */
+function trackedFileNames(): { mode: string; object: string; name: string }[] {
   const out = execFileSync("git", ["-C", root, "ls-files", "-z", "-s"], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
   return out
     .split("\0")
-    .filter((e) => /^100(644|755) /.test(e))
-    .map((e) => e.slice(e.indexOf("\t") + 1));
+    .filter((e) => /^(100644|100755|120000) /.test(e))
+    .map((e) => {
+      const [mode, object] = e.slice(0, e.indexOf("\t")).split(" ");
+      return { mode, object, name: e.slice(e.indexOf("\t") + 1) };
+    });
 }
 
 /** The test fails unless one of the problems has the reason (the word before its first colon). */
@@ -256,9 +377,17 @@ describe("the drupal compose service carries the development-site marker", () =>
   });
 
   it("no tracked file other than docker-compose.yml and this test names the marker", () => {
-    const names = trackedFileNames();
-    expect(names).toContain("docker-compose.yml");
-    const problems = names.flatMap((name) => trackedFileProblems([{ name, text: fs.readFileSync(path.join(root, name), "utf8") }]));
+    const entries = trackedFileNames();
+    expect(entries.map((e) => e.name)).toContain("docker-compose.yml");
+    const regular = new Set(entries.filter((e) => e.mode !== LINK).map((e) => e.name));
+    const read = (name: string) => fs.readFileSync(path.join(root, name), "utf8");
+    const problems = entries.flatMap((e) => {
+      if (e.mode !== LINK) return trackedFileProblems([{ name: e.name, text: read(e.name) }]);
+      // A link is read with its target from git (as Compose follows it), and with the tracked regular file it points to.
+      const link = { name: e.name, text: execFileSync("git", ["-C", root, "cat-file", "blob", e.object], { encoding: "utf8" }), mode: LINK };
+      const to = linkTarget(link);
+      return trackedFileProblems(to !== null && regular.has(to) ? [link, { name: to, text: read(to) }] : [link]);
+    });
     expect(problems).toEqual([]);
   }, 120_000);
 });
