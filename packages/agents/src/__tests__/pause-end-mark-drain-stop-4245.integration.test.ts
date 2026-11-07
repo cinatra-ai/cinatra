@@ -36,7 +36,12 @@
  * record is between its sibling check and its commit, so the declared record
  * ends the pause beside it (M13), or a drain takes the plain repair before the
  * end mark is visible and starts its repair run under the parent that then
- * waits at the ended pause (M14).
+ * waits at the ended pause (M14). The case of pre-review 6 (M15) is red at
+ * 1e7c40d0 too: a drain that selected a plain repair before the end mark moves
+ * it to `dispatched` while a declared record sits between its end mark and its
+ * sibling read, so the declared record does not see it and ends the pause
+ * beside a started repair run. A `markhold` on a run keeps the transaction that
+ * writes the run's end mark waiting right after that write (M15).
  *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided. With
  * X4245_PAUSE_CLAIM_REALDB=1 a missing database throws instead of skipping.
@@ -52,6 +57,8 @@ const ctl = vi.hoisted(() => ({
   statusOf: null as null | ((runId: string) => Promise<string | null>),
   launched: [] as { runId: string; parentRunId: string | null; parentStatus: string | null }[],
   sent: [] as unknown[],
+  /** M15: called once at the repair run's launch, after it is recorded (the drain waits for it). */
+  onLaunch: null as null | (() => Promise<void>),
 }));
 
 vi.mock("@cinatra-ai/a2a", async (orig) => {
@@ -87,6 +94,9 @@ vi.mock("../lifecycle-coordinator", async (orig) => {
       const parentRunId = input.create.input.parentRunId ?? null;
       const parentStatus = parentRunId && ctl.statusOf ? await ctl.statusOf(parentRunId) : null;
       ctl.launched.push({ runId: input.create.input.id, parentRunId, parentStatus });
+      const hook = ctl.onLaunch;
+      ctl.onLaunch = null;
+      if (hook) await hook();
       return { carrier: { kind: "run", run: { id: input.create.input.id } }, status: "queued", moment: null };
     }),
   };
@@ -310,6 +320,19 @@ beforeAll(async () => {
         RETURN NEW;
       END $f$`);
     await admin.query(`CREATE TRIGGER fail_4245d1_repair BEFORE INSERT ON ${sch}."lifecycle_repair" FOR EACH ROW EXECUTE FUNCTION ${sch}."fail_4245d1_repair"()`);
+    // M15: a run with a `markhold` keeps the statement that writes its end mark waiting (at most 20 s) after the write,
+    // holding the run row, until the test lifts the hold.
+    await admin.query(`CREATE FUNCTION ${sch}."fail_4245d1_markhold"() RETURNS trigger LANGUAGE plpgsql AS $f$
+      BEGIN
+        IF NEW.pause_claim_phase = 'changes_requested' AND OLD.pause_claim_phase IS DISTINCT FROM 'changes_requested' THEN
+          FOR i IN 1..400 LOOP
+            EXIT WHEN NOT EXISTS (SELECT 1 FROM ${sch}."fail_4245d1" WHERE key = NEW.id AND kind = 'markhold');
+            PERFORM pg_sleep(0.05);
+          END LOOP;
+        END IF;
+        RETURN NULL;
+      END $f$`);
+    await admin.query(`CREATE TRIGGER fail_4245d1_markhold AFTER UPDATE ON ${sch}."agent_runs" FOR EACH ROW EXECUTE FUNCTION ${sch}."fail_4245d1_markhold"()`);
     await admin.query(
       `INSERT INTO public."organization" (id, name, slug, "createdAt")
        VALUES ($1, $1, $1, now()), ($2, $2, $2, now()) ON CONFLICT (id) DO NOTHING`,
@@ -348,6 +371,7 @@ beforeEach(() => {
   ctl.latest = null;
   ctl.launched = [];
   ctl.sent = [];
+  ctl.onLaunch = null;
 });
 
 describe.skipIf(!HAS_DB)("the change request's end mark (spec 5.2, spec-rev1 MF5)", () => {
@@ -822,5 +846,47 @@ describe.skipIf(!HAS_DB)("the drain stops the run before the repair run (spec 3.
       { runId: drain.repairRunId(ended.id), parentRunId: p.runId, parentStatus: "stopped" },
       { runId: drain.repairRunId(later.id), parentRunId: p.runId, parentStatus: "stopped" },
     ]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("a plain repair a drain selected before the end mark (pre-review 6)", () => {
+  it("M15: the drain launches a plain repair while a declared record sits after its end mark: the declared record refuses", async () => {
+    const p = await seedPaused({ generation: 10 });
+    const b = await addLeg(p);
+    // A committed change request without declaredPause on leg B: a requested repair that keeps no generation.
+    expect(await changeRequest(p, { declared: false, gateOf: b, reviewTaskId: `wayflow-${p.task}#2` })).toMatchObject({ ok: true, status: "requested" });
+    const [plain] = await repairsOf(b.gateId);
+    expect(plain.generation).toBeNull();
+    await onlyThisRepair(b.gateId);
+    await pool(`INSERT INTO ${S()}."fail_4245d1" (key, kind) VALUES ($1, 'markhold')`, [p.runId]);
+    let declared: ReturnType<typeof changeRequest> | undefined;
+    let drained: ReturnType<typeof drain.dispatchPendingProducerRepairs> | undefined;
+    let atLaunch: () => void = () => undefined;
+    const launched = new Promise<void>((resolve) => { atLaunch = resolve; });
+    try {
+      // The drain selects B's repair (no end mark yet). At its launch, the declared record on leg A writes the end
+      // mark and waits right after it, before its sibling read.
+      ctl.onLaunch = async () => {
+        declared = changeRequest(p);
+        await waitForBackend(`wait_event = 'PgSleep'`);
+        atLaunch();
+      };
+      drained = drain.dispatchPendingProducerRepairs();
+      await Promise.race([launched, drained]);
+      // The drain then moves B's repair to `dispatched` (at 1e7c40d0 at once) or waits for the run row the declared
+      // record holds.
+      await settledOrWaiting(drained, `wait_event_type = 'Lock' AND query ILIKE '%agent_runs%'`);
+    } finally {
+      ctl.onLaunch = null;
+      await pool(`DELETE FROM ${S()}."fail_4245d1" WHERE key = $1 AND kind = 'markhold'`, [p.runId]);
+      await Promise.allSettled([drained, declared]);
+    }
+    expect(await drained).toMatchObject({ scanned: 1, dispatched: 1, failed: 0 });
+    expect(ctl.launched).toEqual([{ runId: drain.repairRunId(plain.id), parentRunId: p.runId, parentStatus: "pending_approval" }]);
+    expect(await declared).toMatchObject({ ok: false, code: "pause-mode-conflict" });
+    expect(await gateStatus(p.gateId)).toEqual({ status: "pending", disposition: null });
+    expect(await repairsOf(p.gateId)).toEqual([]);
+    expect(await readRun(p.runId)).toMatchObject({ status: "pending_approval", generation: 10, token: null, phase: null });
+    expect((await repairsOf(b.gateId))[0].status).toBe("dispatched");
   });
 });
