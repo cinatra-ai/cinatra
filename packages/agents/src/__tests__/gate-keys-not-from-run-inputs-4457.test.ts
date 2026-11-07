@@ -135,9 +135,16 @@ import {
   NESTED_GATE_KEYS,
   NESTED_RENDERER,
 } from "./helpers/nested-value-gate-oas-4457";
-// The schema key that carries the withheld keys, spelled out so this file runs
-// red against the base for its assertions, not for a missing module.
+// The schema key that carries the withheld keys, spelled out: the stored
+// schemas carry this exact string, and a direct case below checks that the
+// module's constant is the same string.
 const GATE_KEYS_NOT_FROM_RUN_INPUTS = "x-gate-keys-not-from-run-inputs";
+// The filters themselves, read directly (the last describe block).
+import {
+  GATE_KEYS_NOT_FROM_RUN_INPUTS as MODULE_LIST_KEY,
+  readKeyList,
+  runInputsForGate,
+} from "../gate-keys-not-from-run-inputs";
 import type { AgentRunRecord } from "../store";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 
@@ -752,5 +759,71 @@ describe("cinatra#4457 — a value-surfacing gate inside a FlowNode subflow, fro
     expect(ctx.currentValues.campaignNote).toBe("kept");
     expect(ctx.xRenderer).toBe(NESTED_RENDERER);
     expect(ctx.inputSchema[GATE_KEYS_NOT_FROM_RUN_INPUTS]).toEqual(NESTED_GATE_KEYS);
+  });
+});
+
+// The two filters the readers and the compiler call, read directly from the
+// module: runInputsForGate (hitl-context.ts merges its result under a stored
+// gate's values) and readKeyList (oas-compiler.ts reads a gate's input titles
+// with it).
+describe("cinatra#4457 — the filters of gate-keys-not-from-run-inputs, read directly", () => {
+  const listed = (list: unknown) => ({ type: "object", [GATE_KEYS_NOT_FROM_RUN_INPUTS]: list });
+  const inputs = () => ({ candidateMembers: "stored", listName: "kept", campaignNote: "kept too" });
+
+  it("the module's list key is the string the stored schemas carry", () => {
+    expect(MODULE_LIST_KEY).toBe(GATE_KEYS_NOT_FROM_RUN_INPUTS);
+  });
+
+  it("runInputsForGate: a listed key is dropped, an unlisted key is kept", () => {
+    const runInputs = inputs();
+    const out = runInputsForGate(runInputs, listed(["candidateMembers"]));
+    expect(hasKey(out, "candidateMembers")).toBe(false);
+    expect(out).toEqual({ listName: "kept", campaignNote: "kept too" });
+    // The caller's run inputs are not changed.
+    expect(runInputs).toEqual(inputs());
+  });
+
+  it("runInputsForGate: a schema without the list, or no schema object, keeps every run input", () => {
+    expect(runInputsForGate(inputs(), { type: "object" })).toEqual(inputs());
+    expect(runInputsForGate(inputs(), undefined)).toEqual(inputs());
+    expect(runInputsForGate(inputs(), null)).toEqual(inputs());
+    expect(runInputsForGate(inputs(), ["candidateMembers"])).toEqual(inputs());
+  });
+
+  it.each([
+    ["a string", "candidateMembers"],
+    ["an object", { candidateMembers: true }],
+    ["a number", 1],
+    ["null", null],
+  ])("runInputsForGate: a list that is %s drops every run input", (_label, list) => {
+    expect(runInputsForGate(inputs(), listed(list))).toEqual({});
+  });
+
+  it("runInputsForGate: a list with an entry that is not a string drops every run input", () => {
+    expect(runInputsForGate(inputs(), listed(["candidateMembers", 7]))).toEqual({});
+    expect(runInputsForGate(inputs(), listed(["candidateMembers", null]))).toEqual({});
+  });
+
+  it("runInputsForGate: a key listed twice is dropped, the other run inputs are kept", () => {
+    const out = runInputsForGate(inputs(), listed(["candidateMembers", "candidateMembers"]));
+    expect(out).toEqual({ listName: "kept", campaignNote: "kept too" });
+  });
+
+  it.each([
+    ["a string", "candidateMembers"],
+    ["an object", { 0: "candidateMembers", length: 1 }],
+    ["undefined", undefined],
+    ["null", null],
+  ])("readKeyList: a value that is %s reads as no keys", (_label, value) => {
+    expect(readKeyList(value)).toEqual([]);
+  });
+
+  it("readKeyList: titles that are not strings, and empty titles, are left out; the string titles keep their order", () => {
+    const titles = [undefined, "campaignId", null, 7, true, {}, ["listName"], "", "listName"];
+    expect(readKeyList(titles)).toEqual(["campaignId", "listName"]);
+  });
+
+  it("readKeyList: a title given twice stays twice (the list is filtered, not made unique)", () => {
+    expect(readKeyList(["campaignId", "listName", "campaignId"])).toEqual(["campaignId", "listName", "campaignId"]);
   });
 });
