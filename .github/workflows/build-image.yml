@@ -4058,8 +4058,10 @@ jobs:
       # changed the measured order of the steps above. The tier creates a schema
       # under a name it draws for the run
       # (`cinatra_test_email_fanout_history_3089_<pid>_<random>`) and at its end
-      # drops that schema without `CASCADE`, keeping it, and failing, when an
-      # object outside it depends on one inside it. It also
+      # drops that schema without `CASCADE`, keeping it, and failing, when
+      # pg_depend shows an object outside it that depends on one inside it (a
+      # reference Postgres does not record there, or a dependent not yet
+      # committed, is not seen). It also
       # reads objects and table rows outside that schema, `public` included,
       # and fails when its teardown reads them differently than its setup did,
       # so a change made there while it runs can fail it. `shell: bash` and

@@ -109,8 +109,10 @@
  * the moment of each drop, a normal dependent outside the schema that it finds
  * then (one added after that reading too). A refused drop is rolled back,
  * keeps the schema and fails the run, naming the dependents. The artifact blob
- * root is a temp dir; every app module is imported in `beforeAll` after the env
- * is set, because `postgresSchema` is a module-load const.
+ * root is a temp dir. `beforeAll` sets the env before it imports the other app
+ * modules, because `postgresSchema` is a module-load const; the three app
+ * modules imported statically below read no `SUPABASE_SCHEMA`, nor does any
+ * module they import.
  */
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -666,9 +668,11 @@ const typesOf = (kinds: string): string =>
 /** What the teardown drops of its schema, kind by kind, in this order. One
  *  statement names every object of its kind, so objects of one kind may depend
  *  on each other. An index, a constraint, a trigger, a policy, a rule, a column
- *  default and an owned sequence go with their table. A kind not listed here
- *  (an operator, a collation, a range or a composite type) stays, and the
- *  schema's own drop then refuses. */
+ *  default and an owned sequence go with their table. An object of a kind not
+ *  listed here that no drop takes along stays, and Postgres refuses the drop:
+ *  at the drop of a listed object it is bound to (the routine drop, for a range
+ *  type's constructors or an operator over a function of the schema), else at
+ *  the schema's own drop. A test drives only the last, with a collation. */
 const OWN_SCHEMA_KINDS: ReadonlyArray<readonly [string, string]> = [
   ["MATERIALIZED VIEW", relationsOf("'m'")],
   ["VIEW", relationsOf("'v'")],

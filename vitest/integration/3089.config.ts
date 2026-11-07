@@ -25,9 +25,11 @@ const root = path.resolve(__dirname, "..", "..");
 const rootAlias = ((rootConfig as { resolve?: { alias?: unknown } }).resolve?.alias ??
   []) as Array<{ find: string | RegExp; replacement: string }>;
 
-/** The prefix of the throwaway schema's name. The suite draws the run's own
- *  name under it (the prefix, the process id and random hex digits) and sets
- *  SUPABASE_SCHEMA to that name before it imports any app module. */
+/** The prefix of the throwaway schema's name, and the SUPABASE_SCHEMA value of
+ *  test.env below. In `beforeAll` the suite sets SUPABASE_SCHEMA to the run's
+ *  own name under it (the prefix, the process id and random hex digits) before
+ *  it imports the other app modules; the three app modules it imports
+ *  statically read no SUPABASE_SCHEMA, nor does any module they import. */
 const TEST_SCHEMA = "cinatra_test_email_fanout_history_3089";
 
 export default defineConfig({
