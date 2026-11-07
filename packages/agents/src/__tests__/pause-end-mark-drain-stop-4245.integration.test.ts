@@ -27,7 +27,11 @@
  * (green at base)" hold at the base too. The cases of the fold of the first
  * pre-review (R1, R3, R4, C1, B1, M11's answer) are red at 69a6bf3c too; R2 and
  * G11 pass there (G11 fails at change B's head, where no change request marks
- * the run).
+ * the run). The cases of the second pre-review (M12, B2, G14) are red at
+ * 0a6ae45f too: a requested repair that ended no pause on a sibling gate does
+ * not refuse the declared record, a leg suffix other than `#<n>` (n from 2) is
+ * read as a leg, and the drain starts such a sibling's repair run while the
+ * run waits at the ended pause.
  *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided. With
  * X4245_PAUSE_CLAIM_REALDB=1 a missing database throws instead of skipping.
@@ -158,6 +162,17 @@ async function seedPaused(opts: { generation?: number; task?: string; column?: s
     [gateId, runId, ORG, `wayflow-${task}`, JSON.stringify([{ artifactId, representationRevisionId: rev }])],
   );
   return { runId, task, gateId, artifactId, rev };
+}
+
+/** A second pending leg `wayflow-<task>#2` of the pause of `p`, a sibling gate of the same run. */
+async function addLeg(p: Paused): Promise<Pick<Paused, "gateId" | "artifactId" | "rev">> {
+  const leg = { gateId: `gate-${randomUUID()}`, artifactId: `art-${randomUUID()}`, rev: `rev-${randomUUID()}` };
+  await pool(
+    `INSERT INTO ${S()}."artifact_review_gates" (id, run_id, org_id, review_task_id, status, pinned_targets)
+     VALUES ($1, $2, $3, $4, 'pending', $5::jsonb)`,
+    [leg.gateId, p.runId, ORG, `wayflow-${p.task}#2`, JSON.stringify([{ artifactId: leg.artifactId, representationRevisionId: leg.rev }])],
+  );
+  return leg;
 }
 
 /** The change request on the gate of `p` (or of `gateOf`, another gate); `declared` names the pause of `p` it ends
@@ -455,6 +470,29 @@ describe.skipIf(!HAS_DB)("the change request's end mark (spec 5.2, spec-rev1 MF5
     expect(await readRun(p.runId)).toMatchObject({ phase: null });
   });
 
+  it("B2: a gate whose leg suffix is not #<n> (n from 2, no leading zero) cannot end the pause; nothing is written", async () => {
+    for (const suffix of ["#garbage", "#", "#0", "#1", "#02", "#2#3", "#2 "]) {
+      const p = await seedPaused();
+      await pool(`UPDATE ${S()}."artifact_review_gates" SET review_task_id = $2 WHERE id = $1`, [p.gateId, `wayflow-${p.task}${suffix}`]);
+      expect(await changeRequest(p)).toMatchObject({ ok: false, code: "pause-gate-mismatch" });
+      expect(await gateStatus(p.gateId)).toEqual({ status: "pending", disposition: null });
+      expect(await repairsOf(p.gateId)).toEqual([]);
+      expect(await readRun(p.runId)).toMatchObject({ status: "pending_approval", token: null, phase: null });
+    }
+  });
+
+  it("M12: a requested repair that ended no pause on a sibling gate of the run refuses the declared record; nothing is written", async () => {
+    const p = await seedPaused({ generation: 5 });
+    const b = await addLeg(p);
+    // A change request without declaredPause on leg B: a requested repair that keeps no generation.
+    expect(await changeRequest(p, { declared: false, gateOf: b, reviewTaskId: `wayflow-${p.task}#2` })).toMatchObject({ ok: true, status: "requested" });
+    expect((await repairsOf(b.gateId))[0].generation).toBeNull();
+    expect(await changeRequest(p)).toMatchObject({ ok: false, code: "pause-mode-conflict" });
+    expect(await gateStatus(p.gateId)).toEqual({ status: "pending", disposition: null });
+    expect(await repairsOf(p.gateId)).toEqual([]);
+    expect(await readRun(p.runId)).toMatchObject({ status: "pending_approval", generation: 5, token: null, phase: null });
+  });
+
   it("R1: a retry after a record that ended no pause refuses pause-mode-conflict and marks nothing (requested and escalated)", async () => {
     for (const repairCapable of [true, false]) {
       const p = await seedPaused();
@@ -669,5 +707,39 @@ describe.skipIf(!HAS_DB)("the drain stops the run before the repair run (spec 3.
     expect(summary).toMatchObject({ scanned: 1, dispatched: 1 });
     expect(await readRun(p.runId)).toMatchObject({ status: "pending_approval", phase: null });
     expect(ctl.launched).toEqual([expect.objectContaining({ parentRunId: p.runId, parentStatus: "pending_approval" })]);
+  });
+
+  it("G14: a repair that ended no pause waits while its gate's run carries an end mark; it starts after the drain stopped the run", async () => {
+    const p = await seedPaused({ generation: 6 });
+    const b = await addLeg(p);
+    // The declared change request on leg A ends the pause; then one without declaredPause on leg B.
+    expect(await changeRequest(p)).toMatchObject({ ok: true, status: "requested" });
+    expect(await changeRequest(p, { declared: false, gateOf: b, reviewTaskId: `wayflow-${p.task}#2` })).toMatchObject({ ok: true, status: "requested" });
+    const [ended] = await repairsOf(p.gateId);
+    const [plain] = await repairsOf(b.gateId);
+    expect(ended.generation).toBe(6);
+    expect(plain.generation).toBeNull();
+    await pool(`UPDATE ${S()}."lifecycle_repair" SET status = 'dispatched' WHERE status = 'requested' AND gate_id NOT IN ($1, $2)`, [p.gateId, b.gateId]);
+    // Pass 1: the stop fails; B's repair run must not start while the run waits at the ended pause.
+    await arm(p.runId, "stop");
+    let first: Awaited<ReturnType<typeof drain.dispatchPendingProducerRepairs>> | undefined;
+    try {
+      first = await drain.dispatchPendingProducerRepairs();
+    } finally {
+      await arm(p.runId, "stop", false);
+    }
+    expect(first).toMatchObject({ scanned: 1, dispatched: 0, failed: 1 });
+    expect(ctl.launched).toEqual([]);
+    expect((await repairsOf(b.gateId))[0].status).toBe("requested");
+    expect(await readRun(p.runId)).toMatchObject({ status: "pending_approval", phase: "changes_requested", generation: 6 });
+    // Pass 2: A stops the run, then starts its repair run; B still waits (the pass read the run marked).
+    expect(await drain.dispatchPendingProducerRepairs()).toMatchObject({ scanned: 1, dispatched: 1, failed: 0 });
+    expect(await readRun(p.runId)).toMatchObject({ status: "stopped" });
+    // Pass 3: B's repair run starts under a stopped parent.
+    expect(await drain.dispatchPendingProducerRepairs()).toMatchObject({ scanned: 1, dispatched: 1, failed: 0 });
+    expect(ctl.launched).toEqual([
+      { runId: drain.repairRunId(ended.id), parentRunId: p.runId, parentStatus: "stopped" },
+      { runId: drain.repairRunId(plain.id), parentRunId: p.runId, parentStatus: "stopped" },
+    ]);
   });
 });
