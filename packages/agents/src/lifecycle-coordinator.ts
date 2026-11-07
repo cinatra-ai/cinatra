@@ -972,8 +972,10 @@ export async function clearRunLifecycleMomentOrThrow(
   if (run.lifecycleMoment === null) return;
   // COMPARE AND CLEAR. The read and the write are two statements, so the
   // moment can change between them — a run released and parked again at
-  // something new. Naming the moment this call SAW is what keeps the clear
-  // from taking the newer card off: it removes the moment it read, or nothing.
+  // something new. Naming the moment this call SAW keeps the clear from taking
+  // off a card of ANOTHER moment. The compare reads the moment only: a newer
+  // card stated at the SAME moment between the read and the write is cleared
+  // too.
   await recordRunLifecycleMoment(
     {
       runId: run.id,

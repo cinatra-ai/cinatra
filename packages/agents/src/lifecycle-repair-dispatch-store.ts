@@ -83,7 +83,7 @@ import "server-only";
 // skipped only when `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=off`.
 // ---------------------------------------------------------------------------
 
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, isNotNull, or, sql } from "drizzle-orm";
 
 import { db } from "./db";
 import { agentRuns, agentTemplates, artifactReviewGates, lifecycleRepair } from "./schema";
@@ -214,10 +214,26 @@ export async function dispatchPendingProducerRepairs(opts?: {
     failed: 0,
   };
 
+  // cinatra#4245: a repair that ended no pause (no generation) is not taken while
+  // its gate's run carries an end mark, so its repair run never starts while the
+  // run waits at a pause another change request ended; the next pass takes it
+  // once the repair that ended the pause has stopped the run.
+  const runAtEndedPause = sql`EXISTS (
+    SELECT 1 FROM ${artifactReviewGates} g
+    JOIN ${agentRuns} r ON r.id = g.run_id AND r.org_id = g.org_id
+    WHERE g.id = ${lifecycleRepair.gateId}
+      AND r.status = 'pending_approval' AND r.pause_claim_phase = 'changes_requested'
+  )`;
   const pending = await db
     .select()
     .from(lifecycleRepair)
-    .where(and(eq(lifecycleRepair.status, "requested"), eq(lifecycleRepair.route, "producer_repair")))
+    .where(
+      and(
+        eq(lifecycleRepair.status, "requested"),
+        eq(lifecycleRepair.route, "producer_repair"),
+        or(isNotNull(lifecycleRepair.pausedRunGeneration), sql`NOT ${runAtEndedPause}`),
+      ),
+    )
     .orderBy(asc(lifecycleRepair.createdAt))
     .limit(limit);
 

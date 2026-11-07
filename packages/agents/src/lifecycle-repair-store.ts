@@ -40,7 +40,7 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { createHash, randomUUID } from "node:crypto";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 
 import { db } from "./db";
 import {
@@ -56,7 +56,6 @@ import { emitArtifactReviewGate, ArtifactReviewGateError } from "./artifact-revi
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 import { guardedRunWrite } from "./org-write-run-seam";
 import { markPauseChangesRequestedInTx, type PauseEndMarkRefusal } from "./run-pause-claim";
-import { baseReviewTaskId } from "@/lib/artifacts/artifact-review-target";
 import { dispatchAutoGateOpen, dispatchAutoGateResolved } from "./run-wait-notifier";
 
 import {
@@ -147,11 +146,14 @@ export interface RecordChangesRequestedInput {
    * before the guard. The record writes only inside ONE transaction guarded for
    * `runId` under `authority` (the best-effort clear of the gate's notification
    * follows the commit). There the gate must be a `wayflow-` gate of this run,
-   * org and task (a leg `#<n>` included), a retry answers from an existing
-   * repair only when that repair ended the pause, and a new record writes the
-   * run's end mark, the gate's compare-and-set (bound to `runId`, the org and
-   * the gate's review task) and the repair row, which keeps the generation the
-   * mark ended (the drain's order to stop the run). A `pause-*` refusal writes
+   * org and task (or its leg `#<n>`, n a decimal from 2 without a leading zero;
+   * any other suffix refuses), a retry answers from an existing repair only
+   * when that repair ended the pause, a new record refuses while a gate of the
+   * run (another gate, or this one by a concurrent record) has a requested
+   * repair that ended no pause, and a new record writes the run's end mark, the
+   * gate's compare-and-set (bound to `runId`, the org and the gate's review
+   * task) and the repair row, which keeps the generation the mark ended (the
+   * drain's order to stop the run). A `pause-*` refusal writes
    * nothing; a guard refusal throws. Absent for every other change request,
    * whose road is unchanged; no caller passes it yet.
    */
@@ -161,7 +163,8 @@ export interface RecordChangesRequestedInput {
 /** A refusal of a change request that names its pause, carried out of the guarded
  * transaction so it rolls back. `pause-gate-mismatch`: the gate is not a gate of
  * the run, its org and the named pause task. `pause-mode-conflict`: the gate's
- * repair was opened by a change request that ended no pause. `pause-not-repairable`:
+ * repair, or a requested repair of another gate of the run, was opened by a
+ * change request that ended no pause. `pause-not-repairable`:
  * the repair would escalate, and only a requested repair is drained. */
 class PauseEndMarkRefused extends Error {
   constructor(readonly code: PauseEndMarkRefusal | "pause-gate-mismatch" | "pause-mode-conflict" | "pause-not-repairable") {
@@ -170,10 +173,13 @@ class PauseEndMarkRefused extends Error {
   }
 }
 
-/** The pause task of a `wayflow-<task>` gate or of its leg `wayflow-<task>#<n>`
- * (read as the delivery worker reads it); null for any other review task. */
+/** The pause task of a `wayflow-<task>` gate or of its leg `wayflow-<task>#<n>`,
+ * where n is the decimal leg number a review plan gives a leg after the first
+ * (2 and up, no leading zero); null for any other review task, a malformed
+ * suffix included. */
 function pauseTaskOfGate(reviewTaskId: string): string | null {
-  return reviewTaskId.startsWith("wayflow-") ? baseReviewTaskId(reviewTaskId.slice("wayflow-".length)) : null;
+  const leg = /^wayflow-([^#]+)(?:#(?:[2-9]|[1-9][0-9]+))?$/.exec(reviewTaskId);
+  return leg ? leg[1] : null;
 }
 
 /** The transaction the record writes on: plain, or the guarded one of a declared pause. */
@@ -413,6 +419,25 @@ export async function recordChangesRequested(
           // because the drain is what stops the run. An escalated repair is never
           // drained, so the run would wait at an ended pause forever: refused.
           if (status !== "requested") throw new PauseEndMarkRefused("pause-not-repairable");
+          // A requested repair of a gate of this run that ended no pause would
+          // start its repair run without a stop of its own, so the record refuses
+          // to end the pause beside one. A repair that ended no pause and commits
+          // after this read is held by the drain instead, while the run carries
+          // the end mark.
+          const [plainSibling] = await rtx
+            .select({ id: lifecycleRepair.id })
+            .from(lifecycleRepair)
+            .innerJoin(artifactReviewGates, eq(artifactReviewGates.id, lifecycleRepair.gateId))
+            .where(
+              and(
+                eq(artifactReviewGates.runId, input.runId),
+                eq(artifactReviewGates.orgId, input.orgId),
+                eq(lifecycleRepair.status, "requested"),
+                isNull(lifecycleRepair.pausedRunGeneration),
+              ),
+            )
+            .limit(1);
+          if (plainSibling) throw new PauseEndMarkRefused("pause-mode-conflict");
           const mark = await markPauseChangesRequestedInTx(tx, {
             runId: input.runId,
             orgId: input.orgId,
