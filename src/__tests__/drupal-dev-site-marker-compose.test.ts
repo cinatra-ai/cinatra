@@ -15,6 +15,7 @@
  * top-level `services:` map, one-line environment entries, no `extends` in any service.
  */
 import { describe, it, expect } from "vitest";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -22,6 +23,8 @@ const root = path.resolve(__dirname, "..", "..");
 const composePath = path.join(root, "docker-compose.yml");
 const yaml = fs.existsSync(composePath) ? fs.readFileSync(composePath, "utf8") : "";
 const MARKER = "CINATRA_DEV_SITE";
+/** The tracked files that may name the marker. */
+const MARKER_FILES = ["docker-compose.yml", "src/__tests__/drupal-dev-site-marker-compose.test.ts"];
 
 /** The lines of the top-level `services:` map, without its key line: up to the next top-level key. */
 function servicesSection(text: string): string[] {
@@ -105,6 +108,30 @@ function otherRootComposeFiles(): string[] {
     .sort();
 }
 
+/** The reasons why another root compose file names the marker, extends a service or defines drupal: its lines that do. */
+function rootFileProblems(text: string): string[] {
+  const lines = text.split("\n");
+  return [
+    ...lines.filter((l) => l.includes(MARKER)),
+    ...lines.filter((l) => !l.trim().startsWith("#") && /\bextends\b/.test(l)),
+    ...lines.filter((l) => l === "  drupal:"),
+  ];
+}
+
+/** The scan of the tracked files is not made in this commit: it finds nothing. */
+function trackedFileProblems(files: { name: string; text: string }[]): string[] {
+  return files.filter(() => false).map((f) => `${f.name} names ${MARKER}`);
+}
+
+/** The tracked regular files of the repository (`git ls-files`; links and submodules left out). */
+function trackedFileNames(): string[] {
+  const out = execFileSync("git", ["-C", root, "ls-files", "-z", "-s"], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+  return out
+    .split("\0")
+    .filter((e) => /^100(644|755) /.test(e))
+    .map((e) => e.slice(e.indexOf("\t") + 1));
+}
+
 describe("the drupal compose service carries the development-site marker", () => {
   it("has a drupal service with an environment map", () => {
     expect(fs.existsSync(composePath)).toBe(true);
@@ -118,12 +145,16 @@ describe("the drupal compose service carries the development-site marker", () =>
 
   it("no other compose file of the repository root names the marker, extends a service or defines drupal", () => {
     for (const name of otherRootComposeFiles()) {
-      const lines = fs.readFileSync(path.join(root, name), "utf8").split("\n");
-      expect(lines.filter((l) => l.includes(MARKER)), name).toEqual([]);
-      expect(lines.filter((l) => !l.trim().startsWith("#") && /\bextends\b/.test(l)), name).toEqual([]);
-      expect(lines.filter((l) => l === "  drupal:"), name).toEqual([]);
+      expect(rootFileProblems(fs.readFileSync(path.join(root, name), "utf8")), name).toEqual([]);
     }
   });
+
+  it("no tracked file other than docker-compose.yml and this test names the marker", () => {
+    const names = trackedFileNames();
+    expect(names).toContain("docker-compose.yml");
+    const problems = names.flatMap((name) => trackedFileProblems([{ name, text: fs.readFileSync(path.join(root, name), "utf8") }]));
+    expect(problems).toEqual([]);
+  }, 120_000);
 });
 
 const VALID = [
@@ -178,5 +209,56 @@ describe("the marker reader refuses look-alikes of the drupal service", () => {
     const text = VALID.replace("  drupal:\n", "  drupal: &drupal\n").replace("volumes:\n  data:", "  drupal-copy: *drupal\nvolumes:\n  data:");
     expect(text).toContain("  drupal-copy: *drupal");
     expect(markerProblems(text)).not.toEqual([]);
+  });
+
+  it("refuses a second environment key in the drupal service", () => {
+    const text = VALID.replace("    volumes:\n      - data:/data\n", "    volumes:\n      - data:/data\n    environment: {}\n");
+    expect(text).toContain("      - data:/data\n    environment: {}\n");
+    expect(markerProblems(text)).not.toEqual([]);
+  });
+
+  it("refuses a quoted second drupal key in the services map", () => {
+    const text = VALID.replace("volumes:\n  data:", '  "drupal":\n    image: drupal\nvolumes:\n  data:');
+    expect(text).toContain('  "drupal":\n');
+    expect(markerProblems(text)).not.toEqual([]);
+  });
+
+  it("refuses a second top-level services map", () => {
+    const text = VALID + "services:\n  extra:\n    image: busybox\n";
+    expect(markerProblems(text)).not.toEqual([]);
+  });
+
+  it("refuses a service that takes extends through a merge key", () => {
+    const text = VALID.replace("services:\n", "x-copy: &copy\n  extends:\n    service: drupal\nservices:\n").replace(
+      "volumes:\n  data:",
+      "  drupal-copy:\n    <<: *copy\nvolumes:\n  data:",
+    );
+    expect(text).toContain("  drupal-copy:\n    <<: *copy\n");
+    expect(markerProblems(text)).not.toEqual([]);
+  });
+
+  it("refuses an escaped spelling of extends", () => {
+    const text = VALID.replace("volumes:\n  data:", '  drupal-copy:\n    "ext\\u0065nds":\n      service: drupal\nvolumes:\n  data:');
+    expect(text).toContain('    "ext\\u0065nds":\n');
+    expect(markerProblems(text)).not.toEqual([]);
+  });
+
+  it("refuses an escaped spelling of the marker in another service", () => {
+    const text = VALID.replace("    image: postgres\n", '    image: postgres\n    environment:\n      "CINATRA_DEV_\\u0053ITE": "1"\n');
+    expect(text).toContain('      "CINATRA_DEV_\\u0053ITE": "1"\n');
+    expect(markerProblems(text)).not.toEqual([]);
+  });
+
+  it("refuses an include of another compose file", () => {
+    const text = "include:\n  - docker-compose.extra.yml\n" + VALID;
+    expect(markerProblems(text)).not.toEqual([]);
+  });
+
+  it("refuses another root compose file that defines drupal in flow style", () => {
+    expect(rootFileProblems('services: { drupal: { image: "drupal:11" } }\n')).not.toEqual([]);
+  });
+
+  it("refuses a tracked file other than the compose file that names the marker", () => {
+    expect(trackedFileProblems([{ name: "docker/drupal-clone/clone.env", text: `${MARKER}=1\n` }])).not.toEqual([]);
   });
 });
