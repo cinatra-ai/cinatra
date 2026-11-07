@@ -450,3 +450,80 @@ describe("the marker readers refuse interpolated names and line breaks that only
     expect(markerProblems(lf.replace(/\n/g, "\r\n"))).toEqual([]);
   });
 });
+
+/** A wordpress service whose command exports the marker only after Compose interpolates `${CINATRA_G10_PART:-SITE}`. */
+const COMMAND_FRAGMENT = [
+  "services:",
+  "  wordpress:",
+  "    image: busybox",
+  '    entrypoint: ["/bin/sh", "-c"]',
+  "    command:",
+  '      - "export CINATRA_DEV_${CINATRA_G10_PART:-SITE}=1; exec sleep 600"',
+  "",
+].join("\n");
+/** A compose-named link (git mode 120000) whose text is its target, and the tracked file it points to. */
+const LINK_FILES = [
+  { name: "docker/extra/compose.yml", text: "compose-body.txt", mode: "120000" },
+  { name: "docker/extra/compose-body.txt", text: COMMAND_FRAGMENT },
+];
+
+describe("the marker readers read interpolation in every value, the root .env and tracked compose-named links", () => {
+  it("refuses a command of another service that gets the marker through interpolation", () => {
+    const text = VALID.replace("    image: postgres\n", '    image: postgres\n    command:\n      - "export CINATRA_DEV_${CINATRA_G10_PART:-SITE}=1; exec sleep 600"\n');
+    expect(text).toContain("CINATRA_DEV_${CINATRA_G10_PART:-SITE}=1");
+    expectReason(markerProblems(text), "interpolation");
+  });
+
+  it("refuses an entrypoint of another service that gets the marker through a default without a colon", () => {
+    const text = VALID.replace("    image: postgres\n", "    image: postgres\n    entrypoint: \"sh -c 'export CINATRA_DEV_${CINATRA_G10_PART-SITE}=1'\"\n");
+    expect(text).toContain("CINATRA_DEV_${CINATRA_G10_PART-SITE}=1");
+    expectReason(markerProblems(text), "interpolation");
+  });
+
+  it("refuses a lifecycle hook of another service that gets the marker through a nested default", () => {
+    const text = VALID.replace(
+      "    image: postgres\n",
+      '    image: postgres\n    post_start:\n      - command: ["sh", "-c", "export CINATRA_DEV_${CINATRA_G10_A:-${CINATRA_G10_B:-SI}TE}=1"]\n',
+    );
+    expect(text).toContain("${CINATRA_G10_A:-${CINATRA_G10_B:-SI}TE}");
+    expectReason(markerProblems(text), "interpolation");
+  });
+
+  it("refuses a value with a $ form that Compose does not read", () => {
+    const text = VALID.replace("    image: postgres\n", '    image: "postgres:${PG_TAG"\n');
+    expect(text).toContain('    image: "postgres:${PG_TAG"\n');
+    expectReason(markerProblems(text), "interpolation");
+  });
+
+  it("accepts interpolations whose values do not name the marker", () => {
+    // A function as the replacement: in a replacement string, "$$" stands for one "$".
+    const text = VALID.replace(
+      "    image: postgres\n",
+      () => '    image: "postgres:${PG_TAG:-16}"\n    healthcheck:\n      test: ["CMD-SHELL", "pg_isready -U $${PGUSER:-postgres}"]\n    labels:\n      key: "${CINATRA_G10_A:-${CINATRA_G10_B:-}}"\n',
+    );
+    expect(text).toContain("$${PGUSER:-postgres}");
+    expect(markerProblems(text)).toEqual([]);
+  });
+
+  it("refuses another root compose file whose command gets the marker through interpolation", () => {
+    expectReason(rootFileProblems(COMMAND_FRAGMENT), "interpolation");
+  });
+
+  it("refuses a tracked compose file whose command gets the marker through interpolation", () => {
+    expectReason(trackedFileProblems([{ name: "docker/extra/compose.override.yml", text: COMMAND_FRAGMENT }]), "interpolation");
+  });
+
+  it("refuses a tracked .env file at the root, which Compose reads for interpolation", () => {
+    expectReason(trackedFileProblems([{ name: ".env", text: "CINATRA_G10_PART=SITE\n" }]), "env");
+  });
+
+  it("reads a tracked compose-named link as the compose text of its target", () => {
+    const problems = trackedFileProblems(LINK_FILES);
+    expect(problems.filter((p) => p.startsWith("interpolation: docker/extra/compose.yml: ")), JSON.stringify(problems)).not.toEqual([]);
+  });
+
+  it("refuses a tracked compose-named link that does not point to a tracked file of the list", () => {
+    const files = [{ name: "docker/extra/compose.yml", text: "../../../outside/compose.yml", mode: "120000" }];
+    expectReason(trackedFileProblems(files), "link");
+  });
+});
