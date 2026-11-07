@@ -411,11 +411,14 @@ export const matcherManifestRegistry: MatcherManifestRegistryImpl =
 // install to its own kind. The runtime-discovery dispatcher's artifact reader
 // facet is its one reader (`packages/extensions/src/artifact-handler.ts`), and
 // it keeps only lifecycle-live, scope-visible packages: an entry is reported
-// only while a live install of its package is visible to the reader. No
-// teardown reaps this channel; an entry left from an earlier install is
-// replaced by the next registration of the pack from the same kind of record,
-// and until then its version and record must still match the install a reader
-// binds it to.
+// only while a live install of its package is visible to the reader. Each
+// store rescan pass removes the store surface of every package in its scope
+// whose store surface the pass did not write (`startArtifactPackStoreSurfacePass`):
+// a package it skips or refuses, or no longer finds on disk. No teardown reaps
+// a store surface between passes, and none reaps a development-tree
+// surface; the next registration of the pack from the development tree
+// replaces it, and until then its version must still match the install a
+// reader binds it to.
 // ---------------------------------------------------------------------------
 
 /** The record the bridge read a pack's manifest from: a store record at its
@@ -443,10 +446,10 @@ export interface ArtifactPackSurfaceEntry {
 export type ArtifactPackRecordSource = ArtifactPackRecord["source"] | null;
 
 /**
- * Process-global registry of registered artifact packs' manifest surfaces.
- * Replace by package name and kind of record: a rescan re-emits the current
- * surface of that kind. Zero React / DB / server-only imports (SSR-safe, as
- * the registries above).
+ * Process-global registry of registered artifact packs' manifest surfaces,
+ * keyed by package name and kind of record: a registration replaces the
+ * surface of its pack and kind of record, and `remove` drops one. Zero
+ * React / DB / server-only imports (SSR-safe, as the registries above).
  */
 class ArtifactPackSurfaceRegistryImpl {
   private entries: Map<string, ArtifactPackSurfaceEntry> = new Map();
@@ -466,6 +469,11 @@ class ArtifactPackSurfaceRegistryImpl {
   /** The pack's surface from one kind of record, or null when none is registered. */
   get(packageName: string, source: ArtifactPackRecordSource): ArtifactPackSurfaceEntry | null {
     return this.entries.get(ArtifactPackSurfaceRegistryImpl.key(packageName, source)) ?? null;
+  }
+
+  /** Remove the pack's surface from one kind of record, if one is registered. */
+  remove(packageName: string, source: ArtifactPackRecordSource): void {
+    this.entries.delete(ArtifactPackSurfaceRegistryImpl.key(packageName, source));
   }
 
   /** Every registered surface of one pack. */

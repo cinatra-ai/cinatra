@@ -35,7 +35,10 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import {
   type PackageStoreFs,
 } from "@cinatra-ai/sdk-extensions";
-import { registerArtifactExtensionDir } from "@cinatra-ai/objects/register-artifact-extensions";
+import {
+  registerArtifactExtensionDir,
+  startArtifactPackStoreSurfacePass,
+} from "@cinatra-ai/objects/register-artifact-extensions";
 import {
   hasLiveInstallRow,
   isArtifactExtensionWriteAllowed,
@@ -147,6 +150,16 @@ export async function rescanArtifactBridgeFromStore(
     );
     return { registered, registeredRecords, skippedNotActive };
   }
+
+  // THE PACK SURFACE CHANNEL FOLLOWS THIS PASS (cinatra#3319): when the pass has
+  // ended, a pack in its scope whose store surface it did not write loses that
+  // surface, so a store surface stays only for a pack whose store surface this
+  // pass wrote (also a pack that declares no type of its own). A record the pass skips or refuses (a valid record
+  // joined by a second digest that the anchor does not bind, an archived or
+  // refused row, a contradicting row kind, a manifest the bridge refuses) or no
+  // longer finds on disk keeps no store surface. A pass whose store discovery
+  // failed returned above and changes nothing in the channel.
+  const endSurfacePass = startArtifactPackStoreSurfacePass(opts.onlyPackage);
 
   // cinatra#792 — MULTI-DIGEST NARROWING + UNIFORM ANCHOR KIND BINDING: with
   // retention (#796) several digests of one package may legitimately be on disk.
@@ -278,6 +291,8 @@ export async function rescanArtifactBridgeFromStore(
       );
     }
   }
+
+  endSurfacePass();
 
   if (registered.length || skippedNotActive.length) {
     console.info(

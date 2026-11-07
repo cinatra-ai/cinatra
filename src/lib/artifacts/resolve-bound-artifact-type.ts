@@ -541,11 +541,17 @@ async function readOrgPackSurfaces(orgId: string): Promise<ArtifactPackSurfaceEn
  *     refuses, or skips because two live owner rows share its version, or a
  *     package it refuses for two resolved defaults, can never be activated by
  *     the runtime. The surface must be the one the bridge registered from a
- *     store record at the digest that anchor selects (any store record of the
+ *     store record at the digest that anchor selects (the store surface of the
  *     package when the anchor selects none: the store rescan then registers a
- *     package only from its one store record);
+ *     package only from its one store record, and removes the store surface
+ *     of a package whose store surface it does not write);
  *   - for a BUNDLED install (`bundled`), the surface must be the one the bridge
- *     registered from the development tree;
+ *     registered from the development tree. The bundled scan registers that
+ *     surface without reading an install row, so the reader binds it to the
+ *     claim's own install by package name and version and does not ask which
+ *     row of the package the runtime's platform-global gate prefers: a claim
+ *     bound to the bundled row answers from it also while a live product row
+ *     of the package wins that gate;
  *   - any other source, or none, is no install the runtime anchors.
  * FAIL CLOSED: in every case where a surface of the pack is reported but none
  * is this install's, and on a failed install-row, dispatcher or trust-gate

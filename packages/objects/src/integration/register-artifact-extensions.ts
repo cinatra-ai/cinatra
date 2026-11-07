@@ -10,6 +10,7 @@ import {
   artifactPackSurfaceRegistry,
   DEFAULT_MATCHER_CONFIDENCE_THRESHOLD,
   type ArtifactPackRecord,
+  type ArtifactPackSurfaceEntry,
 } from "../registry";
 import type { SemanticArtifactManifest } from "../types";
 import { validateObjectTypeClaimSchemaSources, claimedTypeRegisteringPackage } from "../claims";
@@ -522,6 +523,34 @@ export function registerArtifactExtensionDir(
   record?: ArtifactPackRecord,
 ): boolean {
   return registerOneArtifactDir(dir, record ?? null);
+}
+
+/**
+ * One store rescan pass over the artifact pack surface channel (cinatra#3319).
+ * Call it before the pass registers any store record, and call the function it
+ * returns when the pass has ended: every store surface of a pack in the pass's
+ * scope (`onlyPackage`, or every pack) that the pass did not write is removed,
+ * so after the pass the channel keeps a store surface only for a pack that the
+ * pass registered from a store record. A surface counts as written when the
+ * bridge recorded it in the pass, also for a pack that declares no type of its
+ * own (its registration returns false, but its surface is recorded). The
+ * development-tree surfaces and the surfaces with no record are not touched.
+ */
+export function startArtifactPackStoreSurfacePass(onlyPackage?: string): () => void {
+  const before = new Map<string, ArtifactPackSurfaceEntry>();
+  for (const entry of artifactPackSurfaceRegistry.list()) {
+    if (entry.record?.source === "store") before.set(entry.packageName, entry);
+  }
+  return () => {
+    for (const entry of artifactPackSurfaceRegistry.list()) {
+      if (entry.record?.source !== "store") continue;
+      if (onlyPackage && entry.packageName !== onlyPackage) continue;
+      // The same entry object as before the pass: the pass did not write it.
+      if (before.get(entry.packageName) === entry) {
+        artifactPackSurfaceRegistry.remove(entry.packageName, "store");
+      }
+    }
+  };
 }
 
 // An artifact-extension directory is named for its package slug, which ends in
