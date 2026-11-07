@@ -102,6 +102,10 @@ export const SOFT_REQUIRED_ENV: readonly SoftVar[] = [
     name: "CINATRA_BRIDGE_TOKEN",
     why: "authenticates WayFlow bridge callbacks (fail-closed 403 when unset); required for a deploy that runs the WayFlow agent runtime",
   },
+  {
+    name: "CINATRA_CONTEXT_ATTEST_KEY",
+    why: "verifies the WayFlow runtime's signed step and context pairs; without it every extension_tool call is refused with a 403 (cinatra#4154) and the context callbacks fail closed; required for a deploy that runs the WayFlow agent runtime",
+  },
 ] as const;
 
 export type EnvPreflightReport = {
