@@ -438,6 +438,9 @@ export async function recordChangesRequested(
           // ends no pause takes that row FOR SHARE before it writes, so it has
           // either committed before this read or commits after this transaction,
           // and the drain then holds its repair while the run carries the end mark.
+          // A repair a drain selected before the mark and launches during it is
+          // still `requested` here: the drain's move to `dispatched` takes the same
+          // row FOR SHARE (markRepairDispatched), so it waits for this transaction.
           const [plainSibling] = await rtx
             .select({ id: lifecycleRepair.id })
             .from(lifecycleRepair)
@@ -817,12 +820,28 @@ export async function submitRepairResponse(
 }
 
 /** Mark a repair DISPATCHED (a completed flow's new repair run was dispatched).
- * Idempotent; only from 'requested'. */
+ * Idempotent; only from 'requested'.
+ *
+ * cinatra#4245: the move first takes the run row of the repair's gate FOR SHARE
+ * (the sub-select below; its count is never negative, so it filters nothing and
+ * only takes the lock, which lasts until this statement commits). A declared
+ * change request holds that row FOR UPDATE from its end mark to its commit and
+ * reads its sibling repairs after the mark, so a repair the drain launched is
+ * either moved off `requested` before the end mark (its run started before the
+ * pause was ended) or still `requested` when the declared record reads it (which
+ * then refuses `pause-mode-conflict`, and its mark rolls back). A gate of no run
+ * locks nothing. */
 export async function markRepairDispatched(repairId: string): Promise<boolean> {
+  const runRowHeld = sql`(SELECT count(*) FROM (
+    SELECT r.id FROM ${agentRuns} r
+    JOIN ${artifactReviewGates} g ON g.run_id = r.id AND g.org_id = r.org_id
+    WHERE g.id = ${lifecycleRepair.gateId}
+    FOR SHARE OF r
+  ) held) >= 0`;
   const rows = await db
     .update(lifecycleRepair)
     .set({ status: "dispatched", updatedAt: sql`now()` })
-    .where(and(eq(lifecycleRepair.id, repairId), eq(lifecycleRepair.status, "requested")))
+    .where(and(eq(lifecycleRepair.id, repairId), eq(lifecycleRepair.status, "requested"), runRowHeld))
     .returning({ id: lifecycleRepair.id });
   return rows.length === 1;
 }

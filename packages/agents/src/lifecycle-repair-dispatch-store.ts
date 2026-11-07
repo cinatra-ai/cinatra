@@ -220,10 +220,13 @@ export async function dispatchPendingProducerRepairs(opts?: {
   // once: a repair selected here was committed either before the declared
   // record's sibling read (which then refuses to end the pause while it is
   // requested) or after the end mark (and is held here), because both records
-  // lock the run row (lifecycle-repair-store). A repair moved off `requested`
-  // before a declared record runs is outside that refusal: a dispatched one
-  // started its run before the end mark existed, and an escalated one started
-  // no run.
+  // lock the run row (lifecycle-repair-store). A repair selected here before
+  // the end mark and launched while a declared record is open stays `requested`
+  // until that record ends: its move to `dispatched` takes the run row FOR SHARE
+  // (markRepairDispatched), so the declared record's sibling read sees it and
+  // refuses. A repair moved off `requested` before the end mark is outside that
+  // refusal: a dispatched one started its run before the end mark existed, and
+  // an escalated one started no run.
   const runAtEndedPause = sql`EXISTS (
     SELECT 1 FROM ${artifactReviewGates} g
     JOIN ${agentRuns} r ON r.id = g.run_id AND r.org_id = g.org_id
