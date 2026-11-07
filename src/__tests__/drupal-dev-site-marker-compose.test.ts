@@ -21,12 +21,15 @@
  * service, an environment that is not a map or a list (a null environment is read as
  * none), a `$` in a service key, an environment key or an environment list entry (Compose
  * does not interpolate keys; the readers refuse a `$` there all the same), or a string
- * value, at any place of the text, with a `$` form that Compose does not read or whose
+ * value, at any place of the text, with a `$` form that the readers do not read or whose
  * interpolation can name the marker. Compose interpolates every string value: the
- * readers read each `$` form of a value with its variable unset, so a value is read with
- * each default (`:-` and `-`) or alternative (`:+` and `+`) and with none, nested forms
- * included, and `$$` as one `$`. A variable's value from the shell or from an untracked
- * .env file is not read, and a command's shell code is not run. In docker-compose.yml
+ * readers read each `${NAME<op>word}` form, for each of the six operators (`:-`, `-`,
+ * `:+`, `+`, `:?`, `?`), both as empty and as each reading of its word, nested forms
+ * included. That is more than Compose gives with the variable unset (`:+` and `+` give
+ * empty, `:?` and `?` stop with an error), so it only adds refusals. `$$` outside a
+ * `${...}` form is one `$`; a `$$` inside a `${...}` form is not read and the value is
+ * refused. A variable's value from the shell or from an untracked .env file is not
+ * read, and a command's shell code is not run. In docker-compose.yml
  * the drupal environment must set the marker to the string "1", and the marker may be
  * named once: in the text and in the parsed keys and string values. The other root
  * compose files may not name drupal, the marker, extends or include, and no tracked file
@@ -35,8 +38,12 @@
  * file with a compose file name is read as a compose text, and no .env file is tracked at
  * the root (Compose reads it for the values of the variables). A tracked link (git mode
  * 120000) with a YAML file name is read under its own name with the text of the tracked
- * regular file it points to, as Compose follows it; such a link that points to no tracked
- * regular file is refused. Submodules are not read.
+ * regular file it points to, as Compose follows it. Its target is read only where the
+ * path it names is the path the filesystem opens: a `..` is taken only before the first
+ * other part of the target, and the way to the target may not go through another tracked
+ * link. Such a link is refused when its target is absolute or leaves the repository, has
+ * a `..` after another part, goes through another tracked link, or names no tracked
+ * regular file (a link to a link included). Submodules are not read.
  */
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
@@ -122,10 +129,12 @@ function stringValues(value: unknown, at = "", out: { at: string; s: string }[] 
 }
 
 /**
- * Every string a value can become when Compose interpolates it with its variables unset: `$$` is one `$`; `$NAME` and
- * `${NAME}` are empty; `${NAME:-w}`, `${NAME-w}`, `${NAME:+w}`, `${NAME+w}`, `${NAME:?w}` and `${NAME?w}` are empty or a
- * reading of w (nested forms included). Null when the value holds a `$` form that Compose does not read, or more than
- * MAX_FORMS readings.
+ * The strings the readers take a value to become when Compose interpolates it: `$$` outside a `${...}` form is one `$`;
+ * `$NAME` and `${NAME}` are empty; `${NAME:-w}`, `${NAME-w}`, `${NAME:+w}`, `${NAME+w}`, `${NAME:?w}` and `${NAME?w}` are
+ * each read both as empty and as each reading of w (nested forms included), whatever the operator. That is more than
+ * Compose gives with the variable unset (`:+` and `+` give empty; `:?` and `?` stop with an error), so the reading only
+ * adds refusals. Null when the value holds a `$` form that the readers do not read: a `$` before anything other than `$`,
+ * `{` or a name, an unclosed or malformed `${...}`, and any `$$` inside a `${...}` form; or more than MAX_FORMS readings.
  */
 function interpolations(s: string): string[] | null {
   let forms = [""];
@@ -150,7 +159,8 @@ function interpolations(s: string): string[] | null {
     let depth = 1;
     let j = i + 2;
     while (j < s.length && depth > 0) {
-      if (s[j] === "$" && s[j + 1] === "$") j += 2;
+      // A `$$` inside a `${...}` form is not read: Compose's reading of it there is not modelled, so the value is refused.
+      if (s[j] === "$" && s[j + 1] === "$") return null;
       else if (s[j] === "$" && s[j + 1] === "{") {
         depth++;
         j += 2;
@@ -290,15 +300,36 @@ interface TrackedFile {
   mode?: string;
 }
 
-/** The path inside the repository that a link of the list points to, or null when it points outside it. */
-function linkTarget(link: TrackedFile): string | null {
-  if (path.posix.isAbsolute(link.text)) return null;
-  const to = path.posix.normalize(path.posix.join(path.posix.dirname(link.name), link.text));
-  return to === ".." || to.startsWith("../") ? null : to;
+/**
+ * The path inside the repository that a link points to, read only where that path is the one the filesystem opens; null
+ * otherwise. The target is read from the link's folder: `..` is taken only before the first other part of the target (it
+ * then leaves a folder that holds a tracked file, so a real folder), and no folder on the way from there may be a link of
+ * `links`. Null for an absolute or empty target, a target that leaves the repository, a `..` after another part (the
+ * folder it leaves could be a link, which the filesystem follows first), and a way through a link.
+ */
+function linkTarget(link: TrackedFile, links: Set<string>): string | null {
+  if (link.text === "" || path.posix.isAbsolute(link.text)) return null;
+  const at = path.posix.dirname(link.name).split("/").filter((p) => p !== "." && p !== "");
+  let down = false;
+  for (const part of link.text.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      if (down || at.length === 0) return null;
+      at.pop();
+      continue;
+    }
+    if (down && links.has(at.join("/"))) return null;
+    at.push(part);
+    down = true;
+  }
+  return down ? at.join("/") : null;
 }
 
-/** Every reason why a file of the list, other than the files that may, could name the marker (see the header). */
-function trackedFileProblems(files: TrackedFile[]): string[] {
+/**
+ * Every reason why a file of the list, other than the files that may, could name the marker (see the header). `links` are
+ * the paths of the tracked links (by default the links of the list).
+ */
+function trackedFileProblems(files: TrackedFile[], links = new Set(files.filter((x) => x.mode === LINK).map((x) => x.name))): string[] {
   const problems: string[] = [];
   const regular = new Map(files.filter((x) => x.mode !== LINK).map((x) => [x.name, x.text]));
   for (const f of files.filter((x) => !MARKER_FILES.includes(x.name))) {
@@ -308,7 +339,7 @@ function trackedFileProblems(files: TrackedFile[]): string[] {
     if (!/\.ya?ml$/i.test(f.name)) continue;
     let text = f.text;
     if (f.mode === LINK) {
-      const to = linkTarget(f);
+      const to = linkTarget(f, links);
       const target = to === null ? undefined : regular.get(to);
       if (target === undefined) {
         problems.push(`link: ${f.name}: the link points to no tracked regular file of the list`);
@@ -380,13 +411,15 @@ describe("the drupal compose service carries the development-site marker", () =>
     const entries = trackedFileNames();
     expect(entries.map((e) => e.name)).toContain("docker-compose.yml");
     const regular = new Set(entries.filter((e) => e.mode !== LINK).map((e) => e.name));
+    const links = new Set(entries.filter((e) => e.mode === LINK).map((e) => e.name));
     const read = (name: string) => fs.readFileSync(path.join(root, name), "utf8");
     const problems = entries.flatMap((e) => {
-      if (e.mode !== LINK) return trackedFileProblems([{ name: e.name, text: read(e.name) }]);
-      // A link is read with its target from git (as Compose follows it), and with the tracked regular file it points to.
+      if (e.mode !== LINK) return trackedFileProblems([{ name: e.name, text: read(e.name) }], links);
+      // A link is read with its target from git, and with the tracked regular file it points to; every tracked link is
+      // passed, so a target whose way goes through another link is refused.
       const link = { name: e.name, text: execFileSync("git", ["-C", root, "cat-file", "blob", e.object], { encoding: "utf8" }), mode: LINK };
-      const to = linkTarget(link);
-      return trackedFileProblems(to !== null && regular.has(to) ? [link, { name: to, text: read(to) }] : [link]);
+      const to = linkTarget(link, links);
+      return trackedFileProblems(to !== null && regular.has(to) ? [link, { name: to, text: read(to) }] : [link], links);
     });
     expect(problems).toEqual([]);
   }, 120_000);
@@ -528,13 +561,13 @@ describe("the marker readers refuse interpolated names and line breaks that only
     expectReason(markerProblems(text), "interpolation");
   });
 
-  it("refuses an interpolated environment key in another service", () => {
+  it("refuses a $ in an environment key of another service (keys are not interpolated; the readers refuse it)", () => {
     const text = VALID.replace("    image: postgres\n", '    image: postgres\n    environment:\n      CINATRA_DEV_${CINATRA_G10_PART:-SITE}: "1"\n');
     expect(text).toContain('      CINATRA_DEV_${CINATRA_G10_PART:-SITE}: "1"\n');
     expectReason(markerProblems(text), "interpolation");
   });
 
-  it("refuses an interpolated service key", () => {
+  it("refuses a $ in a service key (keys are not interpolated; the readers refuse it)", () => {
     const text = VALID.replace("volumes:\n  data:", "  drupal${CINATRA_G10_SUFFIX:-}:\n    image: drupal\nvolumes:\n  data:");
     expect(text).toContain("  drupal${CINATRA_G10_SUFFIX:-}:\n");
     expectReason(markerProblems(text), "interpolation");
