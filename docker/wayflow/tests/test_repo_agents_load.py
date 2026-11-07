@@ -206,13 +206,16 @@ def test_oas_loads_via_agentspec_loader(oas_path: Path, slug: str) -> None:
 # model-bridge ApiNodes and assigns no `id`.
 #
 # The test compares each passthrough node with its compiled step, not two sets
-# of ids. A node is keyed by its `id`, its `name`, the ids of the flows whose
-# `nodes` hold it and a digest of its method, url and body; a compiled
-# ApiCallStep by the same of its own (the flows whose `steps` hold it). So it
-# is red when a node has no compiled step of its id, when two different nodes
-# compile under one id, and when a step carries the id of another node that
-# differs from its own in name, flow, method, url or body (two ids swapped). A
-# reference under `$referenced_components` that no instantiated component
+# of ids. A node is keyed by its `id`, the ids of the flows whose `nodes` hold
+# it and a digest of its method, url and body; a compiled ApiCallStep by the
+# same of its own (the flows whose `steps` hold it). The `name` is not in the
+# key: the loader renames a step whose name an earlier node of the same flow
+# already uses (`<name> 2`, wayflowcore's Flow conversion). So the test is red
+# when a node has no compiled step of its id, when two different nodes compile
+# under one id, and when a step carries the id of another node that differs
+# from its own in flow, method, url or body (two ids swapped). It does not see
+# a swap of two nodes equal in all three: they make the same call from the
+# same flow. A reference under `$referenced_components` that no instantiated component
 # reaches, and a node under `metadata`, compile to nothing and are not counted.
 # The compiled walk follows every instance attribute of every wayflowcore
 # object it reaches (a flow's `steps`, a sub-flow, an `AgentExecutionStep`'s
@@ -239,10 +242,10 @@ _ANCHOR_NODE_ID = "sender-file_recipients"
 
 
 def _passthrough_key(
-    node_id: object, name: object, flows: object, method: object, url: object, data: object
+    node_id: object, flows: object, method: object, url: object, data: object
 ) -> tuple:
-    """`(id, name, flow ids, digest)`: the digest covers the method, the url and
-    the body. A failure message prints only this key, never a substituted url or
+    """`(id, flow ids, digest)`: the digest covers the method, the url and the
+    body. A failure message prints only this key, never a substituted url or
     body."""
     if not data:
         body = None  # the loader passes an empty body on as None
@@ -254,7 +257,7 @@ def _passthrough_key(
         body = ["json", data]
     material = json.dumps([method, url, body], sort_keys=True, default=repr)
     digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
-    return (node_id, name, tuple(sorted(flows)), digest)  # type: ignore[call-overload]
+    return (node_id, tuple(sorted(flows)), digest)  # type: ignore[call-overload]
 
 
 def _oas_passthrough_nodes(doc: object) -> set[tuple]:
@@ -308,7 +311,7 @@ def _oas_passthrough_nodes(doc: object) -> set[tuple]:
         pending.extend(v for k, v in node.items() if k not in ("$referenced_components", "metadata"))
     return {
         _passthrough_key(
-            n["id"], n.get("name"), owners.get(id(n), set()), n.get("http_method"), n.get("url"), n.get("data")
+            n["id"], owners.get(id(n), set()), n.get("http_method"), n.get("url"), n.get("data")
         )
         for n in found
     }
@@ -361,7 +364,6 @@ def _compiled_passthrough_steps(
     return {
         _passthrough_key(
             getattr(s, "id", None),
-            getattr(s, "name", None),
             owners.get(id(s), set()),
             getattr(s, "method", None),
             getattr(s, "url", None),
@@ -381,7 +383,7 @@ def _passthrough_mismatch(doc: object, agent: object, **walk: object) -> str | N
     return (
         f"only in the document: {sorted(expected - compiled, key=repr)}; "
         f"only compiled: {sorted(compiled - expected, key=repr)} "
-        "(key: id, name, flow ids, digest of method, url and body)"
+        "(key: id, flow ids, digest of method, url and body)"
     )
 
 
@@ -495,6 +497,20 @@ def test_synthetic_swapped_ids_of_equal_nodes_in_two_flows_are_red() -> None:
         },
     )
     assert _passthrough_mismatch(doc, agent, **_SYN_WALK) is not None
+
+
+def test_synthetic_a_step_the_loader_renamed_still_matches_its_node() -> None:
+    # wayflowcore's Flow conversion names the second node of a flow that reuses a
+    # name `<name> 2`; the step keeps the node's id, so it must still match.
+    doc = _syn_doc(_syn_node("gate", "Campaign setup", "tool_g"), _syn_node("a", "Campaign setup", "tool_a"))
+    agent = _SynRuntime(
+        id="root",
+        steps={
+            "Campaign setup": _syn_step("gate", "Campaign setup", "tool_g"),
+            "Campaign setup 2": _syn_step("a", "Campaign setup 2", "tool_a"),
+        },
+    )
+    assert _passthrough_mismatch(doc, agent, **_SYN_WALK) is None
 
 
 def test_synthetic_two_nodes_compiled_under_one_id_are_red() -> None:
