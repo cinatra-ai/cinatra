@@ -1,7 +1,7 @@
 // THE PUBLISH-PACK NAMES BORDER (cinatra#4150, acceptance item 7).
 //
 // Core must not name a publish pack. A publish pack is an installed agent pack
-// whose flow (`cinatra/oas.json`) marks a node `publishes: true`. Product code
+// whose flow (`cinatra/oas.json`) marks a node `metadata.cinatra.publishes: true`. Product code
 // under `src/` and `packages/` may not name, for such a pack:
 //   - its package name,
 //   - the gate step id the host derives for one of its publishing nodes
@@ -23,6 +23,12 @@
 // The repository case needs the materialized `extensions/` tree (`node
 // scripts/ci/sync-dev-extensions.mjs --pinned`). Without it the case is
 // skipped and the host kit checks that it did not skip.
+//
+// ORDER: while a pack declares the flag and still declares its renderer, the
+// renderer kinds `linkedin-draft-review` (register-default-renderers.ts:188) and
+// `wordpress-draft-confirm` (:233) are named in product code and this test goes
+// red. The pack changes delete those renderers in the same pack PRs, and the
+// core lock bump must drop the two keys with them.
 
 import { afterEach, describe, expect, it } from "vitest";
 import * as path from "node:path";
@@ -77,7 +83,7 @@ export function readAgentPacks(root: string): { pack: PublishPack | null; packag
       const oasFile = path.join(extRoot, scope.name, dir.name, "cinatra", "oas.json");
       if (!existsSync(pkgFile) || !existsSync(oasFile)) continue;
       const pkg = readJson(pkgFile);
-      const nodes = collectNodes(readJson(oasFile)).filter((n) => n.publishes === true && typeof n.id === "string");
+      const nodes = collectNodes(readJson(oasFile)).filter((n) => n.metadata?.cinatra?.publishes === true && typeof n.id === "string");
       const renderers: any[] = Array.isArray(pkg?.cinatra?.fieldRenderers) ? pkg.cinatra.fieldRenderers : [];
       out.push({
         packageName: String(pkg.name),
@@ -172,7 +178,7 @@ function fixtureRoot(opts: { publishes: boolean }): string {
       component_type: "Flow",
       nodes: [
         { component_type: "StartNode", id: "start" },
-        { component_type: "ApiNode", id: "send_it", ...(opts.publishes ? { publishes: true } : { publishes: false }) },
+        { component_type: "ApiNode", id: "send_it", metadata: { cinatra: { publishes: opts.publishes } } },
       ],
     }),
   );
@@ -223,6 +229,18 @@ describe("A15 fixtures: each kind of name is found, each exclusion stays silent"
     put(root, "src/lib/generated/map.ts", `export const g = ${n};\n`);
     put(root, "src/lib/types.d.ts", `export declare const d: ${n};\n`);
     put(root, "extensions/@cinatra-ai/demo-publish-agent/src/own.ts", `export const o = ${n};\n`);
+    expect(scanProductFor(root, publishPacksOf(root))).toEqual([]);
+  });
+
+  it("a top-level publishes key is not the flag: only metadata.cinatra.publishes counts", () => {
+    const root = fixtureRoot({ publishes: false });
+    put(
+      root,
+      "extensions/@cinatra-ai/demo-publish-agent/cinatra/oas.json",
+      JSON.stringify({ component_type: "Flow", nodes: [{ component_type: "ApiNode", id: "send_it", publishes: true }] }),
+    );
+    put(root, "src/lib/planted.ts", 'export const p = "@cinatra-ai/demo-publish-agent";\n');
+    expect(publishPacksOf(root)).toEqual([]);
     expect(scanProductFor(root, publishPacksOf(root))).toEqual([]);
   });
 
