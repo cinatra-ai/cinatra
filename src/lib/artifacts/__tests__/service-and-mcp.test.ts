@@ -388,6 +388,12 @@ describe("Media route purge gate", () => {
       // regeneration through the canonical revision-append road. Part of the
       // canonical write path, not an alternate writer.
       "artifact-image-tool.ts",
+      // The page capture tool (cinatra#4223) — the SERVICE-LAYER module that
+      // files one PNG of a registered page through createSemanticArtifact under
+      // the image tool's idempotency ledger (the finalize and the page capture
+      // facts record are tx-composed INTO the writer's own transaction). Part of
+      // the canonical write path, not an alternate writer.
+      "artifact-page-capture-tool.ts",
       // NOT an importer: the objects surface-inventory documents the writer
       // file in its raw-object-access allow-list as a string literal
       // ("src/lib/artifacts/artifact-creation.ts"). It contains no import of
