@@ -7,7 +7,7 @@
  * release is identified by its `resolvedSha` in cinatra-dev-extensions.lock.json).
  *
  * What the sibling suites already prove is NOT re-argued here:
- *   - delivery + CMS task construction + completion adapter mechanics
+ *   - delivery + the findings input + completion adapter mechanics
  *     (`lifecycle-repair-cms-production-bridge.integration.test.ts`, PR2);
  *   - the generic single-gated-successor invariant for a SAME-ARTIFACT
  *     successor revision (`lifecycle-repair-successor-batch.integration.test.ts`,

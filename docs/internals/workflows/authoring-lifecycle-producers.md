@@ -209,7 +209,9 @@ the same moment, such as a duplicate delivery of the job, can overwrite it.
 A producer that declares nothing gets its own inputs plus the
 typed request, for every base: the drain adds no `task` or `instructions` for a
 captured CMS snapshot either, and reads no base row to decide. The Drupal and
-WordPress agents declare `instructions`. Neither the drain
+WordPress agents declare `instructions` at the application's dev pins
+(drupal-agent `49bd8040`, wordpress-agent `b434f0a1`); no released tag of
+either agent declares it yet. Neither the drain
 nor the run start checks that the declared name is an input of the template: a
 name the template does not read adds an input that no prompt reads, and a name the
 template types as `object` fails the run at start with a message that names the
