@@ -559,6 +559,18 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   try {
+    const { mintRunWriteAuthorityForMcp } = await import("@/lib/org-write/run-authority-mint");
+    const orgWriteAuthority = verifiedExecutedSource
+      ? await mintRunWriteAuthorityForMcp({ runId: run.id, orgId: run.orgId,
+          executionAttemptId: verifiedExecutedSource.executionAttemptId }) : undefined;
+    return await mcpRequestContextStorage.run({ runId: binding.runId,
+      userId: run.runBy ?? undefined, orgId: run.orgId,
+      ...(run.oboCeiling ? { oboCeiling: run.oboCeiling } : {}),
+      ...(verifiedStepId ? { verifiedStepId } : {}),
+      ...(verifiedExecutedSource ? { verifiedExecutedSource } : {}),
+      ...(orgWriteAuthority ? { orgWriteAuthority } : {}),
+    }, async () => {
+    // Every deterministic branch shares the verified executing-source frame.
     let result: unknown;
     if (tool === "artifact_materialize") {
       // Deterministic artifact materialization (cinatra#925) — NOT an MCP
@@ -895,10 +907,12 @@ export async function POST(req: Request): Promise<Response> {
       result = RUN_SCOPED_CONTEXT_TOOLS.has(tool)
         ? await mcpRequestContextStorage.run(
             {
+              ...mcpRequestContextStorage.getStore(),
               runId: binding.runId,
               verifiedRunScopeId: binding.runId,
               ...(verifiedSubmissionId ? { verifiedSubmissionId } : {}),
               ...(verifiedStepId ? { verifiedStepId } : {}),
+              ...(verifiedExecutedSource ? { verifiedExecutedSource } : {}),
               userId: run.runBy ?? undefined,
               orgId: run.orgId,
               ...(run.oboCeiling ? { oboCeiling: run.oboCeiling } : {}),
@@ -1033,6 +1047,7 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     return NextResponse.json(result);
+    });
   } catch (err) {
     // cinatra#4223, cinatra#4465: an error with the zod marker answers its
     // issues, and a primitive's stated refusal without it keeps its text when

@@ -126,12 +126,11 @@ describe("resolveRequestRunContext precedence", () => {
     expect(r.suppressed).toBe(false);
   });
 
-  it("denied defaults to false on every non-failClosed path", () => {
+  it("ordinary and verified paths remain not denied without the header cutover", () => {
     for (const r of [
       resolveRequestRunContext({ delegatedRunId: "run-obo" }),
       resolveRequestRunContext({ durable: DURABLE_RESOLVED }),
       resolveRequestRunContext({ durable: { outcome: "absent" }, ...HEADERS }),
-      resolveRequestRunContext({ durable: { outcome: "invalid" }, ...HEADERS }),
       resolveRequestRunContext({}),
     ]) {
       expect(r.denied).toBe(false);
@@ -239,17 +238,17 @@ describe("resolveRequestRunContext fail-closed cutover denial", () => {
     expect(r.deniedChannel).toBe("header");
   });
 
-  it("durable INVALID with NO legacy claim is suppressed but NOT denied — the request is served without run attribution", () => {
-    // The availability boundary of the posture, stated explicitly: a request
-    // that never claimed a run id is not refused just because its durable
-    // binding went stale. An unattributed write is never a misattributed one.
+  it("durable INVALID with NO legacy claim is suppressed AND denied rather than served runless", () => {
+    // A present run binding is authoritative even when the caller sends no
+    // run header. Failed verification must not erase its policy protection.
     const r = resolveRequestRunContext({
       failClosed: true,
       durable: { outcome: "invalid" },
     });
     expect(r.runId).toBeUndefined();
     expect(r.suppressed).toBe(true);
-    expect(r.denied).toBe(false);
+    expect(r.denied).toBe(true);
+    expect(r.deniedChannel).toBeUndefined();
   });
 
   it("durable INVALID + a header claim does NOT deny a verified OBO caller", () => {
@@ -320,6 +319,72 @@ describe("resolveRequestRunContext empty-verified-id normalization (default path
     });
     expect(r.runId).toBe("run-header");
     expect(r.servedBy).toBe("header");
+    expect(r.denied).toBe(false);
+  });
+});
+
+
+describe("durable refusal is not a legacy-header opt-out", () => {
+  it.each([false, undefined])("invalid durable binding denies with failClosed=%s", (failClosed) => {
+    const r = resolveRequestRunContext({ durable: { outcome: "invalid" }, failClosed });
+    expect(r).toMatchObject({ servedBy: "none", suppressed: true, denied: true });
+    expect(r.runId).toBeUndefined();
+    expect(r.deniedChannel).toBeUndefined();
+  });
+  it("an empty OBO id cannot shield an invalid durable binding", () => {
+    const r = resolveRequestRunContext({ delegatedRunId: "", durable: { outcome: "invalid" }, failClosed: true });
+    expect(r.denied).toBe(true);
+    expect(r.runId).toBeUndefined();
+  });
+});
+
+describe("the verified executing source rides only with its own channel's run and step (cinatra#3745)", () => {
+  const PROOF = Object.freeze({
+    contextId: "ctx-1", stepId: "step-1", executionAttemptId: "attempt-1",
+    sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: "c".repeat(64),
+  });
+  const durableWith = (verifiedExecutedSource: unknown, stepId = "step-1") => ({
+    outcome: "resolved" as const,
+    ctx: { runId: "run-durable", stepId, verifiedExecutedSource },
+  }) as unknown as Parameters<typeof resolveRequestRunContext>[0]["durable"];
+
+  // (r1)
+  it("an on-behalf-of run carries its own proof with its step", () => {
+    const r = resolveRequestRunContext({ delegatedRunId: "run-obo", delegatedStepId: "step-1",
+      delegatedExecutedSource: PROOF, failClosed: true });
+    expect(r).toMatchObject({ runId: "run-obo", stepId: "step-1", verifiedExecutedSource: PROOF,
+      servedBy: "obo", denied: false });
+  });
+
+  // (r2)
+  it("a durable run carries its binding's proof with its step", () => {
+    const r = resolveRequestRunContext({ durable: durableWith(PROOF), failClosed: true });
+    expect(r).toMatchObject({ runId: "run-durable", stepId: "step-1", verifiedExecutedSource: PROOF,
+      servedBy: "durable", denied: false });
+  });
+
+  // (r3)
+  it("a proof whose step is not the channel's step, or a corrupt proof, refuses the request", () => {
+    const cases = [
+      { delegatedRunId: "run-obo", delegatedStepId: "step-2", delegatedExecutedSource: PROOF },
+      { delegatedRunId: "run-obo", delegatedExecutedSource: PROOF },
+      { delegatedRunId: "run-obo", delegatedStepId: "step-1", delegatedExecutedSource: { ...PROOF, sourceSha256: "not-hex" } },
+      { delegatedRunId: "run-obo", delegatedStepId: "step-1", delegatedExecutedSource: { ...PROOF, extra: "x" } },
+      { durable: durableWith(PROOF, "step-2") },
+      { durable: durableWith({ ...PROOF, executionAttemptId: "" }) },
+    ] as Array<Parameters<typeof resolveRequestRunContext>[0]>;
+    for (const input of cases) {
+      const r = resolveRequestRunContext({ ...input, failClosed: true });
+      expect(r, JSON.stringify(input)).toEqual({ servedBy: "none", suppressed: true, denied: true });
+    }
+  });
+
+  // (r4)
+  it("an on-behalf-of run never borrows a durable binding's proof", () => {
+    const r = resolveRequestRunContext({ delegatedRunId: "run-obo", delegatedStepId: "step-1",
+      durable: durableWith(PROOF), failClosed: true });
+    expect(r.runId).toBe("run-obo");
+    expect(r.verifiedExecutedSource).toBeUndefined();
     expect(r.denied).toBe(false);
   });
 });

@@ -1,3 +1,4 @@
+import { isRunExecutedSourceCurrent } from "@cinatra-ai/agents/store";
 import "@/lib/extensions"; // initialises extensionRegistry side effects
 import "@/lib/register-test-delivery-send-port"; // wires the run-scoped test-delivery send PORT (#1625)
 import { admitToolInputSchema, createMcpRuntimeServer, createMcpServerAuthPlugins, createMcpServerMount, type McpServerSettings, type McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
@@ -686,7 +687,7 @@ export const mcpServerMount = createMcpServerMount({
   // DELETED with the registry (#1195 flip): this is the only run-context
   // channel the app wires besides the signed OBO token.
   resolveDurableRunContext: (rawBearerToken: string) =>
-    resolveDurableRunContext(rawBearerToken, readAgentRunByTokenHash),
+    resolveDurableRunContext(rawBearerToken, readAgentRunByTokenHash, undefined, isRunExecutedSourceCurrent),
   // #1195 metric — counts which channel attributed each MCP request. It once
   // gated the registry removal; the removal has LANDED, so it now records the
   // surviving channels (obo / durable / header / none) as ongoing observability.

@@ -21,6 +21,13 @@
  * The module doubles follow run-token-mcp-actor.test.ts; the route, the run
  * token verifier and the step verifiers are real; the run store's source check
  * is a double (its refusals are pinned in packages/agents).
+ *
+ * A source-bound call that falls back to the machine tool keeps its verified
+ * source only through the durable binding. So that fallback needs a usable
+ * bearer, the run's current credential hash and a successful binding write
+ * that carries the proof; otherwise the machine tool is withheld. The on-behalf-
+ * of token carries the proof itself. A call without a verified source keeps the
+ * best-effort fallback.
  */
 import { afterAll, describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createHmac } from "node:crypto";
@@ -61,7 +68,7 @@ const {
   ),
   buildLlmMcpServerToolForAgentRunMock: vi.fn(() => ({ type: "mcp-tool" })),
   buildLlmMcpServerToolMock: vi.fn(
-    async (): Promise<{ type: string; headers: { Authorization: string } } | null> => ({
+    async (): Promise<{ type: string; headers?: { Authorization?: string } } | null> => ({
       type: "mcp",
       headers: { Authorization: "Bearer machine-token-abc" },
     }),
@@ -530,6 +537,93 @@ describe("the model bridge verifies the executing source of a run-bound call", (
     expect(mintedActor().verifiedStepId).toBe(NODE);
     expect(verifyRunExecutedSourceMock).not.toHaveBeenCalled();
   });
+});
+
+describe("a source-bound machine fallback needs a durable binding that carries the proof", () => {
+  const RUN_BOUND = { "x-cinatra-run-token": RUN_TOKEN, "x-cinatra-a2a-context-id": CTX };
+
+  /** A verified source-bound call whose on-behalf-of mint fails, so the bridge offers the machine tool. */
+  async function sourceBoundFallback(): Promise<unknown> {
+    resolveAgentRunMcpActorMock.mockResolvedValue(null);
+    const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...sourceHeaders() }));
+    expect(res.status).toBe(200);
+    expect(verifyRunExecutedSourceMock).toHaveBeenCalledTimes(1);
+    return invokeOverride();
+  }
+
+  // (b10)
+  it("withholds the machine tool when the run has no current credential hash", async () => {
+    readAgentRunTokenHashByIdMock.mockResolvedValue(null);
+    expect(await sourceBoundFallback()).toBeNull();
+    expect(readAgentRunTokenHashByIdMock).toHaveBeenCalledWith(RUN.id);
+    expect(writeDurableRunContextBindingMock).not.toHaveBeenCalled();
+  });
+
+  // (b11)
+  it.each([undefined, "Basic opaque-token", "Bearer ", "Bearer \t", "Bearer token with-space"])(
+    "withholds the machine tool when its authorization %j gives no usable bearer",
+    async (authorization) => {
+      readAgentRunTokenHashByIdMock.mockResolvedValue("a".repeat(64));
+      buildLlmMcpServerToolMock.mockResolvedValue({ type: "mcp", headers: { Authorization: authorization } });
+      expect(await sourceBoundFallback()).toBeNull();
+      expect(writeDurableRunContextBindingMock).not.toHaveBeenCalled();
+    },
+  );
+
+  // (b12)
+  it("withholds the machine tool when the binding write returns no key", async () => {
+    readAgentRunTokenHashByIdMock.mockResolvedValue("a".repeat(64));
+    writeDurableRunContextBindingMock.mockResolvedValue(null);
+    expect(await sourceBoundFallback()).toBeNull();
+    expect(writeDurableRunContextBindingMock).toHaveBeenCalledWith(
+      "machine-token-abc",
+      expect.objectContaining({ tokenHash: "a".repeat(64), verifiedExecutedSource: VERIFIED_SOURCE }),
+    );
+  });
+
+  // (b13)
+  it("withholds the machine tool when the binding write throws", async () => {
+    readAgentRunTokenHashByIdMock.mockResolvedValue("a".repeat(64));
+    writeDurableRunContextBindingMock.mockRejectedValue(new Error("binding unavailable"));
+    expect(await sourceBoundFallback()).toBeNull();
+    expect(writeDurableRunContextBindingMock).toHaveBeenCalledTimes(1);
+  });
+
+  // (b14)
+  it("offers the machine tool after a binding write that carries the step and the proof", async () => {
+    readAgentRunTokenHashByIdMock.mockResolvedValue("a".repeat(64));
+    expect(await sourceBoundFallback()).toEqual({ type: "mcp", headers: { Authorization: "Bearer machine-token-abc" } });
+    expect(writeDurableRunContextBindingMock).toHaveBeenCalledWith(
+      "machine-token-abc",
+      expect.objectContaining({ tokenHash: "a".repeat(64), stepId: NODE, verifiedExecutedSource: VERIFIED_SOURCE }),
+    );
+    expect(buildLlmMcpServerToolForAgentRunMock).not.toHaveBeenCalled();
+  });
+
+  // (b15)
+  it("carries the proof in the on-behalf-of token and writes no machine binding", async () => {
+    const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...sourceHeaders() }));
+    expect(res.status).toBe(200);
+    expect(await invokeOverride()).toEqual({ type: "mcp-tool" });
+    expect(mintedActor()).toMatchObject({ runId: RUN.id, verifiedStepId: NODE, verifiedExecutedSource: VERIFIED_SOURCE });
+    expect(buildLlmMcpServerToolMock).not.toHaveBeenCalled();
+    expect(writeDurableRunContextBindingMock).not.toHaveBeenCalled();
+  });
+
+  // (b16)
+  it.each(["missing hash", "missing bearer", "binding refusal"])(
+    "keeps the best-effort machine fallback of a call without a verified source (%s)",
+    async (missing) => {
+      resolveAgentRunMcpActorMock.mockResolvedValue(null);
+      if (missing !== "missing hash") readAgentRunTokenHashByIdMock.mockResolvedValue("a".repeat(64));
+      if (missing === "missing bearer") buildLlmMcpServerToolMock.mockResolvedValue({ type: "mcp", headers: {} });
+      if (missing === "binding refusal") writeDurableRunContextBindingMock.mockResolvedValue(null);
+      const res = await POST(makeReq({ user: "hi" }, RUN_BOUND));
+      expect(res.status).toBe(200);
+      expect(await invokeOverride()).toEqual(await buildLlmMcpServerToolMock.mock.results[0]!.value);
+      expect(verifyRunExecutedSourceMock).not.toHaveBeenCalled();
+    },
+  );
 });
 
 // Leave the module registry as this file found it.

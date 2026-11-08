@@ -1,6 +1,8 @@
 import "server-only";
 
 import { createHash } from "node:crypto";
+import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
+import { parseVerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
 import IORedis from "ioredis";
 
 // ---------------------------------------------------------------------------
@@ -37,14 +39,16 @@ import IORedis from "ioredis";
 // credential).
 //
 // Classification contract (converged with Codex, #1195 round-1..3):
-//   - redis GET null or redis transport failure        ⇒ "absent"
+//   - successful redis GET null                        ⇒ "absent"
 //     (no binding; post-flip there is no legacy channel to fall back TO — a
 //     request with no verified run identity simply carries none, and a
 //     header-only claim is REFUSED at the transport)
-//   - present but malformed / schema-invalid / non-64-hex
+//   - redis GET unavailable / present but malformed /
+//     schema-invalid / non-64-hex
 //     token hash / DB miss / DB error after a binding
 //     was found                                        ⇒ "invalid"
-//     (FAIL CLOSED: the caller must suppress the header fallback and every
+//     (FAIL CLOSED: GET failure cannot establish that a binding is absent.
+//     The caller must suppress the header fallback and every
 //     provenance field — a positive stale-credential signal is never
 //     downgraded into a weaker, forgeable channel)
 //   - unique-index hit                                 ⇒ "resolved"
@@ -71,6 +75,7 @@ export type DurableRunContextBinding = {
    *  the bridge only from the flow runtime's signed step pair it verified;
    *  unlike the provenance fields above it is a verified value. */
   stepId?: string;
+  verifiedExecutedSource?: VerifiedExecutedRunSource;
 };
 
 export type DurableRunContextResolution =
@@ -83,6 +88,7 @@ export type DurableRunContextResolution =
         agentSpecVersion?: string;
         /** The binding's verified step (cinatra#3745), when it carries one. */
         stepId?: string;
+        verifiedExecutedSource?: VerifiedExecutedRunSource;
       };
     }
   | { outcome: "invalid" }
@@ -111,9 +117,9 @@ declare global {
  *  through the initial connect instead of being rejected cold (lazyConnect +
  *  enableOfflineQueue:false would deterministically fail the first healthy
  *  write). Outage behavior stays bounded — maxRetriesPerRequest:1 +
- *  commandTimeout fail a command fast when redis is down — and every caller
- *  treats a transport failure as "absent" (write skipped / no run
- *  attribution), so the bridge and the MCP handler are never held hostage. */
+ *  commandTimeout fail a command fast when redis is down. A failed read is
+ *  invalid rather than absent: an unavailable correlation store must not
+ *  downgrade a run-bound machine caller to an ordinary runless caller. */
 function getClient(): DurableBindingRedis {
   if (!globalThis.__cinatraDurableRunCtxRedis) {
     globalThis.__cinatraDurableRunCtxRedis = new IORedis(
@@ -240,6 +246,10 @@ export async function writeDurableRunContextBinding(
   client: DurableBindingRedis = getClient(),
 ): Promise<string | null> {
   if (!rawBearerToken || !SHA256_HEX.test(binding.tokenHash)) return null;
+  if (binding.verifiedExecutedSource !== undefined) {
+    const source = parseVerifiedExecutedRunSource(binding.verifiedExecutedSource);
+    if (!source || source.stepId !== binding.stepId) return null;
+  }
   const key = durableRunContextKey(rawBearerToken);
   try {
     await client.set(
@@ -297,12 +307,15 @@ function parseBinding(raw: string): DurableRunContextBinding | null {
   const optional = (v: unknown): string | undefined =>
     typeof v === "string" && v.length > 0 ? v : undefined;
   const stepId = optional(candidate.stepId);
+  const source = candidate.verifiedExecutedSource === undefined ? undefined : parseVerifiedExecutedRunSource(candidate.verifiedExecutedSource);
+  if (candidate.verifiedExecutedSource !== undefined && (!source || source.stepId !== stepId)) return null;
   return {
     tokenHash: candidate.tokenHash,
     agentId: optional(candidate.agentId),
     packageVersion: optional(candidate.packageVersion),
     agentSpecVersion: optional(candidate.agentSpecVersion),
     ...(stepId ? { stepId } : {}),
+    ...(source ? { verifiedExecutedSource: source } : {}),
   };
 }
 
@@ -318,6 +331,7 @@ export async function resolveDurableRunContext(
     hash: string,
   ) => Promise<{ id: string; orgId: string; runBy: string | null } | null>,
   client: DurableBindingRedis = getClient(),
+  verifySource?: (runId: string, orgId: string, source: VerifiedExecutedRunSource) => Promise<boolean>,
 ): Promise<DurableRunContextResolution> {
   if (!rawBearerToken) return { outcome: "absent" };
 
@@ -325,11 +339,10 @@ export async function resolveDurableRunContext(
   try {
     raw = await client.get(durableRunContextKey(rawBearerToken));
   } catch {
-    // redis transport failure ⇒ absent (availability policy: a redis outage
-    // must not fail every MCP call; the request simply carries no run
-    // attribution — there is no weaker channel left to fall back to).
-    bump(counters().durableOutcome, "absent_transport");
-    return { outcome: "absent" };
+    // The GET did not establish absence. Refuse fallback rather than let a
+    // run-bound machine credential become an ordinary runless caller.
+    bump(counters().durableOutcome, "invalid_transport");
+    return { outcome: "invalid" };
   }
   if (raw === null) {
     bump(counters().durableOutcome, "absent");
@@ -362,6 +375,11 @@ export async function resolveDurableRunContext(
     return { outcome: "invalid" };
   }
 
+  if (binding.verifiedExecutedSource && (!verifySource ||
+      !await verifySource(run.id, run.orgId, binding.verifiedExecutedSource).catch(() => false))) {
+    bump(counters().durableOutcome, "invalid_source");
+    return { outcome: "invalid" };
+  }
   bump(counters().durableOutcome, "resolved");
   return {
     outcome: "resolved",
@@ -371,6 +389,7 @@ export async function resolveDurableRunContext(
       packageVersion: binding.packageVersion,
       agentSpecVersion: binding.agentSpecVersion,
       ...(binding.stepId ? { stepId: binding.stepId } : {}),
+      ...(binding.verifiedExecutedSource ? { verifiedExecutedSource: binding.verifiedExecutedSource } : {}),
     },
   };
 }
