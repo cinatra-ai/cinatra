@@ -44,28 +44,6 @@ import type {
   ConnectorRefResolvedContent,
 } from "@cinatra-ai/objects/connector-ref";
 
-/** cinatra#3978: the limit in UTF-8 bytes of a capture's operation id. The id
- * becomes the source of the apply's effect record, whose table holds 1 to 256
- * bytes (`artifact_review_effect_records.source_ref`), so a capture takes no
- * id the effect could never be stored under. */
-export const CMS_OPERATION_ID_MAX_BYTES = 256;
-
-function isCapturableOperationId(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  const bytes = Buffer.byteLength(value, "utf8");
-  return bytes >= 1 && bytes <= CMS_OPERATION_ID_MAX_BYTES;
-}
-
-/** The class of a thrown value for a log line: "error" or "non-error", never its
- * text. A value whose prototype cannot be read keeps "non-error". */
-function thrownClass(err: unknown): "error" | "non-error" {
-  try {
-    return err instanceof Error ? "error" : "non-error";
-  } catch {
-    return "non-error";
-  }
-}
-
 /** The five-state disposition of a captured staged write's external effect —
  * mirrors the connector's `CmsReviewDisposition`. */
 export type CmsReviewDisposition = "held" | "approved" | "rejected" | "ungated" | "unknown";
@@ -277,6 +255,27 @@ export interface CmsReviewHostSeamDeps {
  * as the reviewed base and maps the verdict to the connector's result shape.
  */
 export function buildCmsReviewHostSeam(deps: CmsReviewHostSeamDeps): CmsReviewHostSeam {
+  // cinatra#3978: the limit in UTF-8 bytes of a capture's operation id. The id
+  // becomes the source of the apply's effect record, whose table holds 1 to 256
+  // bytes (`artifact_review_effect_records.source_ref`), so a capture takes no
+  // id the effect could never be stored under. Local to the builder: the
+  // application border holds this module's top-level names at their ceiling.
+  const operationIdMaxBytes = 256;
+  const isCapturableOperationId = (value: unknown): value is string => {
+    if (typeof value !== "string") return false;
+    const bytes = Buffer.byteLength(value, "utf8");
+    return bytes >= 1 && bytes <= operationIdMaxBytes;
+  };
+  // The class of a thrown value for a log line: "error" or "non-error", never
+  // its text. A value whose prototype cannot be read keeps "non-error".
+  const thrownClass = (err: unknown): "error" | "non-error" => {
+    try {
+      return err instanceof Error ? "error" : "non-error";
+    } catch {
+      return "non-error";
+    }
+  };
+
   return {
     isReviewActive: () => deps.isReviewActive(),
 
@@ -289,7 +288,7 @@ export function buildCmsReviewHostSeam(deps: CmsReviewHostSeamDeps): CmsReviewHo
       }
       if (!isCapturableOperationId(input.operationId)) {
         throw new Error(
-          `[cms-review] the operation id must be 1 to ${CMS_OPERATION_ID_MAX_BYTES} UTF-8 bytes — refusing to capture a staged CMS write whose effect could never be recorded.`,
+          `[cms-review] the operation id must be 1 to ${operationIdMaxBytes} UTF-8 bytes — refusing to capture a staged CMS write whose effect could never be recorded.`,
         );
       }
       const res = await deps.captureCmsContentSnapshot({

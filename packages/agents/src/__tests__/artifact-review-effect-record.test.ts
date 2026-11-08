@@ -117,14 +117,18 @@ describe("serializeReviewEffectRecord — the persisted JSON contract", () => {
   });
 
   it("runs no inherited index getter for a hole", () => {
+    // Only the serializer runs while the inherited getter exists: the matcher
+    // itself assigns array index 1, which a getter-only prototype index refuses.
     const spy = vi.fn(() => "inherited");
+    const sparseExtra = Object.assign([1, , 3], { extra: 2 });
+    let answer: unknown;
     Object.defineProperty(Array.prototype, "1", { get: spy, configurable: true });
     try {
-      const sparseExtra = Object.assign([1, , 3], { extra: 2 });
-      expect(serializeReviewEffectRecord({ a: sparseExtra })).toEqual({ ok: false, code: "invalid-value" });
+      answer = serializeReviewEffectRecord({ a: sparseExtra });
     } finally {
       delete (Array.prototype as unknown as Record<string, unknown>)["1"];
     }
+    expect(answer).toEqual({ ok: false, code: "invalid-value" });
     expect(spy).not.toHaveBeenCalled();
   });
 
