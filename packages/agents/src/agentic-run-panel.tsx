@@ -76,8 +76,10 @@ import { approveReviewTask } from "./hitl-actions";
 // discrimination, and the #817 context-selector envelope synthesis all
 // live in the pure module so this panel and the orchestrator stepper
 // submit byte-identical payloads.
+import { applyAttachmentEnvelope } from "./attachment-envelope-payload";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
+  applyRendererApprovalNote,
   buildChatGateSubmitPayload,
   createGateValidityStore,
   hasUsableListPick,
@@ -87,6 +89,7 @@ import {
   isMidRunListStepGate,
   isSetupGateTaskId,
   liftRendererApprovalNote,
+  runGateIdentityKey,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
   wrapPrimitiveSetupPayload,
@@ -782,7 +785,8 @@ export function AgenticRunPanel({
     question !== null &&
     ((answeredReviewTaskId !== null &&
       question.reviewTaskId === answeredReviewTaskId &&
-      `${question.xRenderer}::${question.fieldName ?? ""}` === answeredQuestionShape) ||
+      runGateIdentityKey(question.reviewTaskId, question.xRenderer, question.fieldName) ===
+        answeredQuestionShape) ||
       (siblingAnsweredKey !== null && answeredHitlQuestionKey(question) === siblingAnsweredKey));
 
   // Load connectedApps + gmailAliases once on mount so the HITL field renderer
@@ -1249,7 +1253,11 @@ export function AgenticRunPanel({
         justSubmittedXRendererRef.current = args.xRenderer;
         setAnsweredReviewTaskId(args.reviewTaskId);
         setAnsweredQuestionShape(
-          `${args.xRenderer}::${latestHitlContextRef.current?.fieldName ?? ""}`,
+          runGateIdentityKey(
+            args.reviewTaskId,
+            args.xRenderer,
+            latestHitlContextRef.current?.fieldName,
+          ),
         );
       }
       try {
@@ -1340,12 +1348,13 @@ export function AgenticRunPanel({
   // the send (`holdKey`), so a renderer-owned or grouped submit and a report
   // made during an awaited flush are held too. The store is made above the
   // submit core.
+  // The key is `runGateIdentityKey`, an injective encoding of the three parts.
   const activeGateKey = effectiveHitlContext
-    ? [
+    ? runGateIdentityKey(
         effectiveHitlContext.reviewTaskId,
         effectiveHitlContext.xRenderer,
-        effectiveHitlContext.fieldName ?? "",
-      ].join("::")
+        effectiveHitlContext.fieldName,
+      )
     : null;
   const activeGateReportedInvalid = useSyncExternalStore(
     gateValidity.subscribe,
@@ -1418,7 +1427,7 @@ export function AgenticRunPanel({
       if (!ctx) return;
       // Reported unsendable (see `gateValidity`): the composer sends nothing,
       // as the Continue drawn for the gate does.
-      const gateKey = [ctx.reviewTaskId, ctx.xRenderer, ctx.fieldName ?? ""].join("::");
+      const gateKey = runGateIdentityKey(ctx.reviewTaskId, ctx.xRenderer, ctx.fieldName);
       if (gateValidity.isHeld(gateKey)) return;
       const { payload, payloadFieldName } = buildChatGateSubmitPayload({
         reviewTaskId: ctx.reviewTaskId,
@@ -1636,11 +1645,22 @@ export function AgenticRunPanel({
   // state was already fixed by the composite React `key` (cinatra#2541/#2556);
   // this is the analogous fix for the panel-level buffer.
   //
-  // The key collapses to `${xRenderer}::` for mid-run gates (no fieldName),
-  // so those keep resetting on xRenderer change alone — unchanged from today.
+  // The key also holds the REVIEW TASK (cinatra#3562). The buffer is the
+  // answer to one gate. A gate of another review task with the same renderer
+  // and field (a mid-run list step has no field) starts with an empty buffer.
+  // The renderer of that gate is a new instance (its React key holds the task),
+  // and it seeds its own state from the `value` it is given. Without the reset
+  // it would be seeded with the earlier task's pick, and the Continue could
+  // approve the new task with that pick. The reset runs during this render, so
+  // the new renderer never receives the earlier buffer. The key is
+  // `runGateIdentityKey`, the injective identity every gate key here uses.
   const bufferedHitlValueKey =
-    currentXRenderer !== null
-      ? `${currentXRenderer}::${effectiveHitlContext?.fieldName ?? ""}`
+    effectiveHitlContext != null && currentXRenderer !== null
+      ? runGateIdentityKey(
+          effectiveHitlContext.reviewTaskId,
+          currentXRenderer,
+          effectiveHitlContext.fieldName,
+        )
       : null;
   const [prevBufferedHitlValueKey, setPrevBufferedHitlValueKey] = useState<string | null>(null);
   if (
@@ -1677,8 +1697,8 @@ export function AgenticRunPanel({
   }, [parkedWithNoGate]);
 
   // The block belongs to ONE gate, so it is released on GATE IDENTITY — the
-  // review-task id — not on the buffer key above (cinatra#3219 convergence).
-  // `xRenderer::fieldName` is not gate identity: a mid-run gate carries no
+  // review-task id — not on the renderer and field (cinatra#3219 convergence).
+  // The renderer and field alone are not gate identity: a mid-run gate carries no
   // fieldName and can reuse the same renderer, so a block keyed that way would
   // survive onto a gate that is genuinely open and hide it behind a panel that
   // says the review is closed.
@@ -2137,17 +2157,27 @@ export function AgenticRunPanel({
           // included. Only that list step is lifted here: a list step on a
           // setup gate, and the helper's other renderers, keep the send they
           // had on this panel.
+          //
+          // The note is what the run receives (cinatra#3562): the server sends
+          // a nonblank `userResponse` before the note, so the lift removes any
+          // `userResponse` the list step buffered (`applyRendererApprovalNote`),
+          // and the attachment envelope of a list step wraps the note
+          // (`applyAttachmentEnvelope`) and not the default text.
           const approvalNoteLift = drawsMidRunListStep
             ? liftRendererApprovalNote(effectiveHitlContext.xRenderer, bufferedHitlValue)
             : null;
-          if (approvalNoteLift) {
-            nextBuffered = { ...nextBuffered, ...approvalNoteLift };
-          }
+          nextBuffered = applyRendererApprovalNote(
+            effectiveHitlContext.xRenderer,
+            nextBuffered,
+            approvalNoteLift,
+          );
           if (!isSetupGateTaskId(effectiveHitlContext.reviewTaskId)) {
-            nextBuffered = applyAttachmentEnvelopeUserResponseOnly(
-              nextBuffered,
-              pendingAttachmentsRef.current,
-            );
+            nextBuffered = approvalNoteLift
+              ? applyAttachmentEnvelope(nextBuffered, pendingAttachmentsRef.current)
+              : applyAttachmentEnvelopeUserResponseOnly(
+                  nextBuffered,
+                  pendingAttachmentsRef.current,
+                );
           }
           // #817: context-selector gate — synthesize the selection envelope
           // when the renderer emitted none (zero-candidate slot). A real
@@ -3051,11 +3081,11 @@ export function AgenticRunPanel({
                   !isGroupedSetup &&
                   hitlRendererEntry.entry.drawsOwnSubmit !== true;
                 // The gate a staged answer belongs to, and to no other.
-                const setupGateKey = [
+                const setupGateKey = runGateIdentityKey(
                   effectiveHitlContext.reviewTaskId,
                   effectiveHitlContext.xRenderer,
-                  effectiveHitlContext.fieldName ?? "",
-                ].join("::");
+                  effectiveHitlContext.fieldName,
+                );
                 // THE CHAT CARD CARRIES ITS OWN CONTINUE.
                 //
                 // The chat setup gate used to pass `hideSubmit`: the form was

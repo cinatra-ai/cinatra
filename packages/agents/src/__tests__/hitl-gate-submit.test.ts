@@ -11,6 +11,7 @@
 import { describe, it, expect } from "vitest";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 
+import * as gateSubmit from "../hitl-gate-submit";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
   buildChatGateSubmitPayload,
@@ -812,5 +813,59 @@ describe("createGateValidityStore (cinatra#3562)", () => {
     expect(store.isHeld("g1")).toBe(false);
     store.report(a, "g1", false);
     expect(store.isHeld("g1")).toBe(true);
+  });
+});
+
+// cinatra#3562, fold 3 (Codex pre-review 2, MUST-FIX 1): the gate identity is
+// injective. Reached through the module namespace, so each case fails on its
+// own assertion where a helper is missing.
+describe("runGateIdentityKey (cinatra#3562)", () => {
+  it("gives two gates whose parts join to the same `::` string two identities", () => {
+    const key = gateSubmit.runGateIdentityKey;
+    expect(typeof key).toBe("function");
+    expect(["a", "r", "b::r::c"].join("::")).toBe(["a::r::b", "r", "c"].join("::"));
+    expect(key("a", "r", "b::r::c")).not.toBe(key("a::r::b", "r", "c"));
+    expect(key("a", "r::x", "c")).not.toBe(key("a::r", "x", "c"));
+  });
+
+  it("is one identity for one gate, and a missing field is the empty field", () => {
+    const key = gateSubmit.runGateIdentityKey;
+    expect(typeof key).toBe("function");
+    expect(key("t", "r", "f")).toBe(key("t", "r", "f"));
+    expect(key("t", "r", undefined)).toBe(key("t", "r", ""));
+    expect(key("t", "r", "f")).not.toBe(key("t2", "r", "f"));
+  });
+});
+
+// cinatra#3562, fold 3 (MUST-FIX 3): a lifted list-step note is the resume
+// text, so a buffered `userResponse` cannot shadow it on the server.
+describe("applyRendererApprovalNote (cinatra#3562)", () => {
+  const LIST = "@cinatra-test/pack-agent:list-picker";
+  const buffered = { listIds: ["L1"], listNames: ["One"], userResponse: "continue" };
+
+  it("removes a list step's userResponse and keeps the lifted note", () => {
+    const apply = gateSubmit.applyRendererApprovalNote;
+    expect(typeof apply).toBe("function");
+    const lift = liftRendererApprovalNote(LIST, buffered, NOW);
+    const out = apply(LIST, { ...buffered, approved: true }, lift);
+    expect(out).not.toHaveProperty("userResponse");
+    expect(out).toMatchObject({ approved: true, listIds: ["L1"], approvalNote: lift!.approvalNote });
+    expect(JSON.parse(out.approvalNote as string)).toMatchObject({ type: "list", listIds: ["L1"] });
+  });
+
+  it("merges every other renderer's lift as before, its userResponse kept", () => {
+    const apply = gateSubmit.applyRendererApprovalNote;
+    expect(typeof apply).toBe("function");
+    const SETUP = "@cinatra-test/pack-agent:setup-form";
+    const lift = liftRendererApprovalNote(SETUP, { callToAction: "Book" }, NOW);
+    const out = apply(SETUP, { userResponse: "keep", approved: true }, lift);
+    expect(out).toMatchObject({ userResponse: "keep", approvalNote: lift!.approvalNote });
+  });
+
+  it("returns the payload itself when there is no lift", () => {
+    const apply = gateSubmit.applyRendererApprovalNote;
+    expect(typeof apply).toBe("function");
+    const payload = { userResponse: "continue" };
+    expect(apply(LIST, payload, null)).toBe(payload);
   });
 });

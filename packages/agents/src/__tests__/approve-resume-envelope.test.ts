@@ -119,6 +119,8 @@ vi.mock("@/lib/auth-session", async (orig) => ({
 }));
 
 import { approveReviewTaskInternal } from "../review-task-actions";
+import * as gateSubmit from "../hitl-gate-submit";
+import { applyAttachmentEnvelope } from "../attachment-envelope-payload";
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
 
 const REF = {
@@ -215,5 +217,61 @@ describe("agent-run resume + WayFlow text-only envelope", () => {
       approveReviewTaskInternal("wayflow-task-r1", "actor-1", { userResponse: "approve" }),
     ).rejects.toThrow(/cross-org run management is unsupported/);
     expect(sendTaskMock).not.toHaveBeenCalled();
+  });
+});
+
+// cinatra#3562, fold 3 (Codex pre-review 2, MUST-FIX 3): END TO END from the
+// payload a run surface builds for a mid-run list step to the text WayFlow
+// receives. The server sends a nonblank `userResponse` before `approvalNote`,
+// so the list step's payload must carry no `userResponse` of its own.
+describe("a list step's picks reach the run (cinatra#3562)", () => {
+  const LIST = "@cinatra-ai/email-outreach-agent:list-picker";
+  const BUFFERED = { listIds: ["L1"], listNames: ["One"], userResponse: "continue" };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupRun();
+  });
+
+  function sentText(): string | undefined {
+    const call = sendTaskMock.mock.calls[0]?.[0] as unknown as {
+      message?: { parts?: Array<{ kind?: string; text?: string }> };
+    };
+    return call?.message?.parts?.[0]?.text;
+  }
+
+  /** The payload the run surfaces build at the list step's Continue. */
+  function listStepPayload(): Record<string, unknown> {
+    const apply = gateSubmit.applyRendererApprovalNote;
+    expect(typeof apply).toBe("function");
+    const lift = gateSubmit.liftRendererApprovalNote(LIST, BUFFERED);
+    return apply(LIST, { ...BUFFERED, approved: true, approvedAt: "2026-11-08T00:00:00.000Z" }, lift);
+  }
+
+  it("the server sends a nonblank userResponse before the note (the precedence the payload must meet)", async () => {
+    const note = gateSubmit.liftRendererApprovalNote(LIST, BUFFERED)!.approvalNote;
+    await approveReviewTaskInternal("wayflow-task-r1", "actor-1", {
+      ...BUFFERED,
+      approvalNote: note,
+    });
+    expect(sentText()).toBe("continue");
+  });
+
+  it("a list step's payload resumes the run with the snapshot of its picks", async () => {
+    await approveReviewTaskInternal("wayflow-task-r1", "actor-1", listStepPayload());
+    expect(sendTaskMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(sentText()!)).toMatchObject({
+      type: "list",
+      listIds: ["L1"],
+      listNames: ["One"],
+    });
+  });
+
+  it("with an attachment, the envelope wraps the snapshot of the picks", async () => {
+    const payload = applyAttachmentEnvelope(listStepPayload(), [REF]);
+    await approveReviewTaskInternal("wayflow-task-r1", "actor-1", payload);
+    const envelope = JSON.parse(sentText()!) as { text: string; attachments: unknown[] };
+    expect(envelope.attachments).toEqual([REF]);
+    expect(JSON.parse(envelope.text)).toMatchObject({ type: "list", listIds: ["L1"] });
   });
 });

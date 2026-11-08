@@ -79,6 +79,39 @@ const hitlActions = vi.hoisted(() => ({
 }));
 vi.mock("../hitl-actions", () => hitlActions);
 
+/**
+ * The run window hands the panel its files through `onSubmit`'s second
+ * argument. The run page draws the window without its paperclip, so a test
+ * that needs a waiting file adds one send control beside the real window, and
+ * only while `windowFiles.attachments` is set.
+ */
+const windowFiles = vi.hoisted(() => ({ attachments: null as null | unknown[] }));
+vi.mock("../hitl-conversation-panel", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../hitl-conversation-panel")>();
+  const { Button: WindowButton } = await import("@/components/ui/button");
+  function WindowWithAFile(props: React.ComponentProps<typeof real.HitlConversationPanel>) {
+    return (
+      <>
+        <real.HitlConversationPanel {...props} />
+        {windowFiles.attachments ? (
+          <WindowButton
+            type="button"
+            onClick={() =>
+              void props.onSubmit(
+                "see attached",
+                windowFiles.attachments as Parameters<typeof props.onSubmit>[1],
+              )
+            }
+          >
+            Send with a file
+          </WindowButton>
+        ) : null}
+      </>
+    );
+  }
+  return { ...real, HitlConversationPanel: WindowWithAFile };
+});
+
 vi.mock("../a2a-actions", () => ({
   getAgentBuilderTask: vi.fn(async () => null),
 }));
@@ -552,7 +585,17 @@ async function renderMovablePanel(options: { strict?: boolean } = {}) {
     await setGate(xRenderer, fieldName, schema, reviewTaskId);
     view.rerender(draw());
   };
-  return { ...view, moveTo };
+  /** The stream holds no gate for a moment, as between two review tasks. */
+  const clearGate = async () => {
+    const { useAgUiRunStream } = await import("../use-ag-ui-run-stream");
+    (useAgUiRunStream as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      ...streamResultFor(CONTROL_LESS_RENDERER_ID, "callToAction", { type: "string" }),
+      status: "running",
+      interruptContext: null,
+    });
+    view.rerender(draw());
+  };
+  return { ...view, moveTo, clearGate };
 }
 
 describe("AgenticRunPanel — a renderer that reports its value unsendable (cinatra#3562)", () => {
@@ -1319,6 +1362,164 @@ describe("AgenticRunPanel — every send of a held gate sends nothing (cinatra#3
     } finally {
       __resetFieldRendererComponentMapForTests();
       quiet.mockRestore();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3562, fold 3 — Codex pre-review 2, MUST-FIX 1 to 3.
+// ---------------------------------------------------------------------------
+
+/** A list step that hands over its pick together with a reply text. */
+function ReplyListRenderer({ onChange }: FieldRendererProps) {
+  return (
+    <Button
+      type="button"
+      onClick={() =>
+        void onChange({ listIds: ["L1"], listNames: ["One"], userResponse: "continue" })
+      }
+    >
+      Pick with a reply
+    </Button>
+  );
+}
+
+describe("AgenticRunPanel — one gate's state and answer stay with that gate (cinatra#3562, fold 3)", () => {
+  it("a gate whose parts join to another gate's `::` string gets its own renderer, draft and answer (MUST-FIX 1)", async () => {
+    // Gate A: task `setup-a`, field `b::<R>::c`. Gate B: task `setup-a::<R>::b`,
+    // field `c`. Joined with `::`, both read `setup-a::<R>::b::<R>::c`.
+    const R = CONTROL_LESS_RENDERER_ID;
+    const fieldA = `b::${R}::c`;
+    expect(["setup-a", R, fieldA].join("::")).toBe([`setup-a::${R}::b`, R, "c"].join("::"));
+    await setGate(R, fieldA, { type: "string" }, "setup-a");
+    const view = await renderMovablePanel();
+
+    const boxA = () => document.getElementById(`field-${fieldA}`) as HTMLInputElement | null;
+    await waitFor(() => expect(boxA()).not.toBeNull());
+    fireEvent.change(boxA()!, { target: { value: "for A" } });
+    await waitFor(() => expect(boxA()!.value).toBe("for A"));
+
+    await view.moveTo(R, "c", { type: "string" }, `setup-a::${R}::b`);
+    const boxB = () => document.getElementById("field-c") as HTMLInputElement | null;
+    await waitFor(() => expect(boxB()).not.toBeNull());
+    // B is a question of its own: it starts empty, and a press sends nothing.
+    expect(boxB()!.value).toBe("");
+    fireEvent.click(productContinue()!);
+    await act(async () => {});
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
+
+  it("a list step of the next review task starts with no pick: the earlier task's pick is never sent for it (MUST-FIX 2)", async () => {
+    const SILENT_LIST_ID = "@cinatra-test/pack-agent-silent:list-picker";
+    fieldRendererRegistry.register({
+      id: SILENT_LIST_ID,
+      priority: 100,
+      condition: (_fieldName, schema) =>
+        (schema as { "x-renderer"?: unknown })["x-renderer"] === SILENT_LIST_ID,
+      renderer: SilentListRenderer,
+    });
+    await setGate(SILENT_LIST_ID, "accountScope", { type: "object" }, "review-run-3562-a");
+    const view = await renderMovablePanel();
+
+    await view.findByRole("button", { name: "Pick list one" });
+    fireEvent.click(view.getByRole("button", { name: "Pick list one" }));
+    await act(async () => {});
+
+    // Task A is answered elsewhere; the stream holds no gate, then task B
+    // arrives on the same renderer and field.
+    await view.clearGate();
+    await view.moveTo(SILENT_LIST_ID, "accountScope", { type: "object" }, "review-run-3562-b");
+    await view.findByRole("button", { name: "Pick list one" });
+    await waitFor(() => expect(productContinue()).not.toBeNull());
+    fireEvent.click(productContinue()!);
+    await act(async () => {});
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
+
+  it("a list step's pick is the resume text: a buffered reply text does not ride along to shadow it (MUST-FIX 3)", async () => {
+    const REPLY_LIST_ID = "@cinatra-test/pack-agent-reply:list-picker";
+    fieldRendererRegistry.register({
+      id: REPLY_LIST_ID,
+      priority: 100,
+      condition: (_fieldName, schema) =>
+        (schema as { "x-renderer"?: unknown })["x-renderer"] === REPLY_LIST_ID,
+      renderer: ReplyListRenderer,
+    });
+    await setGate(REPLY_LIST_ID, "accountScope", { type: "object" }, "review-run-3562");
+    const view = await renderPanel();
+
+    await view.findByRole("button", { name: "Pick with a reply" });
+    fireEvent.click(view.getByRole("button", { name: "Pick with a reply" }));
+    await act(async () => {});
+    await waitFor(() => expect(productContinue()).not.toBeNull());
+    fireEvent.click(productContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("review-run-3562");
+    expect(payload).not.toHaveProperty("userResponse");
+    expect(JSON.parse(payload.approvalNote as string)).toMatchObject({
+      type: "list",
+      listIds: ["L1"],
+      listNames: ["One"],
+    });
+  });
+
+  it("with a file waiting, the attachment envelope wraps the list step's note, not a default text (MUST-FIX 3)", async () => {
+    const REPLY_LIST_ID = "@cinatra-test/pack-agent-reply-file:list-picker";
+    fieldRendererRegistry.register({
+      id: REPLY_LIST_ID,
+      priority: 100,
+      condition: (_fieldName, schema) =>
+        (schema as { "x-renderer"?: unknown })["x-renderer"] === REPLY_LIST_ID,
+      renderer: ReplyListRenderer,
+    });
+    windowFiles.attachments = [
+      {
+        artifactId: "art-1",
+        representationRevisionId: "ver-1",
+        digest: "sha256:abc",
+        mime: "application/pdf",
+        originKind: "upload",
+        filename: "report.pdf",
+      },
+    ];
+    try {
+      await setGate(REPLY_LIST_ID, "accountScope", { type: "object" }, "review-run-3562");
+      // Without a template the window's message stops in the panel after it
+      // keeps the files: nothing goes to the run's conversation.
+      const propsWithoutTemplate = { ...PANEL_PROPS, templateId: undefined };
+      const { AgenticRunPanel } = await import("../agentic-run-panel");
+      const view = render(<AgenticRunPanel {...propsWithoutTemplate} />);
+
+      await view.findByRole("button", { name: "Pick with a reply" });
+      fireEvent.click(view.getByRole("button", { name: "Pick with a reply" }));
+      fireEvent.click(view.getByRole("button", { name: "Send with a file" }));
+      await act(async () => {});
+      await waitFor(() => expect(productContinue()).not.toBeNull());
+      fireEvent.click(productContinue()!);
+      await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+      const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+        string,
+        Record<string, unknown>,
+      ];
+      expect(taskId).toBe("review-run-3562");
+      const envelope = JSON.parse(payload.userResponse as string) as {
+        text: string;
+        attachments: Array<{ artifactId: string }>;
+      };
+      expect(envelope.attachments.map((a) => a.artifactId)).toEqual(["art-1"]);
+      // The run reads the envelope's text: it is the list step's note.
+      expect(envelope.text).toBe(payload.approvalNote);
+      expect(JSON.parse(envelope.text)).toMatchObject({
+        type: "list",
+        listIds: ["L1"],
+        listNames: ["One"],
+      });
+    } finally {
+      windowFiles.attachments = null;
     }
   });
 });

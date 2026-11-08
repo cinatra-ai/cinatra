@@ -453,6 +453,30 @@ export function liftRendererApprovalNote(
   return null;
 }
 
+/**
+ * Merge a renderer's lifted `approvalNote` into the resume payload
+ * (cinatra#3562). For a list step, the note is what the run receives.
+ * `approveReviewTaskInternal` (review-task-actions.ts) sends a nonblank
+ * `userResponse` as the resume text before it reads `approvalNote`. A
+ * `userResponse` in the buffer of a list step would therefore replace the
+ * snapshot of the picks, and the run would never receive the picked lists. So
+ * a lifted list-step note removes `userResponse` from the payload. The
+ * attachment envelope applied after this reads the note
+ * (`applyAttachmentEnvelope`, pickLegacyResumeText). Every other lift is
+ * merged as before. With no lift, the payload is returned unchanged.
+ */
+export function applyRendererApprovalNote(
+  xRenderer: string,
+  payload: Record<string, unknown>,
+  lift: { approvalNote: string } | null,
+): Record<string, unknown> {
+  if (!lift) return payload;
+  const merged: Record<string, unknown> = { ...payload, ...lift };
+  if (!xRenderer.endsWith(":list-picker")) return merged;
+  delete merged.userResponse;
+  return merged;
+}
+
 // ---------------------------------------------------------------------------
 // Chat-gate submit payload (AgenticRunPanel — the single discriminated
 // resume-payload builder behind submitActiveGate / ChatGateDescriptor.submit)
@@ -552,7 +576,9 @@ export function buildChatGateSubmitPayload(args: {
  * The two panels' precedence divergence is pre-existing behavior; unifying
  * it would change the WayFlow resume text for AgenticRunPanel gates whose
  * renderer buffered an approvalNote without a userResponse. Keep them
- * distinct until that alignment is decided deliberately.
+ * distinct until that alignment is decided deliberately. The one exception
+ * is the run panel's list step (cinatra#3562): its lifted note is the resume
+ * text, so its Continue wraps with `applyAttachmentEnvelope`.
  */
 export function applyAttachmentEnvelopeUserResponseOnly(
   payload: Record<string, unknown>,
@@ -570,6 +596,28 @@ export function applyAttachmentEnvelopeUserResponseOnly(
 // ---------------------------------------------------------------------------
 // The renderer's own reading of its value (cinatra#3562)
 // ---------------------------------------------------------------------------
+
+/**
+ * The identity of one gate on a run surface (cinatra#3562): its review task,
+ * its renderer and its field. A run surface keys these by it: the renderer's
+ * report, the React instance of the renderer, the staged draft and answer, the
+ * registered flush and the answered marker.
+ *
+ * The encoding is INJECTIVE. All three parts are unconstrained strings from the
+ * run's own row. A separator join is not injective: task `a`, renderer `r` and
+ * field `b::r::c` join with `::` to the same string as task `a::r::b`,
+ * renderer `r` and field `c`. One gate could then take over another gate's
+ * state and answer. A JSON array keeps the boundaries, as `hitlGateKey`
+ * (agent-hitl-screen-card.tsx) does. A missing field and an empty field are
+ * one identity, as they were before.
+ */
+export function runGateIdentityKey(
+  reviewTaskId: string,
+  xRenderer: string,
+  fieldName: string | undefined,
+): string {
+  return JSON.stringify([reviewTaskId, xRenderer, fieldName ?? ""]);
+}
 
 /**
  * Where a run surface keeps what its field renderers reported through

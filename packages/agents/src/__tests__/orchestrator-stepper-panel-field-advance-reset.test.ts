@@ -44,7 +44,8 @@ describe("orchestrator-stepper-panel — per-field setup advance resets input st
     expect(SRC).toMatch(/const setupGateKey = setupGateIdentity\(interruptContext\);/);
     const identity = SRC.match(/function setupGateIdentity\([\s\S]*?\{\s*return ([^;]*);/);
     expect(identity, "setupGateIdentity must be declared").toBeTruthy();
-    expect(identity![1]).toBe('[gate.reviewTaskId, gate.xRenderer, gate.fieldName ?? ""].join("::")');
+    // An injective encoding of the three parts (cinatra#3562), never a separator join.
+    expect(identity![1]).toBe("runGateIdentityKey(gate.reviewTaskId, gate.xRenderer, gate.fieldName)");
     // No renderer key may remain xRenderer-only.
     expect(SRC).not.toMatch(/key=\{interruptContext\.xRenderer\}/);
   });
@@ -57,6 +58,9 @@ describe("orchestrator-stepper-panel — per-field setup advance resets input st
     expect(bufferKeyMatch, "bufferKey must be declared").toBeTruthy();
     expect(bufferKeyMatch![1]).toMatch(/xRenderer/);
     expect(bufferKeyMatch![1]).toMatch(/fieldName/);
+    // …and the review task (cinatra#3562): a gate of another task with the same
+    // renderer and field starts with an empty buffer.
+    expect(bufferKeyMatch![1]).toMatch(/reviewTaskId/);
   });
 
   it("keeps the null-flicker guard on the buffer reset (non-null → non-null transitions only)", () => {
@@ -64,8 +68,7 @@ describe("orchestrator-stepper-panel — per-field setup advance resets input st
     // a transient null interruptContext (SSE flicker) must remain a no-op,
     // and the composite key must collapse to null when the context is null.
     expect(SRC).toMatch(/interruptContext != null\s*\?/);
-    expect(SRC).toMatch(
-      /bufferKey !== null &&\s*prevBufferKeyRef\.current !== null &&\s*prevBufferKeyRef\.current !== bufferKey/,
-    );
+    expect(SRC).toMatch(/if \(bufferKey !== null && bufferKey !== prevBufferKey\) \{/);
+    expect(SRC).toMatch(/if \(prevBufferKey !== null && Object\.keys\(bufferedHitlValue\)\.length > 0\) \{/);
   });
 });

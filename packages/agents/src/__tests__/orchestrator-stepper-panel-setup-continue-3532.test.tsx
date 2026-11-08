@@ -1517,3 +1517,165 @@ describe("OrchestratorStepperPanel — every send of a held gate sends nothing (
     expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#3562, fold 3 — Codex pre-review 2, MUST-FIX 1 to 3.
+// ---------------------------------------------------------------------------
+
+/** A list step that reports nothing and hands over one pick per press. */
+function SilentListRenderer({ onChange }: FieldRendererProps) {
+  return (
+    <Button
+      type="button"
+      onClick={() => void onChange({ scope: "list", listId: "l1", listName: "List one", memberCount: 3 })}
+    >
+      Pick list one
+    </Button>
+  );
+}
+
+/** A list step that hands over its pick together with a reply text. */
+function ReplyListRenderer({ onChange }: FieldRendererProps) {
+  return (
+    <Button
+      type="button"
+      onClick={() =>
+        void onChange({ listIds: ["L1"], listNames: ["One"], userResponse: "continue" })
+      }
+    >
+      Pick with a reply
+    </Button>
+  );
+}
+
+function registerAs(id: string, renderer: (props: FieldRendererProps) => React.ReactNode) {
+  fieldRendererRegistry.register({
+    id,
+    priority: 100,
+    condition: (_fieldName, schema) => (schema as { "x-renderer"?: unknown })["x-renderer"] === id,
+    renderer,
+  });
+}
+
+describe("OrchestratorStepperPanel — one gate's state and answer stay with that gate (cinatra#3562, fold 3)", () => {
+  it("a gate whose parts join to another gate's `::` string gets its own renderer, draft and answer (MUST-FIX 1)", async () => {
+    // Gate A: task `setup-a`, field `b::<R>::c`. Gate B: task `setup-a::<R>::b`,
+    // field `c`. Joined with `::`, both read `setup-a::<R>::b::<R>::c`.
+    const R = CONTROL_LESS_RENDERER_ID;
+    const fieldA = `b::${R}::c`;
+    expect(["setup-a", R, fieldA].join("::")).toBe([`setup-a::${R}::b`, R, "c"].join("::"));
+    const gate = await mountGate({ xRenderer: R, fieldName: fieldA, reviewTaskId: "setup-a" });
+
+    const boxA = () => document.getElementById(`field-${fieldA}`) as HTMLInputElement | null;
+    await waitFor(() => expect(boxA()).not.toBeNull());
+    fireEvent.change(boxA()!, { target: { value: "for A" } });
+    await waitFor(() => expect(boxA()!.value).toBe("for A"));
+
+    gate.advanceTo({ xRenderer: R, fieldName: "c", reviewTaskId: `setup-a::${R}::b` });
+    const boxB = () => document.getElementById("field-c") as HTMLInputElement | null;
+    await waitFor(() => expect(boxB()).not.toBeNull());
+    // B is a question of its own: it starts empty, and a press sends nothing.
+    expect(boxB()!.value).toBe("");
+    await waitFor(() => expect(productContinues()).toHaveLength(1));
+    fireEvent.click(productContinues()[0]!);
+    await act(async () => {});
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
+
+  it("a list step of the next review task starts with no pick: the earlier task's pick is never sent for it (MUST-FIX 2)", async () => {
+    const SILENT_LIST_ID = "@cinatra-test/pack-agent-silent:list-picker";
+    registerAs(SILENT_LIST_ID, SilentListRenderer);
+    const view = await mountGate({
+      xRenderer: SILENT_LIST_ID,
+      fieldName: "accountScope",
+      schema: { type: "object" },
+      reviewTaskId: "review-run-3562-a",
+    });
+
+    await view.findByRole("button", { name: "Pick list one" });
+    fireEvent.click(view.getByRole("button", { name: "Pick list one" }));
+    await act(async () => {});
+
+    view.advanceTo({
+      xRenderer: SILENT_LIST_ID,
+      fieldName: "accountScope",
+      reviewTaskId: "review-run-3562-b",
+    });
+    await view.findByRole("button", { name: "Pick list one" });
+    const outer = () => view.getByRole("button", { name: /Continue/ }) as HTMLButtonElement;
+    await waitFor(() => expect(outer().disabled).toBe(false));
+    fireEvent.click(outer());
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("review-run-3562-b");
+    expect(JSON.stringify(payload)).not.toContain("l1");
+  });
+
+  it("a list step's pick is the resume text: a buffered reply text does not ride along to shadow it (MUST-FIX 3)", async () => {
+    const REPLY_LIST_ID = "@cinatra-test/pack-agent-reply:list-picker";
+    registerAs(REPLY_LIST_ID, ReplyListRenderer);
+    const view = await mountGate({
+      xRenderer: REPLY_LIST_ID,
+      fieldName: "accountScope",
+      schema: { type: "object" },
+      reviewTaskId: "review-run-3562",
+    });
+
+    await view.findByRole("button", { name: "Pick with a reply" });
+    fireEvent.click(view.getByRole("button", { name: "Pick with a reply" }));
+    await act(async () => {});
+    const outer = () => view.getByRole("button", { name: /Continue/ }) as HTMLButtonElement;
+    await waitFor(() => expect(outer().disabled).toBe(false));
+    fireEvent.click(outer());
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("review-run-3562");
+    expect(payload).not.toHaveProperty("userResponse");
+    expect(JSON.parse(payload.approvalNote as string)).toMatchObject({
+      type: "list",
+      listIds: ["L1"],
+      listNames: ["One"],
+    });
+  });
+  it("the renderer of the next review task's gate is never drawn with the earlier task's pick (MUST-FIX 2)", async () => {
+    // A renderer seeds its own state from the first `value` it is given, so the
+    // reset must land before the new gate's renderer draws, not after.
+    const drawnWith: unknown[] = [];
+    function RecordingListRenderer(props: FieldRendererProps) {
+      drawnWith.push(props.value);
+      return <SilentListRenderer {...props} />;
+    }
+    const RECORDING_LIST_ID = "@cinatra-test/pack-agent-recording:list-picker";
+    registerAs(RECORDING_LIST_ID, RecordingListRenderer);
+    // A field that is not object-typed is given the whole buffer as its value.
+    const view = await mountGate({
+      xRenderer: RECORDING_LIST_ID,
+      fieldName: "accountScope",
+      reviewTaskId: "review-run-3562-a",
+    });
+
+    await view.findByRole("button", { name: "Pick list one" });
+    fireEvent.click(view.getByRole("button", { name: "Pick list one" }));
+    await act(async () => {});
+    // The earlier task's renderer was given its own pick.
+    expect(drawnWith.some((v) => JSON.stringify(v ?? null).includes('"l1"'))).toBe(true);
+
+    const fromHere = drawnWith.length;
+    view.advanceTo({
+      xRenderer: RECORDING_LIST_ID,
+      fieldName: "accountScope",
+      reviewTaskId: "review-run-3562-b",
+    });
+    await view.findByRole("button", { name: "Pick list one" });
+    await act(async () => {});
+    const drawnForB = drawnWith.slice(fromHere);
+    expect(drawnForB.length).toBeGreaterThan(0);
+    expect(drawnForB.filter((v) => JSON.stringify(v ?? null).includes('"l1"'))).toEqual([]);
+  });
+});

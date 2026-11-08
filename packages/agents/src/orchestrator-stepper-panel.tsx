@@ -110,12 +110,14 @@ import { applyAttachmentEnvelope } from "./attachment-envelope-payload";
 // #817 context-selector envelope synthesis are shared with
 // agentic-run-panel so both surfaces submit byte-identical payloads.
 import {
+  applyRendererApprovalNote,
   createGateValidityStore,
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
   isSetupGateTaskId,
   liftRendererApprovalNote,
+  runGateIdentityKey,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
   wrapPrimitiveSetupPayload,
@@ -527,13 +529,14 @@ function GateValidityOwner({
 // renderer and the field together. Defined once here because BOTH halves of the
 // press road read it — the card, which stages and sends an answer for exactly
 // one gate, and the panel, which holds the answered gate while it re-reads the
-// run (fix leg 3).
+// run (fix leg 3). The encoding is `runGateIdentityKey`, which is injective
+// (cinatra#3562): a separator join let two gates share one identity.
 function setupGateIdentity(gate: {
   reviewTaskId: string;
   xRenderer: string;
   fieldName?: string;
 }): string {
-  return [gate.reviewTaskId, gate.xRenderer, gate.fieldName ?? ""].join("::");
+  return runGateIdentityKey(gate.reviewTaskId, gate.xRenderer, gate.fieldName);
 }
 
 // ---------------------------------------------------------------------------
@@ -744,32 +747,38 @@ function HitlApprovalCard({
   // sequential per-field setup gates all reuse the SAME xRenderer
   // (schema-field-fallback), so an xRenderer-only key never fires on a
   // field→field advance (postTitle → blogPostUrl) and field 1's buffered
-  // value bleeds into field 2. fieldName is undefined outside the setup loop,
-  // so non-setup gate transitions keep their existing xRenderer-only behavior.
-  const prevBufferKeyRef = useRef<string | null>(null);
+  // value bleeds into field 2.
+  //
+  // The key also holds the REVIEW TASK (cinatra#3562). A gate of another review
+  // task with the same renderer and field (a mid-run list step has no field)
+  // starts with an empty buffer, so its Continue never approves it with the
+  // earlier task's pick. The key is `runGateIdentityKey`, the injective
+  // identity of `setupGateIdentity`. The reset runs during this render (a state
+  // update of this component during its own render): the renderer of the new
+  // gate never receives the earlier buffer. A renderer seeds its own state from
+  // the first `value` it is given, so a reset after that render would come too
+  // late. The previous key is kept only for non-null keys, so a transient null
+  // changes nothing.
   const bufferKey =
     interruptContext != null
-      ? `${interruptContext.xRenderer}::${interruptContext.fieldName ?? ""}`
+      ? runGateIdentityKey(
+          interruptContext.reviewTaskId,
+          interruptContext.xRenderer,
+          interruptContext.fieldName,
+        )
       : null;
-  if (
-    bufferKey !== null &&
-    prevBufferKeyRef.current !== null &&
-    prevBufferKeyRef.current !== bufferKey
-  ) {
+  const [prevBufferKey, setPrevBufferKey] = useState<string | null>(null);
+  if (bufferKey !== null && bufferKey !== prevBufferKey) {
+    setPrevBufferKey(bufferKey);
     // Real gate→gate transition — clear the previous gate's buffer.
-    if (Object.keys(bufferedHitlValue).length > 0) {
-      queueMicrotask(() => setBufferedHitlValue({}));
+    if (prevBufferKey !== null && Object.keys(bufferedHitlValue).length > 0) {
+      setBufferedHitlValue({});
     }
-  }
-  // Advance the ref only on non-null keys so a transient null doesn't
-  // poison the next real comparison.
-  if (bufferKey !== null) {
-    prevBufferKeyRef.current = bufferKey;
   }
 
   // The block belongs to ONE gate, so it is released on GATE IDENTITY — the
-  // review-task id — and not on the buffer key above (cinatra#3219 convergence).
-  // The buffer key is `xRenderer::fieldName`, which a following gate can repeat
+  // review-task id — and not on the renderer and field (cinatra#3219
+  // convergence). A following gate can repeat the renderer and field
   // exactly: a mid-run WayFlow gate carries no fieldName and often reuses its
   // renderer, so a blocked panel keyed that way would cover a gate that is
   // genuinely open, with no way back but a full reload.
@@ -1024,13 +1033,19 @@ function HitlApprovalCard({
     // scrape-schema-review / final-list-review) — snapshot exactly what was
     // approved at this gate for the downstream continuation. Shared with
     // agentic-run-panel via ./hitl-gate-submit.
+    // A lifted list-step note is the resume text (cinatra#3562): the server
+    // sends a nonblank `userResponse` before the note, so the list step's
+    // lift removes any `userResponse` from the payload. The attachment
+    // envelope below wraps the note (`applyAttachmentEnvelope`).
     const approvalNoteLift = liftRendererApprovalNote(
       interruptContext.xRenderer,
       bufferedHitlValue,
     );
-    if (approvalNoteLift) {
-      nextBuffered = { ...nextBuffered, ...approvalNoteLift };
-    }
+    nextBuffered = applyRendererApprovalNote(
+      interruptContext.xRenderer,
+      nextBuffered,
+      approvalNoteLift,
+    );
     // #817: context-selector gate — synthesize the selection envelope when the
     // renderer emitted none (zero-candidate slot; /api/context-finalize would
     // 422 on the non-JSON value). A real toggle already set
