@@ -28,8 +28,14 @@ vi.mock("../store/db", async () => {
   const insert = () => ({
     values: (v: Record<string, unknown>) => {
       state.inserted.push(v);
-      const p = Promise.resolve([v]);
-      return Object.assign(p, { returning: async () => [v] });
+      // RETURNING carries the columns' database defaults: created_at and
+      // updated_at are `defaultNow()` in store/schema.ts, so the returned row
+      // has them although the insert names neither. The MCP handler's toDto
+      // reads both (mcp/handlers.ts toDto).
+      const now = new Date();
+      const row = { createdAt: now, updatedAt: now, ...v };
+      const p = Promise.resolve([row]);
+      return Object.assign(p, { returning: async () => [row] });
     },
   });
   const select = () => {
