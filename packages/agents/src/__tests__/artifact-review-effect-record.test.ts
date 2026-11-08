@@ -7,8 +7,10 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../cms-snapshot-readback-store", () => ({ readCmsSnapshotTargetByOperation: vi.fn() }));
 
+import { readCmsSnapshotTargetByOperation } from "../cms-snapshot-readback-store";
 import {
   parseCmsApplyEffectResult,
+  recordCmsApplyEffect,
   reviewEffectId,
   REVIEW_EFFECT_RECORD_MAX_BYTES,
   serializeReviewEffectRecord,
@@ -107,6 +109,46 @@ describe("serializeReviewEffectRecord — the persisted JSON contract", () => {
     expect(serializeReviewEffectRecord(nest(33))).toEqual({ ok: false, code: "invalid-value" });
   });
 
+  it("refuses a sparse array whose one extra key makes up the key count of a full array", () => {
+    // [1, <hole>, 3] has the own keys 0, 2 and length; one extra key makes four, the count of a full array of three.
+    const sparseExtra = Object.assign([1, , 3], { extra: 2 });
+    expect(Reflect.ownKeys(sparseExtra)).toHaveLength(sparseExtra.length + 1);
+    expect(serializeReviewEffectRecord({ a: sparseExtra })).toEqual({ ok: false, code: "invalid-value" });
+  });
+
+  it("runs no inherited index getter for a hole", () => {
+    const spy = vi.fn(() => "inherited");
+    Object.defineProperty(Array.prototype, "1", { get: spy, configurable: true });
+    try {
+      const sparseExtra = Object.assign([1, , 3], { extra: 2 });
+      expect(serializeReviewEffectRecord({ a: sparseExtra })).toEqual({ ok: false, code: "invalid-value" });
+    } finally {
+      delete (Array.prototype as unknown as Record<string, unknown>)["1"];
+    }
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("refuses an array key that is not a canonical index below the length", () => {
+    const leadingZero = [1, 2];
+    delete (leadingZero as unknown as Record<string, unknown>)["1"];
+    (leadingZero as unknown as Record<string, unknown>)["01"] = 2;
+    expect(serializeReviewEffectRecord({ a: leadingZero })).toEqual({ ok: false, code: "invalid-value" });
+  });
+
+  it("refuses a revoked proxy at the top, object or array, with a typed answer and no throw", () => {
+    const obj = Proxy.revocable({}, {});
+    const arr = Proxy.revocable([] as unknown[], {});
+    obj.revoke();
+    arr.revoke();
+    expect(serializeReviewEffectRecord(obj.proxy)).toEqual({ ok: false, code: "invalid-value" });
+    expect(serializeReviewEffectRecord(arr.proxy)).toEqual({ ok: false, code: "invalid-value" });
+    expect(serializeReviewEffectRecord({ a: obj.proxy })).toEqual({ ok: false, code: "invalid-value" });
+  });
+
+  it("refuses a live array proxy at the top as a proxy, not as an array", () => {
+    expect(serializeReviewEffectRecord(new Proxy([1], {}))).toEqual({ ok: false, code: "invalid-value" });
+  });
+
   it("runs no getter while it reads", () => {
     const spy = vi.fn(() => 1);
     serializeReviewEffectRecord(Object.defineProperty({}, "toJSON", { get: spy, enumerable: true }));
@@ -174,6 +216,7 @@ describe("parseCmsApplyEffectResult — the CLOSED apply result", () => {
     ["a time without milliseconds", { ...VALID, remotePublishedAt: "2026-11-03T09:20:00Z" }],
     ["a local time", { ...VALID, remotePublishedAt: "2026-11-03 09:20:00" }],
     ["an impossible date", { ...VALID, remotePublishedAt: "2026-02-30T09:20:00.000Z" }],
+    ["an impossible month", { ...VALID, remotePublishedAt: "2026-13-01T09:20:00.000Z" }],
     ["a numeric time", { ...VALID, remotePublishedAt: 1762161600000 }],
     ["a getter", Object.defineProperty({ remoteId: "42", remoteStatus: "draft" }, "remotePublishedAt", { get: () => null, enumerable: true })],
     ["a proxy", new Proxy({ ...VALID }, {})],
@@ -182,6 +225,15 @@ describe("parseCmsApplyEffectResult — the CLOSED apply result", () => {
     ["an array", [VALID]],
   ])("refuses %s", (_n, value) => {
     expect(parseCmsApplyEffectResult(value)).toBeNull();
+  });
+
+  it("refuses a revoked proxy, object or array, with null and no throw", () => {
+    const obj = Proxy.revocable({ ...VALID }, {});
+    const arr = Proxy.revocable([VALID], {});
+    obj.revoke();
+    arr.revoke();
+    expect(parseCmsApplyEffectResult(obj.proxy)).toBeNull();
+    expect(parseCmsApplyEffectResult(arr.proxy)).toBeNull();
   });
 });
 
@@ -202,8 +254,52 @@ describe("storedPinnedTargets — the gate's stored pinned set, fail-closed", ()
     ["an empty revision id", [{ artifactId: "a", representationRevisionId: "" }]],
     ["a numeric revision id", [{ artifactId: "a", representationRevisionId: 7 }]],
     ["one bad element among good ones", [{ artifactId: "a", representationRevisionId: "r" }, { artifactId: "b" }]],
+    ["a class instance element", [Object.assign(new (class Pin {})(), { artifactId: "a", representationRevisionId: "r" })]],
+    ["an element whose ids are inherited", [Object.create({ artifactId: "a", representationRevisionId: "r" }) as unknown]],
+    ["a proxy element", [new Proxy({ artifactId: "a", representationRevisionId: "r" }, {})]],
+    ["a proxy set", new Proxy([{ artifactId: "a", representationRevisionId: "r" }], {})],
+    ["a hole", [, { artifactId: "a", representationRevisionId: "r" }]],
   ])("refuses %s as a whole", (_n, value) => {
     expect(storedPinnedTargets(value)).toBeNull();
+  });
+
+  it("refuses an element whose id is a getter, and runs no getter", () => {
+    const spy = vi.fn(() => "a");
+    const el = Object.defineProperty({ representationRevisionId: "r" }, "artifactId", { get: spy, enumerable: true });
+    expect(storedPinnedTargets([el])).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("accepts a null-prototype element", () => {
+    const el = Object.assign(Object.create(null) as Record<string, unknown>, { artifactId: "a", representationRevisionId: "r" });
+    expect(storedPinnedTargets([el])).toEqual([{ artifactId: "a", representationRevisionId: "r" }]);
+  });
+});
+
+describe("recordCmsApplyEffect — the operation id is the record's source, 1 to 256 UTF-8 bytes", () => {
+  const BASE = { orgId: "org-1", runId: "run-1", gateId: "gate-1", result: VALID };
+  const lookup = vi.mocked(readCmsSnapshotTargetByOperation);
+
+  it.each([
+    ["an empty id", ""],
+    ["an id of 257 bytes", "a".repeat(257)],
+    ["an id of 129 characters and 257 bytes", `${"ü".repeat(128)}a`],
+    ["a non-string id", 42 as unknown as string],
+  ])("refuses %s as invalid-operation before any read", async (_n, operationId) => {
+    lookup.mockClear();
+    expect(await recordCmsApplyEffect({ ...BASE, operationId })).toEqual({ ok: false, code: "invalid-operation" });
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["one byte", "a"],
+    ["256 bytes", "a".repeat(256)],
+    ["128 two-byte characters", "ü".repeat(128)],
+  ])("passes an id of %s on to the stored-state reads", async (_n, operationId) => {
+    lookup.mockClear();
+    lookup.mockResolvedValueOnce(null);
+    expect(await recordCmsApplyEffect({ ...BASE, operationId })).toEqual({ ok: false, code: "target-not-found" });
+    expect(lookup).toHaveBeenCalledWith(operationId);
   });
 });
 

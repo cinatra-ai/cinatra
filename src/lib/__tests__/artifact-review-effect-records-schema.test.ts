@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { artifactReviewGateSchemaQueries } from "@/lib/artifacts/artifact-review-gate-schema";
+import { CMS_OPERATION_ID_MAX_BYTES } from "@/lib/cms-review-host-seam";
 import { artifactReviewEffectRecordsDdlSql } from "../../../migrations/core/core__0129_artifact-review-effect-records.mjs";
 
 /** The one-row-per-reviewed-target constraint, inline in the CREATE TABLE. */
@@ -61,6 +62,12 @@ describe("artifact_review_effect_records — the bootstrap DDL", () => {
       "record_json text NOT NULL CHECK (octet_length(record_json) <= 8192 AND jsonb_typeof(record_json::jsonb) = 'object')",
     );
     expect(bootstrap).toMatch(/recorded_at\s+timestamptz NOT NULL DEFAULT now\(\)/);
+  });
+
+  it("bounds the source by the same 256 bytes the capture seam allows an operation id", () => {
+    expect(CMS_OPERATION_ID_MAX_BYTES).toBe(256);
+    expect(bootstrap).toContain(`CHECK (octet_length(source_ref) BETWEEN 1 AND ${CMS_OPERATION_ID_MAX_BYTES})`);
+    expect(artifactReviewEffectRecordsDdlSql).toContain(`CHECK (octet_length(source_ref) BETWEEN 1 AND ${CMS_OPERATION_ID_MAX_BYTES})`);
   });
 });
 

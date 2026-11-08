@@ -4,13 +4,15 @@
  *   BINDINGS   every binding is read from stored state: the operation's
  *              snapshot, the gate's org, run, status, disposition and pinned
  *              set, and the gate's verification of that snapshot.
- *   FIRST WRITE WINS   identical retry, conflicting retry, concurrent writers,
- *              and a key already held by another writer or another source.
+ *   FIRST WRITE WINS   identical retry, conflicting retry, concurrent writes,
+ *              and a key already held (or held uncommitted) by another writer or
+ *              another source.
  *   COMPOSED   the real read-back verification (recordCmsApplyVerification)
  *              followed by the writer: one verification per gate.
  *   TABLE      the CHECKs (writer, source, the 8192-byte JSON object), the gate
- *              cascade, and the migration twin (idempotent up; down refuses a
- *              non-empty table and drops an empty one).
+ *              cascade, and the migration twin through its exported up and down
+ *              (idempotent up; down refuses a non-empty table, drops an empty one,
+ *              and holds the table locked against a write that lands meanwhile).
  *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided.
  */
@@ -20,8 +22,8 @@ import { Client } from "pg";
 
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 import {
-  artifactReviewEffectRecordsDdlSql,
   down as migrationDown,
+  up as migrationUp,
 } from "../../../../migrations/core/core__0129_artifact-review-effect-records.mjs";
 
 const TEST_SCHEMA = "cinatra_test_review_effect_3978";
@@ -36,6 +38,7 @@ const RESULT = { remoteId: "42", remoteStatus: "published", remotePublishedAt: "
 let store: typeof import("../artifact-review-effect-store");
 let readback: typeof import("../cms-snapshot-readback-store");
 let client: Client;
+const PRIOR_SCHEMA = process.env.SUPABASE_SCHEMA;
 
 async function sql(text: string, values: unknown[] = []) {
   return client.query(text, values);
@@ -49,7 +52,8 @@ interface Seed {
   revisionId: string;
 }
 
-/** A gate, a captured snapshot target, and (by default) its verified read-back. */
+/** A gate, a captured snapshot target, and (by default) its verified read-back.
+ *  A pending gate carries no disposition unless one is named. */
 async function seed(over: {
   status?: "pending" | "resolved";
   disposition?: "approve" | "reject" | "changes_requested";
@@ -57,11 +61,12 @@ async function seed(over: {
   outcome?: "verified" | "drifted" | "unmet" | null;
   verifyOther?: boolean;
   orgId?: string;
+  operationId?: string;
 } = {}): Promise<Seed> {
   const s: Seed = {
     gateId: `gate-${randomUUID()}`,
     runId: `run-${randomUUID()}`,
-    operationId: `op-${randomUUID()}`,
+    operationId: over.operationId ?? `op-${randomUUID()}`,
     artifactId: `art-${randomUUID()}`,
     revisionId: `rev-${randomUUID()}`,
   };
@@ -73,7 +78,7 @@ async function seed(over: {
      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9)`,
     [
       s.gateId, s.runId, over.orgId ?? ORG, `task-${randomUUID()}`, status, JSON.stringify(pinned),
-      status === "resolved" ? (over.disposition ?? "approve") : null,
+      status === "resolved" ? (over.disposition ?? "approve") : (over.disposition ?? null),
       status === "resolved" ? FP : null,
       status === "resolved" ? new Date() : null,
     ],
@@ -100,6 +105,35 @@ async function seed(over: {
   return s;
 }
 
+/** A stored verification of (artifact, revision) under `gateId`. */
+async function insertVerification(gateId: string, artifactId: string, revisionId: string, outcome = "verified") {
+  await sql(
+    `INSERT INTO ${T("artifact_verification_records")}
+       (id, gate_id, reviewed_artifact_id, reviewed_representation_revision_id,
+        repaired_artifact_id, repaired_representation_revision_id, outcome)
+     VALUES ($1, $2, $3, $4, $3, $5, $6)`,
+    [`verify:${randomUUID()}`, gateId, artifactId, revisionId, `${revisionId}:post-apply`, outcome],
+  );
+}
+
+/** Wait until a backend other than `on`'s own waits for a lock while it runs a statement on the effect table. */
+async function waitForLockWaiter(on: Client, pid?: number) {
+  for (let i = 0; i < 200; i += 1) {
+    // Inside an open transaction the activity view is a snapshot; clear it so each read is current.
+    await on.query("SELECT pg_stat_clear_snapshot()");
+    const r = await on.query(
+      `SELECT count(*)::int AS n FROM pg_stat_activity
+        WHERE wait_event_type = 'Lock' AND pid <> pg_backend_pid()
+          AND ($1::int IS NULL OR pid = $1::int)
+          AND ($1::int IS NOT NULL OR query ILIKE '%artifact_review_effect_records%')`,
+      [pid ?? null],
+    );
+    if (r.rows[0].n > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("no backend came to wait for the lock within 10 s");
+}
+
 function write(s: Seed, over: Partial<{ orgId: string; runId: string; gateId: string; operationId: string; result: unknown }> = {}) {
   return store.recordCmsApplyEffect({
     orgId: ORG,
@@ -112,8 +146,8 @@ function write(s: Seed, over: Partial<{ orgId: string; runId: string; gateId: st
 }
 
 /** A row written past the store (a raw INSERT); `key` replaces the revision of the unique key. */
-async function insertRaw(s: Seed, over: { writer?: string; sourceRef?: string; recordJson?: string; key?: string }) {
-  return sql(
+async function insertRaw(s: Seed, over: { writer?: string; sourceRef?: string; recordJson?: string; key?: string }, on?: Client) {
+  return (on ?? client).query(
     `INSERT INTO ${T("artifact_review_effect_records")}
        (id, gate_id, org_id, run_id, reviewed_artifact_id, reviewed_representation_revision_id, writer, source_ref, record_json)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
@@ -154,6 +188,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!HAS_DB) return;
+  if (PRIOR_SCHEMA === undefined) delete process.env.SUPABASE_SCHEMA;
+  else process.env.SUPABASE_SCHEMA = PRIOR_SCHEMA;
   await client?.end().catch(() => {});
   const admin = new Client({ connectionString: DB_URL });
   await admin.connect();
@@ -211,6 +247,7 @@ describe.skipIf(!HAS_DB)("cinatra#3978 — the CMS apply effect writer binds to 
 
   it.each([
     ["a pending gate", { status: "pending" as const }],
+    ["a pending gate that carries approve", { status: "pending" as const, disposition: "approve" as const }],
     ["a rejected gate", { disposition: "reject" as const }],
     ["a changes-requested gate", { disposition: "changes_requested" as const }],
   ])("refuses %s as gate-not-approved", async (_n, over) => {
@@ -249,6 +286,40 @@ describe.skipIf(!HAS_DB)("cinatra#3978 — the CMS apply effect writer binds to 
     const s = await seed(over);
     expect(await write(s)).toEqual({ ok: false, code: "not-verified" });
     expect(await rowsFor(s.gateId)).toHaveLength(0);
+  });
+
+  it("records nothing for another gate's verified verification of the same target (not-verified)", async () => {
+    const s = await seed({ outcome: null });
+    const other = await seed({ outcome: null });
+    await insertVerification(other.gateId, s.artifactId, s.revisionId);
+    expect(await write(s)).toEqual({ ok: false, code: "not-verified" });
+    expect(await rowsFor(s.gateId)).toHaveLength(0);
+  });
+
+  it("records nothing for the gate's verified verification of the same artifact at another revision (not-verified)", async () => {
+    const s = await seed({ outcome: null });
+    await insertVerification(s.gateId, s.artifactId, `rev-other-${randomUUID()}`);
+    expect(await write(s)).toEqual({ ok: false, code: "not-verified" });
+    expect(await rowsFor(s.gateId)).toHaveLength(0);
+  });
+
+  it.each([
+    ["an empty operation id", ""],
+    ["an operation id of 257 bytes", "b".repeat(257)],
+    ["an operation id of 129 characters and 257 bytes", `${"ü".repeat(128)}b`],
+  ])("refuses a captured target whose source cannot be stored: %s answers invalid-operation and stores nothing", async (_n, operationId) => {
+    const s = await seed({ operationId });
+    expect(await write(s)).toEqual({ ok: false, code: "invalid-operation" });
+    expect(await rowsFor(s.gateId)).toHaveLength(0);
+  });
+
+  it.each([
+    ["256 bytes", "c".repeat(256)],
+    ["128 two-byte characters", "ü".repeat(128)],
+  ])("records a captured target whose operation id is %s", async (_n, operationId) => {
+    const s = await seed({ operationId });
+    expect((await write(s)).ok).toBe(true);
+    expect((await rowsFor(s.gateId))[0].source_ref).toBe(operationId);
   });
 
   it("propagates a database failure as a throw and stores nothing", async () => {
@@ -298,7 +369,7 @@ describe.skipIf(!HAS_DB)("cinatra#3978 — first write wins", () => {
     expect(await rowsFor(s.gateId)).toHaveLength(1);
   });
 
-  it("lets exactly one of two concurrent different writers record, the other reads conflict", async () => {
+  it("lets exactly one of two concurrent writes of different records record, the other reads conflict", async () => {
     const s = await seed();
     const other = { ...RESULT, remoteId: "43" };
     const answers = await Promise.all([write(s), write(s, { result: other })]);
@@ -307,6 +378,29 @@ describe.skipIf(!HAS_DB)("cinatra#3978 — first write wins", () => {
     const rows = await rowsFor(s.gateId);
     expect(rows).toHaveLength(1);
     expect(rows[0].record_json).toBe(JSON.stringify(winner));
+  });
+
+  it.each([
+    ["another writer", { writer: "dashboard_publish" }],
+    ["another source", { sourceRef: "op-other" }],
+  ])("a write that races %s holding the key uncommitted waits for it, then answers conflict and keeps that row", async (_n, over) => {
+    const s = await seed();
+    const other = new Client({ connectionString: DB_URL });
+    await other.connect();
+    try {
+      await other.query("BEGIN");
+      await insertRaw(s, { recordJson: JSON.stringify(RESULT), ...over }, other);
+      const writing = write(s);
+      await waitForLockWaiter(client);
+      await other.query("COMMIT");
+      expect(await writing).toEqual({ ok: false, code: "conflict" });
+      const rows = await rowsFor(s.gateId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ writer: over.writer ?? "cms_apply", source_ref: over.sourceRef ?? s.operationId });
+    } finally {
+      await other.query("ROLLBACK").catch(() => {});
+      await other.end().catch(() => {});
+    }
   });
 });
 
@@ -446,9 +540,11 @@ describe.skipIf(!HAS_DB)("cinatra#3978 — the migration twin core__0129", () =>
     const r = await sql(`SELECT to_regclass($1) AS t`, [`"${q(TEST_SCHEMA)}".artifact_review_effect_records`]);
     return r.rows[0].t !== null;
   }
-  async function runDown() {
+  /** Run the statements the exported migration function emits, in the test schema. */
+  async function runMigration(fn: (pgm: never) => void) {
     const statements: string[] = [];
-    migrationDown({ sql: (text: string) => statements.push(text) } as never);
+    fn({ sql: (text: string) => statements.push(text) } as never);
+    expect(statements.length).toBeGreaterThan(0);
     await sql(`SET search_path TO "${q(TEST_SCHEMA)}"`);
     try {
       for (const text of statements) await sql(text);
@@ -456,16 +552,36 @@ describe.skipIf(!HAS_DB)("cinatra#3978 — the migration twin core__0129", () =>
       await sql(`RESET search_path`);
     }
   }
+  const runDown = () => runMigration(migrationDown);
+  const runUp = () => runMigration(migrationUp);
 
-  it("is idempotent after the bootstrap DDL and twice over", async () => {
-    await sql(`SET search_path TO "${q(TEST_SCHEMA)}"`);
-    try {
-      await sql(artifactReviewEffectRecordsDdlSql);
-      await sql(artifactReviewEffectRecordsDdlSql);
-    } finally {
-      await sql(`RESET search_path`);
-    }
+  it("up is idempotent after the bootstrap DDL and twice over", async () => {
+    await runUp();
+    await runUp();
     expect(await tableExists()).toBe(true);
+  });
+
+  it("down holds the table against a write that commits while it waits, and then refuses (keeps the table and the row)", async () => {
+    const s = await seed();
+    await sql(`DELETE FROM ${T("artifact_review_effect_records")}`);
+    const pid = (await sql("SELECT pg_backend_pid() AS pid")).rows[0].pid as number;
+    const other = new Client({ connectionString: DB_URL });
+    await other.connect();
+    try {
+      // The writer holds its row uncommitted, so a check for emptiness made now sees an empty table.
+      await other.query("BEGIN");
+      await insertRaw(s, { recordJson: JSON.stringify(RESULT) }, other);
+      const downing = runDown().then(() => "dropped", (e: Error) => e.message);
+      await waitForLockWaiter(other, pid);
+      await other.query("COMMIT");
+      expect(await downing).toMatch(/not empty/);
+      expect(await tableExists()).toBe(true);
+      expect(await rowsFor(s.gateId)).toHaveLength(1);
+    } finally {
+      await other.query("ROLLBACK").catch(() => {});
+      await other.end().catch(() => {});
+      if (!(await tableExists())) await runUp();
+    }
   });
 
   it("down refuses a table that holds a record, and keeps it", async () => {
@@ -480,12 +596,7 @@ describe.skipIf(!HAS_DB)("cinatra#3978 — the migration twin core__0129", () =>
     await sql(`DELETE FROM ${T("artifact_review_effect_records")}`);
     await runDown();
     expect(await tableExists()).toBe(false);
-    await sql(`SET search_path TO "${q(TEST_SCHEMA)}"`);
-    try {
-      await sql(artifactReviewEffectRecordsDdlSql);
-    } finally {
-      await sql(`RESET search_path`);
-    }
+    await runUp();
     expect(await tableExists()).toBe(true);
   });
 
@@ -495,12 +606,7 @@ describe.skipIf(!HAS_DB)("cinatra#3978 — the migration twin core__0129", () =>
     expect(await tableExists()).toBe(false);
     await expect(runDown()).resolves.toBeUndefined();
     expect(await tableExists()).toBe(false);
-    await sql(`SET search_path TO "${q(TEST_SCHEMA)}"`);
-    try {
-      await sql(artifactReviewEffectRecordsDdlSql);
-    } finally {
-      await sql(`RESET search_path`);
-    }
+    await runUp();
     expect(await tableExists()).toBe(true);
   });
 });

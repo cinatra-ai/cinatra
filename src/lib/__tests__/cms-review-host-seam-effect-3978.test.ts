@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildCmsReviewHostSeam,
+  type CmsReviewCaptureInput,
   type CmsReviewHostSeamDeps,
   type CmsReviewReadbackInput,
 } from "@/lib/cms-review-host-seam";
@@ -206,5 +207,79 @@ describe("cinatra#3978 — the read-back records the apply effect", () => {
     ).recordApplyVerification(INPUT);
     expect(b.effect).toBe("unrecorded");
     expect(preview2).toHaveBeenCalledTimes(1);
+  });
+
+  it("writes the effect before it takes the post-apply preview", async () => {
+    const order: string[] = [];
+    await buildCmsReviewHostSeam(
+      makeDeps({
+        recordCmsApplyEffect: async () => { order.push("effect"); return { ok: true, status: "recorded" }; },
+        capturePostApplyPreview: async () => { order.push("preview"); return { status: "captured" }; },
+      }),
+    ).recordApplyVerification(INPUT);
+    expect(order).toEqual(["effect", "preview"]);
+  });
+
+  it.each([
+    ["an Error with private text", new Error("connection to db-host:5432 refused, password=hunter2"), "error"],
+    ["a hostile object", hostile, "non-error"],
+    ["a proxy whose prototype cannot be read", unreadable, "non-error"],
+  ])("a post-apply preview that throws %s leaves the verification standing and logs a fixed text and class only", async (_n, thrown, cls) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const seam = buildCmsReviewHostSeam(
+      makeDeps({ recordCmsApplyEffect: writer(), capturePostApplyPreview: async () => { throw thrown; } }),
+    );
+    expect(await seam.recordApplyVerification(INPUT)).toEqual({ ok: true, outcome: "verified", outOfScope: [], effect: "recorded" });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]).toEqual([
+      "[cms-review] post-apply preview capture failed (the verification is unaffected):",
+      cls,
+    ]);
+    expect(JSON.stringify(warn.mock.calls)).not.toMatch(/hunter2|SECRET|db-host/);
+  });
+});
+
+describe("cinatra#3978 — the operation id a capture binds is 1 to 256 UTF-8 bytes, the domain of the effect's source", () => {
+  function captureInput(operationId: string): CmsReviewCaptureInput {
+    return {
+      pointer: { connectorId: "site-connector", externalId: "42", url: "https://site.example/?p=42" } as CmsReviewCaptureInput["pointer"],
+      resolved: { text: "{}" } as CmsReviewCaptureInput["resolved"],
+      capturedAt: "2026-11-03T09:20:00.000Z",
+      scopeManifest: { paths: ["title"] },
+      connectorInstance: "site-connector:inst-1",
+      resourceType: "post",
+      cmsResourceId: "42",
+      baseRemoteRevisionRef: null,
+      operationId,
+    };
+  }
+
+  it.each([
+    ["an empty id", ""],
+    ["an id of 257 bytes", "a".repeat(257)],
+    ["an id of 129 characters and 257 bytes", `${"ü".repeat(128)}a`],
+    ["a non-string id", 42 as unknown as string],
+  ])("refuses %s before any capture", async (_n, operationId) => {
+    const capture = vi.fn<CmsReviewHostSeamDeps["captureCmsContentSnapshot"]>();
+    const seam = buildCmsReviewHostSeam(makeDeps({ captureCmsContentSnapshot: capture }));
+    await expect(seam.captureStagedWrite(captureInput(operationId))).rejects.toThrow(/operation id/);
+    expect(capture).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["one byte", "a"],
+    ["256 bytes", "a".repeat(256)],
+    ["128 two-byte characters", "ü".repeat(128)],
+  ])("captures an id of %s", async (_n, operationId) => {
+    const capture = vi.fn<CmsReviewHostSeamDeps["captureCmsContentSnapshot"]>(async () => ({
+      artifactId: "art-1",
+      snapshotRevisionId: "rev-1",
+      snapshotTargetId: "tgt-1",
+      producedEventId: "ev-1",
+    }));
+    const seam = buildCmsReviewHostSeam(makeDeps({ captureCmsContentSnapshot: capture }));
+    await expect(seam.captureStagedWrite(captureInput(operationId))).resolves.toMatchObject({ operationId });
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(capture.mock.calls[0][0].operationId).toBe(operationId);
   });
 });
