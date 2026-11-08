@@ -1859,6 +1859,13 @@ export async function POST(req: Request): Promise<Response> {
                   // `stp` claim (cinatra#3745): the verified step of the
                   // calling model step, carried to the tool server's frame.
                   ...(verifiedStepId ? { verifiedStepId } : {}),
+                  // `pin` claim (cinatra#4220): the run row's host-derived
+                  // connector-instance binding, set once at dispatch after the
+                  // per-instance use gate. Read from the token-resolved run row
+                  // only — never from the request body or a tool argument.
+                  ...(runForPorts.connectorInstanceBinding
+                    ? { connectorInstancePin: runForPorts.connectorInstanceBinding }
+                    : {}),
                 },
                 issueAgentRunMcpActorToken,
                 cinatraMcpAllowedTools,
@@ -1966,9 +1973,14 @@ export async function POST(req: Request): Promise<Response> {
         // this context ONLY when the resolved run row itself carries an
         // instance binding (host-derived, the same pin data the agent-run
         // MCP actor token would carry — NEVER request-payload input);
-        // today's agent_run rows carry no instance binding, so the context
-        // stays surface-only until one exists.
-        toolboxBuildContext: { surface: "agent_run" },
+        // the binding is set at dispatch (cinatra#4220); a run with no binding
+        // stays surface-only.
+        toolboxBuildContext: {
+          surface: "agent_run",
+          ...(runForPorts?.connectorInstanceBinding
+            ? { connectorInstancePin: runForPorts.connectorInstanceBinding }
+            : {}),
+        },
         logLabel: body.agent_id ?? "wayflow",
         actorContext: bridgeActorContext,
         telemetryRequestedProvider: dispatch.requestedProvider,

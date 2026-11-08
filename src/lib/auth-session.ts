@@ -566,14 +566,23 @@ export async function resolveUserContextForUserId(
   // self-anchored owner clauses). The caller of resolveUserContextForUserId
   // is responsible for supplying an authoritative active org.
   let projectGrants: ProjectGrant[] = [];
+  // The person's team ids in the active org, from the SAME single team read
+  // that feeds the team roles and the project grants, threaded into the
+  // actor's own `teamIds` axis exactly as the cookie session lineage does
+  // (`resolveSessionGrantsAndTeams`). Without an org anchor it stays `[]`
+  // ("resolved, none"), never `undefined`. The run page's window builds its
+  // actor here and the chat composer builds it through `requireActorContext`;
+  // both hand it to the same runtime, so the two must agree (cinatra#3487).
+  let teamIds: string[] = [];
   let teamRoles: Record<string, "team_admin" | "member"> | undefined;
   if (activeOrganizationId) {
     const teams = await readTeamsForUser(userId, activeOrganizationId);
+    teamIds = teams.map((t) => t.id);
     // Same read-boundary mapping as the cookie session path — without it,
     // MCP/Bearer-authenticated humans would never surface as team admins.
     teamRoles = toKernelTeamRoles(teams);
     projectGrants = await readProjectGrantsForUser(userId, activeOrganizationId, {
-      teamIds: teams.map((t) => t.id),
+      teamIds,
       ...(teamRoles ? { teamRoles } : {}),
       ...(orgRole ? { orgRole } : {}),
     });
@@ -587,6 +596,7 @@ export async function resolveUserContextForUserId(
   }
 
   const actorContext = buildActorContext(syntheticSession, {
+    teamIds,
     ...(teamRoles ? { teamRoles } : {}),
     ...(orgRole ? { orgRole } : {}),
     projectGrants,

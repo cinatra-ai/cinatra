@@ -1,7 +1,7 @@
 import path from "node:path";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, symlinkSync, readdirSync, lstatSync } from "node:fs";
 import { describe, expect, it, afterAll } from "vitest";
 
 import {
@@ -15,6 +15,11 @@ import {
   syncCinatraDevExtensions,
   REQUIRED_EXTENSIONS_LOCK_FILENAME,
 } from "../cinatra-dev-extensions.mjs";
+// A namespace read for the cinatra#4484 prune: on a module without it, only
+// its own cases fail, not the whole file.
+import * as devExtensions from "../cinatra-dev-extensions.mjs";
+
+const pruneToDeclaredCheckouts = (args) => devExtensions.pruneToDeclaredCheckouts(args);
 
 describe("deriveKindFromName", () => {
   it("derives kind from the package-name suffix (no clone needed)", () => {
@@ -326,13 +331,13 @@ describe("loadDevExtensionPins — fail-closed lock partition", () => {
 
 describe("syncCinatraDevExtensions --pinned — sha plumbing + override semantics", () => {
   const SHA_B = "b".repeat(40);
-  const DEV_URL = "https://github.com/cinatra-ai/resend-connector.git";
-  const config = { "@cinatra-ai/resend-connector": { url: DEV_URL } };
+  const DEV_URL = "https://github.com/example-vendor/resend-connector.git";
+  const config = { "@example-vendor/resend-connector": { url: DEV_URL } };
   const required = {
     packages: [{ packageName: "@cinatra-ai/anthropic-connector", repo: "cinatra-ai/anthropic-connector", resolvedSha: "a".repeat(40) }],
   };
   const dev = {
-    packages: [{ packageName: "@cinatra-ai/resend-connector", repo: "cinatra-ai/resend-connector", resolvedSha: SHA_B }],
+    packages: [{ packageName: "@example-vendor/resend-connector", repo: "example-vendor/resend-connector", resolvedSha: SHA_B }],
   };
   // Required-lock packages need not be cinatra.devExtensions entries (prod-only
   // packages are simply not cloned back), so `required` above referencing a
@@ -386,6 +391,123 @@ describe("syncCinatraDevExtensions --pinned — sha plumbing + override semantic
     expect(r.results[0].pinnedSha).toBe(SHA_B);
   });
 
+  it("--shallow is parsed as a flag of its own (cinatra#4484)", () => {
+    expect(parseDevExtensionFlags(["--pinned", "--shallow"]).shallow).toBe(true);
+    expect(parseDevExtensionFlags(["--pinned"]).shallow).toBe(false);
+  });
+
+  it("--pinned --shallow fetches the dev-lock sha at depth 1 instead of cloning the branch (cinatra#4484)", async () => {
+    const gitCalls = [];
+    const prunes = [];
+    const r = await syncCinatraDevExtensions({
+      repoRoot: "/repo",
+      targetRoot: "/repo",
+      argv: ["--pinned", "--shallow"],
+      env: { CI: "true" },
+      log: () => {},
+      deps: {
+        ...makeDeps(gitCalls),
+        pruneToDeclaredCheckouts: ({ extRoot, declaredDests }) => prunes.push({ extRoot, declaredDests, gitCallsBefore: gitCalls.length }),
+      },
+    });
+    // The tree is pruned to the declared checkouts once, before any git call.
+    expect(prunes).toEqual([
+      { extRoot: "/repo/extensions", declaredDests: ["/repo/extensions/example-vendor/resend-connector"], gitCallsBefore: 0 },
+    ]);
+    expect(r.results[0]).toMatchObject({ action: "cloned", pinnedSha: SHA_B });
+    expect(gitCalls).toContain(`fetch --quiet --depth 1 --no-tags origin ${SHA_B}`);
+    expect(gitCalls.some((g) => g.startsWith("clone"))).toBe(false);
+    expect(gitCalls).toContain(`checkout --quiet --detach ${SHA_B}`);
+  });
+
+  it("--pinned --shallow refuses --select, --kind and --exclude before any prune or git call: every declared checkout is rebuilt (cinatra#4484)", async () => {
+    for (const filter of [
+      ["--select", "resend-connector"],
+      ["--select", "no-such-extension"],
+      ["--kind", "connector"],
+      ["--exclude", "no-such-extension"],
+    ]) {
+      const gitCalls = [];
+      const prunes = [];
+      await expect(
+        syncCinatraDevExtensions({
+          repoRoot: "/repo",
+          targetRoot: "/repo",
+          argv: ["--pinned", "--shallow", ...filter],
+          env: { CI: "true" },
+          log: () => {},
+          deps: { ...makeDeps(gitCalls), pruneToDeclaredCheckouts: (a) => prunes.push(a) },
+        }),
+        filter.join(" "),
+      ).rejects.toThrow(/--shallow rebuilds every declared checkout: --select, --kind and --exclude are refused/);
+      expect(gitCalls, filter.join(" ")).toEqual([]);
+      expect(prunes, filter.join(" ")).toEqual([]);
+    }
+  });
+
+  it("--pinned --shallow with an empty filter value is no filter: every declared checkout is rebuilt (cinatra#4484)", async () => {
+    for (const filter of [["--select", ""], ["--select", ","], ["--select"]]) {
+      const gitCalls = [];
+      const prunes = [];
+      const r = await syncCinatraDevExtensions({
+        repoRoot: "/repo",
+        targetRoot: "/repo",
+        argv: ["--pinned", "--shallow", ...filter],
+        env: { CI: "true" },
+        log: () => {},
+        deps: { ...makeDeps(gitCalls), pruneToDeclaredCheckouts: (a) => prunes.push(a) },
+      });
+      expect(prunes.length, filter.join(" ")).toBe(1);
+      expect(r.results.map((x) => x.pkgName), filter.join(" ")).toEqual(["@example-vendor/resend-connector"]);
+      expect(gitCalls, filter.join(" ")).toContain(`fetch --quiet --depth 1 --no-tags origin ${SHA_B}`);
+    }
+  });
+
+  it("--pinned without --shallow never prunes the tree (cinatra#4484)", async () => {
+    const prunes = [];
+    await syncCinatraDevExtensions({
+      repoRoot: "/repo",
+      targetRoot: "/repo",
+      argv: ["--pinned"],
+      env: { CI: "true" },
+      log: () => {},
+      deps: { ...makeDeps([]), pruneToDeclaredCheckouts: (a) => prunes.push(a) },
+    });
+    expect(prunes).toEqual([]);
+  });
+
+  it("--pinned --shallow outside CI is refused before any git call: it replaces every checkout (cinatra#4484)", async () => {
+    for (const env of [{}, { CI: "1" }, { CI: "false" }]) {
+      const gitCalls = [];
+      await expect(
+        syncCinatraDevExtensions({
+          repoRoot: "/repo",
+          targetRoot: "/repo",
+          argv: ["--pinned", "--shallow"],
+          env,
+          log: () => {},
+          deps: makeDeps(gitCalls),
+        }),
+      ).rejects.toThrow(/--shallow runs in CI only/);
+      expect(gitCalls).toEqual([]);
+    }
+  });
+
+  it("--shallow without --pinned is refused before any git call (cinatra#4484)", async () => {
+    const gitCalls = [];
+    await expect(
+      syncCinatraDevExtensions({
+        repoRoot: "/repo",
+        targetRoot: "/repo",
+        argv: ["--shallow"],
+        env: {},
+        log: () => {},
+        deps: makeDeps(gitCalls),
+      }),
+    ).rejects.toThrow(/--shallow requires --pinned/);
+    expect(gitCalls).toEqual([]);
+  });
+
   it("--pinned + --force are mutually exclusive", async () => {
     await expect(
       syncCinatraDevExtensions({
@@ -420,5 +542,106 @@ describe("syncCinatraDevExtensions --pinned — sha plumbing + override semantic
     // …but an unreadable lock never fails the sync and never detaches a
     // tip-tracking checkout.
     expect(gitCalls.some((g) => g.startsWith("checkout --detach"))).toBe(false);
+  });
+});
+
+describe("pruneToDeclaredCheckouts — a --shallow sync keeps only the declared checkouts (cinatra#4484)", () => {
+  const work = mkdtempSync(path.join(os.tmpdir(), "prune-declared-"));
+  afterAll(() => rmSync(work, { recursive: true, force: true }));
+  let n = 0;
+  const fresh = () => {
+    n += 1;
+    const root = path.join(work, `case-${n}`);
+    const ext = path.join(root, "extensions");
+    mkdirSync(path.join(ext, "example-vendor", "kept-connector", "src"), { recursive: true });
+    writeFileSync(path.join(ext, "example-vendor", "kept-connector", "src", "a.txt"), "kept\n");
+    mkdirSync(path.join(ext, "example-vendor", "kept-agent"), { recursive: true });
+    const outside = path.join(root, "outside");
+    mkdirSync(outside);
+    writeFileSync(path.join(outside, "package.json"), "{}\n");
+    return { root, ext, outside, declared: [path.join(ext, "example-vendor", "kept-connector"), path.join(ext, "example-vendor", "kept-agent")] };
+  };
+  const tree = (ext) =>
+    readdirSync(ext, { recursive: true })
+      .map(String)
+      .sort();
+
+  it("removes undeclared directories, files, symlinks and dot entries, keeps the declared checkouts and never follows a link", () => {
+    const { ext, outside, declared } = fresh();
+    // An undeclared restored repository with a planted fsmonitor: removed without any git call.
+    const planted = path.join(ext, "example-vendor", "planted-connector");
+    mkdirSync(planted);
+    execFileSync("git", ["init", "-q", planted]);
+    const marker = path.join(outside, "ran");
+    execFileSync("git", ["-C", planted, "config", "core.fsmonitor", `touch ${marker}`]);
+    symlinkSync(outside, path.join(ext, "example-vendor", "linked-connector"));
+    writeFileSync(path.join(ext, "example-vendor", "stray.json"), "{}\n");
+    mkdirSync(path.join(ext, "example-vendor", ".kept-connector.restored"));
+    mkdirSync(path.join(ext, "other-vendor", "x-connector"), { recursive: true });
+    writeFileSync(path.join(ext, "README.md"), "x\n");
+    const lines = [];
+    const removed = pruneToDeclaredCheckouts({ extRoot: ext, declaredDests: declared, log: (m) => lines.push(m) });
+    expect(removed.sort()).toEqual(
+      [
+        "README.md",
+        "example-vendor/.kept-connector.restored",
+        "example-vendor/linked-connector",
+        "example-vendor/planted-connector",
+        "example-vendor/stray.json",
+        "other-vendor",
+      ].sort(),
+    );
+    expect(tree(ext)).toEqual(["example-vendor", "example-vendor/kept-agent", "example-vendor/kept-connector", "example-vendor/kept-connector/src", "example-vendor/kept-connector/src/a.txt"]);
+    expect(readFileSync(path.join(ext, "example-vendor", "kept-connector", "src", "a.txt"), "utf8")).toBe("kept\n");
+    // The link was removed, not its target.
+    expect(existsSync(path.join(outside, "package.json"))).toBe(true);
+    expect(existsSync(marker)).toBe(false);
+    expect(lines).toHaveLength(6);
+  });
+
+  it("a symlinked declared checkout or scope directory is removed, its target kept", () => {
+    const { root, ext, outside, declared } = fresh();
+    rmSync(path.join(ext, "example-vendor", "kept-agent"), { recursive: true });
+    symlinkSync(outside, path.join(ext, "example-vendor", "kept-agent"));
+    expect(pruneToDeclaredCheckouts({ extRoot: ext, declaredDests: declared })).toEqual(["example-vendor/kept-agent"]);
+    const ext2 = path.join(root, "ext2");
+    mkdirSync(ext2);
+    symlinkSync(path.join(ext, "example-vendor"), path.join(ext2, "example-vendor"));
+    expect(pruneToDeclaredCheckouts({ extRoot: ext2, declaredDests: [path.join(ext2, "example-vendor", "kept-connector")] })).toEqual([
+      "example-vendor",
+    ]);
+    expect(lstatSync(path.join(ext, "example-vendor", "kept-connector")).isDirectory()).toBe(true);
+    expect(existsSync(path.join(outside, "package.json"))).toBe(true);
+  });
+
+  it("an extensions/ that cannot be read is an error, never taken for absent", () => {
+    const { outside } = fresh();
+    // lstat answers ENOTDIR: the parent is a file.
+    const extRoot = path.join(outside, "package.json", "extensions");
+    expect(() => pruneToDeclaredCheckouts({ extRoot, declaredDests: [] })).toThrow(/ENOTDIR/);
+  });
+
+  it("a regular file where a declared checkout belongs is removed, and a hostile entry name is logged escaped", () => {
+    const { ext, declared } = fresh();
+    rmSync(path.join(ext, "example-vendor", "kept-agent"), { recursive: true });
+    writeFileSync(path.join(ext, "example-vendor", "kept-agent"), "not a checkout\n");
+    mkdirSync(path.join(ext, "example-vendor", "evil\n::error::forged"));
+    const lines = [];
+    const removed = pruneToDeclaredCheckouts({ extRoot: ext, declaredDests: declared, log: (m) => lines.push(m) });
+    expect(removed.sort()).toEqual(["example-vendor/evil\n::error::forged", "example-vendor/kept-agent"].sort());
+    expect(lines).toHaveLength(2);
+    // One line per removal: a newline in a restored name never starts a line of its own.
+    for (const l of lines) expect(l).not.toMatch(/\n/);
+    expect(lines.some((l) => l.includes(String.raw`evil\n::error::forged`))).toBe(true);
+  });
+
+  it("an absent extensions/ is left absent; a symlinked extensions/ is removed, its target kept", () => {
+    const { root, outside } = fresh();
+    expect(pruneToDeclaredCheckouts({ extRoot: path.join(root, "nothing-here"), declaredDests: [] })).toEqual([]);
+    const linked = path.join(root, "linked-ext");
+    symlinkSync(outside, linked);
+    expect(pruneToDeclaredCheckouts({ extRoot: linked, declaredDests: [] })).toEqual(["."]);
+    expect(existsSync(linked)).toBe(false);
+    expect(existsSync(path.join(outside, "package.json"))).toBe(true);
   });
 });

@@ -41,6 +41,7 @@ import {
 } from "./store";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "./agent-builder-ids";
 import { isParkedOnProducedReview } from "./run-produced-review-hold";
+import { runInputsForGate } from "./gate-keys-not-from-run-inputs";
 
 export type HitlContext = {
   xRenderer: string;
@@ -129,7 +130,14 @@ export async function deriveRunHitlContext(
         ? await readTemplateInputSchema(run, options)
         : interruptSchema,
       // Run input params first so live interrupt values win on key collisions.
-      currentValues: { ...runInputParams, ...(interrupt.values ?? {}) },
+      // A key the gate's schema lists as not from run inputs (cinatra#4457) is
+      // left out of them: the gate gave no value for it, and a stored input of
+      // the same name must not be drawn as the gate's own. A list that is not
+      // an array of strings leaves out every run input.
+      currentValues: {
+        ...runInputsForGate(runInputParams, interrupt.schema),
+        ...(interrupt.values ?? {}),
+      },
       ...(interrupt.fieldName ? { fieldName: interrupt.fieldName } : {}),
     };
   }
@@ -149,8 +157,12 @@ export async function deriveRunHitlContext(
       reviewTaskId: durable.reviewTaskId,
       inputSchema: durable.inputSchema,
       // Run input params first so the stored gate values win on key collisions,
-      // exactly as they do on the interrupt path above.
-      currentValues: { ...runInputParams, ...durable.values },
+      // exactly as they do on the interrupt path above, without the keys the
+      // gate's schema lists as not from run inputs (cinatra#4457).
+      currentValues: {
+        ...runInputsForGate(runInputParams, durable.inputSchema),
+        ...durable.values,
+      },
       ...(durable.fieldName ? { fieldName: durable.fieldName } : {}),
     };
   }

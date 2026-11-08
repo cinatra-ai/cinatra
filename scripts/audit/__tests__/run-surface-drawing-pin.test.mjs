@@ -85,7 +85,7 @@ describe("the run surface's drawing pin is recorded", () => {
       CONTRACT.runSurfaceDrawingPin.specCommitDeliberatelyNotMoved,
     ).toMatch(/run-recommendation-chip-row/);
     expect(parseSpecCommit(CONTRACT.specCommit)).toEqual({
-      revision: "67ecd66da3e6a83d27a0d8c5d777e98fc5309917",
+      revision: "9add1eafb964850cf8e58dda026493f1c6bc6a51",
       paths: ["specs/app-lifecycle-cards.html", "specs/app-artifact-review.html"],
     });
   });
