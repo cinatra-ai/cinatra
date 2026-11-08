@@ -39,6 +39,7 @@ import {
 import { ExtensionToolModuleRefusal } from "@/lib/extension-tool-module-loader";
 import { ExtensionToolOriginRefusal, resolveExtensionToolOrigin } from "@/lib/extension-tool-origin";
 import { createExtensionObjectsPort } from "@/lib/extension-objects-port";
+import { attributionFields, type ExtensionToolAttribution } from "@/lib/extension-tool-attribution";
 import {
   ArtifactAdmissionRefusal,
   resolveArtifactDependencyAdmission,
@@ -117,7 +118,81 @@ export async function dispatchExtensionScopedTool(input: {
   run: ExtensionScopedToolRun;
   actor?: ActorContext;
 }): Promise<ExtensionScopedToolOutcome> {
+  let isTool = false;
   try {
+    isTool = input.tool === "extension_tool";
+  } catch {
+    /* the dispatch below answers it */
+  }
+  if (!isTool) return dispatchScopedTool(input);
+  // ONE `extension_tool.dispatch` EVENT PER CALL (cinatra#4154, spec v2.2 2.7),
+  // allowed and refused alike, filled in as the call learns whose code runs.
+  const trail: DispatchTrail = { runPackage: null, codePackage: null, codeInstallId: null, verifiedStepId: null };
+  const outcome = await dispatchScopedTool(input, trail);
+  await auditToolDispatch(input, trail, outcome);
+  return outcome;
+}
+
+/** What the dispatch event records: the four fields, and the resolver's fixed code on its refusal. */
+type DispatchTrail = ExtensionToolAttribution & { originCode?: string };
+
+/**
+ * Write the call's dispatch event. Never throws and never changes the answer.
+ * A refusal records a fixed word for its status and the resolver's fixed code,
+ * never the answer's text; it is recorded every time, never folded into the
+ * denied-event cooldown, because each refused call is its own event.
+ */
+async function auditToolDispatch(
+  input: { run: ExtensionScopedToolRun },
+  trail: DispatchTrail,
+  outcome: ExtensionScopedToolOutcome,
+): Promise<void> {
+  try {
+    const run = input.run;
+    const reason = outcome.ok
+      ? null
+      : outcome.status === 403
+        ? "refused"
+        : outcome.status === 404
+          ? "not-found"
+          : "failed";
+    const { logAuditEvent } = await import("@/lib/authz/audit");
+    await logAuditEvent({
+      organizationId: run.orgId,
+      actorPrincipalId: run.runBy ?? undefined,
+      actorPrincipalType: "a2a",
+      authSource: "agent",
+      resourceType: "extension_tool",
+      operation: "extension_tool.dispatch",
+      runId: run.id,
+      ...(trail.codePackage ? { resourceId: trail.codePackage } : {}),
+      decision: reason === null ? "allowed" : "denied",
+      ...(reason === null ? {} : { deniedCooldown: "record_every" as const }),
+      metadata: {
+        ...attributionFields(trail),
+        ...(reason === null ? {} : { reason }),
+        ...(reason !== null && trail.originCode ? { originCode: trail.originCode } : {}),
+      },
+    });
+  } catch {
+    /* an audit write never changes the answer */
+  }
+}
+
+async function dispatchScopedTool(
+  input: {
+    tool: string;
+    input: Record<string, unknown>;
+    run: ExtensionScopedToolRun;
+    actor?: ActorContext;
+  },
+  trail?: DispatchTrail,
+): Promise<ExtensionScopedToolOutcome> {
+  try {
+    if (trail) {
+      const step: unknown = input.run.verifiedStepId;
+      trail.verifiedStepId = typeof step === "string" && step !== "" ? step : null;
+    }
     const context = await resolveRunExtensionContext({
       templateId: input.run.templateId,
       packageVersion: input.run.packageVersion,
@@ -135,7 +210,7 @@ export async function dispatchExtensionScopedTool(input: {
       return { ok: true, result: await runDataTool(context, input) };
     }
     if (input.tool === "extension_tool") {
-      return { ok: true, result: await runExtensionTool(context, input) };
+      return { ok: true, result: await runExtensionTool(context, input, trail) };
     }
     return { ok: true, result: await runArtifactRead(context, input) };
   } catch (e) {
@@ -219,6 +294,7 @@ function statedRefusal(e: unknown): ExtensionScopedToolOutcome | null | typeof U
 async function runDataTool(
   context: Awaited<ReturnType<typeof resolveRunExtensionContext>> & object,
   input: { input: Record<string, unknown>; run: ExtensionScopedToolRun },
+  attribution?: ExtensionToolAttribution,
 ): Promise<unknown> {
   const tables = parseDeclaredTables(context.cinatra.declaredTables, context.packageName);
   if (tables.length === 0) {
@@ -250,6 +326,7 @@ async function runDataTool(
       runId: input.run.id,
       actorPrincipalId: input.run.runBy,
       request,
+      ...(attribution ? { attribution } : {}),
     });
   } finally {
     client.release();
@@ -277,30 +354,42 @@ async function runExtensionTool(
     run: ExtensionScopedToolRun;
     actor?: ActorContext;
   },
+  trail: DispatchTrail = { runPackage: null, codePackage: null, codeInstallId: null, verifiedStepId: null },
 ): Promise<unknown> {
+  trail.runPackage = runContext.packageName;
   // WHOSE CODE RUNS (cinatra#4154): the run package's own, or, for a proven step
   // of an embedded child flow, the child's, from the exact child installation.
   // The ports below are then the child's declarations, bound to this same run.
-  const origin = await resolveExtensionToolOrigin({
-    run: input.run,
-    context: runContext,
-    request: isPlainObject(input.input) ? input.input : {},
-  });
+  let origin: Awaited<ReturnType<typeof resolveExtensionToolOrigin>>;
+  try {
+    origin = await resolveExtensionToolOrigin({
+      run: input.run,
+      context: runContext,
+      request: isPlainObject(input.input) ? input.input : {},
+    });
+  } catch (e) {
+    if (e instanceof ExtensionToolOriginRefusal) trail.originCode = e.code;
+    throw e;
+  }
   const context = origin.kind === "child" ? origin.context : runContext;
+  trail.codePackage = context.packageName;
+  trail.codeInstallId = origin.kind === "child" ? origin.codeInstallId : null;
+  // Every audit event the ports write names whose code made the call (2.7).
+  const attribution = attributionFields(trail);
   const ports: Omit<ExtensionToolPorts, "review"> = {
     data: {
       select: (request) =>
-        runDataTool(context, { ...input, input: { ...request, operation: "select" } }),
+        runDataTool(context, { ...input, input: { ...request, operation: "select" } }, attribution),
       insertIfAbsent: (request) =>
-        runDataTool(context, { ...input, input: { ...request, operation: "insertIfAbsent" } }),
+        runDataTool(context, { ...input, input: { ...request, operation: "insertIfAbsent" } }, attribution),
       updateWhere: (request) =>
-        runDataTool(context, { ...input, input: { ...request, operation: "updateWhere" } }),
+        runDataTool(context, { ...input, input: { ...request, operation: "updateWhere" } }, attribution),
     },
     artifacts: {
       list: (request) =>
-        runArtifactRead(context, { ...input, tool: "artifacts_list", input: request }),
+        runArtifactRead(context, { ...input, tool: "artifacts_list", input: request }, attribution),
       contentRead: (request) =>
-        runArtifactRead(context, { ...input, tool: "artifact_content_read", input: request }),
+        runArtifactRead(context, { ...input, tool: "artifact_content_read", input: request }, attribution),
     },
     clock: { now: () => new Date() },
     objects: createExtensionObjectsPort({
@@ -309,6 +398,7 @@ async function runExtensionTool(
       cinatra: context.cinatra,
       run: input.run,
       actor: input.actor,
+      attribution,
     }),
   };
   return dispatchExtensionTool({
@@ -325,6 +415,7 @@ async function runExtensionTool(
 async function runArtifactRead(
   context: Awaited<ReturnType<typeof resolveRunExtensionContext>> & object,
   input: { tool: string; input: Record<string, unknown>; run: ExtensionScopedToolRun; actor?: ActorContext },
+  attribution?: ExtensionToolAttribution,
 ): Promise<unknown> {
   const admission = resolveArtifactDependencyAdmission({
     packageName: context.packageName,
@@ -338,6 +429,7 @@ async function runArtifactRead(
     runId: input.run.id,
     ...(input.actor ? { actor: input.actor } : {}),
     actorPrincipalId: input.run.runBy,
+    ...(attribution ? { attribution } : {}),
   };
   const raw = input.input;
   if (input.tool === "artifacts_list") {

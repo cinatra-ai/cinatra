@@ -37,6 +37,7 @@ import {
   ExtensionToolRefusal,
   type ExtensionToolObjectsPort,
 } from "@/lib/extension-tool-dispatch";
+import { withAttribution, type ExtensionToolAttribution } from "@/lib/extension-tool-attribution";
 
 /** The longest walk up the parent-run link a read follows. */
 const MAX_ANCESTOR_HOPS = 16;
@@ -102,6 +103,8 @@ export type ExtensionObjectsPortInput = {
   run: { id: string; orgId: string; runBy: string | null };
   /** The run's own actor context, as the passthrough built it. */
   actor?: ActorContext | undefined;
+  /** Whose code holds this port, on the `extension_tool` road (cinatra#4154). */
+  attribution?: ExtensionToolAttribution;
 };
 
 async function defaultReadObject(
@@ -255,7 +258,7 @@ export function createExtensionObjectsPort(
   const readObject = deps.readObject ?? defaultReadObject;
   const readRun = deps.readRun ?? defaultReadRun;
   const collectHandlers = deps.collectHandlers ?? defaultCollectHandlers;
-  const audit = deps.audit ?? defaultAudit;
+  const audit = withAttribution(deps.audit ?? defaultAudit, input.attribution);
   const run = input.run;
 
   function auditRow(
