@@ -1156,12 +1156,15 @@ export function ReviewGateCard({
   // #2566's COMPOSER COMMENT — the card's own comment path, published to the
   // composer rather than re-implemented by it.
   //
-  // It is `submitAndRefresh` with `disposition: "comment"`: the same closure the
-  // decision bar's Comment button calls, so it carries this host's credential,
-  // lands in the same decision module with the same validation order, and
-  // re-resolves the card afterwards. A comment resolving as `changes_requested`
-  // therefore settles the card in the transcript exactly as pressing Comment
-  // does — there is no second transport that could drift from the first.
+  // It is `submitAndRefresh`, the same closure the decision bar calls, so it
+  // carries this host's credential, lands in the same decision module with the
+  // same validation order, and re-resolves the card afterwards — there is no
+  // second transport that could drift from the first. It posts the
+  // conversation's OWN submission, `conversation-comment`, for this reason:
+  // the floor's Note-field Comment only annotates, while the words a person
+  // types to the review in its conversation keep the change road they had
+  // before the floor (cinatra#2063, #4339). A conversation comment resolving
+  // as `changes_requested` settles the card in the transcript, as before.
   //
   // NO SUGGESTION PARTITION, for the reason the bar states in full: a comment
   // does not resolve the gate, so it cannot carry terminal per-item choices. The
@@ -1175,7 +1178,7 @@ export function ReviewGateCard({
         return { ok: false, message: "A review comment needs some text." };
       }
       return composerCommentResult(
-        await submitAndRefresh({ disposition: "comment", comment: trimmed }),
+        await submitAndRefresh({ disposition: "conversation-comment", comment: trimmed }),
       );
     },
     // Keep the composer submit bound to the current transport AND authorized

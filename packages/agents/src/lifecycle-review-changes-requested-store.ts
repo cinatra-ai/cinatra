@@ -88,8 +88,9 @@ export interface RecordReviewSurfaceChangesRequestedInput {
    * tombstoned/removed) — the base-revision CAS witness the entry point re-checks. */
   currentBaseRevisionId: string | null;
   /** The reviewer's typed note — what to change. Becomes the note finding's
-   * message. The caller passes it trimmed + non-empty (an empty note is refused
-   * with a reason at the floor, before this composer is reached). */
+   * message. The caller passes it trimmed + non-empty (an empty Regenerate note is
+   * refused with a reason at the floor, and the conversation's comment with no
+   * words stays a plain annotation, before this composer is reached). */
   feedback: string;
   /**
    * FOR A PICTURE, THE EDITED PROMPT (cinatra#3080 item 5) — what to make.
@@ -117,7 +118,8 @@ export interface RecordReviewSurfaceChangesRequestedInput {
    * canonical operation, which refuses a `regenerate` whose producing step
    * declares no Note input rather than settling the gate into nothing. Defaults
    * to `typed`, so a caller that predates the field keeps the escalating
-   * behaviour it had.
+   * behaviour it had; the conversation's comment takes `typed` (it keeps the
+   * change road).
    */
   origin?: "typed" | "regenerate";
 }

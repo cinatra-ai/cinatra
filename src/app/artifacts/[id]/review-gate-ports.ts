@@ -277,7 +277,9 @@ export async function enforceReviewDecisionAccess(args: {
  * floor's REGENERATE drives a `changes_requested` decision on a LIFECYCLE review
  * gate: the base gate settles as superseded and a repair opens through the S2
  * store's `recordChangesRequested` entry point (via the surface composer) — no
- * parallel write path. Comment never reaches this binder: it is an annotation.
+ * parallel write path. The conversation's comment (its own submission) reaches the
+ * same binder on the TYPED origin, which it names itself. The Note-field Comment
+ * never reaches this binder: it is an annotation.
  *
  * The ONE fact the composer needs that the surface holds is the base-revision CAS
  * witness (`currentBaseRevisionId`). It is resolved HERE through the SAME
@@ -288,16 +290,23 @@ export async function enforceReviewDecisionAccess(args: {
  *
  * Authorization is the CALLER's job: Regenerate settles the gate, so the action
  * enforces `approveHitl` on the run (the right a terminal decision needs) BEFORE
- * this binder is reached.
+ * this binder is reached; the conversation's comment keeps `respondToHitl`.
  */
 export async function submitReviewSurfaceChangesRequested(args: {
   runId: string;
   reviewTaskId: string;
   baseTarget: ArtifactReviewTarget;
-  /** The reviewer's Regenerate note (trimmed, non-empty). */
+  /** The reviewer's note (trimmed, non-empty): Regenerate's, or the
+   *  conversation's typed words. */
   feedback: string;
   /** The recorded prompt the Regenerate sends back as its own value, or null. */
   prompt?: string | null;
+  /**
+   * WHICH ROAD ASKED. Omitted means the floor's Regenerate, so a caller that
+   * forgets it is refused before any write rather than escalated; the
+   * conversation's comment passes `typed` (it keeps the change road).
+   */
+  origin?: "typed" | "regenerate";
   actorCtx: ReviewActorContext;
 }): Promise<RecordChangesRequestedResult> {
   const kernelActor = buildActorContextFromPrimitive(
@@ -322,9 +331,11 @@ export async function submitReviewSurfaceChangesRequested(args: {
     currentBaseRevisionId,
     feedback: args.feedback,
     prompt: args.prompt ?? null,
-    // The floor's Regenerate: the repair store refuses, before any write, a
-    // regenerate that no producing step can serve or that tripped the cycle bound.
-    origin: "regenerate",
+    // The floor's Regenerate (the default): the repair store refuses, before any
+    // write, a regenerate that no producing step can serve or that tripped the
+    // cycle bound. The conversation's comment names `typed`: a producer that
+    // cannot repair escalates its request to a person, as before the floor.
+    origin: args.origin ?? "regenerate",
     // The DECIDING actor (cinatra#2047 D-2) — the same verified session actor the
     // approve/reject commit stamps, from the context run access was enforced against.
     decidedBy: args.actorCtx.actor.userId ?? null,

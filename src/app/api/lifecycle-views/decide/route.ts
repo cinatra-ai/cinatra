@@ -107,8 +107,10 @@ const reviewRequestSchema = z
     ref: z.string().min(1).max(LIFECYCLE_VIEW_REF_MAX_LENGTH),
     // The review floor (cinatra#3080): Comment, Regenerate and Continue. Continue
     // keeps approve persistence; `approve` stays the compatibility alias and
-    // `reject` is answered by the one entry with the platform's sentence.
-    disposition: z.enum(["comment", "regenerate", "continue", "approve", "reject"]),
+    // `reject` is answered by the one entry with the platform's sentence. The
+    // card's composer posts `conversation-comment`, the conversation's own
+    // submission, which keeps the change road the typed words had before.
+    disposition: z.enum(["comment", "regenerate", "continue", "conversation-comment", "approve", "reject"]),
     // The note (§VI) — optional on Continue, the words a Regenerate works from,
     // and the substance of a comment. Bounded so a card cannot post an essay.
     comment: z.string().max(10_000).nullable().optional(),

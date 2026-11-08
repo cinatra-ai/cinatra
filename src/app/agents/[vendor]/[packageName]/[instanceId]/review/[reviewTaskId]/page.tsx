@@ -356,8 +356,9 @@ export default async function AgentRunReviewPage({
 
   // The whole-gate decision action, bound to THIS gate's route params (never a
   // client-supplied gate id). Passed to the client decision bar AND the prompt
-  // window (both route through the same server helper; the prompt window is the
-  // Comment path — the changes-request channel — not a fourth decision).
+  // window (both route through the same server helper; the conversation's
+  // comment is its own submission — the changes-request channel — not a fourth
+  // floor action).
   async function submitAction(input: {
     disposition: ReviewFloorSubmission;
     comment: string | null;

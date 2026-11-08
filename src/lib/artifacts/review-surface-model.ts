@@ -729,20 +729,40 @@ export const REGENERATE_BOUND_REACHED =
   "This work has already been sent back to be made again as many times as a review allows. Comment or Continue instead.";
 
 /**
- * What a CALLER may submit: the three floor actions, plus the two words every
- * already-shipped client and every stored row still speaks — `approve` (the
- * compatibility alias of Continue) and `reject` (refused, with the reason).
+ * THE CONVERSATION'S COMMENT (its own submission since cinatra#3080; the road it
+ * keeps is the one of cinatra#2063 and #4339). The words a person types to a
+ * review in its conversation — the card's composer — are the change request:
+ * on a single-target lifecycle gate, and on a later leg of a declared review,
+ * they file `changes_requested` on the change road's TYPED origin. The drawing
+ * keeps that window apart from the floor ("the window is the request. It is not
+ * the same act as Regenerate"), so it is its own submission and not the
+ * Note-field Comment, which only annotates. It is not a fourth floor action: it
+ * resolves to Comment, marked as the conversation's, and needs the reader's
+ * respond right as Comment does.
  */
-export type ReviewFloorSubmission = ReviewFloorAction | "approve" | "reject";
+export const REVIEW_CONVERSATION_COMMENT = "conversation-comment";
+
+/**
+ * What a CALLER may submit: the three floor actions, the conversation's comment
+ * (above), plus the two words every already-shipped client and every stored row
+ * still speaks — `approve` (the compatibility alias of Continue) and `reject`
+ * (refused, with the reason).
+ */
+export type ReviewFloorSubmission =
+  | ReviewFloorAction
+  | typeof REVIEW_CONVERSATION_COMMENT
+  | "approve"
+  | "reject";
 
 export type ResolvedFloorSubmission =
-  | { kind: "action"; action: ReviewFloorAction; alias: boolean }
+  | { kind: "action"; action: ReviewFloorAction; alias: boolean; conversation: boolean }
   | { kind: "retired"; reason: string };
 
 const FLOOR_ACTION_SET: ReadonlySet<string> = new Set(REVIEW_FLOOR_ACTIONS);
 
 /** Resolve a submitted word to the floor action it asks for. `approve` resolves
- *  to Continue (`alias: true`); `reject` is the ONE word with no action behind it. */
+ *  to Continue (`alias: true`); the conversation's comment resolves to Comment
+ *  with `conversation: true`; `reject` is the ONE word with no action behind it. */
 export function resolveReviewFloorSubmission(
   submission: ReviewFloorSubmission | string,
 ): ResolvedFloorSubmission {
@@ -750,10 +770,13 @@ export function resolveReviewFloorSubmission(
     return { kind: "retired", reason: REVIEW_REJECT_RETIRED_REASON };
   }
   if (submission === "approve") {
-    return { kind: "action", action: "continue", alias: true };
+    return { kind: "action", action: "continue", alias: true, conversation: false };
+  }
+  if (submission === REVIEW_CONVERSATION_COMMENT) {
+    return { kind: "action", action: "comment", alias: false, conversation: true };
   }
   if (FLOOR_ACTION_SET.has(submission)) {
-    return { kind: "action", action: submission as ReviewFloorAction, alias: false };
+    return { kind: "action", action: submission as ReviewFloorAction, alias: false, conversation: false };
   }
   return { kind: "retired", reason: `Unknown review action "${submission}".` };
 }
