@@ -42,9 +42,9 @@ import "server-only";
 // repair whose base target was a captured CMS snapshot to the CMS bridge's
 // completer. The maintenance sweep no longer runs that completer, so this drain
 // takes every dispatched repair into its candidates, a captured CMS snapshot's
-// included, on the one rule above. (The dispatch drain
-// still asks the bridge for a CMS base's `instructions`, the reviewer's findings;
-// that stays until each producer declares its own projection.)
+// included, on the one rule above. (Since cinatra#4424 the dispatch drain no
+// longer asks the bridge for a CMS base's `instructions`: a producer declares
+// the input that gets the reviewer's findings, for every base.)
 //
 // NOTHING SILENTLY DROPS, and nothing silently finalizes. A repair run still
 // working is `pending` and re-checked next pass. A run that reached a terminal
