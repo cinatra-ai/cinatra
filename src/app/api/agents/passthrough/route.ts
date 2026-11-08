@@ -15,7 +15,6 @@ import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import { withActorContext } from "@cinatra-ai/llm/actor-context";
 import type { ActorContext } from "@/lib/authz/actor-context";
-import { shapeBlogPipelineObjectsSave } from "./blog-pipeline-seam";
 import {
   shapeArtifactMaterializeInput,
   type ShapedArtifactMaterializeInput,
@@ -310,17 +309,6 @@ TOOL_INPUT_SHAPERS.artifact_materialize = (raw) =>
 // a JSON string, which is all a wayflowcore json_body template can carry).
 TOOL_INPUT_SHAPERS.artifact_image_generate = (raw) => shapeArtifactImageInput(raw);
 
-// blog-pipeline-agent deterministic seam dispatch.
-// The pure shaper lives in ./blog-pipeline-seam (zero-dep, unit-tested).
-// Chained AHEAD of the base objects_save shaper; the `_shape` opt-in
-// keeps every other objects_save call site untouched.
-const baseObjectsSaveShaper = TOOL_INPUT_SHAPERS.objects_save;
-TOOL_INPUT_SHAPERS.objects_save = (raw, agentRunId) => {
-  const blog = shapeBlogPipelineObjectsSave(raw, agentRunId);
-  if (blog) return blog;
-  return baseObjectsSaveShaper ? baseObjectsSaveShaper(raw, agentRunId) : raw;
-};
-
 // email-test-delivery run_send input shaping (#1625) — the pure shaper
 // lives in ./test-delivery-seam (zero-dep, unit-tested). It JSON-parses the
 // gate's `envelopeJson` (the ApiNode cannot pass native id arrays — wayflowcore
@@ -424,9 +412,9 @@ export async function POST(req: Request): Promise<Response> {
   try {
     input = shaper ? shaper(rawInput, agentRunId) : rawInput;
   } catch (err) {
-    // A shaper that fails closed (e.g. blog-pipeline `selectedIdeaJson` that
-    // is not a parseable/matching BlogIdea) surfaces a clear 400 instead of
-    // continuing into a wrong/empty downstream artifact.
+    // A shaper that fails closed (it throws on an input it cannot shape)
+    // surfaces a clear 400 instead of continuing into a wrong/empty
+    // downstream artifact.
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 400 });
   }
