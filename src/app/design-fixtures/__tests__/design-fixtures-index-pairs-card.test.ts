@@ -12,7 +12,7 @@
 // its whitespace collapsed, so a reformat, a quote style or a comment changes
 // no reading.
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -68,5 +68,25 @@ describe("cinatra#4188 — the index card and the pixel settle wait", () => {
     // page's readiness reading.
     expect(setTheme).toMatch(/await page\.reload\( ?\{ ?waitUntil: ?"load",? ?\} ?\)/);
     expect(setTheme).not.toContain("networkidle");
+  });
+
+  it("no browser spec that opens the index page waits for network idle", () => {
+    // The index page carries the pairs card, so every spec that opens it (not
+    // only the pixel spec) meets the same island frames. The design job stops
+    // at its first failure, so one such wait left behind turns the whole job
+    // red (cinatra#4188: the Separator geometry spec, both tries).
+    const e2e = path.join(ROOT, "tests/e2e");
+    const specs = (readdirSync(e2e, { recursive: true }) as string[])
+      .filter((rel) => rel.endsWith(".spec.ts"))
+      .map((rel) => path.join("tests/e2e", rel))
+      .filter((rel) => read(rel).includes('"/design-fixtures"'));
+    // Never vacuous: the pixel spec and the Separator spec both open it.
+    expect(specs).toEqual(
+      expect.arrayContaining([
+        path.join("tests/e2e/design/design-fixtures.spec.ts"),
+        path.join("tests/e2e/design/conformance/separator-orientation-3189.spec.ts"),
+      ]),
+    );
+    expect(specs.filter((rel) => read(rel).includes("networkidle"))).toEqual([]);
   });
 });
