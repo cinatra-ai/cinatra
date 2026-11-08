@@ -6,7 +6,7 @@ import "server-only";
 // child's own package. That code must then come from the EXACT installation the
 // parent's dependency edge resolved to, at the root that installation's own
 // anchor names, never from "a package with this name and version". This module
-// states that binding over injected reads; nothing calls it yet. A row counts
+// states that binding over injected reads; extension-tool-origin.ts calls it. A row counts
 // in the run's organisation, or with an explicit null organisation only where
 // the anchor read in the run's organisation carries that exact install id. Each
 // refusal is a fixed code: no path, install id, digest or version. A read that
