@@ -21,8 +21,11 @@
 // a test file, a fixture directory and the generated map.
 //
 // The repository case needs the materialized `extensions/` tree (`node
-// scripts/ci/sync-dev-extensions.mjs --pinned`). Without it the case is
-// skipped and the host kit checks that it did not skip.
+// scripts/ci/sync-dev-extensions.mjs --pinned`), which lays packs out as
+// `extensions/<scope without @>/<name>/` (for example `extensions/cinatra-ai/`).
+// Without the tree the case is skipped, unless CINATRA_REQUIRE_EXTENSIONS=1 is
+// set: a job or kit that ran the sync sets it, and then a missing tree FAILS
+// the case instead of skipping it, so the guard cannot pass vacuously.
 //
 // ORDER: while a pack declares the flag and still declares its renderer, the
 // renderer kinds `linkedin-draft-review` (register-default-renderers.ts:188) and
@@ -263,10 +266,43 @@ describe("A15 fixtures: each kind of name is found, each exclusion stays silent"
   });
 });
 
-const HAS_EXTENSIONS = existsSync(path.join(REPO_ROOT, "extensions", "@cinatra-ai"));
+/** True when `<root>/extensions/<any scope>/<name>/package.json` exists (the synced layout has no "@" in the scope directory). */
+export function hasInstalledExtensions(root: string): boolean {
+  const extRoot = path.join(root, "extensions");
+  if (!existsSync(extRoot)) return false;
+  for (const scope of readdirSync(extRoot, { withFileTypes: true })) {
+    if (!scope.isDirectory() || scope.name.startsWith(".") || scope.name === "node_modules") continue;
+    for (const dir of readdirSync(path.join(extRoot, scope.name), { withFileTypes: true })) {
+      if (dir.isDirectory() && existsSync(path.join(extRoot, scope.name, dir.name, "package.json"))) return true;
+    }
+  }
+  return false;
+}
 
-describe.skipIf(!HAS_EXTENSIONS)("A15 repository: no product file names a publish pack", () => {
+describe("A15 tree detection: the synced layout is found, an empty tree is not", () => {
+  it("finds a pack under a scope directory without an @ (the layout sync-dev-extensions.mjs writes)", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "a15-"));
+    tmpRoots.push(root);
+    put(root, "extensions/cinatra-ai/some-agent/package.json", JSON.stringify({ name: "@cinatra-ai/some-agent" }));
+    expect(hasInstalledExtensions(root)).toBe(true);
+  });
+
+  it("is false without an extensions folder, with an empty one, and with a scope folder that holds no package", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "a15-"));
+    tmpRoots.push(root);
+    expect(hasInstalledExtensions(root)).toBe(false);
+    mkdirSync(path.join(root, "extensions", "cinatra-ai", "empty"), { recursive: true });
+    expect(hasInstalledExtensions(root)).toBe(false);
+  });
+});
+
+// Fail closed: CINATRA_REQUIRE_EXTENSIONS=1 (set where the pinned sync ran) turns "no tree" from a skip into a failure.
+const REQUIRE_EXTENSIONS = process.env.CINATRA_REQUIRE_EXTENSIONS === "1";
+const HAS_EXTENSIONS = hasInstalledExtensions(REPO_ROOT);
+
+describe.skipIf(!HAS_EXTENSIONS && !REQUIRE_EXTENSIONS)("A15 repository: no product file names a publish pack", () => {
   it("reads the installed agent packs (the universe is not empty)", () => {
+    expect(HAS_EXTENSIONS, "CINATRA_REQUIRE_EXTENSIONS=1 but extensions/<scope>/<name>/package.json is absent: the sync did not run").toBe(true);
     expect(readAgentPacks(REPO_ROOT).length).toBeGreaterThan(0);
   });
 
