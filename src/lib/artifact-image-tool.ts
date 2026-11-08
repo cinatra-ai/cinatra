@@ -30,6 +30,7 @@ import { resolveBoundArtifactTarget } from "@/lib/artifacts/resolve-bound-artifa
 import { mimeAcceptedByAccepts } from "@/lib/artifacts/upload-artifact-type-map";
 import {
   loadRunDerivationContext,
+  loadRunMarksReviewStep,
   resolveRunScopeOwnership,
   type ScopeDerivedOwnership,
 } from "@/lib/artifacts/run-artifact-materializer";
@@ -165,6 +166,16 @@ export type ArtifactImageToolDeps = {
     orgId: string;
   }) => Promise<ScopeDerivedOwnership>;
   countRunImages: (input: { orgId: string; runId: string }) => Promise<number>;
+  /**
+   * cinatra#3035: does the run's own flow declare a marked review step? When it
+   * does, a first picture takes the intermediate origin, as a mid-run text write
+   * of that run does — the marked step is its review. Optional: a set without it
+   * keeps the durable origin.
+   */
+  loadMarksReviewStep?: (input: {
+    templateId: string;
+    packageVersion: string | null;
+  }) => Promise<boolean>;
 };
 
 function schemaId(): string {
@@ -221,6 +232,7 @@ export function artifactImageToolDeps(): ArtifactImageToolDeps {
       (await loadRunDerivationContext(i)).producesRefs,
     resolveOwnership: (i) => resolveRunScopeOwnership(i),
     countRunImages: (i) => countFinalizedRunImages(i),
+    loadMarksReviewStep: (i) => loadRunMarksReviewStep(i),
   };
 }
 
@@ -519,6 +531,14 @@ export async function generateArtifactImage(
       runId: input.runId,
       orgId: input.orgId,
     });
+    // cinatra#3035: a first picture of a run whose flow marks a review step
+    // carries the intermediate origin; that step is the review of it.
+    const marksReviewStep = deps.loadMarksReviewStep
+      ? await deps.loadMarksReviewStep({
+          templateId: input.templateId,
+          packageVersion: input.packageVersion,
+        })
+      : false;
 
     let created: { artifactId: string; representationRevisionId: string };
     try {
@@ -532,7 +552,7 @@ export async function generateArtifactImage(
         visibility: ownership.visibility,
         title,
         declaredMime: mime,
-        originKind: "agent_generated",
+        originKind: marksReviewStep ? "live_generator" : "agent_generated",
         stream: asImageStream(bytes),
         createdByRunId: input.runId,
         producerAssertionExtension: input.extension,
