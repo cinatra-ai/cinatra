@@ -401,3 +401,29 @@ describe("(f) the artifact page dispatches every admitted row and hands every di
     expect(call?.[0]).toMatch(/\breview,/);
   });
 });
+
+describe("(g) a review the preparation input carries at version 5 is kept", () => {
+  it("writes no surface reading over the input's own review", async () => {
+    const own = { reading: "continued" as const, openLive: LIVE, decidedAt: "2026-10-01T12:00:00.000Z" };
+    const { buildProps } = bindArtifactReviewPorts({
+      orgId: ORG,
+      actor,
+      buildContent: stubContent,
+      reading: "pending",
+      dataRoad: SESSION_ROAD,
+    } as BinderCtx);
+    const target = CENSUS[0];
+    const props = await buildProps({
+      artifact: target.artifact,
+      representationRevisionId: target.revision,
+      mime: target.mime,
+      propsApiVersion: 5,
+      member: target.member,
+      review: own,
+    });
+    expect(props.propsApiVersion).toBe(5);
+    // The surface's pending reading would read { reading: "pending", openLive: null }.
+    expect(props.review).toEqual(own);
+    expect(props.data).toEqual(SESSION_ROAD);
+  });
+});
