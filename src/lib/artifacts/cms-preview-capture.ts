@@ -70,16 +70,6 @@ import {
 /** Wall-clock ceiling for the whole capture (fetch + render). The staged-write
  * path awaits this, so it is bounded well under a request budget. */
 const CAPTURE_TOTAL_TIMEOUT_MS = 25_000;
-/**
- * The slice of the repaired capture's budget the SYNCHRONOUS proposed-fields
- * lookup may consume (cinatra#2044). That read parks the event loop, so nothing
- * outside it can preempt it — its own timeout is the only bound it has, and the
- * sync helper's default (30s) is LONGER than the whole capture ceiling. Capping
- * it here keeps this writer from making the pre-existing softness of that
- * ceiling measurably worse; see `captureRepairedPreviewForGate` for what the
- * ceiling does and does not bound.
- */
-const CAPTURE_SNAPSHOT_READ_TIMEOUT_MS = 5_000;
 /** The PAIR shares one fetch but runs two isolated renders, so its ceiling is
  * one render longer than a single capture's — still bounded, still awaited. */
 const CAPTURE_PAIR_TOTAL_TIMEOUT_MS = 40_000;
@@ -1209,97 +1199,6 @@ export async function capturePinnedPreviewPairForGate(
     capturePinnedPreviewPair(input, createPreviewCaptureDeps()),
     () => ({ before: timedOut, current: timedOut }),
     CAPTURE_PAIR_TOTAL_TIMEOUT_MS,
-  );
-}
-
-/**
- * The entry point the repair-completion drain reaches (through the boot-bound
- * `@cinatra-ai/host:cms-repaired-capture` port) when a producer's repair lands —
- * cinatra#2286's third picture, pinned against the SUCCESSOR target the repair
- * row itself recorded.
- *
- * The repaired proposal's field map is read HERE from the successor snapshot's
- * own stored serialization (`readCmsSnapshotProposedFields`) rather than taken
- * from the caller: the picture may only ever show what the successor gate
- * actually pins. That read is INSIDE the ceiling below — the repair drain awaits
- * this call before it submits the repair response, so work outside the ceiling
- * would delay a repair by exactly the amount the ceiling exists to bound (a
- * codex convergence finding).
- *
- * WHAT THE CEILING ACTUALLY BOUNDS — stated plainly, because the honest answer
- * is "less than its name suggests". Every store call underneath a capture
- * (`readPinnedCaptures`, `writeCapture`, `listRegisteredSites`, and
- * `ensurePostgresSchema` on a cold process) reaches Postgres through
- * `runPostgresQueriesSync`, which parks the event loop on `Atomics.wait`. A
- * `setTimeout` cannot fire while the loop is parked, so no timer-based ceiling
- * here — or on the pre-existing `capturePinnedPreviewForGate` /
- * `capturePinnedPreviewPairForGate`, which have always had the same shape — is a
- * hard bound. It bounds the asynchronous phases (the signed fetch, the headless
- * render), and each blocking call is bounded only by its OWN query timeout.
- * Making it airtight means moving the capture store off the sync helper, which
- * is a subsystem change well outside this writer; it is NOT claimed here.
- *
- * What this entry point does do is refuse to widen the hole it would otherwise
- * add: the proposed-fields read is the one blocking call this writer introduces,
- * and the sync helper's default (30s) is LONGER than the whole ceiling, so it is
- * capped explicitly at `CAPTURE_SNAPSHOT_READ_TIMEOUT_MS`. A breach throws and
- * is caught below as an unreadable base — which degrades `no-proposed-fields`
- * UNLESS the coordinate recovery or the fetch fails first and names its own
- * reason, since those run before composition.
- *
- * Swallows every failure — the repair completes either way.
- */
-export async function captureRepairedPreviewForGate(input: {
-  orgId: string;
-  successorArtifactId: string;
-  successorSnapshotRevisionId: string;
-  baseArtifactId: string;
-  baseSnapshotRevisionId: string;
-  title?: string;
-  createdBy?: string | null;
-  producerRunId?: string | null;
-}): Promise<CapturePinnedPreviewOutcome> {
-  const work = (async (): Promise<CapturePinnedPreviewOutcome> => {
-    let proposedFields: Record<string, string> | null = null;
-    try {
-      const { readCmsSnapshotProposedFields } = await import("./cms-content-snapshot-capture");
-      proposedFields = await readCmsSnapshotProposedFields(
-        input.orgId,
-        input.successorSnapshotRevisionId,
-        CAPTURE_SNAPSHOT_READ_TIMEOUT_MS,
-      );
-    } catch (err) {
-      // Unreadable ⇒ `no-proposed-fields`, a NAMED degrade recorded below —
-      // never a silent skip, and never the live page passed off as the fix.
-      console.warn(
-        "[cms-preview-capture] could not read the repaired proposal's fields:",
-        err instanceof Error ? err.message : err,
-      );
-    }
-    return await captureRepairedPreview(
-      {
-        orgId: input.orgId,
-        boundArtifactId: input.successorArtifactId,
-        boundSnapshotRevisionId: input.successorSnapshotRevisionId,
-        baseArtifactId: input.baseArtifactId,
-        baseSnapshotRevisionId: input.baseSnapshotRevisionId,
-        proposedFields,
-        title: input.title,
-        createdBy: input.createdBy,
-        producerRunId: input.producerRunId,
-      },
-      createPreviewCaptureDeps(),
-    );
-  })();
-  return withCeiling(
-    work,
-    // A ceiling hit records NOTHING (the capture is still in flight, and a
-    // pinned record is immutable — writing a timeout record here would
-    // permanently displace the real picture it may be about to land). So the
-    // outcome is UNCONFIRMED rather than known-missing, and the drain reports it
-    // with that distinction intact.
-    () => ({ status: "degraded", reason: "capture-timeout", capture: null }),
-    CAPTURE_TOTAL_TIMEOUT_MS,
   );
 }
 

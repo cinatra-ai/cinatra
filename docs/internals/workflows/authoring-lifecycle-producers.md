@@ -28,7 +28,7 @@ through one of the **enumerated emitters**. The set is closed
 |---|---|
 | `createSemanticArtifact` | The file-form artifact writer (`src/lib/artifacts/artifact-creation.ts`). |
 | `dashboard_twin_writer` | The dashboard artifact twin's own transaction. |
-| `object_cms_snapshot_capture` | The CMS content-snapshot capture (`src/lib/artifacts/cms-content-snapshot-capture.ts`). |
+| `object_cms_snapshot_capture` | No write path. The CMS content-snapshot capture that wrote it left the application (#3862); the emitter stays in the enumeration and in the database constraint. |
 
 An event row naming any other emitter is rejected at the contract boundary
 (`validateProducedEvent`). Adding a fourth write path means adding it to that

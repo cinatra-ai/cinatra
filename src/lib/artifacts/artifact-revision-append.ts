@@ -681,8 +681,8 @@ export async function readRevisionGateSatisfaction(input: {
 //   • It appends the `representation` row at MAX(revision)+1 under the
 //     per-artifact advisory lock, moves the `objects.data` pointer onto the new
 //     revision, and emits the artifact-writer provenance witness in the SAME
-//     transaction — the same rows, in the same shapes, the CMS capture writer
-//     already commits together (`buildCmsSnapshotCaptureQueries`). The bytes
+//     transaction — the same rows, in the same shapes, that a file artifact's
+//     representation write commits together. The bytes
 //     door additionally upserts the org-scoped substance-keyed `resource` and
 //     writes the `artifact_blobs` row when that resource is new.
 //

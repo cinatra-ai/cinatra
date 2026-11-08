@@ -180,7 +180,7 @@ function registerCmsPreviewCaptureObjectType(): void {
 }
 
 // The CMS content-snapshot type (cinatra#2043 S5 capture / cinatra#2044 S6
-// review). `captureCmsContentSnapshot` writes its immutable snapshot identity
+// review). The CMS capture wrote its immutable snapshot identity
 // row under `@cinatra-ai/objects:cms-content-snapshot` — a HOST-owned type (core
 // is the writer; no extension pack owns it). Nothing registered it, so
 // `artifactObjectTypeIds()` did not admit it and `readArtifactForDetail` answered
