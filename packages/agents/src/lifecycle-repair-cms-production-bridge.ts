@@ -19,7 +19,10 @@ import "server-only";
 //     graph reads as its instruction. A NO-OP (`{}`) for any base target that
 //     is not itself a captured CMS snapshot (e.g. the blog pipeline's own
 //     markdown artifacts) — this module never widens what a non-CMS producer's
-//     dispatch carries.
+//     dispatch carries. Since cinatra#4424 the dispatch drain no longer calls
+//     this projection: a producer declares the input that gets the findings
+//     (`repairFindingsInput`), for every base. Nothing outside this module
+//     names `projectCmsRepairInputParams`; it leaves with this bridge.
 //   • COMPLETION ADAPTER — once a dispatched CMS repair run reaches a terminal
 //     status, look for the CMS-snapshot capture it produced (keyed on
 //     `producerRunId == the repair run's own id`, matched against the base
@@ -108,7 +111,8 @@ export function buildCmsRepairTaskText(
 }
 
 /**
- * Project fresh CMS-generic instructions onto a dispatched repair
+ * No caller since cinatra#4424 (the drain applies the producer's declared
+ * findings input instead). Project fresh CMS-generic instructions onto a dispatched repair
  * run's `inputParams`, retaining the task alias. Returns `{}` (no addition) when the delivered repair's
  * base target is not a captured CMS snapshot — byte-identical dispatch for the
  * blog pipeline and any future non-CMS repairing producer.

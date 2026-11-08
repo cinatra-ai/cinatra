@@ -207,10 +207,9 @@ input. It is not a compare-and-set: a second writer of the same run's inputs at
 the same moment, such as a duplicate delivery of the job, can overwrite it.
 
 A producer that declares nothing gets its own inputs plus the
-typed request, and, until the application's pins name CMS agent releases that
-declare the input, also the CMS bridge's `task` and `instructions` when its base
-is a captured CMS snapshot (`projectCmsRepairInputParams`,
-`packages/agents/src/lifecycle-repair-cms-production-bridge.ts`). Neither the drain
+typed request, for every base: the drain adds no `task` or `instructions` for a
+captured CMS snapshot either, and reads no base row to decide. The Drupal and
+WordPress agents declare `instructions`. Neither the drain
 nor the run start checks that the declared name is an input of the template: a
 name the template does not read adds an input that no prompt reads, and a name the
 template types as `object` fails the run at start with a message that names the
