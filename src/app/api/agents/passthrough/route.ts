@@ -27,7 +27,7 @@ import {
 import {
   shapeArtifactPageCaptureInput,
   type ShapedArtifactPageCaptureInput,
-} from "./artifact-page-capture-shaper";
+} from "@/lib/artifact-page-capture-shaper";
 import {
   shapeTestDeliverySendInput,
   shapeTestDeliverySendResult,

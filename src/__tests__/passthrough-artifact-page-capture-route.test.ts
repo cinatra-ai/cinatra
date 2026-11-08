@@ -167,7 +167,7 @@ describe("cinatra#4223 POST /api/agents/passthrough — artifact_page_capture", 
     // carries. Imported here, by an absolute path made at run time, so the other
     // cases of this file still load where the shaper module does not exist.
     const shaperPath = fileURLToPath(
-      new URL("../app/api/agents/passthrough/artifact-page-capture-shaper.ts", import.meta.url),
+      new URL("../lib/artifact-page-capture-shaper.ts", import.meta.url),
     );
     const { shapeArtifactPageCaptureInput } = (await import(/* @vite-ignore */ shaperPath)) as {
       shapeArtifactPageCaptureInput: (raw: Record<string, unknown>) => Record<string, unknown>;

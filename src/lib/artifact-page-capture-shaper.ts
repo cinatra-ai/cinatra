@@ -1,6 +1,6 @@
 // Generic server-side seam shaper for the deterministic `artifact_page_capture`
 // passthrough tool (cinatra#4223). Pure module (zero project deps) so it is
-// unit-testable in isolation — same posture as ./artifact-image-shaper.
+// unit-testable in isolation — same posture as the passthrough artifact-image-shaper.
 //
 // The ApiNode wires flow variables straight to {extension, title, url, node_id}.
 // The shaper normalizes and VALIDATES; it never invents a value. The url must be
