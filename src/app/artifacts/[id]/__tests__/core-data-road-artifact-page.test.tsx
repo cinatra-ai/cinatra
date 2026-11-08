@@ -410,9 +410,9 @@ describe("the dashboard's own read gate on the artifact page (cinatra#3092)", ()
     expect(html).not.toContain('data-render-dispatch="dashboard-pointer"');
   });
 
-  // cinatra#4311: until the dashboard's own display is installed, the dispatch
-  // answers a floor for the dashboard, and the page keeps the pointer, so an
-  // admitted dashboard keeps its Open dashboard affordance.
+  // cinatra#4311: where the dispatch answers a floor for an admitted dashboard,
+  // whatever the floor's reason, the page keeps the pointer, so the dashboard
+  // keeps its Open dashboard affordance.
   it("a dashboard the gate admits and no installed display claims keeps its pointer, never the generic floor", async () => {
     dashboardRow();
     mocks.resolveDashboardArtifactPointer.mockResolvedValue({ access: "ok", pointer: POINTER });
@@ -428,6 +428,24 @@ describe("the dashboard's own read gate on the artifact page (cinatra#3092)", ()
     expect(html).toContain('data-render-dispatch="dashboard-pointer"');
     expect(html).toContain('data-testid="artifact-dashboard-pointer"');
     expect(html).toContain('href="/dashboards/a-1"');
+    expect(html).toContain("Open dashboard");
+    expect(mocks.mounted).toHaveLength(0);
+  });
+
+  // An installed display that claims the dashboard but needs a rebuild is a
+  // floor too, so the page draws the pointer there as well.
+  it("a dashboard whose claiming display needs a rebuild keeps its pointer too", async () => {
+    dashboardRow();
+    mocks.resolveDashboardArtifactPointer.mockResolvedValue({ access: "ok", pointer: POINTER });
+    mocks.resolveArtifactDisplayMount.mockResolvedValue({
+      dispatch: "fallback",
+      kind: "floor",
+      slot: "detail",
+      packageName: "@cinatra-ai/dashboard-artifact",
+      reason: "requires-rebuild",
+    });
+    const html = await renderPage();
+    expect(html).toContain('data-render-dispatch="dashboard-pointer"');
     expect(html).toContain("Open dashboard");
     expect(mocks.mounted).toHaveLength(0);
   });

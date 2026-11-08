@@ -9,8 +9,8 @@ import { resolveDashboardArtifactPointer } from "@/lib/dashboards/dashboard-arti
 /**
  * What a type's own read gate answers, past the row's own read authorization.
  * `ok` carries the dashboard's pointer for a dashboard row (null for every other
- * type): the page draws it in place of the generic floor while no installed
- * display claims the dashboard.
+ * type): the page draws it in place of the generic floor wherever the display
+ * dispatch answers a floor for the dashboard.
  */
 export type ArtifactTypeReadGate =
   | { readonly access: "ok"; readonly dashboardPointer: DashboardArtifactPointer | null }
@@ -40,8 +40,10 @@ export class ArtifactTypeReadGateError extends Error {
  *
  * AN ALLOW-LIST, NEVER A PASS-THROUGH. Only the three known answers are read:
  * `ok` with a pointer object, `not-found` and `denied`. Any other answer (an
- * unknown access word, no access at all, `ok` without a pointer, no result)
- * throws, exactly as a store failure throws, to the route's error boundary. That
+ * unknown access word, no access at all, `ok` without a pointer, no result, or
+ * a result whose property read throws) throws the gate's own error, whose
+ * message names no value, to the route's error boundary. A resolver that
+ * rejects (a store failure) reaches that boundary with its own error. The
  * boundary draws its own diagnostic and no artifact display or content.
  */
 export async function readArtifactTypeGate(artifact: {
@@ -51,7 +53,15 @@ export async function readArtifactTypeGate(artifact: {
   if (!isDashboardArtifactType(artifact.objectType)) return OK_NO_POINTER;
   const dashboard: unknown = await resolveDashboardArtifactPointer(artifact.artifactId);
   if (typeof dashboard !== "object" || dashboard === null) throw new ArtifactTypeReadGateError();
-  const { access, pointer } = dashboard as { access?: unknown; pointer?: unknown };
+  let access: unknown;
+  let pointer: unknown;
+  try {
+    ({ access, pointer } = dashboard as { access?: unknown; pointer?: unknown });
+  } catch {
+    // A getter or proxy trap that throws: no known answer. Its error is not
+    // read, because the thrower controls what it carries.
+    throw new ArtifactTypeReadGateError();
+  }
   if (access === "not-found") return NOT_FOUND;
   if (access === "denied") return DENIED;
   if (access === "ok" && typeof pointer === "object" && pointer !== null) {

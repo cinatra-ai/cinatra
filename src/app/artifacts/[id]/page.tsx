@@ -106,12 +106,13 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
   if (typeGate.access === "not-found") notFound();
   if (typeGate.access === "denied") return <ArtifactReadDeniedPanel />;
 
-  // EVERY ROW ADMITTED BY BOTH GATES ABOVE REACHES THE ONE DISPLAY DISPATCH
-  // BELOW, whatever its type (cinatra#3092): nothing intercepts a row before it.
-  // A type's own display draws it. Where no installed display claims the row,
-  // the dispatch answers a floor; a dashboard row then keeps its pointer (below)
-  // until the dashboard's own display is installed, and every other row draws
-  // the generic floor.
+  // NO TYPE-SPECIFIC BRANCH STANDS BETWEEN THE TWO GATES ABOVE AND THE ONE
+  // DISPLAY DISPATCH BELOW (cinatra#3092): a row both gates admit goes on to it,
+  // whatever its type, unless a read on the way throws (the head revision or the
+  // content), which reaches the route's error boundary first. A type's own
+  // display draws the row. Where the dispatch answers a floor, of any reason, a
+  // dashboard row keeps its pointer (below) and every other row draws the
+  // generic floor.
 
   // THE EDITOR OPENS ON THE HEAD REVISION, read from the store.
   //
@@ -321,16 +322,16 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
     propsApiVersion: rendererProps.propsApiVersion,
   });
 
-  // THE DASHBOARD POINTER STAYS UNTIL THE DASHBOARD'S OWN DISPLAY IS INSTALLED
-  // (cinatra#4311). This is not an interception: the dispatch above has already
-  // run, and it answered a floor, so no installed display claims this dashboard.
-  // The page then draws the pointer it has drawn for a dashboard row since
-  // cinatra#1895 (its header and its Open dashboard affordance) instead of the
-  // generic floor, so an admitted dashboard keeps its way to its canonical
-  // surface. The pointer comes from the
-  // type's read gate, which already authorized it. Once a display claims the
-  // dashboard, the dispatch answers that display and this branch is not reached;
-  // the pointer slice of cinatra#4311 then deletes it.
+  // THE DASHBOARD POINTER STAYS WHERE THE DISPATCH ANSWERS A FLOOR (cinatra#4311).
+  // This is not an interception: the dispatch above has already run, and it
+  // answered a floor of some reason: no installed display claims this dashboard,
+  // or the display that claims it needs a rebuild. The page then draws the
+  // pointer it has drawn for a dashboard row since cinatra#1895 (its header and
+  // its Open dashboard affordance) instead of the generic floor, so an admitted
+  // dashboard keeps its way to its canonical surface. The pointer comes from the
+  // type's read gate, which already authorized it. Where the dispatch answers a
+  // display that mounts, this branch is not reached; the pointer slice of
+  // cinatra#4311 deletes it.
   if (mount.kind === "floor" && typeGate.dashboardPointer) {
     return (
       <Main className="min-h-screen">

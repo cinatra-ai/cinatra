@@ -1,8 +1,8 @@
 /**
  * THE DASHBOARD'S OWN READ GATE ON THE ARTIFACT PAGE (cinatra#3092).
  *
- * The page draws every row the gates admit through its one display dispatch, but
- * a dashboard row keeps the gate chain of the canonical /dashboards/[id] route.
+ * No type-specific branch stands before the page's one display dispatch, but a
+ * dashboard row keeps the gate chain of the canonical /dashboards/[id] route.
  * The gate and the real resolver run; only the session actor, the dashboard row
  * read, the access check and the liveness oracle are replaced (the seams of
  * `dashboard-artifact-pointer-resolvers.test.ts`). The resolver is wrapped in a
@@ -144,5 +144,42 @@ describe("readArtifactTypeGate refuses an answer it does not know (fails closed)
     const result = readArtifactTypeGate(DASHBOARD);
     await expect(result).rejects.toMatchObject({ name: "ArtifactTypeReadGateError" });
     await expect(result).rejects.toThrow("the dashboard read gate answered no known access");
+  });
+
+  // An answer whose own property read throws is no known answer either: the
+  // gate throws its own error, never the thrower's (which can carry a value).
+  const throwing = (key: string, rest: Record<string, unknown>) =>
+    Object.defineProperty({ ...rest }, key, {
+      enumerable: true,
+      get() {
+        throw new Error("private value");
+      },
+    });
+  it.each([
+    ["an access getter that throws", throwing("access", {})],
+    ["a pointer getter that throws", throwing("pointer", { access: "ok" })],
+    [
+      // `then` is left readable: a throwing `then` makes the resolver's own
+      // promise reject, which is the store-failure road, not an answer.
+      "a proxy whose traps throw",
+      new Proxy(
+        {},
+        {
+          get(_target, key) {
+            if (key === "then") return undefined;
+            throw new Error("private value");
+          },
+          has() {
+            throw new Error("private value");
+          },
+        },
+      ),
+    ],
+  ])("%s rejects with the gate's own error, never the thrown one", async (_label, answer) => {
+    resolver.mockResolvedValueOnce(answer as never);
+    const result = readArtifactTypeGate(DASHBOARD);
+    await expect(result).rejects.toMatchObject({ name: "ArtifactTypeReadGateError" });
+    await expect(result).rejects.toThrow("the dashboard read gate answered no known access");
+    await expect(result).rejects.not.toThrow("private value");
   });
 });

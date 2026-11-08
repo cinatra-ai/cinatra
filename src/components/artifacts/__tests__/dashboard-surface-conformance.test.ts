@@ -97,8 +97,8 @@ describe("§VIII routing — library rows render as dashboard pointers, dual-aut
     // pointer resolver (the type's read gate holds both), so a dashboard row
     // reaches `resolveArtifactDisplayMount(...)` (the CALL, not the import)
     // like every other. The pointer wiring stays until cinatra#4311 deletes it,
-    // but only AFTER that call and only on a floor: while no installed display
-    // claims the dashboard, an admitted dashboard keeps its Open dashboard
+    // but only AFTER that call and only on a floor: where the dispatch answers a
+    // floor of any reason, an admitted dashboard keeps its Open dashboard
     // affordance instead of the generic floor.
     const code = DETAIL.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
     expect(code).not.toMatch(/isDashboardArtifactType/);
