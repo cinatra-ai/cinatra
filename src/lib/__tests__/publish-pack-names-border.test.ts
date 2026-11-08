@@ -294,7 +294,7 @@ describe("A15 tree detection: the synced layout is found, an empty tree is not",
   it("finds a pack under a scope directory without an @ (the layout sync-dev-extensions.mjs writes)", () => {
     const root = mkdtempSync(path.join(tmpdir(), "a15-"));
     tmpRoots.push(root);
-    put(root, "extensions/cinatra-ai/some-agent/package.json", JSON.stringify({ name: "@cinatra-ai/some-agent" }));
+    put(root, "extensions/fixture-scope/some-agent/package.json", JSON.stringify({ name: "@cinatra-ai/some-agent" }));
     expect(hasInstalledExtensions(root)).toBe(true);
   });
 
