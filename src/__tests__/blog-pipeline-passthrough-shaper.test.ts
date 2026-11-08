@@ -1,111 +1,62 @@
 /**
- * Blog-pipeline-agent deterministic passthrough shapers.
+ * cinatra#3035 — the blog pipeline's two passthrough shapers are RETIRED.
  *
- * The orchestrator OAS declares `_shape: blog_pipeline_selected_idea` /
- * `blog_pipeline_draft_projection` passthrough nodes. The
- * /api/agents/passthrough route must shape them so the OAS nodes'
- * declared outputs (`selected_idea.idea`,
- * `draft_projection.{postTitle,postExcerpt,blogPostContent}`) are
- * actually produced (echoed via `result_input_passthrough` -> rawData).
+ * The passthrough once shaped two blog-pipeline `_shape` opt-ins on
+ * `objects_save`: `blog_pipeline_selected_idea` (the picked idea, reshaped and
+ * saved) and `blog_pipeline_draft_projection` (the draft, projected into three
+ * strings and saved). Both were declared `retiredBy: "cinatra#3035"`. The
+ * pipeline pin the host installs calls neither: the idea gate keeps the pick in
+ * the pack's own `idea_drafts` table, and the draft is written as an artifact
+ * mid-run. This guard pins the removal: no shaper module, no dispatch in the
+ * route, no reference anywhere in the passthrough.
  *
  *   pnpm exec vitest run src/__tests__/blog-pipeline-passthrough-shaper.test.ts
  */
-import { describe, it, expect } from "vitest";
-import { shapeBlogPipelineObjectsSave as __shapeBlogPipelineObjectsSave } from "../app/api/agents/passthrough/blog-pipeline-seam";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { describe, expect, it } from "vitest";
 
-describe("blog-pipeline passthrough seam shapers", () => {
-  it("blog_pipeline_selected_idea: parses selectedIdeaJson and matches an offered idea", () => {
-    const ideas = [
-      { title: "A", summary: "sa", outline: ["1"] },
-      { title: "B", summary: "sb", outline: ["2"] },
-    ];
-    const out = __shapeBlogPipelineObjectsSave(
-      {
-        _shape: "blog_pipeline_selected_idea",
-        selectedIdeaJson: JSON.stringify({ title: "B", summary: "sb", outline: ["2"] }),
-        ideas,
-        cinatra_agent_run_id: "run-1",
-      },
-      "run-fallback",
-    );
-    expect(out).not.toBeNull();
-    expect(out!.typeHint).toBe("@dynamic/types:blog-pipeline-selected-idea");
-    expect(out!.rawData.idea).toEqual({ title: "B", summary: "sb", outline: ["2"] });
-    expect(out!.rawData.cinatra_agent_run_id).toBe("run-1");
+const PASSTHROUGH_DIR = resolve(__dirname, "../app/api/agents/passthrough");
+
+const RETIRED_NAMES = [
+  "blog_pipeline_selected_idea",
+  "blog_pipeline_draft_projection",
+  "blog-pipeline-selected-idea",
+  "blog-pipeline-draft-projection",
+  "blog-pipeline-seam",
+  "shapeBlogPipelineObjectsSave",
+];
+
+function passthroughSources(): Array<{ file: string; text: string }> {
+  return readdirSync(PASSTHROUGH_DIR, { withFileTypes: true })
+    .filter((e) => e.isFile() && /\.(ts|tsx|mts|cts|js|mjs)$/.test(e.name))
+    .map((e) => ({
+      file: e.name,
+      text: readFileSync(join(PASSTHROUGH_DIR, e.name), "utf8"),
+    }));
+}
+
+describe("cinatra#3035 — the blog pipeline's passthrough shapers are retired", () => {
+  it("the blog-pipeline seam module no longer exists", () => {
+    expect(existsSync(join(PASSTHROUGH_DIR, "blog-pipeline-seam.ts"))).toBe(false);
   });
 
-  it("blog_pipeline_selected_idea: THROWS on unparseable selectedIdeaJson (fail closed, no ideas[0] default)", () => {
-    const ideas = [{ title: "Only", summary: "s", outline: [] }];
-    expect(() =>
-      __shapeBlogPipelineObjectsSave(
-        { _shape: "blog_pipeline_selected_idea", selectedIdeaJson: "not json", ideas },
-        "run-x",
-      ),
-    ).toThrow(/not a parseable BlogIdea/);
+  it("the route no longer chains a blog-pipeline shaper ahead of objects_save", () => {
+    const route = readFileSync(join(PASSTHROUGH_DIR, "route.ts"), "utf8");
+    expect(route).not.toMatch(/shapeBlogPipelineObjectsSave/);
+    expect(route).not.toMatch(/baseObjectsSaveShaper/);
+    expect(route).not.toMatch(/TOOL_INPUT_SHAPERS\.objects_save\s*=/);
   });
 
-  it("blog_pipeline_selected_idea: THROWS when the selected idea matches none of the offered ideas", () => {
-    const ideas = [{ title: "Only", summary: "s", outline: [] }];
-    expect(() =>
-      __shapeBlogPipelineObjectsSave(
-        {
-          _shape: "blog_pipeline_selected_idea",
-          selectedIdeaJson: JSON.stringify({ title: "Other", summary: "x", outline: [] }),
-          ideas,
-        },
-        "run-x",
-      ),
-    ).toThrow(/does not match any of the 1 offered ideas/);
-  });
-
-  it("blog_pipeline_selected_idea: accepts a parsed idea when no offered list arrived (unenforceable match)", () => {
-    const out = __shapeBlogPipelineObjectsSave(
-      {
-        _shape: "blog_pipeline_selected_idea",
-        selectedIdeaJson: JSON.stringify({ title: "Solo", summary: "s", outline: [] }),
-      },
-      "run-x",
-    );
-    expect(out!.rawData.idea).toEqual({ title: "Solo", summary: "s", outline: [] });
-    expect(out!.rawData.cinatra_agent_run_id).toBe("run-x");
-  });
-
-  it("blog_pipeline_draft_projection: projects the draft object into linkedin string fields", () => {
-    const out = __shapeBlogPipelineObjectsSave(
-      {
-        _shape: "blog_pipeline_draft_projection",
-        draft: { title: "T", excerpt: "E", content: "C", sourcesUsed: ["u"] },
-        cinatra_run_id: "run-2",
-      },
-      "fb",
-    );
-    expect(out).not.toBeNull();
-    expect(out!.typeHint).toBe("@dynamic/types:blog-pipeline-draft-projection");
-    expect(out!.rawData).toEqual({
-      cinatra_agent_run_id: "run-2",
-      postTitle: "T",
-      postExcerpt: "E",
-      blogPostContent: "C",
-    });
-  });
-
-  it("blog_pipeline_draft_projection: empty/missing draft fields coerce to empty strings (never throws)", () => {
-    const out = __shapeBlogPipelineObjectsSave(
-      { _shape: "blog_pipeline_draft_projection" },
-      "fb",
-    );
-    expect(out!.rawData).toEqual({
-      cinatra_agent_run_id: "fb",
-      postTitle: "",
-      postExcerpt: "",
-      blogPostContent: "",
-    });
-  });
-
-  it("returns null for non-blog shapes (falls back to the base objects_save shaper)", () => {
-    expect(
-      __shapeBlogPipelineObjectsSave({ _shape: "email_outreach_context_setup" }, "x"),
-    ).toBeNull();
-    expect(__shapeBlogPipelineObjectsSave({}, "x")).toBeNull();
+  it("no passthrough module names either retired shape, its type or its module", () => {
+    const sources = passthroughSources();
+    expect(sources.some((s) => s.file === "route.ts")).toBe(true);
+    const hits: string[] = [];
+    for (const { file, text } of sources) {
+      for (const name of RETIRED_NAMES) {
+        if (text.includes(name)) hits.push(`${file}: ${name}`);
+      }
+    }
+    expect(hits).toEqual([]);
   });
 });
