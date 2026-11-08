@@ -355,7 +355,7 @@ export async function resolveExtensionToolOrigin(
   return {
     kind: "child",
     codeInstallId: childInstallId,
-    context: { packageName: label, packageVersion: child.value.row.version, cinatra: child.value.cinatra },
+    context: { packageName: label, packageVersion: child.value.version, cinatra: child.value.cinatra },
     install: {
       installId: childInstallId,
       digest: child.value.digest,

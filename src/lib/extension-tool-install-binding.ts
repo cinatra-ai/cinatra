@@ -50,6 +50,8 @@ export type BoundInstall = {
   digest: string | null;
   /** The `cinatra` block of the package.json lying at `root`. */
   cinatra: Record<string, unknown>;
+  /** The version the row, the anchor and the package.json all carry: checked, never blank. */
+  version: string;
 };
 
 /** The child's validated installation and the parent edge that resolved to it. */
@@ -148,7 +150,7 @@ async function materialize(
     if (manifest.name !== row.packageName || manifest.version !== version) return refuse(manifestMismatch);
     const cinatra = manifest.cinatra;
     if (!isPlainObject(cinatra)) return refuse(manifestInvalid);
-    return { ok: true, value: { row, root: rootDir, digest, cinatra } };
+    return { ok: true, value: { row, root: rootDir, digest, cinatra, version } };
   });
   return checked.ok ? checked.value : refuse("origin-unreadable");
 }
