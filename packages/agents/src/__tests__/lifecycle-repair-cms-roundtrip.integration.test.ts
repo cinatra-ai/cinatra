@@ -2,12 +2,12 @@
  * cinatra#2286, epic S10 PR4 — the CMS repair ROUND TRIP, proven end-to-end
  * against a real Postgres, with the producing template carrying the REAL
  * `@cinatra-ai/wordpress-agent` identity + the lifecycle declaration the
- * lock-pinned release ships (`cinatra.lifecycle: { repairCapable: true }` — the
- * exact block the pin this PR advances brings into the dev universe; the
- * release is identified by its `resolvedSha` in cinatra-dev-extensions.lock.json).
+ * lock-pinned commit/tree ships (`cinatra.lifecycle: { repairCapable: true,
+ * repairFindingsInput: { input: "instructions" } }` since cinatra#4424; the
+ * pinned commit is identified by its `resolvedSha` in cinatra-dev-extensions.lock.json).
  *
  * What the sibling suites already prove is NOT re-argued here:
- *   - delivery + CMS task construction + completion adapter mechanics
+ *   - delivery + the findings input + completion adapter mechanics
  *     (`lifecycle-repair-cms-production-bridge.integration.test.ts`, PR2);
  *   - the generic single-gated-successor invariant for a SAME-ARTIFACT
  *     successor revision (`lifecycle-repair-successor-batch.integration.test.ts`,
@@ -55,6 +55,7 @@ import {
 } from "@/lib/lifecycle/lifecycle-produced-event";
 import { autoReviewTaskId, isRepairSuccessorTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
+import { REPAIR_FINDINGS_TEXT_LEAD } from "@/lib/lifecycle/lifecycle-policy";
 import { agentLifecycleDeclarationSchema } from "../verdaccio/package-contract";
 import { publishCmsRepairedCapturePort } from "../cms-repaired-capture-port";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
@@ -74,7 +75,7 @@ const WORDPRESS_AGENT_PACKAGE = "@cinatra-ai/wordpress-agent";
 
 /**
  * The lifecycle declaration `@cinatra-ai/wordpress-agent` ships in its
- * `package.json#cinatra.lifecycle` at the release the committed dev lock pins
+ * `package.json#cinatra.lifecycle` at the commit/tree the committed dev lock pins
  * (its `resolvedSha` in cinatra-dev-extensions.lock.json). Kept as a
  * literal (the clone-back extension tree is not materialized in the DB-tier CI
  * job) but NEVER a free-floating stub:
@@ -85,7 +86,7 @@ const WORDPRESS_AGENT_PACKAGE = "@cinatra-ai/wordpress-agent";
  *     conformance jobs), the literal is cross-checked byte-for-byte against the
  *     REAL pinned manifest — a manifest drift fails this suite there.
  */
-const WORDPRESS_AGENT_LIFECYCLE = { repairCapable: true } as const;
+const WORDPRESS_AGENT_LIFECYCLE = { repairCapable: true, repairFindingsInput: { input: "instructions" } } as const;
 const CMS_SNAPSHOT_EMITTER = "object_cms_snapshot_capture";
 
 // The PRODUCTION repaired-capture chain (cinatra#2044 / #2046): the adapter the
@@ -433,7 +434,7 @@ describe.skipIf(!HAS_DB)("cinatra#2286 S10 PR4 — the WordPress CMS repair roun
     const parsed = agentLifecycleDeclarationSchema.parse(WORDPRESS_AGENT_LIFECYCLE);
     expect(parsed.repairCapable).toBe(true);
 
-    // The committed dev lock pins the wordpress-agent release this literal is
+    // The committed dev lock pins the wordpress-agent commit/tree this literal is
     // copied from; when the pinned clone-back tree is on disk, cross-check the
     // REAL manifest byte-for-byte.
     const lock = JSON.parse(
@@ -455,17 +456,20 @@ describe.skipIf(!HAS_DB)("cinatra#2286 S10 PR4 — the WordPress CMS repair roun
   it("ROUND TRIP: request-changes → producer repair → repaired capture → re-review → approve → apply released → read-back binding", async () => {
     const ctx = await driveToDispatchedWordPressRepair();
 
-    // The dispatched run carries the delivered request + the CMS task text.
+    // The dispatched run carries the delivered request, and the findings text in
+    // the input the pinned commit/tree declares (cinatra#4424), not a CMS task.
     const runRow = await pool(
       `SELECT input_params FROM "${q(TEST_SCHEMA)}"."agent_runs" WHERE id=$1`,
       [ctx.repairRunId],
     );
     const inputParams = JSON.parse((runRow.rows[0] as { input_params: string }).input_params) as {
       task?: string;
+      instructions?: string;
       lifecycleRepairRequest?: unknown;
     };
     expect(inputParams.lifecycleRepairRequest).toBeDefined();
-    expect(inputParams.task).toContain(ctx.resourceId);
+    expect(inputParams.instructions).toBe(`${REPAIR_FINDINGS_TEXT_LEAD}\n\n1. tighten the headline and fix the excerpt`);
+    expect(inputParams.task).toBeUndefined();
 
     // The producer answers: a fresh re-staged capture on the same CMS resource.
     const repaired = await mintRepairedProduction(ctx);
