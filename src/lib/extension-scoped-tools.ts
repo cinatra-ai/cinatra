@@ -37,6 +37,7 @@ import {
   type ExtensionToolPorts,
 } from "@/lib/extension-tool-dispatch";
 import { ExtensionToolModuleRefusal } from "@/lib/extension-tool-module-loader";
+import { ExtensionToolOriginRefusal, resolveExtensionToolOrigin } from "@/lib/extension-tool-origin";
 import { createExtensionObjectsPort } from "@/lib/extension-objects-port";
 import {
   ArtifactAdmissionRefusal,
@@ -195,6 +196,7 @@ function statedRefusal(e: unknown): ExtensionScopedToolOutcome | null | typeof U
       e instanceof ExtensionDataRefusal ||
       e instanceof ExtensionToolRefusal ||
       e instanceof ExtensionToolModuleRefusal ||
+      e instanceof ExtensionToolOriginRefusal ||
       e instanceof ArtifactAdmissionRefusal ||
       e instanceof ArtifactCursorRefusal
     ) {
@@ -268,7 +270,7 @@ async function runDataTool(
  * dependencies own, through the host's own objects save, the run bound here.
  */
 async function runExtensionTool(
-  context: Awaited<ReturnType<typeof resolveRunExtensionContext>> & object,
+  runContext: Awaited<ReturnType<typeof resolveRunExtensionContext>> & object,
   input: {
     tool: string;
     input: Record<string, unknown>;
@@ -276,6 +278,15 @@ async function runExtensionTool(
     actor?: ActorContext;
   },
 ): Promise<unknown> {
+  // WHOSE CODE RUNS (cinatra#4154): the run package's own, or, for a proven step
+  // of an embedded child flow, the child's, from the exact child installation.
+  // The ports below are then the child's declarations, bound to this same run.
+  const origin = await resolveExtensionToolOrigin({
+    run: input.run,
+    context: runContext,
+    request: isPlainObject(input.input) ? input.input : {},
+  });
+  const context = origin.kind === "child" ? origin.context : runContext;
   const ports: Omit<ExtensionToolPorts, "review"> = {
     data: {
       select: (request) =>
@@ -307,6 +318,7 @@ async function runExtensionTool(
     cinatra: context.cinatra,
     request: input.input,
     ports,
+    ...(origin.kind === "child" ? { install: origin.install } : {}),
   });
 }
 
