@@ -61,23 +61,28 @@ const ctl = vi.hoisted(() => ({
   onLaunch: null as null | (() => Promise<void>),
 }));
 
-vi.mock("@cinatra-ai/a2a", async (orig) => {
-  const actual = await orig<typeof import("@cinatra-ai/a2a")>();
-  return {
-    ...actual,
-    expireRunStream: vi.fn(async () => undefined),
-    createExternalA2AClient: vi.fn(async () => ({
-      sendTask: vi.fn(async (req: unknown) => {
-        ctl.sent.push(req);
-        return { id: "task-sent", status: { state: "completed" } };
-      }),
-    })),
-    resolveLatestWayflowGateTaskId: vi.fn(async () => {
-      if (ctl.latest === "throw") throw new Error("redis is down");
-      return ctl.latest;
+// The a2a mocks sit on the SOURCE modules, not on the `@cinatra-ai/a2a` barrel.
+// The barrel imports `@cinatra-ai/agents`, so loading the store first closes a
+// cycle, and the store's in-body `await import("@cinatra-ai/a2a")` then gets the
+// real barrel: the real Redis lookup ran and M5/M6 read `pause-unverifiable`.
+// Mocked at their source, the barrel re-exports these fakes on every road.
+vi.mock("../../../a2a/src/event-log", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  expireRunStream: vi.fn(async () => undefined),
+  resolveLatestWayflowGateTaskId: vi.fn(async () => {
+    if (ctl.latest === "throw") throw new Error("redis is down");
+    return ctl.latest;
+  }),
+}));
+vi.mock("../../../a2a/src/external-client", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  createExternalA2AClient: vi.fn(async () => ({
+    sendTask: vi.fn(async (req: unknown) => {
+      ctl.sent.push(req);
+      return { id: "task-sent", status: { state: "completed" } };
     }),
-  };
-});
+  })),
+}));
 vi.mock("../run-wait-notifier", async (orig) => {
   const actual = await orig<typeof import("../run-wait-notifier")>();
   return {
