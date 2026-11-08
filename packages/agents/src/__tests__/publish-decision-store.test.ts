@@ -891,3 +891,38 @@ describe("cinatra#4150 PR 3a: the stops a decline or an expiry decided but did n
     await expect(listSettledWithWaitingRun(1)).rejects.toThrow("db down");
   });
 });
+
+describe("cinatra#4150 PR 3a, pre-review 3: the expiry's own rules in the store", () => {
+  it("decide with newestOnly wins only while no newer decision of the same run exists, in the same UPDATE", async () => {
+    answers.update = async () => [stored({ status: "expired" })];
+    await decide("d1", { from: "parked", to: "expired", actor: null, newestOnly: true });
+    const where = rendered(calls.where[0]);
+    expect(where.params).toEqual(["d1", "parked"]);
+    expect(where.sql.replace(/\s+/g, " ")).toMatch(
+      /"status" = \$2 and not exists \(select 1 from .*"agent_run_publish_decisions" newer where newer\.run_id = .*"agent_run_publish_decisions"\."run_id" and \(newer\.created_at, newer\.id\) > \(.*"agent_run_publish_decisions"\."created_at", .*"agent_run_publish_decisions"\."id"\)\)/,
+    );
+    expect(calls.via).toEqual(["tx.update"]);
+  });
+
+  it("decide without newestOnly asks nothing about other decisions", async () => {
+    answers.update = async () => [stored({ status: "run_ended" })];
+    await decide("d1", { from: "parked", to: "run_ended", actor: null });
+    expect(rendered(calls.where[0]).sql).not.toContain("not exists");
+  });
+
+  it("listDueParked reads the next page after the last row it was given, in the same oldest-first order", async () => {
+    await listDueParked(2, undefined, "d2");
+    const where = rendered(calls.where[0]);
+    expect(where.params).toEqual(["parked", "d2"]);
+    expect(where.sql.replace(/\s+/g, " ")).toMatch(
+      /\(.*"agent_run_publish_decisions"\."expires_at", .*"agent_run_publish_decisions"\."id"\) > \(select last_row\.expires_at, last_row\.id from .*"agent_run_publish_decisions" last_row where last_row\.id = \$2\)/,
+    );
+    expect(calls.orderBy).toBe(1);
+    expect(calls.limit).toEqual([2]);
+  });
+
+  it("listDueParked refuses an empty last id before any read", async () => {
+    expect(await codeOf(listDueParked(2, undefined, ""))).toBe("invalid-input");
+    expect(calls.via).toEqual([]);
+  });
+});

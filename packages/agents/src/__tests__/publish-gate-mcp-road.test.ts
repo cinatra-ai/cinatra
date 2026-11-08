@@ -359,3 +359,65 @@ describe("agent_run_resume on a publishing template", () => {
     expect(sendTaskSpy).not.toHaveBeenCalled();
   });
 });
+
+// cinatra#4150 PR 3a, pre-review 3 finding 1: a verified publish-gate claim holds a run whatever the live template lists, so
+// a run that already met a publish gate (it has a decision) is claimed before the send on every template.
+describe("agent_run_resume on a template that lists no publishing step, for a run with a decision", () => {
+  const row = { status: "pending_approval" };
+  const moves = () => storeMock.transitionRunStatus.mock.calls.map((c) => (c as unknown[]).slice(0, 3));
+  const claimed = (m: unknown[][]) => m.some(([, from, to]) => from === "pending_approval" && to === "running");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    for (const m of [storeMock.readAgentRunById, storeMock.transitionRunStatus, decisions.readLatestDecisionForRun, sendTaskSpy]) m.mockReset();
+    row.status = "pending_approval";
+    authSessionMock.resolveOrgRoleForUser.mockResolvedValue("member");
+    enforceRunAccessSpy.mockResolvedValue(undefined);
+    storeMock.readAgentRunById.mockImplementation(async () => ({ ...pausedRun(), status: row.status }));
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tmpl-1",
+      packageName: "@cinatra-ai/web-research-agent",
+      sourceType: "internal",
+      agentAuthPolicy: null,
+    });
+    storeMock.transitionRunStatus.mockImplementation((async (_runId: string, from: string, to: string) => {
+      if (row.status !== from) throw Object.assign(new Error("stale"), { code: "stale_from_status" });
+      row.status = to;
+    }) as never);
+    sendTaskSpy.mockResolvedValue({
+      id: "task-1",
+      contextId: "ctx-1",
+      status: { state: "completed", message: { parts: [] } },
+      metadata: {},
+      history: [{ role: "agent", parts: [{ kind: "text", text: "done" }] }],
+    });
+    holdSpy.mockResolvedValue({ held: false, reason: "no-review" });
+    decisions.readLatestDecisionForRun.mockResolvedValue(null);
+  });
+
+  it("a decision parked by another resume after the first read refuses the send and puts the run back", async () => {
+    decisions.readLatestDecisionForRun
+      .mockResolvedValueOnce({ id: "d1", runId: "run-1", status: "released" })
+      .mockResolvedValueOnce({ id: "d2", runId: "run-1", status: "parked" });
+    const answer = (await resume()) as { error?: string; code?: string };
+    expect(answer.code).toBe("publish_decision_required");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"]]);
+    expect(row.status).toBe("pending_approval");
+  });
+
+  it("a released decision that is still the newest: the run is claimed, the hold read again, and the send goes from running", async () => {
+    decisions.readLatestDecisionForRun.mockResolvedValue({ id: "d1", runId: "run-1", status: "released" });
+    await resume();
+    expect(moves()[0]).toEqual(["run-1", "pending_approval", "running"]);
+    expect(decisions.readLatestDecisionForRun).toHaveBeenCalledTimes(2);
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("a run with no decision is not claimed: the hold is read once and the road goes on as on main", async () => {
+    await resume();
+    expect(claimed(moves())).toBe(false);
+    expect(decisions.readLatestDecisionForRun).toHaveBeenCalledTimes(1);
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+});

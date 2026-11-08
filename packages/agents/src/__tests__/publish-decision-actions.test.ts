@@ -243,8 +243,8 @@ describe("the 24-hour expiry (A9)", () => {
   it("closes a due decision expired with no person and stops its waiting run", async () => {
     decisions.listDueParked.mockResolvedValue([decision()]);
     const summary = await sweepExpiredPublishDecisions({ authorityFor, now: NOW });
-    expect(decisions.listDueParked).toHaveBeenCalledWith(50, NOW);
-    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "expired", actor: null });
+    expect(decisions.listDueParked).toHaveBeenCalledWith(50, NOW, undefined);
+    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "expired", actor: null, newestOnly: true });
     expect(storeMock.transitionRunStatus).toHaveBeenCalledTimes(1);
     const [runId, from, to, , authority] = storeMock.transitionRunStatus.mock.calls[0] as unknown as [
       string, string, string, unknown, { orgId: string },
@@ -302,7 +302,7 @@ describe("the 24-hour expiry (A9)", () => {
     decisions.listDueParked.mockResolvedValue([decision()]);
     storeMock.transitionRunStatus.mockRejectedValueOnce(stale());
     const summary = await sweepExpiredPublishDecisions({ authorityFor, now: NOW });
-    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "expired", actor: null });
+    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "expired", actor: null, newestOnly: true });
     expect(summary).toEqual({ due: 1, expired: 1, runEnded: 0, lost: 0, failed: 0, stopped: 0 });
   });
 
@@ -495,7 +495,7 @@ describe("the expiry stops a run whose hold wrote its row but not its move (find
     decisions.listDueParked.mockResolvedValue([decision()]);
     storeMock.readAgentRunById.mockResolvedValue(run("running"));
     const summary = await sweepExpiredPublishDecisions({ authorityFor, now: NOW });
-    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "expired", actor: null });
+    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "expired", actor: null, newestOnly: true });
     const [runId, from, to] = storeMock.transitionRunStatus.mock.calls[0] as unknown as [string, string, string];
     expect([runId, from, to]).toEqual(["run-1", "running", "stopped"]);
     expect(summary).toEqual({ due: 1, expired: 1, runEnded: 0, lost: 0, failed: 0, stopped: 0 });
@@ -548,10 +548,12 @@ describe("the expiry reads every page of unmade stops (finding 4)", () => {
     expect((storeMock.transitionRunStatus.mock.calls.at(-1) as unknown[])[0]).toBe("run-3");
   });
 
-  it("the pass trusts the store's newest-decision list and reads no decision of its own", async () => {
-    decisions.listSettledWithWaitingRun.mockResolvedValue([decision({ status: "declined" })]);
+  it("the pass reads the run's newest decision again before the stop, and stops when it is still the listed one", async () => {
+    const row = decision({ status: "declined" });
+    decisions.listSettledWithWaitingRun.mockResolvedValue([row]);
+    decisions.readLatestDecisionForRun.mockResolvedValue(row);
     await sweepExpiredPublishDecisions({ authorityFor, now: NOW });
-    expect(decisions.readLatestDecisionForRun).not.toHaveBeenCalled();
+    expect(decisions.readLatestDecisionForRun).toHaveBeenCalledWith("run-1");
     expect(storeMock.transitionRunStatus).toHaveBeenCalledTimes(1);
   });
 });
@@ -610,5 +612,126 @@ describe("the claim a pending_approval road makes before its send (finding 3)", 
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The fold of pre-review 3 (cinatra#4150 PR 3a, findings 1-6).
+// ---------------------------------------------------------------------------
+
+describe("the hold read tells a road whether the run met a publish gate before (finding 1)", () => {
+  it("answers true for a released decision and false for none, so a road claims the run of any template with a decision", async () => {
+    decisions.readLatestDecisionForRun.mockResolvedValueOnce(decision({ status: "released" }));
+    expect(await assertNoOpenPublishDecision("run-1")).toBe(true);
+    decisions.readLatestDecisionForRun.mockResolvedValueOnce(null);
+    expect(await assertNoOpenPublishDecision("run-1")).toBe(false);
+  });
+});
+
+describe("the expiry decides only a run's newest decision, in the same write (finding 2)", () => {
+  const NOW = new Date("2026-11-02T00:00:01Z");
+  const authorityFor = vi.fn((orgId: string) => ({ orgId, can: () => true }));
+
+  it("a due row a newer decision superseded closes run_ended, and its run is not moved", async () => {
+    decisions.listDueParked.mockResolvedValue([decision()]);
+    storeMock.readAgentRunById.mockResolvedValue(run("running"));
+    decisions.decide
+      .mockResolvedValueOnce({ outcome: "lost", currentStatus: "parked" })
+      .mockImplementationOnce(async (id: string) => ({ outcome: "won", decision: decision({ id, status: "run_ended" }) }));
+    const summary = await sweepExpiredPublishDecisions({ authorityFor, now: NOW });
+    expect(decisions.decide.mock.calls).toEqual([
+      ["d1", { from: "parked", to: "expired", actor: null, newestOnly: true }],
+      ["d1", { from: "parked", to: "run_ended", actor: null }],
+    ]);
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    expect(summary).toEqual({ due: 1, expired: 0, runEnded: 1, lost: 0, failed: 0, stopped: 0 });
+  });
+
+  it("an unmade stop whose run met a newer decision after the list was read is not stopped", async () => {
+    decisions.listSettledWithWaitingRun.mockResolvedValue([decision({ status: "declined" })]);
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ id: "d2", status: "parked" }));
+    const summary = await sweepExpiredPublishDecisions({ authorityFor, now: NOW });
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    expect(summary.stopped).toBe(0);
+  });
+});
+
+describe("the expiry reads every page of due decisions (finding 5)", () => {
+  const NOW = new Date("2026-11-02T00:00:01Z");
+  const authorityFor = vi.fn((orgId: string) => ({ orgId, can: () => true }));
+
+  it("a full page of due rows whose writes keep failing does not hide the next page", async () => {
+    const rows = ["d1", "d2", "d3"].map((id, i) => decision({ id, runId: `run-${i + 1}` }));
+    decisions.listDueParked.mockResolvedValueOnce(rows.slice(0, 2)).mockResolvedValueOnce(rows.slice(2));
+    storeMock.readAgentRunById.mockImplementation(async (runId: string) => ({ ...run(), id: runId }));
+    decisions.decide
+      .mockRejectedValueOnce(new Error("db down"))
+      .mockRejectedValueOnce(new Error("db down"))
+      .mockImplementationOnce(async (id: string) => ({ outcome: "won", decision: decision({ id, status: "expired" }) }));
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      expect(await sweepExpiredPublishDecisions({ authorityFor, now: NOW, limit: 2 })).toEqual({
+        due: 3, expired: 1, runEnded: 0, lost: 0, failed: 2, stopped: 0,
+      });
+    } finally {
+      error.mockRestore();
+    }
+    expect(decisions.listDueParked.mock.calls).toEqual([[2, NOW, undefined], [2, NOW, "d2"]]);
+    expect((storeMock.transitionRunStatus.mock.calls[0] as unknown[])[0]).toBe("run-3");
+  });
+});
+
+describe("Do not publish answers every fault after the person check with a fixed text (finding 3)", () => {
+  it.each([
+    ["the run read", () => storeMock.readAgentRunById.mockRejectedValueOnce(new Error("select failed: run-1 user-a"))],
+    ["the template read", () => storeMock.readAgentTemplateById.mockRejectedValueOnce(new Error("select failed: tmpl-1"))],
+    ["the co-owner read", () => storeMock.readRunCoOwners.mockRejectedValueOnce(new Error("select failed: run-1"))],
+    ["the membership read", () => resolveOrgRoleForUser.mockRejectedValueOnce(new Error("select failed: org-1 user-a"))],
+    ["a fault that is not an Error", () => storeMock.readAgentRunById.mockRejectedValueOnce("run-1 user-a")],
+  ])("a fault of %s names no id, person or store error", async (_label, arrange) => {
+    arrange();
+    const err = (await declinePublishDecision({ runId: "run-1", actorContext: ACTOR })
+      .catch((e: unknown) => e)) as Error & { code?: string };
+    expect(err.code).toBe("publish_decision_unavailable");
+    expect(err.message).not.toMatch(/failed|run-1|tmpl-1|org-1|user-a/);
+    expect("cause" in err).toBe(false);
+    expect(decisions.decide).not.toHaveBeenCalled();
+  });
+
+  it("an access refusal still passes unchanged", async () => {
+    const refusal = new AuthzError({ statusCode: 403, reason: "forbidden" });
+    enforceRunAccess.mockRejectedValueOnce(refusal);
+    expect(await declinePublishDecision({ runId: "run-1", actorContext: ACTOR }).catch((e: unknown) => e)).toBe(refusal);
+  });
+});
+
+describe("a put-back that fails after a read error (finding 4)", () => {
+  const AUTH = { orgId: "org-1" } as never;
+
+  it("the read error propagates and the run stays running, where no resume road claims it", async () => {
+    decisions.readLatestDecisionForRun.mockRejectedValueOnce(new Error("db down"));
+    storeMock.transitionRunStatus.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("db down"));
+    await expect(claimRunBeforeSend("run-1", true, AUTH)).rejects.toThrow("db down");
+    expect(storeMock.transitionRunStatus.mock.calls.map((c) => (c as unknown[]).slice(1, 3))).toEqual([
+      ["pending_approval", "running"], ["running", "pending_approval"],
+    ]);
+  });
+});
+
+describe("the write registry tells the truth about the decline's authority (finding 6)", () => {
+  const registry = readFileSync(join(__dirname, "..", "..", "..", "..", "src/lib/org-write/write-registry.ts"), "utf8");
+  const src = readFileSync(join(__dirname, "..", "publish-decision-actions.ts"), "utf8");
+
+  it("the registry names the member-session authority the decline derives, and claims no 'no authority of its own'", () => {
+    const at = registry.indexOf('"packages/agents/src/publish-decision-actions.ts"');
+    expect(at).toBeGreaterThan(-1);
+    const note = registry.slice(registry.lastIndexOf("cinatra#4150", at), at);
+    expect(note).not.toMatch(/mints no authority of its own/);
+    expect(note).toMatch(/sessionAuthorityFromResolvedRole/);
+  });
+
+  it("the decline's one authority is the decider's member session in the run's org", () => {
+    expect(src.match(/sessionAuthorityFromResolvedRole\(/g)).toHaveLength(1);
+    expect(src).toContain("sessionAuthorityFromResolvedRole(run.orgId, role)");
   });
 });

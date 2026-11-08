@@ -224,6 +224,14 @@ describe("the stopped-orchestrator resume and a publish decision", () => {
     expect(moves().at(-1)).toEqual(["run-1", "queued", "stopped"]);
   });
 
+  it("a refusal whose put-back to stopped also fails still answers the refusal; the run stays queued and is sent nothing (pre-review 3 finding 4)", async () => {
+    decisions.readLatestDecisionForRun.mockResolvedValue({ id: "d1", runId: "run-1", status: "declined" });
+    storeMock.transitionRunStatus.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("db down: run-1"));
+    expect(await resumeStoppedOrchestratorAction("run-1")).toEqual({ ok: false, error: "publish_decision_required" });
+    expect(moves()).toEqual([["run-1", "stopped", "queued"], ["run-1", "queued", "stopped"]]);
+    expect(sendTask).not.toHaveBeenCalled();
+  });
+
   it("the hold is read after the claim (pre-review 2 finding 3)", async () => {
     await resumeStoppedOrchestratorAction("run-1");
     expect(storeMock.transitionRunStatus.mock.invocationCallOrder[0]!).toBeLessThan(

@@ -264,4 +264,33 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     }
     expect(paged).toEqual(ids);
   });
+  it("cinatra#4150 PR 3a, pre-review 3: an expiry write with newestOnly loses to a newer decision of the same run", async () => {
+    const input = park();
+    const older = (await store.insertParkedDecision(input)).decision;
+    const newer = (await store.insertParkedDecision({ ...input, gateTaskId: "task-2" })).decision;
+    await admin.query(`UPDATE ${TABLE} SET created_at = now() - interval '1 hour' WHERE id = $1`, [older.id]);
+    expect(await store.decide(older.id, { from: "parked", to: "expired", actor: null, newestOnly: true })).toEqual({
+      outcome: "lost",
+      currentStatus: "parked",
+    });
+    expect((await store.decide(newer.id, { from: "parked", to: "expired", actor: null, newestOnly: true })).outcome).toBe("won");
+    expect((await store.decide(older.id, { from: "parked", to: "run_ended", actor: null })).outcome).toBe("won");
+  });
+
+  it("cinatra#4150 PR 3a, pre-review 3: the due list is read page by page after the last row, each row once, oldest first", async () => {
+    for (const hours of [5, 6, 7]) {
+      const { decision } = await store.insertParkedDecision(park());
+      await admin.query(`UPDATE ${TABLE} SET expires_at = now() - ($2 || ' hours')::interval WHERE id = $1`, [decision.id, String(hours)]);
+    }
+    const all = (await store.listDueParked(1000)).map((r) => r.id);
+    expect(all.length).toBeGreaterThanOrEqual(3);
+    const paged: string[] = [];
+    for (let after: string | undefined = undefined, n = 0; n < 200; n += 1) {
+      const page = (await store.listDueParked(2, undefined, after)).map((r) => r.id);
+      paged.push(...page);
+      if (page.length < 2) break;
+      after = page[page.length - 1];
+    }
+    expect(paged).toEqual(all);
+  });
 });

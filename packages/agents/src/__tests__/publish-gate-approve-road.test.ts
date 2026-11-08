@@ -166,3 +166,33 @@ describe("the generic approve road and a publish decision", () => {
     expect(sendTask).toHaveBeenCalledTimes(1);
   });
 });
+
+// cinatra#4150 PR 3a, pre-review 3 finding 3: when the claim cannot be released after a publish-hold refusal or an
+// unreadable hold, the warning names no run, no task and no raw error.
+describe("the generic approve road's release warning after a publish-hold refusal", () => {
+  it.each([
+    ["a refusal", () => decisions.readLatestDecisionForRun.mockResolvedValue({ id: "d1", runId: RUN.id, status: "parked" }), "publish_decision_required"],
+    ["an unreadable hold", () => decisions.readLatestDecisionForRun.mockRejectedValue(new Error(`db down: ${RUN.id}`)), "publish_decision_unavailable"],
+  ])("%s whose claim release fails logs no run id, task id or raw error", async (_label, arrange, code) => {
+    arrange();
+    const claim = storeMock.transitionRunStatus.getMockImplementation()!;
+    storeMock.transitionRunStatus
+      .mockImplementationOnce(claim)
+      .mockImplementationOnce(async () => {
+        throw new Error(`release failed: ${RUN.id}`);
+      });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await expect(approveReviewTaskInternal("wayflow-task-4150", "reader-a")).rejects.toMatchObject({ code });
+      const ours = warn.mock.calls.filter((c) => /could not release the gate claim|\[publish-decision\]/.test(String(c[0])));
+      expect(ours.some((c) => String(c[0]).includes("could not release the gate claim"))).toBe(true);
+      for (const c of ours) {
+        expect(c.every((a) => typeof a === "string")).toBe(true);
+        expect(c.join(" ")).not.toMatch(/run-4150|task-4150|release failed|db down/);
+      }
+    } finally {
+      warn.mockRestore();
+    }
+    expect(sendTask).not.toHaveBeenCalled();
+  });
+});
