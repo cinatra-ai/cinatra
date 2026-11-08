@@ -2,8 +2,9 @@
  * cinatra#4424 — the reviewer's findings reach a repair run only through the
  * input its producer declares.
  *
- * 1. No module except the CMS repair bridge itself names
- *    `projectCmsRepairInputParams`: the dispatch drain no longer asks the
+ * 1. No code file except the CMS repair bridge itself and this test (the walk
+ *    skips its own file) names `projectCmsRepairInputParams`: the dispatch
+ *    drain no longer asks the
  *    bridge for `task` and `instructions` text, for any base. Source text, not
  *    behaviour: the invariant is the absence of a caller (the same technique as
  *    `blog-repair-new-run-road-structural.test.ts`).
