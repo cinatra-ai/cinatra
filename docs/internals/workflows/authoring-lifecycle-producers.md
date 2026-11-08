@@ -84,6 +84,7 @@ JSON-as-text — the same compiled-config column shape `trigger_mode` /
 | `requestedSkips` | array of checkpoint names (`recommendation`, `review`, `verification`) | Checkpoints the producer asks to have skipped. A **request**, honoured only under the conditions in §3. |
 | `producedTypes` | array of strings | The artifact types the producer declares it creates. The lattice does not branch on it. |
 | `repairCapable` | boolean | Whether this producer implements the typed repair round-trip (§4). |
+| `repairFindingsInput` | object `{ "input": "<name>" }` | The input of this producer's template that a dispatched repair run gets the reviewer's findings in (§4). `input` is an identifier, and is never `lifecycleRepairRequest` or a property name of `Object.prototype`. |
 
 **Reading is tolerant.** Neither reader throws on a malformed value: an absent,
 empty or non-object value yields no declarations, and the producer gets pure core
@@ -165,6 +166,55 @@ total mapping over the capability flag and an optional organization repair route
 
 Nothing silently drops: every `changes_requested` lands on one of the three, and
 the capability flag is the only one of the two inputs a producer controls.
+
+### Where a repair run gets the findings
+
+A `producer_repair` repair is delivered as a new run of the producing template,
+with the producing run's own inputs plus the typed `lifecycleRepairRequest`.
+A producer whose template reads the reviewer's findings from one of its own
+inputs declares that input:
+
+```json
+{
+  "repairCapable": true,
+  "repairFindingsInput": { "input": "instructions" }
+}
+```
+
+The dispatch drain then puts a text built from the findings
+(`buildRepairFindingsText`, `src/lib/lifecycle/lifecycle-policy.ts`)
+into exactly that input, whatever the kind of the reviewed base. The text is the
+same for every producer: a lead line, then one numbered line per finding with the
+field it names (a line break inside a message or a field becomes one space, and a
+stored finding without a message text is left out).
+
+The drain reads the declaration when it creates the repair run, but the worker
+reads the template's declaration again when the run starts. A re-import in between can change
+the declaration: a crash between creation and enqueue, after which a re-drain
+enqueues the existing run as it is, or a run that waits in the queue. So the run
+start (`bindRepairFindingsInputAtStart`, `packages/agents/src/execution.ts`) reads the
+declaration of the template it loaded and, when the run does not already carry the
+text in that input, writes it there. It does this right after the fire-time scope
+recheck (a refused or unverified run gets no write) and before the headless skill
+recommendation, the version pinning and the run's input gates read the inputs.
+The run is failed at start, with a fixed message that names the input, when the
+write fails (the message keeps no text of the storage error, and the run does not
+retry) or when the template declares a findings input and the run carries no
+`lifecycleRepairRequest` object. The write merges one key over the inputs the
+run start reads, so it removes no other input: an input that an earlier
+declaration named keeps the text, also when the template now declares no findings
+input. It is not a compare-and-set: a second writer of the same run's inputs at
+the same moment, such as a duplicate delivery of the job, can overwrite it.
+
+A producer that declares nothing gets its own inputs plus the
+typed request, and, until the application's pins name CMS agent releases that
+declare the input, also the CMS bridge's `task` and `instructions` when its base
+is a captured CMS snapshot (`projectCmsRepairInputParams`,
+`packages/agents/src/lifecycle-repair-cms-production-bridge.ts`). Neither the drain
+nor the run start checks that the declared name is an input of the template: a
+name the template does not read adds an input that no prompt reads, and a name the
+template types as `object` fails the run at start with a message that names the
+input.
 
 ### The round-trip a repair-capable producer must satisfy
 
