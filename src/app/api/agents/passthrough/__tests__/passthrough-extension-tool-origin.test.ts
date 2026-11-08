@@ -126,7 +126,7 @@ const KEY_BEFORE = process.env.CINATRA_CONTEXT_ATTEST_KEY;
 const UNDECLARED = "extension_tool: `name` must be one of the calling extension's own declared tools";
 const origin = (code: string) => `extension_tool: the calling step reaches no tool of this origin (${code})`;
 
-type Doc = Record<string, any>;
+type Doc = Record<string, unknown>;
 
 function childNodeBody(fixedName = CHILD_TOOL): Doc {
   return {
