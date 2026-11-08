@@ -2,8 +2,9 @@
  * cinatra#2046 — the DRUPAL producer half of the repair round trip, proven
  * against a real Postgres with the producing template carrying the REAL
  * `@cinatra-ai/drupal-agent` identity and the lifecycle declaration the release
- * this PR's pin advances to actually ships
- * (`cinatra.lifecycle: { repairCapable: true }`).
+ * the committed dev lock pins actually ships (`cinatra.lifecycle:
+ * { repairCapable: true, repairFindingsInput: { input: "instructions" } }` since
+ * cinatra#4424).
  *
  * WHY THIS SUITE EXISTS — the negative proof it answers. Driven live on
  * `origin/main` `5091632cd`, a reviewer's changes-request on a DRUPAL CMS
@@ -25,8 +26,8 @@
  * (`lifecycle-repair-cms-production-bridge.ts`), so re-driving those rungs under
  * a Drupal name would duplicate a proof rather than add one. What is genuinely
  * Drupal-specific — and what the pin is FOR — is everything up to and including
- * the dispatch, plus the CMS task text naming the Drupal node the repair must
- * re-drive. That is exactly this suite's scope.
+ * the dispatch, plus the reviewer's findings in the input the release declares
+ * (`instructions`, cinatra#4424). That is exactly this suite's scope.
  *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided.
  */
@@ -40,6 +41,7 @@ import { producedEventId, type ArtifactProducedEvent } from "@/lib/lifecycle/lif
 import { autoReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
 
+import { REPAIR_FINDINGS_TEXT_LEAD } from "@/lib/lifecycle/lifecycle-policy";
 import { agentLifecycleDeclarationSchema } from "../verdaccio/package-contract";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
@@ -65,7 +67,7 @@ const DRUPAL_AGENT_PACKAGE = "@cinatra-ai/drupal-agent";
  * parses it through the real manifest contract AND cross-checks it byte-for-byte
  * against the REAL pinned manifest wherever that tree IS on disk.
  */
-const DRUPAL_AGENT_LIFECYCLE = { repairCapable: true } as const;
+const DRUPAL_AGENT_LIFECYCLE = { repairCapable: true, repairFindingsInput: { input: "instructions" } } as const;
 
 /** The pre-pin state this PR corrects: drupal-agent 0.1.2 declared no
  * `cinatra.lifecycle` block, so `installAgentFromPackage` compiled NOTHING onto
@@ -330,7 +332,7 @@ describe.skipIf(!HAS_DB)("cinatra#2046 — the Drupal repair producer (pin activ
   });
 
   it("PINNED: with the release's declared lifecycle block, the SAME drive routes producer_repair and dispatches to the drupal-agent template", async () => {
-    const { cr, resourceId } = await driveDrupalChangesRequest(DRUPAL_AGENT_LIFECYCLE);
+    const { cr } = await driveDrupalChangesRequest(DRUPAL_AGENT_LIFECYCLE);
     if (!cr.ok) throw new Error("unreachable");
 
     // THE PIN'S WHOLE POINT: the route flips off the manifest declaration alone.
@@ -356,14 +358,18 @@ describe.skipIf(!HAS_DB)("cinatra#2046 — the Drupal repair producer (pin activ
     expect(run.template_id).toBe(drupalTemplateId);
     expect(run.source_type).toBe("lifecycle_repair");
 
-    // The dispatched run carries the delivered request, and the CMS task text
-    // names the DRUPAL node the repair has to re-drive.
+    // The dispatched run carries the delivered request, and the reviewer's
+    // findings in the input the release declares (cinatra#4424), not a CMS task.
     const inputParams = JSON.parse(run.input_params) as {
       task?: string;
+      instructions?: string;
       lifecycleRepairRequest?: unknown;
     };
     expect(inputParams.lifecycleRepairRequest).toBeDefined();
-    expect(inputParams.task).toContain(resourceId);
+    expect(inputParams.instructions).toBe(
+      `${REPAIR_FINDINGS_TEXT_LEAD}\n\n1. tighten the node title and fix the body's second paragraph`,
+    );
+    expect(inputParams.task).toBeUndefined();
 
     const row = await repairRow(cr.repairId);
     expect(row!.route).toBe("producer_repair");
