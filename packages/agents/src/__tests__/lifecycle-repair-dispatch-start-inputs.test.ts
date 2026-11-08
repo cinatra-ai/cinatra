@@ -12,8 +12,6 @@ const ports = vi.hoisted(() => ({
   updateResults: [] as unknown[][],
   writes: [] as { values: Record<string, unknown>; condition?: unknown }[],
   created: [] as { input: Record<string, unknown>; authority: unknown }[],
-  target: null as Record<string, unknown> | null,
-  targetReads: 0,
   role: "member" as "member" | undefined,
   createFailure: null as Error | null,
   queued: vi.fn(),
@@ -93,14 +91,6 @@ vi.mock("@/lib/better-auth-db", () => ({
 vi.mock("@/lib/agent-run-enqueue", () => ({
   enqueueAgentRun: ports.queued,
 }));
-vi.mock("../cms-snapshot-readback-store", () => ({
-  readCmsSnapshotTargetByArtifact: async () => { ports.targetReads += 1; return ports.target; },
-  readCmsSnapshotTargetByArtifactAndRevision: () => { throw new Error("Unexpected completion read"); },
-}));
-vi.mock("../cms-repaired-capture-port", () => ({
-  attemptRepairedCapture: () => { throw new Error("No picture operation is allowed in this test"); },
-  leavesUncapturedSide: () => { throw new Error("No completion operation is allowed in this test"); },
-}));
 
 import { dispatchPendingProducerRepairs, repairRunId } from "../lifecycle-repair-dispatch-store";
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
@@ -125,16 +115,12 @@ function arrangeProducer(input: unknown, overrides: Record<string, unknown> = {}
   ports.updateResults = [[{ id: row.id }]];
   return row;
 }
-function cmsTarget(resourceType = "page") {
-  return { artifactId: "artifact-base", snapshotRevisionId: "revision-base", connectorInstance: "cms-site",
-    resourceType, resourceId: "content-42", scopeManifest: { paths: ["title"] } };
-}
 function inputParams() {
   return ports.created[0].input.inputParams as Record<string, unknown>;
 }
 beforeEach(() => {
   ports.reads = []; ports.readConditions = []; ports.updateResults = []; ports.writes = []; ports.created = [];
-  ports.target = null; ports.targetReads = 0; ports.role = "member"; ports.createFailure = null;
+  ports.role = "member"; ports.createFailure = null;
   vi.clearAllMocks();
 });
 
@@ -152,26 +138,22 @@ describe("generic producing-run input inheritance", () => {
     expect(query.params).toEqual(["producer-original", "repair-org"]);
   });
 
-  it("overlays the current findings on the declared input without dropping inherited root inputs, for a captured CMS base", async () => {
+  it("overlays the current findings on the declared input without dropping inherited root inputs, for a CMS producer", async () => {
     arrangeProducer({ instanceId: "site-42", contentId: "content-42", instructions: "Original input", task: "Own task", lifecycleRepairRequest: { repairId: "old" } },
       {}, JSON.stringify({ repairCapable: true, repairFindingsInput: { input: "instructions" } }));
-    ports.target = cmsTarget();
     await dispatchPendingProducerRepairs();
     expect(inputParams()).toMatchObject({ instanceId: "site-42", contentId: "content-42", task: "Own task",
       lifecycleRepairRequest: { repairId: "repair-current", findings: [currentFinding] } });
     expect(inputParams().instructions).toContain(currentFinding.message);
     expect(inputParams().instructions).not.toContain("Original input");
-    expect(ports.targetReads).toBe(0);
   });
 
-  it("adds no CMS task or instructions for a producer that declares nothing, on a captured CMS base", async () => {
+  it("adds no CMS task or instructions for a producer that declares nothing", async () => {
     const original = { instanceId: "site-42", contentId: "content-42", instructions: "Original input" };
     arrangeProducer(original, {}, JSON.stringify({ repairCapable: true }));
-    ports.target = cmsTarget();
     await dispatchPendingProducerRepairs();
     expect(inputParams()).toEqual({ ...original,
       lifecycleRepairRequest: expect.objectContaining({ repairId: "repair-current", findings: [currentFinding] }) });
-    expect(ports.targetReads).toBe(0);
   });
 
   it("does not read inputs or launch a child from a producing run in another organization", async () => {
@@ -190,7 +172,6 @@ describe("input data cannot become repair authorization", () => {
     const parentCeiling = { marker: "original-parent-ceiling" };
     arrangeProducer({ instructions: "Old", orgId: "forged-org", runBy: "forged-user", authority: "forged-authority", parentRunId: "forged-parent" },
       { oboCeiling: JSON.stringify(parentCeiling) });
-    ports.target = cmsTarget();
     await dispatchPendingProducerRepairs();
     const created = ports.created[0];
     expect(created.input).toMatchObject({ orgId: "repair-org", runBy: "human-origin", parentRunId: "producer-original",
