@@ -21,6 +21,8 @@ import "server-only";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, ensurePostgresSchema, postgresSchema } from "@/lib/database";
 import { logFailure, logFixedLine } from "@/lib/failure-log";
+import { buildObjectContentProjection } from "@/lib/artifacts/artifact-content-channel";
+import type { ArtifactContentProjection } from "@cinatra-ai/sdk-extensions/artifact-content-channel";
 
 /** The `artifact_audit.action` of a page capture's facts record. */
 export const PAGE_CAPTURE_FACTS_AUDIT_ACTION = "page_capture_facts";
@@ -285,4 +287,43 @@ function decodeFactsRows(
     return { status: "unreadable" };
   }
   return { status: "recorded", facts };
+}
+
+/**
+ * The content a display receives for ONE file revision (cinatra#4223): the
+ * content channel's own answer, or, only when that answer is `unsupported-form`
+ * (a picture) and the revision carries a page capture's facts record of the
+ * artifact's type, the object snapshot of exactly those three facts, naming the
+ * revision (`buildObjectContentProjection`).
+ *
+ * The facts are the record filed with the revision, never the row's object
+ * data: object data is live and caller-writable, so its field names say nothing
+ * about who wrote them, and a pinned revision must keep its own facts. No
+ * record, a record of another type and an unreadable record keep the channel's
+ * answer; every other answer passes through without a read.
+ */
+export function projectRecordedPageCaptureFacts(
+  input: {
+    orgId: string;
+    artifactId: string;
+    representationRevisionId: string | null;
+    objectType: string;
+    fileProjection: ArtifactContentProjection;
+  },
+  deps: PageCaptureFactsReadDeps = {},
+): ArtifactContentProjection {
+  const { fileProjection, representationRevisionId } = input;
+  if (fileProjection.kind !== "none" || fileProjection.reason !== "unsupported-form") return fileProjection;
+  if (!representationRevisionId) return fileProjection;
+  const recorded = readPageCaptureFactsForRevision(
+    { orgId: input.orgId, artifactId: input.artifactId, representationRevisionId, objectType: input.objectType },
+    deps,
+  );
+  if (recorded.status !== "recorded") return fileProjection;
+  return buildObjectContentProjection({
+    objectType: input.objectType,
+    data: recorded.facts,
+    source: "snapshot",
+    representationRevisionId,
+  });
 }
