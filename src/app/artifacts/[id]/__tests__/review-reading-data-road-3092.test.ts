@@ -93,7 +93,9 @@ import {
 
 import { bindArtifactReviewPorts } from "../review-target-prepare";
 import { loadReviewGateSurface } from "../review-gate-ports";
+import { readDashboardLiveAddress } from "../artifact-type-read-gate";
 import {
+  cookieIslandReviewSurfaceRoads,
   firstPartyReviewSurfaceRoads,
   islandReviewSurfaceRoads,
   type ArtifactContentBuilder,
@@ -277,6 +279,24 @@ describe("(d) the roads", () => {
       reviewTaskId: "review-1",
     } as Parameters<typeof islandReviewSurfaceRoads>[0]);
     expect(roads.dataRoad).toBeUndefined();
+    // cinatra#4311: the island's reader holds no session cookie, so its roads
+    // name no dashboard live address reader.
+    expect(roads.dashboardLiveAddress).toBeUndefined();
+  });
+
+  // cinatra#4311: the dashboard read gate is named by the cookie surfaces that
+  // choose it, never loaded by the shared preparation path, which the locked
+  // routes reach.
+  it("a first-party surface and the island's cookie branch carry the dashboard gate's live address reader", () => {
+    expect(typeof readDashboardLiveAddress).toBe("function");
+    expect(firstPartyReviewSurfaceRoads().dashboardLiveAddress).toBe(readDashboardLiveAddress);
+    expect(cookieIslandReviewSurfaceRoads().dashboardLiveAddress).toBe(readDashboardLiveAddress);
+  });
+
+  it("the shared preparation path loads no dashboard read gate of its own", () => {
+    const source = readFileSync(path.join(__dirname, "..", "review-target-prepare.ts"), "utf8");
+    expect(source).not.toMatch(/import\(\s*["']\.\/artifact-type-read-gate["']\s*\)/);
+    expect(source).not.toMatch(/^import\s+\{[^}]*\}\s+from\s+["']\.\/artifact-type-read-gate["']/m);
   });
 });
 
@@ -322,12 +342,12 @@ describe("(e) the surface loader sets the reading from the gate", () => {
     );
   }
 
-  async function load(): Promise<ArtifactRendererProps[]> {
+  async function load(extraRoads: Record<string, unknown> = {}): Promise<ArtifactRendererProps[]> {
     const surface = await loadReviewGateSurface({
       runId: RUN,
       reviewTaskId: TASK,
       actorCtx: { actor: { actorType: "human", userId: "u" } as never, orgId: ORG },
-      roads: { buildContent: stubContent, dataRoad: SESSION_ROAD } as never,
+      roads: { buildContent: stubContent, dataRoad: SESSION_ROAD, ...extraRoads } as never,
     });
     expect(surface.kind === "ready" || surface.kind === "settled").toBe(true);
     const targets = (
@@ -358,6 +378,20 @@ describe("(e) the surface loader sets the reading from the gate", () => {
     const [text, image] = await load();
     expect(text.review).toEqual({ reading: "continued", openLive: LIVE });
     expect(image.review).toEqual({ reading: "continued", openLive: null });
+  });
+
+  // cinatra#4311: the loader hands every target the live address reader the
+  // surface named, and the binder draws its answer.
+  it("a gate resolved with approve reads each target's live address through the reader its surface named", async () => {
+    wireGate("resolved", "approve");
+    const reader = vi.fn(async (artifact: { artifactId: string }) =>
+      artifact.artifactId === "art_image" ? { liveAddress: "/teams/t-1/dashboards/d-1" } : null,
+    );
+    const [text, image] = await load({ dashboardLiveAddress: reader });
+    expect(reader).toHaveBeenCalledTimes(2);
+    expect(text.review).toEqual({ reading: "continued", openLive: LIVE });
+    expect(image.artifact.sourceUrl).toBe("/teams/t-1/dashboards/d-1");
+    expect(image.review).toEqual({ reading: "continued", openLive: "/teams/t-1/dashboards/d-1" });
   });
 
   // No reading means no review stands, and a display then offers the live link.
@@ -459,7 +493,7 @@ describe("(h) a dashboard target's live address is its canonical path (cinatra#4
   it("the continued reading hands a dashboard the canonical path as its record address and its live navigation", async () => {
     admit();
     const [props] = await buildCensus(
-      { reading: "continued", dataRoad: SESSION_ROAD } as Partial<BinderCtx>,
+      { reading: "continued", dataRoad: SESSION_ROAD, dashboardLiveAddress: readDashboardLiveAddress } as Partial<BinderCtx>,
       ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION,
       [DASHBOARD_TARGET],
     );
@@ -475,6 +509,7 @@ describe("(h) a dashboard target's live address is its canonical path (cinatra#4
       actor,
       buildContent: stubContent,
       reading: "pending",
+      dashboardLiveAddress: readDashboardLiveAddress,
     } as BinderCtx);
     const decidedAt = "2026-10-01T12:00:00.000Z";
     const props = await buildProps({
@@ -492,7 +527,7 @@ describe("(h) a dashboard target's live address is its canonical path (cinatra#4
   it("the pending reading never asks the dashboard gate and carries no address", async () => {
     admit();
     const [props] = await buildCensus(
-      { reading: "pending", dataRoad: SESSION_ROAD } as Partial<BinderCtx>,
+      { reading: "pending", dataRoad: SESSION_ROAD, dashboardLiveAddress: readDashboardLiveAddress } as Partial<BinderCtx>,
       ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION,
       [DASHBOARD_TARGET],
     );
@@ -508,10 +543,22 @@ describe("(h) a dashboard target's live address is its canonical path (cinatra#4
   ])("a dashboard whose gate %s gets no address, and its card is still built", async (_label, arrange) => {
     arrange();
     const [props] = await buildCensus(
+      { reading: "continued", dataRoad: SESSION_ROAD, dashboardLiveAddress: readDashboardLiveAddress } as Partial<BinderCtx>,
+      ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION,
+      [DASHBOARD_TARGET],
+    );
+    expect(props.artifact.sourceUrl).toBeNull();
+    expect(props.review).toEqual({ reading: "continued", openLive: null });
+  });
+
+  it("a binder handed no live address reader asks no dashboard gate, even in the continued reading", async () => {
+    admit();
+    const [props] = await buildCensus(
       { reading: "continued", dataRoad: SESSION_ROAD } as Partial<BinderCtx>,
       ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION,
       [DASHBOARD_TARGET],
     );
+    expect(resolver).not.toHaveBeenCalled();
     expect(props.artifact.sourceUrl).toBeNull();
     expect(props.review).toEqual({ reading: "continued", openLive: null });
   });
@@ -533,7 +580,7 @@ describe("(h) a dashboard target's live address is its canonical path (cinatra#4
   it("a connector row is unchanged and never asks the dashboard gate", async () => {
     admit();
     const [props] = await buildCensus(
-      { reading: "continued", dataRoad: SESSION_ROAD } as Partial<BinderCtx>,
+      { reading: "continued", dataRoad: SESSION_ROAD, dashboardLiveAddress: readDashboardLiveAddress } as Partial<BinderCtx>,
       ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION,
       [CENSUS[0]],
     );

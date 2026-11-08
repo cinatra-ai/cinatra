@@ -163,6 +163,8 @@ export async function beginReviewTargets(args: {
     buildContent: args.roads?.buildContent,
     // cinatra#4311: the data road this surface named, if any.
     dataRoad: args.roads?.dataRoad,
+    // cinatra#4311: the dashboard read gate this surface named, if any.
+    dashboardLiveAddress: args.roads?.dashboardLiveAddress,
     // cinatra#3092: the review's reading, handed to every target alike.
     reading: args.reading,
   });
