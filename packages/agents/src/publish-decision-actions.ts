@@ -17,6 +17,7 @@ import {
   listSettledWithWaitingRun,
   readLatestDecisionForRun,
   readOpenDecisionForRun,
+  type PublishDecisionRow,
   type PublishDecisionStatus,
 } from "./publish-decision-store";
 import {
@@ -53,10 +54,12 @@ const isStale = (err: unknown): boolean =>
   (err as { code?: unknown } | null)?.code === "stale_from_status";
 const nameOf = (err: unknown): string => (err instanceof Error ? err.name : "error");
 
-/** Refuses a resume when the run's newest decision exists and is not `released`. A read error propagates. */
-export async function assertNoOpenPublishDecision(runId: string): Promise<void> {
+/** Refuses a resume when the run's newest decision exists and is not `released`. A read error propagates. Answers
+ *  whether the run has a (released) decision: such a run met a publish gate, so it can meet one again. */
+export async function assertNoOpenPublishDecision(runId: string): Promise<boolean> {
   const latest = await readLatestDecisionForRun(runId);
   if (latest && latest.status !== "released") throw new PublishDecisionRequiredError();
+  return latest !== null;
 }
 
 const HOLD_UNREADABLE = "Resume failed: the publish hold could not be checked.";
@@ -68,6 +71,10 @@ export function publishHoldAnswer(err: unknown): { error: string; code?: string 
   return { error: HOLD_UNREADABLE };
 }
 
+/** A refusal or an unreadable hold, as publishHoldFault answers them. */
+export const isPublishHoldFault = (err: unknown): boolean =>
+  isPublishDecisionRequired(err) || (err as { code?: unknown } | null)?.code === PUBLISH_DECISION_UNAVAILABLE;
+
 /** The fault the generic approve and the stopped-orchestrator resume throw for a hold they could not check: the refusal
  *  unchanged, any other fault one fixed text (publish_decision_unavailable) with no id, value or store error. */
 export function publishHoldFault(err: unknown): unknown {
@@ -78,11 +85,13 @@ export function publishHoldFault(err: unknown): unknown {
 
 /**
  * A5 for the two roads that resume from pending_approval and keep the run there while they send (agent_run_resume and
- * the artifact-review delivery). On a template that lists publishing steps the road claims the run (pending_approval ->
- * running) right before it sends, then reads the hold again: a decision parked by another resume after the road's first
- * read refuses the send. A refusal or a read error puts the run back and propagates. Answers the status the road hands to
- * handleWayflowTaskState, or null when another road holds the run. A send that fails after the claim leaves the run
- * running, as the generic approve does (cinatra#3423): the runtime may have taken the message.
+ * the artifact-review delivery). `publishes`: the template lists publishing steps, or the run has a decision (a verified
+ * publish-gate claim holds a run whatever the list says, so a run that met one can meet another). Then the road claims
+ * the run (pending_approval -> running) right before it sends and reads the hold again: a decision parked by another
+ * resume after the road's first read refuses the send. A refusal or a read error tries to put the run back and
+ * propagates; when that move fails too, the run stays running, where no resume road claims it. Answers the status the
+ * road hands to handleWayflowTaskState, or null when another road holds the run. A send that fails after the claim
+ * leaves the run running, as the generic approve does (cinatra#3423): the runtime may have taken the message.
  */
 export async function claimRunBeforeSend(runId: string, publishes: boolean, authority: OrgWriteAuthority): Promise<AgentRunStatus | null> {
   if (!publishes) return "pending_approval";
@@ -134,9 +143,10 @@ type HeldRunStatus = Extract<AgentRunStatus, "pending_approval" | "running">;
 /** The stored status (plain text) as a held status, or null for any other status or none: no other text reaches a move. */
 const heldStatusOf = (status: string | undefined): HeldRunStatus | null =>
   status === "pending_approval" || status === "running" ? status : null;
-/** The store's own refusals name no id or value; any other fault becomes one fixed text (no id, note or query value). */
+/** An access refusal and the store's own refusals name no id or value; any other fault becomes one fixed text (no id,
+ *  note or query value). */
 const STORE_CODES = new Set(["invalid-input", "invalid-transition", "malformed-row", "not-found", "conflict"]);
-const opaque = (err: unknown): unknown => STORE_CODES.has((err as { code?: unknown } | null)?.code as string) ? err
+const opaque = (err: unknown): unknown => err instanceof AuthzError || STORE_CODES.has((err as { code?: unknown } | null)?.code as string) ? err
   : Object.assign(new Error("The publish decision could not be read or written."), { code: PUBLISH_DECISION_UNAVAILABLE });
 
 /**
@@ -210,8 +220,8 @@ export type PublishDecisionAnswer =
  * acting for a person is refused). Authority: run.execute and run.approveHitl on the run, then membership of the run's
  * org, each for that person. Then ONE decision write (parked -> declined, with that person and the optional note), then
  * the run moves pending_approval -> stopped. It never sends anything to the run's context. A late answer is reported as
- * publish_decision_not_open with the decision's current status. A fault after the authority check surfaces as
- * publish_decision_unavailable with a fixed text.
+ * publish_decision_not_open with the decision's current status. Every fault after the person check, a read of the
+ * authority check included, surfaces as publish_decision_unavailable with a fixed text; access and store refusals pass.
  */
 export async function declinePublishDecision(input: {
   runId: string;
@@ -224,25 +234,24 @@ export async function declinePublishDecision(input: {
     throw new AuthzError({ statusCode: 403, reason: "forbidden", message: "Only a person can decide a publish." });
   }
   const deciderId = actor.userId;
-  const run = await readAgentRunById(input.runId);
-  const { enforceRunAccess, resolveEffectivePolicy } = await import("./auth-policy");
-  const template = run ? await readAgentTemplateById(run.templateId) : null;
-  const coOwners = run ? await readRunCoOwners(run.id) : [];
-  const runForCheck = run
-    ? { id: run.id, runBy: run.runBy, orgId: run.orgId, effectivePolicy: resolveEffectivePolicy(run, template),
-      coOwnerUserIds: coOwners.map((r) => r.userId) }
-    : null;
-  await enforceRunAccess(runForCheck, actor, "execute", input.roleHints);
-  await enforceRunAccess(runForCheck, actor, "approveHitl", input.roleHints);
-  if (!run) throw new AuthzError({ statusCode: 404, reason: "hidden" });
-  const { resolveOrgRoleForUser } = await import("@/lib/auth-session");
-  const role = await resolveOrgRoleForUser(run.orgId, deciderId);
-  if (role === undefined) {
-    throw new AuthzError({ statusCode: 403, reason: "forbidden", message: "Deciding a publish needs membership of the run's organization." });
-  }
-  const authority = sessionAuthorityFromResolvedRole(run.orgId, role);
-
   try {
+    const run = await readAgentRunById(input.runId);
+    const { enforceRunAccess, resolveEffectivePolicy } = await import("./auth-policy");
+    const template = run ? await readAgentTemplateById(run.templateId) : null;
+    const coOwners = run ? await readRunCoOwners(run.id) : [];
+    const runForCheck = run
+      ? { id: run.id, runBy: run.runBy, orgId: run.orgId, effectivePolicy: resolveEffectivePolicy(run, template),
+        coOwnerUserIds: coOwners.map((r) => r.userId) }
+      : null;
+    await enforceRunAccess(runForCheck, actor, "execute", input.roleHints);
+    await enforceRunAccess(runForCheck, actor, "approveHitl", input.roleHints);
+    if (!run) throw new AuthzError({ statusCode: 404, reason: "hidden" });
+    const { resolveOrgRoleForUser } = await import("@/lib/auth-session");
+    const role = await resolveOrgRoleForUser(run.orgId, deciderId);
+    if (role === undefined) {
+      throw new AuthzError({ statusCode: 403, reason: "forbidden", message: "Deciding a publish needs membership of the run's organization." });
+    }
+    const authority = sessionAuthorityFromResolvedRole(run.orgId, role);
     const open = await readOpenDecisionForRun(run.id);
     if (!open) {
       const latest = await readLatestDecisionForRun(run.id);
@@ -268,12 +277,14 @@ export interface PublishExpirySweepSummary {
 }
 
 /**
- * The 24-hour expiry. A due open decision closes with no person: `expired` when its run is held (pending_approval, or
- * running when a hold wrote its row but not its move), and the run then moves from that status to stopped; else
- * `run_ended`. Then it reads, page by page to the end, every held run whose newest decision is declined or expired (a fault
- * or a crash between the decision write and the run move) and moves it to stopped; a run whose stop faults is counted
- * failed and tried again next pass. No row resumes a run; no feature fence is read. `authorityFor` is the caller's
- * dispatch authority for the run's org; `now` is the clock the tests inject.
+ * The 24-hour expiry. It reads the due open decisions page by page to the end, so a row that keeps failing never hides the
+ * next. A due row closes with no person: `expired` when its run is held (pending_approval, or running when a hold wrote
+ * its row but not its move) and the row is still the run's newest decision, checked in the same write, and the run then
+ * moves from that status to stopped; else `run_ended`. Then it reads, page by page to the end, every held run whose newest
+ * decision is declined or expired (a fault or a crash between the decision write and the run move), reads that run's
+ * newest decision again, and moves the run to stopped while the listed row is still the newest. A row whose write or stop
+ * faults is counted failed and tried again next pass. No row resumes a run; no feature fence is read. `authorityFor` is
+ * the caller's dispatch authority for the run's org; `now` is the clock the tests inject.
  */
 export async function sweepExpiredPublishDecisions(opts: {
   authorityFor: (orgId: string) => OrgWriteAuthority;
@@ -286,38 +297,39 @@ export async function sweepExpiredPublishDecisions(opts: {
     console.error(`[publish-decision-expiry] a decision was not closed this pass: ${nameOf(err)}`);
   };
   const limit = opts.limit ?? EXPIRY_PAGE;
-  for (const row of await listDueParked(limit, opts.now)) {
+  const eachRow = async (read: (after?: string) => Promise<PublishDecisionRow[]>, visit: (row: PublishDecisionRow) => Promise<void>) => {
+    for (let after: string | undefined = undefined; ;) {
+      const page = await read(after);
+      for (const row of page) await visit(row).catch(fault);
+      if (page.length < limit) return;
+      after = page[page.length - 1]!.id;
+    }
+  };
+  await eachRow((after) => listDueParked(limit, opts.now, after), async (row) => {
     summary.due += 1;
-    try {
-      const run = await readAgentRunById(row.runId);
-      const held = heldStatusOf(run?.status);
-      const answer = await decide(row.id, { from: "parked", to: held ? "expired" : "run_ended", actor: null });
-      if (answer.outcome === "lost") summary.lost += 1;
-      else if (!held || !run) summary.runEnded += 1;
-      else {
-        await stopHeldRun(run.id, held, opts.authorityFor(run.orgId)); // a stale answer: the run left meanwhile
-        summary.expired += 1;
-      }
-    } catch (err) {
-      fault(err);
+    const run = await readAgentRunById(row.runId);
+    const held = heldStatusOf(run?.status);
+    let answer = await decide(row.id, held ? { from: "parked", to: "expired", actor: null, newestOnly: true } : { from: "parked", to: "run_ended", actor: null });
+    let ended = !held;
+    if (held && answer.outcome === "lost" && answer.currentStatus === "parked") { // a newer decision governs the run
+      answer = await decide(row.id, { from: "parked", to: "run_ended", actor: null });
+      ended = true;
     }
-  }
-  // The store lists only the newest decision of each run, so an old row never takes a place on a page.
-  let after: string | undefined = undefined;
-  for (;;) {
-    const page = await listSettledWithWaitingRun(limit, after);
-    for (const row of page) {
-      try {
-        const run = await readAgentRunById(row.runId);
-        const held = heldStatusOf(run?.status);
-        if (!run || !held) continue; // the run moved meanwhile
-        if (await stopHeldRun(run.id, held, opts.authorityFor(run.orgId))) summary.stopped += 1;
-      } catch (err) {
-        fault(err);
-      }
+    if (answer.outcome === "lost") summary.lost += 1;
+    else if (ended || !held || !run) summary.runEnded += 1;
+    else {
+      await stopHeldRun(run.id, held, opts.authorityFor(run.orgId)); // a stale answer: the run left meanwhile
+      summary.expired += 1;
     }
-    if (page.length < limit) break;
-    after = page[page.length - 1]!.id;
-  }
+  });
+  // The store lists only the newest decision of each run; a newer one written since is read again before the stop.
+  await eachRow((after) => listSettledWithWaitingRun(limit, after), async (row) => {
+    const run = await readAgentRunById(row.runId);
+    const held = heldStatusOf(run?.status);
+    if (!run || !held) return; // the run moved meanwhile
+    const newest = await readLatestDecisionForRun(run.id);
+    if (newest && newest.id !== row.id) return; // a newer decision governs the run
+    if (await stopHeldRun(run.id, held, opts.authorityFor(run.orgId))) summary.stopped += 1;
+  });
   return summary;
 }

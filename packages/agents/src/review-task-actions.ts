@@ -1,7 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { GateNotPendingError, RunTransitionError } from "./run-status";
-import { assertNoOpenPublishDecision, publishHoldFault } from "./publish-decision-actions";
+import { assertNoOpenPublishDecision, isPublishHoldFault, publishHoldFault } from "./publish-decision-actions";
 
 import { sql, type SQL } from "drizzle-orm";
 
@@ -1091,7 +1091,7 @@ export async function approveReviewTaskInternal(
     let capturedPromptId: string | null = null;
     try {
       // cinatra#4150: a run held at a publish decision goes on only by that decision. Read
-      // after the claim, so a decision parked before it is seen; a refusal releases the claim. A hold
+      // after the claim, so a decision parked before it is seen; a refusal tries to release the claim. A hold
       // that cannot be read answers one fixed text that names no run and carries no store error.
       await assertNoOpenPublishDecision(run.id).catch((err: unknown) => { throw publishHoldFault(err); });
       // UNCONDITIONAL write. Empty `message` is allowed (column NOT NULL accepts
@@ -1230,11 +1230,9 @@ export async function approveReviewTaskInternal(
           undefined,
           resumeAuthority,
         ).catch((releaseError) => {
-          console.warn(
-            "[approveReviewTaskInternal] could not release the gate claim",
-            { runId: run.id, taskId },
-            releaseError,
-          );
+          // cinatra#4150: after a publish-hold refusal the warning names no run, no task and no raw error.
+          if (isPublishHoldFault(e)) console.warn("[approveReviewTaskInternal] could not release the gate claim", releaseError instanceof Error ? releaseError.name : "error");
+          else console.warn("[approveReviewTaskInternal] could not release the gate claim", { runId: run.id, taskId }, releaseError);
         });
       }
       throw e;

@@ -278,8 +278,9 @@ export async function resumeStoppedOrchestratorAction(
 
   // cinatra#4150: a run that waits or ended at a publish decision is never resumed here:
   // its context still holds the publish gate. Read after the claim above, so a decision
-  // written before it is seen; a refusal puts the run back to stopped. A hold that cannot be
-  // read throws one fixed text that names no run and carries no store error.
+  // written before it is seen; a refusal tries to put the run back to stopped (if that move
+  // fails too, the run stays queued and nothing is sent). A hold that cannot be read throws
+  // one fixed text that names no run and carries no store error.
   try {
     await assertNoOpenPublishDecision(run.id);
   } catch (err) {

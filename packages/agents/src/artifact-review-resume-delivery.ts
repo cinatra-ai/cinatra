@@ -352,8 +352,9 @@ export async function deliverArtifactReviewResumeIntent(
     console.warn(`[artifact-review-resume] a resume was refused: ${why}`);
     return "retryable";
   };
+  let decided: boolean; // the run has a decision: it met a publish gate, whatever the template lists
   try {
-    await publishHold.assertNoOpenPublishDecision(run.id);
+    decided = await publishHold.assertNoOpenPublishDecision(run.id);
   } catch (err) {
     return refused(err);
   }
@@ -382,11 +383,12 @@ export async function deliverArtifactReviewResumeIntent(
   // scope — it grounds the transition on the system dispatch mint, scoped to the
   // run's org (the human approval already happened when the intent row was written).
   const authority = mintAgentRunExecutionAuthority(run.orgId);
-  // cinatra#4150 (A5): on a publishing template the run is claimed here and the hold is
-  // read again before the send; the intent stays pending when it is refused or held.
+  // cinatra#4150 (A5): on a publishing template, or for a run with a decision, the run is
+  // claimed here and the hold is read again before the send; the intent stays pending when
+  // it is refused or held.
   let sendFrom: Awaited<ReturnType<typeof publishHold.claimRunBeforeSend>>;
   try {
-    sendFrom = await publishHold.claimRunBeforeSend(run.id, (template.publishingSteps?.length ?? 0) > 0, authority);
+    sendFrom = await publishHold.claimRunBeforeSend(run.id, (template.publishingSteps?.length ?? 0) > 0 || decided, authority);
   } catch (err) {
     return refused(err);
   }

@@ -2148,7 +2148,7 @@ async function handleAgentBuilderRunResume(
       }
       // cinatra#4150: a run held at a publish decision goes on only by that decision.
       const publishHold = await import("../publish-decision-actions");
-      try { await publishHold.assertNoOpenPublishDecision(run.id); } catch (e) { return publishHold.publishHoldAnswer(e); }
+      let decided: boolean; try { decided = await publishHold.assertNoOpenPublishDecision(run.id); } catch (e) { return publishHold.publishHoldAnswer(e); }
       const { createExternalA2AClient } = await import("@cinatra-ai/a2a");
       const client = await createExternalA2AClient({
         agentUrl: wayflowUrl,
@@ -2210,8 +2210,8 @@ async function handleAgentBuilderRunResume(
       // `resumeText` reaches the gate's InputMessageNode VERBATIM.
       const { mintResumeRunTokenMetadata } = await import("../wayflow-run-token-carrier");
       const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
-      // cinatra#4150 (A5): on a publishing template the run is claimed here and the hold is read again before the send.
-      const sendFrom = await publishHold.claimRunBeforeSend(run.id, (template.publishingSteps?.length ?? 0) > 0, resumeAuthority).catch((e: unknown) => publishHold.publishHoldAnswer(e));
+      // cinatra#4150 (A5): on a publishing template, or for a run with a decision (it met a publish gate, whatever the list says), the run is claimed and the hold read again before the send.
+      const sendFrom = await publishHold.claimRunBeforeSend(run.id, (template.publishingSteps?.length ?? 0) > 0 || decided, resumeAuthority).catch((e: unknown) => publishHold.publishHoldAnswer(e));
       if (typeof sendFrom !== "string") return sendFrom ?? { error: "Run is not pending approval: another resume holds it." };
       // Send into the existing context so fasta2a routes to the paused conversation.
       const task = await client.sendTask({
