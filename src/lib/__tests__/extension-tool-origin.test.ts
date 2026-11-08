@@ -43,7 +43,20 @@ const STEP = "child-embed_step";
 const SECRET_TEXT = "/fixture/secret/store/path install-secret-id digest-secret";
 const FIXED_SENTENCE = /^extension_tool: the calling step reaches no tool of this origin \([a-z-]+\)$/;
 
-type Doc = Record<string, any>;
+type Doc = Record<string, unknown>;
+
+/** The fixture object at `path` under `doc`; a step that is not an object fails the test at once. */
+function at(doc: unknown, ...path: string[]): Doc {
+  let cur: unknown = doc;
+  for (const key of path) {
+    if (typeof cur !== "object" || cur === null) throw new Error(`fixture: no object at ${path.join(".")}`);
+    cur = (cur as Doc)[key];
+  }
+  if (typeof cur !== "object" || cur === null || Array.isArray(cur)) {
+    throw new Error(`fixture: no object at ${path.join(".")}`);
+  }
+  return cur as Doc;
+}
 
 /** The node the child authored in its own flow, without its id. */
 function childNodeBody(): Doc {
@@ -198,8 +211,8 @@ async function refusedWith(p: Promise<unknown>, code: string) {
 
 /** The parent world with the step's parent flow edited. */
 const withParentFlow = (edit: (d: Doc) => void) =>
-  makeWorld((w) => edit(w.flows[PARENT_ROOT] as Doc));
-const subflowOf = (d: Doc) => d.$referenced_components["child-subflow"];
+  makeWorld((w) => edit(at(w.flows[PARENT_ROOT])));
+const subflowOf = (d: Doc) => at(d, "$referenced_components", "child-subflow");
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -229,20 +242,20 @@ describe("the run package's own road", () => {
 
   it("keeps a step of an unlabelled internal subflow, and an inline subflow, on the parent road", async () => {
     const world = withParentFlow((d) => {
-      delete d.$referenced_components.child_flow.metadata;
+      delete at(d, "$referenced_components", "child_flow").metadata;
     });
     expect(await resolve(world)).toEqual({ kind: "parent" });
     const inline = withParentFlow((d) => {
-      d.$referenced_components.child_flow.subflow = subflowOf(d);
-      delete d.$referenced_components["child-subflow"];
-      delete d.$referenced_components.child_flow.metadata;
+      at(d, "$referenced_components", "child_flow").subflow = subflowOf(d);
+      delete at(d, "$referenced_components")["child-subflow"];
+      delete at(d, "$referenced_components", "child_flow").metadata;
     });
     expect(await resolve(inline)).toEqual({ kind: "parent" });
   });
 
   it("keeps a step under a FlowNode labelled with the parent's own package on the parent road", async () => {
     const world = withParentFlow((d) => {
-      d.$referenced_components.child_flow.metadata.cinatra.packageName = PARENT;
+      at(d, "$referenced_components", "child_flow", "metadata", "cinatra").packageName = PARENT;
     });
     expect(await resolve(world)).toEqual({ kind: "parent" });
   });
@@ -276,9 +289,9 @@ describe("the embedded child's road", () => {
 
   it("matches the node whatever the key order", async () => {
     const world = makeWorld((w) => {
-      const node = (w.flows[CHILD_ROOT] as Doc).$referenced_components.embed_step;
-      const reversed = Object.fromEntries(Object.entries(node).reverse());
-      (w.flows[CHILD_ROOT] as Doc).$referenced_components.embed_step = reversed;
+      const refs = at(w.flows[CHILD_ROOT], "$referenced_components");
+      const reversed = Object.fromEntries(Object.entries(at(refs, "embed_step")).reverse());
+      refs.embed_step = reversed;
     });
     expect((await resolve(world)).kind).toBe("child");
   });
@@ -374,6 +387,16 @@ describe("the parent installation", () => {
     await refusedWith(resolve(makeWorld((w) => { w.anchors[CHILD_ID] = null; })), "child-not-materialized");
   });
 
+  it("refuses a child install row with no version, or a blank one, and reads no child flow", async () => {
+    for (const version of [undefined, "", "  "]) {
+      const world = makeWorld((w) => {
+        w.rows[CHILD_ID] = installRow({ id: CHILD_ID, packageName: CHILD, version, isDefault: false });
+      });
+      await refusedWith(resolve(world), "edge-target-unversioned");
+      expect(world.deps.readFlowDocument).not.toHaveBeenCalledWith(CHILD_ROOT);
+    }
+  });
+
   it("answers a read that throws as origin-unreadable, and logs no text of it", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     const world = makeWorld((w) => {
@@ -414,7 +437,7 @@ describe("the definition and reference graph", () => {
   it("refuses a FlowNode whose reference is missing, empty or names no definition", async () => {
     for (const subflow of [undefined, {}, { $component_ref: "" }, { $component_ref: "nowhere" }]) {
       await refusedWith(resolve(withParentFlow((d) => {
-        d.$referenced_components.child_flow.subflow = subflow;
+        at(d, "$referenced_components", "child_flow").subflow = subflow;
       })), "graph-bad-reference");
     }
   });
@@ -450,33 +473,33 @@ describe("the definition and reference graph", () => {
   it("refuses an empty, blank or non-string label; case is exact", async () => {
     for (const label of ["", "  ", 7, null]) {
       await refusedWith(resolve(withParentFlow((d) => {
-        d.$referenced_components.child_flow.metadata.cinatra.packageName = label;
+        at(d, "$referenced_components", "child_flow", "metadata", "cinatra").packageName = label;
       })), "graph-bad-label");
     }
     await refusedWith(resolve(withParentFlow((d) => {
-      d.$referenced_components.child_flow.metadata.cinatra.packageName = CHILD.toUpperCase();
+      at(d, "$referenced_components", "child_flow", "metadata", "cinatra").packageName = CHILD.toUpperCase();
     })), "not-a-dependency");
   });
 
   it("refuses a nested embedding", async () => {
     // A labelled FlowNode inside the embedded definition, the step one level deeper.
     await refusedWith(resolve(withParentFlow((d) => {
-      const sub = subflowOf(d);
-      const step = sub.$referenced_components[STEP];
-      delete sub.$referenced_components[STEP];
-      sub.$referenced_components.inner = { component_type: "FlowNode", id: "inner",
+      const sub = at(subflowOf(d), "$referenced_components");
+      const step = sub[STEP];
+      delete sub[STEP];
+      sub.inner = { component_type: "FlowNode", id: "inner",
         subflow: { $component_ref: "inner-def" }, metadata: { cinatra: { packageName: CHILD } } };
-      d.$referenced_components["inner-def"] = { component_type: "Flow", id: "inner-def",
+      at(d, "$referenced_components")["inner-def"] = { component_type: "Flow", id: "inner-def",
         $referenced_components: { [STEP]: step } };
     })), "nested-embedding");
     // A label higher up with an unlabelled definition between.
     await refusedWith(resolve(withParentFlow((d) => {
-      const sub = subflowOf(d);
-      const step = sub.$referenced_components[STEP];
-      delete sub.$referenced_components[STEP];
-      sub.$referenced_components.inner = { component_type: "FlowNode", id: "inner",
+      const sub = at(subflowOf(d), "$referenced_components");
+      const step = sub[STEP];
+      delete sub[STEP];
+      sub.inner = { component_type: "FlowNode", id: "inner",
         subflow: { $component_ref: "inner-def" } };
-      d.$referenced_components["inner-def"] = { component_type: "Flow", id: "inner-def",
+      at(d, "$referenced_components")["inner-def"] = { component_type: "Flow", id: "inner-def",
         $referenced_components: { [STEP]: step } };
     })), "nested-embedding");
   });
@@ -501,43 +524,43 @@ describe("the dependency and the provenance", () => {
 
   it("refuses a step that is not the child's node apart from its id", async () => {
     await refusedWith(resolve(withParentFlow((d) => {
-      subflowOf(d).$referenced_components[STEP].data.input.input.ref = "{{ other }}";
+      at(subflowOf(d), "$referenced_components", STEP, "data", "input", "input").ref = "{{ other }}";
     })), "provenance-mismatch");
     // The same id as the child's node: no prefix.
     await refusedWith(resolve(withParentFlow((d) => {
-      const sub = subflowOf(d);
-      sub.$referenced_components.embed_step = { ...sub.$referenced_components[STEP], id: "embed_step" };
-      delete sub.$referenced_components[STEP];
+      const sub = at(subflowOf(d), "$referenced_components");
+      sub.embed_step = { ...at(sub, STEP), id: "embed_step" };
+      delete sub[STEP];
     }), { run: { verifiedStepId: "embed_step" } }), "provenance-mismatch");
   });
 
   it("refuses a step two child nodes could have authored", async () => {
     await refusedWith(resolve(makeWorld((w) => {
-      (w.flows[CHILD_ROOT] as Doc).$referenced_components.step = { ...childNodeBody(), id: "step" };
+      at(w.flows[CHILD_ROOT], "$referenced_components").step = { ...childNodeBody(), id: "step" };
     })), "provenance-ambiguous");
   });
 
   it("refuses a child node that sits in an embedding of the child's own flow", async () => {
     await refusedWith(resolve(makeWorld((w) => {
-      const doc = w.flows[CHILD_ROOT] as Doc;
-      const node = doc.$referenced_components.embed_step;
-      delete doc.$referenced_components.embed_step;
-      doc.$referenced_components.grand = { component_type: "FlowNode", id: "grand",
+      const refs = at(w.flows[CHILD_ROOT], "$referenced_components");
+      const node = refs.embed_step;
+      delete refs.embed_step;
+      refs.grand = { component_type: "FlowNode", id: "grand",
         subflow: { $component_ref: "grand-def" }, metadata: { cinatra: { packageName: "@fixture-scope/grand" } } };
-      doc.$referenced_components["grand-def"] = { component_type: "Flow", id: "grand-def",
+      refs["grand-def"] = { component_type: "Flow", id: "grand-def",
         $referenced_components: { embed_step: node } };
     })), "provenance-nested");
   });
 
   it("refuses a node whose tool name is not fixed", async () => {
     for (const edit of [
-      (n: Doc) => { n.data.input.name = "{{ tool }}"; },
-      (n: Doc) => { n.data.input.name = ""; },
-      (n: Doc) => { n.data.tool = "extension_data"; },
+      (n: Doc) => { at(n, "data", "input").name = "{{ tool }}"; },
+      (n: Doc) => { at(n, "data", "input").name = ""; },
+      (n: Doc) => { at(n, "data").tool = "extension_data"; },
     ]) {
       await refusedWith(resolve(makeWorld((w) => {
-        edit((w.flows[CHILD_ROOT] as Doc).$referenced_components.embed_step);
-        edit((w.flows[PARENT_ROOT] as Doc).$referenced_components["child-subflow"].$referenced_components[STEP]);
+        edit(at(w.flows[CHILD_ROOT], "$referenced_components", "embed_step"));
+        edit(at(w.flows[PARENT_ROOT], "$referenced_components", "child-subflow", "$referenced_components", STEP));
       })), "provenance-unnamed");
     }
   });
@@ -550,7 +573,7 @@ describe("the dependency and the provenance", () => {
   it("refuses an unreadable or malformed child flow with the child's own codes", async () => {
     await refusedWith(resolve(makeWorld((w) => { w.flows[CHILD_ROOT] = "not json"; })), "child-flow-invalid");
     await refusedWith(resolve(makeWorld((w) => {
-      (w.flows[CHILD_ROOT] as Doc).$referenced_components.dup = { component_type: "Flow", id: "child-root" };
+      at(w.flows[CHILD_ROOT], "$referenced_components").dup = { component_type: "Flow", id: "child-root" };
     })), "child-graph-duplicate-definition");
   });
 });
