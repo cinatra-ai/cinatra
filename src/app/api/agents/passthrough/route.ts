@@ -144,6 +144,11 @@ const ALLOWED_TOOLS = new Set([
   // and never a wildcard. The folder is host-side and is never mounted into a
   // sandbox, so these three are the only way an agent reaches it directly.
   ...RUN_FOLDER_TOOLS,
+  // THE RUN'S DASHBOARD WRITE (cinatra#3092). The one dashboards tool admitted
+  // here, dispatched by ./run-dashboard-create as the PROVEN run's owner, with
+  // that run's id and the run org-write authority the MCP transport mints for
+  // an agent-run frame. Update, publish and archive are not admitted.
+  "dashboards_create",
 ]);
 
 // Tools that must execute inside an mcpRequestContextStorage frame carrying the
@@ -690,6 +695,17 @@ export async function POST(req: Request): Promise<Response> {
           { error: outcome.error, reason: outcome.reason },
           { status: 400 },
         );
+      }
+      result = outcome.result;
+    } else if (tool === "dashboards_create") {
+      // cinatra#3092: written as the run PROVEN above (binding.runId), never a
+      // run the body names; refused unless the run holds a live attempt.
+      const { runDashboardCreate } = await import("./run-dashboard-create");
+      const outcome = await withActorContext(alsActorContext, () =>
+        runDashboardCreate({ provenRunId: binding.runId, run, input }),
+      );
+      if (!outcome.ok) {
+        return NextResponse.json({ error: outcome.error }, { status: outcome.status });
       }
       result = outcome.result;
     } else if (EXTENSION_SCOPED_TOOLS.has(tool)) {
