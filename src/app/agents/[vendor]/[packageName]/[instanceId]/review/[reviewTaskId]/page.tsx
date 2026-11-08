@@ -53,11 +53,8 @@ import {
   loadReviewGateSurface,
 } from "@/app/artifacts/[id]/review-gate-ports";
 import { firstPartyReviewSurfaceRoads } from "@/app/artifacts/[id]/review-surface-roads";
-import type {
-  ReviewDisposition,
-  SuggestionDecisionPartition,
-} from "@/lib/artifacts/artifact-review-decision";
-import type { ReviewSubmitOutcome } from "@/lib/artifacts/review-surface-model";
+import type { SuggestionDecisionPartition } from "@/lib/artifacts/artifact-review-decision";
+import type { ReviewFloorSubmission, ReviewSubmitOutcome } from "@/lib/artifacts/review-surface-model";
 
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
@@ -362,9 +359,10 @@ export default async function AgentRunReviewPage({
   // window (both route through the same server helper; the prompt window is the
   // Comment path — the changes-request channel — not a fourth decision).
   async function submitAction(input: {
-    disposition: ReviewDisposition;
+    disposition: ReviewFloorSubmission;
     comment: string | null;
     suggestionDecisions?: SuggestionDecisionPartition | null;
+    regeneratePrompt?: string | null;
   }): Promise<ReviewSubmitOutcome> {
     "use server";
     // The per-item SUGGESTION partition (cinatra#2572, epic #2564 S6c) rides the
@@ -384,6 +382,7 @@ export default async function AgentRunReviewPage({
       input.comment,
       undefined,
       input.suggestionDecisions ?? null,
+      input.regeneratePrompt ?? null,
     );
   }
 

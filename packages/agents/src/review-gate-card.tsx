@@ -178,13 +178,16 @@ import {
   type ReviewTargetKey,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { Button } from "@/components/ui/button";
-import type {
-  ReviewDisposition,
-  SuggestionDecisionPartition,
-} from "@/lib/artifacts/artifact-review-decision";
-import { reviewGateHeaderTitle, reviewSettledOutcomeFromDisposition } from "@/lib/artifacts/review-surface-model";
+import type { SuggestionDecisionPartition } from "@/lib/artifacts/artifact-review-decision";
+import {
+  REGENERATE_MULTI_TARGET_REASON,
+  reviewGateHeaderTitle,
+  reviewSettledOutcomeFromDisposition,
+} from "@/lib/artifacts/review-surface-model";
 import type {
   ReviewDecisionPermissions,
+  ReviewFloorAction,
+  ReviewFloorSubmission,
   ReviewSettledOutcome,
   ReviewSubmitOutcome,
 } from "@/lib/artifacts/review-surface-model";
@@ -1043,8 +1046,9 @@ export function ReviewGateCard({
   // identity is stable across re-resolves.
   const refBoundSubmit = useMemo<SubmitReviewDecisionAction>(() => {
     return async (input: {
-      disposition: ReviewDisposition;
+      disposition: ReviewFloorSubmission;
       comment: string | null;
+      regeneratePrompt?: string | null;
       suggestionDecisions?: SuggestionDecisionPartition | null;
     }): Promise<ReviewSubmitOutcome> => {
       try {
@@ -1067,8 +1071,14 @@ export function ReviewGateCard({
           credentials: credential.credentials,
           body: JSON.stringify({
             ref: view.ref,
+            // The floor word as pressed (cinatra#3080) — the decide route
+            // resolves it, `approve` included as Continue's alias.
             disposition: input.disposition,
             comment: input.comment,
+            // The recorded prompt again, when a Regenerate carried one
+            // (cinatra#3080 item 5). Omitted entirely otherwise, so every other
+            // press posts the body it posted before the field existed.
+            ...(input.regeneratePrompt ? { regeneratePrompt: input.regeneratePrompt } : {}),
             // Omitted entirely when there is no partition, so a gate with no
             // chips posts the body it posted before this slice — and lands the
             // identity-version-1 fingerprint S6b pinned.
@@ -1242,13 +1252,13 @@ export function ReviewGateCard({
     dismissed = {};
     setMarkState({ ref: view.ref, identity: surfacedIdentity, dismissed, cleared: marksCleared });
   }
-  // The partition THIS surface would submit, per disposition (§VIII, cinatra#2852).
-  const suggestionDecisionsFor = (disposition: ReviewDisposition) =>
-    disposition === "reject"
-      ? rejectPartition(surfaced)
-      : disposition === "approve"
-        ? buildPartition(surfaced, dismissed)
-        : null;
+  // The partition THIS surface would submit, per floor action (§VIII,
+  // cinatra#2852, cinatra#3080). The marks ride the ONE decision that still
+  // decides the items under the gate — Continue. Regenerate settles the gate as
+  // superseded and Comment settles nothing, so neither carries them; the retired
+  // reject's "every surfaced suggestion not taken" partition went with it.
+  const suggestionDecisionsFor = (action: ReviewFloorAction) =>
+    action === "continue" ? buildPartition(surfaced, dismissed) : null;
 
   const frame = HOST_FRAME[host];
   // The server-minted island URL, when this answer carried one (cinatra#2754).
@@ -1450,7 +1460,7 @@ function renderState(args: {
   dismissed: Readonly<Record<string, true>>;
   marksCleared: boolean;
   onToggleMark: (id: string) => void;
-  suggestionDecisionsFor: (disposition: ReviewDisposition) => SuggestionDecisionPartition | null;
+  suggestionDecisionsFor: (action: ReviewFloorAction) => SuggestionDecisionPartition | null;
   focusBinding: ComposerFocusBinding;
 }): ReactElement | null {
   const {
@@ -1651,6 +1661,11 @@ function renderState(args: {
             permissions={permissions}
             submitAction={submit}
             recordedPrompt={recordedPrompt}
+            // ITEM 4 — A LEGACY GATE THAT STILL PINS MORE THAN ONE TARGET
+            // REFUSES REGENERATE, and says so before it is pressed. The sentence
+            // is the surface model's, the same one the decision operation
+            // refuses with.
+            regenerateRefusal={(targetHeaders?.length ?? 0) > 1 ? REGENERATE_MULTI_TARGET_REASON : null}
             suggestionDecisionsFor={suggestionDecisionsFor}
             suggestionSummary={
               state.canDecide && suggestions.length > 0
@@ -1856,30 +1871,6 @@ function buildPartition(
     else accepted.push(s.id);
   }
   return { accepted, dismissed: notTaken };
-}
-
-/**
- * The partition a REJECT carries: every surfaced suggestion recorded as NOT
- * TAKEN (§VIII, cinatra#2852).
- *
- * The shipped guard refused an immediate Reject while anything was accepted, and
- * with the old unmarked default that was survivable — nothing was accepted until
- * a reviewer pressed. Accepted-by-default makes the same guard refuse the very
- * first press of Reject, on a row the reviewer never touched, which is a control
- * that fails on press.
- *
- * So the rework is here, at the surface that knows what a reject MEANS for these
- * items: a reject tombstones every reviewed revision, so nothing can be applied
- * into them, and the truthful record of that is a dismissal for each surfaced
- * id — the reviewer looked at them and took none. The decision core's rule ("a
- * reject decision cannot accept suggestions") is untouched and still enforced
- * server-side; this simply never asks it for the impossible.
- */
-function rejectPartition(
-  surfaced: ReadonlyArray<LifecycleSuggestion>,
-): SuggestionDecisionPartition | null {
-  if (surfaced.length === 0) return null;
-  return { accepted: [], dismissed: surfaced.map((s) => s.id) };
 }
 
 /**

@@ -22,6 +22,8 @@ import {
   reviewProvenanceLabel,
   reviewRevisionMarker,
   REVIEW_DISPOSITIONS,
+  REGENERATE_BOUND_REACHED,
+  REGENERATE_NO_NOTE_INPUT,
 } from "../review-surface-model";
 import type { ReviewSettledOutcome } from "../review-surface-model";
 import { reviewTargetRowFacts } from "../review-target-row-facts";
@@ -92,13 +94,13 @@ describe("§V — permission copy + blocked copy", () => {
   it("no disabled reason when the reviewer may decide", () => {
     expect(reviewDecideDisabledReason({ canDecide: true, canComment: true })).toBeNull();
   });
-  it("a comment-only reviewer sees the terminal-needs-approve reason", () => {
+  it("a comment-only reviewer sees the terminal-needs-decision-access reason", () => {
     const reason = reviewDecideDisabledReason({ canDecide: false, canComment: true });
-    expect(reason).toMatch(/approve access/);
+    expect(reason).toMatch(/decision access/);
     expect(reason).toMatch(/Comment/);
   });
-  it("a reviewer with neither sees the no-approve-access reason", () => {
-    expect(reviewDecideDisabledReason({ canDecide: false, canComment: false })).toMatch(/approve access/);
+  it("a reviewer with neither sees the no-decision-access reason", () => {
+    expect(reviewDecideDisabledReason({ canDecide: false, canComment: false })).toMatch(/decision access/);
   });
   it("blocked copy covers every closed reason", () => {
     expect(reviewBlockedCopy("no-longer-pending").title).toMatch(/no longer open/);
@@ -108,8 +110,8 @@ describe("§V — permission copy + blocked copy", () => {
 });
 
 describe("§IV — the disposition set is exactly three (no 'request changes')", () => {
-  it("approve / reject / comment only", () => {
-    expect([...REVIEW_DISPOSITIONS].sort()).toEqual(["approve", "comment", "reject"]);
+  it("approve (Continue) / comment only - Reject is retired", () => {
+    expect([...REVIEW_DISPOSITIONS].sort()).toEqual(["approve", "comment"]);
   });
 });
 
@@ -261,6 +263,20 @@ describe("mapChangesRequestedToOutcome — lifecycle prompt-window path (§IV/§
   it("any other failure (invalid-request / idempotency-key-reuse / empty-feedback) is a retryable error", () => {
     for (const code of ["invalid-request", "idempotency-key-reuse", "empty-feedback"]) {
       expect(mapChangesRequestedToOutcome(fail(code))).toMatchObject({ kind: "error" });
+    }
+  });
+
+  // cinatra#3080 item 4: a Regenerate the store refused BEFORE any write (the
+  // producing step declares no Note input, or the lineage reached its repair bound). The
+  // gate is still pending, so it is NOT a block, and the person reads the
+  // store's own sentence verbatim, never the generic retry line.
+  it("a refused Regenerate (regenerate-unavailable) is an error carrying the store's sentence verbatim, never a block", () => {
+    for (const sentence of [REGENERATE_NO_NOTE_INPUT, REGENERATE_BOUND_REACHED]) {
+      expect(typeof sentence).toBe("string");
+      expect(sentence.length).toBeGreaterThan(0);
+      const outcome = mapChangesRequestedToOutcome({ ok: false, code: "regenerate-unavailable", error: sentence });
+      expect(outcome).toEqual({ kind: "error", message: sentence });
+      expect(outcome).not.toEqual({ kind: "error", message: "The change request could not be recorded." });
     }
   });
 });

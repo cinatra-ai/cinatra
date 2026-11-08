@@ -90,10 +90,13 @@ describe("the grant names the person, the message, the card and ONE control", ()
     // `save` joined it with the ARMED scheduler form (cinatra#2934, the
     // armed-trigger tab): it IS a button that card draws, and the plan puts it
     // on the ask road — "one road for the press and for the ask".
+    // AMENDED (cinatra#3080). The review card draws Comment · Regenerate ·
+    // Continue: `reject` left with the button that drew it, `regenerate` took its
+    // place, and `approve` stays the control id behind Continue.
     expect([...LENT_ACTION_CONTROLS]).toEqual([
       "comment",
       "approve",
-      "reject",
+      "regenerate",
       "submit",
       "confirm",
       "skip",

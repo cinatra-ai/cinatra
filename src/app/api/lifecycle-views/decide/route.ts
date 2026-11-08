@@ -105,11 +105,16 @@ const reviewRequestSchema = z
      *  not is the review shape, which is what it has always been. */
     kind: z.literal("artifact_review_gate").optional(),
     ref: z.string().min(1).max(LIFECYCLE_VIEW_REF_MAX_LENGTH),
-    // Continue keeps approve persistence; older callers retain the approve alias.
-    disposition: z.enum(["approve", "reject", "comment", "continue"]),
-    // The rationale (§IV) — optional on approve, expected on reject, and the
-    // substance of a comment. Bounded so a card cannot post an essay.
+    // The review floor (cinatra#3080): Comment, Regenerate and Continue. Continue
+    // keeps approve persistence; `approve` stays the compatibility alias and
+    // `reject` is answered by the one entry with the platform's sentence.
+    disposition: z.enum(["comment", "regenerate", "continue", "approve", "reject"]),
+    // The note (§VI) — optional on Continue, the words a Regenerate works from,
+    // and the substance of a comment. Bounded so a card cannot post an essay.
     comment: z.string().max(10_000).nullable().optional(),
+    // The recorded prompt a Regenerate sends back with the note (cinatra#3080
+    // item 5); every other action ignores it.
+    regeneratePrompt: z.string().max(10_000).nullable().optional(),
     // The reviewer's per-item SUGGESTION choices (cinatra#2571, epic #2564 S6b),
     // carried ON the one terminal decision — there is deliberately no per-item
     // endpoint (#2047 row 8). Bounded here on SHAPE only: which ids are legitimate
@@ -190,7 +195,7 @@ const requestSchema = z.union([reviewRequestSchema, scheduleRequestSchema]);
 const UNIFORM_REFUSAL = {
   kind: "not-permitted" as const,
   message:
-    "You do not have the run access this decision needs — a terminal decision requires approve access, a comment requires respond access.",
+    "You do not have the run access this decision needs — a terminal decision requires the run's decision access, a comment requires respond access.",
 };
 
 /** The `cwu_` proof header — the discriminant for the widget branch. */
@@ -326,6 +331,7 @@ export async function POST(request: Request): Promise<Response> {
     partition
       ? { accepted: partition.accepted ?? [], dismissed: partition.dismissed ?? [] }
       : null,
+    parsed.data.regeneratePrompt ?? null,
   );
 
   return Response.json({ outcome }, { headers: { "Cache-Control": "no-store" } });

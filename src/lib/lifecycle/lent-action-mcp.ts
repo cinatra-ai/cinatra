@@ -69,7 +69,7 @@
 // WORDS, read out of the spent row rather than supplied by the model. And the
 // MENU on the grant is now cut from those same words on the send path, before
 // any model reads anything: a control the person's own message never named is
-// not on it, so an induced call cannot reach Approve, Reject, a skills Confirm
+// not on it, so an induced call cannot reach Continue, a skills Confirm
 // or a schedule Confirm on a message that never named one. The two keys are
 // deliberately held apart: the person supplies the words, the assistant supplies
 // the reading, and one without the other presses nothing.
@@ -77,11 +77,11 @@
 // WHAT AN INDUCED CALL CAN STILL DO, stated exactly rather than rounded down
 // (convergence round 1, findings 1 and 3):
 //
-//   · file the person's own words as a comment on a review. That is NOT
-//     harmless — on an active single-target lifecycle review the card's own path
-//     files a comment as CHANGES REQUESTED and the gate resolves — but it is
-//     byte-for-byte what the review page's own box does with any typed sentence
-//     today, with no model in the path at all, and this slice does not widen it;
+//   · file the person's own words as a comment on a review, which decides
+//     nothing (cinatra#3080), or send them back as a Regenerate. A Regenerate is
+//     NOT harmless — the gate settles and the producing step runs again — but it
+//     is what the review page's own box did with any typed sentence before
+//     cinatra#3080, with no model in the path at all, and it is not widened here;
 //   · re-draw a schedule card's rows, which writes nothing and arms nothing;
 //   · confirm a different subset of the skills THIS card offered.
 //
@@ -304,10 +304,10 @@ export function reviewOutcomeSentence(
     case "decided": {
       const head =
         outcome.disposition === "approve"
-          ? "Approved. The gate is resolved and the run has been released to continue."
-          : outcome.disposition === "reject"
-            ? "Rejected. The gate is resolved and the reviewed work has been turned back."
-            : "Your comment was recorded with the decision.";
+          ? "Continued. The gate is resolved and the run has been released to continue."
+          : // No Rejected branch (cinatra#3080): the one entry refuses `reject`
+            // before it decides anything, so a decided review is never one.
+            "Your comment was recorded with the decision.";
       return outcome.idempotent ? `${head} (This decision had already been recorded.)` : head;
     }
     case "blocked":
@@ -387,7 +387,7 @@ const inputSchema = z
      *
      * OMITTED NOW MEANS "the control this message was granted", which is the
      * only control it could ever have pressed. A call that NAMES a different one
-     * is refused exactly as before — asking for Reject on a comment grant is
+     * is refused exactly as before — asking for Continue on a comment grant is
      * still an authority this turn does not hold, and gate 3 still says so.
      */
     control: z.enum(LENT_ACTION_CONTROLS).optional(),
@@ -637,10 +637,10 @@ export async function handleLentAction(
       bound.reviewTaskId,
       disposition,
       text,
-      // ONE actor context for the resolve above and the decision-op check
-      // inside — the decision route's own rule, for the same reason.
+      // ONE actor context for the resolve above and the decision-op check inside.
       actorCtx,
       null,
+      null, // A Regenerate carries NO prompt of its own: the typed words ARE the note.
     );
     return say({
       ok: outcome.kind === "decided" || outcome.kind === "annotated" || outcome.kind === "changes-requested",
@@ -1156,12 +1156,12 @@ export async function buildScreenSubmitValues(input: {
   return payload;
 }
 
-/** The review card's three buttons, as the decision core names them. */
+/** The floor's three buttons as the one entry names them; `approve` is Continue. */
 function reviewDisposition(
   control: LentActionControl,
-): "approve" | "reject" | "comment" | null {
+): "approve" | "regenerate" | "comment" | null {
   if (control === "approve") return "approve";
-  if (control === "reject") return "reject";
+  if (control === "regenerate") return "regenerate";
   if (control === "comment") return "comment";
   return null;
 }

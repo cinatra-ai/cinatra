@@ -273,11 +273,11 @@ export async function enforceReviewDecisionAccess(args: {
 }
 
 /**
- * The LIFECYCLE `changes_requested` binder (cinatra#2063; owner ruling 2026-07-25).
- * The review surface's prompt-window feedback (the existing Comment path) drives a
- * `changes_requested` decision on a LIFECYCLE review gate: the base gate closes and
- * a repair opens through the S2 store's `recordChangesRequested` entry point (via
- * the surface composer) — no parallel write path.
+ * The LIFECYCLE `changes_requested` binder (cinatra#2063; cinatra#3080). The review
+ * floor's REGENERATE drives a `changes_requested` decision on a LIFECYCLE review
+ * gate: the base gate settles as superseded and a repair opens through the S2
+ * store's `recordChangesRequested` entry point (via the surface composer) — no
+ * parallel write path. Comment never reaches this binder: it is an annotation.
  *
  * The ONE fact the composer needs that the surface holds is the base-revision CAS
  * witness (`currentBaseRevisionId`). It is resolved HERE through the SAME
@@ -286,16 +286,18 @@ export async function enforceReviewDecisionAccess(args: {
  * live member, and null when it was tombstoned between prepare and submit (a
  * fail-closed `tombstoned-base`). No new artifact read path is introduced.
  *
- * Authorization is the CALLER's job and is UNCHANGED from the base Comment
- * decision: the action enforces `respondToHitl` on the run for the comment op
- * BEFORE this binder is reached, exactly as it does for a plain comment.
+ * Authorization is the CALLER's job: Regenerate settles the gate, so the action
+ * enforces `approveHitl` on the run (the right a terminal decision needs) BEFORE
+ * this binder is reached.
  */
 export async function submitReviewSurfaceChangesRequested(args: {
   runId: string;
   reviewTaskId: string;
   baseTarget: ArtifactReviewTarget;
-  /** The reviewer's typed prompt-window feedback (trimmed, non-empty). */
+  /** The reviewer's Regenerate note (trimmed, non-empty). */
   feedback: string;
+  /** The recorded prompt the Regenerate sends back as its own value, or null. */
+  prompt?: string | null;
   actorCtx: ReviewActorContext;
 }): Promise<RecordChangesRequestedResult> {
   const kernelActor = buildActorContextFromPrimitive(
@@ -319,6 +321,10 @@ export async function submitReviewSurfaceChangesRequested(args: {
     },
     currentBaseRevisionId,
     feedback: args.feedback,
+    prompt: args.prompt ?? null,
+    // The floor's Regenerate: the repair store refuses, before any write, a
+    // regenerate that no producing step can serve or that tripped the cycle bound.
+    origin: "regenerate",
     // The DECIDING actor (cinatra#2047 D-2) — the same verified session actor the
     // approve/reject commit stamps, from the context run access was enforced against.
     decidedBy: args.actorCtx.actor.userId ?? null,

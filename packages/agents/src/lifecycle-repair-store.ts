@@ -86,6 +86,10 @@ import {
 } from "@/lib/lifecycle/lifecycle-orchestration";
 import { baseReviewTaskId, isDeclaredReviewLeg, isDeclaredReviewTaskId } from "@/lib/artifacts/artifact-review-target";
 import { createdAtMicrosSql, laterDeclaredPause } from "./declared-review-pause";
+import {
+  REGENERATE_BOUND_REACHED,
+  REGENERATE_NO_NOTE_INPUT,
+} from "@/lib/artifacts/review-surface-model";
 
 /** The store's executor: the pool, or the caller's open transaction. */
 type RepairStoreExecutor =
@@ -154,6 +158,38 @@ export interface RecordChangesRequestedInput {
    * the approve/reject commit now leaves: `resolved_by` on the gate. Null where
    * the host cannot name an actor (a worker-driven record). */
   decidedBy?: string | null;
+  /**
+   * WHICH ROAD ASKED (cinatra#3080 acceptance item 4). Two callers reach this
+   * one operation and they want different things of a run that has nothing left
+   * to make the work again:
+   *
+   *   `typed`      — the change road's own request. A producer that cannot
+   *                  repair ESCALATES to a human or an org route: the request is
+   *                  recorded, the gate closes, and a person picks it up. That
+   *                  is the route's design and it is unchanged.
+   *   `regenerate` — the review floor's Regenerate, which promises exactly one
+   *                  thing: this work, made again, under a successor gate. When
+   *                  no producing step can deliver that, the operation REFUSES
+   *                  before it writes anything and the gate stays PENDING. It
+   *                  must never settle a gate whose successor is not coming —
+   *                  the shape a real run was found in: one gate row before, one
+   *                  gate row after, a review closed for a revision nobody was
+   *                  going to make.
+   *
+   * Defaults to `typed`, so every caller that predates this field keeps its
+   * behaviour byte for byte.
+   */
+  origin?: "typed" | "regenerate";
+  /**
+   * THE PRODUCING STEP'S DECLARED NOTE INPUT (cinatra#3080, the 2026-10-13
+   * decision): the name of the one text input the reviewer's Note fills, or
+   * null when the step declares none. Read ONLY for `origin: "regenerate"`,
+   * where it REPLACES `repairCapable`: a Regenerate is available exactly when
+   * the producing step declares this input, whatever the agent-level flag says.
+   * Absent or null ⇒ the Regenerate is refused with the plain reason, before
+   * anything is written. Ignored by the `typed` road.
+   */
+  producingStepNoteInput?: string | null;
 }
 
 /** The gate fields the verification-reopen binding reads. */
@@ -335,6 +371,47 @@ export async function recordChangesRequested(
     return { ok: false, code: "stale-base", error: "base revision moved since the review (CAS witness mismatch) — stale changes_requested rejected" };
   }
 
+  // A REGENERATE NEEDS A STEP THAT NAMES WHERE THE NOTE GOES (cinatra#3080, the
+  // 2026-10-13 decision). "On a review whose producing step declares no such
+  // input, Regenerate is refused with a plain reason." The test is the step's
+  // OWN declaration, never the agent-level `repairCapable` flag: that flag says
+  // the agent answers a typed repair request, not which input the Note fills.
+  // Refused BEFORE the transaction and before this operation's cycle-guard read
+  // of the lineage's prior attempts, so nothing is written and the gate is left
+  // exactly as the reviewer found it: pending, its floor still live, the stated
+  // reason on screen. The lineage is derived from the decided gate only after
+  // this refusal (`deriveDecidedGateLineage`, below; reads only). Comment and
+  // Continue do not reach this operation; the conversation's comment reaches it
+  // on the `typed` road, which this refusal does not touch.
+  //
+  // A GATE THAT IS NO LONGER PENDING ANSWERS FIRST (cinatra#3080). Every
+  // Regenerate refusal comes before the transaction's gate CAS, the
+  // one place that otherwise sees the gate's state. So a Regenerate that lands
+  // after a Continue (or any decision that resolved the gate) would read as
+  // "Regenerate is not available", a retryable error, when the first decision
+  // stands and the answer is the BLOCKED one. The gate's state is read first;
+  // a read only. A gate that resolves after this read is still caught by the
+  // CAS below.
+  if (input.origin === "regenerate") {
+    const [gateNow] = await db
+      .select({ status: artifactReviewGates.status })
+      .from(artifactReviewGates)
+      .where(eq(artifactReviewGates.id, request.gateId))
+      .limit(1);
+    if (gateNow?.status !== "pending") {
+      return {
+        ok: false,
+        code: "gate-not-pending",
+        error: "the review gate is not pending — a different decision resolved it",
+      };
+    }
+  }
+  const declaredNoteInput =
+    input.origin === "regenerate" ? (input.producingStepNoteInput?.trim() ?? "") : "";
+  if (input.origin === "regenerate" && declaredNoteInput.length === 0) {
+    return { ok: false, code: "regenerate-unavailable", error: REGENERATE_NO_NOTE_INPUT };
+  }
+
   const derived = await deriveDecidedGateLineage(request.gateId);
   if (!derived.ok) return derived;
   const lineageId = derived.lineageId;
@@ -346,10 +423,26 @@ export async function recordChangesRequested(
   const priorAttempts = priorRows.reduce((m, r) => Math.max(m, r.attempt), 0);
   const cycle = evaluateRepairCycle(priorAttempts, input.maxCycles ?? MAX_REPAIR_CYCLES);
   const route = routeChangesRequested({
-    repairCapable: input.repairCapable,
+    // For a Regenerate the step's declaration (checked above) is what makes the
+    // work again, so it stands in the flag's place; the typed road keeps the flag.
+    repairCapable:
+      input.origin === "regenerate" ? declaredNoteInput.length > 0 : input.repairCapable,
     continuationMode: request.continuationMode,
     orgRepairRoute: input.orgRepairRoute ?? null,
   });
+
+  // A REGENERATE THAT CANNOT REGENERATE IS REFUSED, NOT HALF-FIRED (cinatra#3080
+  // item 4). BEFORE the transaction, so nothing is written and the gate is left
+  // exactly as the reviewer found it: pending, with its floor still live and the
+  // stated reason on screen. An escalation is a fine answer to a TYPED change
+  // request — a person picks it up — but it is not an answer to Regenerate,
+  // which promises the same work made again beneath a successor gate. Settling
+  // the gate anyway is the worst of the three outcomes: the run is released from
+  // a decision nobody made, toward a revision that is not coming. A declared
+  // step always routes to the producer, so the remaining refusal is the bound.
+  if (input.origin === "regenerate" && cycle.escalate) {
+    return { ok: false, code: "regenerate-unavailable", error: REGENERATE_BOUND_REACHED };
+  }
 
   // Escalate (never dispatch) when the cycle bound tripped OR the producer cannot
   // repair (routed to a human / org route). Only a repair-capable producer within

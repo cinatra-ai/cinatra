@@ -901,6 +901,33 @@ export async function commitReviewDecision(
         });
     }
 
+    // THE NOTE ITSELF (cinatra#3080: "Comment records the note and changes
+    // nothing else"). The audit row records THAT a comment was filed; it has no
+    // body column, so once the Comment→changes_requested overload is gone a note
+    // filed from the floor would land nowhere. It is recorded here, on the gate's
+    // own zero-authority advisory seam: gate-bound, provenance-stamped,
+    // STRUCTURALLY decision-free (the table carries no disposition), idempotent
+    // per (gate, key). The key IS the decision fingerprint, which already covers
+    // the exact words, so a response-lost retry re-files the same note rather
+    // than a second one. Written INSIDE this transaction: the note and the audit
+    // row are one filing. Only a NON-TERMINAL comment writes here.
+    if (!plan.terminal && plan.comment !== null && plan.comment.trim().length > 0) {
+      await tx
+        .insert(gateAdvisoryComments)
+        .values({
+          id: randomUUID(),
+          gateId,
+          authorId: plan.decidedBy ?? "unknown",
+          authorKind: "user",
+          body: plan.comment.trim(),
+          idempotencyKey: plan.fingerprint,
+          runCausation: plan.runId,
+        })
+        .onConflictDoNothing({
+          target: [gateAdvisoryComments.gateId, gateAdvisoryComments.idempotencyKey],
+        });
+    }
+
     // Reject tombstone dispositions (durable record; the objects-store tombstone
     // application is drained downstream via applied_at). Idempotent on
     // (gate_id, artifact_id, representation_revision_id).

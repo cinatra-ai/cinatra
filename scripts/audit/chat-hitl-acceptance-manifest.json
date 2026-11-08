@@ -310,7 +310,7 @@
    "unitProofs": [
     {
      "file": "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/__tests__/review-surface-conformance.test.ts",
-     "testName": "the action routes the Comment path to changes_requested ONLY when fenced + a single-target lifecycle gate"
+     "testName": "the action routes ONLY Regenerate to changes_requested, and only when fenced + a single-target lifecycle gate"
     },
     {
      "file": "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/__tests__/review-surface-conformance.test.ts",

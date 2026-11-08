@@ -526,8 +526,7 @@ describe("a lifecycle item survives every layout, every turn outcome, live and r
         expect(card.getAttribute("data-lifecycle-card-state")).toBe("pending");
         expect(card.getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
         for (const action of [
-          "approve-review -> resolved",
-          "reject-review -> resolved",
+          "continue-review -> resolved",
           "comment-review -> annotated",
         ]) {
           const control = card.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);

@@ -29,6 +29,7 @@ import type {
 import type { ArtifactReviewTarget } from "@/lib/artifacts/artifact-review-target";
 import type {
   ReviewDisposition,
+  ReviewRunAccessOp,
   SubmitDecisionResult,
 } from "@/lib/artifacts/artifact-review-decision";
 import type { PinnedCapturePairView } from "@/lib/artifacts/cms-preview-capture-view";
@@ -392,7 +393,8 @@ export function reviewRevisionMarker(representationRevisionId: string): {
 // ---------------------------------------------------------------------------
 
 export interface ReviewDecisionPermissions {
-  /** Terminal Approve / Reject — requires approve access on the run. */
+  /** The terminal floor actions, Continue and Regenerate — both require the
+   *  run's decision (approve) access; only the WORDS retired, not the right. */
   canDecide: boolean;
   /** Comment — requires respond access on the run. */
   canComment: boolean;
@@ -406,9 +408,9 @@ export function reviewDecideDisabledReason(
 ): string | null {
   if (perms.canDecide) return null;
   if (perms.canComment) {
-    return "A terminal Approve / Reject needs approve access on the run — you can Comment, but not decide.";
+    return "Continue and Regenerate need decision access on the run — you can Comment, but not decide.";
   }
-  return "You do not have approve access on the run, so a terminal decision is disabled.";
+  return "You do not have decision access on the run, so Continue and Regenerate are disabled.";
 }
 
 // ---------------------------------------------------------------------------
@@ -538,13 +540,16 @@ export type ReviewSubmitOutcome =
   /** A transient failure — the decision did not commit; safe to retry. */
   | { kind: "error"; message: string };
 
-/** The disposition set the decision bar offers (§IV) — exactly three, no
- * separate "request changes". */
-export const REVIEW_DISPOSITIONS: ReadonlyArray<ReviewDisposition> = [
-  "approve",
-  "reject",
-  "comment",
-];
+/**
+ * The set a NEW decision may carry (§IV, redrawn by cinatra#3080).
+ *
+ * NOT the floor: the floor is Comment · Regenerate · Continue, and its
+ * vocabulary is `REVIEW_FLOOR_ACTIONS` below. This is what reaches the #1807
+ * decision core once a floor action has been resolved — Continue's stored
+ * `approve` and Comment's `comment`. Regenerate is absent because it takes the
+ * change road, and `reject` is absent because it is retired.
+ */
+export const REVIEW_DISPOSITIONS: ReadonlyArray<ReviewDisposition> = ["approve", "comment"];
 
 /**
  * Map the #1807 decision core's typed `SubmitDecisionResult` to the surface's
@@ -627,9 +632,160 @@ export function mapChangesRequestedToOutcome(
       return { kind: "blocked", reason: "revision-not-live" };
     case "targets-mismatch":
       return { kind: "blocked", reason: "targets-mismatch" };
+    case "regenerate-unavailable":
+      // NOT a block: the operation refused BEFORE it settled anything, so the
+      // gate is still pending and the floor is still live. The reason the store
+      // stated is the reason the person reads, carried through verbatim.
+      return { kind: "error", message: result.error };
     default:
       // invalid-request / idempotency-key-reuse / empty-feedback / a transient
       // failure — the decision did not commit; safe to retry.
       return { kind: "error", message: "The change request could not be recorded." };
   }
+}
+
+// ===========================================================================
+// THE REVIEW FLOOR (cinatra#3080). The one place the three review actions, their
+// labels, their required access and the refusals of Regenerate are written down.
+//
+// "On every review the floor offers three things and no more — Comment, the note
+// that decides nothing; Regenerate, which sends the person's words to the
+// producing step for the next revision; Continue, which goes on with the frozen
+// revision — a person who wants neither leaves the run as it is, so there is no
+// Reject."
+//
+// It is NOT a second decision path. A floor action resolves to the disposition
+// the #1807 decision core already takes (`continue` → the stored `approve`,
+// unchanged and unmigrated; `comment` → `comment`) or, for Regenerate, to NO
+// disposition at all: Regenerate rides the change road's canonical
+// `changes_requested` operation, and `floorActionDisposition` answers null for
+// it rather than inventing a fourth stored value. Persistence is untouched: a
+// legacy `approve` row reads as Continued and a legacy `reject` row stays
+// readable.
+// ===========================================================================
+
+/** The three review actions a pending review offers, and no fourth. */
+export type ReviewFloorAction = "comment" | "regenerate" | "continue";
+
+/** The floor, IN DRAWN ORDER: the note that decides nothing, then the two acts
+ *  that settle the gate. */
+export const REVIEW_FLOOR_ACTIONS: readonly ReviewFloorAction[] = [
+  "comment",
+  "regenerate",
+  "continue",
+] as const;
+
+/** The words on the buttons. The ONE source every surface renders from. */
+export const REVIEW_FLOOR_LABELS: Record<ReviewFloorAction, string> = {
+  comment: "Comment",
+  regenerate: "Regenerate",
+  continue: "Continue",
+};
+
+/** The answer to a Reject, wherever it is asked: the decision core's own
+ *  sentence (artifact-review-decision.ts), quoted so a person hears one answer. */
+export const REVIEW_REJECT_RETIRED_REASON =
+  "There is no Reject decision. Leave the review open, Comment, or Continue.";
+
+/** Regenerate carries the person's words to the producing step, so it cannot be
+ *  pressed with nothing to carry. Refused with the reason, never silently. */
+export const REGENERATE_NEEDS_A_NOTE =
+  "Regenerate needs a note saying what to change — the note is what goes back to the step that made this.";
+
+/**
+ * A gate that still pins MORE THAN ONE target (a legacy row from before
+ * one-review-per-artifact) cannot say which piece of work to remake, so
+ * Regenerate is refused on it WITH THE REASON — and Comment and Continue still
+ * work.
+ */
+export const REGENERATE_MULTI_TARGET_REASON =
+  "This review covers more than one piece of work, so Regenerate cannot say which one to make again. Comment or Continue instead.";
+
+/**
+ * The ledger-row property a producing step records the prompt it worked from on.
+ * ONE name, read by the surface and never guessed.
+ */
+export const RECORDED_PROMPT_PROPERTY = "imagePrompt";
+
+/** A review with no producing step behind it (a batch gate, or a review the
+ *  lifecycle road never opened) has nowhere to send the words back to. */
+export const REGENERATE_NOT_ON_THIS_REVIEW =
+  "This review has no producing step to send the words back to, so Regenerate is not available on it. Comment or Continue instead.";
+
+/**
+ * The answer when the step that produced the work declares no input for the
+ * Note (cinatra#3080, the 2026-10-13 decision: "On a review whose producing
+ * step declares no such input, Regenerate is refused with a plain reason").
+ * Regenerate puts the Note into exactly the one input the step names, so with
+ * none named there is nowhere to put it. Refused with this reason and the gate
+ * left PENDING; Comment and Continue work as usual.
+ */
+export const REGENERATE_NO_NOTE_INPUT =
+  "The step that made this work does not name an input for the note, so Regenerate is not available on this review. Comment or Continue instead.";
+
+/** The same refusal, for a lineage that has already been remade as many times as
+ *  a review allows; reaching the bound leaves the gate pending. */
+export const REGENERATE_BOUND_REACHED =
+  "This work has already been sent back to be made again as many times as a review allows. Comment or Continue instead.";
+
+/**
+ * What a CALLER may submit: the three floor actions, plus the two words every
+ * already-shipped client and every stored row still speaks — `approve` (the
+ * compatibility alias of Continue) and `reject` (refused, with the reason).
+ */
+export type ReviewFloorSubmission = ReviewFloorAction | "approve" | "reject";
+
+export type ResolvedFloorSubmission =
+  | { kind: "action"; action: ReviewFloorAction; alias: boolean }
+  | { kind: "retired"; reason: string };
+
+const FLOOR_ACTION_SET: ReadonlySet<string> = new Set(REVIEW_FLOOR_ACTIONS);
+
+/** Resolve a submitted word to the floor action it asks for. `approve` resolves
+ *  to Continue (`alias: true`); `reject` is the ONE word with no action behind it. */
+export function resolveReviewFloorSubmission(
+  submission: ReviewFloorSubmission | string,
+): ResolvedFloorSubmission {
+  if (submission === "reject") {
+    return { kind: "retired", reason: REVIEW_REJECT_RETIRED_REASON };
+  }
+  if (submission === "approve") {
+    return { kind: "action", action: "continue", alias: true };
+  }
+  if (FLOOR_ACTION_SET.has(submission)) {
+    return { kind: "action", action: submission as ReviewFloorAction, alias: false };
+  }
+  return { kind: "retired", reason: `Unknown review action "${submission}".` };
+}
+
+/** The gate disposition a floor action STORES: Continue keeps storing `approve`,
+ *  Comment stores `comment`, Regenerate stores nothing through this road. */
+export function floorActionDisposition(action: ReviewFloorAction): ReviewDisposition | null {
+  switch (action) {
+    case "continue":
+      return "approve";
+    case "comment":
+      return "comment";
+    case "regenerate":
+      return null;
+  }
+}
+
+/** The run access a floor action needs. Regenerate SETTLES THE GATE (as
+ *  superseded), so it needs what a terminal decision needs. */
+export function floorActionRunAccessOp(action: ReviewFloorAction): ReviewRunAccessOp {
+  return action === "comment" ? "respondToHitl" : "approveHitl";
+}
+
+/**
+ * THE PICTURE'S PROMPT, read off the reviewed revision's ledger row. Type-agnostic:
+ * it asks only whether the row records the prompt it was made from.
+ */
+export function reviewPicturePrompt(input: {
+  properties: Record<string, unknown> | null | undefined;
+}): string | null {
+  const raw = input.properties?.[RECORDED_PROMPT_PROPERTY];
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }

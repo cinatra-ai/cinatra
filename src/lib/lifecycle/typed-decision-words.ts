@@ -65,8 +65,9 @@ import type { LentCardControl } from "@/lib/lifecycle/bound-reference-resolver";
 /**
  * The words each DECIDING control answers to.
  *
- * Only the controls that DECIDE something are listed. A control that decides
- * nothing is not gated here at all — see `ALWAYS_ON_THE_MENU`.
+ * Only the controls the words GATE are listed. A control the words never gate
+ * is not listed here at all — see `ALWAYS_ON_THE_MENU`, which says why for each
+ * one (Regenerate and Submit settle something and are still ungated there).
  *
  * Every entry is matched on WORD BOUNDARIES over the person's own text, so
  * "unapproved" is not "approve" and "yesterday" is not "yes". Multi-word entries
@@ -75,12 +76,18 @@ import type { LentCardControl } from "@/lib/lifecycle/bound-reference-resolver";
 export const TYPED_DECISION_WORDS: Readonly<
   Record<"approve" | "reject" | "confirm" | "skip", readonly string[]>
 > = {
-  // The review card's Approve.
+  // The review card's Continue (cinatra#3080). Its control id stays `approve`,
+  // the disposition it stores, so the old words keep naming it and the button's
+  // own word joins them.
   approve: [
     "approve",
     "approves",
     "approved",
     "approving",
+    "continue",
+    "continues",
+    "continued",
+    "continuing",
     "accept",
     "accepts",
     "accepted",
@@ -90,7 +97,11 @@ export const TYPED_DECISION_WORDS: Readonly<
     "lgtm",
     "ship it",
   ],
-  // The review card's Reject.
+  // RETIRED, AND KEPT AS A FAMILY (cinatra#3080). No card draws Reject any more,
+  // so no card lends it and it is never on a menu. The family stays so the
+  // binding can still tell when a person ASKED for it, and answer them with the
+  // platform's own sentence instead of filing their words as something else
+  // (`issueTurnLentActionGrant`).
   reject: [
     "reject",
     "rejects",
@@ -126,16 +137,19 @@ export const TYPED_DECISION_WORDS: Readonly<
 /**
  * The controls the words never gate, and why each one is here.
  *
- *   `comment` — the words ARE the comment. A message with anything in it is a
- *               comment by construction, which is exactly what the review page's
- *               own box does with a typed sentence today; gating it on a word
- *               would take away the one road that already works. It is NOT a
- *               harmless control (convergence round 1, finding 1): on an active
- *               single-target lifecycle review a comment is filed as CHANGES
- *               REQUESTED and settles the gate. It is ungated here because that
- *               is precisely what the review page's own box already does with
- *               any typed sentence, so gating it would be a narrowing of a road
- *               this slice is not changing — not because it decides nothing.
+ *   `comment` — the words ARE the comment, and since cinatra#3080 a comment
+ *               DECIDES NOTHING: it records the note, the gate stays open and the
+ *               run stays parked. A message with anything in it is a comment by
+ *               construction, so gating it on a word would only take away a
+ *               road that cannot change anything.
+ *   `regenerate` — the words ARE the request. Regenerate sends the person's own
+ *               words back to the step that produced the work, so the words are
+ *               the whole of what it carries. It is NOT a harmless control: it
+ *               settles the gate and the producing step runs again. It is
+ *               ungated here because the review page's own box regenerated on
+ *               any typed sentence before this change (a typed sentence was
+ *               filed as CHANGES REQUESTED), so gating it on a word would narrow
+ *               a road this slice is not narrowing.
  *   `fill`    — a fill presses nothing. It places values in the fields in front
  *               of the person and they press the button (W5c).
  *   `adjust`  — the schedule card's Adjust RE-PROPOSES: it writes nothing and
@@ -150,7 +164,13 @@ export const TYPED_DECISION_WORDS: Readonly<
  *               of it would only take the road away from someone who described
  *               their change without using the word.
  */
-const ALWAYS_ON_THE_MENU: readonly LentCardControl[] = ["comment", "fill", "adjust", "submit"];
+const ALWAYS_ON_THE_MENU: readonly LentCardControl[] = [
+  "comment",
+  "regenerate",
+  "fill",
+  "adjust",
+  "submit",
+];
 
 /** Lowercased, punctuation flattened to spaces, whitespace collapsed. */
 function normalize(words: string): string {

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-const db = vi.hoisted(() => ({ query: vi.fn(), access: vi.fn(), gate: vi.fn(), artifact: vi.fn(), member: vi.fn() }));
+const db = vi.hoisted(() => ({ query: vi.fn(), access: vi.fn(), gate: vi.fn(), artifact: vi.fn(), member: vi.fn(), changes: vi.fn() }));
 vi.mock("@/lib/db/pooled", async () => ({
   ...await vi.importActual<typeof import("@/lib/db/pooled")>("@/lib/db/pooled"), getPooledDb: () => db }));
 vi.mock("@/lib/postgres-config", () => ({ getPostgresConnectionString: () => "unused", postgresSchema: "cinatra" }));
@@ -30,11 +30,11 @@ describe("approved app-artifact-review §VI pinned producer words", () => {
 });
 
 vi.mock("@cinatra-ai/agents/artifact-review-gate-store", () => ({ enforceReviewRunAccess: db.access, readReviewGateState: db.gate, readGatePinnedTargets: vi.fn(), readReviewGate: vi.fn(), commitReviewDecision: vi.fn() }));
-vi.mock("@cinatra-ai/agents/lifecycle-review-changes-requested", () => ({ recordReviewSurfaceChangesRequested: vi.fn() }));
+vi.mock("@cinatra-ai/agents/lifecycle-review-changes-requested", () => ({ recordReviewSurfaceChangesRequested: db.changes }));
 vi.mock("@cinatra-ai/agents/lifecycle-repair-store", () => ({ readRepairBySuccessorGateId: vi.fn() }));
 vi.mock("@/lib/artifacts/cms-preview-capture-store", () => ({ readPinnedPreviewCaptures: vi.fn() }));
 vi.mock("@/app/artifacts/[id]/review-target-prepare", () => ({ bindArtifactReviewPorts: () => ({ readArtifact: db.artifact, revisionMember: db.member }), prepareArtifactReviewTargets: vi.fn() }));
-import { readReviewGateRecordedPrompt } from "../review-gate-ports";
+import { readReviewGateRecordedPrompt, submitReviewSurfaceChangesRequested } from "../review-gate-ports";
 const actorCtx = { orgId: "org", actor: { actorType: "human" as const, source: "route" as const, userId: "reader" }, roleHints: { actorOrganizationId: "org" } };
 describe("§VI genuine prompt binder enforces read and pinned revision membership", () => {
   beforeEach(() => {
@@ -59,5 +59,45 @@ describe("§VI genuine prompt binder enforces read and pinned revision membershi
   it("substituted/unlinked revision and multi-target legacy gate cannot provide a prefill", async () => {
     db.member.mockResolvedValue(null); expect(await readReviewGateRecordedPrompt({ runId: "run", reviewTaskId: "task", actorCtx })).toBeNull(); expect(db.query).not.toHaveBeenCalled();
     db.gate.mockResolvedValue({ status: "pending", targets: [{}, {}] }); expect(await readReviewGateRecordedPrompt({ runId: "run", reviewTaskId: "task", actorCtx })).toBeNull(); expect(db.query).not.toHaveBeenCalled();
+  });
+  // ONLY PINNED, FINALIZED LEDGER WORDS (cinatra#3080 item 5: "pre-filled with the
+  // prompt on the revision's ledger row"). The live row's own words are never a
+  // stand-in, even when the pin is still the row's latest revision, and a ledger
+  // read that fails is not turned into some other answer.
+  const liveRow = { kind: "ok", artifact: { latestRepresentationRevisionId: "pinned-old-revision", recordedPrompt: "live row words" } };
+  it("a failing ledger read fails the read: no swallow and no fallback to the live row's words", async () => {
+    db.artifact.mockResolvedValue(liveRow); db.query.mockRejectedValue(new Error("ledger unavailable"));
+    await expect(readReviewGateRecordedPrompt({ runId: "run", reviewTaskId: "task", actorCtx })).rejects.toThrow("ledger unavailable");
+  });
+  it("no finalized ledger words means no prefill, even when the pin is the live row's latest revision", async () => {
+    db.artifact.mockResolvedValue(liveRow); db.query.mockResolvedValue({ rows: [] });
+    expect(await readReviewGateRecordedPrompt({ runId: "run", reviewTaskId: "task", actorCtx })).toBeNull();
+  });
+});
+
+// THE REGENERATE BINDER NAMES ITS ROAD (cinatra#3080 item 4). The review floor's
+// Regenerate is the only surface caller of the change road, and it reaches the
+// store as `origin: "regenerate"`: the store then refuses, before any write, a
+// Regenerate that no producing step can serve or whose lineage reached the repair
+// bound, instead of escalating the gate with no successor. Without the origin the
+// store takes its `typed` default and escalates.
+describe("§IV Regenerate binder passes the floor's road, the note and the prompt to the change road", () => {
+  const baseTarget = { artifactId: "artifact", representationRevisionId: "pinned-old-revision" };
+  beforeEach(() => {
+    db.member.mockResolvedValue({ mime: "image/png" });
+    db.changes.mockResolvedValue({ ok: false, code: "regenerate-unavailable", error: "refused before any write" });
+  });
+  it("sends origin regenerate, the note and the prompt as separate values, the CAS witness and the deciding actor", async () => {
+    const result = await submitReviewSurfaceChangesRequested({ runId: "run", reviewTaskId: "task", baseTarget, feedback: "make it blue", prompt: "a blue fox", actorCtx });
+    expect(db.changes).toHaveBeenCalledTimes(1);
+    expect(db.changes.mock.calls[0][0]).toMatchObject({
+      runId: "run", reviewTaskId: "task", baseTarget, currentBaseRevisionId: "pinned-old-revision",
+      feedback: "make it blue", prompt: "a blue fox", origin: "regenerate", decidedBy: "reader",
+    });
+    expect(result).toEqual({ ok: false, code: "regenerate-unavailable", error: "refused before any write" });
+  });
+  it("a Regenerate without a prompt still names its road, so it can never take the escalating default", async () => {
+    await submitReviewSurfaceChangesRequested({ runId: "run", reviewTaskId: "task", baseTarget, feedback: "shorter", actorCtx });
+    expect(db.changes.mock.calls[0][0]).toMatchObject({ feedback: "shorter", prompt: null, origin: "regenerate" });
   });
 });

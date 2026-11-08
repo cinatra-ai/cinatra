@@ -173,11 +173,13 @@ describe("the review card's three buttons, typed", () => {
     expect(d.consume.mock.calls[0]![0]).toMatchObject({ control: "comment" });
   });
 
-  it("a typed reject presses the same action with the reject disposition", async () => {
-    personWords = "reject it, the numbers are wrong";
-    setFrame(grantFor({ controls: ["comment", "reject"] }));
-    await handleLentAction({ ref: REF, control: "reject" }, deps(REVIEW));
-    expect(submitReviewDecision.mock.calls[0]![2]).toBe("reject");
+  // AMENDED for cinatra#3080: Regenerate took Reject's place on the card and in
+  // the arm, so the third typed button is a Regenerate.
+  it("a typed regenerate presses the same action with the regenerate disposition", async () => {
+    personWords = "the numbers are wrong, make them again";
+    setFrame(grantFor({ controls: ["comment", "regenerate"] }));
+    await handleLentAction({ ref: REF, control: "regenerate" }, deps(REVIEW));
+    expect(submitReviewDecision.mock.calls[0]![2]).toBe("regenerate");
   });
 
   it("relays the card's own refusal rather than writing one of its own", async () => {

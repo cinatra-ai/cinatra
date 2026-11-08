@@ -129,8 +129,8 @@ describe("§IV the review states", () => {
     // §II — exactly one floor, however many targets the island draws.
     expect(container.querySelectorAll('[data-conformance-id="review-decision-bar"]')).toHaveLength(1);
     // The three affordances, live.
-    expect(isDisabled(screen.getByRole("button", { name: /approve/i }))).toBe(false);
-    expect(isDisabled(screen.getByRole("button", { name: /reject/i }))).toBe(false);
+    expect(isDisabled(screen.getByRole("button", { name: /continue/i }))).toBe(false);
+    expect(isDisabled(screen.getByRole("button", { name: /regenerate/i }))).toBe(false);
     expect(isDisabled(screen.getByRole("button", { name: /comment/i }))).toBe(false);
   });
 
@@ -148,8 +148,8 @@ describe("§IV the review states", () => {
     // §IV: a restricted card is a card. It shows the target and the disabled
     // floor — it is NEVER silently dropped (that is `absent`).
     expect(container.querySelector("iframe")).not.toBeNull();
-    expect(isDisabled(screen.getByRole("button", { name: /approve/i }))).toBe(true);
-    expect(isDisabled(screen.getByRole("button", { name: /reject/i }))).toBe(true);
+    expect(isDisabled(screen.getByRole("button", { name: /continue/i }))).toBe(true);
+    expect(isDisabled(screen.getByRole("button", { name: /regenerate/i }))).toBe(true);
     // A reader who may respond keeps a live Comment.
     expect(isDisabled(screen.getByRole("button", { name: /comment/i }))).toBe(false);
     expect(
@@ -215,14 +215,14 @@ describe("the two absences are distinct", () => {
     const fetchMock = mockResolve({ state: "pending", canDecide: true, canComment: true });
     renderOn("site_widget");
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    const widgetFloor = await screen.findByRole("button", { name: /approve/i });
+    const widgetFloor = await screen.findByRole("button", { name: /continue/i });
     expect(isDisabled(widgetFloor)).toBe(false);
     cleanup();
 
     // …and it is the SAME drawing the chat thread produces for the same state.
     mockResolve({ state: "pending", canDecide: true, canComment: true });
     renderOn("chat_thread");
-    const chatFloor = await screen.findByRole("button", { name: /approve/i });
+    const chatFloor = await screen.findByRole("button", { name: /continue/i });
     expect(widgetFloor.textContent).toBe(chatFloor.textContent);
   });
 
@@ -284,18 +284,18 @@ describe("one renderer, four first-party hosts", () => {
       expect(note.className).toBe(subordinate ? subordinateNoteClass : primaryNoteClass);
       expect(note.id).toBe("review-rationale");
       expect(note.getAttribute("data-slot")).toBe("textarea");
-      expect(note.getAttribute("placeholder")).toBe("Add a note for the run and the audit trail…");
+      expect(note.getAttribute("placeholder")).toBe("Add a note, or say what to change before Regenerate…");
       expect(note.value).toBe("");
       expect(note.disabled).toBe(false);
       const label = wrapper.querySelector<HTMLLabelElement>("label")!;
       expect(label.htmlFor).toBe(note.id);
-      expect(label.textContent).toBe("Decision rationale (optional on approve, expected on reject)");
+      expect(label.textContent).toBe("Note (optional on Continue · the words a Regenerate works from)");
       expect(Array.from(floor.querySelectorAll<HTMLButtonElement>("button")).map((button) => ({
         label: button.textContent?.trim(), action: button.getAttribute("data-action"), disabled: button.disabled,
       }))).toEqual([
         { label: "Comment", action: "comment-review -> annotated", disabled: false },
-        { label: "Reject", action: "reject-review -> resolved", disabled: false },
-        { label: "Approve", action: "approve-review -> resolved", disabled: false },
+        { label: "Regenerate", action: "regenerate-review -> successor-gate-opened", disabled: false },
+        { label: "Continue", action: "continue-review -> resolved", disabled: false },
       ]);
       // Keep the original frame normalization, then normalize ONLY the two
       // exact Note attributes asserted above. Every other card byte, including
@@ -496,7 +496,7 @@ describe("§III the target island", () => {
     ).not.toBeNull();
     // §II — a preview that failed to load is never drawn as a reason the
     // reviewer cannot decide; the floor below is untouched.
-    expect(isDisabled(screen.getByRole("button", { name: /approve/i }))).toBe(false);
+    expect(isDisabled(screen.getByRole("button", { name: /continue/i }))).toBe(false);
   });
 
   it("timed-out: Try again remounts the iframe and returns to loading", async () => {
@@ -601,14 +601,14 @@ describe("the decision seam", () => {
     }) as unknown as typeof fetch;
 
     renderOn("chat_thread");
-    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /approve/i }))).toBe(false));
-    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /continue/i }))).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
 
     await waitFor(() =>
       expect(calls.some((c) => c.url === LIFECYCLE_VIEW_DECIDE_PATH)).toBe(true),
     );
     const decide = calls.find((c) => c.url === LIFECYCLE_VIEW_DECIDE_PATH)!;
-    expect(decide.body).toMatchObject({ ref: VIEW.ref, disposition: "approve" });
+    expect(decide.body).toMatchObject({ ref: VIEW.ref, disposition: "continue" });
     // The card names its gate ONLY with the server-minted ref — never with a run
     // id or a gate id it assembled itself.
     expect(JSON.stringify(decide.body)).not.toMatch(/runId|reviewTaskId/);
@@ -656,8 +656,8 @@ describe("the decision seam", () => {
     }) as unknown as typeof fetch;
 
     const { container } = renderOn("chat_thread");
-    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /approve/i }))).toBe(false));
-    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /continue/i }))).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="review-gate-blocked"]')).not.toBeNull(),
     );
@@ -685,8 +685,8 @@ describe("the decision seam", () => {
         <ReviewGateCard view={VIEW} submitAction={hostAction} />
       </LifecycleCardSurfaceProvider>,
     );
-    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /approve/i }))).toBe(false));
-    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /continue/i }))).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="review-gate-blocked"]')).not.toBeNull(),
     );
@@ -709,8 +709,8 @@ describe("the decision seam", () => {
       );
     }) as unknown as typeof fetch;
     renderOn("chat_thread");
-    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /approve/i }))).toBe(false));
-    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /continue/i }))).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
     await waitFor(() =>
       expect(document.querySelector('[data-review-outcome="error"]')).not.toBeNull(),
     );
@@ -727,8 +727,8 @@ describe("the decision seam", () => {
       );
     }) as unknown as typeof fetch;
     renderOn("chat_thread");
-    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /approve/i }))).toBe(false));
-    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /continue/i }))).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
     await waitFor(() =>
       expect(document.querySelector('[data-review-outcome="not-permitted"]')).not.toBeNull(),
     );
@@ -1008,7 +1008,7 @@ describe("§VIII the marking is a TWO-STATE toggle, accepted by default", () => 
 });
 
 describe("§VIII the marks ride the ONE decision submit", () => {
-  it("approve carries what is on screen: untouched means ACCEPTED", async () => {
+  it("Continue carries what is on screen: untouched means ACCEPTED", async () => {
     const fetchMock = mockResolveAndDecide({
       state: "pending",
       canDecide: true,
@@ -1019,7 +1019,7 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
     );
-    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
     await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
     expect(decideBodies(fetchMock)[0].suggestionDecisions).toEqual({
       accepted: ["sug-1", "sug-2"],
@@ -1027,7 +1027,7 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     });
   });
 
-  it("approve carries the partition the reviewer pressed into being", async () => {
+  it("Continue carries the partition the reviewer pressed into being", async () => {
     const fetchMock = mockResolveAndDecide({
       state: "pending",
       canDecide: true,
@@ -1040,59 +1040,11 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     );
     pressChip(container, "items · 0 · bcc"); // dismissed
     await waitFor(() => expect(stateOf(container, "items · 0 · bcc")).toBe("dismissed"));
-    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
     await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
     const body = decideBodies(fetchMock)[0];
-    expect(body.disposition).toBe("approve");
+    expect(body.disposition).toBe("continue");
     expect(body.suggestionDecisions).toEqual({ accepted: ["sug-1"], dismissed: ["sug-2"] });
-  });
-
-  it("an IMMEDIATE Reject is not refused — it records every suggestion as NOT TAKEN", async () => {
-    // The reworked guard (cinatra#2852). With accepted-by-default, the shipped
-    // rule ("clear them first to reject") would refuse the very first press of
-    // Reject on a row the reviewer never touched. A reject tombstones the
-    // revisions, so nothing can be applied into them; the truthful record is a
-    // dismissal for every surfaced id.
-    const fetchMock = mockResolveAndDecide({
-      state: "pending",
-      canDecide: true,
-      canComment: true,
-      suggestions: CHIPS,
-    });
-    const { container } = renderOn("chat_thread");
-    await waitFor(() =>
-      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
-    );
-    // Nothing pressed: every suggestion is accepted on screen.
-    expect(stateOf(container, "subject")).toBe("accepted");
-    fireEvent.click(screen.getByRole("button", { name: /reject/i }));
-    await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
-    const body = decideBodies(fetchMock)[0];
-    expect(body.disposition).toBe("reject");
-    expect(body.suggestionDecisions).toEqual({ accepted: [], dismissed: ["sug-1", "sug-2"] });
-    // …and the surface no longer warns about a combination that cannot happen.
-    expect(container.querySelector('[data-conformance-id="suggestion-chips-reject-note"]')).toBeNull();
-  });
-
-  it("a reject records them as not taken however the reviewer marked them", async () => {
-    const fetchMock = mockResolveAndDecide({
-      state: "pending",
-      canDecide: true,
-      canComment: true,
-      suggestions: CHIPS,
-    });
-    const { container } = renderOn("chat_thread");
-    await waitFor(() =>
-      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
-    );
-    pressChip(container, "subject"); // dismissed
-    await waitFor(() => expect(stateOf(container, "subject")).toBe("dismissed"));
-    fireEvent.click(screen.getByRole("button", { name: /reject/i }));
-    await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
-    expect(decideBodies(fetchMock)[0].suggestionDecisions).toEqual({
-      accepted: [],
-      dismissed: ["sug-1", "sug-2"],
-    });
   });
 
   it("a gate with NO suggestions posts no partition key — the pre-#2571 fingerprint", async () => {
@@ -1102,8 +1054,8 @@ describe("§VIII the marks ride the ONE decision submit", () => {
       canComment: true,
     });
     renderOn("chat_thread");
-    await waitFor(() => expect(screen.getByRole("button", { name: /approve/i })).not.toBeNull());
-    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /continue/i })).not.toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
     await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
     expect("suggestionDecisions" in decideBodies(fetchMock)[0]).toBe(false);
   });
@@ -1125,11 +1077,11 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     );
     pressChip(container, "subject");
     await waitFor(() => expect(stateOf(container, "subject")).toBe("dismissed"));
-    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
     await waitFor(() => expect(hostAction).toHaveBeenCalledTimes(1));
     expect(hostAction).toHaveBeenCalledWith(
       expect.objectContaining({
-        disposition: "approve",
+        disposition: "continue",
         suggestionDecisions: { accepted: ["sug-2"], dismissed: ["sug-1"] },
       }),
     );
@@ -1203,7 +1155,7 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     ).not.toBeNull();
     expect(stateOf(container, "subject")).toBe("accepted");
     // …and the decision carries exactly what is now on screen.
-    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
     await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
     expect(decideBodies(fetchMock)[0].suggestionDecisions).toEqual({
       accepted: ["sug-1"],
@@ -1242,7 +1194,7 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     );
     expect(container.querySelectorAll("[data-suggestion-state]")).toHaveLength(0);
     // The floor is still live — a failed decoration never costs the decision.
-    expect(isDisabled(screen.getByRole("button", { name: /approve/i }))).toBe(false);
+    expect(isDisabled(screen.getByRole("button", { name: /continue/i }))).toBe(false);
   });
 
   it("the notice SURVIVES a second surface change — a flap must not wipe the warning", async () => {
