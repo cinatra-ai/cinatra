@@ -12,8 +12,9 @@
  *
  *   pnpm exec vitest run src/__tests__/blog-pipeline-passthrough-shaper.test.ts
  */
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const PASSTHROUGH_DIR = resolve(__dirname, "../app/api/agents/passthrough");
@@ -27,18 +28,43 @@ const RETIRED_NAMES = [
   "shapeBlogPipelineObjectsSave",
 ];
 
-function passthroughSources(): Array<{ file: string; text: string }> {
-  return readdirSync(PASSTHROUGH_DIR, { withFileTypes: true })
-    .filter((e) => e.isFile() && /\.(ts|tsx|mts|cts|js|mjs)$/.test(e.name))
-    .map((e) => ({
-      file: e.name,
-      text: readFileSync(join(PASSTHROUGH_DIR, e.name), "utf8"),
-    }));
+// Every module form, at any depth below the folder. Test folders are skipped:
+// a test may name a retired value to prove that it is refused.
+const MODULE_FILE = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
+const SKIPPED_DIRS = new Set(["__tests__", "node_modules"]);
+
+function moduleSources(root: string): Array<{ file: string; text: string }> {
+  const out: Array<{ file: string; text: string }> = [];
+  const walk = (dir: string) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, e.name);
+      if (e.isDirectory()) {
+        if (!SKIPPED_DIRS.has(e.name)) walk(full);
+      } else if (e.isFile() && MODULE_FILE.test(e.name)) {
+        out.push({ file: relative(root, full), text: readFileSync(full, "utf8") });
+      }
+    }
+  };
+  walk(root);
+  return out;
+}
+
+function retiredHits(root: string): string[] {
+  const hits: string[] = [];
+  for (const { file, text } of moduleSources(root)) {
+    for (const name of RETIRED_NAMES) {
+      if (file.includes(name) || text.includes(name)) hits.push(`${file}: ${name}`);
+    }
+  }
+  return hits;
 }
 
 describe("cinatra#3035 — the blog pipeline's passthrough shapers are retired", () => {
-  it("the blog-pipeline seam module no longer exists", () => {
-    expect(existsSync(join(PASSTHROUGH_DIR, "blog-pipeline-seam.ts"))).toBe(false);
+  it("the blog-pipeline seam module no longer exists, in any module form or folder", () => {
+    const seams = moduleSources(PASSTHROUGH_DIR).filter((s) =>
+      /(^|\/)blog-pipeline-seam\.[a-z]+$/.test(s.file),
+    );
+    expect(seams).toEqual([]);
   });
 
   it("the route no longer chains a blog-pipeline shaper ahead of objects_save", () => {
@@ -49,14 +75,25 @@ describe("cinatra#3035 — the blog pipeline's passthrough shapers are retired",
   });
 
   it("no passthrough module names either retired shape, its type or its module", () => {
-    const sources = passthroughSources();
-    expect(sources.some((s) => s.file === "route.ts")).toBe(true);
-    const hits: string[] = [];
-    for (const { file, text } of sources) {
-      for (const name of RETIRED_NAMES) {
-        if (text.includes(name)) hits.push(`${file}: ${name}`);
-      }
+    expect(moduleSources(PASSTHROUGH_DIR).some((s) => s.file === "route.ts")).toBe(true);
+    expect(retiredHits(PASSTHROUGH_DIR)).toEqual([]);
+  });
+
+  it("the scan reads every module form at any depth and skips only test folders", () => {
+    const root = mkdtempSync(join(tmpdir(), "guard-3035-"));
+    try {
+      mkdirSync(join(root, "shapers"));
+      mkdirSync(join(root, "__tests__"));
+      const retired = ["blog", "pipeline", "draft", "projection"].join("_");
+      writeFileSync(join(root, "legacy.cjs"), `module.exports = "${retired}";\n`);
+      writeFileSync(join(root, "view.jsx"), `export const v = "${retired}";\n`);
+      writeFileSync(join(root, "shapers", "legacy.ts"), `export const s = "${retired}";\n`);
+      writeFileSync(join(root, "__tests__", "refusal.test.ts"), `const s = "${retired}";\n`);
+      expect(retiredHits(root).sort()).toEqual(
+        [`legacy.cjs: ${retired}`, `shapers/legacy.ts: ${retired}`, `view.jsx: ${retired}`].sort(),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
-    expect(hits).toEqual([]);
   });
 });
