@@ -58,9 +58,10 @@ const q = (): string => postgresSchema.replaceAll('"', '""');
  * created by a deterministic agent run. Pure-ish: one or two scoped
  * SELECTs + a registry manifest read. A failed lookup or manifest read is
  * caught and degrades to `{ validatedRunId: <validated|null>, produces: [] }`
- * so a failed producer read does not block artifact creation. The call can
- * still reject: the schema setup before the first lookup is not caught, and
- * neither is a log line that throws.
+ * so a failed producer read does not block artifact creation. The call still
+ * rejects when a step that no try covers throws: the schema setup before the
+ * first lookup, a read of the input or of the run row (also inside a catch
+ * block), or a log line.
  */
 export async function resolveProducerAssertionPlan(input: {
   createdByRunId?: string | null;

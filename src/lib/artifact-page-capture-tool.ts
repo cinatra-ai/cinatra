@@ -353,14 +353,33 @@ async function releaseLease(input: CaptureArtifactPageInput, lease: PageCaptureL
   }
 }
 
-/** The resolver's explainer seam, answered with the fixed sentence. Never throws; the explanation is never logged. */
+/**
+ * The resolver's explainer seam, answered with the fixed sentence; the explanation is never logged. It throws only when
+ * reading the input's extension for the sentence throws.
+ */
 async function explainAbsentClaimsFixed(input: CaptureArtifactPageInput): Promise<string> {
   logFixedLine(`[${TOOL}] the install state is incomplete or unreadable; the explanation is not logged`, logFields(input));
   return pageCaptureInstallStateError(input.extension);
 }
 
+const LOG_FIELD_KEYS = ["orgId", "runId", "nodeId", "extension"] as const;
+
+/**
+ * The input's identifiers for a log line. A field whose read throws or is not a string is logged as "unreadable",
+ * so building the fields never throws.
+ */
 function logFields(input: CaptureArtifactPageInput): Record<string, string> {
-  return { orgId: input.orgId, runId: input.runId, nodeId: input.nodeId, extension: input.extension };
+  const fields: Record<string, string> = {};
+  for (const key of LOG_FIELD_KEYS) {
+    let value: unknown;
+    try {
+      value = input[key];
+    } catch {
+      value = undefined;
+    }
+    fields[key] = typeof value === "string" ? value : "unreadable";
+  }
+  return fields;
 }
 
 /** The tool, the run, the node and the error's class word; never text taken from the error. */
