@@ -10,7 +10,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 
 import type { EffectiveIdentity } from "@cinatra-ai/objects/effective-identity";
 
@@ -84,8 +84,11 @@ vi.mock("../artifact-display-mount", () => ({
     return <div data-testid="artifact-display-mount" />;
   },
 }));
+// The header draws its title and its actions, so the header's own links are read.
 vi.mock("@/components/page-header", () => ({
-  PageHeader: ({ title }: { title?: string }) => <header data-page-header={title} />,
+  PageHeader: ({ title, actions }: { title?: string; actions?: ReactNode }) => (
+    <header data-page-header={title}>{actions}</header>
+  ),
 }));
 
 import ArtifactDetailPage from "../page";
@@ -468,5 +471,66 @@ describe("the dashboard's own read gate on the artifact page (cinatra#3092)", ()
     await renderPage();
     expect(mocks.resolveDashboardArtifactPointer).not.toHaveBeenCalled();
     expect(mocks.mounted).toHaveLength(1);
+  });
+});
+
+describe("the live address of a dashboard row (cinatra#4311)", () => {
+  const DASHBOARD_TYPE = "@cinatra-ai/dashboard-artifact:dashboard";
+  const POINTER = {
+    dashboardId: "a-1",
+    name: "A dashboard",
+    ownerLevel: "team",
+    projectId: null,
+    updatedAt: null,
+    canonicalHref: "/teams/t-1/dashboards/a-1",
+    scopeChips: [],
+  };
+  function handedArtifact(): { sourceUrl?: unknown } | undefined {
+    return (mocks.mounted[0]?.props as { artifact?: { sourceUrl?: unknown } } | undefined)?.artifact;
+  }
+  beforeEach(() => {
+    mocks.resolveDashboardArtifactPointer.mockReset();
+  });
+
+  it("a dashboard row the gate admits hands its display the canonical path, and the header draws no source-application link", async () => {
+    mocks.readArtifactForDetail.mockReturnValue({
+      kind: "ok",
+      artifact: { ...ARTIFACT, objectType: DASHBOARD_TYPE, artifactType: DASHBOARD_TYPE },
+    });
+    mocks.isDashboardArtifactType.mockImplementation((t) => t === DASHBOARD_TYPE);
+    mocks.resolveDashboardArtifactPointer.mockResolvedValue({ access: "ok", pointer: POINTER });
+    const html = await renderPage();
+    expect(mocks.mounted).toHaveLength(1);
+    expect(handedArtifact()?.sourceUrl).toBe("/teams/t-1/dashboards/a-1");
+    expect(html).not.toContain("Open in source application");
+    expect(html).not.toContain('href="/teams/t-1/dashboards/a-1"');
+  });
+
+  it("a dashboard row under an open review still hands the pending reading with no live address", async () => {
+    mocks.readArtifactForDetail.mockReturnValue({
+      kind: "ok",
+      artifact: { ...ARTIFACT, objectType: DASHBOARD_TYPE, artifactType: DASHBOARD_TYPE },
+    });
+    mocks.isDashboardArtifactType.mockImplementation((t) => t === DASHBOARD_TYPE);
+    mocks.resolveDashboardArtifactPointer.mockResolvedValue({ access: "ok", pointer: POINTER });
+    mocks.isArtifactUnderOpenReview.mockResolvedValue(true);
+    await renderPage();
+    expect((mocks.mounted[0]?.props as { review?: unknown }).review).toEqual({ reading: "pending", openLive: null });
+  });
+
+  it("a connector row is unchanged: its display and its header carry the record's own address", async () => {
+    const SOURCE = "https://source.example/records/7";
+    mocks.readArtifactForDetail.mockReturnValue({ kind: "ok", artifact: { ...ARTIFACT, sourceUrl: SOURCE } });
+    const html = await renderPage();
+    expect(handedArtifact()?.sourceUrl).toBe(SOURCE);
+    expect(html).toContain("Open in source application");
+    expect(html).toContain(`href="${SOURCE}"`);
+    expect(mocks.resolveDashboardArtifactPointer).not.toHaveBeenCalled();
+  });
+
+  it("a row of another type with no record address carries none and draws no source-application link", async () => {
+    const html = await renderPage();
+    expect(handedArtifact()?.sourceUrl).toBeNull();
+    expect(html).not.toContain("Open in source application");
   });
 });

@@ -141,7 +141,9 @@ export function bindArtifactReviewPorts(ctx: {
    * `continued` once the gate was resolved with the approve disposition, and
    * `pending` for every other gate state. Handed to every target alike, with the
    * live address the artifact record itself carries; the props builder writes
-   * none in the pending reading. Absent only outside a review.
+   * none in the pending reading. Absent only outside a review. A dashboard
+   * target's live address is its canonical path, read through the dashboard's
+   * own read gate in the continued reading only (cinatra#4311).
    */
   reading?: ArtifactRendererReviewReading["reading"];
 }): Pick<
@@ -382,6 +384,22 @@ export function bindArtifactReviewPorts(ctx: {
     // href pointing at the byte routes would be a link that 404s from the moment
     // it is drawn — a dead end of exactly the kind this wave exists to remove.
     const { artifact, representationRevisionId, mime } = input;
+    // THE LIVE ADDRESS OF A DASHBOARD TARGET (cinatra#4311). The record carries
+    // a live address from a connector reference only, so a dashboard reads none,
+    // and its display draws "Open live dashboard" from `artifact.sourceUrl`. In
+    // the continued reading, and only there, the address is the dashboard's
+    // canonical path, read through the dashboard's own read gate with the
+    // reader's session: a reader the dashboard refuses, or a gate that cannot be
+    // read, gets no address. A pending reading carries no live link, so it reads
+    // nothing. The island holds no session cookie and reads nothing either.
+    const ownReview = input.propsApiVersion >= 5 && input.review ? input.review : null;
+    const continued = (ownReview ? ownReview.reading : reading) === "continued";
+    const dashboardLive = continued && byteMinter === null ? await readDashboardTargetLive(artifact) : null;
+    const shownArtifact: ArtifactSummary = dashboardLive
+      ? { ...artifact, sourceUrl: dashboardLive.liveAddress }
+      : artifact;
+    const shownReview =
+      ownReview && dashboardLive ? { ...ownReview, openLive: dashboardLive.liveAddress } : input.review;
     const fileBacked = isFileFormMember(input.member);
     const previewHref = fileBacked
       ? versionPinnedHref(artifact.artifactId, representationRevisionId, "preview")
@@ -461,7 +479,7 @@ export function bindArtifactReviewPorts(ctx: {
         );
 
     return buildArtifactRendererProps({
-      artifact,
+      artifact: shownArtifact,
       // THE REVIEW CARD IS READ-ONLY BY CONSTRUCTION (enabler 0.20): it mints a
       // NAMED REFUSAL rather than an edit capability, so the SAME display draws
       // there with no editing affordance and no save address — and "a review's
@@ -474,7 +492,7 @@ export function bindArtifactReviewPorts(ctx: {
       // THE NEGOTIATED VERSION (enabler 0.4) — the display's own, resolved
       // before this builder ran.
       propsApiVersion: input.propsApiVersion,
-      ...(input.propsApiVersion >= 5 && input.review ? { review: input.review } : {}),
+      ...(input.propsApiVersion >= 5 && input.review ? { review: shownReview } : {}),
       // THE DATA ROAD the surface named (cinatra#4311); the builder drops it
       // below version 3.
       ...(ctx.dataRoad ? { data: ctx.dataRoad } : {}),
@@ -484,7 +502,7 @@ export function bindArtifactReviewPorts(ctx: {
       // on this surface. The builder writes none below v3
       // and writes no live address in the pending reading.
       ...(reading && !(input.propsApiVersion >= 5 && input.review)
-        ? { review: { reading, openLive: artifact.sourceUrl ?? null } }
+        ? { review: { reading, openLive: shownArtifact.sourceUrl ?? null } }
         : {}),
     });
   };
@@ -504,6 +522,19 @@ export function bindArtifactReviewPorts(ctx: {
  * form reads as `file` for the reason `isFileFormMember` gives: that is what
  * every caller written before enabler 0.10 meant.
  */
+/**
+ * The dashboard read gate's live address for one review target (cinatra#4311):
+ * null for a row of another type, whose record's own address stands. The gate
+ * module is loaded on this road only, the continued reading of a cookie surface,
+ * and a load that fails gives no address, so the card is still built.
+ */
+async function readDashboardTargetLive(
+  artifact: ArtifactSummary,
+): Promise<{ readonly liveAddress: string | null } | null> {
+  const gate = await import("./artifact-type-read-gate").catch(() => null);
+  return gate ? gate.readDashboardLiveAddress(artifact) : null;
+}
+
 function memberForm(
   member: NonNullable<RevisionMemberOutcome>,
 ): ArtifactRepresentationForm {

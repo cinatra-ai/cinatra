@@ -40,7 +40,7 @@ import { DashboardAccessError, requireDashboardAccess } from "@/lib/dashboards/a
 import { readDashboardRowById } from "@cinatra-ai/dashboards/extension-dashboard-reads";
 import { DASHBOARD_ARTIFACT_OBJECT_TYPE } from "@/lib/dashboards/dashboard-artifact-surface";
 import { resolveDashboardArtifactPointer } from "@/lib/dashboards/dashboard-artifact-pointer-resolvers";
-import { readArtifactTypeGate } from "../artifact-type-read-gate";
+import { readArtifactTypeGate, readDashboardLiveAddress } from "../artifact-type-read-gate";
 
 const access = vi.mocked(requireDashboardAccess);
 const readRow = vi.mocked(readDashboardRowById);
@@ -104,12 +104,13 @@ describe("readArtifactTypeGate", () => {
     await expect(readArtifactTypeGate(DASHBOARD)).resolves.toEqual({ access: "not-found" });
   });
 
-  it("a live dashboard the grant admits is ok and carries its pointer", async () => {
+  it("a live dashboard the grant admits is ok and carries its pointer and its canonical path", async () => {
     readRow.mockResolvedValue(dashboardRow() as never);
     access.mockResolvedValue(undefined as never);
     await expect(readArtifactTypeGate(DASHBOARD)).resolves.toEqual({
       access: "ok",
       dashboardPointer: expect.objectContaining({ dashboardId: "dash-1", name: "Pipeline health" }),
+      liveAddress: "/teams/team-growth/dashboards/dash-1",
     });
   });
 
@@ -119,7 +120,7 @@ describe("readArtifactTypeGate", () => {
   });
 
   it("a row of another type is ok and never reads a dashboard", async () => {
-    const ok = { access: "ok", dashboardPointer: null };
+    const ok = { access: "ok", dashboardPointer: null, liveAddress: null };
     await expect(readArtifactTypeGate({ artifactId: "a-1", objectType: "acme.note" })).resolves.toEqual(ok);
     await expect(readArtifactTypeGate({ artifactId: "a-2", objectType: null })).resolves.toEqual(ok);
     expect(readRow).not.toHaveBeenCalled();
@@ -181,5 +182,67 @@ describe("readArtifactTypeGate refuses an answer it does not know (fails closed)
     await expect(result).rejects.toMatchObject({ name: "ArtifactTypeReadGateError" });
     await expect(result).rejects.toThrow("the dashboard read gate answered no known access");
     await expect(result).rejects.not.toThrow("private value");
+  });
+});
+
+describe("the dashboard's live address (cinatra#4311)", () => {
+  // The pointer is drawn whatever its path; only one root-relative path of this
+  // application becomes the live address.
+  it.each([
+    ["no path", undefined],
+    ["a path that is not a string", 7],
+    ["an absolute address of another host", "https://elsewhere.example/d"],
+    ["a protocol-relative address", "//elsewhere.example/d"],
+    ["a backslash address", "/\\elsewhere.example/d"],
+    ["a path with a doubled slash", "/dashboards//d"],
+    ["a path with a control character", "/dashboards/\td"],
+    ["a script address", "javascript:alert(1)"],
+  ])("%s gives an ok answer with its pointer and no live address", async (_label, canonicalHref) => {
+    const pointer = { dashboardId: "dash-1", name: "Pipeline health", canonicalHref };
+    resolver.mockResolvedValueOnce({ access: "ok", pointer } as never);
+    await expect(readArtifactTypeGate(DASHBOARD)).resolves.toEqual({
+      access: "ok",
+      dashboardPointer: pointer,
+      liveAddress: null,
+    });
+  });
+
+  it("a canonicalHref getter that throws rejects with the gate's own error", async () => {
+    const pointer = Object.defineProperty({ dashboardId: "dash-1" }, "canonicalHref", {
+      enumerable: true,
+      get() {
+        throw new Error("private value");
+      },
+    });
+    resolver.mockResolvedValueOnce({ access: "ok", pointer } as never);
+    const result = readArtifactTypeGate(DASHBOARD);
+    await expect(result).rejects.toMatchObject({ name: "ArtifactTypeReadGateError" });
+    await expect(result).rejects.not.toThrow("private value");
+  });
+
+  it("the review road reads the canonical path of a dashboard the grant admits", async () => {
+    readRow.mockResolvedValue(dashboardRow() as never);
+    access.mockResolvedValue(undefined as never);
+    await expect(readDashboardLiveAddress(DASHBOARD)).resolves.toEqual({
+      liveAddress: "/teams/team-growth/dashboards/dash-1",
+    });
+  });
+
+  it.each([
+    ["denied", () => access.mockRejectedValue(new DashboardAccessError("dashboard_forbidden", "no"))],
+    ["not found", () => readRow.mockResolvedValue(null as never)],
+    ["a store failure", () => readRow.mockRejectedValue(new Error("store down"))],
+    ["an unknown answer", () => resolver.mockResolvedValueOnce({ access: "timeout" } as never)],
+  ])("the review road reads no address where the gate answers %s", async (_label, arrange) => {
+    readRow.mockResolvedValue(dashboardRow() as never);
+    access.mockResolvedValue(undefined as never);
+    arrange();
+    await expect(readDashboardLiveAddress(DASHBOARD)).resolves.toEqual({ liveAddress: null });
+  });
+
+  it("the review road answers null for a row of another type and never asks the dashboard gate", async () => {
+    await expect(readDashboardLiveAddress({ artifactId: "a-1", objectType: "acme.note" })).resolves.toBeNull();
+    expect(readRow).not.toHaveBeenCalled();
+    expect(access).not.toHaveBeenCalled();
   });
 });

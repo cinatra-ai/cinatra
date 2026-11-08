@@ -67,6 +67,10 @@ vi.mock("../renderer-dispatch", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../renderer-dispatch")>()),
   pickArtifactRenderer: vi.fn(() => ({ kind: "fallback" })),
 }));
+// The dashboard's own read gate runs for real; only its session resolver is the seam.
+vi.mock("@/lib/dashboards/dashboard-artifact-pointer-resolvers", () => ({
+  resolveDashboardArtifactPointer: vi.fn(),
+}));
 
 import {
   enforceReviewRunAccess,
@@ -79,6 +83,8 @@ import {
   readArtifactForSettledReview,
 } from "@/lib/artifacts/artifact-service";
 import { resolveArtifactVersionForServe } from "@/lib/artifacts/artifact-read";
+import { resolveDashboardArtifactPointer } from "@/lib/dashboards/dashboard-artifact-pointer-resolvers";
+import { DASHBOARD_ARTIFACT_OBJECT_TYPE } from "@/lib/dashboards/dashboard-artifact-surface";
 import {
   ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION,
   absentArtifactContent,
@@ -190,6 +196,7 @@ afterAll(() => {
   vi.doUnmock("@/lib/artifacts/system-artifact-renderer-registrar");
   vi.doUnmock("../renderer-resolution");
   vi.doUnmock("../renderer-dispatch");
+  vi.doUnmock("@/lib/dashboards/dashboard-artifact-pointer-resolvers");
   vi.restoreAllMocks();
   vi.resetModules();
   vi.useRealTimers();
@@ -425,5 +432,113 @@ describe("(g) a review the preparation input carries at version 5 is kept", () =
     // The surface's pending reading would read { reading: "pending", openLive: null }.
     expect(props.review).toEqual(own);
     expect(props.data).toEqual(SESSION_ROAD);
+  });
+});
+
+describe("(h) a dashboard target's live address is its canonical path (cinatra#4311)", () => {
+  const CANONICAL = "/teams/t-1/dashboards/dash-r";
+  const resolver = vi.mocked(resolveDashboardArtifactPointer);
+  const DASHBOARD_TARGET = {
+    artifact: summary("dash-r", DASHBOARD_ARTIFACT_OBJECT_TYPE, null),
+    revision: "rev_dash",
+    mime: "application/vnd.cinatra.dashboard+json",
+    member: {
+      mime: "application/vnd.cinatra.dashboard+json",
+      form: "dashboard" as const,
+      configuration: { layout: [] },
+      configurationDigest: "e".repeat(64),
+    },
+  };
+  function admit(): void {
+    resolver.mockResolvedValue({
+      access: "ok",
+      pointer: { dashboardId: "dash-r", name: "R", canonicalHref: CANONICAL },
+    } as never);
+  }
+
+  it("the continued reading hands a dashboard the canonical path as its record address and its live navigation", async () => {
+    admit();
+    const [props] = await buildCensus(
+      { reading: "continued", dataRoad: SESSION_ROAD } as Partial<BinderCtx>,
+      ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION,
+      [DASHBOARD_TARGET],
+    );
+    expect(resolver).toHaveBeenCalledWith("dash-r");
+    expect(props.artifact.sourceUrl).toBe(CANONICAL);
+    expect(props.review).toEqual({ reading: "continued", openLive: CANONICAL });
+  });
+
+  it("a version 5 review the input carries gets the canonical path as its live navigation", async () => {
+    admit();
+    const { buildProps } = bindArtifactReviewPorts({
+      orgId: ORG,
+      actor,
+      buildContent: stubContent,
+      reading: "pending",
+    } as BinderCtx);
+    const decidedAt = "2026-10-01T12:00:00.000Z";
+    const props = await buildProps({
+      artifact: DASHBOARD_TARGET.artifact,
+      representationRevisionId: DASHBOARD_TARGET.revision,
+      mime: DASHBOARD_TARGET.mime,
+      propsApiVersion: 5,
+      member: DASHBOARD_TARGET.member,
+      review: { reading: "continued", openLive: null, decidedAt },
+    });
+    expect(props.artifact.sourceUrl).toBe(CANONICAL);
+    expect(props.review).toEqual({ reading: "continued", openLive: CANONICAL, decidedAt });
+  });
+
+  it("the pending reading never asks the dashboard gate and carries no address", async () => {
+    admit();
+    const [props] = await buildCensus(
+      { reading: "pending", dataRoad: SESSION_ROAD } as Partial<BinderCtx>,
+      ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION,
+      [DASHBOARD_TARGET],
+    );
+    expect(resolver).not.toHaveBeenCalled();
+    expect(props.artifact.sourceUrl).toBeNull();
+    expect(props.review).toEqual({ reading: "pending", openLive: null });
+  });
+
+  it.each([
+    ["denies the reader", () => resolver.mockResolvedValue({ access: "denied" } as never)],
+    ["does not find the dashboard", () => resolver.mockResolvedValue({ access: "not-found" } as never)],
+    ["cannot be read", () => resolver.mockRejectedValue(new Error("store down"))],
+  ])("a dashboard whose gate %s gets no address, and its card is still built", async (_label, arrange) => {
+    arrange();
+    const [props] = await buildCensus(
+      { reading: "continued", dataRoad: SESSION_ROAD } as Partial<BinderCtx>,
+      ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION,
+      [DASHBOARD_TARGET],
+    );
+    expect(props.artifact.sourceUrl).toBeNull();
+    expect(props.review).toEqual({ reading: "continued", openLive: null });
+  });
+
+  it("the island reads no dashboard gate and carries no address", async () => {
+    admit();
+    const [props] = await buildCensus(
+      {
+        reading: "continued",
+        byteMinter: () => null,
+      } as unknown as Partial<BinderCtx>,
+      ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION,
+      [DASHBOARD_TARGET],
+    );
+    expect(resolver).not.toHaveBeenCalled();
+    expect(props.artifact.sourceUrl).toBeNull();
+  });
+
+  it("a connector row is unchanged and never asks the dashboard gate", async () => {
+    admit();
+    const [props] = await buildCensus(
+      { reading: "continued", dataRoad: SESSION_ROAD } as Partial<BinderCtx>,
+      ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION,
+      [CENSUS[0]],
+    );
+    expect(resolver).not.toHaveBeenCalled();
+    expect(props.artifact.sourceUrl).toBe(LIVE);
+    expect(props.review).toEqual({ reading: "continued", openLive: LIVE });
   });
 });
