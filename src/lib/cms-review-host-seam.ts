@@ -44,6 +44,28 @@ import type {
   ConnectorRefResolvedContent,
 } from "@cinatra-ai/objects/connector-ref";
 
+/** cinatra#3978: the limit in UTF-8 bytes of a capture's operation id. The id
+ * becomes the source of the apply's effect record, whose table holds 1 to 256
+ * bytes (`artifact_review_effect_records.source_ref`), so a capture takes no
+ * id the effect could never be stored under. */
+export const CMS_OPERATION_ID_MAX_BYTES = 256;
+
+function isCapturableOperationId(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const bytes = Buffer.byteLength(value, "utf8");
+  return bytes >= 1 && bytes <= CMS_OPERATION_ID_MAX_BYTES;
+}
+
+/** The class of a thrown value for a log line: "error" or "non-error", never its
+ * text. A value whose prototype cannot be read keeps "non-error". */
+function thrownClass(err: unknown): "error" | "non-error" {
+  try {
+    return err instanceof Error ? "error" : "non-error";
+  } catch {
+    return "non-error";
+  }
+}
+
 /** The five-state disposition of a captured staged write's external effect —
  * mirrors the connector's `CmsReviewDisposition`. */
 export type CmsReviewDisposition = "held" | "approved" | "rejected" | "ungated" | "unknown";
@@ -265,6 +287,11 @@ export function buildCmsReviewHostSeam(deps: CmsReviewHostSeamDeps): CmsReviewHo
           "[cms-review] no organization resolved from the trusted request frame — refusing to capture a staged CMS write without a tenant scope.",
         );
       }
+      if (!isCapturableOperationId(input.operationId)) {
+        throw new Error(
+          `[cms-review] the operation id must be 1 to ${CMS_OPERATION_ID_MAX_BYTES} UTF-8 bytes — refusing to capture a staged CMS write whose effect could never be recorded.`,
+        );
+      }
       const res = await deps.captureCmsContentSnapshot({
         orgId,
         pointer: input.pointer,
@@ -431,15 +458,9 @@ export function buildCmsReviewHostSeam(deps: CmsReviewHostSeamDeps): CmsReviewHo
             effect = written.ok ? written.status : "refused";
           } catch (err) {
             effect = "unrecorded";
-            let errorClass = "non-error";
-            try {
-              if (err instanceof Error) errorClass = "error";
-            } catch {
-              // A thrown value whose prototype cannot be read keeps the fixed class.
-            }
             console.warn(
               "[cms-review] the apply effect could not be recorded (the verification is unaffected):",
-              errorClass,
+              thrownClass(err),
             );
           }
         }
@@ -460,9 +481,10 @@ export function buildCmsReviewHostSeam(deps: CmsReviewHostSeamDeps): CmsReviewHo
             producerRunId: input.runId,
           });
         } catch (err) {
+          // A fixed text and the class only: the error's text may carry private detail.
           console.warn(
             "[cms-review] post-apply preview capture failed (the verification is unaffected):",
-            err instanceof Error ? err.message : err,
+            thrownClass(err),
           );
         }
       }

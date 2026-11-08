@@ -207,6 +207,10 @@ transaction: after `unrecorded`, retry `recordApplyVerification` with the same
 operation and the same result, and never apply the change again. A display may
 state what happened at the site only from a stored record.
 
+The operation id is the source of the record, so it is 1 to 256 UTF-8 bytes:
+`captureStagedWrite` refuses (throws) any other id before it captures, and the
+host answers `refused` for a captured operation whose id is outside that range.
+
 ## 7. Region anchors
 
 Anchors come **exclusively from the adapter**. The site emits them server-side in

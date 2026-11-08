@@ -21,6 +21,17 @@ import { readCmsSnapshotTargetByOperation } from "./cms-snapshot-readback-store"
 /** The limit in UTF-8 bytes of the compact JSON text; the DB CHECK counts the same text. */
 export const REVIEW_EFFECT_RECORD_MAX_BYTES = 8192;
 
+/** The limit in UTF-8 bytes of the record's source (the CMS operation id); the
+ *  table's `source_ref` CHECK and the capture seam hold the same 1 to 256. */
+export const REVIEW_EFFECT_SOURCE_MAX_BYTES = 256;
+
+/** A source the table can hold: a string of 1 to 256 UTF-8 bytes. */
+function isStorableSource(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const bytes = Buffer.byteLength(value, "utf8");
+  return bytes >= 1 && bytes <= REVIEW_EFFECT_SOURCE_MAX_BYTES;
+}
+
 const MAX_DEPTH = 32;
 const CANONICAL_ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
@@ -32,6 +43,11 @@ export type ReviewEffectRecordJson =
 /** A string the DB JSON type can hold: no NUL, no lone surrogate. */
 function isJsonSafeString(text: string): boolean {
   return !text.includes("\u0000") && !LONE_SURROGATE.test(text);
+}
+
+/** An own key of an array that is a canonical index below its length. */
+function isArrayIndexKey(key: string, length: number): boolean {
+  return /^(?:0|[1-9]\d*)$/.test(key) && Number(key) < length;
 }
 
 function isPlainJsonValue(value: unknown, ancestors: Set<object>, depth: number): boolean {
@@ -46,7 +62,13 @@ function isPlainJsonValue(value: unknown, ancestors: Set<object>, depth: number)
   if ("toJSON" in value) return false; // `in` runs no getter
   const keys = Reflect.ownKeys(value);
   if (keys.some((k) => typeof k === "symbol")) return false;
-  if (isArray && keys.length !== (value as unknown[]).length + 1) return false; // holes, extra keys
+  if (isArray) {
+    // Exactly `length` canonical indexes below `length` plus `length` itself: no
+    // hole (JSON would read it through the prototype) and no extra key.
+    const length = (value as unknown[]).length;
+    if (keys.length !== length + 1) return false;
+    if (!(keys as string[]).every((k) => k === "length" || isArrayIndexKey(k, length))) return false;
+  }
   ancestors.add(value);
   try {
     return (keys as string[]).every((key) => {
@@ -63,14 +85,16 @@ function isPlainJsonValue(value: unknown, ancestors: Set<object>, depth: number)
 /**
  * Serialize an effect record, or refuse it. The top level must be a plain
  * object. Refused: null, arrays, non-finite numbers, undefined, functions,
- * symbols, bigint, cycles, binary objects, class instances, getters, proxies,
- * `toJSON`, NUL and lone surrogates in a value or a key (the DB JSON type
- * refuses both), and anything over the byte limit.
+ * symbols, bigint, cycles, binary objects, class instances, getters, proxies
+ * (also revoked ones, without a throw), `toJSON`, sparse arrays and arrays with
+ * a key that is not an index, NUL and lone surrogates in a value or a key (the
+ * DB JSON type refuses both), and anything over the byte limit.
  */
 export function serializeReviewEffectRecord(value: unknown): ReviewEffectRecordJson {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return { ok: false, code: "not-a-plain-object" };
-  }
+  if (value === null || typeof value !== "object") return { ok: false, code: "not-a-plain-object" };
+  // The proxy check first: Array.isArray throws on a revoked proxy.
+  if (utilTypes.isProxy(value)) return { ok: false, code: "invalid-value" };
+  if (Array.isArray(value)) return { ok: false, code: "not-a-plain-object" };
   if (!isPlainJsonValue(value, new Set(), 0)) return { ok: false, code: "invalid-value" };
   const json = JSON.stringify(value);
   if (Buffer.byteLength(json, "utf8") > REVIEW_EFFECT_RECORD_MAX_BYTES) return { ok: false, code: "too-large" };
@@ -109,14 +133,30 @@ export function parseCmsApplyEffectResult(value: unknown): CmsApplyEffectResult 
   };
 }
 
-/** A gate's stored pinned set read fail-closed: every element a plain object
- *  with two non-empty string ids, or null for the whole set. */
+/** The value of an own data property, or undefined; runs no getter. */
+function ownDataValue(obj: object, key: string): unknown {
+  const d = Object.getOwnPropertyDescriptor(obj, key);
+  return d && "value" in d ? d.value : undefined;
+}
+
+/** A gate's stored pinned set read fail-closed: a plain array with no proxy,
+ *  whose every element is a plain (or null-prototype) object, no proxy, with
+ *  two non-empty string ids as own data properties; or null for the whole set.
+ *  It runs no getter. */
 export function storedPinnedTargets(value: unknown): { artifactId: string; representationRevisionId: string }[] | null {
-  if (!Array.isArray(value)) return null;
+  if (value === null || typeof value !== "object" || utilTypes.isProxy(value)) return null;
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return null;
   const out: { artifactId: string; representationRevisionId: string }[] = [];
-  for (const el of value) {
-    if (el === null || typeof el !== "object" || Array.isArray(el)) return null;
-    const { artifactId, representationRevisionId } = el as Record<string, unknown>;
+  const length = value.length;
+  for (let i = 0; i < length; i += 1) {
+    const d = Object.getOwnPropertyDescriptor(value, String(i));
+    if (!d || !("value" in d)) return null;
+    const el: unknown = d.value;
+    if (el === null || typeof el !== "object" || utilTypes.isProxy(el) || Array.isArray(el)) return null;
+    const proto = Object.getPrototypeOf(el);
+    if (proto !== Object.prototype && proto !== null) return null;
+    const artifactId = ownDataValue(el, "artifactId");
+    const representationRevisionId = ownDataValue(el, "representationRevisionId");
     if (typeof artifactId !== "string" || artifactId.length === 0) return null;
     if (typeof representationRevisionId !== "string" || representationRevisionId.length === 0) return null;
     out.push({ artifactId, representationRevisionId });
@@ -125,7 +165,7 @@ export function storedPinnedTargets(value: unknown): { artifactId: string; repre
 }
 
 export type ReviewEffectRefusal =
-  | "invalid-result" | "target-not-found" | "gate-not-found" | "gate-org-mismatch"
+  | "invalid-result" | "invalid-operation" | "target-not-found" | "gate-not-found" | "gate-org-mismatch"
   | "gate-run-mismatch" | "gate-not-approved" | "pinned-targets-malformed"
   | "target-not-pinned" | "not-verified" | "conflict";
 
@@ -140,7 +180,8 @@ export function reviewEffectId(gateId: string, artifactId: string, revisionId: s
 
 /**
  * Record the effect of an approved CMS apply whose read-back VERIFIED. The
- * result passes the closed schema before any read; then, from stored state:
+ * result passes the closed schema and the operation id (the record's source)
+ * is 1 to 256 UTF-8 bytes before any read; then, from stored state:
  * the operation's snapshot is the target; the gate exists, belongs to `orgId`
  * (the trusted frame's org) and `runId`, resolved `approve`, and its well-formed
  * pinned set pins the snapshot; its stored verification of the snapshot reads
@@ -156,8 +197,11 @@ export async function recordCmsApplyEffect(input: {
 }): Promise<ReviewEffectWriteResult> {
   const result = parseCmsApplyEffectResult(input.result);
   if (!result) return { ok: false, code: "invalid-result" };
+  // A defensive invariant: a parsed result always serializes.
   const serialized = serializeReviewEffectRecord(result);
   if (!serialized.ok) return { ok: false, code: "invalid-result" };
+  // The source CHECK of the table would raise for any other id, on every retry.
+  if (!isStorableSource(input.operationId)) return { ok: false, code: "invalid-operation" };
 
   const target = await readCmsSnapshotTargetByOperation(input.operationId);
   if (!target) return { ok: false, code: "target-not-found" };

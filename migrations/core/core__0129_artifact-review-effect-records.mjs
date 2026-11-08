@@ -15,7 +15,9 @@
 // constraint of the table itself; nothing is backfilled.
 // SEQ 0129: 0125 is the highest on main at authoring time; 0126 to 0128 are
 // taken by other pending changes, and open changes also claim 0115, 0116 and
-// 0120. DOWN drops the table only when it is empty (core__0113).
+// 0120. DOWN drops the table only when it is empty (core__0113), and takes an
+// ACCESS EXCLUSIVE lock before it looks, so no row can commit between the
+// check and the drop.
 
 /** Idempotent DDL mirroring the bootstrap leaf — safe to run after it. */
 export const artifactReviewEffectRecordsDdlSql = `
@@ -48,6 +50,9 @@ export function down(pgm) {
     DO $$
     BEGIN
       IF to_regclass('artifact_review_effect_records') IS NOT NULL THEN
+        -- Held to the end of the migration's transaction: a writer that holds
+        -- the table is waited for, and its row is then seen by the check.
+        LOCK TABLE artifact_review_effect_records IN ACCESS EXCLUSIVE MODE;
         IF EXISTS (SELECT 1 FROM artifact_review_effect_records) THEN
           RAISE EXCEPTION
             'core__0129 down: artifact_review_effect_records is not empty; dropping it would destroy the record of reviewed effects. Export or delete the rows deliberately first.';
