@@ -504,3 +504,25 @@ describe("each scope by its type and its name, named once (cinatra#3443, §IV)",
     expect(row).toEqual({ ownerLevel: "team", ownerName: "Growth", visibility: "private", mime: "text/html", updatedAt: UPDATED });
   });
 });
+
+// cinatra#3080: the conversation's comment is its own
+// submission. It is a Comment (the floor stays three actions, and it needs the
+// reader's respond right), marked as the conversation's, so the one entry can
+// keep its change road apart from the Note-field Comment, which only annotates.
+describe("the conversation's comment resolves to a marked Comment, never a fourth floor action", () => {
+  it("resolves `conversation-comment` to Comment, marked as the conversation's", async () => {
+    const { resolveReviewFloorSubmission, REVIEW_FLOOR_ACTIONS, floorActionRunAccessOp } = await import("../review-surface-model");
+    expect(resolveReviewFloorSubmission("conversation-comment")).toEqual({ kind: "action", action: "comment", alias: false, conversation: true });
+    expect(REVIEW_FLOOR_ACTIONS).toEqual(["comment", "regenerate", "continue"]);
+    expect(floorActionRunAccessOp("comment")).toBe("respondToHitl");
+  });
+
+  it("marks no other word as the conversation's", async () => {
+    const { resolveReviewFloorSubmission } = await import("../review-surface-model");
+    expect(resolveReviewFloorSubmission("comment")).toEqual({ kind: "action", action: "comment", alias: false, conversation: false });
+    expect(resolveReviewFloorSubmission("regenerate")).toEqual({ kind: "action", action: "regenerate", alias: false, conversation: false });
+    expect(resolveReviewFloorSubmission("continue")).toEqual({ kind: "action", action: "continue", alias: false, conversation: false });
+    expect(resolveReviewFloorSubmission("approve")).toEqual({ kind: "action", action: "continue", alias: true, conversation: false });
+    expect(resolveReviewFloorSubmission("reject").kind).toBe("retired");
+  });
+});

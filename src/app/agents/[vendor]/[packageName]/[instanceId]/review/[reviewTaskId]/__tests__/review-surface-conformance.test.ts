@@ -551,16 +551,21 @@ describe("§IV — LIFECYCLE prompt-window wiring (owner ruling 2026-07-25, cina
     }
   });
 
-  it("the action routes ONLY Regenerate to changes_requested, and only when fenced + a single-target lifecycle gate", () => {
+  it("the action routes Regenerate and the conversation's comment to changes_requested, each only when fenced + a single-target gate; the Note-field Comment never", () => {
     // The fence gate + the lifecycle-gate class check + single-target guard.
     expect(ACTIONS).toMatch(/isLifecycleReviewOrchestrationActive\(\)/);
     expect(ACTIONS).toMatch(/isAutoReviewTaskId\(reviewTaskId\)/);
     expect(ACTIONS).toMatch(/isBatchAutoReviewTaskId\(reviewTaskId\)/);
     expect(ACTIONS).toMatch(/pinnedTargets\.length !== 1/);
-    // Only the Regenerate floor action takes the path; a Comment never does.
+    // The Regenerate floor action takes the path on the regenerate road.
     expect(ACTIONS).toMatch(/action === "regenerate"/);
     expect(ACTIONS).toMatch(/submitReviewSurfaceChangesRequested/);
     expect(ACTIONS).toMatch(/mapChangesRequestedToOutcome/);
+    // The conversation's comment (its own submission) takes it on the typed road,
+    // and the card's composer is what posts that submission.
+    expect(ACTIONS).toMatch(/resolved\.conversation/);
+    expect(ACTIONS).toMatch(/origin: "typed"/);
+    expect(stripComments(REVIEW_GATE_CARD)).toMatch(/disposition: "conversation-comment"/);
   });
 
   it("the changes_requested outcome renders as a status notice (data-review-outcome), NOT a new conformance anchor", () => {

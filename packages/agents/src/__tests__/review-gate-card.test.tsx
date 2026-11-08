@@ -1552,13 +1552,15 @@ describe("#2566 composer focus", () => {
     await waitForComposerRegistration(store, VIEW.ref);
 
     const result = await store.getCommentAction(VIEW.ref)!("shorten the intro");
-    // The SAME gate-scoped entry, the SAME opaque ref, the `comment` disposition
-    // the floor's Comment button posts — not a second transport.
+    // The SAME gate-scoped entry and the SAME opaque ref — not a second
+    // transport — under the conversation's OWN submission kind: the floor's
+    // Comment button posts `comment` and only annotates; the
+    // conversation's comment keeps the change road.
     const decide = calls.find((c) => c.url === LIFECYCLE_VIEW_DECIDE_PATH);
     expect(decide).toBeDefined();
     expect(decide!.body).toMatchObject({
       ref: VIEW.ref,
-      disposition: "comment",
+      disposition: "conversation-comment",
       comment: "shorten the intro",
     });
     // A comment carries NO per-item partition — it does not resolve the gate, so
@@ -1628,7 +1630,7 @@ describe("#2566 composer focus", () => {
     expect(result.ok).toBe(true);
     expect(calls.find((c) => c.url === LIFECYCLE_VIEW_DECIDE_PATH)!.body).toMatchObject({
       ref: VIEW.ref,
-      disposition: "comment",
+      disposition: "conversation-comment",
       comment: "the intro is too long",
     });
   });

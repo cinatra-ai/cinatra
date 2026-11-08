@@ -88,7 +88,7 @@ describe("#3035 picture regeneration — Regenerate on the featured image mints 
   });
 
   it("settles the featured image's gate as superseded and pins one successor for that same artifact", async () => {
-    const outcome = await submitReviewDecisionAction(RUN, `${STEP}#2`, "comment", "Make the sky darker");
+    const outcome = await submitReviewDecisionAction(RUN, `${STEP}#2`, "conversation-comment", "Make the sky darker");
 
     expect(gate(`${STEP}#2`)).toMatchObject({ status: "resolved", disposition: "changes_requested" });
     expect(outcome).toEqual({ kind: "changes-requested", status: "requested", idempotent: false });
@@ -101,7 +101,7 @@ describe("#3035 picture regeneration — Regenerate on the featured image mints 
 
   it("leaves the post's gate exactly as it was", async () => {
     const before = structuredClone(gate(STEP));
-    await submitReviewDecisionAction(RUN, `${STEP}#2`, "comment", "Make the sky darker");
+    await submitReviewDecisionAction(RUN, `${STEP}#2`, "conversation-comment", "Make the sky darker");
     expect(gate(STEP)).toEqual(before);
     expect(p.changes).toHaveBeenCalledTimes(1);
     expect(p.changes.mock.calls[0][0]).toMatchObject({ runId: RUN, reviewTaskId: `${STEP}#2`, baseTarget: FEATURED });
@@ -109,7 +109,7 @@ describe("#3035 picture regeneration — Regenerate on the featured image mints 
 
   it("leaves only the successor pending until that gate is continued (gate rows only)", async () => {
     await submitReviewDecisionAction(RUN, STEP, "continue", null);
-    await submitReviewDecisionAction(RUN, `${STEP}#2`, "comment", "Make the sky darker");
+    await submitReviewDecisionAction(RUN, `${STEP}#2`, "conversation-comment", "Make the sky darker");
     const successorId = repairSuccessorReviewTaskId("repair-1", 1);
     expect(pending().map((g) => g.reviewTaskId)).toEqual([successorId]);
 
@@ -184,7 +184,7 @@ describe("#3035 picture regeneration — the witness reader refuses malformed pi
 describe("#3035 picture regeneration — the decision action on a declared gate (C2)", () => {
   it("keeps the plain comment when the store refuses the gate as no lifecycle gate", async () => {
     p.changes.mockResolvedValueOnce({ ok: false, code: "not-a-lifecycle-gate", error: "not a lifecycle review gate" });
-    const outcome = await submitReviewDecisionAction(RUN, `${STEP}#2`, "comment", "Make the sky darker");
+    const outcome = await submitReviewDecisionAction(RUN, `${STEP}#2`, "conversation-comment", "Make the sky darker");
 
     expect(p.changes).toHaveBeenCalledTimes(1);
     expect(p.decision).toHaveBeenCalledTimes(1);
@@ -197,7 +197,7 @@ describe("#3035 picture regeneration — the decision action on a declared gate 
 
   it("blocks without a plain comment when the store refuses the declared gate for another reason", async () => {
     p.changes.mockResolvedValueOnce({ ok: false, code: "gate-not-pending", error: "the review gate is no longer available" });
-    const outcome = await submitReviewDecisionAction(RUN, `${STEP}#2`, "comment", "Make the sky darker");
+    const outcome = await submitReviewDecisionAction(RUN, `${STEP}#2`, "conversation-comment", "Make the sky darker");
 
     expect(outcome).toEqual({ kind: "blocked", reason: "no-longer-pending" });
     expect(p.decision).not.toHaveBeenCalled();
@@ -205,7 +205,7 @@ describe("#3035 picture regeneration — the decision action on a declared gate 
 
   it("sends an empty or blank note on a declared gate down the plain comment, never the repair road", async () => {
     for (const note of ["", "   ", null]) {
-      await submitReviewDecisionAction(RUN, `${STEP}#2`, "comment", note);
+      await submitReviewDecisionAction(RUN, `${STEP}#2`, "conversation-comment", note);
     }
     expect(p.changes).not.toHaveBeenCalled();
     expect(p.decision).toHaveBeenCalledTimes(3);
@@ -216,7 +216,7 @@ describe("#3035 picture regeneration — the decision action on a declared gate 
   // repair road: the post's own leg keeps main's plain annotation.
   it("keeps a note on the post's own leg a plain comment and never calls the repair road", async () => {
     const before = structuredClone(gate(`${STEP}#2`));
-    const outcome = await submitReviewDecisionAction(RUN, STEP, "comment", "Tighten the intro");
+    const outcome = await submitReviewDecisionAction(RUN, STEP, "conversation-comment", "Tighten the intro");
 
     expect(outcome).toEqual({ kind: "annotated" });
     expect(p.changes).not.toHaveBeenCalled();
@@ -230,7 +230,7 @@ describe("#3035 picture regeneration — the decision action on a declared gate 
 
   it("keeps a note on the picture's leg a plain comment while the orchestration fence is off", async () => {
     p.fence = false;
-    const outcome = await submitReviewDecisionAction(RUN, `${STEP}#2`, "comment", "Make the sky darker");
+    const outcome = await submitReviewDecisionAction(RUN, `${STEP}#2`, "conversation-comment", "Make the sky darker");
 
     expect(outcome).toEqual({ kind: "annotated" });
     expect(p.changes).not.toHaveBeenCalled();
@@ -240,7 +240,7 @@ describe("#3035 picture regeneration — the decision action on a declared gate 
 
   it("keeps a note on a declared leg that pins two targets a plain comment", async () => {
     gate(`${STEP}#2`)!.targets = [FEATURED, REGENERATED];
-    const outcome = await submitReviewDecisionAction(RUN, `${STEP}#2`, "comment", "Make the sky darker");
+    const outcome = await submitReviewDecisionAction(RUN, `${STEP}#2`, "conversation-comment", "Make the sky darker");
 
     expect(outcome).toEqual({ kind: "annotated" });
     expect(p.changes).not.toHaveBeenCalled();

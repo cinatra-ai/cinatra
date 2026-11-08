@@ -197,6 +197,15 @@ describe("no oracle", () => {
     }
   });
 
+  it("accepts the conversation's comment as its own word and hands it to the ONE decision entry", async () => {
+    // The card's composer posts `conversation-comment`, which
+    // keeps the change road; the floor's Comment button posts `comment`.
+    submitReviewDecisionAction.mockResolvedValue({ kind: "changes-requested", status: "requested", idempotent: false });
+    const res = await POST(post({ ref: REF, disposition: "conversation-comment", comment: "warmer opening" }));
+    expect(res.status).toBe(200);
+    expect(submitReviewDecisionAction).toHaveBeenCalledWith("run-1", "task-1", "conversation-comment", "warmer opening", ACTOR, null, null);
+  });
+
   it("still accepts `approve` — a shipped card that posts it gets Continue", async () => {
     const res = await POST(post({ ref: REF, disposition: "approve" }));
     expect(res.status).toBe(200);

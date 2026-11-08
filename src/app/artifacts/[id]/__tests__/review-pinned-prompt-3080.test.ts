@@ -100,4 +100,10 @@ describe("§IV Regenerate binder passes the floor's road, the note and the promp
     await submitReviewSurfaceChangesRequested({ runId: "run", reviewTaskId: "task", baseTarget, feedback: "shorter", actorCtx });
     expect(db.changes.mock.calls[0][0]).toMatchObject({ feedback: "shorter", prompt: null, origin: "regenerate" });
   });
+  // The conversation's comment keeps #4339's road, the typed
+  // one, through this same binder; it names that road itself.
+  it("the conversation's comment names the typed road and carries no prompt", async () => {
+    await submitReviewSurfaceChangesRequested({ runId: "run", reviewTaskId: "task", baseTarget, feedback: "shorter", origin: "typed", actorCtx });
+    expect(db.changes.mock.calls[0][0]).toMatchObject({ feedback: "shorter", prompt: null, origin: "typed", decidedBy: "reader" });
+  });
 });
