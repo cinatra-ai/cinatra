@@ -142,9 +142,15 @@ describe("cinatra#3080 — Regenerate needs the producing step's declared Note i
   });
 
   it("the TYPED road on the same agent is unchanged: it still goes on to record the change request", async () => {
+    // The typed road makes no gate-state read of its own. After the existing-
+    // repair lookup the canonical operation derives the lineage from the decided
+    // gate's own row (cinatra#4312, `deriveDecidedGateLineage`): this gate's
+    // task id starts a fresh lineage.
+    ports.reads[3] = [{ id: "gate-3080-mf2", runId: RUN, reviewTaskId: TASK, orgId: "org-3080-mf2" }];
     await press();
     // It reaches the write, exactly as before: the narrowing is Regenerate's only.
     expect(ports.transaction).toHaveBeenCalledTimes(1);
+    expect(ports.reads).toEqual([]);
   });
 });
 
@@ -180,12 +186,16 @@ describe("cinatra#3080 — a Regenerate on a RESOLVED gate is blocked, not refus
   });
 });
 
-// cinatra#3080. A repair-SUCCESSOR gate and a
-// verification-REOPEN gate make one more read before the canonical operation:
-// the composer reads the repair that carries the cycle lineage. That read is a
-// read only. These cases pin what such a Regenerate answers, and that nothing
-// is written, on a pending gate and on a resolved one.
-describe("cinatra#3080 — the lineage read of a successor or reopen gate comes first, and writes nothing", () => {
+// cinatra#3080, on main's lineage derivation (#4312). A
+// repair-SUCCESSOR gate and a verification-REOPEN gate join an earlier repair's
+// lineage. The canonical operation derives that lineage from the decided gate's
+// own row (`deriveDecidedGateLineage`: a read of the gate, then of the repair),
+// and it does so only after Regenerate's refusals: the gate-state read and the
+// Note-input refusal answer first. These cases pin, on a pending gate and on a
+// resolved one, what such a Regenerate answers, that the lineage reads are not
+// made for it, and that nothing is written. The typed road on the same gate does
+// derive the lineage, and goes on to the write.
+describe("cinatra#3080 — on a successor or reopen gate, Regenerate is refused before the lineage is read, and nothing is written", () => {
   const REPAIR_ID = "00000000-0000-4000-8000-000000003080";
   const LINEAGE = "lineage-3080-note2";
   const repairRow = {
@@ -208,15 +218,17 @@ describe("cinatra#3080 — the lineage read of a successor or reopen gate comes 
   };
   const SUCCESSOR_TASK = `lifecycle-review:repair:${REPAIR_ID}:1`;
   const REOPEN_TASK = "lifecycle-review:verify:verify:gate-3080-successor";
+  /** The decided gate's own row, as the lineage derivation reads it. */
+  const gateRow = (task: string) => ({ id: "gate-3080-mf2", runId: RUN, reviewTaskId: task, orgId: "org-3080-mf2" });
 
   for (const [name, task] of [
     ["repair-successor", SUCCESSOR_TASK],
     ["verification-reopen", REOPEN_TASK],
   ] as const) {
-    it(`a ${name} gate, still pending: the lineage read runs, then the plain refusal; nothing is written`, async () => {
-      // The lineage read (the repair row) comes after the producer reads and
-      // before the canonical operation's own reads.
-      ports.reads.splice(2, 0, [repairRow]);
+    it(`a ${name} gate, still pending: the plain refusal comes before the lineage reads; nothing is written`, async () => {
+      // The lineage reads (the gate row, then the repair row) queue after the
+      // gate-state read: they are taken only if the operation gets that far.
+      ports.reads.push([gateRow(task)], [repairRow]);
       const result = await press("regenerate", task);
 
       const { REGENERATE_NO_NOTE_INPUT } = await import("@/lib/artifacts/review-surface-model");
@@ -225,22 +237,33 @@ describe("cinatra#3080 — the lineage read of a successor or reopen gate comes 
         code: "regenerate-unavailable",
         error: REGENERATE_NO_NOTE_INPUT,
       });
-      // The lineage read did run (its queued row was taken) before the refusal.
-      expect(ports.reads).not.toContainEqual([repairRow]);
+      // The refusal answered first: both lineage reads are still queued.
+      expect(ports.reads).toEqual([[gateRow(task)], [repairRow]]);
       expect(ports.transaction).not.toHaveBeenCalled();
       expect(ports.write).not.toHaveBeenCalled();
     });
 
-    it(`a ${name} gate, already resolved: gate-not-pending; nothing is written`, async () => {
+    it(`a ${name} gate, already resolved: gate-not-pending before the lineage reads; nothing is written`, async () => {
       gateAlreadyResolved();
-      ports.reads.splice(2, 0, [repairRow]);
+      ports.reads.push([gateRow(task)], [repairRow]);
       const result = await press("regenerate", task);
 
       expect(result.ok).toBe(false);
       if (result.ok) throw new Error("unreachable");
       expect(result.code).toBe("gate-not-pending");
+      expect(ports.reads).toEqual([[gateRow(task)], [repairRow]]);
       expect(ports.transaction).not.toHaveBeenCalled();
       expect(ports.write).not.toHaveBeenCalled();
     });
   }
+
+  it("the TYPED road on a repair-successor gate reads the lineage (the gate row, then the repair) and goes on to the write", async () => {
+    // No gate-state read on the typed road: the derivation's two reads follow
+    // the existing-repair lookup directly.
+    ports.reads.splice(3, 1, [gateRow(SUCCESSOR_TASK)], [repairRow]);
+    await press(undefined, SUCCESSOR_TASK);
+
+    expect(ports.reads).toEqual([]);
+    expect(ports.transaction).toHaveBeenCalledTimes(1);
+  });
 });

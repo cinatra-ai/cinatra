@@ -170,7 +170,8 @@ describe("#4024 — a committed decision settles the card before its refresh ans
     let resolves = 0;
     const fetchPort = vi.fn(async (url: unknown, init?: RequestInit) => {
       if (String(url).endsWith("/decide")) {
-        return JSON.parse(String(init?.body)).disposition === "comment" ? comment.promise : approveReply;
+        // The composer posts the conversation's own submission, never the Note-field `comment`.
+        return JSON.parse(String(init?.body)).disposition === "conversation-comment" ? comment.promise : approveReply;
       }
       return ++resolves === 1 ? response(envelope(PENDING)) : resolves === 2
         ? response({ ...envelope(PENDING), targetHeaders: [{ ...HEADER, title: "New concurrent authoritative revision" }] })
@@ -184,7 +185,7 @@ describe("#4024 — a committed decision settles the card before its refresh ans
     let annotation!: ReturnType<NonNullable<ReturnType<typeof store.getCommentAction>>>;
     await act(async () => { annotation = store.getCommentAction(VIEW.ref)!("A genuine concurrent composer annotation."); });
     expect(fetchPort.mock.calls.filter(([url]) => String(url).endsWith("/decide")).map(([, init]) =>
-      JSON.parse(String(init?.body)).disposition)).toEqual(["continue", "comment"]);
+      JSON.parse(String(init?.body)).disposition)).toEqual(["continue", "conversation-comment"]);
     await act(async () => {
       comment.resolve(response({ outcome: { kind: "annotated" } }));
       expect(await annotation).toMatchObject({ ok: true });
