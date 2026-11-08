@@ -62,6 +62,7 @@ vi.mock("@cinatra-ai/agents/review-gate-states", () => ({
 }));
 
 import { ARTIFACT_RENDERER_SESSION_DATA_ROAD } from "@/lib/artifacts/artifact-renderer-props";
+import { readDashboardLiveAddress } from "@/app/artifacts/[id]/artifact-type-read-gate";
 import { encodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import ReviewTargetIslandPage from "../page";
 
@@ -106,10 +107,11 @@ describe("the COOKIE branch hands the session data road (the card's cookie-sessi
     expect(roads?.dataRoad).toEqual(ARTIFACT_RENDERER_SESSION_DATA_ROAD);
   });
 
-  it("names the data road and NOTHING else: bytes, content and the capture pair stay as they were", async () => {
+  it("names the data road and the dashboard live address reader and NOTHING else: bytes, content and the capture pair stay as they were", async () => {
     await renderIsland();
     const { roads } = loaderRoads();
-    expect(Object.keys(roads ?? {})).toEqual(["dataRoad"]);
+    expect(Object.keys(roads ?? {}).sort()).toEqual(["dashboardLiveAddress", "dataRoad"]);
+    expect(roads?.dashboardLiveAddress).toBe(readDashboardLiveAddress);
   });
 
   it("a same-site widget frame that sends no credential reads by its cookie too, and is handed the road", async () => {

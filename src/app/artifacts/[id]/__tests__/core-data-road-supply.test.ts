@@ -49,6 +49,7 @@ import * as hostProps from "@/lib/artifacts/artifact-renderer-props";
 import { ArtifactStructuredDataView } from "@/components/artifacts/artifact-structured-data-view";
 import { bindArtifactReviewPorts } from "../review-target-prepare";
 import * as surfaceRoads from "../review-surface-roads";
+import { readDashboardLiveAddress } from "../artifact-type-read-gate";
 
 const REPO_ROOT = resolve(__dirname, "..", "..", "..", "..", "..");
 const CUBE_ROUTE = "/api/dashboards/cubejs-api/v1";
@@ -176,13 +177,16 @@ describe("(2) the surface chooses the road", () => {
     expect(Object.prototype.hasOwnProperty.call(roads, "dataRoad")).toBe(false);
   });
 
-  it("the island's cookie branch names the session data road and nothing else", () => {
+  it("the island's cookie branch names the session data road and the dashboard live address reader, and nothing else", () => {
     // Read loosely, so a red is the code's answer rather than a type error.
     const make = (surfaceRoads as Record<string, unknown>).cookieIslandReviewSurfaceRoads;
     expect(typeof make).toBe("function");
     const roads = (make as () => Record<string, unknown>)();
-    expect(Object.keys(roads)).toEqual(["dataRoad"]);
+    // Both read with the reader's session cookie: the session data road and the
+    // dashboard read gate's live address reader (cinatra#4311). No other road.
+    expect(Object.keys(roads).sort()).toEqual(["dashboardLiveAddress", "dataRoad"]);
     expect(roads.dataRoad).toBe(namedRoad());
+    expect(roads.dashboardLiveAddress).toBe(readDashboardLiveAddress);
   });
 
   it("every surface that loads a review gate is classified: the review page and the island, each naming its road", () => {
