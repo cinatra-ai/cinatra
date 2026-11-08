@@ -1900,7 +1900,9 @@ describe.skipIf(!HAS_REAL_DB)(
           await client.query(`DROP COLLATION ${O}."c"`);
           // With no dependent outside it, the schema goes with its table, its
           // sequence, its trigger, its functions and its type, without CASCADE,
-          // and the schema outside it stays.
+          // and the schema outside it stays. The trigger and the primary key
+          // are of kinds the drop does not list, and they are bound to the
+          // table: its drop takes them along, so neither is refused.
           await dropOwnSchema(client, OWN);
           expect(await left()).toEqual({ own: 0, outside: 1 });
         } finally {
