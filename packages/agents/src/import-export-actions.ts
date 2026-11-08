@@ -117,6 +117,10 @@ export type LocalAgentTemplateSeed = {
    * re-read that #3208 exists to remove. Undefined/omitted normalizes to NULL
    * ("unknown") at the store layer. */
   artifactBindings?: string | null;
+  /** The nodes the compiled OAS declares `publishes: true` (cinatra#4150),
+   * threaded like artifactBindings because the writer below does not spread its
+   * seed. Undefined/omitted normalizes to NULL ("unknown") at the store layer. */
+  publishingSteps?: string[] | null;
   // Install-time owner tier. NULL means a row whose owner tier has not been
   // normalized yet. Threaded from installRegistryPackageAtScope's target
   // through installAgentPackageWithDependencies -> installAgentFromPackage.
@@ -214,6 +218,8 @@ export async function createLocalAgentTemplateVersion(input: {
     // packageVersion and the presence flag above. It must move with them or the
     // materializer's version-pin guard is reading a pair that never agreed.
     artifactBindings: input.seed.artifactBindings ?? null,
+    // cinatra#4150 — the publishing-step declaration rides the same create.
+    publishingSteps: input.seed.publishingSteps ?? null,
     status: (input.seed.status as "draft" | "published") ?? "draft",
   });
 

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { readFileSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { defaultRepoSyncDeps, normalizeGitHubRemote, syncOneRepo } from "./dev-repo-sync.mjs";
 
 // ---------------------------------------------------------------------------
@@ -88,6 +88,58 @@ export function destDirForExtension(pkgName, spec, targetRoot) {
   const m = String(pkgName).match(/^@([^/]+)\/(.+)$/);
   const dest = path.resolve(targetRoot, "extensions", m[1], m[2]);
   return assertContainedIn(path.join(targetRoot, "extensions"), dest, pkgName, "extensions/");
+}
+
+/**
+ * Shallow pinned mode only (cinatra#4484, CI only): before any checkout is
+ * synced, remove every entry under `extRoot` that is not a declared checkout
+ * or a scope directory holding one — undeclared directories, files, symlinks
+ * (a symlinked scope directory or checkout too) and dot entries. In CI the
+ * tree under extensions/ may come from the actions/cache entry, and no git
+ * command may ever run inside an undeclared restored directory (the stale
+ * checkout prune of scripts/ci/sync-dev-extensions.mjs runs `git status` in
+ * each one). Nothing here runs git or follows a link. Returns the removed
+ * paths, relative to `extRoot`.
+ */
+export function pruneToDeclaredCheckouts({ extRoot, declaredDests, log = () => {} }) {
+  const removed = [];
+  const isRealDir = (p) => {
+    try {
+      return lstatSync(p).isDirectory();
+    } catch (err) {
+      // Only an absent path is absent; any other read error fails the sync.
+      if (err?.code === "ENOENT") return null;
+      throw err;
+    }
+  };
+  const remove = (p) => {
+    rmSync(p, { recursive: true, force: true });
+    const rel = path.relative(extRoot, p) || ".";
+    removed.push(rel);
+    // The name comes from the restored tree: logged escaped, so a newline in
+    // it can never start a log line (or a workflow command) of its own.
+    log(`  extensions/ entry ${JSON.stringify(rel)}: removed — not a declared checkout (a --shallow sync keeps only the declared checkouts).`);
+  };
+  const root = isRealDir(extRoot);
+  if (root === null) return removed;
+  if (root === false) {
+    remove(extRoot);
+    return removed;
+  }
+  const declared = new Set([...declaredDests].map((d) => path.resolve(d)));
+  const scopes = new Set([...declared].filter((d) => path.dirname(path.dirname(d)) === path.resolve(extRoot)).map((d) => path.dirname(d)));
+  for (const scope of readdirSync(extRoot)) {
+    const scopeDir = path.resolve(extRoot, scope);
+    if (!scopes.has(scopeDir) || isRealDir(scopeDir) !== true) {
+      remove(scopeDir);
+      continue;
+    }
+    for (const name of readdirSync(scopeDir)) {
+      const dest = path.join(scopeDir, name);
+      if (!declared.has(dest) || isRealDir(dest) !== true) remove(dest);
+    }
+  }
+  return removed;
 }
 
 export function readDevExtensionsConfig(repoRoot, readFile = readFileSync) {
@@ -251,6 +303,10 @@ export function parseDevExtensionFlags(argv = []) {
     // instead of branch tips. Mutually exclusive with --force by design — the
     // pinned path has no stash/reset semantics.
     pinned: argv.includes("--pinned"),
+    // CI only, with --pinned (cinatra#4484): every checkout is made new at
+    // depth 1 from its pin; an existing one (in CI, restored from the
+    // actions/cache entry) is moved aside and read only as a source of objects.
+    shallow: argv.includes("--shallow"),
   };
 }
 
@@ -298,6 +354,25 @@ export async function syncCinatraDevExtensions({
       "[cinatra dev-extensions] --pinned and --force are mutually exclusive — pinned sync never stashes or resets local work.",
     );
   }
+  if (flags.shallow && !flags.pinned) {
+    throw new Error("[cinatra dev-extensions] --shallow requires --pinned — only a pinned commit is fetched at depth 1.");
+  }
+  // The shallow road replaces every existing checkout, local edits included:
+  // CI only (GitHub Actions sets CI=true).
+  if (flags.shallow && env.CI !== "true") {
+    throw new Error(
+      "[cinatra dev-extensions] --shallow runs in CI only (CI=true): it replaces every existing checkout, local edits included.",
+    );
+  }
+  // The shallow road keeps every declared checkout it finds (in CI, restored
+  // from the actions/cache entry), so it must rebuild every one of them: a
+  // filter would keep an unselected restored checkout unverified, and an empty
+  // selection would return before the prune.
+  if (flags.shallow && (flags.select.length > 0 || flags.kinds.length > 0 || flags.exclude.length > 0)) {
+    throw new Error(
+      "[cinatra dev-extensions] --shallow rebuilds every declared checkout: --select, --kind and --exclude are refused.",
+    );
+  }
   // Fail-closed BEFORE any git work: every config entry must be pinnable, or
   // pinned sync refuses outright (a partially-pinned universe would mix
   // committed state with floating tips).
@@ -328,6 +403,13 @@ export async function syncCinatraDevExtensions({
   // config, or a fake `git` in tests) without having to supply the whole git-op
   // surface (`exists`/`git`/`mkdirp`/`readdir`) that `syncOneRepo` needs.
   const realDeps = deps ? { ...defaultRepoSyncDeps(), ...deps } : defaultRepoSyncDeps();
+  if (flags.shallow) {
+    // Every declared entry keeps its checkout; with no filter (refused above)
+    // every one of them is selected and rebuilt below.
+    const declaredDests = Object.entries(config).map(([pkgName, spec]) => destDirForExtension(pkgName, spec, targetRoot));
+    const prune = deps?.pruneToDeclaredCheckouts ?? pruneToDeclaredCheckouts;
+    prune({ extRoot: path.join(targetRoot, "extensions"), declaredDests, log });
+  }
   const results = [];
   log(
     `- Dev extensions (${selected.length} selected${flags.pinned ? ", pinned to the committed lock shas" : ""}${flags.jobs > 1 ? `, --jobs ${flags.jobs} reserved` : ""}):`,
@@ -345,6 +427,7 @@ export async function syncCinatraDevExtensions({
       // committed config URL, not the override).
       sha: pins ? pins.get(pkgName).sha : undefined,
       lockSha: detachedRepinPins?.get(pkgName)?.sha,
+      shallow: flags.shallow,
       dest,
       force: flags.force,
       deps: realDeps,

@@ -30,8 +30,8 @@ import {
 } from "@/lib/scoped-launch-route";
 import { AGENT_LAUNCH_SEGMENT } from "@/lib/agent-url";
 import type { ScopeSurfaceSettingsSubject } from "@/components/scope-surface-settings-shell";
-import type { ScopeSurfaceRef } from "@/lib/scope-surfaces";
-import { scopeSurfaceBase } from "@/lib/scope-surfaces";
+import type { ScopeSurfaceEntityName, ScopeSurfaceRef } from "@/lib/scope-surfaces";
+import { scopeSurfaceBase, scopeSurfaceEntityLabel } from "@/lib/scope-surfaces";
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
@@ -61,8 +61,8 @@ type SearchParams = Record<string, string | string[] | undefined>;
 // `src/lib/__tests__/scoped-launch-build-graph-2809.test.ts` holds the ceiling.
 // ---------------------------------------------------------------------------
 
-/** The gated per-scope name, read at request time. */
-async function readScopeName(scope: ScopeSurfaceRef): Promise<string | null> {
+/** The gated per-scope name, read at request time, as the read's typed answer. */
+async function readScopeName(scope: ScopeSurfaceRef): Promise<ScopeSurfaceEntityName> {
   const { readScopeSurfaceEntityName } = await import(
     "@/lib/scope-surface-entity-name"
   );
@@ -83,7 +83,7 @@ async function readScopeName(scope: ScopeSurfaceRef): Promise<string | null> {
  */
 async function renderScopeSurfaceSettingsShell(props: {
   scope: ScopeSurfaceRef;
-  scopeTitle?: string | null;
+  scopeTitle?: ScopeSurfaceEntityName | null;
   subject: ScopeSurfaceSettingsSubject;
   pair: { vendor: string; name: string };
   searchParams?: Promise<SearchParams>;
@@ -116,7 +116,7 @@ type AgentInstanceScreen = (props: {
   instanceId: string;
   scopeBase?: string | null;
   launchScope?: ScopeSurfaceRef | null;
-  scopeTitle?: string | null;
+  scopeTitle?: ScopeSurfaceEntityName | null;
   searchParams?: Promise<SearchParams> | undefined;
 }) => Promise<React.ReactNode>;
 
@@ -157,8 +157,8 @@ export async function ScopedAgentsRoute({
   // THE SCOPE'S NAME, READ ONCE, HERE (cinatra#2809 fix leg 2). This is the one
   // place that knows the scope before any surface below it draws, and the read
   // repeats that scope's own gate — so every page under this base publishes the
-  // SAME name the scope's landing publishes, and a reader who may not be told
-  // it gets the id abbreviation on all of them alike.
+  // SAME name the scope's landing publishes, and every page draws the same
+  // crumb for each answer of that read (cinatra#4453).
   const scopeTitle = await readScopeName(scope);
 
   if (route.kind === "executions") {
@@ -309,16 +309,25 @@ export async function ScopedAssistantsRoute({
 // what the tab reads meanwhile, and a static noun would mirror nothing.
 //
 // The read is THE gated one every other scoped surface uses, so this title can
-// never disclose a name the page beneath it may not disclose; a withheld or
-// genuinely unavailable name falls back to the surface's own noun, never to
-// the id in any form.
+// never disclose a name the page beneath it may not disclose. A withheld name
+// (a refused or missing scope, or a failure before the access decision) falls
+// back to the surface's own noun and no part of the id; a scope the reader may
+// read whose name is blank, or an organization whose name read fails after
+// the membership check, adds the id's first eight characters plus an
+// ellipsis, as the crumb does.
 export async function scopedSurfaceMetadata(
   scope: ScopeSurfaceRef,
   surface: "Agents" | "Assistants",
 ): Promise<Metadata> {
   try {
     const name = await readScopeName(scope);
-    return { title: name ? surface + " — " + name : surface };
+    // The same entity label the trail draws; a refused or missing scope adds none.
+    return {
+      title:
+        name.state === "unavailable"
+          ? surface
+          : surface + " — " + scopeSurfaceEntityLabel(scope, name),
+    };
   } catch {
     // A name is a convenience on this surface, never its subject.
     return { title: surface };

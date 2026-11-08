@@ -2630,7 +2630,7 @@ async function handleAgentBuilderExport(
       try {
         zipEntries.push({
           name: sidecar,
-          content: await readFile(join(resolved.rootDir, sidecar), "utf8"),
+          content: await readFile(join(/* turbopackIgnore: true */ resolved.rootDir, sidecar), "utf8"),
         });
       } catch {
         // Sidecar absent on disk — skip it.

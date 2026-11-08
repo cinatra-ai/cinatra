@@ -54,6 +54,11 @@ const FLEET = [
   "pdf-artifact",
   "dashboard-artifact",
   "drupal-artifacts",
+  // The blog pipeline's three packs (cinatra#3033). Their types are the rows
+  // the pipeline files: the post, the LinkedIn draft and the idea.
+  "blog-post-artifact",
+  "linkedin-artifacts",
+  "blog-idea-artifact",
 ] as const;
 
 function registerFleet(): void {
@@ -107,6 +112,17 @@ const TYPED: readonly Row[] = [
   ["typed PDF", "@cinatra-ai/pdf-artifact:document", winner("@cinatra-ai/pdf-artifact"), "application/pdf", "@cinatra-ai/pdf-artifact"],
 ];
 
+// THE BLOG PIPELINE'S TYPED ROWS (cinatra#3033). Each row carries its blog pack's
+// own object type and that pack is the winner, yet no blog pack ships a display
+// (the three text displays were withdrawn), so a winner with no display falls
+// through to the media type, and the answer names the text or markdown pack
+// that draws the row. The expectation is that fall-through, on both roads.
+const BLOG_TYPED: readonly Row[] = [
+  ["typed blog post (markdown)", "@cinatra-ai/blog-post-artifact:post", winner("@cinatra-ai/blog-post-artifact"), "text/markdown", "@cinatra-ai/markdown-artifact"],
+  ["typed LinkedIn draft (text)", "@cinatra-ai/linkedin:post-draft", winner("@cinatra-ai/linkedin-artifacts"), "text/plain", "@cinatra-ai/text-artifact"],
+  ["typed blog idea", "@cinatra-ai/blog-idea-artifact:blog-idea", winner("@cinatra-ai/blog-idea-artifact"), "text/markdown", "@cinatra-ai/markdown-artifact"],
+];
+
 const REPRESENTATION_ONLY: readonly Row[] = [
   // The text pack declares text/plain beside text/csv (acceptance item 4, made in
   // the pack's own repository), so an untyped plain-text row reaches the text
@@ -152,7 +168,7 @@ describe.each([
   ["the artifact detail", 0],
   ["the review", 1],
 ] as const)("acceptance 8 — %s road", (_road, index) => {
-  it.each([...TYPED, ...REPRESENTATION_ONLY, ...REFERENCES])(
+  it.each([...TYPED, ...BLOG_TYPED, ...REPRESENTATION_ONLY, ...REFERENCES])(
     "%s",
     async (...row) => {
       const expected = row[4];
