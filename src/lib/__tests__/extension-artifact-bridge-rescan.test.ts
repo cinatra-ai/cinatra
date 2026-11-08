@@ -400,4 +400,41 @@ describe("rescanArtifactBridgeFromStore — cinatra#3319 store surfaces of the p
       record: { source: "store", digest: D1 },
     });
   });
+
+  // cinatra#3319 T52: a read of the canonical store that fails inside a pass.
+  // The anchor read is not guarded: its rejection rejects the rescan before the
+  // pass ends, so the pass removes nothing. The two access gates map their own
+  // read error to a refusal (the write gate answers false, the live-row probe
+  // answers true), so the pass skips the record and removes its store surface.
+  it("3319 T52 (a) an anchor read that rejects inside a pass rejects the rescan and removes no store surface", async () => {
+    anchorMock.mockResolvedValue({ digest: null, kind: "artifact" });
+    writeStorePackage(storeRoot, "t51", D1, artifactPkg(PKG));
+    writeStorePackage(storeRoot, "t51-other", D2, artifactPkg(OTHER));
+    expect((await rescanArtifactBridgeFromStore({ storeRoot })).registered.sort()).toEqual([PKG, OTHER].sort());
+    writeStorePackage(storeRoot, "t51", D2, artifactPkg(PKG));
+    anchorMock.mockRejectedValue(new Error("db down"));
+    await expect(rescanArtifactBridgeFromStore({ storeRoot })).rejects.toThrow("db down");
+    expect(artifactPackSurfaceRegistry.get(PKG, "store")?.record).toEqual({ source: "store", digest: D1 });
+    expect(artifactPackSurfaceRegistry.get(OTHER, "store")?.record).toEqual({ source: "store", digest: D2 });
+  });
+
+  it("3319 T52 (b) a write gate that refuses one package, as on its read error, makes a full pass remove that package's store surface only", async () => {
+    writeStorePackage(storeRoot, "t51", D1, artifactPkg(PKG));
+    writeStorePackage(storeRoot, "t51-other", D2, artifactPkg(OTHER));
+    await rescanArtifactBridgeFromStore({ storeRoot });
+    writeAllowedMock.mockImplementation(async (name?: string) => name !== PKG);
+    const res = await rescanArtifactBridgeFromStore({ storeRoot });
+    expect(res.skippedNotActive).toEqual([PKG]);
+    expect(artifactPackSurfaceRegistry.get(PKG, "store")).toBeNull();
+    expect(artifactPackSurfaceRegistry.get(OTHER, "store")?.record).toEqual({ source: "store", digest: D2 });
+  });
+
+  it("3319 T52 (c) with no anchor, a live-row probe that answers true, as on its read error, makes the pass remove the store surface", async () => {
+    writeStorePackage(storeRoot, "t51", D1, artifactPkg(PKG));
+    await rescanArtifactBridgeFromStore({ storeRoot });
+    expect(artifactPackSurfaceRegistry.get(PKG, "store")?.record).toEqual({ source: "store", digest: D1 });
+    hasLiveRowMock.mockResolvedValue(true);
+    expect((await rescanArtifactBridgeFromStore({ storeRoot })).registered).toEqual([]);
+    expect(artifactPackSurfaceRegistry.get(PKG, "store")).toBeNull();
+  });
 });
