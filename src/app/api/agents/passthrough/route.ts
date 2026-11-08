@@ -1,7 +1,7 @@
 import "server-only";
 import { NextResponse } from "next/server";
 
-import { readAgentRunById } from "@cinatra-ai/agents";
+import { publishCallAllowed, readAgentRunById } from "@cinatra-ai/agents";
 import { collectAllPrimitiveHandlers } from "@/lib/primitive-handlers";
 import { isAuthorizedBridgeRequest } from "@/lib/wayflow-bridge-auth";
 import { bindBridgeRunId } from "@/lib/authz/bridge-run-binding";
@@ -451,6 +451,14 @@ export async function POST(req: Request): Promise<Response> {
     return NextResponse.json(
       { error: `agent_run ${agentRunId} not found` },
       { status: 404 },
+    );
+  }
+  // cinatra#4150 — no publish without a released decision, enforced at the call,
+  // before any tool runs: the run the binding proved, the verified step or none.
+  if (!(await publishCallAllowed(run, verifiedStepId))) {
+    return NextResponse.json(
+      { error: "This call waits for a publish decision.", code: "publish_not_released" },
+      { status: 403 },
     );
   }
   let actor: PrimitiveActorContext;

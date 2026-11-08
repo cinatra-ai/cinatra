@@ -15,6 +15,7 @@ import {
   insertParkedDecision,
   listDueParked,
   listSettledWithWaitingRun,
+  readDecisionForRunNode,
   readLatestDecisionForRun,
   readOpenDecisionForRun,
   type PublishDecisionRow,
@@ -28,6 +29,7 @@ import {
   type AgentRunRecord,
   type AgentRunStatus,
 } from "./store";
+import { resolveWayflowUrl } from "./wayflow-url";
 
 /** The id prefix of the gate the flow runtime inserts in front of a publishing step. The
  *  compiler reserves the same prefix (oas-compiler.ts, PUBLISH_GATE_ID_PREFIX). */
@@ -36,6 +38,7 @@ export const PUBLISH_DECISION_REQUIRED = "publish_decision_required";
 export const PUBLISH_DECISION_NOT_OPEN = "publish_decision_not_open";
 export const PUBLISH_GATE_UNVERIFIED = "publish_gate_unverified";
 export const PUBLISH_DECISION_UNAVAILABLE = "publish_decision_unavailable";
+const PUBLISH_RESUME_FAILED = "publish_resume_failed";
 const EXPIRY_PAGE = 50;
 
 /** A resume of a run held at a publish decision. The text names no run, step or value. */
@@ -214,44 +217,62 @@ export type PublishDecisionAnswer =
   | { ok: true; runStopped: boolean }
   | { ok: false; code: typeof PUBLISH_DECISION_NOT_OPEN; currentStatus: PublishDecisionStatus | null };
 
+type DecideInput = { runId: string; actorContext: PrimitiveActorContext; roleHints?: ActorRoleHints };
+const forbidden = (message: string) => new AuthzError({ statusCode: 403, reason: "forbidden", message });
+
 /**
- * "Do not publish" (its surface is the decision card, a later part). The decider is ONE principal: the person of
+ * Who may decide a publish, for Publish and Do not publish alike. The decider is ONE principal: the person of
  * `actorContext` (a human actor with a user id and no delegated agent ceiling; a model, a peer, the system or an agent
- * acting for a person is refused). Authority: run.execute and run.approveHitl on the run, then membership of the run's
- * org, each for that person. Then ONE decision write (parked -> declined, with that person and the optional note), then
- * the run moves pending_approval -> stopped. It never sends anything to the run's context. A late answer is reported as
- * publish_decision_not_open with the decision's current status. Every fault after the person check, a read of the
- * authority check included, surfaces as publish_decision_unavailable with a fixed text; access and store refusals pass.
+ * acting for a person is refused before any read), and a member of the run's organization.
+ *   - A run with a human owner: run.execute and run.approveHitl under the run's effective policy, as every gate decision.
+ *   - A run with no human owner (runBy null): the policy's owner tier would refuse everyone, so the person's role in the
+ *     run's organization is resolved first and both permissions are asked of the kernel for that organization, with the
+ *     token-scope and agent-ceiling checks of enforceRunAccess kept and the run policy not applied.
+ * Answers the run, the decider and the decider's write authority in the run's organization.
  */
-export async function declinePublishDecision(input: {
-  runId: string;
-  actorContext: PrimitiveActorContext;
-  roleHints?: ActorRoleHints;
-  note?: string | null;
-}): Promise<PublishDecisionAnswer> {
+export async function enforcePublishDecisionAccess(input: DecideInput): Promise<{ run: AgentRunRecord; deciderId: string; authority: OrgWriteAuthority }> {
   const actor = input.actorContext;
   if (actor?.actorType !== "human" || typeof actor.userId !== "string" || actor.userId.length === 0 || actor.oboCeiling) {
-    throw new AuthzError({ statusCode: 403, reason: "forbidden", message: "Only a person can decide a publish." });
+    throw forbidden("Only a person can decide a publish.");
   }
   const deciderId = actor.userId;
+  const run = await readAgentRunById(input.runId);
+  const { enforceRunAccess, resolveEffectivePolicy } = await import("./auth-policy");
+  const { resolveOrgRoleForUser } = await import("@/lib/auth-session");
+  const notMember = () => forbidden("Deciding a publish needs membership of the run's organization.");
+  let runForCheck: Parameters<typeof enforceRunAccess>[0] = null;
+  let roles = input.roleHints;
+  const headless = run !== null && !run.runBy;
+  let role = headless ? await resolveOrgRoleForUser(run.orgId, deciderId) : undefined;
+  if (run && headless) {
+    if (role === undefined) throw notMember();
+    runForCheck = { id: run.id, runBy: null, orgId: run.orgId, coOwnerUserIds: [] };
+    roles = { ...input.roleHints, orgRole: role, actorOrganizationId: run.orgId };
+  } else if (run) {
+    const template = await readAgentTemplateById(run.templateId);
+    const coOwners = await readRunCoOwners(run.id);
+    runForCheck = { id: run.id, runBy: run.runBy, orgId: run.orgId, effectivePolicy: resolveEffectivePolicy(run, template),
+      coOwnerUserIds: coOwners.map((r) => r.userId) };
+  }
+  await enforceRunAccess(runForCheck, actor, "execute", roles);
+  await enforceRunAccess(runForCheck, actor, "approveHitl", roles);
+  if (!run) throw new AuthzError({ statusCode: 404, reason: "hidden" });
+  if (!headless) role = await resolveOrgRoleForUser(run.orgId, deciderId);
+  if (role === undefined) throw notMember();
+  return { run, deciderId, authority: sessionAuthorityFromResolvedRole(run.orgId, role) };
+}
+
+/**
+ * "Do not publish" (its surface is the decision card, a later part). The decider and the authority are those of
+ * enforcePublishDecisionAccess. Then ONE decision write (parked -> declined, with that person and the optional note),
+ * then the run moves pending_approval -> stopped. It never sends anything to the run's context. A late answer is
+ * reported as publish_decision_not_open with the decision's current status. Every fault after the person check, a read
+ * of the authority check included, surfaces as publish_decision_unavailable with a fixed text; access and store refusals
+ * pass.
+ */
+export async function declinePublishDecision(input: DecideInput & { note?: string | null }): Promise<PublishDecisionAnswer> {
   try {
-    const run = await readAgentRunById(input.runId);
-    const { enforceRunAccess, resolveEffectivePolicy } = await import("./auth-policy");
-    const template = run ? await readAgentTemplateById(run.templateId) : null;
-    const coOwners = run ? await readRunCoOwners(run.id) : [];
-    const runForCheck = run
-      ? { id: run.id, runBy: run.runBy, orgId: run.orgId, effectivePolicy: resolveEffectivePolicy(run, template),
-        coOwnerUserIds: coOwners.map((r) => r.userId) }
-      : null;
-    await enforceRunAccess(runForCheck, actor, "execute", input.roleHints);
-    await enforceRunAccess(runForCheck, actor, "approveHitl", input.roleHints);
-    if (!run) throw new AuthzError({ statusCode: 404, reason: "hidden" });
-    const { resolveOrgRoleForUser } = await import("@/lib/auth-session");
-    const role = await resolveOrgRoleForUser(run.orgId, deciderId);
-    if (role === undefined) {
-      throw new AuthzError({ statusCode: 403, reason: "forbidden", message: "Deciding a publish needs membership of the run's organization." });
-    }
-    const authority = sessionAuthorityFromResolvedRole(run.orgId, role);
+    const { run, deciderId, authority } = await enforcePublishDecisionAccess(input);
     const open = await readOpenDecisionForRun(run.id);
     if (!open) {
       const latest = await readLatestDecisionForRun(run.id);
@@ -264,6 +285,85 @@ export async function declinePublishDecision(input: {
     return { ok: true, runStopped: await stopHeldRun(run.id, "pending_approval", authority) };
   } catch (err) {
     throw opaque(err);
+  }
+}
+
+export type PublishApproveAnswer =
+  | { ok: true; resumed: boolean }
+  | Extract<PublishDecisionAnswer, { ok: false }>;
+
+/** The text sent into the held gate. The gate's output feeds no step, so it carries no value. */
+const PUBLISH_RESUME_TEXT = "[Publish approved]";
+
+/**
+ * "Publish" (its surface is the decision card, a later part). The decider and the authority are those of
+ * enforcePublishDecisionAccess, then the agent's install scope for that person, as the generic approve asks it. The run
+ * must hold a WayFlow context of an internal template. Then ONE decision write (parked -> released, with that person),
+ * then the shared WayFlow resume: the run is claimed (pending_approval -> running) and ONE message is sent into its held
+ * context. A decision already released while the run still waits (a resume that failed before its send) retries only
+ * the resume. A run that another Publish already claimed resumes nothing more ({ ok: true, resumed: false }). A late
+ * answer is publish_decision_not_open with the current status. A resume that fails before its send puts the run back to
+ * pending_approval; after its send the run stays where the send left it. Its fault is publish_resume_failed, with a
+ * fixed text.
+ */
+export async function approvePublishDecision(input: DecideInput): Promise<PublishApproveAnswer> {
+  const { run, deciderId, authority } = await enforcePublishDecisionAccess(input);
+  const { assertAgentRunDispatchAuthorized } = await import("./agent-run-serde");
+  await assertAgentRunDispatchAuthorized({ runId: run.id, stage: "dispatch", actingUserId: deciderId }).catch((err: unknown) => {
+    if ((err as { code?: unknown } | null)?.code !== "AGENT_TEMPLATE_SCOPE_DENIED") throw err;
+    console.warn("[publish-decision] a Publish was refused by the agent's install scope");
+    throw forbidden("Run access denied.");
+  });
+  let agentUrl: string;
+  let contextId: string;
+  try {
+    const template = await readAgentTemplateById(run.templateId);
+    if (!run.a2aContextId || !template?.packageName || template.sourceType !== "internal") throw new Error("not resumable");
+    agentUrl = resolveWayflowUrl(template.packageName);
+    contextId = run.a2aContextId;
+    const open = await readOpenDecisionForRun(run.id);
+    const answer = open ? await decide(open.id, { from: "parked", to: "released", actor: deciderId }) : null;
+    if (answer?.outcome !== "won") {
+      const latest = await readLatestDecisionForRun(run.id);
+      if (latest?.status !== "released") return { ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: latest?.status ?? null };
+    }
+    if (!(await moveRun(run.id, "pending_approval", "running", undefined, authority))) return { ok: true, resumed: false };
+  } catch (err) {
+    throw opaque(err);
+  }
+  let sent = false;
+  try {
+    const { sendWayflowResume } = await import("./review-task-actions");
+    await sendWayflowResume({ run, contextId, agentUrl, text: PUBLISH_RESUME_TEXT, authority, onDispatch: () => { sent = true; } });
+  } catch (err) {
+    if (!sent) await moveRun(run.id, "running", "pending_approval", undefined, authority).catch(() => false);
+    console.warn(`[publish-decision] a released publish could not resume its run: ${nameOf(err)}`);
+    throw Object.assign(new Error("The publish is approved, but the run could not go on."), { code: PUBLISH_RESUME_FAILED });
+  }
+  return { ok: true, resumed: true };
+}
+
+/**
+ * The call-site check of the model bridge and the passthrough road (A6): may this call of `run` go on? `verifiedStepId`
+ * is the step the runtime signed for the call, or undefined when the call carries no verified step.
+ *   - A verified step with a decision row is served only while that row (its newest) reads `released`.
+ *   - A verified step with no row is refused when the template lists it as a publishing step.
+ *   - A call with no verified step is refused when the template lists any publishing step.
+ *   - A template that is not found cannot prove that it publishes nothing; a list stored as null (a template compiled
+ *     before the list existed) lists none, so only a decision row holds such a run.
+ * A read error refuses the call; it is logged by the error's name only.
+ */
+export async function publishCallAllowed(run: { id: string; templateId: string }, verifiedStepId: string | undefined): Promise<boolean> {
+  try {
+    const template = await readAgentTemplateById(run.templateId);
+    const listed = template?.publishingSteps ?? [];
+    if (verifiedStepId === undefined) return template !== null && listed.length === 0;
+    const row = await readDecisionForRunNode(run.id, verifiedStepId);
+    if (row) return row.status === "released";
+    return template !== null && !listed.includes(verifiedStepId);
+  } catch (err) {
+    console.warn(`[publish-decision] a call could not check its publish decision: ${nameOf(err)}`);
+    return false;
   }
 }
 

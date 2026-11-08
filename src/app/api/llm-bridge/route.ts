@@ -52,6 +52,7 @@ import {
   readAgentRunByTokenHash,
   readAgentRunTokenHashById,
   readAgentTemplateById,
+  publishCallAllowed,
   OasCinatraLlmSchema,
   type LlmProvider,
 } from "@cinatra-ai/agents";
@@ -998,6 +999,17 @@ export async function POST(req: Request): Promise<Response> {
           attestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER),
         }) ?? undefined)
       : undefined;
+
+  // cinatra#4150 — no publish without a released decision, enforced at the call,
+  // before any provider is reached. The run is the one the token proved, else the
+  // one the context-id header names; the step is the verified step above, or none.
+  const publishRun = runFromToken ?? runFromContextId;
+  if (publishRun && !(await publishCallAllowed(publishRun, verifiedStepId))) {
+    return NextResponse.json(
+      { error: "This call waits for a publish decision.", code: "publish_not_released" },
+      { status: 403 },
+    );
+  }
 
   // ---------------------------------------------------------------------------
   // Provider-aware dispatch resolution.

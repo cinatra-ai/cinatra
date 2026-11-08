@@ -248,6 +248,7 @@ export {
 } from "./actions";
 // Auth-neutral approval helper for external /api/a2a/resume callers.
 export { approveReviewTaskInternal } from "./review-task-actions";
+export { publishCallAllowed } from "./publish-decision-actions";
 // NB: the generic artifact-review GATE store (cinatra#1796, epic #1620 S13) is
 // intentionally NOT re-exported from this barrel — it imports the host review
 // cores (@/lib/artifacts/artifact-review-*), so barrelling it would grow the
