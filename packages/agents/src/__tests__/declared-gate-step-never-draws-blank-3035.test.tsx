@@ -545,3 +545,103 @@ describe("no kind of declared gate step leaves the card blank (cinatra#3035)", (
     }
   });
 });
+
+/**
+ * EVERY BRANCH OF THE NARROWED BYPASS, ONE CASE EACH (self-check of this unit).
+ *
+ * The bypass keeps a gate that asks for nothing of its own on its single
+ * Continue (no field, no prompt window, exactly as main draws it); every other
+ * gate drawn by the fallback is drawn by the schema-field renderer's object arm.
+ * Each shape below is read through the panel itself, so a change to any one
+ * branch of the predicate fails its own case.
+ *
+ * A MALFORMED SCHEMA KEEPS MAIN'S BYPASS. A `properties` value that is not a
+ * map of property specs (null, an array, a string) or a property spec that is
+ * not an object (null, a string, an array) is nothing the object arm can take
+ * apart — reading a null spec there throws. Main bypassed every such schema,
+ * and so does this: the card keeps its Continue and never throws.
+ */
+function fallbackGate(schema: Record<string, unknown>): Record<string, unknown> {
+  return { xRenderer: SCHEMA_FIELD_FALLBACK_RENDERER_ID, schema, values: {}, reviewTaskId: "gate-run-3035" };
+}
+
+async function expectBypass(schema: Record<string, unknown>) {
+  await mountGate(fallbackGate(schema));
+  const region = gateRegion()!;
+  expect(region.querySelectorAll("input, textarea, select").length, "no field is drawn").toBe(0);
+  expect(continueButtonsIn(region).length, "the Continue is the whole surface").toBe(1);
+  expect(controlsIn(region).length).toBe(1);
+  expect(promptWindowPresent(), "no prompt window for a gate that asks nothing").toBe(false);
+}
+
+async function expectDrawn(schema: Record<string, unknown>) {
+  await mountGate(fallbackGate(schema));
+  const region = gateRegion()!;
+  expect(
+    region.querySelectorAll("input, textarea, select").length,
+    "the object arm draws a control of the gate's own",
+  ).toBeGreaterThan(0);
+  expect(continueButtonsIn(region).length, "exactly one control submits this gate").toBe(1);
+  expect(promptWindowPresent(), "the prompt window stands at this gate's foot").toBe(true);
+}
+
+describe("each branch of the narrowed bypass (cinatra#3035)", () => {
+  it("an untyped `approved` flag alone is a bare confirmation: bypass", async () => {
+    await expectBypass({ type: "object", properties: { approved: {} } });
+  });
+
+  it("an untyped `approved` flag with a title alone: bypass", async () => {
+    await expectBypass({ type: "object", properties: { approved: { title: "Approved" } } });
+  });
+
+  it("`approved: boolean` beside another property: drawn", async () => {
+    await expectDrawn({
+      type: "object",
+      properties: { approved: { type: "boolean" }, note: { type: "string", title: "Note" } },
+    });
+    expect(gateRegion()!.querySelector("#field-note"), "the other property is drawn").not.toBeNull();
+  });
+
+  it("an untyped `approved` beside another property: drawn", async () => {
+    await expectDrawn({
+      type: "object",
+      properties: { approved: {}, note: { type: "string", title: "Note" } },
+    });
+    expect(gateRegion()!.querySelector("#field-note")).not.toBeNull();
+  });
+
+  it.each(["allOf", "oneOf", "anyOf"])(
+    "a schema that composes its fields with `%s` at the top: drawn",
+    async (keyword) => {
+      await expectDrawn({
+        type: "object",
+        [keyword]: [{ type: "object", properties: { note: { type: "string", title: "Note" } } }],
+      });
+    },
+  );
+
+  it.each([
+    ["null", null],
+    ["an empty array", []],
+    ["a non-empty array", [{ type: "string" }]],
+    ["a string", "note"],
+    ["a number", 3],
+  ])("`properties` that is %s: bypass, as on main", async (_label, properties) => {
+    await expectBypass({ type: "object", properties });
+  });
+
+  it.each([
+    ["null", null],
+    ["a string", "string"],
+    ["an array", [{ type: "string" }]],
+  ])("a property spec that is %s: bypass, as on main, and never throws", async (_label, spec) => {
+    await expectBypass({ type: "object", properties: { note: spec } });
+  });
+
+  it("a null spec beside a readable property: bypass, never throws", async () => {
+    await expectBypass({
+      type: "object",
+      properties: { note: null, other: { type: "string", title: "Other" } },
+    });
+  });
+});

@@ -655,7 +655,14 @@ function declaresNoAskedProperty(schema: unknown): boolean {
     return false;
   }
   const properties = declared?.properties;
-  if (properties === null || typeof properties !== "object") return true;
+  // A MALFORMED SCHEMA KEEPS MAIN'S BYPASS. `properties` that is not a map of
+  // property specs, or a property spec that is not an object (null, a string, an
+  // array), is nothing the renderer's object arm can take apart — a null spec
+  // throws there. Main bypassed every such schema; so does this, so the card
+  // keeps its Continue and never throws (self-check of cinatra#3035).
+  if (properties === null || typeof properties !== "object" || Array.isArray(properties)) return true;
+  const specs = Object.values(properties as Record<string, unknown>);
+  if (specs.some((spec) => spec === null || typeof spec !== "object" || Array.isArray(spec))) return true;
   // `approved` is exempt as the CONFIRMATION FLAG the comment above names —
   // `{ approved: boolean }` — never as a name. A property called `approved`
   // that declares another type is something the person is asked to write, and
