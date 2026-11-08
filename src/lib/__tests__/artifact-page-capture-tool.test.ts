@@ -719,3 +719,59 @@ describe("cinatra#4223 page capture: a refusal sentence promises no log line", (
     expect(text).not.toMatch(/\blog/i);
   });
 });
+
+describe("cinatra#4223 page capture: a log line's fields that cannot be read do not change the answer", () => {
+  const SECRET = "field-getter-secret-host";
+
+  it("answers the unexpected-error sentence when the outer catch cannot read the org id for its log line", async () => {
+    const input: typeof call = { ...call };
+    Object.defineProperty(input, "orgId", {
+      enumerable: true,
+      get() {
+        throw new Error(`connect ECONNREFUSED ${SECRET}:5432`);
+      },
+    });
+    const deps = {
+      ...toolDeps(captureSeams([]).deps),
+      loadProducesRefs: async () => {
+        throw new Error("connect ECONNREFUSED registry-secret-host:5432");
+      },
+    };
+    const outcome = await captureArtifactPage(input, deps);
+    expect(outcome).toEqual({ ok: false, reason: "write_refused", error: PAGE_CAPTURE_UNEXPECTED_ERROR });
+    expect(JSON.stringify(logged.mock.calls)).toContain('"orgId":"unreadable"');
+    expect(JSON.stringify(logged.mock.calls)).not.toContain(SECRET);
+    expect(JSON.stringify(logged.mock.calls)).not.toContain("registry-secret-host");
+  });
+
+  it("answers the filed capture when a release that throws has made the org id unreadable for its log line", async () => {
+    const b = budget();
+    const input: typeof call = { ...call };
+    const deps: ArtifactPageCaptureToolDeps = {
+      ...toolDeps(captureSeams([]).deps, b),
+      acquireLease: async (i) => {
+        b.acquired.push(i);
+        return {
+          ok: true,
+          lease: {
+            leaseId: "lease-1",
+            release: async () => {
+              b.released += 1;
+              Object.defineProperty(input, "orgId", {
+                get() {
+                  throw new Error(`connect ECONNREFUSED ${SECRET}:5432`);
+                },
+              });
+              throw new Error("release failed");
+            },
+          },
+        };
+      },
+    };
+    const outcome = await captureArtifactPage(input, deps);
+    expect(outcome).toEqual({ ok: true, artifactId: "art-1", representationRevisionId: "rev-1", ...FACTS, deduped: false });
+    expect(b.released).toBe(1);
+    expect(JSON.stringify(logged.mock.calls)).toContain('"orgId":"unreadable"');
+    expect(JSON.stringify(logged.mock.calls)).not.toContain(SECRET);
+  });
+});
