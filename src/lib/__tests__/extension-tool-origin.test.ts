@@ -212,6 +212,7 @@ async function refusedWith(p: Promise<unknown>, code: string) {
 /** The parent world with the step's parent flow edited. */
 const withParentFlow = (edit: (d: Doc) => void) =>
   makeWorld((w) => edit(at(w.flows[PARENT_ROOT])));
+const refsOf = (d: Doc) => at(d, "$referenced_components");
 const subflowOf = (d: Doc) => at(d, "$referenced_components", "child-subflow");
 
 afterEach(() => {
@@ -421,16 +422,16 @@ describe("the definition and reference graph", () => {
   it("refuses an unknown and a duplicate step", async () => {
     await refusedWith(resolve(makeWorld(), { run: { verifiedStepId: "no_such_step" } }), "step-unknown");
     await refusedWith(resolve(withParentFlow((d) => {
-      d.$referenced_components.copy = { component_type: "ApiNode", id: STEP };
+      refsOf(d).copy = { component_type: "ApiNode", id: STEP };
     })), "step-duplicate");
   });
 
   it("refuses a duplicate definition and a node that shares a definition's id", async () => {
     await refusedWith(resolve(withParentFlow((d) => {
-      d.$referenced_components.dup = { component_type: "Flow", id: "child-subflow" };
+      refsOf(d).dup = { component_type: "Flow", id: "child-subflow" };
     })), "graph-duplicate-definition");
     await refusedWith(resolve(withParentFlow((d) => {
-      d.$referenced_components.clash = { component_type: "ApiNode", id: "child-subflow" };
+      refsOf(d).clash = { component_type: "ApiNode", id: "child-subflow" };
     })), "graph-duplicate-definition");
   });
 
@@ -444,28 +445,28 @@ describe("the definition and reference graph", () => {
 
   it("refuses a definition referenced by two FlowNodes", async () => {
     await refusedWith(resolve(withParentFlow((d) => {
-      d.$referenced_components.second = { component_type: "FlowNode", id: "second",
+      refsOf(d).second = { component_type: "FlowNode", id: "second",
         subflow: { $component_ref: "child-subflow" } };
     })), "graph-multiple-referencers");
   });
 
   it("refuses an unreferenced definition that encloses the step", async () => {
     await refusedWith(resolve(withParentFlow((d) => {
-      delete d.$referenced_components.child_flow;
+      delete refsOf(d).child_flow;
     })), "graph-unreferenced-definition");
   });
 
   it("refuses a back reference to an embedded definition, and a reference cycle", async () => {
     await refusedWith(resolve(withParentFlow((d) => {
-      subflowOf(d).$referenced_components.back = { component_type: "FlowNode", id: "back",
+      refsOf(subflowOf(d)).back = { component_type: "FlowNode", id: "back",
         subflow: { $component_ref: "loop" } };
-      d.$referenced_components.loop = { component_type: "Flow", id: "loop", $referenced_components: {
+      refsOf(d).loop = { component_type: "Flow", id: "loop", $referenced_components: {
         again: { component_type: "FlowNode", id: "again", subflow: { $component_ref: "child-subflow" } } } };
     })), "graph-multiple-referencers");
     await refusedWith(resolve(withParentFlow((d) => {
-      d.$referenced_components.a = { component_type: "Flow", id: "a", $referenced_components: {
+      refsOf(d).a = { component_type: "Flow", id: "a", $referenced_components: {
         toB: { component_type: "FlowNode", id: "toB", subflow: { $component_ref: "b" } } } };
-      d.$referenced_components.b = { component_type: "Flow", id: "b", $referenced_components: {
+      refsOf(d).b = { component_type: "Flow", id: "b", $referenced_components: {
         toA: { component_type: "FlowNode", id: "toA", subflow: { $component_ref: "a" } } } };
     })), "graph-cycle");
   });
