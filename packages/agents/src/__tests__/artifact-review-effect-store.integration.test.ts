@@ -396,7 +396,10 @@ describe.skipIf(!HAS_DB)("cinatra#3978 — first write wins", () => {
       expect(await writing).toEqual({ ok: false, code: "conflict" });
       const rows = await rowsFor(s.gateId);
       expect(rows).toHaveLength(1);
-      expect(rows[0]).toMatchObject({ writer: over.writer ?? "cms_apply", source_ref: over.sourceRef ?? s.operationId });
+      expect(rows[0]).toMatchObject({
+        writer: "writer" in over ? over.writer : "cms_apply",
+        source_ref: "sourceRef" in over ? over.sourceRef : s.operationId,
+      });
     } finally {
       await other.query("ROLLBACK").catch(() => {});
       await other.end().catch(() => {});
