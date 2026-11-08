@@ -58,16 +58,27 @@ export type PublishPack = {
   rendererKinds: string[];
 };
 
-function readJson(file: string): any {
+type FlowNode = {
+  id?: unknown;
+  component_type: string;
+  metadata?: { cinatra?: { publishes?: unknown } };
+};
+type PackageJson = {
+  name?: unknown;
+  cinatra?: { fieldRenderers?: unknown };
+};
+type FieldRenderer = { id?: unknown; kind?: unknown } | null;
+
+function readJson(file: string): unknown {
   return JSON.parse(readFileSync(file, "utf8"));
 }
 
-function collectNodes(value: unknown, out: any[] = []): any[] {
+function collectNodes(value: unknown, out: FlowNode[] = []): FlowNode[] {
   if (Array.isArray(value)) {
     for (const v of value) collectNodes(v, out);
   } else if (value && typeof value === "object") {
     const o = value as Record<string, unknown>;
-    if (typeof o.component_type === "string") out.push(o);
+    if (typeof o.component_type === "string") out.push(o as unknown as FlowNode);
     for (const v of Object.values(o)) collectNodes(v, out);
   }
   return out;
@@ -85,9 +96,9 @@ export function readAgentPacks(root: string): { pack: PublishPack | null; packag
       const pkgFile = path.join(extRoot, scope.name, dir.name, "package.json");
       const oasFile = path.join(extRoot, scope.name, dir.name, "cinatra", "oas.json");
       if (!existsSync(pkgFile) || !existsSync(oasFile)) continue;
-      const pkg = readJson(pkgFile);
+      const pkg = readJson(pkgFile) as PackageJson;
       const nodes = collectNodes(readJson(oasFile)).filter((n) => n.metadata?.cinatra?.publishes === true && typeof n.id === "string");
-      const renderers: any[] = Array.isArray(pkg?.cinatra?.fieldRenderers) ? pkg.cinatra.fieldRenderers : [];
+      const renderers: FieldRenderer[] = Array.isArray(pkg?.cinatra?.fieldRenderers) ? (pkg.cinatra?.fieldRenderers as FieldRenderer[]) : [];
       out.push({
         packageName: String(pkg.name),
         pack:
