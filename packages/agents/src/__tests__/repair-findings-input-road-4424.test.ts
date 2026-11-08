@@ -1,6 +1,7 @@
 /**
- * cinatra#4424 — the reviewer's findings reach a repair run only through the
- * input its producer declares.
+ * cinatra#4424 — the reviewer's findings text is projected only into the input
+ * a repair run's producer declares; the drain adds no CMS fallback input. The
+ * structured findings still travel in `lifecycleRepairRequest`.
  *
  * 1. No code file except the CMS repair bridge itself and this test (the walk
  *    skips its own file) names `projectCmsRepairInputParams`: the dispatch
@@ -39,6 +40,9 @@ function codeFiles(dir: string, out: string[] = []): string[] {
 }
 
 describe("cinatra#4424 — the dispatch drain no longer calls the CMS repair bridge's projection", () => {
+  // The title says "except the bridge itself", but this test file names the
+  // function too: the walk skips it (SELF below). The title stays as the kits
+  // recorded it.
   it("no module except the bridge itself names projectCmsRepairInputParams", () => {
     const files = SCAN_ROOTS.flatMap((root) => codeFiles(path.join(REPO_ROOT, root)));
     // The walk must actually reach the drain and the bridge, or an empty scan passes.

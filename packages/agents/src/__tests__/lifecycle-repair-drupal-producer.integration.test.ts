@@ -1,8 +1,8 @@
 /**
  * cinatra#2046 — the DRUPAL producer half of the repair round trip, proven
  * against a real Postgres with the producing template carrying the REAL
- * `@cinatra-ai/drupal-agent` identity and the lifecycle declaration the release
- * the committed dev lock pins actually ships (`cinatra.lifecycle:
+ * `@cinatra-ai/drupal-agent` identity and the lifecycle declaration the pinned
+ * commit/tree of the committed dev lock actually ships (`cinatra.lifecycle:
  * { repairCapable: true, repairFindingsInput: { input: "instructions" } }` since
  * cinatra#4424).
  *
@@ -26,7 +26,7 @@
  * (`lifecycle-repair-cms-production-bridge.ts`), so re-driving those rungs under
  * a Drupal name would duplicate a proof rather than add one. What is genuinely
  * Drupal-specific — and what the pin is FOR — is everything up to and including
- * the dispatch, plus the reviewer's findings in the input the release declares
+ * the dispatch, plus the reviewer's findings in the input the pinned commit/tree declares
  * (`instructions`, cinatra#4424). That is exactly this suite's scope.
  *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided.
@@ -60,7 +60,7 @@ const DRUPAL_AGENT_PACKAGE = "@cinatra-ai/drupal-agent";
 
 /**
  * The lifecycle declaration `@cinatra-ai/drupal-agent` ships in its
- * `package.json#cinatra.lifecycle` at the release the committed dev lock pins
+ * `package.json#cinatra.lifecycle` at the commit/tree the committed dev lock pins
  * (its `resolvedSha` in cinatra-dev-extensions.lock.json). Kept as a literal
  * (the clone-back extension tree is not materialized in the DB-tier CI job) but
  * NEVER a free-floating stub — see the manifest-ground-truth test below, which
@@ -296,7 +296,7 @@ describe.skipIf(!HAS_DB)("cinatra#2046 — the Drupal repair producer (pin activ
     const parsed = agentLifecycleDeclarationSchema.parse(DRUPAL_AGENT_LIFECYCLE);
     expect(parsed.repairCapable).toBe(true);
 
-    // The committed dev lock pins the drupal-agent release this literal is
+    // The committed dev lock pins the drupal-agent commit/tree this literal is
     // copied from; when the pinned clone-back tree is on disk, cross-check the
     // REAL manifest byte-for-byte — a manifest drift fails this suite there.
     const lock = JSON.parse(
@@ -331,6 +331,8 @@ describe.skipIf(!HAS_DB)("cinatra#2046 — the Drupal repair producer (pin activ
     expect(row!.successor_gate_id).toBeNull();
   });
 
+  // "the release's" in the title below means the pinned commit/tree; the title
+  // stays as the kits recorded it.
   it("PINNED: with the release's declared lifecycle block, the SAME drive routes producer_repair and dispatches to the drupal-agent template", async () => {
     const { cr } = await driveDrupalChangesRequest(DRUPAL_AGENT_LIFECYCLE);
     if (!cr.ok) throw new Error("unreachable");
@@ -359,7 +361,7 @@ describe.skipIf(!HAS_DB)("cinatra#2046 — the Drupal repair producer (pin activ
     expect(run.source_type).toBe("lifecycle_repair");
 
     // The dispatched run carries the delivered request, and the reviewer's
-    // findings in the input the release declares (cinatra#4424), not a CMS task.
+    // findings in the input the pinned commit/tree declares (cinatra#4424), not a CMS task.
     const inputParams = JSON.parse(run.input_params) as {
       task?: string;
       instructions?: string;

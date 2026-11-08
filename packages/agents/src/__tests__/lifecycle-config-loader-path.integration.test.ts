@@ -61,7 +61,7 @@ const REPO_ROOT = resolve(__dirname, "..", "..", "..", "..");
 /** The producing package under proof — the REAL extension identity wave124
  * drove, not a synthetic stand-in. */
 const WORDPRESS_AGENT_PACKAGE = "@cinatra-ai/wordpress-agent";
-/** The lock-pinned release whose manifest declares the capability. */
+/** The lock-pinned commit/tree whose manifest declares the capability. */
 const WORDPRESS_AGENT_VERSION = "0.1.7";
 /** The pinned clone-back tree the dev-boot scan loads from. Present in a dev
  * checkout and in the conformance jobs; absent in the DB-tier CI job, which is
@@ -225,8 +225,8 @@ function resolveWordPressFixture(): Promise<{ oasPath: string; fromPinnedTree: b
       version?: string;
       cinatra?: { lifecycle?: unknown };
     };
-    // Pin drift guard: the literal above must still BE what the pinned release
-    // declares, or every CI-only run of this suite would prove the wrong thing.
+    // Pin drift guard: the literal above must still BE what the pinned
+    // commit/tree declares, or every CI-only run of this suite would prove the wrong thing.
     expect(pinned.cinatra?.lifecycle).toEqual(WORDPRESS_AGENT_LIFECYCLE);
     expect(pinned.version).toBe(WORDPRESS_AGENT_VERSION);
     return Promise.resolve({ oasPath: PINNED_OAS_PATH, fromPinnedTree: true });

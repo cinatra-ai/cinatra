@@ -2,9 +2,9 @@
  * cinatra#2286, epic S10 PR4 — the CMS repair ROUND TRIP, proven end-to-end
  * against a real Postgres, with the producing template carrying the REAL
  * `@cinatra-ai/wordpress-agent` identity + the lifecycle declaration the
- * lock-pinned release ships (`cinatra.lifecycle: { repairCapable: true,
+ * lock-pinned commit/tree ships (`cinatra.lifecycle: { repairCapable: true,
  * repairFindingsInput: { input: "instructions" } }` since cinatra#4424; the
- * release is identified by its `resolvedSha` in cinatra-dev-extensions.lock.json).
+ * pinned commit is identified by its `resolvedSha` in cinatra-dev-extensions.lock.json).
  *
  * What the sibling suites already prove is NOT re-argued here:
  *   - delivery + the findings input + completion adapter mechanics
@@ -75,7 +75,7 @@ const WORDPRESS_AGENT_PACKAGE = "@cinatra-ai/wordpress-agent";
 
 /**
  * The lifecycle declaration `@cinatra-ai/wordpress-agent` ships in its
- * `package.json#cinatra.lifecycle` at the release the committed dev lock pins
+ * `package.json#cinatra.lifecycle` at the commit/tree the committed dev lock pins
  * (its `resolvedSha` in cinatra-dev-extensions.lock.json). Kept as a
  * literal (the clone-back extension tree is not materialized in the DB-tier CI
  * job) but NEVER a free-floating stub:
@@ -434,7 +434,7 @@ describe.skipIf(!HAS_DB)("cinatra#2286 S10 PR4 — the WordPress CMS repair roun
     const parsed = agentLifecycleDeclarationSchema.parse(WORDPRESS_AGENT_LIFECYCLE);
     expect(parsed.repairCapable).toBe(true);
 
-    // The committed dev lock pins the wordpress-agent release this literal is
+    // The committed dev lock pins the wordpress-agent commit/tree this literal is
     // copied from; when the pinned clone-back tree is on disk, cross-check the
     // REAL manifest byte-for-byte.
     const lock = JSON.parse(
@@ -457,7 +457,7 @@ describe.skipIf(!HAS_DB)("cinatra#2286 S10 PR4 — the WordPress CMS repair roun
     const ctx = await driveToDispatchedWordPressRepair();
 
     // The dispatched run carries the delivered request, and the findings text in
-    // the input the release declares (cinatra#4424), not a CMS task.
+    // the input the pinned commit/tree declares (cinatra#4424), not a CMS task.
     const runRow = await pool(
       `SELECT input_params FROM "${q(TEST_SCHEMA)}"."agent_runs" WHERE id=$1`,
       [ctx.repairRunId],
