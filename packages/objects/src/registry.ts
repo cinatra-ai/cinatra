@@ -422,10 +422,13 @@ export const matcherManifestRegistry: MatcherManifestRegistryImpl =
 // ---------------------------------------------------------------------------
 
 /** The record the bridge read a pack's manifest from: a store record at its
- *  digest (`<root>/<kind>/<slug>/<digest>`), or the image's development tree. */
+ *  digest (`<root>/<kind>/<slug>/<digest>`), or the image's development tree.
+ *  The bundled scan also records the pack's folder in that tree (`dir`), so a
+ *  reader can bind a development checkout's install row to the folder it
+ *  names (cinatra#3319); a caller that names no folder leaves it out. */
 export type ArtifactPackRecord =
   | { source: "store"; digest: string }
-  | { source: "bundled" };
+  | { source: "bundled"; dir?: string };
 
 /** One registered artifact pack's manifest surface, keyed by package name and
  *  the kind of its record (`record.source`, or none). */

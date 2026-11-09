@@ -228,10 +228,65 @@ function readMatcherChannelPackages(): ReadonlySet<string> {
 }
 
 /**
+ * The fixed codes a refusal of the claim-backed reader carries
+ * (`ClaimSurfaceUnreadableCode` in resolve-bound-artifact-type). Only a value
+ * equal to one of these literals is ever logged.
+ */
+const CLAIM_READ_CODES: ReadonlySet<string> = new Set([
+  "dispatcher-unreadable",
+  "no-development-tree",
+  "store-record-mismatch",
+  "no-anchored-source",
+  "version-mismatch",
+  "trust-anchor-unreadable",
+  "trust-gate-no-anchor",
+]);
+
+/**
+ * The built-in error classes a failed claim-backed read may be named by,
+ * chosen by identity (`instanceof`), never by a name the value reports.
+ */
+const CLAIM_READ_ERROR_CLASSES: ReadonlyArray<readonly [string, (err: unknown) => boolean]> = [
+  ["TypeError", (err) => err instanceof TypeError],
+  ["RangeError", (err) => err instanceof RangeError],
+  ["SyntaxError", (err) => err instanceof SyntaxError],
+  ["Error", (err) => err instanceof Error],
+];
+
+/**
+ * One word that classifies a failed claim-backed read (cinatra#3319): the
+ * reader's own refusal code when the value carries one of CLAIM_READ_CODES,
+ * else the first built-in class it is an instance of, else "other". Never
+ * text taken from the thrown value, and never a throw: a getter or proxy trap
+ * that throws only skips that test.
+ */
+function classifyClaimReadFailure(error: unknown): string {
+  try {
+    const code = (error as { claimReadCode?: unknown } | null)?.claimReadCode;
+    if (typeof code === "string" && CLAIM_READ_CODES.has(code)) {
+      for (const known of CLAIM_READ_CODES) if (known === code) return known;
+    }
+  } catch {
+    /* a getter or proxy trap that throws carries no code */
+  }
+  for (const [word, isInstance] of CLAIM_READ_ERROR_CLASSES) {
+    try {
+      if (isInstance(error)) return word;
+    } catch {
+      /* not that class */
+    }
+  }
+  return "other";
+}
+
+/**
  * The organisation's claim-backed meaning types for one request (cinatra#3319),
  * read leniently by both actions: a failed read answers no type, and
  * `claimBackedReadFailed` says so, so the access gate can refuse the matcher
- * entries whose claim state is then unknown.
+ * entries whose claim state is then unknown. A failed read writes one fixed
+ * server-log line with one classifying word (`classifyClaimReadFailure`),
+ * never the error's text; a log line that cannot be written is dropped, so the
+ * answer is the same for every rejected value.
  */
 async function readClaimBackedForRequest(orgId: string): Promise<{
   claimBacked: ClaimBackedMeaningType[];
@@ -245,7 +300,15 @@ async function readClaimBackedForRequest(orgId: string): Promise<{
       claimBacked: await readClaimBackedMeaningTypesForOrg(orgId),
       claimBackedReadFailed: false,
     };
-  } catch {
+  } catch (error) {
+    try {
+      console.warn(
+        "[artifacts] the claim-backed read failed; the upload picker offers no claim-backed type:",
+        classifyClaimReadFailure(error),
+      );
+    } catch {
+      /* a log line that cannot be written is dropped; the answer never depends on it */
+    }
     return { claimBacked: [], claimBackedReadFailed: true };
   }
 }

@@ -10,6 +10,7 @@ import {
   resolveArtifactBindingObjectType,
   type ResolveArtifactBindingObjectTypeResult,
 } from "@cinatra-ai/agents/artifact-binding";
+import { PLATFORM_OWNER_SENTINEL } from "@cinatra-ai/extensions/canonical-types";
 import { isExactVersion } from "@cinatra-ai/registries/src/version-compare";
 import { readArtifactTypeClaimsForOrg } from "@/lib/objects/artifact-claim-store";
 import { ensureArtifactTypesRegistered } from "./ensure-artifact-registry";
@@ -520,6 +521,106 @@ async function readOrgPackSurfaces(orgId: string): Promise<ArtifactPackSurfaceEn
   return out;
 }
 
+/** Why the claim's install could not be read (cinatra#3319): a fixed code on
+ *  every refusal of `readClaimWinnerSurfaceFields`, so a caller can log the
+ *  reason without logging the error's text. */
+export type ClaimSurfaceUnreadableCode =
+  | "dispatcher-unreadable"
+  | "no-development-tree"
+  | "store-record-mismatch"
+  | "no-anchored-source"
+  | "version-mismatch"
+  | "trust-anchor-unreadable"
+  | "trust-gate-no-anchor";
+
+/** The `local` source keys a supplied (store) install records; the development
+ *  heal writes none of them. */
+const SUPPLIED_SOURCE_KEYS = ["contentDigest", "activeDigest", "integrity", "contentHash"] as const;
+
+/** The commit the development version record writes as a checkout source's
+ *  `resolvedCommitOrTreeHash`: `git rev-parse --short HEAD`
+ *  (`currentGitSha`, packages/extensions/src/dev-version.ts). Its "unknown"
+ *  fallback is not accepted. */
+const DEV_RECORD_COMMIT_RE = /^[0-9a-f]{7,40}$/;
+
+/**
+ * THE DEVELOPMENT CHECKOUT'S OWN ROW (cinatra#3319). A development boot's scan
+ * loads every in-tree pack under `<cwd>/extensions/<vendor>/<slug>` and, for an
+ * artifact pack with no install row, its install-record heal writes ONE row
+ * (`healArtifactInstallRecordAndClaims` -> `defaultInstallRow`): platform scope
+ * (`ownerLevel` "platform", no organisation; the canonical store persists its
+ * owner as `PLATFORM_OWNER_SENTINEL`, and the table's platform check allows no
+ * other owner) and a `local` source of that folder (`path`) with no digest and
+ * `resolvedCommitOrTreeHash` "in-tree@<version>"; the development version
+ * record may later rewrite that source to another `local` source of the same
+ * folder, again with no digest, whose `resolvedCommitOrTreeHash` is the git
+ * commit. The trust gate never anchors such a row, so the store road
+ * can never answer for it. The bundled scan registers the pack's surface from
+ * the same folder and records it (`record.dir`).
+ *
+ * The row reads that development-tree surface only when ALL of these hold,
+ * and otherwise this answers null and the row keeps the store road:
+ *   - this is a development process (`CINATRA_RUNTIME_MODE` "development", the
+ *     signal the development scan, its heal and its version record run on);
+ *   - the row is platform-scoped, its owner is exactly the persisted platform
+ *     owner (`PLATFORM_OWNER_SENTINEL`; a null or any other owner is refused),
+ *     and it has no organisation;
+ *   - its source is `local` and carries none of the keys a supplied store
+ *     install records (`contentDigest`, also an empty one, `activeDigest`,
+ *     `integrity`, `contentHash`);
+ *   - its `resolvedCommitOrTreeHash` is what one of the two development
+ *     writers writes: "in-tree@<the row's version>" (the heal) or a git
+ *     commit (the development version record);
+ *   - the dispatcher reports a development-tree surface of the package that
+ *     names its folder, that folder lies inside the development extension root
+ *     (`resolveDevExtensionSourceRoot`), and the row's `path` is that folder.
+ * The version and the remaining rules are checked by the caller as for any row.
+ */
+async function readDevCheckoutSurface(
+  row: {
+    ownerLevel?: unknown;
+    ownerId?: unknown;
+    organizationId?: unknown;
+    version?: unknown;
+    source?: unknown;
+  },
+  own: readonly ArtifactPackSurfaceEntry[],
+): Promise<ArtifactPackSurfaceEntry | null> {
+  if (process.env.CINATRA_RUNTIME_MODE !== "development") return null;
+  if (
+    row.ownerLevel !== "platform" ||
+    row.ownerId !== PLATFORM_OWNER_SENTINEL ||
+    row.organizationId != null
+  ) {
+    return null;
+  }
+  const source = row.source;
+  if (!source || typeof source !== "object") return null;
+  const fields = source as Record<string, unknown>;
+  if (fields.type !== "local") return null;
+  if (SUPPLIED_SOURCE_KEYS.some((key) => Object.prototype.hasOwnProperty.call(fields, key))) return null;
+  const tree = fields.resolvedCommitOrTreeHash;
+  const healTree = typeof row.version === "string" && row.version !== "" ? `in-tree@${row.version}` : null;
+  if (typeof tree !== "string" || (tree !== healTree && !DEV_RECORD_COMMIT_RE.test(tree))) return null;
+  const sourcePath = fields.path;
+  if (typeof sourcePath !== "string" || sourcePath === "") return null;
+  const surface = own.find((s) => s.record?.source === "bundled");
+  const record = surface?.record;
+  const dir = record?.source === "bundled" ? record.dir : undefined;
+  if (!surface || typeof dir !== "string" || dir === "") return null;
+  try {
+    const path = await import("node:path");
+    const { resolveDevExtensionSourceRoot } = await import("@cinatra-ai/agents/agent-runtime-mount");
+    const root = path.resolve(resolveDevExtensionSourceRoot());
+    const folder = path.resolve(dir);
+    const rel = path.relative(root, folder);
+    if (rel === "" || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return null;
+    return path.resolve(sourcePath) === folder ? surface : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * THE CAPABILITIES OF THE WINNING CLAIM'S OWN INSTALL (cinatra#3319), as the
  * runtime registered them. The claim's install row (`installId`) must be a live
@@ -552,6 +653,11 @@ async function readOrgPackSurfaces(orgId: string): Promise<ArtifactPackSurfaceEn
  *     row of the package the runtime's platform-global gate prefers: a claim
  *     bound to the bundled row answers from it also while a live product row
  *     of the package wins that gate;
+ *   - for the DEVELOPMENT CHECKOUT's own row (`readDevCheckoutSurface`: a
+ *     `local` row exactly as a development boot's install-record heal writes
+ *     it, naming the folder the bundled scan registered the pack from, in a
+ *     development process), the surface must be that development-tree
+ *     surface. Every other `local` row is a store install as above;
  *   - any other source, or none, is no install the runtime anchors.
  * FAIL CLOSED: in every case where a surface of the pack is reported but none
  * is this install's, and on a failed install-row, dispatcher or trust-gate
@@ -572,17 +678,20 @@ async function readClaimWinnerSurfaceFields(
   ) {
     return null;
   }
-  const unreadable = (why: string): never => {
-    throw new Error(
-      `the manifest of the claim's install cannot be read: ${why} ` +
-        `(${winner.extension}@${winner.extensionVersion}, install ${winner.installId})`,
+  const unreadable = (why: string, code: ClaimSurfaceUnreadableCode): never => {
+    throw Object.assign(
+      new Error(
+        `the manifest of the claim's install cannot be read: ${why} ` +
+          `(${winner.extension}@${winner.extensionVersion}, install ${winner.installId})`,
+      ),
+      { claimReadCode: code },
     );
   };
   let reported: readonly ArtifactPackSurfaceEntry[];
   try {
     reported = await surfaces();
   } catch {
-    return unreadable("the runtime-discovery dispatcher cannot be read");
+    return unreadable("the runtime-discovery dispatcher cannot be read", "dispatcher-unreadable");
   }
   const own = reported.filter((s) => s.packageName === winner.extension);
   if (own.length === 0) return null;
@@ -593,20 +702,31 @@ async function readClaimWinnerSurfaceFields(
   if (sourceType === "bundled") {
     surface = own.find((s) => s.record?.source === "bundled");
     if (!surface) {
-      return unreadable("the runtime registered the pack from no development tree");
-    }
-  } else if (sourceType === "verdaccio" || sourceType === "local" || sourceType === "github") {
-    const digest = await readAnchoredStoreDigest(row.packageName, row.id, unreadable);
-    surface = own.find((s) => s.record?.source === "store");
-    const record = surface?.record;
-    if (!surface || record?.source !== "store" || (digest !== null && record.digest !== digest)) {
-      return unreadable("the runtime registered the pack from another record than the install's");
+      return unreadable("the runtime registered the pack from no development tree", "no-development-tree");
     }
   } else {
-    return unreadable("the install row has no source the runtime anchors");
+    // The development checkout's own row reads the development-tree surface
+    // registered from the very folder the row names; any other row, `local`
+    // ones included, keeps the store road unchanged.
+    const checkout = sourceType === "local" ? await readDevCheckoutSurface(row, own) : null;
+    if (checkout) {
+      surface = checkout;
+    } else if (sourceType === "verdaccio" || sourceType === "local" || sourceType === "github") {
+      const digest = await readAnchoredStoreDigest(row.packageName, row.id, unreadable);
+      surface = own.find((s) => s.record?.source === "store");
+      const record = surface?.record;
+      if (!surface || record?.source !== "store" || (digest !== null && record.digest !== digest)) {
+        return unreadable(
+          "the runtime registered the pack from another record than the install's",
+          "store-record-mismatch",
+        );
+      }
+    } else {
+      return unreadable("the install row has no source the runtime anchors", "no-anchored-source");
+    }
   }
   if (surface.version !== winner.extensionVersion) {
-    return unreadable("the runtime registered the pack at another version than the claim");
+    return unreadable("the runtime registered the pack at another version than the claim", "version-mismatch");
   }
   return {
     accepts: [...surface.fileMimeTypes],
@@ -627,7 +747,7 @@ async function readClaimWinnerSurfaceFields(
 async function readAnchoredStoreDigest(
   packageName: string,
   installId: string,
-  unreadable: (why: string) => never,
+  unreadable: (why: string, code: ClaimSurfaceUnreadableCode) => never,
 ): Promise<string | null> {
   const { makeDefaultInstallAnchorsResolver } = await import("@/lib/extension-install-anchor");
   let anchors: readonly { installId?: string | null; digest?: string | null }[];
@@ -637,11 +757,11 @@ async function readAnchoredStoreDigest(
     });
     anchors = await resolve(packageName);
   } catch {
-    return unreadable("the install's trust anchor cannot be read");
+    return unreadable("the install's trust anchor cannot be read", "trust-anchor-unreadable");
   }
   const anchor = anchors.find((a) => a.installId === installId);
   if (!anchor) {
-    return unreadable("the runtime's trust gate anchors no version of the install");
+    return unreadable("the runtime's trust gate anchors no version of the install", "trust-gate-no-anchor");
   }
   return anchor.digest ?? null;
 }

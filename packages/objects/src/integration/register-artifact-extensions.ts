@@ -569,7 +569,8 @@ function scanDirForArtifacts(dir: string): number {
   let n = 0;
   for (const dirent of readdirSync(dir, { withFileTypes: true })) {
     if (!dirent.isDirectory() || !isArtifactExtensionDirName(dirent.name)) continue;
-    if (registerOneArtifactDir(path.join(dir, dirent.name), { source: "bundled" })) n += 1;
+    const packDir = path.join(dir, dirent.name);
+    if (registerOneArtifactDir(packDir, { source: "bundled", dir: packDir })) n += 1;
   }
   return n;
 }
