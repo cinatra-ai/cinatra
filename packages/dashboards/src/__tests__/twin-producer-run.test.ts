@@ -219,4 +219,12 @@ describe("(c) census: only the content writers pass a producing run (cinatra#309
     const registry = fs.readFileSync(path.resolve(__dirname, "../mcp/registry.ts"), "utf-8");
     expect(registry).toContain("if (requestCtx?.runId) actorBase.runId = requestCtx.runId;");
   });
+
+  it("the dashboards MCP registry takes the request frame from its own subpath, not the package barrel", () => {
+    // The barrel (src/index.tsx) also holds the MCP screens; the frame store is
+    // the same object, exported by the request-context subpath.
+    const registry = fs.readFileSync(path.resolve(__dirname, "../mcp/registry.ts"), "utf-8");
+    expect(registry).toContain('import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context";');
+    expect(registry).not.toMatch(/^import \{[^}]*\} from "@cinatra-ai\/mcp-server";$/m);
+  });
 });

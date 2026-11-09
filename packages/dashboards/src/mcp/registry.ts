@@ -1,6 +1,6 @@
 import "server-only";
 import type { McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
-import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
+import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context";
 import type { ZodTypeAny } from "zod";
 
 import { createDashboardPrimitiveHandlers } from "./handlers";
