@@ -109,6 +109,8 @@ vi.mock("../artifact-authoring", () => ({
 }));
 
 import {
+  authorizeToolMaterializeWrite,
+  loadRunImageWriteFacts,
   materializeToolArtifact,
   __resetRunPackageBindingsCacheForTests,
 } from "../run-artifact-materializer";
@@ -351,109 +353,300 @@ describe("materializeToolArtifact", () => {
     if (outcome.ok) return;
     expect(outcome.error).toContain("materialization failed: db down");
   });
+});
 
-  it("writes a mid-run write with the intermediate origin when the run's flow marks a review step (cinatra#3035)", async () => {
-    // The run's own flow: the materialize call, and a pause marked as the
-    // review of what it wrote. The marker names the pause's target input.
-    getAgentPackageMock.mockResolvedValue({
-      manifest: {
-        name: "@test/agent",
-        cinatra: { produces: [{ extension: EXT }] },
-      },
-      payload: {
-        $referenced_components: {
-          persist_draft: {
-            component_type: "ApiNode",
-            id: "persist_draft",
-            metadata: { cinatra: { extension: EXT } },
-          },
-          review_gate: {
-            component_type: "InputMessageNode",
-            id: "review_gate",
-            metadata: { cinatra: { artifactReview: { targetsInput: "reviewTargets" } } },
-          },
-        },
-      },
-    });
-    const outcome = await materializeToolArtifact(BASE_INPUT);
-    expect(outcome.ok).toBe(true);
-    expect(createSemanticArtifactMock.mock.calls[0][0]).toMatchObject({
-      originKind: "live_generator",
-    });
+// ---------------------------------------------------------------------------
+// cinatra#3035: the origin of a mid-run write follows a marked review gate THAT
+// EXECUTES after it — read with the compiler's topology, never from a
+// marker-shaped value anywhere in the document.
+// ---------------------------------------------------------------------------
+
+type Doc = Record<string, unknown>;
+const ref = (id: string) => ({ $component_ref: id });
+const control = (from: string, to: string) => ({
+  component_type: "ControlFlowEdge",
+  name: `${from}->${to}`,
+  from_node: ref(from),
+  to_node: ref(to),
+});
+const data = (from: string, output: string, to: string, input: string) => ({
+  component_type: "DataFlowEdge",
+  name: `${from}.${output}->${to}.${input}`,
+  source_node: ref(from),
+  source_output: output,
+  destination_node: ref(to),
+  destination_input: input,
+});
+const port = (title: string) => ({ title, type: "array" });
+const writeNode = (id: string) => ({
+  component_type: "ApiNode",
+  id,
+  name: id,
+  metadata: { cinatra: { extension: EXT } },
+  outputs: [port("artifact")],
+});
+const gate = (targetsInput: unknown, inputs = [port("review_targets")]) => ({
+  component_type: "InputMessageNode",
+  id: "review_gate",
+  name: "review_gate",
+  metadata: { cinatra: { artifactReview: { targetsInput } } },
+  inputs,
+  outputs: [{ title: "userResponse", type: "string" }],
+});
+
+/** A flow: start -> each `order` node -> end, with the given data edges. */
+function flow(order: string[], components: Doc, dataEdges: unknown[], extra: Doc = {}): Doc {
+  const ids = ["start", ...order, "end"];
+  return {
+    agentspec_version: "26.1.0",
+    component_type: "Flow",
+    id: "flow",
+    name: "flow",
+    metadata: { cinatra: { type: "flow" } },
+    inputs: [],
+    outputs: [],
+    start_node: ref("start"),
+    nodes: ids.map(ref),
+    control_flow_connections: ids.slice(1).map((id, i) => control(ids[i]!, id)),
+    data_flow_connections: dataEdges,
+    $referenced_components: {
+      start: { component_type: "StartNode", id: "start", name: "start" },
+      end: { component_type: "EndNode", id: "end", name: "end" },
+      ...components,
+    },
+    ...extra,
+  };
+}
+
+/** The reviewed shape: write -> marked gate, the gate's targets fed by the write. */
+function reviewedFlow(): Doc {
+  return flow(
+    ["persist_draft", "review_gate"],
+    { persist_draft: writeNode("persist_draft"), review_gate: gate("review_targets") },
+    [data("persist_draft", "artifact", "review_gate", "review_targets")],
+  );
+}
+
+function withPayload(payload: Doc | null, manifestName = "@test/agent") {
+  return {
+    manifest: { name: manifestName, cinatra: { produces: [{ extension: EXT }] } },
+    payload,
+  };
+}
+
+async function originOf(payload: Doc): Promise<unknown> {
+  getAgentPackageMock.mockResolvedValue(withPayload(payload));
+  const outcome = await materializeToolArtifact(BASE_INPUT);
+  expect(outcome.ok).toBe(true);
+  return (createSemanticArtifactMock.mock.calls[0]?.[0] as { originKind?: unknown }).originKind;
+}
+
+describe("cinatra#3035 — a mid-run write under an executed marked review gate", () => {
+  it("writes with the intermediate origin when a reachable marked gate after the write takes its targets from it", async () => {
+    expect(await originOf(reviewedFlow())).toBe("live_generator");
   });
 
-  it("keeps the durable origin when the run's flow marks no review step", async () => {
-    getAgentPackageMock.mockResolvedValue({
-      manifest: {
-        name: "@test/agent",
-        cinatra: { produces: [{ extension: EXT }] },
-      },
-      payload: {
-        $referenced_components: {
-          persist_draft: {
-            component_type: "ApiNode",
-            id: "persist_draft",
-            metadata: { cinatra: { extension: EXT } },
-          },
-          review_gate: {
-            component_type: "InputMessageNode",
-            id: "review_gate",
-            metadata: { cinatra: {} },
-          },
+  it("writes with the intermediate origin when the write sits in a FlowNode subflow that feeds the gate", async () => {
+    const payload = flow(
+      ["drafting", "review_gate"],
+      {
+        drafting: {
+          component_type: "FlowNode",
+          id: "drafting",
+          name: "drafting",
+          subflow: ref("drafting_flow"),
+          outputs: [port("artifact")],
         },
+        drafting_flow: {
+          component_type: "Flow",
+          id: "drafting_flow",
+          name: "drafting_flow",
+          start_node: ref("inner_start"),
+          nodes: [ref("inner_start"), ref("persist_draft"), ref("inner_end")],
+        },
+        inner_start: { component_type: "StartNode", id: "inner_start", name: "inner_start" },
+        persist_draft: writeNode("persist_draft"),
+        inner_end: { component_type: "EndNode", id: "inner_end", name: "inner_end" },
+        review_gate: gate("review_targets"),
       },
-    });
-    const outcome = await materializeToolArtifact(BASE_INPUT);
-    expect(outcome.ok).toBe(true);
-    expect(createSemanticArtifactMock.mock.calls[0][0]).toMatchObject({
-      originKind: "agent_generated",
-    });
+      [data("drafting", "artifact", "review_gate", "review_targets")],
+    );
+    expect(await originOf(payload)).toBe("live_generator");
   });
 
-  it("keeps the durable origin when the marker sits on something other than a pause", async () => {
-    // Only a pause is a review step: a marker-shaped value in another node's
-    // data does not suppress the default review of what the run writes.
-    getAgentPackageMock.mockResolvedValue({
-      manifest: {
-        name: "@test/agent",
-        cinatra: { produces: [{ extension: EXT }] },
+  it("keeps the durable origin when the flow marks no review gate", async () => {
+    const payload = flow(
+      ["persist_draft", "review_gate"],
+      {
+        persist_draft: writeNode("persist_draft"),
+        review_gate: { ...gate("review_targets"), metadata: { cinatra: {} } },
       },
-      payload: {
-        $referenced_components: {
-          persist_draft: {
-            component_type: "ApiNode",
-            id: "persist_draft",
-            metadata: { cinatra: { extension: EXT } },
-            data: { example: { metadata: { cinatra: { artifactReview: { targetsInput: "reviewTargets" } } } } },
-          },
-        },
-      },
-    });
-    const outcome = await materializeToolArtifact(BASE_INPUT);
-    expect(outcome.ok).toBe(true);
-    expect(createSemanticArtifactMock.mock.calls[0][0]).toMatchObject({
-      originKind: "agent_generated",
-    });
+      [data("persist_draft", "artifact", "review_gate", "review_targets")],
+    );
+    expect(await originOf(payload)).toBe("agent_generated");
   });
 
-  it("finds a marked pause however deep the flow document nests it", async () => {
-    let nested: Record<string, unknown> = {
-      component_type: "InputMessageNode",
-      id: "review_gate",
-      metadata: { cinatra: { artifactReview: { targetsInput: "reviewTargets" } } },
-    };
-    for (let depth = 0; depth < 20000; depth += 1) nested = { subflow: nested };
-    getAgentPackageMock.mockResolvedValue({
-      manifest: {
-        name: "@test/agent",
-        cinatra: { produces: [{ extension: EXT }] },
+  it("keeps the durable origin for a decoy marked gate in the flow's own metadata", async () => {
+    const payload = flow(["persist_draft"], { persist_draft: writeNode("persist_draft") }, [], {
+      metadata: { cinatra: { type: "flow", decoy: gate("review_targets") } },
+    });
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  it("keeps the durable origin for a marker-shaped value in another node's data", async () => {
+    const payload = flow(
+      ["persist_draft"],
+      {
+        persist_draft: {
+          ...writeNode("persist_draft"),
+          data: { example: gate("review_targets") },
+        },
       },
-      payload: { $referenced_components: { deep: nested } },
+      [],
+    );
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  it("keeps the durable origin for a marked gate that is an unused component", async () => {
+    const payload = flow(
+      ["persist_draft"],
+      { persist_draft: writeNode("persist_draft"), review_gate: gate("review_targets") },
+      [data("persist_draft", "artifact", "review_gate", "review_targets")],
+    );
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  it("keeps the durable origin for a marked gate inside a subflow no reachable node calls", async () => {
+    const payload = flow(
+      ["persist_draft"],
+      {
+        persist_draft: writeNode("persist_draft"),
+        uncalled: { component_type: "FlowNode", id: "uncalled", name: "uncalled", subflow: ref("uncalled_flow") },
+        uncalled_flow: {
+          component_type: "Flow",
+          id: "uncalled_flow",
+          name: "uncalled_flow",
+          nodes: [ref("review_gate")],
+        },
+        review_gate: gate("review_targets"),
+      },
+      [data("persist_draft", "artifact", "review_gate", "review_targets")],
+    );
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  it("keeps the durable origin for a marked gate nested in a called subflow (the compiler propagates no nested marker)", async () => {
+    const payload = flow(
+      ["persist_draft", "reviewing"],
+      {
+        persist_draft: writeNode("persist_draft"),
+        reviewing: {
+          component_type: "FlowNode",
+          id: "reviewing",
+          name: "reviewing",
+          subflow: ref("reviewing_flow"),
+          inputs: [port("review_targets")],
+        },
+        reviewing_flow: {
+          component_type: "Flow",
+          id: "reviewing_flow",
+          name: "reviewing_flow",
+          nodes: [ref("review_gate")],
+        },
+        review_gate: gate("review_targets"),
+      },
+      [data("persist_draft", "artifact", "reviewing", "review_targets")],
+    );
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  it("keeps the durable origin for a marked gate that runs before the write", async () => {
+    const payload = flow(
+      ["review_gate", "persist_draft"],
+      { persist_draft: writeNode("persist_draft"), review_gate: gate("review_targets") },
+      [data("persist_draft", "artifact", "review_gate", "review_targets")],
+    );
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  it("keeps the durable origin for a marker naming an input the gate does not declare", async () => {
+    const payload = flow(
+      ["persist_draft", "review_gate"],
+      { persist_draft: writeNode("persist_draft"), review_gate: gate("review_targets", []) },
+      [data("persist_draft", "artifact", "review_gate", "review_targets")],
+    );
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  it("keeps the durable origin for a blank marker", async () => {
+    const payload = flow(
+      ["persist_draft", "review_gate"],
+      { persist_draft: writeNode("persist_draft"), review_gate: gate("   ", [port("   ")]) },
+      [data("persist_draft", "artifact", "review_gate", "   ")],
+    );
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  it("keeps the durable origin for a write the gate's targets do not come from", async () => {
+    const payload = flow(
+      ["persist_draft", "persist_other", "review_gate"],
+      {
+        persist_draft: writeNode("persist_draft"),
+        persist_other: writeNode("persist_other"),
+        review_gate: gate("review_targets"),
+      },
+      [data("persist_other", "artifact", "review_gate", "review_targets")],
+    );
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  it("answers the append road (no writing node named) as unreviewed", async () => {
+    getAgentPackageMock.mockResolvedValue(withPayload(reviewedFlow()));
+    const authorized = await authorizeToolMaterializeWrite({
+      orgId: "org-a",
+      templateId: "tpl-1",
+      packageVersion: "1.2.3",
+      extension: EXT,
+      mime: "text/markdown",
+      content: "# Hello",
     });
-    const outcome = await materializeToolArtifact(BASE_INPUT);
-    expect(outcome.ok).toBe(true);
-    expect(createSemanticArtifactMock.mock.calls[0][0]).toMatchObject({
-      originKind: "live_generator",
+    expect(authorized).toMatchObject({ ok: true, reviewed: false });
+  });
+});
+
+describe("cinatra#3035 — the image road's write facts come from one reading", () => {
+  it("takes the produces refs and the review answer from the same registry result while the tag moves", async () => {
+    // An unpinned run: the tag first resolves to a version whose flow marks no
+    // gate, then moves to one that does. Each reading is one registry read, and
+    // both answers of a reading come from that one result.
+    getAgentPackageMock
+      .mockResolvedValueOnce(withPayload(flow(["persist_draft"], { persist_draft: writeNode("persist_draft") }, [])))
+      .mockResolvedValueOnce(withPayload(reviewedFlow()));
+    const before = await loadRunImageWriteFacts({
+      templateId: "tpl-1",
+      packageVersion: null,
+      nodeId: "persist_draft",
     });
+    expect(getAgentPackageMock).toHaveBeenCalledTimes(1);
+    expect(before).toEqual({ producesRefs: [{ extension: EXT }], reviewed: false });
+
+    const after = await loadRunImageWriteFacts({
+      templateId: "tpl-1",
+      packageVersion: null,
+      nodeId: "persist_draft",
+    });
+    expect(getAgentPackageMock).toHaveBeenCalledTimes(2);
+    expect(after).toEqual({ producesRefs: [{ extension: EXT }], reviewed: true });
+  });
+
+  it("reads nothing reviewed for a template with no package", async () => {
+    poolQueryMock.mockResolvedValue({ rows: [{ package_name: null }] });
+    const facts = await loadRunImageWriteFacts({
+      templateId: "tpl-1",
+      packageVersion: "1.2.3",
+      nodeId: "persist_draft",
+    });
+    expect(facts).toEqual({ producesRefs: [], reviewed: false });
+    expect(getAgentPackageMock).not.toHaveBeenCalled();
   });
 });

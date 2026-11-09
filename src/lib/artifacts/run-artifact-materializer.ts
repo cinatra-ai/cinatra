@@ -5,6 +5,8 @@ import {
   collectArtifactBindingsFromOasDocument,
   parseArtifactBindingDeclaration,
   producesObjectTypeIdForExtension,
+  readArtifactReviewTargetsInput,
+  readFlowControlTopology,
   type CollectedArtifactBinding,
   type PersistedArtifactBindingDeclaration,
   type SemanticArtifactProducesRef,
@@ -334,35 +336,103 @@ const pinnedBindingsCache = new Map<
     errors: string[];
     produces: string[];
     producesRefs: SemanticArtifactProducesRef[];
-    marksReviewStep: boolean;
+    reviewedWriteNodeIds: ReadonlySet<string>;
   }
 >();
 
 /**
- * cinatra#3035: does the run's own flow document declare a marked review step —
- * a pause (an InputMessageNode, the one node the compiler reads the marker on)
- * whose `metadata.cinatra.artifactReview.targetsInput` names an input —
- * anywhere in it, embedded subflows included? Reads the generic marker only,
- * and walks the document without recursion, so no depth can overflow it.
+ * cinatra#3035: the ids of the nodes whose write a marked review gate THAT
+ * EXECUTES reviews. Read with the compiler's own topology and marker reading
+ * (`readFlowControlTopology`, `readArtifactReviewTargetsInput`), so only what
+ * compiles to a marked step counts: a top-level InputMessageNode reachable from
+ * the start node (the compiler propagates no marker out of a nested subflow).
+ * Such a gate reviews a write only when its marker names one of its own declared
+ * inputs (not blank once trimmed), a data edge feeds that input from the node
+ * that wrote, and the gate is reachable from that node — it runs after the
+ * write. A write inside a FlowNode's subflow takes that FlowNode's place. A node
+ * id that also stands in an unreviewed place reads unreviewed. Everything else —
+ * a decoy value, an unused component, an uncalled subflow, a gate before the
+ * write, a marker naming a missing or blank input, a gate fed by another node —
+ * leaves the write with the core default review.
  */
-function flowMarksReviewStep(document: unknown): boolean {
-  const seen = new Set<object>();
-  const pending: unknown[] = [document];
-  while (pending.length > 0) {
-    const value = pending.pop();
-    if (value === null || typeof value !== "object" || seen.has(value)) continue;
-    seen.add(value);
-    const children = Array.isArray(value) ? value : Object.values(value);
-    if (isRecord(value) && value.component_type === "InputMessageNode") {
-      const metadata = value.metadata;
-      const cinatra = isRecord(metadata) ? metadata.cinatra : undefined;
-      const review = isRecord(cinatra) ? cinatra.artifactReview : undefined;
-      const targetsInput = isRecord(review) ? review.targetsInput : undefined;
-      if (typeof targetsInput === "string" && targetsInput.length > 0) return true;
+function readReviewedWriteNodeIds(doc: Record<string, unknown>): ReadonlySet<string> {
+  const refs: Record<string, unknown> = isRecord(doc.$referenced_components)
+    ? doc.$referenced_components
+    : {};
+  const { adjacency, reachable } = readFlowControlTopology(doc);
+  const executed = new Set(reachable);
+  const edges = Array.isArray(doc.data_flow_connections) ? doc.data_flow_connections : [];
+  const reaches = (from: string, to: string): boolean => {
+    const seen = new Set<string>();
+    const queue = [...(adjacency.get(from) ?? [])];
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      if (id === to) return true;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      queue.push(...(adjacency.get(id) ?? []));
     }
-    for (const child of children) pending.push(child);
+    return false;
+  };
+  const reviewedPlaces = new Set<string>();
+  for (const gateId of reachable) {
+    const gate = refs[gateId];
+    if (!isRecord(gate) || gate.component_type !== "InputMessageNode") continue;
+    const targetsInput = readArtifactReviewTargetsInput(gate);
+    if (targetsInput === undefined || targetsInput.trim().length === 0) continue;
+    const inputs = Array.isArray(gate.inputs) ? gate.inputs : [];
+    if (!inputs.some((port) => isRecord(port) && port.title === targetsInput)) continue;
+    for (const edge of edges) {
+      if (!isRecord(edge) || refOf(edge.destination_node) !== gateId) continue;
+      if (edge.destination_input !== targetsInput) continue;
+      const writer = refOf(edge.source_node);
+      if (writer === undefined || writer === gateId || !executed.has(writer)) continue;
+      if (reaches(writer, gateId)) reviewedPlaces.add(writer);
+    }
   }
-  return false;
+  // Each node id -> the top-level places it stands in.
+  const places = new Map<string, Set<string>>();
+  const place = (id: unknown, at: string): void => {
+    if (typeof id !== "string" || id.length === 0) return;
+    if (!places.has(id)) places.set(id, new Set());
+    places.get(id)!.add(at);
+  };
+  for (const top of reachable) {
+    place(top, top);
+    const component = refs[top];
+    if (!isRecord(component)) continue;
+    place(component.id, top);
+    if (component.component_type !== "FlowNode") continue;
+    const seen = new Set<object>();
+    const pending: unknown[] = [component.subflow];
+    while (pending.length > 0) {
+      const value = pending.pop();
+      if (value === null || typeof value !== "object" || seen.has(value)) continue;
+      seen.add(value);
+      if (Array.isArray(value)) {
+        for (const item of value) pending.push(item);
+        continue;
+      }
+      const record = value as Record<string, unknown>;
+      if (typeof record.component_type === "string") place(record.id, top);
+      const ref = record.$component_ref;
+      if (typeof ref === "string") {
+        place(ref, top);
+        pending.push(refs[ref]);
+      }
+      for (const item of Object.values(record)) pending.push(item);
+    }
+  }
+  const reviewed = new Set<string>();
+  for (const [id, at] of places) {
+    if ([...at].every((p) => reviewedPlaces.has(p))) reviewed.add(id);
+  }
+  return reviewed;
+}
+
+function refOf(value: unknown): string | undefined {
+  const ref = isRecord(value) ? value.$component_ref : undefined;
+  return typeof ref === "string" ? ref : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -379,8 +449,8 @@ async function loadRunPackageBindings(input: {
   /** The FULL typed produces entries (cinatra#1454) — carries per-entry
    *  objectTypeId so the materializer resolves the declared target type. */
   producesRefs: SemanticArtifactProducesRef[];
-  /** cinatra#3035: the run's own flow declares a marked review step. */
-  marksReviewStep: boolean;
+  /** cinatra#3035: the nodes whose write an executed marked gate reviews. */
+  reviewedWriteNodeIds: ReadonlySet<string>;
 }> {
   const cacheKey =
     input.packageVersion !== null
@@ -430,7 +500,7 @@ async function loadRunPackageBindings(input: {
       errors: [] as string[],
       produces,
       producesRefs,
-      marksReviewStep: false,
+      reviewedWriteNodeIds: new Set<string>(),
     };
     if (cacheKey !== null) pinnedBindingsCache.set(cacheKey, empty);
     return empty;
@@ -443,7 +513,7 @@ async function loadRunPackageBindings(input: {
     ...collected,
     produces,
     producesRefs,
-    marksReviewStep: flowMarksReviewStep(payload),
+    reviewedWriteNodeIds: readReviewedWriteNodeIds(payload as Record<string, unknown>),
   };
   if (cacheKey !== null) pinnedBindingsCache.set(cacheKey, result);
   return result;
@@ -505,21 +575,44 @@ export async function loadRunDerivationContext(input: {
 }
 
 /**
- * cinatra#3035: does the run's own flow document declare a marked review step?
- * The SAME cached answer `authorizeToolMaterializeWrite` hands the text road,
- * read from the run package's own flow, so a picture written mid-run takes the
- * origin a mid-run text write of that run takes. A template with no package
- * marks nothing.
+ * cinatra#3035: the image road's write facts from ONE reading of the run's
+ * package — the typed produces refs and whether an executed marked gate reviews
+ * the write `nodeId` makes. An unpinned run (a dist-tag that can move) reads the
+ * registry once here and takes both answers from that one result. A pinned run
+ * whose template persisted its executed declaration takes the produces refs from
+ * it (as `loadRunDerivationContext` does) and the review answer from the
+ * registry copy of that SAME immutable version; that read failing leaves the
+ * write with the core default review rather than refusing it.
  */
-export async function loadRunMarksReviewStep(input: {
+export async function loadRunImageWriteFacts(input: {
   templateId: string;
   packageVersion: string | null;
-}): Promise<boolean> {
-  const packageName = await resolveTemplatePackageName(input.templateId);
-  if (packageName === null) return false;
-  return (
-    await loadRunPackageBindings({ packageName, packageVersion: input.packageVersion })
-  ).marksReviewStep;
+  nodeId: string;
+}): Promise<{ producesRefs: SemanticArtifactProducesRef[]; reviewed: boolean }> {
+  const { packageName, executedDeclaration } = await resolveTemplatePackageAndBindingsFlag(
+    input.templateId,
+    input.packageVersion,
+  );
+  if (packageName === null) return { producesRefs: [], reviewed: false };
+  if (executedDeclaration !== null) {
+    let reviewed = false;
+    try {
+      reviewed = (
+        await loadRunPackageBindings({ packageName, packageVersion: input.packageVersion })
+      ).reviewedWriteNodeIds.has(input.nodeId);
+    } catch {
+      reviewed = false;
+    }
+    return { producesRefs: executedDeclaration.producesRefs, reviewed };
+  }
+  const loaded = await loadRunPackageBindings({
+    packageName,
+    packageVersion: input.packageVersion,
+  });
+  return {
+    producesRefs: loaded.producesRefs,
+    reviewed: loaded.reviewedWriteNodeIds.has(input.nodeId),
+  };
 }
 
 async function resolveTemplatePackageName(
@@ -1406,8 +1499,10 @@ export async function authorizeToolMaterializeWrite(input: {
   objectTypeId?: string;
   mime: string;
   content: string;
+  /** cinatra#3035: the writing node; absent (the append road) reads unreviewed. */
+  nodeId?: string;
 }): Promise<
-  | { ok: true; target: ResolvedBoundTarget; marksReviewStep: boolean }
+  | { ok: true; target: ResolvedBoundTarget; reviewed: boolean }
   | { ok: false; error: string }
 > {
   const packageName = await resolveTemplatePackageName(input.templateId);
@@ -1453,7 +1548,11 @@ export async function authorizeToolMaterializeWrite(input: {
       producesObjectTypeIdForExtension(loaded.producesRefs, input.extension) ?? undefined,
   });
   if (!resolved.ok) return { ok: false, error: resolved.error };
-  return { ok: true, target: resolved.target, marksReviewStep: loaded.marksReviewStep };
+  return {
+    ok: true,
+    target: resolved.target,
+    reviewed: input.nodeId !== undefined && loaded.reviewedWriteNodeIds.has(input.nodeId),
+  };
 }
 
 export async function materializeToolArtifact(input: {
@@ -1488,6 +1587,7 @@ export async function materializeToolArtifact(input: {
       objectTypeId: input.objectTypeId,
       mime: input.mime,
       content: input.content,
+      nodeId: input.nodeId,
     });
     if (!authorized.ok) return { ok: false, error: authorized.error };
     const resolved = authorized;
@@ -1513,9 +1613,9 @@ export async function materializeToolArtifact(input: {
       ownership,
       resolvedTarget: resolved.target,
       mimeDescription: "the call declared MIME",
-      // cinatra#3035: a mid-run write of a run whose flow marks a review step
-      // carries the intermediate origin; that step is the review of it.
-      ...(resolved.marksReviewStep ? { originKind: "live_generator" as const } : {}),
+      // cinatra#3035: a mid-run write an executed marked gate reviews carries
+      // the intermediate origin; that gate is the review of it.
+      ...(resolved.reviewed ? { originKind: "live_generator" as const } : {}),
     });
   } catch (err) {
     return {

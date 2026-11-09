@@ -29,8 +29,7 @@ import {
 import { resolveBoundArtifactTarget } from "@/lib/artifacts/resolve-bound-artifact-type";
 import { mimeAcceptedByAccepts } from "@/lib/artifacts/upload-artifact-type-map";
 import {
-  loadRunDerivationContext,
-  loadRunMarksReviewStep,
+  loadRunImageWriteFacts,
   resolveRunScopeOwnership,
   type ScopeDerivedOwnership,
 } from "@/lib/artifacts/run-artifact-materializer";
@@ -156,26 +155,24 @@ export type ResolvedImageProvider = {
  */
 export type ArtifactImageToolDeps = {
   resolveImageProvider: () => Promise<ResolvedImageProvider | null>;
-  loadProducesRefs: (input: {
+  /**
+   * The run package's write facts from ONE reading (cinatra#3035): the typed
+   * produces refs the write is authorized against, and whether a marked review
+   * gate that executes after the write `nodeId` makes reviews it. A reviewed
+   * first picture takes the intermediate origin, as a reviewed mid-run text
+   * write does — that gate is its review.
+   */
+  loadWriteFacts: (input: {
     templateId: string;
     packageVersion: string | null;
-  }) => Promise<readonly SemanticArtifactProducesRef[]>;
+    nodeId: string;
+  }) => Promise<{ producesRefs: readonly SemanticArtifactProducesRef[]; reviewed: boolean }>;
   resolveOwnership: (input: {
     templateId: string;
     runId: string;
     orgId: string;
   }) => Promise<ScopeDerivedOwnership>;
   countRunImages: (input: { orgId: string; runId: string }) => Promise<number>;
-  /**
-   * cinatra#3035: does the run's own flow declare a marked review step? When it
-   * does, a first picture takes the intermediate origin, as a mid-run text write
-   * of that run does — the marked step is its review. Optional: a set without it
-   * keeps the durable origin.
-   */
-  loadMarksReviewStep?: (input: {
-    templateId: string;
-    packageVersion: string | null;
-  }) => Promise<boolean>;
 };
 
 function schemaId(): string {
@@ -228,11 +225,9 @@ export function artifactImageToolDeps(): ArtifactImageToolDeps {
           }),
       };
     },
-    loadProducesRefs: async (i) =>
-      (await loadRunDerivationContext(i)).producesRefs,
+    loadWriteFacts: (i) => loadRunImageWriteFacts(i),
     resolveOwnership: (i) => resolveRunScopeOwnership(i),
     countRunImages: (i) => countFinalizedRunImages(i),
-    loadMarksReviewStep: (i) => loadRunMarksReviewStep(i),
   };
 }
 
@@ -312,10 +307,12 @@ export async function generateArtifactImage(
     // the extension is one the run's package DECLARED it produces, and the call
     // resolves to exactly one declared object type.
     // ------------------------------------------------------------------
-    const producesRefs = await deps.loadProducesRefs({
+    const writeFacts = await deps.loadWriteFacts({
       templateId: input.templateId,
       packageVersion: input.packageVersion,
+      nodeId: input.nodeId,
     });
+    const producesRefs = writeFacts.producesRefs;
     const declared = producesRefs.map((r) => r.extension);
     if (!declared.includes(input.extension)) {
       return {
@@ -531,14 +528,6 @@ export async function generateArtifactImage(
       runId: input.runId,
       orgId: input.orgId,
     });
-    // cinatra#3035: a first picture of a run whose flow marks a review step
-    // carries the intermediate origin; that step is the review of it.
-    const marksReviewStep = deps.loadMarksReviewStep
-      ? await deps.loadMarksReviewStep({
-          templateId: input.templateId,
-          packageVersion: input.packageVersion,
-        })
-      : false;
 
     let created: { artifactId: string; representationRevisionId: string };
     try {
@@ -552,7 +541,9 @@ export async function generateArtifactImage(
         visibility: ownership.visibility,
         title,
         declaredMime: mime,
-        originKind: marksReviewStep ? "live_generator" : "agent_generated",
+        // cinatra#3035: a first picture an executed marked gate reviews carries
+        // the intermediate origin; that gate is the review of it.
+        originKind: writeFacts.reviewed ? "live_generator" : "agent_generated",
         stream: asImageStream(bytes),
         createdByRunId: input.runId,
         producerAssertionExtension: input.extension,

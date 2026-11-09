@@ -86,7 +86,10 @@ function deps(over: Partial<ArtifactImageToolDeps> = {}): ArtifactImageToolDeps 
         model: "second-model",
       }),
     }),
-    loadProducesRefs: async () => [{ extension: "@cinatra-ai/picture-artifact" }],
+    loadWriteFacts: async () => ({
+      producesRefs: [{ extension: "@cinatra-ai/picture-artifact" }],
+      reviewed: false,
+    }),
     resolveOwnership: async () => ({
       ownerLevel: "organization",
       ownerId: "org-1",
