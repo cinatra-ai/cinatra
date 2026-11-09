@@ -332,21 +332,103 @@ describe("expired-foreign does the SAME WORK as live-foreign", () => {
   });
 
   it("forged stays within the same order of magnitude — the pre-existing AEAD gap, not a new one", () => {
-    // Both arms come from one interleaved loop. A measurement still lands on a
-    // loaded runner now and then, so it is taken up to three times and the
-    // claim holds when one reading falls inside the order-of-magnitude band. A
-    // real regression of that size moves every reading, so all three fail.
+    // Three readings, each from one interleaved loop; the claim is decided on
+    // their MEDIAN ratio (see forgedRatioVerdict below), so one reading taken in
+    // a burst of load cannot fail it and one lucky reading cannot pass it.
     const expiredRef = mintExpired({ userId: OTHER_USER, orgId: ORG });
     const forgedRef = forge();
-    const readings: string[] = [];
-    let within = false;
-    for (let attempt = 0; attempt < 3 && !within; attempt += 1) {
+    const readings: ForgedReading[] = [];
+    for (let attempt = 0; attempt < FORGED_ATTEMPTS; attempt += 1) {
       const [expiredForeign, forged] = pairedMedianNanos(expiredRef, forgedRef);
-      const ratio = expiredForeign / forged;
-      readings.push(`ratio ${ratio} (expired-foreign ${expiredForeign}ns vs forged ${forged}ns)`);
-      within = ratio > 0.1 && ratio < 10;
+      readings.push({ expiredForeign, forged });
     }
-    expect(within, `no reading inside 0.1..10: ${readings.join("; ")}`).toBe(true);
+    const verdict = forgedRatioVerdict(readings);
+    expect(verdict.pass, verdict.message).toBe(true);
+  });
+});
+
+/**
+ * The decision of the forged timing test, pure so that its branches are
+ * pinned without a clock.
+ *
+ * The forged path stops inside `decipher.final()` and is the cheaper one, so
+ * the expired-foreign/forged ratio sits well above 1: CI runners read it at
+ * about 10. The band is therefore 0.1 to 25. Both ends are strict. It still
+ * fails a change that makes either path orders of magnitude slower or faster.
+ * The decision is on the median of the per-reading ratios: one outlier in
+ * either direction cannot decide it, and a steady shift moves the median.
+ */
+const FORGED_ATTEMPTS = 3;
+const FORGED_RATIO_LOW = 0.1;
+const FORGED_RATIO_HIGH = 25;
+
+type ForgedReading = { expiredForeign: number; forged: number };
+
+function forgedRatioVerdict(readings: ForgedReading[]): {
+  pass: boolean;
+  medianRatio: number;
+  message: string;
+} {
+  const ratios = readings.map((r) => r.expiredForeign / r.forged);
+  const sorted = [...ratios].sort((a, b) => a - b);
+  const medianRatio = sorted[Math.floor(sorted.length / 2)];
+  const pass =
+    readings.length > 0 &&
+    Number.isFinite(medianRatio) &&
+    medianRatio > FORGED_RATIO_LOW &&
+    medianRatio < FORGED_RATIO_HIGH;
+  const lines = readings.map(
+    (r, i) =>
+      `attempt ${i + 1}/${readings.length}: ratio ${ratios[i]} ` +
+      `(expired-foreign ${r.expiredForeign}ns vs forged ${r.forged}ns)`,
+  );
+  const message =
+    `median ratio ${medianRatio} must be inside ${FORGED_RATIO_LOW}..${FORGED_RATIO_HIGH}; ` +
+    lines.join("; ");
+  return { pass, medianRatio, message };
+}
+
+describe("the forged timing decision reads the median ratio, not any one reading", () => {
+  /** A reading with the given expired-foreign/forged ratio. */
+  const r = (ratio: number): ForgedReading => ({ expiredForeign: ratio * 1000, forged: 1000 });
+
+  it("passes a steady ratio inside the band", () => {
+    expect(forgedRatioVerdict([r(9), r(10.2), r(11)]).pass).toBe(true);
+  });
+
+  it("fails at and above the upper bound", () => {
+    expect(forgedRatioVerdict([r(25), r(25), r(25)]).pass).toBe(false);
+    expect(forgedRatioVerdict([r(40), r(26), r(30)]).pass).toBe(false);
+  });
+
+  it("fails at and below the lower bound", () => {
+    expect(forgedRatioVerdict([r(0.1), r(0.1), r(0.1)]).pass).toBe(false);
+    expect(forgedRatioVerdict([r(0.05), r(0.09), r(0.2)]).pass).toBe(false);
+  });
+
+  it("one outside reading does not decide it, either way", () => {
+    expect(forgedRatioVerdict([r(80), r(9), r(10)]).pass).toBe(true);
+    expect(forgedRatioVerdict([r(9), r(10), r(80)]).pass).toBe(true);
+    expect(forgedRatioVerdict([r(9), r(30), r(40)]).pass).toBe(false);
+  });
+
+  it("a steady regression near the bound fails although one reading falls inside", () => {
+    expect(forgedRatioVerdict([r(26), r(24.9), r(26.5)]).pass).toBe(false);
+    expect(forgedRatioVerdict([r(0.098), r(0.101), r(0.097)]).pass).toBe(false);
+  });
+
+  it("fails with no reading or a non-finite ratio", () => {
+    expect(forgedRatioVerdict([]).pass).toBe(false);
+    const zero: ForgedReading = { expiredForeign: 1, forged: 0 };
+    expect(forgedRatioVerdict([r(9), zero, zero]).pass).toBe(false);
+  });
+
+  it("the failure message names every attempt and the band", () => {
+    const { message } = forgedRatioVerdict([r(30), r(31), r(32)]);
+    expect(message).toContain("attempt 1/3: ratio 30");
+    expect(message).toContain("attempt 2/3: ratio 31");
+    expect(message).toContain("attempt 3/3: ratio 32");
+    expect(message).toContain("inside 0.1..25");
   });
 });
 
