@@ -25,6 +25,10 @@ import {
   type ShapedArtifactImageInput,
 } from "./artifact-image-shaper";
 import {
+  shapeArtifactPageCaptureInput,
+  type ShapedArtifactPageCaptureInput,
+} from "@/lib/artifact-page-capture-shaper";
+import {
   shapeTestDeliverySendInput,
   shapeTestDeliverySendResult,
 } from "./test-delivery-seam";
@@ -43,6 +47,7 @@ import {
 import { shapeObjectsUpdateInput } from "./objects-update-seam";
 import { EXTENSION_SCOPED_TOOLS } from "@/lib/extension-scoped-tools";
 import { EXTENSION_TOOL_REVIEW_TARGETS_KEY } from "@/lib/extension-tool-dispatch";
+import { EXTENSION_TOOL_STEP_UNPROVEN } from "@/lib/extension-scoped-tools-refusals";
 import { RUN_FOLDER_TOOLS } from "@/lib/run-folder-tools";
 import {
   PASSTHROUGH_ACTOR_CONTEXT_ERROR,
@@ -98,6 +103,11 @@ const ALLOWED_TOOLS = new Set([
   // provider, sharing the #923 idempotency ledger (`path:'materialize_tool'`)
   // and, for a regeneration, the mid-run revision's one compare-and-set.
   "artifact_image_generate",
+  // THE PAGE CAPTURE TOOL (cinatra#4223): a page url on one of the org's active
+  // connect-registered sites in, a PNG of that page filed. Dispatched to
+  // `@/lib/artifact-page-capture-tool#captureArtifactPage` under the bound run's
+  // own authority, sharing the #923 idempotency ledger (`path:'materialize_tool'`).
+  "artifact_page_capture",
   // Run-scoped HITL prompt primitives (#1794) — the deterministic pre-interrupt
   // seam. An extension workflow's prep ApiNode calls these to assemble / shape
   // its own HITL payload before the interrupt; the primitive derives the run +
@@ -309,6 +319,10 @@ TOOL_INPUT_SHAPERS.artifact_materialize = (raw) =>
 // a JSON string, which is all a wayflowcore json_body template can carry).
 TOOL_INPUT_SHAPERS.artifact_image_generate = (raw) => shapeArtifactImageInput(raw);
 
+// The page capture tool's seam shaper (cinatra#4223): pure module, flow
+// variables wire straight to {extension, title, url, node_id}.
+TOOL_INPUT_SHAPERS.artifact_page_capture = (raw) => shapeArtifactPageCaptureInput(raw);
+
 // blog-pipeline-agent deterministic seam dispatch.
 // The pure shaper lives in ./blog-pipeline-seam (zero-dep, unit-tested).
 // Chained AHEAD of the base objects_save shaper; the `_shape` opt-in
@@ -407,9 +421,12 @@ export async function POST(req: Request): Promise<Response> {
   // signs the executing step's id over the run's context id; it is verified
   // here with the context id the run binding above proved, and stamped on the
   // run-scoped frame below. An absent or unverified pair gives no step.
+  // A blank key is no key (cinatra#4154): the runtime refuses to boot on one,
+  // and a pair signed under whitespace proves nothing.
+  const attestKey = process.env.CINATRA_CONTEXT_ATTEST_KEY;
   const verifiedStepId =
     verifyRunStepAttestation({
-      key: process.env.CINATRA_CONTEXT_ATTEST_KEY,
+      key: attestKey && attestKey.trim() !== "" ? attestKey : null,
       contextId: req.headers.get("x-cinatra-a2a-context-id"),
       node: req.headers.get(RUN_STEP_NODE_HEADER),
       attestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER),
@@ -628,6 +645,34 @@ export async function POST(req: Request): Promise<Response> {
         mime: outcome.mime,
         deduped: outcome.deduped,
       };
+    } else if (tool === "artifact_page_capture") {
+      // THE PAGE CAPTURE TOOL (cinatra#4223). Every identity comes from the run
+      // row bound above, never from the request body. Dynamic import keeps the
+      // capture + artifact stack out of this route's static module graph.
+      const { captureArtifactPage } = await import("@/lib/artifact-page-capture-tool");
+      const shaped = input as unknown as ShapedArtifactPageCaptureInput;
+      const outcome = await captureArtifactPage({
+        runId: run.id,
+        orgId: run.orgId,
+        templateId: run.templateId,
+        packageVersion: run.packageVersion,
+        createdBy: run.runBy,
+        nodeId: shaped.nodeId,
+        extension: shaped.extension,
+        title: shaped.title,
+        url: shaped.url,
+      });
+      if (!outcome.ok) {
+        return NextResponse.json({ error: outcome.error, reason: outcome.reason }, { status: 400 });
+      }
+      result = {
+        artifactId: outcome.artifactId,
+        representationRevisionId: outcome.representationRevisionId,
+        capturedUrl: outcome.capturedUrl,
+        viewport: outcome.viewport,
+        capturedAt: outcome.capturedAt,
+        deduped: outcome.deduped,
+      };
     } else if (RUN_FOLDER_TOOLS.has(tool)) {
       // The run folder's file tools (cinatra#3030, item 0.21). The scope is the
       // run PROVEN above — a bridge-token holder can only ever reach ITS OWN
@@ -654,6 +699,15 @@ export async function POST(req: Request): Promise<Response> {
       // admission an extension's own and not a bridge-token holder's choice.
       // Dynamic import keeps the artifact + extension-table stack out of this
       // route's static module graph (same posture as artifact_materialize).
+      //
+      // cinatra#4154: an `extension_tool` call reaches a package's tool from
+      // the calling STEP, so it is refused before any dispatch when the
+      // runtime's signed step pair did not verify above. The verified step and
+      // the run's own install fields ride into the dispatch; no request field
+      // does.
+      if (tool === "extension_tool" && !verifiedStepId) {
+        return NextResponse.json({ error: EXTENSION_TOOL_STEP_UNPROVEN }, { status: 403 });
+      }
       const { dispatchExtensionScopedTool } = await import("@/lib/extension-scoped-tools");
       const outcome = await dispatchExtensionScopedTool({
         tool,
@@ -664,6 +718,9 @@ export async function POST(req: Request): Promise<Response> {
           runBy: run.runBy ?? null,
           templateId: run.templateId,
           packageVersion: run.packageVersion ?? null,
+          versionId: run.versionId ?? null,
+          dependentInstallId: run.dependentInstallId ?? null,
+          verifiedStepId: verifiedStepId ?? null,
         },
         actor: alsActorContext,
       });

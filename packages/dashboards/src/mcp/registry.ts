@@ -1,6 +1,6 @@
 import "server-only";
 import type { McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
-import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
+import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context";
 import type { ZodTypeAny } from "zod";
 
 import { createDashboardPrimitiveHandlers } from "./handlers";
@@ -114,6 +114,9 @@ export function registerDashboardPrimitives(server: McpRuntimeToolServer): void 
         if (requestCtx?.orgWriteAuthority) {
           actorBase.orgWriteAuthority = requestCtx.orgWriteAuthority;
         }
+        // The verified run id of the frame (cinatra#3092): a dashboard an agent
+        // run writes is that run's artifact, so the twin can name its producer.
+        if (requestCtx?.runId) actorBase.runId = requestCtx.runId;
 
         const result = await handler({
           primitiveName: name,
