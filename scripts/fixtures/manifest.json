@@ -66,6 +66,7 @@
     { "name": "object_connector_configs", "category": "retired", "reason": "Renamed to object_sync_adapter_configs in drizzle-store.ts; legacy rows remain in older DBs." },
     { "name": "object_sync_adapter_configs", "category": "connector-instance", "reason": "Connector sync adapter configs come from the real WordPress/Drupal install flow." },
     { "name": "objects", "category": "fixture-driven", "minRows": 500, "seededBy": "seedCrmData + seedCanonicalBlogFixtures + seedLists", "surface": "/data, /lists, /campaigns, /contacts" },
+    { "name": "page_capture_leases", "category": "runtime-event", "reason": "Page capture budget leases, one per capture an agent run takes." },
     { "name": "path_relocations", "category": "runtime-event", "reason": "Object path relocation ledger." },
     { "name": "project_access", "category": "fixture-driven", "minRows": 5, "seededBy": "seedRbacGrants", "surface": "/projects/<id>/permissions" },
     { "name": "project_agent_template_bindings", "category": "runtime-dependent", "reason": "Project-pinned agent templates; needs boot-registered agent_template IDs." },
