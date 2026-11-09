@@ -34,9 +34,11 @@ the proven run.
 
 ## How it is used
 
-Stage the tree into `extensions/<vendor>/<slug>/` (the directory both the
-host's dev boot scan and the WayFlow runtime read) and seed one run of
-`@cinatra-dashboard-fixture/run-writes-dashboard` with a `title`, the same way
+`tests/e2e/agents-run/dashboard-producer-fixture.ts` stages the tree into
+`extensions/<vendor>/<slug>/` (the directory both the host's dev boot scan and
+the WayFlow runtime read) with `stageDashboardProducerFixture`, and seeds one
+run of `@cinatra-dashboard-fixture/run-writes-dashboard` with a `title` with
+`seedDashboardProducerRun`, the same way
 `tests/e2e/agents-run/review-gate-fixture.ts` stages and seeds its fixture.
 
 ## Keeping the marker in sync

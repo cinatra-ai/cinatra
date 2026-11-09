@@ -699,10 +699,11 @@ export async function POST(req: Request): Promise<Response> {
       result = outcome.result;
     } else if (tool === "dashboards_create") {
       // cinatra#3092: written as the run PROVEN above (binding.runId), never a
-      // run the body names; refused unless the run holds a live attempt.
+      // run the body names; refused unless the attempt the binding read is
+      // still the run's live attempt.
       const { runDashboardCreate } = await import("./run-dashboard-create");
       const outcome = await withActorContext(alsActorContext, () =>
-        runDashboardCreate({ provenRunId: binding.runId, run, input }),
+        runDashboardCreate({ binding, run, input }),
       );
       if (!outcome.ok) {
         return NextResponse.json({ error: outcome.error }, { status: outcome.status });

@@ -6,8 +6,10 @@
  * the proven run id (so the twin names the run as the producer), and holds the
  * org-write authority minted by the SAME function the MCP transport uses for an
  * agent-run frame. Every unproven run is refused before the tool runs: a
- * binding that fails, a run with no owner, a run with no current attempt, and a
- * run the mint refuses (not inside a live attempt).
+ * binding that fails, a run with no owner, a run with no current attempt, a run
+ * whose attempt changed after the binding read it, a run with no OBO ceiling,
+ * and a run the mint refuses (not inside a live attempt). A tool error of an
+ * unknown code answers a fixed sentence, never its own text.
  *
  *   npx vitest run src/__tests__/passthrough-dashboards-create-3092.test.ts
  */
@@ -21,7 +23,6 @@ const {
   collectAllPrimitiveHandlersMock,
   mintRunWriteAuthorityForMcpMock,
   dashboardsCreateMock,
-  otherDashboardsHandlerMock,
 } = vi.hoisted(() => ({
   isAuthorizedMock: vi.fn(() => true),
   bindBridgeRunIdMock: vi.fn(),
@@ -35,7 +36,6 @@ const {
   collectAllPrimitiveHandlersMock: vi.fn(),
   mintRunWriteAuthorityForMcpMock: vi.fn(),
   dashboardsCreateMock: vi.fn(),
-  otherDashboardsHandlerMock: vi.fn(),
 }));
 
 vi.mock("@cinatra-ai/agents", () => ({
@@ -59,13 +59,9 @@ vi.mock("@cinatra-ai/llm/actor-context", () => ({
 vi.mock("@/lib/org-write/run-authority-mint", () => ({
   mintRunWriteAuthorityForMcp: mintRunWriteAuthorityForMcpMock,
 }));
+// The entry exports the create write only (no update, publish or archive).
 vi.mock("@cinatra-ai/dashboards/mcp", () => ({
-  createDashboardPrimitiveHandlers: () => ({
-    dashboards_create: dashboardsCreateMock,
-    dashboards_update: otherDashboardsHandlerMock,
-    dashboards_publish: otherDashboardsHandlerMock,
-    dashboards_archive: otherDashboardsHandlerMock,
-  }),
+  createDashboardForRun: dashboardsCreateMock,
 }));
 
 import { POST } from "../app/api/agents/passthrough/route";
@@ -109,7 +105,7 @@ function createBody(overrides?: Record<string, unknown>): Record<string, unknown
 beforeEach(() => {
   vi.clearAllMocks();
   isAuthorizedMock.mockReturnValue(true);
-  bindBridgeRunIdMock.mockResolvedValue({ ok: true, runId: "run-1" });
+  bindBridgeRunIdMock.mockResolvedValue({ ok: true, runId: "run-1", executionAttemptId: "att-1" });
   readAgentRunByIdMock.mockResolvedValue(RUN);
   mintRunWriteAuthorityForMcpMock.mockResolvedValue(AUTHORITY);
   collectAllPrimitiveHandlersMock.mockResolvedValue({});
@@ -210,12 +206,41 @@ describe("POST /api/agents/passthrough — dashboards_create (cinatra#3092)", ()
   });
 
   it("refuses when the bound run is not the run row read", async () => {
-    bindBridgeRunIdMock.mockResolvedValue({ ok: true, runId: "run-2" });
+    bindBridgeRunIdMock.mockResolvedValue({ ok: true, runId: "run-2", executionAttemptId: "att-1" });
     const res = await POST(post(createBody()));
     expect(res.status).toBe(403);
     expect(mintRunWriteAuthorityForMcpMock).not.toHaveBeenCalled();
     expect(dashboardsCreateMock).not.toHaveBeenCalled();
   });
+
+  it("refuses a callback bound under one attempt when the run row is on another (rollover)", async () => {
+    // The binding read attempt att-1; by the time the run row is read, the run
+    // has moved to att-2. The claim is the binding's attempt, so it is stale.
+    readAgentRunByIdMock.mockResolvedValue({ ...RUN, executionAttemptId: "att-2" });
+    const res = await POST(post(createBody()));
+    expect(res.status).toBe(403);
+    expect(mintRunWriteAuthorityForMcpMock).not.toHaveBeenCalled();
+    expect(dashboardsCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a binding that read no attempt, before the mint", async () => {
+    bindBridgeRunIdMock.mockResolvedValue({ ok: true, runId: "run-1", executionAttemptId: null });
+    const res = await POST(post(createBody()));
+    expect(res.status).toBe(403);
+    expect(mintRunWriteAuthorityForMcpMock).not.toHaveBeenCalled();
+    expect(dashboardsCreateMock).not.toHaveBeenCalled();
+  });
+
+  it.each([null, undefined, []])(
+    "refuses a run with no OBO ceiling (%s), before the mint",
+    async (oboCeiling) => {
+      readAgentRunByIdMock.mockResolvedValue({ ...RUN, oboCeiling });
+      const res = await POST(post(createBody()));
+      expect(res.status).toBe(403);
+      expect(mintRunWriteAuthorityForMcpMock).not.toHaveBeenCalled();
+      expect(dashboardsCreateMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("answers the tool's own refusal with a non-2xx, so the flow step fails", async () => {
     dashboardsCreateMock.mockResolvedValue({ error: { code: "forbidden", message: "no" } });
@@ -224,10 +249,17 @@ describe("POST /api/agents/passthrough — dashboards_create (cinatra#3092)", ()
     expect(await res.json()).toEqual({ error: { code: "forbidden", message: "no" } });
   });
 
-  it("forwards no ceiling when the run has none", async () => {
-    readAgentRunByIdMock.mockResolvedValue({ ...RUN, oboCeiling: null });
-    await POST(post(createBody()));
-    expect(dashboardsCreateMock.mock.calls[0][0].actor).not.toHaveProperty("oboCeiling");
+  it.each([
+    { code: "internal_error", message: 'duplicate key value violates unique constraint "dashboards_pkey"' },
+    { code: "some_new_code", message: "relation cinatra.dashboards: connection detail" },
+    "a bare error text naming a table",
+  ])("answers a tool error of an unknown code with a fixed sentence, never its text", async (error) => {
+    dashboardsCreateMock.mockResolvedValue({ error });
+    const res = await POST(post(createBody()));
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body).toEqual({ error: { code: "internal_error", message: "dashboards_create failed" } });
+    expect(JSON.stringify(body)).not.toMatch(/duplicate|relation|table|connection/);
   });
 
   it.each(["dashboards_update", "dashboards_publish", "dashboards_archive", "dashboards_get"])(
@@ -235,7 +267,7 @@ describe("POST /api/agents/passthrough — dashboards_create (cinatra#3092)", ()
     async (tool) => {
       const res = await POST(post({ ...createBody(), tool }));
       expect(res.status).toBe(403);
-      expect(otherDashboardsHandlerMock).not.toHaveBeenCalled();
+      expect(dashboardsCreateMock).not.toHaveBeenCalled();
       expect(mintRunWriteAuthorityForMcpMock).not.toHaveBeenCalled();
     },
   );

@@ -3,6 +3,7 @@
 // Cube handlers: dashboard_cubes_list, dashboard_cube_propose.
 // AI handlers: dashboards_generation_start, dashboards_generation_status.
 //
-// The handler factory is exported for the agent passthrough, which admits
-// `dashboards_create` for a proven run (cinatra#3092).
-export { createDashboardPrimitiveHandlers } from "./handlers";
+// Only the CREATE write is exported, for the agent passthrough, which admits
+// `dashboards_create` for a proven run (cinatra#3092). The handler factory
+// (update, publish, archive) stays unexported.
+export { createDashboardForRun } from "./handlers";
