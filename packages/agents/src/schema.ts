@@ -432,6 +432,12 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // Migration: see src/lib/drizzle-store.ts run_token_hash entry + core__0020
   //   (ALTER TABLE cinatra.agent_runs ADD COLUMN IF NOT EXISTS run_token_hash text).
   runTokenHash: text("run_token_hash"),
+  // cinatra#4220: the run's host-derived connector-instance binding, JSON-as-text
+  // {connectorKey, instanceId}. Set ONLY by the dispatcher
+  // (setAgentRunConnectorInstanceBinding) after the per-instance use gate;
+  // write-once; never a run-creation input. Signed into the run's MCP actor
+  // token as its pin. Migration core__0122 + agentRunConnectorInstanceBindingSchemaQueries.
+  connectorInstanceBinding: text("connector_instance_binding"),
   // dependent_install_id: the installed_extension row id a run executes AS
   // (cinatra#1392 Gap 2). Threaded onto the signed run lineage (ActorContext)
   // so the A2A dispatch seam resolves edge-bound serving against a TRUSTED
@@ -892,6 +898,12 @@ export const artifactVerificationRecords = cinatraSchema.table("artifact_verific
   fieldDiff:                       jsonb("field_diff").notNull().default(sql`'[]'::jsonb`),
   visualDiff:                      jsonb("visual_diff"),
   outcome:                         text("outcome").notNull(), // verified | drifted | unmet
+  // cinatra#4312 — the record's reopen gate. The verification writes it in that gate's
+  // insert transaction; core__0125's backfill, repeated by the review orchestration
+  // sweep, names a gate a repair row at attempt 2 or later rests on (an old writer's,
+  // or a caller's gate with a hand-written row). Null when neither named one, and
+  // again when the named gate is deleted (the foreign key sets it to null).
+  reopenedGateId:                  text("reopened_gate_id").references(() => artifactReviewGates.id, { onDelete: "set null" }),
   createdAt:                       timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   gateIdx: index("artifact_verification_records_gate_idx").on(t.gateId),

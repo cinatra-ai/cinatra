@@ -43,6 +43,7 @@ import {
 import { shapeObjectsUpdateInput } from "./objects-update-seam";
 import { EXTENSION_SCOPED_TOOLS } from "@/lib/extension-scoped-tools";
 import { EXTENSION_TOOL_REVIEW_TARGETS_KEY } from "@/lib/extension-tool-dispatch";
+import { EXTENSION_TOOL_STEP_UNPROVEN } from "@/lib/extension-scoped-tools-refusals";
 import { RUN_FOLDER_TOOLS } from "@/lib/run-folder-tools";
 import {
   PASSTHROUGH_ACTOR_CONTEXT_ERROR,
@@ -407,9 +408,12 @@ export async function POST(req: Request): Promise<Response> {
   // signs the executing step's id over the run's context id; it is verified
   // here with the context id the run binding above proved, and stamped on the
   // run-scoped frame below. An absent or unverified pair gives no step.
+  // A blank key is no key (cinatra#4154): the runtime refuses to boot on one,
+  // and a pair signed under whitespace proves nothing.
+  const attestKey = process.env.CINATRA_CONTEXT_ATTEST_KEY;
   const verifiedStepId =
     verifyRunStepAttestation({
-      key: process.env.CINATRA_CONTEXT_ATTEST_KEY,
+      key: attestKey && attestKey.trim() !== "" ? attestKey : null,
       contextId: req.headers.get("x-cinatra-a2a-context-id"),
       node: req.headers.get(RUN_STEP_NODE_HEADER),
       attestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER),
@@ -654,6 +658,15 @@ export async function POST(req: Request): Promise<Response> {
       // admission an extension's own and not a bridge-token holder's choice.
       // Dynamic import keeps the artifact + extension-table stack out of this
       // route's static module graph (same posture as artifact_materialize).
+      //
+      // cinatra#4154: an `extension_tool` call reaches a package's tool from
+      // the calling STEP, so it is refused before any dispatch when the
+      // runtime's signed step pair did not verify above. The verified step and
+      // the run's own install fields ride into the dispatch; no request field
+      // does.
+      if (tool === "extension_tool" && !verifiedStepId) {
+        return NextResponse.json({ error: EXTENSION_TOOL_STEP_UNPROVEN }, { status: 403 });
+      }
       const { dispatchExtensionScopedTool } = await import("@/lib/extension-scoped-tools");
       const outcome = await dispatchExtensionScopedTool({
         tool,
@@ -664,6 +677,9 @@ export async function POST(req: Request): Promise<Response> {
           runBy: run.runBy ?? null,
           templateId: run.templateId,
           packageVersion: run.packageVersion ?? null,
+          versionId: run.versionId ?? null,
+          dependentInstallId: run.dependentInstallId ?? null,
+          verifiedStepId: verifiedStepId ?? null,
         },
         actor: alsActorContext,
       });
