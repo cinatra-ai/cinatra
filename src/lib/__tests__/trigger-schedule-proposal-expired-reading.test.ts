@@ -353,10 +353,15 @@ describe("expired-foreign does the SAME WORK as live-foreign", () => {
  *
  * The forged path stops inside `decipher.final()` and is the cheaper one, so
  * the expired-foreign/forged ratio sits well above 1: CI runners read it at
- * about 10. The band is therefore 0.1 to 25. Both ends are strict. It still
- * fails a change that makes either path orders of magnitude slower or faster.
- * The decision is on the median of the per-reading ratios: one outlier in
- * either direction cannot decide it, and a steady shift moves the median.
+ * about 10. The band is therefore 0.1 to 25, strict at both ends. From a
+ * healthy ratio of about 10 it fails an upward shift of about 2.5x or more
+ * and a downward shift of about 100x or more; a smaller shift stays inside.
+ *
+ * The verdict needs exactly FORGED_ATTEMPTS readings, the count the timed
+ * test takes. Any reading with a forged time that is not above 0, or with a
+ * ratio that is not finite, fails the verdict, wherever it stands. Otherwise
+ * the decision is on the median of the ratios: one outlier in either
+ * direction cannot decide it, and a steady shift moves the median.
  */
 const FORGED_ATTEMPTS = 3;
 const FORGED_RATIO_LOW = 0.1;
@@ -366,22 +371,36 @@ type ForgedReading = { expiredForeign: number; forged: number };
 
 function forgedRatioVerdict(readings: ForgedReading[]): {
   pass: boolean;
-  medianRatio: number;
+  medianRatio: number | null;
   message: string;
 } {
+  if (readings.length !== FORGED_ATTEMPTS) {
+    return {
+      pass: false,
+      medianRatio: null,
+      message: `expected ${FORGED_ATTEMPTS} readings, got ${readings.length}`,
+    };
+  }
   const ratios = readings.map((r) => r.expiredForeign / r.forged);
-  const sorted = [...ratios].sort((a, b) => a - b);
-  const medianRatio = sorted[Math.floor(sorted.length / 2)];
-  const pass =
-    readings.length > 0 &&
-    Number.isFinite(medianRatio) &&
-    medianRatio > FORGED_RATIO_LOW &&
-    medianRatio < FORGED_RATIO_HIGH;
   const lines = readings.map(
     (r, i) =>
       `attempt ${i + 1}/${readings.length}: ratio ${ratios[i]} ` +
       `(expired-foreign ${r.expiredForeign}ns vs forged ${r.forged}ns)`,
   );
+  const invalid = readings
+    .map((r, i) => (r.forged > 0 && Number.isFinite(ratios[i]) ? null : `invalid ${lines[i]}`))
+    .filter((line): line is string => line !== null);
+  if (invalid.length > 0) {
+    return {
+      pass: false,
+      medianRatio: null,
+      message:
+        "every reading must have a forged time above 0 and a finite ratio; " + invalid.join("; "),
+    };
+  }
+  const sorted = [...ratios].sort((a, b) => a - b);
+  const medianRatio = sorted[Math.floor(sorted.length / 2)];
+  const pass = medianRatio > FORGED_RATIO_LOW && medianRatio < FORGED_RATIO_HIGH;
   const message =
     `median ratio ${medianRatio} must be inside ${FORGED_RATIO_LOW}..${FORGED_RATIO_HIGH}; ` +
     lines.join("; ");
@@ -393,7 +412,9 @@ describe("the forged timing decision reads the median ratio, not any one reading
   const r = (ratio: number): ForgedReading => ({ expiredForeign: ratio * 1000, forged: 1000 });
 
   it("passes a steady ratio inside the band", () => {
-    expect(forgedRatioVerdict([r(9), r(10.2), r(11)]).pass).toBe(true);
+    const verdict = forgedRatioVerdict([r(9), r(10.2), r(11)]);
+    expect(verdict.pass).toBe(true);
+    expect(verdict.medianRatio).toBeCloseTo(10.2, 9);
   });
 
   it("fails at and above the upper bound", () => {
@@ -406,10 +427,21 @@ describe("the forged timing decision reads the median ratio, not any one reading
     expect(forgedRatioVerdict([r(0.05), r(0.09), r(0.2)]).pass).toBe(false);
   });
 
-  it("one outside reading does not decide it, either way", () => {
+  it("one upper outlier does not decide it, in any position", () => {
     expect(forgedRatioVerdict([r(80), r(9), r(10)]).pass).toBe(true);
+    expect(forgedRatioVerdict([r(9), r(80), r(10)]).pass).toBe(true);
     expect(forgedRatioVerdict([r(9), r(10), r(80)]).pass).toBe(true);
+  });
+
+  it("one lower outlier does not decide it, in any position", () => {
+    expect(forgedRatioVerdict([r(0.01), r(9), r(10)]).pass).toBe(true);
+    expect(forgedRatioVerdict([r(9), r(0.01), r(10)]).pass).toBe(true);
+    expect(forgedRatioVerdict([r(9), r(10), r(0.01)]).pass).toBe(true);
+  });
+
+  it("two outside readings decide it", () => {
     expect(forgedRatioVerdict([r(9), r(30), r(40)]).pass).toBe(false);
+    expect(forgedRatioVerdict([r(0.01), r(9), r(0.05)]).pass).toBe(false);
   });
 
   it("a steady regression near the bound fails although one reading falls inside", () => {
@@ -417,10 +449,35 @@ describe("the forged timing decision reads the median ratio, not any one reading
     expect(forgedRatioVerdict([r(0.098), r(0.101), r(0.097)]).pass).toBe(false);
   });
 
-  it("fails with no reading or a non-finite ratio", () => {
-    expect(forgedRatioVerdict([]).pass).toBe(false);
-    const zero: ForgedReading = { expiredForeign: 1, forged: 0 };
-    expect(forgedRatioVerdict([r(9), zero, zero]).pass).toBe(false);
+  it("one invalid reading fails it, in any position, and is named", () => {
+    const bad: ForgedReading[] = [
+      { expiredForeign: Number.NaN, forged: 1000 },
+      { expiredForeign: Number.POSITIVE_INFINITY, forged: 1000 },
+      { expiredForeign: Number.NEGATIVE_INFINITY, forged: 1000 },
+      { expiredForeign: 0, forged: 0 },
+      { expiredForeign: 1000, forged: 0 },
+      { expiredForeign: 1000, forged: -1000 },
+      { expiredForeign: 1000, forged: Number.NaN },
+    ];
+    for (const reading of bad) {
+      for (let position = 0; position < FORGED_ATTEMPTS; position += 1) {
+        const readings = [r(9), r(10)];
+        readings.splice(position, 0, reading);
+        const verdict = forgedRatioVerdict(readings);
+        expect(verdict.pass, JSON.stringify(readings)).toBe(false);
+        expect(verdict.medianRatio).toBeNull();
+        expect(verdict.message).toContain(`invalid attempt ${position + 1}/3:`);
+      }
+    }
+  });
+
+  it("fails any count of readings other than three, with no median", () => {
+    for (const count of [0, 1, 2, 4]) {
+      const verdict = forgedRatioVerdict(Array.from({ length: count }, () => r(10)));
+      expect(verdict.pass).toBe(false);
+      expect(verdict.medianRatio).toBeNull();
+      expect(verdict.message).toBe(`expected 3 readings, got ${count}`);
+    }
   });
 
   it("the failure message names every attempt and the band", () => {
