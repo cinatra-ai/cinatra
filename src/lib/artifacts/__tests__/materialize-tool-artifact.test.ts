@@ -378,6 +378,13 @@ const data = (from: string, output: string, to: string, input: string) => ({
   destination_input: input,
 });
 const port = (title: string) => ({ title, type: "array" });
+const collector = (id: string) => ({
+  component_type: "ApiNode",
+  id,
+  name: id,
+  inputs: [port("items")],
+  outputs: [port("reviewTargets")],
+});
 const writeNode = (id: string) => ({
   component_type: "ApiNode",
   id,
@@ -434,9 +441,9 @@ function withPayload(payload: Doc | null, manifestName = "@test/agent") {
   };
 }
 
-async function originOf(payload: Doc): Promise<unknown> {
+async function originOf(payload: Doc, nodeId = "persist_draft"): Promise<unknown> {
   getAgentPackageMock.mockResolvedValue(withPayload(payload));
-  const outcome = await materializeToolArtifact(BASE_INPUT);
+  const outcome = await materializeToolArtifact({ ...BASE_INPUT, nodeId });
   expect(outcome.ok).toBe(true);
   return (createSemanticArtifactMock.mock.calls[0]?.[0] as { originKind?: unknown }).originKind;
 }
@@ -600,6 +607,88 @@ describe("cinatra#3035 — a mid-run write under an executed marked review gate"
     expect(await originOf(payload)).toBe("agent_generated");
   });
 
+  it("writes with the intermediate origin when a collector between the write and the gate gathers the targets", async () => {
+    const payload = flow(
+      ["persist_draft", "gather", "review_gate"],
+      { persist_draft: writeNode("persist_draft"), gather: collector("gather"), review_gate: gate("review_targets") },
+      [
+        data("persist_draft", "artifact", "gather", "items"),
+        data("gather", "reviewTargets", "review_gate", "review_targets"),
+      ],
+    );
+    expect(await originOf(payload)).toBe("live_generator");
+  });
+
+  it("writes with the intermediate origin through two collectors", async () => {
+    const payload = flow(
+      ["persist_draft", "gather_one", "gather_two", "review_gate"],
+      {
+        persist_draft: writeNode("persist_draft"),
+        gather_one: collector("gather_one"),
+        gather_two: collector("gather_two"),
+        review_gate: gate("review_targets"),
+      },
+      [
+        data("persist_draft", "artifact", "gather_one", "items"),
+        data("gather_one", "reviewTargets", "gather_two", "items"),
+        data("gather_two", "reviewTargets", "review_gate", "review_targets"),
+      ],
+    );
+    expect(await originOf(payload)).toBe("live_generator");
+  });
+
+  it("keeps the durable origin when the collector feeding the gate does not take the write's output", async () => {
+    const payload = flow(
+      ["persist_draft", "persist_other", "gather", "review_gate"],
+      {
+        persist_draft: writeNode("persist_draft"),
+        persist_other: writeNode("persist_other"),
+        gather: collector("gather"),
+        review_gate: gate("review_targets"),
+      },
+      [
+        data("persist_other", "artifact", "gather", "items"),
+        data("gather", "reviewTargets", "review_gate", "review_targets"),
+      ],
+    );
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  it("keeps the durable origin for a writer the start node never reaches", async () => {
+    const payload = flow(
+      ["review_gate"],
+      { persist_draft: writeNode("persist_draft"), review_gate: gate("review_targets") },
+      [data("persist_draft", "artifact", "review_gate", "review_targets")],
+    );
+    // The writer runs into the gate, but nothing runs into the writer.
+    (payload.control_flow_connections as unknown[]).push(control("persist_draft", "review_gate"));
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  it("keeps the durable origin for a node id that also stands in a place no gate reviews", async () => {
+    const payload = flow(
+      ["persist_draft", "review_gate", "other_flow"],
+      {
+        persist_draft: writeNode("persist_draft"),
+        review_gate: gate("review_targets"),
+        other_flow: {
+          component_type: "FlowNode",
+          id: "other_flow",
+          name: "other_flow",
+          subflow: ref("other_subflow"),
+        },
+        other_subflow: {
+          component_type: "Flow",
+          id: "other_subflow",
+          name: "other_subflow",
+          nodes: [ref("persist_draft")],
+        },
+      },
+      [data("persist_draft", "artifact", "review_gate", "review_targets")],
+    );
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
   it("answers the append road (no writing node named) as unreviewed", async () => {
     getAgentPackageMock.mockResolvedValue(withPayload(reviewedFlow()));
     const authorized = await authorizeToolMaterializeWrite({
@@ -648,5 +737,78 @@ describe("cinatra#3035 — the image road's write facts come from one reading", 
     });
     expect(facts).toEqual({ producesRefs: [], reviewed: false });
     expect(getAgentPackageMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("cinatra#3035 — the shipped blog pipeline's wiring (writes -> collector -> marked gate)", () => {
+  // The shape of the blog pipeline's own flow: the draft and its picture are
+  // written, a collector gathers their references into the draft gate's review
+  // targets; the LinkedIn post is written after that gate and its own collector
+  // feeds the LinkedIn gate.
+  function pipelineFlow(): Doc {
+    const linkedinGate = {
+      ...gate("reviewTargets", [port("linkedinPost"), port("linkedinTitle"), port("reviewTargets")]),
+      id: "linkedin_review_gate",
+      name: "linkedin_review_gate",
+    };
+    return flow(
+      [
+        "write_draft",
+        "file_image",
+        "complete_relation",
+        "draft_review_gate",
+        "write_linkedin",
+        "gather_linkedin_review",
+        "linkedin_review_gate",
+      ],
+      {
+        write_draft: writeNode("write_draft"),
+        file_image: { ...writeNode("file_image"), inputs: [port("postArtifactId")] },
+        complete_relation: {
+          ...collector("complete_relation"),
+          inputs: [port("draftArtifactId"), port("draftRevisionId"), port("imageArtifactId"), port("imageRevisionId")],
+        },
+        draft_review_gate: {
+          ...gate("reviewTargets", [port("reviewTargets")]),
+          id: "draft_review_gate",
+          name: "draft_review_gate",
+        },
+        write_linkedin: writeNode("write_linkedin"),
+        gather_linkedin_review: {
+          ...collector("gather_linkedin_review"),
+          inputs: [port("linkedinArtifactId"), port("linkedinRevisionId")],
+        },
+        linkedin_review_gate: linkedinGate,
+      },
+      [
+        data("write_draft", "artifactId", "file_image", "postArtifactId"),
+        data("write_draft", "artifactId", "complete_relation", "draftArtifactId"),
+        data("write_draft", "representationRevisionId", "complete_relation", "draftRevisionId"),
+        data("file_image", "artifactId", "complete_relation", "imageArtifactId"),
+        data("file_image", "representationRevisionId", "complete_relation", "imageRevisionId"),
+        data("complete_relation", "reviewTargets", "draft_review_gate", "reviewTargets"),
+        data("write_linkedin", "artifactId", "gather_linkedin_review", "linkedinArtifactId"),
+        data("write_linkedin", "representationRevisionId", "gather_linkedin_review", "linkedinRevisionId"),
+        data("gather_linkedin_review", "reviewTargets", "linkedin_review_gate", "reviewTargets"),
+      ],
+    );
+  }
+
+  it("writes the draft with the intermediate origin", async () => {
+    expect(await originOf(pipelineFlow(), "write_draft")).toBe("live_generator");
+  });
+
+  it("writes the LinkedIn post with the intermediate origin", async () => {
+    expect(await originOf(pipelineFlow(), "write_linkedin")).toBe("live_generator");
+  });
+
+  it("reads the picture's write as reviewed on the image road", async () => {
+    getAgentPackageMock.mockResolvedValue(withPayload(pipelineFlow()));
+    const facts = await loadRunImageWriteFacts({
+      templateId: "tpl-1",
+      packageVersion: "1.2.3",
+      nodeId: "file_image",
+    });
+    expect(facts).toEqual({ producesRefs: [{ extension: EXT }], reviewed: true });
   });
 });

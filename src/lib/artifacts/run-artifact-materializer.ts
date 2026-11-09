@@ -347,13 +347,16 @@ const pinnedBindingsCache = new Map<
  * compiles to a marked step counts: a top-level InputMessageNode reachable from
  * the start node (the compiler propagates no marker out of a nested subflow).
  * Such a gate reviews a write only when its marker names one of its own declared
- * inputs (not blank once trimmed), a data edge feeds that input from the node
- * that wrote, and the gate is reachable from that node — it runs after the
- * write. A write inside a FlowNode's subflow takes that FlowNode's place. A node
- * id that also stands in an unreviewed place reads unreviewed. Everything else —
- * a decoy value, an unused component, an uncalled subflow, a gate before the
- * write, a marker naming a missing or blank input, a gate fed by another node —
- * leaves the write with the core default review.
+ * inputs (not blank once trimmed), a DATA path reaches that input from the node
+ * that wrote — a direct edge, or through intermediate nodes the writer's output
+ * feeds (a collector that gathers the review targets), transitively — and the
+ * gate is reachable from that node, so it runs after the write. The writer is a
+ * node reachable from the start node too. A write inside a FlowNode's subflow
+ * takes that FlowNode's place. A node id that also stands in an unreviewed place
+ * reads unreviewed. Everything else — a decoy value, an unused component, an
+ * uncalled subflow, a gate before the write, a marker naming a missing or blank
+ * input, a gate no data path from the writer reaches — leaves the write with the
+ * core default review.
  */
 function readReviewedWriteNodeIds(doc: Record<string, unknown>): ReadonlySet<string> {
   const refs: Record<string, unknown> = isRecord(doc.$referenced_components)
@@ -374,6 +377,16 @@ function readReviewedWriteNodeIds(doc: Record<string, unknown>): ReadonlySet<str
     }
     return false;
   };
+  // Data edges by destination: each node -> the nodes that feed any of its inputs.
+  const feeders = new Map<string, string[]>();
+  for (const edge of edges) {
+    if (!isRecord(edge)) continue;
+    const from = refOf(edge.source_node);
+    const to = refOf(edge.destination_node);
+    if (from === undefined || to === undefined) continue;
+    if (!feeders.has(to)) feeders.set(to, []);
+    feeders.get(to)!.push(from);
+  }
   const reviewedPlaces = new Set<string>();
   for (const gateId of reachable) {
     const gate = refs[gateId];
@@ -382,12 +395,24 @@ function readReviewedWriteNodeIds(doc: Record<string, unknown>): ReadonlySet<str
     if (targetsInput === undefined || targetsInput.trim().length === 0) continue;
     const inputs = Array.isArray(gate.inputs) ? gate.inputs : [];
     if (!inputs.some((port) => isRecord(port) && port.title === targetsInput)) continue;
+    // Every node with a data path into the gate's targets input: the direct
+    // feeders of that input, then whatever feeds any input of those, cycle-safe.
+    const upstream = new Set<string>();
+    const pending: string[] = [];
     for (const edge of edges) {
       if (!isRecord(edge) || refOf(edge.destination_node) !== gateId) continue;
       if (edge.destination_input !== targetsInput) continue;
-      const writer = refOf(edge.source_node);
-      if (writer === undefined || writer === gateId || !executed.has(writer)) continue;
-      if (reaches(writer, gateId)) reviewedPlaces.add(writer);
+      const source = refOf(edge.source_node);
+      if (source !== undefined) pending.push(source);
+    }
+    while (pending.length > 0) {
+      const id = pending.pop()!;
+      if (upstream.has(id) || id === gateId) continue;
+      upstream.add(id);
+      for (const from of feeders.get(id) ?? []) pending.push(from);
+    }
+    for (const writer of upstream) {
+      if (executed.has(writer) && reaches(writer, gateId)) reviewedPlaces.add(writer);
     }
   }
   // Each node id -> the top-level places it stands in.
