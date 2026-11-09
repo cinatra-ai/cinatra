@@ -443,17 +443,17 @@ function withPayload(payload: Doc | null, manifestName = "@test/agent") {
 }
 
 /** The origin of a write by `nodeId`, called from the verified step `step`
- *  (by default the same node, as the runtime signs it). */
+ *  (by default the same node, as the runtime signs it; null = no verified step). */
 async function originOf(
   payload: Doc,
   nodeId = "persist_draft",
-  step: string | undefined = nodeId,
+  step: string | null = nodeId,
 ): Promise<unknown> {
   getAgentPackageMock.mockResolvedValue(withPayload(payload));
   const outcome = await materializeToolArtifact({
     ...BASE_INPUT,
     nodeId,
-    ...(step === undefined ? {} : { verifiedStepId: step }),
+    ...(step === null ? {} : { verifiedStepId: step }),
   });
   expect(outcome.ok).toBe(true);
   return (createSemanticArtifactMock.mock.calls[0]?.[0] as { originKind?: unknown }).originKind;
@@ -761,7 +761,7 @@ describe("cinatra#3035 pre-review 2 — the gate reviews only the write it in fa
   });
 
   it("keeps the durable origin when no signed step verified", async () => {
-    expect(await originOf(draftGatePicture(), "draft_writer", undefined)).toBe("agent_generated");
+    expect(await originOf(draftGatePicture(), "draft_writer", null)).toBe("agent_generated");
   });
 
   it("writes with the intermediate origin when the signed step is the reviewed node", async () => {
