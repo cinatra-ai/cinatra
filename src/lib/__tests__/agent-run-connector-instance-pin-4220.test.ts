@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 
 // cinatra#4220 — an agent run's site read through the governed invoker, with
@@ -19,6 +22,20 @@ import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 //   (e)     NO binding for an unusable or unknown start input; an unpinned
 //           agent_run frame stays fail-closed (connector_key_underivable);
 //   (f)     REFUSED at derive time for a user who lost org membership.
+//
+// cinatra#4498 — the same harness drives the INSTALLED WordPress publisher
+// pack (the one the development lock pins). The binding reads exactly one
+// start input, `instanceId`, and the application never names the publisher
+// for it, so the pack must route the connected site into its publish step
+// under that name. The cases read the start input the publish step's two
+// site calls address from the pack's own flow (the prompt's
+// `instanceId: <field>` arguments, traced back over the data edge to the
+// start step), build a start input from the start step's required list with
+// the site in that field, and check: (a) the run is bound to that site;
+// (b) the bound run's site call reaches it and a call to another site of the
+// org is refused; (c) that field is a required start input. At the
+// publisher's 0.4.x pin the traced field is `wordpressInstanceId`, the derive
+// returns no binding, and (a) and (b) fail.
 
 vi.mock("server-only", () => ({}));
 
@@ -426,5 +443,115 @@ describe("cinatra#4220 — an agent run's site read through its derived connecto
     });
     await expect(derive).rejects.toBeInstanceOf(InstanceWriteAuthorityError);
     await expect(derive).rejects.toMatchObject({ reason: "member_without_org_membership" });
+  });
+});
+
+// --- the installed publisher pack (synced by the development lock) ----------
+const PACK_DIR = path.resolve(
+  __dirname,
+  "../../../extensions/cinatra-ai/blog-wordpress-publish-agent",
+);
+type FlowNode = {
+  component_type?: string;
+  inputs?: Array<{ title?: string }>;
+  metadata?: { cinatra?: { required?: string[] } };
+  data?: { system?: string };
+};
+type Flow = {
+  data_flow_connections?: Array<{
+    source_node?: { $component_ref?: string };
+    source_output?: string;
+    destination_node?: { $component_ref?: string };
+    destination_input?: string;
+  }>;
+  $referenced_components: Record<string, FlowNode>;
+};
+
+function readPack(): Flow {
+  return JSON.parse(fs.readFileSync(path.join(PACK_DIR, "cinatra/oas.json"), "utf8")) as Flow;
+}
+
+/** The start input whose value the publish step's site calls pass as `instanceId`. */
+function siteStartField(flow: Flow): { stepInput: string; startField: string } {
+  const system = flow.$referenced_components.publish?.data?.system ?? "";
+  const named = new Set<string>();
+  for (const call of ["wordpress_site_tools_list", "wordpress_site_tool_call"]) {
+    // A call written with its arguments: `<call>({ instanceId: <field>, ... })`.
+    const calls = [...system.matchAll(new RegExp(`${call}\\(\\{\\s*instanceId:\\s*<([A-Za-z_][A-Za-z0-9_]*)>`, "g"))];
+    expect(calls.length, `the publish step's prompt calls ${call} with instanceId: <field>`).toBeGreaterThan(0);
+    for (const m of calls) named.add(m[1]);
+  }
+  expect(named.size, "both site calls address the same step input").toBe(1);
+  const stepInput = [...named][0];
+  const edges = (flow.data_flow_connections ?? []).filter(
+    (e) =>
+      e.destination_node?.$component_ref === "publish" &&
+      e.destination_input === stepInput &&
+      e.source_node?.$component_ref === "start",
+  );
+  expect(edges, `one start edge feeds the publish step's ${stepInput}`).toHaveLength(1);
+  return { stepInput, startField: edges[0].source_output ?? "" };
+}
+
+function startInputFor(flow: Flow, startField: string, site: string): Record<string, unknown> {
+  const required = flow.$referenced_components.start?.metadata?.cinatra?.required ?? [];
+  const input: Record<string, unknown> = {};
+  for (const f of required) input[f] = `stand-in-${f}`;
+  input[startField] = site;
+  return input;
+}
+
+describe("cinatra#4498 — the installed WordPress publisher's run is bound to the site it publishes to", () => {
+  beforeEach(() => {
+    wireCalls.length = 0;
+    resolveOrgRoleForUser.mockReset();
+    resolveOrgRoleForUser.mockImplementation(async () => "member");
+  });
+
+  it("(a) a start input in the pack's own shape binds the run to the site its publish step addresses", async () => {
+    const flow = readPack();
+    const { startField } = siteStartField(flow);
+    const binding = await deriveAgentRunConnectorInstanceBinding({
+      runId: "run-4498",
+      runBy: USER,
+      orgId: ORG_A,
+      inputParams: startInputFor(flow, startField, "wp-valid"),
+    });
+    expect(binding).toEqual({ connectorKey: "wordpress", instanceId: "wp-valid" });
+  });
+
+  it("(b) the bound run's site call reaches that site, and a call to another site of the org is refused", async () => {
+    const flow = readPack();
+    const { startField } = siteStartField(flow);
+    const binding = await deriveAgentRunConnectorInstanceBinding({
+      runId: "run-4498",
+      runBy: USER,
+      orgId: ORG_A,
+      inputParams: startInputFor(flow, startField, "wp-valid"),
+    });
+    expect(binding).not.toBeNull();
+
+    const result = await runAsPinnedAgentRun(binding!, () =>
+      invoker.invokeSiteTool({ toolName: "core/get-site-info", args: {}, instanceId: "wp-valid" }),
+    );
+    expect(result).toEqual({ structuredContent: { ok: true } });
+    expect(wireCalls[wireCalls.length - 1]?.name).toBe(TRIAD[2]);
+    for (const c of wireCalls) expect(c.endpoint).toMatch(/^https:\/\/a\.example\//);
+
+    wireCalls.length = 0;
+    const other = runAsPinnedAgentRun(binding!, () =>
+      invoker.invokeSiteTool({ toolName: "core/get-site-info", args: {}, instanceId: "wp-valid-2" }),
+    );
+    await expect(other).rejects.toBeInstanceOf(InvokerError);
+    await expect(other).rejects.toMatchObject({ code: "instance_pin_mismatch" });
+    expect(wireCalls).toHaveLength(0);
+  });
+
+  it("(c) the site field is a required start input, so every run the setup starts carries it", () => {
+    const flow = readPack();
+    const { stepInput, startField } = siteStartField(flow);
+    expect(flow.$referenced_components.start?.metadata?.cinatra?.required ?? []).toContain(startField);
+    expect((flow.$referenced_components.start?.inputs ?? []).map((i) => i.title)).toContain(startField);
+    expect((flow.$referenced_components.publish?.inputs ?? []).map((i) => i.title)).toContain(stepInput);
   });
 });
