@@ -105,9 +105,9 @@ describe("the hold every resume road reads", () => {
   );
 
   it("a run with no decision, or a released one, may go on", async () => {
-    await expect(assertNoOpenPublishDecision("run-1")).resolves.toBeUndefined();
+    await expect(assertNoOpenPublishDecision("run-1")).resolves.toBe(false);
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released" }));
-    await expect(assertNoOpenPublishDecision("run-1")).resolves.toBeUndefined();
+    await expect(assertNoOpenPublishDecision("run-1")).resolves.toBe(true);
   });
 
   it("an unreadable record is a refusal, never a pass", async () => {
