@@ -155,8 +155,8 @@ const opaque = (err: unknown): unknown => err instanceof AuthzError || STORE_COD
  *   - a verified `cinatra_publish_gate__<node>` claim (the prefix wins over the template's
  *     list): the row is written FIRST (a failure ends the run failed), then the run moves to
  *     pending_approval; a lost move closes the row run_ended;
- *   - a missing or unverified claim on a template that lists publishing steps or is not found, or an unverified
- *     publish-gate claim on a template that cannot be read: the run ends failed, publish_gate_unverified.
+ *   - a missing or unverified claim on a template that lists publishing steps, or an unverified publish-gate claim
+ *     on a template that is not found or cannot be read: the run ends failed, publish_gate_unverified.
  * No renderer, no generic review task and no lifecycle moment is offered for a publish gate.
  */
 export async function holdRunAtPublishGate(args: {
@@ -175,13 +175,13 @@ export async function holdRunAtPublishGate(args: {
     claim,
   });
   if (verified === null) {
-    let publishes: boolean;
-    try { // a template that is not found cannot prove that it publishes nothing
+    let publishes: boolean | null = null;
+    try {
       const template = await readAgentTemplateById(run.templateId);
-      publishes = !template || (template.publishingSteps?.length ?? 0) > 0;
-    } catch { // unreadable: only a pause that claims a publish gate fails; any other keeps today's road, as on main
-      publishes = typeof claim?.node === "string" && claim.node.startsWith(PUBLISH_GATE_NODE_PREFIX);
-    }
+      if (template) publishes = (template.publishingSteps?.length ?? 0) > 0;
+    } catch { /* unreadable: decided below, as a template that is not found */ }
+    // Not found or unreadable: only a pause that claims a publish gate fails; any other keeps today's road, as on main.
+    publishes ??= typeof claim?.node === "string" && claim.node.startsWith(PUBLISH_GATE_NODE_PREFIX);
     if (!publishes) return false;
     await moveRun(run.id, fromStatus, "failed", { error: `${PUBLISH_GATE_UNVERIFIED}: the pause carries no verified step claim`, completedAt: new Date() }, authority);
     return true;
