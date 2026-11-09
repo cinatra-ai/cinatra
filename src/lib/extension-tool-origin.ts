@@ -53,7 +53,8 @@ export const ORIGIN_CODES = [
   "child-flow-invalid", "child-graph-duplicate-definition", "child-graph-bad-reference",
   "child-graph-multiple-referencers", "child-graph-unreferenced-definition", "child-graph-cycle",
   "child-graph-bad-label", "provenance-mismatch", "provenance-ambiguous", "provenance-nested",
-  "provenance-unnamed", "name-not-bound", "not-embeddable",
+  "provenance-unnamed", "name-not-bound", "child-declaration-invalid", "child-tool-undeclared",
+  "not-embeddable",
 ] as const;
 export type ExtensionToolOriginCode = InstallBindingCode | (typeof ORIGIN_CODES)[number];
 
@@ -171,9 +172,12 @@ function graphOf(doc: unknown, prefix: "" | "child-"): Graph {
     const label = labelOf(obj);
     if (label !== NO_LABEL && !nonEmpty(label)) code("graph-bad-label");
     const sub = obj.subflow;
+    // An inline Flow is a target only as the definition the walk indexed (a string id), like any other.
     const target = isPlainObject(sub)
       ? sub.component_type === "Flow"
-        ? sub
+        ? typeof sub.id === "string" && definitions.get(sub.id) === sub
+          ? sub
+          : undefined
         : nonEmpty(sub.$component_ref)
           ? definitions.get(sub.$component_ref)
           : undefined
@@ -340,15 +344,20 @@ export async function resolveExtensionToolOrigin(
   const requested = typeof input.request.name === "string" ? input.request.name.trim() : "";
   if (requested !== fixedName) refuse("name-not-bound");
 
-  // The child consents per tool. A declaration that does not parse keeps the dispatch's own refusal.
-  let tools: ReturnType<typeof parseDeclaredTools> | null = null;
-  try {
-    tools = parseDeclaredTools(child.value.cinatra.tools, label);
-  } catch {
-    tools = null;
-  }
-  const tool = tools?.find((t) => t.name === requested);
-  if (tools !== null && tool !== undefined && !declaredToolIsEmbeddable(tool)) refuse("not-embeddable");
+  // The child consents per tool. A declaration that does not parse, or that does not declare the
+  // tool, is refused here with a fixed code: the parser's text (it can carry manifest values) never
+  // reaches a response; the dispatch then re-parses the same declaration, which parsed here.
+  const tools = ((): ReturnType<typeof parseDeclaredTools> | null => {
+    try {
+      return parseDeclaredTools(child.value.cinatra.tools, label);
+    } catch {
+      return null;
+    }
+  })();
+  if (tools === null) return refuse("child-declaration-invalid");
+  const tool = tools.find((t) => t.name === requested);
+  if (tool === undefined) return refuse("child-tool-undeclared");
+  if (!declaredToolIsEmbeddable(tool)) refuse("not-embeddable");
 
   const parentInstallId = parent.value.row.id;
   const childInstallId = child.value.row.id;

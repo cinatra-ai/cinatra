@@ -261,6 +261,14 @@ describe("the run package's own road", () => {
     expect(await resolve(world)).toEqual({ kind: "parent" });
   });
 
+  it("runs a labelled inline child Flow that is a well-formed definition on the child road", async () => {
+    const world = withParentFlow((d) => {
+      at(d, "$referenced_components", "child_flow").subflow = subflowOf(d);
+      delete at(d, "$referenced_components")["child-subflow"];
+    });
+    expect((await resolve(world)).kind).toBe("child");
+  });
+
   it("does not index payload objects that carry an id but no component type", async () => {
     const world = withParentFlow((d) => {
       subflowOf(d).inputs = [{ id: "child-subflow" }, { id: STEP }];
@@ -318,15 +326,29 @@ describe("the embedded child's road", () => {
     }
   });
 
-  it("leaves an undeclared or unparsable child tool to the dispatch's own refusal", async () => {
+  it("refuses a child tool the child's declaration does not declare, with a fixed code", async () => {
     const undeclared = makeWorld((w) => {
       w.manifests[CHILD_ROOT]!.cinatra = { tools: [] };
     });
-    expect((await resolve(undeclared)).kind).toBe("child");
-    const broken = makeWorld((w) => {
-      w.manifests[CHILD_ROOT]!.cinatra = { tools: "not a list" };
-    });
-    expect((await resolve(broken)).kind).toBe("child");
+    await refusedWith(resolve(undeclared), "child-tool-undeclared");
+  });
+
+  it("refuses a child declaration that does not parse at the origin, and echoes none of its text", async () => {
+    // The parser's own error would carry the raw module value; the refusal is the fixed sentence only.
+    const RAW = "/private/store/child-tool.mjs";
+    for (const tools of [
+      [{ name: TOOL, module: RAW, embeddable: true }],
+      [{ name: "Not An Ident /private/store/name", module: "./cinatra/tools/c.mjs", embeddable: true }],
+      "not a list",
+    ]) {
+      const world = makeWorld((w) => {
+        w.manifests[CHILD_ROOT]!.cinatra = { tools };
+      });
+      const e = await resolve(world).then(() => null, (err: unknown) => err);
+      await refusedWith(Promise.reject(e), "child-declaration-invalid");
+      expect((e as Error).message).not.toContain("/private/store");
+      expect((e as Error).message).not.toContain("declared-tools");
+    }
   });
 });
 
@@ -440,6 +462,22 @@ describe("the definition and reference graph", () => {
       await refusedWith(resolve(withParentFlow((d) => {
         at(d, "$referenced_components", "child_flow").subflow = subflow;
       })), "graph-bad-reference");
+    }
+  });
+
+  it("refuses a labelled inline Flow without a string id instead of placing its step on the parent road", async () => {
+    // Without an id the inline Flow is no definition: its step would inherit the root and run parent code.
+    for (const id of [undefined, 7, null]) {
+      const malformed = () => withParentFlow((d) => {
+        const inline = { ...subflowOf(d) };
+        if (id === undefined) delete inline.id;
+        else inline.id = id;
+        at(d, "$referenced_components", "child_flow").subflow = inline;
+        delete at(d, "$referenced_components")["child-subflow"];
+      });
+      // A request for a parent-declared tool, and for the child's tool: both refuse.
+      await refusedWith(resolve(malformed(), { name: "parent_tool" }), "graph-bad-reference");
+      await refusedWith(resolve(malformed()), "graph-bad-reference");
     }
   });
 
