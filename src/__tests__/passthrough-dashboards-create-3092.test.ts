@@ -7,8 +7,10 @@
  * org-write authority minted by the SAME function the MCP transport uses for an
  * agent-run frame. Every unproven run is refused before the tool runs: a
  * binding that fails, a run with no owner, a run with no current attempt, a run
- * whose attempt changed after the binding read it, a run with no OBO ceiling,
- * and a run the mint refuses (not inside a live attempt). A tool error of an
+ * whose attempt changed after the binding read it, a run with no OBO ceiling, a
+ * run whose stored ceiling does not contain the chain re-derived from its
+ * template anchor (the model bridge's mint-time check), and a run the mint
+ * refuses (not inside a live attempt). A tool error of an
  * unknown code answers a fixed sentence, never its own text.
  *
  *   npx vitest run src/__tests__/passthrough-dashboards-create-3092.test.ts
@@ -19,6 +21,7 @@ const {
   isAuthorizedMock,
   bindBridgeRunIdMock,
   readAgentRunByIdMock,
+  readAgentTemplateByIdMock,
   buildActorContextFromRunMock,
   collectAllPrimitiveHandlersMock,
   mintRunWriteAuthorityForMcpMock,
@@ -27,6 +30,7 @@ const {
   isAuthorizedMock: vi.fn(() => true),
   bindBridgeRunIdMock: vi.fn(),
   readAgentRunByIdMock: vi.fn(),
+  readAgentTemplateByIdMock: vi.fn(),
   buildActorContextFromRunMock: vi.fn(async () => ({
     principalType: "HumanUser",
     principalId: "user-1",
@@ -40,6 +44,7 @@ const {
 
 vi.mock("@cinatra-ai/agents", () => ({
   readAgentRunById: readAgentRunByIdMock,
+  readAgentTemplateById: readAgentTemplateByIdMock,
 }));
 vi.mock("@/lib/primitive-handlers", () => ({
   collectAllPrimitiveHandlers: collectAllPrimitiveHandlersMock,
@@ -66,7 +71,10 @@ vi.mock("@cinatra-ai/dashboards/mcp", () => ({
 
 import { POST } from "../app/api/agents/passthrough/route";
 
-const CEILING = [{ kind: "template-anchor", scope: "org-a" }];
+// The chain deriveOboCeilingChain gives an organization-anchored template.
+const CEILING = [{ tier: "organization", id: "org-a" }];
+const ORG_TEMPLATE = { id: "tpl-1", ownerLevel: "organization", ownerId: "org-a" };
+const TEAM_TEMPLATE = { id: "tpl-1", ownerLevel: "team", ownerId: "team-1" };
 
 const RUN = {
   id: "run-1",
@@ -107,6 +115,7 @@ beforeEach(() => {
   isAuthorizedMock.mockReturnValue(true);
   bindBridgeRunIdMock.mockResolvedValue({ ok: true, runId: "run-1", executionAttemptId: "att-1" });
   readAgentRunByIdMock.mockResolvedValue(RUN);
+  readAgentTemplateByIdMock.mockResolvedValue(ORG_TEMPLATE);
   mintRunWriteAuthorityForMcpMock.mockResolvedValue(AUTHORITY);
   collectAllPrimitiveHandlersMock.mockResolvedValue({});
   dashboardsCreateMock.mockResolvedValue({ dashboard: { id: "dash-1", name: "Run board" } });
@@ -241,6 +250,36 @@ describe("POST /api/agents/passthrough — dashboards_create (cinatra#3092)", ()
       expect(dashboardsCreateMock).not.toHaveBeenCalled();
     },
   );
+
+  it("refuses a team-anchored run whose stored ceiling holds only the organization, before the mint", async () => {
+    // The model bridge re-derives team-1 + org-a and refuses a chain without team-1.
+    readAgentTemplateByIdMock.mockResolvedValue(TEAM_TEMPLATE);
+    const res = await POST(post(createBody()));
+    expect(res.status).toBe(403);
+    expect(readAgentTemplateByIdMock).toHaveBeenCalledWith("tpl-1");
+    expect(mintRunWriteAuthorityForMcpMock).not.toHaveBeenCalled();
+    expect(dashboardsCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("admits a team-anchored run whose stored ceiling contains the re-derived chain", async () => {
+    readAgentTemplateByIdMock.mockResolvedValue(TEAM_TEMPLATE);
+    const ceiling = [
+      { tier: "team", id: "team-1" },
+      { tier: "organization", id: "org-a" },
+    ];
+    readAgentRunByIdMock.mockResolvedValue({ ...RUN, oboCeiling: ceiling });
+    const res = await POST(post(createBody()));
+    expect(res.status).toBe(200);
+    expect(mintRunWriteAuthorityForMcpMock).toHaveBeenCalledTimes(1);
+    expect(dashboardsCreateMock.mock.calls[0][0].actor.oboCeiling).toEqual(ceiling);
+  });
+
+  it("refuses when the template read fails, before the mint", async () => {
+    readAgentTemplateByIdMock.mockRejectedValue(new Error("db down"));
+    const res = await POST(post(createBody()));
+    expect(res.status).toBe(403);
+    expect(mintRunWriteAuthorityForMcpMock).not.toHaveBeenCalled();
+  });
 
   it("answers the tool's own refusal with a non-2xx, so the flow step fails", async () => {
     dashboardsCreateMock.mockResolvedValue({ error: { code: "forbidden", message: "no" } });

@@ -2,9 +2,11 @@
 // chain: the bridge binding (bindBridgeRunId), the run-authority mint and its
 // verifier (mintRunWriteAuthorityForMcp → verifyRunAuthority), the dashboards
 // create handler, the permission resolver, the org-write seam with the kernel
-// guard, and the twin seam. Only the database is replaced: the agent-run reads
-// (by context id, and the verifier's row read) and the dashboards db, with the
-// sanctioned kernel fakes, as twin-producer-run.test.ts does.
+// guard, and the twin seam, and the ceiling containment check (the model
+// bridge's deriveOboCeilingChain / oboCeilingContains). Only the database is
+// replaced: the agent-run reads (by context id, the template read, and the
+// verifier's row read) and the dashboards db, with the sanctioned kernel fakes,
+// as twin-producer-run.test.ts does.
 //
 //   pnpm -C packages/dashboards exec vitest run src/__tests__/passthrough-run-write-3092.test.ts
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,11 +21,14 @@ const state = vi.hoisted(() => ({
   contextRun: null as Record<string, unknown> | null,
   /** The run row the verifier reads (readAgentRunRowForOrgWriteAuthority). */
   authorityRow: null as Record<string, unknown> | null,
+  /** The run's template (readAgentTemplateById): its locked owner anchor. */
+  template: null as Record<string, unknown> | null,
 }));
 
 // The agent-run database reads, and nothing else of the agents store.
 vi.mock("@cinatra-ai/agents", () => ({
   readAgentRunByContextId: vi.fn(async () => state.contextRun),
+  readAgentTemplateById: vi.fn(async () => state.template),
   readAgentRunRowForOrgWriteAuthority: vi.fn(async () => state.authorityRow),
 }));
 
@@ -77,6 +82,7 @@ vi.mock("../store/db", async () => {
   };
 });
 
+import { readAgentRunRowForOrgWriteAuthority } from "@cinatra-ai/agents";
 import { bindBridgeRunId } from "@/lib/authz/bridge-run-binding";
 import { runDashboardCreate } from "@/app/api/agents/passthrough/run-dashboard-create";
 import * as mcpEntry from "../mcp/index";
@@ -90,7 +96,10 @@ const ORG_A = "org-a";
 const ORG_B = "org-b";
 const USER = "user-1";
 const RUN = "run-1";
+const TEAM = "team-1";
+// The chain deriveOboCeilingChain gives an organization-anchored template.
 const CEILING = [{ tier: "organization", id: ORG_A }];
+const ORG_TEMPLATE = { id: "tpl-1", ownerLevel: "organization", ownerId: ORG_A };
 
 const DC = {
   portlets: [] as unknown[],
@@ -103,6 +112,8 @@ function runRow(overrides: Record<string, unknown> = {}): Record<string, unknown
   return {
     id: RUN,
     orgId: ORG_A,
+    templateId: "tpl-1",
+    projectId: null,
     runBy: USER,
     status: "running",
     executionAttemptId: "att-1",
@@ -147,6 +158,8 @@ beforeEach(() => {
   state.kernelAnswers.organization = { archivedAt: null };
   state.contextRun = runRow();
   state.authorityRow = runRow();
+  state.template = ORG_TEMPLATE;
+  vi.mocked(readAgentRunRowForOrgWriteAuthority).mockClear();
   recorded = [];
   resetDashboardArtifactTwinWriter();
   setDashboardArtifactTwinWriter(recordingTwin);
@@ -236,6 +249,45 @@ describe("the passthrough run write through the real seams (cinatra#3092)", () =
     const outcome = await writeAsRun(personal, runRow({ oboCeiling: null }));
     expect(outcome).toMatchObject({ ok: false, status: 403 });
     expect(state.inserted).toHaveLength(0);
+  });
+
+  it("refuses a team-anchored run whose stored ceiling holds only the organization", async () => {
+    // A stale or corrupt chain: the template is anchored to team-1, the stored
+    // chain carries only org-a. The re-derived team-1 element is missing, so
+    // the write stops before the mint, as the model bridge stops before minting.
+    state.template = { id: "tpl-1", ownerLevel: "team", ownerId: TEAM };
+    const outcome = await writeAsRun(personal);
+    expect(outcome).toMatchObject({ ok: false, status: 403 });
+    expect(readAgentRunRowForOrgWriteAuthority).not.toHaveBeenCalled();
+    expect(state.inserted).toHaveLength(0);
+    expect(recorded).toHaveLength(0);
+  });
+
+  it("passes a team-anchored run whose stored ceiling contains the re-derived chain to the mint", async () => {
+    state.template = { id: "tpl-1", ownerLevel: "team", ownerId: TEAM };
+    const ceiling = [
+      { tier: "team", id: TEAM },
+      { tier: "organization", id: ORG_A },
+    ];
+    const outcome = await writeAsRun(personal, runRow({ oboCeiling: ceiling }));
+    // The containment check passes and the authority is minted; the resolver
+    // then decides the write: a team ceiling holds no personal dashboard, so
+    // it is the tool's own forbidden refusal, not the 403 before the mint.
+    expect(readAgentRunRowForOrgWriteAuthority).toHaveBeenCalledTimes(1);
+    expect(outcome).toMatchObject({ ok: false, status: 422 });
+    if (!outcome.ok) expect((outcome.error as { code?: string }).code).toBe("forbidden");
+  });
+
+  it("writes for a user-anchored run whose stored ceiling contains the re-derived chain", async () => {
+    state.template = { id: "tpl-1", ownerLevel: "user", ownerId: USER };
+    const ceiling = [
+      { tier: "user", id: USER },
+      { tier: "organization", id: ORG_A },
+    ];
+    const outcome = await writeAsRun(personal, runRow({ oboCeiling: ceiling }));
+    expect(outcome.ok).toBe(true);
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0].producerRunId).toBe(RUN);
   });
 
   it("answers a database error with the fixed sentence, never its text", async () => {

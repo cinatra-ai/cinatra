@@ -14,21 +14,32 @@ import "server-only";
 //     after that, the claim is stale and the mint refuses. The authority holds
 //     only the run capabilities (content.write, run.complete);
 //   - the run's OBO ceiling rides along, so the dashboards resolver confines
-//     the write the same way it confines an MCP call of the run.
+//     the write the same way it confines an MCP call of the run. As the model
+//     bridge does before it mints an OBO token, the stored ceiling must CONTAIN
+//     the chain re-derived from the run's locked template anchor and project
+//     launch (deriveOboCeilingChain / oboCeilingContains), or the write is
+//     refused.
 //
 // FAIL CLOSED: a run with no owner, no attempt at binding, an attempt that
-// changed since binding, no OBO ceiling, or no minted authority is refused
+// changed since binding, no OBO ceiling, a ceiling that does not contain the
+// re-derived anchor chain, or no minted authority is refused
 // before the tool runs. The tool's own refusal is a non-2xx answer, so the flow
 // step fails visibly instead of ending the run without a dashboard. A tool
 // error of an unknown code answers a fixed sentence, never the error's text.
 
+import { readAgentTemplateById } from "@cinatra-ai/agents";
 import { createDashboardForRun } from "@cinatra-ai/dashboards/mcp";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
+import {
+  deriveOboCeilingChain,
+  oboCeilingContains,
+  type OboCeilingChain,
+} from "@cinatra-ai/mcp-server/obo-ceiling";
 import { mintRunWriteAuthorityForMcp } from "@/lib/org-write/run-authority-mint";
 
 /** The answer when the proven run cannot write content now. */
 const RUN_DASHBOARD_WRITE_UNPROVEN =
-  "the run cannot write a dashboard: it has no owner, no live attempt, no scope ceiling or no write authority";
+  "the run cannot write a dashboard: it has no owner, no live attempt, no valid scope ceiling or no write authority";
 
 /** The answer for a tool error of an unknown code: its text is never sent. */
 export const RUN_DASHBOARD_WRITE_FAILED = "dashboards_create failed";
@@ -45,6 +56,8 @@ const CALLER_FACING_CODES: ReadonlySet<string> = new Set([
 type RunForDashboardWrite = {
   readonly id: string;
   readonly orgId: string;
+  readonly templateId: string;
+  readonly projectId?: string | null;
   readonly runBy: string | null | undefined;
   readonly executionAttemptId: string | null | undefined;
   readonly oboCeiling?: unknown;
@@ -88,6 +101,26 @@ export async function runDashboardCreate(params: {
     !Array.isArray(ceiling) ||
     ceiling.length === 0
   ) {
+    return { ok: false, status: 403, error: RUN_DASHBOARD_WRITE_UNPROVEN };
+  }
+  // The model bridge's mint-time ceiling check (src/app/api/llm-bridge/route.ts,
+  // before it mints the run's OBO token): re-derive the chain from the run's
+  // LOCKED template anchor and project launch, and require the stored chain to
+  // contain it. A corrupt anchor, a failed read or a stored chain missing an
+  // element refuses.
+  const template = await readAgentTemplateById(run.templateId).then(
+    (row) => ({ row }),
+    () => null,
+  );
+  const recomputed = template
+    ? deriveOboCeilingChain({
+        ownerLevel: template.row?.ownerLevel ?? null,
+        ownerId: template.row?.ownerId ?? null,
+        orgId: run.orgId,
+        projectId: run.projectId ?? null,
+      })
+    : null;
+  if (!recomputed || !oboCeilingContains(ceiling as OboCeilingChain, recomputed)) {
     return { ok: false, status: 403, error: RUN_DASHBOARD_WRITE_UNPROVEN };
   }
   // The verifier reads the run row again and refuses unless the claimed
