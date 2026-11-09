@@ -129,6 +129,43 @@ const sourceDirPackageRoot = async (
 };
 
 /**
+ * The image's SEED COPY of the package in the agent runtime mount
+ * (`<dataRoot>/.agent-mount/<scope>/<name>`) — the third road, and only where
+ * the store holds no record: a pack the image bundles reaches an instance as
+ * this copy and never as a store record. The single live install row must
+ * carry the pinned version, the copy's package.json must carry the pinned
+ * name and version, and the copy's real path must be exactly its place in the
+ * mount (no link on the way out of it).
+ */
+const seedCopyPackageRoot = async (
+  dataRoot: string,
+  packageName: string,
+  packageVersion: string,
+): Promise<string | null> => {
+  const match = /^@([^/]+)\/([^/]+)$/.exec(packageName);
+  if (!match || [match[1], match[2]].some((s) => s.startsWith(".") || s.includes("\\"))) return null;
+  const { readInstalledExtensionsByPackageName } = await import("@cinatra-ai/extensions/canonical-store");
+  const live = (await readInstalledExtensionsByPackageName(packageName)).filter(
+    (row) => row.status === "active" || row.status === "locked",
+  );
+  if (live.length !== 1 || live[0].version !== packageVersion) return null;
+  // AGENT_RUNTIME_MOUNT_DIRNAME (@cinatra-ai/agents/agent-runtime-mount).
+  const mount = path.join(dataRoot, ".agent-mount");
+  const root = path.join(mount, match[1], match[2]);
+  try {
+    if ((await realpath(root)) !== path.join(await realpath(mount), match[1], match[2])) return null;
+    const parsed = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")) as {
+      name?: unknown;
+      version?: unknown;
+    };
+    if (parsed.name !== packageName || parsed.version !== packageVersion) return null;
+  } catch {
+    return null;
+  }
+  return root;
+};
+
+/**
  * The materialized package at the pinned version, read off the store itself.
  *
  * THE PIN IS CHECKED AGAINST THE PACKAGE ON DISK, not against a record field:
@@ -168,7 +205,12 @@ const defaultPackageRootResolver: PinnedPackageRootResolver = async ({
   // moved off a materialized install onto a source tree. ONLY a store holding
   // no record for it at all — what a development installation always reads —
   // reaches the second road.
-  if (records.length === 0) return sourceDirPackageRoot(packageName, packageVersion);
+  if (records.length === 0) {
+    return (
+      (await sourceDirPackageRoot(packageName, packageVersion)) ??
+      seedCopyPackageRoot(resolveExtensionDataRoot(), packageName, packageVersion)
+    );
+  }
   if (!anchor) return null;
   // Anchor KIND binding: the canonical row's kind against the store path's kind.
   const kindBound = records.filter((record) =>
