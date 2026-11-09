@@ -244,6 +244,10 @@ export type GenerateArtifactImageInput = {
   createdBy: string | null;
   /** The calling node's id — the ledger's output identity. */
   nodeId: string;
+  /** cinatra#3035: the runtime's signed step of the call, when it verified. The
+   *  picture reads reviewed only when it is the named node: a request's own
+   *  node_id is never the review authority. */
+  verifiedStepId?: string;
   /** The artifact extension the picture belongs to. */
   extension: string;
   /** OPTIONAL declared-type discriminator — the exact `@scope/pkg:local-id`. */
@@ -543,7 +547,12 @@ export async function generateArtifactImage(
         declaredMime: mime,
         // cinatra#3035: a first picture an executed marked gate reviews carries
         // the intermediate origin; that gate is the review of it.
-        originKind: writeFacts.reviewed ? "live_generator" : "agent_generated",
+        originKind:
+          writeFacts.reviewed &&
+          input.verifiedStepId !== undefined &&
+          input.verifiedStepId === input.nodeId
+            ? "live_generator"
+            : "agent_generated",
         stream: asImageStream(bytes),
         createdByRunId: input.runId,
         producerAssertionExtension: input.extension,

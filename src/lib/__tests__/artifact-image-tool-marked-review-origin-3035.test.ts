@@ -125,7 +125,10 @@ describe("cinatra#3035 — the origin of a first picture filed mid-run", () => {
   it("files a first picture with the intermediate origin when the one reading says the write is reviewed", async () => {
     arrange();
     const loadWriteFacts = facts(true);
-    const outcome = await generateArtifactImage(call, deps({ loadWriteFacts }));
+    const outcome = await generateArtifactImage(
+      { ...call, verifiedStepId: "node-1" },
+      deps({ loadWriteFacts }),
+    );
 
     expect(outcome.ok).toBe(true);
     // One reading, asked for THIS node's write, supplies both answers.
@@ -150,6 +153,30 @@ describe("cinatra#3035 — the origin of a first picture filed mid-run", () => {
     expect(outcome.ok).toBe(true);
     expect(loadWriteFacts).toHaveBeenCalledTimes(1);
     expect(createSemanticArtifactMock).toHaveBeenCalledTimes(1);
+    expect(createSemanticArtifactMock.mock.calls[0]?.[0]).toMatchObject({
+      originKind: "agent_generated",
+    });
+  });
+
+  // Pre-review 2, finding 1: the request's node_id is not the review authority.
+  it("keeps the durable origin when the reading says reviewed but the signed step is another node", async () => {
+    arrange();
+    const outcome = await generateArtifactImage(
+      { ...call, verifiedStepId: "picture_writer" },
+      deps({ loadWriteFacts: facts(true) }),
+    );
+
+    expect(outcome.ok).toBe(true);
+    expect(createSemanticArtifactMock.mock.calls[0]?.[0]).toMatchObject({
+      originKind: "agent_generated",
+    });
+  });
+
+  it("keeps the durable origin when the reading says reviewed but no signed step verified", async () => {
+    arrange();
+    const outcome = await generateArtifactImage(call, deps({ loadWriteFacts: facts(true) }));
+
+    expect(outcome.ok).toBe(true);
     expect(createSemanticArtifactMock.mock.calls[0]?.[0]).toMatchObject({
       originKind: "agent_generated",
     });

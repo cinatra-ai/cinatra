@@ -2,6 +2,8 @@ import "server-only";
 import { createHash } from "node:crypto";
 import type { Pool } from "pg";
 import {
+  ARTIFACT_IMAGE_TOOL,
+  ARTIFACT_MATERIALIZE_TOOL,
   collectArtifactBindingsFromOasDocument,
   parseArtifactBindingDeclaration,
   producesObjectTypeIdForExtension,
@@ -347,16 +349,19 @@ const pinnedBindingsCache = new Map<
  * compiles to a marked step counts: a top-level InputMessageNode reachable from
  * the start node (the compiler propagates no marker out of a nested subflow).
  * Such a gate reviews a write only when its marker names one of its own declared
- * inputs (not blank once trimmed), a DATA path reaches that input from the node
- * that wrote — a direct edge, or through intermediate nodes the writer's output
- * feeds (a collector that gathers the review targets), transitively — and the
- * gate is reachable from that node, so it runs after the write. The writer is a
- * node reachable from the start node too. A write inside a FlowNode's subflow
- * takes that FlowNode's place. A node id that also stands in an unreviewed place
- * reads unreviewed. Everything else — a decoy value, an unused component, an
- * uncalled subflow, a gate before the write, a marker naming a missing or blank
- * input, a gate no data path from the writer reaches — leaves the write with the
- * core default review.
+ * inputs (not blank once trimmed) and all of these hold, read the fail-closed
+ * way (when in doubt, unreviewed, so the core default review stays):
+ * - the writer is a top-level artifact-writing passthrough ApiNode
+ *   (`artifact_materialize` or `artifact_image_generate`) reachable from start;
+ * - a DATA path carries THAT writer's output into the targets input: a direct
+ *   edge, or through executed non-writing ApiNodes (collectors) only. The walk
+ *   never passes through another writer (its inputs feed a different artifact),
+ *   a FlowNode or any other node, and each edge it follows runs from a node
+ *   that control-reaches the node it feeds;
+ * - the gate POST-DOMINATES the writer and every collector on that path: every
+ *   control path from it to the end passes the gate (all branches counted).
+ * A write inside a FlowNode's subflow reads unreviewed, and so does a node id
+ * that also stands in a subflow or in an unreviewed place.
  */
 function readReviewedWriteNodeIds(doc: Record<string, unknown>): ReadonlySet<string> {
   const refs: Record<string, unknown> = isRecord(doc.$referenced_components)
@@ -377,6 +382,35 @@ function readReviewedWriteNodeIds(doc: Record<string, unknown>): ReadonlySet<str
     }
     return false;
   };
+  // The gate post-dominates `from` when `from` reaches the gate and no node
+  // without a successor (the end, or a dead end) is reachable from `from`
+  // without passing the gate. Every edge counts, whatever its branch.
+  const postDominates = (gateId: string, from: string): boolean => {
+    if (from === gateId || !reaches(from, gateId)) return false;
+    const seen = new Set<string>([from]);
+    const queue = [from];
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      const next = adjacency.get(id) ?? [];
+      if (next.length === 0) return false;
+      for (const n of next) {
+        if (n === gateId || seen.has(n)) continue;
+        seen.add(n);
+        queue.push(n);
+      }
+    }
+    return true;
+  };
+  const apiTool = (id: string): string | undefined | null => {
+    const node = refs[id];
+    if (!isRecord(node) || node.component_type !== "ApiNode") return null;
+    const tool = isRecord(node.data) ? node.data.tool : undefined;
+    return typeof tool === "string" ? tool : undefined;
+  };
+  const isWriter = (id: string): boolean => {
+    const tool = apiTool(id);
+    return tool === ARTIFACT_MATERIALIZE_TOOL || tool === ARTIFACT_IMAGE_TOOL;
+  };
   // Data edges by destination: each node -> the nodes that feed any of its inputs.
   const feeders = new Map<string, string[]>();
   for (const edge of edges) {
@@ -395,27 +429,34 @@ function readReviewedWriteNodeIds(doc: Record<string, unknown>): ReadonlySet<str
     if (targetsInput === undefined || targetsInput.trim().length === 0) continue;
     const inputs = Array.isArray(gate.inputs) ? gate.inputs : [];
     if (!inputs.some((port) => isRecord(port) && port.title === targetsInput)) continue;
-    // Every node with a data path into the gate's targets input: the direct
-    // feeders of that input, then whatever feeds any input of those, cycle-safe.
-    const upstream = new Set<string>();
+    // Backwards from the gate's targets input: writers end the walk, executed
+    // collectors the gate post-dominates pass it on, every other node stops it.
+    const visited = new Set<string>();
     const pending: string[] = [];
     for (const edge of edges) {
       if (!isRecord(edge) || refOf(edge.destination_node) !== gateId) continue;
       if (edge.destination_input !== targetsInput) continue;
       const source = refOf(edge.source_node);
-      if (source !== undefined) pending.push(source);
+      if (source !== undefined && reaches(source, gateId)) pending.push(source);
     }
     while (pending.length > 0) {
       const id = pending.pop()!;
-      if (upstream.has(id) || id === gateId) continue;
-      upstream.add(id);
-      for (const from of feeders.get(id) ?? []) pending.push(from);
-    }
-    for (const writer of upstream) {
-      if (executed.has(writer) && reaches(writer, gateId)) reviewedPlaces.add(writer);
+      if (visited.has(id) || id === gateId) continue;
+      visited.add(id);
+      if (!executed.has(id) || !postDominates(gateId, id)) continue;
+      if (isWriter(id)) {
+        reviewedPlaces.add(id);
+        continue;
+      }
+      if (apiTool(id) === null) continue;
+      for (const from of feeders.get(id) ?? []) {
+        if (reaches(from, id)) pending.push(from);
+      }
     }
   }
-  // Each node id -> the top-level places it stands in.
+  // Each node id -> the places it stands in. Anything inside a called
+  // FlowNode's subflow stands in NESTED, a place no gate reviews.
+  const NESTED = "\u0000nested";
   const places = new Map<string, Set<string>>();
   const place = (id: unknown, at: string): void => {
     if (typeof id !== "string" || id.length === 0) return;
@@ -439,10 +480,10 @@ function readReviewedWriteNodeIds(doc: Record<string, unknown>): ReadonlySet<str
         continue;
       }
       const record = value as Record<string, unknown>;
-      if (typeof record.component_type === "string") place(record.id, top);
+      if (typeof record.component_type === "string") place(record.id, NESTED);
       const ref = record.$component_ref;
       if (typeof ref === "string") {
-        place(ref, top);
+        place(ref, NESTED);
         pending.push(refs[ref]);
       }
       for (const item of Object.values(record)) pending.push(item);
@@ -1589,6 +1630,10 @@ export async function materializeToolArtifact(input: {
   createdBy: string | null;
   /** The calling ApiNode's id — the ledger output identity. */
   nodeId: string;
+  /** cinatra#3035: the runtime's signed step of the call, when it verified. The
+   *  write reads reviewed only when it is the named node: a request's own
+   *  node_id is never the review authority. */
+  verifiedStepId?: string;
   extension: string;
   /** OPTIONAL declared-type discriminator (cinatra#1454) — the exact
    *  `@scope/pkg:local-id` the tool materializes into. */
@@ -1612,7 +1657,10 @@ export async function materializeToolArtifact(input: {
       objectTypeId: input.objectTypeId,
       mime: input.mime,
       content: input.content,
-      nodeId: input.nodeId,
+      // cinatra#3035: the review is read only for the verified calling step.
+      ...(input.verifiedStepId !== undefined && input.verifiedStepId === input.nodeId
+        ? { nodeId: input.nodeId }
+        : {}),
     });
     if (!authorized.ok) return { ok: false, error: authorized.error };
     const resolved = authorized;
