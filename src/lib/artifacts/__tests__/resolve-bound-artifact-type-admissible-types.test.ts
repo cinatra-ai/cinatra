@@ -1460,4 +1460,199 @@ describe("cinatra#3319 — readClaimBackedMeaningTypesForOrg", () => {
       expect(await readLinkedin("1.0.0")).toEqual([]);
     }
   });
+
+  // cinatra#3319 T53: THE DEVELOPMENT CHECKOUT'S OWN ROW. A development boot's
+  // scan loads the in-tree pack from `<cwd>/extensions/<vendor>/<slug>`; its
+  // install-record heal writes ONE platform-scoped row with a `local` source of
+  // that folder, no digest and the tree hash "in-tree@<version>"
+  // (`defaultInstallRow`); the canonical store persists its owner as
+  // "__platform__" (`PLATFORM_OWNER_SENTINEL`). The development version record
+  // may rewrite that source to another digest-less `local` source of the same
+  // folder whose tree hash is the git commit. The bundled scan registers the pack's surface
+  // from the same folder and records it. That row, in a development process,
+  // reads that development-tree surface under the bundled row's rules. Every
+  // other `local` row keeps the store road, where the trust gate anchors no
+  // digest-less row, so the reader throws as before.
+  describe("3319 T53 the development checkout's own row", () => {
+    /** The folder the heal names, inside the development extension root. */
+    const checkoutDir = () => join(t3Store.devRoot as string, "cinatra-ai", "linkedin-artifacts");
+    /** The row the development heal writes for the in-tree pack, as the
+     *  canonical store persists and reads it back. */
+    const checkoutRow = (over: Record<string, unknown> = {}, source: Record<string, unknown> = {}) =>
+      linkedinRow(null, {
+        ownerLevel: "platform",
+        ownerId: "__platform__",
+        organizationId: null,
+        version: "1.0.0",
+        source: {
+          type: "local",
+          path: checkoutDir(),
+          resolvedCommitOrTreeHash: "in-tree@1.0.0",
+          ...source,
+        },
+        ...over,
+      });
+    const inDevelopment = () => vi.stubEnv("CINATRA_RUNTIME_MODE", "development");
+    afterEach(() => vi.unstubAllEnvs());
+
+    it("3319 T53 (a) the heal's row, and the row the development version record rewrites, answer through the development tree registered from the folder they name", async () => {
+      inDevelopment();
+      writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0");
+      runtimeRegistersDevTree();
+      for (const row of [
+        checkoutRow(),
+        checkoutRow({}, { resolvedCommitOrTreeHash: "abc1234" }),
+        checkoutRow({ status: "locked" }),
+      ]) {
+        t3Store.rows = { [LI_INSTALL]: row };
+        expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
+      }
+    });
+
+    it("3319 T53 (b) the checkout row keeps the bundled row's rules: matcher skills or no file accepts give no entry, another version throws", async () => {
+      inDevelopment();
+      t3Store.rows = { [LI_INSTALL]: checkoutRow() };
+      writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0", {
+        artifact: { accepts: { file: { mimeTypes: POST_DRAFT_ACCEPTS } }, skills: { matchers: ["t53-matcher"] } },
+      });
+      runtimeRegistersDevTree();
+      expect(await readLinkedin("1.0.0")).toEqual([]);
+      // A valid manifest that accepts no file: the surface is registered, with
+      // no file MIME type.
+      artifactPackSurfaceRegistry?._clearForTests();
+      writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0", { artifact: { accepts: { dashboard: true } } });
+      runtimeRegistersDevTree();
+      expect(artifactPackSurfaceRegistry?.get(EXT_LINKEDIN, "bundled")?.fileMimeTypes).toEqual([]);
+      expect(await readLinkedin("1.0.0")).toEqual([]);
+      artifactPackSurfaceRegistry?._clearForTests();
+      writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.1");
+      runtimeRegistersDevTree();
+      await expect(readLinkedin("1.0.0")).rejects.toMatchObject({ claimReadCode: "version-mismatch" });
+    });
+
+    it("3319 T53 (c) the checkout row with no development-tree surface: no surface gives no entry, a store surface alone throws", async () => {
+      inDevelopment();
+      t3Store.rows = { [LI_INSTALL]: checkoutRow() };
+      expect(await readLinkedin("1.0.0")).toEqual([]);
+      stock([rec1]);
+      runtimeRegistersStore(rec1);
+      await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
+    });
+
+    // Each case below is a `local` row that is NOT the development checkout's
+    // own row. It keeps the store road: the trust gate anchors no digest-less
+    // row, so the reader throws although an exact-version development-tree
+    // surface is registered.
+    const expectStoreRoadRefusal = async () => {
+      await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
+      await expect(readLinkedin("1.0.0")).rejects.toMatchObject({ claimReadCode: "trust-gate-no-anchor" });
+    };
+
+    it("3319 T53 (d) an organisation-scoped digest-less local row keeps the store road", async () => {
+      inDevelopment();
+      writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0");
+      runtimeRegistersDevTree();
+      t3Store.rows = {
+        [LI_INSTALL]: checkoutRow({ ownerLevel: "organization", ownerId: ORG, organizationId: ORG }),
+      };
+      await expectStoreRoadRefusal();
+      // A platform row whose owner is not the persisted platform owner (none,
+      // or another owner), or that names an organisation, is no heal row.
+      for (const over of [{ ownerId: null }, { ownerId: "someone" }, { ownerId: "" }, { organizationId: ORG }]) {
+        t3Store.rows = { [LI_INSTALL]: checkoutRow(over) };
+        await expectStoreRoadRefusal();
+      }
+    });
+
+    it("3319 T53 (d2) a local row whose tree hash neither development writer writes keeps the store road", async () => {
+      inDevelopment();
+      writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0");
+      runtimeRegistersDevTree();
+      for (const resolvedCommitOrTreeHash of [undefined, "", "in-tree@2.0.0", "in-tree@", "unknown", "upload", "ABC1234", "abc12"]) {
+        t3Store.rows = { [LI_INSTALL]: checkoutRow({}, { resolvedCommitOrTreeHash }) };
+        await expectStoreRoadRefusal();
+      }
+      // "in-tree@<version>" binds to the row's own version only.
+      t3Store.rows = { [LI_INSTALL]: checkoutRow({ version: "2.0.0" }) };
+      await expectStoreRoadRefusal();
+    });
+
+    it("3319 T53 (e) a platform local row whose path is not the folder the development tree was registered from keeps the store road", async () => {
+      inDevelopment();
+      writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0");
+      runtimeRegistersDevTree();
+      for (const path of ["/uploads/old.tgz", join(t3Store.devRoot as string, "cinatra-ai", "other-artifacts"), "", undefined]) {
+        t3Store.rows = { [LI_INSTALL]: checkoutRow({}, { path }) };
+        await expectStoreRoadRefusal();
+      }
+    });
+
+    it("3319 T53 (f) a local row with any supplied-install key, an empty contentDigest included, keeps the store road", async () => {
+      inDevelopment();
+      writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0");
+      runtimeRegistersDevTree();
+      for (const extra of [
+        { contentDigest: "" },
+        { activeDigest: "" },
+        { integrity: "sha512-t53" },
+        { contentHash: "t53-hash" },
+      ]) {
+        t3Store.rows = { [LI_INSTALL]: checkoutRow({}, extra) };
+        await expectStoreRoadRefusal();
+      }
+    });
+
+    it("3319 T53 (g) outside a development process the heal-shaped row keeps the store road", async () => {
+      writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0");
+      runtimeRegistersDevTree();
+      t3Store.rows = { [LI_INSTALL]: checkoutRow() };
+      // The mode unset (as in production), then set to production.
+      vi.stubEnv("CINATRA_RUNTIME_MODE", "development");
+      delete process.env.CINATRA_RUNTIME_MODE;
+      await expectStoreRoadRefusal();
+      vi.stubEnv("CINATRA_RUNTIME_MODE", "production");
+      await expectStoreRoadRefusal();
+    });
+
+    it("3319 T53 (h) a development-tree surface outside the development extension root, or with no folder, does not bind the row", async () => {
+      inDevelopment();
+      t3Store.rows = { [LI_INSTALL]: checkoutRow() };
+      const surface = {
+        packageName: EXT_LINKEDIN,
+        version: "1.0.0",
+        fileMimeTypes: POST_DRAFT_ACCEPTS,
+        matcherSkillIds: [],
+      };
+      artifactPackSurfaceRegistry.register({ ...surface, record: { source: "bundled" } });
+      await expectStoreRoadRefusal();
+      // A record that names a folder outside the development extension root.
+      // (Built as a value, not a literal, so the case also typechecks before
+      // the record's `dir` field exists.)
+      const outsideRecord = { source: "bundled" as const, dir: "/elsewhere/linkedin-artifacts" };
+      artifactPackSurfaceRegistry.register({ ...surface, record: outsideRecord });
+      t3Store.rows = { [LI_INSTALL]: checkoutRow({}, { path: "/elsewhere/linkedin-artifacts" }) };
+      await expectStoreRoadRefusal();
+    });
+
+    it("3319 T53 (i) a supplied local row (a content digest) stays a store install: the development tree never answers for it, and its store record does", async () => {
+      inDevelopment();
+      stock([rec1]);
+      writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0");
+      runtimeRegistersDevTree();
+      const supplied = checkoutRow({}, {
+        contentDigest: "a".repeat(64),
+        activeDigest: digestOf(rec1),
+        ...PIPELINE,
+      });
+      t3Store.rows = { [LI_INSTALL]: supplied };
+      await expect(readLinkedin("1.0.0")).rejects.toThrow(UNREADABLE);
+      artifactPackSurfaceRegistry?._clearForTests();
+      writeDevManifest(["cinatra-ai", "linkedin-artifacts"], "1.0.0", {
+        artifact: { accepts: { file: { mimeTypes: ["text/markdown"] } }, skills: { matchers: ["t53-dev-matcher"] } },
+      });
+      runtimeRegistersDevTree();
+      runtimeRegistersStore(rec1);
+      expect(await readLinkedin("1.0.0")).toEqual([POST_DRAFT_ENTRY_AT_1]);
+    });
+  });
 });

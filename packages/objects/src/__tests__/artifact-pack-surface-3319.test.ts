@@ -77,7 +77,7 @@ describe("artifact pack surface channel (cinatra#3319)", () => {
     expect(matcherManifestRegistry.get(PKG)?.matcherSkillIds).toEqual(["t46-matcher"]);
   });
 
-  it("3319 T46 (b) the bundled scan records the development tree as the record", () => {
+  it("3319 T46 (b) the bundled scan records the development tree as the record, with the pack's folder in it", () => {
     writeAt(path.join(root, "cinatra-ai", "t46-artifacts"), manifest());
     registerArtifactExtensions(root);
     expect(artifactPackSurfaceRegistry.get(PKG, "bundled")).toEqual({
@@ -85,7 +85,16 @@ describe("artifact pack surface channel (cinatra#3319)", () => {
       version: "1.0.0",
       fileMimeTypes: ["text/markdown"],
       matcherSkillIds: [],
-      record: { source: "bundled" },
+      record: { source: "bundled", dir: path.join(root, "cinatra-ai", "t46-artifacts") },
+    });
+    // An unscoped folder directly under the root is recorded the same way.
+    artifactPackSurfaceRegistry._clearForTests();
+    rmSync(path.join(root, "cinatra-ai"), { recursive: true, force: true });
+    writeAt(path.join(root, "t46-artifacts"), manifest());
+    registerArtifactExtensions(root);
+    expect(artifactPackSurfaceRegistry.get(PKG, "bundled")?.record).toEqual({
+      source: "bundled",
+      dir: path.join(root, "t46-artifacts"),
     });
   });
 

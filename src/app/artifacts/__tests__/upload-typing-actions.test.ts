@@ -774,6 +774,125 @@ describe("3319 claim-backed meaning types reach the upload picker and its promot
     expect(promoteMatchedArtifactType).not.toHaveBeenCalled();
   });
 
+  // cinatra#3319 T54: A FAILED CLAIM-BACKED READ IS LOGGED, SAFELY. The answer
+  // is the same as before for every rejected value: no claim-backed type and
+  // `claimBackedReadFailed`. The server log gets one fixed sentence and one
+  // classifying word (the reader's own refusal code, else a built-in error
+  // class, else "other"), never text taken from the thrown value; and a value
+  // whose conversion throws, or a console that throws, never changes the answer.
+  describe("3319 T54 a failed claim-backed read is logged safely", () => {
+    const SENTENCE =
+      "[artifacts] the claim-backed read failed; the upload picker offers no claim-backed type:";
+    const SECRET = 'Authorization: Bearer sk-live-t54secret; /srv/example/private; row={"id":"inst-1"}';
+    const spyOnWarn = () => vi.spyOn(console, "warn").mockImplementation(() => {});
+    let warn: ReturnType<typeof spyOnWarn>;
+    beforeEach(() => {
+      warn = spyOnWarn();
+      readArtifactForDetail.mockReturnValue({
+        kind: "ok",
+        artifact: { mime: "text/markdown", objectType: TEXT_TYPE },
+      });
+      readArtifactForMeaningWrite.mockReturnValue({
+        kind: "ok",
+        artifact: { mime: "text/markdown", objectType: TEXT_TYPE },
+      });
+    });
+    afterEach(() => warn.mockRestore());
+    const claimReadLines = () => warn.mock.calls.filter((args) => args[0] === SENTENCE);
+    /** Every argument of every console.warn call, as text, for leak checks. */
+    const everythingLogged = () =>
+      warn.mock.calls
+        .flat()
+        .map((a) => (typeof a === "string" ? a : (JSON.stringify(a) ?? "")))
+        .join("\n");
+    /** The list answers as before a failed read; the confirmation is refused. */
+    const expectUnchangedAnswers = async () => {
+      const { listInstalledTypesForArtifact, assertUploadMeaning } = await import(
+        "../upload-typing-actions"
+      );
+      const listed = await listInstalledTypesForArtifact("a1");
+      expect(listed).toMatchObject({ ok: true, mime: "text/markdown", types: [] });
+      expect(listInstalledMeaningTypesAcceptingMime).toHaveBeenLastCalledWith("text/markdown", {
+        excludeTypeId: TEXT_TYPE,
+        claimBacked: [],
+      });
+      const res = await assertUploadMeaning({ artifactId: "a1", extension: LINKEDIN_PACK });
+      expect(res).toMatchObject({ ok: false, reason: "invalid-type" });
+      expect(assertSemanticType).not.toHaveBeenCalled();
+      expect(promoteMatchedArtifactType).not.toHaveBeenCalled();
+    };
+
+    it("3319 T54 (a) a reader refusal logs one fixed line per request with its code, and nothing of its message", async () => {
+      readClaimBackedMeaningTypesForOrg.mockRejectedValue(
+        Object.assign(new Error(`the manifest of the claim's install cannot be read: ${SECRET}`), {
+          claimReadCode: "trust-gate-no-anchor",
+        }),
+      );
+      await expectUnchangedAnswers();
+      expect(claimReadLines()).toEqual([
+        [SENTENCE, "trust-gate-no-anchor"],
+        [SENTENCE, "trust-gate-no-anchor"],
+      ]);
+      expect(everythingLogged()).not.toContain("sk-live-t54secret");
+      expect(everythingLogged()).not.toContain("/srv/example");
+      expect(everythingLogged()).not.toContain("inst-1");
+    });
+
+    it("3319 T54 (b) a secret-bearing error, an unknown code and a non-Error are named only by a fixed word", async () => {
+      const cases: ReadonlyArray<readonly [unknown, string]> = [
+        [new Error(SECRET), "Error"],
+        [new TypeError(SECRET), "TypeError"],
+        [Object.assign(new Error(SECRET), { claimReadCode: SECRET }), "Error"],
+        [SECRET, "other"],
+        [{ message: SECRET, claimReadCode: "sk-live-t54secret" }, "other"],
+      ];
+      for (const [rejected, word] of cases) {
+        warn.mockClear();
+        readClaimBackedMeaningTypesForOrg.mockRejectedValue(rejected);
+        await expectUnchangedAnswers();
+        expect(claimReadLines()).toEqual([
+          [SENTENCE, word],
+          [SENTENCE, word],
+        ]);
+        expect(everythingLogged()).not.toContain("sk-live-t54secret");
+        expect(everythingLogged()).not.toContain("/srv/example");
+      }
+    });
+
+    it("3319 T54 (c) a hostile rejected value (a throwing toString, a throwing code getter) leaves the answer unchanged", async () => {
+      const hostile = {
+        toString(): string {
+          throw new Error("conversion failed");
+        },
+        get claimReadCode(): string {
+          throw new Error("getter failed");
+        },
+      };
+      readClaimBackedMeaningTypesForOrg.mockRejectedValue(hostile);
+      await expectUnchangedAnswers();
+      expect(claimReadLines()).toEqual([
+        [SENTENCE, "other"],
+        [SENTENCE, "other"],
+      ]);
+    });
+
+    it("3319 T54 (d) a console.warn that throws leaves the answer unchanged", async () => {
+      warn.mockImplementation(() => {
+        throw new Error("console unavailable");
+      });
+      readClaimBackedMeaningTypesForOrg.mockRejectedValue(new Error(SECRET));
+      await expectUnchangedAnswers();
+      expect(claimReadLines()).toHaveLength(2);
+    });
+
+    it("3319 T54 (e) a read that answers writes no such line", async () => {
+      readClaimBackedMeaningTypesForOrg.mockResolvedValue([]);
+      const { listInstalledTypesForArtifact } = await import("../upload-typing-actions");
+      await listInstalledTypesForArtifact("a1");
+      expect(claimReadLines()).toEqual([]);
+    });
+  });
+
   it("3319 T17: a claim-backed pack is decided by the claim's per-actor gate, never by the org-wide matcher gate an entry under its name would select", async () => {
     registerOtherVersionMatcher();
     // The org-wide matcher gate would admit the pack; the per-actor gate refuses it.
