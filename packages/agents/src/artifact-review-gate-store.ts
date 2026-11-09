@@ -1336,7 +1336,7 @@ export async function rearmExhaustedResumeIntent(
       leaseExpiresAt: null,
       deadLetteredAt: null,
       maxAttempts: sql`${artifactReviewResumeOutbox.attempts} + ${RECOVERY_ATTEMPTS_BUDGET}`,
-      lastError: sql`'re-armed once by the upgrade recovery (cinatra#4476); before: ' || coalesce(${artifactReviewResumeOutbox.lastError}, 'no error recorded')`,
+      lastError: sql`'re-armed once by the upgrade recovery; before: ' || coalesce(${artifactReviewResumeOutbox.lastError}, 'no error recorded')`,
       updatedAt: sql`now()`,
     })
     .where(

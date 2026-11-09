@@ -657,7 +657,9 @@ describe.skipIf(!HAS_DB)("cinatra#4476 — state 1: the upgrade re-arms the newe
     expectResumedWith(p, pictureText);
     const row = await fullIntentOf(pictureGateId);
     expect(row).toMatchObject({ status: "done", attempts: 26, max_attempts: 45, dead_lettered_at: null });
-    expect(row!.last_error).toMatch(/^re-armed once by the upgrade recovery \(cinatra#4476\); before: /);
+    // A user reads this text in the Last error cell of the stuck releases card: plain words, no issue reference.
+    expect(row!.last_error).toMatch(/^re-armed once by the upgrade recovery; before: /);
+    expect(row!.last_error).not.toMatch(/#\d/);
     expect(await markerOf(p.runId)).toEqual([{ base_review_task_id: p.step, road: "rearm", gate_id: pictureGateId }]);
   });
 
@@ -1147,7 +1149,7 @@ describe.skipIf(!HAS_DB)("cinatra#4476 — state 2: an old writer's attempt on t
     expect(await fullIntentOf(postGateId)).toMatchObject({ status: "done", attempts: 26, max_attempts: 45, dead_lettered_at: null });
     // The dead-letter pass took the row first: the re-arm keeps the error it wrote.
     expect((await fullIntentOf(postGateId))!.last_error).toBe(
-      "re-armed once by the upgrade recovery (cinatra#4476); before: resume delivery attempts exhausted",
+      "re-armed once by the upgrade recovery; before: resume delivery attempts exhausted",
     );
     expect(await markerOf(p.runId)).toEqual([{ base_review_task_id: p.step, road: "rearm", gate_id: postGateId }]);
     expect(await intentOf(reopen)).toBeUndefined();
