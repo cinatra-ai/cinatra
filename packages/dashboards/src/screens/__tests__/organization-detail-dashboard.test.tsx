@@ -121,19 +121,33 @@ const BOX_GLYPH_A = "M21 8v13H3V8";
 const BOX_GLYPH_B = "M1 3h22v5H1z";
 const CROSS_GLYPH_A = "M18 6 6 18";
 
-// Returns the markup of the one Archived lifecycle pill, from its attributes to
-// the end of its glyph, after checking that it sits in the page header.
+// Returns the markup of the one Archived lifecycle pill, from its opening
+// <span> to its closing </span>, after checking that it is the lifecycle badge
+// (slot, status and lifecycle attributes), that its archive box and its
+// "Archived" label sit inside it, and that it sits in the page header.
 function headerArchivedPill(html: string): string {
   const at = html.indexOf('data-lifecycle="archived"');
   expect(at).toBeGreaterThan(-1);
   expect(html.indexOf('data-lifecycle="archived"', at + 1)).toBe(-1);
-  const headerStart = html.lastIndexOf("<header", at);
+  const start = html.lastIndexOf("<span", at);
+  expect(start).toBeGreaterThan(-1);
+  const openEnd = html.indexOf(">", at);
+  expect(openEnd).toBeGreaterThan(at);
+  const openTag = html.slice(start, openEnd + 1);
+  expect(openTag).toContain('data-slot="lifecycle-badge"');
+  expect(openTag).toContain('data-status="archived"');
+  // The glyph is the first child; the label follows it; then the pill closes.
+  expect(html.slice(openEnd + 1, openEnd + 5)).toBe("<svg");
+  const svgEnd = html.indexOf("</svg>", openEnd);
+  expect(svgEnd).toBeGreaterThan(openEnd);
+  const closeTag = "Archived</span>";
+  expect(html.slice(svgEnd + 6, svgEnd + 6 + closeTag.length)).toBe(closeTag);
+  const end = svgEnd + 6 + closeTag.length;
+  const headerStart = html.lastIndexOf("<header", start);
   expect(headerStart).toBeGreaterThan(-1);
-  expect(html.slice(headerStart, at)).not.toContain("</header>");
-  expect(html.indexOf("</header>", at)).toBeGreaterThan(at);
-  const end = html.indexOf("</svg>", at);
-  expect(end).toBeGreaterThan(at);
-  return html.slice(at, end);
+  expect(html.slice(headerStart, start)).not.toContain("</header>");
+  expect(html.indexOf("</header>", end)).toBeGreaterThan(end - 1);
+  return html.slice(start, end);
 }
 
 function primeSession(userId = "u1", activeOrgId: string | undefined = "org-1") {
@@ -351,7 +365,7 @@ describe("org detail screen — archived read-only posture (cinatra#1942 V4)", (
     h.listTeams.mockResolvedValue([]);
 
     const pill = headerArchivedPill(await renderScreen());
-    expect(pill).toContain('data-status="archived"');
+    expect(pill).toContain('data-lifecycle="archived"');
     expect(pill).toContain(BOX_GLYPH_A);
     expect(pill).toContain(BOX_GLYPH_B);
     expect(pill).not.toContain(CROSS_GLYPH_A);
