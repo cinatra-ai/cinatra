@@ -200,6 +200,36 @@ describe("/api/llm-bridge under the scripted test provider (cinatra#2910)", () =
     expect(String(body.title)).toContain(UAT_SENTINEL);
   });
 
+  it("answers a STRING-ARRAY output with five members, each opening with a Title: line", async () => {
+    // The blog idea generator's bridge node: `ideas` is fanned out one
+    // artifact per member, titled from each member's first line behind
+    // "Title:". One untitled member failed the run at materialisation.
+    const res = await POST(
+      bridgeRequest({
+        user: "generate the ideas",
+        agent_id: "idea-generator",
+        output_schema: {
+          type: "object",
+          properties: {
+            ideas: { type: "array", title: "ideas", items: { type: "string" } },
+            notes: { type: "string", title: "notes" },
+          },
+          required: ["ideas", "notes"],
+          additionalProperties: false,
+        },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ideas?: unknown; notes?: string };
+    expect(Array.isArray(body.ideas)).toBe(true);
+    const ideas = body.ideas as string[];
+    expect(ideas).toHaveLength(5);
+    ideas.forEach((member, i) => {
+      expect(member.split("\n", 1)[0]).toBe(`Title: ${UAT_SENTINEL} scripted ideas item ${i + 1}`);
+    });
+    expect(String(body.notes)).toContain(UAT_SENTINEL);
+  });
+
   it("AUTH IS UNTOUCHED: a wrong bridge token is still 403, scripted or not", async () => {
     const res = await POST(
       bridgeRequest({ user: "write the report" }, "wrong-token-32chars-BBBBBBBBBBB"),

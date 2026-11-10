@@ -71,6 +71,19 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."
 const GATE = join(REPO_ROOT, "scripts", "audit", "chat-hitl-acceptance-gate.mjs");
 const manifest = () => JSON.parse(readFileSync(MANIFEST_PATH, "utf8"));
 
+// One re-ratification entry of the anchor contract's note: from its own head
+// (for example "RE-RATIFIED 2026-10-23 (cinatra#4308") up to the head of the
+// next entry, or to the end of the note. An assertion about one entry reads
+// only that entry, so a later entry that repeats a phrase cannot satisfy it.
+const NOTE_ENTRY_HEAD = /RE-RATIFIED (?:AGAIN )?\d{4}-\d{2}-\d{2} \(/g;
+function noteEntry(note, head) {
+  const start = note.indexOf(head);
+  if (start === -1) return "";
+  NOTE_ENTRY_HEAD.lastIndex = start + head.length;
+  const next = NOTE_ENTRY_HEAD.exec(note);
+  return note.slice(start, next ? next.index : note.length);
+}
+
 /** A minimal well-formed manifest: every criterion, all MAPPED to one real proof. */
 function wellFormed() {
   const proof = {
@@ -282,13 +295,13 @@ describe("the REAL manifest", () => {
     // still MISSING as a criterion, and the gap now names each remaining cell
     // with the shipped line that blocks it, which is what this assertion pins.
     expect(unproven.map((r) => r.gap).join("\n")).toMatch(/CARD AXIS PARTIAL/);
-    // NOT pinned here: row 15's gap also still says trigger_schedule_proposal
-    // "is NOT DRAWN on main" (item (a) of its own STILL-ABSENT list). That
-    // sentence is stale as of this same commit — the card IS drawn — but row 15
-    // is untouched by this round (it asks for the S0 spec-matrix capture sweep
-    // specifically, a different round's work), and this suite must not pin a
-    // sentence it knows to be false. See the manifest row itself for the open
-    // follow-up this leaves.
+    // Row 15's gap no longer says that trigger_schedule_proposal "is NOT DRAWN
+    // on main". Item (a) of its STILL ABSENT list now says that the obstacle it
+    // used to name is gone (the card is drawn and dispatched on main) and that
+    // what is owed is the picture. The row stays MISSING because it asks for the
+    // S0 spec-matrix capture sweep, a different round's work. This suite pins
+    // only that the false sentence does not come back.
+    expect(manifest().rows[14].gap).not.toMatch(/is NOT DRAWN on main/);
     // The line the CLI would print, spelled out here so a regression in either
     // count is still legible as the sentence a reader sees.
     expect(`${total - unproven.length}/${total} criteria proven, ${unproven.length} MISSING, ${partial.length} partial`).toBe(
@@ -298,9 +311,10 @@ describe("the REAL manifest", () => {
 
   it("the design pin is the ratified drawing, and the drift is recorded rather than overwritten", () => {
     const m = manifest();
-    // The pin was adopted onto the revision the drawings' main line stands at,
-    // taking in the two ratifications of governed drawings it had not adopted.
-    // Every pin the rows
+    // The pin was adopted onto the newest revision of the drawings' main line,
+    // which is also the newest that touches a governed drawing, taking in the
+    // one ratification of a governed drawing it had not adopted, that of the
+    // agent input card's held Continue. Every pin the rows
     // were read against before this move is still here: the previous head
     // becomes `previousPin`, and the head before THAT is APPENDED to
     // `priorPins` rather than replacing what was already in it. The whole point
@@ -311,20 +325,19 @@ describe("the REAL manifest", () => {
     // The approved revision governs both drawings; the canonical parser keeps
     // the immutable revision and exact sibling set strict.
     expect(parseSpecCommit(m.specCommit)).toEqual({
-      revision: "06230d4e8de397e86e3216199342d15c0b4fc5a6",
+      revision: "9eb5aaf1974f2a80f0d41c7320d0b514c7380c0e",
       paths: ["specs/app-lifecycle-cards.html", "specs/app-artifact-review.html"],
     });
     // The displaced pin governed both drawings, so it is recorded with both:
     // the canonical parser reads it exactly as it read the pin when it stood.
-    // It is the pin the main line stood at before the move, not a revision the
-    // move passed through on its own branch.
+    // It is the pin the main line stood at before the move.
     expect(parseSpecCommit(m.specCommitDrift.previousPin)).toEqual({
-      revision: "bc0c04e4ee4cea4ae177355ee438896ca8ce9e0f",
+      revision: "9add1eafb964850cf8e58dda026493f1c6bc6a51",
       paths: ["specs/app-lifecycle-cards.html", "specs/app-artifact-review.html"],
     });
-    // The move took two steps on a branch that was squashed into one commit, so
-    // the main line never stood at the intermediate revision: it is no pin of
-    // the trail.
+    // An earlier move took two steps on a branch that was squashed into one
+    // commit, so the main line never stood at the intermediate revision: it is
+    // no pin of the trail.
     expect(
       [m.specCommit, m.specCommitDrift.previousPin, ...m.specCommitDrift.priorPins].join("\n"),
     ).not.toContain("46b2d8bc642cfcebc20477872fb47132e1bcd795");
@@ -341,6 +354,9 @@ describe("the REAL manifest", () => {
       "b3665f8f308f32138f47f59ca490684c526c1e89",
       "831df38088ec969c7392018e79b297a49ee935a2",
       "8a5d5013fdcb92af5508d61e997cd43564000de3",
+      "bc0c04e4ee4cea4ae177355ee438896ca8ce9e0f",
+      "06230d4e8de397e86e3216199342d15c0b4fc5a6",
+      "67ecd66da3e6a83d27a0d8c5d777e98fc5309917",
     ]) {
       expect(m.specCommitDrift.priorPins.join("\n"), prior).toContain(prior);
     }
@@ -362,17 +378,33 @@ describe("the REAL manifest", () => {
     expect(untilDates, m.specCommitDrift.priorPins.join("\n")).toStrictEqual([...untilDates].sort());
     // The pin before the displaced one is the one that stood LAST before it, so
     // it is the tail of the trail and not an insertion into the middle of it.
-    expect(m.specCommitDrift.priorPins.at(-1)).toContain("8a5d5013fdcb92af5508d61e997cd43564000de3");
-    // The appended entry keeps the one drawing it governed, read by the
-    // canonical parser once its date label is taken off.
-    expect(
-      parseSpecCommit(m.specCommitDrift.priorPins.at(-1).replace(/ \(until \d{4}-\d{2}-\d{2}\)$/, "")),
-    ).toEqual({
+    // It governed both drawings, and the canonical parser reads it with both
+    // once its date label is taken off.
+    const undated = (entry) => entry.replace(/ \(until \d{4}-\d{2}-\d{2}\)$/, "");
+    expect(m.specCommitDrift.priorPins.at(-1)).toContain("67ecd66da3e6a83d27a0d8c5d777e98fc5309917");
+    expect(parseSpecCommit(undated(m.specCommitDrift.priorPins.at(-1)))).toEqual({
+      revision: "67ecd66da3e6a83d27a0d8c5d777e98fc5309917",
+      paths: ["specs/app-lifecycle-cards.html", "specs/app-artifact-review.html"],
+    });
+    expect(m.specCommitDrift.priorPins.at(-1)).toMatch(/\(until 2026-11-05\)$/);
+    // The entries before it keep what they recorded: appending never rewrites
+    // what is already on the trail.
+    expect(parseSpecCommit(undated(m.specCommitDrift.priorPins.at(-2)))).toEqual({
+      revision: "06230d4e8de397e86e3216199342d15c0b4fc5a6",
+      paths: ["specs/app-lifecycle-cards.html", "specs/app-artifact-review.html"],
+    });
+    expect(m.specCommitDrift.priorPins.at(-2)).toMatch(/\(until 2026-10-27\)$/);
+    expect(parseSpecCommit(undated(m.specCommitDrift.priorPins.at(-3)))).toEqual({
+      revision: "bc0c04e4ee4cea4ae177355ee438896ca8ce9e0f",
+      paths: ["specs/app-lifecycle-cards.html", "specs/app-artifact-review.html"],
+    });
+    expect(m.specCommitDrift.priorPins.at(-3)).toMatch(/\(until 2026-10-23\)$/);
+    expect(parseSpecCommit(undated(m.specCommitDrift.priorPins.at(-4)))).toEqual({
       revision: "8a5d5013fdcb92af5508d61e997cd43564000de3",
       paths: ["specs/app-lifecycle-cards.html"],
     });
-    expect(m.specCommitDrift.priorPins.at(-1)).toMatch(/\(until 2026-10-21\)$/);
-    expect(m.specCommitDrift.movedOn).toBe("2026-10-23");
+    expect(m.specCommitDrift.priorPins.at(-4)).toMatch(/\(until 2026-10-21\)$/);
+    expect(m.specCommitDrift.movedOn).toBe("2026-11-09");
     // No pin is ever its own predecessor: a "move" that recorded the same commit
     // on both sides would satisfy every check above and record nothing.
     expect(m.specCommitDrift.previousPin).not.toBe(m.specCommit);
@@ -380,15 +412,93 @@ describe("the REAL manifest", () => {
     // The move says what CHANGED between the two documents, not merely that one
     // happened, and it does not claim an approval it cannot see.
     expect(m.specCommitDrift.differs.length).toBeGreaterThan(120);
-    // Each of the two governed drawings was ratified by its own revision.
-    expect(m.specCommitDrift.whoRatified).toMatch(/ratified on 2026-10-21/);
-    expect(m.specCommitDrift.whoRatified).toMatch(/ratified on 2026-10-22/);
-    // The added section's six examples are named, in the drift record and in
-    // the contract's re-ratification entry, and both say that no recorded
-    // anchor changed rather than leaving a reader to infer it.
+    // The one revision of the range touches a governed drawing and carries a
+    // maintainer's Reviewed-by trailer, and the record says exactly that; it
+    // is the only first-parent revision between the two pins.
+    expect(m.specCommitDrift.whoRatified).toMatch(/ratified on 2026-11-09 by a maintainer review/);
+    expect(m.specCommitDrift.whoRatified).toContain("It carries a `Reviewed-by:` trailer naming the maintainer at tier maintainer");
+    expect(m.specCommitDrift.whoRatified).toContain("the only first-parent revision between the previous pin and itself");
+    // The move is not a hash-only re-pin: the record names the blob of the
+    // changed drawing at each pin, and the one blob the unchanged drawing has
+    // at both.
+    for (const blob of [
+      "10cd2f00efc4481a6a7cbef19668ef92c2045dad",
+      "fbf8b785cc3054c47f53323a94d515fb98b597ce",
+      "ae4b9f38ba8c46323ba1ea55e2a19c6953935bca",
+    ]) {
+      expect(m.specCommitDrift.why, blob).toContain(blob);
+    }
+    expect(m.specCommitDrift.why).toContain("moves from 0.22.0 to 0.23.0");
+    expect(m.specCommitDrift.differs).toContain("`specs/app-artifact-review.html` does not change");
+    // The drift record and the contract's newest re-ratification entry both
+    // say that no recorded anchor changed rather than leaving a reader to
+    // infer it.
     const contractNote = JSON.parse(
       readFileSync(join(REPO_ROOT, "scripts", "audit", "chat-hitl-anchor-contract.json"), "utf8"),
     ).note;
+    expect(m.specCommitDrift.differs).toMatch(/No recorded anchor changed/);
+    const entry1109 = noteEntry(contractNote, "RE-RATIFIED 2026-11-09 (");
+    expect(entry1109).toMatch(/NO RECORDED ANCHOR CHANGED/);
+    expect(entry1109).toContain("`anchorsUnresolvedAtPin` STAYS EMPTY");
+    expect(entry1109).toContain("the two reports are the same byte for byte");
+    // The held Continue adds no `data-*` attribute to the 57 added elements,
+    // but it adds one, `data-state="empty"`, to the element the owner anchor
+    // `agent-hitl-screen-card` reads. Both records say exactly that, and that
+    // the anchor still matches one element; neither claims that no data
+    // attribute moves.
+    for (const [where, text] of [
+      ["differs", m.specCommitDrift.differs],
+      ["the 2026-11-09 note entry", entry1109],
+    ]) {
+      expect(text, where).not.toMatch(/adds or removes no attribute/);
+      expect(text, where).not.toContain("no recorded anchor attribute and no data attribute");
+      expect(text, where).toContain("The added elements are 57 in all and none carries a `data-*` attribute");
+      expect(text, where).toContain("`data-state=\"empty\"`");
+      expect(text, where).toContain("adds or removes no recorded anchor attribute");
+    }
+    expect(m.specCommitDrift.differs).toContain(
+      "`[data-conformance-id=\"agent-hitl-screen-card\"]` matches exactly one element of `specs/app-lifecycle-cards.html` at both pins",
+    );
+    expect(entry1109).toContain("`[data-conformance-id=\"agent-hitl-screen-card\"]` still resolves exactly once");
+    expect(entry1109).toContain("seven of the eight selectors behind the 10 drawing anchors");
+    const entry1105 = noteEntry(contractNote, "RE-RATIFIED 2026-11-05 (");
+    expect(entry1105).toMatch(/NO RECORDED ANCHOR CHANGED/);
+    expect(entry1105).toContain("`anchorsUnresolvedAtPin` STAYS EMPTY");
+    expect(entry1105).toContain("the two reports are the same byte for byte");
+    // The added paragraph is seven elements, a `p` with a class and six
+    // `b`/`em` elements, and none carries a `data-*` attribute. Both records
+    // say exactly that: no recorded anchor attribute and no data attribute
+    // moves. Neither claims that no attribute moves.
+    // The entry of 2026-11-05 stays on file with the claim it made about the
+    // paragraph it read.
+    expect(entry1105).not.toMatch(/adds or removes no attribute/);
+    expect(entry1105).toContain("none carries a `data-*` attribute");
+    expect(entry1105).toContain("adds or removes no recorded anchor attribute and no data attribute");
+    expect(entry1105).toContain("`dashboard-display` example");
+    // An adoption APPENDS its entry to the note: the newest entry stands last,
+    // after the entry of 2026-11-05, which stands after the entry of
+    // 2026-10-28, which moved no pin.
+    expect(contractNote.lastIndexOf("RE-RATIFIED 2026-11-09 (")).toBeGreaterThan(
+      contractNote.lastIndexOf("RE-RATIFIED 2026-11-05 ("),
+    );
+    expect(contractNote.lastIndexOf("RE-RATIFIED 2026-11-05 (")).toBeGreaterThan(
+      contractNote.lastIndexOf("RE-RATIFIED 2026-10-28 (cinatra#3677"),
+    );
+    expect(contractNote.lastIndexOf("RE-RATIFIED 2026-10-28 (cinatra#3677")).toBeGreaterThan(
+      contractNote.lastIndexOf("RE-RATIFIED 2026-10-27 (cinatra#4386"),
+    );
+    // The earlier entries stay on file: an adoption appends to the note, it
+    // never rewrites what an earlier re-examination recorded. The entry of
+    // 2026-10-27 keeps the sign-in cards it named and the attribute claim
+    // about the interval boxes removed in §VI.
+    const entry1027 = noteEntry(contractNote, "RE-RATIFIED 2026-10-27 (cinatra#4386");
+    expect(entry1027).toMatch(/NO RECORDED ANCHOR CHANGED/);
+    for (const surface of ["embed-signin-first", "embed-signin-again"]) {
+      expect(entry1027, surface).toContain(surface);
+    }
+    expect(entry1027).not.toMatch(/adds or removes no attribute/);
+    expect(entry1027).toContain("none carries a `data-*` attribute");
+    expect(entry1027).toContain("adds or removes no recorded anchor attribute and no data attribute");
     for (const surface of [
       "schedule-card-recurrence-first-shown",
       "schedule-card-recurrence-configured",
@@ -397,14 +507,9 @@ describe("the REAL manifest", () => {
       "schedule-card-recurrence-fired-recurring",
       "schedule-card-recurrence-stopped",
     ]) {
-      expect(m.specCommitDrift.differs, surface).toContain(surface);
       expect(contractNote, surface).toContain(surface);
     }
-    expect(m.specCommitDrift.differs).toMatch(/No recorded anchor changed/);
-    expect(contractNote).toMatch(/RE-RATIFIED 2026-10-23 \(cinatra#4308[^]*NO RECORDED ANCHOR CHANGED/);
-    // The earlier entry stays on file: an adoption appends to the note, it never
-    // rewrites what an earlier re-examination recorded. Its five examples are in
-    // the range from the previous pin, so the drift record names them too.
+    expect(noteEntry(contractNote, "RE-RATIFIED 2026-10-23 (cinatra#4308")).toMatch(/NO RECORDED ANCHOR CHANGED/);
     for (const surface of [
       "email-gate-sender-field",
       "email-gate-follow-up-cadence-field",
@@ -412,23 +517,42 @@ describe("the REAL manifest", () => {
       "email-gate-recipients-review-field",
       "email-gate-test-delivery-field",
     ]) {
-      expect(m.specCommitDrift.differs, surface).toContain(surface);
       expect(contractNote, surface).toContain(surface);
     }
-    expect(contractNote).toMatch(/RE-RATIFIED 2026-10-22 \(cinatra#4308[^]*NO RECORDED ANCHOR CHANGED/);
-    // The controls drawn inside those five examples carry twelve `data-action`
-    // attributes of their own. The contract records the bare capture selector
-    // `[data-action]`, which names no value and so reads every one of them: the
-    // drift record names that selector, and claims only that no recorded
-    // selector names their values, never that no recorded selector reads them.
+    expect(noteEntry(contractNote, "RE-RATIFIED 2026-10-22 (cinatra#4308")).toMatch(/NO RECORDED ANCHOR CHANGED/);
+    // The mutants: each earlier entry that loses the phrase must fail its own
+    // check, although later entries still carry it. The unbounded form the
+    // checks above replaced, `<head>[^]*NO RECORDED ANCHOR CHANGED`, still
+    // passes on each mutant, which is why the checks read one entry only.
+    for (const head of [
+      "RE-RATIFIED 2026-10-22 (cinatra#4308",
+      "RE-RATIFIED 2026-10-23 (cinatra#4308",
+      "RE-RATIFIED 2026-10-27 (cinatra#4386",
+      "RE-RATIFIED 2026-11-05 (",
+    ]) {
+      const entry = noteEntry(contractNote, head);
+      const mutant = contractNote.replace(entry, entry.replaceAll("NO RECORDED ANCHOR CHANGED", "(phrase removed)"));
+      expect(mutant, head).not.toBe(contractNote);
+      expect(noteEntry(mutant, head), head).not.toMatch(/NO RECORDED ANCHOR CHANGED/);
+      expect(mutant.slice(mutant.indexOf(head)), head).toMatch(/NO RECORDED ANCHOR CHANGED/);
+    }
+    // The contract records the bare capture selector `[data-action]`, which
+    // names no value and so reads every drawn control. The entry of 2026-10-27
+    // named the selector and the value of the two Sign in buttons it added; the
+    // entries of 2026-11-05 and 2026-11-09 name the selector and its element
+    // count in each governed drawing, which neither revision changes.
     const recordedCaptureSelectors = new Set(
       Object.values(captureAnchorExpectations())
         .flatMap((cells) => Object.values(cells).flat())
         .map((claim) => claim.split(" ")[0]),
     );
     expect(recordedCaptureSelectors.has("[data-action]")).toBe(true);
-    expect(m.specCommitDrift.differs).toContain("the bare capture selector `[data-action]`");
-    expect(m.specCommitDrift.differs).not.toMatch(/none of them is a selector the anchor contract records/);
+    expect(entry1027).toContain("the bare capture selector `[data-action]`");
+    expect(entry1027).toContain("start-sign-in -> sign-in-window-opened");
+    expect(entry1105).toContain("the bare capture selector `[data-action]` included (46 elements of");
+    expect(entry1105).toContain("52 of `specs/app-artifact-review.html` at both");
+    expect(entry1109).toContain("the bare capture selector `[data-action]` included (46 elements of");
+    expect(entry1109).toContain("52 of `specs/app-artifact-review.html` at both");
   });
 
   it("row 15 keeps the proofs it had — a flip withdraws a claim, not evidence", () => {

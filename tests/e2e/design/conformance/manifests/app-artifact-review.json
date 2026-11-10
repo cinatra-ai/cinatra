@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-artifact-review.html",
-  "contentHash": "sha256:cc1ba264246997f63ed7711c8bee635d9911ce1b18ab794994efda9cf41d5c0d",
+  "contentHash": "sha256:6d519e1e4611425263875da940529f526867b664931356be9774a85ee66d198d",
   "surfaces": [
     {
       "id": "run-surface",
@@ -750,6 +750,18 @@
         {
           "field": "layout",
           "source": "representation.pinned-configuration"
+        },
+        {
+          "field": "open-live",
+          "source": "artifact.sourceUrl"
+        },
+        {
+          "field": "open-live",
+          "source": "artifact.sourceUrl"
+        },
+        {
+          "field": "open-live",
+          "source": "artifact.sourceUrl"
         },
         {
           "field": "open-live",

@@ -41,7 +41,7 @@ import {
   resolveTimezoneField,
 } from "./trigger-timezone";
 import { TimezoneField } from "./timezone-field";
-import { RecurrenceFrequencySelectors } from "./schedule-proposal-card";
+import { isOfferedDayOfMonth, RecurrenceFrequencySelectors } from "./schedule-proposal-card";
 import { declaredDurationEstimate } from "./duration-declared";
 // THE SCHEDULE DEFAULT IS THE RUNNER'S, NOT THIS FORM'S (cinatra#2936).
 // `scheduleScreenSelection` applies `scheduleDefaultForLaunch` — the decision
@@ -553,17 +553,37 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
       if (typeof values.timezone === "string") {
         sv("timezone", values.timezone);
       }
+      // A FILLED CRON IS A FILL OF THE SAME ROWS (cinatra#4377). It is applied
+      // only when `parseCronToRecurring` reads it back, and when the day of
+      // month it names, if any, is one the select offers as a new choice
+      // (1-28). Otherwise neither the cron nor the selection moves, so a day
+      // the select cannot draw is never stored under it. A list, a range or a
+      // step in the day field is read by the number it starts with (the 1st
+      // when that is missing or 0), the reader's own approximation, which its
+      // tests pin. Such a cron is applied as given when that day is 1-28
+      // (`0 9 1,15 * *` is stored and draws day 1), and refused when it is 29
+      // or more (`0 9 29,30 * *`).
       if (typeof values.cronExpression === "string") {
-        sv("cronExpression", values.cronExpression);
         const parsed = parseCronToRecurring(values.cronExpression);
-        if (parsed) setRecurring((prev) => ({ ...prev, ...parsed }));
+        if (parsed && (parsed.dayOfMonth === undefined || isOfferedDayOfMonth(parsed.dayOfMonth))) {
+          sv("cronExpression", values.cronExpression);
+          setRecurring((prev) => ({ ...prev, ...parsed }));
+        }
       }
       // THE REPEAT ROWS THEMSELVES. The same write the form's own controls make
       // (`updateRecurring`): the selections move and the cron is rebuilt from
       // them, so what is armed later is what the person can read now.
+      //
+      // THE DAY OF MONTH A FILL MAY SET (cinatra#4377): only a day the select
+      // offers as a new choice, 1-28. Any other value is dropped from the patch,
+      // so the select and the cron keep the day they hold — a saved day 29-31
+      // included, which reaches the selection through the stated schedule or a
+      // saved cron, never through this row.
       const patch: Record<string, unknown> = {};
       for (const row of SCHEDULE_RECURRENCE_ROWS) {
-        if (values[row] !== undefined) patch[row] = values[row];
+        if (values[row] === undefined) continue;
+        if (row === "dayOfMonth" && !isOfferedDayOfMonth(values[row])) continue;
+        patch[row] = values[row];
       }
       if (Object.keys(patch).length > 0) {
         setRecurring((prev) => {
