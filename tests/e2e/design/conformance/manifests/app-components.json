@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-components.html",
-  "contentHash": "sha256:7aceaf73557962256eb36cc308e9f7a814bf4c5c2b7841c566ccc724b35dbc4a",
+  "contentHash": "sha256:dce332648ec4e3f8c56599d5e66eb48985593d3e15f453dd5940379a4daea7cc",
   "surfaces": [
     {
       "id": "button",
