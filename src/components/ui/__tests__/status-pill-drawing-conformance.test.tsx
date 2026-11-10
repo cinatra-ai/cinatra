@@ -24,7 +24,8 @@
 // strokes; that was the wrong seam — see badge-drawing-conformance.test.tsx
 // for the record of that correction and the reason the badge is not edited.
 //
-// NO DEPARTURE FOUND.
+// NO DEPARTURE FOUND. (`hold` is graded at the drawing's own mustard-ink
+// recipe since cinatra#4296; see SAME_INK below.)
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 
@@ -35,7 +36,7 @@ afterEach(cleanup);
 // The states the clause's "tinted from the status colour" recipe governs: the
 // six that carry a STATUS colour. Queued is one of them: the roster draws it
 // as `pill running`, the indigo family (specs/app.html, the status-pills
-// roster; cinatra#3189). `idle` and `archived` are the
+// roster; cinatra#3189). `idle`, `archived`, `withdrawn` and `reset` are the
 // neutral states — they carry no status colour to tint from — and `failed` /
 // `declined` are the terminal states the drawing's §V draws solid rather than
 // tinted. Each of those two groups is graded in its own block below, so the
@@ -49,7 +50,15 @@ const TINTED: StatusPillStatus[] = [
   "queued",
 ];
 
-const NEUTRAL: StatusPillStatus[] = ["idle", "archived"];
+const NEUTRAL: StatusPillStatus[] = ["idle", "archived", "withdrawn", "reset"];
+
+// `hold` is tinted from the mustard too, but the drawing writes its label in
+// the darker MUSTARD INK, the readable shade of that mustard on its own tint
+// (specs/app.html: `.pill.hold { background: rgba(199,149,69,0.16); color:
+// var(--mustard-ink); border-color: rgba(199,149,69,0.42) }`; cinatra#4296).
+// So its text is not the tint's own token, and it is graded by its own case
+// below, at the drawing's three values.
+const SAME_INK = TINTED.filter((s) => s !== "hold");
 
 function renderPill(status: StatusPillStatus) {
   const { container } = render(<StatusPill status={status}>Label</StatusPill>);
@@ -57,7 +66,7 @@ function renderPill(status: StatusPillStatus) {
 }
 
 describe('clause: "bg tinted from the status colour, text in the same colour, border at higher alpha"', () => {
-  it.each(TINTED)(
+  it.each(SAME_INK)(
     "draws '%s' as one status colour at three alphas — tinted ground, solid text, stronger stroke",
     (status) => {
       const cls = renderPill(status).className;
@@ -83,6 +92,12 @@ describe('clause: "bg tinted from the status colour, text in the same colour, bo
       ).toBeGreaterThan(bgAlpha);
     },
   );
+
+  it("draws 'hold' as the mustard tint at 16%, its border at 42%, and the mustard ink", () => {
+    const cls = renderPill("hold").className.split(/\s+/);
+    // The border (42%) still sits at a higher alpha than the ground (16%).
+    expect(cls).toEqual(expect.arrayContaining(["bg-warning/16", "border-warning/42", "text-mustard-ink"]));
+  });
 
   it("always draws a border, so the pill has an edge on every ground", () => {
     for (const status of [...TINTED, ...NEUTRAL]) {
@@ -110,8 +125,9 @@ describe("the neutral states, which the clause's tint recipe does not reach", ()
     "draws '%s' in the muted ink rather than borrowing a status colour it does not have",
     (status) => {
       // The clause says a status pill is "tinted from the status colour". An
-      // idle or archived run has no status colour, so there is nothing
-      // to tint from; these draw the muted ink on a near-transparent ground.
+      // idle, archived, withdrawn or reset state has no status colour, so there
+      // is nothing to tint from; these draw the muted ink on a near-transparent
+      // ground.
       // Grading them against the tint relation would invent a clause the
       // drawing does not state.
       const cls = renderPill(status).className;
