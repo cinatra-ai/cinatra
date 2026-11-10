@@ -82,7 +82,7 @@
 const ALLOWED_PROPOSAL_OVERRIDE = new Set<string>([
   // Dashboard authoring from chat — handler enforces actor + canWrite + config
   // validation + audit row in one transaction (mutation-service.ts:154-214).
-  // An enterprise-intelligence-platform chat should be able to author analytics
+  // A Cinatra chat should be able to author analytics
   // views. Publish/archive stay denied (the publish/archive verb tokens have
   // no CarveOut → caught by DENIED_VERB_TOKENS below).
   "dashboards_create",
