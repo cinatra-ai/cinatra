@@ -6,10 +6,11 @@
  * (a repair gets a dispatched run) for a generic producer. This suite proves
  * the CMS-GENERIC halves this slice adds on top:
  *
- *   TASK CONSTRUCTION — a CMS base target projects a `task` onto the
- *                        dispatched run's `inputParams`; a non-CMS base
- *                        target (e.g. blog) projects nothing (byte-identical
- *                        dispatch for every other producer).
+ *   FINDINGS INPUT    — a producer that declares its findings input
+ *                        (`repairFindingsInput`, cinatra#4424) gets the
+ *                        findings text there on a CMS base; a producer that
+ *                        declares nothing gets no `task` and no `instructions`,
+ *                        for a CMS base and a non-CMS base alike.
  *   COMPLETION ADAPTER — once the dispatched repair run has produced a
  *                        matching CMS-snapshot capture, the drain finds it and
  *                        submits it as the repair response (the round trip
@@ -31,6 +32,7 @@ import {
   type ArtifactProducedEvent,
 } from "@/lib/lifecycle/lifecycle-produced-event";
 import { autoReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
+import { REPAIR_FINDINGS_TEXT_LEAD } from "@/lib/lifecycle/lifecycle-policy";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
@@ -41,6 +43,8 @@ const q = (s: string) => s.replaceAll('"', '""');
 const ORG = "org-2286-s10-pr2";
 const MEMBER_USER = "user-2286-s10-pr2-member";
 const MANIFEST_REPAIR_CAPABLE = JSON.stringify({ repairCapable: true });
+/** The compiled lifecycle of a producer that declares its findings input (cinatra#4424). */
+const MANIFEST_DECLARES_INSTRUCTIONS = JSON.stringify({ repairCapable: true, repairFindingsInput: { input: "instructions" } });
 const CMS_SNAPSHOT_EMITTER = "object_cms_snapshot_capture";
 
 let outboxStore: typeof import("../lifecycle-produced-outbox-store");
@@ -221,7 +225,7 @@ afterAll(async () => {
 /** Drive a produced CMS-snapshot artifact through auto-gate → typed
  * changes-request → producer repair → delivery, returning the dispatched
  * repair's identity. */
-async function driveToDispatchedCmsRepair(): Promise<{
+async function driveToDispatchedCmsRepair(lifecycleConfig: string = MANIFEST_REPAIR_CAPABLE): Promise<{
   repairId: string;
   repairRunId: string;
   base: ArtifactProducedEvent;
@@ -231,7 +235,7 @@ async function driveToDispatchedCmsRepair(): Promise<{
 }> {
   const templateId = await seedTemplate(
     `@cinatra-ai/declared-cms-${randomUUID()}-agent`,
-    MANIFEST_REPAIR_CAPABLE,
+    lifecycleConfig,
   );
   const producerRunId = await seedRun(templateId);
   const base = await produce({ producerRunId, emitter: CMS_SNAPSHOT_EMITTER });
@@ -270,7 +274,23 @@ async function driveToDispatchedCmsRepair(): Promise<{
 }
 
 describe.skipIf(!HAS_DB)("cinatra#2286 S10 PR2 — the delivered-repair execution bridge", () => {
-  it("TASK CONSTRUCTION: a CMS base target projects a task onto the dispatched run's inputParams", async () => {
+  it("FINDINGS INPUT: a producer that declares its findings input gets the findings text there on a CMS base, and no task", async () => {
+    const ctx = await driveToDispatchedCmsRepair(MANIFEST_DECLARES_INSTRUCTIONS);
+    const runRow = await pool(
+      `SELECT input_params FROM "${q(TEST_SCHEMA)}"."agent_runs" WHERE id=$1`,
+      [ctx.repairRunId],
+    );
+    const inputParams = JSON.parse((runRow.rows[0] as { input_params: string }).input_params) as {
+      task?: string;
+      instructions?: string;
+      lifecycleRepairRequest?: unknown;
+    };
+    expect(inputParams.instructions).toBe(`${REPAIR_FINDINGS_TEXT_LEAD}\n\n1. fix the title`);
+    expect(inputParams.task).toBeUndefined();
+    expect(inputParams.lifecycleRepairRequest).toBeDefined();
+  });
+
+  it("FINDINGS INPUT: a producer that declares nothing gets no task and no instructions on a CMS base", async () => {
     const ctx = await driveToDispatchedCmsRepair();
     const runRow = await pool(
       `SELECT input_params FROM "${q(TEST_SCHEMA)}"."agent_runs" WHERE id=$1`,
@@ -278,11 +298,11 @@ describe.skipIf(!HAS_DB)("cinatra#2286 S10 PR2 — the delivered-repair executio
     );
     const inputParams = JSON.parse((runRow.rows[0] as { input_params: string }).input_params) as {
       task?: string;
+      instructions?: string;
       lifecycleRepairRequest?: unknown;
     };
-    expect(inputParams.task).toBeDefined();
-    expect(inputParams.task).toContain(ctx.resourceType);
-    expect(inputParams.task).toContain(ctx.connectorInstance);
+    expect(inputParams.task).toBeUndefined();
+    expect(inputParams.instructions).toBeUndefined();
     expect(inputParams.lifecycleRepairRequest).toBeDefined();
   });
 
