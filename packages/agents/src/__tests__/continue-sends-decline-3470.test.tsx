@@ -54,6 +54,7 @@ import {
 } from "../register-default-renderers";
 import { AgentHitlScreenCard } from "../agent-hitl-screen-card";
 import { continueApprovalFlag } from "../hitl-gate-submit";
+import { Button } from "@/components/ui/button";
 
 const RUN_ID = "run-3470";
 const TASK_ID = "task-3470";
@@ -63,9 +64,9 @@ const DECLARED_ID = "@acme-test/publish-agent:confirm";
 /** A mid-run renderer whose one control stages a decline. */
 function DeclineProbe({ onChange }: FieldRendererProps) {
   return (
-    <button type="button" onClick={() => onChange({ approved: false, itemId: "item-1" })}>
+    <Button type="button" onClick={() => onChange({ approved: false, itemId: "item-1" })}>
       Fixture decline
-    </button>
+    </Button>
   );
 }
 
