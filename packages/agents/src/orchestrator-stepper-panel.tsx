@@ -110,6 +110,7 @@ import {
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
+  continueApprovalFlag,
   isSetupGateTaskId,
   liftRendererApprovalNote,
   midRunBooleanFieldHidesSubmit,
@@ -953,7 +954,7 @@ function HitlApprovalCard({
     // so no setState is needed here — just capture the merged object as a local.
     let nextBuffered: Record<string, unknown> = {
       ...bufferedHitlValue,
-      approved: true,
+      approved: continueApprovalFlag(bufferedHitlValue),
       approvedAt: new Date().toISOString(),
     };
     // Renderer-specific approvalNote lifts (list-picker / setup-form /

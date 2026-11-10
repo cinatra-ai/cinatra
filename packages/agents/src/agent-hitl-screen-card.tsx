@@ -143,6 +143,7 @@ import {
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
+  continueApprovalFlag,
   isSetupGateTaskId,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
@@ -944,7 +945,7 @@ export function AgentHitlScreenContinue({
       onPress={async () => {
         let payload: Record<string, unknown> = {
           ...buffered,
-          approved: true,
+          approved: continueApprovalFlag(buffered),
           approvedAt: new Date().toISOString(),
         };
         if (!isSetupGateTaskId(gate.reviewTaskId)) {

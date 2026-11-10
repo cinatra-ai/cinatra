@@ -80,6 +80,7 @@ import {
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
+  continueApprovalFlag,
   isSetupGateTaskId,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
@@ -2019,7 +2020,7 @@ export function AgenticRunPanel({
           // Compute payload synchronously from current state to avoid a setState read race.
           let nextBuffered: Record<string, unknown> = {
             ...bufferedHitlValue,
-            approved: true,
+            approved: continueApprovalFlag(bufferedHitlValue),
             approvedAt: new Date().toISOString(),
           };
           if (!isSetupGateTaskId(effectiveHitlContext.reviewTaskId)) {

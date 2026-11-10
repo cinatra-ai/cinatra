@@ -298,6 +298,17 @@ export function midRunBooleanFieldHidesSubmit(gate: {
   return !(Array.isArray(enumValues) && enumValues.length > 0);
 }
 
+/**
+ * The approval flag a mid-run Continue sends (cinatra#3470). The screen's own
+ * choices only stage an answer and the host's one Continue sends it, "a
+ * decline as a decline" (design app-artifact-review I.4 and I.5): a staged
+ * `approved: false` is kept, and every other staged answer continues as an
+ * approval, as before.
+ */
+export function continueApprovalFlag(staged: Record<string, unknown>): boolean {
+  return staged.approved !== false;
+}
+
 // ---------------------------------------------------------------------------
 // #817 context-selector envelope synthesis
 // ---------------------------------------------------------------------------
