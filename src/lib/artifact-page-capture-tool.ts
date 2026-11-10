@@ -1,5 +1,4 @@
 import "server-only";
-import { createHash } from "node:crypto";
 
 import {
   producesObjectTypeIdForExtension,
@@ -7,17 +6,11 @@ import {
 } from "@cinatra-ai/agents/artifact-binding";
 
 import { postgresSchema } from "@/lib/database";
-import { logFailure, logFixedLine } from "@/lib/failure-log";
+import { logFixedLine } from "@/lib/failure-log";
 import { registerAllObjectTypes } from "@/lib/register-all-object-types";
-import { createSemanticArtifact } from "@/lib/artifacts/artifact-creation";
 import { isArtifactExtensionWriteAllowed } from "@/lib/artifacts/artifact-extension-access";
 import { captureDegradeCopy, type CaptureDegradeReason } from "@/lib/artifacts/cms-preview-capture";
-import {
-  buildFinalizeMaterializationQuery,
-  claimMaterialization,
-  isMaterializationFinalizeConflict,
-  readFinalizedMaterialization,
-} from "@/lib/artifacts/materialization-ledger";
+import { fileFirstArtifactWrite, logFilingFailure } from "@/lib/artifacts/first-artifact-filing";
 import {
   acquirePageCaptureLease,
   MAX_CONCURRENT_PAGE_CAPTURES_PER_RUN,
@@ -51,8 +44,9 @@ import {
 // (`captureRegisteredPage`). The PNG is filed as the one object type the named
 // extension resolves to (the tool names no type), with the three facts as its
 // object data: `capturedUrl`, `viewport` (the renderer's report) and `capturedAt`
-// (when the renderer returned). The write authorization and the ledger road are
-// the image tool's, with no image provenance on the ledger row.
+// (when the renderer returned). The write authorization is the image tool's, and
+// the ledger road is the first write both tools share (first-artifact-filing.ts),
+// with no image provenance on the ledger row.
 //
 // The shared Postgres budget (page-capture-budget.ts) leases one capture of the
 // organisation and run the caller passes. The lease's release is called on every
@@ -237,77 +231,41 @@ async function captureAndFile(
     };
   }
   const facts: CapturedFacts = { capturedUrl: input.url, viewport: captured.viewport, capturedAt: captured.capturedAt };
-  const claim = await claimMaterialization({
-    orgId: input.orgId,
-    runId: input.runId,
-    outputId: input.nodeId,
-    nodeId: input.nodeId,
-    path: "materialize_tool",
-    extension: input.extension,
-    contentHash: createHash("sha256").update(captured.png).digest("hex"),
-  });
-  if (claim.path !== undefined && claim.path !== "materialize_tool") {
-    return {
-      ok: false,
-      reason: "write_refused",
-      error:
-        `the materialization ledger identity collided with a different path ("${claim.path}") for run ` +
+  const filed = await fileFirstArtifactWrite({
+    tool: TOOL,
+    run: input,
+    bytes: captured.png,
+    mime: CAPTURE_MIME,
+    target,
+    // Read only on the writer road, after the claim.
+    writerFields: () => ({ createdBy: input.createdBy, title: input.title }),
+    typedData: () => ({ ...facts }),
+    additionalTx2Ops: ({ artifactId, representationRevisionId }) => [
+      buildPageCaptureFactsRecordOp({
+        schema: postgresSchema,
+        orgId: input.orgId,
+        objectType: target.objectTypeId,
+        facts,
+        artifactId,
+        representationRevisionId,
+      }),
+    ],
+    resolveOwnership: () => deps.resolveOwnership({ templateId: input.templateId, runId: input.runId, orgId: input.orgId }),
+    // A re-drive of this node with these bytes, or the double-drive loser: the first write serves it, with its facts.
+    readStored: (refs) => storedCaptureResult(input, deps, target.objectTypeId, refs),
+    texts: {
+      pathCollision: (path) =>
+        `the materialization ledger identity collided with a different path ("${path}") for run ` +
         `${input.runId} node "${input.nodeId}" extension "${input.extension}"; refusing to alias`,
-    };
-  }
-  // A re-drive of this node with these bytes: the first write serves it, with the facts recorded with it.
-  if (claim.kind === "finalized") return storedCaptureResult(input, deps, target.objectTypeId, claim);
-  const ownership = await deps.resolveOwnership({ templateId: input.templateId, runId: input.runId, orgId: input.orgId });
-  let created: { artifactId: string; representationRevisionId: string };
-  try {
-    const written = await createSemanticArtifact({
-      orgId: input.orgId,
-      objectType: target.objectTypeId,
-      expectedAcceptMimes: target.acceptedFileMimeTypes,
-      createdBy: input.createdBy,
-      ownerLevel: ownership.ownerLevel,
-      ownerId: ownership.ownerId,
-      visibility: ownership.visibility,
-      title: input.title,
-      declaredMime: CAPTURE_MIME,
-      originKind: "agent_generated",
-      stream: (async function* () {
-        yield captured.png;
-      })(),
-      createdByRunId: input.runId,
-      producerAssertionExtension: input.extension,
-      skipFallbackClassification: true,
-      typedData: { ...facts },
-      additionalTx2Queries: (ids) => [
-        buildFinalizeMaterializationQuery({ ledgerId: claim.ledgerId, orgId: input.orgId, ...ids }),
-        buildPageCaptureFactsRecordOp({ schema: postgresSchema, orgId: input.orgId, objectType: target.objectTypeId, facts, ...ids }),
-      ],
-    });
-    created = { artifactId: written.artifactId, representationRevisionId: written.representationRevisionId };
-  } catch (err) {
-    // The concurrent double-drive loser, recovered as the image tool recovers it.
-    if (isMaterializationFinalizeConflict(err)) {
-      const winner = await readFinalizedMaterialization({ orgId: input.orgId, ledgerId: claim.ledgerId });
-      if (winner) return storedCaptureResult(input, deps, target.objectTypeId, winner);
-    }
-    const schemaRefusal = isSchemaRefusal(err);
-    logToolFailure(input, err);
-    return schemaRefusal
-      ? { ok: false, reason: "data_rejected", error: PAGE_CAPTURE_DATA_REJECTED_ERROR }
-      : { ok: false, reason: "write_refused", error: PAGE_CAPTURE_WRITE_FAILED_ERROR };
-  }
-  try {
-    const { enqueueArtifactMatchRun } = await import("@/lib/artifacts/matcher-enqueue");
-    await enqueueArtifactMatchRun({
-      orgId: input.orgId,
-      artifactId: created.artifactId,
-      representationRevisionId: created.representationRevisionId,
-      createdByRunId: input.runId,
-    });
-  } catch {
-    /* best-effort: never fails a filed capture. */
-  }
-  return { ok: true, ...created, ...facts, deduped: false };
+      dataRejected: PAGE_CAPTURE_DATA_REJECTED_ERROR,
+      writeFailed: PAGE_CAPTURE_WRITE_FAILED_ERROR,
+    },
+    // The tool's own per-field sanitizer: a field that is not a readable string is logged as "unreadable".
+    logFields: () => logFields(input),
+  });
+  if (filed.kind === "served") return filed.answer;
+  if (filed.kind === "refused") return { ok: false, reason: filed.reason, error: filed.error };
+  return { ok: true, artifactId: filed.artifactId, representationRevisionId: filed.representationRevisionId, ...facts, deduped: false };
 }
 
 /** The answer to a re-drive: the facts recorded with the revision that serves it, or a fixed refusal. */
@@ -384,15 +342,6 @@ function logFields(input: CaptureArtifactPageInput): Record<string, string> {
 
 /** The tool, the run, the node and the error's class word; never text taken from the error. */
 function logToolFailure(input: CaptureArtifactPageInput, err: unknown): void {
-  logFailure(`[${TOOL}] failed; the error's own text is not logged`, logFields(input), err);
-}
-
-/** A writer's schema refusal, read from a plain message only. Never a throw. */
-function isSchemaRefusal(err: unknown): boolean {
-  try {
-    const message: unknown = typeof err === "string" ? err : err instanceof Error ? err.message : undefined;
-    return typeof message === "string" && /does not satisfy the declared schema/.test(message);
-  } catch {
-    return false;
-  }
+  const fields = logFields(input);
+  logFilingFailure(TOOL, { orgId: fields.orgId, runId: fields.runId, nodeId: fields.nodeId, extension: fields.extension }, err);
 }
