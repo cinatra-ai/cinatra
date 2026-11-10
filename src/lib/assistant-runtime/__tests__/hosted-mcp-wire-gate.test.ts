@@ -198,7 +198,7 @@ function selfMcpToolFixture(): Record<string, unknown> {
     serverLabel: "cinatra",
     serverUrl: PUBLIC_MCP_URL,
     headers: { Authorization: "Bearer delegated-actor-token" },
-    serverDescription: "Cinatra MCP, the open source agentic teams workspace",
+    serverDescription: "Cinatra MCP server (Cinatra is the open source agentic teams workspace)",
     allowedTools: null,
     approval: "auto_execute",
     transport: "streamable-http",

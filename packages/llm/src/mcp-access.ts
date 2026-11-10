@@ -473,7 +473,7 @@ function buildCinatraMcpServerTool(
       ...(lentActionGrant ? { "X-Cinatra-Lent-Grant": lentActionGrant } : {}),
     },
     serverDescription:
-      "Cinatra MCP, the open source agentic teams workspace: read agents, workflows, " +
+      "Cinatra MCP server (Cinatra is the open source agentic teams workspace): read agents, workflows, " +
       "objects/lists/projects, content connectors, cubes, artifact authoring, skills. " +
       "Mutations run via agent dispatch only; no permissions/auth/settings access.",
     // `null` (default) = unrestricted, preserving the chat / machine /

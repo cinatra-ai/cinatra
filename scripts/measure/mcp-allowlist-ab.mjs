@@ -272,7 +272,7 @@ async function main() {
   const apiKey = requireEnv("OPENAI_API_KEY");
   const bearer = requireEnv("CINATRA_MCP_BEARER");
   const serverUrl = requireEnv("CINATRA_MCP_URL");
-  const system = args.get("system") ?? "You are Cinatra, the open source agentic teams workspace assistant.";
+  const system = args.get("system") ?? "You are the assistant of Cinatra, the open source agentic teams workspace.";
 
   const rows = [];
   for (const arm of ["full", "restricted"]) {
