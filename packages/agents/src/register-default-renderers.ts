@@ -25,6 +25,7 @@ import { createElement, type ComponentType } from "react";
 import {
   fieldRendererRegistry,
   type FieldRendererCondition,
+  type FieldRendererEntry,
   type FieldRendererProps,
 } from "./field-renderer-registry";
 import {
@@ -59,6 +60,7 @@ import {
 import { hasFieldRendererComponent } from "./field-renderer-components";
 import { makeExtensionFieldRenderer } from "./extension-field-renderer";
 import {
+  declaredHitlScreenReady,
   makeDeclaredHitlScreenRenderer,
   type DeclaredHitlCard,
 } from "./declared-hitl-screen-renderer";
@@ -293,8 +295,12 @@ function registerDeclaredScreen(b: FieldRendererBindingInput): void {
     ? RENDERER_KIND_TABLE[b.kind]
     : undefined;
   let renderer: ComponentType<FieldRendererProps> | undefined;
+  let continueReady: FieldRendererEntry["continueReady"] = undefined;
   if (kindEntry && checked.screen?.layout === "card") {
-    renderer = makeDeclaredHitlScreenRenderer(checked.screen as DeclaredHitlCard);
+    const card = checked.screen as DeclaredHitlCard;
+    renderer = makeDeclaredHitlScreenRenderer(card);
+    // The host's Continue waits for a declared choice and every required value.
+    continueReady = ({ runValue, staged }) => declaredHitlScreenReady(card, runValue, staged);
   } else if (kindEntry && checked.screen?.layout === "kind" && kindEntry.renderer !== SchemaOnlyFloorRenderer) {
     renderer = kindEntry.renderer;
   }
@@ -318,6 +324,7 @@ function registerDeclaredScreen(b: FieldRendererBindingInput): void {
     credentialSafe: !isKind || kindEntry.credentialSafe === true,
     // The card draws no send: the host's one Continue sends its answer.
     drawsOwnSubmit: isKind && kindEntry.drawsOwnSubmit === true,
+    ...(continueReady !== undefined ? { continueReady } : {}),
     midRunHitl: b.midRunHitl === true,
   });
 }

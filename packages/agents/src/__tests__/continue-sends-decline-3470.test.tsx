@@ -53,7 +53,7 @@ import {
   registerFieldRendererBindings,
 } from "../register-default-renderers";
 import { AgentHitlScreenCard } from "../agent-hitl-screen-card";
-import { continueApprovalFlag } from "../hitl-gate-submit";
+import { continueApprovalFlag, continueHeldByRenderer } from "../hitl-gate-submit";
 import { Button } from "@/components/ui/button";
 
 const RUN_ID = "run-3470";
@@ -223,6 +223,74 @@ describe("the HITL screen card's Continue (cinatra#3470)", () => {
     expect(approveMock).not.toHaveBeenCalled();
     const payload = await pressContinue(container);
     expect(payload).toMatchObject({ approved: false, itemId: "item-1", revisionId: "rev-1" });
+  });
+});
+
+describe("a declared card holds the HITL screen card's Continue (cinatra#3470)", () => {
+  function continueButton(container: HTMLElement): HTMLButtonElement | null {
+    return container.querySelector<HTMLButtonElement>('[data-action="submit-hitl-screen"]');
+  }
+
+  it("the Continue stays disabled until a declared choice is made", async () => {
+    registerDeclaredPublishCard();
+    const { container } = mount();
+    await settle();
+    await waitFor(() => expect(continueButton(container)).not.toBeNull());
+    expect(continueButton(container)!.disabled).toBe(true);
+    // A press on the held Continue sends nothing.
+    fireEvent.click(continueButton(container)!);
+    await settle();
+    expect(approveMock).not.toHaveBeenCalled();
+    fireEvent.click(button(container, /^Fixture send/)!);
+    await settle();
+    expect(continueButton(container)!.disabled).toBe(false);
+    const payload = await pressContinue(container);
+    expect(payload).toMatchObject({ approved: true, itemId: "item-1", revisionId: "rev-1" });
+  });
+
+  it("the Continue stays disabled until a required field holds text", async () => {
+    registerFieldRendererBindings([
+      {
+        id: DECLARED_ID,
+        kind: "linkedin-draft-review",
+        priority: 90,
+        midRunHitl: true,
+        screen: {
+          layout: "card",
+          title: "Fixture question",
+          sections: [{ type: "field", key: "answer", label: "Fixture label" }],
+          carry: ["itemId"],
+          requires: ["answer"],
+        },
+      },
+    ]);
+    current = asking(DECLARED_ID, { itemId: "item-1" });
+    const { container } = mount();
+    await settle();
+    await waitFor(() => expect(continueButton(container)).not.toBeNull());
+    expect(continueButton(container)!.disabled).toBe(true);
+    const box = container.querySelector<HTMLInputElement>("input")!;
+    expect(box.disabled).toBe(false);
+    fireEvent.change(box, { target: { value: "   " } });
+    await settle();
+    expect(continueButton(container)!.disabled).toBe(true);
+    fireEvent.change(box, { target: { value: "Fixture answer" } });
+    await settle();
+    expect(continueButton(container)!.disabled).toBe(false);
+    const payload = await pressContinue(container);
+    expect(payload).toMatchObject({ approved: true, itemId: "item-1", answer: "Fixture answer" });
+  });
+});
+
+describe("continueHeldByRenderer (cinatra#3470)", () => {
+  it("holds only where the entry declares continueReady and it answers false", () => {
+    expect(continueHeldByRenderer(null, {}, {})).toBe(false);
+    expect(continueHeldByRenderer({}, {}, {})).toBe(false);
+    expect(continueHeldByRenderer({ continueReady: () => true }, {}, {})).toBe(false);
+    expect(continueHeldByRenderer({ continueReady: () => false }, {}, {})).toBe(true);
+    const seen = vi.fn(() => true);
+    continueHeldByRenderer({ continueReady: seen }, undefined, { a: 1 });
+    expect(seen).toHaveBeenCalledWith({ runValue: {}, staged: { a: 1 } });
   });
 });
 

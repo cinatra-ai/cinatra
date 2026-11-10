@@ -228,6 +228,67 @@ describe("a declared text field (app-lifecycle-cards V.1)", () => {
   });
 });
 
+describe("a declared card holds the host's Continue (cinatra#3470)", () => {
+  const FIELD_SCREEN = {
+    layout: "card",
+    title: "Fixture question",
+    sections: [{ type: "field", key: "answer", label: "Fixture label" }],
+    carry: ["itemId"],
+    requires: ["answer"],
+  };
+
+  function ready(runValue: Record<string, unknown>, staged: Record<string, unknown>): boolean | undefined {
+    return entryOf()?.continueReady?.({ runValue, staged });
+  }
+
+  it("holds the Continue until one of the declared choices is made", () => {
+    registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90, screen: CARD }]);
+    expect(entryOf()?.continueReady).toBeTypeOf("function");
+    expect(ready(VALUE, {})).toBe(false);
+    expect(ready(VALUE, { itemId: "item-1", revisionId: "rev-1" })).toBe(false);
+    expect(ready(VALUE, { approved: "false" })).toBe(false);
+    expect(ready(VALUE, { itemId: "item-1", revisionId: "rev-1", approved: false })).toBe(true);
+    expect(ready(VALUE, { approved: true })).toBe(true);
+    // The run value never makes the choice for the person.
+    expect(ready({ ...VALUE, approved: true }, {})).toBe(false);
+  });
+
+  it("holds the Continue while a required run value is blank, even with a choice made", () => {
+    registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90, screen: CARD }]);
+    expect(ready({ ...VALUE, revisionId: " " }, { approved: false })).toBe(false);
+  });
+
+  it("holds the Continue until a required field holds text, and the field stays usable", () => {
+    registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90, screen: FIELD_SCREEN }]);
+    expect(ready({ itemId: "item-1" }, {})).toBe(false);
+    expect(ready({ itemId: "item-1" }, { answer: "   " })).toBe(false);
+    expect(ready({ itemId: "item-1" }, { itemId: "item-1", answer: "typed" })).toBe(true);
+    // `requires` names the field's own key: the field is NOT disabled by it.
+    const onChange = mount({ itemId: "item-1" });
+    const box = dom.getByLabelText("Fixture label") as HTMLInputElement;
+    expect(box.disabled).toBe(false);
+    fireEvent.change(box, { target: { value: "typed" } });
+    expect(onChange).toHaveBeenLastCalledWith({ itemId: "item-1", answer: "typed" });
+  });
+
+  it("treats every declared field as a required value", () => {
+    const { requires: _requires, ...withoutRequires } = FIELD_SCREEN;
+    void _requires;
+    registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90, screen: withoutRequires }]);
+    expect(ready({}, {})).toBe(false);
+    expect(ready({}, { answer: "typed" })).toBe(true);
+  });
+
+  it("a 'kind' layout and a binding without a screen never hold the Continue", () => {
+    registerFieldRendererBindings([
+      { id: ID, kind: "blog-idea-selection", priority: 80, midRunHitl: true, screen: { layout: "kind" } },
+    ]);
+    expect(entryOf()?.continueReady).toBeUndefined();
+    registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90 }]);
+    expect(entryOf()?.continueReady).toBeUndefined();
+  });
+});
+
 describe("registration validates the declaration again (cinatra#3470)", () => {
   it("a 'kind' layout registers the host's own component for that kind", () => {
     registerFieldRendererBindings([

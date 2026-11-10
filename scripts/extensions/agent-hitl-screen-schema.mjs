@@ -16,8 +16,10 @@
 //     the choice stages for the host's one Continue. A card offers decisions
 //     or fields, never both.
 //     carry: run-value keys copied into every staged answer.
-//     requires: run-value keys that must be non-blank text before a choice
-//     or a field can be used.
+//     requires: keys that must hold non-blank text before the host's
+//     Continue can send; a choice also waits for them. Every field is a
+//     required value, and a card with decisions holds the Continue until
+//     one of them is chosen.
 //   - "kind": { layout } - the host's own component for the binding's kind.
 //
 // Dependency-free and fs-free on purpose (build scripts, the runtime

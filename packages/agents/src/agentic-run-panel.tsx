@@ -81,6 +81,7 @@ import {
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
   continueApprovalFlag,
+  continueHeldByRenderer,
   isSetupGateTaskId,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
@@ -1995,7 +1996,18 @@ export function AgenticRunPanel({
       ) : null}
       <Button
         size="sm"
-        disabled={isApproving}
+        disabled={
+          isApproving ||
+          // cinatra#3470: a declared card holds the screen's Continue until a
+          // choice is made and every required value holds text. Never the
+          // bare-gate row (the tool-call banner with its Reject).
+          (!opts?.withReject &&
+            continueHeldByRenderer(
+              hitlRendererEntry?.entry,
+              effectiveHitlContext.currentValues,
+              bufferedHitlValue,
+            ))
+        }
         className="gap-1.5"
         // THE HITL SCREEN'S ONE DECISION (cinatra#2930). Named on the row this
         // panel draws INSIDE the screen card, and deliberately not on the

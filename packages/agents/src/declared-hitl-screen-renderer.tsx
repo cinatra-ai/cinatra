@@ -9,7 +9,8 @@
 // value's: this module carries no agent text and names no extension. The
 // card draws no send control of its own. A decision or a field only STAGES
 // its answer, and the host's one Continue beneath the card sends it, a
-// decline as a decline.
+// decline as a decline. That Continue is held (`declaredHitlScreenReady`)
+// until a declared choice is made and every required value holds text.
 
 import { useState, type ComponentType, type ReactNode } from "react";
 import Link from "next/link";
@@ -52,6 +53,32 @@ function isWebAddress(text: string): boolean {
   }
 }
 
+/**
+ * May the host's Continue send this card's answer yet?
+ *
+ *   - every `requires` key holds non-blank text (staged over the run value);
+ *   - every field holds non-blank text: a declared field is a required value;
+ *   - a card with decisions has one of them chosen: the staged answer holds
+ *     every key of one declared answer with exactly its value. Nothing is
+ *     chosen for the person, not even by the run value.
+ */
+export function declaredHitlScreenReady(
+  screen: DeclaredHitlCard,
+  runValue: Record<string, unknown>,
+  staged: Record<string, unknown>,
+): boolean {
+  const merged: Record<string, unknown> = { ...runValue, ...staged };
+  const fieldKeys = (screen.sections ?? []).flatMap((s) => (s.type === "field" ? [s.key] : []));
+  for (const k of [...(screen.requires ?? []), ...fieldKeys]) {
+    if (textOf(merged, k).trim() === "") return false;
+  }
+  const decisions = screen.decisions ?? [];
+  if (decisions.length === 0) return true;
+  return decisions.some((d) =>
+    Object.entries(d.answer).every(([k, x]) => Object.hasOwn(staged, k) && Object.is(staged[k], x)),
+  );
+}
+
 export function makeDeclaredHitlScreenRenderer(
   screen: DeclaredHitlCard,
 ): ComponentType<FieldRendererProps> {
@@ -61,8 +88,10 @@ export function makeDeclaredHitlScreenRenderer(
         ? (value as Record<string, unknown>)
         : {};
     const [picked, setPicked] = useState<number | null>(null);
+    // A choice waits for the run values it requires. A field is never locked
+    // by them: its own key may be required, and the person must type it.
     const ready = (screen.requires ?? []).every((k) => textOf(v, k).trim() !== "");
-    const locked = disabled === true || !ready;
+    const choicesLocked = disabled === true || !ready;
     // The carried run values ride on every staged answer (own keys only).
     const carried = (): Record<string, unknown> =>
       Object.fromEntries(
@@ -79,7 +108,7 @@ export function makeDeclaredHitlScreenRenderer(
           id,
           value: textOf(v, s.key),
           placeholder: s.placeholder,
-          disabled: locked,
+          disabled: disabled === true,
         };
         const write = (text: string) => onChange({ ...carried(), [s.key]: text });
         return (
@@ -142,7 +171,7 @@ export function makeDeclaredHitlScreenRenderer(
                 variant={i === decisions.length - 1 ? "default" : "outline"}
                 aria-pressed={picked === i}
                 className={picked === i ? "ring-2 ring-ring ring-offset-2" : undefined}
-                disabled={locked}
+                disabled={choicesLocked}
                 onClick={() => {
                   setPicked(i);
                   onChange({ ...carried(), ...d.answer });

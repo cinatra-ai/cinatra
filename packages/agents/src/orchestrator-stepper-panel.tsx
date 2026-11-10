@@ -111,6 +111,7 @@ import {
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
   continueApprovalFlag,
+  continueHeldByRenderer,
   isSetupGateTaskId,
   liftRendererApprovalNote,
   midRunBooleanFieldHidesSubmit,
@@ -1453,7 +1454,17 @@ function HitlApprovalCard({
 
         {showContinueButton && (
           <div className="flex justify-end pt-2 border-t border-line">
-            <Button size="sm" disabled={isApproving} onClick={handleContinue} className="gap-1.5">
+            <Button
+              size="sm"
+              // cinatra#3470: a declared card holds the Continue until a choice
+              // is made and every required value holds text.
+              disabled={
+                isApproving ||
+                continueHeldByRenderer(entry, interruptContext.values, bufferedHitlValue)
+              }
+              onClick={handleContinue}
+              className="gap-1.5"
+            >
               {isApproving ? "Continuing…" : "Continue"}
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>
