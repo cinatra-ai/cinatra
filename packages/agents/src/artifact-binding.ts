@@ -711,6 +711,18 @@ export const ARTIFACT_MATERIALIZE_TOOL = "artifact_materialize";
  *  picture filed under the extension the call names. */
 export const ARTIFACT_IMAGE_TOOL = "artifact_image_generate";
 
+/** The host's page capture tool on the passthrough route (cinatra#4223): a page
+ *  url in, a PNG of that page filed under the extension the call names. */
+export const ARTIFACT_PAGE_CAPTURE_TOOL = "artifact_page_capture";
+
+/** The filing tools the image-node collector recognizes, each with the string
+ *  inputs that tool trims and refuses when blank. A Map, so a `data.tool` such
+ *  as "constructor" never reads a prototype member. */
+const FILING_TOOL_REQUIRED_TEXT = new Map<string, readonly string[]>([
+  [ARTIFACT_IMAGE_TOOL, ["title", "prompt"]],
+  [ARTIFACT_PAGE_CAPTURE_TOOL, ["title", "url"]],
+]);
+
 /** URL marker identifying the deterministic passthrough route. */
 export const AGENTS_PASSTHROUGH_URL_MARKER = "/api/agents/passthrough";
 
@@ -1004,18 +1016,20 @@ export type CollectedArtifactImageNode = {
 
 /**
  * cinatra#3035: collect every passthrough ApiNode that files a picture through
- * the host's image tool (`artifact_image_generate`) — the fourth
- * materialization road. The tool refuses an extension the running package does
+ * the host's image tool (`artifact_image_generate`) or, since cinatra#4223, its
+ * page capture tool (`artifact_page_capture`) — the fourth
+ * materialization road. Each tool refuses an extension the running package does
  * not declare in `cinatra.produces`, so a step that calls it with a literal,
  * declared extension and names itself as the ledger's node reaches that entry.
  *
  * Statics only, walked like the materialize collector (top-level components and
- * FlowNode subflows). A node counts ONLY when `data.tool` is the literal image
- * tool, `data.input` is an object, `input.extension` is a literal the known
- * produces list names (a null list skips the parity), `input.node_id` is a
- * literal equal to the node's own id, and `input.title` and `input.prompt` are
- * strings that are not blank once trimmed. A node that does not meet them
- * resolves nothing — there is no error list, so no package gains a finding; a
+ * FlowNode subflows). A node counts ONLY when `data.tool` is one of the two
+ * literal filing tools, `data.input` is an object, `input.extension` is a
+ * literal the known produces list names (a null list skips the parity),
+ * `input.node_id` is a literal equal to the node's own id, and `input.title` and
+ * the tool's subject input (`input.prompt` for the image tool, `input.url` for
+ * the page capture tool) are strings that are not blank once trimmed. A node that
+ * does not meet them resolves nothing — there is no error list, so no package gains a finding; a
  * produces entry kept only by such a node stays refused by the existing
  * unmaterialized finding.
  */
@@ -1039,7 +1053,9 @@ export function collectArtifactImageNodesFromOasDocument(
         return;
       }
     }
-    if (!isPlainObject(data) || data.tool !== ARTIFACT_IMAGE_TOOL) return;
+    if (!isPlainObject(data) || typeof data.tool !== "string") return;
+    const requiredText = FILING_TOOL_REQUIRED_TEXT.get(data.tool);
+    if (requiredText === undefined) return;
 
     const input = data.input;
     if (!isPlainObject(input)) return;
@@ -1059,9 +1075,9 @@ export function collectArtifactImageNodesFromOasDocument(
       return;
     }
 
-    for (const field of ["title", "prompt"] as const) {
+    for (const field of requiredText) {
       const value = input[field];
-      // The image tool trims both and refuses a blank one.
+      // The filing tool trims each one and refuses a blank one.
       if (typeof value !== "string" || value.trim().length === 0) return;
     }
 
