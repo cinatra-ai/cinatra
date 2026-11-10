@@ -233,16 +233,13 @@ async function captureAndFile(
   const facts: CapturedFacts = { capturedUrl: input.url, viewport: captured.viewport, capturedAt: captured.capturedAt };
   const filed = await fileFirstArtifactWrite({
     tool: TOOL,
-    orgId: input.orgId,
-    runId: input.runId,
-    nodeId: input.nodeId,
-    extension: input.extension,
-    createdBy: input.createdBy,
-    title: input.title,
+    run: input,
     bytes: captured.png,
     mime: CAPTURE_MIME,
     target,
-    typedData: { ...facts },
+    // Read only on the writer road, after the claim.
+    writerFields: () => ({ createdBy: input.createdBy, title: input.title }),
+    typedData: () => ({ ...facts }),
     additionalTx2Ops: ({ artifactId, representationRevisionId }) => [
       buildPageCaptureFactsRecordOp({
         schema: postgresSchema,
@@ -263,6 +260,8 @@ async function captureAndFile(
       dataRejected: PAGE_CAPTURE_DATA_REJECTED_ERROR,
       writeFailed: PAGE_CAPTURE_WRITE_FAILED_ERROR,
     },
+    // The tool's own per-field sanitizer: a field that is not a readable string is logged as "unreadable".
+    logFields: () => logFields(input),
   });
   if (filed.kind === "served") return filed.answer;
   if (filed.kind === "refused") return { ok: false, reason: filed.reason, error: filed.error };

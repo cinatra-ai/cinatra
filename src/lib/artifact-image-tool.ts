@@ -476,18 +476,15 @@ export async function generateArtifactImage(
     }
     const filed = await fileFirstArtifactWrite({
       tool: "artifact_image_generate",
-      orgId: input.orgId,
-      runId: input.runId,
-      nodeId: input.nodeId,
-      extension: input.extension,
-      createdBy: input.createdBy,
-      title,
+      run: input,
       bytes,
       mime,
       target: resolvedTarget.target,
+      // Read only on the writer road, after the claim.
+      writerFields: () => ({ createdBy: input.createdBy, title }),
       // The picture's own data, validated against the type's schema by the
       // write path itself (item 0.28).
-      ...(input.data ? { typedData: input.data } : {}),
+      typedData: () => (input.data ? input.data : undefined),
       additionalTx2Ops: ({ ledgerId }) => [
         buildImageGenerationProvenanceQuery({ schema: schemaId(), ledgerId, orgId: input.orgId, provenance }),
       ],
@@ -504,6 +501,7 @@ export async function generateArtifactImage(
         dataRejected: FILING_DATA_REJECTED_ERROR,
         writeFailed: FILING_WRITE_FAILED_ERROR,
       },
+      logFields: () => filingLogFields(input),
     });
     if (filed.kind === "served") return filed.answer;
     if (filed.kind === "refused") return { ok: false, reason: filed.reason, error: filed.error };

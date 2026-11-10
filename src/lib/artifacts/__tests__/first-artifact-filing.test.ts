@@ -48,21 +48,21 @@ let owners = 0;
 let written: Array<{ input: Record<string, unknown>; bytes: Buffer; tx2: Array<{ text: string; values: unknown[] }> }> =
   [];
 let extraCalls: Array<{ ledgerId: string; artifactId: string; representationRevisionId: string }> = [];
+let writerReads = 0;
 let logged: ReturnType<typeof vi.spyOn>;
 
 function filingInput(over: Partial<FirstArtifactFilingInput<Answer>> = {}): FirstArtifactFilingInput<Answer> {
   return {
     tool: "some_tool",
-    orgId: "org-1",
-    runId: "run-1",
-    nodeId: "node-1",
-    extension: "@scope/pack",
-    createdBy: "user-1",
-    title: "A title",
+    run: { orgId: "org-1", runId: "run-1", nodeId: "node-1", extension: "@scope/pack" },
     bytes: BYTES,
     mime: "image/png",
     target: TARGET,
-    typedData: { field: "value" },
+    writerFields: () => {
+      writerReads += 1;
+      return { createdBy: "user-1", title: "A title" };
+    },
+    typedData: () => ({ field: "value" }),
     additionalTx2Ops: (ids) => {
       extraCalls.push(ids);
       return [EXTRA_OP];
@@ -80,6 +80,7 @@ function filingInput(over: Partial<FirstArtifactFilingInput<Answer>> = {}): Firs
       dataRejected: "DATA REJECTED",
       writeFailed: "WRITE FAILED",
     },
+    logFields: () => ({ orgId: "org-1", runId: "run-1", nodeId: "node-1", extension: "@scope/pack" }),
     ...over,
   };
 }
@@ -89,6 +90,7 @@ beforeEach(() => {
   owners = 0;
   written = [];
   extraCalls = [];
+  writerReads = 0;
   logged = vi.spyOn(console, "error").mockImplementation(() => {});
   h.claimMaterialization.mockResolvedValue({ kind: "claimed", ledgerId: "ledger-1" });
   h.createSemanticArtifact.mockImplementation(
@@ -174,7 +176,7 @@ describe("fileFirstArtifactWrite (cinatra#4223)", () => {
 
   it("passes no typedData when the caller gives none, and a failed matcher enqueue never fails the filing", async () => {
     h.enqueueArtifactMatchRun.mockRejectedValueOnce(new Error(SECRET));
-    const outcome = await fileFirstArtifactWrite(filingInput({ typedData: undefined }));
+    const outcome = await fileFirstArtifactWrite(filingInput({ typedData: () => undefined }));
     expect(outcome).toEqual({ kind: "filed", artifactId: "art-1", representationRevisionId: "rev-1" });
     expect("typedData" in written[0].input).toBe(false);
     expect(loggedText()).not.toContain("hunter2");
@@ -191,6 +193,7 @@ describe("fileFirstArtifactWrite (cinatra#4223)", () => {
     expect(outcome).toEqual({ kind: "served", answer: { served: "art-0/rev-0" } });
     expect(reads).toEqual([{ artifactId: "art-0", representationRevisionId: "rev-0" }]);
     expect(owners).toBe(0);
+    expect(writerReads).toBe(0);
     expect(h.createSemanticArtifact).not.toHaveBeenCalled();
     expect(h.enqueueArtifactMatchRun).not.toHaveBeenCalled();
   });
@@ -204,7 +207,30 @@ describe("fileFirstArtifactWrite (cinatra#4223)", () => {
     expect(outcome).toEqual({ kind: "refused", reason: "write_refused", error: 'collided with "run_completion"' });
     expect(owners).toBe(0);
     expect(reads).toEqual([]);
+    expect(writerReads).toBe(0);
     expect(h.createSemanticArtifact).not.toHaveBeenCalled();
+  });
+
+  it("answers a writer field that throws as a failed write, logged with the caller's log fields", async () => {
+    const outcome = await fileFirstArtifactWrite(
+      filingInput({
+        writerFields: () => {
+          throw new RangeError(SECRET);
+        },
+        logFields: () => ({ orgId: "org-1", runId: "run-1", nodeId: "unreadable", extension: "@scope/pack" }),
+      }),
+    );
+    expect(outcome).toEqual({ kind: "refused", reason: "write_refused", error: "WRITE FAILED" });
+    expect(owners).toBe(1);
+    expect(h.createSemanticArtifact).not.toHaveBeenCalled();
+    expect(logged).toHaveBeenCalledWith("[some_tool] failed; the error's own text is not logged", {
+      orgId: "org-1",
+      runId: "run-1",
+      nodeId: "unreadable",
+      extension: "@scope/pack",
+      errorClass: "RangeError",
+    });
+    expect(loggedText()).not.toContain("hunter2");
   });
 
   it("answers a schema refusal of the writer as data_rejected with the caller's fixed text, logging the class word only", async () => {
