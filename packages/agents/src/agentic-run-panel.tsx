@@ -85,6 +85,7 @@ import {
   isGroupedSetupRenderer,
   hitlGateIdentityKey,
   isSetupGateTaskId,
+  midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
   withDeclaredRendererValues,
@@ -3128,8 +3129,17 @@ export function AgenticRunPanel({
                       // (the shared props contract says a renderer that draws
                       // its own Continue must skip it), and the card's Continue
                       // asks the field for its value through the same flush the
-                      // renderer's own button would have used.
-                      hideSubmit={productOwnsSetupSend}
+                      // renderer's own button would have used. A boolean field
+                      // on a mid-run gate is told the same (cinatra#4310): the
+                      // outer Continue below is that gate's one control.
+                      hideSubmit={
+                        productOwnsSetupSend ||
+                        midRunBooleanFieldHidesSubmit({
+                          isMidRun: isMidRunHitl,
+                          isGroupedSetup,
+                          fieldSchema: hitlRendererEntry.fieldSchema,
+                        })
+                      }
                       registerFlush={
                         productOwnsSetupSend
                           ? (fn: () => Promise<void>) =>

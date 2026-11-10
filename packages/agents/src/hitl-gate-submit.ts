@@ -273,6 +273,45 @@ export function hitlRendererFieldName(fieldName: string | undefined): string {
     : HITL_PLACEHOLDER_FIELD_NAME;
 }
 
+/**
+ * Is a BOOLEAN field on a MID-RUN gate told `hideSubmit`? (cinatra#4310.)
+ *
+ * Since cinatra#4310 the schema-drawn boolean draws a Continue of its own
+ * wherever it is not told `hideSubmit`. That is right on a per-field setup
+ * gate: the fallback entry declares `drawsOwnSubmit`, so the surface draws no
+ * Continue beside the field. A mid-run gate is not like that. Each surface
+ * (the run panel, the orchestrator stepper and the HITL screen card) draws its
+ * own outer Continue beneath every mid-run renderer that is not a grouped setup
+ * form, and the approved input card gives that gate one host control and no
+ * separate field send. So on a mid-run gate the boolean field is told
+ * `hideSubmit`: it draws no Continue, and its box hands each change to the
+ * gate's `onChange` exactly as it did before cinatra#4310. The surface's one
+ * outer Continue is the gate's only control. That `onChange` keeps only a
+ * non-array object, so a boolean's answer is dropped there and the Continue
+ * sends the approval without it; main does the same (cinatra#4506).
+ *
+ * "A boolean" is what the schema-field renderer draws with its boolean branch:
+ * `type` exactly `"boolean"`, and no non-empty `enum`, because the renderer
+ * draws a non-empty `enum` first, as a Select with no Continue. Only the
+ * boolean, on purpose: it is the one kind whose control cinatra#4310 moved. The
+ * rule reads the schema, not the renderer, so a custom renderer of a mid-run
+ * gate whose schema is such a boolean is told `hideSubmit` too, and the shared
+ * props contract asks it to skip a submit of its own beside the surface's
+ * Continue. A grouped setup form is never told this, because it draws the one
+ * submit of its own form.
+ */
+export function midRunBooleanFieldHidesSubmit(gate: {
+  isMidRun: boolean;
+  isGroupedSetup: boolean;
+  fieldSchema: unknown;
+}): boolean {
+  if (!gate.isMidRun || gate.isGroupedSetup) return false;
+  const schema = gate.fieldSchema as { type?: unknown; enum?: unknown } | null | undefined;
+  if (schema?.type !== "boolean") return false;
+  const enumValues = schema?.enum;
+  return !(Array.isArray(enumValues) && enumValues.length > 0);
+}
+
 // ---------------------------------------------------------------------------
 // #817 context-selector envelope synthesis
 // ---------------------------------------------------------------------------

@@ -895,7 +895,6 @@ function readLeftFixtureAccountId(): string | null {
  */
 export async function ensureDevConnectActor(): Promise<DevConnectActor | null> {
   if (!isStrictDevelopmentRuntime()) return null;
-  if (cachedDevActor) return cachedDevActor;
 
   // An instance anyone can reach never carries the fixture account: a password
   // printed on one operator's screen must never be typeable at somebody else's
@@ -920,6 +919,10 @@ export async function ensureDevConnectActor(): Promise<DevConnectActor | null> {
     publicBaseUrlUnreadable: publicSignal.unreadable,
   });
   if (!decision.allowed) {
+    // An actor an earlier, private boot cached is no owner on a boot that
+    // refuses the fixture (cinatra#4112): drop it, so the shell adopts the
+    // first administrator instead.
+    cachedDevActor = null;
     console.log(`${tag}:connect ${decision.refusal}`);
     // Nothing on this instance may hold a fixture password it refuses to use.
     removeDevFixturePasswordFile();
@@ -928,6 +931,15 @@ export async function ensureDevConnectActor(): Promise<DevConnectActor | null> {
     // that boot's password. Take the password away before returning.
     await retireStaleDevFixtureAccount();
     return null;
+  }
+
+  if (cachedDevActor) {
+    // The owner holder is process-wide (cinatra#4112): another module instance
+    // or an earlier boot may have cleared or replaced it since this actor was
+    // cached, so a cached actor that this boot still allows is pushed again
+    // before the hooks run.
+    setDevActorForExternalMcp({ userId: cachedDevActor.userId, organizationId: cachedDevActor.orgId });
+    return cachedDevActor;
   }
 
   const { password: fixturePassword, source: fixturePasswordSource } = resolveDevFixturePassword();

@@ -236,11 +236,11 @@ type Declaration = {
 
 const THREE_REQUIRED: Declaration = {
   label: "three required start fields",
-  required: ["postArtifactId", "postRepresentationRevisionId", "wordpressInstanceId"],
+  required: ["postArtifactId", "postRepresentationRevisionId", "instanceId"],
   properties: {
     postArtifactId: { type: "string", title: "postArtifactId" },
     postRepresentationRevisionId: { type: "string", title: "postRepresentationRevisionId" },
-    wordpressInstanceId: { type: "string", title: "wordpressInstanceId" },
+    instanceId: { type: "string", title: "instanceId" },
     cinatra_run_id: { type: "string", title: "cinatra_run_id", "x-hidden": true, default: "" },
   },
 };

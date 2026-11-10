@@ -1,9 +1,9 @@
 /**
  * cinatra#4223 — THE PASSTHROUGH'S FAILURE-TEXT ALLOW-LIST (src/lib/passthrough-refusal.ts).
  *
- * Only a primitive's stated refusal (PrimitiveInvocationError) and an
- * input-schema error (ZodError) keep their own text; every other throw answers
- * a fixed sentence. The server log records the stage, the tool, the run and
+ * Only a primitive's stated refusal (PrimitiveInvocationError) keeps its own
+ * text, and an input-schema error (ZodError) answers its issues' paths and codes
+ * (cinatra#4465); every other throw answers a fixed sentence. The server log records the stage, the tool, the run and
  * a word for the error's class from a fixed list, never text taken from the
  * error (no message, no class name it made up, no code), and reading the error or
  * writing the log never throws or changes the answer. The module is new in
@@ -84,10 +84,14 @@ describe("cinatra#4223 — passthroughFailureText", () => {
     expect(logged).not.toHaveBeenCalled();
   });
 
-  it("an input-schema error keeps its own text", () => {
+  it("an input-schema error answers its issues' paths and codes, never its own message", () => {
     const err = realZodError();
     expect(isZodError(err)).toBe(true);
-    expect(passthroughFailureText(err, CTX)).toBe(err.message);
+    expect(passthroughFailureText(err, CTX)).toBe(
+      "the input does not match the tool's input schema: objectId: invalid_type, expected string",
+    );
+    expect(passthroughFailureText(err, CTX)).not.toBe(err.message);
+    expect(logged).not.toHaveBeenCalled();
   });
 
   it("a plain Error answers the fixed sentence and logs its class, never its text", () => {

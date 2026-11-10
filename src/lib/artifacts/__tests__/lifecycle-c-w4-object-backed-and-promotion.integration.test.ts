@@ -118,8 +118,10 @@ const AUTHORITY = {
  * tier must not pull in (the CI command's config aliases only `server-only`,
  * none of the root config's other stubs). The unit tier pins that the production
  * retype hands the road's key to the canonical writer (the CANON case of
- * `typed-promotion-proof-3319.test.ts`), with a substituted store; no test here
- * runs the real writer against the real change-event row.
+ * `typed-promotion-proof-3319.test.ts`), with a substituted store. The real
+ * writer against the real change-event row runs in its own tier, whose config
+ * provisions that boot graph (`typed-promotion-canonical-writer-4379.integration.test.ts`,
+ * `pnpm test:typed-promotion-real-writer`, cinatra#4379).
  */
 type RetypeInput = {
   orgId: string;
