@@ -62,6 +62,11 @@ import {
 
 import { Button } from "@/components/ui/button";
 import {
+  ApprovalPendingPill,
+  RepairStuckPill,
+  repairAttemptsText,
+} from "@/lib/approvals/approval-pills";
+import {
   Empty,
   EmptyHeader,
   EmptyMedia,
@@ -812,27 +817,6 @@ function NotificationCard({
   );
 }
 
-function EligibilityPill({
-  actionable,
-}: {
-  actionable: boolean;
-}): React.ReactElement {
-  if (actionable) {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-warning/40 bg-warning/15 px-2 py-0.5 text-xs font-semibold text-warning">
-        <span aria-hidden className="size-1.5 rounded-full bg-warning" />
-        Awaiting you
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-line-strong px-2 py-0.5 text-xs font-medium text-muted-foreground">
-      <span aria-hidden className="size-1.5 rounded-full bg-muted-foreground" />
-      Awaiting others
-    </span>
-  );
-}
-
 function ApprovalCard({
   approval,
   createdAt,
@@ -843,6 +827,9 @@ function ApprovalCard({
   onDecided: () => void;
 }): React.ReactElement {
   const iconClass = "size-[17px]";
+  const repairCount = approval.repairStuck
+    ? repairAttemptsText(approval.repairStuck.attempts)
+    : "";
   return (
     <li data-conformance-id="approval-row" className={CARD_SHELL}>
       {/* Href-less approvals OPT OUT of the whole card — inline decide only
@@ -873,11 +860,15 @@ function ApprovalCard({
           <span className="font-sans text-sm font-semibold text-foreground">
             {approval.title}
           </span>
-          <EligibilityPill actionable={approval.actionable} />
+          {/* The approval's one pending pill (specs/app.html V.1), shared
+              with the marketplace approval row. */}
+          <ApprovalPendingPill viewerMayDecide={approval.actionable} />
+          {approval.repairStuck ? <RepairStuckPill /> : null}
         </div>
         <p className="mt-0.5 text-xs text-muted-foreground">
           {approval.subtitle ? `${approval.subtitle} · ` : ""}
           <FeedTimestamp value={createdAt} />
+          {repairCount ? ` · ${repairCount}` : ""}
         </p>
       </div>
 
