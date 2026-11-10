@@ -62,10 +62,15 @@ vi.mock("../wayflow-url", () => ({
   createWayflowFetch: vi.fn(() => globalThis.fetch),
 }));
 
+// cinatra#4312 — the run decision lock's transaction, as the lock hands it to the
+// re-read and the acknowledgement it guards.
+const TX = vi.hoisted(() => ({ tx: "run-decision-lock" }));
 const gateStoreMock = vi.hoisted(() => ({
   claimPendingResumeIntents: vi.fn(),
-  listReviewGatesForRun: vi.fn<(runId: string) => Promise<Array<{ runId?: string; orgId?: string; reviewTaskId: string; status: string; pinnedTargets?: unknown }>>>(async () => []),
+  listReviewGatesForRun: vi.fn<(runId: string, executor?: unknown) => Promise<Array<{ runId?: string; orgId?: string; reviewTaskId: string; status: string; pinnedTargets?: unknown; createdAt?: Date }>>>(async () => []),
   markResumeIntentDelivered: vi.fn(),
+  withRunDecisionLock: vi.fn(async (_runId: string, fn: (tx: unknown) => Promise<unknown>) => fn(TX)),
+  deadLetterExhaustedResumeIntents: vi.fn(async () => 0),
 }));
 vi.mock("../artifact-review-gate-store", () => gateStoreMock);
 
@@ -83,6 +88,16 @@ vi.mock("@cinatra-ai/a2a", () => ({
   resolveLatestWayflowGateTaskId: resolveLatestSpy,
 }));
 vi.mock("../execution", () => ({ handleWayflowTaskState: handleWayflowTaskStateSpy }));
+// cinatra#4312 — the repair-lineage reads the worker takes for a Regenerate on a
+// declared picture leg. Real-store proofs: lifecycle-c-w11-picture-regenerate-parks-run-3035.integration.test.ts.
+const lineageStateError = (code: string) => Object.assign(new Error(`${code}: lineage state`), { name: "RepairLineageStateError", code });
+const repairStoreMock = vi.hoisted(() => ({
+  readRepairLineageRootGate: vi.fn<(taskId: string, gateId: string) => Promise<unknown>>(async () => {
+    throw Object.assign(new Error("unknown-repair: not seeded"), { name: "RepairLineageStateError", code: "unknown-repair" });
+  }),
+  isRepairLineageOpen: vi.fn<(gateId: string, executor?: unknown) => Promise<boolean>>(async () => false),
+}));
+vi.mock("../lifecycle-repair-store", () => repairStoreMock);
 
 import {
   deliverArtifactReviewResumeIntent,
@@ -185,13 +200,20 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
     expect(outcome).toBe("already-advanced");
     expect(sendTaskSpy).not.toHaveBeenCalled();
     expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
-    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-1", "lease-abc");
+    // cinatra#4312 — acknowledged under the run decision lock, after a re-read there.
+    expect(gateStoreMock.withRunDecisionLock).toHaveBeenCalledWith("run-1", expect.any(Function));
+    expect(gateStoreMock.listReviewGatesForRun).toHaveBeenCalledWith("run-1", TX);
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-1", "lease-abc", TX);
   });
 
   it("does not let another pause's pending leg hold this original task", async () => {
+    // cinatra#4312 — the other pause is an OLDER one: a later pause would close this
+    // decision without a send (`laterDeclaredPause`), and so would a gate whose time
+    // cannot be read, so every gate here carries its created time.
+    const at = new Date("2026-11-03T12:00:00Z");
     gateStoreMock.listReviewGatesForRun.mockResolvedValue([
-      ...familyRows(),
-      { reviewTaskId: "wayflow-task-2#2", status: "pending" },
+      ...familyRows().map((row) => ({ ...row, createdAt: at })),
+      { reviewTaskId: "wayflow-task-2#2", status: "pending", createdAt: new Date(at.getTime() - 1) },
     ]);
     const outcome = await deliverArtifactReviewResumeIntent(intent({ reviewTaskId: "wayflow-task-1#2" }));
     expect(outcome).toBe("delivered");
@@ -301,6 +323,22 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
     expect(summary.failed).toBe(0);
   });
 
+  it("cinatra#4312: the sweep dead-letters exhausted intents before it claims", async () => {
+    gateStoreMock.claimPendingResumeIntents.mockResolvedValue([]);
+    await sweepArtifactReviewResumeIntents();
+    expect(gateStoreMock.deadLetterExhaustedResumeIntents).toHaveBeenCalledTimes(1);
+    expect(gateStoreMock.deadLetterExhaustedResumeIntents.mock.invocationCallOrder[0])
+      .toBeLessThan(gateStoreMock.claimPendingResumeIntents.mock.invocationCallOrder[0]);
+  });
+
+  it("cinatra#4312: a failed dead-letter pass is tallied and the claim still runs", async () => {
+    gateStoreMock.deadLetterExhaustedResumeIntents.mockRejectedValueOnce(new Error("db blip"));
+    gateStoreMock.claimPendingResumeIntents.mockResolvedValue([]);
+    const summary = await sweepArtifactReviewResumeIntents();
+    expect(summary.failed).toBe(1);
+    expect(gateStoreMock.claimPendingResumeIntents).toHaveBeenCalledTimes(1);
+  });
+
   it("a per-intent throw is tallied as failed and never poisons the batch", async () => {
     gateStoreMock.claimPendingResumeIntents.mockResolvedValue([intent()]);
     storeMock.readAgentTemplateById.mockResolvedValue({
@@ -388,4 +426,204 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
     expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
   });
 
+  // cinatra#4312 (review 10, finding 1) — the worker closes a decision of an earlier
+  // declared review without a send when the run's gates, as it reads them, hold a
+  // later review: newer, or with the same created time. The latest-task map here
+  // names this task. A later review written after this read is not driven here.
+  it.each([["newer", 1], ["equal", 0]])(
+    "a declared review's decision on a run whose other declared review is %s is closed without a send",
+    async (_label, laterBy) => {
+      const at = new Date("2026-11-03T12:00:00Z");
+      gateStoreMock.listReviewGatesForRun.mockResolvedValue([
+        ...familyRows().map((row) => ({ ...row, createdAt: at })),
+        { runId: "run-1", orgId: "org-1", reviewTaskId: "wayflow-task-2", status: "pending", createdAt: new Date(at.getTime() + laterBy) },
+      ]);
+      const outcome = await deliverArtifactReviewResumeIntent(intent());
+      expect(outcome).toBe("already-advanced");
+      expect(sendTaskSpy).not.toHaveBeenCalled();
+      expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-1", "lease-abc");
+    },
+  );
+
+  it("an older declared review of the run does not hold this one's decision: it is sent", async () => {
+    const at = new Date("2026-11-03T12:00:00Z");
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue([
+      { runId: "run-1", orgId: "org-1", reviewTaskId: "wayflow-task-0", status: "resolved", createdAt: new Date(at.getTime() - 1) },
+      ...familyRows().map((row) => ({ ...row, createdAt: at })),
+    ]);
+    const outcome = await deliverArtifactReviewResumeIntent(intent());
+    expect(outcome).toBe("delivered");
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("a decision held by a later declared review whose lease was lost answers lease-lost and sends nothing", async () => {
+    const at = new Date("2026-11-03T12:00:00Z");
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue([
+      ...familyRows().map((row) => ({ ...row, createdAt: at })),
+      { runId: "run-1", orgId: "org-1", reviewTaskId: "wayflow-task-2", status: "pending", createdAt: new Date(at.getTime() + 1) },
+    ]);
+    gateStoreMock.markResumeIntentDelivered.mockResolvedValueOnce(false);
+    const outcome = await deliverArtifactReviewResumeIntent(intent());
+    expect(outcome).toBe("lease-lost");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-1", "lease-abc");
+  });
+
+});
+
+
+describe("cinatra#4312 — Regenerate on a declared picture leg keeps the pause parked at its successor", () => {
+  const SUCCESSOR = "lifecycle-review:repair:0b6f2d6e-3c1a-4c55-9d7e-2f0a1b2c3d4e:1";
+  function regeneratedFamily() {
+    const rows = familyRows(["resolved", "resolved"]).map((r, i) => ({
+      ...r, id: i === 0 ? "gate-post" : "gate-leg2", disposition: i === 0 ? "approve" : "changes_requested",
+    }));
+    return rows;
+  }
+  beforeEach(() => {
+    vi.clearAllMocks();
+    storeMock.readAgentRunByTaskId.mockImplementation(async (taskId: string) => (taskId === "task-1" ? pausedRun() : null));
+    storeMock.readAgentTemplateById.mockResolvedValue(internalTemplate());
+    gateStoreMock.markResumeIntentDelivered.mockResolvedValue(true);
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue(regeneratedFamily());
+    sendTaskSpy.mockResolvedValue({ id: "task-x", status: { state: "completed" } });
+    resolveLatestSpy.mockResolvedValue("task-1");
+    repairStoreMock.readRepairLineageRootGate.mockRejectedValue(lineageStateError("unknown-repair"));
+    repairStoreMock.isRepairLineageOpen.mockResolvedValue(false);
+  });
+
+  it("the post's decision leaves the run parked while the regenerated picture's lineage is open", async () => {
+    repairStoreMock.isRepairLineageOpen.mockResolvedValue(true);
+    const outcome = await deliverArtifactReviewResumeIntent(intent({ gateId: "gate-post" }));
+    expect(outcome).toBe("already-advanced");
+    expect(repairStoreMock.isRepairLineageOpen).toHaveBeenCalledWith("gate-leg2");
+    expect(repairStoreMock.isRepairLineageOpen).toHaveBeenCalledWith("gate-leg2", TX);
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-post", "lease-abc", TX);
+  });
+
+  it("a lineage the re-read under the run decision lock finds closed lets the run go on instead of being acknowledged", async () => {
+    repairStoreMock.isRepairLineageOpen.mockImplementation(async (_gateId: string, executor?: unknown) => executor === undefined);
+    const outcome = await deliverArtifactReviewResumeIntent(intent({ gateId: "gate-post" }));
+    expect(outcome).toBe("delivered");
+    expect(gateStoreMock.withRunDecisionLock).toHaveBeenCalledTimes(1);
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledTimes(1);
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-post", "lease-abc");
+  });
+
+  it("the post's decision resumes the run once that lineage is decided", async () => {
+    const outcome = await deliverArtifactReviewResumeIntent(intent({ gateId: "gate-post" }));
+    expect(outcome).toBe("delivered");
+    expect(repairStoreMock.isRepairLineageOpen).toHaveBeenCalledWith("gate-leg2");
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("the successor's decision resumes the paused run through the picture's leg, carrying its own decision", async () => {
+    const leg = regeneratedFamily()[1];
+    repairStoreMock.readRepairLineageRootGate.mockResolvedValue({
+      id: leg.id, runId: leg.runId, orgId: leg.orgId, reviewTaskId: leg.reviewTaskId, pinnedTargets: leg.pinnedTargets,
+    });
+    const responseText = JSON.stringify(buildReviewApproveEnvelope({ reviewTaskId: SUCCESSOR, comment: null, targets: [] }));
+    const outcome = await deliverArtifactReviewResumeIntent(intent({ gateId: "gate-succ", reviewTaskId: SUCCESSOR, responseText }));
+    expect(outcome).toBe("delivered");
+    expect(repairStoreMock.readRepairLineageRootGate).toHaveBeenCalledWith(SUCCESSOR, "gate-succ");
+    expect(storeMock.readAgentRunByTaskId).toHaveBeenCalledWith("task-1");
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+    const sent = sendTaskSpy.mock.calls[0]![0] as { message: { contextId: string; parts: Array<{ text: string }> } };
+    expect(sent.message.contextId).toBe("ctx-1");
+    expect(sent.message.parts[0]!.text).toBe(responseText);
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-succ", "lease-abc");
+  });
+
+  it("the successor's decision keeps the run parked while another artifact of the pause is open", async () => {
+    const rows = regeneratedFamily();
+    rows[0] = { ...rows[0], status: "pending", disposition: null as unknown as string };
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue(rows);
+    repairStoreMock.readRepairLineageRootGate.mockResolvedValue({
+      id: rows[1].id, runId: rows[1].runId, orgId: rows[1].orgId, reviewTaskId: rows[1].reviewTaskId, pinnedTargets: rows[1].pinnedTargets,
+    });
+    const outcome = await deliverArtifactReviewResumeIntent(intent({ gateId: "gate-succ", reviewTaskId: SUCCESSOR }));
+    expect(outcome).toBe("already-advanced");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-succ", "lease-abc", TX);
+  });
+
+  it("a successor whose lineage started on an ordinary automatic gate keeps the automatic-gate road", async () => {
+    repairStoreMock.readRepairLineageRootGate.mockResolvedValue({
+      id: "gate-root", runId: "run-1", orgId: "org-1", reviewTaskId: "lifecycle-review:ev-1", pinnedTargets: regeneratedFamily()[1].pinnedTargets,
+    });
+    const outcome = await deliverArtifactReviewResumeIntent(intent({ gateId: "gate-succ", reviewTaskId: SUCCESSOR }));
+    expect(outcome).toBe("already-advanced");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(storeMock.readAgentRunByTaskId).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-succ", "lease-abc");
+  });
+
+  it("a successor whose lineage started on the post's own leg takes the family road with its own decision (b2)", async () => {
+    const rows = regeneratedFamily();
+    rows[0] = { ...rows[0], disposition: "changes_requested" };
+    rows[1] = { ...rows[1], disposition: "approve" };
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue(rows);
+    repairStoreMock.readRepairLineageRootGate.mockResolvedValue({
+      id: rows[0].id, runId: rows[0].runId, orgId: rows[0].orgId, reviewTaskId: rows[0].reviewTaskId, pinnedTargets: rows[0].pinnedTargets,
+    });
+    const responseText = JSON.stringify(buildReviewApproveEnvelope({ reviewTaskId: SUCCESSOR, comment: "post successor", targets: [] }));
+    const outcome = await deliverArtifactReviewResumeIntent(intent({ gateId: "gate-succ", reviewTaskId: SUCCESSOR, responseText }));
+    expect(outcome).toBe("delivered");
+    expect(repairStoreMock.isRepairLineageOpen).toHaveBeenCalledWith("gate-post");
+    expect(storeMock.readAgentRunByTaskId).toHaveBeenCalledWith("task-1");
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+    const sent = sendTaskSpy.mock.calls[0]![0] as { message: { messageId: string; parts: Array<{ text: string }> } };
+    expect(sent.message.parts[0]!.text).toBe(responseText);
+    expect(sent.message.messageId).toBe("artifact-review-resume-gate-succ");
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-succ", "lease-abc");
+  });
+
+  it("a successor whose lineage started on the post's own leg keeps the run parked while the picture's leg is open (b2)", async () => {
+    const rows = regeneratedFamily();
+    rows[0] = { ...rows[0], disposition: "changes_requested" };
+    rows[1] = { ...rows[1], status: "pending", disposition: null as unknown as string };
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue(rows);
+    repairStoreMock.readRepairLineageRootGate.mockResolvedValue({
+      id: rows[0].id, runId: rows[0].runId, orgId: rows[0].orgId, reviewTaskId: rows[0].reviewTaskId, pinnedTargets: rows[0].pinnedTargets,
+    });
+    const outcome = await deliverArtifactReviewResumeIntent(intent({ gateId: "gate-succ", reviewTaskId: SUCCESSOR }));
+    expect(outcome).toBe("already-advanced");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-succ", "lease-abc", TX);
+  });
+
+  it("a failed lineage read on the post's decision throws: nothing is resumed and the intent is not marked done", async () => {
+    repairStoreMock.isRepairLineageOpen.mockRejectedValue(new Error("lineage read failed"));
+    await expect(deliverArtifactReviewResumeIntent(intent({ gateId: "gate-post" }))).rejects.toThrow("lineage read failed");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+  });
+
+  it("a failed lineage-root read on the successor's decision throws: nothing is resumed and the intent is not marked done", async () => {
+    repairStoreMock.readRepairLineageRootGate.mockRejectedValue(new Error("lineage root read failed"));
+    await expect(deliverArtifactReviewResumeIntent(intent({ gateId: "gate-succ", reviewTaskId: SUCCESSOR }))).rejects.toThrow("lineage root read failed");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+  });
+
+  // Review 1 of cinatra#4339, finding 4: an unknown repair, another attempt, a
+  // repair that does not name this gate, a malformed task id and a missing root
+  // gate are named errors, never "no lineage" (real store:
+  // lifecycle-c-w11-picture-regenerate-parks-run-3035.integration.test.ts).
+  it.each(["unknown-repair", "attempt-mismatch", "successor-mismatch", "malformed-successor-task", "missing-root-gate"])(
+    "a successor whose lineage reads %s fails closed: nothing is resumed and the intent is not marked done",
+    async (code) => {
+      repairStoreMock.readRepairLineageRootGate.mockRejectedValue(lineageStateError(code));
+      await expect(deliverArtifactReviewResumeIntent(intent({ gateId: "gate-succ", reviewTaskId: SUCCESSOR })))
+        .rejects.toMatchObject({ code });
+      expect(repairStoreMock.readRepairLineageRootGate).toHaveBeenCalledWith(SUCCESSOR, "gate-succ");
+      expect(sendTaskSpy).not.toHaveBeenCalled();
+      expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+    },
+  );
 });
