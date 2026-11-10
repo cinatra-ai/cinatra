@@ -1,5 +1,4 @@
 import "server-only";
-import { createHash } from "node:crypto";
 
 import {
   producesObjectTypeIdForExtension,
@@ -14,15 +13,11 @@ import {
 import { runPostgresQueriesAsync } from "@/lib/postgres-async";
 import { logFailure, logFixedLine } from "@/lib/failure-log";
 import { registerAllObjectTypes } from "@/lib/register-all-object-types";
-import { createSemanticArtifact } from "@/lib/artifacts/artifact-creation";
 import { isArtifactExtensionWriteAllowed } from "@/lib/artifacts/artifact-extension-access";
 import { appendArtifactRevision } from "@/lib/artifacts/artifact-revision-append";
+import { fileFirstArtifactWrite, filingLogFields, logFilingFailure } from "@/lib/artifacts/first-artifact-filing";
 import {
-  buildFinalizeMaterializationQuery,
   buildImageGenerationProvenanceQuery,
-  claimMaterialization,
-  isMaterializationFinalizeConflict,
-  readFinalizedMaterialization,
   readRevisionImageProvenance,
   type ImageGenerationProvenance,
 } from "@/lib/artifacts/materialization-ledger";
@@ -222,10 +217,6 @@ export function artifactImageToolDeps(): ArtifactImageToolDeps {
     resolveOwnership: (i) => resolveRunScopeOwnership(i),
     countRunImages: (i) => countFinalizedRunImages(i),
   };
-}
-
-async function* asImageStream(bytes: Uint8Array): AsyncIterable<Uint8Array> {
-  yield bytes;
 }
 
 export type GenerateArtifactImageInput = {
@@ -483,123 +474,41 @@ export async function generateArtifactImage(
     if (title.length === 0) {
       return { ok: false, reason: "write_refused", error: "title must be a non-empty string" };
     }
-    const contentHash = createHash("sha256").update(bytes).digest("hex");
-    const claim = await claimMaterialization({
-      orgId: input.orgId,
-      runId: input.runId,
-      outputId: input.nodeId,
-      nodeId: input.nodeId,
-      path: "materialize_tool",
-      extension: input.extension,
-      contentHash,
-    });
-    if (claim.path !== undefined && claim.path !== "materialize_tool") {
-      return {
-        ok: false,
-        reason: "write_refused",
-        error:
-          `the materialization ledger identity collided with a different path ("${claim.path}") ` +
+    const filed = await fileFirstArtifactWrite({
+      tool: "artifact_image_generate",
+      run: input,
+      bytes,
+      mime,
+      target: resolvedTarget.target,
+      // Read only on the writer road, after the claim.
+      writerFields: () => ({ createdBy: input.createdBy, title }),
+      // The picture's own data, validated against the type's schema by the
+      // write path itself (item 0.28).
+      typedData: () => (input.data ? input.data : undefined),
+      additionalTx2Ops: ({ ledgerId }) => [
+        buildImageGenerationProvenanceQuery({ schema: schemaId(), ledgerId, orgId: input.orgId, provenance }),
+      ],
+      resolveOwnership: () =>
+        deps.resolveOwnership({ templateId: input.templateId, runId: input.runId, orgId: input.orgId }),
+      // A re-drive of this node with these bytes, or the loser of a double drive:
+      // the first write serves it, with the facts stored with that write.
+      readStored: (refs) => storedPictureResult(input, { ...refs, revision: 1, mime }),
+      texts: {
+        pathCollision: (path) =>
+          `the materialization ledger identity collided with a different path ("${path}") ` +
           `for run ${input.runId} node "${input.nodeId}" extension "${input.extension}" — ` +
           "refusing to alias",
-      };
-    }
-    if (claim.kind === "finalized") {
-      // A re-drive of this node with these bytes: the first write serves it,
-      // with the facts stored with that write — never this attempt's.
-      return storedPictureResult(input, {
-        artifactId: claim.artifactId,
-        representationRevisionId: claim.representationRevisionId,
-        revision: 1,
-        mime,
-      });
-    }
-
-    const ownership = await deps.resolveOwnership({
-      templateId: input.templateId,
-      runId: input.runId,
-      orgId: input.orgId,
+        dataRejected: FILING_DATA_REJECTED_ERROR,
+        writeFailed: FILING_WRITE_FAILED_ERROR,
+      },
+      logFields: () => filingLogFields(input),
     });
-
-    let created: { artifactId: string; representationRevisionId: string };
-    try {
-      created = await createSemanticArtifact({
-        orgId: input.orgId,
-        objectType: resolvedTarget.target.objectTypeId,
-        expectedAcceptMimes: resolvedTarget.target.acceptedFileMimeTypes,
-        createdBy: input.createdBy,
-        ownerLevel: ownership.ownerLevel,
-        ownerId: ownership.ownerId,
-        visibility: ownership.visibility,
-        title,
-        declaredMime: mime,
-        originKind: "agent_generated",
-        stream: asImageStream(bytes),
-        createdByRunId: input.runId,
-        producerAssertionExtension: input.extension,
-        skipFallbackClassification: true,
-        // The picture's own data, validated against the type's schema by the
-        // write path itself (item 0.28).
-        ...(input.data ? { typedData: input.data } : {}),
-        additionalTx2Queries: (ids) => [
-          buildFinalizeMaterializationQuery({
-            ledgerId: claim.ledgerId,
-            orgId: input.orgId,
-            artifactId: ids.artifactId,
-            representationRevisionId: ids.representationRevisionId,
-          }),
-          buildImageGenerationProvenanceQuery({
-            schema: schemaId(),
-            ledgerId: claim.ledgerId,
-            orgId: input.orgId,
-            provenance,
-          }),
-        ],
-      });
-    } catch (err) {
-      // The concurrent-double-drive loser, exactly as the text road recovers it.
-      if (isMaterializationFinalizeConflict(err)) {
-        const winner = await readFinalizedMaterialization({
-          orgId: input.orgId,
-          ledgerId: claim.ledgerId,
-        });
-        if (winner) {
-          // The winner's facts, as stored with its write.
-          return storedPictureResult(input, {
-            artifactId: winner.artifactId,
-            representationRevisionId: winner.representationRevisionId,
-            revision: 1,
-            mime,
-          });
-        }
-      }
-      const schemaRefusal = isSchemaRefusal(err);
-      logFilingFailure("artifact_image_generate", input, err);
-      // A payload the type's schema rejects is a DIFFERENT answer from a write
-      // that failed: the caller sent data the picture's type does not declare,
-      // and restating it correctly is the fix. Both answers are fixed texts.
-      return schemaRefusal
-        ? { ok: false, reason: "data_rejected", error: FILING_DATA_REJECTED_ERROR }
-        : { ok: false, reason: "write_refused", error: FILING_WRITE_FAILED_ERROR };
-    }
-
-    // The meaning matcher, post-commit and best-effort — the same enqueue the
-    // text road makes after an agent-emitted write.
-    try {
-      const { enqueueArtifactMatchRun } = await import("@/lib/artifacts/matcher-enqueue");
-      await enqueueArtifactMatchRun({
-        orgId: input.orgId,
-        artifactId: created.artifactId,
-        representationRevisionId: created.representationRevisionId,
-        createdByRunId: input.runId,
-      });
-    } catch {
-      /* best-effort — never fails a filed picture. */
-    }
-
+    if (filed.kind === "served") return filed.answer;
+    if (filed.kind === "refused") return { ok: false, reason: filed.reason, error: filed.error };
     return {
       ok: true,
-      artifactId: created.artifactId,
-      representationRevisionId: created.representationRevisionId,
+      artifactId: filed.artifactId,
+      representationRevisionId: filed.representationRevisionId,
       revision: 1,
       provider: provenance.provider,
       model: provenance.model,
@@ -691,48 +600,6 @@ async function explainAbsentClaimsFixed(
     );
   }
   return sentence;
-}
-
-/** The caller's own identifiers a failure's log line carries. Never a throw. */
-function filingLogFields(input: {
-  orgId: string;
-  runId: string;
-  nodeId: string;
-  extension: string;
-}): Record<string, string> {
-  try {
-    return {
-      orgId: input.orgId,
-      runId: input.runId,
-      nodeId: input.nodeId,
-      extension: input.extension,
-    };
-  } catch {
-    return {};
-  }
-}
-
-/**
- * Log a failure on the server: the tool, the run, the node and the error's
- * class word, never text taken from the error. Never a throw (src/lib/failure-log.ts).
- */
-export function logFilingFailure(
-  tool: string,
-  input: { orgId: string; runId: string; nodeId: string; extension: string },
-  err: unknown,
-): void {
-  logFailure(`[${tool}] failed; the error's own text is not logged`, filingLogFields(input), err);
-}
-
-/** A writer's schema refusal, read from a plain message only. Never a throw. */
-function isSchemaRefusal(err: unknown): boolean {
-  try {
-    const message: unknown =
-      typeof err === "string" ? err : err instanceof Error ? err.message : undefined;
-    return typeof message === "string" && /does not satisfy the declared schema/.test(message);
-  } catch {
-    return false;
-  }
 }
 
 /**
