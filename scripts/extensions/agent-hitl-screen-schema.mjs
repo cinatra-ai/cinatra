@@ -52,50 +52,85 @@ function isPlainObject(v) {
 
 const MAX_DEPTH = 8;
 
+// A Proxy can answer a read differently from what its descriptors showed.
+// Refused where the runtime can tell one apart (Node's util.types.isProxy,
+// read at call time); in a runtime that cannot, the plain copy below still
+// keeps every trap but the descriptor and key reads out of the result.
+function isProxyValue(v) {
+  const getBuiltinModule = globalThis.process?.getBuiltinModule;
+  if (typeof getBuiltinModule !== "function") return false;
+  let isProxy;
+  try {
+    isProxy = getBuiltinModule.call(globalThis.process, "node:util")?.types?.isProxy;
+  } catch {
+    return false;
+  }
+  return typeof isProxy === "function" && isProxy(v) === true;
+}
+
 /**
- * Why the RAW input is not plain JSON, or null when it is. Read before any
- * JSON round trip, because a round trip hides exactly what this refuses: an
- * `undefined` value drops its key, a `toJSON` method replaces the object, and
- * a class instance or an accessor reads as an ordinary object. Allowed: null,
- * booleans, finite numbers, strings, dense arrays and objects whose prototype
- * is Object.prototype or null, each property an own enumerable data property
- * with a string key.
+ * Walk the RAW input once and return `{ value }`, a plain copy built only from
+ * the own data-property values the walk read, or `{ problem }` when the input
+ * is not plain JSON. Read before any JSON round trip, because a round trip
+ * hides exactly what this refuses: an `undefined` value drops its key, a
+ * `toJSON` method replaces the object, and a class instance or an accessor
+ * reads as an ordinary object. Every key and descriptor is read once and no
+ * getter of the raw input is called, so the copy is exactly what was checked.
+ * Allowed: null, booleans, finite numbers, strings, dense arrays and objects
+ * whose prototype is Object.prototype or null, each property an own
+ * enumerable data property with a string key.
  */
-function plainJsonProblem(v, at, ancestors, depth) {
-  if (v === null || typeof v === "boolean" || typeof v === "string") return null;
-  if (typeof v === "number") return Number.isFinite(v) ? null : `${at} is not a finite number`;
-  if (typeof v !== "object") return `${at} is ${typeof v === "undefined" ? "undefined" : `a ${typeof v}`}`;
-  if (ancestors.has(v)) return `${at} refers back to itself`;
-  if (depth > MAX_DEPTH) return `${at} is nested deeper than ${MAX_DEPTH}`;
+function plainJsonCopy(v, at, ancestors, depth) {
+  if (v === null || typeof v === "boolean" || typeof v === "string") return { value: v };
+  if (typeof v === "number") {
+    return Number.isFinite(v) ? { value: v } : { problem: `${at} is not a finite number` };
+  }
+  if (typeof v !== "object") {
+    return { problem: `${at} is ${typeof v === "undefined" ? "undefined" : `a ${typeof v}`}` };
+  }
+  if (isProxyValue(v)) return { problem: `${at} is a proxy` };
+  if (ancestors.has(v)) return { problem: `${at} refers back to itself` };
+  if (depth > MAX_DEPTH) return { problem: `${at} is nested deeper than ${MAX_DEPTH}` };
   const isArray = Array.isArray(v);
   const proto = Object.getPrototypeOf(v);
   if (isArray ? proto !== Array.prototype : proto !== Object.prototype && proto !== null) {
-    return `${at} is not a plain ${isArray ? "list" : "object"}`;
+    return { problem: `${at} is not a plain ${isArray ? "list" : "object"}` };
   }
   const keys = Reflect.ownKeys(v);
-  if (keys.some((k) => typeof k === "symbol")) return `${at} has a symbol key`;
+  if (keys.some((k) => typeof k === "symbol")) return { problem: `${at} has a symbol key` };
+  const descriptors = new Map();
+  for (const k of keys) descriptors.set(k, Reflect.getOwnPropertyDescriptor(v, k));
+  let copy;
   if (isArray) {
-    for (let i = 0; i < v.length; i += 1) {
-      if (!Object.hasOwn(v, i)) return `${at}[${i}] is a hole`;
+    const lengthDescriptor = descriptors.get("length");
+    const length = lengthDescriptor?.value;
+    if (!Number.isSafeInteger(length) || length < 0) return { problem: `${at} has no list length` };
+    for (let i = 0; i < length; i += 1) {
+      if (!descriptors.has(String(i))) return { problem: `${at}[${i}] is a hole` };
     }
-    if (keys.length !== v.length + 1) return `${at} has a key that is not an index`;
+    if (keys.length !== length + 1) return { problem: `${at} has a key that is not an index` };
+    copy = [];
+  } else {
+    // No prototype, so no inherited toJSON can run when the copy is serialized.
+    copy = Object.create(null);
   }
   ancestors.add(v);
   try {
     for (const k of keys) {
       if (isArray && k === "length") continue;
       const where = isArray ? `${at}[${k}]` : `${at}.${k}`;
-      if (k === "toJSON") return `${where} is a toJSON key`;
-      const d = Object.getOwnPropertyDescriptor(v, k);
-      if (!d || !Object.hasOwn(d, "value")) return `${where} is an accessor`;
-      if (!d.enumerable) return `${where} is not enumerable`;
-      const inner = plainJsonProblem(d.value, where, ancestors, depth + 1);
-      if (inner) return inner;
+      if (k === "toJSON") return { problem: `${where} is a toJSON key` };
+      const d = descriptors.get(k);
+      if (!d || !Object.hasOwn(d, "value")) return { problem: `${where} is an accessor` };
+      if (!d.enumerable) return { problem: `${where} is not enumerable` };
+      const inner = plainJsonCopy(d.value, where, ancestors, depth + 1);
+      if (Object.hasOwn(inner, "problem")) return inner;
+      Object.defineProperty(copy, k, { value: inner.value, enumerable: true, writable: true, configurable: true });
     }
   } finally {
     ancestors.delete(v);
   }
-  return null;
+  return { value: copy };
 }
 
 function isText(v) {
@@ -160,12 +195,13 @@ function checkAnswer(where, answer, errors) {
 export function validateHitlScreen(raw, where = "screen") {
   const errors = [];
   if (!isPlainObject(raw)) return { errors: [`${where}: must be an object`] };
-  // Fail closed on the raw input first (see plainJsonProblem).
-  const problem = plainJsonProblem(raw, where, new Set(), 0);
-  if (problem) return { errors: [`${where}: must be plain JSON (${problem})`] };
+  // Fail closed on the raw input first, then validate and serialize ONLY the
+  // walked plain copy, never `raw` (see plainJsonCopy).
+  const walked = plainJsonCopy(raw, where, new Set(), 0);
+  if (Object.hasOwn(walked, "problem")) return { errors: [`${where}: must be plain JSON (${walked.problem})`] };
   let serialized;
   try {
-    serialized = JSON.stringify(raw);
+    serialized = JSON.stringify(walked.value);
   } catch {
     return { errors: [`${where}: must be plain JSON`] };
   }

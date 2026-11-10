@@ -210,6 +210,77 @@ describe("validateHitlScreen refuses by name", () => {
     expect(out).toEqual({ layout: "card", title: "Fixture" });
   });
 
+  // A Proxy (pre-review 2, finding 1): the descriptor walk reads own data
+  // properties, but serializing the raw object would run the proxy's get
+  // trap, which the walk never saw. The proxy is refused where the runtime
+  // can tell it apart, and only the walked plain copy is ever validated and
+  // serialized, so no get trap on the raw input runs.
+  function verdictProxy(counter) {
+    return new Proxy(
+      { layout: "card", title: "x" },
+      {
+        get(target, key, receiver) {
+          counter.get += 1;
+          if (key === "toJSON") return () => ({ layout: "kind" });
+          return Reflect.get(target, key, receiver);
+        },
+      },
+    );
+  }
+
+  function nestedProxyCard(counter) {
+    const note = new Proxy(
+      { type: "note", text: "Fixture note" },
+      {
+        get(target, key, receiver) {
+          counter.get += 1;
+          if (key === "text") return "Changed by the get trap";
+          return Reflect.get(target, key, receiver);
+        },
+      },
+    );
+    return { layout: "card", title: "Fixture", sections: [note] };
+  }
+
+  // Runs fn as in a runtime that cannot tell a Proxy apart (a browser).
+  function withoutProxyDetection(fn) {
+    const original = process.getBuiltinModule;
+    process.getBuiltinModule = undefined;
+    try {
+      return fn();
+    } finally {
+      process.getBuiltinModule = original;
+    }
+  }
+
+  it("a Proxy with a virtual toJSON is refused as a proxy", () => {
+    const counter = { get: 0 };
+    expect(refused(verdictProxy(counter))).toMatch(/must be plain JSON \(screen is a proxy\)/);
+    expect(counter.get).toBe(0);
+  });
+
+  it("a nested Proxy whose get trap changes a value is refused as a proxy", () => {
+    const counter = { get: 0 };
+    expect(refused(nestedProxyCard(counter))).toMatch(/screen\.sections\[0\] is a proxy/);
+    expect(counter.get).toBe(0);
+  });
+
+  it("without proxy detection, a virtual toJSON never stands in for the walked card", () => {
+    const counter = { get: 0 };
+    const { screen: out, errors } = withoutProxyDetection(() => validateHitlScreen(verdictProxy(counter)));
+    expect(errors).toEqual([]);
+    expect(out).toEqual({ layout: "card", title: "x" });
+    expect(counter.get).toBe(0);
+  });
+
+  it("without proxy detection, a get trap never changes a nested value", () => {
+    const counter = { get: 0 };
+    const { screen: out, errors } = withoutProxyDetection(() => validateHitlScreen(nestedProxyCard(counter)));
+    expect(errors).toEqual([]);
+    expect(out).toEqual({ layout: "card", title: "Fixture", sections: [{ type: "note", text: "Fixture note" }] });
+    expect(counter.get).toBe(0);
+  });
+
   it(`a screen over ${MAX_HITL_SCREEN_BYTES} bytes`, () => {
     const sections = Array.from({ length: 16 }, () => ({ type: "note", text: "\u00e9".repeat(300) }));
     expect(refused({ layout: "card", title: "x", sections })).toMatch(/<= 8192 bytes/);
