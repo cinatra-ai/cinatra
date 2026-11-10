@@ -85,6 +85,48 @@ describe("the recorded readings hold for the live tree", () => {
     expect(row?.sites.map((s) => [s.tag, s.drawn, s.effect])).toEqual([["DropdownMenuCheckboxItem", "switch", "immediate"]]);
   });
 
+  it("the schema-drawn boolean's box (cinatra#4310) is read as lost on a mid-run gate, pinned to each surface's object-only mid-run buffer (cinatra#4506)", () => {
+    const row = CHECKBOX_CALL_SITE_READINGS.find((r) => r.file === "packages/agents/src/schema-field-renderer.tsx");
+    expect(row?.sites).toHaveLength(1);
+    const site = row!.sites[0]!;
+    // No road applies the box's change at once: the per-field Continue and the
+    // form's submit hold it, and on a mid-run gate it is lost, not applied. That
+    // is `confirmed` by the definition of the effect, which the next case pins.
+    expect(site.effect).toBe("confirmed");
+    expect(site.reading).toContain("cinatra#4506");
+    expect(site.reading).toContain("drops the box's answer");
+    // The outer Continue applies no boolean answer, so the reading never says it confirms one.
+    expect(site.reading).not.toMatch(/outer Continue is the step's only control/);
+    // Each surface's mid-run handler keeps only a non-array object; the evidence
+    // must stand in its code, so a change to that line fails the reading until
+    // the site is read again.
+    const objectOnly = 'if (next && typeof next === "object" && !Array.isArray(next)) {';
+    for (const file of [
+      "packages/agents/src/agentic-run-panel.tsx",
+      "packages/agents/src/orchestrator-stepper-panel.tsx",
+      "packages/agents/src/agent-hitl-screen-card.tsx",
+    ]) {
+      expect(site.evidence).toContainEqual({ file, text: objectOnly });
+    }
+  });
+
+  it("the definition of the effect `confirmed` covers a site that a road drops, as the renderer's box on a mid-run gate (cinatra#4506)", () => {
+    // The box's change is held for a confirm on every road that applies it and
+    // dropped on a mid-run gate. `confirmed` fits that site only because its
+    // definition counts the roads that apply the change and has the reading
+    // name a road that drops it.
+    const scan = readRepo("src/components/ui/__tests__/checkbox-call-site-scan.ts");
+    const at = scan.indexOf("export type Effect =");
+    expect(at).toBeGreaterThan(0);
+    const doc = scan.slice(scan.lastIndexOf("/**", at), at).replace(/\s*\n\s*\*\/?\s?/g, " ");
+    expect(doc).toContain("A site drawn on several roads is `confirmed` when at least one road applies its change and every road that applies it holds it for such a confirm.");
+    expect(doc).toContain("A road that drops the change, so that nothing applies it there, does not make the site `immediate` or `none`");
+    expect(doc).toContain("the site's reading names that road, and its evidence pins the code that drops it");
+    const site = CHECKBOX_CALL_SITE_READINGS.find((r) => r.file === "packages/agents/src/schema-field-renderer.tsx")!.sites[0]!;
+    expect(site.reading).toContain("On a mid-run step");
+    expect(site.reading).toContain("drops the box's answer");
+  });
+
   it("the immediate-effect sites drawn as a checkbox are exactly the ones with a recorded reason", () => {
     const stays = [
       ...CHECKBOX_CALL_SITE_READINGS.flatMap((r) =>
@@ -92,8 +134,9 @@ describe("the recorded readings hold for the live tree", () => {
       ),
       ...COMPONENT_CALLERS.flatMap((set) => set.callers.filter((c) => c.effect === "immediate").map((c) => [c.file, Boolean(c.staysBecause)])),
     ];
+    // cinatra#4310 — the per-field boolean question's box left this list: it
+    // stages the answer, and the Continue drawn beneath it sends it.
     expect(stays).toEqual([
-      ["packages/agents/src/schema-field-renderer.tsx", true],
       ["packages/skills/src/skills-toolbar.tsx", true],
       ["src/components/scope-filter-combobox.tsx", true],
     ]);
