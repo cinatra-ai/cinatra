@@ -205,7 +205,7 @@
     {
       "packageName": "@cinatra-ai/email-drafting-agent",
       "repo": "cinatra-ai/email-drafting-agent",
-      "resolvedSha": "faf05c2afee7e78412978f2e646e2c3273c48837"
+      "resolvedSha": "f88e19ab4a3650b30149f50500ced8b43057556c"
     },
     {
       "packageName": "@cinatra-ai/email-follow-up-agent",
@@ -215,7 +215,7 @@
     {
       "packageName": "@cinatra-ai/email-outreach-agent",
       "repo": "cinatra-ai/email-outreach-agent",
-      "resolvedSha": "92874fdd00de8ad63fc585c68598b08f4ea7fd85"
+      "resolvedSha": "dcbdce665765580128612bfc87fffd78db9cdd14"
     },
     {
       "packageName": "@cinatra-ai/email-recipient-selection-agent",
