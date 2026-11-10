@@ -58,6 +58,13 @@ import {
 } from "./agent-builder-ids";
 import { hasFieldRendererComponent } from "./field-renderer-components";
 import { makeExtensionFieldRenderer } from "./extension-field-renderer";
+import {
+  makeDeclaredHitlScreenRenderer,
+  type DeclaredHitlCard,
+} from "./declared-hitl-screen-renderer";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: dependency-free .mjs validation module (allowJs)
+import { validateHitlScreen } from "../../../scripts/extensions/agent-hitl-screen-schema.mjs";
 
 // ---------------------------------------------------------------------------
 // The normalized binding shape this module registers from. Mirrors
@@ -71,6 +78,7 @@ export type FieldRendererBindingInput = {
   readonly midRunHitl?: boolean;
   readonly a2uiTranslator?: string;
   readonly params?: Readonly<Record<string, unknown>>;
+  readonly screen?: Readonly<Record<string, unknown>>;
 };
 
 // ---------------------------------------------------------------------------
@@ -269,6 +277,49 @@ function withBindingParams(
 }
 
 /**
+ * A binding that DECLARES its HITL screen (cinatra#3470) is drawn by the host:
+ * a "card" by the declared-screen card, a "kind" by the host's own component
+ * for the binding's kind. The declaration is checked again here instead of
+ * trusting build or runtime data, and the kind is read from the table's OWN
+ * keys. A refused declaration registers nothing: the package's component is
+ * never the fallback.
+ */
+function registerDeclaredScreen(b: FieldRendererBindingInput): void {
+  const checked = validateHitlScreen(b.screen, `${b.id} screen`) as {
+    screen?: { layout?: string };
+    errors: string[];
+  };
+  const kindEntry = Object.hasOwn(RENDERER_KIND_TABLE, b.kind)
+    ? RENDERER_KIND_TABLE[b.kind]
+    : undefined;
+  let renderer: ComponentType<FieldRendererProps> | undefined;
+  if (kindEntry && checked.screen?.layout === "card") {
+    renderer = makeDeclaredHitlScreenRenderer(checked.screen as DeclaredHitlCard);
+  } else if (kindEntry && checked.screen?.layout === "kind" && kindEntry.renderer !== SchemaOnlyFloorRenderer) {
+    renderer = kindEntry.renderer;
+  }
+  if (!kindEntry || !renderer) {
+    const reason = checked.errors.length > 0
+      ? checked.errors.join("; ")
+      : `the host has no component of its own for kind "${b.kind}"`;
+    console.error(`[field-renderers] declared screen of ${b.id} refused: ${reason}`);
+    return;
+  }
+  const isKind = checked.screen?.layout === "kind";
+  fieldRendererRegistry.register({
+    id: b.id,
+    priority: b.priority,
+    condition: conditionFor(b.id, b.kind),
+    renderer: withBindingParams(renderer, b.params),
+    // The card reaches no server action, but no test pins it as safe yet.
+    credentialSafe: isKind && kindEntry.credentialSafe === true,
+    // The card draws no send: the host's one Continue sends its answer.
+    drawsOwnSubmit: isKind && kindEntry.drawsOwnSubmit === true,
+    midRunHitl: b.midRunHitl === true,
+  });
+}
+
+/**
  * Register normalized manifest bindings into the client registry.
  * Idempotent (registry replace-by-id). Unknown kinds are SKIPPED with a
  * warning — runtime data can never break the host; build-time data cannot
@@ -279,6 +330,10 @@ export function registerFieldRendererBindings(
   bindings: ReadonlyArray<FieldRendererBindingInput>,
 ): void {
   for (const b of bindings) {
+    if (b.screen !== undefined) {
+      registerDeclaredScreen(b);
+      continue;
+    }
     // S8 spine (cinatra#1625): a binding whose component has migrated into its
     // claiming extension (declared cinatra.fieldRenderers[].component and is in
     // THIS build) resolves to the extension-shipped component via the generated

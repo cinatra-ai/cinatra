@@ -21,6 +21,8 @@
 // Dependency-free on purpose (imported by build scripts, TS host code via
 // `allowJs`, and tests).
 
+import { validateHitlScreen } from "./agent-hitl-screen-schema.mjs";
+
 export const KNOWN_FIELD_RENDERER_KINDS = Object.freeze([
   "blog-idea-selection",
   "campaign-recipients-review",
@@ -98,7 +100,7 @@ export function validateFieldRendererDeclarations(packageName, raw) {
       errors.push(`${where}: entry must be an object`);
       return;
     }
-    const { id, kind, priority, midRunHitl, a2uiTranslator, params, component, ...rest } = e;
+    const { id, kind, priority, midRunHitl, a2uiTranslator, params, component, screen, ...rest } = e;
     const unknownKeys = Object.keys(rest);
     if (unknownKeys.length > 0) {
       errors.push(`${where}: unknown key(s) ${unknownKeys.join(", ")}`);
@@ -188,6 +190,17 @@ export function validateFieldRendererDeclarations(packageName, raw) {
         ...(propsApiVersion !== undefined ? { propsApiVersion } : {}),
       };
     }
+    // The declared HITL screen (cinatra#3470): the host draws it, so the
+    // package's own component is never loaded for this binding.
+    let normalizedScreen;
+    if (screen !== undefined) {
+      const checked = validateHitlScreen(screen, `${where}.screen`);
+      if (checked.errors.length > 0) {
+        errors.push(...checked.errors);
+        return;
+      }
+      normalizedScreen = checked.screen;
+    }
     entries.push({
       id,
       kind,
@@ -196,6 +209,7 @@ export function validateFieldRendererDeclarations(packageName, raw) {
       ...(a2uiTranslator !== undefined ? { a2uiTranslator } : {}),
       ...(params !== undefined ? { params: JSON.parse(JSON.stringify(params)) } : {}),
       ...(normalizedComponent !== undefined ? { component: normalizedComponent } : {}),
+      ...(normalizedScreen !== undefined ? { screen: normalizedScreen } : {}),
       declaredBy: packageName,
     });
   });
@@ -224,6 +238,7 @@ export function comparableFieldRendererBinding(e) {
     a2uiTranslator: e.a2uiTranslator ?? null,
     params: e.params ?? null,
     component: e.component ?? null,
+    screen: e.screen ?? null,
   });
 }
 
