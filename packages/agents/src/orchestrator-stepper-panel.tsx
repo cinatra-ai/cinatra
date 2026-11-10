@@ -625,6 +625,38 @@ type InterruptCtx = NonNullable<
 >;
 
 /**
+ * Does this schema, at ANY depth the schema-field renderer walks, carry a
+ * property map or a property spec that renderer cannot take apart?
+ *
+ * The renderer's object arm reads every declared property spec as an object
+ * (`properties[name]["x-hidden"]`), and it draws a nested object-typed spec
+ * through the same arm, so a null spec one level down throws exactly as one at
+ * the top does. Main bypassed every object schema and never reached that arm;
+ * a schema with such a spec anywhere keeps that bypass. The walk follows
+ * `properties` and an object-valued `items` — the two places the renderer and
+ * its object validator descend into. Composition and reference keywords are
+ * not walked: nothing on this road draws what they hold.
+ */
+function hasMalformedPropertySpec(schema: unknown, depth = 0): boolean {
+  if (depth > 32) return true;
+  if (schema === null || typeof schema !== "object" || Array.isArray(schema)) return false;
+  const declared = schema as Record<string, unknown>;
+  const properties = declared.properties;
+  if (properties !== undefined) {
+    if (properties === null || typeof properties !== "object" || Array.isArray(properties)) return true;
+    for (const spec of Object.values(properties as Record<string, unknown>)) {
+      if (spec === null || typeof spec !== "object" || Array.isArray(spec)) return true;
+      if (hasMalformedPropertySpec(spec, depth + 1)) return true;
+    }
+  }
+  const items = declared.items;
+  if (items !== null && typeof items === "object" && !Array.isArray(items)) {
+    if (hasMalformedPropertySpec(items, depth + 1)) return true;
+  }
+  return false;
+}
+
+/**
  * Does this declared object schema ask the person for nothing of its own?
  *
  * The step-confirmation bypass below exists for the shape its comment names —
@@ -639,6 +671,14 @@ type InterruptCtx = NonNullable<
  */
 function declaresNoAskedProperty(schema: unknown): boolean {
   const declared = schema as Record<string, unknown> | null | undefined;
+  // A MALFORMED SCHEMA KEEPS MAIN'S BYPASS, AND THIS CHECK COMES FIRST. A
+  // `properties` value that is not a map of property specs, or a property spec
+  // that is not an object (null, a string, an array) — at the top or in any
+  // nested object or array-item spec — is nothing the renderer's object arm can
+  // take apart: a null spec throws there. Main bypassed every such schema; so
+  // does this, whatever composition or reference keyword the schema also
+  // carries, so the card keeps its Continue (review round of cinatra#3035).
+  if (hasMalformedPropertySpec(declared)) return true;
   // A schema that carries its fields behind a reference or a composition
   // keyword declares them somewhere this host does not read (neither the
   // compiler nor the schema-field renderer resolves `$ref`). It is not the bare
@@ -655,14 +695,9 @@ function declaresNoAskedProperty(schema: unknown): boolean {
     return false;
   }
   const properties = declared?.properties;
-  // A MALFORMED SCHEMA KEEPS MAIN'S BYPASS. `properties` that is not a map of
-  // property specs, or a property spec that is not an object (null, a string, an
-  // array), is nothing the renderer's object arm can take apart — a null spec
-  // throws there. Main bypassed every such schema; so does this, so the card
-  // keeps its Continue and never throws (self-check of cinatra#3035).
+  // No declared properties at all (the malformed shapes returned above): the
+  // gate asks for nothing of its own.
   if (properties === null || typeof properties !== "object" || Array.isArray(properties)) return true;
-  const specs = Object.values(properties as Record<string, unknown>);
-  if (specs.some((spec) => spec === null || typeof spec !== "object" || Array.isArray(spec))) return true;
   // `approved` is exempt as the CONFIRMATION FLAG the comment above names —
   // `{ approved: boolean }` — never as a name. A property called `approved`
   // that declares another type is something the person is asked to write, and

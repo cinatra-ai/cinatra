@@ -547,7 +547,7 @@ describe("no kind of declared gate step leaves the card blank (cinatra#3035)", (
 });
 
 /**
- * EVERY BRANCH OF THE NARROWED BYPASS, ONE CASE EACH (self-check of this unit).
+ * EVERY BRANCH OF THE NARROWED BYPASS, ONE CASE EACH (self-check of this change).
  *
  * The bypass keeps a gate that asks for nothing of its own on its single
  * Continue (no field, no prompt window, exactly as main draws it); every other
@@ -558,8 +558,10 @@ describe("no kind of declared gate step leaves the card blank (cinatra#3035)", (
  * A MALFORMED SCHEMA KEEPS MAIN'S BYPASS. A `properties` value that is not a
  * map of property specs (null, an array, a string) or a property spec that is
  * not an object (null, a string, an array) is nothing the object arm can take
- * apart — reading a null spec there throws. Main bypassed every such schema,
- * and so does this: the card keeps its Continue and never throws.
+ * apart — reading a null spec there throws. That holds at the top, in a nested
+ * object spec and in an array's item spec, and whatever composition or
+ * reference keyword the schema also carries (review round of cinatra#3035). Main bypassed
+ * every such schema, and so does this: the card keeps its Continue.
  */
 function fallbackGate(schema: Record<string, unknown>): Record<string, unknown> {
   return { xRenderer: SCHEMA_FIELD_FALLBACK_RENDERER_ID, schema, values: {}, reviewTaskId: "gate-run-3035" };
@@ -638,10 +640,114 @@ describe("each branch of the narrowed bypass (cinatra#3035)", () => {
     await expectBypass({ type: "object", properties: { note: spec } });
   });
 
-  it("a null spec beside a readable property: bypass, never throws", async () => {
+  it.each([
+    ["null", null],
+    ["a string", "string"],
+    ["an array", [{ type: "string" }]],
+  ])("a property spec that is %s beside a readable property: bypass", async (_label, spec) => {
     await expectBypass({
       type: "object",
-      properties: { note: null, other: { type: "string", title: "Other" } },
+      properties: { note: spec, other: { type: "string", title: "Other" } },
     });
+  });
+
+  it("an empty `properties` map asks for nothing: bypass", async () => {
+    await expectBypass({ type: "object", properties: {} });
+  });
+
+  it("an untyped property that is not `approved`: drawn", async () => {
+    await expectDrawn({ type: "object", properties: { note: { title: "Note" } } });
+    expect(gateRegion()!.querySelector("#field-note"), "the untyped property is drawn").not.toBeNull();
+  });
+
+  // The exemption is the exact flag `{ approved: boolean }`: the name and the
+  // type are read as written, so a case variant of either is a property the
+  // person is asked for, and it is drawn.
+  it("a boolean property named `Approved` (case variant of the name): drawn", async () => {
+    await mountGate(fallbackGate({ type: "object", properties: { Approved: { type: "boolean" } } }));
+    const region = gateRegion()!;
+    expect(region.querySelector("#field-Approved"), "the property is drawn under its own id").not.toBeNull();
+    expect(continueButtonsIn(region).length, "exactly one control submits this gate").toBe(1);
+    expect(promptWindowPresent(), "the prompt window stands at this gate's foot").toBe(true);
+  });
+
+  it("an `approved` property typed `Boolean` (case variant of the type): drawn", async () => {
+    await expectDrawn({ type: "object", properties: { approved: { type: "Boolean" } } });
+    expect(gateRegion()!.querySelector("#field-approved")).not.toBeNull();
+  });
+});
+
+/**
+ * MALFORMED SPECS THE FIRST GUARD MISSED (review round of cinatra#3035).
+ *
+ * (1) A composition or reference keyword at the top used to send the schema to
+ * the object arm before the malformed check ran, and the arm threw on a null
+ * spec. (2) The check read the top level only, so a null spec inside a nested
+ * object spec reached the nested object field and threw there. Each shape
+ * below must keep main's bypass: the card mounts, holds its single Continue
+ * and no field.
+ */
+describe("a malformed spec at any depth keeps main's bypass (cinatra#3035)", () => {
+  it.each([
+    ["$ref", "#/$defs/Note"],
+    ["allOf", []],
+    ["oneOf", [{ type: "object" }]],
+    ["anyOf", [{ type: "object" }]],
+  ])("`%s` beside a null property spec: bypass, never throws", async (keyword, value) => {
+    await expectBypass({ type: "object", [keyword]: value, properties: { note: null } });
+  });
+
+  it.each([
+    ["null", null],
+    ["a string", "string"],
+    ["an array", [{ type: "string" }]],
+  ])("a nested object spec whose property spec is %s: bypass, never throws", async (_label, spec) => {
+    await expectBypass({
+      type: "object",
+      properties: { outer: { type: "object", properties: { inner: spec } } },
+    });
+  });
+
+  it("a nested object spec whose `properties` is null: bypass", async () => {
+    await expectBypass({
+      type: "object",
+      properties: { outer: { type: "object", properties: null } },
+    });
+  });
+
+  it("a null spec two levels down, beside a readable property: bypass", async () => {
+    await expectBypass({
+      type: "object",
+      properties: {
+        other: { type: "string", title: "Other" },
+        outer: {
+          type: "object",
+          properties: { middle: { type: "object", properties: { inner: null } } },
+        },
+      },
+    });
+  });
+
+  it("an array's item spec with a null property spec: bypass", async () => {
+    await expectBypass({
+      type: "object",
+      properties: {
+        list: { type: "array", items: { type: "object", properties: { inner: null } } },
+      },
+    });
+  });
+
+  it("a well-formed nested object spec is drawn, sub-field and all", async () => {
+    await expectDrawn({
+      type: "object",
+      properties: {
+        outer: {
+          type: "object",
+          title: "Outer",
+          properties: { inner: { type: "string", title: "Inner" } },
+        },
+      },
+    });
+    expect(gateRegion()!.querySelector("#field-inner"), "the nested sub-field is drawn").not.toBeNull();
   });
 });
