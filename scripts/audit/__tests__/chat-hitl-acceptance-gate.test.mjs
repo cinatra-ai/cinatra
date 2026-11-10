@@ -558,6 +558,19 @@ describe("the REAL manifest", () => {
       expect(noteEntry(mutant, head), head).not.toMatch(/NO RECORDED ANCHOR CHANGED/);
       expect(mutant.slice(mutant.indexOf(head)), head).toMatch(/NO RECORDED ANCHOR CHANGED/);
     }
+    // The newest entry has no later entry that could still carry the phrase,
+    // so its mutant is checked at the tail: the entry is the last one of the
+    // note, and with the phrase removed nothing from its head to the end of the
+    // note carries it.
+    {
+      const head = "RE-RATIFIED 2026-11-10 (";
+      const entry = noteEntry(contractNote, head);
+      expect(contractNote.endsWith(entry), head).toBe(true);
+      const mutant = contractNote.replace(entry, entry.replaceAll("NO RECORDED ANCHOR CHANGED", "(phrase removed)"));
+      expect(mutant, head).not.toBe(contractNote);
+      expect(noteEntry(mutant, head), head).not.toMatch(/NO RECORDED ANCHOR CHANGED/);
+      expect(mutant.slice(mutant.indexOf(head)), head).not.toMatch(/NO RECORDED ANCHOR CHANGED/);
+    }
     // The contract records the bare capture selector `[data-action]`, which
     // names no value and so reads every drawn control. The entry of 2026-10-27
     // named the selector and the value of the two Sign in buttons it added; the
