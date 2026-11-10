@@ -750,4 +750,21 @@ describe("a malformed spec at any depth keeps main's bypass (cinatra#3035)", () 
     });
     expect(gateRegion()!.querySelector("#field-inner"), "the nested sub-field is drawn").not.toBeNull();
   });
+
+  // The walk gives up at depth 32 and reports the schema malformed (keeps the bypass),
+  // so a deeply nested gate never reaches the renderer's recursion. The root is depth 0
+  // and each nested object spec adds one; the leaf below sits at depth `levels`.
+  function nestedGate(levels: number): Record<string, unknown> {
+    let spec: Record<string, unknown> = { type: "string", title: "Leaf" };
+    for (let i = 0; i < levels; i += 1) spec = { type: "object", properties: { n: spec } };
+    return spec;
+  }
+
+  it("a well-formed spec nested to depth 32 is still read: drawn", async () => {
+    await expectDrawn(nestedGate(32));
+  });
+
+  it("a well-formed spec nested to depth 33 passes the walk's limit: bypass", async () => {
+    await expectBypass(nestedGate(33));
+  });
 });
