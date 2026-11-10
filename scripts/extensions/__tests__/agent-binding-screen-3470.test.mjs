@@ -56,6 +56,10 @@ describe("the generator emits the declared screen", () => {
 
   it("emits no screen key for a binding without one", () => {
     const { entries } = validateFieldRendererDeclarations(PKG, [BINDING]);
-    expect(emitAgentBindings(entries, {})).not.toMatch(/screen: \{/);
+    // Not vacuous: the binding itself is emitted, only without a screen.
+    expect(entries).toHaveLength(1);
+    const out = emitAgentBindings(entries, {});
+    expect(out).toContain(`declaredBy: "${PKG}"`);
+    expect(out).not.toMatch(/screen: \{/);
   });
 });

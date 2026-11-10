@@ -48,6 +48,54 @@ function isPlainObject(v) {
   return v !== null && typeof v === "object" && !Array.isArray(v);
 }
 
+const MAX_DEPTH = 8;
+
+/**
+ * Why the RAW input is not plain JSON, or null when it is. Read before any
+ * JSON round trip, because a round trip hides exactly what this refuses: an
+ * `undefined` value drops its key, a `toJSON` method replaces the object, and
+ * a class instance or an accessor reads as an ordinary object. Allowed: null,
+ * booleans, finite numbers, strings, dense arrays and objects whose prototype
+ * is Object.prototype or null, each property an own enumerable data property
+ * with a string key.
+ */
+function plainJsonProblem(v, at, ancestors, depth) {
+  if (v === null || typeof v === "boolean" || typeof v === "string") return null;
+  if (typeof v === "number") return Number.isFinite(v) ? null : `${at} is not a finite number`;
+  if (typeof v !== "object") return `${at} is ${typeof v === "undefined" ? "undefined" : `a ${typeof v}`}`;
+  if (ancestors.has(v)) return `${at} refers back to itself`;
+  if (depth > MAX_DEPTH) return `${at} is nested deeper than ${MAX_DEPTH}`;
+  const isArray = Array.isArray(v);
+  const proto = Object.getPrototypeOf(v);
+  if (isArray ? proto !== Array.prototype : proto !== Object.prototype && proto !== null) {
+    return `${at} is not a plain ${isArray ? "list" : "object"}`;
+  }
+  const keys = Reflect.ownKeys(v);
+  if (keys.some((k) => typeof k === "symbol")) return `${at} has a symbol key`;
+  if (isArray) {
+    for (let i = 0; i < v.length; i += 1) {
+      if (!Object.hasOwn(v, i)) return `${at}[${i}] is a hole`;
+    }
+    if (keys.length !== v.length + 1) return `${at} has a key that is not an index`;
+  }
+  ancestors.add(v);
+  try {
+    for (const k of keys) {
+      if (isArray && k === "length") continue;
+      const where = isArray ? `${at}[${k}]` : `${at}.${k}`;
+      if (k === "toJSON") return `${where} is a toJSON key`;
+      const d = Object.getOwnPropertyDescriptor(v, k);
+      if (!d || !Object.hasOwn(d, "value")) return `${where} is an accessor`;
+      if (!d.enumerable) return `${where} is not enumerable`;
+      const inner = plainJsonProblem(d.value, where, ancestors, depth + 1);
+      if (inner) return inner;
+    }
+  } finally {
+    ancestors.delete(v);
+  }
+  return null;
+}
+
 function isText(v) {
   return typeof v === "string" && v.trim().length > 0 && v.length <= MAX_TEXT;
 }
@@ -109,13 +157,17 @@ function checkAnswer(where, answer, errors) {
  */
 export function validateHitlScreen(raw, where = "screen") {
   const errors = [];
+  if (!isPlainObject(raw)) return { errors: [`${where}: must be an object`] };
+  // Fail closed on the raw input first (see plainJsonProblem).
+  const problem = plainJsonProblem(raw, where, new Set(), 0);
+  if (problem) return { errors: [`${where}: must be plain JSON (${problem})`] };
   let serialized;
   try {
     serialized = JSON.stringify(raw);
   } catch {
     return { errors: [`${where}: must be plain JSON`] };
   }
-  if (!isPlainObject(raw) || serialized === undefined) return { errors: [`${where}: must be an object`] };
+  if (serialized === undefined) return { errors: [`${where}: must be an object`] };
   if (new TextEncoder().encode(serialized).length > MAX_HITL_SCREEN_BYTES) {
     return { errors: [`${where}: must serialize to <= ${MAX_HITL_SCREEN_BYTES} bytes`] };
   }

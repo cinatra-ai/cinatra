@@ -118,6 +118,98 @@ describe("validateHitlScreen refuses by name", () => {
     expect(refused(cyclic)).toMatch(/must be plain JSON/);
   });
 
+  // Fail-closed on the RAW input, before any JSON round trip (pre-review 1,
+  // finding 3): a round trip would drop an undefined key, call toJSON, and
+  // read a class instance or an accessor as an ordinary object.
+  it("an undefined value, which a round trip would drop", () => {
+    expect(refused({ layout: "card", title: "x", unknown: undefined })).toMatch(
+      /must be plain JSON \(screen\.unknown is undefined\)/,
+    );
+  });
+
+  it("an undefined value deep in a section", () => {
+    expect(refused({ ...CARD, sections: [{ type: "note", text: "x", href: undefined }] })).toMatch(
+      /must be plain JSON \(screen\.sections\[0\]\.href is undefined\)/,
+    );
+  });
+
+  it("a toJSON method that would stand in for the object", () => {
+    expect(
+      refused({
+        toJSON() {
+          return { layout: "card" };
+        },
+      }),
+    ).toMatch(/must be plain JSON \(screen\.toJSON is a toJSON key\)/);
+  });
+
+  it("a toJSON key on an answer, even as text", () => {
+    expect(refused({ ...CARD, decisions: [{ label: "x", answer: { toJSON: "x" } }] })).toMatch(
+      /toJSON is a toJSON key/,
+    );
+  });
+
+  it("a class instance", () => {
+    class Screen {
+      constructor() {
+        this.layout = "card";
+        this.title = "x";
+      }
+    }
+    expect(refused(new Screen())).toMatch(/must be plain JSON \(screen is not a plain object\)/);
+  });
+
+  it("a class instance as a section", () => {
+    class Note {
+      constructor() {
+        this.type = "note";
+        this.text = "x";
+      }
+    }
+    expect(refused({ ...CARD, sections: [new Note()] })).toMatch(/sections\[0\] is not a plain object/);
+  });
+
+  it("a Date value", () => {
+    expect(refused({ layout: "card", title: new Date(0) })).toMatch(/screen\.title is not a plain object/);
+  });
+
+  it("a function value", () => {
+    expect(refused({ layout: "card", title: "x", run: () => 1 })).toMatch(/screen\.run is a function/);
+  });
+
+  it("a symbol value and a symbol key", () => {
+    expect(refused({ layout: "card", title: Symbol("x") })).toMatch(/screen\.title is a symbol/);
+    expect(refused({ layout: "card", title: "x", [Symbol("k")]: 1 })).toMatch(/has a symbol key/);
+  });
+
+  it("an accessor", () => {
+    const screen = { layout: "card" };
+    Object.defineProperty(screen, "title", { get: () => "x", enumerable: true });
+    expect(refused(screen)).toMatch(/screen\.title is an accessor/);
+  });
+
+  it("a hidden key", () => {
+    const screen = { layout: "card", title: "x" };
+    Object.defineProperty(screen, "hidden", { value: "y", enumerable: false });
+    expect(refused(screen)).toMatch(/screen\.hidden is not enumerable/);
+  });
+
+  it("a sparse list and a list with an extra key", () => {
+    const sparse = ["itemId"];
+    sparse[2] = "x";
+    expect(refused({ ...CARD, carry: sparse })).toMatch(/carry\[1\] is a hole/);
+    const carry = ["itemId"];
+    carry.extra = "x";
+    expect(refused({ ...CARD, carry })).toMatch(/carry has a key that is not an index/);
+  });
+
+  it("a null-prototype object is plain JSON", () => {
+    const screen = Object.assign(Object.create(null), { layout: "card", title: "Fixture" });
+    const { screen: out, errors } = validateHitlScreen(screen);
+    expect(errors).toEqual([]);
+    expect(out).toEqual({ layout: "card", title: "Fixture" });
+  });
+
   it(`a screen over ${MAX_HITL_SCREEN_BYTES} bytes`, () => {
     const sections = Array.from({ length: 16 }, () => ({ type: "note", text: "\u00e9".repeat(300) }));
     expect(refused({ layout: "card", title: "x", sections })).toMatch(/<= 8192 bytes/);

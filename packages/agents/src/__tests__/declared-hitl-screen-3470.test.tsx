@@ -170,8 +170,11 @@ describe("a declared card is drawn by the host (cinatra#3470)", () => {
     const value = Object.assign(Object.create({ revisionId: "inherited" }), {
       itemId: "item-1",
     }) as Record<string, unknown>;
+    // The declaration omits `requires` (an `undefined` value is not plain JSON).
+    const { requires: _requires, ...withoutRequires } = CARD;
+    void _requires;
     registerFieldRendererBindings([
-      { id: ID, kind: "linkedin-draft-review", priority: 90, screen: { ...CARD, requires: undefined } },
+      { id: ID, kind: "linkedin-draft-review", priority: 90, screen: withoutRequires },
     ]);
     const onChange = mount(value);
     fireEvent.click(dom.getByRole("button", { name: "Send it" }));
