@@ -389,8 +389,16 @@ describe("test of record: the connector artifact roads over the real tree", () =
     expect(removedByProblems(committed)).toEqual([]);
   });
 
-  it("exactly the three roads of today", () => {
-    expect(Object.keys(live.roads)).toHaveLength(3);
+  it("exactly the one road of today, the mail routing's", () => {
+    expect(Object.keys(live.roads)).toEqual(["@cinatra-ai/host:email-routing :: src/lib/register-email-providers.ts"]);
+  });
+
+  it("publishes no @cinatra-ai/host:cms-review capability and floors no road from it (cinatra#3862 leg 7)", () => {
+    const retired = "@cinatra-ai/host:cms-review";
+    expect(live.published.has(retired)).toBe(false);
+    expect(Object.keys(committed.capabilities)).not.toContain(retired);
+    expect(Object.keys(committed.roads).filter((k) => k.startsWith(`${retired} :: `))).toEqual([]);
+    expect(readSdkCreatingRoads(REPO_ROOT)).not.toContain(retired);
   });
 
   it("the blog-routing capability reaches no creating module", () => {

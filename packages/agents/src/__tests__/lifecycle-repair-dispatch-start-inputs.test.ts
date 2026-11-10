@@ -3,7 +3,9 @@ import { PgDialect } from "drizzle-orm/pg-core";
 
 // Only external persistence, queue and identity-reading ports are replaced.
 // The real dispatcher, coordinator, system authority mint, ActorContext
-// builder and current CMS task projection execute. No run or queue job exists.
+// builder and the declared findings projection (cinatra#4424) execute. The
+// CMS snapshot read-back counts its reads: the drain must never read it. No
+// run or queue job exists.
 const ports = vi.hoisted(() => ({
   reads: [] as unknown[][],
   readConditions: [] as unknown[],
@@ -11,6 +13,7 @@ const ports = vi.hoisted(() => ({
   writes: [] as { values: Record<string, unknown>; condition?: unknown }[],
   created: [] as { input: Record<string, unknown>; authority: unknown }[],
   target: null as Record<string, unknown> | null,
+  targetReads: 0,
   role: "member" as "member" | undefined,
   createFailure: null as Error | null,
   queued: vi.fn(),
@@ -91,7 +94,7 @@ vi.mock("@/lib/agent-run-enqueue", () => ({
   enqueueAgentRun: ports.queued,
 }));
 vi.mock("../cms-snapshot-readback-store", () => ({
-  readCmsSnapshotTargetByArtifact: async () => ports.target,
+  readCmsSnapshotTargetByArtifact: async () => { ports.targetReads += 1; return ports.target; },
   readCmsSnapshotTargetByArtifactAndRevision: () => { throw new Error("Unexpected completion read"); },
 }));
 vi.mock("../cms-repaired-capture-port", () => ({
@@ -112,11 +115,13 @@ function pendingRepair(overrides: Record<string, unknown> = {}) {
     continuationAddress: null, findings: [currentFinding], ...overrides,
   };
 }
-function arrangeProducer(input: unknown, overrides: Record<string, unknown> = {}) {
+function arrangeProducer(input: unknown, overrides: Record<string, unknown> = {}, lifecycleConfig?: string | null) {
   const row = pendingRepair();
+  const template: Record<string, unknown> = { id: "template-producing", packageName: "@any-vendor/repair-producer" };
+  if (lifecycleConfig !== undefined) template.lifecycleConfig = lifecycleConfig;
   ports.reads = [[row], [{ templateId: "template-producing", orgId: "repair-org", runBy: "human-origin", oboCeiling: null,
     inputParams: typeof input === "string" ? input : JSON.stringify(input), ...overrides }],
-    [{ id: "template-producing", packageName: "@any-vendor/repair-producer" }], []];
+    [template], []];
   ports.updateResults = [[{ id: row.id }]];
   return row;
 }
@@ -129,7 +134,7 @@ function inputParams() {
 }
 beforeEach(() => {
   ports.reads = []; ports.readConditions = []; ports.updateResults = []; ports.writes = []; ports.created = [];
-  ports.target = null; ports.role = "member"; ports.createFailure = null;
+  ports.target = null; ports.targetReads = 0; ports.role = "member"; ports.createFailure = null;
   vi.clearAllMocks();
 });
 
@@ -147,17 +152,26 @@ describe("generic producing-run input inheritance", () => {
     expect(query.params).toEqual(["producer-original", "repair-org"]);
   });
 
-  it("overlays the current CMS task without dropping inherited root inputs or borrowing the old task", async () => {
-    arrangeProducer({ instanceId: "site-42", contentId: "content-42", instructions: "Original input", task: "Stale task", lifecycleRepairRequest: { repairId: "old" } });
+  it("overlays the current findings on the declared input without dropping inherited root inputs, for a captured CMS base", async () => {
+    arrangeProducer({ instanceId: "site-42", contentId: "content-42", instructions: "Original input", task: "Own task", lifecycleRepairRequest: { repairId: "old" } },
+      {}, JSON.stringify({ repairCapable: true, repairFindingsInput: { input: "instructions" } }));
     ports.target = cmsTarget();
     await dispatchPendingProducerRepairs();
-    expect(inputParams()).toMatchObject({ instanceId: "site-42", contentId: "content-42",
+    expect(inputParams()).toMatchObject({ instanceId: "site-42", contentId: "content-42", task: "Own task",
       lifecycleRepairRequest: { repairId: "repair-current", findings: [currentFinding] } });
     expect(inputParams().instructions).toContain(currentFinding.message);
     expect(inputParams().instructions).not.toContain("Original input");
-    expect(inputParams().task).toBe(inputParams().instructions);
-    expect(inputParams().task).toContain(currentFinding.message);
-    expect(inputParams().task).not.toContain("Stale task");
+    expect(ports.targetReads).toBe(0);
+  });
+
+  it("adds no CMS task or instructions for a producer that declares nothing, on a captured CMS base", async () => {
+    const original = { instanceId: "site-42", contentId: "content-42", instructions: "Original input" };
+    arrangeProducer(original, {}, JSON.stringify({ repairCapable: true }));
+    ports.target = cmsTarget();
+    await dispatchPendingProducerRepairs();
+    expect(inputParams()).toEqual({ ...original,
+      lifecycleRepairRequest: expect.objectContaining({ repairId: "repair-current", findings: [currentFinding] }) });
+    expect(ports.targetReads).toBe(0);
   });
 
   it("does not read inputs or launch a child from a producing run in another organization", async () => {
