@@ -28,8 +28,10 @@ const RETIRED_NAMES = [
   "shapeBlogPipelineObjectsSave",
 ];
 
-// Every module form, at any depth below the folder. Test folders are skipped:
-// a test may name a retired value to prove that it is refused.
+// Every module form, at any depth below the folder. Two kinds of folder are
+// skipped: test folders (`__tests__`), because a test may name a retired value
+// to prove that it is refused, and `node_modules`, which holds no passthrough
+// module of this repository.
 const MODULE_FILE = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 const SKIPPED_DIRS = new Set(["__tests__", "node_modules"]);
 
@@ -79,19 +81,44 @@ describe("cinatra#3035 — the blog pipeline's passthrough shapers are retired",
     expect(retiredHits(PASSTHROUGH_DIR)).toEqual([]);
   });
 
-  it("the scan reads every module form at any depth and skips only test folders", () => {
+  it("the scan reads every module form at any depth and skips test folders and node_modules", () => {
     const root = mkdtempSync(join(tmpdir(), "guard-3035-"));
     try {
       mkdirSync(join(root, "shapers"));
+      mkdirSync(join(root, "a", "b", "c"), { recursive: true });
       mkdirSync(join(root, "__tests__"));
+      mkdirSync(join(root, "node_modules"));
       const retired = ["blog", "pipeline", "draft", "projection"].join("_");
-      writeFileSync(join(root, "legacy.cjs"), `module.exports = "${retired}";\n`);
-      writeFileSync(join(root, "view.jsx"), `export const v = "${retired}";\n`);
+      // One file per module form, so that dropping any extension from the scan turns this case red.
+      const forms = ["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"];
+      for (const ext of forms) writeFileSync(join(root, `legacy.${ext}`), `export const s = "${retired}";\n`);
+      // A module three folders deep.
+      writeFileSync(join(root, "a", "b", "c", "deep.ts"), `export const s = "${retired}";\n`);
       writeFileSync(join(root, "shapers", "legacy.ts"), `export const s = "${retired}";\n`);
+      // Skipped: test folders and node_modules. Not a module form: a markdown file.
       writeFileSync(join(root, "__tests__", "refusal.test.ts"), `const s = "${retired}";\n`);
+      writeFileSync(join(root, "node_modules", "legacy.cjs"), `module.exports = "${retired}";\n`);
+      writeFileSync(join(root, "notes.md"), `${retired}\n`);
       expect(retiredHits(root).sort()).toEqual(
-        [`legacy.cjs: ${retired}`, `shapers/legacy.ts: ${retired}`, `view.jsx: ${retired}`].sort(),
+        [
+          ...forms.map((ext) => `legacy.${ext}: ${retired}`),
+          `a/b/c/deep.ts: ${retired}`,
+          `shapers/legacy.ts: ${retired}`,
+        ].sort(),
       );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("the scan finds a module by its file name alone, even when its text names nothing retired", () => {
+    const root = mkdtempSync(join(tmpdir(), "guard-3035-name-"));
+    try {
+      mkdirSync(join(root, "shapers"));
+      const retired = ["blog", "pipeline", "selected", "idea"].join("_");
+      writeFileSync(join(root, "shapers", `${retired}.ts`), "export {};\n");
+      writeFileSync(join(root, "shapers", "other.ts"), "export {};\n");
+      expect(retiredHits(root)).toEqual([`shapers/${retired}.ts: ${retired}`]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
