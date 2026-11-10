@@ -64,6 +64,58 @@ const RESERVED_APPROVAL_ENVELOPE_KEYS = new Set<string>([
 ]);
 
 /**
+ * THE WAYFLOW RESUME TEXT OF A DECLINE (cinatra#3470).
+ *
+ * A mid-run Continue sends `approved: false` when the screen staged a decline
+ * (a declared card's "Do not post"). The resume text is what the running
+ * agent reads, and a structured answer reaches it as the JSON string of the
+ * answer object (`{ ..., approved, approvedAt }`), so a decline must reach it
+ * as such a JSON object with `approved: false`. Without this, a decline that
+ * carries no `userResponse` fell through to the "[Approved by operator]"
+ * marker and the agent read it as an approval.
+ *
+ * Returns the `userResponse` to resume with:
+ *   - not a decline (`approved` is not exactly `false`): the caller's own
+ *     `userResponse`, unchanged;
+ *   - a decline with a JSON-object `userResponse`: that object with
+ *     `approved: false` set (inside the attachment envelope's `text` when the
+ *     object is the `{ text, attachments }` envelope);
+ *   - any other decline: the JSON of the values (without `userResponse`)
+ *     with `approved: false`; a plain-text `userResponse` rides along under
+ *     its own name, unless it is the approval marker itself (the attachment
+ *     envelope wraps that marker when nothing else was written).
+ */
+export function declineAwareUserResponse(values: Record<string, unknown> | null): unknown {
+  const raw = values?.userResponse;
+  if (!values || values.approved !== false) return raw;
+  const { userResponse: _u, ...rest } = values;
+  void _u;
+  const fromValues = (text: string | null): string =>
+    JSON.stringify({
+      ...rest,
+      ...(text !== null && text.trim().length > 0 && text !== "[Approved by operator]"
+        ? { userResponse: text }
+        : {}),
+      approved: false,
+    });
+  const withDecline = (text: string): string => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return fromValues(text);
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return fromValues(text);
+    const obj = parsed as Record<string, unknown>;
+    if (typeof obj.text === "string" && Array.isArray(obj.attachments)) {
+      return JSON.stringify({ ...obj, text: withDecline(obj.text) });
+    }
+    return JSON.stringify({ ...obj, approved: false });
+  };
+  return typeof raw === "string" && raw.trim().length > 0 ? withDecline(raw) : fromValues(null);
+}
+
+/**
  * Reject a setup value that violates its input's DECLARED type (cinatra#2484).
  *
  * Thin binding over the shared leaf guard: the SAME assertion runs at run
@@ -1038,7 +1090,14 @@ export async function approveReviewTaskInternal(
       values && typeof values === "object" && !Array.isArray(values)
         ? (values as { userResponse?: unknown; approvalNote?: unknown })
         : null;
-    const userResponseRaw = valuesObj?.userResponse;
+    // A DECLINE IS SENT AS A DECLINE (cinatra#3470): a Continue that sends
+    // `approved: false` resumes with a JSON answer that says so, never with
+    // the "[Approved by operator]" marker or a bare note. It then takes the
+    // structured road below like any renderer-written `userResponse` (the
+    // resume text, the captured prompt and the answered-gate binding).
+    const userResponseRaw = declineAwareUserResponse(
+      valuesObj as Record<string, unknown> | null,
+    );
     const approvalNoteRaw = valuesObj?.approvalNote;
     const trimmedNote = typeof approvalNoteRaw === "string" ? approvalNoteRaw.trim() : "";
 
