@@ -1705,7 +1705,13 @@ export function findCheckboxSites(text: string, file = "f.tsx"): FoundSite[] {
 /**
  * `immediate`: the change takes effect at once (it is written, sent or applied
  * when the box changes). `confirmed`: the change is held and only a separate
- * confirm (a form submit, a Continue, a dialog action) applies it. `none`: the
+ * confirm (a form submit, a Continue, a dialog action) applies it. A site drawn
+ * on several roads is `confirmed` when at least one road applies its change and
+ * every road that applies it holds it for such a confirm. A road that drops the
+ * change, so that nothing applies it there, does not make the site `immediate`
+ * or `none`; the site's reading names that road, and its evidence pins the code
+ * that drops it. The schema-drawn boolean's box has such a road, a mid-run
+ * gate (cinatra#4506), and the reading test checks both for it. `none`: the
  * element changes nothing itself (a primitive's own definition, a part of it, a
  * static drawing fixture, a decorative box inside a row that is the control, or
  * an element that is not a checkbox).

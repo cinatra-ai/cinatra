@@ -5,8 +5,11 @@
  *   - The status union covers the FULL canonical extension lifecycle
  *     (active | archived | locked) — "locked" must never be dropped.
  *   - Active renders live/green (StatusPill "approved", check icon).
- *   - Archived renders muted grey with a CROSS (✕) icon — never the old
- *     box/archive glyph, and never the red failed treatment.
+ *   - Archived renders muted grey with the roster's ARCHIVE BOX — the one
+ *     Archived pill the approved drawing draws (specs/app.html, the pill roster
+ *     and block V.1; cinatra#4296) — and never the red failed treatment. The
+ *     Extensions lifecycle chip's grey cross is the marked text of
+ *     installed-status-indicator.tsx, not this pill.
  *   - Locked renders live/green styling with a distinct "Locked" label.
  *   - Icon-led: every badge carries an inline SVG glyph, never a bare dot.
  */
@@ -19,8 +22,8 @@ import { StatusPill } from "../ui/status-pill";
 // Glyph fingerprints (path data) from StatusPill's StatusIcon.
 const CHECK_GLYPH = "M20 6 9 17l-5-5";
 const CROSS_GLYPH_A = "M18 6 6 18";
-const CROSS_GLYPH_B = "m6 6 12 12";
-const OLD_BOX_GLYPH = "M21 8v13H3V8";
+const BOX_GLYPH_A = "M21 8v13H3V8";
+const BOX_GLYPH_B = "M1 3h22v5H1z";
 
 function render(status: LifecycleStatus): string {
   return renderToStaticMarkup(<LifecycleBadge status={status} />);
@@ -43,17 +46,17 @@ describe("LifecycleBadge", () => {
     expect(html).toContain(">Active<");
   });
 
-  it("archived → muted StatusPill 'archived' with a CROSS (✕) icon and 'Archived' label", () => {
+  it("archived → muted StatusPill 'archived' with the roster's archive box and 'Archived' label", () => {
     const html = render("archived");
     expect(html).toContain('data-status="archived"');
-    expect(html).toContain(CROSS_GLYPH_A);
-    expect(html).toContain(CROSS_GLYPH_B);
+    expect(html).toContain(BOX_GLYPH_A);
+    expect(html).toContain(BOX_GLYPH_B);
     expect(html).toContain(">Archived<");
   });
 
-  it("archived NEVER renders the old box/archive glyph, nor red failed styling", () => {
+  it("archived NEVER renders the cross, nor red failed styling", () => {
     const html = render("archived");
-    expect(html).not.toContain(OLD_BOX_GLYPH);
+    expect(html).not.toContain(CROSS_GLYPH_A);
     expect(html).not.toContain('data-status="failed"');
     expect(html).not.toContain('data-status="declined"');
   });
@@ -92,12 +95,12 @@ describe("LifecycleBadge", () => {
   });
 });
 
-describe("StatusPill archived icon (design system §VI)", () => {
-  it("renders the cross (✕) glyph in the archived case, replacing the box/archive icon", () => {
+describe("StatusPill archived icon (specs/app.html, the pill roster and block V.1)", () => {
+  it("renders the roster's archive box in the archived case, never the cross", () => {
     const html = renderToStaticMarkup(<StatusPill status="archived" />);
-    expect(html).toContain(CROSS_GLYPH_A);
-    expect(html).toContain(CROSS_GLYPH_B);
-    expect(html).not.toContain(OLD_BOX_GLYPH);
+    expect(html).toContain(BOX_GLYPH_A);
+    expect(html).toContain(BOX_GLYPH_B);
+    expect(html).not.toContain(CROSS_GLYPH_A);
   });
 
   it("keeps the muted-grey archived colourway (token classes, not raw colours)", () => {

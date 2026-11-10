@@ -65,10 +65,13 @@ const STAGED = {
   // Re-copied verbatim at design@f77ea323 (cinatra#3978): the copy carries the
   // continued readings that design#191 placed inside the email and post displays,
   // and every surface the drawing has added since. No surface is removed or changed.
+  // Re-copied verbatim at design@9eb5aaf1 (cinatra#3380): the held Continue of the agent
+  // input card (lifecycle cards 0.23.0) declares the state `empty` on agent-hitl-screen-card.
+  // No surface is added or removed, and no other surface changes.
   "app-lifecycle-cards.json": {
     spec: "specs/app-lifecycle-cards.html",
-    manifestSha256: "2f9879e8e2a829fb5524f6ac44ea1b50b5e182792a918032658080f42da84f25",
-    contentHash: "sha256:48b868de1d67def632f060c694d49f36caa683e941c3d6794d88de24c4e4996e",
+    manifestSha256: "b605cdef05e2f40235b1936703c4e6cbf9ff29fa3cc30c22d626c5127632d389",
+    contentHash: "sha256:86aa666385434bddf0cdba41ee05475e58a902e94b18199aa4d2f6ec36f174bc",
   },
   // The artifact-review drawing, staged by cinatra#3158 (the artifact-kind
   // display wave). First-time adoption: the drawing has never been committed
