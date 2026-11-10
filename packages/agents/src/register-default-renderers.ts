@@ -311,8 +311,11 @@ function registerDeclaredScreen(b: FieldRendererBindingInput): void {
     priority: b.priority,
     condition: conditionFor(b.id, b.kind),
     renderer: withBindingParams(renderer, b.params),
-    // The card reaches no server action, but no test pins it as safe yet.
-    credentialSafe: isKind && kindEntry.credentialSafe === true,
+    // A "card" is pure host rendering: it calls no server action and resolves
+    // nothing from the registry (declared-hitl-screen-3470.test.tsx pins that
+    // against its own source), so it is drawn wherever the card is, the site
+    // widget included. A "kind" inherits its kind's answer.
+    credentialSafe: !isKind || kindEntry.credentialSafe === true,
     // The card draws no send: the host's one Continue sends its answer.
     drawsOwnSubmit: isKind && kindEntry.drawsOwnSubmit === true,
     midRunHitl: b.midRunHitl === true,

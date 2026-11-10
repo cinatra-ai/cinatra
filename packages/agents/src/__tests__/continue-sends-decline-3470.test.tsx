@@ -134,6 +134,43 @@ function mount() {
   );
 }
 
+/** The site widget: no cookie session, a declared credential instead. */
+function mountOnSiteWidget() {
+  return render(
+    <LifecycleCardSurfaceProvider
+      host="site_widget"
+      auth={{ headers: () => ({ Authorization: "Bearer cwu_site" }), credentials: "omit" }}
+      frame={{ assistant: "a", instanceId: "i" }}
+    >
+      <AgentHitlScreenCard runId={RUN_ID} wireRef={TASK_ID} />
+    </LifecycleCardSurfaceProvider>,
+  );
+}
+
+/** A declared publish card with two choices (fixture words). */
+function registerDeclaredPublishCard() {
+  registerFieldRendererBindings([
+    {
+      id: DECLARED_ID,
+      kind: "linkedin-draft-review",
+      priority: 90,
+      midRunHitl: true,
+      screen: {
+        layout: "card",
+        title: "Fixture publish step",
+        sections: [{ type: "words", key: "content" }],
+        decisions: [
+          { label: "Fixture do not send", answer: { approved: false } },
+          { label: "Fixture send", answer: { approved: true } },
+        ],
+        carry: ["itemId", "revisionId"],
+        requires: ["itemId", "revisionId"],
+      },
+    },
+  ]);
+  current = asking(DECLARED_ID, { itemId: "item-1", revisionId: "rev-1", content: "Fixture words" });
+}
+
 function button(container: HTMLElement, name: RegExp): HTMLButtonElement | undefined {
   return Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find((b) =>
     name.test(b.textContent ?? ""),
@@ -177,26 +214,7 @@ describe("the HITL screen card's Continue (cinatra#3470)", () => {
   });
 
   it("a declared card's decline reaches the server as a decline, with its carried keys", async () => {
-    registerFieldRendererBindings([
-      {
-        id: DECLARED_ID,
-        kind: "linkedin-draft-review",
-        priority: 90,
-        midRunHitl: true,
-        screen: {
-          layout: "card",
-          title: "Fixture publish step",
-          sections: [{ type: "words", key: "content" }],
-          decisions: [
-            { label: "Fixture do not send", answer: { approved: false } },
-            { label: "Fixture send", answer: { approved: true } },
-          ],
-          carry: ["itemId", "revisionId"],
-          requires: ["itemId", "revisionId"],
-        },
-      },
-    ]);
-    current = asking(DECLARED_ID, { itemId: "item-1", revisionId: "rev-1", content: "Fixture words" });
+    registerDeclaredPublishCard();
     const { container } = mount();
     await settle();
     await waitFor(() => expect(button(container, /Fixture do not send/)).toBeDefined());
@@ -205,5 +223,21 @@ describe("the HITL screen card's Continue (cinatra#3470)", () => {
     expect(approveMock).not.toHaveBeenCalled();
     const payload = await pressContinue(container);
     expect(payload).toMatchObject({ approved: false, itemId: "item-1", revisionId: "rev-1" });
+  });
+});
+
+describe("a declared card on the site widget (cinatra#3470)", () => {
+  it("is drawn on a credential-only host, and its Continue is not withheld", async () => {
+    registerDeclaredPublishCard();
+    const { container } = mountOnSiteWidget();
+    await settle();
+    await waitFor(() => expect(button(container, /Fixture do not send/)).toBeDefined());
+    expect(button(container, /^Fixture send/)).toBeDefined();
+    fireEvent.click(button(container, /Fixture do not send/)!);
+    await settle();
+    const go = container.querySelector<HTMLButtonElement>('[data-action="submit-hitl-screen"]');
+    expect(go).not.toBeNull();
+    expect(go!.disabled).toBe(false);
+    expect(go!.getAttribute("title")).toBeNull();
   });
 });

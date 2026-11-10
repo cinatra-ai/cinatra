@@ -22,6 +22,10 @@
  *   pnpm --filter @cinatra-ai/agents exec vitest run \
  *     src/__tests__/declared-hitl-screen-3470.test.tsx
  */
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen as dom } from "@testing-library/react";
 
@@ -119,8 +123,24 @@ describe("a declared card is drawn by the host (cinatra#3470)", () => {
     expect(entry).toBeDefined();
     expect(entry!.renderer).not.toBe(SchemaOnlyFloorRenderer);
     expect(entry!.drawsOwnSubmit).toBe(false);
-    expect(entry!.credentialSafe).toBe(false);
+    // Pure host rendering with no action: drawn on a credential-only host too.
+    expect(entry!.credentialSafe).toBe(true);
     expect(entry!.midRunHitl).toBe(true);
+  });
+
+  it("is credential-safe in its own source: no server action, no registry lookup", () => {
+    // The same two readings hitl-screen-credential-safety.test.ts makes of
+    // every kind declared safe, made of the declared card's own module.
+    const source = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "..", "declared-hitl-screen-renderer.tsx"),
+      "utf8",
+    )
+      .replace(/\/\*[\s\S]*?\*\//g, " ")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(source).toContain("export function makeDeclaredHitlScreenRenderer");
+    expect(source).not.toMatch(/from\s+"\.\/[A-Za-z0-9-]*-actions"/);
+    expect(source).not.toMatch(/"use server"/);
+    expect(source).not.toMatch(/fieldRendererRegistry/);
   });
 
   it("draws the declared title, facts, words, quote and note from the run value", () => {
