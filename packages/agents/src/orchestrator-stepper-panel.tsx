@@ -636,22 +636,43 @@ type InterruptCtx = NonNullable<
  * `properties` and an object-valued `items` — the two places the renderer and
  * its object validator descend into. Composition and reference keywords are
  * not walked: nothing on this road draws what they hold.
+ *
+ * The walk has no depth limit: a well-formed schema is drawn however deep it
+ * nests, as the renderer draws it. It runs on an explicit stack, not by
+ * recursion, so a deep schema cannot exhaust the call stack. A spec that
+ * contains itself (a cycle, which no JSON payload can carry) is one the
+ * renderer would descend into without end, so it keeps the bypass too.
  */
-function hasMalformedPropertySpec(schema: unknown, depth = 0): boolean {
-  if (depth > 32) return true;
-  if (schema === null || typeof schema !== "object" || Array.isArray(schema)) return false;
-  const declared = schema as Record<string, unknown>;
-  const properties = declared.properties;
-  if (properties !== undefined) {
-    if (properties === null || typeof properties !== "object" || Array.isArray(properties)) return true;
-    for (const spec of Object.values(properties as Record<string, unknown>)) {
-      if (spec === null || typeof spec !== "object" || Array.isArray(spec)) return true;
-      if (hasMalformedPropertySpec(spec, depth + 1)) return true;
+function hasMalformedPropertySpec(schema: unknown): boolean {
+  type Frame = { node: object; leaving: boolean };
+  const stack: Frame[] = [];
+  const onPath = new Set<object>();
+  const done = new Set<object>();
+  const visit = (node: unknown) => {
+    if (node !== null && typeof node === "object" && !Array.isArray(node)) stack.push({ node, leaving: false });
+  };
+  visit(schema);
+  while (stack.length > 0) {
+    const { node, leaving } = stack.pop()!;
+    if (leaving) {
+      onPath.delete(node);
+      done.add(node);
+      continue;
     }
-  }
-  const items = declared.items;
-  if (items !== null && typeof items === "object" && !Array.isArray(items)) {
-    if (hasMalformedPropertySpec(items, depth + 1)) return true;
+    if (onPath.has(node)) return true;
+    if (done.has(node)) continue;
+    onPath.add(node);
+    stack.push({ node, leaving: true });
+    const declared = node as Record<string, unknown>;
+    const properties = declared.properties;
+    if (properties !== undefined) {
+      if (properties === null || typeof properties !== "object" || Array.isArray(properties)) return true;
+      for (const spec of Object.values(properties as Record<string, unknown>)) {
+        if (spec === null || typeof spec !== "object" || Array.isArray(spec)) return true;
+        visit(spec);
+      }
+    }
+    visit(declared.items);
   }
   return false;
 }
