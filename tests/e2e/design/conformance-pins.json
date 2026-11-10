@@ -13,22 +13,22 @@
       "id": "app-components",
       "file": "app-components.json",
       "source": "published",
-      "manifestSha256": "4fe35b8bee4af4475f71b5ea8662fd7c6f074c3735f80d477c33c17f4628a617",
-      "specContentHash": "sha256:dce332648ec4e3f8c56599d5e66eb48985593d3e15f453dd5940379a4daea7cc"
+      "manifestSha256": "957a38057abfc46bb6a2a83cad32b7316e4c84f95dad7b3ef7f73e9c7ace1b8c",
+      "specContentHash": "sha256:f521c8d599c5c2e243f2a30d3ea5d54a9407137b336a1eb2c2fc23e342fb06ab"
     },
     {
       "id": "app-extensions",
       "file": "app-extensions.json",
       "source": "published",
-      "manifestSha256": "b1f00ffcf9aed87793ed0d1ae7604a030d98a09e0c43db987356484e817533d0",
-      "specContentHash": "sha256:9c86b3006aa25dad2c255088c10f7e3f4d1dc387dd16a6dc40c8527e92235a1a"
+      "manifestSha256": "e4b393356f5ef90d97a5bc863c7b9adab259fff43918a12792cd4a675b338f65",
+      "specContentHash": "sha256:0283cf7f711f9d0705222838ca7eb853edc2fcde4cb34e1c206ca5527fd57cdf"
     },
     {
       "id": "app-connectors",
       "file": "app-connectors.json",
       "source": "published",
-      "manifestSha256": "2293c96c7b10363fcaf15549fd2690ad52b9b0ba4794d1679b1c8f0a150211b4",
-      "specContentHash": "sha256:be15e54fb6267260cdd6b196ff77bab8a6f8a6c76e0758a5528e920121a7b576"
+      "manifestSha256": "23b16595714596fb6b1d0fa7ce8b44e570318c1feb53b3c0069e2506a3fcc3e1",
+      "specContentHash": "sha256:b3ac24669c6ce08d8fbff01c729aca5fc4e94ecf88bb928ffda1c8045ce9d6e3"
     },
     {
       "id": "app-notifications",
