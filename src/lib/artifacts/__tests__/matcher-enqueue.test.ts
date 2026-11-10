@@ -107,4 +107,22 @@ describe("enqueueArtifactMatchRun", () => {
       }),
     ).resolves.toBeUndefined();
   });
+
+  // cinatra#4223: a queue error's message can carry a host or a connection string; the log line keeps the ids only.
+  it("best-effort: a queue failure logs one line without the error's text", async () => {
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      enqueueMock.mockRejectedValue(new Error("connect ECONNREFUSED queue-secret-host:6379"));
+      await enqueueArtifactMatchRun({
+        orgId: "org-a",
+        artifactId: "art-1",
+        representationRevisionId: "rep-1",
+      });
+      expect(warned).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(warned.mock.calls)).toContain("art-1");
+      expect(JSON.stringify(warned.mock.calls)).not.toContain("queue-secret-host");
+    } finally {
+      warned.mockRestore();
+    }
+  });
 });
