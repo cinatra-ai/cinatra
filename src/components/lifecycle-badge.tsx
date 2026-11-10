@@ -11,7 +11,9 @@ import { cn } from "@/lib/utils";
 // "active" | "archived" | "locked".
 //
 // Mapping: lifecycle "active" → StatusPill "approved" (sea-green check).
-//          lifecycle "archived" → StatusPill "archived" (muted grey cross).
+//          lifecycle "archived" → StatusPill "archived" (the roster's muted
+//          archive box, specs/app.html; the Extensions marked-text chip keeps
+//          its grey cross in installed-status-indicator.tsx).
 //          lifecycle "locked" → StatusPill "approved" (live/green styling —
 //          a locked system extension IS active) with a distinct "Locked"
 //          label + explanatory tooltip, mirroring lifecycle-ui.ts copy.

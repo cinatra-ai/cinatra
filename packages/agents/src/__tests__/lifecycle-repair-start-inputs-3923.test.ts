@@ -4,8 +4,9 @@ import { PgDialect } from "drizzle-orm/pg-core";
 
 // Only external persistence, queue and identity-reading ports are replaced.
 // The real dispatcher, coordinator, system authority mint, ActorContext
-// builder, the declared findings projection (cinatra#4424) and the CMS
-// instruction projection execute. No run or queue job exists.
+// builder and the declared findings projection (cinatra#4424) execute. The
+// CMS snapshot read-back is a spy: the drain must never read it. No run or
+// queue job exists.
 const ports = vi.hoisted(() => ({
   reads: [] as unknown[][],
   updateResults: [] as unknown[][],
@@ -95,7 +96,6 @@ vi.mock("../cms-repaired-capture-port", () => ({
 }));
 
 import { dispatchPendingProducerRepairs, repairRunId } from "../lifecycle-repair-dispatch-store";
-import { projectCmsRepairInputParams } from "../lifecycle-repair-cms-production-bridge";
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
 
 // Source-contract fixtures from the adopted producers' actual root Flow
@@ -239,7 +239,7 @@ describe("repair start inputs satisfy the actual producing root contracts", () =
   for (const contract of producerContracts) {
     it(`${contract.label}: retains every required start input and passes standard root-schema validation`, async () => {
       const original = { ...contract.originalInputs, customProducerOption: { untouched: ["value"] } };
-      arrangeProducer(original); ports.target = cmsTarget(contract.resourceType);
+      arrangeProducer(original, {}, DECLARES_INSTRUCTIONS); ports.target = cmsTarget(contract.resourceType);
       const result = await dispatchPendingProducerRepairs();
       expect(result).toMatchObject({ dispatched: 1, failed: 0, escalated: 0 });
       const parsed = schemaForRoot(contract).safeParse(inputParams());
@@ -249,15 +249,15 @@ describe("repair start inputs satisfy the actual producing root contracts", () =
     });
 
     it(`${contract.label}: the consumed instructions use fresh findings instead of inherited old instructions`, async () => {
-      arrangeProducer({ ...contract.originalInputs, lifecycleRepairRequest: { repairId: "previous-repair", findings: [{ message: "Stale previous finding" }] } });
+      arrangeProducer({ ...contract.originalInputs, lifecycleRepairRequest: { repairId: "previous-repair", findings: [{ message: "Stale previous finding" }] } },
+        {}, DECLARES_INSTRUCTIONS);
       ports.target = cmsTarget(contract.resourceType);
       await dispatchPendingProducerRepairs();
       const delivered = inputParams();
-      expect(delivered.instructions).toContain(currentFinding.message);
-      expect(delivered.instructions).toContain("field: title");
+      expect(delivered.instructions).toBe(FINDINGS_TEXT);
       expect(delivered.instructions).not.toContain("Old producing instructions");
       expect(delivered.instructions).not.toContain("Stale previous finding");
-      expect(delivered.task).toBe(delivered.instructions);
+      expect(delivered).not.toHaveProperty("task");
       expect(delivered.lifecycleRepairRequest).toMatchObject({ repairId: "repair-current", attempt: 2, findings: [currentFinding] });
     });
 
@@ -331,24 +331,16 @@ describe("repair start inputs satisfy the actual producing root contracts", () =
     }
   });
 
-  it("a producer that declares nothing keeps the CMS bridge's instructions on a captured CMS base until its pinned release declares its input", async () => {
-    const original = { instanceId: "cms-site", instructions: "Old producing instructions" };
-    arrangeProducer(original, {}, JSON.stringify({ repairCapable: true })); ports.target = cmsTarget();
-    await dispatchPendingProducerRepairs();
-    const delivered = inputParams();
-    expect(delivered.instructions).toContain(currentFinding.message);
-    expect(delivered.instructions).not.toBe(FINDINGS_TEXT);
-    expect(delivered.task).toBe(delivered.instructions);
-    expect(ports.readBack).toHaveBeenCalledOnce();
-  });
-
-  it("a producer that declares nothing on a captured CMS base gets, byte for byte, its own inputs, the bridge's additions and the typed request", async () => {
+  it("a producer that declares nothing gets, byte for byte, its own inputs plus the typed request on a captured CMS base too, and no base row is read", async () => {
     const original = { instanceId: "cms-site", instructions: "Old producing instructions", custom: { kept: true } };
-    arrangeProducer(original, {}, JSON.stringify({ repairCapable: true })); ports.target = cmsTarget();
-    await dispatchPendingProducerRepairs();
-    const bridge = await projectCmsRepairInputParams(deliveredRequest() as never);
-    expect(Object.keys(bridge).sort()).toEqual(["instructions", "task"]);
-    expect(JSON.stringify(inputParams())).toBe(JSON.stringify({ ...original, ...bridge, lifecycleRepairRequest: deliveredRequest() }));
+    for (const lifecycleConfig of [undefined, null, JSON.stringify({ repairCapable: true })]) {
+      ports.created = []; ports.readBack.mockClear();
+      arrangeProducer(original, {}, lifecycleConfig); ports.target = cmsTarget();
+      expect(await dispatchPendingProducerRepairs()).toMatchObject({ dispatched: 1, failed: 0, escalated: 0 });
+      expect(JSON.stringify(inputParams())).toBe(JSON.stringify({ ...original, lifecycleRepairRequest: deliveredRequest() }));
+      expect(inputParams()).not.toHaveProperty("task");
+      expect(ports.readBack).not.toHaveBeenCalled();
+    }
   });
 
   it("a declared input replaces whatever value of any type the producing run recorded under that name", async () => {
@@ -359,13 +351,6 @@ describe("repair start inputs satisfy the actual producing root contracts", () =
       expect(JSON.stringify(inputParams())).toBe(JSON.stringify({ instructions: FINDINGS_TEXT, custom: "retained",
         lifecycleRepairRequest: deliveredRequest() }));
     }
-  });
-
-  it("returns no CMS additions for a non-CMS target", async () => {
-    const request = { kind: "lifecycle_repair_request" as const, repairId: "repair-current", gateId: "gate-current", lineageId: "lineage-current",
-      attempt: 2, baseTarget: { artifactId: "artifact-base", representationRevisionId: "revision-base" }, expectedBaseRevisionId: "revision-base",
-      findings: [], continuationMode: "async_effects_gated", continuationAddress: null, originatingRunBy: "human-origin" };
-    expect(await projectCmsRepairInputParams(request)).toEqual({});
   });
 });
 

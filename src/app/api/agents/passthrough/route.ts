@@ -24,6 +24,10 @@ import {
   type ShapedArtifactImageInput,
 } from "./artifact-image-shaper";
 import {
+  shapeArtifactPageCaptureInput,
+  type ShapedArtifactPageCaptureInput,
+} from "@/lib/artifact-page-capture-shaper";
+import {
   shapeTestDeliverySendInput,
   shapeTestDeliverySendResult,
 } from "./test-delivery-seam";
@@ -98,6 +102,11 @@ const ALLOWED_TOOLS = new Set([
   // provider, sharing the #923 idempotency ledger (`path:'materialize_tool'`)
   // and, for a regeneration, the mid-run revision's one compare-and-set.
   "artifact_image_generate",
+  // THE PAGE CAPTURE TOOL (cinatra#4223): a page url on one of the org's active
+  // connect-registered sites in, a PNG of that page filed. Dispatched to
+  // `@/lib/artifact-page-capture-tool#captureArtifactPage` under the bound run's
+  // own authority, sharing the #923 idempotency ledger (`path:'materialize_tool'`).
+  "artifact_page_capture",
   // Run-scoped HITL prompt primitives (#1794) — the deterministic pre-interrupt
   // seam. An extension workflow's prep ApiNode calls these to assemble / shape
   // its own HITL payload before the interrupt; the primitive derives the run +
@@ -319,6 +328,10 @@ TOOL_INPUT_SHAPERS.artifact_materialize = (raw) =>
 // {extension, prompt, title, node_id} plus the picture's own data (native or as
 // a JSON string, which is all a wayflowcore json_body template can carry).
 TOOL_INPUT_SHAPERS.artifact_image_generate = (raw) => shapeArtifactImageInput(raw);
+
+// The page capture tool's seam shaper (cinatra#4223): pure module, flow
+// variables wire straight to {extension, title, url, node_id}.
+TOOL_INPUT_SHAPERS.artifact_page_capture = (raw) => shapeArtifactPageCaptureInput(raw);
 
 // email-test-delivery run_send input shaping (#1625) — the pure shaper
 // lives in ./test-delivery-seam (zero-dep, unit-tested). It JSON-parses the
@@ -629,6 +642,34 @@ export async function POST(req: Request): Promise<Response> {
         provider: outcome.provider,
         model: outcome.model,
         mime: outcome.mime,
+        deduped: outcome.deduped,
+      };
+    } else if (tool === "artifact_page_capture") {
+      // THE PAGE CAPTURE TOOL (cinatra#4223). Every identity comes from the run
+      // row bound above, never from the request body. Dynamic import keeps the
+      // capture + artifact stack out of this route's static module graph.
+      const { captureArtifactPage } = await import("@/lib/artifact-page-capture-tool");
+      const shaped = input as unknown as ShapedArtifactPageCaptureInput;
+      const outcome = await captureArtifactPage({
+        runId: run.id,
+        orgId: run.orgId,
+        templateId: run.templateId,
+        packageVersion: run.packageVersion,
+        createdBy: run.runBy,
+        nodeId: shaped.nodeId,
+        extension: shaped.extension,
+        title: shaped.title,
+        url: shaped.url,
+      });
+      if (!outcome.ok) {
+        return NextResponse.json({ error: outcome.error, reason: outcome.reason }, { status: 400 });
+      }
+      result = {
+        artifactId: outcome.artifactId,
+        representationRevisionId: outcome.representationRevisionId,
+        capturedUrl: outcome.capturedUrl,
+        viewport: outcome.viewport,
+        capturedAt: outcome.capturedAt,
         deduped: outcome.deduped,
       };
     } else if (RUN_FOLDER_TOOLS.has(tool)) {

@@ -57,13 +57,11 @@ import "server-only";
 //   • actually ENQUEUES the repair run (`enqueueAgentRun`, `jobId: runId` for
 //     BullMQ-level dedup across a re-drain) so a `dispatched` repair genuinely
 //     runs, dispatched exactly like any other agent run;
-//   • projects an optional CMS-generic task/`inputParams` addition (see
-//     `./lifecycle-repair-cms-production-bridge`) when the base target is a
-//     captured CMS snapshot — a no-op for every other producer (e.g. blog).
-//     cinatra#4424: a producer that declares its findings input
-//     (`cinatra.lifecycle.repairFindingsInput`) gets the generic projection
-//     (`projectRepairFindingsInput`, `@/lib/lifecycle/lifecycle-policy`)
-//     instead, for every base;
+//   • puts the reviewer's findings into the input the producer declares for
+//     them (cinatra#4424: `cinatra.lifecycle.repairFindingsInput`, projected by
+//     `projectRepairFindingsInput`, `@/lib/lifecycle/lifecycle-policy`), for
+//     every base whatever its kind; a producer that declares nothing gets its
+//     own inputs plus the typed request;
 //   • THE SECURITY FIX: the dispatched run's ActorContext is the ORIGINATING
 //     producing run's own `runBy`, re-verified LIVE at dispatch time via
 //     `resolveOrgRoleForUser` (never trusted from whatever the producing run
@@ -317,18 +315,9 @@ export async function dispatchPendingProducerRepairs(opts?: {
 
       // The reviewer's findings go into the input the producer DECLARES for
       // them (cinatra#4424): one generic text built from the findings alone,
-      // for every base, whatever its kind.
-      //
-      // A producer that declares no findings input keeps today's dispatch,
-      // byte for byte: its own inputs plus the typed request, and, only for a
-      // base that is a captured CMS snapshot, the CMS bridge's instructions
-      // (cinatra#2286 S10 PR2). That fallback stays until the application's
-      // pins name the Drupal and WordPress agent releases that declare
-      // `instructions` (cinatra#4424, item 5); the pinned releases declare
-      // nothing yet and read the findings from `instructions`, so dropping it
-      // first would hand their repair runs the producing run's old
-      // instructions. The bridge is imported dynamically, so a producer that
-      // declares its input never loads it.
+      // for every base, whatever its kind. A producer that declares no
+      // findings input gets its own inputs plus the typed request, byte for
+      // byte; the drain reads no base row and adds no input for it.
       //
       // The drain applies the declaration it reads here only to a run it
       // creates. A run that already exists (a re-drain after a crash between creation and enqueue)
@@ -336,16 +325,8 @@ export async function dispatchPendingProducerRepairs(opts?: {
       // in the queue while the template is re-imported: the worker's run start
       // (`bindRepairFindingsInputAtStart`, `./execution.ts`) re-derives the
       // findings input from the template it executes.
-      const declaredFindingsInput = projectRepairFindingsInput(producer.lifecycle, request.findings);
-      let findingsInputParams: Record<string, unknown>;
-      if (declaredFindingsInput) {
-        findingsInputParams = declaredFindingsInput;
-      } else {
-        const { projectCmsRepairInputParams } = await import(
-          "./lifecycle-repair-cms-production-bridge"
-        );
-        findingsInputParams = await projectCmsRepairInputParams(request);
-      }
+      const findingsInputParams: Record<string, unknown> =
+        projectRepairFindingsInput(producer.lifecycle, request.findings) ?? {};
 
       const [already] = await db
         .select({ id: agentRuns.id })
