@@ -702,6 +702,13 @@ describe("wordpress connection-admin + content + widget-auth services (cinatra#1
     expect(hostProviders).toEqual([]);
   });
 
+  it("the CMS review seam is NO LONGER host-published — the content-editor agents file the page snapshot (cinatra#3862 leg 7)", () => {
+    // No connector resolves @cinatra-ai/host:cms-review any more (legs 5 and 6),
+    // so the application publishes nothing under it: no provider at all, the
+    // host's or anyone's.
+    expect(resolveCapabilityProviders("@cinatra-ai/host:cms-review")).toEqual([]);
+  });
+
   // The wordpress widget-auth store INVERTED to the wordpress-mcp-connector
   // (cinatra#975 Wave 2): the host publishes no `wordpress-widget-auth`
   // service — the connector registers the capability from its own register(ctx).
