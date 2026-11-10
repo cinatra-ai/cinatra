@@ -118,6 +118,29 @@ const ALL_CAPS = {
 };
 const NO_BLOCKERS = { teams: 0, activeProjects: 0, connectors: 0, dashboards: 0, agents: 0 };
 
+// The Archived pill of an archived organization's page header (cinatra#4290):
+// the components drawing (specs/app-components.html, the entity page header
+// example) gives it the status roster's Archived pill with the archive box.
+// The grey cross is the Extensions lifecycle mark and never shows here.
+const BOX_GLYPH_A = "M21 8v13H3V8";
+const BOX_GLYPH_B = "M1 3h22v5H1z";
+const CROSS_GLYPH_A = "M18 6 6 18";
+
+// Returns the markup of the one Archived lifecycle pill, from its attributes to
+// the end of its glyph, after checking that it sits in the page header.
+function headerArchivedPill(html: string): string {
+  const at = html.indexOf('data-lifecycle="archived"');
+  expect(at).toBeGreaterThan(-1);
+  expect(html.indexOf('data-lifecycle="archived"', at + 1)).toBe(-1);
+  const headerStart = html.lastIndexOf("<header", at);
+  expect(headerStart).toBeGreaterThan(-1);
+  expect(html.slice(headerStart, at)).not.toContain("</header>");
+  expect(html.indexOf("</header>", at)).toBeGreaterThan(at);
+  const end = html.indexOf("</svg>", at);
+  expect(end).toBeGreaterThan(at);
+  return html.slice(at, end);
+}
+
 function primeSession(userId = "u1") {
   h.getAuthSession.mockResolvedValue({ user: { id: userId } });
 }
@@ -242,6 +265,31 @@ describe("archived org read-only posture (cinatra#1942 V4)", () => {
     expect(html).not.toContain("Read-only — this organization is archived.");
     expect(html).not.toMatch(/<fieldset[^>]*disabled/);
     expect(html).not.toMatch(/<fieldset[^>]*inert/);
+  });
+
+  test("the header draws the roster's Archived pill with the archive box, never the cross (cinatra#4290)", async () => {
+    primeSession();
+    h.isMember.mockResolvedValue(true);
+    h.state.queue = [[ARCHIVED_ORG_ROW], MEMBER_ROWS];
+    h.listTeams.mockResolvedValue([]);
+    h.resolveCaps.mockResolvedValue(NO_CAPS);
+
+    const pill = headerArchivedPill(await renderScreen());
+    expect(pill).toContain('data-status="archived"');
+    expect(pill).toContain(BOX_GLYPH_A);
+    expect(pill).toContain(BOX_GLYPH_B);
+    expect(pill).not.toContain(CROSS_GLYPH_A);
+  });
+
+  test("an active organization draws no lifecycle pill in its header (cinatra#4290)", async () => {
+    primeSession();
+    h.isMember.mockResolvedValue(true);
+    h.state.queue = [[ORG_ROW], MEMBER_ROWS];
+    h.listTeams.mockResolvedValue([]);
+    h.resolveCaps.mockResolvedValue(NO_CAPS);
+
+    const html = await renderScreen();
+    expect(html).not.toContain('data-slot="lifecycle-badge"');
   });
 });
 

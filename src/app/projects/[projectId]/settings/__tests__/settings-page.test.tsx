@@ -73,6 +73,29 @@ const userOwnedProject = {
   organizationId: ORG_A,
 };
 
+// The Archived pill of an archived project's page header (cinatra#4290): the
+// components drawing (specs/app-components.html, the entity page header
+// example) gives it the status roster's Archived pill with the archive box.
+// The grey cross is the Extensions lifecycle mark and never shows here.
+const BOX_GLYPH_A = "M21 8v13H3V8";
+const BOX_GLYPH_B = "M1 3h22v5H1z";
+const CROSS_GLYPH_A = "M18 6 6 18";
+
+// Returns the markup of the one Archived lifecycle pill, from its attributes to
+// the end of its glyph, after checking that it sits in the page header.
+function headerArchivedPill(html: string): string {
+  const at = html.indexOf('data-lifecycle="archived"');
+  expect(at).toBeGreaterThan(-1);
+  expect(html.indexOf('data-lifecycle="archived"', at + 1)).toBe(-1);
+  const headerStart = html.lastIndexOf("<header", at);
+  expect(headerStart).toBeGreaterThan(-1);
+  expect(html.slice(headerStart, at)).not.toContain("</header>");
+  expect(html.indexOf("</header>", at)).toBeGreaterThan(at);
+  const end = html.indexOf("</svg>", at);
+  expect(end).toBeGreaterThan(at);
+  return html.slice(at, end);
+}
+
 describe("project settings page RSC (#1733)", () => {
   it("404-hides when actor lacks project.read", async () => {
     const { default: SettingsPage } = await import("../page");
@@ -158,5 +181,46 @@ describe("project settings page RSC (#1733)", () => {
 
     expect(html).toMatch(/>Archived</);
     expect(html).toMatch(/data-testid="project-sharing-panel"/);
+  });
+
+  it("draws the roster's Archived pill with the archive box in the header, never the cross (#4290)", async () => {
+    const { default: SettingsPage } = await import("../page");
+
+    await primeActor(OWNER, { granted: true });
+    const projectsStore = (await import("@/lib/projects-store")) as unknown as {
+      readProjectById: ReturnType<typeof vi.fn>;
+      projectsDb: { execute: ReturnType<typeof vi.fn> };
+    };
+    projectsStore.readProjectById.mockResolvedValue(userOwnedProject);
+    projectsStore.projectsDb.execute.mockResolvedValueOnce({
+      rows: [{ archived_at: new Date("2026-01-01T00:00:00Z") }],
+    });
+
+    const ui = (await SettingsPage({
+      params: Promise.resolve({ projectId: userOwnedProject.id }),
+    } as never)) as ReactElement;
+    const pill = headerArchivedPill(renderToStaticMarkup(ui));
+
+    expect(pill).toContain('data-status="archived"');
+    expect(pill).toContain(BOX_GLYPH_A);
+    expect(pill).toContain(BOX_GLYPH_B);
+    expect(pill).not.toContain(CROSS_GLYPH_A);
+  });
+
+  it("an active project draws no lifecycle pill in its header (#4290)", async () => {
+    const { default: SettingsPage } = await import("../page");
+
+    await primeActor(OWNER, { granted: true });
+    const projectsStore = (await import("@/lib/projects-store")) as unknown as {
+      readProjectById: ReturnType<typeof vi.fn>;
+    };
+    projectsStore.readProjectById.mockResolvedValue(userOwnedProject);
+
+    const ui = (await SettingsPage({
+      params: Promise.resolve({ projectId: userOwnedProject.id }),
+    } as never)) as ReactElement;
+    const html = renderToStaticMarkup(ui);
+
+    expect(html).not.toContain('data-slot="lifecycle-badge"');
   });
 });
