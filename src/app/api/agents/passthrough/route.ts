@@ -15,7 +15,6 @@ import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import { withActorContext } from "@cinatra-ai/llm/actor-context";
 import type { ActorContext } from "@/lib/authz/actor-context";
-import { shapeBlogPipelineObjectsSave } from "./blog-pipeline-seam";
 import {
   shapeArtifactMaterializeInput,
   type ShapedArtifactMaterializeInput,
@@ -246,8 +245,19 @@ const TOOL_INPUT_SHAPERS: Record<string, InputShaper> = {
   // the 30s+ LLM tax. Only fires when the ApiNode opts-in via the synthetic
   // input field `_shape: "email_outreach_context_setup"` so other objects_save
   // call sites are untouched.
+  //
+  // `_shape` is a CLOSED discriminator (cinatra#3035): a body without the
+  // field passes through unchanged, and a body that carries it with any other
+  // value is refused (the shaper-throw contract answers HTTP 400). A retired
+  // opt-in must not fall through with its caller-supplied `typeHint` and
+  // `rawData` into the save.
   objects_save(raw) {
-    if (raw._shape !== "email_outreach_context_setup") return raw;
+    if (!Object.prototype.hasOwnProperty.call(raw, "_shape")) return raw;
+    if (raw._shape !== "email_outreach_context_setup") {
+      throw new Error(
+        'objects_save: `_shape` names no passthrough shaper; the only accepted value is "email_outreach_context_setup".',
+      );
+    }
     const setupJson = typeof raw.setupJson === "string" ? raw.setupJson : "";
     const cinatra_agent_run_id =
       typeof raw.cinatra_agent_run_id === "string"
@@ -322,17 +332,6 @@ TOOL_INPUT_SHAPERS.artifact_image_generate = (raw) => shapeArtifactImageInput(ra
 // The page capture tool's seam shaper (cinatra#4223): pure module, flow
 // variables wire straight to {extension, title, url, node_id}.
 TOOL_INPUT_SHAPERS.artifact_page_capture = (raw) => shapeArtifactPageCaptureInput(raw);
-
-// blog-pipeline-agent deterministic seam dispatch.
-// The pure shaper lives in ./blog-pipeline-seam (zero-dep, unit-tested).
-// Chained AHEAD of the base objects_save shaper; the `_shape` opt-in
-// keeps every other objects_save call site untouched.
-const baseObjectsSaveShaper = TOOL_INPUT_SHAPERS.objects_save;
-TOOL_INPUT_SHAPERS.objects_save = (raw, agentRunId) => {
-  const blog = shapeBlogPipelineObjectsSave(raw, agentRunId);
-  if (blog) return blog;
-  return baseObjectsSaveShaper ? baseObjectsSaveShaper(raw, agentRunId) : raw;
-};
 
 // email-test-delivery run_send input shaping (#1625) — the pure shaper
 // lives in ./test-delivery-seam (zero-dep, unit-tested). It JSON-parses the
@@ -437,9 +436,9 @@ export async function POST(req: Request): Promise<Response> {
   try {
     input = shaper ? shaper(rawInput, agentRunId) : rawInput;
   } catch (err) {
-    // A shaper that fails closed (e.g. blog-pipeline `selectedIdeaJson` that
-    // is not a parseable/matching BlogIdea) surfaces a clear 400 instead of
-    // continuing into a wrong/empty downstream artifact.
+    // A shaper that fails closed (it throws on an input it cannot shape)
+    // surfaces a clear 400 instead of continuing into a wrong/empty
+    // downstream artifact.
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 400 });
   }
