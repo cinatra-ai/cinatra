@@ -1096,6 +1096,56 @@ export function collectArtifactImageNodesFromOasDocument(
   return { nodes };
 }
 
+/**
+ * cinatra#3035: the flow's control topology as the OAS compiler reads it — the
+ * `control_flow_connections` adjacency (a repeated edge listed once) and the ids
+ * reachable from `start_node`, in breadth-first order. `compileOasAgentJson`
+ * numbers its approval steps from this order, so a reader that asks which nodes
+ * execute, and in what order, reads the same one.
+ */
+export function readFlowControlTopology(doc: Record<string, unknown>): {
+  adjacency: Map<string, string[]>;
+  reachable: string[];
+} {
+  const adjacency = new Map<string, string[]>();
+  const edges = Array.isArray(doc.control_flow_connections) ? doc.control_flow_connections : [];
+  for (const edge of edges) {
+    const e = edge as { from_node?: { $component_ref?: string }; to_node?: { $component_ref?: string } } | null;
+    const fromId = e?.from_node?.$component_ref;
+    const toId = e?.to_node?.$component_ref;
+    if (!fromId || !toId) continue;
+    if (!adjacency.has(fromId)) adjacency.set(fromId, []);
+    const neighbors = adjacency.get(fromId)!;
+    if (!neighbors.includes(toId)) neighbors.push(toId);
+  }
+  const startId = (doc.start_node as { $component_ref?: unknown } | null | undefined)?.$component_ref;
+  const reachable: string[] = [];
+  if (typeof startId !== "string") return { adjacency, reachable };
+  const visited = new Set<string>();
+  const queue: string[] = [startId];
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    reachable.push(id);
+    for (const n of adjacency.get(id) ?? []) if (!visited.has(n)) queue.push(n);
+  }
+  return { adjacency, reachable };
+}
+
+/**
+ * The artifact-review marker exactly as the compiler puts it on an
+ * InputMessageNode step (cinatra#1796): `metadata.cinatra.artifactReview.targetsInput`
+ * when it is a non-empty string, otherwise undefined.
+ */
+export function readArtifactReviewTargetsInput(component: unknown): string | undefined {
+  const raw = (component as
+    | { metadata?: { cinatra?: { artifactReview?: { targetsInput?: unknown } } } }
+    | null
+    | undefined)?.metadata?.cinatra?.artifactReview?.targetsInput;
+  return typeof raw === "string" && raw.length > 0 ? raw : undefined;
+}
+
 // ---------------------------------------------------------------------------
 // The EXECUTED artifact-binding declaration, persisted (cinatra#3208).
 //

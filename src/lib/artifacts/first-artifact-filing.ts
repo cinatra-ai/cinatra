@@ -54,9 +54,14 @@ export type FirstArtifactFilingInput<S> = {
   target: ResolvedArtifactTarget;
   /**
    * The writer's own fields, read only on the writer road: the run's runBy principal (persisted as the
-   * artifact's createdBy) and the title. A throw here is a failed write.
+   * artifact's createdBy), the title and, optionally, the origin (default agent_generated; cinatra#3035:
+   * a reviewed mid-run write takes live_generator). A throw here is a failed write.
    */
-  writerFields: () => { createdBy: string | null; title: string };
+  writerFields: () => {
+    createdBy: string | null;
+    title: string;
+    originKind?: "agent_generated" | "live_generator";
+  };
   /** The object's own fields, validated against the type's schema by the writer; read after writerFields. */
   typedData?: () => Record<string, unknown> | undefined;
   /** The caller's ops for the writer's second transaction, after the finalize. */
@@ -113,7 +118,7 @@ export async function fileFirstArtifactWrite<S>(input: FirstArtifactFilingInput<
         visibility: ownership.visibility,
         title: writer.title,
         declaredMime: input.mime,
-        originKind: "agent_generated",
+        originKind: writer.originKind ?? "agent_generated",
         stream: (async function* () {
           yield input.bytes;
         })(),
