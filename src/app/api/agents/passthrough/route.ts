@@ -582,6 +582,8 @@ export async function POST(req: Request): Promise<Response> {
           packageVersion: run.packageVersion,
           createdBy: run.runBy,
           nodeId: shaped.nodeId,
+          // cinatra#3035: the signed step, never a request field, decides review.
+          ...(verifiedStepId ? { verifiedStepId } : {}),
           extension: shaped.extension,
           objectTypeId: shaped.objectTypeId,
           title: shaped.title,
@@ -618,6 +620,8 @@ export async function POST(req: Request): Promise<Response> {
         packageVersion: run.packageVersion,
         createdBy: run.runBy,
         nodeId: shaped.nodeId,
+        // cinatra#3035: the signed step, never a request field, decides review.
+        ...(verifiedStepId ? { verifiedStepId } : {}),
         extension: shaped.extension,
         title: shaped.title,
         prompt: shaped.prompt,

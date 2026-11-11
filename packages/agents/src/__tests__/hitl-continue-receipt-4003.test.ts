@@ -1,4 +1,11 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+
+// cinatra#4150: every resume road reads the run's newest publish decision before it
+// sends. This suite is about another question, so no publish decision holds its run.
+vi.mock("../publish-decision-store", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readLatestDecisionForRun: async () => null,
+}));
 const ports = vi.hoisted(() => ({
   rows: [] as Record<string, unknown>[], events: [] as string[],
   query: vi.fn(), send: vi.fn(), get: vi.fn(), handle: vi.fn(),
