@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { PHASE_DEVELOPMENT_SERVER } from "next/constants";
 import { createRequire } from "node:module";
 import path from "node:path";
 
@@ -145,9 +146,13 @@ const buildCpus = readBuildKnobInt("CINATRA_BUILD_CPUS", 1, 256);
 //
 // For the webpack DEV server's Node.js compile only, this handler externalizes
 // these packages by the path they resolve to from the importing file, so Node
-// loads them from the pnpm store at runtime, as Turbopack does. The production
-// build is unchanged: a standalone image must not hold absolute paths of the
-// build machine.
+// loads them from the pnpm store at runtime, as Turbopack does. The `webpack`
+// key is added to the config ONLY in the development-server phase (see the
+// default export at the end of this file): Next treats any `webpack` key as a
+// custom webpack config and then turns the default webpack build worker off,
+// so a key in the production build phase would change that build even when
+// the hook does nothing. A standalone image must also not hold absolute paths
+// of the build machine.
 // ---------------------------------------------------------------------------
 const WEBPACK_DEV_NODE_EXTERNALS = new Set([
   "pacote",
@@ -171,14 +176,35 @@ function webpackDevNodeExternal(
     callback();
     return;
   }
+  let resolved: string;
   try {
-    const resolved = createRequire(path.join(context, "noop.js")).resolve(request);
-    callback(null, `commonjs ${resolved}`);
+    resolved = createRequire(path.join(context, "noop.js")).resolve(request);
   } catch {
     // Not resolvable from this importer: let webpack report it as usual.
     callback();
+    return;
   }
+  // Outside the try: an exception the callback throws propagates, and the
+  // callback is called exactly once.
+  callback(null, `commonjs ${resolved}`);
 }
+
+// The hook the development-server phase adds as the config's `webpack` key.
+// Turbopack never calls it, and the `turbopack` block of the config keeps
+// Next 16 from treating it as an unmigrated webpack config.
+const webpackDevServerHook: NonNullable<NextConfig["webpack"]> = (
+  config,
+  { dev, isServer, nextRuntime },
+) => {
+  if (dev && isServer && nextRuntime === "nodejs") {
+    const current = config.externals;
+    config.externals = [
+      ...(Array.isArray(current) ? current : current ? [current] : []),
+      webpackDevNodeExternal,
+    ];
+  }
+  return config;
+};
 
 const nextConfig: NextConfig = {
   // Emit a self-contained .next/standalone/ at build time so the runtime
@@ -219,19 +245,6 @@ const nextConfig: NextConfig = {
   // headless Playwright. The dev server still binds the same socket; this only
   // affects how Next's cross-origin guard classifies incoming requests.
   allowedDevOrigins: ["127.0.0.1"],
-  // cinatra#4546: see WEBPACK_DEV_NODE_EXTERNALS above. Turbopack never calls
-  // this hook, and the `turbopack` block above keeps Next 16 from treating it
-  // as an unmigrated webpack config.
-  webpack(config, { dev, isServer, nextRuntime }) {
-    if (dev && isServer && nextRuntime === "nodejs") {
-      const current = config.externals;
-      config.externals = [
-        ...(Array.isArray(current) ? current : current ? [current] : []),
-        webpackDevNodeExternal,
-      ];
-    }
-    return config;
-  },
   experimental: {
     // Decouple App Router client hydration from the dev-mode React debug
     // channel.
@@ -956,15 +969,29 @@ if (!SENTRY_BUILD_READY) {
   };
 }
 
-export default SENTRY_BUILD_READY
-  ? withSentryConfig(nextConfig, {
-      org: process.env.SENTRY_ORG,
-      project: process.env.SENTRY_PROJECT,
-      authToken: process.env.SENTRY_AUTH_TOKEN,
-      silent: !process.env.CI,
-      widenClientFileUpload: true,
-      tunnelRoute: "/monitoring",
-      disableLogger: true,
-      sourcemaps: { deleteSourcemapsAfterUpload: true },
-    })
-  : nextConfig;
+function withSentryWhenReady(config: NextConfig): NextConfig {
+  return SENTRY_BUILD_READY
+    ? withSentryConfig(config, {
+        org: process.env.SENTRY_ORG,
+        project: process.env.SENTRY_PROJECT,
+        authToken: process.env.SENTRY_AUTH_TOKEN,
+        silent: !process.env.CI,
+        widenClientFileUpload: true,
+        tunnelRoute: "/monitoring",
+        disableLogger: true,
+        sourcemaps: { deleteSourcemapsAfterUpload: true },
+      })
+    : config;
+}
+
+// Next calls this function with the phase it runs in. cinatra#4546: only the
+// development-server phase gets the `webpack` key (see
+// WEBPACK_DEV_NODE_EXTERNALS above); every other phase, the production build
+// among them, gets the config without it, exactly as before the hook.
+export default function nextConfigForPhase(phase: string): NextConfig {
+  return withSentryWhenReady(
+    phase === PHASE_DEVELOPMENT_SERVER
+      ? { ...nextConfig, webpack: webpackDevServerHook }
+      : nextConfig,
+  );
+}
