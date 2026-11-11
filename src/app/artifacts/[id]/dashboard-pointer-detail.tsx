@@ -4,19 +4,22 @@ import "server-only";
  * (cinatra#1895; spec `specs/app-artifacts.html` §VIII at design@5daf862;
  * owner ruling 2026-07-20).
  *
- * A dashboard-typed artifact's detail route is a POINTER surface: it NEVER
- * previews or renders the dashboard inline. It shows the artifact's metadata —
- * the dashboard glyph, its name, the defining-extension label, the scope chips
- * and the updated time — over a single primary "Open dashboard" affordance that
- * navigates to the dashboard's canonical surface. There is NO read-only grid, NO
- * embedded portlet render, and NO in-page rendering here — the canonical surface
- * owns both viewing and editing. There is also NO Download (a dashboard is a
- * live view, not a file).
+ * The artifact page draws this POINTER for an admitted dashboard row only where
+ * the display dispatch answers a floor (no installed display claims the
+ * dashboard, or the display that claims it needs a rebuild; cinatra#4311).
+ * Where a display mounts, the display draws the dashboard and this pointer is
+ * not drawn. The pointer itself NEVER previews or renders the dashboard inline.
+ * It shows the artifact's metadata — the dashboard glyph, its name, the
+ * defining-extension label, the scope chips and the updated time — over a
+ * single primary "Open dashboard" affordance that navigates to the dashboard's
+ * canonical surface. There is NO read-only grid, NO embedded portlet render,
+ * and NO in-page rendering here — the canonical surface owns both viewing and
+ * editing. There is also NO Download (a dashboard is a live view, not a file).
  *
  * The three frames below carry the closed §IX data-state set for this surface
- * (loading · ready · error); the caller streams the READY frame behind a
- * Suspense whose fallback is the LOADING frame, and renders the ERROR frame when
- * the dashboards source fails.
+ * (loading · ready · error). The artifact page renders the READY frame only,
+ * with the pointer the type's read gate already resolved; the LOADING and ERROR
+ * frames are kept for that data-state set.
  */
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";

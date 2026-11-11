@@ -506,6 +506,42 @@ describe("the live address of a dashboard row (cinatra#4311)", () => {
     expect(html).not.toContain('href="/teams/t-1/dashboards/a-1"');
   });
 
+  it("a dashboard row with a record address whose canonical path the gate rejects hands neither its display nor its header that address", async () => {
+    const EXTERNAL = "https://other.example/live";
+    mocks.readArtifactForDetail.mockReturnValue({
+      kind: "ok",
+      artifact: { ...ARTIFACT, objectType: DASHBOARD_TYPE, artifactType: DASHBOARD_TYPE, sourceUrl: EXTERNAL },
+    });
+    mocks.isDashboardArtifactType.mockImplementation((t) => t === DASHBOARD_TYPE);
+    mocks.resolveDashboardArtifactPointer.mockResolvedValue({
+      access: "ok",
+      pointer: { ...POINTER, canonicalHref: "//other.example/d" },
+    });
+    const html = await renderPage();
+    expect(mocks.mounted).toHaveLength(1);
+    expect(handedArtifact()?.sourceUrl).toBeNull();
+    expect(
+      (mocks.mounted[0]?.props as { actions?: { openInSource?: unknown } } | undefined)?.actions?.openInSource,
+    ).toBeNull();
+    expect(html).not.toContain("Open in source application");
+    expect(html).not.toContain("other.example");
+  });
+
+  it("a dashboard row with a record address and an admitted canonical path hands its display the path and draws no source-application link", async () => {
+    const EXTERNAL = "https://other.example/live";
+    mocks.readArtifactForDetail.mockReturnValue({
+      kind: "ok",
+      artifact: { ...ARTIFACT, objectType: DASHBOARD_TYPE, artifactType: DASHBOARD_TYPE, sourceUrl: EXTERNAL },
+    });
+    mocks.isDashboardArtifactType.mockImplementation((t) => t === DASHBOARD_TYPE);
+    mocks.resolveDashboardArtifactPointer.mockResolvedValue({ access: "ok", pointer: POINTER });
+    const html = await renderPage();
+    expect(mocks.mounted).toHaveLength(1);
+    expect(handedArtifact()?.sourceUrl).toBe("/teams/t-1/dashboards/a-1");
+    expect(html).not.toContain("Open in source application");
+    expect(html).not.toContain("other.example");
+  });
+
   it("a dashboard row under an open review still hands the pending reading with no live address", async () => {
     mocks.readArtifactForDetail.mockReturnValue({
       kind: "ok",

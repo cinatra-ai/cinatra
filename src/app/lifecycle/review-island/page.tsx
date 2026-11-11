@@ -229,8 +229,9 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
   // credential branch, because only that branch has a principal to seal
   // capabilities to: a same-site first-party frame reaching the cookie branch
   // below keeps the session addresses, which work there and are the narrower
-  // grant. The cookie branch names the session DATA road only (cinatra#4311):
-  // its reader carries the cookie that road is reached with.
+  // grant. The cookie branch names the session DATA road and the dashboard
+  // live address reader (cinatra#4311): its reader carries the cookie both are
+  // reached with.
   let roads: ReviewSurfaceRoads | null = null;
   if (credential) {
     const reader = await resolveIslandCredentialReader({ credential, ref });
@@ -305,9 +306,11 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
     if (!payload) return empty;
     runId = payload.runId;
     reviewTaskId = payload.reviewTaskId;
-    // THE SESSION DATA ROAD (cinatra#4311). This reader was authenticated by
-    // its session cookie, so its displays read live series from the
-    // application's own route with that cookie. Every other road of this
+    // THE SESSION DATA ROAD AND THE DASHBOARD LIVE ADDRESS READER
+    // (cinatra#4311). This reader was authenticated by its session cookie, so
+    // its displays read live series from the application's own route with that
+    // cookie, and a dashboard target's live address is read through the
+    // dashboard's read gate with the same session. Every other road of this
     // branch is unchanged: the session byte addresses, the content channel's
     // named absence and the first-party capture pair.
     roads = cookieIslandReviewSurfaceRoads();

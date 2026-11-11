@@ -196,6 +196,11 @@ describe("the dashboard's live address (cinatra#4311)", () => {
     ["a backslash address", "/\\elsewhere.example/d"],
     ["a path with a doubled slash", "/dashboards//d"],
     ["a path with a control character", "/dashboards/\td"],
+    // Not whitespace, so only the explicit control ranges reject these.
+    ["a path with a C0 control that is not whitespace", "/dashboards/\u0001d"],
+    ["a path with DEL", "/dashboards/\u007fd"],
+    ["a path with the first C1 control", "/dashboards/\u0080d"],
+    ["a path with the last C1 control", "/dashboards/\u009fd"],
     ["a script address", "javascript:alert(1)"],
   ])("%s gives an ok answer with its pointer and no live address", async (_label, canonicalHref) => {
     const pointer = { dashboardId: "dash-1", name: "Pipeline health", canonicalHref };

@@ -150,9 +150,9 @@ export function bindArtifactReviewPorts(ctx: {
    *
    * Present (a cookie surface) and, in the continued reading only, a dashboard
    * target's live address is its canonical path, read through the dashboard's
-   * own read gate with the reader's session. Absent (the island, whose reader
-   * holds no cookie, and every caller outside a surface) and no target reads a
-   * dashboard gate. The SURFACE's, like the roads above: this binder never
+   * own read gate with the reader's session. Absent (the island's credential
+   * branch, whose reader holds no cookie, and every caller outside a surface)
+   * and no target reads a dashboard gate. The SURFACE's, like the roads above: this binder never
    * loads the gate itself, because the locked routes reach this module.
    */
   dashboardLiveAddress?: DashboardLiveAddressReader;

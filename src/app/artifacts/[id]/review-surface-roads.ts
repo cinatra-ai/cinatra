@@ -159,8 +159,8 @@ export function hostArtifactContentBuilder(): ArtifactContentBuilder {
 }
 
 /**
- * The roads for a FIRST-PARTY surface: the content channel and the session
- * data road, and nothing else.
+ * The roads for a FIRST-PARTY surface: the content channel, the session data
+ * road and the dashboard live address reader (cinatra#4311).
  *
  * The byte road stays the session routes — they work under a cookie and they
  * are the narrower grant — and the capture pair stays the first-party pair.

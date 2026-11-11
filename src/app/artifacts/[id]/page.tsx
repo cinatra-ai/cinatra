@@ -278,13 +278,18 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
   // "Open live dashboard" link to `artifact.sourceUrl`, and the service fills
   // that field from a connector reference only, so a dashboard row reads null.
   // The type's read gate above already authorized the dashboard and answers its
-  // canonical path, so the display's copy of the row carries that path. The row
-  // as read is left as it is: the header below reads it, and a dashboard draws no
-  // "Open in source application" there.
-  const displayedArtifact: ArtifactSummary =
-    typeGate.access === "ok" && typeGate.liveAddress
-      ? { ...artifact, sourceUrl: typeGate.liveAddress }
-      : artifact;
+  // canonical path, so the display's copy of the row carries that path. Where the
+  // gate admits the dashboard but rejects its path, the live address is null and
+  // so is the display's copy: a record address the row may still carry is never
+  // the dashboard's address, so it does not stand in. A dashboard draws no "Open
+  // in source application" in the header below either; every other row keeps its
+  // record's own address in both places.
+  const dashboardGate =
+    typeGate.access === "ok" && typeGate.dashboardPointer !== null ? typeGate : null;
+  const displayedArtifact: ArtifactSummary = dashboardGate
+    ? { ...artifact, sourceUrl: dashboardGate.liveAddress }
+    : artifact;
+  const sourceApplicationHref = dashboardGate ? null : artifact.sourceUrl;
 
   // THE REVIEW READING (cinatra#3092). Read here, past the row's own read
   // authorization and the type's own read gate above, so a reader the row is
@@ -399,13 +404,14 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
         // download the drawing never draws — the fourth proof round measured it
         // on all twenty-two artifact frames. "Open in source application" is not
         // one: it is where a connector-referenced row came FROM, not its bytes.
-        // It reads the row as read (a connector reference), never the display's
-        // copy, which carries a dashboard's live address (cinatra#4311).
+        // It reads the row's record address (a connector reference), never the
+        // display's copy, which carries a dashboard's live address, and a
+        // dashboard row draws none (cinatra#4311).
         actions={
-          artifact.sourceUrl ? (
+          sourceApplicationHref ? (
             <Button asChild variant="outline">
               <Link
-                href={artifact.sourceUrl}
+                href={sourceApplicationHref}
                 target="_blank"
                 rel="noopener noreferrer"
               >

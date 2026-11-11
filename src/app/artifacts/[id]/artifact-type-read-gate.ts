@@ -88,13 +88,13 @@ export async function readArtifactTypeGate(artifact: {
 /**
  * The canonical path as a live address, or null. Only one root-relative path of
  * this application passes: it starts with one "/" and holds no "//", no "\\",
- * no whitespace and no control character, so a browser cannot read it as an
- * address of another host.
+ * no whitespace and no control character (C0, DEL or C1), so a browser cannot
+ * read it as an address of another host.
  */
 function rootRelativePathOrNull(href: unknown): string | null {
   if (typeof href !== "string") return null;
   if (!/^\/[^/\\]/.test(href)) return null;
-  if (/[\s\\]|[\u0000-\u001f\u007f]|\/\//.test(href)) return null;
+  if (/[\s\\]|[\u0000-\u001f\u007f-\u009f]|\/\//.test(href)) return null;
   return href;
 }
 
