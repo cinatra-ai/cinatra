@@ -1,5 +1,5 @@
 {
-  "$comment": "cinatra#4150 PR 4 (A3): ONE fixture both sides read. docker/wayflow/tests (the loader inserts a gate in front of each node declared metadata.cinatra.publishes: true) and packages/agents/src/__tests__/publish-gate-parity.test.ts (the host compiler's publishingSteps) both assert their ids equal publishingSteps below, gate ids = gatePrefix + step. The first two flows were copied by hand from the two publish packs at their lock pins (WordPress 415114bd, LinkedIn 11753d6c): the node ids, the control edges and the data edges into the publishing step, with the flag the packs will declare; every value is a string. The third has a publishing step first after start and a second one.",
+  "$comment": "cinatra#4150 PR 4 (A3): ONE fixture both sides read. docker/wayflow/tests (the loader inserts a gate in front of each node declared metadata.cinatra.publishes: true) and packages/agents/src/__tests__/publish-gate-parity.test.ts (the host compiler's publishingSteps) both assert their ids equal publishingSteps below, gate ids = gatePrefix + step. The first two flows were copied by hand from the two publish packs at their lock pins (WordPress 099e802b, LinkedIn 11753d6c): the node ids, the control edges and the data edges into the publishing step, with the flag the packs will declare; every value is a string. The third has a publishing step first after start and a second one.",
   "gatePrefix": "cinatra_publish_gate__",
   "flows": [
     {
@@ -27,7 +27,7 @@
             "type": "string"
           },
           {
-            "title": "wordpressInstanceId",
+            "title": "instanceId",
             "type": "string"
           },
           {
@@ -198,15 +198,15 @@
           },
           {
             "component_type": "DataFlowEdge",
-            "name": "start_wordpressInstanceId_to_publish_wordpressInstanceId",
+            "name": "start_instanceId_to_publish_instanceId",
             "source_node": {
               "$component_ref": "start"
             },
-            "source_output": "wordpressInstanceId",
+            "source_output": "instanceId",
             "destination_node": {
               "$component_ref": "publish"
             },
-            "destination_input": "wordpressInstanceId"
+            "destination_input": "instanceId"
           },
           {
             "component_type": "DataFlowEdge",
@@ -296,7 +296,7 @@
                 "type": "string"
               },
               {
-                "title": "wordpressInstanceId",
+                "title": "instanceId",
                 "type": "string"
               },
               {
@@ -400,7 +400,7 @@
               "input": {
                 "postArtifactId": "{{ postArtifactId }}",
                 "postRepresentationRevisionId": "{{ postRepresentationRevisionId }}",
-                "wordpressInstanceId": "{{ wordpressInstanceId }}",
+                "instanceId": "{{ instanceId }}",
                 "postText": "{{ postText }}",
                 "postArtifact": "{{ postArtifact }}",
                 "truncated": "{{ truncated }}"
@@ -416,7 +416,7 @@
                 "type": "string"
               },
               {
-                "title": "wordpressInstanceId",
+                "title": "instanceId",
                 "type": "string"
               },
               {
