@@ -89,7 +89,7 @@ for (const key of REQUIRED_ENV) {
 // this file is ever read (`next/dist/lib/bundler.js`), so it lives in
 // scripts/next-build.mjs, not here.
 //
-// DELIBERATELY ABSENT: `experimental.turbopackMemoryLimit`. It looks like the
+// DELIBERATELY ABSENT FROM BUILDS: `experimental.turbopackMemoryLimit`. It looks like the
 // obvious native lever and it is not one — on 16.2.10 it is measurably INERT
 // for `next build`. Wiring it would hand an operator a knob that changes
 // nothing while looking like the remedy. The measurements are in the doc below.
@@ -127,6 +127,12 @@ function readBuildKnobInt(name: string, min: number, max: number): number | unde
 // A band, not an opinion: the floor is one worker, the ceiling is well past any
 // real builder. The knob does not pick a "good" number — the operator's host does.
 const buildCpus = readBuildKnobInt("CINATRA_BUILD_CPUS", 1, 256);
+
+// Optional development-only target, in bytes; unset keeps Next's default.
+const devTurbopackMemoryLimit =
+  process.env.NODE_ENV === "development"
+    ? readBuildKnobInt("CINATRA_DEV_TURBOPACK_MEMORY_LIMIT", 1, Number.MAX_SAFE_INTEGER)
+    : undefined;
 
 const nextConfig: NextConfig = {
   // Emit a self-contained .next/standalone/ at build time so the runtime
@@ -168,6 +174,9 @@ const nextConfig: NextConfig = {
   // affects how Next's cross-origin guard classifies incoming requests.
   allowedDevOrigins: ["127.0.0.1"],
   experimental: {
+    ...(devTurbopackMemoryLimit === undefined
+      ? {}
+      : { turbopackMemoryLimit: devTurbopackMemoryLimit }),
     // Decouple App Router client hydration from the dev-mode React debug
     // channel.
     //
