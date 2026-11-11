@@ -261,6 +261,11 @@ export type AgentTemplateRecord = {
   // read. OPTIONAL in the type (like `lifecycleConfig`) so legacy fixture
   // objects in tests remain valid; `deserializeTemplate` always populates it.
   artifactBindings?: string | null;
+  // The nodes the compiled OAS declares `publishes: true` (cinatra#4150); null =
+  // unknown: a row written before the column existed, or by a writer that does not
+  // take the list from a compile. OPTIONAL in the type so
+  // legacy fixture objects in tests remain valid.
+  publishingSteps?: string[] | null;
   // template-level default AgentAuthPolicy. null = use
   // DEFAULT_AGENT_AUTH_POLICY from auth-policy.ts. Persisted as JSON-as-text
   // in agent_templates.agent_auth_policy.
@@ -340,6 +345,9 @@ export type CreateAgentTemplateInput = {
   // The executed artifact-binding declaration as JSON-as-text (cinatra#3208).
   // null clears it back to "unknown"; omit to leave the column unchanged.
   artifactBindings?: string | null;
+  // The nodes the compiled OAS declares `publishes: true` (cinatra#4150). null
+  // clears it back to "unknown"; omit to leave the column unchanged.
+  publishingSteps?: string[] | null;
   // template-level default policy; pass null or omit to leave unset
   // (resolves to DEFAULT_AGENT_AUTH_POLICY at read time).
   agentAuthPolicy?: AgentAuthPolicy | null;
@@ -881,6 +889,9 @@ export async function _runAgentTemplateUpdate(
   // presence flag does, in one statement with package_version.
   if (patch.artifactBindings !== undefined)
     updates.artifactBindings = patch.artifactBindings ?? null;
+  // cinatra#4150 — JSON-stringified like gatedSteps so the text column stays canonical.
+  if (patch.publishingSteps !== undefined)
+    updates.publishingSteps = patch.publishingSteps ? JSON.stringify(patch.publishingSteps) : null;
   if (patch.gatedSteps !== undefined)
     updates.gatedSteps = patch.gatedSteps ? JSON.stringify(patch.gatedSteps) : null;
   // template-level AgentAuthPolicy patch handler. null clears the
@@ -2249,7 +2260,7 @@ export async function readAgentRunByContextId(
 // #1193 run-token spine store seam. Extracted verbatim to ./run-token-store to
 // keep this hub under the file-size ratchet ceiling; re-exported here so callers
 // importing from ./store are unchanged (pure mechanical extraction).
-export { setAgentRunTokenHash, readAgentRunByTokenHash, readAgentRunTokenHashById } from "./run-token-store";
+export { setAgentRunTokenHash, readAgentRunByTokenHash, readAgentRunTokenHashById, setAgentRunConnectorInstanceBinding } from "./run-token-store";
 
 /**
  * Update the user-given title for an agent run.

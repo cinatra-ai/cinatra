@@ -27,7 +27,9 @@
       "src/app/design-fixtures/conformance/__tests__/component-surface-fixtures.test.tsx",
       "tests/e2e/design/conformance/scheduling-recurrence-driver.ts",
       "tests/e2e/design/conformance/scheduling-recurrence-sentinels.ts",
-      "src/app/design-fixtures/conformance/scheduling-recurrence-fixture-data.ts"
+      "src/app/design-fixtures/conformance/scheduling-recurrence-fixture-data.ts",
+      "src/app/design-fixtures/conformance/scheduling-recurrence-fixtures.tsx",
+      "src/app/design-fixtures/conformance/__tests__/scheduling-recurrence-fixtures.test.tsx"
     ],
     "app-extensions": [
       "tests/e2e/design/conformance/manifests/app-extensions.json",

@@ -109,6 +109,7 @@ import {
   type ArtifactKindDisplay,
   type ArtifactKindDisplaySurfaceId,
 } from "./artifact-review-displays";
+import { kindDisplayFieldDrivers } from "./artifact-review-display-readings";
 import {
   LIFECYCLE_CHAT_COMPOSER_MOUNT,
   type LifecycleComposerRowMount,
@@ -2443,22 +2444,13 @@ const SCHEDULING_STEP_CONFIGURED_DRIVER: SurfaceDriver = {
 // (scheduling-recurrence-driver.ts) from the readings of
 // src/app/design-fixtures/conformance/scheduling-recurrence-fixture-data.ts.
 //
-// The component they bind, the shared `RecurrenceFrequencySelectors` that the
-// in-flow scheduling step and the schedule card both draw, is NOT on the
-// default branch: it arrives with cinatra#4280. Until it does, nothing on the
-// conformance harness carries these surface ids. So, exactly as with the
-// Workspace surfaces of the application drawing (below, `awaitingMount`), each
-// driver is written in full but guarded by `awaitingMount`: it SKIPS with the
-// reason below while the harness mounts nothing, and runs unchanged the moment
-// the mount exists. scripts/design/__tests__/awaiting-mount-guard.test.mjs
-// holds the arrangement honest.
+// The component they bind is the shared `RecurrenceFrequencySelectors` that the
+// in-flow scheduling step and the schedule card both draw. The conformance
+// harness mounts it in the four readings and the two anti-alias probes
+// (src/app/design-fixtures/conformance/scheduling-recurrence-fixtures.tsx), so
+// each driver is bound directly and runs in the design suite;
+// scripts/design/__tests__/scheduling-recurrence-mount.test.mjs holds that.
 // ---------------------------------------------------------------------------
-/** Why the four recurrence drivers skip, named on every skipped test. */
-const AWAITING_RECURRENCE_SELECTORS =
-  "the shared recurrence selectors are not on the default branch yet — they " +
-  "arrive with cinatra#4280 — so the conformance harness mounts none of the " +
-  "four recurrence readings. Every assertion in this driver is written and runs " +
-  "unchanged the moment the mount exists.";
 
 // ---------------------------------------------------------------------------
 // App-shell drivers adopted with the cinatra#3057 pin reconciliation:
@@ -3032,7 +3024,9 @@ function kindDisplayKindState(surface: string, kind: string): StateAssert {
  *     shipped review target already carries — so a display bound to the wrong
  *     source cannot resolve the locator at all. A field the drawing binds only
  *     once the review is continued is read on the continued mount, and its
- *     absence on the open one (`continuedOnlyField`).
+ *     absence on the open one (`continuedOnlyField`). A field the drawing binds
+ *     in several readings gets one driver, from all of its declarations
+ *     (`kindDisplayFieldDrivers` in artifact-review-display-readings.ts).
  *   - the one action the manifest declares, pressed on the control that declares
  *     exactly that action AND that outcome (`declaredAction`), so a driver
  *     cannot press one control and report another one's outcome.
@@ -3063,20 +3057,20 @@ function artifactKindDisplayDriver(row: ArtifactKindDisplay): SurfaceDriver {
     states: {},
   };
 
-  for (const field of row.fields) {
-    const binding = `[data-field="${field.name}=${field.source}"]`;
-    driver.fields[field.name] = {
-      source: field.source,
-      assert:
-        field.reading === "continued"
-          ? continuedOnlyField(row.surface, binding)
-          : async (_page, root) => {
-              const bound = kindDisplayPanel(root, row.surface).locator(binding);
-              await expect(bound).toHaveCount(1);
-              await expect(bound).toBeVisible();
-            },
-    };
-  }
+  // artifact-review-display-readings.ts groups the row's declarations by name
+  // and picks the assertion for each name's reading; this map only says what
+  // each of the three assertions does.
+  driver.fields = kindDisplayFieldDrivers(row.surface, row.fields, {
+    present: (binding) => async (_page: Page, root: Locator) => {
+      const bound = kindDisplayPanel(root, row.surface).locator(binding);
+      await expect(bound).toHaveCount(1);
+      await expect(bound).toBeVisible();
+    },
+    continuedOnly: (binding) => continuedOnlyField(row.surface, binding),
+    skip: (reason) => async () => {
+      test.skip(true, reason);
+    },
+  });
 
   const action = row.action;
   if (action !== null) {
@@ -8056,10 +8050,10 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "approvals-marketplace-states": APPROVALS_MARKETPLACE_STATES_DRIVER,
   "scheduling-step": SCHEDULING_STEP_DRIVER,
   "scheduling-step-configured": SCHEDULING_STEP_CONFIGURED_DRIVER,
-  "scheduling-step-quarterly": awaitingMount("scheduling-step-quarterly", recurrenceSelectorsDriver("scheduling-step-quarterly"), AWAITING_RECURRENCE_SELECTORS),
-  "scheduling-step-yearly": awaitingMount("scheduling-step-yearly", recurrenceSelectorsDriver("scheduling-step-yearly"), AWAITING_RECURRENCE_SELECTORS),
-  "scheduling-step-configured-monthly": awaitingMount("scheduling-step-configured-monthly", recurrenceSelectorsDriver("scheduling-step-configured-monthly"), AWAITING_RECURRENCE_SELECTORS),
-  "scheduling-step-configured-quarterly": awaitingMount("scheduling-step-configured-quarterly", recurrenceSelectorsDriver("scheduling-step-configured-quarterly"), AWAITING_RECURRENCE_SELECTORS),
+  "scheduling-step-quarterly": recurrenceSelectorsDriver("scheduling-step-quarterly"),
+  "scheduling-step-yearly": recurrenceSelectorsDriver("scheduling-step-yearly"),
+  "scheduling-step-configured-monthly": recurrenceSelectorsDriver("scheduling-step-configured-monthly"),
+  "scheduling-step-configured-quarterly": recurrenceSelectorsDriver("scheduling-step-configured-quarterly"),
   "sidebar-assistants-entry": SIDEBAR_ASSISTANTS_ENTRY_DRIVER,
   "breadcrumb-entity-resolution": BREADCRUMB_ENTITY_RESOLUTION_DRIVER,
   "button": BUTTON_SURFACE_DRIVER, // The components drawing's shared primitives, one mount each (cinatra#3189).

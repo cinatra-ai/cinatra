@@ -151,69 +151,67 @@ describe("0.16 — the passthrough shapers are inside the rule", () => {
   it("every shaper on the passthrough declares the types it saves", () => {
     const ids = PASSTHROUGH_SHAPER_DECLARATIONS.map((d) => d.shaperId);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toContain("blog-pipeline-seam:blog_pipeline_draft_projection");
     expect(ids).toContain("route:campaigns_context_setup");
     for (const d of PASSTHROUGH_SHAPER_DECLARATIONS) {
       expect(d.savesTypes.length).toBeGreaterThan(0);
     }
   });
 
-  it("the audit names the blog-pipeline write as unowned, with the reason", () => {
-    // The campaigns context type IS owned by an installed extension, so the only
-    // unowned shaper save left is the one the plan names on the blog pipeline's
-    // road (the selected-idea save is retired: cinatra#3380).
-    const findings = auditPassthroughShaperDeclarations(
-      ports({ writable: ["@cinatra-ai/campaigns:context"] }),
-    );
-    const unowned = findings.filter((f) => f.kind === "unowned-type");
-    expect(unowned.map((f) => f.shaperId).sort()).toEqual([
-      "blog-pipeline-seam:blog_pipeline_draft_projection",
-    ]);
-    for (const f of unowned) expect(f.reason).toBe("dynamic-namespace");
+  it("the two blog-pipeline writes are retired: no shaper declares them (cinatra#3035)", () => {
+    // The plan gave "the removal of the selected-idea save and the persisted
+    // draft projection" to the pipeline's own wave, W11 (cinatra#3035). Both
+    // shapers are gone, so neither is declared any more.
+    const ids = PASSTHROUGH_SHAPER_DECLARATIONS.map((d) => d.shaperId);
+    expect(ids).not.toContain("blog-pipeline-seam:blog_pipeline_selected_idea");
+    expect(ids).not.toContain("blog-pipeline-seam:blog_pipeline_draft_projection");
+    expect(ids.filter((id) => id.startsWith("blog-pipeline-seam:"))).toEqual([]);
+    // No declared write still counts down to the wave that retired them.
+    expect(PASSTHROUGH_SHAPER_DECLARATIONS.filter((d) => d.retiredBy === "cinatra#3035")).toEqual([]);
   });
 
-  it("the audit names a shaper that persists a transform of a run value", () => {
+  it("the audit names no unowned shaper save once the blog-pipeline writes are retired", () => {
+    // The campaigns context type IS owned by an installed extension, and the
+    // two writes the plan named on the blog pipeline's road are retired.
     const findings = auditPassthroughShaperDeclarations(
       ports({ writable: ["@cinatra-ai/campaigns:context"] }),
     );
-    const persisting = findings
-      .filter((f) => f.kind === "persists-run-value-transform")
-      .map((f) => f.shaperId)
-      .sort();
+    expect(findings.filter((f) => f.kind === "unowned-type")).toEqual([]);
+  });
+
+  it("no declared shaper persists a transform of a run value", () => {
     // The plan: "a shaper never persists a transform of a run value — a
-    // projection is a deterministic, non-persisting step". Exactly the one the
-    // plan names on the blog pipeline's road.
-    expect(persisting).toEqual([
-      "blog-pipeline-seam:blog_pipeline_draft_projection",
-    ]);
-  });
-
-  it("the blog-pipeline write counts down to the wave scheduled to remove it", () => {
-    // The countdown is only a countdown while it names a wave that is still to
-    // run. W10 (cinatra#3034) closed WITHOUT carrying the removal: its own
-    // record puts "the removal of the selected-idea save and the persisted
-    // draft projection" in "the pipeline's own wave" — W11, cinatra#3035, which
-    // is open. A countdown pointing at the closed wave misreports the
-    // projection write as already retired while the boundary still refuses it.
-    // (The selected-idea save is retired: cinatra#3380.)
-    const blogWrites = PASSTHROUGH_SHAPER_DECLARATIONS.filter((d) =>
-      d.shaperId.startsWith("blog-pipeline-seam:"),
-    );
-    expect(blogWrites.map((d) => d.shaperId).sort()).toEqual([
-      "blog-pipeline-seam:blog_pipeline_draft_projection",
-    ]);
-    // Never the wave that closed without doing the retirement.
-    for (const d of blogWrites) {
-      expect(d.retiredBy).toBe("cinatra#3035");
-      expect(d.retiredBy).not.toBe("cinatra#3034");
-    }
-    // The audit carries the countdown onto every finding it raises for those
-    // writes — the reader of the audit is the one the stale pointer misleads.
+    // projection is a deterministic, non-persisting step". The two that did
+    // were the blog pipeline's, now retired.
     const findings = auditPassthroughShaperDeclarations(
       ports({ writable: ["@cinatra-ai/campaigns:context"] }),
-    ).filter((f) => f.shaperId.startsWith("blog-pipeline-seam:"));
-    expect(findings.length).toBeGreaterThan(0);
-    for (const f of findings) expect(f.retiredBy).toBe("cinatra#3035");
+    );
+    expect(findings.filter((f) => f.kind === "persists-run-value-transform")).toEqual([]);
+    expect(PASSTHROUGH_SHAPER_DECLARATIONS.some((d) => d.persistsRunValueTransform)).toBe(false);
+  });
+
+  it("the audit still names an unowned, persisting write with its reason and its countdown", () => {
+    // The audit itself stays: a declaration that saves under the reserved
+    // dynamic namespace and persists a transform is named on both counts, and
+    // carries its countdown onto every finding.
+    const findings = auditPassthroughShaperDeclarations(
+      ports({ writable: ["@cinatra-ai/campaigns:context"] }),
+      [
+        {
+          shaperId: "fixture:dynamic_projection",
+          module: "fixture.ts",
+          savesTypes: ["@dynamic/types:fixture-projection"],
+          persistsRunValueTransform: true,
+          retiredBy: "fixture#1",
+        },
+      ],
+    );
+    expect(findings.map((f) => f.kind).sort()).toEqual([
+      "persists-run-value-transform",
+      "unowned-type",
+    ]);
+    const unowned = findings.find((f) => f.kind === "unowned-type");
+    expect(unowned?.reason).toBe("dynamic-namespace");
+    for (const f of findings) expect(f.retiredBy).toBe("fixture#1");
   });
 
   it("a shaper whose type an installed extension owns raises nothing", () => {

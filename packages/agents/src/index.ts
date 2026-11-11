@@ -46,7 +46,7 @@ export {
   readAgentRunByContextId,
   readAgentRunByTokenHash,
   readAgentRunTokenHashById,
-  setAgentRunTokenHash,
+  setAgentRunTokenHash, setAgentRunConnectorInstanceBinding,
   updateAgentRunA2ATaskId,
   updateAgentRunA2AContextId,
   readAgentRunsByParent,

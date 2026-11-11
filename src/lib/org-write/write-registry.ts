@@ -370,6 +370,12 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       // (`sessionAuthorityFromResolvedRole(run.orgId, resumeRole)`), resolves no
       // identity of its own and adds no client-reachable surface.
       "packages/agents/src/review-task-actions.ts",
+      // cinatra#4150 — the publish gate: -> pending_approval / -> failed, and the resume claim
+      // pending_approval <-> running, under the caller's authority; -> stopped on "Do not publish"
+      // (the decider's member-session authority, derived from the role resolved for that person:
+      // `sessionAuthorityFromResolvedRole(run.orgId, role)`, as review-task-actions does) and on the
+      // expiry (the resume-delivery loop's system dispatch authority, handed in). It mints no system authority.
+      "packages/agents/src/publish-decision-actions.ts",
       "src/lib/host-content-editor-dispatch.ts",
       // opaque store.ts / agents-barrel accessors (also on updateAgentRunStatus):
       "src/app/plugins-registry.tsx",
@@ -1160,6 +1166,18 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       reason:
         "site-widget login flow: bearer validation deletes spent/expired token rows on the no-session request path — needs the connect-surface authority-minting decision",
     },
+  },
+  {
+    module: "src/lib/widget-user-auth.ts",
+    exportName: "renewUserWidgetToken",
+    capability: "org.settings",
+    orgIdExtractor: "claimed token row's org, copied unchanged to its successor and to the grace write-back (single-claim DELETE...RETURNING feeding both INSERTs)",
+    storageReferences: ["widget_user_tokens"],
+    cascadeOwnership: "inert-history",
+    // cinatra#4217: a credential-rotating writer, banned from day one to the one
+    // route that renews the frame's token.
+    importBanned: true,
+    allowedImporters: ["src/app/api/widget-auth/frame/renew/route.ts"],
   },
 
   // — assistant chat thread store (cinatra#1939 wave 3 edge-family sweep, the

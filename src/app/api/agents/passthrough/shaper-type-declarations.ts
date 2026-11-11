@@ -20,23 +20,14 @@
 // run value, so the same ownership classifier that refuses a save can be run
 // over the host's own writes.
 //
-// ONE BLOG WRITE STAYS. This slice did not remove the two — the plan gives
-// their removal to the pipeline's own wave (`the selected-idea save and the
-// persisted draft projection`), and cinatra#2960 closes only when both halves
-// have landed. What this slice adds is that they are DECLARED and the audit
-// NAMES them, so the removal is measurable rather than remembered. The
-// selected-idea save has since been retired with the built-in idea chooser
-// (cinatra#3380): the pipeline pack never sends that shape, so its branch and
-// its entry are gone. The draft projection stays, declared below.
-//
-// THE COUNTDOWN NAMES W11, NOT W10. The removal was written down here as W10's
-// (cinatra#3034) when this module shipped. W10 closed WITHOUT carrying it: its
-// own record puts "the removal of the selected-idea save and the persisted
-// draft projection" in "the pipeline's own wave" — W11, cinatra#3035, which is
-// open. The blog entry below therefore counts down to W11. The stale pointer
-// causes nothing on its own — the surviving save is what the boundary refuses —
-// but a countdown that names a CLOSED wave misreports its retirement status,
-// and reads as a removal that already landed while the save is still refused.
+// THE TWO BLOG WRITES ARE RETIRED. The enabler slice declared them so the
+// audit could NAME them and their removal was measurable rather than
+// remembered. The plan gave the removal (`the selected-idea save and the
+// persisted draft projection`) to the pipeline's own wave, W11, cinatra#3035,
+// and both shapers are gone: the pipeline keeps the picked idea in its own
+// `idea_drafts` table and writes the draft as an artifact mid-run, so the host
+// saves neither. The `retiredBy` field stays for any later write whose
+// retirement is scheduled.
 //
 // PURE: no `server-only`, no registry import. The two registry questions arrive
 // as ports, exactly as the classifier takes them.
@@ -78,14 +69,6 @@ export interface PassthroughShaperDeclaration {
  * passthrough's shaper modules.
  */
 export const PASSTHROUGH_SHAPER_DECLARATIONS: readonly PassthroughShaperDeclaration[] = [
-  {
-    shaperId: "blog-pipeline-seam:blog_pipeline_draft_projection",
-    module: "src/app/api/agents/passthrough/blog-pipeline-seam.ts",
-    savesTypes: ["@dynamic/types:blog-pipeline-draft-projection"],
-    // The draft, projected into three strings and written back.
-    persistsRunValueTransform: true,
-    retiredBy: "cinatra#3035",
-  },
   {
     shaperId: "route:campaigns_context_setup",
     module: "src/app/api/agents/passthrough/route.ts",
