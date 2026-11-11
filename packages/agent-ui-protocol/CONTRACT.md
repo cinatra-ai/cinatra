@@ -439,9 +439,9 @@ reached a provider. Tools that the LLM layer adds or translates inside
   the allow-list filter. `ref` is an `LlmToolReference`
   (`packages/sdk-extensions/src/llm-provider-adapter-contract.ts`). No other
   field of a tool is returned.
-- `schemaHash` — HMAC-SHA-256 of the canonical JSON of the tool's projection
+- `schemaHash` — HMAC (keyed SHA-256) of the canonical JSON of the tool's projection
   (below), lowercase hex.
-- `manifestHash` — HMAC-SHA-256 of the canonical JSON of
+- `manifestHash` — HMAC (keyed SHA-256) of the canonical JSON of
   `{ "conversationOnly": ..., "tools": [...] }` of that report, lowercase hex.
 - The HMAC key is 32 random bytes made for this one response. It is never
   returned, logged or stored. Hashes therefore compare only within one
