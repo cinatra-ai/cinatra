@@ -1,4 +1,7 @@
 import type { NextConfig } from "next";
+import { PHASE_DEVELOPMENT_SERVER } from "next/constants";
+import { createRequire } from "node:module";
+import path from "node:path";
 
 // ---------------------------------------------------------------------------
 // cinatra#1506 — pin `sonner` to a single resolved module instance under
@@ -127,6 +130,81 @@ function readBuildKnobInt(name: string, min: number, max: number): number | unde
 // A band, not an opinion: the floor is one worker, the ceiling is well past any
 // real builder. The knob does not pick a "good" number — the operator's host does.
 const buildCpus = readBuildKnobInt("CINATRA_BUILD_CPUS", 1, 256);
+
+// ---------------------------------------------------------------------------
+// cinatra#4546: `pnpm dev:webpack` keeps the npm client packages external.
+//
+// `src/instrumentation.node.ts` reaches `packages/agents/src/verdaccio/client.ts`,
+// which imports `pacote`. pnpm installs `pacote` for `packages/agents` and
+// `packages/registries` only, so it does not resolve from the repository root.
+// Next's webpack externals handler bundles a package that does not resolve
+// from the root to the same file, even when `serverExternalPackages` names it.
+// Webpack then walks pacote -> @npmcli/run-script -> node-gyp, whose context
+// `require('./' + command)` pulls in `node-gyp/lib/Find-VisualStudio.cs`, the
+// compile fails and every request answers HTTP 500. Turbopack (`pnpm dev`)
+// keeps these packages external and is not affected.
+//
+// For the webpack DEV server's Node.js compile only, this handler externalizes
+// these packages by the path they resolve to from the importing file, so Node
+// loads them from the pnpm store at runtime, as Turbopack does. The `webpack`
+// key is added to the config ONLY in the development-server phase (see the
+// default export at the end of this file): Next treats any `webpack` key as a
+// custom webpack config and then turns the default webpack build worker off,
+// so a key in the production build phase would change that build even when
+// the hook does nothing. A standalone image must also not hold absolute paths
+// of the build machine.
+// ---------------------------------------------------------------------------
+const WEBPACK_DEV_NODE_EXTERNALS = new Set([
+  "pacote",
+  "libnpmpublish",
+  "npm-registry-fetch",
+  "@npmcli/run-script",
+  "node-gyp",
+]);
+
+function packageNameOf(request: string): string {
+  const parts = request.split("/");
+  return request.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
+}
+
+function webpackDevNodeExternal(
+  data: { context?: string; request?: string },
+  callback: (err?: Error | null, result?: string) => void,
+): void {
+  const { context, request } = data;
+  if (!context || !request || !WEBPACK_DEV_NODE_EXTERNALS.has(packageNameOf(request))) {
+    callback();
+    return;
+  }
+  let resolved: string;
+  try {
+    resolved = createRequire(path.join(context, "noop.js")).resolve(request);
+  } catch {
+    // Not resolvable from this importer: let webpack report it as usual.
+    callback();
+    return;
+  }
+  // Outside the try: an exception the callback throws propagates, and the
+  // callback is called exactly once.
+  callback(null, `commonjs ${resolved}`);
+}
+
+// The hook the development-server phase adds as the config's `webpack` key.
+// Turbopack never calls it, and the `turbopack` block of the config keeps
+// Next 16 from treating it as an unmigrated webpack config.
+const webpackDevServerHook: NonNullable<NextConfig["webpack"]> = (
+  config,
+  { dev, isServer, nextRuntime },
+) => {
+  if (dev && isServer && nextRuntime === "nodejs") {
+    const current = config.externals;
+    config.externals = [
+      ...(Array.isArray(current) ? current : current ? [current] : []),
+      webpackDevNodeExternal,
+    ];
+  }
+  return config;
+};
 
 const nextConfig: NextConfig = {
   // Emit a self-contained .next/standalone/ at build time so the runtime
@@ -891,15 +969,29 @@ if (!SENTRY_BUILD_READY) {
   };
 }
 
-export default SENTRY_BUILD_READY
-  ? withSentryConfig(nextConfig, {
-      org: process.env.SENTRY_ORG,
-      project: process.env.SENTRY_PROJECT,
-      authToken: process.env.SENTRY_AUTH_TOKEN,
-      silent: !process.env.CI,
-      widenClientFileUpload: true,
-      tunnelRoute: "/monitoring",
-      disableLogger: true,
-      sourcemaps: { deleteSourcemapsAfterUpload: true },
-    })
-  : nextConfig;
+function withSentryWhenReady(config: NextConfig): NextConfig {
+  return SENTRY_BUILD_READY
+    ? withSentryConfig(config, {
+        org: process.env.SENTRY_ORG,
+        project: process.env.SENTRY_PROJECT,
+        authToken: process.env.SENTRY_AUTH_TOKEN,
+        silent: !process.env.CI,
+        widenClientFileUpload: true,
+        tunnelRoute: "/monitoring",
+        disableLogger: true,
+        sourcemaps: { deleteSourcemapsAfterUpload: true },
+      })
+    : config;
+}
+
+// Next calls this function with the phase it runs in. cinatra#4546: only the
+// development-server phase gets the `webpack` key (see
+// WEBPACK_DEV_NODE_EXTERNALS above); every other phase, the production build
+// among them, gets the config without it, exactly as before the hook.
+export default function nextConfigForPhase(phase: string): NextConfig {
+  return withSentryWhenReady(
+    phase === PHASE_DEVELOPMENT_SERVER
+      ? { ...nextConfig, webpack: webpackDevServerHook }
+      : nextConfig,
+  );
+}
