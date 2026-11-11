@@ -301,6 +301,106 @@ and the display-only applied/refresh affordance are S4's concern; the
 editor-patch consumer (the refresh executor in the CMS widgets) is S5's
 (#1221) — this contract owns only the payload-type seam.
 
+### 5.2 Tool-manifest report (cinatra#3487)
+
+A read-only report of the tool manifest a turn would expose, so a test can
+compare the chat composer's manifest with the manifest of a prompt window
+outside the chat, with a lifecycle screen active, without reading the DOM. This
+section is the spec only. The route does not exist yet; a later product change
+adds it with its own tests.
+
+**Route.** `GET /api/assistants/chat/tool-manifest`, beside the capability
+route `src/app/api/assistants/chat/capabilities/route.ts`. GET only; there is
+no write method.
+
+**Auth.** The same as the session branch of the capability route's GET:
+`getAuthSession()`, and no `session.user.id` gives
+`401 { "error": "Unauthorized" }`. The report names instance-specific tools, so
+it is never served to the broker-auth embed: a `cit_` bearer gives the same 401,
+fail-closed, with no fall back to the cookie session (the auth-confusion guard
+of the capability route). A widget manifest is out of scope.
+
+**Screen context (the run window).** Two optional query parameters:
+
+- `runId` — the run whose page shows the window.
+- `surface` — one of `RUN_WINDOW_SURFACES`
+  (`packages/agents/src/run-window-conversation-store.ts`): `run-page`,
+  `step-by-step`, `schedule`, `armed-trigger`, `review`. The run's window with a
+  review screen active is `surface=review`.
+
+Both absent: the report is for the chat composer. Both present: the route
+first applies the read access of the run window (the rule of
+`requireRunWindowAccess(runId, "read")` in `src/lib/lifecycle/run-window-turn.ts`)
+and then builds the report. The screen context is additive and never a
+restriction (ruling of 2026-09-14 on cinatra#3487): it is echoed in the
+response and selects nothing. The route has no allow-list, filter or mode
+parameter, and it does not read the surface when it assembles the tools.
+
+**One source.** The report reads the same request builder that cinatra#3487
+item 5 pins for both roads: `buildCinatraAssistantRuntimeConfig()` in
+`src/lib/assistant-runtime/cinatra-assistant-config.ts`, which both
+`runChatTurn` (`src/app/api/chat/runner.ts`) and `runWindowTurn`
+(`src/lib/lifecycle/run-window-turn.ts`) hand to `runAssistantTurn`. The tools
+of a turn are assembled inside `runAssistantTurn`
+(`src/lib/assistant-runtime/runtime.ts`): the self-MCP reference, the external
+MCP tools, the skill tools and `web_search`, then the allow-list filter
+(`isAllowedByList` in `src/lib/assistant-runtime/ports.ts`); a
+conversation-only provider assembles none. The product change extracts that
+assembly into one function that `runAssistantTurn` and this route both call.
+The route never keeps a second list of tools. To build the report the route
+mints no actor token and no lent-action grant, calls no model provider and
+runs no reachability probe.
+
+**Response.** `200`, `Cache-Control: no-store`, JSON:
+
+```json
+{
+  "manifestVersion": 1,
+  "screenContext": null,
+  "conversationOnly": false,
+  "tools": [
+    { "ref": { "type": "mcp", "serverLabel": "..." }, "schemaHash": "sha256:<hex>" },
+    { "ref": { "type": "function", "name": "..." }, "schemaHash": "sha256:<hex>" },
+    { "ref": { "type": "web_search" }, "schemaHash": "sha256:<hex>" }
+  ],
+  "manifestHash": "sha256:<hex>"
+}
+```
+
+- `screenContext` — `null`, or `{ "runId": ..., "surface": ... }` as sent.
+- `conversationOnly` — `true` when the resolved provider takes no tools; then
+  `tools` is `[]`.
+- `tools` — one entry for each tool the turn hands to the provider, in the
+  order of the assembly, after the allow-list filter. `ref` is an
+  `LlmToolReference` (`packages/sdk-extensions/src/llm-provider-adapter-contract.ts`).
+- `schemaHash` — SHA-256 of the canonical JSON (keys sorted, no white space)
+  of the declaration the model sees: for a function tool `name`, `description`,
+  `parameters`; for an MCP reference `serverLabel`, `serverDescription`,
+  `allowedTools`, `approval`; for a sandbox execution tool `toolName`,
+  `description`; for the other kinds `type` only. It never includes an
+  address, a header, an authorization value, a grant or an `execute` function.
+- `manifestHash` — SHA-256 of the canonical JSON of `tools`.
+
+For one person and one moment, a report with a screen context and the report
+without one have equal `tools` and equal `manifestHash`. That equality is what
+the item 7 conformance test reads.
+
+**Errors.** One JSON `error` field for each:
+
+- `401 Unauthorized` — no session, or a `cit_` bearer.
+- `400` — exactly one of `runId` and `surface`, a `surface` that is not in
+  `RUN_WINDOW_SURFACES`, or a repeated parameter.
+- `404` — a run that does not exist and a run the caller may not read give the
+  same answer, so the route is not an oracle for run ids.
+- `503 { "error": "tools_unavailable" }` — the self-MCP reference cannot be
+  assembled (for example no public MCP URL is configured). The turn stops in
+  that case, so the route does not report a shorter list.
+
+**It draws nothing.** The route has no screen, no component and no drawn
+element; no design spec covers it. The DOM never reads it; tests read it. It is
+not part of the stream wire, and it does not change
+`ASSISTANT_STREAM_CONTRACT_VERSION` (§8).
+
 ## 6. Conformance
 
 `conformance.ts` + `conformance-fixtures.ts` give S6 (#1222) its static
