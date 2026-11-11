@@ -40,9 +40,9 @@
     {
       "packageName": "@cinatra-ai/blog-content-skill",
       "repo": "cinatra-ai/blog-content-skill",
-      "resolvedSha": "77d3cc8d1379e78e9b795649931ee39aa0f11491",
+      "resolvedSha": "e04c1c3a9483d69b3ff0a4a2a8d9492bc23dc8f3",
       "packageVersion": "0.1.0",
-      "treeSha256": "bfdb4b38db0a5cd84a72d529446fe08704ce2e2e318f8aea474d3f258679961a"
+      "treeSha256": "356f9a63d0bff22b247622c77787ee1c4af97e94ff6295aee1b544e895656b1b"
     },
     {
       "packageName": "@cinatra-ai/chart-artifact",

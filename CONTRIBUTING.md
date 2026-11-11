@@ -1,6 +1,6 @@
 # Contributing to Cinatra
 
-Thanks for your interest. Cinatra is the open source AI workspace, and external contributions — bug reports, agents, connectors, skills, documentation, and code — are welcome.
+Thanks for your interest. Cinatra is The Open Source Agentic Teams Workspace, and external contributions — bug reports, agents, connectors, skills, documentation, and code — are welcome.
 
 This page covers how to get a development environment running and how to propose changes. For the deeper architecture and authoring references, start at the [Developer Guide](https://docs.cinatra.ai/guides/developer/).
 

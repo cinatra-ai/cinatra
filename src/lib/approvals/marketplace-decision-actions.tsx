@@ -25,6 +25,9 @@ const INITIAL: InlineDecideState = { ok: false };
  * OPTIONAL row eligibility (#1045): when the marketplace supplies `can_approve` /
  * `can_reject` / `reason`, the matching button is disabled and annotated;
  * action-time enforcement at the marketplace stays authoritative regardless.
+ * When it refuses BOTH, the viewer may not decide the row: it is "Awaiting
+ * others", and that row "draws no decide action" (specs/app.html V.1,
+ * cinatra#4296), so no Approve / Reject control renders at all.
  */
 export function MarketplaceDecisionActions({
   sourceId,
@@ -80,6 +83,24 @@ export function MarketplaceDecisionActions({
   }
 
   // moderate
+  if (eligibility?.can_approve === false && eligibility?.can_reject === false) {
+    return (
+      <div className="flex flex-col items-end gap-1.5">
+        {detailsHref ? (
+          <Link
+            href={detailsHref}
+            className="text-xs text-muted-foreground underline hover:text-foreground"
+          >
+            Details
+          </Link>
+        ) : null}
+        {eligibility.reason ? (
+          <p className="max-w-64 text-right text-xs text-muted-foreground">{eligibility.reason}</p>
+        ) : null}
+      </div>
+    );
+  }
+
   const approveDisabled = pending || eligibility?.can_approve === false;
   const rejectDisabled = pending || eligibility?.can_reject === false;
 

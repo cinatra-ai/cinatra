@@ -11,7 +11,7 @@
  *
  *   pnpm vitest run src/lib/__tests__/extension-tool-module-loader-anchor-binding.test.ts
  */
-import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -37,9 +37,30 @@ const storeRecords: StoreRecord[] = [];
 const anchors: { version: string | null; digest: string | null; kind: string | null }[] = [];
 const anchorResolverCalls: (string | null)[] = [];
 const generatedManifest: Record<string, GeneratedRecord> = {};
+/** The canonical install rows of the package, in the fields the seed road reads. */
+type InstallRow = {
+  status: string;
+  version?: string;
+  organizationId: string | null;
+  ownerLevel: string;
+  source: { type: string } | null;
+};
+const installRows: InstallRow[] = [];
+/** Every temporary fixture tree of one test, removed after it. */
+const tempDirs: string[] = [];
+async function tempDir(prefix: string): Promise<string> {
+  const dir = await mkdtemp(path.join(tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+const dataRootRef = { current: "/unused-by-this-test" };
 
 vi.mock("@/lib/extension-data-root", () => ({
-  resolveExtensionDataRoot: () => "/unused-by-this-test",
+  resolveExtensionDataRoot: () => dataRootRef.current,
+}));
+
+vi.mock("@cinatra-ai/extensions/canonical-store", () => ({
+  readInstalledExtensionsByPackageName: async () => installRows,
 }));
 
 vi.mock("@/lib/extension-store-io", () => ({
@@ -90,7 +111,7 @@ export function extensionTool() {
 /** Two digest dirs of the SAME package at the SAME version, as a store that has
  *  retained an older install beside the live one actually looks. */
 async function twoDigestStore() {
-  const dataRoot = await mkdtemp(path.join(tmpdir(), "cinatra-3525-store-"));
+  const dataRoot = await tempDir("cinatra-3525-store-");
   // The RETAINED digest is discovered FIRST, so a resolver that trusts the
   // store's own package.json hands back exactly the wrong directory.
   for (const digest of [RETAINED_DIGEST, LIVE_DIGEST]) {
@@ -120,7 +141,7 @@ async function twoDigestStore() {
 async function sourceTreePackage(
   options: { name?: string; version?: string; moduleEscapesTheTree?: boolean } = {},
 ) {
-  const root = await mkdtemp(path.join(tmpdir(), "cinatra-3602-source-"));
+  const root = await tempDir("cinatra-3602-source-");
   const dir = path.join(root, "fixture-tool-pack");
   const toolsDir = path.join(dir, "cinatra", "tools");
   await mkdir(toolsDir, { recursive: true });
@@ -158,7 +179,10 @@ async function withRuntimeMode<T>(mode: string, run: () => Promise<T>): Promise<
   }
 }
 
-async function load(importModule?: (absPath: string) => Promise<unknown>) {
+async function load(
+  importModule?: (absPath: string) => Promise<unknown>,
+  modulePath = "./cinatra/tools/fixture-tool.mjs",
+) {
   const { loadDeclaredToolModule } = await import("@/lib/extension-tool-module-loader");
   return loadDeclaredToolModule(
     {
@@ -166,7 +190,7 @@ async function load(importModule?: (absPath: string) => Promise<unknown>) {
       packageVersion: PINNED,
       orgId: ORG,
       toolName: "fixture_tool",
-      modulePath: "./cinatra/tools/fixture-tool.mjs",
+      modulePath,
     },
     importModule ? { importModule } : {},
   );
@@ -176,11 +200,14 @@ beforeEach(async () => {
   storeRecords.length = 0;
   anchors.length = 0;
   anchorResolverCalls.length = 0;
+  installRows.length = 0;
+  dataRootRef.current = "/unused-by-this-test";
   await twoDigestStore();
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 describe("the declared-module load road binds the trusted install anchor", () => {
@@ -346,6 +373,286 @@ describe("the declared-module load road reads the source directory the generated
         }),
       ),
     ).rejects.toThrow(/not materialized at the pinned version/);
+    expect(seen).toEqual([]);
+  });
+});
+
+/**
+ * THE SEED COPY: a pack the image bundles reaches an instance only as its seed
+ * copy in the agent runtime mount, `<dataRoot>/.agent-mount/<scope>/<name>`,
+ * which the store walk never reads. Where the store holds no record for the
+ * package, the declared module loads from that copy, but only while exactly
+ * one candidate install row (the image's bundled platform row, or a row of the
+ * run's own organisation) carries the pinned version, the seed's own marker
+ * names the package, and the copy's package.json carries the pinned name and
+ * version. Every arm runs in production mode, where the source road is closed,
+ * unless it says otherwise.
+ */
+const SEED_MARKER = { vendor: "fixture-scope", slug: "fixture-tool-pack", kind: "required-oas-seed" };
+
+/** The image's bundled platform row, as the boot seeder writes it. */
+function bundledRow(overrides: Partial<InstallRow> = {}): InstallRow {
+  return {
+    status: "active",
+    version: PINNED,
+    organizationId: null,
+    ownerLevel: "platform",
+    source: { type: "bundled" },
+    ...overrides,
+  };
+}
+
+async function seedCopy(
+  options: {
+    name?: string;
+    version?: string;
+    noPackageJson?: boolean;
+    marker?: Record<string, unknown> | null;
+    moduleEscapesTheTree?: boolean;
+    packageDirIsALink?: boolean;
+  } = {},
+) {
+  const dataRoot = await tempDir("cinatra-seed-copy-");
+  const scopeDir = path.join(dataRoot, ".agent-mount", "fixture-scope");
+  await mkdir(scopeDir, { recursive: true });
+  // A link in the mount whose target lies outside it carries a whole valid copy.
+  const dir = options.packageDirIsALink
+    ? path.join(dataRoot, "outside-the-mount", "fixture-tool-pack")
+    : path.join(scopeDir, "fixture-tool-pack");
+  const toolsDir = path.join(dir, "cinatra", "tools");
+  await mkdir(toolsDir, { recursive: true });
+  if (options.packageDirIsALink) await symlink(dir, path.join(scopeDir, "fixture-tool-pack"));
+  if (!options.noPackageJson) {
+    await writeFile(
+      path.join(dir, "package.json"),
+      JSON.stringify({ name: options.name ?? PACK, version: options.version ?? PINNED }),
+    );
+  }
+  const marker = options.marker === undefined ? SEED_MARKER : options.marker;
+  if (marker !== null) await writeFile(path.join(dir, ".cinatra-required-seed.json"), JSON.stringify(marker));
+  if (options.moduleEscapesTheTree) {
+    const outside = path.join(dataRoot, "outside-the-tree.mjs");
+    await writeFile(outside, FIXTURE_TOOL_MODULE_SOURCE);
+    await symlink(outside, path.join(toolsDir, "fixture-tool.mjs"));
+  } else {
+    await writeFile(path.join(toolsDir, "fixture-tool.mjs"), FIXTURE_TOOL_MODULE_SOURCE);
+  }
+  dataRootRef.current = dataRoot;
+  return { dataRoot, dir };
+}
+
+const SEED_MODULE = path.join(
+  ".agent-mount",
+  "fixture-scope",
+  "fixture-tool-pack",
+  "cinatra",
+  "tools",
+  "fixture-tool.mjs",
+);
+
+describe("the declared-module load road reads the image's seed copy where the store holds no record", () => {
+  const loads = async (mode = "production") => {
+    const seen: string[] = [];
+    await withRuntimeMode(mode, () =>
+      load(async (absPath) => {
+        seen.push(absPath);
+        return { extensionTool: () => ({ ok: true }) };
+      }),
+    );
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain(SEED_MODULE);
+  };
+  const refuses = async (pattern: RegExp, modulePath?: string, mode = "production") => {
+    const seen: string[] = [];
+    await expect(
+      withRuntimeMode(mode, () =>
+        load(async (absPath) => {
+          seen.push(absPath);
+          return { extensionTool: () => ({}) };
+        }, modulePath),
+      ),
+    ).rejects.toThrow(pattern);
+    expect(seen).toEqual([]);
+  };
+  const NOT_MATERIALIZED = /not materialized at the pinned version/;
+
+  it("a marked seed copy at the pinned version with the bundled row at that version loads its declared module", async () => {
+    storeRecords.length = 0;
+    await seedCopy();
+    installRows.push(bundledRow());
+    await loads();
+  });
+
+  it("a locked bundled row loads too", async () => {
+    storeRecords.length = 0;
+    await seedCopy();
+    installRows.push(bundledRow({ status: "locked" }));
+    await loads();
+  });
+
+  it("the run's own organisation's row at the pinned version loads", async () => {
+    storeRecords.length = 0;
+    await seedCopy();
+    installRows.push(bundledRow({ organizationId: ORG, ownerLevel: "organization", source: { type: "verdaccio" } }));
+    await loads();
+  });
+
+  it("a row of another organisation is never a candidate", async () => {
+    storeRecords.length = 0;
+    await seedCopy();
+    installRows.push(bundledRow({ organizationId: "org-other", ownerLevel: "organization" }));
+    await refuses(NOT_MATERIALIZED);
+  });
+
+  it("a platform row that is not the bundled one is not a candidate", async () => {
+    storeRecords.length = 0;
+    await seedCopy();
+    installRows.push(bundledRow({ source: { type: "verdaccio" } }));
+    await refuses(NOT_MATERIALIZED);
+  });
+
+  it("two live candidates (the bundled row and the own organisation's row) are refused", async () => {
+    storeRecords.length = 0;
+    await seedCopy();
+    installRows.push(bundledRow(), bundledRow({ organizationId: ORG, ownerLevel: "organization" }));
+    await refuses(NOT_MATERIALIZED);
+  });
+
+  it("a candidate row at another version is refused", async () => {
+    storeRecords.length = 0;
+    await seedCopy();
+    installRows.push(bundledRow({ version: "9.9.9" }));
+    await refuses(NOT_MATERIALIZED);
+  });
+
+  it("no install row is refused", async () => {
+    storeRecords.length = 0;
+    await seedCopy();
+    await refuses(NOT_MATERIALIZED);
+  });
+
+  it("an install row that is not live is refused", async () => {
+    storeRecords.length = 0;
+    await seedCopy();
+    installRows.push(bundledRow({ status: "archived" }));
+    await refuses(NOT_MATERIALIZED);
+  });
+
+  it("a copy without the seed marker is refused", async () => {
+    storeRecords.length = 0;
+    await seedCopy({ marker: null });
+    installRows.push(bundledRow());
+    await refuses(NOT_MATERIALIZED);
+  });
+
+  it("a seed marker that names another package is refused", async () => {
+    storeRecords.length = 0;
+    await seedCopy({ marker: { ...SEED_MARKER, slug: "another-fixture-pack" } });
+    installRows.push(bundledRow());
+    await refuses(NOT_MATERIALIZED);
+  });
+
+  it("a marker of another kind is refused", async () => {
+    storeRecords.length = 0;
+    await seedCopy({ marker: { ...SEED_MARKER, kind: "something-else" } });
+    installRows.push(bundledRow());
+    await refuses(NOT_MATERIALIZED);
+  });
+
+  it("a seed copy whose package.json names another package is refused", async () => {
+    storeRecords.length = 0;
+    await seedCopy({ name: "@fixture-scope/another-fixture-pack" });
+    installRows.push(bundledRow());
+    await refuses(NOT_MATERIALIZED);
+  });
+
+  it("a seed copy whose package.json carries another version is refused", async () => {
+    storeRecords.length = 0;
+    await seedCopy({ version: "9.9.9" });
+    installRows.push(bundledRow());
+    await refuses(NOT_MATERIALIZED);
+  });
+
+  it("a seed copy without a package.json is refused", async () => {
+    storeRecords.length = 0;
+    await seedCopy({ noPackageJson: true });
+    installRows.push(bundledRow());
+    await refuses(NOT_MATERIALIZED);
+  });
+
+  it("a seed copy that is a link to a directory outside the mount is refused", async () => {
+    storeRecords.length = 0;
+    await seedCopy({ packageDirIsALink: true });
+    installRows.push(bundledRow());
+    await refuses(NOT_MATERIALIZED);
+  });
+
+  it("a declared module that is a link out of the seed copy is refused", async () => {
+    storeRecords.length = 0;
+    await seedCopy({ moduleEscapesTheTree: true });
+    installRows.push(bundledRow());
+    await refuses(/resolves outside the calling extension's own tree/);
+  });
+
+  it("a declared path that climbs out of the seed copy is refused", async () => {
+    storeRecords.length = 0;
+    await seedCopy();
+    installRows.push(bundledRow());
+    await refuses(/leaves the calling extension's own tree/, "./cinatra/../../outside-the-tree.mjs");
+  });
+
+  it("a present store record keeps the seed copy out", async () => {
+    // The shared two-digest store STANDS, and the anchor binds neither digest.
+    await seedCopy();
+    installRows.push(bundledRow());
+    anchors.push({ version: PINNED, digest: "cccccccccccc", kind: "agent" });
+    await refuses(NOT_MATERIALIZED);
+  });
+
+  it("a source package.json that cannot be parsed stays a refusal and never falls through to the seed copy", async () => {
+    storeRecords.length = 0;
+    await seedCopy();
+    installRows.push(bundledRow());
+    const pack = await sourceTreePackage();
+    await writeFile(path.join(pack.dir, "package.json"), "{ not json");
+    generatedRecord({ version: PINNED, sourceDir: pack.sourceDir });
+    await refuses(NOT_MATERIALIZED, undefined, "development");
+  });
+});
+
+describe("a root the resolver checked as a real path is not resolved again", () => {
+  it("a link put in place of the checked root after the check cannot move the import", async () => {
+    const { dataRoot, dir } = await seedCopy();
+    const outside = path.join(dataRoot, "swapped-in");
+    await mkdir(path.join(outside, "cinatra", "tools"), { recursive: true });
+    await writeFile(path.join(outside, "cinatra", "tools", "fixture-tool.mjs"), FIXTURE_TOOL_MODULE_SOURCE);
+    const seen: string[] = [];
+    const { loadDeclaredToolModule } = await import("@/lib/extension-tool-module-loader");
+    const checkedRealRoot = await (await import("node:fs/promises")).realpath(dir);
+    await expect(
+      loadDeclaredToolModule(
+        {
+          packageName: PACK,
+          packageVersion: PINNED,
+          orgId: ORG,
+          toolName: "fixture_tool",
+          modulePath: "./cinatra/tools/fixture-tool.mjs",
+        },
+        {
+          // The check has passed on the real directory; the swap happens before
+          // the loader uses the root.
+          resolvePackageRoot: async () => {
+            await rename(checkedRealRoot, `${checkedRealRoot}-aside`);
+            await symlink(outside, checkedRealRoot);
+            return { realRoot: checkedRealRoot };
+          },
+          importModule: async (absPath) => {
+            seen.push(absPath);
+            return { extensionTool: () => ({}) };
+          },
+        },
+      ),
+    ).rejects.toThrow(/resolves outside the calling extension's own tree/);
     expect(seen).toEqual([]);
   });
 });
