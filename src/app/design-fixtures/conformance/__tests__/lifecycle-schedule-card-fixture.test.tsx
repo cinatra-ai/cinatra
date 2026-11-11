@@ -70,7 +70,7 @@ describe("the conformance harness mounts for the schedule card", () => {
     for (const surfaceId of ["schedule-card-first-shown", "schedule-card-expired"]) {
       const drawn = card(mount(surfaceId));
       expect(drawn.querySelector('[data-conformance-id="schedule-proposal-floor"]')).not.toBeNull();
-      expect(drawn.querySelector('[data-action="confirm-schedule-proposal"]')).not.toBeNull();
+      expect(drawn.querySelector('[data-action="confirm-schedule -> scheduled"]')).not.toBeNull();
       expect(drawn.querySelector('[data-action="save-schedule-changes"]')).toBeNull();
       cleanup();
     }
@@ -79,7 +79,7 @@ describe("the conformance harness mounts for the schedule card", () => {
     for (const surfaceId of ["schedule-card-configured", "schedule-card-fired-recurring"]) {
       const drawn = card(mount(surfaceId));
       expect(drawn.querySelector('[data-action="save-schedule-changes"]')).not.toBeNull();
-      expect(drawn.querySelector('[data-action="confirm-schedule-proposal"]')).toBeNull();
+      expect(drawn.querySelector('[data-action="confirm-schedule -> scheduled"]')).toBeNull();
       cleanup();
     }
     // "Fired, one-off — the schedule was spent · read-only · none at all": the
@@ -105,7 +105,7 @@ describe("the conformance harness mounts for the schedule card", () => {
 
   it("presses the shipped Confirm and the PRODUCT composes the request and the in-flight floor", async () => {
     const root = mount("schedule-card-confirm-floor");
-    const confirm = card(root).querySelector('[data-action="confirm-schedule-proposal"]');
+    const confirm = card(root).querySelector('[data-action="confirm-schedule -> scheduled"]');
     fireEvent.click(confirm as HTMLElement);
     // The card's own in-flight presentation — the word and the dead control are
     // both the component's, computed while its answer is outstanding.
