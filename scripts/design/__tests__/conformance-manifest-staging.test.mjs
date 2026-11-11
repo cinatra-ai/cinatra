@@ -72,10 +72,12 @@ const STAGED = {
   // No surface is added or removed, and no other surface changes.
   // Re-copied verbatim at design@4d75cb4c: the embedded webfonts changed the drawing's
   // bytes, so only the embedded contentHash moves. No surface changes.
+  // Re-copied verbatim at design@3beff055 (design#247): the brand gold moved to #9c7434
+  // in the drawing, so only the embedded contentHash moves. No surface changes.
   "app-lifecycle-cards.json": {
     spec: "specs/app-lifecycle-cards.html",
-    manifestSha256: "0c1d0b1f59a2c91e3e27f2bcbff24b9448df657c18625d8be20aced23c1e641c",
-    contentHash: "sha256:11a1017e3ccfbd28bf199bc785f61f0ebf22ea484c9c6dbff1915739e11fc3e3",
+    manifestSha256: "9289120d2a0ff812dce2af37b8f1c73d20d52c13dd9a02d74f9263ad2a2bb355",
+    contentHash: "sha256:234c532f2301b049026211df7b548903bc7eff7b67837a018e18c4195246574c",
   },
   // The artifact-review drawing, staged by cinatra#3158 (the artifact-kind
   // display wave). First-time adoption: the drawing has never been committed
@@ -86,10 +88,12 @@ const STAGED = {
   // open-live once for each of the four that draw the live dashboard link.
   // Re-copied verbatim at design@4d75cb4c: the embedded webfonts changed the drawing's
   // bytes, so only the embedded contentHash moves. No surface changes.
+  // Re-copied verbatim at design@3beff055 (design#247): the brand gold moved to #9c7434
+  // in the drawing, so only the embedded contentHash moves. No surface changes.
   "app-artifact-review.json": {
     spec: "specs/app-artifact-review.html",
-    manifestSha256: "dca86cfdd706f71efbd5eb686c53125185ebf78bfe1a8509c55a20ca49b3366d",
-    contentHash: "sha256:8f27ef24ea87ac6ccace009d538520968b02e3b6fdd4c97a16647b9c5eb6d0cc",
+    manifestSha256: "0eb04b2a30858e5f383559d90852ca2e3e74cca8c8a5e9d6c3cc497a14540465",
+    contentHash: "sha256:54d23e9cfae4ee2078901b8e64d60b9dab6ce82190e38ebdf745a86e730533ec",
   },
 };
 

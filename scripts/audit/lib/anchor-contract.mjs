@@ -88,23 +88,24 @@ export function canonicalJson(value) {
 }
 
 /**
- * FOUR CARD CONTROLS THAT NO GOVERNED DRAWING DRAWS UNDER THE RECORDED VALUE
- * ARE NOT ANCHORS OF THIS CONTRACT (cinatra#3677, re-ratified 2026-10-28).
+ * THREE CARD CONTROLS THAT NO GOVERNED DRAWING DRAWS ARE NOT ANCHORS OF THIS
+ * CONTRACT (cinatra#3677, re-ratified 2026-10-28; cinatra#4390, 2026-11-03).
  *
- * Four capture requirements named a card's own control that no governed drawing
- * draws under the value the product emits, and recording them here kept
- * `design-anchor-resolution` red on main with nothing in a drawing to fix.
- * Each selector below is one of them, named under the kind that owns it, with
- * its own reason:
+ * Capture requirements that named a card's own control that no governed
+ * drawing draws under the value the product emits kept `design-anchor-resolution`
+ * red on main with nothing in a drawing to fix. Each selector below is one of
+ * them, named under the kind that owns it:
  *
  *   · recommendation_hold — the per-skill Confirm / Adjust / Skip that
  *     packages/agents/src/run-recommendation-chip-row.tsx draws on each pill
- *     (`data-skill-action`); the drawing retired them;
- *   · trigger_schedule_proposal — the schedule card's own Confirm in
- *     packages/agents/src/schedule-proposal-card.tsx
- *     (`data-action="confirm-schedule-proposal"`). The governed drawing draws
- *     that floor under another value, `confirm-schedule -> scheduled`; the
- *     product's value is tracked in cinatra#3678.
+ *     (`data-skill-action`); the drawing retired them.
+ *
+ * cinatra#3677 also listed the schedule card's own Confirm under
+ * trigger_schedule_proposal, because the product emitted another value than
+ * the governed drawing draws. cinatra#4390 gave the product the drawn value,
+ * `confirm-schedule -> scheduled`, which resolves in the governed drawing, so
+ * the schedule card has no entry here and its Confirm is recorded like every
+ * other requirement.
  *
  * WHAT THIS DOES NOT DO. It removes no product control and no requirement from
  * the recorder: scripts/ci/lib/capture-record-contract.mjs and
@@ -122,10 +123,9 @@ export const AGENT_OWNED_CAPTURE_CONTROLS = Object.freeze({
     '[data-skill-action="adjust"]',
     '[data-skill-action="skip"]',
   ]),
-  trigger_schedule_proposal: Object.freeze(['[data-action="confirm-schedule-proposal"]']),
 });
 
-/** Is `selector` one of the four listed controls, in a cell of the kind that owns it? */
+/** Is `selector` one of the listed controls, in a cell of the kind that owns it? */
 export function isAgentOwnedCaptureControl(kind, selector) {
   return (
     typeof kind === "string" &&
@@ -138,7 +138,7 @@ export function isAgentOwnedCaptureControl(kind, selector) {
  * The anchors a CAPTURE is graded against, recomputed live from the recorder
  * contract — one entry per (host, kind, state), plus the host's own frame-wide
  * set. This is the third digest input, and it is never read from the anchor
- * file: a requirement that changed must move the digest. The four controls of
+ * file: a requirement that changed must move the digest. The controls of
  * `AGENT_OWNED_CAPTURE_CONTROLS` are left out of the cells of the kind that owns
  * each, and nothing else is.
  */

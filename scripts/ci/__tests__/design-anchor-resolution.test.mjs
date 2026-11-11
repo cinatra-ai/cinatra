@@ -155,14 +155,14 @@ describe("serialized capture assertions retain selector and observation provenan
     expect(report.unresolved.map((a) => a.selector)).toEqual([selector]);
   });
 
-  // cinatra#3677: the live contract records none of the four controls that
-  // kept this check red on main (the per-skill Confirm, Adjust and Skip, which
-  // the drawing retired, and the schedule card's Confirm, whose floor the
-  // drawing draws under another value) — in
-  // either polarity, as an owner anchor, a drawing claim or a passive marker —
-  // and the record of what is unresolved is empty.
+  // cinatra#3677: the live contract records none of the per-skill Confirm,
+  // Adjust and Skip, which the drawing retired and which kept this check red
+  // on main — in either polarity, as an owner anchor, a drawing claim or a
+  // passive marker — and the record of what is unresolved is empty. The
+  // schedule card's Confirm, which cinatra#3677 also left out, carries the
+  // drawn value since cinatra#4390 and is recorded again.
   it("records none of an agent card's own controls as a drawing claim of the live contract", () => {
-    const agentOwned = [...retired, '[data-action="confirm-schedule-proposal"]'];
+    const agentOwned = [...retired];
     const captureAnchors = captureAnchorExpectations();
     const before = JSON.stringify(captureAnchors);
     const inputs = anchorDigestInputs({ specCommit: manifest().specCommit, domExpectations: contract().domExpectations, captureAnchors });
@@ -170,6 +170,9 @@ describe("serialized capture assertions retain selector and observation provenan
     const anchors = collectRecordedAnchors({ anchorContract: contract(), captureAnchors });
     const report = checked(anchors);
     expect(anchors.filter((a) => agentOwned.includes(a.selector))).toEqual([]);
+    // cinatra#4390: the schedule card's drawn Confirm is a drawing claim of the
+    // live contract again, collected whole and sent through the drawing check.
+    expect(anchors.filter((a) => a.selector === '[data-action="confirm-schedule -> scheduled"]').length).toBeGreaterThan(0);
     expect(report.results.filter((a) => agentOwned.includes(a.selector))).toEqual([]);
     expect(report.unresolved.filter((a) => agentOwned.includes(a.selector))).toEqual([]);
     expect(report.captureHooks.filter((a) => agentOwned.includes(a.selector))).toEqual([]);
@@ -182,7 +185,7 @@ describe("serialized capture assertions retain selector and observation provenan
   it("still sends the same controls through the drawing check when something records them", () => {
     // The contract leaves them out; the checker does not excuse them. A record
     // that carries one is a drawing claim, red on main while no drawing draws it.
-    const agentOwned = [...retired, '[data-action="confirm-schedule-proposal"]'];
+    const agentOwned = [...retired];
     const report = checked(agentOwned.map((s) => anchor(s, "recommendation_hold", "capture")));
     expect(report.unresolved.map((a) => a.selector)).toEqual(agentOwned);
     expect(report.captureHooks).toHaveLength(0);
@@ -288,7 +291,7 @@ describe("passive capture markers are accounted for separately from drawn parts"
       '[data-lifecycle-card="unknown_card"]',
       '[data-embed-assistant][data-phase="starting"]',
       '[data-conformance-id="hitl-screen-fields"]',
-      '[data-action="confirm-schedule-proposal"]',
+      '[data-action="confirm-schedule -> scheduled"]',
       '[data-skill-action="confirm"]',
       '[data-skill-action="adjust"]',
       '[data-skill-action="skip"]',
@@ -636,8 +639,15 @@ describe("the report", () => {
     expect(capture.length).toBeGreaterThan(0);
     for (const a of capture) {
       expect(a.selector).not.toContain("composition-only");
-      expect(a.selector).not.toContain(" ");
+      // No field boundary inside a selector: a space OUTSIDE a quoted attribute
+      // literal would be the scope / expect / within / tier tail left behind.
+      // A space INSIDE a quoted literal belongs to the selector, as
+      // captureAssertionOf documents — the drawn schedule Confirm,
+      // `confirm-schedule -> scheduled` (cinatra#4390), carries two.
+      expect(a.selector.replace(/"[^"]*"|'[^']*'/g, '""')).not.toContain(" ");
     }
+    // ...and that selector is collected whole, quoted spaces and all.
+    expect(capture.map((a) => a.selector)).toContain('[data-action="confirm-schedule -> scheduled"]');
   });
 
   it("DECIDES every selector the live recorded set carries today, refusing none", () => {
