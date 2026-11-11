@@ -111,7 +111,9 @@ describe("(1) the host contract names one session data road", () => {
       join(REPO_ROOT, "packages/dashboards/src/components/dashboards-client-shell.tsx"),
       "utf8",
     );
-    expect(shell).toMatch(new RegExp(`DASHBOARDS_API_URL = "${CUBE_ROUTE.replace(/\//g, "\\/")}"`));
+    // A full regex escape (backslash included), not a slash-only one.
+    const routePattern = CUBE_ROUTE.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+    expect(shell).toMatch(new RegExp(`DASHBOARDS_API_URL = "${routePattern}"`));
   });
 
   it("is an address and nothing else: two keys, no credential-shaped field", () => {
