@@ -35,7 +35,7 @@ describe("orchestrator-stepper-panel — per-field setup advance resets input st
     // field→field advance under one shared xRenderer remounts the renderer.
     // An xRenderer-only key regresses to the carryover bug.
     expect(SRC).toMatch(
-      /key=\{`\$\{interruptContext\.xRenderer\}::\$\{interruptContext\.fieldName \?\? ""\}`\}/,
+      /key=\{`\$\{interruptContext\.reviewTaskId\}::\$\{interruptContext\.xRenderer\}::\$\{interruptContext\.fieldName \?\? ""\}`\}/,
     );
     // No renderer key may remain xRenderer-only.
     expect(SRC).not.toMatch(/key=\{interruptContext\.xRenderer\}/);

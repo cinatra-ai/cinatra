@@ -358,6 +358,16 @@ describe("resolution parity with the retired hand map", () => {
   });
 });
 
+describe("the idea step's binding holds its Continue until a pick", () => {
+  const IDEA_BINDING_ID = "@cinatra-ai/blog-pipeline-agent:idea-selection";
+
+  it("the extension's renderer keeps the step's Continue held until a pick (cinatra#3035)", () => {
+    const entry = resolveWith(IDEA_BINDING_ID);
+    expect(entry).toBeTruthy();
+    expect(entry!.holdsContinueUntilPicked).toBe(true);
+  });
+});
+
 describe("mid-run HITL classification parity", () => {
   it.each([
     "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
