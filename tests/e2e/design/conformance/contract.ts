@@ -804,7 +804,7 @@ export function reviewTargetHeaderDriver(
 // readings, and one family factory over one fixture list drives all nine, the
 // same shape `cardDriver` and `suggestionChipDriver` already give.
 //
-// EVERY CONTROL PRESSED HERE IS THE SHIPPED ONE. `confirm-schedule-proposal`,
+// EVERY CONTROL PRESSED HERE IS THE SHIPPED ONE. `confirm-schedule -> scheduled`,
 // `save-schedule-changes` and `cancel-trigger-schedule` are literals of
 // packages/agents/src/schedule-proposal-card.tsx and testid-contract.json
 // requires each of them in that file, so a driver naming a control the product
@@ -884,7 +884,7 @@ async function changeARow(root: Locator): Promise<void> {
  *  carrying the reader's. */
 const EDITED_ROWS = JSON.stringify({ kind: "immediate" });
 
-const CONFIRM_CONTROL = '[data-action="confirm-schedule-proposal"]';
+const CONFIRM_CONTROL = '[data-action="confirm-schedule -> scheduled"]';
 const SAVE_CONTROL = '[data-action="save-schedule-changes"]';
 
 export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): SurfaceDriver {
