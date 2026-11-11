@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 //     <ToolbarGroup>…tab buttons…</ToolbarGroup>
 //     <ToolbarSeparator />
 //     <ToolbarSearchGroup>
-//       <ToolbarSearchInput placeholder="…" defaultValue={…} onChange={…} />
+//       <ToolbarSearchInput aria-label="…" placeholder="…" defaultValue={…} onChange={…} />
 //     </ToolbarSearchGroup>
 //     <ToolbarSeparator />
 //     <ToolbarGroup>
@@ -237,10 +237,34 @@ function ToolbarSearchGroup({
   );
 }
 
+// The search pill's name. The pill is a <label> holding a decorative glass and
+// the input, so the label has no text and the input takes no name from it; a
+// placeholder is only a fallback that some assistive technology drops. The type
+// therefore asks the caller for a name — an `aria-label` or an `aria-labelledby`
+// (a string) — and a call written without either does not compile
+// (cinatra#4452: three toolbars shipped a search box with an empty name).
+// What the type enforces is that one of the two props is PRESENT as a string in
+// a typed call. It does not enforce that the name is non-empty or that it still
+// reaches the input: an empty or whitespace-only string, an `aria-labelledby`
+// that points to no element, an `any`-typed spread or a cast, a later optional
+// spread that overwrites the label with `undefined`, a widened
+// `React.ElementType` or component registry, `@ts-ignore` or `@ts-nocheck`,
+// `cloneElement` or any replacement of props after construction, and a file
+// outside the repository typecheck include all pass.
+type ToolbarSearchInputName =
+  | { "aria-label": string; "aria-labelledby"?: string }
+  | { "aria-labelledby": string; "aria-label"?: string };
+
+type ToolbarSearchInputProps = Omit<
+  React.InputHTMLAttributes<HTMLInputElement>,
+  "aria-label" | "aria-labelledby"
+> &
+  ToolbarSearchInputName;
+
 function ToolbarSearchInput({
   className,
   ...props
-}: React.InputHTMLAttributes<HTMLInputElement>) {
+}: ToolbarSearchInputProps) {
   const level = React.useContext(ToolbarLevelContext);
   return (
     <label
@@ -251,7 +275,11 @@ function ToolbarSearchInput({
         // text in a centred flex row — the identical geometry. Preflight gives
         // the nested <input> `font: inherit`, so declaring it here reaches the
         // value and the placeholder as well.
-        "flex w-full min-w-0 items-center gap-2 rounded-[7px] bg-surface-strong px-3 leading-[normal]",
+        // The input itself is `outline-none`, so the keyboard focus ring sits on
+        // the pill: the drawing's --ring, at the strength the toolbar buttons use
+        // (TOOLBAR_BUTTON_CLASSES; specs/app-components.html says an input's focus
+        // ring picks up --ring).
+        "flex w-full min-w-0 items-center gap-2 rounded-[7px] bg-surface-strong px-3 leading-[normal] focus-within:ring-2 focus-within:ring-ring/40",
         TOOLBAR_CONTROL_HEIGHT[level]
       )}
     >

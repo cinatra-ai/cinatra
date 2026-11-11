@@ -67,6 +67,7 @@ import {
   type ArtifactRepresentationForm,
 } from "@/lib/artifacts/artifact-content-channel";
 import { createPinnedSubstanceReader } from "@/lib/artifacts/artifact-content-substance-reader";
+import { projectRecordedPageCaptureFacts } from "@/lib/artifacts/page-capture-facts-record";
 import { reviewTargetVersionPath } from "@cinatra-ai/agent-ui-protocol/renderable-views/lifecycle-cards";
 // The ROADS themselves stay type-only: they are CONSTRUCTED on the surfaces
 // that choose them (`./review-surface-roads`), none of which is a locked
@@ -476,7 +477,7 @@ export function bindArtifactReviewPorts(ctx: {
     // form the channel projects no class for — the six media forms among them —
     // comes back as the channel's own NAMED absence, because those bytes are
     // the byte road's.
-    const content = buildContent
+    const fileContent = buildContent
       ? await buildContent(contentInput)
       : // THROUGH THE STORE-FAULT GUARD, which main added on this same arm: a
         // read that throws is logged against its revision and comes back as the
@@ -489,6 +490,16 @@ export function bindArtifactReviewPorts(ctx: {
             carriedConfiguration: contentInput.carriedConfiguration,
           }),
         );
+    // A PAGE CAPTURE'S FACTS (cinatra#4223): for a picture the channel has no
+    // class for, the facts recorded with THIS pinned revision, as its object
+    // snapshot. The row's live object data never reaches the card.
+    const content = projectRecordedPageCaptureFacts({
+      orgId,
+      artifactId: artifact.artifactId,
+      representationRevisionId,
+      objectType: artifact.objectType,
+      fileProjection: fileContent,
+    });
 
     return buildArtifactRendererProps({
       artifact: shownArtifact,

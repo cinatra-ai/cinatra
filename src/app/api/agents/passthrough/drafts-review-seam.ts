@@ -3,8 +3,8 @@ import "server-only";
 /**
  * email-outreach drafts-review passthrough seam shaper (cinatra#1959).
  *
- * Pure, zero-dependency, unit-tested (mirrors ./test-delivery-seam and
- * ./blog-pipeline-seam). The passthrough route wires this into its per-tool
+ * Pure, zero-dependency, unit-tested (mirrors ./test-delivery-seam). The
+ * passthrough route wires this into its per-tool
  * input-shaper table for `email_outreach_initial_drafts_update` so the CERTIFIED
  * persist primitive (packages/agents drafts-persist-handler.ts) stays
  * byte-identical.

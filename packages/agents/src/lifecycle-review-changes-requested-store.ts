@@ -15,7 +15,8 @@ import "server-only";
 // resolves the facts the entry point needs that the surface does not already
 // hold (the gate identity + org, the producing run + continuation from the
 // produced-event outbox, the producer's repair capability from its compiled
-// manifest, the cycle lineage for a repair-successor gate), builds the typed
+// manifest; the entry point derives the repair lineage from the gate itself,
+// cinatra#4312), builds the typed
 // `ChangesRequestedRequest` from the typed feedback (ONE free-text finding,
 // mirroring the pre-migration WayFlow review HITL, which consumed a single typed
 // `message`), and drives the entry point. The base-revision CAS witness
@@ -49,18 +50,11 @@ import { readReviewGate } from "./artifact-review-gate-store";
 import { readProducedEvent } from "./lifecycle-produced-outbox-store";
 import {
   recordChangesRequested,
-  readRepair,
-  readRepairBySuccessorGateId,
   type RecordChangesRequestedResult,
 } from "./lifecycle-repair-store";
 
-import {
-  isAutoReviewTaskId,
-  isRepairSuccessorTaskId,
-  isVerificationReopenTaskId,
-  REPAIR_SUCCESSOR_TASK_PREFIX,
-  VERIFICATION_REOPEN_TASK_PREFIX,
-} from "@/lib/lifecycle/lifecycle-orchestration";
+import { isAutoReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
+import { isDeclaredReviewLeg, isDeclaredReviewTaskId } from "@/lib/artifacts/artifact-review-target";
 import { producedEventId, type ContinuationMode } from "@/lib/lifecycle/lifecycle-produced-event";
 import type { ChangesRequestedRequest, RepairFinding } from "@/lib/lifecycle/lifecycle-repair";
 
@@ -169,39 +163,6 @@ async function resolveRepairCapable(producerRunId: string | null): Promise<boole
   }
 }
 
-/** Recover the original repair lineage id for a repair-SUCCESSOR gate (a repair
- * chain) so the cycle guard counts the WHOLE chain, not a fresh lineage per
- * successor. For a first-round auto gate this is undefined (the entry point
- * defaults the lineage to the base gate id). */
-async function resolveLineageId(reviewTaskId: string): Promise<string | undefined> {
-  if (isRepairSuccessorTaskId(reviewTaskId)) {
-    // `repairSuccessorReviewTaskId` = `${PREFIX}${repairId}:${attempt}`; repairId is a
-    // UUID (no colon), so the first segment after the prefix is the repair id.
-    const repairId = reviewTaskId.slice(REPAIR_SUCCESSOR_TASK_PREFIX.length).split(":")[0];
-    if (!repairId) return undefined;
-    const repair = await readRepair(repairId);
-    return repair?.lineageId ?? undefined;
-  }
-  // A post-change VERIFICATION-REOPEN gate (cinatra#2042): a FAILED verification of
-  // a repaired revision reopened this gate. A changes_requested on it must thread the
-  // ORIGINAL repair lineage so the cycle bound counts the verify→reopen→repair loop —
-  // otherwise the bound RESETS to attempt 1 and the loop is unbounded. The reopen
-  // task encodes the verification id `verify:<successorGateId>`; the repair whose
-  // successor gate that is carries the lineage. (An external-change verification has
-  // no repair successor ⇒ undefined ⇒ a fresh lineage, which is correct: a
-  // human-driven external change is not an automated repair cycle.)
-  if (isVerificationReopenTaskId(reviewTaskId)) {
-    const verificationId = reviewTaskId.slice(VERIFICATION_REOPEN_TASK_PREFIX.length);
-    const successorGateId = verificationId.startsWith("verify:")
-      ? verificationId.slice("verify:".length)
-      : verificationId;
-    if (!successorGateId) return undefined;
-    const repair = await readRepairBySuccessorGateId(successorGateId);
-    return repair?.lineageId ?? undefined;
-  }
-  return undefined;
-}
-
 /**
  * Record a prompt-window `changes_requested` decision for the review surface.
  * Resolves the gate + producer facts and drives the S2 `recordChangesRequested`
@@ -210,7 +171,9 @@ async function resolveLineageId(reviewTaskId: string): Promise<string | undefine
  * failure so the surface renders its BLOCKED state.
  *
  * Guards (defence in depth — the action also checks these before calling):
- *   - the gate must exist and be a LIFECYCLE gate (auto/repair-successor task id);
+ *   - the gate must exist and be a LIFECYCLE gate (auto/repair-successor task id)
+ *     or a later leg (the picture's, never the post's own) of a per-artifact
+ *     DECLARED review (cinatra#3035 W11), proven by the family witness on its pin;
  *   - the gate must pin EXACTLY the one base target (the repair path is single-base).
  * A non-lifecycle / mismatched / multi-target gate returns a typed failure rather
  * than closing the wrong gate.
@@ -220,7 +183,8 @@ export async function recordReviewSurfaceChangesRequested(
 ): Promise<RecordChangesRequestedResult> {
   const { runId, reviewTaskId, baseTarget, currentBaseRevisionId, feedback } = input;
 
-  if (!isAutoReviewTaskId(reviewTaskId)) {
+  const lifecycleGate = isAutoReviewTaskId(reviewTaskId);
+  if (!lifecycleGate && !isDeclaredReviewTaskId(reviewTaskId)) {
     return { ok: false, code: "not-a-lifecycle-gate", error: "not a lifecycle review gate" };
   }
   const trimmed = feedback.trim();
@@ -231,6 +195,12 @@ export async function recordReviewSurfaceChangesRequested(
   const gate = await readReviewGate(runId, reviewTaskId);
   if (!gate) {
     return { ok: false, code: "gate-not-pending", error: "the review gate is no longer available" };
+  }
+  // A flow-authored gate takes this road only as a later leg (the picture's) of a
+  // declared per-artifact review, read from the family witness on its pin; the
+  // post's own leg and any other flow-authored gate keep their plain Comment.
+  if (!lifecycleGate && !isDeclaredReviewLeg({ runId, orgId: gate.orgId, reviewTaskId, pinnedTargets: gate.pinnedTargets })) {
+    return { ok: false, code: "not-a-lifecycle-gate", error: "not a lifecycle review gate" };
   }
   // The repair path is single-base: the gate must pin exactly the one reviewed
   // target (a multi-target/batch gate is out of scope for this per-target repair).
@@ -260,7 +230,6 @@ export async function recordReviewSurfaceChangesRequested(
   const repairCapable =
     (await resolveRepairCapable(producerRunId)) ||
     (await resolveCoreRepairCapable(baseTarget.artifactId));
-  const lineageId = await resolveLineageId(reviewTaskId);
 
   // A stable idempotency key over the gate + the EXACT feedback: a response-lost
   // retry with the same feedback re-derives the same repair (idempotent); different
@@ -288,7 +257,6 @@ export async function recordReviewSurfaceChangesRequested(
       producerRunId,
       producerAgentId,
       currentBaseRevisionId,
-      lineageId,
       decidedBy: input.decidedBy ?? null,
     });
   } catch (err) {

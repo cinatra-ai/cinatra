@@ -62,10 +62,18 @@ const STAGED = {
     contentHash: "sha256:dd0eeaf1e9aaeede212214e7711e57a7c76fa3d000a501c13266da971a0e70c6",
   },
   // The lifecycle-cards drawing, staged by cinatra#3156 (the suggestion-chip wave).
+  // Re-copied verbatim at design@f77ea323 (cinatra#3978): the copy carries the
+  // continued readings that design#191 placed inside the email and post displays,
+  // and every surface the drawing has added since. No surface is removed or changed.
+  // Re-copied verbatim at design@9eb5aaf1 (cinatra#3380): the held Continue of the agent
+  // input card (lifecycle cards 0.23.0) declares the state `empty` on agent-hitl-screen-card.
+  // No surface is added or removed, and no other surface changes.
+  // Re-copied verbatim at design@4d75cb4c: the embedded webfonts changed the drawing's
+  // bytes, so only the embedded contentHash moves. No surface changes.
   "app-lifecycle-cards.json": {
     spec: "specs/app-lifecycle-cards.html",
-    manifestSha256: "983fd9fdaa49f4d0749c4637c2ede51ce0b0cd1dc858a92e4d7e63080a4e6af3",
-    contentHash: "sha256:218bf86ae8e105d9279aaf8f6e8ecfc8612ec70b5f7d982aecd94491f728ca10",
+    manifestSha256: "0c1d0b1f59a2c91e3e27f2bcbff24b9448df657c18625d8be20aced23c1e641c",
+    contentHash: "sha256:11a1017e3ccfbd28bf199bc785f61f0ebf22ea484c9c6dbff1915739e11fc3e3",
   },
   // The artifact-review drawing, staged by cinatra#3158 (the artifact-kind
   // display wave). First-time adoption: the drawing has never been committed
@@ -74,10 +82,12 @@ const STAGED = {
   // the pin gate when every one of them is covered. Re-copied verbatim at
   // design@67ecd66d (cinatra#4388): dashboard-display draws six readings and binds
   // open-live once for each of the four that draw the live dashboard link.
+  // Re-copied verbatim at design@4d75cb4c: the embedded webfonts changed the drawing's
+  // bytes, so only the embedded contentHash moves. No surface changes.
   "app-artifact-review.json": {
     spec: "specs/app-artifact-review.html",
-    manifestSha256: "641bcfff84564190321abfff34c55321ae7c7c15e8d820c505a6552f2c5b6a6c",
-    contentHash: "sha256:6d519e1e4611425263875da940529f526867b664931356be9774a85ee66d198d",
+    manifestSha256: "dca86cfdd706f71efbd5eb686c53125185ebf78bfe1a8509c55a20ca49b3366d",
+    contentHash: "sha256:8f27ef24ea87ac6ccace009d538520968b02e3b6fdd4c97a16647b9c5eb6d0cc",
   },
 };
 
@@ -180,6 +190,37 @@ describe("the artifacts drawing carries the ratified five-entry tab strip", () =
 
   it("declares the empty, error, artifact-kind and loading state variants", () => {
     expect(scopeDashboardsTab().states).toEqual(["empty", "error", "kind:artifact", "loading"]);
+  });
+});
+
+describe("the lifecycle-cards drawing carries the continued readings inside the displays", () => {
+  // The adoption cinatra#3978 needs: design#191 draws each display's own continued
+  // reading inside the display, bound to the review reading and the decision time,
+  // beneath which the host draws only the generic settled marker. Asserting the four
+  // surfaces here means a later re-copy that drops them cannot land unnoticed while
+  // the drawing is still unpinned. Read at assertion time, for the reason the
+  // artifacts block above gives.
+  const CONTINUED_READINGS = [
+    "email-continued-reading-in-thread",
+    "email-continued-reading-outside-thread",
+    "post-continued-reading",
+    "regenerated-post-continued-reading",
+  ];
+  const surfaceOf = (id) => {
+    const abs = path.join(MANIFEST_DIR, "app-lifecycle-cards.json");
+    expect(existsSync(abs), "manifests/app-lifecycle-cards.json is not committed.").toBe(true);
+    return readJson(abs).surfaces.find((s) => s.id === id);
+  };
+
+  it.each(CONTINUED_READINGS)("declares %s with the reading and the decision time", (id) => {
+    const surface = surfaceOf(id);
+    expect(surface, `app-lifecycle-cards.json does not declare ${id}`).toBeDefined();
+    expect(surface.fields).toEqual([
+      { field: "reading", source: "review.reading" },
+      { field: "decision", source: "review.decidedAt" },
+    ]);
+    expect(surface.actions).toEqual([]);
+    expect(surface.states).toEqual(["empty"]);
   });
 });
 

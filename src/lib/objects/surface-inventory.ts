@@ -167,8 +167,8 @@ export const DYNAMIC_TYPES: readonly DynamicTypeEntry[] = [
   { typeId: "@cinatra-ai/dynamic:approved-email-draft-bundle",    disposition: "internal", note: "internal machinery (#1455); reviewer-approved bundle read by HITL/send, dissolved into per-item email:body artifacts (#1454)." },
   { typeId: "@cinatra-ai/dynamic:approved-email-followup-bundle", disposition: "internal", note: "internal machinery (#1455); reviewer-approved bundle read by HITL/send, dissolved into per-item email:body artifacts (#1454)." },
   { typeId: "@cinatra-ai/dynamic:email-recipients-bundle",        disposition: "internal", note: "internal machinery (#1455); alias of @cinatra-ai/campaigns:recipients (stays internal) — the per-recipient artifact surface is @cinatra-ai/email:recipient (#1454)." },
-  { typeId: "@cinatra-ai/dynamic:blog-pipeline-selected-idea",    disposition: "internal", note: "transient agent-to-UI passthrough; mark internal" },
-  { typeId: "@cinatra-ai/dynamic:blog-pipeline-draft-projection", disposition: "internal", note: "transient LinkedIn draft projection; mark internal" },
+  { typeId: "@cinatra-ai/dynamic:blog-pipeline-selected-idea",    disposition: "retire",   note: "retired (cinatra#3035): the passthrough shaper that wrote the picked idea is removed; the pack keeps the pick in its own idea_drafts table" },
+  { typeId: "@cinatra-ai/dynamic:blog-pipeline-draft-projection", disposition: "retire",   note: "retired (cinatra#3035): the passthrough shaper that wrote the LinkedIn draft projection is removed; the draft is written as an artifact mid-run" },
 ];
 
 // ---------------------------------------------------------------------------
