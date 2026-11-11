@@ -303,15 +303,16 @@ editor-patch consumer (the refresh executor in the CMS widgets) is S5's
 
 ### 5.2 Tool-manifest report (cinatra#3487)
 
-A read-only report of the tool manifest a turn would expose, so a test can
-compare the chat composer's manifest with the manifest of a prompt window
-outside the chat, with a lifecycle screen active, without reading the DOM. This
-section is the spec only. The route does not exist yet; a later product change
-adds it with its own tests.
+A read-only report of the tools that the chat composer and the run window would
+hand to the model, so that a test can compare the two without reading the DOM.
+This section is the spec only. The route does not exist yet; a later product
+change adds it with its own tests.
 
 **Route.** `GET /api/assistants/chat/tool-manifest`, beside the capability
 route `src/app/api/assistants/chat/capabilities/route.ts`. GET only; there is
-no write method.
+no write method. One request returns BOTH reports, the composer's and the run
+window's, assembled from one set of reads (see "One snapshot"). There is no
+single-road mode.
 
 **Auth.** The same as the session branch of the capability route's GET:
 `getAuthSession()`, and no `session.user.id` gives
@@ -320,81 +321,204 @@ it is never served to the broker-auth embed: a `cit_` bearer gives the same 401,
 fail-closed, with no fall back to the cookie session (the auth-confusion guard
 of the capability route). A widget manifest is out of scope.
 
-**Screen context (the run window).** Two optional query parameters:
+**Parameters.** Exactly three query parameters, all required, each given once:
 
+- `threadId` — the composer's thread.
 - `runId` — the run whose page shows the window.
 - `surface` — one of `RUN_WINDOW_SURFACES`
   (`packages/agents/src/run-window-conversation-store.ts`): `run-page`,
   `step-by-step`, `schedule`, `armed-trigger`, `review`. The run's window with a
   review screen active is `surface=review`.
 
-Both absent: the report is for the chat composer. Both present: the route
-first applies the read access of the run window (the rule of
-`requireRunWindowAccess(runId, "read")` in `src/lib/lifecycle/run-window-turn.ts`)
-and then builds the report. The screen context is additive and never a
-restriction (ruling of 2026-09-14 on cinatra#3487): it is echoed in the
-response and selects nothing. The route has no allow-list, filter or mode
-parameter, and it does not read the surface when it assembles the tools.
+The surface is echoed and selects nothing (ruling of 2026-09-14 on
+cinatra#3487: the screen context is additive, never a restriction). The route
+has no allow-list, filter or mode parameter.
 
-**One source.** The report reads the same request builder that cinatra#3487
-item 5 pins for both roads: `buildCinatraAssistantRuntimeConfig()` in
-`src/lib/assistant-runtime/cinatra-assistant-config.ts`, which both
-`runChatTurn` (`src/app/api/chat/runner.ts`) and `runWindowTurn`
-(`src/lib/lifecycle/run-window-turn.ts`) hand to `runAssistantTurn`. The tools
-of a turn are assembled inside `runAssistantTurn`
-(`src/lib/assistant-runtime/runtime.ts`): the self-MCP reference, the external
-MCP tools, the skill tools and `web_search`, then the allow-list filter
-(`isAllowedByList` in `src/lib/assistant-runtime/ports.ts`); a
-conversation-only provider assembles none. The product change extracts that
-assembly into one function that `runAssistantTurn` and this route both call.
-The route never keeps a second list of tools. To build the report the route
-mints no actor token and no lent-action grant, calls no model provider and
-runs no reachability probe.
+**The inputs of each road.** Each report is assembled from the inputs that its
+road hands to `runAssistantTurn` (`src/lib/assistant-runtime/runtime.ts`) today,
+read the way that road reads them, with the config
+`buildCinatraAssistantRuntimeConfig()`
+(`src/lib/assistant-runtime/cinatra-assistant-config.ts`) that both roads use
+(cinatra#3487 item 5):
+
+- Composer — the cookie branch of `POST /api/assistants/chat` with no
+  `assistant` selector (`runChatTurn`, `src/app/api/chat/runner.ts`): the
+  session's user; `requireActorContext()`; `platformRole` from
+  `isPlatformAdmin(session)`; `sessionOrgId` from the session's
+  `activeOrganizationId`; `sessionId` = `threadId`, after
+  `authorizeThreadForTurn` (`src/lib/assistant-runtime/ag-ui-stream-route.ts`)
+  admits the thread. A thread with no row is assembled as a new thread (no
+  assignment scope); the route never claims or writes it.
+- Window — `runWindowTurn` (`src/lib/lifecycle/run-window-turn.ts`): the actor
+  that `requireRunWindowAccess(runId, "read")` resolves;
+  `resolveUserContextForUserId(actor.userId, { activeOrganizationId:
+  actor.orgId, platformRole: actor.platformRole })` for `actorContext`,
+  `platformRole` and `sessionOrgId`; NO `sessionId`, because `runWindowTurn`
+  passes none (the runtime then mints a per-turn id, which has no thread scope).
+
+The lent-action grant and the run frame are not inputs of the report: they
+change only the self-MCP reference's headers and the system text, which the
+report excludes. If a later change gives the window a `sessionId`, this list
+changes with it in the same change.
+
+**One snapshot.** Within one request the route does each read once for each
+distinct input value, and both roads use that one result: the provider adapter
+(resolved as `runAssistantTurn` resolves it), the skill registration state, the
+external MCP tools (`resolveChatExternalMcpTools(provider, { surface: "chat" })`
+in `packages/llm/src/registry.ts`), the self-MCP catalog state (one read for
+each distinct subject user, organization and platform role), the injected skill
+set (one read for each distinct `sessionId` value, absent included), and the
+skill delivery (one call for each distinct list of catalog skill ids). A state
+change between the two roads' reads therefore cannot occur when their inputs are
+equal; when the inputs differ, the reports may differ, and that difference is
+real.
+
+**One source.** The product change extracts the tool assembly of
+`runAssistantTurn` (conversation-only check, injected skill set, skill
+delivery, self-MCP reference, external MCP tools, skill tools, `web_search`,
+then `isAllowedByList` from `src/lib/assistant-runtime/ports.ts`) into one
+function that `runAssistantTurn` and this route both call. The route never keeps
+a second list of tools.
+
+**Read only.** The extracted function only reads. It inserts, updates and
+deletes nothing, mints no actor token and no lent-action grant, sends no stream
+event, persists no delivery record, and makes no network call to a model
+provider or to an MCP endpoint. Its write steps stay in `runAssistantTurn`,
+before and after the call: the skill registration
+(`ensureAssistantSkillsRegistered`: `ensureInstalledSkillsRegistered` and
+`retireSupersededChatSkillsOnce` in
+`packages/skills/src/extension-skill-resolver.ts`), the token mint, the grant
+(`issueTurnLentActionGrant`), the reachability probe
+(`checkPublicMcpReachability`) and the delivery record. The function takes the
+token issuer as a port; the route passes an issuer that returns an inert fixed
+value and never mints. Because the route does not register skills, it first
+reads whether this process has already registered every id of
+`runtimeConfig.skillIds` (the per-process `registrationMemo`, through a new
+read-only accessor) and has settled the retirement; if not, it answers
+`503 skills_not_registered` and never a manifest that the next turn could
+change. Unit E proves this with a test that runs the route against recording
+ports and stores and asserts zero writes, zero mints and zero provider or MCP
+calls.
+
+**Declared, not reachable.** The report is the pre-dispatch manifest: the tools
+that the turn would hand to `stream()` if it passed every later check. It runs
+no reachability probe and mints nothing, so a turn can still stop where the
+report answers 200 (an unreachable public MCP URL, a failed token mint). The
+item 7 test compares the two declared manifests; it does not claim that a turn
+reached a provider. Tools that the LLM layer adds or translates inside
+`stream()` per provider are not part of the report; both roads call the same
+`stream()` with the same arguments shape.
 
 **Response.** `200`, `Cache-Control: no-store`, JSON:
 
 ```json
 {
   "manifestVersion": 1,
-  "screenContext": null,
-  "conversationOnly": false,
-  "tools": [
-    { "ref": { "type": "mcp", "serverLabel": "..." }, "schemaHash": "sha256:<hex>" },
-    { "ref": { "type": "function", "name": "..." }, "schemaHash": "sha256:<hex>" },
-    { "ref": { "type": "web_search" }, "schemaHash": "sha256:<hex>" }
-  ],
-  "manifestHash": "sha256:<hex>"
+  "composer": {
+    "threadId": "...",
+    "conversationOnly": false,
+    "tools": [
+      { "ref": { "type": "mcp", "serverLabel": "..." }, "schemaHash": "hmac-sha256:<hex>" },
+      { "ref": { "type": "web_search" }, "schemaHash": "hmac-sha256:<hex>" }
+    ],
+    "manifestHash": "hmac-sha256:<hex>"
+  },
+  "window": {
+    "runId": "...",
+    "surface": "review",
+    "conversationOnly": false,
+    "tools": [],
+    "manifestHash": "hmac-sha256:<hex>"
+  }
 }
 ```
 
-- `screenContext` — `null`, or `{ "runId": ..., "surface": ... }` as sent.
 - `conversationOnly` — `true` when the resolved provider takes no tools; then
   `tools` is `[]`.
-- `tools` — one entry for each tool the turn hands to the provider, in the
-  order of the assembly, after the allow-list filter. `ref` is an
-  `LlmToolReference` (`packages/sdk-extensions/src/llm-provider-adapter-contract.ts`).
-- `schemaHash` — SHA-256 of the canonical JSON (keys sorted, no white space)
-  of the declaration the model sees: for a function tool `name`, `description`,
-  `parameters`; for an MCP reference `serverLabel`, `serverDescription`,
-  `allowedTools`, `approval`; for a sandbox execution tool `toolName`,
-  `description`; for the other kinds `type` only. It never includes an
-  address, a header, an authorization value, a grant or an `execute` function.
-- `manifestHash` — SHA-256 of the canonical JSON of `tools`.
+- `tools` — one entry for each tool of the assembled array, in its order, after
+  the allow-list filter. `ref` is an `LlmToolReference`
+  (`packages/sdk-extensions/src/llm-provider-adapter-contract.ts`). No other
+  field of a tool is returned.
+- `schemaHash` — HMAC-SHA-256 of the canonical JSON of the tool's projection
+  (below), lowercase hex.
+- `manifestHash` — HMAC-SHA-256 of the canonical JSON of
+  `{ "conversationOnly": ..., "tools": [...] }` of that report, lowercase hex.
+- The HMAC key is 32 random bytes made for this one response. It is never
+  returned, logged or stored. Hashes therefore compare only within one
+  response, and a hash cannot be used to guess a text offline.
 
-For one person and one moment, a report with a screen context and the report
-without one have equal `tools` and equal `manifestHash`. That equality is what
-the item 7 conformance test reads.
+**Projection.** Each tool contributes exactly these fields and nothing else.
+An absent or `undefined` optional field is written as `null`, except where a
+default is named:
 
-**Errors.** One JSON `error` field for each:
+- function (`type` absent or `"function"`): `type: "function"`, `name`,
+  `description`, `parameters`.
+- `mcp`: `type`, `serverLabel`, `serverUrl`, `serverDescription`,
+  `allowedTools`, `approval` (absent = `"auto_execute"`), `transport`
+  (absent = `"unknown"`). Never `headers` or `authorization`.
+- `shell`: `type`, `skills` (each `name`, `description`, `path`, in order),
+  `stagedSkills` (each `skillId`, `slug`, `description`, in order).
+- `container_skills`: `type`, `skills` (each `skillId`, `version`,
+  `catalogSkillId`, in order).
+- `sandbox_execution`: `type`, `toolName`, `description`, `stagedSkills` (as for
+  `shell`).
+- `web_search`: `type`.
+
+`execute`, `resolveFiles`, `onRead` and every other function are never read. A
+kind that is not in this list is a `503 assembly_failed`, so a new union member
+cannot pass unhashed.
+
+**Canonical JSON.** RFC 8785 (JSON Canonicalization Scheme) over the
+projection: object keys sorted by UTF-16 code units at every depth, arrays in
+order, no white space, strings escaped as RFC 8785 states and not normalized,
+numbers in the ECMAScript form (`-0` is `0`). Inside `parameters` an object
+member whose value is `undefined` is left out (as `JSON.stringify` does). A
+non-finite number, a `bigint`, a function or a symbol anywhere in the projection
+is a `503 tool_unserializable`. The repository has no general RFC 8785
+function today (the `canonical` helpers in `packages/agents` are private, and
+the `canonical*Json` helpers of `packages/execution-plane` serialize only their
+own types); unit E adds one with the RFC's test vectors.
+
+**Errors.** Each error body is `{ "error": "<code>" }` and nothing else: no
+message, URL, stack or provider text. The cause is logged on the server. An
+error on either road fails the whole request; the route never returns one
+report alone or a shorter list.
 
 - `401 Unauthorized` — no session, or a `cit_` bearer.
-- `400` — exactly one of `runId` and `surface`, a `surface` that is not in
-  `RUN_WINDOW_SURFACES`, or a repeated parameter.
-- `404` — a run that does not exist and a run the caller may not read give the
-  same answer, so the route is not an oracle for run ids.
-- `503 { "error": "tools_unavailable" }` — the self-MCP reference cannot be
-  assembled (for example no public MCP URL is configured). The turn stops in
-  that case, so the route does not report a shorter list.
+- `400 invalid_request` — a missing, empty or repeated parameter, any other
+  parameter, a `threadId` or `runId` longer than 200 characters or with a
+  character outside printable ASCII (0x21-0x7E), or a `surface` that is not in
+  `RUN_WINDOW_SURFACES`. These checks read no store, so they say nothing about
+  whether a run exists.
+- `403 Forbidden` — `authorizeThreadForTurn` refuses the thread (the status and
+  error that the chat route returns for it).
+- `404 not_found` — `requireRunWindowAccess(runId, "read")` refuses: a run that
+  does not exist, a run the caller may not read and a caller with no bound turn
+  actor give the same answer, so the route is not an oracle for run ids.
+- `503 actor_unavailable` — `requireActorContext()` or
+  `resolveUserContextForUserId` fails for a valid session (for example the
+  grants and teams cannot be read).
+- `503 provider_unavailable` — no provider adapter resolves, or
+  `BoundDefaultProviderUnavailableError`.
+- `503 skills_not_registered` — see "Read only".
+- `503 skills_not_synced` — the skill delivery throws its skill-not-synced
+  error (`packages/llm/src/errors.ts`: a catalog skill has no synced
+  provider copy).
+- `503 skill_delivery_refused` — the skill delivery throws its skill-cap error
+  (same file), or the delivery produced no vehicle (the case where the turn
+  refuses).
+- `503 tools_unavailable` — the self-MCP reference cannot be assembled (no
+  public MCP URL is configured).
+- `503 catalog_unavailable` — the self-MCP catalog state cannot be read.
+- `503 external_tools_unavailable` — `resolveChatExternalMcpTools` throws.
+- `503 tool_unserializable` — see "Canonical JSON".
+- `503 assembly_failed` — any other failure of the assembly.
+
+**Item 7.** The conformance test sends one request and asserts that
+`composer.manifestHash` equals `window.manifestHash` (and that the `tools`
+lists are equal). The two reports use the inputs of the real roads, so a
+difference between the roads, such as the window's missing `sessionId`, shows
+as a difference here and fails the test.
 
 **It draws nothing.** The route has no screen, no component and no drawn
 element; no design spec covers it. The DOM never reads it; tests read it. It is
