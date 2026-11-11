@@ -190,7 +190,7 @@
     {
       "packageName": "@cinatra-ai/email-artifacts",
       "repo": "cinatra-ai/email-artifacts",
-      "resolvedSha": "bb6bbda90f52fde37505fd91fd6eeb5c2d41ec3d"
+      "resolvedSha": "e393c78abf297ff35de5df83e22d00b893ef173e"
     },
     {
       "packageName": "@cinatra-ai/email-body-matcher-skill",
