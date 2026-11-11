@@ -6,15 +6,20 @@
 // `aiSuggestions` prop (read in trigger-screen-recurrence-selectors-3189) and,
 // standalone, this screen's own window: `runWindow.send()` answers a turn, and
 // its `fill.values` go through the same `applyScheduleValues`. These drive that
-// second caller: the window's conversation hook and its panel are stand-ins, so
-// a turn's fill is exactly the values named here.
+// second caller: the window's conversation hook is a stand-in, so a turn's fill
+// is exactly the values named here.
+//
+// THE PAGE OWNS THE WINDOW (cinatra#3487): the screen mounts no panel of its
+// own; it registers with `useRunWindowScreen`, and the page chrome calls the
+// registered `onSubmit` with what the person typed. So a turn here is that call,
+// read from the registration store the screen publishes into.
 //
 //   pnpm --filter @cinatra-ai/agents exec vitest run \
 //     src/__tests__/trigger-screen-standalone-fill-4377.test.tsx
 
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 
 import type {
   ProposedSchedule,
@@ -35,23 +40,11 @@ vi.mock("../use-run-window-conversation", () => ({
   useRunWindowConversation: () => ({ entries: [], pending: false, send: windowState.send }),
 }));
 
-// The window's panel stands in as one control that sends a message, the way
-// the drawn panel calls `onSubmit` with what the person typed. A span, because
-// the design-system gate forbids the bare element in favour of the shadcn
-// control (run-window-fill-reaches-setup-field-2934's stand-in).
-vi.mock("../hitl-conversation-panel", () => ({
-  HitlConversationPanel: (props: { onSubmit: (prompt: string) => unknown }) => (
-    <span
-      role="button"
-      tabIndex={0}
-      data-testid="send-in-window"
-      onClick={() => void props.onSubmit("change the day")}
-    >
-      send
-    </span>
-  ),
-}));
-
+import {
+  createRunWindowScreenStore,
+  RunWindowScreenProvider,
+  type RunWindowScreenStore,
+} from "../run-window-screen-context";
 import { TriggerScreenClient, type TriggerScreenClientProps } from "../trigger-screen-client";
 
 const ORIGINAL_RESIZE_OBSERVER = (globalThis as { ResizeObserver?: unknown }).ResizeObserver;
@@ -78,6 +71,9 @@ const BASE: RecurringSelection = {
 
 const STATED: ProposedSchedule = { kind: "recurring", timezone: "Europe/Berlin", selection: BASE };
 
+/** The store the screen registers its window with, as the page chrome holds it. */
+let windowStore: RunWindowScreenStore;
+
 function renderStandalone() {
   (globalThis as { ResizeObserver?: unknown }).ResizeObserver = ResizeObserverStub;
   const props: TriggerScreenClientProps = {
@@ -91,7 +87,12 @@ function renderStandalone() {
     setupComplete: true,
     statedSchedule: STATED,
   };
-  return render(<TriggerScreenClient {...props} />);
+  windowStore = createRunWindowScreenStore();
+  return render(
+    <RunWindowScreenProvider store={windowStore}>
+      <TriggerScreenClient {...props} />
+    </RunWindowScreenProvider>,
+  );
 }
 
 const storedCron = (container: HTMLElement) =>
@@ -100,15 +101,20 @@ const dayOfMonth = (container: HTMLElement) =>
   (container.querySelector('[aria-label="Day of month"]') as HTMLElement | null)?.textContent ?? null;
 
 /**
- * One window turn whose effect is `effect`. It resolves only after the turn's
- * answer was awaited and its fill (if any) applied, so a refusal is read after
- * the fill had its chance to land, never before.
+ * One window turn whose effect is `effect`: the page chrome's call of the
+ * screen's registered `onSubmit` with what the person typed. It resolves only
+ * after the turn's answer was awaited and its fill (if any) applied, so a
+ * refusal is read after the fill had its chance to land, never before.
  */
 async function turn(effect: { fill: { values: Record<string, unknown> } | null; acted: boolean }) {
   windowState.send.mockResolvedValueOnce(effect);
+  const registration = windowStore.read();
+  // The screen lends the page a window it may type in: the schedule's own.
+  expect(registration).not.toBeNull();
+  expect(registration!.surface).toBe("schedule");
+  expect(registration!.canManipulate).toBe(true);
   await act(async () => {
-    fireEvent.click(screen.getByTestId("send-in-window"));
-    await windowState.send.mock.results[0]?.value;
+    await registration!.onSubmit("change the day");
   });
   expect(windowState.send).toHaveBeenCalledTimes(1);
   expect(windowState.send).toHaveBeenCalledWith("change the day");
