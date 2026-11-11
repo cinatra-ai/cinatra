@@ -62,21 +62,27 @@ vi.mock("../db", () => {
     },
     select: () => {
       calls.via.push(`${name}.select`);
+      const where = (w: unknown) => {
+        calls.where.push(w);
+        const limit = (n: number) => {
+          calls.limit.push(n);
+          return answers.select();
+        };
+        return {
+          limit,
+          orderBy: () => {
+            calls.orderBy += 1;
+            return { limit };
+          },
+        };
+      };
       return {
         from: () => ({
-          where: (w: unknown) => {
-            calls.where.push(w);
-            const limit = (n: number) => {
-              calls.limit.push(n);
-              return answers.select();
-            };
-            return {
-              limit,
-              orderBy: () => {
-                calls.orderBy += 1;
-                return { limit };
-              },
-            };
+          where,
+          // cinatra#4150 PR 3a: the one read that joins the run, for its status.
+          innerJoin: () => {
+            calls.via.push(`${name}.innerJoin`);
+            return { where };
           },
         }),
       };
@@ -111,7 +117,9 @@ import {
   decide,
   insertParkedDecision,
   listDueParked,
+  listSettledWithWaitingRun,
   readDecisionForRunNode,
+  readLatestDecisionForRun,
   readOpenDecisionForRun,
 } from "../publish-decision-store";
 import { endPublishDecisionSuite } from "./__fixtures__/publish-decision-suite-teardown";
@@ -813,5 +821,108 @@ describe("the integration file's teardown (publish-decision-suite-teardown)", ()
       expect(shared.__cinatraAgentBuilderPool).toBeUndefined();
       expect(shared.__cinatraPostgresSchemaInitialized).toBeUndefined();
     });
+  });
+});
+
+describe("cinatra#4150 PR 3a: the newest decision of a run, the one every resume road reads", () => {
+  it("asks for the run only, newest first, one row, and answers it whatever its status", async () => {
+    expect(await readLatestDecisionForRun("run-1")).toBeNull();
+    expect(rendered(calls.where[0]).params).toEqual(["run-1"]);
+    expect(calls.orderBy).toBe(1);
+    expect(calls.limit).toEqual([1]);
+    for (const status of ["parked", "released", "declined", "expired", "run_ended"]) {
+      answers.select = async () => [stored({ status })];
+      expect((await readLatestDecisionForRun("run-1"))?.status).toBe(status);
+    }
+  });
+
+  it("refuses an empty run id, throws on a read error and on a malformed row", async () => {
+    expect(await codeOf(readLatestDecisionForRun(""))).toBe("invalid-input");
+    answers.select = async () => [stored({ status: "approved" })];
+    expect(await codeOf(readLatestDecisionForRun("run-1"))).toBe("malformed-row");
+    answers.select = async () => {
+      throw new Error("db down");
+    };
+    await expect(readLatestDecisionForRun("run-1")).rejects.toThrow("db down");
+  });
+});
+
+describe("cinatra#4150 PR 3a: the stops a decline or an expiry decided but did not make", () => {
+  it("joins the run and asks for the newest decision of each held run, when it is declined or expired", async () => {
+    answers.select = async () => [{ decision: stored({ id: "d1", status: "declined" }) }, { decision: stored({ id: "d2", status: "expired" }) }];
+    const rows = await listSettledWithWaitingRun(50);
+    expect(rows.map((r) => [r.id, r.status])).toEqual([["d1", "declined"], ["d2", "expired"]]);
+    expect(rows[0]!.surfacedValues).toEqual({ what: "the post" });
+    expect(calls.via).toEqual(["db.select", "db.innerJoin"]);
+    const where = rendered(calls.where[0]);
+    expect(where.params).toEqual(["declined", "expired", "pending_approval", "running"]);
+    // Only a row no newer decision of the same run follows (created_at, then id: the order every newest read uses).
+    expect(where.sql.replace(/\s+/g, " ")).toMatch(
+      /not exists \(select 1 from .*"agent_run_publish_decisions" newer where newer\.run_id = .*"agent_run_publish_decisions"\."run_id" and \(newer\.created_at, newer\.id\) > \(.*"agent_run_publish_decisions"\."created_at", .*"agent_run_publish_decisions"\."id"\)\)/,
+    );
+    expect(calls.orderBy).toBe(1);
+    expect(calls.limit).toEqual([50]);
+  });
+
+  it("reads the next page after the last id it was given", async () => {
+    await listSettledWithWaitingRun(2, "d2");
+    const where = rendered(calls.where[0]);
+    expect(where.params).toEqual(["declined", "expired", "pending_approval", "running", "d2"]);
+    expect(where.sql).toMatch(/"agent_run_publish_decisions"\."id" > \$5/);
+    expect(calls.limit).toEqual([2]);
+  });
+
+  it("refuses an empty last id before any read", async () => {
+    expect(await codeOf(listSettledWithWaitingRun(2, ""))).toBe("invalid-input");
+    expect(calls.via).toEqual([]);
+  });
+
+  it.each([0, PUBLISH_DECISION_MAX_DUE_PAGE + 1, 1.5])("refuses the limit %s before any read", async (limit) => {
+    expect(await codeOf(listSettledWithWaitingRun(limit))).toBe("invalid-input");
+    expect(calls.via).toEqual([]);
+  });
+
+  it("throws on a malformed row and on a read error", async () => {
+    answers.select = async () => [{ decision: stored({ status: "approved" }) }];
+    expect(await codeOf(listSettledWithWaitingRun(1))).toBe("malformed-row");
+    answers.select = async () => {
+      throw new Error("db down");
+    };
+    await expect(listSettledWithWaitingRun(1)).rejects.toThrow("db down");
+  });
+});
+
+describe("cinatra#4150 PR 3a, pre-review 3: the expiry's own rules in the store", () => {
+  it("decide with newestOnly wins only while no newer decision of the same run exists, in the same UPDATE", async () => {
+    answers.update = async () => [stored({ status: "expired" })];
+    await decide("d1", { from: "parked", to: "expired", actor: null, newestOnly: true });
+    const where = rendered(calls.where[0]);
+    expect(where.params).toEqual(["d1", "parked"]);
+    expect(where.sql.replace(/\s+/g, " ")).toMatch(
+      /"status" = \$2 and not exists \(select 1 from .*"agent_run_publish_decisions" newer where newer\.run_id = .*"agent_run_publish_decisions"\."run_id" and \(newer\.created_at, newer\.id\) > \(.*"agent_run_publish_decisions"\."created_at", .*"agent_run_publish_decisions"\."id"\)\)/,
+    );
+    expect(calls.via).toEqual(["tx.update"]);
+  });
+
+  it("decide without newestOnly asks nothing about other decisions", async () => {
+    answers.update = async () => [stored({ status: "run_ended" })];
+    await decide("d1", { from: "parked", to: "run_ended", actor: null });
+    expect(rendered(calls.where[0]).sql).not.toContain("not exists");
+  });
+
+  it("listDueParked reads the next page after the last row it was given, in the same oldest-first order", async () => {
+    await listDueParked(2, undefined, "d2");
+    const where = rendered(calls.where[0]);
+    expect(where.params).toEqual(["parked", "d2"]);
+    expect(where.sql.replace(/\s+/g, " ")).toMatch(
+      /\(.*"agent_run_publish_decisions"\."expires_at", .*"agent_run_publish_decisions"\."id"\) > \(select last_row\.expires_at, last_row\.id from .*"agent_run_publish_decisions" last_row where last_row\.id = \$2\)/,
+    );
+    expect(calls.orderBy).toBe(1);
+    expect(calls.limit).toEqual([2]);
+  });
+
+  it("listDueParked refuses an empty last id before any read", async () => {
+    expect(await codeOf(listDueParked(2, undefined, ""))).toBe("invalid-input");
+    expect(calls.via).toEqual([]);
   });
 });

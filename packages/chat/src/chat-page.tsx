@@ -94,7 +94,7 @@ import {
 import { SkillBadgeCloud } from "./skill-badge-cloud";
 import { selectChatBadges, chatEmptyStateCaption, isPinnedBadgePrefill, getGreeting, DEFAULT_GREETING } from "./chat-badges";
 import { fingerprintMessages, isRealActivity, recallThreadTranscript, recalledThreadFingerprint, rememberThreadTranscript } from "./thread-activity";
-import { publishChatThreadTitle } from "@/lib/chat-shell-bus";
+import { useThreadCrumbName } from "./thread-crumb-name";
 import { DancingRobot } from "./dancing-robot";
 
 // Extension-provided chat renderable-view components (viewType → component),
@@ -134,7 +134,7 @@ import { ConversationColumn, CHAT_THREAD_HOST } from "./conversation-column";
 // above.
 // ---------------------------------------------------------------------------
 
-export function ChatPage({ initialThreadId, initialAssistantPackage, initialInstanceId, remoteChat, userId, initialMention, initialMode, initialPrompt, widgets = EMPTY_WIDGETS, widgetManifests = EMPTY_WIDGET_MANIFESTS, chatViews = EMPTY_CHAT_VIEWS }: ChatPageProps = {}) {
+export function ChatPage({ initialThreadId, initialThreadName, initialAssistantPackage, initialInstanceId, remoteChat, userId, initialMention, initialMode, initialPrompt, widgets = EMPTY_WIDGETS, widgetManifests = EMPTY_WIDGET_MANIFESTS, chatViews = EMPTY_CHAT_VIEWS }: ChatPageProps = {}) {
   const { resolvedTheme } = useTheme();
   const theme: ThemeName = resolvedTheme === "dark" ? "github-dark" : "github-light";
   // Manifest-driven widget runtime — registries/detectors/wizard helpers
@@ -146,6 +146,9 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   const isCreateAgentMode = initialMode === "create-agent";
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(initialThreadId ?? null);
+  // Emit the active thread's name so AppShell can show it in the breadcrumb
+  // (cinatra#4453; the order of its sources is in ./thread-crumb-name).
+  const startThreadNameRead = useThreadCrumbName({ activeThreadId, threads, setThreads, initialThreadId, initialThreadName });
   const { pushChatUrl, pushNewChatUrl, restoreActiveThread, adoptThreadBinding, newThreadSummary, chatTurnContainer } =
     useChatUrlSync(threads, initialAssistantPackage, initialInstanceId);
   const [messages, setMessages] = useState<Message[]>(() => recallThreadTranscript(userId ?? null, initialThreadId) as Message[]);
@@ -412,7 +415,9 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
       prevIsSlackModeRef.current = false;
       return;
     }
+    const noteThreadName = startThreadNameRead(activeThreadId);
     void fetchThreadById(activeThreadId).then((thread) => {
+      noteThreadName(thread);
       if (thread) {
         // Backfill missing ids — threads stored before the id field was added won't have them,
         // causing key={undefined} in the messages list and React's missing-key warning.
@@ -449,7 +454,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
         loadedThreadIdRef.current = activeThreadId;
       }
     });
-  }, [activeThreadId]);
+  }, [activeThreadId, startThreadNameRead]);
 
   // Poll the active thread for externally-written messages (e.g. from the
   // chat_thread_send MCP tool). Uses window.setInterval per codebase convention.
@@ -458,7 +463,9 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     if (hasActiveStream) return;
 
     const intervalId = window.setInterval(() => {
+      const noteThreadName = startThreadNameRead(activeThreadId);
       void fetchThreadById(activeThreadId).then((thread) => {
+        noteThreadName(thread); // a rename or a deletion by another writer reaches the crumb
         if (!thread) return;
         setMessages((prev) => {
           if (thread.messages.length <= prev.length) return prev;
@@ -479,7 +486,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [activeThreadId, hasActiveStream]);
+  }, [activeThreadId, hasActiveStream, startThreadNameRead]);
 
   // Clear the pending-external-reply state as soon as an assistant message arrives
   // (either from the external assistant via polling, or from the @cinatra fallback).
@@ -588,12 +595,6 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   useEffect(() => {
     rememberThreadTranscript(userId ?? null, activeThreadId, loadedThreadIdRef.current, messages);
   }, [activeThreadId, messages]);
-
-  // Emit active thread title so AppShell can show it in the breadcrumb.
-  useEffect(() => {
-    const title = threads.find((t) => t.id === activeThreadId)?.title ?? null;
-    publishChatThreadTitle(title);
-  }, [activeThreadId, threads]);
 
   // Acquired immediately before streamResponse's try, so the finally is sure.
   // `anchorMessageId` is the PROMPT this turn answers — how the intent tells a turn BELOW an edit point from one above it.
