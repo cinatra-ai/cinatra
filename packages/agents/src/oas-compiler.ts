@@ -53,6 +53,8 @@ import {
 import {
   collectArtifactBindingsFromOasDocument,
   collectArtifactMaterializeNodesFromOasDocument,
+  readArtifactReviewTargetsInput,
+  readFlowControlTopology,
 } from "./artifact-binding";
 import type { PersistedArtifactBindingDeclaration } from "./artifact-binding";
 import { readKeyList } from "./gate-keys-not-from-run-inputs";
@@ -1675,35 +1677,12 @@ export async function compileOasAgentJson(opts: {
   //    (do NOT rely on parsed.nodes array index).
   const nodes = parsed.nodes as Array<{ "$component_ref": string }>;
   const arrayNodeIds = nodes.map((n) => n.$component_ref);
-  const controlEdges = (parsed.control_flow_connections as Array<Record<string, unknown>>) ?? [];
-
-  const adjacency = new Map<string, string[]>();
-  for (const edge of controlEdges) {
-    const e = edge as { from_node?: { $component_ref?: string }; to_node?: { $component_ref?: string } };
-    const fromId = e.from_node?.$component_ref;
-    const toId = e.to_node?.$component_ref;
-    if (!fromId || !toId) continue;
-    if (!adjacency.has(fromId)) adjacency.set(fromId, []);
-    const neighbors = adjacency.get(fromId)!;
-    // Deduplicate: if the same (from, to) edge appears twice, do not push the
-    // target id twice — that wastes queue operations and can muddle step order
-    // under edge-duplication (the visited-set still catches it, but only after
-    // the duplicate has been drained).
-    if (!neighbors.includes(toId)) neighbors.push(toId);
-  }
-
+  // The shared reading (cinatra#3035): the same topology a run-time reader of
+  // the executed gates takes.
+  const { reachable } = readFlowControlTopology(parsed);
   const startEntryId = (parsed.start_node as { $component_ref: string }).$component_ref;
-  const nodeIds: string[] = [];
-  const visited = new Set<string>();
-  const queue: string[] = [startEntryId];
-  while (queue.length > 0) {
-    const id = queue.shift()!;
-    if (visited.has(id)) continue;
-    visited.add(id);
-    nodeIds.push(id);
-    const next = adjacency.get(id) ?? [];
-    for (const n of next) if (!visited.has(n)) queue.push(n);
-  }
+  const nodeIds: string[] = [...reachable];
+  const visited = new Set<string>(reachable);
   // Safety: append any disconnected nodes in array order (structural validator should reject).
   for (const id of arrayNodeIds) if (!visited.has(id)) nodeIds.push(id);
 
@@ -1833,11 +1812,7 @@ export async function compileOasAgentJson(opts: {
       // interrupt hook can pin the gate + route to the generic review surface.
       // Only a NON-EMPTY string marks the gate; anything else leaves it unset so
       // the gate stays an ordinary (byte-identical) HITL gate.
-      const targetsInputRaw = ime.metadata?.cinatra?.artifactReview?.targetsInput;
-      const artifactReviewTargetsInput =
-        typeof targetsInputRaw === "string" && targetsInputRaw.length > 0
-          ? targetsInputRaw
-          : undefined;
+      const artifactReviewTargetsInput = readArtifactReviewTargetsInput(ime);
       // cinatra#4457: the keys of a value-surfacing gate's message. The flag is
       // read with the loader's own strict identity (`=== true`, never a truthy
       // coercion); each declared input's title is a key of the message. An

@@ -24,7 +24,7 @@ import {
 import { resolveBoundArtifactTarget } from "@/lib/artifacts/resolve-bound-artifact-type";
 import { mimeAcceptedByAccepts } from "@/lib/artifacts/upload-artifact-type-map";
 import {
-  loadRunDerivationContext,
+  loadRunImageWriteFacts,
   resolveRunScopeOwnership,
   type ScopeDerivedOwnership,
 } from "@/lib/artifacts/run-artifact-materializer";
@@ -150,10 +150,18 @@ export type ResolvedImageProvider = {
  */
 export type ArtifactImageToolDeps = {
   resolveImageProvider: () => Promise<ResolvedImageProvider | null>;
-  loadProducesRefs: (input: {
+  /**
+   * The run package's write facts from ONE reading (cinatra#3035): the typed
+   * produces refs the write is authorized against, and whether a marked review
+   * gate that executes after the write `nodeId` makes reviews it. A reviewed
+   * first picture takes the intermediate origin, as a reviewed mid-run text
+   * write does — that gate is its review.
+   */
+  loadWriteFacts: (input: {
     templateId: string;
     packageVersion: string | null;
-  }) => Promise<readonly SemanticArtifactProducesRef[]>;
+    nodeId: string;
+  }) => Promise<{ producesRefs: readonly SemanticArtifactProducesRef[]; reviewed: boolean }>;
   resolveOwnership: (input: {
     templateId: string;
     runId: string;
@@ -212,8 +220,7 @@ export function artifactImageToolDeps(): ArtifactImageToolDeps {
           }),
       };
     },
-    loadProducesRefs: async (i) =>
-      (await loadRunDerivationContext(i)).producesRefs,
+    loadWriteFacts: (i) => loadRunImageWriteFacts(i),
     resolveOwnership: (i) => resolveRunScopeOwnership(i),
     countRunImages: (i) => countFinalizedRunImages(i),
   };
@@ -228,6 +235,10 @@ export type GenerateArtifactImageInput = {
   createdBy: string | null;
   /** The calling node's id — the ledger's output identity. */
   nodeId: string;
+  /** cinatra#3035: the runtime's signed step of the call, when it verified. The
+   *  picture reads reviewed only when it is the named node: a request's own
+   *  node_id is never the review authority. */
+  verifiedStepId?: string;
   /** The artifact extension the picture belongs to. */
   extension: string;
   /** OPTIONAL declared-type discriminator — the exact `@scope/pkg:local-id`. */
@@ -291,10 +302,12 @@ export async function generateArtifactImage(
     // the extension is one the run's package DECLARED it produces, and the call
     // resolves to exactly one declared object type.
     // ------------------------------------------------------------------
-    const producesRefs = await deps.loadProducesRefs({
+    const writeFacts = await deps.loadWriteFacts({
       templateId: input.templateId,
       packageVersion: input.packageVersion,
+      nodeId: input.nodeId,
     });
+    const producesRefs = writeFacts.producesRefs;
     const declared = producesRefs.map((r) => r.extension);
     if (!declared.includes(input.extension)) {
       return {
@@ -481,7 +494,18 @@ export async function generateArtifactImage(
       mime,
       target: resolvedTarget.target,
       // Read only on the writer road, after the claim.
-      writerFields: () => ({ createdBy: input.createdBy, title }),
+      writerFields: () => ({
+        createdBy: input.createdBy,
+        title,
+        // cinatra#3035: a first picture an executed marked gate reviews carries
+        // the intermediate origin; that gate is the review of it.
+        originKind:
+          writeFacts.reviewed &&
+          input.verifiedStepId !== undefined &&
+          input.verifiedStepId === input.nodeId
+            ? "live_generator"
+            : "agent_generated",
+      }),
       // The picture's own data, validated against the type's schema by the
       // write path itself (item 0.28).
       typedData: () => (input.data ? input.data : undefined),
