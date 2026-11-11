@@ -397,9 +397,9 @@ export function shouldShowLiveProgressStatus(message: StreamStatusMessage) {
 // or an ANCHORED SLOT in the ordered `parts` trace — today the `agent_run`
 // tool call the recommendation card mounts at (#2786). The second one is the
 // fragile half: the Slack layout pins its own turn shape and deliberately drops
-// `parts`, and an error turn skips the ordered-parts branch entirely, so a held
-// decision could be hidden by a presentation mode or by an unrelated stream
-// error. These helpers name that subset ONCE so the projection and the renderer
+// `parts`, and an error turn suppresses ordinary trace content. Lifecycle slots
+// must stay mounted in either reading so an already seen decision survives an
+// unrelated stream error. These helpers name that subset ONCE so the projection and the renderer
 // agree on what "a lifecycle slot" is instead of each testing for `agent_run`.
 //
 // This is a NARROWING of the trace, never a widening: the pinned Slack layout
