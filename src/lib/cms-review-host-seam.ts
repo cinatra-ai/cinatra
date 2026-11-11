@@ -87,6 +87,9 @@ export interface CmsReviewReadbackInput {
   gateId: string;
   runId: string;
   postApplyFields: Record<string, string>;
+  /** cinatra#3978: the site tool's apply result in the CLOSED schema of
+   * `artifact-review-effect-store`; recorded only on a `verified` read-back. */
+  effect?: unknown;
 }
 
 /** Post-apply read-back result — mirrors the connector's `CmsReviewReadbackResult`. */
@@ -96,6 +99,9 @@ export interface CmsReviewReadbackResult {
   outOfScope?: string[];
   code?: string;
   error?: string;
+  /** Only when the input carried `effect`: `refused` stores nothing; after
+   * `unrecorded` the verification stands and a retry may record it. */
+  effect?: "recorded" | "already-recorded" | "refused" | "unrecorded";
 }
 
 /** The published host seam — mirrors the connector's `CmsReviewSeam` structurally
@@ -229,6 +235,15 @@ export interface CmsReviewHostSeamDeps {
     projectFields: (t: CmsReviewVerificationTargetRef) => Record<string, string>;
     representationMatches?: boolean;
   }) => Promise<CmsReviewVerificationResult>;
+  /** cinatra#3978: `orgId` is the frame's org; the writer derives every other
+   * binding from stored state. Absent, an input `effect` reads `unrecorded`. */
+  recordCmsApplyEffect?: (input: {
+    orgId: string;
+    runId: string;
+    gateId: string;
+    operationId: string;
+    result: unknown;
+  }) => Promise<{ ok: true; status: "recorded" | "already-recorded" } | { ok: false; code: string }>;
 }
 
 /**
@@ -240,6 +255,27 @@ export interface CmsReviewHostSeamDeps {
  * as the reviewed base and maps the verdict to the connector's result shape.
  */
 export function buildCmsReviewHostSeam(deps: CmsReviewHostSeamDeps): CmsReviewHostSeam {
+  // cinatra#3978: the limit in UTF-8 bytes of a capture's operation id. The id
+  // becomes the source of the apply's effect record, whose table holds 1 to 256
+  // bytes (`artifact_review_effect_records.source_ref`), so a capture takes no
+  // id the effect could never be stored under. Local to the builder: the
+  // application border holds this module's top-level names at their ceiling.
+  const operationIdMaxBytes = 256;
+  const isCapturableOperationId = (value: unknown): value is string => {
+    if (typeof value !== "string") return false;
+    const bytes = Buffer.byteLength(value, "utf8");
+    return bytes >= 1 && bytes <= operationIdMaxBytes;
+  };
+  // The class of a thrown value for a log line: "error" or "non-error", never
+  // its text. A value whose prototype cannot be read keeps "non-error".
+  const thrownClass = (err: unknown): "error" | "non-error" => {
+    try {
+      return err instanceof Error ? "error" : "non-error";
+    } catch {
+      return "non-error";
+    }
+  };
+
   return {
     isReviewActive: () => deps.isReviewActive(),
 
@@ -248,6 +284,11 @@ export function buildCmsReviewHostSeam(deps: CmsReviewHostSeamDeps): CmsReviewHo
       if (!orgId) {
         throw new Error(
           "[cms-review] no organization resolved from the trusted request frame — refusing to capture a staged CMS write without a tenant scope.",
+        );
+      }
+      if (!isCapturableOperationId(input.operationId)) {
+        throw new Error(
+          `[cms-review] the operation id must be 1 to ${operationIdMaxBytes} UTF-8 bytes — refusing to capture a staged CMS write whose effect could never be recorded.`,
         );
       }
       const res = await deps.captureCmsContentSnapshot({
@@ -396,6 +437,33 @@ export function buildCmsReviewHostSeam(deps: CmsReviewHostSeamDeps): CmsReviewHo
         representationMatches: inScopeFaithful,
       });
       if (!res.ok) return { ok: false, code: res.code, error: res.error };
+      // cinatra#3978: the effect only after a VERIFIED read-back. Its failure never
+      // fails the verification; the log has a fixed text and class, never the error.
+      let effect: CmsReviewReadbackResult["effect"];
+      if (input.effect !== undefined) {
+        if (res.verdict.outcome !== "verified") {
+          effect = "refused";
+        } else if (!deps.recordCmsApplyEffect) {
+          effect = "unrecorded";
+        } else {
+          try {
+            const written = await deps.recordCmsApplyEffect({
+              orgId,
+              runId: input.runId,
+              gateId: input.gateId,
+              operationId: input.operationId,
+              result: input.effect,
+            });
+            effect = written.ok ? written.status : "refused";
+          } catch (err) {
+            effect = "unrecorded";
+            console.warn(
+              "[cms-review] the apply effect could not be recorded (the verification is unaffected):",
+              thrownClass(err),
+            );
+          }
+        }
+      }
       // S6 (#2044 L-D): the verification's field diff gains its VISUAL
       // counterpart. The apply has landed, so the site now really carries the
       // applied content — this is a straight fetched render of the page the
@@ -412,13 +480,19 @@ export function buildCmsReviewHostSeam(deps: CmsReviewHostSeamDeps): CmsReviewHo
             producerRunId: input.runId,
           });
         } catch (err) {
+          // A fixed text and the class only: the error's text may carry private detail.
           console.warn(
             "[cms-review] post-apply preview capture failed (the verification is unaffected):",
-            err instanceof Error ? err.message : err,
+            thrownClass(err),
           );
         }
       }
-      return { ok: true, outcome: res.verdict.outcome, outOfScope: res.verdict.outOfScopePaths };
+      return {
+        ok: true,
+        outcome: res.verdict.outcome,
+        outOfScope: res.verdict.outOfScopePaths,
+        ...(effect !== undefined ? { effect } : {}),
+      };
     },
   };
 }

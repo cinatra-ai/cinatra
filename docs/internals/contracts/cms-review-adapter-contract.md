@@ -175,6 +175,42 @@ in-scope deletion or an in-scope rewrite by the site cannot read as faithful.
 
 `outOfScope` returns the offending paths.
 
+### The apply effect
+
+The adapter may also pass `effect`: the site tool's result of the apply, in a
+**closed** schema with exactly three keys. No other field (no response body,
+no remote error text) can be stored. The host checks `remoteId` for its form
+only; it cannot tell what an id of that form stands for, so the adapter passes
+the site's own id of the item and nothing else.
+
+| Key | Value |
+|---|---|
+| `remoteId` | The site's id of the changed item: 1 to 128 of `A-Z a-z 0-9 . _ : -`. |
+| `remoteStatus` | One of `published`, `scheduled`, `draft`, `pending`, `private`. The adapter maps its site's status word. |
+| `remotePublishedAt` | The site's own publication time as a canonical ISO time (`2026-11-03T09:20:00.000Z`), or `null`. |
+
+Any other key, value or shape is refused, and nothing is stored. The host
+records the effect only when the read-back is `verified`; a `drifted` or
+`unmet` apply records none. The record binds to the gate and the snapshot from
+stored state: the gate must be resolved with `approve` on the named run and
+the caller's org, pin the operation's snapshot, and hold a `verified`
+verification of it. The first record wins. The host keeps one verification
+per gate, the first one written: after a `drifted` or `unmet` read-back, a
+later `verified` read-back of the same gate records no effect. That one
+verification names one target, so of two targets that one gate pins only that
+target can have a record.
+
+The result carries `effect`: `recorded`, `already-recorded` (an identical
+retry), `refused` (nothing stored), or `unrecorded` (the store could not be
+written; the verification stands). The apply and the record are not one
+transaction: after `unrecorded`, retry `recordApplyVerification` with the same
+operation and the same result, and never apply the change again. A display may
+state what happened at the site only from a stored record.
+
+The operation id is the source of the record, so it is 1 to 256 UTF-8 bytes:
+`captureStagedWrite` refuses (throws) any other id before it captures, and the
+host answers `refused` for a captured operation whose id is outside that range.
+
 ## 7. Region anchors
 
 Anchors come **exclusively from the adapter**. The site emits them server-side in

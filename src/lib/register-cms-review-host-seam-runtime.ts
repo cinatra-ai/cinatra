@@ -140,6 +140,9 @@ function createCmsReviewHostSeamDeps(): CmsReviewHostSeamDeps {
         verdict: { outcome: res.verdict.outcome, outOfScopePaths: res.verdict.outOfScopePaths },
       };
     },
+    // cinatra#3978: the apply's effect record, lazy like the stores above.
+    recordCmsApplyEffect: async (i) =>
+      (await import("@cinatra-ai/agents/artifact-review-effect-store")).recordCmsApplyEffect(i),
   };
 }
 
