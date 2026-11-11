@@ -457,7 +457,7 @@ describe.each(["chat", "widget"] as const)(
         const card = container.querySelector(CARD) as HTMLElement;
         expect(card.querySelectorAll("select").length).toBe(0);
         expect(
-          card.querySelectorAll('[data-action="confirm-schedule-proposal"]').length,
+          card.querySelectorAll('[data-action="confirm-schedule -> scheduled"]').length,
         ).toBe(0);
         expect(card.textContent).toContain("Run right after setup");
         expect(container.querySelector(FALLBACK)).toBeNull();
