@@ -138,17 +138,40 @@ export function buildCron(c: RecurringConfig): string {
 }
 
 /**
- * The day of month that a date cron's day field names (cinatra#4377). A day
- * written in digits is read as it is. Any other field (a list, a range or a
- * step) keeps the earlier approximate reading: the number it starts with, or
- * the 1st when that is missing or 0 (the every-N-days limit the tests pin).
+ * The day of month that a date cron's day field names (cinatra#4377, #4407). A
+ * day written in digits is read as it is. Any other field (a list, a range or
+ * a step) keeps the earlier approximate reading: the number it starts with, or
+ * the 1st when it names no number (the every-N-days limit the tests pin).
  * Either way the day must be one that some month has, 1 to 31: `0`, `32`,
  * `99` or a list such as `32,33` is no selection the form can draw, so the
  * cron is not read back (null), rather than drawn as a day with no option. A
  * saved day 29-31 is read back as it is.
+ *
+ * EVERY ELEMENT OF A LIST, A RANGE OR A STEP IS CHECKED (cinatra#4407), not
+ * only the first: every number that an element writes in digits before any
+ * `/` must be 1-31, and an element that starts with a `-` or `+` sign is no
+ * day. So `0 9 0,15 * *`, `0 9 0-5 * *`, `0 9 1,32 * *`, `0 9 1,-5 * *`,
+ * `0 9 5,-1 * *` and `0 9 +5 * *` are not read back. The count after a `/` is
+ * a step, not a day, and is not checked (`1-20/45` reads as the 1st). The day
+ * that is read is held to 1-31 as a last guard: a field that starts with a
+ * minus (`-5`, `-1,15`) is refused by the sign check before it, and would
+ * otherwise read as a negative day. A field whose day part has no digit (an
+ * every-N-days step, `L`, `?`) still reads as the 1st.
  */
 function dateCronDay(domStr: string): number | null {
-  const day = /^\d+$/.test(domStr) ? Number(domStr) : parseInt(domStr, 10) || 1;
+  if (/^\d+$/.test(domStr)) {
+    const day = Number(domStr);
+    return day >= 1 && day <= 31 ? day : null;
+  }
+  for (const element of domStr.split(",")) {
+    const base = element.split("/")[0];
+    if (/^[+-]/.test(base)) return null;
+    for (const digits of base.match(/\d+/g) ?? []) {
+      const n = Number(digits);
+      if (n < 1 || n > 31) return null;
+    }
+  }
+  const day = parseInt(domStr, 10) || 1;
   return day >= 1 && day <= 31 ? day : null;
 }
 
@@ -167,6 +190,12 @@ export function parseCronToRecurring(cron: string): Partial<RecurringConfig> | n
 
   // Quarterly Nth-weekday: "1-7 1,4,7,10 1"
   if (rangeMatch && (monthStr === Q_START_MONTHS || monthStr === Q_END_MONTHS)) {
+    // A day-of-week of `*` names no weekday, so the day range is the only day
+    // this cron names: both of its ends are held to 1-31, as a date cron's are
+    // (cinatra#4407). `0 9 32-40 1,4,7,10 *` and `0 9 0-5 1,4,7,10 *` are not
+    // read back; `0 9 1-7 1,4,7,10 *` keeps its reading. With a day-of-week
+    // (`0 9 32-40 1,4,7,10 1`) the day range is not checked.
+    if (dowStr === "*" && dateCronDay(domStr) === null) return null;
     const nthWeek = nthWeekFromRange(parseInt(rangeMatch[1], 10));
     return {
       frequency: "quarterly",
