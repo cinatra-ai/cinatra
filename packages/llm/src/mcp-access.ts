@@ -248,6 +248,12 @@ export type AgentRunMcpActor = {
    * Optional; mirrors the app-layer type.
    */
   verifiedStepId?: string;
+  /**
+   * The run's host-derived connector-instance binding (cinatra#4220), signed as
+   * the token's `pin` claim. Set by the bridge only from the run row.
+   * Optional; mirrors the app-layer type.
+   */
+  connectorInstancePin?: { connectorKey: string; instanceId: string };
 };
 
 export type AgentRunMcpActorTokenIssuer = (actor: AgentRunMcpActor) => string;
@@ -467,7 +473,7 @@ function buildCinatraMcpServerTool(
       ...(lentActionGrant ? { "X-Cinatra-Lent-Grant": lentActionGrant } : {}),
     },
     serverDescription:
-      "Cinatra enterprise intelligence MCP: read agents, workflows, " +
+      "Cinatra MCP server (Cinatra is the open source agentic teams workspace): read agents, workflows, " +
       "objects/lists/projects, content connectors, cubes, artifact authoring, skills. " +
       "Mutations run via agent dispatch only; no permissions/auth/settings access.",
     // `null` (default) = unrestricted, preserving the chat / machine /
