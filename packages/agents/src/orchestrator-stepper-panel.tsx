@@ -135,7 +135,7 @@ import {
 } from "./run-surface-status";
 import { useRunRowWatch } from "./use-run-row-watch";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
-import { fieldRendererRegistry } from "./field-renderer-registry";
+import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext } from "./field-renderer-registry";
 import {
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
@@ -711,12 +711,12 @@ function HitlApprovalCard({
   // sequential per-field setup gates all reuse the SAME xRenderer
   // (schema-field-fallback), so an xRenderer-only key never fires on a
   // field→field advance (postTitle → blogPostUrl) and field 1's buffered
-  // value bleeds into field 2. fieldName is undefined outside the setup loop,
-  // so non-setup gate transitions keep their existing xRenderer-only behavior.
+  // value bleeds into field 2. The review-task id leads the key (cinatra#3035),
+  // so a later mid-run gate of the same renderer never inherits an earlier pick.
   const prevBufferKeyRef = useRef<string | null>(null);
   const bufferKey =
     interruptContext != null
-      ? `${interruptContext.xRenderer}::${interruptContext.fieldName ?? ""}`
+      ? `${interruptContext.reviewTaskId}::${interruptContext.xRenderer}::${interruptContext.fieldName ?? ""}`
       : null;
   if (
     bufferKey !== null &&
@@ -1278,9 +1278,9 @@ function HitlApprovalCard({
             // unmounts. Without fieldName in the key the renderer (and its
             // internal input state, e.g. SchemaFieldRenderer's localValue)
             // survives the field advance and the previous field's typed text
-            // pre-fills the next field. fieldName is undefined for non-setup
-            // interrupts, so those keep the existing xRenderer-keyed identity.
-            key={`${interruptContext.xRenderer}::${interruptContext.fieldName ?? ""}`}
+            // pre-fills the next field. The review-task id leads it
+            // (cinatra#3035): a later gate's renderer starts with no pick.
+            key={`${interruptContext.reviewTaskId}::${interruptContext.xRenderer}::${interruptContext.fieldName ?? ""}`}
             // The gate's REAL field identity (cinatra#2541). `fieldName` is what
             // the renderer labels itself from (resolveFieldLabel) and ids its
             // input with, so the hardcoded placeholder that used to sit here
@@ -1452,7 +1452,8 @@ function HitlApprovalCard({
 
         {showContinueButton && (
           <div className="flex justify-end pt-2 border-t border-line">
-            <Button size="sm" disabled={isApproving} onClick={handleContinue} className="gap-1.5">
+            {/* cinatra#3035: a gate whose kind declares the hold keeps its Continue unavailable until a pick is made. */}
+            <Button size="sm" disabled={isApproving || continueAwaitsAPick(entry, bufferedHitlValue)} onClick={handleContinue} className="gap-1.5">
               {isApproving ? "Continuing…" : "Continue"}
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>
