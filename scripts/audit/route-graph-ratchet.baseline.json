@@ -2,35 +2,35 @@
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. The counts exclude modules under the extension tree (extensions/**): they are walked and reported per route as the excluded count, and each changed pack is read by the pin-advance host-tool check. A core module a route reaches only through a pack's modules is that pack's cost: it is reported per pack ('reached through <pack>') and excluded as well; a core module the route also reaches through core modules counts. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate and its tests validate the committed records strictly against the base (malformed/stale/orphan records fail closed, naming the route and the field; a carried-forward record may not be deleted while its raised ceiling is kept) and the gate prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
     "/sign-in": 165,
-    "/api/mcp": 1315,
-    "/chat": 1418,
-    "/api/a2a": 1323,
-    "/api/llm-bridge": 1333
+    "/api/mcp": 1317,
+    "/chat": 1420,
+    "/api/a2a": 1325,
+    "/api/llm-bridge": 1335
   },
   "absorbs": {
     "/api/a2a": {
-      "from": 1319,
-      "to": 1323,
-      "reason": "This pull request's four new core modules, src/lib/approvals/approval-pills.tsx, src/lib/approvals/relative-time.ts, src/lib/approvals/repair-stuck.ts and src/lib/approvals/sources/marketplace-state.ts (the approval pill, relative time, repair-stuck and marketplace state helpers of cinatra#4296), reached through the approval source modules in src/lib/approvals/sources that this pull request changes.",
-      "pr": 4364
+      "from": 1323,
+      "to": 1325,
+      "reason": "This pull request's two new core modules, src/lib/artifacts/page-capture-facts-record.ts (the page capture's per-revision facts record of cinatra#4223, whose reader the review target now calls to hand a picture's display its recorded facts) and src/lib/failure-log.ts (which that record imports), reached through src/app/artifacts/[id]/review-target-prepare.ts.",
+      "pr": 0
     },
     "/api/llm-bridge": {
-      "from": 1329,
-      "to": 1333,
-      "reason": "This pull request's four new core modules, src/lib/approvals/approval-pills.tsx, src/lib/approvals/relative-time.ts, src/lib/approvals/repair-stuck.ts and src/lib/approvals/sources/marketplace-state.ts (the approval pill, relative time, repair-stuck and marketplace state helpers of cinatra#4296), reached through the approval source modules in src/lib/approvals/sources that this pull request changes.",
-      "pr": 4364
+      "from": 1333,
+      "to": 1335,
+      "reason": "This pull request's two new core modules, src/lib/artifacts/page-capture-facts-record.ts (the page capture's per-revision facts record of cinatra#4223, whose reader the review target now calls to hand a picture's display its recorded facts) and src/lib/failure-log.ts (which that record imports), reached through src/app/artifacts/[id]/review-target-prepare.ts.",
+      "pr": 0
     },
     "/api/mcp": {
-      "from": 1311,
-      "to": 1315,
-      "reason": "This pull request's four new core modules, src/lib/approvals/approval-pills.tsx, src/lib/approvals/relative-time.ts, src/lib/approvals/repair-stuck.ts and src/lib/approvals/sources/marketplace-state.ts (the approval pill, relative time, repair-stuck and marketplace state helpers of cinatra#4296), reached through the approval source modules in src/lib/approvals/sources that this pull request changes.",
-      "pr": 4364
+      "from": 1315,
+      "to": 1317,
+      "reason": "This pull request's two new core modules, src/lib/artifacts/page-capture-facts-record.ts (the page capture's per-revision facts record of cinatra#4223, whose reader the review target now calls to hand a picture's display its recorded facts) and src/lib/failure-log.ts (which that record imports), reached through src/app/artifacts/[id]/review-target-prepare.ts.",
+      "pr": 0
     },
     "/chat": {
-      "from": 1414,
-      "to": 1418,
-      "reason": "This pull request's four new core modules, src/lib/approvals/approval-pills.tsx, src/lib/approvals/relative-time.ts, src/lib/approvals/repair-stuck.ts and src/lib/approvals/sources/marketplace-state.ts (the approval pill, relative time, repair-stuck and marketplace state helpers of cinatra#4296), reached through the approval source modules in src/lib/approvals/sources that this pull request changes.",
-      "pr": 4364
+      "from": 1418,
+      "to": 1420,
+      "reason": "This pull request's two new core modules, src/lib/artifacts/page-capture-facts-record.ts (the page capture's per-revision facts record of cinatra#4223, whose reader the review target now calls to hand a picture's display its recorded facts) and src/lib/failure-log.ts (which that record imports), reached through src/app/artifacts/[id]/review-target-prepare.ts.",
+      "pr": 0
     },
     "/sign-in": {
       "from": 164,
