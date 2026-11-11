@@ -341,16 +341,18 @@ describe("the fifth kind is covered by the same alarm", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. Four card controls are not anchors of this contract (cinatra#3677)
+// 6. Card controls that no governed drawing draws are not anchors of this
+//    contract (cinatra#3677, cinatra#4390)
 // ---------------------------------------------------------------------------
 //
-// Four capture requirements named
-// a card's own control that no governed drawing draws under the recorded value
-// (three the drawing retired, and the schedule card's Confirm, whose floor it
-// draws as `confirm-schedule -> scheduled`), which kept
-// design-anchor-resolution red on main. The contract leaves exactly those four
-// out of the cells of the kind that owns each, and records everything else the
-// recorder computes, unchanged.
+// cinatra#3677 left four capture requirements out of this contract: the skills
+// card's per-skill Confirm, Adjust and Skip, which the drawing retired, and the
+// schedule card's Confirm, whose product value no drawing drew. cinatra#4390
+// gave the schedule card's Confirm the drawn value, `confirm-schedule ->
+// scheduled`, which resolves in the governed drawing, so only the three
+// skills-card controls stay out. The contract leaves exactly those three out of
+// the cells of the kind that owns each, and records everything else the
+// recorder computes, unchanged, the schedule card's drawn Confirm among it.
 
 describe("an agent card's own controls are not anchors of this contract", () => {
   const SKILL_CONTROLS = [
@@ -358,33 +360,49 @@ describe("an agent card's own controls are not anchors of this contract", () => 
     '[data-skill-action="adjust"]',
     '[data-skill-action="skip"]',
   ];
-  const SCHEDULE_CONFIRM = '[data-action="confirm-schedule-proposal"]';
-  const FOUR = [...SKILL_CONTROLS, SCHEDULE_CONFIRM];
+  const SCHEDULE_CONFIRM = '[data-action="confirm-schedule -> scheduled"]';
   // The serialized shape `captureAnchorExpectations` records, spelled here so
   // the comparison below does not borrow the code it checks.
   const serialized = (spec) =>
     [spec.selector, spec.scope ?? "frame", spec.expect ?? "present", spec.within ?? "", spec.tier ?? "canonical"].join(" ");
 
-  it("names exactly the four controls, each under the kind that owns it, as a frozen list", () => {
-    expect(AGENT_OWNED_CAPTURE_CONTROLS).toEqual({
-      recommendation_hold: SKILL_CONTROLS,
-      trigger_schedule_proposal: [SCHEDULE_CONFIRM],
-    });
+  it("names exactly the three skills-card controls, under the kind that owns them, as a frozen list", () => {
+    expect(AGENT_OWNED_CAPTURE_CONTROLS).toEqual({ recommendation_hold: SKILL_CONTROLS });
     expect(Object.isFrozen(AGENT_OWNED_CAPTURE_CONTROLS)).toBe(true);
     for (const list of Object.values(AGENT_OWNED_CAPTURE_CONTROLS)) expect(Object.isFrozen(list)).toBe(true);
   });
 
-  it("records none of the four in any cell of the live capture anchors", () => {
+  it("records none of the three in any cell of the live capture anchors", () => {
     const anchors = captureAnchorExpectations();
     for (const [host, cells] of Object.entries(anchors)) {
       for (const [cell, entries] of Object.entries(cells)) {
         for (const entry of entries) {
-          for (const selector of FOUR) {
+          for (const selector of SKILL_CONTROLS) {
             expect(entry.startsWith(`${selector} `), `${host} ${cell}: ${entry}`).toBe(false);
           }
         }
       }
     }
+  });
+
+  it("records the schedule card's drawn Confirm in every capturable pending cell of its kind (cinatra#4390)", () => {
+    // The capture contract names the drawn value as the kind's one decision
+    // control; the anchor contract now records it rather than leaving it out.
+    expect(CARD_KINDS.trigger_schedule_proposal.decisionControls).toEqual([SCHEDULE_CONFIRM]);
+    const anchors = captureAnchorExpectations();
+    let cells = 0;
+    for (const host of CAPTURE_HOSTS) {
+      if (!captureHostAdmissibility("trigger_schedule_proposal", host).capturable) continue;
+      const expected = captureRequirementsFor(host, "trigger_schedule_proposal", "pending")
+        .filter((spec) => spec.selector === SCHEDULE_CONFIRM)
+        .map(serialized);
+      expect(expected.length, host).toBeGreaterThan(0);
+      for (const entry of expected) {
+        expect(anchors[host]["trigger_schedule_proposal|pending"], host).toContain(entry);
+      }
+      cells += 1;
+    }
+    expect(cells).toBeGreaterThan(0);
   });
 
   it("leaves out only those, and records every other requirement exactly as the recorder computes it", () => {
@@ -405,15 +423,15 @@ describe("an agent card's own controls are not anchors of this contract", () => 
     }
   });
 
-  it("excuses a control only in the cells of the kind that owns it", () => {
+  it("excuses a control only in the cells of the kind that owns it, and never the schedule card's Confirm", () => {
     for (const selector of SKILL_CONTROLS) {
       expect(isAgentOwnedCaptureControl("recommendation_hold", selector)).toBe(true);
       expect(isAgentOwnedCaptureControl("trigger_schedule_proposal", selector)).toBe(false);
     }
-    expect(isAgentOwnedCaptureControl("trigger_schedule_proposal", SCHEDULE_CONFIRM)).toBe(true);
+    expect(isAgentOwnedCaptureControl("trigger_schedule_proposal", SCHEDULE_CONFIRM)).toBe(false);
     expect(isAgentOwnedCaptureControl("recommendation_hold", SCHEDULE_CONFIRM)).toBe(false);
     for (const kind of ["artifact_review_gate", "verification_summary", "agent_hitl_screen", "constructor", "__proto__", null]) {
-      for (const selector of FOUR) expect(isAgentOwnedCaptureControl(kind, selector)).toBe(false);
+      for (const selector of [...SKILL_CONTROLS, SCHEDULE_CONFIRM]) expect(isAgentOwnedCaptureControl(kind, selector)).toBe(false);
     }
   });
 

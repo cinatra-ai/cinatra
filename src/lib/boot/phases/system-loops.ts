@@ -471,11 +471,18 @@ export function systemLoopPhases(): BootPhase[] {
         const { registerArtifactReviewResumeDeliveryRunner } = await import(
           "@/lib/background-jobs-registry"
         );
-        const { sweepArtifactReviewResumeIntents } = await import(
+        const { sweepArtifactReviewResumeIntents, sweepExpiredPublishDecisionsOnce } = await import(
           "@cinatra-ai/agents/artifact-review-resume-delivery"
         );
+        // cinatra#4150: the publish-decision expiry rides this UNFENCED loop, first in
+        // each cycle; its fault is logged and never stops the resume drain.
         registerArtifactReviewResumeDeliveryRunner({
-          sweep: () => sweepArtifactReviewResumeIntents(),
+          sweep: async () => {
+            await sweepExpiredPublishDecisionsOnce().catch((err: unknown) => {
+              console.error("[publish-decision-expiry] pass failed:", err instanceof Error ? err.name : "error");
+            });
+            return sweepArtifactReviewResumeIntents();
+          },
         });
         const {
           enqueueBackgroundJob,

@@ -195,10 +195,6 @@
       "count": 1,
       "owner": "@cinatra-ai/email-delivery-agent"
     },
-    "src/app/api/agents/passthrough/blog-pipeline-seam.ts :: name :: blog": {
-      "count": 1,
-      "owner": "@cinatra-ai/blog-pipeline-agent"
-    },
     "src/app/campaigns/actions.ts :: name :: campaigns": {
       "count": 1,
       "owner": "@cinatra-ai/email-outreach-agent"
@@ -516,10 +512,6 @@
     "packages/trigger-email-send/src/mcp/schemas.ts": {
       "count": 5,
       "owner": "@cinatra-ai/email-delivery-agent"
-    },
-    "src/app/api/agents/passthrough/blog-pipeline-seam.ts": {
-      "count": 2,
-      "owner": "@cinatra-ai/blog-pipeline-agent"
     },
     "src/app/campaigns/actions.ts": {
       "count": 29,

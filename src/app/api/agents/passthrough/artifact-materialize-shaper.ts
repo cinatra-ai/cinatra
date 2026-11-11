@@ -1,6 +1,6 @@
 // Generic server-side seam shaper for the deterministic `artifact_materialize`
 // passthrough tool (cinatra#925). Pure module (zero project deps) so it is
-// unit-testable in isolation — same posture as ./blog-pipeline-seam.
+// unit-testable in isolation — same posture as ./test-delivery-seam.
 //
 // Unlike the per-agent `_shape` opt-ins, the contract is GENERIC: the ApiNode
 // wires flow variables straight to {extension, content, declaredMime, title,
