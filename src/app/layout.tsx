@@ -67,7 +67,7 @@ export const metadata: Metadata = {
     template: "%s | Cinatra",
   },
   description:
-    "The open source agentic teams workspace for orchestrating agents, workflows, data, content, connectors, and analytics from one shared workspace.",
+    "Cinatra is The Open Source Agentic Teams Workspace. Orchestrate agents, workflows, data, content, connectors, and analytics from one shared workspace.",
 };
 
 export default async function RootLayout({
