@@ -44,11 +44,11 @@ import { db } from "./db";
 import { agentRuns, agentTemplates } from "./schema";
 import {
   coreRepairsObjectType,
+  readProducingStepNoteInput,
   type CoreRepairableProducedRole,
 } from "./lifecycle-repair-producer-registry";
 import { readReviewGate } from "./artifact-review-gate-store";
 import { readProducedEvent } from "./lifecycle-produced-outbox-store";
-import { readProducingStepNoteInput } from "./producing-step-note-input";
 import {
   recordChangesRequested,
   type RecordChangesRequestedResult,

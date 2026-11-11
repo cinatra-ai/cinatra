@@ -136,7 +136,7 @@ describe("cinatra#3080 — Regenerate needs the producing step's declared Note i
   });
 
   it("the real declaration read finds none: the contract has no field that could hold one", async () => {
-    const { readProducingStepNoteInput } = await import("../producing-step-note-input");
+    const { readProducingStepNoteInput } = await import("../lifecycle-repair-producer-registry");
     expect(await readProducingStepNoteInput(RUN)).toBeNull();
     expect(await readProducingStepNoteInput(null)).toBeNull();
   });
@@ -163,7 +163,7 @@ describe("cinatra#3080 — Regenerate needs the producing step's declared Note i
 describe("cinatra#3080 — a Regenerate on a RESOLVED gate is blocked, not refused", () => {
   it("answers gate-not-pending on a gate a Continue already resolved, with the real declaration read, and writes nothing", async () => {
     gateAlreadyResolved();
-    const { readProducingStepNoteInput } = await import("../producing-step-note-input");
+    const { readProducingStepNoteInput } = await import("../lifecycle-repair-producer-registry");
     expect(await readProducingStepNoteInput(RUN)).toBeNull();
 
     const result = await press("regenerate");

@@ -180,7 +180,7 @@ afterAll(async () => {
 describe.skipIf(!HAS_DB)("cinatra#3080 — Regenerate after Continue, with the real declaration read", () => {
   it("the real declaration read finds none for a seeded run", async () => {
     const runId = await seedRun();
-    const { readProducingStepNoteInput } = await import("../producing-step-note-input");
+    const { readProducingStepNoteInput } = await import("../lifecycle-repair-producer-registry");
     expect(await readProducingStepNoteInput(runId)).toBeNull();
   });
 

@@ -41,7 +41,8 @@ import { Client } from "pg";
 // Postgres. The real read's answer today (none, for every run) is pinned
 // without a database in `regenerate-needs-a-declared-note-input-3080.test.ts`.
 const declaredNoteInputs = vi.hoisted(() => new Map<string, string>());
-vi.mock("../producing-step-note-input", () => ({
+vi.mock("../lifecycle-repair-producer-registry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lifecycle-repair-producer-registry")>()),
   readProducingStepNoteInput: async (producerRunId: string | null) =>
     (producerRunId ? declaredNoteInputs.get(producerRunId) : undefined) ?? null,
 }));
