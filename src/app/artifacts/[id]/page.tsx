@@ -52,7 +52,7 @@ import {
 } from "@/lib/artifacts/artifact-renderer-props";
 import { hostArtifactContentBuilder } from "./review-surface-roads";
 import { readArtifactPageReviewReading } from "./artifact-page-review-reading";
-import { readArtifactTypeGate } from "./artifact-type-read-gate";
+import { admittedDashboardLiveAddress, readArtifactTypeGate } from "./artifact-type-read-gate";
 import {
   artifactDisplayTitle,
   buildArtifactDetailHeader,
@@ -283,13 +283,14 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
   // so is the display's copy: a record address the row may still carry is never
   // the dashboard's address, so it does not stand in. A dashboard draws no "Open
   // in source application" in the header below either; every other row keeps its
-  // record's own address in both places.
-  const dashboardGate =
-    typeGate.access === "ok" && typeGate.dashboardPointer !== null ? typeGate : null;
-  const displayedArtifact: ArtifactSummary = dashboardGate
-    ? { ...artifact, sourceUrl: dashboardGate.liveAddress }
+  // record's own address in both places. The gate module answers whether the
+  // row is an admitted dashboard, so this page names the pointer only where it
+  // draws it, after the dispatch below answered a floor.
+  const dashboardLive = admittedDashboardLiveAddress(typeGate);
+  const displayedArtifact: ArtifactSummary = dashboardLive
+    ? { ...artifact, sourceUrl: dashboardLive.liveAddress }
     : artifact;
-  const sourceApplicationHref = dashboardGate ? null : artifact.sourceUrl;
+  const sourceApplicationHref = dashboardLive ? null : artifact.sourceUrl;
 
   // THE REVIEW READING (cinatra#3092). Read here, past the row's own read
   // authorization and the type's own read gate above, so a reader the row is

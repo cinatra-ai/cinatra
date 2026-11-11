@@ -40,7 +40,11 @@ import { DashboardAccessError, requireDashboardAccess } from "@/lib/dashboards/a
 import { readDashboardRowById } from "@cinatra-ai/dashboards/extension-dashboard-reads";
 import { DASHBOARD_ARTIFACT_OBJECT_TYPE } from "@/lib/dashboards/dashboard-artifact-surface";
 import { resolveDashboardArtifactPointer } from "@/lib/dashboards/dashboard-artifact-pointer-resolvers";
-import { readArtifactTypeGate, readDashboardLiveAddress } from "../artifact-type-read-gate";
+import {
+  admittedDashboardLiveAddress,
+  readArtifactTypeGate,
+  readDashboardLiveAddress,
+} from "../artifact-type-read-gate";
 
 const access = vi.mocked(requireDashboardAccess);
 const readRow = vi.mocked(readDashboardRowById);
@@ -243,6 +247,26 @@ describe("the dashboard's live address (cinatra#4311)", () => {
     access.mockResolvedValue(undefined as never);
     arrange();
     await expect(readDashboardLiveAddress(DASHBOARD)).resolves.toEqual({ liveAddress: null });
+  });
+
+  // The artifact page reads the admitted-dashboard decision through this helper,
+  // before its display dispatch (review-reading-data-road-3092.test.ts (f)).
+  it("the page's admitted dashboard hands its live address, a rejected path included", () => {
+    const pointer = { dashboardId: "dash-1", name: "Pipeline health", canonicalHref: "/dashboards/d" } as never;
+    expect(
+      admittedDashboardLiveAddress({ access: "ok", dashboardPointer: pointer, liveAddress: "/dashboards/d" }),
+    ).toEqual({ liveAddress: "/dashboards/d" });
+    expect(admittedDashboardLiveAddress({ access: "ok", dashboardPointer: pointer, liveAddress: null })).toEqual({
+      liveAddress: null,
+    });
+  });
+
+  it.each([
+    ["an admitted row of another type", { access: "ok", dashboardPointer: null, liveAddress: null }],
+    ["not found", { access: "not-found" }],
+    ["denied", { access: "denied" }],
+  ] as const)("the page reads no admitted dashboard where the gate answers %s", (_label, gate) => {
+    expect(admittedDashboardLiveAddress(gate)).toBeNull();
   });
 
   it("the review road answers null for a row of another type and never asks the dashboard gate", async () => {

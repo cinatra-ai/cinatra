@@ -99,6 +99,22 @@ function rootRelativePathOrNull(href: unknown): string | null {
 }
 
 /**
+ * THE ADMITTED DASHBOARD'S LIVE ADDRESS ON THE ARTIFACT PAGE (cinatra#4311). The
+ * gate admits a dashboard row with its pointer; this answers that row's live
+ * address (the canonical path, or null where the gate rejected the path). Every
+ * other answer, and an admitted row of another type, answers null: that row is
+ * not an admitted dashboard, and its record's own address stands. The page reads
+ * the decision here, before its display dispatch, so the page itself names the
+ * pointer only where it draws it, after the dispatch answered a floor.
+ */
+export function admittedDashboardLiveAddress(
+  gate: ArtifactTypeReadGate,
+): { readonly liveAddress: string | null } | null {
+  if (gate.access !== "ok" || gate.dashboardPointer === null) return null;
+  return { liveAddress: gate.liveAddress };
+}
+
+/**
  * THE LIVE ADDRESS OF A DASHBOARD ROW ON A REVIEW SURFACE (cinatra#4311). The
  * review binder reads it for a dashboard target through this same gate, with the
  * reader's session. A row of another type answers null: its record's own address
