@@ -1,4 +1,6 @@
 import type { NextConfig } from "next";
+import { createRequire } from "node:module";
+import path from "node:path";
 
 // ---------------------------------------------------------------------------
 // cinatra#1506 — pin `sonner` to a single resolved module instance under
@@ -128,6 +130,56 @@ function readBuildKnobInt(name: string, min: number, max: number): number | unde
 // real builder. The knob does not pick a "good" number — the operator's host does.
 const buildCpus = readBuildKnobInt("CINATRA_BUILD_CPUS", 1, 256);
 
+// ---------------------------------------------------------------------------
+// cinatra#4546: `pnpm dev:webpack` keeps the npm client packages external.
+//
+// `src/instrumentation.node.ts` reaches `packages/agents/src/verdaccio/client.ts`,
+// which imports `pacote`. pnpm installs `pacote` for `packages/agents` and
+// `packages/registries` only, so it does not resolve from the repository root.
+// Next's webpack externals handler bundles a package that does not resolve
+// from the root to the same file, even when `serverExternalPackages` names it.
+// Webpack then walks pacote -> @npmcli/run-script -> node-gyp, whose context
+// `require('./' + command)` pulls in `node-gyp/lib/Find-VisualStudio.cs`, the
+// compile fails and every request answers HTTP 500. Turbopack (`pnpm dev`)
+// keeps these packages external and is not affected.
+//
+// For the webpack DEV server's Node.js compile only, this handler externalizes
+// these packages by the path they resolve to from the importing file, so Node
+// loads them from the pnpm store at runtime, as Turbopack does. The production
+// build is unchanged: a standalone image must not hold absolute paths of the
+// build machine.
+// ---------------------------------------------------------------------------
+const WEBPACK_DEV_NODE_EXTERNALS = new Set([
+  "pacote",
+  "libnpmpublish",
+  "npm-registry-fetch",
+  "@npmcli/run-script",
+  "node-gyp",
+]);
+
+function packageNameOf(request: string): string {
+  const parts = request.split("/");
+  return request.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
+}
+
+function webpackDevNodeExternal(
+  data: { context?: string; request?: string },
+  callback: (err?: Error | null, result?: string) => void,
+): void {
+  const { context, request } = data;
+  if (!context || !request || !WEBPACK_DEV_NODE_EXTERNALS.has(packageNameOf(request))) {
+    callback();
+    return;
+  }
+  try {
+    const resolved = createRequire(path.join(context, "noop.js")).resolve(request);
+    callback(null, `commonjs ${resolved}`);
+  } catch {
+    // Not resolvable from this importer: let webpack report it as usual.
+    callback();
+  }
+}
+
 const nextConfig: NextConfig = {
   // Emit a self-contained .next/standalone/ at build time so the runtime
   // Docker image only needs the modules actually traced from the app
@@ -167,6 +219,19 @@ const nextConfig: NextConfig = {
   // headless Playwright. The dev server still binds the same socket; this only
   // affects how Next's cross-origin guard classifies incoming requests.
   allowedDevOrigins: ["127.0.0.1"],
+  // cinatra#4546: see WEBPACK_DEV_NODE_EXTERNALS above. Turbopack never calls
+  // this hook, and the `turbopack` block above keeps Next 16 from treating it
+  // as an unmigrated webpack config.
+  webpack(config, { dev, isServer, nextRuntime }) {
+    if (dev && isServer && nextRuntime === "nodejs") {
+      const current = config.externals;
+      config.externals = [
+        ...(Array.isArray(current) ? current : current ? [current] : []),
+        webpackDevNodeExternal,
+      ];
+    }
+    return config;
+  },
   experimental: {
     // Decouple App Router client hydration from the dev-mode React debug
     // channel.
