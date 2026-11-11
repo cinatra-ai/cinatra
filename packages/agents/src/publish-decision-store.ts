@@ -7,10 +7,10 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 import { types } from "node:util";
-import { and, asc, desc, eq, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lte, sql } from "drizzle-orm";
 
 import { db } from "./db";
-import { agentRunPublishDecisions } from "./schema";
+import { agentRunPublishDecisions, agentRuns } from "./schema";
 
 export const PUBLISH_DECISION_STATUSES = ["parked", "released", "declined", "expired", "run_ended"] as const;
 export type PublishDecisionStatus = (typeof PUBLISH_DECISION_STATUSES)[number];
@@ -176,6 +176,8 @@ export interface DecideInput {
   actor: string | null;
   /** Only a decline carries a note. */
   note?: string | null;
+  /** Wins only while no newer decision of the same run exists, checked in the same UPDATE (the expiry's rule). */
+  newestOnly?: boolean;
 }
 
 export type DecideResult =
@@ -208,6 +210,9 @@ function requireTransition(input: DecideInput): { actor: string | null; note: st
   }
 }
 
+/** No newer decision (by created_at, then id) of the same run follows this row. */
+const NO_NEWER_DECISION = sql`not exists (select 1 from ${agentRunPublishDecisions} newer where newer.run_id = ${agentRunPublishDecisions.runId} and (newer.created_at, newer.id) > (${agentRunPublishDecisions.createdAt}, ${agentRunPublishDecisions.id}))`;
+
 export async function decide(id: string, input: DecideInput): Promise<DecideResult> {
   const decisionId = requireText(id, "id");
   const { actor, note } = requireTransition(input);
@@ -216,7 +221,8 @@ export async function decide(id: string, input: DecideInput): Promise<DecideResu
     const [won] = await tx
       .update(agentRunPublishDecisions)
       .set({ status: input.to, decidedBy: actor, decidedAt: sql`now()`, decisionNote: note })
-      .where(and(eq(agentRunPublishDecisions.id, decisionId), eq(agentRunPublishDecisions.status, "parked")))
+      .where(and(eq(agentRunPublishDecisions.id, decisionId), eq(agentRunPublishDecisions.status, "parked"),
+        input.newestOnly ? NO_NEWER_DECISION : undefined))
       .returning();
     if (won) return { outcome: "won", decision: deserialize(won) };
 
@@ -262,11 +268,43 @@ export async function readOpenDecisionForRun(runId: string): Promise<PublishDeci
   return row ? deserialize(row) : null;
 }
 
-/** Open decisions past their expiry, oldest first. `now` is injectable for the sweep's tests. */
-export async function listDueParked(limit: number, now?: Date): Promise<PublishDecisionRow[]> {
+/** The newest decision of this run, whatever its status: the one a resume of the run must read. */
+export async function readLatestDecisionForRun(runId: string): Promise<PublishDecisionRow | null> {
+  const [row] = await db
+    .select()
+    .from(agentRunPublishDecisions)
+    .where(eq(agentRunPublishDecisions.runId, requireText(runId, "runId")))
+    .orderBy(desc(agentRunPublishDecisions.createdAt), desc(agentRunPublishDecisions.id))
+    .limit(1);
+  return row ? deserialize(row) : null;
+}
+
+/** Stops left unmade: the NEWEST decision of each run, when it is declined or expired and its run is still held
+ *  (pending_approval, or running when a hold wrote its row but not its move). One page in id order after `afterId`. */
+export async function listSettledWithWaitingRun(limit: number, afterId?: string): Promise<PublishDecisionRow[]> {
   if (!Number.isInteger(limit) || limit < 1 || limit > PUBLISH_DECISION_MAX_DUE_PAGE) {
     throw new PublishDecisionError("invalid-input", `limit must be from 1 to ${PUBLISH_DECISION_MAX_DUE_PAGE}`);
   }
+  const after = afterId === undefined ? undefined : requireText(afterId, "afterId");
+  const d = agentRunPublishDecisions;
+  const rows = await db
+    .select({ decision: d })
+    .from(d)
+    .innerJoin(agentRuns, eq(agentRuns.id, d.runId))
+    .where(and(inArray(d.status, ["declined", "expired"]), inArray(agentRuns.status, ["pending_approval", "running"]),
+      NO_NEWER_DECISION, after === undefined ? undefined : gt(d.id, after)))
+    .orderBy(asc(d.id))
+    .limit(limit);
+  return rows.map((row) => deserialize(row.decision));
+}
+
+/** Open decisions past their expiry, oldest first; one page after the row `afterId` when given. `now` is injectable for
+ *  the sweep's tests. */
+export async function listDueParked(limit: number, now?: Date, afterId?: string): Promise<PublishDecisionRow[]> {
+  if (!Number.isInteger(limit) || limit < 1 || limit > PUBLISH_DECISION_MAX_DUE_PAGE) {
+    throw new PublishDecisionError("invalid-input", `limit must be from 1 to ${PUBLISH_DECISION_MAX_DUE_PAGE}`);
+  }
+  const after = afterId === undefined ? undefined : requireText(afterId, "afterId");
   if (now !== undefined && !(now instanceof Date && Number.isFinite(now.getTime()))) {
     throw new PublishDecisionError("invalid-input", "now must be a valid date");
   }
@@ -277,6 +315,7 @@ export async function listDueParked(limit: number, now?: Date): Promise<PublishD
       and(
         eq(agentRunPublishDecisions.status, "parked"),
         lte(agentRunPublishDecisions.expiresAt, now ?? sql`now()`),
+        after === undefined ? undefined : sql`(${agentRunPublishDecisions.expiresAt}, ${agentRunPublishDecisions.id}) > (select last_row.expires_at, last_row.id from ${agentRunPublishDecisions} last_row where last_row.id = ${after})`,
       ),
     )
     .orderBy(asc(agentRunPublishDecisions.expiresAt), asc(agentRunPublishDecisions.id))
