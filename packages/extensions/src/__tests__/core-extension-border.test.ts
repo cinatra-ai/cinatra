@@ -118,7 +118,7 @@ describe("core/extension border — fixture detection per crossing class", () =>
 
   it("catches a pack's type id hard-coded in core", () => {
     const found = scan(
-      "packages/agents/src/blog-idea-selection-renderer.tsx",
+      "packages/agents/src/synthetic-core-binding-fixture.tsx",
       'const BINDING = "@cinatra-ai/blog-pipeline-agent:idea-selection";\n',
     );
     expect(found.map((f) => f.rule)).toEqual(["pack-type-id-in-core"]);
