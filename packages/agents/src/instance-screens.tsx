@@ -1868,6 +1868,9 @@ export async function SetupScreen({
   // hides the trail for legacy / external templates without surfacing the
   // condition. Mirrors the client-side guard at orchestrator-stepper-panel.tsx
   // (`agentPackageName && ...`) so server-render and client-refetch agree.
+  // Where the walk stopped without a proven owner for the next answer
+  // (cinatra#3035); the rail reads it before it ties a gate to a marked step.
+  const submissionWalkReport: { stoppedAtStepNumber?: number } = {};
   const submissionMap: SubmissionMapEntries =
     run && template.packageName
       ? await buildSubmissionMapByStepIndex(
@@ -1875,6 +1878,7 @@ export async function SetupScreen({
           template.packageName,
           policySteps as ReadonlyArray<{ stepNumber: number; gateCount?: number; hitlOwnedBy?: string; xRenderer?: string; firesRendererGate?: boolean }>,
           hitlSteps.map((h) => ({ index: h.index, stepNumber: h.stepNumber })),
+          submissionWalkReport,
         )
       : [];
 
@@ -2133,6 +2137,23 @@ export async function SetupScreen({
     index: h.index,
     stepNumber: h.stepNumber,
     label: h.label,
+    // The step the policy marks as the one that opens its review (cinatra#3035):
+    // its review gate is drawn in this step's place on the rail.
+    marksReview: policySteps.some((p) => {
+      const step = p as { stepNumber?: unknown; artifactReviewTargetsInput?: unknown };
+      return (
+        step.stepNumber === h.stepNumber &&
+        typeof step.artifactReviewTargetsInput === "string" &&
+        step.artifactReviewTargetsInput.length > 0
+      );
+    }),
+    // How many times the step pauses; the rail places a marked step's gates by
+    // position only when each marked step pauses once (cinatra#3035).
+    gateCount: (() => {
+      const step = policySteps.find((p) => (p as { stepNumber?: unknown }).stepNumber === h.stepNumber);
+      const count = (step as { gateCount?: unknown } | undefined)?.gateCount;
+      return typeof count === "number" && count > 0 ? count : undefined;
+    })(),
   }));
   const railStepResults = (run?.stepResults ?? []) as unknown[];
   // Transcript only forms the rail spine for a single-agent/leaf run — no policy
@@ -2158,6 +2179,7 @@ export async function SetupScreen({
           stepIndex,
           answered: entry.submittedValues != null,
         })),
+        submissionsStoppedAtStep: submissionWalkReport.stoppedAtStepNumber,
         messages: railMessages,
         stepResults: railStepResults,
         gates: reviewRailGates,
@@ -3453,6 +3475,8 @@ export async function SetupScreen({
                   // step "1" — the drawing's own rail — instead of the "2" the
                   // re-shoot photographed.
                   stepOffset={runSurfaceRailNumberedCount(railSteps.map((step) => step.key))}
+                  // Only a run waiting on a person opens its active row (cinatra#3035).
+                  runPaused={run.status === "pending_approval"}
                 />
               ) : null;
               // Review is a forecast after the work, never a head row above

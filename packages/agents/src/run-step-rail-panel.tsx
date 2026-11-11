@@ -1,5 +1,6 @@
 "use client";
 
+import type { KeyboardEvent } from "react";
 import { Check } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -23,6 +24,7 @@ import {
   RUN_PAGE_RAIL_SEP_CLASS,
   RUN_PAGE_RAIL_TITLE_CLASS,
   RUN_PAGE_RAIL_TITLE_COLOUR_CLASS,
+  useRunStepSelection,
 } from "./run-step-rail-extra-entry";
 
 // The panel's own entry type, re-exported so a caller mounting this component
@@ -62,10 +64,17 @@ export function RunStepRailPanel({
   activeOrdinal,
   reviewHrefBase,
   stepOffset = 0,
+  runPaused = false,
 }: {
   entries: RunStepRailEntry[];
   activeOrdinal: number | null;
   reviewHrefBase: string;
+  /**
+   * True while the run waits on a person at a step (`pending_approval`,
+   * cinatra#3035). Only then does the active step row open the run detail: the
+   * active row of a running run is a step still being worked, not a pause.
+   */
+  runPaused?: boolean;
   /**
    * How many rows this rail is renumbered by (cinatra#2788, S9d).
    *
@@ -79,7 +88,14 @@ export function RunStepRailPanel({
    */
   stepOffset?: number;
 }) {
+  // cinatra#3035: inside a frame the step row the run is paused on opens the run
+  // detail, unless a pending review-gate row already stands for it (that row
+  // opens the detail itself, in the step's place or after the spine).
+  const selection = useRunStepSelection();
   if (entries.length === 0) return null;
+  const railCarriesPendingGate = entries.some(
+    (e) => e.kind === "gate" && e.status === "pending" && e.gate != null,
+  );
   // The stepper's numeric "value" is the active display index. Map the active
   // ordinal to its 1-based position in the sorted rail; fall back to past-the-end
   // (everything completed) when nothing is active.
@@ -205,6 +221,26 @@ export function RunStepRailPanel({
               </StepperIndicator>
             );
 
+            // The press opens the run detail and changes no mark: aria-current and
+            // data-run-surface-rail-selected keep main's meaning, the current
+            // reached step (cinatra#3449, cinatra#4095).
+            const opensTheRunDetail =
+              runPaused &&
+              selection !== null &&
+              displayStep === activeIndex &&
+              !railCarriesPendingGate;
+            const pausedStepPress = opensTheRunDetail
+              ? {
+                  onClick: () => selection?.select("detail"),
+                  // Capture phase, so the trigger's own arrow, Home and End navigation still runs.
+                  onKeyDownCapture: (event: KeyboardEvent<HTMLButtonElement>) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    selection?.select("detail");
+                  },
+                }
+              : {};
+
             return (
               <StepperItem
                 key={entry.key}
@@ -273,7 +309,7 @@ export function RunStepRailPanel({
                     <StepperTrigger
                       className={RUN_PAGE_RAIL_ROW_CLASS}
                       aria-label={`${displayStep} ${entry.label}`}
-                      tabIndex={-1}
+                      tabIndex={opensTheRunDetail ? 0 : -1}
                       // THE ROW IS WHERE THE RAIL'S STATE IS MARKED
                       // (cinatra#3449), and it is THIS node rather than the box
                       // around it: the row a reading of the rail already finds
@@ -284,6 +320,7 @@ export function RunStepRailPanel({
                       data-run-surface-rail-settled={railSettled ? "true" : "false"}
                       aria-current={railSelected ? "step" : undefined}
                       data-run-surface-rail-selected={railSelected ? "true" : "false"}
+                      {...pausedStepPress}
                     >
                       {indicatorNode}
                       {titleNode}

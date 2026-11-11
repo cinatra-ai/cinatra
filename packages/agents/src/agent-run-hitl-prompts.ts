@@ -26,7 +26,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { createHash, randomUUID } from "node:crypto";
 
 import { db, agentBuilderPool } from "./db";
-import { agentRunHitlPrompts } from "./schema";
+import { agentRunHitlPrompts, artifactReviewGates } from "./schema";
 
 export type WriteHitlPromptInput = {
   runId: string;
@@ -146,6 +146,25 @@ export async function readAllHitlPromptsForRun(
       ),
     )
     .orderBy(agentRunHitlPrompts.capturedAt);
+}
+
+// ---------------------------------------------------------------------------
+// The run's review gates as the submission walk reads them (cinatra#3035): the
+// task id and the creation time only, in creation order. A marked review step
+// decided through its gate stores no prompt row, so the walk compares this time
+// with the next row's capture time to tell the two apart. Same run-scoped table
+// and index as `listReviewGatesForRun`; authorization is the caller's job, as
+// for every reader above. Read here, beside the prompt rows, so the walk adds
+// no module to the routes that reach it.
+// ---------------------------------------------------------------------------
+export async function readReviewGateTimesForRun(
+  runId: string,
+): Promise<Array<{ reviewTaskId: string; createdAt: Date }>> {
+  return db
+    .select({ reviewTaskId: artifactReviewGates.reviewTaskId, createdAt: artifactReviewGates.createdAt })
+    .from(artifactReviewGates)
+    .where(eq(artifactReviewGates.runId, runId))
+    .orderBy(artifactReviewGates.createdAt);
 }
 
 // ---------------------------------------------------------------------------
