@@ -401,6 +401,23 @@ export async function deliverArtifactReviewResumeIntent(
     if (parked !== null) return parked;
   }
 
+  // cinatra#4150: a run held at a publish decision goes on only by that decision. The
+  // intent stays pending; a decline or an expiry stops the run, and the status guard
+  // above then closes it. A hold that cannot be read keeps it pending too. Neither log
+  // line names the gate, the run or the store's error.
+  const publishHold = await import("./publish-decision-actions");
+  const refused = (err: unknown): "retryable" => {
+    const why = publishHold.isPublishDecisionRequired(err) ? publishHold.PUBLISH_DECISION_REQUIRED : "the publish hold could not be checked";
+    console.warn(`[artifact-review-resume] a resume was refused: ${why}`);
+    return "retryable";
+  };
+  let decided: boolean; // the run has a decision: it met a publish gate, whatever the template lists
+  try {
+    decided = await publishHold.assertNoOpenPublishDecision(run.id);
+  } catch (err) {
+    return refused(err);
+  }
+
   // Deliver the typed decision verbatim as the WayFlow resume message. Dynamic
   // import mirrors review-task-actions.ts (circular-dep avoidance:
   // agents ← @cinatra-ai/a2a ← mcp-server ← agent-builder).
@@ -421,6 +438,20 @@ export async function deliverArtifactReviewResumeIntent(
   // executing. An overwrite-in-place rotation would 403 that live task.
   const { mintResumeRunTokenMetadata } = await import("./wayflow-run-token-carrier");
   const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
+  // cinatra#1939 wave 2: the delivery worker advances the run with no session in
+  // scope — it grounds the transition on the system dispatch mint, scoped to the
+  // run's org (the human approval already happened when the intent row was written).
+  const authority = mintAgentRunExecutionAuthority(run.orgId);
+  // cinatra#4150 (A5): on a publishing template, or for a run with a decision, the run is
+  // claimed here and the hold is read again before the send; the intent stays pending when
+  // it is refused or held.
+  let sendFrom: Awaited<ReturnType<typeof publishHold.claimRunBeforeSend>>;
+  try {
+    sendFrom = await publishHold.claimRunBeforeSend(run.id, (template.publishingSteps?.length ?? 0) > 0 || decided, authority);
+  } catch (err) {
+    return refused(err);
+  }
+  if (!sendFrom) return "retryable";
   const task = await client.sendTask({
     message: {
       role: "user",
@@ -439,14 +470,11 @@ export async function deliverArtifactReviewResumeIntent(
   });
 
   // Drive the returned Task through the canonical state machine (advances the
-  // run past the gate — to the next gate or to terminal). fromStatus is the
-  // literal "pending_approval" (guarded above), matching the human resume path.
+  // run past the gate — to the next gate or to terminal). fromStatus is
+  // "pending_approval" (guarded above), matching the human resume path, or
+  // "running" after the cinatra#4150 claim above.
   const { handleWayflowTaskState } = await import("./execution");
-  // cinatra#1939 wave 2: the delivery worker advances the run with no session in
-  // scope — it grounds the transition on the system dispatch mint, scoped to the
-  // run's org (the human approval already happened when the intent row was written).
-  const authority = mintAgentRunExecutionAuthority(run.orgId);
-  await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task, authority });
+  await handleWayflowTaskState({ runId: run.id, run, fromStatus: sendFrom, task, authority });
 
   const marked = await markResumeIntentDelivered(gateId, leaseToken);
   console.log(
@@ -700,4 +728,16 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
   // candidate query returns only runs that are actually releasable.
   await releaseDecidedProducedReviewParks(PRODUCED_REVIEW_RELEASE_LIMIT, summary);
   return summary;
+}
+
+/** cinatra#4150: one pass of the publish-decision expiry on this unfenced ~30-second loop, under
+ *  the loop's system dispatch authority: due decisions close and their runs stop; unmade stops finish. */
+export async function sweepExpiredPublishDecisionsOnce(): Promise<void> {
+  const { sweepExpiredPublishDecisions } = await import("./publish-decision-actions");
+  const s = await sweepExpiredPublishDecisions({ authorityFor: mintAgentRunExecutionAuthority });
+  if (s.due + s.stopped + s.failed > 0) {
+    console.log(
+      `[publish-decision-expiry] due=${s.due} expired=${s.expired} run_ended=${s.runEnded} lost=${s.lost} failed=${s.failed} stopped=${s.stopped}`,
+    );
+  }
 }

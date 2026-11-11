@@ -2,7 +2,7 @@
 
 <img src="assets/logo.svg" alt="Cinatra" width="360" />
 
-# Agentic Teams Workspace
+# The Open Source Agentic Teams Workspace
 
 Cinatra is an extensible Web application where people, AI assistants, and agents work together in projects, teams, and organizations, or across the whole workspace and in personal spaces. It provides the shared tools and knowledge to work together from discussion to delivery in a multi-purpose AI productivity environment that you can host yourself. Most notably, Cinatra supports an agent lifecycle, from selecting context and skills to scheduling, execution, review, and learning.
 
