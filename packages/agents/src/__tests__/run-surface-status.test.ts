@@ -368,9 +368,11 @@ describe("applyJustSubmittedSuppression", () => {
     ).toEqual({ context: null, clearSuppression: false });
   });
 
-  // The setup fields share ONE review task (`setup-<runId>`), and a WayFlow
-  // task's gates share `wayflow-<taskId>`. Such an id names no single gate, so
-  // it is never read as spent: those gates read exactly as before this change.
+  // The setup fields of one run share ONE review task (`setup-<runId>`). That
+  // id names no single gate, so it is never read as spent: those gates read
+  // exactly as before this change. A WayFlow id does NOT belong here: a
+  // multi-gate WayFlow flow mints a new task id per gate (see the WayFlow
+  // cases below).
   it("reads the shared setup review task exactly as before", () => {
     const setupA: HitlGateContext = { ...gate, reviewTaskId: "setup-run-1", fieldName: "a" };
     const setupB: HitlGateContext = {
@@ -400,11 +402,67 @@ describe("applyJustSubmittedSuppression", () => {
       context: setupA,
       clearSuppression: false,
     });
-    const wayflow: HitlGateContext = { ...gate, reviewTaskId: "wayflow-t-1" };
-    expect(applyJustSubmittedSuppression(wayflow, null, answered("wayflow-t-1"))).toEqual({
-      context: wayflow,
+  });
+
+  // A multi-gate WayFlow flow mints a NEW task id for each gate, so two context
+  // gates in a row arrive as (R, wayflow-t1) and then (R, wayflow-t2): the
+  // production shape of #4602. Each WayFlow id names one gate.
+  it("draws the next WayFlow gate of the same renderer (wayflow-t2 after answered wayflow-t1) and clears", () => {
+    const wf1: HitlGateContext = { ...gate, reviewTaskId: "wayflow-t1" };
+    const wf2: HitlGateContext = { ...gate, reviewTaskId: "wayflow-t2" };
+    expect(
+      applyJustSubmittedSuppression(wf2, { xRenderer: R, reviewTaskId: "wayflow-t1" }, answered("wayflow-t1")),
+    ).toEqual({ context: wf2, clearSuppression: true });
+    // The answered WayFlow gate itself stays suppressed while armed ...
+    expect(
+      applyJustSubmittedSuppression(wf1, { xRenderer: R, reviewTaskId: "wayflow-t1" }, answered("wayflow-t1")),
+    ).toEqual({ context: null, clearSuppression: false });
+  });
+
+  it("never draws an answered WayFlow gate a late poll returns after the pair was cleared", () => {
+    const wf1: HitlGateContext = { ...gate, reviewTaskId: "wayflow-t1" };
+    expect(applyJustSubmittedSuppression(wf1, null, answered("wayflow-t1"))).toEqual({
+      context: null,
       clearSuppression: false,
     });
+    expect(
+      applyJustSubmittedSuppression(wf1, { xRenderer: R, reviewTaskId: "wayflow-t2" }, answered("wayflow-t1", "wayflow-t2")),
+    ).toEqual({ context: null, clearSuppression: false });
+  });
+
+  it("keeps a same-renderer gate with a whitespace-only review task suppressed (names no gate)", () => {
+    const blank: HitlGateContext = { ...gate, reviewTaskId: "   " };
+    expect(
+      applyJustSubmittedSuppression(blank, { xRenderer: R, reviewTaskId: "rt-1" }, answered("rt-1")),
+    ).toEqual({ context: null, clearSuppression: false });
+  });
+
+  it("keeps a same-renderer gate with a missing or non-string review task suppressed", () => {
+    for (const id of [undefined, null, 42]) {
+      const odd = { ...gate, reviewTaskId: id as unknown as string };
+      expect(
+        applyJustSubmittedSuppression(odd, { xRenderer: R, reviewTaskId: "rt-1" }, answered("rt-1")),
+      ).toEqual({ context: null, clearSuppression: false });
+    }
+  });
+
+  it("keeps the same renderer suppressed when the armed pair carries no usable review task", () => {
+    // With no armed review task the next gate cannot be told from the
+    // answered one, so the old renderer-only reading holds.
+    for (const armedTask of [null, "", "   "]) {
+      expect(
+        applyJustSubmittedSuppression(nextGateSameRenderer, { xRenderer: R, reviewTaskId: armedTask }, answered()),
+      ).toEqual({ context: null, clearSuppression: false });
+    }
+  });
+
+  it("suppresses a spent one-gate review task even when it arrives with a different renderer", () => {
+    // The answered set is read before the renderer: a review task that names
+    // one gate and was answered on this mount is never drawn again.
+    const spentOther: HitlGateContext = { ...gate, xRenderer: "@cinatra-ai/x:other", reviewTaskId: "rt-1" };
+    expect(
+      applyJustSubmittedSuppression(spentOther, { xRenderer: R, reviewTaskId: "rt-2" }, answered("rt-1", "rt-2")),
+    ).toEqual({ context: null, clearSuppression: false });
   });
 });
 
