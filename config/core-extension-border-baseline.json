@@ -113,6 +113,11 @@
     },
     {
       "rule": "pack-type-id-in-core",
+      "key": "packages/objects/src/integration/register-types.ts::@cinatra-ai/drupal:node",
+      "reason": "retired tombstone: the pack moved its pointer type into its own namespace, and the host keeps the former id registered, read-only and never projected, so stored rows of it fail closed."
+    },
+    {
+      "rule": "pack-type-id-in-core",
       "key": "packages/objects/src/integration/register-types.ts::@cinatra-ai/email:body",
       "reason": "standing debt: the host objects registry restates a type id the pack declares, so a pack that is not installed still has its representation known here."
     },
@@ -180,6 +185,11 @@
       "rule": "pack-type-id-in-core",
       "key": "src/lib/member-post-draft-writer-provider.ts::@cinatra-ai/linkedin:post-draft",
       "reason": "standing debt: the draft writer provider names a pack-declared type id to write the draft it owns."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "src/lib/object-history/retention-policy.ts::@cinatra-ai/drupal:node",
+      "reason": "retired tombstone: the retention policy names the former Drupal pointer id, which the host keeps registered as a read-only tombstone for its stored rows."
     },
     {
       "rule": "pack-type-id-in-core",

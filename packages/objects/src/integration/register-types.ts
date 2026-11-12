@@ -572,11 +572,66 @@ function registerLinkedinObjectTypes(): void {
 }
 
 // ---------------------------------------------------------------------------
-// The Drupal external node pointer is not registered here. Its artifact pack
+// The Drupal external node pointer is not defined here. Its artifact pack
 // declares it in the pack's own namespace, so the artifact bridge registers it
-// from the pack claim under the pack (cinatra#4366); the host restatement of
-// the former cross-namespace id is retired.
+// from the pack claim under the pack (cinatra#4366).
+//
+// The former host id stays registered as a RETIRED tombstone, because a
+// database that ran the connector's old pointer writer may still hold rows of
+// it. Without a definition those rows would leave the governed path: the
+// projector would emit their raw data, objects_update would write them with no
+// schema, and the artifact reads would lose them. The tombstone keeps them
+// resolvable under their former contract (content category, agent/import
+// sources, the strict inline pointer schema), declares projection `none` so
+// they are never projected, and is marked retired so objects_save and
+// objects_update refuse it and the type discovery surfaces leave it out.
 // ---------------------------------------------------------------------------
+
+function registerRetiredDrupalNodeType(): void {
+  objectTypeRegistry.registerRetired({
+    type: "@cinatra-ai/drupal:node",
+    dispositions: {
+      projection: "none",
+      pinnable: false,
+      snapshotPolicy: "none",
+      sensitivity: "normal",
+      mutability: "external",
+    },
+    category: "content",
+    schema: z
+      .object({
+        artifactType: z.literal("connector-ref"),
+        originKind: z.literal("external_link"),
+        mime: z.string().min(1),
+        title: z.string().optional(),
+        excerpt: z.string().optional(),
+        connectorRef: z
+          .object({
+            url: z.string().min(1),
+            connectorId: z.string().min(1),
+            externalId: z.string().min(1),
+            resolver: z.string().min(1).optional(),
+            resolvedMimeType: z.string().min(1).optional(),
+            state: z.enum(["linked", "stale", "dangling"]),
+            lastVerifiedAt: z.string().min(1).optional(),
+            remoteVersion: z.string().min(1).optional(),
+            title: z.string().optional(),
+            excerpt: z.string().optional(),
+          })
+          .strict(),
+      })
+      .passthrough(),
+    lifecycle: {
+      sources: ["agent", "import"],
+      mutableBy: ["agent"],
+    },
+    renderers: {
+      listRow: GenericObjectListRow,
+      card: GenericObjectCard,
+      detail: GenericObjectDetail,
+    },
+  });
+}
 
 // ---------------------------------------------------------------------------
 // @cinatra-ai/memory:concept — envelope contract (cinatra#1376, epic #1373).
@@ -980,6 +1035,7 @@ export function registerAllObjectTypes(): void {
   registerCampaignBundleTypes();
   registerEmailObjectTypes();
   registerLinkedinObjectTypes();
+  registerRetiredDrupalNodeType();
   registerMemoryConceptType();
   registerWordPressObjectTypes();
   // CRM types (account / contact / list) are registered by the crm-connector
