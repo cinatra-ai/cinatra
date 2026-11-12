@@ -110,12 +110,13 @@ export function parseAuthPolicySafe(raw: string | null): AgentAuthPolicy | null 
 // The pause generation, parsed strictly (cinatra#4245): a safe integer >= 0, or
 // its canonical decimal text (the driver's form for a bigint read outside
 // Drizzle). Anything else is undefined, so a reader of the pause refuses rather
-// than guess a generation; it is never coerced to 0.
+// than guess a generation; it is never coerced to 0. A -0 reads as 0 (`+ 0`), so
+// Object.is and a JSON round trip agree with the stored value.
 export function parsePauseGeneration(raw: unknown): number | undefined {
   const n = typeof raw === "number" ? raw
     : typeof raw === "string" && /^(?:0|[1-9][0-9]{0,15})$/.test(raw) ? Number(raw)
     : Number.NaN;
-  return Number.isSafeInteger(n) && n >= 0 ? n : undefined;
+  return Number.isSafeInteger(n) && n >= 0 ? n + 0 : undefined;
 }
 
 export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunRecord {
@@ -163,10 +164,13 @@ export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunReco
     // carries it onto the ActorContext for edge-bound serving (cinatra#1392 Gap 2).
     dependentInstallId: row.dependentInstallId ?? null,
     // current attempt id for the OBO token's `att` claim (cinatra#1939 S3).
-    executionAttemptId: row.executionAttemptId ?? null,
+    executionAttemptId: row.executionAttemptId ?? null, humanWaitAttemptId: row.humanWaitAttemptId ?? null, // cinatra#3062: read by recommendationRunHasStartedForRow
     // run-start presence discriminator (cinatra#2067). Drizzle returns the typed
     // boolean column directly; null on pre-backfill / headless rows.
     humanPresent: row.humanPresent ?? null,
+    // cinatra#4220 — the dispatch-derived connector-instance binding, parsed
+    // fail-closed (null when absent or malformed).
+    connectorInstanceBinding: parseConnectorInstanceBinding(row.connectorInstanceBinding ?? null),
     // The lifecycle MOMENT TRIPLE (cinatra#2928). Surfaced as written: a run at
     // no moment reads all three as null, which is what every row created before
     // the columns existed reads too. Nothing here interprets the values — the
@@ -200,6 +204,28 @@ export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunReco
     // authority on which scopes a run may read assignments from.
     assignmentScopeSnapshot: row.assignmentScopeSnapshot ?? null,
   };
+}
+
+/** cinatra#4220 — fail-closed parse of agent_runs.connector_instance_binding.
+ * Returns the binding only for a JSON object with exactly the two keys
+ * connectorKey and instanceId, both non-empty strings; null otherwise. */
+export function parseConnectorInstanceBinding(
+  raw: string | null,
+): { connectorKey: string; instanceId: string } | null {
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const keys = Object.keys(value).sort();
+  if (keys.length !== 2 || keys[0] !== "connectorKey" || keys[1] !== "instanceId") return null;
+  const { connectorKey, instanceId } = value as Record<string, unknown>;
+  if (typeof connectorKey !== "string" || connectorKey.length === 0) return null;
+  if (typeof instanceId !== "string" || instanceId.length === 0) return null;
+  return { connectorKey, instanceId };
 }
 
 // ---------------------------------------------------------------------------

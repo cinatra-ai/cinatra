@@ -20,6 +20,7 @@
 // components that emit byte-identical DOM.
 
 import { isRunStartToolName } from "./run-start-tool-names";
+import { drawOrderWithRunStartLinesFirst } from "./run-start-line-order";
 import { Component, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentType, type ReactElement, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
@@ -35,6 +36,7 @@ import {
   PENDING_CONFIRMATION_RESULT_PREFIX,
 } from "./pending-tool-confirmation-card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { userAvatarAccent, userInitials } from "@cinatra-ai/sdk-ui/lib/user-avatar";
 // Direct per-icon imports — avoid Turbopack processing the full simple-icons barrel (see apis-page.tsx note)
 import SiAnthropic from "@icons-pack/react-simple-icons/icons/SiAnthropic.mjs";
 import SiGooglegemini from "@icons-pack/react-simple-icons/icons/SiGooglegemini.mjs";
@@ -250,10 +252,14 @@ function ThoughtGroupSection({ group, isLive }: { group: UiThoughtGroup; isLive:
 //    skill inside it can be selected."
 //
 // So while the row is open the turn carries the assistant's text and the chip
-// row and nothing else; the decision is what brings the run card in, with the
-// settled chips above it. Both readings live in ONE container — the `agent_run`
-// part's own slot — so the card that arrives lands exactly where the panel
-// always was, not at the end of the turn.
+// row and nothing else. The plan's second sentence is superseded in this turn by
+// the bound design's §V ("No reading is ever redrawn as a row above another
+// card"): once the skills are decided the settled row stays, and the run card is
+// NOT drawn beneath it — the panel stays mounted but stood down, and a review it
+// draws is shown in place (see the stand-down in `AgentRunTurnSlot`). Both
+// readings live in ONE container — the `agent_run` part's own slot — so a review
+// the panel draws lands exactly where the panel always was, not at the end of
+// the turn.
 //
 // ONE RESOLVE ANSWERS BOTH QUESTIONS. The hold's authoritative state is read by
 // the card (the ONE renderer of `recommendation_hold`) and published here; this
@@ -365,15 +371,35 @@ function AgentRunTurnSlot({
   // "Awaiting input" on this page. That makes the moment reach the OPEN page
   // live, and the card mount here with no reload.
   const credential = useConversationCredential();
+  // THE SAME ANSWER'S START STAMP (cinatra#3062, fix leg 6). The route already
+  // sends the row's `startedAt` beside its status; it is kept here, off the SAME
+  // read, for the one card that needs it — the §V row, whose replay in a
+  // re-created turn may not guess whether the run has started. `undefined`
+  // until this container's own read has answered; `null` for a row with no
+  // stamp. No second reader and no new poll.
+  const [runStartedAt, setRunStartedAt] = useState<string | null | undefined>(undefined);
   const momentReader = useMemo<RunMomentCardReader | null>(() => {
     const request = runSeedRequest(credential, runId);
     // A host that cannot say who is asking reads NOTHING, and the turn keeps
     // exactly the reading it drew before this rule existed.
     if (!request) return null;
     return async (signal) => {
-      const response = await fetch(request.url, { ...request.init, signal });
+      // cinatra#4217: the frame renews its credential while it stays open, so the
+      // headers are built again for every look, never kept from the first one.
+      const current = runSeedRequest(credential, runId) ?? request;
+      const response = await fetch(current.url, { ...current.init, signal });
+      // A refusal is no answer. A look refused while the frame's renewal was on
+      // its way, or after it replaced the credential, is not a miss either: the
+      // watch itself reads the host's renewal and waits for it (cinatra#4217
+      // fold 3, `useRunMomentCard`).
       if (!response.ok) return null;
-      return parseRunMomentCard(await response.json());
+      const body: unknown = await response.json();
+      const card = parseRunMomentCard(body);
+      if (card) {
+        const stamp = (body as { startedAt?: unknown }).startedAt;
+        setRunStartedAt(typeof stamp === "string" && stamp.length > 0 ? stamp : null);
+      }
+      return card;
     };
   }, [credential, runId]);
   const {
@@ -820,7 +846,16 @@ function AgentRunTurnSlot({
           makes it survive a transcript reload and what lets it settle IN PLACE
           into its confirmed/skipped summary after a decision instead of
           disappearing. */}
-      <RecommendationHoldCard runId={runId} wireRef={null} onStateChange={setHold} />
+      <RecommendationHoldCard
+        runId={runId}
+        wireRef={null}
+        onStateChange={setHold}
+        runStatus={momentCard.status}
+        // THE SAME READING'S START STAMP (cinatra#3062, fix leg 6): the fact a
+        // re-created turn's replayed row may not guess, from the row this
+        // container already reads — no second reader, no new poll.
+        runStartedAt={runStartedAt}
+      />
       {/* THE SETTLED MOMENT'S OWN READING (cinatra#3044). Drawn here, in the
           producing part's own container, ABOVE the reading the run has now:
           the schedule was settled before the run moved on, and a conversation
@@ -933,8 +968,23 @@ function AgentRunTurnSlot({
           wrapper element across both readings and the stand-down is written on
           it and taken off it: same element, same position, same panel, and the
           three marks are exactly the ones it always carried while it stands
-          down. */}
-      {runCardWaits || runCardStandsDown ? null : turnCarriesSettledSchedule ? (
+          down.
+
+          AND THE SAME STAND-DOWN ONCE THE SKILLS ARE DECIDED (cinatra#3062,
+          §V). "Once the run has started the same pills are drawn with the state
+          their boxes were left in, read-only, and with no Continue … No reading
+          is ever redrawn as a row above another card." The settled row is the
+          run's reading in this turn, so the progress panel is not drawn beneath
+          it - and, for the reason above, it is not unmounted either: it stays
+          this turn's one publisher of the run's later gates, and a review it
+          draws is shown, by the same rule. A run that was never held (`none`)
+          or whose hold cannot be read is not decided, and keeps its panel.
+          The bound design draws no decided-run turn of its own; what it draws
+          for a run in the thread is §II's placeholder, which "names no status,
+          reports no result" and is "replaced, in place, by the review", and a
+          run's steps and what each did are read on the run page (Agent run &
+          review §I). */}
+      {runCardWaits || runCardStandsDown ? null : turnCarriesSettledSchedule || decided ? (
         <div
           hidden={!panelDrawsReview}
           aria-hidden={panelDrawsReview ? undefined : true}
@@ -1413,9 +1463,14 @@ function OrderedPartsSection({
     (part) => part.kind === "text" && correctPlatformScheduleText(part.content).includes(runStandingLine),
   );
   if (parts.length === 0) return null;
+  // THE LINE FIRST, THEN THE ROW (cinatra#3062, §V): the platform's start
+  // sentence for a run is drawn above that run's slot; every part keeps its
+  // own index. See `drawOrderWithRunStartLinesFirst`.
+  const drawOrder = drawOrderWithRunStartLinesFirst(parts);
   return (
     <div className="flex flex-col gap-2" onClick={onMarkdownClick}>
-      {parts.map((part, idx) => {
+      {drawOrder.map((idx) => {
+        const part = parts[idx]!;
         if (part.kind === "text") {
           // §VI: the authorized schedule reading owns this turn's one prose
           // sentence. Neither a lead-in nor a follow-up accompanies it; the
@@ -2503,7 +2558,7 @@ export type ChatMessagesViewProps = {
   theme: ThemeName;
   /** Signed-in user's id + display fields (from authClient.useSession()). */
   userId?: string;
-  sessionUser?: { name?: string | null; image?: string | null } | null;
+  sessionUser?: { name?: string | null; image?: string | null; email?: string | null; accentColor?: string | null } | null;
   activeThreadId: string | null;
   activeAssistantHandle?: string;
   /** assistantUserId → @handle map scanned from user-message mentions. */
@@ -2661,6 +2716,15 @@ export function ChatMessagesView({
     }
   }, []);
 
+  // The signed-in person's avatar ground (cinatra#4292): their persisted
+  // accent, else one derived from their stable id. Assistants keep their own.
+  const sessionUserAccent = userAvatarAccent({
+    id: userId,
+    accentColor: sessionUser?.accentColor,
+    name: sessionUser?.name,
+    email: sessionUser?.email,
+  });
+
   return (
     /* cinatra#2565 — the surface DECLARES itself as a lifecycle-card host. The
        declaration is opt-in with no default: a surface that has not been
@@ -2678,16 +2742,14 @@ export function ChatMessagesView({
       {messages.map((message) => {
         const isUser = message.role === "user";
         if (isSlackMode) {
-          const userInitials = sessionUser?.name
-            ? sessionUser.name.split(" ").map((n: string) => n[0]).filter(Boolean).join("").toUpperCase().slice(0, 2)
-            : "Me";
+          const sessionUserInitials = userInitials(sessionUser ?? {}, "Me");
           // Resolve per-message handle: authorUserId → handle map, fallback to "cinatra"
           const messageHandle = !isUser
             ? (message.authorUserId
                 ? (assistantHandleMap.get(message.authorUserId) ?? activeAssistantHandle ?? "cinatra")
                 : "cinatra")
             : null;
-          const initials = isUser ? userInitials : getParticipantInitials(messageHandle ?? undefined);
+          const initials = isUser ? sessionUserInitials : getParticipantInitials(messageHandle ?? undefined);
           const displayName = isUser
             ? (sessionUser?.name ?? "You")
             : resolveAssistantDisplayName(messageHandle);
@@ -2711,7 +2773,7 @@ export function ChatMessagesView({
                   const avatarEl = (
                     <Avatar size="sm">
                       {isUser && sessionUser?.image && <AvatarImage src={sessionUser.image} />}
-                      <AvatarFallback>{assistantIcon ?? initials}</AvatarFallback>
+                      <AvatarFallback accent={isUser ? sessionUserAccent : undefined}>{assistantIcon ?? initials}</AvatarFallback>
                     </Avatar>
                   );
                   return (
@@ -2930,9 +2992,7 @@ export function ChatMessagesView({
         }
         // ChatGPT branch — preserve byte-identical render behavior.
         const showParticipantHeaders = true;
-        const nmUserInitials = sessionUser?.name
-          ? sessionUser.name.split(" ").map((n: string) => n[0]).filter(Boolean).join("").toUpperCase().slice(0, 2)
-          : "Me";
+        const nmUserInitials = userInitials(sessionUser ?? {}, "Me");
         const nmUserName = sessionUser?.name ?? "You";
         const nmThreadHasMention = taggedAssistantUserIds.length >= 1
           || messages.some((m) => m.role === "user" && /@[a-z0-9_-]+/i.test(m.content));
@@ -2953,7 +3013,7 @@ export function ChatMessagesView({
                   <span className="text-xs font-medium text-muted-foreground">{nmUserName}</span>
                   <Avatar size="sm">
                     {sessionUser?.image && <AvatarImage src={sessionUser.image} />}
-                    <AvatarFallback>{nmUserInitials}</AvatarFallback>
+                    <AvatarFallback accent={sessionUserAccent}>{nmUserInitials}</AvatarFallback>
                   </Avatar>
                 </div>
               ) : (

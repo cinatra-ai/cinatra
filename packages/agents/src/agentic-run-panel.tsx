@@ -44,12 +44,14 @@ import { ArrowRight } from "lucide-react";
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
 import {
   LifecycleCardSurfaceProvider,
+  answeredHitlQuestionKey,
   runCardOwnsLifecycleCopy,
   defaultRunReviewSlotReader,
   lifecycleRequestCredential,
   parseRunReviewSlot,
   useComposerFocusStore,
   useComposerTarget,
+  useAnsweredHitlQuestionKey,
   useLifecycleCardHost,
   useLifecycleCardAuth,
   useLifecycleCardDeclarationRefused,
@@ -79,6 +81,7 @@ import {
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
   isSetupGateTaskId,
+  midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
   wrapPrimitiveSetupPayload,
@@ -252,11 +255,13 @@ export type AgenticRunPanelProps = {
    * (cinatra#2790, epic #2784 S9f).
    *
    * The plan: "The agentic run progress card appears once the skills are
-   * decided; no skill inside it can be selected." So a run that came through the
-   * recommendation card draws NO skill picker inside this panel — the settled
-   * chips above it already say what was chosen, and a second, pressable list of
-   * every assigned skill reads as a live choice that disagrees with the one that
-   * was taken.
+   * decided; no skill inside it can be selected." (In a conversation turn the
+   * bound design's §V supersedes the first half: the turn stands this panel down
+   * beneath the settled row, cinatra#3062. The no-picker rule below stands.) So
+   * a run that came through the recommendation card draws NO skill picker inside
+   * this panel — the settled row already says what was chosen, and a second,
+   * pressable list of every assigned skill reads as a live choice that disagrees
+   * with the one that was taken.
    *
    * IT IS A PROP ON EVERY HOST, and it is the panel's ONLY reading of the
    * question (cinatra#3047). This panel used to mount the recommendation card
@@ -727,11 +732,27 @@ export function AgenticRunPanel({
   // question, on the stream or the row, counts exactly as before. Armed beside
   // the key above; released with it, since nothing matches a released key.
   const [answeredQuestionShape, setAnsweredQuestionShape] = useState<string | null>(null);
+  // AND THE SIBLING CARD'S CONTINUE COUNTS TOO (cinatra#4375). Inside a
+  // conversation the question and its Continue are the conversation's own card
+  // (`runCardOwnsLifecycleCopy`), so this panel's own submit never runs there
+  // and the key above was never armed: on the widget the panel drew its
+  // "pending approval" plate over a run that was working. That card now records
+  // the question in the conversation's register at the press, and each press
+  // takes back only its own attempt unless its submit is accepted, as the key
+  // above is armed and released; it counts here exactly as the key above does: the same review task, renderer
+  // and field, or nothing. Only where the sibling owns the Continue; the run
+  // page keeps its own submit as the one source.
+  const siblingAnsweredKeyOnFile = useAnsweredHitlQuestionKey(runId);
+  const siblingAnsweredKey = runCardOwnsLifecycleCopy(ambientLifecycleHost)
+    ? null
+    : siblingAnsweredKeyOnFile;
+  const anyQuestionAnswered = answeredReviewTaskId !== null || siblingAnsweredKey !== null;
   const isAnsweredQuestion = (question: HitlContext | null): boolean =>
     question !== null &&
-    answeredReviewTaskId !== null &&
-    question.reviewTaskId === answeredReviewTaskId &&
-    `${question.xRenderer}::${question.fieldName ?? ""}` === answeredQuestionShape;
+    ((answeredReviewTaskId !== null &&
+      question.reviewTaskId === answeredReviewTaskId &&
+      `${question.xRenderer}::${question.fieldName ?? ""}` === answeredQuestionShape) ||
+      (siblingAnsweredKey !== null && answeredHitlQuestionKey(question) === siblingAnsweredKey));
 
   // Load connectedApps + gmailAliases once on mount so the HITL field renderer
   // registry can evaluate conditions like `context.connectedApps.includes("gmail")`.
@@ -851,8 +872,9 @@ export function AgenticRunPanel({
       Boolean(
         streamEnabled &&
           streamResult.interruptContext &&
-          (streamResult.interruptContext.reviewTaskId !== answeredReviewTaskId ||
-            !isAnsweredQuestion(streamQuestionOnFile)),
+          // The answered match already requires the review task (cinatra#4375:
+          // the sibling card's question on record is matched here too).
+          !isAnsweredQuestion(streamQuestionOnFile),
       ) ||
       (hitlContext !== null && !isAnsweredQuestion(hitlContext)),
   });
@@ -2303,7 +2325,7 @@ export function AgenticRunPanel({
   // releases the key), a marked gate and a park all read exactly as before.
   const onlyTheAnsweredQuestionOnFile =
     isPendingApproval &&
-    answeredReviewTaskId !== null &&
+    anyQuestionAnswered &&
     (streamQuestionOnFile === null || isAnsweredQuestion(streamQuestionOnFile)) &&
     (hitlContext === null || isAnsweredQuestion(hitlContext));
   const blockedOnInputGate =
@@ -3036,8 +3058,17 @@ export function AgenticRunPanel({
                       // (the shared props contract says a renderer that draws
                       // its own Continue must skip it), and the card's Continue
                       // asks the field for its value through the same flush the
-                      // renderer's own button would have used.
-                      hideSubmit={productOwnsSetupSend}
+                      // renderer's own button would have used. A boolean field
+                      // on a mid-run gate is told the same (cinatra#4310): the
+                      // outer Continue below is that gate's one control.
+                      hideSubmit={
+                        productOwnsSetupSend ||
+                        midRunBooleanFieldHidesSubmit({
+                          isMidRun: isMidRunHitl,
+                          isGroupedSetup,
+                          fieldSchema: hitlRendererEntry.fieldSchema,
+                        })
+                      }
                       registerFlush={
                         productOwnsSetupSend
                           ? (fn: () => Promise<void>) =>

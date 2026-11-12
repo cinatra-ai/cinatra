@@ -68,6 +68,43 @@ export async function settleSendOrDescribe(
   }
 }
 
+/**
+ * cinatra#4150 (A5) under the pause claim: the publish hold read again after the
+ * claim and before the fence. Under a claim no other road sends at this pause, and
+ * a claimer whose lease was taken over loses its fence, so a decision parked after
+ * the road's first read is seen here and nothing is sent. Throws the hold's fault
+ * (publishHoldFault: the refusal unchanged, any read error one fixed text that
+ * names no run and carries no store error).
+ */
+export async function recheckPublishHoldUnderClaim(runId: string): Promise<void> {
+  const hold = await import("./publish-decision-actions");
+  await hold.assertNoOpenPublishDecision(runId).catch((err: unknown) => {
+    throw hold.publishHoldFault(err);
+  });
+}
+
+/**
+ * cinatra#4150: a publish-hold fault before the fence gives the claim back and
+ * stays the answer; true when `fault` is one. A release that fails too is logged
+ * by `warnLine` (a constant) and the error's name only, no run, task or raw error;
+ * the lease then frees itself when it ends. Any other fault: false, nothing done.
+ */
+export async function givePauseBackOnHoldFault(
+  ref: ClaimRef,
+  authority: OrgWriteAuthority | undefined,
+  fault: unknown,
+  warnLine: string,
+): Promise<boolean> {
+  const { isPublishHoldFault } = await import("./publish-decision-actions");
+  if (!isPublishHoldFault(fault)) return false;
+  try {
+    await releasePauseClaim({ runId: ref.runId, orgId: ref.orgId, token: ref.token }, authority);
+  } catch (releaseError) {
+    console.warn(warnLine, releaseError instanceof Error ? releaseError.name : "error");
+  }
+  return true;
+}
+
 const REFUSALS: Record<string, string> = {
   "moved-on": "Run moved on from the pause this resume read; nothing was sent.",
   held: "Run is already being resumed at this pause by another request.",
@@ -90,6 +127,8 @@ export async function resumeWayflowUnderPauseClaim(args: {
   /** The RESUMING PRINCIPAL's authority (D-OBO-RESUME), never the frame's run authority. */
   authority: OrgWriteAuthority;
   readRun: () => Promise<{ status: string } | null | undefined>;
+  /** cinatra#4150 (A5): read the publish hold again under the claim, before the fence. */
+  recheckPublishHold?: boolean;
 }): Promise<Record<string, unknown>> {
   const { run, client, resumeText, prompt, authority, readRun } = args;
   // claimPause refuses a generation that cannot be read.
@@ -115,9 +154,13 @@ export async function resumeWayflowUnderPauseClaim(args: {
       parts: [{ kind: "text", text: resumeText }],
       metadata: resumeMetadata,
     };
+    if (args.recheckPublishHold) await recheckPublishHoldUnderClaim(run.id);
     await transitionRunStatus(run.id, "pending_approval", "running", { pauseFence: { token: claim.token, generation: claim.generation } }, authority);
   } catch (stepError) {
     if (!(stepError instanceof RunTransitionError && stepError.code === "stale_from_status")) {
+      if (await givePauseBackOnHoldFault(ref, authority, stepError, "[resumeWayflowUnderPauseClaim] could not give the claim back after a publish-hold refusal")) {
+        return (await import("./publish-decision-actions")).publishHoldAnswer(stepError);
+      }
       return failPreSendStep({ ...ref, expiresAt: claim.expiresAt }, authority, stepError);
     }
     return {

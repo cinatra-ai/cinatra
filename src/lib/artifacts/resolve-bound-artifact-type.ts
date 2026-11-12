@@ -1,5 +1,5 @@
 import "server-only";
-import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
+import { objectTypeRegistry, type ArtifactPackSurfaceEntry } from "@cinatra-ai/objects/registry";
 import { parseSemanticArtifactManifest } from "@cinatra-ai/objects/semantic-manifest";
 import {
   resolveClaimWinner,
@@ -10,8 +10,11 @@ import {
   resolveArtifactBindingObjectType,
   type ResolveArtifactBindingObjectTypeResult,
 } from "@cinatra-ai/agents/artifact-binding";
+import { PLATFORM_OWNER_SENTINEL } from "@cinatra-ai/extensions/canonical-types";
+import { isExactVersion } from "@cinatra-ai/registries/src/version-compare";
 import { readArtifactTypeClaimsForOrg } from "@/lib/objects/artifact-claim-store";
 import { ensureArtifactTypesRegistered } from "./ensure-artifact-registry";
+import type { ClaimBackedMeaningType } from "./installed-type-picker";
 
 // ---------------------------------------------------------------------------
 // Bound-artifact-type resolution seam (cinatra#1454).
@@ -70,12 +73,20 @@ export type ResolveBoundArtifactTargetDeps = {
   }) => Promise<string>;
 };
 
-/** One artifact-safe claim WINNER: the type it is over, and the package that
- *  won it. */
+/** One artifact-safe claim WINNER: the type it is over, the package that won
+ *  it, that package's version the claim was activated at, the claim's scope and
+ *  the install row the claim is bound to (null for an unbound claim). */
 type ArtifactSafeClaimWinner = {
   objectTypeId: string;
   extensionPackage: string;
+  extensionVersion: string;
+  scope: string;
+  installId: string | null;
 };
+
+/** A claim row as the store reads it: the arbitrable fields and the install row
+ *  it is bound to (`installId`, absent from a bare arbitrable fixture). */
+type ClaimRowForOrg = ArbitrableClaim & { installId?: string | null };
 
 /**
  * THE ONE CLAIM ARBITRATION BOTH SIDES OF THE ARTIFACT BOUNDARY READ
@@ -100,7 +111,7 @@ function readArtifactSafeClaimWinners(
   orgId: string,
   readClaimsForOrg: (
     orgId: string,
-  ) => readonly ArbitrableClaim[] = readArtifactTypeClaimsForOrg,
+  ) => readonly ClaimRowForOrg[] = readArtifactTypeClaimsForOrg,
 ): ArtifactSafeClaimWinner[] {
   const claims = readClaimsForOrg(orgId);
   const typeIds = new Set(claims.map((c) => c.objectTypeId));
@@ -112,7 +123,13 @@ function readArtifactSafeClaimWinners(
     // Intersect with a currently-registered host type — a claim over a type this
     // process never registered cannot be materialized here.
     if (objectTypeRegistry.resolve(objectTypeId) === null) continue;
-    out.push({ objectTypeId, extensionPackage: winner.extensionPackage });
+    out.push({
+      objectTypeId,
+      extensionPackage: winner.extensionPackage,
+      extensionVersion: winner.extensionVersion,
+      scope: winner.scope,
+      installId: winner.installId ?? null,
+    });
   }
   return out;
 }
@@ -132,6 +149,86 @@ export function readEffectiveArtifactSafeTypeIdsForExtension(
     .filter((w) => w.extensionPackage === extension)
     .map((w) => w.objectTypeId)
     .sort();
+}
+
+/**
+ * The package whose WINNING artifact-safe claim in this organisation is over
+ * `objectTypeId`, or null when no such claim wins it (cinatra#3319). The same
+ * arbitration as both functions above. A claim-backed type is registered by the
+ * host, so the object-type registry names no pack for it: this is how a caller
+ * learns which pack owns the row's type. A failed claim read throws.
+ */
+export function readArtifactSafeClaimWinnerForType(
+  orgId: string,
+  objectTypeId: string,
+  readClaimsForOrg?: (orgId: string) => readonly ArbitrableClaim[],
+): string | null {
+  const winner = readArtifactSafeClaimWinners(orgId, readClaimsForOrg).find(
+    (w) => w.objectTypeId === objectTypeId,
+  );
+  return winner ? winner.extensionPackage : null;
+}
+
+/**
+ * The packages that pass every rule of `readClaimBackedMeaningTypesForOrg`
+ * except the surface read (cinatra#3319): rules 0, 1, 3, 4 and 6, through the
+ * same code (`readClaimBackedCandidates`). Sorted. Only such a package can be
+ * claim-backed, so the upload actions read it after the claim-backed read
+ * failed, to tell which matcher entries could be a claim-backed pack's; a
+ * package this list does not name can never be claim-backed under the same
+ * arbitration. Reads the claims and the registry only. A failed claim read
+ * throws.
+ */
+export function readClaimBackedCandidatePackagesForOrg(
+  orgId: string,
+  readClaimsForOrg?: (orgId: string) => readonly ClaimRowForOrg[],
+): string[] {
+  return readClaimBackedCandidates(orgId, readClaimsForOrg)
+    .map((w) => w.extensionPackage)
+    .sort();
+}
+
+/** A claim winner that passes rules 0, 1, 3, 4 and 6 of
+ *  `readClaimBackedMeaningTypesForOrg`: bound to an install row. */
+type ClaimBackedCandidate = ArtifactSafeClaimWinner & { installId: string };
+
+/**
+ * Rules 0, 1, 3, 4 and 6 of `readClaimBackedMeaningTypesForOrg`, written once:
+ * from THE ONE arbitration, grouped by the winning extension, the one winner of
+ * each extension that wins exactly one type (3) at an exact version (0), is
+ * bound to an install row (6), registers no type with `isArtifact` (1), and
+ * whose type is host-registered (4). No surface is read. A failed claim read
+ * throws.
+ */
+function readClaimBackedCandidates(
+  orgId: string,
+  readClaimsForOrg?: (orgId: string) => readonly ClaimRowForOrg[],
+): ClaimBackedCandidate[] {
+  const byExtension = new Map<string, ArtifactSafeClaimWinner[]>();
+  for (const winner of readArtifactSafeClaimWinners(orgId, readClaimsForOrg)) {
+    const group = byExtension.get(winner.extensionPackage);
+    if (group) group.push(winner);
+    else byExtension.set(winner.extensionPackage, [winner]);
+  }
+  const out: ClaimBackedCandidate[] = [];
+  for (const [extension, winners] of byExtension) {
+    // 3. exactly one winning type, so exactly one version.
+    if (winners.length !== 1) continue;
+    const winner = winners[0];
+    // 0. a versionless claim has no manifest version to bind to.
+    if (winner.extensionVersion === "0.0.0" || !isExactVersion(winner.extensionVersion)) continue;
+    // 6. an unbound claim names no install whose bytes could answer.
+    if (winner.installId === null) continue;
+    // 1. the pack mints no own artifact type.
+    const ownsArtifactType = objectTypeRegistry
+      .getTypesForPackage(extension)
+      .some((typeId) => objectTypeRegistry.resolve(typeId)?.isArtifact != null);
+    if (ownsArtifactType) continue;
+    // 4. the claimed type is host-registered.
+    if (objectTypeRegistry.getRegisteringPackage(winner.objectTypeId) !== null) continue;
+    out.push({ ...winner, installId: winner.installId });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +294,86 @@ export function readAdmissibleArtifactTypeIdsForOrg(
     admissible.add(winner.objectTypeId);
   }
   return [...admissible].sort();
+}
+
+/**
+ * The CLAIM-BACKED meaning surfaces of an org's upload picker (cinatra#3319).
+ * From THE ONE arbitration (`readArtifactSafeClaimWinners`), grouped by the
+ * winning extension, keep an extension only when all seven hold:
+ *   0. its winner's `extensionVersion` is an exact version (not `"0.0.0"`);
+ *   1. it registered no type with `isArtifact`;
+ *   2. the pack's surface declares no matcher skills;
+ *   3. it won exactly one type;
+ *   4. that type is host-registered (no registering package);
+ *   5. the pack's surface accepts a file MIME type;
+ *   6. the winning claim is bound to an install row (`installId`).
+ * Rules 0, 1, 3, 4 and 6 read the claims and the registry only
+ * (`readClaimBackedCandidates`, which `readClaimBackedCandidatePackagesForOrg`
+ * reads too). Rules 2 and 5 read the pack's surface, and only for an extension
+ * that passes them: the capabilities the runtime-discovery dispatcher reports
+ * for the pack (`readOrgPackSurfaces`, read once per call and only when an
+ * extension reaches it), bound to the winner's own install row
+ * (`readClaimWinnerSurfaceFields`). The reader opens no manifest. Each entry
+ * names the winner it was read for: version, install and scope. The
+ * dispatcher is read in this organisation's visibility scope, so a pack whose
+ * live installs this organisation cannot see reports no surface. The install
+ * row's organisation is not compared with the claim's scope here; the
+ * claim-scoped gate the upload actions ask
+ * (`canActorAccessClaimedArtifactExtension`) refuses a bound row that does not
+ * govern that scope. The caller warms the registry. The claim read, the
+ * surface read and the per-winner read are injectable for unit tests. A failed
+ * claim read, install-row read, dispatcher read or trust-gate read throws, and
+ * so does a reported surface that is not the surface of the claim's install at
+ * the claim's version: the pack's claim state is then unknown, and the caller
+ * must read the whole answer as failed, never as "not claim-backed" (the
+ * upload actions then refuse a matcher entry whose claim state is unknown). An
+ * extension that a rule other than 2 and 5 drops is dropped before its surface
+ * is read, so it cannot fail the answer.
+ */
+export async function readClaimBackedMeaningTypesForOrg(
+  orgId: string,
+  deps?: {
+    readClaimsForOrg?: (orgId: string) => readonly ClaimRowForOrg[];
+    /** The organisation's pack surfaces; the runtime-discovery dispatcher by
+     *  default (`readOrgPackSurfaces`). */
+    readPackSurfaces?: (orgId: string) => Promise<readonly ArtifactPackSurfaceEntry[]>;
+    /** The per-winner read in place of `readClaimWinnerSurfaceFields` (which
+     *  reads the surfaces above): the pack's accepts and matcher skills for the
+     *  winner's install, or null for no entry. */
+    readManifestFields?: (winner: {
+      extension: string;
+      extensionVersion: string;
+      installId: string;
+    }) => Promise<{ accepts: string[]; objectTypeIds: string[]; matchers: string[] } | null>;
+  },
+): Promise<ClaimBackedMeaningType[]> {
+  const readPackSurfaces = deps?.readPackSurfaces ?? readOrgPackSurfaces;
+  let surfaces: Promise<readonly ArtifactPackSurfaceEntry[]> | null = null;
+  const surfacesOnce = () => (surfaces ??= readPackSurfaces(orgId));
+  const readManifestFields =
+    deps?.readManifestFields ??
+    ((winner: { extension: string; extensionVersion: string; installId: string }) =>
+      readClaimWinnerSurfaceFields(winner, surfacesOnce));
+  const out: ClaimBackedMeaningType[] = [];
+  for (const candidate of readClaimBackedCandidates(orgId, deps?.readClaimsForOrg)) {
+    const { objectTypeId, extensionPackage: extension, extensionVersion, installId, scope } =
+      candidate;
+    // Null: the claim names no live artifact install of the pack, or the
+    // runtime reports no surface of the pack. A reported surface that is not
+    // the install's throws (the reader fails closed).
+    const fields = await readManifestFields({ extension, extensionVersion, installId });
+    // 2. no matcher skills; 5. the surface accepts something.
+    if (!fields || fields.matchers.length > 0 || fields.accepts.length === 0) continue;
+    out.push({
+      objectTypeId,
+      extension,
+      acceptMimes: fields.accepts,
+      extensionVersion,
+      installId,
+      scope,
+    });
+  }
+  return out;
 }
 
 /**
@@ -292,6 +469,301 @@ async function readInstalledPackManifestFields(
     // dev root unavailable
   }
   return null;
+}
+
+/**
+ * The pack surfaces the runtime-discovery dispatcher reports for one
+ * organisation (cinatra#3319): `discoverActiveExtensionCapabilities` for the
+ * artifact kind, whose reader facet lists the surfaces the object-registry
+ * bridge recorded for each lifecycle-live pack it registered, one per kind of
+ * record (`artifactPackSurfaceRegistry`, written from the manifest the bridge
+ * validated, with the store record or development tree it read). This is the
+ * one road the reader takes to a pack's capabilities: it opens no manifest
+ * itself. The artifact handler is registered first if this process has not
+ * registered one (`registerIfAbsent`; the handler bootstrap registers the same
+ * handler, and a later `register` there replaces it), so the facet is there in
+ * a worker the bootstrap has not reached. The visibility scope is the
+ * organisation's own: a system read that admits every install anchored to the
+ * organisation and the deployment-wide ones, never another organisation's.
+ * Which actor may use an entry is decided later, by the claim-scoped gate of
+ * the upload actions. A failed dispatcher read, a facet that throws and a
+ * facet that is not there all throw: none of them is "no surface".
+ */
+async function readOrgPackSurfaces(orgId: string): Promise<ArtifactPackSurfaceEntry[]> {
+  const [{ discoverActiveExtensionCapabilities }, { extensionRegistry }, { createArtifactExtensionHandler }] =
+    await Promise.all([
+      import("@cinatra-ai/extensions/runtime-discovery-host"),
+      import("@cinatra-ai/extensions"),
+      import("@cinatra-ai/extensions/artifact-handler"),
+    ]);
+  extensionRegistry.registerIfAbsent(createArtifactExtensionHandler());
+  const facet: { failed: boolean; error: unknown } = { failed: false, error: null };
+  const discovered = await discoverActiveExtensionCapabilities({
+    kind: "artifact",
+    actor: { actorType: "system", source: "worker" },
+    scope: { userId: null, organizationId: orgId, teamIds: [], orgRole: "org_admin" },
+    onError: (_kind, error) => {
+      facet.failed = true;
+      facet.error = error;
+    },
+  });
+  if (facet.failed) {
+    throw facet.error instanceof Error ? facet.error : new Error("the artifact reader facet failed");
+  }
+  if (discovered.unmigratedKinds.includes("artifact")) {
+    throw new Error("the runtime-discovery dispatcher has no artifact reader facet");
+  }
+  const out: ArtifactPackSurfaceEntry[] = [];
+  for (const descriptor of discovered.byKind.artifact ?? []) {
+    const surface = (descriptor as { artifactPack?: unknown } | null)?.artifactPack;
+    if (surface && typeof surface === "object") out.push(surface as ArtifactPackSurfaceEntry);
+  }
+  return out;
+}
+
+/** Why the claim's install could not be read (cinatra#3319): a fixed code on
+ *  every refusal of `readClaimWinnerSurfaceFields`, so a caller can log the
+ *  reason without logging the error's text. */
+export type ClaimSurfaceUnreadableCode =
+  | "dispatcher-unreadable"
+  | "no-development-tree"
+  | "store-record-mismatch"
+  | "no-anchored-source"
+  | "version-mismatch"
+  | "trust-anchor-unreadable"
+  | "trust-gate-no-anchor";
+
+/** The `local` source keys a supplied (store) install records; the development
+ *  heal writes none of them. */
+const SUPPLIED_SOURCE_KEYS = ["contentDigest", "activeDigest", "integrity", "contentHash"] as const;
+
+/** The commit the development version record writes as a checkout source's
+ *  `resolvedCommitOrTreeHash`: `git rev-parse --short HEAD`
+ *  (`currentGitSha`, packages/extensions/src/dev-version.ts). Its "unknown"
+ *  fallback is not accepted. */
+const DEV_RECORD_COMMIT_RE = /^[0-9a-f]{7,40}$/;
+
+/**
+ * THE DEVELOPMENT CHECKOUT'S OWN ROW (cinatra#3319). A development boot's scan
+ * loads every in-tree pack under `<cwd>/extensions/<vendor>/<slug>` and, for an
+ * artifact pack with no install row, its install-record heal writes ONE row
+ * (`healArtifactInstallRecordAndClaims` -> `defaultInstallRow`): platform scope
+ * (`ownerLevel` "platform", no organisation; the canonical store persists its
+ * owner as `PLATFORM_OWNER_SENTINEL`, and the table's platform check allows no
+ * other owner) and a `local` source of that folder (`path`) with no digest and
+ * `resolvedCommitOrTreeHash` "in-tree@<version>"; the development version
+ * record may later rewrite that source to another `local` source of the same
+ * folder, again with no digest, whose `resolvedCommitOrTreeHash` is the git
+ * commit. The trust gate never anchors such a row, so the store road
+ * can never answer for it. The bundled scan registers the pack's surface from
+ * the same folder and records it (`record.dir`).
+ *
+ * The row reads that development-tree surface only when ALL of these hold,
+ * and otherwise this answers null and the row keeps the store road:
+ *   - this is a development process (`CINATRA_RUNTIME_MODE` "development", the
+ *     signal the development scan, its heal and its version record run on);
+ *   - the row is platform-scoped, its owner is exactly the persisted platform
+ *     owner (`PLATFORM_OWNER_SENTINEL`; a null or any other owner is refused),
+ *     and it has no organisation;
+ *   - its source is `local` and carries none of the keys a supplied store
+ *     install records (`contentDigest`, also an empty one, `activeDigest`,
+ *     `integrity`, `contentHash`);
+ *   - its `resolvedCommitOrTreeHash` is what one of the two development
+ *     writers writes: "in-tree@<the row's version>" (the heal) or a git
+ *     commit (the development version record);
+ *   - the dispatcher reports a development-tree surface of the package that
+ *     names its folder, that folder lies inside the development extension root
+ *     (`resolveDevExtensionSourceRoot`), and the row's `path` is that folder.
+ * The version and the remaining rules are checked by the caller as for any row.
+ */
+async function readDevCheckoutSurface(
+  row: {
+    ownerLevel?: unknown;
+    ownerId?: unknown;
+    organizationId?: unknown;
+    version?: unknown;
+    source?: unknown;
+  },
+  own: readonly ArtifactPackSurfaceEntry[],
+): Promise<ArtifactPackSurfaceEntry | null> {
+  if (process.env.CINATRA_RUNTIME_MODE !== "development") return null;
+  if (
+    row.ownerLevel !== "platform" ||
+    row.ownerId !== PLATFORM_OWNER_SENTINEL ||
+    row.organizationId != null
+  ) {
+    return null;
+  }
+  const source = row.source;
+  if (!source || typeof source !== "object") return null;
+  const fields = source as Record<string, unknown>;
+  if (fields.type !== "local") return null;
+  if (SUPPLIED_SOURCE_KEYS.some((key) => Object.prototype.hasOwnProperty.call(fields, key))) return null;
+  const tree = fields.resolvedCommitOrTreeHash;
+  const healTree = typeof row.version === "string" && row.version !== "" ? `in-tree@${row.version}` : null;
+  if (typeof tree !== "string" || (tree !== healTree && !DEV_RECORD_COMMIT_RE.test(tree))) return null;
+  const sourcePath = fields.path;
+  if (typeof sourcePath !== "string" || sourcePath === "") return null;
+  const surface = own.find((s) => s.record?.source === "bundled");
+  const record = surface?.record;
+  const dir = record?.source === "bundled" ? record.dir : undefined;
+  if (!surface || typeof dir !== "string" || dir === "") return null;
+  try {
+    const path = await import("node:path");
+    const { resolveDevExtensionSourceRoot } = await import("@cinatra-ai/agents/agent-runtime-mount");
+    const root = path.resolve(resolveDevExtensionSourceRoot());
+    const folder = path.resolve(dir);
+    const rel = path.relative(root, folder);
+    if (rel === "" || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return null;
+    return path.resolve(sourcePath) === folder ? surface : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * THE CAPABILITIES OF THE WINNING CLAIM'S OWN INSTALL (cinatra#3319), as the
+ * runtime registered them. The claim's install row (`installId`) must be a live
+ * (`active` or `locked`) `kind:"artifact"` row of this package; any other row,
+ * or none, answers null (the claim names no live install of the pack). The
+ * answer is the pack's surface as the runtime-discovery dispatcher reports it
+ * (`readOrgPackSurfaces`), and null when the dispatcher reports none for the
+ * package: the runtime registered no capability of the pack, so the picker
+ * offers none (the bridge's registration of a manifest file writes a pack's
+ * matcher entry only on a pass that also writes its surface). The dispatcher
+ * can report a store surface and a development-tree surface of one pack; the
+ * install's own kind of record picks one. It answers only when it is the
+ * surface of this install's bytes:
+ *   - its manifest is at the claim's version;
+ *   - for a STORE install (`verdaccio`, `local` or `github`), the runtime's own
+ *     multi-version trust gate (`makeDefaultInstallAnchorsResolver`, as boot
+ *     builds it, with a read of no port grant: the grant decides approved
+ *     ports, never whether a row anchors) must anchor this row: a row it
+ *     refuses, or skips because two live owner rows share its version, or a
+ *     package it refuses for two resolved defaults, can never be activated by
+ *     the runtime. The surface must be the one the bridge registered from a
+ *     store record at the digest that anchor selects (the store surface of the
+ *     package when the anchor selects none: the store rescan then registers a
+ *     package only from its one store record, and removes the store surface
+ *     of a package whose store surface it does not write);
+ *   - for a BUNDLED install (`bundled`), the surface must be the one the bridge
+ *     registered from the development tree. The bundled scan registers that
+ *     surface without reading an install row, so the reader binds it to the
+ *     claim's own install by package name and version and does not ask which
+ *     row of the package the runtime's platform-global gate prefers: a claim
+ *     bound to the bundled row answers from it also while a live product row
+ *     of the package wins that gate;
+ *   - for the DEVELOPMENT CHECKOUT's own row (`readDevCheckoutSurface`: a
+ *     `local` row exactly as a development boot's install-record heal writes
+ *     it, naming the folder the bundled scan registered the pack from, in a
+ *     development process), the surface must be that development-tree
+ *     surface. Every other `local` row is a store install as above;
+ *   - any other source, or none, is no install the runtime anchors.
+ * FAIL CLOSED: in every case where a surface of the pack is reported but none
+ * is this install's, and on a failed install-row, dispatcher or trust-gate
+ * read, the reader throws. The pack's claim state is then unknown, so the answer must
+ * never read as "not claim-backed" (see `readClaimBackedMeaningTypesForOrg`).
+ */
+async function readClaimWinnerSurfaceFields(
+  winner: { extension: string; extensionVersion: string; installId: string },
+  surfaces: () => Promise<readonly ArtifactPackSurfaceEntry[]>,
+): Promise<{ accepts: string[]; objectTypeIds: string[]; matchers: string[] } | null> {
+  const { readInstalledExtensionById } = await import("@cinatra-ai/extensions/canonical-store");
+  const row = await readInstalledExtensionById(winner.installId);
+  if (
+    !row ||
+    row.packageName !== winner.extension ||
+    (row.status !== "active" && row.status !== "locked") ||
+    row.kind !== "artifact"
+  ) {
+    return null;
+  }
+  const unreadable = (why: string, code: ClaimSurfaceUnreadableCode): never => {
+    throw Object.assign(
+      new Error(
+        `the manifest of the claim's install cannot be read: ${why} ` +
+          `(${winner.extension}@${winner.extensionVersion}, install ${winner.installId})`,
+      ),
+      { claimReadCode: code },
+    );
+  };
+  let reported: readonly ArtifactPackSurfaceEntry[];
+  try {
+    reported = await surfaces();
+  } catch {
+    return unreadable("the runtime-discovery dispatcher cannot be read", "dispatcher-unreadable");
+  }
+  const own = reported.filter((s) => s.packageName === winner.extension);
+  if (own.length === 0) return null;
+  // The pack's surface from this install's own kind of record: the registry
+  // keeps a store surface and a development-tree surface side by side.
+  let surface: ArtifactPackSurfaceEntry | undefined;
+  const sourceType = (row.source as { type?: unknown } | null | undefined)?.type;
+  if (sourceType === "bundled") {
+    surface = own.find((s) => s.record?.source === "bundled");
+    if (!surface) {
+      return unreadable("the runtime registered the pack from no development tree", "no-development-tree");
+    }
+  } else {
+    // The development checkout's own row reads the development-tree surface
+    // registered from the very folder the row names; any other row, `local`
+    // ones included, keeps the store road unchanged.
+    const checkout = sourceType === "local" ? await readDevCheckoutSurface(row, own) : null;
+    if (checkout) {
+      surface = checkout;
+    } else if (sourceType === "verdaccio" || sourceType === "local" || sourceType === "github") {
+      const digest = await readAnchoredStoreDigest(row.packageName, row.id, unreadable);
+      surface = own.find((s) => s.record?.source === "store");
+      const record = surface?.record;
+      if (!surface || record?.source !== "store" || (digest !== null && record.digest !== digest)) {
+        return unreadable(
+          "the runtime registered the pack from another record than the install's",
+          "store-record-mismatch",
+        );
+      }
+    } else {
+      return unreadable("the install row has no source the runtime anchors", "no-anchored-source");
+    }
+  }
+  if (surface.version !== winner.extensionVersion) {
+    return unreadable("the runtime registered the pack at another version than the claim", "version-mismatch");
+  }
+  return {
+    accepts: [...surface.fileMimeTypes],
+    objectTypeIds: [],
+    matchers: [...surface.matcherSkillIds],
+  };
+}
+
+/**
+ * The store digest the runtime's own multi-version trust gate selects for one
+ * live install row (cinatra#3319): the anchor `makeDefaultInstallAnchorsResolver`
+ * (platform-global, as boot builds it) resolves for the row `installId`. Null
+ * when that anchor selects no digest. No anchor for the row (refused, skipped
+ * as an ambiguous version, or every version refused for two resolved
+ * defaults), and a failed read, throw through `unreadable`. The port grant is
+ * not read: it decides approved ports only.
+ */
+async function readAnchoredStoreDigest(
+  packageName: string,
+  installId: string,
+  unreadable: (why: string, code: ClaimSurfaceUnreadableCode) => never,
+): Promise<string | null> {
+  const { makeDefaultInstallAnchorsResolver } = await import("@/lib/extension-install-anchor");
+  let anchors: readonly { installId?: string | null; digest?: string | null }[];
+  try {
+    const resolve = await makeDefaultInstallAnchorsResolver(null, "platform-global", {
+      readGrant: async () => null,
+    });
+    anchors = await resolve(packageName);
+  } catch {
+    return unreadable("the install's trust anchor cannot be read", "trust-anchor-unreadable");
+  }
+  const anchor = anchors.find((a) => a.installId === installId);
+  if (!anchor) {
+    return unreadable("the runtime's trust gate anchors no version of the install", "trust-gate-no-anchor");
+  }
+  return anchor.digest ?? null;
 }
 
 /**

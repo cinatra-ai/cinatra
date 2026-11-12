@@ -39,7 +39,7 @@ const passthroughNode = (id, data) => ({
 });
 
 describe("the allowlist reader over this tree's own route", () => {
-  it("returns exactly the twenty names the passthrough carries", () => {
+  it("returns exactly the twenty-one names the passthrough carries", () => {
     const allowlist = readPassthroughAllowlist(REPO_ROOT);
     expect([...allowlist].sort()).toEqual([
       "agent_run_hitl_prompts_exclude",
@@ -47,6 +47,7 @@ describe("the allowlist reader over this tree's own route", () => {
       "artifact_content_read",
       "artifact_image_generate",
       "artifact_materialize",
+      "artifact_page_capture",
       "artifacts_get",
       "artifacts_list",
       "email_outreach_initial_drafts_update",

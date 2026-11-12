@@ -1,6 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { GateNotPendingError, PAUSE_SEND_LEASE_SECONDS, RunTransitionError } from "./run-status";
+import { assertNoOpenPublishDecision, publishHoldFault } from "./publish-decision-actions";
 
 import { sql, type SQL } from "drizzle-orm";
 
@@ -28,7 +29,7 @@ import {
   transitionRunStatus,
 } from "./store";
 import { claimPause } from "./run-pause-claim";
-import { failPreSendStep, settleSendOrDescribe } from "./run-resume-under-claim";
+import { failPreSendStep, givePauseBackOnHoldFault, settleSendOrDescribe } from "./run-resume-under-claim";
 import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuccessfulContinue, continueBindingDigest, continueGateDigest } from "./agent-run-hitl-prompts";
 // cinatra#1939 wave 2 (§7.1): the guarded setup-resume writer — the setup-*
 // inputParams-merge + pending_approval->queued CAS now runs inside the org-write
@@ -1102,6 +1103,11 @@ export async function approveReviewTaskInternal(
     let settled = false;
     let capturedPromptId: string | null = null;
     try {
+      // cinatra#4150: a run held at a publish decision goes on only by that decision. Read under
+      // the pause claim and before the fence (cinatra#4245), so a decision parked before the claim is
+      // seen and nothing is sent; a refusal gives the claim back. A hold that cannot be read answers one
+      // fixed text that names no run and carries no store error.
+      await assertNoOpenPublishDecision(run.id).catch((err: unknown) => { throw publishHoldFault(err); });
       // Dynamic imports mirror mcp/handlers.ts:625-628 — avoids circular dep at
       // module load time (review-task-actions is imported by actions.ts which is
       // re-exported from index.ts; @cinatra-ai/a2a pulls in mcp-server which depends
@@ -1316,7 +1322,12 @@ export async function approveReviewTaskInternal(
       return;
     } catch (e) {
       if (settled) throw e;
-      if (!dispatchStarted) return await failPreSendStep({ ...claimRef, expiresAt: claim.expiresAt }, resumeAuthority, e);
+      if (!dispatchStarted) {
+        // cinatra#4150: a publish-hold refusal gives the claim back and is the answer; a release that fails
+        // too is logged with no run, no task and no raw error.
+        if (await givePauseBackOnHoldFault(claimRef, resumeAuthority, e, "[approveReviewTaskInternal] could not release the gate claim")) throw e;
+        return await failPreSendStep({ ...claimRef, expiresAt: claim.expiresAt }, resumeAuthority, e);
+      }
       // A failed send is not given back (WayFlow may hold the message): it is settled.
       const settleFailure = await settleSendOrDescribe(claimRef, resumeAuthority, fencedAt);
       if (settleFailure === null) throw e;

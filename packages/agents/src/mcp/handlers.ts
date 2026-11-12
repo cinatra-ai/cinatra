@@ -2122,10 +2122,7 @@ async function handleAgentBuilderRunResume(
 
     // WayFlow resume path keyed by agent_runs.a2aTaskId.
     // WayFlow is the only execution path.
-    if (
-      run.a2aTaskId &&
-      template.sourceType === "internal"
-) {
+    if (run.a2aTaskId && template.sourceType === "internal") {
       const packageName = template.packageName;
       if (!packageName) {
         return { error: `template.packageName is null for templateId=${template.id}; cannot route WayFlow resume` };
@@ -2147,6 +2144,9 @@ async function handleAgentBuilderRunResume(
       if (!run.a2aContextId) {
         return { error: `Run ${runId} has no a2aContextId. Cannot resume WayFlow task without context ID.` };
       }
+      // cinatra#4150: a run held at a publish decision goes on only by that decision.
+      const publishHold = await import("../publish-decision-actions");
+      let decided: boolean; try { decided = await publishHold.assertNoOpenPublishDecision(run.id); } catch (e) { return publishHold.publishHoldAnswer(e); }
       const { createExternalA2AClient } = await import("@cinatra-ai/a2a");
       const client = await createExternalA2AClient({
         agentUrl: wayflowUrl,
@@ -2196,6 +2196,8 @@ async function handleAgentBuilderRunResume(
         prompt: { agentId: packageName, message: trimmedNote, submittedValues },
         authority: resumeAuthority,
         readRun: () => readAgentRunById(run.id),
+        // cinatra#4150 (A5): a publishing template, or a run with a decision, reads the hold again under the claim.
+        recheckPublishHold: (template.publishingSteps?.length ?? 0) > 0 || decided,
       });
     }
 
@@ -2585,7 +2587,7 @@ async function handleAgentBuilderExport(
       try {
         zipEntries.push({
           name: sidecar,
-          content: await readFile(join(resolved.rootDir, sidecar), "utf8"),
+          content: await readFile(join(/* turbopackIgnore: true */ resolved.rootDir, sidecar), "utf8"),
         });
       } catch {
         // Sidecar absent on disk — skip it.

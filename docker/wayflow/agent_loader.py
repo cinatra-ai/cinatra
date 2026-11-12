@@ -58,6 +58,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import copy
 import datetime as _datetime
 import hashlib
 import hmac
@@ -3748,7 +3749,7 @@ def _derive_bridge_output_schemas(
             if shape is None:
                 print(
                     f"[agent_loader] WARNING: {label}: bridge ApiNode "
-                    f"{node.get('id') or node.get('name')!r} declares an output "
+                    f"{_quote_node_id(node.get('id') or node.get('name'))} declares an output "
                     f"without a usable title/type ({prop!r}); deriving NO "
                     f"output_schema for it — it keeps asking for free text."
                 )
@@ -3770,7 +3771,7 @@ def _derive_bridge_output_schemas(
             # it is exactly what an answer will come back EMPTY inside — and
             # because the fix is one declaration in the agent's own OAS.
             print(
-                f"[agent_loader] NOTE: {label}: bridge ApiNode {node_id!r} "
+                f"[agent_loader] NOTE: {label}: bridge ApiNode {_quote_node_id(node_id)} "
                 f"declares no members for {', '.join(free_form)}; the request "
                 f"can promise nothing about them. An object level with no "
                 f"declared members is sent CLOSED and EMPTY (the strict "
@@ -3835,7 +3836,11 @@ def _reconcile_input_message_gates(
     input values reach the renderer only as the assistant-message JSON the host
     parses via its generic ``historyText → spreadFromOutput`` merge. Every gate
     WITHOUT the flag keeps the byte-identical empty-guard template, so no other
-    gate-bearing agent's behavior changes.
+    gate-bearing agent's behavior changes. A publish gate (cinatra#4150: an id
+    with ``PUBLISH_GATE_ID_PREFIX``, which only ``_insert_publish_gates`` can
+    give) renders each value exactly, a falsy one included
+    (``"<name>": {% if <name> is none %}null{% else %}{{ <name> | tojson }}{%
+    endif %}``); ``is none`` keeps the input optional on the pin.
 
     Idempotent (skips a node already at ``PluginInputMessageNode`` or one that
     already carries a ``message_template``) and conservative (a node whose
@@ -3905,9 +3910,22 @@ def _reconcile_input_message_gates(
                     and isinstance(node_meta.get("cinatra"), dict)
                     and node_meta["cinatra"].get("surfaceGateInputs") is True
                 )
+                publish_gate = isinstance(obj.get("id"), str) and obj["id"].startswith(
+                    PUBLISH_GATE_ID_PREFIX
+                )
                 if all_ok and not already_templated:
                     obj["component_type"] = "PluginInputMessageNode"
-                    if surface_gate_inputs:
+                    if surface_gate_inputs and publish_gate:
+                        obj["message_template"] = (
+                            "{"
+                            + ", ".join(
+                                '"' + t + '": {% if ' + t + " is none %}null{% else %}{{ "
+                                + t + " | tojson }}{% endif %}"
+                                for t in titles
+                            )
+                            + "}"
+                        )
+                    elif surface_gate_inputs:
                         obj["message_template"] = (
                             "{"
                             + ", ".join(
@@ -3944,6 +3962,343 @@ def _reconcile_input_message_gates(
                 _walk(item)
 
     _walk(doc)
+    return report
+
+
+# ---------------------------------------------------------------------------
+# cinatra#4150 — stop the run in front of a declared publishing step.
+#
+# A pack marks the node that publishes with `metadata.cinatra.publishes: true`
+# (the host compiler reads the same key into `publishingSteps`). A model call
+# cannot pause a run, and a flow of ApiNodes only runs straight through, so the
+# stop has to be a real step: this pass puts ONE host-owned InputMessageNode,
+# id `cinatra_publish_gate__<node>`, in front of each declared node. The gate
+# runs through `_reconcile_input_message_gates` like any pack gate, and the
+# runtime signs it in the gate claim of the pause, so the host can tell a
+# publish gate from every other pause by its verified id.
+#
+# The flag may only ADD a stop. Anything that carries the key and is not a
+# clean declaration refuses the load (that version does not mount; on a reload
+# the version mounted before keeps serving), and so does a declared node the
+# pass cannot put a gate in front of with certainty.
+# ---------------------------------------------------------------------------
+
+PUBLISH_GATE_ID_PREFIX = "cinatra_publish_gate__"
+#: The node kinds that can be the publishing action (the compiler's set).
+_PUBLISH_ACTION_KINDS = frozenset({"ApiNode", "AgentNode", "FlowNode", "ParallelFlowNode"})
+#: The gate's one output. An InputMessageNode must declare exactly one string
+#: output; nothing consumes this one.
+_PUBLISH_GATE_OUTPUT = "cinatra_publish_gate_answer"
+
+
+class PublishGateError(ValueError):
+    """A publishing-step declaration the loader refuses to mount."""
+
+
+def _quote_node_id(value: Any) -> str:
+    """A node id for an error or log text: repr-escaped (one line), cut at 120."""
+    if not isinstance(value, str):
+        return "<an id that is not a string>"
+    return repr(value[:120] + "..." if len(value) > 120 else value)
+
+
+def _publishes_flag(component: Any) -> Tuple[bool, Any]:
+    """(present, value) of `metadata.cinatra.publishes` on a component."""
+    if not isinstance(component, dict):
+        return False, None
+    meta = component.get("metadata")
+    if not isinstance(meta, dict):
+        return False, None
+    cinatra = meta.get("cinatra")
+    if not isinstance(cinatra, dict) or "publishes" not in cinatra:
+        return False, None
+    return True, cinatra["publishes"]
+
+
+def _component_ref_of(value: Any) -> Optional[str]:
+    if isinstance(value, dict) and isinstance(value.get("$component_ref"), str):
+        return value["$component_ref"]
+    return None
+
+
+def _insert_publish_gates(doc: Any, label: str) -> List[Dict[str, Any]]:
+    """cinatra#4150 — insert a gate in front of each declared publishing step.
+
+    For every top-level node of the root flow whose `metadata.cinatra.publishes`
+    is the boolean True (Python identity, so a truthy string or 1 does not
+    count):
+      1. add an InputMessageNode `cinatra_publish_gate__<node>` with
+         `metadata.cinatra.surfaceGateInputs: True` and one string output, and
+         list it in the root `nodes` right before the node;
+      2. redirect EVERY control edge whose destination is the node to the gate
+         (its source and branch stay), and add one control edge from the gate
+         to the node;
+      3. for each data edge into the node, add a twin edge from the same source
+         output into a same-named input of the gate, so the pause carries the
+         values handed to the node; the node keeps its own data edges.
+
+    Refuses (PublishGateError, before changing anything) when:
+      - a component carries `publishes` that is not a bool (PUBLISHES_MALFORMED);
+      - `publishes: True` sits on the flow root, on a component that is not a
+        top-level node of the root flow, or on a node that cannot be the
+        publishing action (PUBLISHES_MISPLACED);
+      - a pack id or reference takes the reserved prefix (RESERVED_NODE_ID);
+      - a declared node has no incoming control edge (PUBLISH_GATE_NO_ENTRY);
+      - an edge list of the root flow is not a list or holds an edge that is
+        not an inline edge between references, the declared node is referenced
+        from anywhere but the root flow's nodes and edges, no data edge feeds it
+        (the stop would surface nothing, and a flow with no data edge list may
+        be wired by name), or an input fed into it is not a plain identifier
+        the gate can surface (PUBLISH_GATE_UNSUPPORTED).
+    Error texts name node ids only, never a value.
+
+    Mutates `doc` in place; returns one report entry per gate (empty, and `doc`
+    untouched, when nothing is declared). Not idempotent, by design: a second
+    run on the same document refuses with RESERVED_NODE_ID, because a node with
+    the reserved prefix cannot be told from a pack's own; each mount runs the
+    pass once on a fresh parse.
+    """
+    if not isinstance(doc, dict):
+        return []
+    root_refs = doc.get("$referenced_components")
+    if not isinstance(root_refs, dict):
+        root_refs = {}
+    nodes_list = doc.get("nodes") if isinstance(doc.get("nodes"), list) else []
+    top_level = {r for r in (_component_ref_of(n) for n in nodes_list) if r is not None}
+
+    declared: List[str] = []
+    seen_declared: set = set()
+    allowed_ref_paths: set = set()
+
+    def _check(obj: Any, path: Tuple[Any, ...], owner_key: Optional[str]) -> None:
+        if isinstance(obj, dict):
+            ref = _component_ref_of(obj)
+            if ref is not None and ref.startswith(PUBLISH_GATE_ID_PREFIX):
+                raise PublishGateError(
+                    f"{label}: RESERVED_NODE_ID: reference {_quote_node_id(ref)} uses the reserved "
+                    f"prefix {PUBLISH_GATE_ID_PREFIX!r}"
+                )
+            if "component_type" in obj or path == () or owner_key is not None:
+                cid = obj.get("id")
+                for candidate in (owner_key, cid):
+                    if isinstance(candidate, str) and candidate.startswith(PUBLISH_GATE_ID_PREFIX):
+                        raise PublishGateError(
+                            f"{label}: RESERVED_NODE_ID: node {_quote_node_id(candidate)} uses the "
+                            f"reserved prefix {PUBLISH_GATE_ID_PREFIX!r}"
+                        )
+                present, value = _publishes_flag(obj)
+                who = (
+                    "the flow root" if path == ()
+                    else f"node {_quote_node_id(owner_key if owner_key is not None else cid)}"
+                )
+                if present and not isinstance(value, bool):
+                    raise PublishGateError(
+                        f"{label}: PUBLISHES_MALFORMED: {who} declares metadata.cinatra.publishes "
+                        f"with a value that is not the JSON boolean true or false"
+                    )
+                if present and value is True:
+                    is_top = (
+                        len(path) == 2
+                        and path[0] == "$referenced_components"
+                        and owner_key in top_level
+                    )
+                    if not is_top:
+                        raise PublishGateError(
+                            f"{label}: PUBLISHES_MISPLACED: {who} declares metadata.cinatra.publishes "
+                            f"but is not a top-level node of the flow; a stop could not be inserted "
+                            f"in front of it"
+                        )
+                    kind = obj.get("component_type")
+                    if not (isinstance(kind, str) and kind in _PUBLISH_ACTION_KINDS):
+                        raise PublishGateError(
+                            f"{label}: PUBLISHES_MISPLACED: {who} declares metadata.cinatra.publishes, "
+                            f"but only a node of kind ApiNode, AgentNode, FlowNode or "
+                            f"ParallelFlowNode can be the publishing action"
+                        )
+                    if owner_key not in seen_declared:
+                        seen_declared.add(owner_key)
+                        declared.append(owner_key)  # type: ignore[arg-type]
+            for k, v in obj.items():
+                child_owner = k if path and path[-1] == "$referenced_components" else None
+                if k == "$referenced_components" and isinstance(v, dict):
+                    for rk in v:
+                        if isinstance(rk, str) and rk.startswith(PUBLISH_GATE_ID_PREFIX):
+                            raise PublishGateError(
+                                f"{label}: RESERVED_NODE_ID: node {_quote_node_id(rk)} uses the "
+                                f"reserved prefix {PUBLISH_GATE_ID_PREFIX!r}"
+                            )
+                _check(v, path + (k,), child_owner)
+        elif isinstance(obj, list):
+            for i, item in enumerate(obj):
+                _check(item, path + (i,), None)
+
+    _check(doc, (), None)
+    if not declared:
+        return []
+    # Node order, as the compiler lists publishingSteps.
+    order = [_component_ref_of(n) for n in nodes_list]
+    declared.sort(key=order.index)
+
+    # Every root edge must be an inline edge between references, or the pass
+    # could not see (and so could not redirect) an entry into a declared node.
+    for key in ("control_flow_connections", "data_flow_connections"):
+        if doc.get(key) is not None and not isinstance(doc.get(key), list):
+            raise PublishGateError(
+                f"{label}: PUBLISH_GATE_UNSUPPORTED: the flow's {key} is not a list; a "
+                f"publishing step's edges cannot be read"
+            )
+    cf_list = doc["control_flow_connections"] if doc.get("control_flow_connections") is not None else []
+    df_list = doc["data_flow_connections"] if doc.get("data_flow_connections") is not None else []
+    for i, edge in enumerate(cf_list):
+        if not (
+            isinstance(edge, dict)
+            and _component_ref_of(edge.get("from_node")) is not None
+            and _component_ref_of(edge.get("to_node")) is not None
+        ):
+            raise PublishGateError(
+                f"{label}: PUBLISH_GATE_UNSUPPORTED: control edge #{i} of the flow is not an inline "
+                f"edge between node references; a publishing step's entries cannot be read"
+            )
+        allowed_ref_paths.add(("control_flow_connections", i, "from_node"))
+        allowed_ref_paths.add(("control_flow_connections", i, "to_node"))
+    for i, edge in enumerate(df_list):
+        if not (
+            isinstance(edge, dict)
+            and _component_ref_of(edge.get("source_node")) is not None
+            and _component_ref_of(edge.get("destination_node")) is not None
+            and isinstance(edge.get("source_output"), str)
+            and isinstance(edge.get("destination_input"), str)
+        ):
+            raise PublishGateError(
+                f"{label}: PUBLISH_GATE_UNSUPPORTED: data edge #{i} of the flow is not an inline "
+                f"edge between node references; a publishing step's inputs cannot be read"
+            )
+        allowed_ref_paths.add(("data_flow_connections", i, "source_node"))
+        allowed_ref_paths.add(("data_flow_connections", i, "destination_node"))
+    for i in range(len(nodes_list)):
+        allowed_ref_paths.add(("nodes", i))
+
+    # A declared node used anywhere else (a subflow listing it, a nested
+    # definition under the same key) would run, or could run, without the gate.
+    declared_set = set(declared)
+
+    def _refs_outside(obj: Any, path: Tuple[Any, ...]) -> None:
+        if isinstance(obj, dict):
+            ref = _component_ref_of(obj)
+            if ref in declared_set and path not in allowed_ref_paths:
+                raise PublishGateError(
+                    f"{label}: PUBLISH_GATE_UNSUPPORTED: node {_quote_node_id(ref)} declares "
+                    f"metadata.cinatra.publishes and is referenced outside the root flow's nodes "
+                    f"and edges; that use would bypass the stop"
+                )
+            for k, v in obj.items():
+                if (
+                    k == "$referenced_components"
+                    and path != ()
+                    and isinstance(v, dict)
+                    and declared_set.intersection(v)
+                ):
+                    raise PublishGateError(
+                        f"{label}: PUBLISH_GATE_UNSUPPORTED: a nested definition reuses the id of "
+                        f"node {_quote_node_id(sorted(declared_set.intersection(v))[0])}, which "
+                        f"declares metadata.cinatra.publishes"
+                    )
+                _refs_outside(v, path + (k,))
+        elif isinstance(obj, list):
+            for i, item in enumerate(obj):
+                _refs_outside(item, path + (i,))
+
+    _refs_outside(doc, ())
+
+    plans: List[Dict[str, Any]] = []
+    for node_key in declared:
+        entries = [e for e in cf_list if _component_ref_of(e["to_node"]) == node_key]
+        if not entries:
+            raise PublishGateError(
+                f"{label}: PUBLISH_GATE_NO_ENTRY: node {_quote_node_id(node_key)} declares "
+                f"metadata.cinatra.publishes but has no incoming control edge; the stop could not "
+                f"stand in front of it"
+            )
+        feeds = [e for e in df_list if _component_ref_of(e["destination_node"]) == node_key]
+        if not feeds:
+            raise PublishGateError(
+                f"{label}: PUBLISH_GATE_UNSUPPORTED: node {_quote_node_id(node_key)} declares "
+                f"metadata.cinatra.publishes but no data edge feeds it, so the stop would "
+                f"surface nothing"
+            )
+        titles: List[str] = []
+        for e in feeds:
+            title = e["destination_input"]
+            if not _GATE_INPUT_TITLE_RE.fullmatch(title):
+                raise PublishGateError(
+                    f"{label}: PUBLISH_GATE_UNSUPPORTED: an input fed into node "
+                    f"{_quote_node_id(node_key)} is not a plain identifier, so the stop could not "
+                    f"surface it"
+                )
+            if title not in titles:
+                titles.append(title)
+        plans.append({"node": node_key, "entries": entries, "feeds": feeds, "titles": titles})
+
+    # Every check passed: now change the document.
+    report: List[Dict[str, Any]] = []
+    for plan in plans:
+        node_key = plan["node"]
+        gate_id = PUBLISH_GATE_ID_PREFIX + node_key
+        node = root_refs[node_key]
+        declared_inputs = {
+            i.get("title"): i
+            for i in (node.get("inputs") if isinstance(node.get("inputs"), list) else [])
+            if isinstance(i, dict) and isinstance(i.get("title"), str)
+        }
+        gate: Dict[str, Any] = {
+            "component_type": "InputMessageNode",
+            "id": gate_id,
+            "name": gate_id,
+            "description": "Host-owned stop in front of a declared publishing step (cinatra#4150).",
+            "metadata": {"cinatra": {"surfaceGateInputs": True}},
+            "outputs": [{"title": _PUBLISH_GATE_OUTPUT, "type": "string"}],
+            "inputs": [
+                copy.deepcopy(declared_inputs[t]) if t in declared_inputs else {"title": t, "type": "string"}
+                for t in plan["titles"]
+            ],
+        }
+        root_refs[gate_id] = gate
+        position = next(i for i, n in enumerate(nodes_list) if _component_ref_of(n) == node_key)
+        nodes_list.insert(position, {"$component_ref": gate_id})
+        for edge in plan["entries"]:
+            edge["to_node"] = {"$component_ref": gate_id}
+        cf_list.append(
+            {
+                "component_type": "ControlFlowEdge",
+                "name": f"{gate_id}__to__{node_key}",
+                "from_node": {"$component_ref": gate_id},
+                "to_node": {"$component_ref": node_key},
+            }
+        )
+        twins_seen: set = set()
+        for e in plan["feeds"]:
+            src, out, title = _component_ref_of(e["source_node"]), e["source_output"], e["destination_input"]
+            if (src, out, title) in twins_seen:
+                continue
+            twins_seen.add((src, out, title))
+            df_list.append(
+                {
+                    "component_type": "DataFlowEdge",
+                    "name": f"{gate_id}__{title}__from__{src}__{out}",
+                    "source_node": {"$component_ref": src},
+                    "source_output": out,
+                    "destination_node": {"$component_ref": gate_id},
+                    "destination_input": title,
+                }
+            )
+        report.append(
+            {
+                "node": node_key,
+                "gate": gate_id,
+                "controlEdges": len(plan["entries"]),
+                "inputs": list(plan["titles"]),
+            }
+        )
     return report
 
 
@@ -4000,6 +4355,33 @@ def _mount_one_sync(
                 f"composed_sha256={composed_sha256[:12]}…"
             )
 
+    # cinatra#4150 — put a host-owned gate in front of every node declared
+    # `metadata.cinatra.publishes: true`, BEFORE the gate reconcile below, so
+    # the inserted gate is reconciled (and surfaces its values) like any pack
+    # gate. A declaration the pass refuses raises PublishGateError and this
+    # version does not mount. composed_oas stays None without a context
+    # injection, as for the reconcile and the output_schema pass below. See
+    # _insert_publish_gates for the full contract.
+    publish_working_doc: Optional[Dict[str, Any]] = (
+        composed_oas if composed_oas is not None else parsed_doc
+    )
+    if isinstance(publish_working_doc, dict):
+        publish_report = _insert_publish_gates(publish_working_doc, label)
+        if publish_report:
+            raw_text = json.dumps(publish_working_doc)
+            if composed_oas is not None:
+                composed_sha256 = hashlib.sha256(
+                    raw_text.encode("utf-8")
+                ).hexdigest()
+            print(
+                f"[agent_loader] publish gates {label}: "
+                + ", ".join(
+                    f"{_quote_node_id(r['gate'])}(control edges {r['controlEdges']}, "
+                    f"inputs {len(r['inputs'])})"
+                    for r in publish_report
+                )
+            )
+
     # cinatra#1830 — reconcile HITL InputMessageNode gates that declare explicit
     # DFE-fed inputs into the pin-accepted PluginInputMessageNode form BEFORE
     # AgentSpecLoader validates the graph. Runs on the current working document
@@ -4019,7 +4401,7 @@ def _mount_one_sync(
                 ).hexdigest()
             print(
                 f"[agent_loader] HITL gate reconcile {label}: "
-                f"gates={[r['node'] for r in gate_report]} "
+                f"gates=[{', '.join(_quote_node_id(r['node']) for r in gate_report)}] "
                 f"(InputMessageNode → PluginInputMessageNode, "
                 f"inputs folded into message_template)"
             )
@@ -4044,7 +4426,7 @@ def _mount_one_sync(
             print(
                 f"[agent_loader] bridge output_schema derived {label}: "
                 + ", ".join(
-                    f"{r['node']}({'/'.join(r['outputs'])})" for r in schema_report
+                    f"{_quote_node_id(r['node'])}({'/'.join(r['outputs'])})" for r in schema_report
                 )
             )
 

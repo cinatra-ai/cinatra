@@ -3,7 +3,7 @@
  *
  * The claim module (claimPause, fencePauseInPlace, releasePauseClaim,
  * settlePauseSend) and the claim rules of the status seam, on a throwaway
- * schema replayed from the store bootstrap, with the core__0116 CHECKs in
+ * schema replayed from the store bootstrap, with the core__0126 CHECKs in
  * place, so every write here also passes the shape CHECK:
  *   - a claim at the generation read; the four refusals; the lease measured on
  *     the database clock;
@@ -113,7 +113,7 @@ beforeAll(async () => {
     const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
     const { replayStoreSchema } = await import("@/lib/test-support/store-schema-replay");
     await replayStoreSchema(admin, buildCreateStoreSchemaQueries(TEST_SCHEMA), { additionalHeads: ["DO $$ "] });
-    // The core__0116 CHECKs are anonymous blocks whose text starts "DO $$\n",
+    // The core__0126 CHECKs are anonymous blocks whose text starts "DO $$\n",
     // a head the replay does not take: apply the leaf itself (it is idempotent).
     const { agentRunPauseClaimSchemaQueries } = await import("@/lib/agent-run-created-at-schema");
     for (const s of agentRunPauseClaimSchemaQueries(TEST_SCHEMA)) await admin.query(s.text);
@@ -143,7 +143,7 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("cinatra#4245 the pause claim (real database)", () => {
-  it("the throwaway schema carries both core__0116 CHECKs", async () => {
+  it("the throwaway schema carries both core__0126 CHECKs", async () => {
     const { rows } = await pool(
       `SELECT c.conname FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid
          JOIN pg_namespace n ON n.oid = t.relnamespace

@@ -61,8 +61,8 @@ const REPO_ROOT = resolve(__dirname, "..", "..", "..", "..");
 /** The producing package under proof — the REAL extension identity wave124
  * drove, not a synthetic stand-in. */
 const WORDPRESS_AGENT_PACKAGE = "@cinatra-ai/wordpress-agent";
-/** The lock-pinned release whose manifest declares the capability. */
-const WORDPRESS_AGENT_VERSION = "0.1.6";
+/** The lock-pinned commit/tree whose manifest declares the capability. */
+const WORDPRESS_AGENT_VERSION = "0.1.7";
 /** The pinned clone-back tree the dev-boot scan loads from. Present in a dev
  * checkout and in the conformance jobs; absent in the DB-tier CI job, which is
  * why the fixture below falls back to a synthesized tree carrying the same
@@ -72,17 +72,18 @@ const PINNED_OAS_PATH = join(PINNED_AGENT_DIR, "cinatra", "oas.json");
 const PINNED_MANIFEST_PATH = join(PINNED_AGENT_DIR, "package.json");
 
 /**
- * The lifecycle declaration `@cinatra-ai/wordpress-agent@0.1.6` ships in its
- * `package.json#cinatra.lifecycle`. Kept as a literal so the DB-tier CI job can
+ * The lifecycle declaration `@cinatra-ai/wordpress-agent@0.1.7` ships in its
+ * `package.json#cinatra.lifecycle` (with `repairFindingsInput` since
+ * cinatra#4424). Kept as a literal so the DB-tier CI job can
  * still run the whole proof without the clone-back tree, but NEVER a
- * free-floating stub — the same two guards the merged
- * `lifecycle-repair-cms-roundtrip.integration.test.ts` applies:
+ * free-floating stub — the same two guards the CMS round-trip suite applied
+ * before cinatra#3862 leg 7 removed it:
  *   - it must PARSE through the real manifest contract
  *     (`agentLifecycleDeclarationSchema`), and
  *   - whenever the pinned tree IS on disk it is cross-checked against the REAL
  *     manifest, so a pin that drops or changes the block fails this suite.
  */
-const WORDPRESS_AGENT_LIFECYCLE = { repairCapable: true } as const;
+const WORDPRESS_AGENT_LIFECYCLE = { repairCapable: true, repairFindingsInput: { input: "instructions" } } as const;
 /** The exact column TEXT the compiled declaration serializes to (stable key
  * order — `serializeLifecycleConfig`). Asserted as bytes, not as a parse, so a
  * silently-reshaped column cannot pass. */
@@ -224,8 +225,8 @@ function resolveWordPressFixture(): Promise<{ oasPath: string; fromPinnedTree: b
       version?: string;
       cinatra?: { lifecycle?: unknown };
     };
-    // Pin drift guard: the literal above must still BE what the pinned release
-    // declares, or every CI-only run of this suite would prove the wrong thing.
+    // Pin drift guard: the literal above must still BE what the pinned
+    // commit/tree declares, or every CI-only run of this suite would prove the wrong thing.
     expect(pinned.cinatra?.lifecycle).toEqual(WORDPRESS_AGENT_LIFECYCLE);
     expect(pinned.version).toBe(WORDPRESS_AGENT_VERSION);
     return Promise.resolve({ oasPath: PINNED_OAS_PATH, fromPinnedTree: true });
@@ -427,7 +428,7 @@ describe.skipIf(!HAS_DB)(
 
     it("UPGRADE: an ALREADY-INSTALLED row at the SAME version whose lifecycle_config is NULL is repaired on the next loader run", async () => {
       // The state wave124 actually found in the wild, and the one a fix that
-      // only projects on a FRESH install would never reach: 0.1.6 is already
+      // only projects on a FRESH install would never reach: the pinned version is already
       // installed, so the loader's version-skip guard short-circuits every boot
       // and the NULL column survives forever. Reproduced exactly — take the row
       // the first case installed and put the column back to its pre-fix value.
@@ -545,7 +546,7 @@ describe.skipIf(!HAS_DB)(
         slug,
         packageName,
         version: "0.2.0",
-        lifecycle: { repairCapable: true },
+        lifecycle: { ...WORDPRESS_AGENT_LIFECYCLE },
       });
       const installed = await loader.ensureAgentPackageFromGitFile({ oasSourcePath: oasPath });
       expect(installed.skipped).toBe(false);

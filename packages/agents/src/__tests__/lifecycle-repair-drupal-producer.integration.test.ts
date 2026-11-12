@@ -1,9 +1,10 @@
 /**
  * cinatra#2046 — the DRUPAL producer half of the repair round trip, proven
  * against a real Postgres with the producing template carrying the REAL
- * `@cinatra-ai/drupal-agent` identity and the lifecycle declaration the release
- * this PR's pin advances to actually ships
- * (`cinatra.lifecycle: { repairCapable: true }`).
+ * `@cinatra-ai/drupal-agent` identity and the lifecycle declaration the pinned
+ * commit/tree of the committed dev lock actually ships (`cinatra.lifecycle:
+ * { repairCapable: true, repairFindingsInput: { input: "instructions" } }` since
+ * cinatra#4424).
  *
  * WHY THIS SUITE EXISTS — the negative proof it answers. Driven live on
  * `origin/main` `5091632cd`, a reviewer's changes-request on a DRUPAL CMS
@@ -17,16 +18,12 @@
  * `producer_repair` + a real dispatch on the pinned declaration.
  *
  * WHAT THIS SUITE DELIBERATELY DOES NOT RE-ARGUE. Everything downstream of the
- * dispatch is CMS-GENERIC and already proven end to end by #2296's suite
- * (`lifecycle-repair-cms-roundtrip.integration.test.ts`): the repaired capture,
- * the re-review, the approval-released apply, the read-back binding and the
- * exactly-one-gate invariant. Core's CMS bridge keys on its own outbox /
- * snapshot-target rows and never on a package name
- * (`lifecycle-repair-cms-production-bridge.ts`), so re-driving those rungs under
- * a Drupal name would duplicate a proof rather than add one. What is genuinely
+ * dispatch is generic: since cinatra#3862 leg 7 every repair completes
+ * through the generic completer, which keys on no package name, so re-driving
+ * it under a Drupal name would duplicate a proof rather than add one. What is genuinely
  * Drupal-specific — and what the pin is FOR — is everything up to and including
- * the dispatch, plus the CMS task text naming the Drupal node the repair must
- * re-drive. That is exactly this suite's scope.
+ * the dispatch, plus the reviewer's findings in the input the pinned commit/tree declares
+ * (`instructions`, cinatra#4424). That is exactly this suite's scope.
  *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided.
  */
@@ -40,6 +37,7 @@ import { producedEventId, type ArtifactProducedEvent } from "@/lib/lifecycle/lif
 import { autoReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
 
+import { REPAIR_FINDINGS_TEXT_LEAD } from "@/lib/lifecycle/lifecycle-policy";
 import { agentLifecycleDeclarationSchema } from "../verdaccio/package-contract";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
@@ -58,14 +56,14 @@ const DRUPAL_AGENT_PACKAGE = "@cinatra-ai/drupal-agent";
 
 /**
  * The lifecycle declaration `@cinatra-ai/drupal-agent` ships in its
- * `package.json#cinatra.lifecycle` at the release the committed dev lock pins
+ * `package.json#cinatra.lifecycle` at the commit/tree the committed dev lock pins
  * (its `resolvedSha` in cinatra-dev-extensions.lock.json). Kept as a literal
  * (the clone-back extension tree is not materialized in the DB-tier CI job) but
  * NEVER a free-floating stub — see the manifest-ground-truth test below, which
  * parses it through the real manifest contract AND cross-checks it byte-for-byte
  * against the REAL pinned manifest wherever that tree IS on disk.
  */
-const DRUPAL_AGENT_LIFECYCLE = { repairCapable: true } as const;
+const DRUPAL_AGENT_LIFECYCLE = { repairCapable: true, repairFindingsInput: { input: "instructions" } } as const;
 
 /** The pre-pin state this PR corrects: drupal-agent 0.1.2 declared no
  * `cinatra.lifecycle` block, so `installAgentFromPackage` compiled NOTHING onto
@@ -152,10 +150,9 @@ async function produce(over: Partial<ArtifactProducedEvent> = {}): Promise<Artif
   return ev;
 }
 
-/** Insert a `cms_snapshot_targets` row directly — the apply binding a real
- * `captureCmsContentSnapshot` writes (SQL mirrored from
- * `buildCmsSnapshotCaptureQueries`'s `targetInsert`, as the sibling CMS suites
- * do). `resourceType: "node"` is the DRUPAL shape (WordPress writes "post"). */
+/** Insert a `cms_snapshot_targets` row directly — the apply binding the
+ * retired CMS capture wrote (SQL mirrored from its `targetInsert`, as the
+ * sibling CMS suites do). `resourceType: "node"` is the DRUPAL shape (WordPress writes "post"). */
 async function insertDrupalSnapshotTarget(input: {
   artifactId: string;
   snapshotRevisionId: string;
@@ -294,7 +291,7 @@ describe.skipIf(!HAS_DB)("cinatra#2046 — the Drupal repair producer (pin activ
     const parsed = agentLifecycleDeclarationSchema.parse(DRUPAL_AGENT_LIFECYCLE);
     expect(parsed.repairCapable).toBe(true);
 
-    // The committed dev lock pins the drupal-agent release this literal is
+    // The committed dev lock pins the drupal-agent commit/tree this literal is
     // copied from; when the pinned clone-back tree is on disk, cross-check the
     // REAL manifest byte-for-byte — a manifest drift fails this suite there.
     const lock = JSON.parse(
@@ -329,8 +326,10 @@ describe.skipIf(!HAS_DB)("cinatra#2046 — the Drupal repair producer (pin activ
     expect(row!.successor_gate_id).toBeNull();
   });
 
+  // "the release's" in the title below means the pinned commit/tree; the title
+  // stays as the kits recorded it.
   it("PINNED: with the release's declared lifecycle block, the SAME drive routes producer_repair and dispatches to the drupal-agent template", async () => {
-    const { cr, resourceId } = await driveDrupalChangesRequest(DRUPAL_AGENT_LIFECYCLE);
+    const { cr } = await driveDrupalChangesRequest(DRUPAL_AGENT_LIFECYCLE);
     if (!cr.ok) throw new Error("unreachable");
 
     // THE PIN'S WHOLE POINT: the route flips off the manifest declaration alone.
@@ -356,14 +355,18 @@ describe.skipIf(!HAS_DB)("cinatra#2046 — the Drupal repair producer (pin activ
     expect(run.template_id).toBe(drupalTemplateId);
     expect(run.source_type).toBe("lifecycle_repair");
 
-    // The dispatched run carries the delivered request, and the CMS task text
-    // names the DRUPAL node the repair has to re-drive.
+    // The dispatched run carries the delivered request, and the reviewer's
+    // findings in the input the pinned commit/tree declares (cinatra#4424), not a CMS task.
     const inputParams = JSON.parse(run.input_params) as {
       task?: string;
+      instructions?: string;
       lifecycleRepairRequest?: unknown;
     };
     expect(inputParams.lifecycleRepairRequest).toBeDefined();
-    expect(inputParams.task).toContain(resourceId);
+    expect(inputParams.instructions).toBe(
+      `${REPAIR_FINDINGS_TEXT_LEAD}\n\n1. tighten the node title and fix the body's second paragraph`,
+    );
+    expect(inputParams.task).toBeUndefined();
 
     const row = await repairRow(cr.repairId);
     expect(row!.route).toBe("producer_repair");

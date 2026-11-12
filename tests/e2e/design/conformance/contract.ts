@@ -22,6 +22,7 @@ import { expect, request as playwrightRequest, test, type Locator, type Page } f
 import { RUN_ELIGIBILITY_AGENT, RUN_ELIGIBILITY_CONNECTOR, RUN_ELIGIBILITY_MISSING } from "../../../../src/app/design-fixtures/conformance/agent-run-eligibility-fixture-data";
 import { HYDRATION_TIMEOUT_MS } from "../../config/hydration";
 import { TOAST_DRIVER } from "./toast-driver";
+import { recurrenceSelectorsDriver } from "./scheduling-recurrence-driver";
 import { AGENT_ASSIGNMENT_SKILLS_DRIVER } from "./scope-assignment-skills-driver";
 import {
   BUTTON_SURFACE_DRIVER,
@@ -108,6 +109,7 @@ import {
   type ArtifactKindDisplay,
   type ArtifactKindDisplaySurfaceId,
 } from "./artifact-review-displays";
+import { kindDisplayFieldDrivers } from "./artifact-review-display-readings";
 import {
   LIFECYCLE_CHAT_COMPOSER_MOUNT,
   type LifecycleComposerRowMount,
@@ -803,7 +805,7 @@ export function reviewTargetHeaderDriver(
 // readings, and one family factory over one fixture list drives all nine, the
 // same shape `cardDriver` and `suggestionChipDriver` already give.
 //
-// EVERY CONTROL PRESSED HERE IS THE SHIPPED ONE. `confirm-schedule-proposal`,
+// EVERY CONTROL PRESSED HERE IS THE SHIPPED ONE. `confirm-schedule -> scheduled`,
 // `save-schedule-changes` and `cancel-trigger-schedule` are literals of
 // packages/agents/src/schedule-proposal-card.tsx and testid-contract.json
 // requires each of them in that file, so a driver naming a control the product
@@ -883,7 +885,7 @@ async function changeARow(root: Locator): Promise<void> {
  *  carrying the reader's. */
 const EDITED_ROWS = JSON.stringify({ kind: "immediate" });
 
-const CONFIRM_CONTROL = '[data-action="confirm-schedule-proposal"]';
+const CONFIRM_CONTROL = '[data-action="confirm-schedule -> scheduled"]';
 const SAVE_CONTROL = '[data-action="save-schedule-changes"]';
 
 export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): SurfaceDriver {
@@ -2437,6 +2439,20 @@ const SCHEDULING_STEP_CONFIGURED_DRIVER: SurfaceDriver = {
 };
 
 // ---------------------------------------------------------------------------
+// The scheduling step's recurrence selectors: four surfaces of the components
+// drawing that declare fields only, driven by recurrenceSelectorsDriver
+// (scheduling-recurrence-driver.ts) from the readings of
+// src/app/design-fixtures/conformance/scheduling-recurrence-fixture-data.ts.
+//
+// The component they bind is the shared `RecurrenceFrequencySelectors` that the
+// in-flow scheduling step and the schedule card both draw. The conformance
+// harness mounts it in the four readings and the two anti-alias probes
+// (src/app/design-fixtures/conformance/scheduling-recurrence-fixtures.tsx), so
+// each driver is bound directly and runs in the design suite;
+// scripts/design/__tests__/scheduling-recurrence-mount.test.mjs holds that.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
 // App-shell drivers adopted with the cinatra#3057 pin reconciliation:
 // `sidebar-assistants-entry` (conformance/app.json) and
 // `breadcrumb-entity-resolution` (conformance/app-components.json). Both name
@@ -3003,10 +3019,14 @@ function kindDisplayKindState(surface: string, kind: string): StateAssert {
  *     all."
  *   - §XI: "Where a display divides one artifact into readings, they are the
  *     design system's tabs … never a toggle and never a segmented control."
- *   - the one field the manifest binds, addressed through the binding the
+ *   - every field the manifest binds, addressed through the binding the
  *     display names on itself — the `data-field="<name>=<source>"` convention the
  *     shipped review target already carries — so a display bound to the wrong
- *     source cannot resolve the locator at all.
+ *     source cannot resolve the locator at all. A field the drawing binds only
+ *     once the review is continued is read on the continued mount, and its
+ *     absence on the open one (`continuedOnlyField`). A field the drawing binds
+ *     in several readings gets one driver, from all of its declarations
+ *     (`kindDisplayFieldDrivers` in artifact-review-display-readings.ts).
  *   - the one action the manifest declares, pressed on the control that declares
  *     exactly that action AND that outcome (`declaredAction`), so a driver
  *     cannot press one control and report another one's outcome.
@@ -3037,19 +3057,20 @@ function artifactKindDisplayDriver(row: ArtifactKindDisplay): SurfaceDriver {
     states: {},
   };
 
-  const field = row.field;
-  if (field !== null) {
-    driver.fields[field.name] = {
-      source: field.source,
-      assert: async (_page, root) => {
-        const bound = kindDisplayPanel(root, row.surface).locator(
-          `[data-field="${field.name}=${field.source}"]`,
-        );
-        await expect(bound).toHaveCount(1);
-        await expect(bound).toBeVisible();
-      },
-    };
-  }
+  // artifact-review-display-readings.ts groups the row's declarations by name
+  // and picks the assertion for each name's reading; this map only says what
+  // each of the three assertions does.
+  driver.fields = kindDisplayFieldDrivers(row.surface, row.fields, {
+    present: (binding) => async (_page: Page, root: Locator) => {
+      const bound = kindDisplayPanel(root, row.surface).locator(binding);
+      await expect(bound).toHaveCount(1);
+      await expect(bound).toBeVisible();
+    },
+    continuedOnly: (binding) => continuedOnlyField(row.surface, binding),
+    skip: (reason) => async () => {
+      test.skip(true, reason);
+    },
+  });
 
   const action = row.action;
   if (action !== null) {
@@ -3063,6 +3084,31 @@ function artifactKindDisplayDriver(row: ArtifactKindDisplay): SurfaceDriver {
   }
 
   return driver;
+}
+
+/**
+ * A field the drawing binds only in the continued reading. §XI.5 and §XI.6 draw
+ * "Open live dashboard" (open-live = artifact.sourceUrl) only once the review
+ * is continued: "while a decision is still open the proposal is not the live
+ * dashboard, so the display offers no way to open one". So the binding is
+ * asserted ABSENT on the open reading, which must itself be drawn (on a missing
+ * mount a zero count proves nothing), and PRESENT once on the settled mount.
+ */
+function continuedOnlyField(
+  surface: string,
+  binding: string,
+): (page: Page, root: Locator) => Promise<void> {
+  return async (page, root) => {
+    await expect(page.locator(kindDisplayMount(surface, "populated"))).toHaveCount(1);
+    await expect(kindDisplayPanel(root, surface)).toBeVisible();
+    await expect(kindDisplayPanel(root, surface).locator(binding)).toHaveCount(0);
+    const settled = page.locator(kindDisplayMount(surface, "continued"));
+    await expect(settled).toHaveCount(1);
+    await expect(settled.locator('[data-conformance-id="settled-marker"]')).toBeVisible();
+    const bound = kindDisplayPanel(settled, surface).locator(binding);
+    await expect(bound).toHaveCount(1);
+    await expect(bound).toBeVisible();
+  };
 }
 
 /** Assert the display draws no tab strip at all — a surface the drawing gives
@@ -3530,10 +3576,11 @@ const RUN_STEP_KIND_ASSERT: Record<RunStepKind, (row: RunStepRailRow) => RunStep
     }
   },
 
-  // Section I.1 — "one row per stored idea no draft has used ... the idea's
-  // first line as its title over the idea's own text", with "Generate new ideas"
-  // and the primary Continue over a hairline floor, and "Nothing is selected for
-  // them".
+  // Section I.1 — "one row per entry the agent's declared list offers ... each
+  // row carrying the title the declaration binds over the entry's own detail
+  // line", and "Nothing is selected for them". Under the rows sits the primary
+  // Continue "and nothing else, because the host draws one control on a gate
+  // page" — so the host draws no Generate new ideas of its own.
   idea: (row) => async (_page, root) => {
     const panel = runStepPanel(root, row.surface);
     const rows = panel.locator('[data-conformance-id="run-idea-row"]');
@@ -3541,7 +3588,7 @@ const RUN_STEP_KIND_ASSERT: Record<RunStepKind, (row: RunStepRailRow) => RunStep
     await expect(panel.locator('[data-conformance-id="run-idea-row"][aria-selected="true"]')).toHaveCount(0);
     await expect(
       panel.locator('[data-action="generate-ideas -> ideas-stored"]'),
-    ).toBeVisible();
+    ).toHaveCount(0);
   },
 
   // Section I.2 — "Every row carries the artifact's title, the type that owns
@@ -8003,6 +8050,10 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "approvals-marketplace-states": APPROVALS_MARKETPLACE_STATES_DRIVER,
   "scheduling-step": SCHEDULING_STEP_DRIVER,
   "scheduling-step-configured": SCHEDULING_STEP_CONFIGURED_DRIVER,
+  "scheduling-step-quarterly": recurrenceSelectorsDriver("scheduling-step-quarterly"),
+  "scheduling-step-yearly": recurrenceSelectorsDriver("scheduling-step-yearly"),
+  "scheduling-step-configured-monthly": recurrenceSelectorsDriver("scheduling-step-configured-monthly"),
+  "scheduling-step-configured-quarterly": recurrenceSelectorsDriver("scheduling-step-configured-quarterly"),
   "sidebar-assistants-entry": SIDEBAR_ASSISTANTS_ENTRY_DRIVER,
   "breadcrumb-entity-resolution": BREADCRUMB_ENTITY_RESOLUTION_DRIVER,
   "button": BUTTON_SURFACE_DRIVER, // The components drawing's shared primitives, one mount each (cinatra#3189).
