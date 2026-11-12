@@ -46,14 +46,16 @@ import { pickArtifactRenderer } from "../renderer-dispatch";
 const REPO_ROOT = resolve(__dirname, "..", "..", "..", "..", "..");
 const ORG = "org_w3_reachability";
 
-// EVERY DISPLAY THE WAVE STEPS TO VERSION 2, not a sample of them. The host's
-// display contract moves to version 2 in this change, and a pack mounts under
-// it only if the generated map says so, so the rung below has to name each of
-// the eleven — the nine shipped displays acceptance item 1 counts, plus the two
-// this wave adds — or the step is asserted for the kinds someone happened to
-// list and merely assumed for the rest. Each row names the pack, the object
-// type a row of the kind carries (read off the registry, never guessed), and a
-// form the pack accepts.
+// EVERY DISPLAY THE WAVE STEPS TO VERSION 2 THAT A TYPE STILL REACHES, not a
+// sample of them. The host's display contract moves to version 2 in this
+// change, and a pack mounts under it only if the generated map says so, so the
+// rung below has to name each of them or the step is asserted for the kinds
+// someone happened to list and merely assumed for the rest. Each row names the
+// pack, the object type a row of the kind carries (read off the registry, never
+// guessed), and a form the pack accepts. The CMS snapshot pack was the
+// eleventh; it no longer declares an object type (its page half moved to the
+// website pack, cinatra#4366), so its display is reached by representation and
+// is measured in its own describe below.
 const KINDS = [
   // the two new displays
   ["screenshot-artifact", "@cinatra-ai/screenshot-artifact:screenshot", "image/png"],
@@ -71,7 +73,6 @@ const KINDS = [
   ["zip-artifact", "@cinatra-ai/zip-artifact:artifact", "application/zip"],
   // the three moved onto the content channel
   ["json-artifact", "@cinatra-ai/json-artifact:artifact", "application/json"],
-  ["cms-snapshot-artifact", "@cinatra-ai/cms-snapshot-artifact:cms-page", "application/vnd.cinatra.cms-fields+json"],
   ["text-artifact", "@cinatra-ai/text-artifact:artifact", "text/csv"],
 ] as const;
 
@@ -219,5 +220,43 @@ describe("a display is reachable only through a type some package registers (#30
     // The wave's one known orphan was the deck's and the re-pin closed it.
     // Anything appearing in this list now is new.
     expect(orphaned).toEqual([]);
+  });
+});
+
+// THE CMS SNAPSHOT DISPLAY AFTER THE PAGE HALF LEFT (cinatra#4366). The pack
+// dropped its `cms-page` type, its list row and the `application/json` page
+// form; what stays is the reviewed-fields display. A pack that declares no type
+// registers no semantic renderer, so the display is reached through the
+// org-scoped representation provider for the fields form, and its detail entry
+// moved to props version 5. Each fact is read off the registry or the
+// generated map, never assumed.
+describe("the CMS snapshot display is reached by its fields form, not by a type (#4366)", () => {
+  const CMS = "@cinatra-ai/cms-snapshot-artifact";
+  const CMS_FIELDS = "application/vnd.cinatra.cms-fields+json";
+
+  afterEach(() => {
+    objectTypeRegistry.removeByPackage(CMS);
+    semanticRendererRegistry.removeByPackage(CMS);
+    matcherManifestRegistry.removeByPackage(CMS);
+  });
+
+  it("the pack registers no object type and no semantic renderer", () => {
+    expect(registerArtifactExtensionDir(resolve(REPO_ROOT, "extensions/cinatra-ai/cms-snapshot-artifact"))).toBe(false);
+    expect(objectTypeRegistry.getTypesForPackage(CMS)).toEqual([]);
+    expect(objectTypeRegistry.getRegisteringPackage(CMS + ":cms-page")).toBeNull();
+    expect(semanticRendererRegistry.listByPackage(CMS)).toEqual([]);
+  });
+
+  it("its detail entry is props version 5 over the fields form only", () => {
+    const detail = GENERATED_ARTIFACT_RENDERERS[CMS + "::detail"];
+    expect(detail?.propsApiVersion).toBe(5);
+    expect(detail?.representations).toEqual([CMS_FIELDS]);
+  });
+
+  it("its preview stays props version 2 over the fields form only, and it ships no list row", () => {
+    const preview = GENERATED_ARTIFACT_RENDERERS[CMS + "::preview"];
+    expect(preview?.propsApiVersion).toBe(2);
+    expect(preview?.representations).toEqual([CMS_FIELDS]);
+    expect(Object.hasOwn(GENERATED_ARTIFACT_RENDERERS, CMS + "::listRow")).toBe(false);
   });
 });
