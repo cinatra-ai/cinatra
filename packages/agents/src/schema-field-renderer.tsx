@@ -394,12 +394,49 @@ function isValidEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
+/**
+ * How a number field reads its typed text (cinatra#4244).
+ *
+ * ON A GATE - inside `GateContinueHoldContext`, which only the run page's
+ * schema-drawn gate provides - text that is no finite number (`1e309`, NaN)
+ * is no answer: JSON cannot carry it. Its flush hands over `undefined`, which
+ * also clears a value flushed on an earlier press, and the field shows the
+ * number error. EVERYWHERE ELSE (setup gates, grouped setup forms) the reading
+ * is main's, unchanged: only NaN is an error and is not handed over.
+ */
+export function numberFlushValue(
+  text: string,
+  kind: "number" | "integer",
+  onGate: boolean,
+): { emit: false } | { emit: true; value: number | undefined } {
+  if (text === "") return { emit: true, value: undefined };
+  const parsed = kind === "integer" ? parseInt(text, 10) : Number(text);
+  if (onGate) return { emit: true, value: Number.isFinite(parsed) ? parsed : undefined };
+  return Number.isNaN(parsed) ? { emit: false } : { emit: true, value: parsed };
+}
+
+export function numberFieldError(
+  text: string,
+  kind: "number" | "integer",
+  onGate: boolean,
+): string | null {
+  if (text.length === 0) return null;
+  const parsed = kind === "integer" ? parseInt(text, 10) : Number(text);
+  const invalid = onGate ? !Number.isFinite(parsed) : Number.isNaN(parsed);
+  return invalid ? "Enter a valid number." : null;
+}
+
 export function SchemaFieldRenderer(props: Props) {
   const { fieldName, schema, value, onChange, disabled, required, error: callerError, context, onBusyChange, saveNow, assistResponseKey, mode, registerFlush, hideSubmit, bypassRegistry, onDraftChange } = props;
 
   const title = (schema as { title?: string }).title;
   const description = (schema as { description?: string }).description;
   const label = resolveFieldLabel(fieldName, title, description);
+  // cinatra#4244 - on the run page's schema-drawn gate a number that is not
+  // finite is no answer (`numberFlushValue`); elsewhere the reading is main's.
+  const onGate = useContext(GateContinueHoldContext);
+  const onGateRef = useRef(onGate);
+  useEffect(() => { onGateRef.current = onGate; }, [onGate]);
 
   // Local state for text-entry inputs (string, url, email, number, array).
   // onChange in HITL context calls approveReviewTask; these inputs need local
@@ -488,12 +525,11 @@ export function SchemaFieldRenderer(props: Props) {
     registerFlush(async () => {
       const v = localValueRef.current;
       if (t === "number" || t === "integer") {
-        if (v === "") { onChangeRef.current(undefined); return; }
-        const parsed = t === "integer" ? parseInt(v, 10) : Number(v);
-        // A box that holds no finite number hands over NOTHING - `undefined`,
-        // not silence - so a value flushed on an earlier press never stays
-        // behind and is sent again (cinatra#4244).
-        onChangeRef.current(Number.isFinite(parsed) ? parsed : undefined);
+        // On a gate a box that holds no finite number hands over `undefined`,
+        // so a value flushed on an earlier press never stays behind and is sent
+        // again; elsewhere main's reading (cinatra#4244, `numberFlushValue`).
+        const read = numberFlushValue(v, t, onGateRef.current);
+        if (read.emit) onChangeRef.current(read.value);
       } else if (t === "array") {
         onChangeRef.current(v.split("\n").map((s) => s.trim()).filter(Boolean));
       } else {
@@ -732,14 +768,15 @@ export function SchemaFieldRenderer(props: Props) {
 
   // Number / integer
   if (type === "number" || type === "integer") {
-    // A number that is not finite (`1e309`) is no answer either: JSON cannot carry it (cinatra#4244).
-    const numError = localValue.length > 0 && !Number.isFinite(type === "integer" ? parseInt(localValue, 10) : Number(localValue)) ? "Enter a valid number." : null;
+    // On a gate a number that is not finite (`1e309`) is no answer either:
+    // JSON cannot carry it. Elsewhere main's reading (cinatra#4244).
+    const numError = numberFieldError(localValue, type, onGate);
     const displayError = callerError ?? numError;
     const submitNum = () => {
       const raw = localValue;
       if (raw === "") return handleSubmit(undefined);
       const parsed = type === "integer" ? parseInt(raw, 10) : Number(raw);
-      if (Number.isFinite(parsed)) return handleSubmit(parsed);
+      if (numberFieldError(raw, type, onGate) === null) return handleSubmit(parsed);
     };
     return (
       <div className="flex flex-col gap-2">
@@ -1281,15 +1318,16 @@ function StructuredObjectField(props: ObjectFieldProps) {
   // its field shows "Enter a valid number." and the Continue is held, so it is
   // never dropped or sent as `null` (cinatra#4244). This covers the number
   // fields this object draws itself. A number inside a NESTED object is not
-  // held: it shows the same message, its flush hands over `undefined` (also
-  // clearing a value flushed on an earlier press), and the nested value is
-  // sent without it (never as `null`).
+  // held: on this gate path it shows the same message, its flush hands over
+  // `undefined` (also clearing a value flushed on an earlier press), and the
+  // nested value is sent without it (never as `null`). Off the gate path the
+  // number field keeps main's reading (`numberFlushValue`).
   const typedNumberInvalid = visible.some((key) => {
     const kind = ((ownSubValue(properties, key) ?? {}) as { type?: unknown }).type;
     if (kind !== "number" && kind !== "integer") return false;
     const current = currentSub(key);
     if (typeof current !== "string" || current === "") return false;
-    return !Number.isFinite(kind === "integer" ? parseInt(current, 10) : Number(current));
+    return numberFieldError(current, kind as "number" | "integer", true) !== null;
   });
   const held =
     holdOn &&
