@@ -92,16 +92,20 @@ const row = (c: HTMLElement) => c.querySelector<HTMLElement>("[data-run-recommen
 /**
  * Every element from the row's root down to (but not including) a pill.
  *
- * THE STEP'S OWN FLOOR IS NOT A CARD, and it is excluded here rather than
- * silently matched (cinatra#3047, leg 7). The drawing draws the Continue row on
- * a rule of its own — `justify-content:flex-end; padding-top:12px; border-top:
- * 1px solid var(--line)` — which is a FLOOR under the list, not a frame around
- * it: one hairline on one edge, no ground, no radius, no shadow and no padding
- * that could box the pills. This scan reads "card chrome" off class names
- * alone, so a one-edge rule reads to it exactly like a four-edge border; the
- * exclusion is by the floor's own anchor, and the rule it must carry is
- * asserted positively in `skills-step-chrome-per-drawing.test.tsx` — so nothing
- * this scan stops looking at goes unwatched.
+ * THE CONTINUE FLOOR IS NOT PANEL CHROME (cinatra#3062, convergence round;
+ * cinatra#3047, leg 7). §V draws the control's own wrapper verbatim —
+ * `display:flex; justify-content:flex-end; margin-top:12px; padding-top:12px;
+ * border-top:1px solid var(--line)` — so its hairline rule and the padding
+ * beneath it are the DRAWING's, not a card this step wrapped itself in: one
+ * hairline on one edge, no ground, no radius, no shadow and no padding that
+ * could box the pills. What this file bans is a panel around the step: a
+ * border, a ground or a radius that closes the row off from the column it sits
+ * in. This scan reads "card chrome" off class names alone, so a one-edge rule
+ * reads to it exactly like a four-edge border; the floor is excluded by its own
+ * anchor rather than by loosening the pattern, so a real card would still be
+ * caught, and the rule the floor must carry is asserted positively in
+ * `skills-step-chrome-per-drawing.test.tsx` — so nothing this scan stops
+ * looking at goes unwatched.
  */
 function frameElements(c: HTMLElement): HTMLElement[] {
   const root = row(c);
