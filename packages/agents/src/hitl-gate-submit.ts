@@ -546,3 +546,88 @@ export function applyAttachmentEnvelopeUserResponseOnly(
   const wrapped = wrapUserResponseWithAttachments(existing, attachments);
   return { ...payload, userResponse: wrapped.userResponse };
 }
+
+// ---------------------------------------------------------------------------
+// A schema-drawn gate that asks for fields of its own (cinatra#4244)
+// ---------------------------------------------------------------------------
+
+/** Keys every approval payload carries; a schema naming only these asks nothing. */
+const APPROVAL_BOOKKEEPING_KEYS: ReadonlySet<string> = new Set(["approved", "approvedAt"]);
+
+/**
+ * The fields an object-typed gate schema asks the reader to fill (cinatra#4244).
+ *
+ * A gate drawn by the schema-field fallback with an object schema is one of two
+ * things. With no declared properties (or only the `approved` / `approvedAt`
+ * bookkeeping keys) it is a bare step confirmation: there is nothing to fill,
+ * and the surface draws a Continue alone. With declared properties it is an
+ * input gate - a WayFlow InputMessageNode such as "Pick the brand voice"
+ * declaring `brandVoice` - and its fields must be drawn, or the reader is
+ * shown a Continue with nothing to fill in while the run waits for an answer.
+ *
+ * Returns the declared, visible property names other than the bookkeeping
+ * keys, in declaration order. Anything that is not an object schema with a
+ * `properties` map asks for nothing.
+ */
+export function gateSchemaFieldNames(schema: unknown): string[] {
+  if (schema === null || typeof schema !== "object" || Array.isArray(schema)) return [];
+  const { type, properties } = schema as { type?: unknown; properties?: unknown };
+  if (type !== "object") return [];
+  if (properties === null || typeof properties !== "object" || Array.isArray(properties)) {
+    return [];
+  }
+  return Object.entries(properties as Record<string, unknown>)
+    .filter(([name, sub]) => {
+      if (APPROVAL_BOOKKEEPING_KEYS.has(name)) return false;
+      const hidden =
+        sub !== null &&
+        typeof sub === "object" &&
+        (sub as { "x-hidden"?: unknown })["x-hidden"] === true;
+      return !hidden;
+    })
+    .map(([name]) => name);
+}
+
+/**
+ * The approval payload for a non-setup gate whose fields the schema-field
+ * fallback draws (cinatra#4244).
+ *
+ * `next` is what the drawn object field submits: the object of its declared
+ * fields, or `undefined` when every field is optional and was left blank.
+ *
+ *  - The blank answer sends `{ approved, approvedAt }`, the payload the
+ *    Continue-only card sent for this gate before its fields were drawn.
+ *  - A filled answer sends its fields plus `approved` / `approvedAt`.
+ *  - When the gate asks for exactly ONE string field and that field was
+ *    filled, its text is also the WayFlow resume text (`userResponse`). The
+ *    server forwards `userResponse` to the flow, and without it the flow is
+ *    handed "[Approved by operator]" in place of the answer. This is the
+ *    convention the idea-selection renderer follows for its one output. A
+ *    `userResponse` the answer already carries is kept as it is.
+ */
+export function buildSchemaFieldGatePayload(args: {
+  schema: unknown;
+  next: unknown;
+  now?: string;
+}): Record<string, unknown> {
+  const answer =
+    args.next !== null && typeof args.next === "object" && !Array.isArray(args.next)
+      ? (args.next as Record<string, unknown>)
+      : {};
+  const payload: Record<string, unknown> = {
+    ...answer,
+    approved: true,
+    approvedAt: args.now ?? new Date().toISOString(),
+  };
+  if (typeof answer.userResponse === "string") return payload;
+  const fields = gateSchemaFieldNames(args.schema);
+  if (fields.length !== 1) return payload;
+  const only = fields[0]!;
+  const properties = (args.schema as { properties: Record<string, unknown> }).properties;
+  const declared = properties[only] as { type?: unknown } | null | undefined;
+  const value = answer[only];
+  if (declared?.type === "string" && typeof value === "string" && value.trim() !== "") {
+    payload.userResponse = value;
+  }
+  return payload;
+}

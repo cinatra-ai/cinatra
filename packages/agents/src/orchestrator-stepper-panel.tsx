@@ -107,6 +107,8 @@ import { applyAttachmentEnvelope } from "./attachment-envelope-payload";
 // #817 context-selector envelope synthesis are shared with
 // agentic-run-panel so both surfaces submit byte-identical payloads.
 import {
+  buildSchemaFieldGatePayload,
+  gateSchemaFieldNames,
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
@@ -1050,10 +1052,28 @@ function HitlApprovalCard({
   // JSON box) and emits a REAL object, and suppressing it would leave an
   // object-typed setup field with no input at all, so the loop would re-emit
   // the same gate forever. Scope the guard to non-setup gates.
+  //
+  // AND NOT A GATE THAT DECLARES FIELDS OF ITS OWN (cinatra#4244). A WayFlow
+  // InputMessageNode with no renderer of its own reaches this card on the same
+  // fallback id with an object schema, but its schema DECLARES the fields it
+  // asks for ("Pick the brand voice" declares `brandVoice`). Read as a bare
+  // confirmation, its fields were never drawn: the card showed a Continue with
+  // nothing to fill in, after a Continue and after a reload alike, while the
+  // run waited for the answer. Only a schema that declares nothing to fill is
+  // the bare confirmation; a gate that declares fields is drawn by the
+  // fallback, which owns its one Continue, and submits through
+  // `submitSchemaFieldGate` below. (`gateSchemaFieldNames` reads an object
+  // schema only, so the gate below is an object gate as well.)
+  const gateFieldNames = gateSchemaFieldNames(interruptContext.schema);
   const isGenericObjectSchema =
     interruptContext.xRenderer === SCHEMA_FIELD_FALLBACK_RENDERER_ID &&
     (interruptContext.schema as { type?: string })?.type === "object" &&
-    !isSetupGateTaskId(interruptContext.reviewTaskId);
+    !isSetupGateTaskId(interruptContext.reviewTaskId) &&
+    gateFieldNames.length === 0;
+  const fallbackGateAsksForFields =
+    interruptContext.xRenderer === SCHEMA_FIELD_FALLBACK_RENDERER_ID &&
+    !isSetupGateTaskId(interruptContext.reviewTaskId) &&
+    gateFieldNames.length > 0;
   // Keep the outer Continue button for last-step gates whose renderer doesn't
   // own a button, including the text-envelope branch in ReviewerAgentOutputRenderer
   // and schema-field-fallback when no renderer matches. The outer Continue is
@@ -1174,6 +1194,29 @@ function HitlApprovalCard({
       const m = err instanceof Error ? err.message : "unknown";
       if (isAlreadyResolvedError(m)) return "accepted";
       throw err;
+    }
+  };
+
+  // THE SEND OF A NON-SETUP GATE WHOSE FIELDS THE FALLBACK DRAWS (cinatra#4244).
+  // The drawn object field owns the gate's one Continue and hands its answer
+  // here. The press is the same press the Continue-only card made for this
+  // gate: the run-name check, the parent's spinner while the run takes the
+  // answer, and the spinner released when the send is refused or fails. A
+  // failed send is told the way that card told it (a toast), because the
+  // field that pressed was unmounted behind the spinner. The payload is the
+  // approval with the answer in it (`buildSchemaFieldGatePayload`).
+  const submitSchemaFieldGate = async (next: unknown): Promise<void> => {
+    if (!(await checkRunName())) return;
+    onApproved?.();
+    try {
+      const outcome = await submitSetupFieldPayload(
+        buildSchemaFieldGatePayload({ schema: interruptContext.schema, next }),
+        undefined,
+      );
+      if (outcome === "blocked") onApproveRejected?.();
+    } catch {
+      onApproveRejected?.();
+      toast.error("Could not continue this run.");
     }
   };
 
@@ -1366,6 +1409,13 @@ function HitlApprovalCard({
                     }
                   }
                 : async (next: unknown) => {
+                    // cinatra#4244 - a non-setup gate whose declared fields the
+                    // fallback draws is answered as an approval, never through
+                    // the setup-loop wrap below.
+                    if (fallbackGateAsksForFields) {
+                      await submitSchemaFieldGate(next);
+                      return;
+                    }
                     // Setup-loop fallback path. The SchemaFieldRenderer for
                     // primitive types (string, number, array, boolean) emits
                     // onChange(primitive). The approveReviewTask handler's
