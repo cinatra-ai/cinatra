@@ -490,7 +490,10 @@ export function SchemaFieldRenderer(props: Props) {
       if (t === "number" || t === "integer") {
         if (v === "") { onChangeRef.current(undefined); return; }
         const parsed = t === "integer" ? parseInt(v, 10) : Number(v);
-        if (Number.isFinite(parsed)) onChangeRef.current(parsed);
+        // A box that holds no finite number hands over NOTHING - `undefined`,
+        // not silence - so a value flushed on an earlier press never stays
+        // behind and is sent again (cinatra#4244).
+        onChangeRef.current(Number.isFinite(parsed) ? parsed : undefined);
       } else if (t === "array") {
         onChangeRef.current(v.split("\n").map((s) => s.trim()).filter(Boolean));
       } else {
@@ -1278,8 +1281,9 @@ function StructuredObjectField(props: ObjectFieldProps) {
   // its field shows "Enter a valid number." and the Continue is held, so it is
   // never dropped or sent as `null` (cinatra#4244). This covers the number
   // fields this object draws itself. A number inside a NESTED object is not
-  // held: it shows the same message, its flush hands over nothing, and the
-  // nested value is sent without it (never as `null`).
+  // held: it shows the same message, its flush hands over `undefined` (also
+  // clearing a value flushed on an earlier press), and the nested value is
+  // sent without it (never as `null`).
   const typedNumberInvalid = visible.some((key) => {
     const kind = ((ownSubValue(properties, key) ?? {}) as { type?: unknown }).type;
     if (kind !== "number" && kind !== "integer") return false;
