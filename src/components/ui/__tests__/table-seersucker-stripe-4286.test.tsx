@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 // THE TABLE'S SEERSUCKER STRIPE, IN BOTH PALETTES (cinatra#4286).
 // ---------------------------------------------------------------------------
-// THE DRAWING. specs/app-components.html, section "Table" (cinatra-ai/design,
+// THE DRAWING. specs/app-components.html, section "Table" (the approved design spec,
 // app-components 0.8.0): "Alternate rows carry the seersucker stripe in both
 // palettes. Every second body row is drawn with the fabric stripe of
 // Application Design III: over the row's own ground, a one-pixel thread at 6px
