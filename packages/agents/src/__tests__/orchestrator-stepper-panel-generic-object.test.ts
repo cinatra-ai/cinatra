@@ -95,6 +95,18 @@ describe("orchestrator-stepper-panel — isGenericObjectSchema Continue button",
     expect(expr).toMatch(/!\s*isSetupGateTaskId/);
   });
 
+  // cinatra#4244 - a non-setup gate whose object schema DECLARES fields of its
+  // own (a WayFlow input gate with no renderer, e.g. "Pick the brand voice") is
+  // not a bare confirmation: suppressing the renderer drew a Continue with
+  // nothing to fill in. Only a schema that declares no field is generic. The
+  // drawn behaviour is pinned by orchestrator-stepper-panel-next-input-gate-4244.
+  it("EXCLUDES gates that declare fields of their own from isGenericObjectSchema (cinatra#4244)", () => {
+    const match = SRC.match(/isGenericObjectSchema\s*=\s*([^;]+);/);
+    expect(match, "isGenericObjectSchema must be declared").toBeTruthy();
+    expect(match![1]).toMatch(/gateFieldNames\.length\s*===\s*0/);
+    expect(SRC).toMatch(/gateFieldNames\s*=\s*gateSchemaFieldNames\(\s*interruptContext\.schema\s*\)/);
+  });
+
   it("hides HitlConversationPanel when isGenericObjectSchema is true", () => {
     // The AI-assist panel must be hidden for generic-object gates because
     // there is nothing for the user to refine — they only click Continue.
