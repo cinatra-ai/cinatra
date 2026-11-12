@@ -280,6 +280,25 @@ describe("applyJustSubmittedSuppression", () => {
       clearSuppression: false,
     });
   });
+
+  // cinatra#3080 pre-round: two context slots in a row (Brand Voice, then Draft
+  // Context) are two gates of ONE renderer. After Continue on the first, the
+  // second gate arrives with the same renderer and a NEW review task. It is the
+  // next question, not the stale one, and the open page must draw it.
+  const nextGateSameRenderer: HitlGateContext = { ...gate, reviewTaskId: "rt-2" };
+
+  it("lets the NEXT gate of the same renderer through (a new review task) and signals the caller to clear", () => {
+    expect(
+      applyJustSubmittedSuppression(nextGateSameRenderer, "@cinatra-ai/x:output", "rt-1"),
+    ).toEqual({ context: nextGateSameRenderer, clearSuppression: true });
+  });
+
+  it("still suppresses the answered gate itself (same renderer, same review task)", () => {
+    expect(applyJustSubmittedSuppression(gate, "@cinatra-ai/x:output", "rt-1")).toEqual({
+      context: null,
+      clearSuppression: false,
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
