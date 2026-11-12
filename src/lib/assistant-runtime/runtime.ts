@@ -58,35 +58,25 @@ import {
   issueTurnLentActionGrant,
   type TurnBoundCard,
 } from "@/lib/lifecycle/bound-card-binding";
-import {
-  buildTurnSkillDeliveryRows,
-  type TurnSkillDeliveryRow,
-} from "./skill-delivery-record";
+import type { TurnSkillDeliveryRow } from "./skill-delivery-record";
+// CONTRACT.md section 5.2 ("One source"): the turn's tool assembly, the one
+// function this turn and the tool-manifest report both call.
+import { assembleAssistantTurnTools } from "./turn-tool-assembly";
 import {
   describeLlmRuntimeUnavailability,
   stream,
-  selectSkillDeliveryAdapter,
-  deliverInjectedSkillsInline,
   resolveBoundDefaultAdapter,
   BoundDefaultProviderUnavailableError,
   resolveProviderAdapter,
-  resolveChatExternalMcpTools,
-  buildLlmMcpServerToolForChat,
-  buildLlmMcpServerToolForWidget,
   checkPublicMcpReachability,
 } from "@cinatra-ai/llm";
-import type { LlmTool, LlmProvider, LlmCapabilityRequirement, LlmToolReduction } from "@cinatra-ai/llm";
+import type { LlmToolReduction } from "@cinatra-ai/llm";
 // cinatra#2091 (epic #2086 S4): the assistant runtime routes through the ONE
 // typed injection contract + the provider delivery seam. Its former direct
 // `buildSkillTools` call was the last production bypass of that seam.
-import {
-  resolveInjectedSkillSet,
-  injectedCatalogSkillIds,
-  injectedSkillDrops,
-  injectedSkillMembers,
-  isInlineSkillMechanism,
-  type InjectionAuthorization,
-  type InjectionResolverPorts,
+import type {
+  InjectionAuthorization,
+  InjectionResolverPorts,
 } from "@cinatra-ai/skills/injection";
 import {
   assertScriptedProviderNotProduction,
@@ -136,7 +126,6 @@ import { buildAttachmentResolverPorts } from "@/lib/artifacts/attachment-resolve
 // sanitized actionable copy with an Administration pointer), never raw.
 import {
   classifyAssistantRuntimeError,
-  isAllowedByList,
   // cinatra#2580 — the per-turn no-progress guard. The agentic loop re-sends the
   // WHOLE request envelope on every step, so a turn that keeps re-issuing one
   // dead tool call bills a full ~43k-token context per round until the ceiling.
@@ -154,18 +143,6 @@ import {
   conversationOnlyNoticeFor,
 } from "./model-routing";
 import type { WidgetPrincipal } from "./widget-principal";
-
-/**
- * Type-narrowing guard: a provider with NATIVE MCP (OpenAI/Anthropic) is the
- * tool-capable set. Deriving it from the shared `isConversationOnlyProvider`
- * data list keeps one source of truth while giving TypeScript the narrowing the
- * tool-assembly calls (`buildLlmMcpServerToolFor*`, `resolveChatExternalMcpTools`,
- * all typed to `"openai" | "anthropic"`) require now that Gemini flows through to
- * the conversation-only branch instead of early-returning (cinatra#1875 AC#5).
- */
-function isNativeMcpProvider(provider: LlmProvider): provider is "openai" | "anthropic" {
-  return !isConversationOnlyProvider(provider);
-}
 
 // ---------------------------------------------------------------------------
 // Public types (unchanged from the pre-extraction runner; re-exported by
@@ -635,27 +612,6 @@ export function buildAssistantInjectionPorts(
   };
 }
 
-/**
- * A delivery adapter is an EXTENSION surface, so it can report a
- * `deliveryMode` this build has no vehicle name for. The record stays truthful
- * (`delivered`, vehicle `unknown`, raw mode preserved) rather than fabricating
- * a transport or demoting a real delivery to a drop — but an unclassifiable
- * vehicle means an operator's audit answer is degraded, so it is never silent.
- */
-function warnOnUnclassifiedVehicles(
-  rows: readonly TurnSkillDeliveryRow[],
-  provider: string,
-): void {
-  const unclassified = rows.filter((r) => r.vehicle === "unknown");
-  if (unclassified.length === 0) return;
-  console.error(
-    `[assistant-runtime] ${provider} delivery reported ${unclassified.length} ` +
-      "skill(s) under a delivery mode this build cannot classify into a vehicle " +
-      `— recorded as delivered/vehicle=unknown: ` +
-      unclassified.map((r) => `${r.skillId} (mode=${r.deliveryMode})`).join(", "),
-  );
-}
-
 // ---------------------------------------------------------------------------
 // The chat surface's self-MCP catalog state (cinatra#2771).
 //
@@ -1071,426 +1027,205 @@ export async function runAssistantTurn(
   // existing surface changes.
   send("turn_capability", { conversationOnly });
 
-  // Tool array. Conversation-only providers (Gemini, AC#5) carry NO tools; every
-  // MCP/skill assembly + the dead-ingress reachability probe is skipped for them.
-  // Tool-capable providers (OpenAI/Anthropic) assemble the full array below,
-  // byte-identical to before.
-  // cinatra#2091 S4 — the assistant declares its INTENT; the resolver derives
-  // the members (its own required injectable set) and applies the hard cap of
-  // 8 TOTAL. Resolved BEFORE the provider branch so the cap is enforced
-  // IDENTICALLY on every provider, including the conversation-only (no-native-
-  // MCP) branch that assembles no tools at all.
+  // Tool array (packages/agent-ui-protocol/CONTRACT.md section 5.2, "One
+  // source"). The assembly lives in ./turn-tool-assembly and only reads; this
+  // turn's write steps stay here. The dead-ingress probe and the lent-action
+  // grant run through `admitSelfMcpReference` and the token mint through the
+  // issuer ports, at the same points as before; the delivery record is
+  // committed after the call. The skill registration runs before the call (it
+  // used to run right after the injected skill set was resolved; that
+  // resolution reads only the assistant's injection ports, never the
+  // registration). Conversation-only providers (Gemini, AC#5) carry NO tools;
+  // every MCP/skill assembly + the dead-ingress reachability probe is skipped
+  // for them. Tool-capable providers (OpenAI/Anthropic) assemble the full
+  // array, byte-identical to before.
   const assistantAgentId = args.assistantId ?? runtimeConfig.skillIdNamespace;
   const assistantSessionId = args.sessionId ?? `assistant-turn:${randomUUID()}`;
-  const injectedSkills = await resolveInjectedSkillSet(
-    {
-      kind: "assistant",
-      agentId: assistantAgentId,
-      userId,
-      sessionId: assistantSessionId,
-    },
-    buildAssistantInjectionPorts({
-      agentId: assistantAgentId,
-      userId,
-      sessionId: assistantSessionId,
-      requiredSkillIds: runtimeConfig.skillIds,
-      // cinatra#2815 S3 — the assistant's per-scope assignments, resolved
-      // through the thread's IMMUTABLE snapshot. Imported dynamically so this
-      // runtime's static module graph (and the locked route graphs that reach
-      // it) is unchanged by a channel that only runs when a turn dispatches.
-      resolveAssignedSkillIdsForSession: async (sessionId) => {
-        const { resolveAssistantAssignedSkillIds } = await import(
-          "@/lib/assistant-assigned-skills-delivery"
-        );
-        return resolveAssistantAssignedSkillIds({
-          agentId: assistantAgentId,
-          sessionId,
-        });
-      },
-    }),
-  );
-  // The CINATRA assistant never truncates BY DESIGN: its bundle's SIZE
-  // CONTRACT (cinatra-assistant-config.ts, pinned by its test) keeps the
-  // required set at 5 slugs — at most 7 — so 5 + the personal delta = 6 ≤ the
-  // hard cap of 8. This guard therefore exists for the OTHER configs that
-  // reach this runtime: an extension-declared assistant's `skillBundle` is
-  // schema-unbounded, and a drop the resolver recorded must reach an operator
-  // rather than vanish here.
-  const injectionDrops = injectedSkillDrops(injectedSkills);
-  if (injectionDrops.length > 0) {
-    console.error(
-      `[assistant-runtime] the injection contract dropped ${injectionDrops.length} ` +
-        `skill(s) for assistant "${assistantAgentId}" — its required bundle of ` +
-        `${runtimeConfig.skillIds.length} exceeds the hard cap of 8 per request: ` +
-        injectionDrops.map((d) => `${d.skillId} (${d.reason})`).join(", "),
-    );
-  }
-
-  let tools: LlmTool[] = [];
-  // cinatra#2776 — the capability THIS turn pins on the adapter. Set to
-  // `"native_mcp"` exactly where the Cinatra self-MCP toolbox is handed over
-  // (below, once `chatCinatraMcpTool` has assembled), and left undefined
-  // otherwise. A conversation-only provider (Gemini) never assembles that tool,
-  // so it never carries the requirement either and its request stays
-  // byte-identical to before.
-  let selfMcpCapabilityRequired: LlmCapabilityRequirement | undefined;
-  let platformMcpLabel: string | undefined;
-  let platformToolsUnavailable = false;
   // cinatra#2932 (lifecycle-b W5a) — declared at TURN scope because two places
   // read it: the tool assembly, which puts the grant on the self-MCP reference,
   // and the system fragments below, which tell the model what it may press. A
   // conversation-only turn assembles no tools, so it keeps the default — no
   // grant, and nothing said about a control it could not operate.
   let turnBoundCard: TurnBoundCard = { grant: null, systemContext: "" };
-  // The provider's skill contribution to the system prompt: an availability cue
-  // on a tool-mount/container provider, the EXPANDED skill bodies on an inline
-  // provider. Declared out here because both branches below feed it.
-  let skillSystemContext = "";
-  // cinatra#2240 — the turn's DELIVERY FACTS, captured here during preparation
-  // and COMMITTED at the true dispatch boundary (immediately before `stream()`,
-  // or on the refusal return). Capturing and committing at different points is
-  // deliberate: several paths return between delivery preparation and dispatch
-  // (an unreachable public MCP URL, the explicit-dispatch short circuit), and a
-  // record written at `deliver()` time would claim skills reached a model they
-  // never reached.
-  let turnSkillDeliveryRows: TurnSkillDeliveryRow[] = [];
-  if (isInlineSkillMechanism(adapter.provider)) {
-    // Inline mechanism (Gemini): core SHORT-CIRCUITS — no delivery adapter, no
-    // connector surface. It reads each member's router body plus its ONE-HOP
-    // references and merges them under the per-request byte budget, so a
-    // conversation-only turn still receives the assistant's skills instead of
-    // silently losing every one of them.
-    await ensureAssistantSkillsRegistered(runtimeConfig.skillIds);
-    const inline = await deliverInjectedSkillsInline({ set: injectedSkills });
-    skillSystemContext = inline.systemContext;
-    if (inline.dropped.length > 0) {
-      console.warn(
-        `[assistant-runtime] inline expansion dropped ${inline.dropped.length} ` +
-          `whole skill(s) for assistant "${assistantAgentId}": ` +
-          inline.dropped.map((d) => `${d.skillId} (${d.reason})`).join(", "),
-      );
-    }
-    // The inline vehicle has no adapter and no refusal path of its own: a
-    // skill that did not make the byte budget is a DROP, not a refusal, and is
-    // recorded as one. Both drop channels feed the record — the injection
-    // contract's cap drops and the inline expansion's whole-skill drops.
-    turnSkillDeliveryRows = buildTurnSkillDeliveryRows({
-      provider: adapter.provider,
-      requestedSkillIds: injectedSkillMembers(injectedSkills).map((m) => m.skillId),
-      exposure: inline.exposure,
-      contractDrops: [...injectionDrops, ...inline.dropped].map((d) => ({
-        skillId: d.skillId,
-        reason: d.reason,
-      })),
-    });
-    warnOnUnclassifiedVehicles(turnSkillDeliveryRows, adapter.provider);
-  }
-  if (isNativeMcpProvider(adapter.provider)) {
-  // adapter.provider is narrowed to "openai" | "anthropic" in this block
-  // (equivalent to `!conversationOnly`), so the tool-assembly calls type-check.
+  let platformToolsUnavailable = false;
   // Guarantee the assistant's skills resolve with an on-disk sourcePath so
   // buildSkillTools emits the shell tool (also feeds the catalog-backed
-  // loadSystemPrompt above; the read_skill fallback is retired).
+  // loadSystemPrompt above; the read_skill fallback is retired). Every provider
+  // has a delivery mechanism (inline, tool-mount or container), so this runs
+  // once per turn, before the assembly reads the registered skills.
   await ensureAssistantSkillsRegistered(runtimeConfig.skillIds);
-  // SKILL DELIVERY ALWAYS RUNS (cinatra#2094 F11). There is no caller-side
-  // model gate any more: the model-aware NATIVE-SHELL decision belongs to the
-  // provider adapter, which already owns it. For a shell-incompatible OpenAI
-  // model the adapter emits the RESTRICTED, NAMED `skill_file_read` function
-  // tool instead of the hosted `shell` (exec-plane S2's singular-native-shell
-  // rule, cinatra#1707) — so the 400 the old gate defended against (issue #47)
-  // cannot reach the wire, and gating here only DESTROYED delivery.
-  //
-  // What the old gate did, measured: on a shell-incompatible model the chat
-  // turn shipped ZERO skills behind a `console.warn` — a silent no-delivery on a
-  // configuration the wizard's own model input can produce. Silent no-delivery
-  // is the one forbidden outcome, so the gate is retired and the seam decides.
-  let skillTools: LlmTool[] = [];
-  const catalogSkillIds = injectedCatalogSkillIds(injectedSkills);
-  // cinatra#2240 — the record's DENOMINATOR is every member the injection
-  // contract RESOLVED, not the catalog subset the native vehicle can carry.
-  // `injectedCatalogSkillIds` filters to `deliveryMode === "catalog"`, so a
-  // non-catalog member (the personal delta, always `inline`) is absent from it
-  // — and this runtime never merges a non-catalog member's body into the system
-  // context on a native provider. Keying the record on the catalog subset would
-  // therefore leave such a member RESOLVED, UNDELIVERED and UNRECORDED, which is
-  // precisely the shape finding F8 reported. It is recorded as a DROP naming the
-  // structural reason instead.
-  //
-  // Latent rather than live today: `buildAssistantInjectionPorts` supplies no
-  // `resolvePersonalDelta` port, so the assistant surface currently resolves
-  // catalog members only and this set equals `catalogSkillIds`. The point is
-  // that wiring the delta later cannot silently reintroduce an unrecorded
-  // member.
-  const resolvedMembers = injectedSkillMembers(injectedSkills);
-  const resolvedSkillIds = resolvedMembers.map((m) => m.skillId);
-  const nonCatalogDrops = resolvedMembers
-    .filter((m) => m.deliveryMode !== "catalog")
-    .map((m) => ({
-      skillId: m.skillId,
-      reason:
-        `resolved as a "${m.deliveryMode}" member (rank "${m.rank}") — the ` +
-        `${adapter.provider} native vehicle delivers catalog members only, so it ` +
-        "never reached the model",
-    }));
-  const nativeContractDrops = [
-    ...injectionDrops.map((d) => ({ skillId: d.skillId, reason: d.reason })),
-    ...nonCatalogDrops,
-  ];
-  if (catalogSkillIds.length > 0) {
-    const delivery = await selectSkillDeliveryAdapter(adapter.provider).deliver({
-      skillIds: catalogSkillIds,
-      // The authoritative cap already ran in the contract; the adapter's own
-      // cap is a defence-in-depth invariant.
-      selectionMode: "general",
-    });
-    skillTools = delivery.tools;
-    skillSystemContext = delivery.systemContext;
-    // cinatra#2240 — capture what the adapter reported it delivered (per-skill
-    // mode → vehicle), the Anthropic container refs actually emitted, and every
-    // resolved-but-undelivered skill with its reason.
-    turnSkillDeliveryRows = buildTurnSkillDeliveryRows({
+  const assembly = await assembleAssistantTurnTools(
+    {
       provider: adapter.provider,
-      requestedSkillIds: resolvedSkillIds,
-      exposure: delivery.exposure ?? [],
-      tools: delivery.tools,
-      contractDrops: nativeContractDrops,
-      adapterDroppedSkillIds: delivery.droppedSkillIds,
-      adapterSelectionReason: delivery.selectionReason,
-    });
-    warnOnUnclassifiedVehicles(turnSkillDeliveryRows, adapter.provider);
-    // LOUD, never silent: the injection contract resolved skills for this turn,
-    // so a delivery that produced no vehicle at all means the operator's
-    // assistant is running WITHOUT its instructions. Refuse the turn rather than
-    // answer as a skill-less assistant while claiming to be the configured one.
-    if (skillTools.length === 0 && !delivery.systemContext) {
-      const refusalReason =
-        `skill delivery produced NO vehicle for provider "${adapter.provider}" ` +
-        `model "${adapter.defaultModel}" — the turn was refused`;
-      console.error(
-        `[assistant-runtime] skill delivery produced NO vehicle for provider ` +
-          `"${adapter.provider}" model "${adapter.defaultModel}" with ` +
-          `${catalogSkillIds.length} resolved skill(s) — refusing the turn ` +
-          "(a silently skill-less assistant is never an acceptable degrade)",
-      );
-      // The refusal record IS the point of #2240: it names every skill the
-      // operator's assistant lost, durably, so the refusal is answerable from
-      // the store and not only from a log line. Committed BEFORE the error
-      // event so a client that tears down on `error` cannot race the write.
-      //
-      // The refusal is NOT the whole story: a skill the injection contract or
-      // the adapter had ALREADY dropped was never part of the delivery attempt,
-      // so it keeps its own drop reason rather than being relabelled "refused"
-      // (or, worse, losing its row entirely — the finding-F8 failure mode).
-      await persistTurnSkillDelivery(
-        args.turnIdentity,
-        buildTurnSkillDeliveryRows({
-          provider: adapter.provider,
-          requestedSkillIds: resolvedSkillIds,
-          exposure: [],
-          contractDrops: nativeContractDrops,
-          adapterDroppedSkillIds: delivery.droppedSkillIds,
-          adapterSelectionReason: delivery.selectionReason,
-          refusalReason,
-        }),
-      );
-      send("error", {
-        message:
-          `The assistant's skills could not be delivered to ${adapter.provider} ` +
-          `(model "${adapter.defaultModel}"). The turn was refused instead of ` +
-          "answering without them — check the provider's model setting at " +
-          "/configuration/llm.",
-        // S5 (cinatra#2390): stable classification for the loud no-vehicle refusal.
-        code: "skill_delivery_refused",
-      });
-      return;
-    }
-  } else if (nativeContractDrops.length > 0 || resolvedSkillIds.length > 0) {
-    // NO catalog member survived to the native vehicle, but the injection
-    // contract DID resolve skills for this turn — non-catalog members, or
-    // members it dropped at the cap. No delivery adapter runs, so nothing
-    // reaches the model; without this branch that turn records NOTHING and the
-    // loss is invisible, which is the finding-F8 shape the record exists to
-    // close. It is a set of DROPS, never a refusal: the loud refusal is
-    // specifically "the adapter ran and produced no vehicle", which did not
-    // happen here.
-    turnSkillDeliveryRows = buildTurnSkillDeliveryRows({
-      provider: adapter.provider,
-      requestedSkillIds: resolvedSkillIds,
-      exposure: [],
-      contractDrops: nativeContractDrops,
-    });
-  }
-  // Dead-ingress guard (#1699): a configured-but-unreachable public MCP URL
-  // is WORSE than a missing one — OpenAI silently omits the hosted MCP server
-  // (200 completed, no mcp_list_tools, no 424), chat loses every Cinatra tool
-  // with no signal, and the model confabulates that the tools don't exist.
-  // Probe (cached, short timeout) and fail LOUD like the unconfigured case
-  // below instead of running a turn that lies about the platform.
-  const mcpReachability = await checkPublicMcpReachability();
-  if (mcpReachability.status === "unreachable") {
-    // The probe already retried a timeout and gave up (#3109), so this is a
-    // considered verdict, not one slow moment. The log carries WHICH outcome
-    // it was — a timeout and a refused connection are different events and
-    // have to be tellable apart afterwards — and the URL and the raw network
-    // reason stay here, where an operator reads them.
-    console.error(
-      `[assistant-runtime] public MCP URL ${mcpReachability.url} is unreachable ` +
-        `[${mcpReachability.kind}] (${mcpReachability.reason}) — refusing to run the turn ` +
-        "without Cinatra tools (#1699, #3109)",
-    );
-    // What the PERSON reads says what happened to them, in words that need no
-    // knowledge of the product's own network setup, and names the one thing
-    // worth doing next. The two outcomes ask for different next steps, so
-    // they do not read alike: a moment that did not answer is worth sending
-    // again, an address that answered "no" needs somebody to fix it.
+      defaultModel: adapter.defaultModel,
+      skillIds: runtimeConfig.skillIds,
+      allowedTools: runtimeConfig.allowedTools,
+      assistantAgentId,
+      userId,
+      sessionId: assistantSessionId,
+      injectionPorts: buildAssistantInjectionPorts({
+        agentId: assistantAgentId,
+        userId,
+        sessionId: assistantSessionId,
+        requiredSkillIds: runtimeConfig.skillIds,
+        // cinatra#2815 S3 — the assistant's per-scope assignments, resolved
+        // through the thread's IMMUTABLE snapshot. Imported dynamically so this
+        // runtime's static module graph (and the locked route graphs that reach
+        // it) is unchanged by a channel that only runs when a turn dispatches.
+        resolveAssignedSkillIdsForSession: async (sessionId) => {
+          const { resolveAssistantAssignedSkillIds } = await import(
+            "@/lib/assistant-assigned-skills-delivery"
+          );
+          return resolveAssistantAssignedSkillIds({
+            agentId: assistantAgentId,
+            sessionId,
+          });
+        },
+      }),
+      // SEAM (S5, cinatra#1221). The cinatra self-MCP tool carries a DIFFERENT
+      // delegated actor token depending on the caller:
+      //   · widget principal present → a `cinatra.widget.mcp-obo` OBO token
+      //     (pinned canonical instance + connector kind + `public_site_widget`
+      //     discriminator). A fresh nonce is minted here, and the token is
+      //     SEALED to two things it cannot outlive (cinatra#2687): the `cwu_`
+      //     row this turn authenticated against, and THIS turn's AG-UI run id.
+      //     The MCP authorization layer refuses the token once that sign-in
+      //     ends or that turn's terminal status is committed. The transport
+      //     verifies it to a `delegation: "public_site_widget"` actor → the
+      //     CLOSED, kind-keyed `delegated-widget` tool policy applies.
+      //   · absent → the existing chat OBO token (`delegation: "chat"`), byte-
+      //     identical to before — the cookie-session `@cinatra` path is
+      //     unchanged.
+      selfMcp: widgetPrincipal
+        ? {
+            kind: "widget",
+            actor: {
+              userId: widgetPrincipal.userId,
+              orgId: widgetPrincipal.orgId,
+              instanceId: widgetPrincipal.instanceId,
+              kind: widgetPrincipal.assistantHandle,
+              jti: randomUUID(),
+              // The two seals (cinatra#2687). Both are values THIS turn already
+              // holds — the principal's parent row and the harness-bound run
+              // id — so the mint invents nothing and nothing downstream can
+              // widen them.
+              parentJti: widgetPrincipal.parentTokenJti,
+              turnRunId: args.turnIdentity.runId,
+              // cinatra#2577 (S8d) — the route's own reading of the consumed
+              // `cwu_`. The runtime never re-derives it: one observation,
+              // carried.
+              lifecycleRead: widgetPrincipal.lifecycleRead,
+              // The person's real tier, resolved at the route (cinatra#2674).
+              // The widget path no longer floors it, because the site no
+              // longer holds the credential that made flooring necessary.
+              platformRole: widgetPrincipal.platformRole,
+            },
+          }
+        : {
+            kind: "chat",
+            actor: { delegation: "chat", userId, orgId: sessionOrgId, platformRole },
+          },
+    },
+    {
+      issueChatMcpActorToken,
+      issueWidgetMcpActorToken,
+      readChatMcpCatalogState: () =>
+        resolveChatMcpCatalogState({ actorContext, userId, sessionOrgId }),
+      admitSelfMcpReference: async () => {
+        // Dead-ingress guard (#1699): a configured-but-unreachable public MCP
+        // URL is WORSE than a missing one — OpenAI silently omits the hosted
+        // MCP server (200 completed, no mcp_list_tools, no 424), chat loses
+        // every Cinatra tool with no signal, and the model confabulates that
+        // the tools don't exist. Probe (cached, short timeout) and fail LOUD
+        // like the unconfigured case below instead of running a turn that lies
+        // about the platform.
+        const mcpReachability = await checkPublicMcpReachability();
+        if (mcpReachability.status === "unreachable") {
+          // The probe already retried a timeout and gave up (#3109), so this is
+          // a considered verdict, not one slow moment. The log carries WHICH
+          // outcome it was — a timeout and a refused connection are different
+          // events and have to be tellable apart afterwards — and the URL and
+          // the raw network reason stay here, where an operator reads them.
+          console.error(
+            `[assistant-runtime] public MCP URL ${mcpReachability.url} is unreachable ` +
+              `[${mcpReachability.kind}] (${mcpReachability.reason}) — refusing to run the turn ` +
+              "without Cinatra tools (#1699, #3109)",
+          );
+          // What the PERSON reads says what happened to them, in words that
+          // need no knowledge of the product's own network setup, and names
+          // the one thing worth doing next. The two outcomes ask for different
+          // next steps, so they do not read alike: a moment that did not
+          // answer is worth sending again, an address that answered "no" needs
+          // somebody to fix it.
+          send("error", {
+            message:
+              mcpReachability.kind === "timeout"
+                ? "The platform tools did not answer in time for this message, so the assistant " +
+                  "stopped rather than answer as though it never had them. Send the message again - " +
+                  "a slow moment usually clears on its own."
+                : "The platform tools were unavailable for this message, so the assistant stopped " +
+                  "rather than answer as though it never had them. If this keeps happening, an " +
+                  "administrator can open /configuration/development?tab=tunnel and run its " +
+                  "connection test.",
+          });
+          return null;
+        }
+        // THE BOUND CARD, RE-CHECKED HERE (cinatra#2932, lifecycle-b W5a). The
+        // claim the composer sent is resolved under the reader's OWN live
+        // standing and the binding rule is applied to what survived; a bound
+        // card mints ONE single-use grant for ONE of its controls, which rides
+        // this turn's self-MCP reference as a header. Nothing bound and
+        // nothing minted is the ordinary case and costs the turn nothing —
+        // `systemContext` is `""` and the system string is byte-identical to a
+        // turn that never had a composer binding.
+        turnBoundCard = await issueTurnLentActionGrant({
+          claim: args.boundCard ?? null,
+          userId: widgetPrincipal ? widgetPrincipal.userId : userId,
+          orgId: widgetPrincipal ? widgetPrincipal.orgId : sessionOrgId,
+          // The turn's DURABLE identity is the grant's one-per-message key, so
+          // a retried send of the same turn cannot mint a second spendable
+          // authority.
+          messageId: args.turnIdentity.turnId,
+          // THE PERSON'S OWN WORDS (convergence round 1, finding 2). Taken from
+          // the turn's last user message, here on the server, and stored with
+          // the grant — so what lands on the card is what they typed and the
+          // model supplies no text at all. `null` when the turn carries no user
+          // message, which lands an empty comment rather than an invented one.
+          messageText:
+            [...messages].reverse().find((m) => m.role === "user")?.content ?? null,
+        });
+        return { lentActionGrant: turnBoundCard.grant };
+      },
+    },
+  );
+  if (assembly.kind === "delivery_refused") {
+    // The refusal record IS the point of #2240: it names every skill the
+    // operator's assistant lost, durably, so the refusal is answerable from
+    // the store and not only from a log line. Committed BEFORE the error event
+    // so a client that tears down on `error` cannot race the write.
+    await persistTurnSkillDelivery(args.turnIdentity, assembly.refusalRows);
     send("error", {
       message:
-        mcpReachability.kind === "timeout"
-          ? "The platform tools did not answer in time for this message, so the assistant " +
-            "stopped rather than answer as though it never had them. Send the message again - " +
-            "a slow moment usually clears on its own."
-          : "The platform tools were unavailable for this message, so the assistant stopped " +
-            "rather than answer as though it never had them. If this keeps happening, an " +
-            "administrator can open /configuration/development?tab=tunnel and run its " +
-            "connection test.",
+        `The assistant's skills could not be delivered to ${adapter.provider} ` +
+        `(model "${adapter.defaultModel}"). The turn was refused instead of ` +
+        "answering without them — check the provider's model setting at " +
+        "/configuration/llm.",
+      // S5 (cinatra#2390): stable classification for the loud no-vehicle refusal.
+      code: "skill_delivery_refused",
     });
     return;
   }
-  // SEAM (S5, cinatra#1221). The cinatra self-MCP tool carries a DIFFERENT
-  // delegated actor token depending on the caller:
-  //   · widget principal present → a `cinatra.widget.mcp-obo` OBO token (pinned
-  //     canonical instance + connector kind + `public_site_widget` discriminator;
-  //     platform-admin floored to `member` at mint). A fresh nonce is minted
-  //     here, and the token is SEALED to two things it cannot outlive
-  //     (cinatra#2687): the `cwu_` row this turn authenticated against, and THIS
-  //     turn's AG-UI run id. The MCP authorization layer refuses the token once
-  //     that sign-in ends or that turn's terminal status is committed — so the
-  //     120 s TTL now bounds only the gap between the relay's last call and that
-  //     commit, instead of being the whole containment. The transport
-  //     verifies it to a `delegation: "public_site_widget"` actor → the CLOSED,
-  //     kind-keyed `delegated-widget` tool policy applies (only the bound kind's
-  //     `*_content_editor_run`).
-  //   · absent → the existing chat OBO token (`delegation: "chat"`), byte-
-  //     identical to before — the cookie-session `@cinatra` path is unchanged.
-  //
-  // A mint/build failure returns null on BOTH paths → the same fail-closed error
-  // below (the widget path never silently falls back to the chat token or the
-  // machine token).
-  // THE BOUND CARD, RE-CHECKED HERE (cinatra#2932, lifecycle-b W5a). The claim
-  // the composer sent is resolved under the reader's OWN live standing and the
-  // binding rule is applied to what survived; a bound card mints ONE single-use
-  // grant for ONE of its controls, which rides this turn's self-MCP reference as
-  // a header. Nothing bound and nothing minted is the ordinary case and costs
-  // the turn nothing — `systemContext` is `""` and the system string is
-  // byte-identical to a turn that never had a composer binding.
-  turnBoundCard = await issueTurnLentActionGrant({
-    claim: args.boundCard ?? null,
-    userId: widgetPrincipal ? widgetPrincipal.userId : userId,
-    orgId: widgetPrincipal ? widgetPrincipal.orgId : sessionOrgId,
-    // The turn's DURABLE identity is the grant's one-per-message key, so a
-    // retried send of the same turn cannot mint a second spendable authority.
-    messageId: args.turnIdentity.turnId,
-    // THE PERSON'S OWN WORDS (convergence round 1, finding 2). Taken from the turn's
-    // last user message, here on the server, and stored with the grant — so what
-    // lands on the card is what they typed and the model supplies no text at
-    // all. `null` when the turn carries no user message, which lands an empty
-    // comment rather than an invented one.
-    messageText:
-      [...messages].reverse().find((m) => m.role === "user")?.content ?? null,
-  });
-  const chatCinatraMcpTool = widgetPrincipal
-    ? await buildLlmMcpServerToolForWidget(
-        adapter.provider,
-        {
-          userId: widgetPrincipal.userId,
-          orgId: widgetPrincipal.orgId,
-          instanceId: widgetPrincipal.instanceId,
-          kind: widgetPrincipal.assistantHandle,
-          jti: randomUUID(),
-          // The two seals (cinatra#2687). Both are values THIS turn already
-          // holds — the principal's parent row and the harness-bound run id — so
-          // the mint invents nothing and nothing downstream can widen them.
-          parentJti: widgetPrincipal.parentTokenJti,
-          turnRunId: args.turnIdentity.runId,
-          // cinatra#2577 (S8d) — the route's own reading of the consumed `cwu_`.
-          // The runtime never re-derives it: one observation, carried.
-          lifecycleRead: widgetPrincipal.lifecycleRead,
-          // The person's real tier, resolved at the route (cinatra#2674). The
-          // widget path no longer floors it, because the site no longer holds
-          // the credential that made flooring necessary.
-          platformRole: widgetPrincipal.platformRole,
-        },
-        issueWidgetMcpActorToken,
-        // cinatra#2932 — the widget is on the same road; it carries the grant
-        // exactly as the chat page does.
-        { lentActionGrant: turnBoundCard.grant },
-      )
-    : await buildLlmMcpServerToolForChat(
-        adapter.provider,
-        { delegation: "chat", userId, orgId: sessionOrgId, platformRole },
-        issueChatMcpActorToken,
-        {
-          catalogState: await resolveChatMcpCatalogState({
-            actorContext,
-            userId,
-            sessionOrgId,
-          }),
-          // cinatra#2932 — this turn's lent-action grant, or null.
-          lentActionGrant: turnBoundCard.grant,
-        },
-      );
-  if (!chatCinatraMcpTool) {
+  // The probe refused the turn and has already said so.
+  if (assembly.kind === "stopped") return;
+  if (assembly.kind === "self_mcp_unavailable") {
     send("error", {
       message:
         "Cinatra MCP public URL is not configured for hosted MCP access. Set it at /configuration/development?tab=tunnel.",
     });
     return;
   }
-  // cinatra#2776 (owner ruling 2026-08-15). The self-MCP catalog is now on this
-  // turn's tool array, and the ONLY shape in which it may reach a model is ONE
-  // provider-hosted MCP reference. Pinning `native_mcp` here makes that a
-  // CONTRACT the adapter must satisfy rather than a property of whichever mode
-  // the connector happens to be configured in: an adapter whose native path is
-  // unavailable — Anthropic's persisted `mcpMode: "function-tools"`, or a
-  // native attempt that failed at runtime — must REFUSE the turn before any
-  // credential-bearing egress instead of flattening the catalog into inline
-  // function schemas (the cost/behavior regression class of cinatra#2771).
-  // Both chat surfaces pin it, because both hand over the same toolbox: the
-  // cookie-session browser chat and the widget principal's turn.
-  // `function-tools` stays reachable only for callers that DECLARE it (the
-  // agent-run LLM bridge forwards an agent's own `capabilityRequired`);
-  // field-absent is not an opt-in.
-  selfMcpCapabilityRequired = "native_mcp";
-  platformMcpLabel = chatCinatraMcpTool.serverLabel;
-
-  // cinatra#2019 S4: cookie-chat and widget-principal turns share this
-  // external-tool assembly, so the build context carries the REAL surface —
-  // surface-gating toolboxes (trusted-site native read-injection) emit only
-  // for "chat" and refuse widget builds fail-closed instead of leaking
-  // chat-scoped injections onto public-site widget turns.
-  const externalMcpTools = await resolveChatExternalMcpTools(
-    adapter.provider,
-    widgetPrincipal ? { surface: "public_site_widget" } : { surface: "chat" },
-  );
-  const assembledTools: LlmTool[] = [
-    chatCinatraMcpTool,
-    ...externalMcpTools,
-    ...skillTools,
-    { type: "web_search" },
-  ];
-  // Apply the assistant's tool allow-list. EMPTY = no restriction beyond
-  // platform policy (the sidecar contract), so the filter is a strict no-op
-  // for the Cinatra reference assistant — byte-identical tool array. A
-  // non-empty list keeps only its members; MCP server tools (which expose many
-  // primitives behind one `type: "mcp"` entry) and provider-native tools carry
-  // no filterable `name`, so they are unaffected by name-level allow-listing at
-  // this layer (per-primitive gating is an MCP-layer concern for a later slice).
-  tools = assembledTools.filter((tool) => {
-    const name = (tool as { name?: string }).name;
-    if (typeof name !== "string") return true;
-    return isAllowedByList(name, runtimeConfig.allowedTools);
-  });
-  } // end !conversationOnly tool assembly
+  const { tools, skillSystemContext, selfMcpCapabilityRequired, platformMcpLabel } = assembly;
+  const turnSkillDeliveryRows = assembly.deliveryRows;
 
   const systemPrompt = await loadSystemPrompt(
     runtimeConfig.systemSkillId,
