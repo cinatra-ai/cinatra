@@ -7,7 +7,10 @@ import { ARTIFACT_ALLOWED_CINATRA_KEYS as ALLOWED_CINATRA_KEYS } from "@cinatra-
 import {
   objectTypeRegistry,
   matcherManifestRegistry,
+  artifactPackSurfaceRegistry,
   DEFAULT_MATCHER_CONFIDENCE_THRESHOLD,
+  type ArtifactPackRecord,
+  type ArtifactPackSurfaceEntry,
 } from "../registry";
 import type { SemanticArtifactManifest } from "../types";
 import { validateObjectTypeClaimSchemaSources, claimedTypeRegisteringPackage } from "../claims";
@@ -123,10 +126,10 @@ function claimIdentityKey(fields: readonly string[]): (data: unknown) => string 
   };
 }
 
-function registerOneArtifactDir(dir: string): boolean {
+function registerOneArtifactDir(dir: string, record: ArtifactPackRecord | null): boolean {
   const pkgPath = path.join(dir, "package.json");
   if (!existsSync(pkgPath)) return false;
-  let pkg: { name?: unknown; cinatra?: { kind?: unknown; artifact?: unknown } };
+  let pkg: { name?: unknown; version?: unknown; cinatra?: { kind?: unknown; artifact?: unknown } };
   try {
     pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
   } catch {
@@ -194,7 +197,10 @@ function registerOneArtifactDir(dir: string): boolean {
   }
   // Everything above is parse/validation. The registration below reads the
   // manifest's explicitly declared `objectTypes` only (entry 95, epic #1785).
-  return registerParsedArtifactManifest(descriptor, pkg.name);
+  return registerParsedArtifactManifest(descriptor, pkg.name, {
+    version: typeof pkg.version === "string" ? pkg.version : null,
+    record,
+  });
 }
 
 /**
@@ -212,6 +218,11 @@ function registerOneArtifactDir(dir: string): boolean {
 export function registerParsedArtifactManifest(
   descriptor: SemanticArtifactManifest,
   packageName: string,
+  /** The manifest's version and the record it was read from (cinatra#3319).
+   *  Given, the pack's surface is (re)registered in the artifact pack surface
+   *  channel; omitted (a direct caller with no manifest file), that channel is
+   *  not touched. */
+  origin?: { version: string | null; record: ArtifactPackRecord | null },
 ): boolean {
   // PERMANENT namespace tombstone (cinatra#1789, epic #1785): a package under a
   // retired dynamic namespace (`@dynamic/types` / `@cinatra-ai/dynamic`) can NEVER
@@ -264,6 +275,22 @@ export function registerParsedArtifactManifest(
     });
   } else {
     matcherManifestRegistry.removeByPackage(packageName);
+  }
+  // ARTIFACT PACK SURFACE channel (cinatra#3319): every pack this pass registers
+  // gets its manifest surface recorded, matchers or none and types or none, on
+  // the same pass and from the same manifest as the matcher channel above. The
+  // matcher channel keeps the last registration of a pack; this channel keeps
+  // one surface per pack and kind of record (see the registry), so a store
+  // install and a bundled install each bind to their own record's surface. The
+  // runtime-discovery dispatcher's artifact facet is what reads it.
+  if (origin) {
+    artifactPackSurfaceRegistry.register({
+      packageName,
+      version: origin.version,
+      fileMimeTypes: [...fileMimeTypes],
+      matcherSkillIds: [...matcherSkillIds],
+      record: origin.record,
+    });
   }
   // A manifest with no explicitly declared types mints NO type. Umbrella
   // derivation is RETIRED (entry 95, epic #1785) — resolution reads declared
@@ -489,8 +516,41 @@ function registerSemanticRenderersForTypes(
  * `package.json` only). Returns true iff a valid `kind:"artifact"` package was
  * registered.
  */
-export function registerArtifactExtensionDir(dir: string): boolean {
-  return registerOneArtifactDir(dir);
+export function registerArtifactExtensionDir(
+  dir: string,
+  /** The store record `dir` is (cinatra#3319): the rescan passes the record's
+   *  digest. Omitted, the pack's surface names no record. */
+  record?: ArtifactPackRecord,
+): boolean {
+  return registerOneArtifactDir(dir, record ?? null);
+}
+
+/**
+ * One store rescan pass over the artifact pack surface channel (cinatra#3319).
+ * Call it before the pass registers any store record, and call the function it
+ * returns when the pass has ended: every store surface of a pack in the pass's
+ * scope (`onlyPackage`, or every pack) that the pass did not write is removed,
+ * so after the pass the channel keeps a store surface only for a pack that the
+ * pass registered from a store record. A surface counts as written when the
+ * bridge recorded it in the pass, also for a pack that declares no type of its
+ * own (its registration returns false, but its surface is recorded). The
+ * development-tree surfaces and the surfaces with no record are not touched.
+ */
+export function startArtifactPackStoreSurfacePass(onlyPackage?: string): () => void {
+  const before = new Map<string, ArtifactPackSurfaceEntry>();
+  for (const entry of artifactPackSurfaceRegistry.list()) {
+    if (entry.record?.source === "store") before.set(entry.packageName, entry);
+  }
+  return () => {
+    for (const entry of artifactPackSurfaceRegistry.list()) {
+      if (entry.record?.source !== "store") continue;
+      if (onlyPackage && entry.packageName !== onlyPackage) continue;
+      // The same entry object as before the pass: the pass did not write it.
+      if (before.get(entry.packageName) === entry) {
+        artifactPackSurfaceRegistry.remove(entry.packageName, "store");
+      }
+    }
+  };
 }
 
 // An artifact-extension directory is named for its package slug, which ends in
@@ -509,7 +569,8 @@ function scanDirForArtifacts(dir: string): number {
   let n = 0;
   for (const dirent of readdirSync(dir, { withFileTypes: true })) {
     if (!dirent.isDirectory() || !isArtifactExtensionDirName(dirent.name)) continue;
-    if (registerOneArtifactDir(path.join(dir, dirent.name))) n += 1;
+    const packDir = path.join(dir, dirent.name);
+    if (registerOneArtifactDir(packDir, { source: "bundled", dir: packDir })) n += 1;
   }
   return n;
 }
