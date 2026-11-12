@@ -40,11 +40,11 @@ vi.mock("../agent-run-serde", () => ({ assertAgentRunDispatchAuthorized }));
 vi.mock("../wayflow-url", () => ({ resolveWayflowUrl: (pkg: string) => `http://wayflow.test/${pkg}` }));
 
 // The run's current gate visit (the latest-task map the interrupt writes): "task-1" is the gate task of decision() below.
+// A full double, as in artifact-review-resume-delivery.test.ts: Publish reads only this one export. A partial double loads
+// the real module, whose graph imports this package's index back over the partial doubles above; in CI that load failed,
+// so every gate read under the claim answered publish_decision_unavailable.
 const resolveLatestWayflowGateTaskId = vi.hoisted(() => vi.fn(async (_runId: string): Promise<string | null> => "task-1"));
-vi.mock("@cinatra-ai/a2a", async (orig) => ({
-  ...(await orig<Record<string, unknown>>()),
-  resolveLatestWayflowGateTaskId,
-}));
+vi.mock("@cinatra-ai/a2a", () => ({ resolveLatestWayflowGateTaskId }));
 
 import {
   PUBLISH_DECISION_NOT_OPEN,
