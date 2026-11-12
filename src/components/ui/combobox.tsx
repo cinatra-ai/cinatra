@@ -178,7 +178,10 @@ function Combobox({
           >
             {label ?? placeholder}
           </span>
-          <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground opacity-50" />
+          {/* The Example draws the chevron at 14px in the full muted ink
+              ("width:14px;height:14px;color:var(--muted)"), not at 16px
+              dimmed to half opacity. */}
+          <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
         </button>
       </PopoverTrigger>
       <PopoverContent
@@ -270,7 +273,13 @@ function Combobox({
           // above them.
           className="rounded-none! bg-transparent p-0"
         >
-          <CommandInput chrome="flush" placeholder={searchPlaceholder} />
+          {/* The Example sets the search text at 12.5px
+              ("font: 12.5px var(--font-sans)"). */}
+          <CommandInput
+            chrome="flush"
+            className="text-[12.5px]"
+            placeholder={searchPlaceholder}
+          />
           <CommandList className="p-[5px]">
             <CommandEmpty>{emptyText}</CommandEmpty>
             {options.map((option) => {
@@ -312,6 +321,16 @@ function Combobox({
                   className={cn(
                     "data-selected:bg-transparent data-[selected=true]:bg-indigo-ink/[0.06]!",
                     "data-[checked=true]:[&_svg]:text-indigo-ink!",
+                    // The Example's row and check, written out in full: rows
+                    // at "padding: 7px 9px; border-radius: 5px" in 13px type,
+                    // and a 13px check at stroke 2.4. The shared row's 8px x
+                    // 6px inset, its `rounded-sm` (derived from a `--radius`
+                    // the two palettes set differently), its 14px type and
+                    // its 16px icon size are replaced here, for this list
+                    // only; the size variant repeats the shared one so that
+                    // tailwind-merge drops the 16px rule.
+                    "rounded-[5px] px-[9px] py-[7px] text-[13px]",
+                    "[&_svg:not([class*='size-'])]:size-[13px] [&_svg]:[stroke-width:2.4]",
                   )}
                   onSelect={() => {
                     onValueChange?.(option.value)
