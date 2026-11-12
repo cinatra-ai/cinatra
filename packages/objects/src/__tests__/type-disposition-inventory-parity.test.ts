@@ -19,7 +19,12 @@ import { describe, it, expect, beforeAll } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { matcherManifestRegistry, objectTypeRegistry } from "../registry";
+import {
+  isDispositionGovernedType,
+  matcherManifestRegistry,
+  objectTypeRegistry,
+  resolveTypeProjectionDisposition,
+} from "../registry";
 import { semanticRendererRegistry } from "../artifact-renderer-registry";
 import { registerAllObjectTypes } from "../integration/register-types";
 import { registerParsedArtifactManifest } from "../integration/register-artifact-extensions";
@@ -83,6 +88,14 @@ const INVENTORY: Record<string, Record<string, TypeDispositions>> = {
 const DRUPAL_PACK_DIR = "drupal-artifacts";
 const DRUPAL_POINTER_TYPE = "@cinatra-ai/drupal-artifacts:node-pointer";
 const DRUPAL_RETIRED_HOST_TYPE = "@cinatra-ai/drupal:node";
+// The retired id's tombstone: same flags as before, but never projected.
+const DRUPAL_RETIRED_DISPOSITIONS: TypeDispositions = {
+  projection: "none",
+  pinnable: false,
+  snapshotPolicy: "none",
+  sensitivity: "normal",
+  mutability: "external",
+};
 const DRUPAL_POINTER_DISPOSITIONS: TypeDispositions = {
   projection: "artifact-safe",
   pinnable: false,
@@ -137,9 +150,39 @@ describe("type-driven disposition inventory parity (epic #1785 merge gate)", () 
     }
   });
 
-  it("the host no longer restates the retired Drupal host type", () => {
+  it("the host keeps the retired Drupal id as a read-only tombstone that fails closed", () => {
     // registerAllObjectTypes ran in beforeAll; no pack is registered here.
-    expect(objectTypeRegistry.resolve(DRUPAL_RETIRED_HOST_TYPE)).toBeNull();
+    // Stored rows of the retired id must stay governed: resolvable, never
+    // projected (projection none, so the projector skips them and a rebuild
+    // counts them as excluded), and marked retired so no write reaches them.
+    const def = objectTypeRegistry.resolve(DRUPAL_RETIRED_HOST_TYPE);
+    expect(def, "the retired id must stay resolvable").not.toBeNull();
+    expect(objectTypeRegistry.definerOf(DRUPAL_RETIRED_HOST_TYPE)).toBeNull();
+    expect(objectTypeRegistry.isRetired(DRUPAL_RETIRED_HOST_TYPE)).toBe(true);
+    expect(isDispositionGovernedType(DRUPAL_RETIRED_HOST_TYPE)).toBe(true);
+    expect(resolveTypeProjectionDisposition(DRUPAL_RETIRED_HOST_TYPE)).toBe("none");
+    expect(def!.dispositions).toEqual(DRUPAL_RETIRED_DISPOSITIONS);
+    // The former contract stays on the tombstone: content category, the
+    // agent/import sources and the old pointer schema.
+    expect(def!.category).toBe("content");
+    expect(def!.lifecycle).toEqual({ sources: ["agent", "import"], mutableBy: ["agent"] });
+    expect(def!.isArtifact).toBeUndefined();
+    expect(
+      def!.schema.safeParse({
+        artifactType: "connector-ref",
+        originKind: "external_link",
+        mime: "text/html",
+        connectorRef: {
+          url: "https://cms.example.test/node/42",
+          connectorId: "drupal-1",
+          externalId: "42",
+          state: "linked",
+        },
+      }).success,
+    ).toBe(true);
+    // No other host type is retired.
+    const retired = objectTypeRegistry.list().filter((d) => objectTypeRegistry.isRetired(d.type));
+    expect(retired.map((d) => d.type)).toEqual([DRUPAL_RETIRED_HOST_TYPE]);
   });
 
   it("the drupal-artifacts pack OWNS its pointer type with the external disposition", () => {
@@ -164,9 +207,21 @@ describe("type-driven disposition inventory parity (epic #1785 merge gate)", () 
       expect(def).not.toBeNull();
       expect(objectTypeRegistry.definerOf(DRUPAL_POINTER_TYPE)).toBe(pkg.name);
       expect(def!.dispositions).toEqual(DRUPAL_POINTER_DISPOSITIONS);
-      // The retired id stays unregistered: the pack never registers it and the
-      // host no longer does.
-      expect(objectTypeRegistry.resolve(DRUPAL_RETIRED_HOST_TYPE)).toBeNull();
+      // The bridge's contract for a pack's own type, pinned because it differs
+      // from the retired host definition: category report (was content), the
+      // agent/user/import sources with an agent/user baseline (was agent/import
+      // and agent), and no identity key (was connectorId:externalId).
+      expect(def!.category).toBe("report");
+      expect(def!.lifecycle).toEqual({
+        sources: ["agent", "user", "import"],
+        mutableBy: ["agent", "user"],
+      });
+      expect(def!.identityKey).toBeUndefined();
+      expect(objectTypeRegistry.isRetired(DRUPAL_POINTER_TYPE)).toBe(false);
+      // The pack does not touch the retired id: it stays the host tombstone.
+      expect(objectTypeRegistry.definerOf(DRUPAL_RETIRED_HOST_TYPE)).toBeNull();
+      expect(objectTypeRegistry.isRetired(DRUPAL_RETIRED_HOST_TYPE)).toBe(true);
+      expect(resolveTypeProjectionDisposition(DRUPAL_RETIRED_HOST_TYPE)).toBe("none");
     } finally {
       objectTypeRegistry.removeByPackage(pkg.name);
       semanticRendererRegistry.removeByPackage(pkg.name);

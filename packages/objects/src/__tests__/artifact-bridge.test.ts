@@ -1569,6 +1569,15 @@ describe("registerParsedArtifactManifest — cross-namespace claims never clobbe
     expect(pointer).not.toBeNull();
     expect(pointer!.dispositions?.mutability).toBe("external");
     expect(pointer!.dispositions?.pinnable).toBe(false);
+    // The bridge's contract for a pack's own type differs from the retired host
+    // definition (content, agent/import, agent baseline, connectorId:externalId
+    // identity); pinned so a change to either side is seen.
+    expect(pointer!.category).toBe("report");
+    expect(pointer!.lifecycle).toEqual({
+      sources: ["agent", "user", "import"],
+      mutableBy: ["agent", "user"],
+    });
+    expect(pointer!.identityKey).toBeUndefined();
     expect(
       objectTypeRegistry.getTypesForPackage("@cinatra-ai/drupal-artifacts"),
     ).toContain("@cinatra-ai/drupal-artifacts:node-pointer");
