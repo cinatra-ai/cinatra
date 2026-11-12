@@ -24,7 +24,7 @@ vi.mock("@cinatra-ai/webhooks", async (importOriginal) => {
   return { ...actual, assertEgressAllowed: egress.assertEgressAllowed };
 });
 
-import { fetchPreviewGuarded } from "../cms-preview-capture";
+import { fetchPreviewGuarded } from "../registered-page-render";
 
 const PAGE = "<html><body><p>staged</p></body></html>";
 const LOOPBACK_PREVIEW = "http://localhost:8080/?preview=1";
