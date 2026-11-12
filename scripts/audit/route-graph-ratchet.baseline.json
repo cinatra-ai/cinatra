@@ -2,35 +2,35 @@
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. The counts exclude modules under the extension tree (extensions/**): they are walked and reported per route as the excluded count, and each changed pack is read by the pin-advance host-tool check. A core module a route reaches only through a pack's modules is that pack's cost: it is reported per pack ('reached through <pack>') and excluded as well; a core module the route also reaches through core modules counts. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate and its tests validate the committed records strictly against the base (malformed/stale/orphan records fail closed, naming the route and the field; a carried-forward record may not be deleted while its raised ceiling is kept) and the gate prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
     "/sign-in": 165,
-    "/api/mcp": 1320,
-    "/chat": 1424,
-    "/api/a2a": 1328,
-    "/api/llm-bridge": 1338
+    "/api/mcp": 1322,
+    "/chat": 1426,
+    "/api/a2a": 1330,
+    "/api/llm-bridge": 1340
   },
   "absorbs": {
     "/api/a2a": {
-      "from": 1327,
-      "to": 1328,
-      "reason": "Pull request 4370 (issue 3062) adds exactly one core module to this route, packages/agents/src/run-recommendation-reading-register.ts: the reading the skills card drew is remembered in its own module so the settled card can be drawn read-only without the decision core. Measured, not argued: with the companion extension fleet cloned pinned and the merged scripts/route-graph.mjs, main at bd70333a694d070c3413d871a2df4f280690c53d reads 1327 and the merged tree reads 1328, the one added module being that file; the growth is additive and no module leaves the route.",
-      "pr": 4370
+      "from": 1328,
+      "to": 1330,
+      "reason": "Pull request 4538 (issue 4245) adds exactly two core modules to this route: packages/agents/src/run-pause-claim.ts (already on main but reached by no route there) and packages/agents/src/run-resume-under-claim.ts (new). Every resume road of a paused run now takes the pause claim, so the route that resumes a run reaches the claim store and the shared resume-under-claim step. Measured with scripts/route-graph.mjs: main at 9d8ebf110 reads 1328 and the merged tree reads 1330, the two added modules being those files; a lazy import does not lower the count, and the growth is additive with no module leaving the route.",
+      "pr": 4538
     },
     "/api/llm-bridge": {
-      "from": 1337,
-      "to": 1338,
-      "reason": "Pull request 4370 (issue 3062) adds exactly one core module to this route, packages/agents/src/run-recommendation-reading-register.ts: the reading the skills card drew is remembered in its own module so the settled card can be drawn read-only without the decision core. Measured, not argued: with the companion extension fleet cloned pinned and the merged scripts/route-graph.mjs, main at bd70333a694d070c3413d871a2df4f280690c53d reads 1337 and the merged tree reads 1338, the one added module being that file; the growth is additive and no module leaves the route.",
-      "pr": 4370
+      "from": 1338,
+      "to": 1340,
+      "reason": "Pull request 4538 (issue 4245) adds exactly two core modules to this route: packages/agents/src/run-pause-claim.ts (already on main but reached by no route there) and packages/agents/src/run-resume-under-claim.ts (new). Every resume road of a paused run now takes the pause claim, so the route that resumes a run reaches the claim store and the shared resume-under-claim step. Measured with scripts/route-graph.mjs: main at 9d8ebf110 reads 1338 and the merged tree reads 1340, the two added modules being those files; a lazy import does not lower the count, and the growth is additive with no module leaving the route.",
+      "pr": 4538
     },
     "/api/mcp": {
-      "from": 1319,
-      "to": 1320,
-      "reason": "Pull request 4370 (issue 3062) adds exactly one core module to this route, packages/agents/src/run-recommendation-reading-register.ts: the reading the skills card drew is remembered in its own module so the settled card can be drawn read-only without the decision core. Measured, not argued: with the companion extension fleet cloned pinned and the merged scripts/route-graph.mjs, main at bd70333a694d070c3413d871a2df4f280690c53d reads 1319 and the merged tree reads 1320, the one added module being that file; the growth is additive and no module leaves the route.",
-      "pr": 4370
+      "from": 1320,
+      "to": 1322,
+      "reason": "Pull request 4538 (issue 4245) adds exactly two core modules to this route: packages/agents/src/run-pause-claim.ts (already on main but reached by no route there) and packages/agents/src/run-resume-under-claim.ts (new). Every resume road of a paused run now takes the pause claim, so the route that resumes a run reaches the claim store and the shared resume-under-claim step. Measured with scripts/route-graph.mjs: main at 9d8ebf110 reads 1320 and the merged tree reads 1322, the two added modules being those files; a lazy import does not lower the count, and the growth is additive with no module leaving the route.",
+      "pr": 4538
     },
     "/chat": {
-      "from": 1422,
-      "to": 1424,
-      "reason": "Pull request 4370 (issue 3062) adds exactly two core modules to this route: packages/agents/src/run-recommendation-reading-register.ts, where the reading the skills card drew is remembered in its own module so the settled card can be drawn read-only without the decision core, and packages/chat/src/run-start-line-order.ts, the order in which the conversation draws the platform's start line above the run's slot. Measured, not argued: with the companion extension fleet cloned pinned and the merged scripts/route-graph.mjs, main at bd70333a694d070c3413d871a2df4f280690c53d reads 1422 and the merged tree reads 1424, the two added modules being those files; the growth is additive and no module leaves the route.",
-      "pr": 4370
+      "from": 1424,
+      "to": 1426,
+      "reason": "Pull request 4538 (issue 4245) adds exactly two core modules to this route: packages/agents/src/run-pause-claim.ts (already on main but reached by no route there) and packages/agents/src/run-resume-under-claim.ts (new). Every resume road of a paused run now takes the pause claim, so the route that resumes a run reaches the claim store and the shared resume-under-claim step. Measured with scripts/route-graph.mjs: main at 9d8ebf110 reads 1424 and the merged tree reads 1426, the two added modules being those files; a lazy import does not lower the count, and the growth is additive with no module leaving the route.",
+      "pr": 4538
     },
     "/sign-in": {
       "from": 164,
