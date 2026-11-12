@@ -2,10 +2,12 @@
 // (packages/agent-ui-protocol/CONTRACT.md section 5.2, "One source" and
 // "Read only").
 //
-// The function is driven with recording ports and with the LLM layer's
-// builders stubbed, so each case can see exactly what it called, in which
-// order, and what it handed back. The real injection contract and the real
-// delivery-record builder run.
+// The function is an async generator: it stops at each point where the turn
+// runs a write step of its own and yields that step. Each case drives it the
+// way the turn does, with a recording driver, and with the LLM layer's
+// builders stubbed, so it can see exactly what the assembly called, in which
+// order, at which step, and what it handed back. The real injection contract
+// and the real delivery-record builder run.
 
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +15,7 @@ import type { InjectionResolverPorts } from "@cinatra-ai/skills/injection";
 
 const state = vi.hoisted(() => ({
   calls: [] as string[],
+  deliveredSkillIds: [] as string[][],
   delivery: {
     tools: [{ type: "function", name: "skill_file_read" }] as Array<Record<string, unknown>>,
     systemContext: "SKILLS_CUE",
@@ -27,13 +30,17 @@ const state = vi.hoisted(() => ({
     Record<string, unknown>
   >,
   selfMcpNull: false,
+  // Stands for the persisted catalog that the skill registration repairs: the
+  // assigned-skills port reads it, the registration step writes it.
+  catalogRepaired: false,
 }));
 
 vi.mock("@cinatra-ai/llm", () => ({
   selectSkillDeliveryAdapter: vi.fn((provider: string) => ({
     provider,
-    deliver: vi.fn(async () => {
+    deliver: vi.fn(async (req: { skillIds: string[] }) => {
       state.calls.push("deliver");
+      state.deliveredSkillIds.push([...req.skillIds]);
       return { ...state.delivery };
     }),
   })),
@@ -80,22 +87,28 @@ import {
 } from "@cinatra-ai/llm";
 import {
   assembleAssistantTurnTools,
+  type AssistantTurnToolAssembly,
   type AssistantTurnToolAssemblyInput,
-  type AssistantTurnToolAssemblyPorts,
+  type AssistantTurnToolAssemblyResume,
+  type TurnSelfMcpAdmission,
 } from "../turn-tool-assembly";
 
 const SKILLS = ["@cinatra-ai/a:one", "@cinatra-ai/b:two"];
+const REPAIRED_SKILL = "@cinatra-ai/c:three";
 
 function injectionPorts(): InjectionResolverPorts {
   return {
     async authorizeAssistantSession() {
+      state.calls.push("resolve:authorize");
       return { ok: true, runOwnerUserId: "u1" };
     },
     async resolveAssistantRequiredSkills() {
+      state.calls.push("resolve:required");
       return SKILLS.map((skillId) => ({ skillId }));
     },
     async resolveAssistantAssignedSkills() {
-      return [];
+      state.calls.push("resolve:assigned");
+      return state.catalogRepaired ? [{ skillId: REPAIRED_SKILL }] : [];
     },
   } as InjectionResolverPorts;
 }
@@ -110,36 +123,80 @@ function input(over: Partial<AssistantTurnToolAssemblyInput> = {}): AssistantTur
     userId: "u1",
     sessionId: "thread-1",
     injectionPorts: injectionPorts(),
-    selfMcp: {
-      kind: "chat",
-      actor: { delegation: "chat", userId: "u1", orgId: "o1", platformRole: "member" },
-    } as AssistantTurnToolAssemblyInput["selfMcp"],
     ...over,
   };
 }
 
-function recordingPorts(grant: string | null = "grant-1") {
-  const chatIssuer = vi.fn(() => "inert-chat-token");
-  const widgetIssuer = vi.fn(() => "inert-widget-token");
-  const ports: AssistantTurnToolAssemblyPorts = {
-    issueChatMcpActorToken: chatIssuer as unknown as AssistantTurnToolAssemblyPorts["issueChatMcpActorToken"],
-    issueWidgetMcpActorToken:
-      widgetIssuer as unknown as AssistantTurnToolAssemblyPorts["issueWidgetMcpActorToken"],
-    readChatMcpCatalogState: vi.fn(async () => {
-      state.calls.push("catalogState");
-      return undefined;
-    }),
-    admitSelfMcpReference: vi.fn(async () => {
-      state.calls.push("admit");
-      return { lentActionGrant: grant };
-    }),
-  };
-  return { ports, chatIssuer, widgetIssuer };
+const CHAT_ACTOR = { delegation: "chat", userId: "u1", orgId: "o1", platformRole: "member" };
+
+function chatAdmission(over: Partial<TurnSelfMcpAdmission> = {}): TurnSelfMcpAdmission {
+  return {
+    kind: "chat",
+    actor: CHAT_ACTOR,
+    catalogState: undefined,
+    lentActionGrant: "grant-1",
+    actorToken: { ok: true, token: "minted-chat-token" },
+    ...over,
+  } as TurnSelfMcpAdmission;
+}
+
+const WIDGET_ACTOR = {
+  userId: "u1",
+  orgId: "o1",
+  instanceId: "wp-canonical",
+  kind: "wordpress",
+  jti: "jti-1",
+  parentJti: "cwu-row-1",
+  turnRunId: "run-1",
+  platformRole: "member",
+};
+
+function widgetAdmission(): TurnSelfMcpAdmission {
+  return {
+    kind: "widget",
+    actor: WIDGET_ACTOR,
+    lentActionGrant: null,
+    actorToken: { ok: true, token: "minted-widget-token" },
+  } as TurnSelfMcpAdmission;
+}
+
+/**
+ * Drives the assembly as the turn does. Each yielded step is recorded in
+ * `state.calls`; the registration step runs `onRegister`, the admission step
+ * resumes with `admission`, or `"stop"` ends the drive there as the turn does
+ * when its probe stops it.
+ */
+async function drive(
+  inp: AssistantTurnToolAssemblyInput,
+  opts: { admission?: TurnSelfMcpAdmission | "stop"; onRegister?: () => void } = {},
+): Promise<AssistantTurnToolAssembly | "stopped"> {
+  const run = assembleAssistantTurnTools(inp);
+  let resume: AssistantTurnToolAssemblyResume | undefined;
+  for (;;) {
+    const step = await run.next(resume);
+    if (step.done) return step.value;
+    state.calls.push(`step:${step.value.kind}`);
+    if (step.value.kind === "register_skills") {
+      opts.onRegister?.();
+      resume = { kind: "skills_registered" };
+      continue;
+    }
+    if (opts.admission === "stop") return "stopped";
+    resume = { kind: "self_mcp_admitted", admission: opts.admission ?? chatAdmission() };
+  }
+}
+
+function assembled(out: AssistantTurnToolAssembly | "stopped") {
+  if (out === "stopped" || out.kind !== "assembled") {
+    throw new Error(`expected assembled, got ${out === "stopped" ? out : out.kind}`);
+  }
+  return out;
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   state.calls = [];
+  state.deliveredSkillIds = [];
   state.delivery = {
     tools: [{ type: "function", name: "skill_file_read" }],
     systemContext: "SKILLS_CUE",
@@ -150,14 +207,67 @@ beforeEach(() => {
     { type: "mcp", serverLabel: "ext", serverUrl: "https://ext.example.test/mcp" },
   ];
   state.selfMcpNull = false;
+  state.catalogRepaired = false;
+});
+
+describe("the steps, in the order the turn has always run them", () => {
+  it("a tool-capable provider: resolve, register, deliver, admit, self-MCP reference, external tools", async () => {
+    await drive(input());
+    expect(state.calls).toEqual([
+      "resolve:authorize",
+      "resolve:required",
+      "resolve:assigned",
+      "step:register_skills",
+      "deliver",
+      "step:admit_self_mcp_reference",
+      "selfMcpChat",
+      "externalTools",
+    ]);
+  });
+
+  it("the injected skill set is resolved BEFORE the registration, so a catalog the registration repairs does not change this turn", async () => {
+    // The concrete case: the registration repairs a catalog row that the
+    // assigned-skills resolution reads. Resolved first (as the turn always
+    // did), the repaired skill is not part of this turn's delivery.
+    await drive(input(), {
+      onRegister: () => {
+        state.catalogRepaired = true;
+      },
+    });
+    expect(state.deliveredSkillIds).toHaveLength(1);
+    expect(state.deliveredSkillIds[0]).not.toContain(REPAIRED_SKILL);
+    expect([...state.deliveredSkillIds[0]].sort()).toEqual([...SKILLS].sort());
+  });
+
+  it("a conversation-only provider: resolve, register, deliver inline, and no admission step", async () => {
+    const out = assembled(await drive(input({ provider: "gemini", defaultModel: "gemini-2.5-pro" })));
+    expect(state.calls).toEqual([
+      "resolve:authorize",
+      "resolve:required",
+      "resolve:assigned",
+      "step:register_skills",
+      "deliverInline",
+    ]);
+    expect(out.conversationOnly).toBe(true);
+    expect(out.tools).toEqual([]);
+    expect(out.selfMcpCapabilityRequired).toBeUndefined();
+    expect(out.platformMcpLabel).toBeUndefined();
+    expect(out.skillSystemContext).toBe("INLINE_BODIES");
+  });
+
+  it("refuses to continue when a step is resumed without its write step", async () => {
+    const run = assembleAssistantTurnTools(input());
+    const first = await run.next();
+    expect(first.done).toBe(false);
+    await expect(run.next({ kind: "self_mcp_admitted", admission: chatAdmission() })).rejects.toThrow(
+      /without the skill registration/,
+    );
+  });
 });
 
 describe("a tool-capable provider", () => {
   it("assembles self-MCP, external tools, skill tools and web_search, in that order", async () => {
-    const { ports } = recordingPorts();
-    const out = await assembleAssistantTurnTools(input(), ports);
-    expect(out.kind).toBe("assembled");
-    if (out.kind !== "assembled") return;
+    const out = assembled(await drive(input()));
     expect(out.conversationOnly).toBe(false);
     expect(out.tools).toEqual([
       expect.objectContaining({ type: "mcp", serverLabel: "cinatra" }),
@@ -170,61 +280,54 @@ describe("a tool-capable provider", () => {
     expect(out.skillSystemContext).toBe("SKILLS_CUE");
   });
 
-  it("runs the caller's admit step after the delivery and before the self-MCP reference", async () => {
-    const { ports } = recordingPorts();
-    await assembleAssistantTurnTools(input(), ports);
-    expect(state.calls).toEqual([
-      "deliver",
-      "admit",
-      "catalogState",
-      "selfMcpChat",
-      "externalTools",
-    ]);
-    expect(ports.admitSelfMcpReference).toHaveBeenCalledTimes(1);
-  });
-
-  it("builds the self-MCP reference with the issuer port and the admitted grant", async () => {
-    const { ports, chatIssuer, widgetIssuer } = recordingPorts("grant-7");
-    const out = await assembleAssistantTurnTools(input(), ports);
+  it("builds the chat reference from the admission: its actor, catalog state, grant and minted token", async () => {
+    const catalogState = { marker: "catalog" } as unknown as Extract<
+      TurnSelfMcpAdmission,
+      { kind: "chat" }
+    >["catalogState"];
+    const out = assembled(
+      await drive(input(), {
+        admission: chatAdmission({ catalogState, lentActionGrant: "grant-7" } as Partial<TurnSelfMcpAdmission>),
+      }),
+    );
     const call = vi.mocked(buildLlmMcpServerToolForChat).mock.calls[0];
     expect(call[0]).toBe("openai");
-    expect(call[1]).toEqual({ delegation: "chat", userId: "u1", orgId: "o1", platformRole: "member" });
-    expect(call[2]).toBe(ports.issueChatMcpActorToken);
-    expect(call[3]).toEqual({ catalogState: undefined, lentActionGrant: "grant-7" });
-    expect(chatIssuer).toHaveBeenCalledTimes(1);
-    expect(widgetIssuer).not.toHaveBeenCalled();
+    expect(call[1]).toEqual(CHAT_ACTOR);
+    expect(call[3]).toEqual({ catalogState, lentActionGrant: "grant-7" });
+    expect(vi.mocked(buildLlmMcpServerToolForWidget)).not.toHaveBeenCalled();
     expect(vi.mocked(resolveChatExternalMcpTools)).toHaveBeenCalledWith("openai", { surface: "chat" });
-    if (out.kind !== "assembled") throw new Error(out.kind);
-    expect(JSON.stringify(out.tools[0])).toContain("inert-chat-token");
+    expect(JSON.stringify(out.tools[0])).toContain("minted-chat-token");
   });
 
-  it("a widget subject uses the widget builder, the widget issuer and the widget surface", async () => {
-    const { ports, chatIssuer, widgetIssuer } = recordingPorts(null);
-    const actor = {
-      userId: "u1",
-      orgId: "o1",
-      instanceId: "wp-canonical",
-      kind: "wordpress",
-      jti: "jti-1",
-      parentJti: "cwu-row-1",
-      turnRunId: "run-1",
-      platformRole: "member",
-    };
-    await assembleAssistantTurnTools(
-      input({ selfMcp: { kind: "widget", actor } as AssistantTurnToolAssemblyInput["selfMcp"] }),
-      ports,
-    );
+  it("a widget admission uses the widget builder, its actor and token, and the widget surface", async () => {
+    const out = assembled(await drive(input(), { admission: widgetAdmission() }));
     expect(vi.mocked(buildLlmMcpServerToolForChat)).not.toHaveBeenCalled();
     const call = vi.mocked(buildLlmMcpServerToolForWidget).mock.calls[0];
-    expect(call[1]).toBe(actor);
-    expect(call[2]).toBe(ports.issueWidgetMcpActorToken);
+    expect(call[1]).toEqual(WIDGET_ACTOR);
     expect(call[3]).toEqual({ lentActionGrant: null });
-    expect(widgetIssuer).toHaveBeenCalledTimes(1);
-    expect(chatIssuer).not.toHaveBeenCalled();
-    expect(ports.readChatMcpCatalogState).not.toHaveBeenCalled();
     expect(vi.mocked(resolveChatExternalMcpTools)).toHaveBeenCalledWith("openai", {
       surface: "public_site_widget",
     });
+    expect(JSON.stringify(out.tools[0])).toContain("minted-widget-token");
+  });
+
+  it("a mint that failed is thrown inside the builder's issuer, as when the builder minted itself", async () => {
+    const mintError = new Error("signing secret missing");
+    let thrown: unknown;
+    vi.mocked(buildLlmMcpServerToolForChat).mockImplementationOnce((async (...args: unknown[]) => {
+      const issue = args[2] as (actor: unknown) => string;
+      try {
+        issue(args[1]);
+      } catch (err) {
+        thrown = err;
+      }
+      return null;
+    }) as never);
+    const out = await drive(input(), {
+      admission: chatAdmission({ actorToken: { ok: false, error: mintError } }),
+    });
+    expect(thrown).toBe(mintError);
+    expect(out).toEqual({ kind: "self_mcp_unavailable" });
   });
 
   it("applies the allow-list to named tools only", async () => {
@@ -232,9 +335,7 @@ describe("a tool-capable provider", () => {
       { type: "function", name: "skill_file_read" },
       { type: "function", name: "other_tool" },
     ];
-    const { ports } = recordingPorts();
-    const out = await assembleAssistantTurnTools(input({ allowedTools: ["other_tool"] }), ports);
-    if (out.kind !== "assembled") throw new Error(out.kind);
+    const out = assembled(await drive(input({ allowedTools: ["other_tool"] })));
     expect(out.tools).toEqual([
       expect.objectContaining({ serverLabel: "cinatra" }),
       expect.objectContaining({ serverLabel: "ext" }),
@@ -249,69 +350,39 @@ describe("a tool-capable provider", () => {
       deliveryMode: "openai_shell",
       invocationAttributable: true,
     }));
-    const { ports } = recordingPorts();
-    const out = await assembleAssistantTurnTools(input(), ports);
-    if (out.kind !== "assembled") throw new Error(out.kind);
+    const out = assembled(await drive(input()));
     expect(out.deliveryRows.map((r) => r.skillId).sort()).toEqual([...SKILLS].sort());
     expect(out.deliveryRows.every((r) => r.outcome === "delivered")).toBe(true);
   });
 });
 
 describe("the early outcomes", () => {
-  it("a delivery with no vehicle refuses before the admit step, with the refusal rows", async () => {
+  it("a delivery with no vehicle refuses before the admission step, with the refusal rows", async () => {
     state.delivery = { tools: [], systemContext: "", exposure: [] };
-    const { ports } = recordingPorts();
-    const out = await assembleAssistantTurnTools(input(), ports);
-    expect(out.kind).toBe("delivery_refused");
-    if (out.kind !== "delivery_refused") return;
+    const out = await drive(input());
+    if (out === "stopped" || out.kind !== "delivery_refused") throw new Error(String(out));
     expect(out.refusalRows.map((r) => r.skillId).sort()).toEqual([...SKILLS].sort());
     for (const row of out.refusalRows) {
       expect(row.outcome).toBe("refused");
       expect(String(row.nonDeliveryReason)).toContain("NO vehicle");
     }
-    expect(ports.admitSelfMcpReference).not.toHaveBeenCalled();
+    expect(state.calls).not.toContain("step:admit_self_mcp_reference");
     expect(vi.mocked(buildLlmMcpServerToolForChat)).not.toHaveBeenCalled();
     expect(vi.mocked(resolveChatExternalMcpTools)).not.toHaveBeenCalled();
   });
 
-  it("an admit step that stops the turn ends the assembly there", async () => {
-    const { ports } = recordingPorts();
-    vi.mocked(ports.admitSelfMcpReference).mockResolvedValueOnce(null);
-    const out = await assembleAssistantTurnTools(input(), ports);
-    expect(out).toEqual({ kind: "stopped" });
+  it("a turn that does not resume the admission step builds no reference and reads no external tool", async () => {
+    const out = await drive(input(), { admission: "stop" });
+    expect(out).toBe("stopped");
     expect(vi.mocked(buildLlmMcpServerToolForChat)).not.toHaveBeenCalled();
-    expect(ports.readChatMcpCatalogState).not.toHaveBeenCalled();
     expect(vi.mocked(resolveChatExternalMcpTools)).not.toHaveBeenCalled();
   });
 
   it("no self-MCP reference is its own outcome, and no external tool is read", async () => {
     state.selfMcpNull = true;
-    const { ports } = recordingPorts();
-    const out = await assembleAssistantTurnTools(input(), ports);
+    const out = await drive(input());
     expect(out).toEqual({ kind: "self_mcp_unavailable" });
     expect(vi.mocked(resolveChatExternalMcpTools)).not.toHaveBeenCalled();
-  });
-});
-
-describe("a conversation-only provider", () => {
-  it("assembles no tools, delivers inline and never calls a tool port", async () => {
-    const { ports, chatIssuer, widgetIssuer } = recordingPorts();
-    const out = await assembleAssistantTurnTools(
-      input({ provider: "gemini", defaultModel: "gemini-2.5-pro" }),
-      ports,
-    );
-    expect(out.kind).toBe("assembled");
-    if (out.kind !== "assembled") return;
-    expect(out.conversationOnly).toBe(true);
-    expect(out.tools).toEqual([]);
-    expect(out.selfMcpCapabilityRequired).toBeUndefined();
-    expect(out.platformMcpLabel).toBeUndefined();
-    expect(out.skillSystemContext).toBe("INLINE_BODIES");
-    expect(state.calls).toEqual(["deliverInline"]);
-    expect(ports.admitSelfMcpReference).not.toHaveBeenCalled();
-    expect(ports.readChatMcpCatalogState).not.toHaveBeenCalled();
-    expect(chatIssuer).not.toHaveBeenCalled();
-    expect(widgetIssuer).not.toHaveBeenCalled();
   });
 });
 
@@ -319,24 +390,48 @@ describe("one source, read only", () => {
   const moduleSource = readFileSync(new URL("../turn-tool-assembly.ts", import.meta.url), "utf8");
   const runtimeSource = readFileSync(new URL("../runtime.ts", import.meta.url), "utf8");
 
-  it("the assembly module imports none of the turn's write steps", () => {
+  it("the assembly module names none of the turn's write steps, mints nothing and takes no write callback", () => {
     for (const writer of [
       "recordTurnSkillDelivery",
       "persistTurnSkillDelivery",
       "issueTurnLentActionGrant",
       "checkPublicMcpReachability",
+      "ensureAssistantSkillsRegistered(",
       "ensureInstalledSkillsRegistered",
       "retireSupersededChatSkillsOnce",
+      "issueChatMcpActorToken",
+      "issueWidgetMcpActorToken",
+      "admitSelfMcpReference",
+      "readChatMcpCatalogState",
+      "randomUUID",
       "@/lib/chat-mcp-actor-token",
       "@/lib/widget-mcp-actor-token",
     ]) {
       expect(moduleSource, writer).not.toContain(writer);
     }
+    // One parameter: the input. No ports object of callbacks.
+    expect(moduleSource).toMatch(
+      /export async function\* assembleAssistantTurnTools\(\s*input: AssistantTurnToolAssemblyInput,\s*\)/,
+    );
   });
 
-  it("the turn assembles its tools through the extracted function only", () => {
+  it("the turn runs its write steps at the yielded steps, and assembles its tools through the extracted function only", () => {
     expect(runtimeSource).toContain('from "./turn-tool-assembly"');
-    expect(runtimeSource).toContain("await assembleAssistantTurnTools(");
+    expect(runtimeSource).toContain("assembleAssistantTurnTools({");
+    expect(runtimeSource).toContain('step.value.kind === "register_skills"');
+    const register = runtimeSource.indexOf('step.value.kind === "register_skills"');
+    const registration = runtimeSource.indexOf(
+      "await ensureAssistantSkillsRegistered(runtimeConfig.skillIds);",
+    );
+    const probe = runtimeSource.indexOf("await checkPublicMcpReachability();");
+    // The registration exists once, inside the register_skills step, before
+    // the admission step's probe.
+    expect(
+      runtimeSource.split("await ensureAssistantSkillsRegistered(runtimeConfig.skillIds);").length - 1,
+    ).toBe(1);
+    expect(register).toBeGreaterThan(-1);
+    expect(registration).toBeGreaterThan(register);
+    expect(probe).toBeGreaterThan(registration);
     for (const assemblyStep of [
       "resolveInjectedSkillSet(",
       "selectSkillDeliveryAdapter(",
