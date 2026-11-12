@@ -35,7 +35,7 @@ import { PrimitiveRow } from "./primitive-row";
 export function ComplexPrimitives() {
   return (
     <div className="flex flex-col">
-      <PrimitiveRow name="Table" spec="@/components/ui/table" conformance="Mono-uppercase header; navy underline; seersucker zebra (--stripe-light / --stripe-mid); IDs/times mono 11px slate.">
+      <PrimitiveRow name="Table" spec="@/components/ui/table" conformance="Mono-uppercase header; navy underline; even rows one flat band (--surface-muted light, --surface dark); IDs/times mono 11px slate.">
         <Table className="w-full">
           <TableHeader>
             <TableRow>

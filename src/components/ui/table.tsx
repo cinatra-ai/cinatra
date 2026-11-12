@@ -32,15 +32,17 @@ function TableHeader({ className, ...props }: React.ComponentProps<"thead">) {
   )
 }
 
-// Seersucker zebra. Body rows alternate between the table bg and the cool
-// --stripe-light wash. The :last-child rule keeps the "no terminal border"
-// behavior.
+// Alternate-row band (specs/app-components.html, Table). Every even body row
+// lays one flat ground one step off the page: --surface-muted in the light
+// palette, --surface in the dark palette. No pattern, and odd rows carry no
+// ground. The stripe colours are for media placeholders only. The :last-child
+// rule keeps the "no terminal border" behavior.
 function TableBody({ className, ...props }: React.ComponentProps<"tbody">) {
   return (
     <tbody
       data-slot="table-body"
       className={cn(
-        "[&_tr:last-child]:border-0 [&_tr:nth-child(even)]:bg-stripe-light/50",
+        "[&_tr:last-child]:border-0 [&_tr:nth-child(even)]:bg-surface-muted dark:[&_tr:nth-child(even)]:bg-surface",
         className,
       )}
       {...props}
