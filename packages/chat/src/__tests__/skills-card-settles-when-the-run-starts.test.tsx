@@ -248,17 +248,23 @@ describe("the skills card settles when the run starts, without a reload", () => 
   it("in /chat: editable with Continue before the start, read-only with none after it", async () => {
     await editableThenReadOnly("chat");
     // The chat arm reads the card's authority through its own session action.
-    expect(run.cookieReads).toBeGreaterThanOrEqual(2);
+    // The card goes read-only on the turn's row reading during render, while its
+    // re-read of the authority is asked from an effect of that same commit, so
+    // the second read can land just after the redraw. Wait for it, never assume
+    // it already ran.
+    await waitFor(() => expect(run.cookieReads).toBeGreaterThanOrEqual(2));
   }, 30_000);
 
   it("in the widget: the same two readings, under the widget's own credential", async () => {
     await editableThenReadOnly("widget");
     // The widget arm never touches the cookie road; it reads through its broker.
     expect(run.cookieReads).toBe(0);
-    const holdReads = stub!.calls.filter(
-      (call) => !call.url.startsWith(RUN_SEED) && String(call.init.body ?? "").includes(RUN_ID),
-    );
-    expect(holdReads.length).toBeGreaterThanOrEqual(2);
+    // The same order as the chat arm: the re-read follows the redraw's commit.
+    const holdReads = () =>
+      stub!.calls.filter(
+        (call) => !call.url.startsWith(RUN_SEED) && String(call.init.body ?? "").includes(RUN_ID),
+      );
+    await waitFor(() => expect(holdReads().length).toBeGreaterThanOrEqual(2));
     for (const call of stub!.calls) expect(call.init.credentials).toBe("omit");
   }, 30_000);
 });
