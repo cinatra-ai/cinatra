@@ -9,7 +9,7 @@ import { postgresSchema } from "@/lib/database";
 import { logFixedLine } from "@/lib/failure-log";
 import { registerAllObjectTypes } from "@/lib/register-all-object-types";
 import { isArtifactExtensionWriteAllowed } from "@/lib/artifacts/artifact-extension-access";
-import { captureDegradeCopy, type CaptureDegradeReason } from "@/lib/artifacts/cms-preview-capture";
+import { captureDegradeCopy, type CaptureDegradeReason } from "@/lib/artifacts/registered-page-render";
 import { fileFirstArtifactWrite, logFilingFailure } from "@/lib/artifacts/first-artifact-filing";
 import {
   acquirePageCaptureLease,

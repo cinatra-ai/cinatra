@@ -132,6 +132,7 @@ vi.mock("@/lib/agent-run-actor-resolve", () => ({
 vi.mock("@cinatra-ai/agents", async () => {
   const { z } = await import("zod");
   return {
+    publishCallAllowed: async () => true, // cinatra#4150: no publish decision holds this run
     readAgentRunByContextId: readAgentRunByContextIdMock,
     readAgentRunById: readAgentRunByIdMock,
     readAgentRunByTokenHash: readAgentRunByTokenHashMock,

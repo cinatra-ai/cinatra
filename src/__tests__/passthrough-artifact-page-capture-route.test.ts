@@ -41,6 +41,7 @@ const {
 
 vi.mock("@cinatra-ai/agents", () => ({
   readAgentRunById: readAgentRunByIdMock,
+  publishCallAllowed: async () => true, // cinatra#4150: no publish decision holds this run
 }));
 vi.mock("@/lib/primitive-handlers", () => ({
   collectAllPrimitiveHandlers: collectAllPrimitiveHandlersMock,
