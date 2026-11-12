@@ -370,8 +370,9 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       // (`sessionAuthorityFromResolvedRole(run.orgId, resumeRole)`), resolves no
       // identity of its own and adds no client-reachable surface.
       "packages/agents/src/review-task-actions.ts",
-      // cinatra#4150 — the publish gate: -> pending_approval / -> failed, and the resume claim
-      // pending_approval <-> running, under the caller's authority; -> stopped on "Do not publish"
+      // cinatra#4150 — the publish gate: -> pending_approval / -> failed, and Publish's fence
+      // pending_approval -> running under its pause claim (cinatra#4245), under the caller's
+      // authority; -> stopped on "Do not publish"
       // (the decider's member-session authority, derived from the role resolved for that person:
       // `sessionAuthorityFromResolvedRole(run.orgId, role)`, as review-task-actions does) and on the
       // expiry (the resume-delivery loop's system dispatch authority, handed in). It mints no system authority.
@@ -430,11 +431,13 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
   //   (pause_claim_token / _phase / _expires_at, and pause_generation at the
   //   in-place fence), inside guardedRunWrite with run.execute; the org axis is
   //   the authority's org and every UPDATE is org-scoped. Each allowlist names
-  //   the modules that import that writer: the three resume roads take the claim
+  //   the modules that import that writer: the four resume roads take the claim
   //   (the MCP resume in run-resume-under-claim.ts, the review page's Continue,
-  //   the resume delivery worker); only the delivery worker fences in place; the
-  //   release and the settle are reached only through run-resume-under-claim.ts,
-  //   whose two shared steps every road calls.
+  //   the resume delivery worker, and Publish in publish-decision-actions.ts,
+  //   cinatra#4150); only the delivery worker fences in place; the release and the
+  //   settle are reached through run-resume-under-claim.ts, whose two shared steps
+  //   the first three roads call, and from Publish, which gives back and settles
+  //   its own claim.
   {
     module: "packages/agents/src/run-pause-claim.ts",
     exportName: "claimPause",
@@ -447,6 +450,7 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       "packages/agents/src/run-resume-under-claim.ts",
       "packages/agents/src/review-task-actions.ts",
       "packages/agents/src/artifact-review-resume-delivery.ts",
+      "packages/agents/src/publish-decision-actions.ts",
     ],
   },
   {
@@ -467,7 +471,10 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     storageReferences: ["agent_runs"],
     cascadeOwnership: "inert-history",
     importBanned: true,
-    allowedImporters: ["packages/agents/src/run-resume-under-claim.ts"],
+    allowedImporters: [
+      "packages/agents/src/run-resume-under-claim.ts",
+      "packages/agents/src/publish-decision-actions.ts",
+    ],
   },
   {
     module: "packages/agents/src/run-pause-claim.ts",
@@ -477,7 +484,10 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     storageReferences: ["agent_runs"],
     cascadeOwnership: "inert-history",
     importBanned: true,
-    allowedImporters: ["packages/agents/src/run-resume-under-claim.ts"],
+    allowedImporters: [
+      "packages/agents/src/run-resume-under-claim.ts",
+      "packages/agents/src/publish-decision-actions.ts",
+    ],
   },
   // — new-run creation (#1940 P3, Decision 2): the exemption above is FLIPPED
   //   — both are now guarded inserts (guardedRunWrite, capability run.execute)

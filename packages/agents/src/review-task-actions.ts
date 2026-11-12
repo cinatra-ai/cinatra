@@ -7,6 +7,7 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { enqueueBackgroundJob, BACKGROUND_JOB_NAMES } from "@/lib/background-jobs";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
+import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 import { agentRuns } from "./schema";
 import { enforceRunAccess, resolveEffectivePolicy, type ActorRoleHints } from "./auth-policy";
 import type { AgentAuthPolicy } from "./auth-policy-types";
@@ -1108,28 +1109,11 @@ export async function approveReviewTaskInternal(
       // seen and nothing is sent; a refusal gives the claim back. A hold that cannot be read answers one
       // fixed text that names no run and carries no store error.
       await assertNoOpenPublishDecision(run.id).catch((err: unknown) => { throw publishHoldFault(err); });
-      // Dynamic imports mirror mcp/handlers.ts:625-628 — avoids circular dep at
-      // module load time (review-task-actions is imported by actions.ts which is
-      // re-exported from index.ts; @cinatra-ai/a2a pulls in mcp-server which depends
-      // on @cinatra/agent-builder for handler registration).
-      const { createExternalA2AClient } = await import("@cinatra-ai/a2a");
-      const { randomUUID } = await import("node:crypto");
-
-      const client = await createExternalA2AClient({
-        agentUrl: wayflowUrl,
-        // 24h ceiling + custom undici dispatcher aligned with wayflow's
-        // batch-LLM timeout patches (docker/wayflow/agent_loader.py).
-        // `createWayflowFetch()` builds a fetch with long
-        // headersTimeout/bodyTimeout — globalThis.fetch's default 300s
-        // headersTimeout would kill the connection before the 24h
-        // AbortSignal fires.
-        timeoutMs: WAYFLOW_A2A_TIMEOUT_MS,
-        fetchImpl: createWayflowFetch(),
-      });
-
-      // Capture the Task returned by sendTask and pass it through the canonical
-      // state-machine handler. Discarding the Task and unconditionally
-      // transitioning pending_approval -> running would drop multi-gate flows
+      // The shared WayFlow resume (cinatra#4150) is prepared before the fence and
+      // sent after it (cinatra#4245): the client with its 24h ceiling and the
+      // runtime's long header/body timeouts, this leg's credential and the message.
+      // The Task the send returns goes through the canonical state-machine handler:
+      // an unconditional pending_approval -> running would drop multi-gate flows
       // after the first HITL gate.
       // #1193 resume carrier: mint this leg's per-run credential and persist its
       // hash BEFORE the blocking sendTask, then carry the RAW token in the A2A
@@ -1142,12 +1126,10 @@ export async function approveReviewTaskInternal(
       // when its lease ends. A claimer that then loses its fence leaves one more
       // credential of this run that is never sent (the credential set is additive
       // by design, run-token-store.ts).
-      const { mintResumeRunTokenMetadata } = await import("./wayflow-run-token-carrier");
-      const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
-      // The message id is drawn before the fence too: past the fence a failure
-      // counts as possibly sent, so nothing that can fail before the send may wait
-      // there to be drawn (cinatra#4245).
-      const messageId = randomUUID();
+      // The preparation draws the message id too: past the fence a failure counts
+      // as possibly sent, so nothing that can fail before the send may wait there
+      // to be drawn (cinatra#4245).
+      const prepared = await prepareWayflowResume(run.id, wayflowUrl);
       // THE FENCE: a stop or a lease takeover since the claim loses here, and
       // nothing is sent.
       try {
@@ -1271,33 +1253,19 @@ export async function approveReviewTaskInternal(
         return null;
       });
 
-      // Past this line the answer is on the wire.
-      dispatchStarted = true;
-      const deadline = Date.now() + WAYFLOW_A2A_TIMEOUT_MS;
-      const initialTask = await client.sendTask({
-        message: {
-          role: "user",
-          kind: "message",
-          messageId,
-          contextId: run.a2aContextId,
-          parts: [{ kind: "text", text: resumeText }],
-          metadata: resumeMetadata,
-        },
-        configuration: { acceptedOutputModes: ["text"], blocking: true },
-      }, {timeoutMs: Math.max(1,deadline-Date.now())});
-      const task = await awaitContinueTaskOutcome(initialTask,client,run.a2aContextId,deadline);
-
-      // Lazy import to avoid circular dep (review-task-actions ← actions.ts ←
-      // index.ts ← @cinatra-ai/a2a).
-      //
-      // `fromStatus` is "running" because the fence above already moved the row off
-      // `pending_approval` (cinatra#3423): the handler's park and terminal
-      // transitions are taken from where the run ACTUALLY is, and every edge it
-      // needs out of `running` — to `pending_approval` for the next gate, to
-      // `completed`, `failed` or `waiting_trigger` — the state machine already
-      // carries. resumeAuthority was minted above (before sendTask).
-      const { handleWayflowTaskState } = await import("./execution");
-      await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task, authority: resumeAuthority, pauseClaimToken: claim.token });
+      // The shared WayFlow resume (cinatra#4150): the blocking send into the held
+      // context and the canonical state handler from `running` (the fence moved the
+      // row there), under this answer's claim token. `onDispatch` marks the answer
+      // on the wire.
+      const task = await sendWayflowResume({
+        run,
+        contextId: run.a2aContextId,
+        text: resumeText,
+        authority: resumeAuthority,
+        prepared,
+        pauseClaimToken: claim.token,
+        onDispatch: () => { dispatchStarted = true; },
+      });
 
       const state=task.status?.state;
       if(capturedPromptId && gateSnapshot && submittedValues !== null
@@ -1346,6 +1314,77 @@ export async function approveReviewTaskInternal(
     `real UUID paths are not supported after review task row removal. ` +
     `Use synthetic prefix (setup-, wayflow-) for post-migration runs.`,
   );
+}
+
+/** The steps of a WayFlow resume that can fail before its send (cinatra#4245), drawn before the caller's fence. */
+export type PreparedWayflowResume = {
+  client: Awaited<ReturnType<typeof import("@cinatra-ai/a2a").createExternalA2AClient>>;
+  metadata: Awaited<ReturnType<typeof import("./wayflow-run-token-carrier").mintResumeRunTokenMetadata>>;
+  messageId: string;
+};
+
+/**
+ * The preparation of the shared WayFlow resume (cinatra#4150): the client, this leg's per-run credential (#1193: it
+ * rides in the message METADATA, because the text reaches the gate's InputMessageNode verbatim) and the message id.
+ * The caller runs it under its pause claim and BEFORE its fence (cinatra#4245): a failure here gives the claim back,
+ * while past the fence every failure counts as possibly sent. A claimer that then loses its fence leaves one more
+ * credential of this run that is never sent (the credential set is additive by design, run-token-store.ts).
+ */
+export async function prepareWayflowResume(runId: string, agentUrl: string): Promise<PreparedWayflowResume> {
+  // Dynamic imports avoid a circular dep at module load time (review-task-actions
+  // is imported by actions.ts, re-exported from index.ts; @cinatra-ai/a2a pulls in
+  // mcp-server, which depends on @cinatra/agent-builder for handler registration).
+  const { createExternalA2AClient } = await import("@cinatra-ai/a2a");
+  // 24h ceiling + a dispatcher whose header/body timeouts match the runtime's
+  // batch-LLM timeouts (globalThis.fetch's 300s headersTimeout would end first).
+  const client = await createExternalA2AClient({
+    agentUrl,
+    timeoutMs: WAYFLOW_A2A_TIMEOUT_MS,
+    fetchImpl: createWayflowFetch(),
+  });
+  const { mintResumeRunTokenMetadata } = await import("./wayflow-run-token-carrier");
+  const metadata = await mintResumeRunTokenMetadata(runId);
+  return { client, metadata, messageId: randomUUID() };
+}
+
+/**
+ * The WayFlow resume shared by the generic `wayflow-` approve and the publish decision's Publish (cinatra#4150). The
+ * caller holds the pause claim whose token it passes, and its fence moved the run `pending_approval -> running`
+ * (cinatra#4245). One blocking send of `text` into the run's held context with the prepared client, credential and
+ * message id, then the canonical state handler from `running`, which writes only under that claim token.
+ * `onDispatch` runs right before the send: past it the answer is on the wire.
+ */
+export async function sendWayflowResume(args: {
+  run: NonNullable<Awaited<ReturnType<typeof readAgentRunById>>>;
+  contextId: string;
+  text: string;
+  authority: OrgWriteAuthority;
+  prepared: PreparedWayflowResume;
+  pauseClaimToken: string;
+  onDispatch?: () => void;
+}) {
+  const { run, contextId, text, authority, prepared, pauseClaimToken } = args;
+  const { client } = prepared;
+  args.onDispatch?.();
+  const deadline = Date.now() + WAYFLOW_A2A_TIMEOUT_MS;
+  const initialTask = await client.sendTask({
+    message: {
+      role: "user",
+      kind: "message",
+      messageId: prepared.messageId,
+      contextId,
+      parts: [{ kind: "text", text }],
+      metadata: prepared.metadata,
+    },
+    configuration: { acceptedOutputModes: ["text"], blocking: true },
+  }, { timeoutMs: Math.max(1, deadline - Date.now()) });
+  const task = await awaitContinueTaskOutcome(initialTask, client, contextId, deadline);
+  // The task goes through the canonical handler, never an unconditional move to
+  // `running`, so a multi-gate flow parks again at its next gate. `fromStatus` is
+  // `running` because the caller's fence moved the row off `pending_approval`.
+  const { handleWayflowTaskState } = await import("./execution");
+  await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task, authority, pauseClaimToken });
+  return task;
 }
 
 /** Internal: an accepted async reply is not yet a settled answer. */
