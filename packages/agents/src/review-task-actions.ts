@@ -34,6 +34,7 @@ import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuc
 // kernel guard instead of directly on the module `db` (owner ruling 2026-07-26,
 // ruling 1: "now").
 import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
+import { readWayflowSubmittedValues } from "./wayflow-submitted-values";
 // cinatra#2484: the setup-resume path is the LAST place a type-violating setup
 // value can be stopped before it becomes `agent_runs.inputParams` and reaches
 // the run. It needs the SAME effective schema the setup loop rendered from —
@@ -1052,25 +1053,10 @@ export async function approveReviewTaskInternal(
       resumeText = "[Approved by operator]";
     }
 
-    // Extract structured submission payload (parsed userResponse JSON, else
-    // values minus userResponse, else null).
-    let submittedValues: Record<string, unknown> | null = null;
-    if (typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0) {
-      try {
-        const parsed = JSON.parse(userResponseRaw);
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          submittedValues = parsed as Record<string, unknown>;
-        }
-      } catch {
-        if (valuesObj) {
-          const { userResponse: _u, ...rest } = valuesObj as Record<string, unknown>;
-          if (Object.keys(rest).length > 0) submittedValues = rest;
-        }
-      }
-    } else if (valuesObj) {
-      const { userResponse: _u, ...rest } = valuesObj as Record<string, unknown>;
-      if (Object.keys(rest).length > 0) submittedValues = rest;
-    }
+    // Extract structured submission payload: a named single text answer under
+    // its field (cinatra#4244), else parsed userResponse JSON, else values minus
+    // userResponse, else null. The resume text above is unchanged by this.
+    const submittedValues = readWayflowSubmittedValues(values);
 
     // THE CLAIM IS RELEASED WHEN THE ANSWER NEVER LEAVES (cinatra#3423).
     //

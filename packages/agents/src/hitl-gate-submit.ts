@@ -583,7 +583,9 @@ function isPlainSchemaObject(value: unknown): value is Record<string, unknown> {
  *    `required` present but not a list of names, a non-boolean `x-hidden` /
  *    `x-required`, nesting deeper than `MAX_SCHEMA_DEPTH` - and a gate schema
  *    with no `properties` whose `required` list names any value (the card has
- *    no field to write it into). It is refused: it is neither a bare
+ *    no field to write it into), or whose `required` list names anything that
+ *    is not a declared property (a nested object's `required` must name a
+ *    visible declared property). It is refused: it is neither a bare
  *    confirmation (that would send an approval for a gate nobody could read)
  *    nor drawable (a property that is not a schema cannot be drawn).
  *
@@ -621,6 +623,13 @@ function isWellFormedFieldSchema(sub: unknown, depth: number): boolean {
     if (!isPlainSchemaObject(properties)) return false;
     for (const member of Object.values(properties)) {
       if (!isWellFormedFieldSchema(member, depth + 1)) return false;
+    }
+    // A nested required name must name a VISIBLE declared property: the drawn
+    // object checks it on the press, and a name no field can write would hold
+    // the gate forever (cinatra#4244).
+    for (const name of (required as string[] | undefined) ?? []) {
+      if (!Object.prototype.hasOwnProperty.call(properties, name)) return false;
+      if ((properties[name] as Record<string, unknown>)["x-hidden"] === true) return false;
     }
   }
   if (Object.prototype.hasOwnProperty.call(sub, "items") && !isWellFormedFieldSchema(sub.items, depth + 1)) {
@@ -674,6 +683,9 @@ export function readSchemaFieldGate(schema: unknown): SchemaFieldGateReading {
   ) {
     return { kind: "malformed" };
   }
+  for (const name of (required as string[] | undefined) ?? []) {
+    if (!Object.prototype.hasOwnProperty.call(properties, name)) return { kind: "malformed" };
+  }
   const kept = Object.create(null) as Record<string, Record<string, unknown>>;
   const fields: string[] = [];
   const xRequired: string[] = [];
@@ -721,14 +733,13 @@ export function readSchemaFieldGate(schema: unknown): SchemaFieldGateReading {
  *    it the node is handed "[Approved by operator]" in place of the answer.
  *    When the gate asks for exactly one field, declared as a string, and the
  *    answer is a string, that text is the resume text verbatim (the
- *    convention the idea-selection renderer follows for its one output). Any
+ *    convention the idea-selection renderer follows for its one output), JSON-
+ *    looking or not, and `userResponseFieldName` names the field so the
+ *    server records the answer under it (`readWayflowSubmittedValues`). Any
  *    other answer - a list, a number, a boolean, an object, or several
  *    fields - is sent as one JSON object of the declared fields that were
  *    answered (a blank text or an empty list is not an answer), the
  *    structured round-trip the server parses back into the submitted values.
- *    A single text answer that itself parses as JSON (`42`, `{"tone":"warm"}`)
- *    is sent in that JSON form too, under its declared field: sent verbatim,
- *    the server would parse it as the submitted values themselves.
  *  - A number that is not finite cannot travel as JSON (it would reach the
  *    flow as `null`): the payload is refused with `NonFiniteAnswerError`.
  *  - No declared field answered: no resume text, so the flow receives the
@@ -736,15 +747,6 @@ export function readSchemaFieldGate(schema: unknown): SchemaFieldGateReading {
  *  - A `userResponse` the answer already carries is kept as it is.
  *  - A schema that is not read as `fields` adds no resume text.
  */
-function parsesAsJson(text: string): boolean {
-  try {
-    JSON.parse(text);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function buildSchemaFieldGatePayload(args: {
   schema: unknown;
   next: unknown;
@@ -776,8 +778,9 @@ export function buildSchemaFieldGatePayload(args: {
       | { type?: unknown }
       | undefined;
     const value = ownValue(answered, only);
-    if (declared?.type === "string" && typeof value === "string" && !parsesAsJson(value)) {
+    if (declared?.type === "string" && typeof value === "string") {
       payload.userResponse = value;
+      payload.userResponseFieldName = only;
       return payload;
     }
   }

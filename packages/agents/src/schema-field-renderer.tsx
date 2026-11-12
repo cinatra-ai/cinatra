@@ -1276,7 +1276,10 @@ function StructuredObjectField(props: ObjectFieldProps) {
     Object.prototype.hasOwnProperty.call(typed, key) ? typed[key] : ownSubValue(draft, key);
   // A typed number that is not a finite number (`1e309`, `abc`) is no answer:
   // its field shows "Enter a valid number." and the Continue is held, so it is
-  // never dropped or sent as `null` (cinatra#4244). Any visible number field.
+  // never dropped or sent as `null` (cinatra#4244). This covers the number
+  // fields this object draws itself. A number inside a NESTED object is not
+  // held: it shows the same message, its flush hands over nothing, and the
+  // nested value is sent without it (never as `null`).
   const typedNumberInvalid = visible.some((key) => {
     const kind = ((ownSubValue(properties, key) ?? {}) as { type?: unknown }).type;
     if (kind !== "number" && kind !== "integer") return false;
