@@ -8,7 +8,8 @@
  * `{ approved }` confirmation and drew a Continue alone, so a gate that declares
  * fields of its own (the blog pipeline's "Pick the brand voice", declaring
  * `brandVoice`) never drew `#field-brandVoice`: the reader saw nothing to fill
- * in after the Continue on the gate before it, and after a reload as well.
+ * in after the Continue on the gate before it. (By reading the code, a reload
+ * draws the same; no session has observed a reload.)
  *
  * Pinned here, on the stepper, with no reload and no remount:
  *   - Continue on one gate, then the run parks on the next gate, which declares
@@ -17,7 +18,15 @@
  *     single text field's text is also the WayFlow resume text;
  *   - a blank optional answer sends the approval the Continue-only card sent;
  *   - a bare `{ type: "object" }` confirmation still draws no field and its one
- *     Continue still sends `{ approved, approvedAt }`.
+ *     Continue still sends `{ approved, approvedAt }`;
+ *   - every declared answer reaches WayFlow: a non-string answer, or several,
+ *     travel as one JSON object in the resume text;
+ *   - a declared value with no default (`x-required`, or the schema's
+ *     `required` list) holds the Continue unavailable and message-free until
+ *     the field writes it (design V.1);
+ *   - a malformed gate schema fails closed: no field, no Continue;
+ *   - the `approved` / `approvedAt` bookkeeping keys are never drawn;
+ *   - two presses in one tick send the answer once.
  *
  * Harness mirrors orchestrator-stepper-panel-boolean-setup-continue-4310.test.tsx.
  *
@@ -167,6 +176,26 @@ function brandVoiceGate(): Record<string, unknown> {
   };
 }
 
+/** A gate on the fallback id with the given schema (non-setup, WayFlow). */
+function gateWith(schema: unknown, reviewTaskId = "wayflow-task-other"): Record<string, unknown> {
+  return {
+    schema,
+    xRenderer: SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+    values: {},
+    reviewTaskId,
+  };
+}
+
+function fieldById(name: string): HTMLElement | null {
+  return document.getElementById(`field-${name}`);
+}
+
+/** The last approval payload sent. */
+function lastPayload(): Record<string, unknown> {
+  const calls = hitlActions.approveReviewTask.mock.calls as unknown[][];
+  return calls[calls.length - 1]![1] as Record<string, unknown>;
+}
+
 async function mount(gate: Record<string, unknown>) {
   INTERRUPT = gate;
   const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
@@ -282,5 +311,137 @@ describe("OrchestratorStepperPanel - the next input gate after a Continue (cinat
       "approved",
       "approvedAt",
     ]);
+  });
+  it("carries a list answer to WayFlow as a JSON object in the resume text", async () => {
+    const schema = { type: "object", properties: { tags: { type: "array", title: "Tags" } } };
+    await mount(gateWith(schema));
+    await waitFor(() => expect(fieldById("tags")).not.toBeNull());
+    fireEvent.change(fieldById("tags")!, { target: { value: "warm\nplain" } });
+    await waitFor(() => expect(continues()).toHaveLength(1));
+    fireEvent.click(continues()[0]!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const sent = lastPayload();
+    expect(sent.tags).toEqual(["warm", "plain"]);
+    expect(JSON.parse(sent.userResponse as string)).toEqual({ tags: ["warm", "plain"] });
+  });
+
+  it("carries several answers to WayFlow as one JSON object in the resume text", async () => {
+    const schema = {
+      type: "object",
+      properties: { title: { type: "string", title: "Title" }, body: { type: "string", title: "Body" } },
+    };
+    await mount(gateWith(schema));
+    await waitFor(() => expect(fieldById("title")).not.toBeNull());
+    fireEvent.change(fieldById("title")!, { target: { value: "T" } });
+    fireEvent.change(fieldById("body")!, { target: { value: "B" } });
+    await waitFor(() => expect(continues()).toHaveLength(1));
+    fireEvent.click(continues()[0]!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(lastPayload().userResponse as string)).toEqual({ title: "T", body: "B" });
+  });
+
+  it("holds the Continue unavailable, with no message, until an x-required value is written (V.1)", async () => {
+    const schema = {
+      type: "object",
+      properties: { brandVoice: { type: "string", title: "Brand voice", "x-required": true } },
+    };
+    await mount(gateWith(schema));
+    await waitFor(() => expect(fieldById("brandVoice")).not.toBeNull());
+    await waitFor(() => expect(continues()).toHaveLength(1));
+    expect(continues()[0]!.disabled).toBe(true);
+    fireEvent.click(continues()[0]!);
+    fireEvent.change(fieldById("brandVoice")!, { target: { value: "   " } });
+    await settle();
+    expect(continues()[0]!.disabled).toBe(true);
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    expect(document.body.textContent ?? "").not.toMatch(/Fill in the required|Required\b/);
+
+    fireEvent.change(fieldById("brandVoice")!, { target: { value: "Warm." } });
+    await waitFor(() => expect(continues()[0]!.disabled).toBe(false));
+    fireEvent.click(continues()[0]!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    expect(lastPayload()).toEqual(
+      expect.objectContaining({ brandVoice: "Warm.", userResponse: "Warm.", approved: true }),
+    );
+  });
+
+  it("holds the Continue unavailable, with no message, until a required list is written (V.1)", async () => {
+    const schema = {
+      type: "object",
+      properties: { tags: { type: "array", title: "Tags" } },
+      required: ["tags"],
+    };
+    await mount(gateWith(schema));
+    await waitFor(() => expect(fieldById("tags")).not.toBeNull());
+    await waitFor(() => expect(continues()).toHaveLength(1));
+    expect(continues()[0]!.disabled).toBe(true);
+    fireEvent.change(fieldById("tags")!, { target: { value: "  \n " } });
+    fireEvent.click(continues()[0]!);
+    await settle();
+    expect(continues()[0]!.disabled).toBe(true);
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    expect(document.body.textContent ?? "").not.toMatch(/Fill in the required|Required\b/);
+
+    fireEvent.change(fieldById("tags")!, { target: { value: "warm" } });
+    await waitFor(() => expect(continues()[0]!.disabled).toBe(false));
+    fireEvent.click(continues()[0]!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    expect(lastPayload().tags).toEqual(["warm"]);
+  });
+
+  it("does not hold a required value that declares a default (V.1)", async () => {
+    const schema = {
+      type: "object",
+      properties: { tone: { type: "string", title: "Tone", default: "plain" } },
+      required: ["tone"],
+    };
+    await mount(gateWith(schema));
+    await waitFor(() => expect(fieldById("tone")).not.toBeNull());
+    await waitFor(() => expect(continues()).toHaveLength(1));
+    expect(continues()[0]!.disabled).toBe(false);
+  });
+
+  for (const [name, schema] of [
+    ["a list of properties", { type: "object", properties: [] }],
+    ["null properties", { type: "object", properties: null }],
+    ["a null property", { type: "object", properties: { brandVoice: null } }],
+  ] as const) {
+    it(`fails closed on a malformed gate schema (${name}): no field, no Continue`, async () => {
+      await mount(gateWith(schema));
+      await waitFor(() =>
+        expect(document.body.textContent ?? "").toMatch(/no renderer configured/),
+      );
+      expect(continues()).toHaveLength(0);
+      expect(document.querySelector('[id^="field-"]')).toBeNull();
+      expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    });
+  }
+
+  it("never draws the approved / approvedAt bookkeeping keys as fields", async () => {
+    const schema = {
+      type: "object",
+      properties: {
+        brandVoice: { type: "string", title: "Brand voice" },
+        approved: { type: "boolean" },
+        approvedAt: { type: "string" },
+      },
+    };
+    await mount(gateWith(schema));
+    await waitFor(() => expect(fieldById("brandVoice")).not.toBeNull());
+    expect(fieldById("approved")).toBeNull();
+    expect(fieldById("approvedAt")).toBeNull();
+  });
+
+  it("sends the answer once when Continue is pressed twice in one tick", async () => {
+    await mount(brandVoiceGate());
+    await waitFor(() => expect(brandVoiceField()).not.toBeNull());
+    fireEvent.change(brandVoiceField()!, { target: { value: "Warm and plain." } });
+    await waitFor(() => expect(continues()).toHaveLength(1));
+    const button = continues()[0]!;
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1);
   });
 });
