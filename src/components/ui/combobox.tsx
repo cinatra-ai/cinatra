@@ -167,11 +167,12 @@ function Combobox({
           // `rounded-md` token this used to take is derived from a `--radius`
           // the two palettes set differently, so the pair rounded 6px in one
           // and 8px in the other where the drawing draws one number.
-          // `pl-3 pr-2.5`: the inset the Example writes out in full,
-          // `padding: 0 10px 0 12px` - 12px before the value, and the
-          // Input's own 10px after the chevron.
+          // `pl-3 pr-2.5 py-0`: the padding the Example writes out in full,
+          // `padding: 0 10px 0 12px` - 12px before the value, the Input's
+          // own 10px after the chevron, and 0 above and below: the 32px
+          // height alone sets the block size and the row centres on it.
           className={cn(
-            "flex h-8 w-fit items-center justify-between gap-2 rounded-[7px] border border-input bg-surface-strong pl-3 pr-2.5 py-1 text-sm font-normal whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-muted-foreground data-[join=bottom]:rounded-b-none data-[join=top]:rounded-t-none dark:bg-input-fill/30 dark:hover:bg-input-fill/50",
+            "flex h-8 w-fit items-center justify-between gap-2 rounded-[7px] border border-input bg-surface-strong pl-3 pr-2.5 py-0 text-sm font-normal whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-muted-foreground data-[join=bottom]:rounded-b-none data-[join=top]:rounded-t-none dark:bg-input-fill/30 dark:hover:bg-input-fill/50",
             className,
           )}
         >
