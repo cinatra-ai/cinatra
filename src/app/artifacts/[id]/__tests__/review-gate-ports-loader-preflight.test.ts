@@ -92,6 +92,7 @@ describe("the actual loader releases its preflight while target I/O remains pend
     try {
       await flush();
       expect(returned).toBe(true);
+      expect(artifactIo.readArtifact).toHaveBeenCalled();
       const surface = await loading;
       expect(surface.kind).toBe(status === "pending" ? "ready" : "settled");
       expect(surface.kind !== "blocked" && surface.kind !== "not-authorized" && surface.targets.map((entry) => entry.target)).toEqual(pins);
