@@ -546,16 +546,28 @@ export function mapInterruptToHitlContext(
  */
 export type JustSubmittedGate = { xRenderer: string; reviewTaskId: string | null };
 
-const NO_ANSWERED_REVIEW_TASKS: ReadonlySet<string> = new Set();
+/**
+ * The review tasks answered on this mount, as the suppression reads them:
+ * anything that answers `has` (a Set of ids, or the claims map of the
+ * answered-gate ledger, answered-gate-ledger.ts).
+ */
+export type AnsweredReviewTasks = { has(reviewTaskId: string): boolean };
+
+const NO_ANSWERED_REVIEW_TASKS: AnsweredReviewTasks = new Set<string>();
 
 /**
- * A review task id that one run reuses for several gates in a row: the setup
- * loop's `setup-<runId>` (one per run, every setup field) and a WayFlow task's
- * `wayflow-<taskId>` (one per task, every gate of it). Such an id names no
- * single gate, so it is never read as spent.
+ * Whether a review task id names ONE gate. A missing or non-string id, an
+ * empty one and a whitespace-only one name none. Nor does `setup-<runId>`:
+ * the setup loop mints it once per run and reuses it for every setup field of
+ * that run. A WayFlow id (`wayflow-<taskId>`) names one gate: a multi-gate
+ * WayFlow flow mints a new task id for each gate (packages/a2a event-log.ts).
  */
-function isSharedGateReviewTaskId(reviewTaskId: string): boolean {
-  return reviewTaskId.startsWith("setup-") || reviewTaskId.startsWith("wayflow-");
+export function reviewTaskIdNamesOneGate(reviewTaskId: unknown): reviewTaskId is string {
+  return (
+    typeof reviewTaskId === "string" &&
+    reviewTaskId.trim() !== "" &&
+    !reviewTaskId.startsWith(SETUP_GATE_TASK_ID_PREFIX)
+  );
 }
 
 /**
@@ -567,25 +579,32 @@ function isSharedGateReviewTaskId(reviewTaskId: string): boolean {
  * signals the caller to null its ref).
  *
  * AND THE NEXT GATE OF THE SAME RENDERER IS DRAWN (cinatra#3080). Two context
- * slots in a row are two gates of one renderer with two review tasks. The
+ * gates in a row are two gates of one renderer with two review tasks. The
  * caller passes the answered gate as one pair and the review tasks answered on
- * this mount. A review task in that set is spent: polls are not ordered, so a
- * late one can still carry an older answered gate, and it is never drawn
- * again, armed pair or not. A same-renderer gate whose review task is neither
- * the armed one nor spent is the next question: it is drawn and the caller
- * clears the pair. An empty review task, a shared one (`setup-<runId>`,
- * `wayflow-<taskId>`) and a caller that passes only a renderer keep the old
- * reading: suppressed while the renderer matches.
+ * this mount. The reading, in this order:
+ *  - a raw gate whose review task names one gate (`reviewTaskIdNamesOneGate`)
+ *    and is in the answered set is suppressed, whatever its renderer and
+ *    whether or not a pair is armed: polls are not ordered, so a late one can
+ *    still carry an older answered gate;
+ *  - with no armed pair, the raw gate is drawn;
+ *  - a raw gate of another renderer is drawn, and the caller clears the pair;
+ *  - a raw gate of the same renderer is drawn, and the caller clears the
+ *    pair, only when its review task names one gate, the armed review task is
+ *    a non-blank string, and the two differ;
+ *  - every other raw gate of the same renderer stays suppressed. That covers
+ *    the shared `setup-<runId>` id, a blank or non-string id on either side,
+ *    and a caller that passes only a renderer: the old renderer-only reading.
  */
 export function applyJustSubmittedSuppression(
   raw: HitlGateContext | null,
   justSubmitted: JustSubmittedGate | string | null,
-  answeredReviewTaskIds: ReadonlySet<string> = NO_ANSWERED_REVIEW_TASKS,
+  answeredReviewTaskIds: AnsweredReviewTasks = NO_ANSWERED_REVIEW_TASKS,
 ): { context: HitlGateContext | null; clearSuppression: boolean } {
   if (raw === null) return { context: null, clearSuppression: false };
-  const rawTask = typeof raw.reviewTaskId === "string" ? raw.reviewTaskId : "";
-  const rawTaskNamesOneGate = rawTask !== "" && !isSharedGateReviewTaskId(rawTask);
-  if (rawTaskNamesOneGate && answeredReviewTaskIds.has(rawTask)) {
+  const rawTask: string | null = reviewTaskIdNamesOneGate(raw.reviewTaskId)
+    ? raw.reviewTaskId
+    : null;
+  if (rawTask !== null && answeredReviewTaskIds.has(rawTask)) {
     return { context: null, clearSuppression: false };
   }
   const armed: JustSubmittedGate | null =
@@ -597,12 +616,11 @@ export function applyJustSubmittedSuppression(
     // Different step arrived — the caller should clear the suppression.
     return { context: raw, clearSuppression: true };
   }
-  if (
-    rawTaskNamesOneGate &&
-    typeof armed.reviewTaskId === "string" &&
-    armed.reviewTaskId !== "" &&
-    rawTask !== armed.reviewTaskId
-  ) {
+  const armedTask =
+    typeof armed.reviewTaskId === "string" && armed.reviewTaskId.trim() !== ""
+      ? armed.reviewTaskId
+      : null;
+  if (rawTask !== null && armedTask !== null && rawTask !== armedTask) {
     return { context: raw, clearSuppression: true };
   }
   return { context: null, clearSuppression: false };
