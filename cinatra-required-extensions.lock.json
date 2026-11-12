@@ -75,9 +75,9 @@
     {
       "packageName": "@cinatra-ai/dashboard-artifact",
       "repo": "cinatra-ai/dashboard-artifact",
-      "resolvedSha": "6459039af4a9737cb527a084adc3729c6eaea115",
+      "resolvedSha": "314f63a1eef28cff4b0f16de028b9f892bdc56b8",
       "packageVersion": "0.1.0",
-      "treeSha256": "f7df29d242d8b560a63bff0a211d0af1c865a1b9a6f269202b20eae28efa4c90"
+      "treeSha256": "aa18d2de52e97906aebcab2a997ae647917059703ff83aa307bd69ef073939a2"
     },
     {
       "packageName": "@cinatra-ai/document-artifact",
