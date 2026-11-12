@@ -1,7 +1,8 @@
 // RFC 8785 (JSON Canonicalization Scheme) for the tool-manifest report
 // (packages/agent-ui-protocol/CONTRACT.md section 5.2, "Canonical JSON").
 // The vectors below are the RFC's own examples (section 3.2.2, 3.2.3 and
-// Appendix B), so the function is pinned to the standard, not to itself.
+// selected Appendix B numbers), so the function is pinned to the standard,
+// not to itself.
 
 import { describe, expect, it } from "vitest";
 import { CanonicalJsonError, canonicalizeJson } from "../canonical-json";
@@ -71,6 +72,7 @@ describe("canonicalizeJson (RFC 8785)", () => {
     ["4430000000000000", "295147905179352830000"],
     ["44b52d02c7e14af5", "9.999999999999997e+22"],
     ["44b52d02c7e14af6", "1e+23"],
+    ["44b52d02c7e14af7", "1.0000000000000001e+23"],
     ["3eb0c6f7a0b5ed8d", "0.000001"],
     ["3eb0c6f7a0b5ed8c", "9.999999999999997e-7"],
   ])("serializes the Appendix B number %s as %s", (hex, expected) => {
@@ -111,10 +113,55 @@ describe("canonicalizeJson (RFC 8785)", () => {
     expect(() => canonicalizeJson(undefined)).toThrow(CanonicalJsonError);
   });
 
-  it("refuses a cycle", () => {
+  it("refuses a hole of a sparse array", () => {
+    const holed: unknown[] = [1, 2, 3];
+    delete holed[1];
+    expect(() => canonicalizeJson(holed)).toThrow(CanonicalJsonError);
+    expect(() => canonicalizeJson(new Array(1))).toThrow(CanonicalJsonError);
+    const late: unknown[] = [];
+    late[1] = 1;
+    expect(() => canonicalizeJson({ a: { b: late } })).toThrow(CanonicalJsonError);
+  });
+
+  it("escapes control characters as RFC 8785 states", () => {
+    expect(canonicalizeJson("\b\t\n\f\r\u0000\u001f\u007f")).toBe(
+      '"\\b\\t\\n\\f\\r\\u0000\\u001f\u007f"',
+    );
+  });
+
+  it.each([
+    ["a lone high surrogate", "\uD800"],
+    ["a lone low surrogate", "\uDC00"],
+    ["a high surrogate at the end", "a\uDBFF"],
+    ["a low surrogate before a high one", "\uDC00\uD800"],
+  ])("refuses %s in a string value and in an object key", (_label, bad) => {
+    expect(() => canonicalizeJson(bad)).toThrow(CanonicalJsonError);
+    expect(() => canonicalizeJson({ a: [{ default: bad }] })).toThrow(CanonicalJsonError);
+    expect(() => canonicalizeJson({ [bad]: 1 })).toThrow(CanonicalJsonError);
+  });
+
+  it("keeps a valid surrogate pair as the character itself", () => {
+    expect(canonicalizeJson({ "\uD83D\uDE00": "\uD83D\uDE00" })).toBe('{"\uD83D\uDE00":"\uD83D\uDE00"}');
+  });
+
+  it("refuses a cycle, direct, indirect and through an array", () => {
     const a: Record<string, unknown> = {};
     a.self = a;
     expect(() => canonicalizeJson(a)).toThrow(CanonicalJsonError);
+    const b: Record<string, unknown> = {};
+    b.child = { grandchild: { back: b } };
+    expect(() => canonicalizeJson(b)).toThrow(CanonicalJsonError);
+    const list: unknown[] = [1];
+    list.push({ inner: list });
+    expect(() => canonicalizeJson(list)).toThrow(CanonicalJsonError);
+  });
+
+  it("serializes a shared object that is not a cycle at each place", () => {
+    const shared = { a: 1 };
+    const sharedList = [shared];
+    expect(canonicalizeJson({ x: shared, y: shared, z: [sharedList, sharedList] })).toBe(
+      '{"x":{"a":1},"y":{"a":1},"z":[[{"a":1}],[{"a":1}]]}',
+    );
   });
 
   it("accepts an object with a null prototype", () => {

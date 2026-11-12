@@ -1,8 +1,8 @@
 // The pure half of the tool-manifest report (packages/agent-ui-protocol/
 // CONTRACT.md section 5.2): the tool reference, the projection of each tool
-// kind, and the keyed hashes over their canonical JSON. The route and the
-// extracted tool assembly come in a later change; this file pins what they
-// will hash and return.
+// kind, and the keyed hashes over their canonical JSON. A later route and
+// an extracted tool assembly are the intended callers; this file pins what
+// the module hashes and returns.
 
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
@@ -87,6 +87,15 @@ describe("toolReferenceOf", () => {
       expect.objectContaining({ code: "assembly_failed" }),
     );
   });
+
+  it("refuses a non-string tool type as assembly_failed", () => {
+    expect(() => toolReferenceOf({ type: null } as unknown as LlmTool)).toThrow(
+      expect.objectContaining({ code: "assembly_failed" }),
+    );
+    expect(() => projectToolForManifest({ type: 1 } as unknown as LlmTool)).toThrow(
+      expect.objectContaining({ code: "assembly_failed" }),
+    );
+  });
 });
 
 describe("projectToolForManifest", () => {
@@ -161,6 +170,28 @@ describe("projectToolForManifest", () => {
 
   it("projects web_search to its type", () => {
     expect(projectToolForManifest(webSearch)).toEqual({ type: "web_search" });
+  });
+
+  it("never reads the mcp headers or authorization", () => {
+    const guarded = { type: "mcp", serverLabel: "cinatra", serverUrl: "https://instance.example/api/mcp" };
+    for (const name of ["headers", "authorization"]) {
+      Object.defineProperty(guarded, name, {
+        enumerable: true,
+        get() {
+          throw new Error(`the mcp ${name} were read`);
+        },
+      });
+    }
+    const tool = guarded as unknown as LlmTool;
+    expect(() => projectToolForManifest(tool)).not.toThrow();
+    expect(() => toolReferenceOf(tool)).not.toThrow();
+    expect(() => buildToolManifestReport({ conversationOnly: false, tools: [tool], key: KEY })).not.toThrow();
+  });
+
+  it("keeps an explicit null allowedTools as null", () => {
+    expect(
+      projectToolForManifest({ ...(mcpTool as object), allowedTools: null } as unknown as LlmTool),
+    ).toMatchObject({ allowedTools: null });
   });
 
   it("never calls an executable member", () => {
@@ -238,6 +269,27 @@ describe("buildToolManifestReport", () => {
     expect(report.manifestHash).toBe(hmac(canonicalizeJson({ conversationOnly: true, tools: [] })));
   });
 
+  it("refuses an unknown or non-string tool kind on the conversation-only road too", () => {
+    for (const bad of [{ type: "computer_use" }, { type: null }]) {
+      expect(() =>
+        buildToolManifestReport({
+          conversationOnly: true,
+          tools: [webSearch, bad as unknown as LlmTool],
+          key: KEY,
+        }),
+      ).toThrow(expect.objectContaining({ code: "assembly_failed" }));
+    }
+  });
+
+  it("returns an empty list with conversationOnly false for no tools", () => {
+    const report = buildToolManifestReport({ conversationOnly: false, tools: [], key: KEY });
+    expect(report).toEqual({
+      conversationOnly: false,
+      tools: [],
+      manifestHash: hmac(canonicalizeJson({ conversationOnly: false, tools: [] })),
+    });
+  });
+
   it("hashes with the given key only: another key gives other hashes", () => {
     const a = buildToolManifestReport({ conversationOnly: false, tools: [webSearch], key: KEY });
     const b = buildToolManifestReport({
@@ -264,6 +316,28 @@ describe("buildToolManifestReport", () => {
     ).toThrow(expect.objectContaining({ code: "tool_unserializable" }));
   });
 
+  it("maps a sparse array or a lone surrogate in a schema to tool_unserializable", () => {
+    const holed: unknown[] = ["a", "b", "c"];
+    delete holed[1];
+    const withHole = {
+      ...(functionTool as object),
+      parameters: { type: "object", properties: { n: { enum: holed } } },
+    } as unknown as LlmTool;
+    const withSurrogate = {
+      ...(functionTool as object),
+      parameters: { type: "object", properties: { n: { default: "\uD800" } } },
+    } as unknown as LlmTool;
+    const withSurrogateKey = {
+      ...(functionTool as object),
+      parameters: { type: "object", properties: { "\uDC00": { type: "string" } } },
+    } as unknown as LlmTool;
+    for (const bad of [withHole, withSurrogate, withSurrogateKey]) {
+      expect(() =>
+        buildToolManifestReport({ conversationOnly: false, tools: [bad], key: KEY }),
+      ).toThrow(expect.objectContaining({ code: "tool_unserializable" }));
+    }
+  });
+
   it("throws a ToolManifestError for an unknown kind", () => {
     expect(() =>
       buildToolManifestReport({
@@ -276,12 +350,13 @@ describe("buildToolManifestReport", () => {
 });
 
 describe("createToolManifestHashKey", () => {
-  it("makes 32 random bytes per call", () => {
+  it("makes a new 32-byte buffer per call", () => {
     const a = createToolManifestHashKey();
     const b = createToolManifestHashKey();
+    expect(Buffer.isBuffer(a)).toBe(true);
     expect(a).toHaveLength(32);
     expect(b).toHaveLength(32);
-    expect(a.equals(b)).toBe(false);
+    expect(b).not.toBe(a);
   });
 });
 
