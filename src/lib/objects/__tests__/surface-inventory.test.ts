@@ -78,6 +78,18 @@ describe("surface inventory consistency", () => {
     expect(promotedEmailBundles).toEqual([]);
   });
 
+  it("the blog-pipeline passthrough types are RETIRED: no shaper writes them (cinatra#3035)", () => {
+    for (const typeId of [
+      "@cinatra-ai/dynamic:blog-pipeline-selected-idea",
+      "@cinatra-ai/dynamic:blog-pipeline-draft-projection",
+    ]) {
+      const entry = DYNAMIC_TYPES.find((d) => d.typeId === typeId);
+      expect(entry, `${typeId} must stay inventoried`).toBeDefined();
+      expect(entry?.disposition, `${typeId} must be retire`).toBe("retire");
+      expect(entry?.note).toContain("cinatra#3035");
+    }
+  });
+
   it("SKILL/OAS refs are classified", () => {
     const issues = new Set(["legacy-primitive", "invalid-type-id-shape", "invalid-id-shape"]);
     for (const r of SKILL_OAS_REFS) {

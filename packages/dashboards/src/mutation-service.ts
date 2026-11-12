@@ -251,7 +251,12 @@ function twinCtx(
   // `{ mintMeaningAssertion: true }` to request the pack's meaning assertion; every
   // other call site omits it (default false) so the mint is NARROW to
   // materialization — never an archive/restore re-mint or an adopt/upgrade path.
-  opts?: { readonly mintMeaningAssertion?: boolean },
+  // cinatra#3092: the three content writers an agent reaches through MCP
+  // (create, update, publish) pass the actor's run as `producerRunId`, so a
+  // dashboard an agent run writes names that run as its producer. Every other
+  // writer omits it, so no lifecycle write (archive, restore, rename, adopt,
+  // upgrade, backfill) is ever announced as a run's product.
+  opts?: { readonly mintMeaningAssertion?: boolean; readonly producerRunId?: string },
 ): DashboardTwinContext {
   // The substrate twin is tenant-keyed. An org-NULL WORKSPACE row has no twin
   // (cinatra#2811) and reaches pairing only through `pairTwinUnlessWorkspaceRow`,
@@ -286,6 +291,11 @@ function twinCtx(
     // materialize, adopt, upgrade and backfill — carries it. Never on `delete`
     // (a delete appends no revision).
     ...(operation === "upsert" ? { configuration: row.configJson } : {}),
+    // THE PRODUCING RUN (cinatra#3092): only on an `upsert` from a content
+    // writer whose actor carries a run; absent otherwise.
+    ...(operation === "upsert" && opts?.producerRunId
+      ? { producerRunId: opts.producerRunId }
+      : {}),
   };
 }
 
@@ -324,9 +334,10 @@ async function pairTwinUnlessWorkspaceRow(
   row: DashboardRow,
   operation: "upsert" | "delete",
   actorId: string | null,
+  opts?: { readonly producerRunId?: string },
 ): Promise<void> {
   if (isWorkspaceDashboardRow(row)) return;
-  await pairTwin(tx, twinCtx(row, operation, actorId));
+  await pairTwin(tx, twinCtx(row, operation, actorId, opts));
 }
 
 /**
@@ -767,7 +778,10 @@ export async function createDashboard(
         row,
         metadata: { initialStatus: row.status, ownerLevel: row.ownerLevel },
       });
-      await pairTwin(tx as unknown as TwinTx, twinCtx(row, "upsert", actor.userId));
+      await pairTwin(
+        tx as unknown as TwinTx,
+        twinCtx(row, "upsert", actor.userId, { producerRunId: actor.runId }),
+      );
       return row;
       },
     );
@@ -865,7 +879,9 @@ export async function updateDashboard(
         dashboardVersion: updated.dashboardVersion,
       },
     });
-    await pairTwinUnlessWorkspaceRow(tx as unknown as TwinTx, updated, "upsert", actor.userId);
+    await pairTwinUnlessWorkspaceRow(tx as unknown as TwinTx, updated, "upsert", actor.userId, {
+      producerRunId: actor.runId,
+    });
     return updated;
     },
   );
@@ -936,7 +952,10 @@ export async function publishDashboard(
         dashboardVersion: updated.dashboardVersion,
       },
     });
-    await pairTwin(tx as unknown as TwinTx, twinCtx(updated, "upsert", actor.userId));
+    await pairTwin(
+      tx as unknown as TwinTx,
+      twinCtx(updated, "upsert", actor.userId, { producerRunId: actor.runId }),
+    );
     return updated;
     },
   );

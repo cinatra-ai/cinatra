@@ -65,10 +65,17 @@ const STAGED = {
   // Re-copied verbatim at design@f77ea323 (cinatra#3978): the copy carries the
   // continued readings that design#191 placed inside the email and post displays,
   // and every surface the drawing has added since. No surface is removed or changed.
+  // Re-copied verbatim at design@9eb5aaf1 (cinatra#3380): the held Continue of the agent
+  // input card (lifecycle cards 0.23.0) declares the state `empty` on agent-hitl-screen-card.
+  // No surface is added or removed, and no other surface changes.
+  // Re-copied verbatim at design@4d75cb4c: the embedded webfonts changed the drawing's
+  // bytes, so only the embedded contentHash moves. No surface changes.
+  // Re-copied verbatim at design@3beff055 (design#247): the brand gold moved to #9c7434
+  // in the drawing, so only the embedded contentHash moves. No surface changes.
   "app-lifecycle-cards.json": {
     spec: "specs/app-lifecycle-cards.html",
-    manifestSha256: "2f9879e8e2a829fb5524f6ac44ea1b50b5e182792a918032658080f42da84f25",
-    contentHash: "sha256:48b868de1d67def632f060c694d49f36caa683e941c3d6794d88de24c4e4996e",
+    manifestSha256: "9289120d2a0ff812dce2af37b8f1c73d20d52c13dd9a02d74f9263ad2a2bb355",
+    contentHash: "sha256:234c532f2301b049026211df7b548903bc7eff7b67837a018e18c4195246574c",
   },
   // The artifact-review drawing, staged by cinatra#3158 (the artifact-kind
   // display wave). First-time adoption: the drawing has never been committed
@@ -77,10 +84,14 @@ const STAGED = {
   // the pin gate when every one of them is covered. Re-copied verbatim at
   // design@67ecd66d (cinatra#4388): dashboard-display draws six readings and binds
   // open-live once for each of the four that draw the live dashboard link.
+  // Re-copied verbatim at design@4d75cb4c: the embedded webfonts changed the drawing's
+  // bytes, so only the embedded contentHash moves. No surface changes.
+  // Re-copied verbatim at design@3beff055 (design#247): the brand gold moved to #9c7434
+  // in the drawing, so only the embedded contentHash moves. No surface changes.
   "app-artifact-review.json": {
     spec: "specs/app-artifact-review.html",
-    manifestSha256: "641bcfff84564190321abfff34c55321ae7c7c15e8d820c505a6552f2c5b6a6c",
-    contentHash: "sha256:6d519e1e4611425263875da940529f526867b664931356be9774a85ee66d198d",
+    manifestSha256: "0eb04b2a30858e5f383559d90852ca2e3e74cca8c8a5e9d6c3cc497a14540465",
+    contentHash: "sha256:54d23e9cfae4ee2078901b8e64d60b9dab6ce82190e38ebdf745a86e730533ec",
   },
 };
 
