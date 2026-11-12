@@ -1415,56 +1415,6 @@ function hostLinkedinPostDraftDef(): ObjectTypeDefinition<unknown> {
   } as unknown as ObjectTypeDefinition<unknown>;
 }
 
-// Host Drupal external node-pointer def (register-types.ts registerDrupalObjectTypes,
-// cinatra#1465) — an `external` connector-owned POINTER to a Drupal node (canonical
-// content lives in Drupal). category content; dedup on (instance, node) =
-// connectorRef.connectorId + connectorRef.externalId so a re-sync of the same node
-// updates that pointer row in place, and a row missing either id keeps its random
-// identity rather than collapsing distinct pointers.
-function hostDrupalNodeDef(): ObjectTypeDefinition<unknown> {
-  return {
-    type: "@cinatra-ai/drupal:node",
-    category: "content",
-    schema: z
-      .object({
-        artifactType: z.literal("connector-ref"),
-        originKind: z.literal("external_link"),
-        mime: z.string().min(1),
-        title: z.string().optional(),
-        excerpt: z.string().optional(),
-        connectorRef: z
-          .object({
-            url: z.string().min(1),
-            connectorId: z.string().min(1),
-            externalId: z.string().min(1),
-            state: z.enum(["linked", "stale", "dangling"]),
-          })
-          .strict(),
-      })
-      .passthrough(),
-    // Written by connector sync only (agent/import); the `external` claim narrows
-    // post-create mutableBy to [] — reference state moves via connector verification.
-    lifecycle: { sources: ["agent", "import"], mutableBy: ["agent"] },
-    renderers: { listRow: null, card: null, detail: null },
-    identityKey: (data: unknown) => {
-      const d = data as Record<string, unknown>;
-      const ref =
-        d.connectorRef && typeof d.connectorRef === "object"
-          ? (d.connectorRef as Record<string, unknown>)
-          : {};
-      const connectorId =
-        typeof ref.connectorId === "string" && ref.connectorId.length > 0
-          ? ref.connectorId
-          : null;
-      const externalId =
-        typeof ref.externalId === "string" && ref.externalId.length > 0
-          ? ref.externalId
-          : null;
-      return connectorId && externalId ? `${connectorId}:${externalId}` : null;
-    },
-  } as unknown as ObjectTypeDefinition<unknown>;
-}
-
 describe("registerParsedArtifactManifest — cross-namespace claims never clobber the owner (epic #1785)", () => {
   beforeEach(() => {
     objectTypeRegistry._clearForTests();
@@ -1590,21 +1540,16 @@ describe("registerParsedArtifactManifest — cross-namespace claims never clobbe
     ).not.toContain("@cinatra-ai/linkedin:post-draft");
   });
 
-  it("the drupal-artifacts pack claiming host drupal:node [external] leaves the host definition intact (and mints no umbrella) (cinatra#1465)", () => {
-    // Host registers the rich external node-pointer def first (boot order).
-    objectTypeRegistry.register(hostDrupalNodeDef());
-
-    // The drupal-artifacts pack (8bd7bf36) CLAIMS the cross-namespace host id
-    // (dedicated, external) — the pack manifest carries the disposition/mutability
-    // class + arbitration, NEVER a second runtime registrar (epic #1448 principle 5).
-    // `external` ⇒ pinnable:false + snapshotPolicy:none (you pin the immutable
-    // snapshot record, never the live pointer).
+  it("the drupal-artifacts pack registers its OWN pointer type from its claim, under the pack (cinatra#4366)", () => {
+    // The pack (310d0f8c) declares the external pointer in its own namespace,
+    // so the bridge is its single registrar: there is no host definition of it
+    // (the host's `@cinatra-ai/drupal:node` restatement is retired).
     const registered = registerParsedArtifactManifest(
       {
         accepts: { connectorRef: { resolvedMimeTypes: ["text/html"] } },
         objectTypes: [
           {
-            type: "@cinatra-ai/drupal:node",
+            type: "@cinatra-ai/drupal-artifacts:node-pointer",
             claim: "dedicated",
             dispositions: {
               projection: "artifact-safe",
@@ -1619,27 +1564,17 @@ describe("registerParsedArtifactManifest — cross-namespace claims never clobbe
       } as unknown as SemanticArtifactManifest,
       "@cinatra-ai/drupal-artifacts",
     );
-    // The ONLY declared claim is cross-namespace (registrant @cinatra-ai/drupal,
-    // not the claiming pack) → nothing self-owned registers, and umbrella/derived
-    // minting is retired (entry 95, epic #1785) → NO `${pkg}:artifact` umbrella.
-    expect(registered).toBe(false);
-    expect(objectTypeRegistry.resolve("@cinatra-ai/drupal-artifacts:artifact")).toBeNull();
-
-    // drupal:node — host external pointer definition PRESERVED (the pack never
-    // registers a cross-namespace type, so the host def is untouched).
-    const node = objectTypeRegistry.resolve("@cinatra-ai/drupal:node");
-    expect(node).not.toBeNull();
-    expect(node!.category).toBe("content");
-    expect(typeof node!.identityKey).toBe("function");
-    // Dedup on (instance, node) = connectorId:externalId; never collapse onto one id.
-    expect(
-      node!.identityKey!({ connectorRef: { connectorId: "drupal-1", externalId: "42" } }),
-    ).toBe("drupal-1:42");
-    expect(node!.identityKey!({ connectorRef: { connectorId: "drupal-1" } })).toBeNull();
-    // Still host-owned — no bridge provenance attaches the claimed id to the pack.
+    expect(registered).toBe(true);
+    const pointer = objectTypeRegistry.resolve("@cinatra-ai/drupal-artifacts:node-pointer");
+    expect(pointer).not.toBeNull();
+    expect(pointer!.dispositions?.mutability).toBe("external");
+    expect(pointer!.dispositions?.pinnable).toBe(false);
     expect(
       objectTypeRegistry.getTypesForPackage("@cinatra-ai/drupal-artifacts"),
-    ).not.toContain("@cinatra-ai/drupal:node");
+    ).toContain("@cinatra-ai/drupal-artifacts:node-pointer");
+    // No umbrella is minted, and the retired host id is not registered by the pack.
+    expect(objectTypeRegistry.resolve("@cinatra-ai/drupal-artifacts:artifact")).toBeNull();
+    expect(objectTypeRegistry.resolve("@cinatra-ai/drupal:node")).toBeNull();
   });
 
   it("the default-artifact floor claim over the host generic object type does not clobber its identityKey (and mints no umbrella)", () => {

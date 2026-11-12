@@ -72,15 +72,23 @@ const INVENTORY: Record<string, Record<string, TypeDispositions>> = {
       mutability: "draftable",
     },
   },
-  "drupal-artifacts": {
-    "@cinatra-ai/drupal:node": {
-      projection: "artifact-safe",
-      pinnable: false,
-      snapshotPolicy: "none",
-      sensitivity: "normal",
-      mutability: "external",
-    },
-  },
+  // drupal-artifacts is not here: the pack declares its pointer type in its own
+  // namespace (cinatra#4366), so the HOST registers no Drupal type. Its own case
+  // below reads the materialized pack.
+};
+
+// The Drupal pointer, owned by its pack (cinatra#4366). The pack renamed its
+// claim from the host-registered `@cinatra-ai/drupal:node` to a type in its own
+// namespace, which the artifact bridge registers from the claim under the pack.
+const DRUPAL_PACK_DIR = "drupal-artifacts";
+const DRUPAL_POINTER_TYPE = "@cinatra-ai/drupal-artifacts:node-pointer";
+const DRUPAL_RETIRED_HOST_TYPE = "@cinatra-ai/drupal:node";
+const DRUPAL_POINTER_DISPOSITIONS: TypeDispositions = {
+  projection: "artifact-safe",
+  pinnable: false,
+  snapshotPolicy: "none",
+  sensitivity: "normal",
+  mutability: "external",
 };
 
 const ALL_ENTRIES = Object.values(INVENTORY).flatMap((pack) => Object.entries(pack));
@@ -122,6 +130,43 @@ describe("type-driven disposition inventory parity (epic #1785 merge gate)", () 
       expect(def!.dispositions?.projection).toBe("none");
       expect(def!.dispositions?.sensitivity).toBe("sensitive");
       expect(def!.identityKey?.({ runId: "run-1", contactKey: "contact:c1" })).toBe("run-1:contact:c1");
+    } finally {
+      objectTypeRegistry.removeByPackage(pkg.name);
+      semanticRendererRegistry.removeByPackage(pkg.name);
+      matcherManifestRegistry.removeByPackage(pkg.name);
+    }
+  });
+
+  it("the host no longer restates the retired Drupal host type", () => {
+    // registerAllObjectTypes ran in beforeAll; no pack is registered here.
+    expect(objectTypeRegistry.resolve(DRUPAL_RETIRED_HOST_TYPE)).toBeNull();
+  });
+
+  it("the drupal-artifacts pack OWNS its pointer type with the external disposition", () => {
+    // The pinned pack is materialized in CI; an absent pack fails this case,
+    // never skips it (the same rule as the email recipient case above).
+    const root = fileURLToPath(new URL("../../../../", import.meta.url));
+    const manifestPath = `${root}extensions/cinatra-ai/${DRUPAL_PACK_DIR}/package.json`;
+    expect(existsSync(manifestPath), `the materialized Drupal pack must be present at ${manifestPath}`).toBe(true);
+    const pkg = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+      name: string;
+      cinatra?: { artifact?: { objectTypes?: Array<{ type: string; dispositions?: TypeDispositions }> } };
+    };
+    const claims = pkg.cinatra?.artifact?.objectTypes ?? [];
+    expect(claims.map((c) => c.type)).toEqual([DRUPAL_POINTER_TYPE]);
+    expect(claims[0]!.dispositions).toEqual(DRUPAL_POINTER_DISPOSITIONS);
+    const parsed = parseSemanticArtifactManifest(pkg.cinatra?.artifact);
+    expect(parsed.ok, "the Drupal pack's artifact manifest must parse").toBe(true);
+    if (!parsed.ok) return;
+    try {
+      expect(registerParsedArtifactManifest(parsed.manifest, pkg.name)).toBe(true);
+      const def = objectTypeRegistry.resolve(DRUPAL_POINTER_TYPE);
+      expect(def).not.toBeNull();
+      expect(objectTypeRegistry.definerOf(DRUPAL_POINTER_TYPE)).toBe(pkg.name);
+      expect(def!.dispositions).toEqual(DRUPAL_POINTER_DISPOSITIONS);
+      // The retired id stays unregistered: the pack never registers it and the
+      // host no longer does.
+      expect(objectTypeRegistry.resolve(DRUPAL_RETIRED_HOST_TYPE)).toBeNull();
     } finally {
       objectTypeRegistry.removeByPackage(pkg.name);
       semanticRendererRegistry.removeByPackage(pkg.name);
