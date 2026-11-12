@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from "vitest";
 
 // ---------------------------------------------------------------------------
 // The CMS content-snapshot HOST object type (cinatra#2044 S6 L-A3 live-walk
-// finding). `captureCmsContentSnapshot` writes its immutable snapshot identity
+// finding). The CMS capture wrote its immutable snapshot identity
 // row under `@cinatra-ai/objects:cms-content-snapshot`, but nothing registered
 // the type — so `artifactObjectTypeIds()` did not admit it, `readArtifactForDetail`
 // answered `not-found`, and every captured snapshot floored the review gate at
@@ -16,7 +16,10 @@ import { describe, it, expect, beforeAll } from "vitest";
 // ---------------------------------------------------------------------------
 
 import { objectTypeRegistry } from "@cinatra-ai/objects";
-import { CMS_SNAPSHOT_OBJECT_TYPE } from "@/lib/artifacts/cms-content-snapshot-capture";
+
+// The capture writer that owned this constant is gone (cinatra#3862); the
+// registered id is the contract.
+const CMS_SNAPSHOT_OBJECT_TYPE = "@cinatra-ai/objects:cms-content-snapshot";
 
 beforeAll(async () => {
   const { registerAllObjectTypes } = await import("@/lib/register-all-object-types");
@@ -24,7 +27,7 @@ beforeAll(async () => {
 });
 
 describe("@cinatra-ai/objects:cms-content-snapshot is a registered host artifact type", () => {
-  it("the capture writer's constant is the registered id (no drift)", () => {
+  it("the snapshot type id is registered", () => {
     expect(CMS_SNAPSHOT_OBJECT_TYPE).toBe("@cinatra-ai/objects:cms-content-snapshot");
     expect(objectTypeRegistry.resolve(CMS_SNAPSHOT_OBJECT_TYPE)).toBeTruthy();
   });

@@ -445,6 +445,7 @@
       "@cinatra-ai/skills/bundled-skill-registration": ["./packages/skills/src/bundled-skill-registration.ts"],
       "@cinatra-ai/skills/skill-packages": ["./packages/skills/src/skill-packages.ts"],
       "@cinatra-ai/skills/store": ["./packages/skills/src/skills-store.ts"],
+      "@cinatra-ai/skills/local-skill-files": ["./packages/skills/src/local-skill-files.ts"],
       "@cinatra-ai/skills/pages": ["./packages/skills/src/plugin-pages.tsx"],
       "@cinatra-ai/skills/recommendation": ["./packages/skills/src/recommendation/index.ts"],
       "@cinatra-ai/skills/recommendation-server": ["./packages/skills/src/recommendation/recommend.server.ts"],
