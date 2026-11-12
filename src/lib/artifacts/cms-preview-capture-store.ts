@@ -3,8 +3,7 @@ import { randomUUID, createHash } from "node:crypto";
 
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 // Sync-leaf connection/schema primitives (the artifact write-path contract):
-// never import `@/lib/database` from a sync store leaf. Mirrors
-// `cms-content-snapshot-capture.ts`.
+// never import `@/lib/database` from a sync store leaf.
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 
@@ -190,8 +189,7 @@ export interface PreviewCaptureWriteFacts {
 }
 
 /**
- * PURE composition of the capture transaction's query list (no DB, no blob I/O),
- * mirroring `buildCmsSnapshotCaptureQueries`:
+ * PURE composition of the capture transaction's query list (no DB, no blob I/O):
  *   [0] the capture `objects` row (deterministic PK — a duplicate rolls back).
  *   [1] the PNG content write, ONLY for a captured record.
  *   [2] the artifact-writer PROVENANCE WITNESS for that PNG representation.

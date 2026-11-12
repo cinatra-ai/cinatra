@@ -141,6 +141,8 @@ const isArtifactExtensionWriteAllowed = vi.fn<(extension: string, orgId?: string
 vi.mock("@/lib/artifacts/artifact-extension-access", () => ({
   isArtifactExtensionWriteAllowed: (extension: string, orgId: string) =>
     isArtifactExtensionWriteAllowed(extension, orgId),
+  // The claim-scoped gate of a claim-backed pack's winning install (cinatra#3319).
+  canActorAccessClaimedArtifactExtension: async () => true,
 }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 // The typed promotion road and its authority, as in upload-typing-actions.test.ts
@@ -556,7 +558,14 @@ describe("cinatra#3319 — listInstalledTypesForArtifact answers the derived mea
     if (opts.claimBacked) {
       // The pack registers no object type; its claim owns the host type.
       readClaimBackedMeaningTypesForOrg.mockImplementation(async () => [
-        { objectTypeId: CLAIM_TYPE, extension: PACK, acceptMimes: ["text/markdown"] },
+        {
+          objectTypeId: CLAIM_TYPE,
+          extension: PACK,
+          acceptMimes: ["text/markdown"],
+          extensionVersion: "1.0.0",
+          installId: "inst-voice-1",
+          scope: "org:org-1",
+        },
       ]);
       readArtifactSafeClaimWinnerForType.mockImplementation((_org, type) =>
         type === CLAIM_TYPE ? PACK : null,
@@ -922,7 +931,7 @@ describe("cinatra#3319 — listInstalledTypesForArtifact answers the derived mea
     expect(hostReads()).toBe(0);
   });
 
-  it("C2a: the list reads the claims leniently: a failed claim read keeps the ordinary list, and the confirmation then refuses", async () => {
+  it("C2a: the list reads the claims leniently: a failed claim read still answers the list, without the row's own claiming pack, and the confirmation then refuses", async () => {
     presentedBaseRow(
       { tier: "matcher", identity: PACK, preselect: PACK, suggestions: [] },
       { claimBacked: true },
@@ -934,12 +943,32 @@ describe("cinatra#3319 — listInstalledTypesForArtifact answers the derived mea
       "../upload-typing-actions"
     );
     const res = await listInstalledTypesForArtifact("a-3319");
-    expect(res).toMatchObject({ ok: true, meaning: { preselect: PACK } });
-    expect(extensionsOf(res)).toContain(PACK);
+    // The ordinary list never held the claiming pack: the claim-backed reading
+    // excludes the row's own type, and with the claim read failing the
+    // presented-base check cannot name its definer. The list still answers.
+    expect(res).toMatchObject({ ok: true, meaning: { preselect: null } });
+    expect(extensionsOf(res)).toEqual([IDEA, POST]);
     expect(readArtifactSafeClaimWinnerForType).toHaveBeenCalledWith("org-1", CLAIM_TYPE);
     const confirmed = await assertUploadMeaning({ artifactId: "a-3319", extension: PACK });
     expect(confirmed).toMatchObject({ ok: false, reason: "invalid-type" });
     expect(assertSemanticType).not.toHaveBeenCalled();
+  });
+
+  it("3319 T20: a failed claim-backed read does not refuse the presented base meaning of a natively typed row: it is confirmed with ONE user assertion, as without the claim-backed change", async () => {
+    presentedBaseRow();
+    readClaimBackedMeaningTypesForOrg.mockImplementation(async () => {
+      throw new Error("claim store unavailable");
+    });
+    const { assertUploadMeaning } = await import("../upload-typing-actions");
+    const confirmed = await assertUploadMeaning({ artifactId: "a-3319", extension: PACK });
+    expect(confirmed).toEqual({ ok: true });
+    expect(assertSemanticType).toHaveBeenCalledTimes(1);
+    expect(assertSemanticType).toHaveBeenCalledWith(exactUserWrite(PACK));
+    expect(promoteMatchedArtifactType).not.toHaveBeenCalled();
+    expect(appends).toEqual([]);
+    // The pack registers the row's type, so no claim is read to decide it.
+    expect(readArtifactSafeClaimWinnerForType).not.toHaveBeenCalled();
+    expect(host.resolveArtifactPresentationReading).toHaveBeenCalledTimes(1);
   });
 
   /** The reading `presentedBaseRow` configured, taken without leaving a call. */
@@ -1209,6 +1238,10 @@ describe("cinatra#3319 — listInstalledTypesForArtifact answers the derived mea
       { tier: "classic", identity: PACK, preselect: null, suggestions: [{ extension: POST, confidence: 0.4 }] },
       { claimBacked: true, promotion: INTERRUPTED },
     );
+    // The pack declares matchers, so it is no claim-backed meaning type
+    // (cinatra#3319): its claim wins the row's type, yet it owns no type the
+    // promotion road could promote into.
+    readClaimBackedMeaningTypesForOrg.mockImplementation(async () => []);
     expect(await confirmPack()).toEqual({ ok: true });
     expect(assertSemanticType).not.toHaveBeenCalled();
     expect(promoteMatchedArtifactType).not.toHaveBeenCalled();

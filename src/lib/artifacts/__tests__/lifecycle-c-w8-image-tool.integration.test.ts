@@ -204,10 +204,15 @@ function providerServing(images: string[]) {
       }),
       // The run package's declared production, in the shape the registry loader
       // returns it.
-      loadProducesRefs: async () => [
-        { extension: PICTURE_EXT, objectTypeId: PICTURE_TYPE },
-        { extension: NOTE_EXT, objectTypeId: NOTE_TYPE },
-      ],
+      // One reading supplies both write facts (cinatra#3035): the fixture
+      // package marks no review gate, so no registry is read for it.
+      loadWriteFacts: async () => ({
+        producesRefs: [
+          { extension: PICTURE_EXT, objectTypeId: PICTURE_TYPE },
+          { extension: NOTE_EXT, objectTypeId: NOTE_TYPE },
+        ],
+        reviewed: false,
+      }),
       ...over,
     }),
   };
@@ -788,7 +793,10 @@ describe.skipIf(!HAS_REAL_DB)(
         },
         provider.deps({
           // The run package declares the real image kind as its production.
-          loadProducesRefs: async () => [{ extension: IMAGE_EXT, objectTypeId: IMAGE_TYPE }],
+          loadWriteFacts: async () => ({
+            producesRefs: [{ extension: IMAGE_EXT, objectTypeId: IMAGE_TYPE }],
+            reviewed: false,
+          }),
         }),
       );
 

@@ -779,6 +779,16 @@ services:
       DRUPAL_ADMIN_PASS: cinatra
       DRUPAL_SITE_URL: http://localhost:8082
       CINATRA_BASE_URL: http://host.docker.internal:3000
+      # The development-site marker: drupal-module's cinatra_dev_site submodule
+      # serves its exposure only in a process that carries it exactly as "1",
+      # and only after the submodule's own setup has armed the site. An ordinary
+      # install of the submodule needs it; every process of this container,
+      # `docker exec` included, inherits it. A config import can install the
+      # submodule without it; there the exposure stays inactive, and only the
+      # submodule's import guard acts: it can refuse an imported node:page
+      # workflow binding (cinatra#4226). The web server answers the remote MCP
+      # requests, so the marker belongs to the container's environment.
+      CINATRA_DEV_SITE: "1"
     volumes:
       - cinatra-drupal:/drupal/web/sites/default
       - ./dev/drupal-module/cinatra:/drupal/web/modules/custom/cinatra

@@ -123,7 +123,7 @@ _ORCHESTRATOR = "email-outreach-agent"
 #: ``sender-approval_gate`` declares inputs too) does not red this suite.
 _ORCHESTRATED_GATE_INPUTS: Dict[str, Tuple[str, ...]] = {
     "recipients-review_gate": ("confirmedRecipients", "recipientCount"),
-    "drafts-approval_gate": ("draftBodyArtifacts", "draftBundleRef"),
+    "drafts-approval_gate": ("draftBodyArtifacts", "draftBundle", "draftBundleRef"),
 }
 
 

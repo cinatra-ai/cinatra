@@ -77,15 +77,8 @@ const WRITER_ALLOWLIST = new Set([
   // like the artifact stores above, its migration to the canonical writer is a
   // follow-up.
   "src/lib/artifacts/artifact-revision-append.ts",
-  // cinatra#2043 (epic #2037 S5) CMS content-snapshot capture writer — same
-  // class as the artifact stores above: a CTE-atomic writer that inserts the
-  // snapshot artifact's own objects identity row alongside resource /
-  // artifact_blobs / representation and its transactional ArtifactProduced
-  // event (own graphiti_projection_outbox row + version bump) in one tx.
-  // Migration to the canonical writer is a follow-up.
-  "src/lib/artifacts/cms-content-snapshot-capture.ts",
   // cinatra#2044 (epic #2037 S6) PINNED preview-capture writer — the same class
-  // as the capture writer above: one CTE-atomic transaction that inserts the
+  // as the artifact stores above: one CTE-atomic transaction that inserts the
   // capture artifact's own objects identity row alongside its resource /
   // artifact_blobs / representation. It is APPEND-ONLY BY CONSTRUCTION — the
   // objects id is derived (sha256 of the pinned target + role), so the only
