@@ -29,6 +29,11 @@
  * proof. So when the on-behalf-of road is unavailable the tool is withheld,
  * and no machine bearer is minted or bound. A call without a verified source
  * keeps the best-effort machine fallback.
+ *
+ * The model call of a run-bound step is offered only the tools that step
+ * declares in the run's bound source: a verified source-bound call carries the
+ * step's reading of that source, a run-bound call without a verified source is
+ * offered no tool, and a call without a resolved run carries no step policy.
  */
 import { afterAll, describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createHmac } from "node:crypto";
@@ -52,6 +57,8 @@ const {
   resolveAgentRunMcpActorMock,
   issueAgentRunMcpActorTokenMock,
   verifyRunExecutedSourceMock,
+  readRunStepToolPolicyMock,
+  readTrustedStepToolDeclarationMock,
 } = vi.hoisted(() => ({
   runResolvedSkillAwareDeterministicLlmTaskMock: vi.fn<
     (input: Record<string, unknown>) => Promise<{ text: string; artifacts: unknown[] }>
@@ -92,6 +99,8 @@ const {
   resolveAgentRunMcpActorMock: vi.fn(),
   issueAgentRunMcpActorTokenMock: vi.fn(() => "obo-token"),
   verifyRunExecutedSourceMock: vi.fn(),
+  readRunStepToolPolicyMock: vi.fn(),
+  readTrustedStepToolDeclarationMock: vi.fn(),
 }));
 
 vi.mock("server-only", () => ({}));
@@ -111,6 +120,10 @@ vi.mock("@cinatra-ai/llm", () => ({
 }));
 vi.mock("@cinatra-ai/agents/store", () => ({
   verifyRunExecutedSource: verifyRunExecutedSourceMock,
+  // The bound source's step-tool policy and its trusted reader (their own
+  // refusals are pinned in packages/agents).
+  readRunStepToolPolicy: readRunStepToolPolicyMock,
+  readTrustedStepToolDeclaration: readTrustedStepToolDeclarationMock,
 }));
 vi.mock("@/lib/agent-run-context-durable", () => ({
   writeDurableRunContextBinding: writeDurableRunContextBindingMock,
@@ -319,6 +332,8 @@ beforeEach(async () => {
   readAgentRunTokenHashByIdMock.mockResolvedValue(null);
   writeDurableRunContextBindingMock.mockResolvedValue("cinatra:run-ctx:v1:test-key");
   verifyRunExecutedSourceMock.mockResolvedValue(VERIFIED_SOURCE);
+  readRunStepToolPolicyMock.mockResolvedValue({ source: "bound-source-under-test" });
+  readTrustedStepToolDeclarationMock.mockReturnValue({ kind: "undeclared" });
   const mod = await import("../route");
   POST = mod.POST;
 });
@@ -622,6 +637,51 @@ describe("a source-bound call never gets a machine bearer", () => {
     expect(verifyRunExecutedSourceMock).not.toHaveBeenCalled();
     const arg = runResolvedSkillAwareDeterministicLlmTaskMock.mock.calls[0]![0] as Record<string, unknown>;
     expect(arg).not.toHaveProperty("cinatraMcpToolOverride");
+  });
+});
+
+describe("the model bridge offers a run-bound step only the tools it declares", () => {
+  const RUN_BOUND = { "x-cinatra-run-token": RUN_TOKEN, "x-cinatra-a2a-context-id": CTX };
+
+  /** The input of the one model call the bridge made. */
+  function dispatchInput(): Record<string, unknown> {
+    expect(runResolvedSkillAwareDeterministicLlmTaskMock).toHaveBeenCalledTimes(1);
+    return runResolvedSkillAwareDeterministicLlmTaskMock.mock.calls[0]![0];
+  }
+
+  // (b17)
+  it("a verified source-bound call carries the step's reading of the run's bound source", async () => {
+    readTrustedStepToolDeclarationMock.mockReturnValue({ kind: "declared", tools: ["mail_send"] });
+    const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...sourceHeaders() }));
+    expect(res.status).toBe(200);
+    expect(readRunStepToolPolicyMock).toHaveBeenCalledWith(RUN.id, RUN.orgId);
+    expect(readTrustedStepToolDeclarationMock).toHaveBeenCalledWith("bound-source-under-test", NODE);
+    expect(dispatchInput().stepToolPolicy).toEqual({ kind: "declared", tools: ["mail_send"] });
+  });
+
+  // (b18)
+  it("a verified source-bound step that declares nothing keeps every tool", async () => {
+    const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...sourceHeaders() }));
+    expect(res.status).toBe(200);
+    expect(dispatchInput().stepToolPolicy).toEqual({ kind: "undeclared" });
+  });
+
+  // (b19)
+  it("a run-bound call without a verified source is offered no tool and reads no policy", async () => {
+    for (const headers of [RUN_BOUND, { ...RUN_BOUND, ...stepHeaders() }]) {
+      vi.clearAllMocks();
+      const res = await POST(makeReq({ user: "hi" }, headers));
+      expect(res.status).toBe(200);
+      expect(dispatchInput().stepToolPolicy).toEqual({ kind: "declared", tools: [] });
+      expect(readRunStepToolPolicyMock).not.toHaveBeenCalled();
+    }
+  });
+
+  // (b20)
+  it("a call without a resolved run carries no step policy", async () => {
+    const res = await POST(makeReq({ user: "hi" }, { "x-cinatra-a2a-context-id": CTX }));
+    expect(res.status).toBe(200);
+    expect(dispatchInput()).not.toHaveProperty("stepToolPolicy");
   });
 });
 

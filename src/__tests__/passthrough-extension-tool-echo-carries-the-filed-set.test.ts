@@ -73,6 +73,15 @@ vi.mock("@/lib/extension-scoped-tools", () => ({
   dispatchExtensionScopedTool: dispatchExtensionScopedToolMock,
 }));
 
+// cinatra#3745: every passthrough call first prepares its arguments against the
+// run's verified executing source and the step's declared tools (pinned in
+// src/app/api/agents/passthrough/__tests__/passthrough-verified-step.test.ts and
+// passthrough-refusal-map-3745.test.ts). Here that check admits the call and
+// hands the tool its input unchanged.
+vi.mock("@/lib/extension-host-context", () => ({
+  prepareDeclaredRunToolArguments: async (_tool: string, input: unknown) => input,
+}));
+
 import { POST } from "../app/api/agents/passthrough/route";
 
 const RUN = {
@@ -138,6 +147,7 @@ afterAll(() => {
   if (ATTEST_KEY_BEFORE === undefined) delete process.env.CINATRA_CONTEXT_ATTEST_KEY;
   else process.env.CINATRA_CONTEXT_ATTEST_KEY = ATTEST_KEY_BEFORE;
   vi.doUnmock("@cinatra-ai/agents");
+  vi.doUnmock("@/lib/extension-host-context");
   vi.doUnmock("@/lib/primitive-handlers");
   vi.doUnmock("@/lib/wayflow-bridge-auth");
   vi.doUnmock("@/lib/authz/bridge-run-binding");

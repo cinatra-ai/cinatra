@@ -4,9 +4,7 @@
  *
  * After the run binding proves the run from the context-id header, the runtime's
  * signed step pair is verified with that context id, and the frame the road
- * opens for a run-scoped tool carries `verifiedStepId`. A tool the road serves
- * without a frame keeps that path. A call without source headers and without a
- * valid `s1` pair is served exactly as before and carries no step.
+ * opens for a run-scoped tool carries `verifiedStepId`.
  *
  * A call with any source header must carry a source-bound `s2` pair that
  * verifies over the step, the execution attempt its task was sent under and the
@@ -23,6 +21,12 @@
  * runs. The run-scoped frame a run-scoped tool gets keeps every field of that
  * frame.
  *
+ * Before any tool runs, the road asks the run store whether the verified
+ * source is still current and whether the step declares the tool. A call that
+ * carries no verified executing source (no source headers, only an `s1` pair)
+ * is refused with the fixed 403 body and the code
+ * `action_executed_source_missing_or_stale`; no tool runs.
+ *
  * Drives the real route and the real run binding; the run store (with its
  * source check), the handler registry, the bridge-auth check, the actor
  * builder and the run-authority mint are test doubles.
@@ -35,6 +39,9 @@ const h = vi.hoisted(() => ({
   readAgentRunByContextId: vi.fn(),
   resolveLatestWayflowGateTaskId: vi.fn(async () => null as string | null),
   verifyRunExecutedSource: vi.fn(),
+  isRunExecutedSourceCurrent: vi.fn(),
+  assertRunStepToolAllowed: vi.fn(),
+  policy: { source: "bound-source-under-test" },
   mintRunWriteAuthorityForMcp: vi.fn(),
   observed: [] as Array<{ tool: string; frame: unknown }>,
 }));
@@ -45,9 +52,13 @@ vi.mock("@cinatra-ai/agents", () => ({
   readAgentRunById: h.readAgentRunById,
   readAgentRunByContextId: h.readAgentRunByContextId,
 }));
-// The run store's source check (its own refusals are pinned in packages/agents).
+// The run store's source check, its currency check and the step's declared
+// tools (their own refusals are pinned in packages/agents).
 vi.mock("@cinatra-ai/agents/store", () => ({
   verifyRunExecutedSource: h.verifyRunExecutedSource,
+  isRunExecutedSourceCurrent: h.isRunExecutedSourceCurrent,
+  readRunStepToolPolicy: async () => h.policy,
+  assertRunStepToolAllowed: h.assertRunStepToolAllowed,
 }));
 // The run-write authority the road mints for a verified source's attempt.
 vi.mock("@/lib/org-write/run-authority-mint", () => ({
@@ -120,6 +131,8 @@ const SOURCE = {
 const ATTEMPT = "attempt-1";
 const VERIFIED_SOURCE = Object.freeze({ contextId: CTX, stepId: NODE, executionAttemptId: ATTEMPT, ...SOURCE });
 const REFUSED = { error: "Executing source could not be verified" };
+// The fixed 403 body of a refused run tool call: a sentence and the refusal code.
+const NO_CURRENT_SOURCE = { error: "The run's tool call was refused.", code: "action_executed_source_missing_or_stale" };
 const AUTHORITY = Object.freeze({ authority: "run-authority-under-test" });
 
 /** The source-bound pair the runtime signs over the step, its task's attempt and the executing source. */
@@ -172,6 +185,8 @@ beforeEach(() => {
   );
   h.resolveLatestWayflowGateTaskId.mockReset().mockResolvedValue(null);
   h.verifyRunExecutedSource.mockReset().mockResolvedValue(VERIFIED_SOURCE);
+  h.isRunExecutedSourceCurrent.mockReset().mockResolvedValue(true);
+  h.assertRunStepToolAllowed.mockReset().mockReturnValue({ kind: "undeclared" });
   h.mintRunWriteAuthorityForMcp.mockReset().mockResolvedValue(AUTHORITY);
   process.env.CINATRA_CONTEXT_ATTEST_KEY = ATTEST_KEY;
 });
@@ -181,19 +196,17 @@ afterEach(() => {
   else process.env.CINATRA_CONTEXT_ATTEST_KEY = ATTEST_BEFORE;
 });
 
-describe("the passthrough road's verified step", () => {
+describe("the passthrough road refuses a call without a verified executing source", () => {
   // (t1)
-  it("a run-scoped tool called with a valid step pair sees the step on its frame", async () => {
+  it("a run-scoped tool called with only a valid step pair is refused before it runs", async () => {
     const res = await POST(makeReq(RUN_SCOPED_TOOL, stepHeaders()));
-    expect(res.status).toBe(200);
-    expect(h.observed).toHaveLength(1);
-    const frame = h.observed[0]!.frame as Record<string, unknown>;
-    expect(frame.verifiedRunScopeId).toBe(RUN.id);
-    expect(frame.verifiedStepId).toBe(NODE);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(NO_CURRENT_SOURCE);
+    expect(h.observed).toHaveLength(0);
   });
 
   // (t2)
-  it("an invalid or absent pair leaves the run-scoped frame as before, with no step", async () => {
+  it("an invalid or absent pair is refused the same way, with no tool run", async () => {
     const valid = stepHeaders();
     const variants: Array<Record<string, string>> = [
       {},
@@ -205,25 +218,18 @@ describe("the passthrough road's verified step", () => {
     for (const headers of variants) {
       h.observed.length = 0;
       const res = await POST(makeReq(RUN_SCOPED_TOOL, headers));
-      expect(res.status).toBe(200);
-      expect(h.observed).toHaveLength(1);
-      const frame = h.observed[0]!.frame as Record<string, unknown>;
-      expect(frame).toEqual({
-        runId: RUN.id,
-        verifiedRunScopeId: RUN.id,
-        userId: RUN.runBy,
-        orgId: RUN.orgId,
-      });
+      expect(res.status, JSON.stringify(headers)).toBe(403);
+      expect(await res.json()).toEqual(NO_CURRENT_SOURCE);
+      expect(h.observed).toHaveLength(0);
     }
   });
 
   // (t3)
-  it("a tool served without a run-scoped frame runs in the run's frame, which carries the step", async () => {
+  it("a tool served without a run-scoped frame is refused the same way", async () => {
     const res = await POST(makeReq(FRAMELESS_TOOL, stepHeaders()));
-    expect(res.status).toBe(200);
-    expect(h.observed).toHaveLength(1);
-    expect(h.observed[0]!.tool).toBe(FRAMELESS_TOOL);
-    expect(h.observed[0]!.frame).toEqual({ runId: RUN.id, userId: RUN.runBy, orgId: RUN.orgId, verifiedStepId: NODE });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(NO_CURRENT_SOURCE);
+    expect(h.observed).toHaveLength(0);
     expect(h.mintRunWriteAuthorityForMcp).not.toHaveBeenCalled();
   });
 });
@@ -243,6 +249,10 @@ describe("the passthrough road's source-bound step", () => {
     expect(h.mintRunWriteAuthorityForMcp).toHaveBeenCalledWith({
       runId: RUN.id, orgId: RUN.orgId, executionAttemptId: VERIFIED_SOURCE.executionAttemptId,
     });
+    // The source is read again as current, and the step's declaration admits the tool.
+    expect(h.isRunExecutedSourceCurrent).toHaveBeenCalledWith(RUN.id, RUN.orgId, VERIFIED_SOURCE);
+    expect(h.assertRunStepToolAllowed).toHaveBeenCalledWith({ policy: h.policy, contextId: CTX,
+      executedSourceSha256: SOURCE.executedSourceSha256, stepId: NODE, toolName: RUN_SCOPED_TOOL });
   });
 
   // (t5)
@@ -298,11 +308,26 @@ describe("the passthrough road's source-bound step", () => {
   });
 
   // (t8)
-  it("a call without source headers takes the s1 road and never reads the source check", async () => {
+  it("a call without source headers is refused and never reads the source checks", async () => {
     const res = await POST(makeReq(RUN_SCOPED_TOOL, stepHeaders()));
-    expect(res.status).toBe(200);
-    expect((h.observed[0]!.frame as Record<string, unknown>).verifiedStepId).toBe(NODE);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(NO_CURRENT_SOURCE);
     expect(h.verifyRunExecutedSource).not.toHaveBeenCalled();
+    expect(h.isRunExecutedSourceCurrent).not.toHaveBeenCalled();
+    expect(h.assertRunStepToolAllowed).not.toHaveBeenCalled();
+  });
+
+  // (t12)
+  it("a verified source that the run store no longer reads as current is refused before any tool runs", async () => {
+    h.isRunExecutedSourceCurrent.mockResolvedValue(false);
+    for (const tool of [RUN_SCOPED_TOOL, FRAMELESS_TOOL]) {
+      h.observed.length = 0;
+      const res = await POST(makeReq(tool, sourceHeaders()));
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual(NO_CURRENT_SOURCE);
+      expect(h.observed).toHaveLength(0);
+    }
+    expect(h.assertRunStepToolAllowed).not.toHaveBeenCalled();
   });
 });
 
@@ -335,14 +360,12 @@ describe("the passthrough road carries the verified executing source", () => {
   });
 
   // (t11)
-  it("a call without a verified source carries no source and mints no authority", async () => {
+  it("a call without a verified source mints no authority and runs no tool", async () => {
     for (const headers of [stepHeaders(), {}]) {
       h.observed.length = 0;
       const res = await POST(makeReq(RUN_SCOPED_TOOL, headers));
-      expect(res.status).toBe(200);
-      const frame = h.observed[0]!.frame as Record<string, unknown>;
-      expect(frame).not.toHaveProperty("verifiedExecutedSource");
-      expect(frame).not.toHaveProperty("orgWriteAuthority");
+      expect(res.status).toBe(403);
+      expect(h.observed).toHaveLength(0);
     }
     expect(h.mintRunWriteAuthorityForMcp).not.toHaveBeenCalled();
   });
