@@ -157,6 +157,38 @@ describe("readSchemaFieldGate - fold2 admission (cinatra#4244)", () => {
     expect(deep.kind).toBe("fields");
   });
 
+  it("refuses a required name that names no declared property, at the top level and nested", () => {
+    const refused: unknown[] = [
+      { type: "object", properties: {}, required: ["brandVoice"] },
+      { type: "object", properties: { tone: { type: "string" } }, required: ["brandVoice"] },
+      {
+        type: "object",
+        properties: { config: { type: "object", properties: { a: { type: "string" } }, required: ["b"] } },
+      },
+      {
+        type: "object",
+        properties: {
+          config: {
+            type: "object",
+            properties: { a: { type: "string" }, s: { type: "string", "x-hidden": true } },
+            required: ["s"],
+          },
+        },
+      },
+    ];
+    for (const schema of refused) {
+      expect(read(schema), JSON.stringify(schema)).toEqual({ kind: "malformed" });
+    }
+    // A top-level required name may name a hidden or a bookkeeping property.
+    expect(
+      read({
+        type: "object",
+        properties: { tone: { type: "string" }, secret: { type: "string", "x-hidden": true }, approved: {} },
+        required: ["secret", "approved"],
+      }).kind,
+    ).toBe("fields");
+  });
+
   it("keeps a declared field named __proto__ as an own field of the drawn schema", () => {
     const reading = read(JSON.parse('{"type":"object","properties":{"__proto__":{"type":"string"}}}'));
     expect(reading.kind).toBe("fields");
@@ -188,6 +220,7 @@ describe("buildSchemaFieldGatePayload (cinatra#4244)", () => {
       approved: true,
       approvedAt: NOW,
       userResponse: "Warm and plain.",
+      userResponseFieldName: "brandVoice",
     });
   });
 
@@ -280,13 +313,17 @@ describe("buildSchemaFieldGatePayload (cinatra#4244)", () => {
     ).toThrow();
   });
 
-  it("sends a single text answer that reads as JSON under its declared field", () => {
-    for (const text of ["42", '{"tone":"warm"}', "true", "[1]", "null"]) {
+  it("sends a single text answer verbatim, JSON-looking or not, naming its declared field", () => {
+    for (const text of ["42", '{"tone":"warm"}', "true", "[1]", "null", "Warm."]) {
       const sent = payload({ schema: BRAND_SCHEMA, next: { brandVoice: text }, now: NOW });
-      expect(JSON.parse(sent.userResponse as string), text).toEqual({ brandVoice: text });
+      expect(sent.userResponse, text).toBe(text);
+      expect(sent.userResponseFieldName, text).toBe("brandVoice");
     }
-    expect(payload({ schema: BRAND_SCHEMA, next: { brandVoice: "Warm." }, now: NOW }).userResponse).toBe(
-      "Warm.",
-    );
+    const several = payload({
+      schema: { type: "object", properties: { title: { type: "string" }, body: { type: "string" } } },
+      next: { title: "T", body: "B" },
+      now: NOW,
+    });
+    expect(several.userResponseFieldName).toBeUndefined();
   });
 });

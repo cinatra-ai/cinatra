@@ -406,6 +406,7 @@ describe("OrchestratorStepperPanel - the next input gate after a Continue (cinat
     ["null properties", { type: "object", properties: null }],
     ["a null property", { type: "object", properties: { brandVoice: null } }],
     ["no properties but a required name", { type: "object", required: ["brandVoice"] }],
+    ["an empty property map but a required name", { type: "object", properties: {}, required: ["brandVoice"] }],
     [
       "a nested null property",
       { type: "object", properties: { config: { type: "object", properties: { child: null } } } },
