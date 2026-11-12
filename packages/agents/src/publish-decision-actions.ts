@@ -304,10 +304,17 @@ const PUBLISH_RESUME_TEXT = "[Publish approved]";
  * the resume. A run that another Publish already claimed resumes nothing more ({ ok: true, resumed: false }). A late
  * answer is publish_decision_not_open with the current status. A resume that fails before its send puts the run back to
  * pending_approval; after its send the run stays where the send left it. Its fault is publish_resume_failed, with a
- * fixed text.
+ * fixed text. A fault of a read of the authority check surfaces as publish_decision_unavailable with a fixed text, as
+ * in Do not publish; access and store refusals pass.
  */
 export async function approvePublishDecision(input: DecideInput): Promise<PublishApproveAnswer> {
-  const { run, deciderId, authority } = await enforcePublishDecisionAccess(input);
+  let access: Awaited<ReturnType<typeof enforcePublishDecisionAccess>>;
+  try {
+    access = await enforcePublishDecisionAccess(input);
+  } catch (err) {
+    throw opaque(err);
+  }
+  const { run, deciderId, authority } = access;
   const { assertAgentRunDispatchAuthorized } = await import("./agent-run-serde");
   await assertAgentRunDispatchAuthorized({ runId: run.id, stage: "dispatch", actingUserId: deciderId }).catch((err: unknown) => {
     if ((err as { code?: unknown } | null)?.code !== "AGENT_TEMPLATE_SCOPE_DENIED") throw err;
