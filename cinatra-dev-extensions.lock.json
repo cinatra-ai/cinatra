@@ -120,7 +120,7 @@
     {
       "packageName": "@cinatra-ai/cms-snapshot-artifact",
       "repo": "cinatra-ai/cms-snapshot-artifact",
-      "resolvedSha": "1a87c2ead539e435ab7d3e19cd03356e1b35753e"
+      "resolvedSha": "a274228f6de9bb9c31cc476bf0663d06eb33a27b"
     },
     {
       "packageName": "@cinatra-ai/company-discovery-agent",
@@ -170,7 +170,7 @@
     {
       "packageName": "@cinatra-ai/drupal-artifacts",
       "repo": "cinatra-ai/drupal-artifacts",
-      "resolvedSha": "dd1bbfa0e939ee176f6d01b4173056ca95f6b77a"
+      "resolvedSha": "310d0f8cc3f5b42598c8506bd31771001332d4ce"
     },
     {
       "packageName": "@cinatra-ai/drupal-assistant-connector",
