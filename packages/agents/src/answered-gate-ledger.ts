@@ -5,31 +5,38 @@
  * token. The ledger holds:
  *  - `pair`: the gate of the last armed submit (renderer and review task),
  *    with the tokens of the submits of that same gate, or null;
- *  - `claims`: for each review task that names one gate
- *    (`reviewTaskIdNamesOneGate`), the tokens of the submits that answered it.
- *    A shared `setup-<runId>` id and a blank id are never claimed.
+ *  - `claims`: for each answered question whose review task names one gate
+ *    (`reviewTaskIdNamesOneGate`), keyed by `answeredGateKey` (review task,
+ *    renderer and field together), the tokens of the submits that answered
+ *    it. A run's gates can share one review task, so another renderer or
+ *    field under an answered review task is not claimed (cinatra#3739). A
+ *    shared `setup-<runId>` id and a blank id are never claimed.
  *
  * Duplicate submits of one gate are expected (a double click, chat plus form;
  * see hitl-gate-submit.ts), and the server answers the loser with a blocked
  * result. So a submit that fails (blocked or thrown) releases only what its
- * own token added: its token on the pair and its claim on its review task.
- * The pair is released only when no submit of its gate holds it, and a review
- * task leaves `claims` only when no submit holds it. A losing duplicate submit
- * therefore never takes back the suppression of an accepted one, and a late
+ * own token added: its token on the pair and its claim on its question.
+ * The pair is released only when no submit of its gate holds it, and a
+ * question leaves `claims` only when no submit holds it. A losing duplicate
+ * submit therefore never takes back the suppression of an accepted one, and a late
  * failure of one submit never clears the pair of a later submit of another
  * gate.
  *
  * Pure and framework-free: the panel keeps one ledger in a ref and passes
  * `pair` and `claims` to `applyJustSubmittedSuppression`.
  */
-import { reviewTaskIdNamesOneGate, type JustSubmittedGate } from "./run-surface-status";
+import {
+  answeredGateKey,
+  reviewTaskIdNamesOneGate,
+  type JustSubmittedGate,
+} from "./run-surface-status";
 
 export type ArmedAnsweredGate = JustSubmittedGate & { readonly holders: Set<number> };
 
 export type AnsweredGateLedger = {
   pair: ArmedAnsweredGate | null;
   readonly claims: Map<string, Set<number>>;
-  readonly claimOfToken: Map<number, string>;
+  readonly claimOfToken: Map<number, { readonly key: string; readonly reviewTaskId: string }>;
   nextToken: number;
 };
 
@@ -60,20 +67,25 @@ export function armAnsweredGate(ledger: AnsweredGateLedger, gate: JustSubmittedG
     };
   }
   if (reviewTaskIdNamesOneGate(gate.reviewTaskId)) {
-    let holders = ledger.claims.get(gate.reviewTaskId);
+    const key = answeredGateKey({
+      reviewTaskId: gate.reviewTaskId,
+      xRenderer: gate.xRenderer,
+      fieldName: gate.fieldName,
+    });
+    let holders = ledger.claims.get(key);
     if (holders === undefined) {
       holders = new Set();
-      ledger.claims.set(gate.reviewTaskId, holders);
+      ledger.claims.set(key, holders);
     }
     holders.add(token);
-    ledger.claimOfToken.set(token, gate.reviewTaskId);
+    ledger.claimOfToken.set(token, { key, reviewTaskId: gate.reviewTaskId });
   }
   return token;
 }
 
 /**
  * Undo what the submit with this token added: its token on the pair (the pair
- * is released when no holder is left) and its claim on its review task. A
+ * is released when no holder is left) and its claim on its question. A
  * token released before, or armed before the last reset or a replacing arm,
  * leaves the pair alone.
  */
@@ -82,13 +94,21 @@ export function releaseAnsweredGate(ledger: AnsweredGateLedger, token: number): 
   if (pair !== null && pair.holders.delete(token) && pair.holders.size === 0) {
     ledger.pair = null;
   }
-  const reviewTaskId = ledger.claimOfToken.get(token);
-  if (reviewTaskId === undefined) return;
+  const claim = ledger.claimOfToken.get(token);
+  if (claim === undefined) return;
   ledger.claimOfToken.delete(token);
-  const holders = ledger.claims.get(reviewTaskId);
+  const holders = ledger.claims.get(claim.key);
   if (holders === undefined) return;
   holders.delete(token);
-  if (holders.size === 0) ledger.claims.delete(reviewTaskId);
+  if (holders.size === 0) ledger.claims.delete(claim.key);
+}
+
+/** Whether any submit still holds a claim on a question under this review task. */
+export function isReviewTaskClaimed(ledger: AnsweredGateLedger, reviewTaskId: string): boolean {
+  for (const claim of ledger.claimOfToken.values()) {
+    if (claim.reviewTaskId === reviewTaskId) return true;
+  }
+  return false;
 }
 
 /** The render-time clear: the next gate is drawn, so the pair is released; claims stay. */

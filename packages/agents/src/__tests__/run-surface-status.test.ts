@@ -11,6 +11,7 @@
 import { describe, it, expect } from "vitest";
 
 import {
+  answeredGateKey,
   applyJustSubmittedSuppression,
   classifyRunWaitInterrupt,
   isSetupInterruptTaskId,
@@ -289,11 +290,14 @@ describe("applyJustSubmittedSuppression", () => {
   // The caller passes the answered gate as ONE pair (renderer and review task,
   // written together, so no render reads a renderer of one submit beside the
   // review task of another), and the review tasks answered so far on this
-  // mount. A review task in that set is spent: a late poll that still carries
-  // it is never drawn again, whatever the armed pair says.
+  // mount, each keyed by its review task, renderer and field
+  // (`answeredGateKey`). An answered question is spent: a late poll that still
+  // carries it is never drawn again, whatever the armed pair says.
   const R = "@cinatra-ai/x:output";
   const nextGateSameRenderer: HitlGateContext = { ...gate, reviewTaskId: "rt-2" };
-  const answered = (...ids: string[]): ReadonlySet<string> => new Set(ids);
+  // The questions answered on renderer R with no field, by their review task.
+  const answered = (...ids: string[]): ReadonlySet<string> =>
+    new Set(ids.map((reviewTaskId) => answeredGateKey({ reviewTaskId, xRenderer: R })));
 
   it("lets the NEXT gate of the same renderer through (a new review task) and signals the caller to clear", () => {
     expect(
@@ -456,12 +460,36 @@ describe("applyJustSubmittedSuppression", () => {
     }
   });
 
-  it("suppresses a spent one-gate review task even when it arrives with a different renderer", () => {
-    // The answered set is read before the renderer: a review task that names
-    // one gate and was answered on this mount is never drawn again.
-    const spentOther: HitlGateContext = { ...gate, xRenderer: "@cinatra-ai/x:other", reviewTaskId: "rt-1" };
+  it("draws another question under an answered review task (another renderer or field), never the answered one", () => {
+    // "The question the person answered is spent wherever it is read" - and
+    // only that question (cinatra#3739). A run's gates can share one review
+    // task, so a question under the answered review task that asks another
+    // renderer or field is a new question.
+    const otherRenderer: HitlGateContext = {
+      ...gate,
+      xRenderer: "@cinatra-ai/x:other",
+      reviewTaskId: "rt-1",
+      fieldName: "idea",
+    };
     expect(
-      applyJustSubmittedSuppression(spentOther, { xRenderer: R, reviewTaskId: "rt-2" }, answered("rt-1", "rt-2")),
+      applyJustSubmittedSuppression(otherRenderer, { xRenderer: R, reviewTaskId: "rt-2" }, answered("rt-1", "rt-2")),
+    ).toEqual({ context: otherRenderer, clearSuppression: true });
+    expect(applyJustSubmittedSuppression(otherRenderer, null, answered("rt-1"))).toEqual({
+      context: otherRenderer,
+      clearSuppression: false,
+    });
+    const otherField: HitlGateContext = { ...gate, reviewTaskId: "rt-1", fieldName: "idea" };
+    expect(applyJustSubmittedSuppression(otherField, null, answered("rt-1"))).toEqual({
+      context: otherField,
+      clearSuppression: false,
+    });
+    // The answered question itself stays spent, with or without an armed pair.
+    expect(applyJustSubmittedSuppression(gate, null, answered("rt-1"))).toEqual({
+      context: null,
+      clearSuppression: false,
+    });
+    expect(
+      applyJustSubmittedSuppression(gate, { xRenderer: "@cinatra-ai/x:other", reviewTaskId: "rt-1" }, answered("rt-1")),
     ).toEqual({ context: null, clearSuppression: false });
   });
 });

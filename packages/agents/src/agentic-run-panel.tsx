@@ -101,6 +101,7 @@ import {
   armAnsweredGate,
   clearAnsweredPair,
   createAnsweredGateLedger,
+  isReviewTaskClaimed,
   releaseAnsweredGate,
   resetAnsweredGates,
   type AnsweredGateLedger,
@@ -721,10 +722,12 @@ export function AgenticRunPanel({
   // answered-gate-ledger.ts), kept in this ref, not in React state. Its
   // `pair` is the gate of the last armed submit (renderer and review task,
   // written in one assignment) with the tokens of the submits of that gate.
-  // Its `claims` are the review tasks that name one gate and were answered on
-  // this mount, each with the tokens of the submits that answered it. Polls
-  // are not ordered, so a late one can still carry a gate answered earlier; a
-  // gate whose review task is claimed is not drawn while the claim stands.
+  // Its `claims` are the questions (review task, renderer and field) answered
+  // on this mount whose review task names one gate, each with the tokens of
+  // the submits that answered it. Polls are not ordered, so a late one can
+  // still carry a gate answered earlier; a claimed question is not drawn while
+  // the claim stands, and another question under its review task is
+  // (cinatra#3739).
   // A blocked or thrown submit releases only what its own token added, and
   // Re-check releases everything. The shared `setup-<runId>` id is never
   // claimed.
@@ -1234,7 +1237,7 @@ export function AgenticRunPanel({
         const ledger = answeredGateLedgerRef.current;
         releaseAnsweredGate(ledger, ownToken);
         ownToken = null;
-        const stillClaimed = ledger.claims.has(args.reviewTaskId);
+        const stillClaimed = isReviewTaskClaimed(ledger, args.reviewTaskId);
         setAnsweredReviewTaskId((current) =>
           current === args.reviewTaskId && !stillClaimed ? null : current,
         );
@@ -1243,6 +1246,7 @@ export function AgenticRunPanel({
         ownToken = armAnsweredGate(answeredGateLedgerRef.current, {
           xRenderer: args.xRenderer,
           reviewTaskId: args.reviewTaskId,
+          fieldName: latestHitlContextRef.current?.fieldName ?? null,
         });
         setAnsweredReviewTaskId(args.reviewTaskId);
         setAnsweredQuestionShape(
@@ -2328,8 +2332,8 @@ export function AgenticRunPanel({
   // `effectiveHitlContext` reaches null down two very different roads. One is
   // the road this placeholder is for: the row carries no interrupt at all,
   // because the person answered it and the run moved past it. The other is
-  // `applyJustSubmittedSuppression`, which nulls a NON-null interrupt whose
-  // review task was claimed on this mount, and otherwise for as long as the
+  // `applyJustSubmittedSuppression`, which nulls a NON-null interrupt that is
+  // a question claimed on this mount, and otherwise for as long as the
   // just-submitted renderer matches, unless the interrupt's review task names
   // one gate and differs from a non-blank armed one (cinatra#3080) - and a
   // run's sequential setup fields deliberately share one renderer and one

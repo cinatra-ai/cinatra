@@ -16,18 +16,20 @@ import {
   armAnsweredGate,
   clearAnsweredPair,
   createAnsweredGateLedger,
+  isReviewTaskClaimed,
   releaseAnsweredGate,
   resetAnsweredGates,
 } from "../answered-gate-ledger";
 import { applyJustSubmittedSuppression, type HitlGateContext } from "../run-surface-status";
 
 const R = "@cinatra-ai/x:output";
-const ctx = (reviewTaskId: string, xRenderer = R): HitlGateContext => ({
+const ctx = (reviewTaskId: string, xRenderer = R, fieldName?: string): HitlGateContext => ({
   xRenderer,
   childRunId: null,
   reviewTaskId,
   inputSchema: {},
   currentValues: {},
+  ...(fieldName === undefined ? {} : { fieldName }),
 });
 const view = (ledger: ReturnType<typeof createAnsweredGateLedger>, raw: HitlGateContext) =>
   applyJustSubmittedSuppression(raw, ledger.pair, ledger.claims);
@@ -37,7 +39,7 @@ describe("answered-gate ledger", () => {
     const ledger = createAnsweredGateLedger();
     armAnsweredGate(ledger, { xRenderer: R, reviewTaskId: "rt-1" });
     expect(ledger.pair).toMatchObject({ xRenderer: R, reviewTaskId: "rt-1" });
-    expect(ledger.claims.has("rt-1")).toBe(true);
+    expect(isReviewTaskClaimed(ledger, "rt-1")).toBe(true);
     expect(view(ledger, ctx("rt-1"))).toEqual({ context: null, clearSuppression: false });
   });
 
@@ -46,7 +48,7 @@ describe("answered-gate ledger", () => {
     const a = armAnsweredGate(ledger, { xRenderer: R, reviewTaskId: "rt-1" });
     releaseAnsweredGate(ledger, a);
     expect(ledger.pair).toBeNull();
-    expect(ledger.claims.has("rt-1")).toBe(false);
+    expect(isReviewTaskClaimed(ledger, "rt-1")).toBe(false);
     expect(view(ledger, ctx("rt-1"))).toEqual({ context: ctx("rt-1"), clearSuppression: false });
   });
 
@@ -55,7 +57,7 @@ describe("answered-gate ledger", () => {
     armAnsweredGate(ledger, { xRenderer: R, reviewTaskId: "rt-1" }); // A: accepted
     const b = armAnsweredGate(ledger, { xRenderer: R, reviewTaskId: "rt-1" }); // B: blocked
     releaseAnsweredGate(ledger, b);
-    expect(ledger.claims.has("rt-1")).toBe(true);
+    expect(isReviewTaskClaimed(ledger, "rt-1")).toBe(true);
     expect(ledger.pair).toMatchObject({ xRenderer: R, reviewTaskId: "rt-1" });
     // A late poll still carrying the answered gate is not drawn.
     expect(view(ledger, ctx("rt-1"))).toEqual({ context: null, clearSuppression: false });
@@ -66,9 +68,9 @@ describe("answered-gate ledger", () => {
     const a = armAnsweredGate(ledger, { xRenderer: R, reviewTaskId: "rt-1" });
     const b = armAnsweredGate(ledger, { xRenderer: R, reviewTaskId: "rt-1" });
     releaseAnsweredGate(ledger, b);
-    expect(ledger.claims.has("rt-1")).toBe(true);
+    expect(isReviewTaskClaimed(ledger, "rt-1")).toBe(true);
     releaseAnsweredGate(ledger, a);
-    expect(ledger.claims.has("rt-1")).toBe(false);
+    expect(isReviewTaskClaimed(ledger, "rt-1")).toBe(false);
   });
 
   it("never lets a late failure of an earlier submit clear a later submit's pair or task", () => {
@@ -77,8 +79,8 @@ describe("answered-gate ledger", () => {
     armAnsweredGate(ledger, { xRenderer: R, reviewTaskId: "rt-2" });
     releaseAnsweredGate(ledger, a);
     expect(ledger.pair).toMatchObject({ xRenderer: R, reviewTaskId: "rt-2" });
-    expect(ledger.claims.has("rt-1")).toBe(false);
-    expect(ledger.claims.has("rt-2")).toBe(true);
+    expect(isReviewTaskClaimed(ledger, "rt-1")).toBe(false);
+    expect(isReviewTaskClaimed(ledger, "rt-2")).toBe(true);
     expect(view(ledger, ctx("rt-2"))).toEqual({ context: null, clearSuppression: false });
   });
 
@@ -88,10 +90,10 @@ describe("answered-gate ledger", () => {
     const b = armAnsweredGate(ledger, { xRenderer: R, reviewTaskId: "rt-1" });
     releaseAnsweredGate(ledger, a);
     releaseAnsweredGate(ledger, a);
-    expect(ledger.claims.has("rt-1")).toBe(true);
+    expect(isReviewTaskClaimed(ledger, "rt-1")).toBe(true);
     expect(ledger.pair).toMatchObject({ reviewTaskId: "rt-1" });
     releaseAnsweredGate(ledger, b);
-    expect(ledger.claims.has("rt-1")).toBe(false);
+    expect(isReviewTaskClaimed(ledger, "rt-1")).toBe(false);
   });
 
   it("clears only the pair at the render-time clear; a later release of that submit leaves a newer pair alone", () => {
@@ -99,7 +101,7 @@ describe("answered-gate ledger", () => {
     const a = armAnsweredGate(ledger, { xRenderer: R, reviewTaskId: "rt-1" });
     clearAnsweredPair(ledger);
     expect(ledger.pair).toBeNull();
-    expect(ledger.claims.has("rt-1")).toBe(true);
+    expect(isReviewTaskClaimed(ledger, "rt-1")).toBe(true);
     armAnsweredGate(ledger, { xRenderer: R, reviewTaskId: "rt-2" });
     releaseAnsweredGate(ledger, a);
     expect(ledger.pair).toMatchObject({ reviewTaskId: "rt-2" });
@@ -110,11 +112,11 @@ describe("answered-gate ledger", () => {
     const a = armAnsweredGate(ledger, { xRenderer: R, reviewTaskId: "rt-1" });
     resetAnsweredGates(ledger);
     expect(ledger.pair).toBeNull();
-    expect(ledger.claims.has("rt-1")).toBe(false);
+    expect(isReviewTaskClaimed(ledger, "rt-1")).toBe(false);
     const c = armAnsweredGate(ledger, { xRenderer: R, reviewTaskId: "rt-3" });
     releaseAnsweredGate(ledger, a);
     expect(ledger.pair).toMatchObject({ reviewTaskId: "rt-3" });
-    expect(ledger.claims.has("rt-3")).toBe(true);
+    expect(isReviewTaskClaimed(ledger, "rt-3")).toBe(true);
     expect(c).not.toBe(a);
   });
 
@@ -135,6 +137,58 @@ describe("answered-gate ledger", () => {
     // A still holds the pair and the answered task.
     expect(view(ledger, ctx("wayflow-t1"))).toEqual({ context: null, clearSuppression: false });
     expect(view(ledger, ctx("wayflow-t2"))).toEqual({ context: ctx("wayflow-t2"), clearSuppression: true });
+  });
+
+  // "The question the person answered is spent wherever it is read" - and only
+  // that question (cinatra#3739). A run's gates can share one review task, so
+  // a question under the answered review task that asks another renderer or
+  // another field is a new question and is drawn; the answered question
+  // itself stays spent.
+  it("draws another question under the answered review task once the pair is cleared, never the answered one", () => {
+    const ledger = createAnsweredGateLedger();
+    armAnsweredGate(ledger, { xRenderer: R, reviewTaskId: "rt-1" });
+    clearAnsweredPair(ledger);
+    const otherRenderer = ctx("rt-1", "@cinatra-ai/x:other", "idea");
+    const otherField = ctx("rt-1", R, "idea");
+    expect(view(ledger, otherRenderer)).toEqual({ context: otherRenderer, clearSuppression: false });
+    expect(view(ledger, otherField)).toEqual({ context: otherField, clearSuppression: false });
+    // The answered question itself, as a late poll returns it, stays spent.
+    expect(view(ledger, ctx("rt-1"))).toEqual({ context: null, clearSuppression: false });
+  });
+
+  it("draws a question of another renderer under the answered review task while the pair is armed, and clears the pair", () => {
+    const ledger = createAnsweredGateLedger();
+    armAnsweredGate(ledger, { xRenderer: R, reviewTaskId: "rt-1" });
+    const otherRenderer = ctx("rt-1", "@cinatra-ai/x:other", "idea");
+    expect(view(ledger, otherRenderer)).toEqual({ context: otherRenderer, clearSuppression: true });
+  });
+
+  it("claims the answered field: the same renderer and review task with that field stays spent", () => {
+    const ledger = createAnsweredGateLedger();
+    armAnsweredGate(ledger, { xRenderer: R, reviewTaskId: "rt-1", fieldName: "idea" });
+    clearAnsweredPair(ledger);
+    expect(view(ledger, ctx("rt-1", R, "idea"))).toEqual({ context: null, clearSuppression: false });
+    expect(view(ledger, ctx("rt-1", R, "other"))).toEqual({
+      context: ctx("rt-1", R, "other"),
+      clearSuppression: false,
+    });
+  });
+
+  it("keeps a review task claimed while any submit holds a question under it", () => {
+    const ledger = createAnsweredGateLedger();
+    const a = armAnsweredGate(ledger, { xRenderer: R, reviewTaskId: "rt-1" });
+    const b = armAnsweredGate(ledger, { xRenderer: "@cinatra-ai/x:other", reviewTaskId: "rt-1" });
+    releaseAnsweredGate(ledger, a);
+    expect(isReviewTaskClaimed(ledger, "rt-1")).toBe(true);
+    clearAnsweredPair(ledger);
+    // Only the released question is drawn again; the held one stays spent.
+    expect(view(ledger, ctx("rt-1"))).toEqual({ context: ctx("rt-1"), clearSuppression: false });
+    expect(view(ledger, ctx("rt-1", "@cinatra-ai/x:other"))).toEqual({
+      context: null,
+      clearSuppression: false,
+    });
+    releaseAnsweredGate(ledger, b);
+    expect(isReviewTaskClaimed(ledger, "rt-1")).toBe(false);
   });
 
   it("keeps the pair of an accepted setup submit when a duplicate submit of it loses", () => {
