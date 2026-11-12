@@ -37,19 +37,23 @@
 //     14px chevron in the full muted ink;
 //   - the trigger was inset 12px on both sides (`px-3`), where the Example
 //     draws 12px on the left and 10px on the right. The Input's own inset is
-//     10px on both sides (`px-2.5`), so the trigger matched neither.
+//     10px on both sides (`px-2.5`), so the trigger matched neither;
+//   - the trigger was padded 4px top and bottom (`py-1`), where the Example
+//     draws 0 top and bottom.
 // Each is fixed in the Combobox's own call site; the shared Command primitive
 // and every other caller keep their recipe.
 //
 // The trigger's TYPE SIZE is graded against the family clause the Select
 // section states for every trigger of the select family, "Trigger mirrors
-// Input chrome": the trigger keeps the Input's `text-sm`, so a list that
-// crosses the ~8 threshold changes its behaviour without changing how the row
-// reads beside the Input next to it. The trigger's INSET is graded against
-// the Combobox's own Example, which writes it out in full: the family clause
-// gives the chrome (height, radius, border, surface), the section's own
-// picture gives the one number the clause leaves open. Its right inset is the
-// Input's 10px; its left inset is the Example's 12px.
+// Input chrome": from md up the trigger keeps the Input's `text-sm`, so a
+// list that crosses the ~8 threshold changes its behaviour without changing
+// how the row reads beside the Input next to it. Below md the Input sets
+// `text-base` and the trigger stays `text-sm`; that breakpoint is not graded.
+// The trigger's INSET is graded against the Combobox's own Example, which
+// writes it out in full: the family clause gives the chrome (height, radius,
+// border, surface), the section's own picture gives the numbers the clause
+// leaves open. Its right inset is the Input's 10px; its left inset is the
+// Example's 12px; its top and bottom padding are the Example's 0.
 //
 // What is graded here is the RECIPE (class names). Colours that only resolve
 // through palette tokens are re-read on the live boot in both palettes.
@@ -182,7 +186,21 @@ describe('clause: "an Input-chrome trigger" / "Input trigger + chevron"', () => 
     ).not.toContain("px-2.5")
   })
 
-  it("keeps the Input's type size, as the family clause asks", () => {
+  it('pads the trigger 0px top and bottom, as the Example draws it ("padding: 0 10px 0 12px")', () => {
+    // The shorthand's first and third values are 0: the 32px height alone
+    // sets the trigger's block size, and the value and chevron sit on the
+    // flex centre line. Any vertical padding utility other than a zero one
+    // (`py-1` would add 4px above and below) departs from the drawing.
+    const vertical = classes(renderTrigger()).filter((t) =>
+      /^(?:[a-z-]+:)*(?:p|py|pt|pb)-/.test(t),
+    )
+    expect(
+      vertical.filter((t) => !/-0$/.test(t)),
+      "the trigger takes a top or bottom padding the Example does not draw",
+    ).toEqual([])
+  })
+
+  it("keeps the Input's type size from md up, as the family clause asks", () => {
     // "Trigger mirrors Input chrome": the Input sets its type at text-sm from
     // md up, and the trigger takes the same size so the two read alike.
     const { container } = render(<Input aria-label="Name" />)
@@ -292,8 +310,14 @@ describe('clause: "The current value carries an indigo check" / "check on select
       own.filter((t) => t.includes("size-")),
       "the check sets its own size, so the row's 13px rule does not reach it",
     ).toEqual([])
+    // A colour class of its own is a text, fill or stroke colour; a stroke
+    // WIDTH (`stroke-2`, `stroke-[2.4]`) is not a colour and is not read here.
     expect(
-      own.filter((t) => /^(?:[a-z-]+:)*text-/.test(t)),
+      own.filter(
+        (t) =>
+          /^(?:[a-z-]+:)*(?:text|fill|stroke)-/.test(t) &&
+          !/^(?:[a-z-]+:)*stroke-(?:\d+(?:\.\d+)?|\[\d+(?:\.\d+)?(?:px)?\])$/.test(t),
+      ),
       "the check sets its own colour class",
     ).toEqual([])
   })
