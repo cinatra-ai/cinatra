@@ -28,6 +28,8 @@ through one of the **enumerated emitters**. The set is closed
 |---|---|
 | `createSemanticArtifact` | The file-form artifact writer (`src/lib/artifacts/artifact-creation.ts`). |
 | `dashboard_twin_writer` | The dashboard artifact twin's own transaction. |
+| `object_snapshot_mint` | The mint of an object-backed row's snapshot revision (`src/lib/artifacts/object-content-snapshot.ts`). |
+| `artifact_revision_append` | The same-artifact revision append (`src/lib/artifacts/artifact-revision-append.ts`). |
 | `object_cms_snapshot_capture` | No write path. The CMS content-snapshot capture that wrote it left the application (#3862); the emitter stays in the enumeration and in the database constraint. |
 
 An event row naming any other emitter is rejected at the contract boundary
@@ -60,7 +62,7 @@ Three axes on the row decide everything downstream:
 - **`continuation_mode`** — `async_effects_gated` (the run never pauses
   retroactively; the artifact's downstream effect is held until the decision) or
   `checkpointed` (the run evaluates policy, then parks; the park is released by
-  the decision or by its deadline). Both emitters with a write path emit
+  the decision or by its deadline). All four emitters with a write path emit
   `async_effects_gated`, which is the standard mode; `checkpointed` is the
   alternative the event and orchestration contracts carry.
 

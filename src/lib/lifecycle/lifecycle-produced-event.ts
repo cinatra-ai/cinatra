@@ -5,8 +5,10 @@
  * Review is driven by a durable PRODUCED EVENT with ENUMERATED emitters, not by a
  * writer hook — because the local artifact write happens across several distinct
  * choke points (the file-form `createSemanticArtifact`, the dashboard twin
- * writer's own transaction, and object/CMS snapshot capture) and `objects_save`
- * / remote CMS writes sit outside any single one. Each emitter writes an event
+ * writer's own transaction, the object snapshot mint and the same-artifact
+ * revision append) and `objects_save` / remote CMS writes sit outside any single
+ * one. The `object_cms_snapshot_capture` emitter stays in the enumeration, but
+ * no writer uses it since cinatra#3862. Each emitter with a writer writes an event
  * row in the SAME local transaction as its artifact/representation write
  * (same-transaction atomicity), keyed by a DETERMINISTIC event id so a replay is
  * idempotent and a reconciliation sweeper can detect a suppressed emit.

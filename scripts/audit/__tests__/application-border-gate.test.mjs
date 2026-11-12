@@ -413,8 +413,10 @@ describe("test of record: the application border floor over the real tree", () =
 
   it("the CMS snapshot capture left the class 2 floor and the class 3 ceilings with its module (cinatra#3862)", () => {
     // Built from parts so that this file does not name the retired module
-    // (src/lib/__tests__/cms-snapshot-writer-retired-3862.test.ts reads every
-    // JS, TS and JSON file under src/, packages/, scripts/ and config/).
+    // (src/lib/__tests__/cms-snapshot-writer-retired-3862.test.ts reads the JS,
+    // TS and JSON files under src/, packages/, scripts/ and config/, except
+    // inside directories named node_modules, .next, dist, build, coverage or
+    // .turbo).
     const writer = "src/lib/artifacts/" + "cms-content-snapshot" + "-capture.ts";
     expect(committed.names[`${writer} :: name :: cms`]).toBeUndefined();
     expect(committed.ceilings[writer]).toBeUndefined();
