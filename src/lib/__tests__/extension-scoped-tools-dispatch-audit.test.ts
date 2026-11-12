@@ -1,6 +1,6 @@
 /**
  * ONE `extension_tool.dispatch` AUDIT EVENT PER CALL, AND THE TOOL'S PORTS
- * ATTRIBUTED (cinatra#4154, part C2; spec v2.2 section 2.7).
+ * ATTRIBUTED (cinatra#4154, part C2).
  *
  * Every `extension_tool` call that reaches the scoped dispatch writes one
  * `extension_tool.dispatch` event, allowed and refused alike, carrying
