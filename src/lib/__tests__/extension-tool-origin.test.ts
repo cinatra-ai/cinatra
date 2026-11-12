@@ -135,7 +135,7 @@ type World = {
   manifests: Record<string, Doc>;
   flows: Record<string, unknown>;
   dev: boolean;
-  devRoot: string | null;
+  devRoot: string | { realRoot: string } | null;
   derived: { kind: "none" } | { kind: "derived"; id: string } | { kind: "ambiguous"; message: string };
 };
 
@@ -384,6 +384,13 @@ describe("the parent installation", () => {
     });
     expect(world.deps.readFlowDocument).toHaveBeenCalledWith(DEV_ROOT);
     await refusedWith(resolve(world, { run: { dependentInstallId: null } }), "child-not-materialized");
+    // A checked real root (the seed-copy road) is read at its real path.
+    world.w.devRoot = { realRoot: DEV_ROOT };
+    world.deps.readFlowDocument.mockClear();
+    expect(await resolve(world, { run: { dependentInstallId: null, verifiedStepId: "own_step" } })).toEqual({
+      kind: "parent",
+    });
+    expect(world.deps.readFlowDocument).toHaveBeenCalledWith(DEV_ROOT);
     world.w.devRoot = null;
     await refusedWith(resolve(world, { run: { dependentInstallId: null } }), "parent-not-materialized");
   });

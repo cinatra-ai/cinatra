@@ -283,7 +283,9 @@ export async function resolveExtensionToolOrigin(
       resolveRoot({ packageName: context.packageName, packageVersion: context.packageVersion, orgId: run.orgId }),
     );
     if (root === null) return refuse("parent-not-materialized");
-    const g = graphOf(await guarded("flow-document", () => readFlow(root)), "");
+    // A root the resolver already checked as a real path is read at that path.
+    const rootDir = typeof root === "string" ? root : root.realRoot;
+    const g = graphOf(await guarded("flow-document", () => readFlow(rootDir)), "");
     return classify(g, stepId, context.packageName).label === null
       ? { kind: "parent" }
       : refuse("child-not-materialized");
