@@ -1,6 +1,6 @@
 /**
  * EVERY AUDIT EVENT OF THE TOOL ROAD NAMES WHOSE CODE RAN (cinatra#4154, part
- * C2; spec v2.2 section 2.7).
+ * C2).
  *
  * Since part C an `extension_tool` call of an embedded child step runs the
  * child's code under the parent's run. An audit row that names only "the

@@ -1,6 +1,6 @@
 /**
  * WHOSE CODE AN `extension_tool` CALL RUNS, THROUGH THE ROUTE (cinatra#4154,
- * part C2; spec v2.2 sections 4.1 and 8.4).
+ * part C2).
  *
  * Drives the real passthrough route, the real scoped dispatch, the real origin
  * resolver and the real tool dispatch. The proven step comes only from the

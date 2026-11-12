@@ -1,5 +1,4 @@
-// WHOSE CODE AN AUDIT EVENT OF THE TOOL ROAD RECORDS (cinatra#4154, spec v2.2
-// section 2.7).
+// WHOSE CODE AN AUDIT EVENT OF THE TOOL ROAD RECORDS (cinatra#4154).
 //
 // Since an embedded child step may run the child's code under the parent's
 // run, "the extension" an audit event names is no longer enough to say which
