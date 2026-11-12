@@ -8,17 +8,21 @@
  * answer under that field, even when the text itself reads as JSON. Every
  * other road keeps the reading it had.
  *
+ * The reader lives in hitl-gate-submit.ts, beside the payload builder that
+ * names the field. A module of its own would add a first-party module to every
+ * locked route of the route-graph ratchet.
+ *
  * Run:
  *   cd packages/agents && pnpm exec vitest run src/__tests__/wayflow-submitted-values-4244.test.ts
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 type Reader = (values: unknown) => Record<string, unknown> | null;
 
 async function reader(): Promise<Reader> {
-  const mod = (await import("../wayflow-submitted-values").catch(() => ({}))) as {
+  const mod = (await import("../hitl-gate-submit").catch(() => ({}))) as {
     readWayflowSubmittedValues?: Reader;
   };
   if (typeof mod.readWayflowSubmittedValues !== "function") {
@@ -69,5 +73,12 @@ describe("approveReviewTaskInternal uses the reader (cinatra#4244)", () => {
   it("reads the submitted values through readWayflowSubmittedValues", () => {
     const src = readFileSync(join(__dirname, "..", "review-task-actions.ts"), "utf8");
     expect(src).toMatch(/submittedValues\s*=\s*readWayflowSubmittedValues\(\s*values\s*\)/);
+    expect(src).toMatch(/import \{ readWayflowSubmittedValues \} from "\.\/hitl-gate-submit";/);
+  });
+
+  it("adds no module of its own for the reader or the gate's hold context", () => {
+    for (const leaf of ["wayflow-submitted-values.ts", "gate-continue-hold-context.ts"]) {
+      expect(existsSync(join(__dirname, "..", leaf)), leaf).toBe(false);
+    }
   });
 });

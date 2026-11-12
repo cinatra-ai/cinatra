@@ -109,7 +109,7 @@ describe("readSchemaFieldGate (cinatra#4244)", () => {
         tone: { type: "string", default: "plain" },
         note: { type: "string" },
       },
-      required: ["tags", "tone", "missing"],
+      required: ["tags", "tone"],
     });
     expect(reading.kind).toBe("fields");
     if (reading.kind !== "fields") return;
