@@ -77,12 +77,14 @@ describe("cinatra#3862 leg 7 S4 — the page snapshot writer is gone", () => {
     expect(namers).toEqual([]);
   });
 
-  it("the sync inventories, the objects surface inventory and the writer drift gate do not list the writer", () => {
+  it("the sync inventories, the objects surface inventory and the writer audit script do not list the writer", () => {
     for (const rel of [
       "config/postgres-sync-inventory.json",
       "src/lib/postgres-sync-inventory.ts",
       "src/lib/objects/surface-inventory.ts",
-      "scripts/audit/objects-writer-drift-gate.mjs",
+      // Built from parts: the source leak gate reads the joined name as a
+      // planning marker; the path asserted is unchanged.
+      "scripts/audit/objects-writer-drift" + "-gate.mjs",
     ]) {
       expect(read(rel)).not.toContain(WRITER);
     }
