@@ -1364,6 +1364,70 @@ describe("AgenticRunPanel — every send of a held gate sends nothing (cinatra#3
       quiet.mockRestore();
     }
   });
+
+  it("a held report keeps a per-field boolean Continue unavailable: the floor a crashed component leaves draws it disabled (cinatra#4310)", async () => {
+    // The register-default-renderers road gives every extension-shipped
+    // component `drawsOwnSubmit: true`, so the product draws no Continue. When
+    // such a component reports false and crashes, the floor draws the boolean
+    // question with its own Continue (cinatra#4310). The false report stands,
+    // so that Continue is unavailable too: disabled, and a press sends nothing.
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    const WRAPPED_ID = "@cinatra-test/pack-agent:crash-wrapped-boolean";
+    __setFieldRendererComponentMapForTests({
+      [WRAPPED_ID]: {
+        resolution: "guardedOptional",
+        packageName: "@cinatra-test/pack-agent",
+        propsApiVersion: 1,
+        load: async () => ({ default: ReportsFalseThenThrows }),
+      },
+    });
+    /** The Continue buttons the field draws itself (not the product's). */
+    const ownContinues = () =>
+      Array.from(document.querySelectorAll<HTMLButtonElement>("button")).filter(
+        (b) =>
+          /Continue|Submitting/.test(b.textContent ?? "") &&
+          b.getAttribute("data-action") !== "submit-hitl-screen",
+      );
+    try {
+      fieldRendererRegistry.register({
+        id: WRAPPED_ID,
+        priority: 100,
+        condition: (_fieldName, schema) =>
+          (schema as { "x-renderer"?: unknown })["x-renderer"] === WRAPPED_ID,
+        renderer: makeExtensionFieldRenderer(WRAPPED_ID),
+        drawsOwnSubmit: true,
+      });
+      await setGate(WRAPPED_ID, "acceptTerms", { type: "boolean" });
+      const view = await renderPanel();
+
+      const breakButton = await view.findByRole("button", { name: "Break" });
+      expect(productContinue()).toBeNull();
+      fireEvent.click(breakButton);
+
+      // The floor replaces the component and draws the boolean's own Continue.
+      await waitFor(() => expect(view.queryByRole("button", { name: "Break" })).toBeNull());
+      await waitFor(() => expect(document.querySelector("#field-acceptTerms")).not.toBeNull());
+      await waitFor(() => expect(ownContinues()).toHaveLength(1));
+      await act(async () => {});
+      expect(productContinue()).toBeNull();
+      expect(ownContinues()[0]!.disabled).toBe(true);
+      fireEvent.click(ownContinues()[0]!);
+      await act(async () => {});
+      expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+      // A report the crashed component makes afterwards frees nothing.
+      expect(crashed.lateReport).not.toBeNull();
+      act(() => crashed.lateReport!(true));
+      await act(async () => {});
+      expect(ownContinues()[0]!.disabled).toBe(true);
+      fireEvent.click(ownContinues()[0]!);
+      await act(async () => {});
+      expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    } finally {
+      __resetFieldRendererComponentMapForTests();
+      quiet.mockRestore();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
