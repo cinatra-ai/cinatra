@@ -38,6 +38,13 @@ vi.mock("../agent-run-serde", () => ({ assertAgentRunDispatchAuthorized }));
 
 vi.mock("../wayflow-url", () => ({ resolveWayflowUrl: (pkg: string) => `http://wayflow.test/${pkg}` }));
 
+// The run's current gate visit (the latest-task map the interrupt writes): "task-1" is the gate task of decision() below.
+const resolveLatestWayflowGateTaskId = vi.hoisted(() => vi.fn(async (_runId: string): Promise<string | null> => "task-1"));
+vi.mock("@cinatra-ai/a2a", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  resolveLatestWayflowGateTaskId,
+}));
+
 import {
   PUBLISH_DECISION_NOT_OPEN,
   approvePublishDecision,
@@ -69,7 +76,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   for (const m of [storeMock.readAgentRunById, storeMock.readAgentTemplateById, storeMock.transitionRunStatus,
     decisions.decide, decisions.readOpenDecisionForRun, decisions.readLatestDecisionForRun, sendWayflowResume,
-    enforceRunAccess, resolveOrgRoleForUser, assertAgentRunDispatchAuthorized]) m.mockReset();
+    enforceRunAccess, resolveOrgRoleForUser, assertAgentRunDispatchAuthorized, resolveLatestWayflowGateTaskId]) m.mockReset();
   storeMock.readAgentRunById.mockResolvedValue(run());
   storeMock.readAgentTemplateById.mockResolvedValue({ id: "tmpl-1", packageName: "@acme/poster", sourceType: "internal", agentAuthPolicy: null });
   storeMock.readRunCoOwners.mockResolvedValue([]);
@@ -86,6 +93,7 @@ beforeEach(() => {
   enforceRunAccess.mockResolvedValue(undefined);
   resolveOrgRoleForUser.mockResolvedValue("member");
   assertAgentRunDispatchAuthorized.mockResolvedValue(undefined);
+  resolveLatestWayflowGateTaskId.mockResolvedValue("task-1");
 });
 
 describe("Publish (A7)", () => {
@@ -184,6 +192,27 @@ describe("Publish (A7)", () => {
     expect(sendWayflowResume).toHaveBeenCalledTimes(2);
   });
 
+  it("a Publish after the run parked at a later gate sends nothing", async () => {
+    decisions.readOpenDecisionForRun.mockResolvedValue(null);
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", gateTaskId: "task-1" }));
+    resolveLatestWayflowGateTaskId.mockResolvedValue("task-7");
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: false });
+    expect(resolveLatestWayflowGateTaskId).toHaveBeenCalledWith("run-1");
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+  });
+
+  it("a released decision whose run's current gate cannot be read resumes nothing", async () => {
+    decisions.readOpenDecisionForRun.mockResolvedValue(null);
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released" }));
+    resolveLatestWayflowGateTaskId.mockResolvedValue(null);
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: false });
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+  });
+
   it("a resume that fails after its send leaves the run where the send left it", async () => {
     sendWayflowResume.mockImplementationOnce(async (args: { onDispatch?: () => void }) => {
       args.onDispatch?.();
@@ -224,6 +253,24 @@ describe("Publish (A7)", () => {
     }
     expect(decisions.decide).not.toHaveBeenCalled();
     expect(sendWayflowResume).not.toHaveBeenCalled();
+  });
+
+  it("a fault of the install-scope check that is not a scope refusal answers the fixed text, before any write", async () => {
+    assertAgentRunDispatchAuthorized.mockRejectedValueOnce(new Error("select failed: tmpl-1 user-a"));
+    const err = (await approvePublishDecision({ runId: "run-1", actorContext: ACTOR }).catch((e: unknown) => e)) as Error & { code?: string };
+    expect(err.code).toBe("publish_decision_unavailable");
+    expect(err.message).not.toMatch(/failed|tmpl-1|user-a/);
+    expect("cause" in err).toBe(false);
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+  });
+
+  it("an access refusal from the install-scope check passes unchanged", async () => {
+    const refusal = new AuthzError({ statusCode: 403, reason: "forbidden" });
+    assertAgentRunDispatchAuthorized.mockRejectedValueOnce(refusal);
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR }).catch((e: unknown) => e)).toBe(refusal);
+    expect(decisions.decide).not.toHaveBeenCalled();
   });
 
   it("a store fault is not swallowed, and its text carries no id or store error", async () => {

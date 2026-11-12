@@ -301,11 +301,14 @@ const PUBLISH_RESUME_TEXT = "[Publish approved]";
  * must hold a WayFlow context of an internal template. Then ONE decision write (parked -> released, with that person),
  * then the shared WayFlow resume: the run is claimed (pending_approval -> running) and ONE message is sent into its held
  * context. A decision already released while the run still waits (a resume that failed before its send) retries only
- * the resume. A run that another Publish already claimed resumes nothing more ({ ok: true, resumed: false }). A late
+ * the resume, and only while the run's current gate visit is that decision's own gate task; a run that went on to a later
+ * gate, or whose current gate cannot be read, resumes nothing ({ ok: true, resumed: false }), with no claim and no write.
+ * A run that another Publish already claimed resumes nothing more ({ ok: true, resumed: false }). A late
  * answer is publish_decision_not_open with the current status. A resume that fails before its send puts the run back to
  * pending_approval; after its send the run stays where the send left it. Its fault is publish_resume_failed, with a
- * fixed text. A fault of a read of the authority check surfaces as publish_decision_unavailable with a fixed text, as
- * in Do not publish; access and store refusals pass.
+ * fixed text. A fault of a read of the authority check or of the install-scope check surfaces as
+ * publish_decision_unavailable with a fixed text, as in Do not publish; access and store refusals pass, and a scope
+ * refusal is answered as before.
  */
 export async function approvePublishDecision(input: DecideInput): Promise<PublishApproveAnswer> {
   let access: Awaited<ReturnType<typeof enforcePublishDecisionAccess>>;
@@ -317,7 +320,7 @@ export async function approvePublishDecision(input: DecideInput): Promise<Publis
   const { run, deciderId, authority } = access;
   const { assertAgentRunDispatchAuthorized } = await import("./agent-run-serde");
   await assertAgentRunDispatchAuthorized({ runId: run.id, stage: "dispatch", actingUserId: deciderId }).catch((err: unknown) => {
-    if ((err as { code?: unknown } | null)?.code !== "AGENT_TEMPLATE_SCOPE_DENIED") throw err;
+    if ((err as { code?: unknown } | null)?.code !== "AGENT_TEMPLATE_SCOPE_DENIED") throw opaque(err);
     console.warn("[publish-decision] a Publish was refused by the agent's install scope");
     throw forbidden("Run access denied.");
   });
@@ -333,6 +336,10 @@ export async function approvePublishDecision(input: DecideInput): Promise<Publis
     if (answer?.outcome !== "won") {
       const latest = await readLatestDecisionForRun(run.id);
       if (latest?.status !== "released") return { ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: latest?.status ?? null };
+      // A released decision is retried only while the run still waits at that decision's own gate visit. A run that went
+      // on and paused at a later gate (or whose current gate cannot be read) is not this decision's to resume.
+      const { resolveLatestWayflowGateTaskId } = await import("@cinatra-ai/a2a");
+      if ((await resolveLatestWayflowGateTaskId(run.id)) !== latest.gateTaskId) return { ok: true, resumed: false };
     }
     if (!(await moveRun(run.id, "pending_approval", "running", undefined, authority))) return { ok: true, resumed: false };
   } catch (err) {
