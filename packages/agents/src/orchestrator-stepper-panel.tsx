@@ -1222,13 +1222,19 @@ function HitlApprovalCard({
     if (schemaGateSendRef.current === gateKey) return;
     schemaGateSendRef.current = gateKey;
     try {
+      // Built BEFORE the press is taken: an answer JSON cannot carry (a number
+      // that is not finite) is refused here, the card stays, nothing is sent.
+      let gatePayload: Record<string, unknown>;
+      try {
+        gatePayload = buildSchemaFieldGatePayload({ schema: interruptContext.schema, next });
+      } catch {
+        toast.error("Could not continue this run.");
+        return;
+      }
       if (!(await checkRunName())) return;
       onApproved?.();
       try {
-        const outcome = await submitSetupFieldPayload(
-          buildSchemaFieldGatePayload({ schema: interruptContext.schema, next }),
-          undefined,
-        );
+        const outcome = await submitSetupFieldPayload(gatePayload, undefined);
         if (outcome === "blocked") onApproveRejected?.();
       } catch {
         onApproveRejected?.();

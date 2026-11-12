@@ -288,6 +288,18 @@ export function parseJsonObjectInput(text: string): ParsedObject {
   return { ok: true, value: parsed };
 }
 
+/**
+ * Own-property read and write over agent-declared keys (cinatra#4244): a plain
+ * `obj[key]` reads, and `obj[key] = v` calls, the prototype accessor for a
+ * field named `__proto__`, which loses the field and its answer.
+ */
+function ownSubValue(obj: Record<string, unknown>, key: string): unknown {
+  return Object.prototype.hasOwnProperty.call(obj, key) ? obj[key] : undefined;
+}
+function setOwnSubValue(obj: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(obj, key, { value, enumerable: true, writable: true, configurable: true });
+}
+
 /** A sub-value that is absent, blank, or an empty list counts as "not given". */
 function isBlankSubValue(value: unknown): boolean {
   if (value === undefined || value === null) return true;
@@ -353,13 +365,13 @@ export function collectObjectSchemaErrors(
   const errors: ObjectSchemaError[] = [];
   const missing = new Set<string>();
   for (const key of required) {
-    if (isBlankSubValue(value[key])) {
+    if (isBlankSubValue(ownSubValue(value, key))) {
       missing.add(key);
       errors.push({ path: [...path, key].join("."), kind: "missing" });
     }
   }
   for (const [key, sub] of Object.entries(properties)) {
-    const child = value[key];
+    const child = ownSubValue(value, key);
     if (child === undefined) continue; // absence is the required check's business
     if (missing.has(key)) continue; // already reported as missing; don't double-report
     errors.push(...collectObjectSchemaErrors(sub, child, [...path, key]));
@@ -478,7 +490,7 @@ export function SchemaFieldRenderer(props: Props) {
       if (t === "number" || t === "integer") {
         if (v === "") { onChangeRef.current(undefined); return; }
         const parsed = t === "integer" ? parseInt(v, 10) : Number(v);
-        if (!Number.isNaN(parsed)) onChangeRef.current(parsed);
+        if (Number.isFinite(parsed)) onChangeRef.current(parsed);
       } else if (t === "array") {
         onChangeRef.current(v.split("\n").map((s) => s.trim()).filter(Boolean));
       } else {
@@ -717,13 +729,14 @@ export function SchemaFieldRenderer(props: Props) {
 
   // Number / integer
   if (type === "number" || type === "integer") {
-    const numError = localValue.length > 0 && Number.isNaN(type === "integer" ? parseInt(localValue, 10) : Number(localValue)) ? "Enter a valid number." : null;
+    // A number that is not finite (`1e309`) is no answer either: JSON cannot carry it (cinatra#4244).
+    const numError = localValue.length > 0 && !Number.isFinite(type === "integer" ? parseInt(localValue, 10) : Number(localValue)) ? "Enter a valid number." : null;
     const displayError = callerError ?? numError;
     const submitNum = () => {
       const raw = localValue;
       if (raw === "") return handleSubmit(undefined);
       const parsed = type === "integer" ? parseInt(raw, 10) : Number(raw);
-      if (!Number.isNaN(parsed)) return handleSubmit(parsed);
+      if (Number.isFinite(parsed)) return handleSubmit(parsed);
     };
     return (
       <div className="flex flex-col gap-2">
@@ -1205,7 +1218,9 @@ function StructuredObjectField(props: ObjectFieldProps) {
   const deriveDraft = useCallback(
     (raw: unknown): Record<string, unknown> => {
       if (!isPlainObject(raw)) return {};
-      return Object.fromEntries(Object.entries(raw).filter(([k]) => k in properties));
+      return Object.fromEntries(
+        Object.entries(raw).filter(([k]) => Object.prototype.hasOwnProperty.call(properties, k)),
+      );
     },
     [properties],
   );
@@ -1257,16 +1272,28 @@ function StructuredObjectField(props: ObjectFieldProps) {
       ),
     [],
   );
+  const currentSub = (key: string): unknown =>
+    Object.prototype.hasOwnProperty.call(typed, key) ? typed[key] : ownSubValue(draft, key);
+  // A typed number that is not a finite number (`1e309`, `abc`) is no answer:
+  // its field shows "Enter a valid number." and the Continue is held, so it is
+  // never dropped or sent as `null` (cinatra#4244). Any visible number field.
+  const typedNumberInvalid = visible.some((key) => {
+    const kind = ((ownSubValue(properties, key) ?? {}) as { type?: unknown }).type;
+    if (kind !== "number" && kind !== "integer") return false;
+    const current = currentSub(key);
+    if (typeof current !== "string" || current === "") return false;
+    return !Number.isFinite(kind === "integer" ? parseInt(current, 10) : Number(current));
+  });
   const held =
     holdOn &&
-    subRequired.some((key) => {
-      const sub = properties[key] ?? {};
-      const kind = (sub as { type?: unknown }).type;
-      if (kind === "object" || kind === "boolean") return false;
-      if (Object.prototype.hasOwnProperty.call(sub, "default")) return false;
-      const current = Object.prototype.hasOwnProperty.call(typed, key) ? typed[key] : draft[key];
-      return isBlankSubValue(current);
-    });
+    (typedNumberInvalid ||
+      subRequired.some((key) => {
+        const sub = (ownSubValue(properties, key) ?? {}) as Record<string, unknown>;
+        const kind = (sub as { type?: unknown }).type;
+        if (kind === "object" || kind === "boolean") return false;
+        if (Object.prototype.hasOwnProperty.call(sub, "default")) return false;
+        return isBlankSubValue(currentSub(key));
+      }));
 
   const [missing, setMissing] = useState<string[]>([]);
   const [invalid, setInvalid] = useState<string[]>([]);
@@ -1303,10 +1330,10 @@ function StructuredObjectField(props: ObjectFieldProps) {
   const assemble = useCallback((raw: Record<string, unknown>) => {
     const out: Record<string, unknown> = {};
     for (const key of Object.keys(properties)) {
-      const v = raw[key];
+      const v = ownSubValue(raw, key);
       if (v === undefined) continue;
       if (!subRequired.includes(key) && isBlankSubValue(v)) continue;
-      out[key] = v;
+      setOwnSubValue(out, key, v);
     }
     return out;
   }, [properties, subRequired]);
@@ -1351,7 +1378,7 @@ function StructuredObjectField(props: ObjectFieldProps) {
       // first path segment so several errors inside one sub-object mark it once.
       const firstSegments = (kind: ObjectSchemaError["kind"]) =>
         [...new Set(errors.filter((e) => e.kind === kind).map((e) => e.path.split(".")[0]!))]
-          .filter((k) => k in properties);
+          .filter((k) => Object.prototype.hasOwnProperty.call(properties, k));
       const notObject = firstSegments("not-an-object");
       // A sub-object already flagged as "not an object" is not ALSO "incomplete".
       const incomplete = firstSegments("missing").filter((k) => !notObject.includes(k));
@@ -1368,7 +1395,7 @@ function StructuredObjectField(props: ObjectFieldProps) {
     (assembled: Record<string, unknown>) => {
       const { notObject, incomplete } = nestedErrors(assembled);
       return {
-        miss: subRequired.filter((k) => isBlankSubValue(assembled[k])),
+        miss: subRequired.filter((k) => isBlankSubValue(ownSubValue(assembled, k))),
         bad: notObject,
         incomplete,
       };
@@ -1515,7 +1542,7 @@ function StructuredObjectField(props: ObjectFieldProps) {
             key={key}
             fieldName={key}
             schema={properties[key] ?? {}}
-            value={draft[key]}
+            value={ownSubValue(draft, key)}
             onChange={(next: unknown) => setSub(key, next)}
             disabled={disabled || submitting}
             required={subRequired.includes(key)}

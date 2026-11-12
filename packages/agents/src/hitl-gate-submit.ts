@@ -577,12 +577,19 @@ function isPlainSchemaObject(value: unknown): value is Record<string, unknown> {
  *    `x-required: true` - so the drawn form holds its Continue until those
  *    values are written (design V.1). A value with a default is answered by it
  *    and never held.
- *  - `malformed`: an object schema whose declaration cannot be read safely -
- *    `properties` present but not a map, a property that is not a schema
- *    object, `required` present but not a list of names, or a non-boolean
- *    `x-hidden` / `x-required`. It is refused: it is neither a bare
+ *  - `malformed`: an object schema whose declaration cannot be read safely,
+ *    at ANY depth (`isWellFormedFieldSchema`) - `properties` present but not
+ *    a map, a property or array `items` that is not a schema object,
+ *    `required` present but not a list of names, a non-boolean `x-hidden` /
+ *    `x-required`, nesting deeper than `MAX_SCHEMA_DEPTH` - and a gate schema
+ *    with no `properties` whose `required` list names any value (the card has
+ *    no field to write it into). It is refused: it is neither a bare
  *    confirmation (that would send an approval for a gate nobody could read)
  *    nor drawable (a property that is not a schema cannot be drawn).
+ *
+ * Field names are agent-declared, so the maps built here have no prototype:
+ * a field named `__proto__` stays an own field and is never the prototype
+ * setter.
  */
 export type SchemaFieldGateReading =
   | { kind: "not-object" }
@@ -590,11 +597,73 @@ export type SchemaFieldGateReading =
   | { kind: "malformed" }
   | { kind: "fields"; fields: string[]; renderSchema: Record<string, unknown> };
 
+/** Deeper nesting than this is refused as malformed (fail closed, no unbounded walk). */
+const MAX_SCHEMA_DEPTH = 16;
+
+/**
+ * Whether a declared field schema can be read safely, at every depth: a plain
+ * object; `properties`, when present, a map whose members are all
+ * well-formed; `items`, when present, a well-formed schema; `required`, when
+ * present, a list of names; `x-hidden` / `x-required`, when present, booleans.
+ */
+function isWellFormedFieldSchema(sub: unknown, depth: number): boolean {
+  if (depth > MAX_SCHEMA_DEPTH || !isPlainSchemaObject(sub)) return false;
+  const hidden = sub["x-hidden"];
+  const xReq = sub["x-required"];
+  if (hidden !== undefined && typeof hidden !== "boolean") return false;
+  if (xReq !== undefined && typeof xReq !== "boolean") return false;
+  const required = sub.required;
+  if (required !== undefined && (!Array.isArray(required) || !required.every((n) => typeof n === "string"))) {
+    return false;
+  }
+  const properties = sub.properties;
+  if (properties !== undefined) {
+    if (!isPlainSchemaObject(properties)) return false;
+    for (const member of Object.values(properties)) {
+      if (!isWellFormedFieldSchema(member, depth + 1)) return false;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(sub, "items") && !isWellFormedFieldSchema(sub.items, depth + 1)) {
+    return false;
+  }
+  return true;
+}
+
+/** An own-property read: a plain `obj[key]` reads the prototype for `__proto__`. */
+function ownValue(obj: Record<string, unknown>, key: string): unknown {
+  return Object.prototype.hasOwnProperty.call(obj, key) ? obj[key] : undefined;
+}
+
+/** An own-property write: a plain `obj[key] = v` calls the prototype setter for `__proto__`. */
+function setOwn(obj: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(obj, key, { value, enumerable: true, writable: true, configurable: true });
+}
+
+/** Thrown when an answer holds a number JSON cannot carry (it would reach the flow as null). */
+export class NonFiniteAnswerError extends Error {
+  constructor(field: string) {
+    super(`The answer to "${field}" is not a finite number.`);
+    this.name = "NonFiniteAnswerError";
+  }
+}
+
+function holdsNonFiniteNumber(value: unknown, depth = 0): boolean {
+  if (typeof value === "number") return !Number.isFinite(value);
+  // Too deep to read is refused, never waved through.
+  if (depth > MAX_SCHEMA_DEPTH) return true;
+  if (Array.isArray(value)) return value.some((v) => holdsNonFiniteNumber(v, depth + 1));
+  if (isPlainSchemaObject(value)) {
+    return Object.values(value).some((v) => holdsNonFiniteNumber(v, depth + 1));
+  }
+  return false;
+}
+
 export function readSchemaFieldGate(schema: unknown): SchemaFieldGateReading {
   if (!isPlainSchemaObject(schema) || schema.type !== "object") return { kind: "not-object" };
   const { properties, required } = schema;
   if (properties === undefined) {
-    return required === undefined || Array.isArray(required)
+    if (required === undefined) return { kind: "bare" };
+    return Array.isArray(required) && required.length === 0
       ? { kind: "bare" }
       : { kind: "malformed" };
   }
@@ -605,24 +674,24 @@ export function readSchemaFieldGate(schema: unknown): SchemaFieldGateReading {
   ) {
     return { kind: "malformed" };
   }
-  const kept: Record<string, Record<string, unknown>> = {};
+  const kept = Object.create(null) as Record<string, Record<string, unknown>>;
   const fields: string[] = [];
   const xRequired: string[] = [];
   for (const [name, sub] of Object.entries(properties)) {
-    if (!isPlainSchemaObject(sub)) return { kind: "malformed" };
-    const hidden = sub["x-hidden"];
-    const xReq = sub["x-required"];
-    if (hidden !== undefined && typeof hidden !== "boolean") return { kind: "malformed" };
-    if (xReq !== undefined && typeof xReq !== "boolean") return { kind: "malformed" };
+    if (!isWellFormedFieldSchema(sub, 1)) return { kind: "malformed" };
+    const member = sub as Record<string, unknown>;
+    const hidden = member["x-hidden"];
+    const xReq = member["x-required"];
     if (APPROVAL_BOOKKEEPING_KEYS.has(name)) continue;
-    kept[name] = sub;
+    setOwn(kept, name, member);
     if (hidden === true) continue;
     fields.push(name);
     if (xReq === true) xRequired.push(name);
   }
   if (fields.length === 0) return { kind: "bare" };
   const held = (name: string) =>
-    fields.includes(name) && !Object.prototype.hasOwnProperty.call(kept[name], "default");
+    fields.includes(name) &&
+    !Object.prototype.hasOwnProperty.call(ownValue(kept, name) as object, "default");
   const requiredNames: string[] = [];
   for (const name of [...((required as string[] | undefined) ?? []), ...xRequired]) {
     if (held(name) && !requiredNames.includes(name)) requiredNames.push(name);
@@ -657,11 +726,25 @@ export function readSchemaFieldGate(schema: unknown): SchemaFieldGateReading {
  *    fields - is sent as one JSON object of the declared fields that were
  *    answered (a blank text or an empty list is not an answer), the
  *    structured round-trip the server parses back into the submitted values.
+ *    A single text answer that itself parses as JSON (`42`, `{"tone":"warm"}`)
+ *    is sent in that JSON form too, under its declared field: sent verbatim,
+ *    the server would parse it as the submitted values themselves.
+ *  - A number that is not finite cannot travel as JSON (it would reach the
+ *    flow as `null`): the payload is refused with `NonFiniteAnswerError`.
  *  - No declared field answered: no resume text, so the flow receives the
  *    approval marker, as the Continue-only card sent for this gate.
  *  - A `userResponse` the answer already carries is kept as it is.
  *  - A schema that is not read as `fields` adds no resume text.
  */
+function parsesAsJson(text: string): boolean {
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function buildSchemaFieldGatePayload(args: {
   schema: unknown;
   next: unknown;
@@ -676,21 +759,24 @@ export function buildSchemaFieldGatePayload(args: {
   if (typeof answer.userResponse === "string") return payload;
   const reading = readSchemaFieldGate(args.schema);
   if (reading.kind !== "fields") return payload;
-  const answered: Record<string, unknown> = {};
+  const answered = Object.create(null) as Record<string, unknown>;
   for (const name of reading.fields) {
-    const value = answer[name];
+    const value = ownValue(answer, name);
     if (value === undefined || value === null) continue;
     if (typeof value === "string" && value.trim() === "") continue;
     if (Array.isArray(value) && value.length === 0) continue;
-    answered[name] = value;
+    if (holdsNonFiniteNumber(value)) throw new NonFiniteAnswerError(name);
+    setOwn(answered, name, value);
   }
   const names = Object.keys(answered);
   if (names.length === 0) return payload;
   if (reading.fields.length === 1) {
     const only = reading.fields[0]!;
-    const declared = (reading.renderSchema.properties as Record<string, { type?: unknown }>)[only];
-    const value = answered[only];
-    if (declared?.type === "string" && typeof value === "string") {
+    const declared = ownValue(reading.renderSchema.properties as Record<string, unknown>, only) as
+      | { type?: unknown }
+      | undefined;
+    const value = ownValue(answered, only);
+    if (declared?.type === "string" && typeof value === "string" && !parsesAsJson(value)) {
       payload.userResponse = value;
       return payload;
     }
