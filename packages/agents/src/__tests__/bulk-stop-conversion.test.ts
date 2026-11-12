@@ -94,7 +94,7 @@ beforeEach(() => {
 describe("bulkStopAgentRuns — canonical transitions", () => {
   it("empty runIds is a no-op (no DB read, no transitions)", async () => {
     const res = await bulkStopAgentRuns([], AUTH);
-    expect(res).toEqual({ stopped: 0, alreadyTerminal: 0, total: 0 });
+    expect(res).toEqual({ stopped: 0, alreadyTerminal: 0, resuming: 0, total: 0 });
     expect(shared.calls).toHaveLength(0);
   });
 
@@ -106,7 +106,7 @@ describe("bulkStopAgentRuns — canonical transitions", () => {
     ];
     const res = await bulkStopAgentRuns(["r-queued", "r-running", "r-done"], AUTH);
 
-    expect(res).toEqual({ stopped: 2, alreadyTerminal: 1, total: 3 });
+    expect(res).toEqual({ stopped: 2, alreadyTerminal: 1, resuming: 0, total: 3 });
     expect(shared.calls).toEqual([
       { runId: "r-queued", from: "queued", to: "stopped", auth: AUTH },
       { runId: "r-running", from: "running", to: "stopped", auth: AUTH },
@@ -137,7 +137,7 @@ describe("bulkStopAgentRuns — canonical transitions", () => {
     shared.behavior.set("r-2", "stale-terminal");
     shared.reread.set("r-2", "completed"); // re-read shows it really terminalized
     const res = await bulkStopAgentRuns(["r-1", "r-2", "r-3"], AUTH);
-    expect(res).toEqual({ stopped: 2, alreadyTerminal: 1, total: 3 });
+    expect(res).toEqual({ stopped: 2, alreadyTerminal: 1, resuming: 0, total: 3 });
   });
 
   it("RETRY-ON-STALE: a row that RACED to another live status is re-driven and stopped", async () => {
@@ -146,7 +146,7 @@ describe("bulkStopAgentRuns — canonical transitions", () => {
     shared.reread.set("r-race", "running"); // raced queued→running, still stoppable
     const res = await bulkStopAgentRuns(["r-race"], AUTH);
     // The run is STOPPED (not silently miscounted as alreadyTerminal).
-    expect(res).toEqual({ stopped: 1, alreadyTerminal: 0, total: 1 });
+    expect(res).toEqual({ stopped: 1, alreadyTerminal: 0, resuming: 0, total: 1 });
     // Second drive came from the fresh live status.
     expect(shared.calls.map((c) => c.from)).toEqual(["queued", "running"]);
   });
@@ -167,7 +167,7 @@ describe("bulkStopAgentRuns — canonical transitions", () => {
     shared.reread.set("c", "failed");
     const res = await bulkStopAgentRuns(["a", "b", "c"], AUTH);
     expect(res.stopped + res.alreadyTerminal).toBe(res.total);
-    expect(res).toEqual({ stopped: 1, alreadyTerminal: 2, total: 3 });
+    expect(res).toEqual({ stopped: 1, alreadyTerminal: 2, resuming: 0, total: 3 });
   });
 });
 
@@ -178,7 +178,7 @@ describe("bulkStopAgentRunsByTemplate — canonical transitions", () => {
       { id: "t-2", status: "armed", orgId: ORG },
     ];
     const res = await bulkStopAgentRunsByTemplate("tmpl-1", AUTH);
-    expect(res).toEqual({ stopped: 2, alreadyTerminal: 0, total: 2 });
+    expect(res).toEqual({ stopped: 2, alreadyTerminal: 0, resuming: 0, total: 2 });
     expect(shared.calls).toEqual([
       { runId: "t-1", from: "running", to: "stopped", auth: AUTH },
       { runId: "t-2", from: "armed", to: "stopped", auth: AUTH },
@@ -188,7 +188,7 @@ describe("bulkStopAgentRunsByTemplate — canonical transitions", () => {
   it("no matching rows is a no-op", async () => {
     shared.rows = [];
     const res = await bulkStopAgentRunsByTemplate("tmpl-empty", AUTH);
-    expect(res).toEqual({ stopped: 0, alreadyTerminal: 0, total: 0 });
+    expect(res).toEqual({ stopped: 0, alreadyTerminal: 0, resuming: 0, total: 0 });
     expect(shared.calls).toHaveLength(0);
   });
 
@@ -200,6 +200,6 @@ describe("bulkStopAgentRunsByTemplate — canonical transitions", () => {
     shared.behavior.set("t-1", "stale-terminal");
     shared.reread.set("t-1", "completed");
     const res = await bulkStopAgentRunsByTemplate("tmpl-1", AUTH);
-    expect(res).toEqual({ stopped: 1, alreadyTerminal: 1, total: 2 });
+    expect(res).toEqual({ stopped: 1, alreadyTerminal: 1, resuming: 0, total: 2 });
   });
 });

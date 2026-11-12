@@ -35,8 +35,13 @@ const storeMock = vi.hoisted(() => ({
     }
   },
   findSavedConnectionForAgentUrl: vi.fn(async () => null),
-  updateAgentRunA2ATaskId: vi.fn(async () => undefined),
+  updateAgentRunA2ATaskId: vi.fn(async () => ({ written: true })),
   updateAgentRunA2AContextId: vi.fn(async () => undefined),
+}));
+// cinatra#4245: the resume road's pause claim always wins here.
+vi.mock("../run-pause-claim", async (orig) => ({
+  ...(await orig<typeof import("../run-pause-claim")>()),
+  ...(await import("./pause-claim-test-fake")).pauseClaimFake,
 }));
 vi.mock("../store", () => storeMock);
 

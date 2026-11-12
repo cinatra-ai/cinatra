@@ -1,7 +1,8 @@
 // cinatra#4150 part 5a: "Publish" lets a run held at a publish gate go on (A7), and who may decide a publish on a run
 // with no human owner (A11). The shared WayFlow resume itself is driven by the generic approve's suites; here it is a
-// double, so these cases pin the order: the authority, the claim, the gate read under it, ONE released decision, then
-// ONE send.
+// double, so these cases pin the order: the authority, the claim, the gate read under it, ONE released decision, the
+// preparation, the fence, then ONE send. Since cinatra#4245 the claim is the pause claim (a double here: its rules are
+// pinned by run-pause-claim's own suites) and the fence is the one move pending_approval -> running.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AuthzError } from "@/lib/authz/errors";
@@ -32,7 +33,18 @@ const resolveOrgRoleForUser = vi.hoisted(() => vi.fn(async () => "member" as str
 vi.mock("@/lib/auth-session", () => ({ resolveOrgRoleForUser }));
 
 const sendWayflowResume = vi.hoisted(() => vi.fn());
-vi.mock("../review-task-actions", () => ({ sendWayflowResume }));
+const PREPARED = { client: "the client", metadata: { token: "t" }, messageId: "m-1" };
+const prepareWayflowResume = vi.hoisted(() => vi.fn());
+vi.mock("../review-task-actions", () => ({ sendWayflowResume, prepareWayflowResume }));
+
+const claims = vi.hoisted(() => ({
+  claimPause: vi.fn(),
+  releasePauseClaim: vi.fn(),
+  settlePauseSend: vi.fn(),
+}));
+vi.mock("../run-pause-claim", () => claims);
+const CLAIMED = { kind: "claimed" as const, token: "tok-1", generation: 4, expiresAt: new Date("2026-11-01T00:01:00Z") };
+const refused = (reason: string, status = "pending_approval") => ({ kind: "refused" as const, reason, status, generation: 3 });
 
 const assertAgentRunDispatchAuthorized = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../agent-run-serde", () => ({ assertAgentRunDispatchAuthorized }));
@@ -58,7 +70,7 @@ const ROLE_HINTS = { actorOrganizationId: "org-9" };
 function run(overrides: Record<string, unknown> = {}) {
   return {
     id: "run-1", templateId: "tmpl-1", orgId: "org-1", runBy: "user-a", authPolicy: null,
-    status: "pending_approval", a2aContextId: "ctx-1", a2aTaskId: "task-1", ...overrides,
+    status: "pending_approval", a2aContextId: "ctx-1", a2aTaskId: "task-1", pauseGeneration: 3, ...overrides,
   };
 }
 
@@ -77,7 +89,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   for (const m of [storeMock.readAgentRunById, storeMock.readAgentTemplateById, storeMock.transitionRunStatus,
     decisions.decide, decisions.readOpenDecisionForRun, decisions.readLatestDecisionForRun, sendWayflowResume,
-    enforceRunAccess, resolveOrgRoleForUser, assertAgentRunDispatchAuthorized, resolveLatestWayflowGateTaskId]) m.mockReset();
+    enforceRunAccess, resolveOrgRoleForUser, assertAgentRunDispatchAuthorized, resolveLatestWayflowGateTaskId,
+    prepareWayflowResume, claims.claimPause, claims.releasePauseClaim, claims.settlePauseSend]) m.mockReset();
   storeMock.readAgentRunById.mockResolvedValue(run());
   storeMock.readAgentTemplateById.mockResolvedValue({ id: "tmpl-1", packageName: "@acme/poster", sourceType: "internal", agentAuthPolicy: null });
   storeMock.readRunCoOwners.mockResolvedValue([]);
@@ -95,47 +108,67 @@ beforeEach(() => {
   resolveOrgRoleForUser.mockResolvedValue("member");
   assertAgentRunDispatchAuthorized.mockResolvedValue(undefined);
   resolveLatestWayflowGateTaskId.mockResolvedValue("task-1");
+  prepareWayflowResume.mockResolvedValue(PREPARED);
+  claims.claimPause.mockResolvedValue(CLAIMED);
+  claims.releasePauseClaim.mockResolvedValue("released");
+  claims.settlePauseSend.mockResolvedValue("settled");
 });
 
 describe("Publish (A7)", () => {
-  it("checks the decider, claims the run, writes ONE released decision under the claim, then sends once into its held context", async () => {
+  it("checks the decider, claims the pause, writes ONE released decision under the claim, then fences and sends once into its held context", async () => {
     expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: true });
     expect(enforceRunAccess.mock.calls.map((c) => (c as unknown[])[2])).toEqual(["execute", "approveHitl"]);
     expect(assertAgentRunDispatchAuthorized).toHaveBeenCalledWith({ runId: "run-1", stage: "dispatch", actingUserId: "user-a" });
     expect(decisions.decide).toHaveBeenCalledTimes(1);
     expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a" });
+    expect(claims.claimPause).toHaveBeenCalledTimes(1);
+    expect((claims.claimPause.mock.calls[0] as unknown[])[0]).toEqual({ runId: "run-1", orgId: "org-1", generation: 3 });
     expect(moves()).toEqual([["run-1", "pending_approval", "running"]]);
+    expect((storeMock.transitionRunStatus.mock.calls[0] as unknown[])[3]).toEqual({ pauseFence: { token: "tok-1", generation: 4 } });
+    expect(prepareWayflowResume).toHaveBeenCalledWith("run-1", "http://wayflow.test/@acme/poster");
     expect(sendWayflowResume).toHaveBeenCalledTimes(1);
     const args = sendWayflowResume.mock.calls[0]![0] as Record<string, unknown> & { authority: { orgId: string } };
     expect(args.contextId).toBe("ctx-1");
-    expect(args.agentUrl).toBe("http://wayflow.test/@acme/poster");
+    expect(args.prepared).toBe(PREPARED);
+    expect(args.pauseClaimToken).toBe("tok-1");
     expect(typeof args.text).toBe("string");
     expect((args.text as string).length).toBeGreaterThan(0);
     expect((args.run as { id: string }).id).toBe("run-1");
     expect(args.authority.orgId).toBe("org-1");
+    // Every step of the order is called exactly once, so no entry below is an undefined that sorts last.
+    expect(claims.settlePauseSend).toHaveBeenCalledTimes(1);
+    expect(resolveLatestWayflowGateTaskId).toHaveBeenCalledTimes(1);
+    expect(prepareWayflowResume).toHaveBeenCalledTimes(1);
+    expect(storeMock.transitionRunStatus).toHaveBeenCalledTimes(1);
     const order = [
-      storeMock.transitionRunStatus.mock.invocationCallOrder[0]!,
+      claims.claimPause.mock.invocationCallOrder[0]!,
       resolveLatestWayflowGateTaskId.mock.invocationCallOrder[0]!,
       decisions.decide.mock.invocationCallOrder[0]!,
+      prepareWayflowResume.mock.invocationCallOrder[0]!,
+      storeMock.transitionRunStatus.mock.invocationCallOrder[0]!,
       sendWayflowResume.mock.invocationCallOrder[0]!,
+      claims.settlePauseSend.mock.invocationCallOrder[0]!,
     ];
     expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(claims.releasePauseClaim).not.toHaveBeenCalled();
   });
 
   it("a second Publish resumes nothing more", async () => {
     decisions.readOpenDecisionForRun.mockResolvedValue(null);
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released" }));
-    storeMock.transitionRunStatus.mockRejectedValueOnce(stale());
+    claims.claimPause.mockResolvedValueOnce(refused("moved-on"));
     expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: false });
     expect(decisions.decide).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
     expect(sendWayflowResume).not.toHaveBeenCalled();
   });
 
   it("a Publish that finds the run claimed by another Publish, which released the decision, writes and sends nothing", async () => {
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released" }));
-    storeMock.transitionRunStatus.mockRejectedValueOnce(stale());
+    claims.claimPause.mockResolvedValueOnce(refused("moved-on"));
     expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: false });
     expect(decisions.decide).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
     expect(sendWayflowResume).not.toHaveBeenCalled();
   });
 
@@ -147,6 +180,7 @@ describe("Publish (A7)", () => {
       expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({
         ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: status,
       });
+      expect(claims.claimPause).not.toHaveBeenCalled();
       expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
       expect(sendWayflowResume).not.toHaveBeenCalled();
     },
@@ -158,7 +192,8 @@ describe("Publish (A7)", () => {
     expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({
       ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: "declined",
     });
-    expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"]]);
+    expect(moves()).toEqual([]);
+    expect(claims.releasePauseClaim).toHaveBeenCalledWith({ runId: "run-1", orgId: "org-1", token: "tok-1" }, expect.anything());
     expect(sendWayflowResume).not.toHaveBeenCalled();
   });
 
@@ -180,18 +215,31 @@ describe("Publish (A7)", () => {
     expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
   });
 
-  it("a resume that fails before its send puts the run back, keeps the decision, and Publish again retries only the resume", async () => {
-    sendWayflowResume.mockRejectedValueOnce(new Error("wayflow down: run-1 ctx-1"));
+  it("a resume that fails before its send gives the claim back, keeps the decision, and Publish again retries only the resume", async () => {
+    prepareWayflowResume.mockRejectedValueOnce(new Error("wayflow down: run-1 ctx-1"));
     const err = (await approvePublishDecision({ runId: "run-1", actorContext: ACTOR }).catch((e: unknown) => e)) as Error & { code?: string };
     expect(err.code).toBe("publish_resume_failed");
     expect(err.message).not.toMatch(/wayflow down|run-1|ctx-1/);
-    expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"]]);
+    expect(moves()).toEqual([]);
+    expect(claims.releasePauseClaim).toHaveBeenCalledTimes(1);
+    expect(sendWayflowResume).not.toHaveBeenCalled();
 
     decisions.readOpenDecisionForRun.mockResolvedValue(null);
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released" }));
     expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: true });
     expect(decisions.decide).toHaveBeenCalledTimes(1);
-    expect(sendWayflowResume).toHaveBeenCalledTimes(2);
+    expect(sendWayflowResume).toHaveBeenCalledTimes(1);
+  });
+
+  it("a fence lost to a stop or another claimer sends nothing, gives nothing back and keeps the decision", async () => {
+    storeMock.transitionRunStatus.mockRejectedValueOnce(stale());
+    const err = (await approvePublishDecision({ runId: "run-1", actorContext: ACTOR }).catch((e: unknown) => e)) as Error & { code?: string };
+    expect(err.code).toBe("publish_resume_failed");
+    expect(moves()).toEqual([["run-1", "pending_approval", "running"]]);
+    expect(decisions.decide).toHaveBeenCalledTimes(1);
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+    expect(claims.releasePauseClaim).not.toHaveBeenCalled();
+    expect(claims.settlePauseSend).not.toHaveBeenCalled();
   });
 
   it("a Publish after the run parked at a later gate sends nothing", async () => {
@@ -201,7 +249,8 @@ describe("Publish (A7)", () => {
     expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: false });
     expect(resolveLatestWayflowGateTaskId).toHaveBeenCalledWith("run-1");
     expect(decisions.decide).not.toHaveBeenCalled();
-    expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"]]);
+    expect(moves()).toEqual([]);
+    expect(claims.releasePauseClaim).toHaveBeenCalledTimes(1);
     expect(sendWayflowResume).not.toHaveBeenCalled();
   });
 
@@ -210,13 +259,32 @@ describe("Publish (A7)", () => {
     resolveLatestWayflowGateTaskId.mockResolvedValue("task-7");
     expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: false });
     expect(decisions.decide).not.toHaveBeenCalled();
-    expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"]]);
+    expect(moves()).toEqual([]);
+    expect(claims.releasePauseClaim).toHaveBeenCalledTimes(1);
     expect(sendWayflowResume).not.toHaveBeenCalled();
   });
 
   it("two Publishes at once on one parked decision, and a third with the same old read: ONE release, ONE send (finding 1)", async () => {
     let runStatus = "pending_approval";
     let decided = "parked";
+    // The pause claim: one holder at a time, cleared by a give-back or the settle of a send.
+    let holder: string | null = null;
+    let tokens = 0;
+    claims.claimPause.mockImplementation(async () => {
+      if (holder !== null || runStatus !== "pending_approval") return refused("held");
+      holder = `tok-${++tokens}`;
+      return { ...CLAIMED, token: holder };
+    });
+    claims.releasePauseClaim.mockImplementation(async (ref: { token: string }) => {
+      if (holder !== ref.token) return "lost";
+      holder = null;
+      return "released";
+    });
+    claims.settlePauseSend.mockImplementation(async (ref: { token: string }) => {
+      if (holder !== ref.token) return "already-cleared";
+      holder = null;
+      return "settled";
+    });
     storeMock.transitionRunStatus.mockImplementation(async (...args: unknown[]) => {
       const [, from, to] = args as string[];
       if (runStatus !== from) throw stale();
@@ -246,7 +314,7 @@ describe("Publish (A7)", () => {
 
   it("a Publish on a run that already ended releases nothing, so the expiry can still close the row run_ended (finding 3)", async () => {
     storeMock.readAgentRunById.mockResolvedValue(run({ status: "stopped" }));
-    storeMock.transitionRunStatus.mockRejectedValueOnce(stale());
+    claims.claimPause.mockResolvedValueOnce(refused("not-pending", "stopped"));
     decisions.readLatestDecisionForRun.mockResolvedValue(decision());
     expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({
       ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: "parked",
@@ -255,31 +323,32 @@ describe("Publish (A7)", () => {
     expect(sendWayflowResume).not.toHaveBeenCalled();
   });
 
-  it("a resume that fails before its send and whose put-back faults ends the run failed (finding 2)", async () => {
-    sendWayflowResume.mockRejectedValueOnce(new Error("credential mint failed"));
-    storeMock.transitionRunStatus.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("db down: run-1"));
+  it("a resume that fails before its send and whose give-back faults ends the run failed (finding 2)", async () => {
+    prepareWayflowResume.mockRejectedValueOnce(new Error("credential mint failed"));
+    claims.releasePauseClaim.mockRejectedValueOnce(new Error("db down: run-1"));
     await expect(approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).rejects.toMatchObject({ code: "publish_resume_failed" });
-    expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"], ["run-1", "running", "failed"]]);
-    const patch = (storeMock.transitionRunStatus.mock.calls[2] as unknown[])[3] as { error: string };
+    expect(moves()).toEqual([["run-1", "pending_approval", "failed"]]);
+    const patch = (storeMock.transitionRunStatus.mock.calls[0] as unknown[])[3] as { error: string };
     expect(patch.error).toMatch(/^publish_resume_failed:/);
     expect(patch.error).not.toMatch(/run-1|db down/);
   });
 
-  it("a claim given back at another gate whose put-back faults ends the run failed (finding 2)", async () => {
+  it("a claim given back at another gate whose give-back faults ends the run failed (finding 2)", async () => {
     resolveLatestWayflowGateTaskId.mockResolvedValue("task-7");
-    storeMock.transitionRunStatus.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("db down"));
+    claims.releasePauseClaim.mockRejectedValueOnce(new Error("db down"));
     expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: false });
-    expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"], ["run-1", "running", "failed"]]);
+    expect(moves()).toEqual([["run-1", "pending_approval", "failed"]]);
     expect(decisions.decide).not.toHaveBeenCalled();
   });
 
-  it("when the put-back and the failed move both fault, the fault surfaces with the fixed text, not as a resume failure (finding 2)", async () => {
-    sendWayflowResume.mockRejectedValueOnce(new Error("credential mint failed"));
-    storeMock.transitionRunStatus.mockResolvedValueOnce(undefined).mockRejectedValue(new Error("db down: run-1"));
+  it("when the give-back and the failed move both fault, the fault surfaces with the fixed text, not as a resume failure (finding 2)", async () => {
+    prepareWayflowResume.mockRejectedValueOnce(new Error("credential mint failed"));
+    claims.releasePauseClaim.mockRejectedValueOnce(new Error("db down: run-1"));
+    storeMock.transitionRunStatus.mockRejectedValue(new Error("db down: run-1"));
     const err = (await approvePublishDecision({ runId: "run-1", actorContext: ACTOR }).catch((e: unknown) => e)) as Error & { code?: string };
     expect(err.code).toBe("publish_decision_unavailable");
     expect(err.message).not.toMatch(/db down|run-1/);
-    expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"], ["run-1", "running", "failed"]]);
+    expect(moves()).toEqual([["run-1", "pending_approval", "failed"]]);
   });
 
   it("a gate that cannot be read under the claim gives the claim back and answers the fixed text", async () => {
@@ -289,11 +358,12 @@ describe("Publish (A7)", () => {
     const err = (await approvePublishDecision({ runId: "run-1", actorContext: ACTOR }).catch((e: unknown) => e)) as Error & { code?: string };
     expect(err.code).toBe("publish_decision_unavailable");
     expect(err.message).not.toMatch(/redis|run-1/);
-    expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"]]);
+    expect(moves()).toEqual([]);
+    expect(claims.releasePauseClaim).toHaveBeenCalledTimes(1);
     expect(sendWayflowResume).not.toHaveBeenCalled();
   });
 
-  it("a resume fault is logged by a fixed error name only, never a custom name", async () => {
+  it("a resume fault after the fence is logged by a fixed error name only, never a custom name, and the send's claim is settled", async () => {
     sendWayflowResume.mockRejectedValueOnce(Object.assign(new Error("x"), { name: "Run run-1 ctx-1" }));
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
@@ -301,6 +371,8 @@ describe("Publish (A7)", () => {
       const logged = warn.mock.calls.map((c) => c.join(" ")).join("\n");
       expect(logged).not.toMatch(/run-1|ctx-1/);
       expect(logged).toMatch(/: Error$/m);
+      expect(claims.settlePauseSend).toHaveBeenCalledTimes(1);
+      expect(claims.releasePauseClaim).not.toHaveBeenCalled();
     } finally {
       warn.mockRestore();
     }
@@ -312,7 +384,8 @@ describe("Publish (A7)", () => {
     resolveLatestWayflowGateTaskId.mockResolvedValue(null);
     expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: false });
     expect(decisions.decide).not.toHaveBeenCalled();
-    expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"]]);
+    expect(moves()).toEqual([]);
+    expect(claims.releasePauseClaim).toHaveBeenCalledTimes(1);
     expect(sendWayflowResume).not.toHaveBeenCalled();
   });
 
@@ -323,6 +396,8 @@ describe("Publish (A7)", () => {
     });
     await expect(approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).rejects.toMatchObject({ code: "publish_resume_failed" });
     expect(moves()).toEqual([["run-1", "pending_approval", "running"]]);
+    expect(claims.settlePauseSend).toHaveBeenCalledTimes(1);
+    expect(claims.releasePauseClaim).not.toHaveBeenCalled();
   });
 
   it.each([

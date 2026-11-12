@@ -89,6 +89,9 @@ beforeAll(async () => {
   crStore = await import("../lifecycle-review-changes-requested-store");
   resumeDelivery = await import("../artifact-review-resume-delivery");
   dbMod = await import("../db");
+  // cinatra#4245: a resume takes the pause claim, an org-guarded write, so the run's
+  // organization exists, as it does for every real run.
+  await pool(`INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $1, $1, now()) ON CONFLICT (id) DO NOTHING`, [ORG]);
 }, 90_000);
 
 beforeEach(async () => {

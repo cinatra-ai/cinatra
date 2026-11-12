@@ -43,8 +43,8 @@ function productSendTaskCalls(): Record<string, number> {
 const ROADS: Record<string, "resume" | "initial-dispatch" | "new-conversation"> = {
   // the generic `wayflow-` approve
   "packages/agents/src/review-task-actions.ts": "resume",
-  // agent_run_resume
-  "packages/agents/src/mcp/handlers.ts": "resume",
+  // agent_run_resume: its send is in the claim helper since cinatra#4245 (mcp/handlers.ts calls it)
+  "packages/agents/src/run-resume-under-claim.ts": "resume",
   // the artifact-review resume delivery
   "packages/agents/src/artifact-review-resume-delivery.ts": "resume",
   // the stopped-orchestrator resume
@@ -56,27 +56,35 @@ const ROADS: Record<string, "resume" | "initial-dispatch" | "new-conversation"> 
   "src/lib/host-content-editor-dispatch.ts": "new-conversation",
 };
 
-/** Where each resume road claims the run before its send. The hold is read AFTER the claim (pre-review 2 finding 3): a
- *  decision parked by another resume before the claim is then seen. The two roads that keep the run in pending_approval
- *  while they send claim through claimRunBeforeSend, which reads the hold itself after its claim. */
-const RESUME_ROAD_ANCHORS: Record<string, { from: string; claim: string; send?: string }> = {
-  // part 5a: the generic approve sends through the shared WayFlow resume (pinned below)
+/** Where each resume road claims the run before its send, and where it reads the publish hold. The hold is read AFTER the
+ *  claim (pre-review 2 finding 3) and before the send: a decision parked by another resume before the claim is then seen.
+ *  Since cinatra#4245 the three pause roads claim with the pause claim (claimPause) and send only after their fence; the
+ *  hold is read under the claim and before the fence, so a refusal sends nothing and moves no status. The generic approve
+ *  sends through the shared WayFlow resume (cinatra#4150 part 5a, pinned below). */
+const RESUME_ROAD_ANCHORS: Record<string, { from: string; claim: string; hold: string; fence?: string; send?: string }> = {
   "packages/agents/src/review-task-actions.ts": {
     from: 'if (reviewTaskId.startsWith("wayflow-"))',
-    claim: "THE GATE IS DECIDED ONCE",
+    claim: "claimPause(",
+    hold: "assertNoOpenPublishDecision(",
+    fence: "pauseFence:",
     send: "await sendWayflowResume(",
   },
-  "packages/agents/src/mcp/handlers.ts": {
-    from: "async function handleAgentBuilderRunResume(",
-    claim: "claimRunBeforeSend(",
+  "packages/agents/src/run-resume-under-claim.ts": {
+    from: "export async function resumeWayflowUnderPauseClaim(",
+    claim: "claimPause(",
+    hold: "recheckPublishHoldUnderClaim(",
+    fence: "pauseFence:",
   },
   "packages/agents/src/artifact-review-resume-delivery.ts": {
     from: "export async function deliverArtifactReviewResumeIntent(",
-    claim: "claimRunBeforeSend(",
+    claim: "claimPause(",
+    hold: "recheckPublishHoldUnderClaim(",
+    fence: "fencePauseInPlace(",
   },
   "packages/agents/src/orchestrator-actions.ts": {
     from: "export async function resumeStoppedOrchestratorAction(",
     claim: 'transitionRunStatus(runId, "stopped", "queued"',
+    hold: "assertNoOpenPublishDecision(",
   },
 };
 
@@ -85,15 +93,27 @@ describe("the road list equals the product sendTask call sites", () => {
     expect(productSendTaskCalls()).toEqual(Object.fromEntries(Object.keys(ROADS).map((f) => [f, 1])));
   });
 
-  it.each(Object.keys(RESUME_ROAD_ANCHORS))("%s claims the run, then reads the hold, then sends", (file) => {
+  it.each(Object.keys(RESUME_ROAD_ANCHORS))("%s claims the run, then reads the hold, then fences and sends", (file) => {
     const src = read(file);
-    const { from, claim, send: sendAnchor = ".sendTask(" } = RESUME_ROAD_ANCHORS[file]!;
+    const { from, claim, hold, fence, send: sendAnchor = ".sendTask(" } = RESUME_ROAD_ANCHORS[file]!;
     const start = at(src, from);
     const send = at(src, sendAnchor, start);
     const claimed = at(src, claim, start);
-    const hold = claim === "claimRunBeforeSend(" ? claimed : at(src, "assertNoOpenPublishDecision(", claimed);
+    const held = at(src, hold, claimed);
     expect(claimed).toBeLessThan(send);
-    expect(hold).toBeLessThan(send);
+    expect(held).toBeLessThan(send);
+    if (fence) expect(at(src, fence, held)).toBeLessThan(send);
+  });
+
+  it("agent_run_resume and the delivery read the hold before their claim too", () => {
+    const handlers = read("packages/agents/src/mcp/handlers.ts");
+    const resume = at(handlers, "async function handleAgentBuilderRunResume(");
+    const first = at(handlers, "assertNoOpenPublishDecision(", resume);
+    const call = at(handlers, "resumeWayflowUnderPauseClaim({", first);
+    expect(at(handlers, "recheckPublishHold:", call)).toBeLessThan(at(handlers, "});", call));
+    const delivery = read("packages/agents/src/artifact-review-resume-delivery.ts");
+    const deliver = at(delivery, "export async function deliverArtifactReviewResumeIntent(");
+    expect(at(delivery, "assertNoOpenPublishDecision(", deliver)).toBeLessThan(at(delivery, "claimPause(", deliver));
   });
 
   it("the shared WayFlow resume holds the one send of review-task-actions.ts, and only two roads call it", () => {
@@ -115,16 +135,19 @@ describe("the road list equals the product sendTask call sites", () => {
     });
   });
 
-  it("Publish claims the run, reads its gate under the claim, then releases the decision, then sends", () => {
+  it("Publish claims the pause, reads its gate under the claim, releases the decision, then fences and sends", () => {
     const src = read("packages/agents/src/publish-decision-actions.ts");
     const start = at(src, "export async function approvePublishDecision(");
-    const claimed = at(src, 'moveRun(run.id, "pending_approval", "running"', start);
+    // cinatra#4245: the pause claim is the claim, and the fence is the one move to running.
+    const claimed = at(src, "claimPause(", start);
     const gate = at(src, "resolveLatestWayflowGateTaskId(run.id)", start);
     const released = at(src, 'to: "released"', start);
+    const fence = at(src, "pauseFence:", released);
     const send = at(src, "sendWayflowResume(", start);
     expect(claimed).toBeLessThan(gate);
     expect(gate).toBeLessThan(released);
-    expect(released).toBeLessThan(send);
+    expect(released).toBeLessThan(fence);
+    expect(fence).toBeLessThan(send);
   });
 
   it("the content-editor send carries no context id", () => {

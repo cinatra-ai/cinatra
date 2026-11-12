@@ -1,7 +1,17 @@
 // cinatra#4150 (A5): `agent_run_resume` refuses a run held at a publish decision with
 // code publish_decision_required. Nothing is recorded and nothing is sent into the held
 // context. The harness is the one of produced-review-recovery-resume-primitive.test.ts.
+// Since cinatra#4245 the road takes the pause claim before its fence; the hold is read
+// before the claim and, on a publishing template or for a run with a decision, again
+// under the claim and before the fence.
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { pauseClaimFake } from "./pause-claim-test-fake";
+
+// cinatra#4245: the resume road's pause claim always wins here unless a case says otherwise.
+vi.mock("../run-pause-claim", async (orig) => ({
+  ...(await orig<typeof import("../run-pause-claim")>()),
+  ...(await import("./pause-claim-test-fake")).pauseClaimFake,
+}));
 
 const authSessionMock = vi.hoisted(() => ({
   getAuthSession: vi.fn(async (): Promise<unknown> => null),
@@ -52,7 +62,7 @@ const storeMock = vi.hoisted(() => ({
   resolveRunCoOwnerUserIds: vi.fn(async () => []),
   setAgentRunTokenHash: vi.fn(async () => {}),
   findSavedConnectionForAgentUrl: vi.fn(async () => null),
-  updateAgentRunA2ATaskId: vi.fn(async () => undefined),
+  updateAgentRunA2ATaskId: vi.fn(async () => ({ written: true })),
   updateAgentRunA2AContextId: vi.fn(async () => undefined),
 }));
 vi.mock("../store", () => storeMock);
@@ -267,10 +277,10 @@ describe("agent_run_resume and a publish decision", () => {
   });
 });
 
-// cinatra#4150 PR 3a, pre-review 2 findings 2, 3 and 5: on a template that lists publishing steps the run is claimed
-// (pending_approval -> running) right before the send and the hold is read again, so a decision another resume parked
-// after this road's first read refuses the send; a send that fails after the claim leaves the run running, where no
-// road resumes it; an unreadable hold answers a fixed text.
+// cinatra#4150 PR 3a, pre-review 2 findings 2, 3 and 5, settled with cinatra#4245: on a template that lists publishing
+// steps the road takes the pause claim, reads the hold again under it and only then fences (pending_approval -> running)
+// and sends, so a decision another resume parked after this road's first read refuses the send and gives the claim back;
+// a send that fails after the fence leaves the run running with its claim settled; an unreadable hold answers a fixed text.
 describe("agent_run_resume on a publishing template", () => {
   const row = { status: "pending_approval" };
   const moves = () => storeMock.transitionRunStatus.mock.calls.map((c) => (c as unknown[]).slice(0, 3));
@@ -279,6 +289,8 @@ describe("agent_run_resume on a publishing template", () => {
     vi.clearAllMocks();
     // Once-answers a case leaves (a red run over older code) must not feed the next case.
     for (const m of [storeMock.readAgentRunById, storeMock.transitionRunStatus, decisions.readLatestDecisionForRun, sendTaskSpy]) m.mockReset();
+    pauseClaimFake.claimPause.mockReset().mockImplementation(async () => ({ kind: "claimed", token: "tok-fake", generation: 1, expiresAt: new Date(0) }));
+    pauseClaimFake.releasePauseClaim.mockReset().mockImplementation(async () => "released");
     row.status = "pending_approval";
     authSessionMock.resolveOrgRoleForUser.mockResolvedValue("member");
     enforceRunAccessSpy.mockResolvedValue(undefined);
@@ -305,42 +317,81 @@ describe("agent_run_resume on a publishing template", () => {
     decisions.readLatestDecisionForRun.mockResolvedValue(null);
   });
 
-  it("claims the run before the send and reads the hold after the claim", async () => {
+  it("claims the pause, reads the hold again under the claim, then fences and sends", async () => {
     await resume();
     expect(moves()[0]).toEqual(["run-1", "pending_approval", "running"]);
     expect(sendTaskSpy).toHaveBeenCalledTimes(1);
     expect(decisions.readLatestDecisionForRun).toHaveBeenCalledTimes(2);
-    expect(storeMock.transitionRunStatus.mock.invocationCallOrder[0]!).toBeLessThan(
+    expect(pauseClaimFake.claimPause.mock.invocationCallOrder[0]!).toBeLessThan(
       decisions.readLatestDecisionForRun.mock.invocationCallOrder[1]!,
     );
-    expect(decisions.readLatestDecisionForRun.mock.invocationCallOrder[1]!).toBeLessThan(sendTaskSpy.mock.invocationCallOrder[0]!);
-    // The task is then handled from where the claim put the run, never from pending_approval.
+    expect(decisions.readLatestDecisionForRun.mock.invocationCallOrder[1]!).toBeLessThan(
+      storeMock.transitionRunStatus.mock.invocationCallOrder[0]!,
+    );
+    expect(storeMock.transitionRunStatus.mock.invocationCallOrder[0]!).toBeLessThan(sendTaskSpy.mock.invocationCallOrder[0]!);
+    // The task is then handled from where the fence put the run, never from pending_approval.
     expect(moves().slice(1).every(([, from]) => from !== "pending_approval")).toBe(true);
   });
 
-  it("a decision parked by another resume after the first read refuses the send and puts the run back", async () => {
+  it("a decision parked by another resume after the first read refuses the send and gives the claim back", async () => {
     decisions.readLatestDecisionForRun.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: "d1", runId: "run-1", status: "parked" });
     const answer = (await resume()) as { error?: string; code?: string };
     expect(answer.code).toBe("publish_decision_required");
     expect(sendTaskSpy).not.toHaveBeenCalled();
-    expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"]]);
+    expect(moves()).toEqual([]);
+    expect(pauseClaimFake.releasePauseClaim).toHaveBeenCalledTimes(1);
     expect(row.status).toBe("pending_approval");
   });
 
-  it("a run another resume holds is sent nothing", async () => {
-    row.status = "running"; // the claim of the other resume; this one read the run before it
-    storeMock.readAgentRunById.mockResolvedValueOnce({ ...pausedRun(), status: "pending_approval" });
+  it("a hold that cannot be read under the claim answers the fixed text, sends nothing and gives the claim back", async () => {
+    decisions.readLatestDecisionForRun.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error("db down: run-1"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const answer = (await resume()) as { error?: string; code?: string };
+      expect(answer.error).toMatch(/publish hold could not be checked/);
+      expect(answer.error).not.toMatch(/db down|run-1/);
+      for (const c of warn.mock.calls) expect(c.map(String).join(" ")).not.toMatch(/db down|run-1/);
+    } finally {
+      warn.mockRestore();
+    }
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(moves()).toEqual([]);
+    expect(pauseClaimFake.releasePauseClaim).toHaveBeenCalledTimes(1);
+  });
+
+  it("a refusal under the claim whose release fails still answers the refusal and logs no run or raw error", async () => {
+    decisions.readLatestDecisionForRun.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: "d1", runId: "run-1", status: "parked" });
+    pauseClaimFake.releasePauseClaim.mockRejectedValueOnce(new Error("release failed: run-1"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const answer = (await resume()) as { error?: string; code?: string };
+      expect(answer.code).toBe("publish_decision_required");
+      const ours = warn.mock.calls.filter((c) => String(c[0]).includes("could not give the claim back"));
+      expect(ours).toHaveLength(1);
+      for (const c of ours) expect(c.map(String).join(" ")).not.toMatch(/run-1|release failed/);
+    } finally {
+      warn.mockRestore();
+    }
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(moves()).toEqual([]);
+  });
+
+  it("a pause another resume holds is sent nothing", async () => {
+    pauseClaimFake.claimPause.mockResolvedValueOnce({ kind: "refused", reason: "held", status: "pending_approval", generation: 1 } as never);
     const answer = (await resume()) as { error?: string };
     expect(typeof answer.error).toBe("string");
     expect(sendTaskSpy).not.toHaveBeenCalled();
-    expect(row.status).toBe("running");
+    expect(moves()).toEqual([]);
   });
 
-  it("a send that fails after the claim leaves the run running, and a retry is refused and sends nothing", async () => {
+  it("a send that fails after the fence leaves the run running with its claim settled, and a retry is refused and sends nothing", async () => {
     sendTaskSpy.mockRejectedValueOnce(new Error("socket hang up"));
     await resume().catch(() => undefined);
     expect(row.status).toBe("running");
     expect(moves()).toEqual([["run-1", "pending_approval", "running"]]);
+    expect(pauseClaimFake.settlePauseSend).toHaveBeenCalledTimes(1);
+    expect(pauseClaimFake.releasePauseClaim).not.toHaveBeenCalled();
+    pauseClaimFake.claimPause.mockResolvedValueOnce({ kind: "refused", reason: "not-pending", status: "running", generation: 2 } as never);
     const retry = (await resume()) as { error?: string };
     expect(retry.error).toMatch(/not pending approval/);
     expect(sendTaskSpy).toHaveBeenCalledTimes(1);
@@ -357,19 +408,21 @@ describe("agent_run_resume on a publishing template", () => {
       warn.mockRestore();
     }
     expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(pauseClaimFake.claimPause).not.toHaveBeenCalled();
   });
 });
 
 // cinatra#4150 PR 3a, pre-review 3 finding 1: a verified publish-gate claim holds a run whatever the live template lists, so
-// a run that already met a publish gate (it has a decision) is claimed before the send on every template.
+// a run that already met a publish gate (it has a decision) reads the hold again under the claim on every template.
 describe("agent_run_resume on a template that lists no publishing step, for a run with a decision", () => {
   const row = { status: "pending_approval" };
   const moves = () => storeMock.transitionRunStatus.mock.calls.map((c) => (c as unknown[]).slice(0, 3));
-  const claimed = (m: unknown[][]) => m.some(([, from, to]) => from === "pending_approval" && to === "running");
 
   beforeEach(() => {
     vi.clearAllMocks();
     for (const m of [storeMock.readAgentRunById, storeMock.transitionRunStatus, decisions.readLatestDecisionForRun, sendTaskSpy]) m.mockReset();
+    pauseClaimFake.claimPause.mockReset().mockImplementation(async () => ({ kind: "claimed", token: "tok-fake", generation: 1, expiresAt: new Date(0) }));
+    pauseClaimFake.releasePauseClaim.mockReset().mockImplementation(async () => "released");
     row.status = "pending_approval";
     authSessionMock.resolveOrgRoleForUser.mockResolvedValue("member");
     enforceRunAccessSpy.mockResolvedValue(undefined);
@@ -395,18 +448,19 @@ describe("agent_run_resume on a template that lists no publishing step, for a ru
     decisions.readLatestDecisionForRun.mockResolvedValue(null);
   });
 
-  it("a decision parked by another resume after the first read refuses the send and puts the run back", async () => {
+  it("a decision parked by another resume after the first read refuses the send and gives the claim back", async () => {
     decisions.readLatestDecisionForRun
       .mockResolvedValueOnce({ id: "d1", runId: "run-1", status: "released" })
       .mockResolvedValueOnce({ id: "d2", runId: "run-1", status: "parked" });
     const answer = (await resume()) as { error?: string; code?: string };
     expect(answer.code).toBe("publish_decision_required");
     expect(sendTaskSpy).not.toHaveBeenCalled();
-    expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"]]);
+    expect(moves()).toEqual([]);
+    expect(pauseClaimFake.releasePauseClaim).toHaveBeenCalledTimes(1);
     expect(row.status).toBe("pending_approval");
   });
 
-  it("a released decision that is still the newest: the run is claimed, the hold read again, and the send goes from running", async () => {
+  it("a released decision that is still the newest: the hold is read again under the claim, and the send goes from running", async () => {
     decisions.readLatestDecisionForRun.mockResolvedValue({ id: "d1", runId: "run-1", status: "released" });
     await resume();
     expect(moves()[0]).toEqual(["run-1", "pending_approval", "running"]);
@@ -414,10 +468,11 @@ describe("agent_run_resume on a template that lists no publishing step, for a ru
     expect(sendTaskSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("a run with no decision is not claimed: the hold is read once and the road goes on as on main", async () => {
+  it("a run with no decision reads the hold once; the pause claim and its fence go on as on every resume", async () => {
     await resume();
-    expect(claimed(moves())).toBe(false);
     expect(decisions.readLatestDecisionForRun).toHaveBeenCalledTimes(1);
+    expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
+    expect(moves()[0]).toEqual(["run-1", "pending_approval", "running"]);
     expect(sendTaskSpy).toHaveBeenCalledTimes(1);
   });
 });

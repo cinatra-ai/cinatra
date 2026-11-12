@@ -38,6 +38,11 @@ const sendTaskMock = vi.fn(async (_input: SendTaskInput) => ({
 // The gate's own behavior is proven in `agent-template-scope.test.ts`,
 // `agent-run-scope-guard.test.ts` and `agent-run-scope-enforcement-wiring.test.ts`
 // (which pins that THIS call site keeps its assertion).
+// cinatra#4245: the resume road's pause claim always wins here.
+vi.mock("../run-pause-claim", async (orig) => ({
+  ...(await orig<typeof import("../run-pause-claim")>()),
+  ...(await import("./pause-claim-test-fake")).pauseClaimFake,
+}));
 vi.mock("../agent-run-serde", async (orig) => ({
   ...(await orig<typeof import("../agent-run-serde")>()),
   assertAgentRunScopeAuthorized: vi.fn(async () => undefined),

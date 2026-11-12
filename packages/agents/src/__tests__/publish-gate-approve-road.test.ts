@@ -3,7 +3,11 @@
 // `wayflow-` approve reads the hold AFTER its claim (so a decision parked before the
 // claim is seen), then puts the claim back, records nothing and sends nothing into the
 // held context. The harness is the one of review-gate-decided-once-3423.test.ts.
+// Since cinatra#4245 the claim is the pause claim: the hold is read under it and before
+// the fence (pending_approval -> running), so a refusal moves no status and gives the
+// claim back.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { pauseClaimFake } from "./pause-claim-test-fake";
 
 import { RunTransitionError } from "../run-status";
 
@@ -18,6 +22,11 @@ const storeMock = vi.hoisted(() => ({
   transitionRunStatus: vi.fn(),
 }));
 vi.mock("../store", () => storeMock);
+// cinatra#4245: the answer's pause claim always wins here unless a case says otherwise.
+vi.mock("../run-pause-claim", async () => ({
+  ...(await import("./pause-claim-test-fake")).pauseClaimFake,
+  PauseClaimReleaseError: class extends Error {},
+}));
 vi.mock("../agent-run-hitl-prompts", () => ({
   captureHitlPromptForContinue: async (input: never) => {
     await (storeMock.writeHitlPrompt as unknown as (value: unknown) => Promise<void>)(input);
@@ -72,6 +81,8 @@ vi.mock("@cinatra-ai/a2a", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   createExternalA2AClient: vi.fn(async () => ({ sendTask })),
   resolveRunIdByWayflowTaskId: vi.fn(async () => null),
+  // cinatra#4245: Continue reads the latest-task key; no key leaves the column's word.
+  resolveLatestWayflowGateTaskId: vi.fn(async () => null),
 }));
 const handleWayflowTaskState = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../execution", () => ({ handleWayflowTaskState }));
@@ -107,13 +118,15 @@ beforeEach(() => {
   });
   sendTask.mockResolvedValue({ id: "task-next", contextId: "ctx-4150", status: { state: "input-required" } });
   decisions.readLatestDecisionForRun.mockResolvedValue(null);
+  pauseClaimFake.claimPause.mockImplementation(async () => ({ kind: "claimed", token: "tok-fake", generation: 1, expiresAt: new Date(0) }));
+  pauseClaimFake.releasePauseClaim.mockImplementation(async () => "released");
 });
 
 const moves = () => storeMock.transitionRunStatus.mock.calls.map((c) => (c as unknown[]).slice(0, 3));
 
 describe("the generic approve road and a publish decision", () => {
   it.each(["parked", "declined", "expired", "run_ended"])(
-    "a run whose newest decision is %s is refused with publish_decision_required, and the claim is put back",
+    "a run whose newest decision is %s is refused with publish_decision_required, and the claim is given back",
     async (status) => {
       decisions.readLatestDecisionForRun.mockResolvedValue({ id: "d1", runId: RUN.id, status });
       await expect(approveReviewTaskInternal("wayflow-task-4150", "reader-a")).rejects.toMatchObject({
@@ -121,14 +134,16 @@ describe("the generic approve road and a publish decision", () => {
       });
       expect(decisions.readLatestDecisionForRun).toHaveBeenCalledWith(RUN.id);
       expect(sendTask).not.toHaveBeenCalled();
-      expect(moves()).toEqual([[RUN.id, "pending_approval", "running"], [RUN.id, "running", "pending_approval"]]);
+      // The hold is read before the fence: no status moves, and the pause claim is given back.
+      expect(moves()).toEqual([]);
+      expect(pauseClaimFake.releasePauseClaim).toHaveBeenCalledTimes(1);
       expect(storeMock.writeHitlPrompt).not.toHaveBeenCalled();
       expect(handleWayflowTaskState).not.toHaveBeenCalled();
       expect(row.status).toBe("pending_approval");
     },
   );
 
-  it("an unreadable decision record refuses too with one fixed text that names no run or store error, and the claim is put back", async () => {
+  it("an unreadable decision record refuses too with one fixed text that names no run or store error, and the claim is given back", async () => {
     decisions.readLatestDecisionForRun.mockRejectedValue(new Error(`db down: select ... where run_id = ${RUN.id}`));
     const err = (await approveReviewTaskInternal("wayflow-task-4150", "reader-a").catch((e: unknown) => e)) as Error & { code?: string };
     expect(err.code).toBe("publish_decision_unavailable");
@@ -137,21 +152,22 @@ describe("the generic approve road and a publish decision", () => {
     expect("cause" in err).toBe(false);
     expect(sendTask).not.toHaveBeenCalled();
     expect(row.status).toBe("pending_approval");
+    expect(pauseClaimFake.releasePauseClaim).toHaveBeenCalledTimes(1);
   });
 
   it("the hold is read after the claim (pre-review 2 finding 3): a decision parked before the claim is seen", async () => {
     // Another resume parks a publish decision between this road's read of the run and its claim.
-    storeMock.transitionRunStatus.mockImplementationOnce(async (_runId: string, from: string, to: string) => {
+    pauseClaimFake.claimPause.mockImplementationOnce(async () => {
       decisions.readLatestDecisionForRun.mockResolvedValue({ id: "d1", runId: RUN.id, status: "parked" });
-      if (row.status !== from) throw new RunTransitionError({ code: "stale_from_status", runId: RUN.id, from: from as never, to: to as never });
-      row.status = to;
+      return { kind: "claimed", token: "tok-fake", generation: 1, expiresAt: new Date(0) };
     });
     await expect(approveReviewTaskInternal("wayflow-task-4150", "reader-a")).rejects.toMatchObject({
       code: "publish_decision_required",
     });
     expect(sendTask).not.toHaveBeenCalled();
     expect(row.status).toBe("pending_approval");
-    expect(storeMock.transitionRunStatus.mock.invocationCallOrder[0]!).toBeLessThan(
+    expect(moves()).toEqual([]);
+    expect(pauseClaimFake.claimPause.mock.invocationCallOrder[0]!).toBeLessThan(
       decisions.readLatestDecisionForRun.mock.invocationCallOrder[0]!,
     );
   });
@@ -175,12 +191,9 @@ describe("the generic approve road's release warning after a publish-hold refusa
     ["an unreadable hold", () => decisions.readLatestDecisionForRun.mockRejectedValue(new Error(`db down: ${RUN.id}`)), "publish_decision_unavailable"],
   ])("%s whose claim release fails logs no run id, task id or raw error", async (_label, arrange, code) => {
     arrange();
-    const claim = storeMock.transitionRunStatus.getMockImplementation()!;
-    storeMock.transitionRunStatus
-      .mockImplementationOnce(claim)
-      .mockImplementationOnce(async () => {
-        throw new Error(`release failed: ${RUN.id}`);
-      });
+    pauseClaimFake.releasePauseClaim.mockImplementationOnce(async () => {
+      throw new Error(`release failed: ${RUN.id}`);
+    });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
       await expect(approveReviewTaskInternal("wayflow-task-4150", "reader-a")).rejects.toMatchObject({ code });

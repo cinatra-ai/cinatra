@@ -189,6 +189,9 @@ export async function updateAgentRunStatusConditional(
   pause?: PauseSeamFields,
 ): Promise<boolean> {
   assertPauseSeamFields(id, expectedStatus, nextStatus, pause);
+  if (expectedStatus === "pending_approval" && nextStatus === "running" && pause?.pauseFence === undefined) {
+    throw new Error(`updateAgentRunStatusConditional: pending_approval→running requires pauseFence on run ${id}`);
+  }
   // cinatra#1937: a queued→running CAS IS a dispatch — it stamps per-dispatch
   // bookkeeping ATOMICALLY with the status flip at the deepest layer, so no
   // caller can bypass it and `running` rows never carry stale attempt ids.
@@ -268,11 +271,10 @@ export async function updateAgentRunStatusConditional(
 //      fence (rule 3);
 //   2. every entry into `pending_approval` raises `pause_generation` by 1, and
 //      writes `a2a_task_id` when the caller names the pause's task;
-//   3. the fence: `pending_approval → running` with `pauseFence` lands only
-//      under the live `claimed` lease of that token at that generation; it
+//   3. the fence: `pending_approval → running` requires `pauseFence` and lands
+//      only under the live `claimed` lease of that token at that generation; it
 //      sets the phase `sending`, raises the generation by 1, keeps the token
-//      and sets the send lease. Without `pauseFence` the edge is the old
-//      status-only compare-and-set (a later change makes the fence required);
+//      and sets the send lease;
 //   4. no `→ stopped` edge lands while a live `sending` lease holds the row
 //      (transitionRunStatus then throws `pause_resume_in_flight`);
 //   5. `pauseEndMark` on `→ stopped` lands only while the pause carries the

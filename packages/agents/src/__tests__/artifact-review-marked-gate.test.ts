@@ -314,7 +314,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
       "run-rev-1",
       "running",
       "pending_approval",
-      undefined,
+      { pauseTaskId: "task-rev-1" },
       TEST_AUTHORITY,
     );
   });
@@ -369,7 +369,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
       "run-rev-1",
       "running",
       "pending_approval",
-      undefined,
+      { pauseTaskId: "task-rev-1" },
       TEST_AUTHORITY,
     );
   });
@@ -437,7 +437,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
       "run-rev-1",
       "running",
       "pending_approval",
-      undefined,
+      { pauseTaskId: "task-rev-1" },
       TEST_AUTHORITY,
     );
   });
@@ -687,7 +687,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
       expect(onInterruptSpy.mock.calls[0]?.[1]).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
       expect(onInterruptSpy.mock.calls[0]?.[3]).toBe(originalId);
       expect((onInterruptSpy.mock.calls[0]?.[2] as Record<string, unknown>).targetCount).toBe(1);
-      if (fromStatus === "running") expect(storeMock.transitionRunStatus).toHaveBeenCalledWith(run.id, "running", "pending_approval", undefined, TEST_AUTHORITY);
+      if (fromStatus === "running") expect(storeMock.transitionRunStatus).toHaveBeenCalledWith(run.id, "running", "pending_approval", expect.objectContaining({ pauseTaskId: expect.any(String) }), TEST_AUTHORITY);
       else expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
       expect(storeMock.transitionRunStatus.mock.calls.every((call) => call[2] !== "running" && call[2] !== "completed")).toBe(true);
     } finally { dispatch.mockRestore(); }
@@ -724,7 +724,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
       expect(dispatch).not.toHaveBeenCalled();
       expect(JSON.stringify(request)).toBe(before);
       expect(onInterruptSpy).toHaveBeenCalledTimes(1);
-      expect(storeMock.transitionRunStatus).toHaveBeenCalledWith(run.id, "running", "pending_approval", undefined, TEST_AUTHORITY);
+      expect(storeMock.transitionRunStatus).toHaveBeenCalledWith(run.id, "running", "pending_approval", expect.objectContaining({ pauseTaskId: expect.any(String) }), TEST_AUTHORITY);
       expect(storeMock.transitionRunStatus.mock.calls.every((call) => call[2] !== "running" && call[2] !== "completed")).toBe(true);
     } finally { dispatch.mockRestore(); }
   });
@@ -748,7 +748,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
       expect(emitSpy.mock.calls.map(([input]) => input.targets)).toEqual(kept.map((target) => [target]));
       expect(emitSpy.mock.calls.flatMap(([input]) => input.targets as typeof raw)).not.toContainEqual(newer);
     }
-    expect(storeMock.transitionRunStatus).toHaveBeenCalledWith(run.id, "running", "pending_approval", undefined, TEST_AUTHORITY);
+    expect(storeMock.transitionRunStatus).toHaveBeenCalledWith(run.id, "running", "pending_approval", expect.objectContaining({ pauseTaskId: expect.any(String) }), TEST_AUTHORITY);
   });
 
   it.each(["throws", "missing"])("App163: a policy core that %s cannot authorize mint or action", async (mode) => {
