@@ -1096,10 +1096,13 @@ export function AgenticRunPanel({
   // Suppress re-showing the same HITL screen after Approve/Reject while the server
   // processes the resume. Prevents "Loading recipients" flash caused by the poll
   // returning pending_approval with the stale context before the graph advances.
-  // Clear suppression when a different xRenderer arrives (next step's HITL).
+  // Clear suppression when a different xRenderer arrives (next step's HITL),
+  // or the same renderer with another review task (cinatra#3080: two context
+  // slots in a row). `answeredReviewTaskId` is armed and released with the ref.
   const suppression = applyJustSubmittedSuppression(
     rawEffectiveHitlContext,
     justSubmittedXRendererRef.current,
+    answeredReviewTaskId,
   );
   if (suppression.clearSuppression) {
     justSubmittedXRendererRef.current = null;
@@ -2293,10 +2296,11 @@ export function AgenticRunPanel({
   // the road this placeholder is for: the row carries no interrupt at all,
   // because the person answered it and the run moved past it. The other is
   // `applyJustSubmittedSuppression`, which nulls a NON-null interrupt for as
-  // long as the just-submitted renderer matches - and it matches on the
-  // renderer alone, never on the review task, while a run's sequential setup
-  // fields deliberately reuse one renderer. So the step AFTER a submitted one
-  // can be a real, live, unanswered question wearing a null context.
+  // long as the just-submitted renderer and review task match (a gate of the
+  // same renderer with another review task is drawn, cinatra#3080) - and a
+  // run's sequential setup fields deliberately share one renderer and one
+  // review task. So the step AFTER a submitted one can be a real, live,
+  // unanswered question wearing a null context.
   //
   // Drawing the quiet placeholder over that would hide a question the run is
   // waiting on, and hide with it the Re-check that is the one control which

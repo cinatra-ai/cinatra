@@ -546,16 +546,26 @@ export function mapInterruptToHitlContext(
  * before the graph advances. When a DIFFERENT xRenderer arrives (the next
  * step's gate), the suppression must be cleared (`clearSuppression`
  * signals the caller to null its ref).
+ *
+ * AND WHEN THE SAME RENDERER ARRIVES WITH A NEW REVIEW TASK (cinatra#3080).
+ * Two context slots in a row are two gates of one renderer: the answered
+ * gate's review task names the stale one, and a gate with another review
+ * task is the next question. Without this the open page hid the next gate
+ * until a reload. A caller that passes no review task keeps the old reading.
  */
 export function applyJustSubmittedSuppression(
   raw: HitlGateContext | null,
   justSubmittedXRenderer: string | null,
+  justSubmittedReviewTaskId: string | null = null,
 ): { context: HitlGateContext | null; clearSuppression: boolean } {
   if (
     raw !== null &&
     justSubmittedXRenderer !== null &&
     raw.xRenderer === justSubmittedXRenderer
   ) {
+    if (justSubmittedReviewTaskId !== null && raw.reviewTaskId !== justSubmittedReviewTaskId) {
+      return { context: raw, clearSuppression: true };
+    }
     return { context: null, clearSuppression: false };
   }
   if (raw !== null && justSubmittedXRenderer !== null) {
