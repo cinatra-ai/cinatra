@@ -405,6 +405,11 @@ describe("OrchestratorStepperPanel - the next input gate after a Continue (cinat
     ["a list of properties", { type: "object", properties: [] }],
     ["null properties", { type: "object", properties: null }],
     ["a null property", { type: "object", properties: { brandVoice: null } }],
+    ["no properties but a required name", { type: "object", required: ["brandVoice"] }],
+    [
+      "a nested null property",
+      { type: "object", properties: { config: { type: "object", properties: { child: null } } } },
+    ],
   ] as const) {
     it(`fails closed on a malformed gate schema (${name}): no field, no Continue`, async () => {
       await mount(gateWith(schema));
@@ -443,5 +448,35 @@ describe("OrchestratorStepperPanel - the next input gate after a Continue (cinat
     await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
     await settle();
     expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1);
+  });
+  it("holds the Continue while a typed number is not a finite number, and sends nothing", async () => {
+    const schema = { type: "object", properties: { count: { type: "number", title: "Count" } } };
+    await mount(gateWith(schema));
+    await waitFor(() => expect(fieldById("count")).not.toBeNull());
+    fireEvent.change(fieldById("count")!, { target: { value: "1e309" } });
+    await waitFor(() => expect(continues()).toHaveLength(1));
+    await waitFor(() => expect(continues()[0]!.disabled).toBe(true));
+    fireEvent.click(continues()[0]!);
+    await settle();
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    fireEvent.change(fieldById("count")!, { target: { value: "3" } });
+    await waitFor(() => expect(continues()[0]!.disabled).toBe(false));
+    fireEvent.click(continues()[0]!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(lastPayload().userResponse as string)).toEqual({ count: 3 });
+  });
+
+  it("draws and sends a declared field named __proto__", async () => {
+    const schema = JSON.parse(
+      '{"type":"object","properties":{"__proto__":{"type":"string","title":"Proto"}}}',
+    );
+    await mount(gateWith(schema));
+    await waitFor(() => expect(fieldById("__proto__")).not.toBeNull());
+    fireEvent.change(fieldById("__proto__")!, { target: { value: "warm" } });
+    await waitFor(() => expect(continues()).toHaveLength(1));
+    fireEvent.click(continues()[0]!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    expect(lastPayload().userResponse).toBe("warm");
   });
 });

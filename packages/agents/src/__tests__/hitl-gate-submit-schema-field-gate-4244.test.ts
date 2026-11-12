@@ -118,6 +118,56 @@ describe("readSchemaFieldGate (cinatra#4244)", () => {
   });
 });
 
+describe("readSchemaFieldGate - fold2 admission (cinatra#4244)", () => {
+  it("refuses a schema with no properties whose required list is not empty or not names", () => {
+    expect(read({ type: "object", required: [] })).toEqual({ kind: "bare" });
+    expect(read({ type: "object", required: [1] })).toEqual({ kind: "malformed" });
+    expect(read({ type: "object", required: ["brandVoice"] })).toEqual({ kind: "malformed" });
+  });
+
+  it("refuses a malformed declaration at any depth", () => {
+    const nested: unknown[] = [
+      { type: "object", properties: { config: { type: "object", properties: { child: null } } } },
+      { type: "object", properties: { config: { type: "object", properties: [] } } },
+      { type: "object", properties: { config: { type: "object", properties: {}, required: "child" } } },
+      {
+        type: "object",
+        properties: { config: { type: "object", properties: { a: { type: "string", "x-hidden": 1 } } } },
+      },
+      {
+        type: "object",
+        properties: { config: { type: "object", properties: { a: { type: "string", "x-required": "y" } } } },
+      },
+      { type: "object", properties: { tags: { type: "array", items: null } } },
+      { type: "object", properties: { tags: { type: "array", items: { type: "object", properties: { x: 3 } } } } },
+    ];
+    for (const schema of nested) {
+      expect(read(schema), JSON.stringify(schema)).toEqual({ kind: "malformed" });
+    }
+    const deep = read({
+      type: "object",
+      properties: {
+        config: {
+          type: "object",
+          properties: { tone: { type: "string" }, tags: { type: "array", items: { type: "string" } } },
+          required: ["tone"],
+        },
+      },
+    });
+    expect(deep.kind).toBe("fields");
+  });
+
+  it("keeps a declared field named __proto__ as an own field of the drawn schema", () => {
+    const reading = read(JSON.parse('{"type":"object","properties":{"__proto__":{"type":"string"}}}'));
+    expect(reading.kind).toBe("fields");
+    if (reading.kind !== "fields") return;
+    expect(reading.fields).toEqual(["__proto__"]);
+    const props = reading.renderSchema.properties as object;
+    expect(Object.prototype.hasOwnProperty.call(props, "__proto__")).toBe(true);
+    expect(Object.keys(props)).toEqual(["__proto__"]);
+  });
+});
+
 describe("buildSchemaFieldGatePayload (cinatra#4244)", () => {
   it("sends the bare approval for a blank optional answer", () => {
     expect(payload({ schema: BRAND_SCHEMA, next: undefined, now: NOW })).toEqual({
@@ -200,5 +250,43 @@ describe("buildSchemaFieldGatePayload (cinatra#4244)", () => {
         now: NOW,
       }),
     ).toEqual({ brandVoice: "Warm.", userResponse: "kept", approved: true, approvedAt: NOW });
+  });
+  it("carries an answer to a field named __proto__ to WayFlow", () => {
+    const one = JSON.parse('{"type":"object","properties":{"__proto__":{"type":"string"}}}');
+    expect(payload({ schema: one, next: JSON.parse('{"__proto__":"warm"}'), now: NOW }).userResponse).toBe(
+      "warm",
+    );
+    const two = JSON.parse(
+      '{"type":"object","properties":{"__proto__":{"type":"string"},"note":{"type":"string"}}}',
+    );
+    const sent = payload({ schema: two, next: JSON.parse('{"__proto__":"warm","note":"n"}'), now: NOW });
+    const parsed = JSON.parse(sent.userResponse as string) as object;
+    expect(Object.prototype.hasOwnProperty.call(parsed, "__proto__")).toBe(true);
+    expect((parsed as Record<string, unknown>)["note"]).toBe("n");
+    expect(Object.getOwnPropertyDescriptor(parsed, "__proto__")?.value).toBe("warm");
+  });
+
+  it("refuses a non-finite number answer instead of sending null", () => {
+    const schema = { type: "object", properties: { count: { type: "number" } } };
+    for (const bad of [Infinity, -Infinity, Number.NaN]) {
+      expect(() => payload({ schema, next: { count: bad }, now: NOW })).toThrow();
+    }
+    expect(() =>
+      payload({
+        schema: { type: "object", properties: { cfg: { type: "object" } } },
+        next: { cfg: { depth: Infinity } },
+        now: NOW,
+      }),
+    ).toThrow();
+  });
+
+  it("sends a single text answer that reads as JSON under its declared field", () => {
+    for (const text of ["42", '{"tone":"warm"}', "true", "[1]", "null"]) {
+      const sent = payload({ schema: BRAND_SCHEMA, next: { brandVoice: text }, now: NOW });
+      expect(JSON.parse(sent.userResponse as string), text).toEqual({ brandVoice: text });
+    }
+    expect(payload({ schema: BRAND_SCHEMA, next: { brandVoice: "Warm." }, now: NOW }).userResponse).toBe(
+      "Warm.",
+    );
   });
 });
