@@ -102,10 +102,20 @@ export function makeExtensionFieldRenderer(
     // identity for as long as the host's own report does, so a component that
     // reports in an effect keyed on it does not report again on every render.
     const crashedRef = useRef(false);
+    // THE FLOOR OF A HELD CRASH IS UNAVAILABLE (cinatra#3562 with cinatra#4310).
+    // The component's last report before the crash stands with the gate, and
+    // nothing can change it. When that report is `false`, the floor is drawn
+    // `disabled`: a control the floor draws itself (the Continue of a per-field
+    // boolean, string or number question on a setup gate whose entry declares
+    // `drawsOwnSubmit`) would otherwise look available on a gate whose sends
+    // all send nothing.
+    const lastReportRef = useRef<boolean | null>(null);
+    const [heldAtCrash, setHeldAtCrash] = useState(false);
     const reportValidity = props.onValidityChange;
     const guardedReport = useCallback(
       (valid: boolean) => {
         if (crashedRef.current) return;
+        lastReportRef.current = valid === true;
         reportValidity?.(valid);
       },
       [reportValidity],
@@ -147,6 +157,7 @@ export function makeExtensionFieldRenderer(
       props.schema as { "x-renderer"?: unknown } & Record<string, unknown>;
     const floorProps: FieldRendererProps = {
       ...props,
+      ...(heldAtCrash ? { disabled: true } : {}),
       schema: floorSchema,
       context: {
         ...props.context,
@@ -168,6 +179,7 @@ export function makeExtensionFieldRenderer(
         fallback: floor,
         onCrash: () => {
           crashedRef.current = true;
+          if (lastReportRef.current === false) setHeldAtCrash(true);
         },
       },
       createElement(resolved, resolvedProps),
