@@ -113,11 +113,6 @@
     },
     {
       "rule": "pack-type-id-in-core",
-      "key": "packages/objects/src/integration/register-types.ts::@cinatra-ai/drupal:node",
-      "reason": "standing debt: the host objects registry restates a type id the pack declares, so a pack that is not installed still has its representation known here."
-    },
-    {
-      "rule": "pack-type-id-in-core",
       "key": "packages/objects/src/integration/register-types.ts::@cinatra-ai/email:body",
       "reason": "standing debt: the host objects registry restates a type id the pack declares, so a pack that is not installed still has its representation known here."
     },
@@ -185,11 +180,6 @@
       "rule": "pack-type-id-in-core",
       "key": "src/lib/member-post-draft-writer-provider.ts::@cinatra-ai/linkedin:post-draft",
       "reason": "standing debt: the draft writer provider names a pack-declared type id to write the draft it owns."
-    },
-    {
-      "rule": "pack-type-id-in-core",
-      "key": "src/lib/object-history/retention-policy.ts::@cinatra-ai/drupal:node",
-      "reason": "standing debt: the retention policy names pack-declared type ids to set per-type history windows in the host."
     },
     {
       "rule": "pack-type-id-in-core",

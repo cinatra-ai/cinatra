@@ -5,10 +5,6 @@
       "count": 1,
       "owner": "@cinatra-ai/email-connector"
     },
-    "packages/objects/src/integration/register-types.ts :: type :: @cinatra-ai/drupal:node": {
-      "count": 1,
-      "owner": "the claiming artifact extension of each id (@cinatra-ai/email-artifacts, @cinatra-ai/linkedin-artifacts, @cinatra-ai/drupal-artifacts)"
-    },
     "packages/objects/src/integration/register-types.ts :: type :: @cinatra-ai/email:body": {
       "count": 1,
       "owner": "the claiming artifact extension of each id (@cinatra-ai/email-artifacts, @cinatra-ai/linkedin-artifacts, @cinatra-ai/drupal-artifacts)"
@@ -52,10 +48,6 @@
     "src/lib/member-post-draft-writer-provider.ts :: type :: @cinatra-ai/linkedin:post-draft": {
       "count": 1,
       "owner": "@cinatra-ai/blog-linkedin-writer-agent"
-    },
-    "src/lib/object-history/retention-policy.ts :: type :: @cinatra-ai/drupal:node": {
-      "count": 1,
-      "owner": "the claiming artifact extension of each id (declares its own retention)"
     },
     "src/lib/object-history/retention-policy.ts :: type :: @cinatra-ai/email:body": {
       "count": 1,
@@ -450,7 +442,7 @@
       "owner": "@cinatra-ai/wordpress-agent and @cinatra-ai/drupal-agent (the content-editor agents that stage the change); display by @cinatra-ai/cms-snapshot-artifact"
     },
     "packages/objects/src/integration/register-types.ts": {
-      "count": 29,
+      "count": 28,
       "owner": "the claiming artifact extension of each id (@cinatra-ai/email-artifacts, @cinatra-ai/linkedin-artifacts, @cinatra-ai/drupal-artifacts)"
     },
     "packages/sdk-extensions/src/appointment-schedules-contract.ts": {
