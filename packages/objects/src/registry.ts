@@ -166,10 +166,11 @@ class ObjectTypeRegistryImpl {
    * Register a RETIRED host type (cinatra#4366): an id the host no longer
    * defines because its definer moved it (for example a pack that renamed its
    * type into its own namespace), kept registered ONLY so stored rows of it
-   * still resolve and FAIL CLOSED instead of falling to the ungoverned path.
-   * The definition must declare projection `none`, so the projector skips its
-   * rows and a rebuild counts them as excluded; anything else throws (a host
-   * programming error, never a runtime input). It is registered host-owned
+   * still resolve and FAIL CLOSED on writes instead of falling to the
+   * ungoverned path. The definition must declare projection `none` (its rows
+   * are never projected) or `artifact-safe` (its rows stay in the artifact
+   * library, read-only, as they were before the move); anything else throws (a
+   * host programming error, never a runtime input). It is registered host-owned
    * (no package), so a package cannot take the id over and `removeByPackage`
    * never reaps it. `isRetired` marks it for the write paths, which refuse it,
    * and for the discovery surfaces, which leave it out. A later ordinary
@@ -177,9 +178,10 @@ class ObjectTypeRegistryImpl {
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   registerRetired<T = any>(def: ObjectTypeDefinition<T>): void {
-    if (def.dispositions?.projection !== "none") {
+    const projection = def.dispositions?.projection;
+    if (projection !== "none" && projection !== "artifact-safe") {
       throw new Error(
-        `Retired object type '${def.type}' must declare projection "none" so its stored rows are never projected.`,
+        `Retired object type '${def.type}' must declare projection "none" or "artifact-safe"; a retired type is never projected raw.`,
       );
     }
     this.register(def);

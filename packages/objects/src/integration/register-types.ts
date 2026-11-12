@@ -582,16 +582,19 @@ function registerLinkedinObjectTypes(): void {
 // projector would emit their raw data, objects_update would write them with no
 // schema, and the artifact reads would lose them. The tombstone keeps them
 // resolvable under their former contract (content category, agent/import
-// sources, the strict inline pointer schema), declares projection `none` so
-// they are never projected, and is marked retired so objects_save and
-// objects_update refuse it and the type discovery surfaces leave it out.
+// sources, the strict inline pointer schema, the former dispositions with
+// projection `artifact-safe`), so they stay in the artifact library and their
+// artifact page opens as before the move. It is marked retired, so
+// objects_save and objects_update refuse it (the rows are read-only) and the
+// type discovery surfaces leave it out. Its identity key is not kept: nothing
+// writes the id any more.
 // ---------------------------------------------------------------------------
 
 function registerRetiredDrupalNodeType(): void {
   objectTypeRegistry.registerRetired({
     type: "@cinatra-ai/drupal:node",
     dispositions: {
-      projection: "none",
+      projection: "artifact-safe",
       pinnable: false,
       snapshotPolicy: "none",
       sensitivity: "normal",

@@ -114,7 +114,7 @@
     {
       "rule": "pack-type-id-in-core",
       "key": "packages/objects/src/integration/register-types.ts::@cinatra-ai/drupal:node",
-      "reason": "retired tombstone: the pack moved its pointer type into its own namespace, and the host keeps the former id registered, read-only and never projected, so stored rows of it fail closed."
+      "reason": "retired tombstone: the pack moved its pointer type into its own namespace, and the host keeps the former id registered and read-only, so stored rows of it stay listed and fail closed on writes."
     },
     {
       "rule": "pack-type-id-in-core",

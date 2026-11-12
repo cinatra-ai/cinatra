@@ -133,8 +133,9 @@ result. Shape:
 When a type's definer moves it (for example a pack that renames its type into
 its own namespace), the host keeps the former id registered with
 `objectTypeRegistry.registerRetired(def)` so stored rows of it still resolve and
-fail closed. The definition must declare projection `none` (anything else
-throws), so the projector skips those rows and a rebuild counts them as excluded.
+fail closed on writes. The definition must declare projection `none` (the rows
+are never projected) or `artifact-safe` (the rows stay in the artifact library
+and open read-only, as before the move); anything else throws.
 `objectTypeRegistry.isRetired(type)` marks the id:
 
 - `objects_save` refuses it with `OBJECTS_TYPE_NOT_REGISTERED`, as it refuses a
@@ -155,7 +156,9 @@ throws), so the projector skips those rows and a rebuild counts them as excluded
 
 `objects_get`, `objects_list` and `objects_delete` are unchanged. The only
 retired host type is `@cinatra-ai/drupal:node`, the former id of the Drupal
-pack's pointer type.
+pack's pointer type. It keeps projection `artifact-safe`, so a stored row of it
+stays listed in the artifact library and its artifact page opens as before;
+only edits are refused.
 
 ## Dynamic object type registry — REMOVED (engine teardown, epic #1785 entry 95, #1793)
 
