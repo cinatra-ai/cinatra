@@ -115,14 +115,16 @@ describe("the road list equals the product sendTask call sites", () => {
     });
   });
 
-  it("Publish releases the decision, then claims the run, then sends", () => {
+  it("Publish claims the run, reads its gate under the claim, then releases the decision, then sends", () => {
     const src = read("packages/agents/src/publish-decision-actions.ts");
     const start = at(src, "export async function approvePublishDecision(");
-    const released = at(src, 'to: "released"', start);
     const claimed = at(src, 'moveRun(run.id, "pending_approval", "running"', start);
+    const gate = at(src, "resolveLatestWayflowGateTaskId(run.id)", start);
+    const released = at(src, 'to: "released"', start);
     const send = at(src, "sendWayflowResume(", start);
-    expect(released).toBeLessThan(claimed);
-    expect(claimed).toBeLessThan(send);
+    expect(claimed).toBeLessThan(gate);
+    expect(gate).toBeLessThan(released);
+    expect(released).toBeLessThan(send);
   });
 
   it("the content-editor send carries no context id", () => {

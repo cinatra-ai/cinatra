@@ -1,6 +1,7 @@
 // cinatra#4150 part 5a: "Publish" lets a run held at a publish gate go on (A7), and who may decide a publish on a run
 // with no human owner (A11). The shared WayFlow resume itself is driven by the generic approve's suites; here it is a
-// double, so these cases pin the order: the authority, ONE released decision, the claim, then ONE send.
+// double, so these cases pin the order: the authority, the claim, the gate read under it, ONE released decision, then
+// ONE send.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AuthzError } from "@/lib/authz/errors";
@@ -97,7 +98,7 @@ beforeEach(() => {
 });
 
 describe("Publish (A7)", () => {
-  it("checks the decider, writes ONE released decision, then claims the run and sends once into its held context", async () => {
+  it("checks the decider, claims the run, writes ONE released decision under the claim, then sends once into its held context", async () => {
     expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: true });
     expect(enforceRunAccess.mock.calls.map((c) => (c as unknown[])[2])).toEqual(["execute", "approveHitl"]);
     expect(assertAgentRunDispatchAuthorized).toHaveBeenCalledWith({ runId: "run-1", stage: "dispatch", actingUserId: "user-a" });
@@ -113,8 +114,9 @@ describe("Publish (A7)", () => {
     expect((args.run as { id: string }).id).toBe("run-1");
     expect(args.authority.orgId).toBe("org-1");
     const order = [
-      decisions.decide.mock.invocationCallOrder[0]!,
       storeMock.transitionRunStatus.mock.invocationCallOrder[0]!,
+      resolveLatestWayflowGateTaskId.mock.invocationCallOrder[0]!,
+      decisions.decide.mock.invocationCallOrder[0]!,
       sendWayflowResume.mock.invocationCallOrder[0]!,
     ];
     expect([...order].sort((a, b) => a - b)).toEqual(order);
@@ -129,11 +131,11 @@ describe("Publish (A7)", () => {
     expect(sendWayflowResume).not.toHaveBeenCalled();
   });
 
-  it("a Publish that loses the decision write to another Publish sends nothing when that one holds the run", async () => {
-    decisions.decide.mockResolvedValueOnce({ outcome: "lost", currentStatus: "released" });
+  it("a Publish that finds the run claimed by another Publish, which released the decision, writes and sends nothing", async () => {
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released" }));
     storeMock.transitionRunStatus.mockRejectedValueOnce(stale());
     expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: false });
+    expect(decisions.decide).not.toHaveBeenCalled();
     expect(sendWayflowResume).not.toHaveBeenCalled();
   });
 
@@ -150,13 +152,13 @@ describe("Publish (A7)", () => {
     },
   );
 
-  it("a Publish that loses the decision write to Do not publish is reported and nothing is sent", async () => {
+  it("a Publish that loses the decision write to Do not publish gives the claim back, is reported and nothing is sent", async () => {
     decisions.decide.mockResolvedValueOnce({ outcome: "lost", currentStatus: "declined" });
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "declined" }));
     expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({
       ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: "declined",
     });
-    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"]]);
     expect(sendWayflowResume).not.toHaveBeenCalled();
   });
 
@@ -199,26 +201,91 @@ describe("Publish (A7)", () => {
     expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: false });
     expect(resolveLatestWayflowGateTaskId).toHaveBeenCalledWith("run-1");
     expect(decisions.decide).not.toHaveBeenCalled();
-    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"]]);
     expect(sendWayflowResume).not.toHaveBeenCalled();
   });
 
-  it("two Publishes at once: the one that claims after the other's resume reached a later gate gives the claim back and sends nothing", async () => {
-    // The loser read the decision's own gate before its claim; the winner's resume then parked the run at a later gate
-    // (the runtime records that gate before the run is back in pending_approval), so the loser's claim succeeds.
-    decisions.readOpenDecisionForRun.mockResolvedValue(null);
-    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", gateTaskId: "task-1" }));
-    resolveLatestWayflowGateTaskId.mockResolvedValueOnce("task-1").mockResolvedValueOnce("task-7");
+  it("the Publish that would win the decision write, claiming after another resume parked the run at a later gate, releases and sends nothing (finding 1)", async () => {
+    // Its read of the open decision (gate task-1) came before the other resume; when it claims, the run waits at task-7.
+    resolveLatestWayflowGateTaskId.mockResolvedValue("task-7");
     expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: false });
+    expect(decisions.decide).not.toHaveBeenCalled();
     expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"]]);
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+  });
+
+  it("two Publishes at once on one parked decision, and a third with the same old read: ONE release, ONE send (finding 1)", async () => {
+    let runStatus = "pending_approval";
+    let decided = "parked";
+    storeMock.transitionRunStatus.mockImplementation(async (...args: unknown[]) => {
+      const [, from, to] = args as string[];
+      if (runStatus !== from) throw stale();
+      runStatus = to!;
+      return undefined;
+    });
+    decisions.decide.mockImplementation(async (id: string, change: { to: string }) => {
+      if (decided !== "parked") return { outcome: "lost", currentStatus: decided };
+      decided = change.to;
+      return { outcome: "won", decision: decision({ id, status: decided }) };
+    });
+    decisions.readLatestDecisionForRun.mockImplementation(async () => decision({ status: decided }));
+    // The resume reaches a later gate: the runtime records it, then the run waits again.
+    sendWayflowResume.mockImplementation(async (args: { onDispatch?: () => void }) => {
+      args.onDispatch?.();
+      resolveLatestWayflowGateTaskId.mockResolvedValue("task-7");
+      runStatus = "pending_approval";
+      return { id: "task-7", contextId: "ctx-1", status: { state: "input-required" } };
+    });
+    const answers = await Promise.all([1, 2].map(() => approvePublishDecision({ runId: "run-1", actorContext: ACTOR })));
+    expect(answers.filter((a) => a.ok && a.resumed)).toHaveLength(1);
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: false });
+    expect(decisions.decide).toHaveBeenCalledTimes(1);
+    expect(sendWayflowResume).toHaveBeenCalledTimes(1);
+    expect(runStatus).toBe("pending_approval");
+  });
+
+  it("a Publish on a run that already ended releases nothing, so the expiry can still close the row run_ended (finding 3)", async () => {
+    storeMock.readAgentRunById.mockResolvedValue(run({ status: "stopped" }));
+    storeMock.transitionRunStatus.mockRejectedValueOnce(stale());
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision());
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({
+      ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: "parked",
+    });
     expect(decisions.decide).not.toHaveBeenCalled();
     expect(sendWayflowResume).not.toHaveBeenCalled();
+  });
+
+  it("a resume that fails before its send and whose put-back faults ends the run failed (finding 2)", async () => {
+    sendWayflowResume.mockRejectedValueOnce(new Error("credential mint failed"));
+    storeMock.transitionRunStatus.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("db down: run-1"));
+    await expect(approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).rejects.toMatchObject({ code: "publish_resume_failed" });
+    expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"], ["run-1", "running", "failed"]]);
+    const patch = (storeMock.transitionRunStatus.mock.calls[2] as unknown[])[3] as { error: string };
+    expect(patch.error).toMatch(/^publish_resume_failed:/);
+    expect(patch.error).not.toMatch(/run-1|db down/);
+  });
+
+  it("a claim given back at another gate whose put-back faults ends the run failed (finding 2)", async () => {
+    resolveLatestWayflowGateTaskId.mockResolvedValue("task-7");
+    storeMock.transitionRunStatus.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("db down"));
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: false });
+    expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"], ["run-1", "running", "failed"]]);
+    expect(decisions.decide).not.toHaveBeenCalled();
+  });
+
+  it("when the put-back and the failed move both fault, the fault surfaces with the fixed text, not as a resume failure (finding 2)", async () => {
+    sendWayflowResume.mockRejectedValueOnce(new Error("credential mint failed"));
+    storeMock.transitionRunStatus.mockResolvedValueOnce(undefined).mockRejectedValue(new Error("db down: run-1"));
+    const err = (await approvePublishDecision({ runId: "run-1", actorContext: ACTOR }).catch((e: unknown) => e)) as Error & { code?: string };
+    expect(err.code).toBe("publish_decision_unavailable");
+    expect(err.message).not.toMatch(/db down|run-1/);
+    expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"], ["run-1", "running", "failed"]]);
   });
 
   it("a gate that cannot be read under the claim gives the claim back and answers the fixed text", async () => {
     decisions.readOpenDecisionForRun.mockResolvedValue(null);
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released" }));
-    resolveLatestWayflowGateTaskId.mockResolvedValueOnce("task-1").mockRejectedValueOnce(new Error("redis down: run-1"));
+    resolveLatestWayflowGateTaskId.mockRejectedValueOnce(new Error("redis down: run-1"));
     const err = (await approvePublishDecision({ runId: "run-1", actorContext: ACTOR }).catch((e: unknown) => e)) as Error & { code?: string };
     expect(err.code).toBe("publish_decision_unavailable");
     expect(err.message).not.toMatch(/redis|run-1/);
@@ -245,7 +312,7 @@ describe("Publish (A7)", () => {
     resolveLatestWayflowGateTaskId.mockResolvedValue(null);
     expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: false });
     expect(decisions.decide).not.toHaveBeenCalled();
-    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"]]);
     expect(sendWayflowResume).not.toHaveBeenCalled();
   });
 
