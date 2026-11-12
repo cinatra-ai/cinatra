@@ -13,8 +13,11 @@
 // per palette, as specs/app-components.html section "Table" draws it:
 // "[&_tr:nth-child(even)]:bg-surface-muted" for the light palette and
 // "dark:[&_tr:nth-child(even)]:bg-surface" for the dark one. The band lies
-// over the table frame's own ground, `bg-background`
-// (src/components/ui/paginated-table.tsx). No page overrides it.
+// over the page ground, `bg-background`: PaginatedTable's frame lays it
+// (src/components/ui/paginated-table.tsx) and, in the dark palette, the
+// `Table` primitive lays it under its own rows, so a table mounted directly on
+// a --surface card keeps its band (table-flat-band-4286.test.tsx section 3
+// reads those mounts). No page overrides it.
 //
 // THE ORIGINAL DEFECT (cinatra#3552). The band used to be one utility,
 // `bg-stripe-light/50`, and `--stripe-light` was declared for the LIGHT
@@ -269,6 +272,32 @@ function bandUtilities(className: string): Record<Palette, Utility> {
   };
 }
 
+/** The band utility the cascade applies to an even row of `palette`: in the
+ *  dark palette the dark-qualified carrier when the list carries one, else the
+ *  plain one, which then reaches the dark rows as well; in the light palette
+ *  the plain one. Unlike `bandUtilities` it demands no particular shape of the
+ *  class list, so a case that reads the painted band through it fails for its
+ *  own invariant (the colour, the contrast), not because a carrier is
+ *  missing. */
+function cascadeBand(className: string, palette: Palette): Utility {
+  const carriers = className
+    .split(/\s+/)
+    .filter((c) => c.includes("nth-child(even)") && /(?:^|:)bg-/.test(c));
+  const plain = carriers.filter((c) => c.startsWith(BAND_VARIANT));
+  const dark = carriers.filter((c) => c.startsWith(DARK_PREFIX + BAND_VARIANT));
+  const useDark = palette === "dark" && dark.length > 0;
+  const pick = useDark ? dark : plain;
+  const prefix = useDark ? DARK_PREFIX + BAND_VARIANT : BAND_VARIANT;
+  expect(
+    pick.length,
+    `expected exactly one alternate-row background utility reaching the ${palette} rows in: ${className}`,
+  ).toBe(1);
+  const rest = pick[0]!.slice(prefix.length);
+  expect(rest.startsWith("bg-"), `not a background utility: ${pick[0]}`).toBe(true);
+  const [name, mod] = rest.slice("bg-".length).split("/");
+  return { token: name!, alpha: mod === undefined ? null : Number(mod) };
+}
+
 /** The table body the product paints, mounted from the primitive itself so the
  *  class this file reads is the class the Skills directory renders. */
 function tableBody(): HTMLElement {
@@ -290,13 +319,12 @@ function tableBody(): HTMLElement {
 }
 
 /** The band as a person sees it: the palette's token at its opacity (a flat
- *  band carries none), composited over the table frame's own ground
- *  (`bg-background`, paginated-table.tsx). */
+ *  band carries none), composited over the page ground (`bg-background`). */
 function paintedBand(
   palette: Palette,
   sheet: Sheet = "host",
 ): { band: Rgba; ground: Rgba; util: Utility } {
-  const util = bandUtilities(tableBody().className)[palette];
+  const util = cascadeBand(tableBody().className, palette);
   const tokens = SHEETS[sheet].palette[palette];
   const ground = colour(resolve(tokens, "--background", sheet));
   const ink = {
@@ -342,6 +370,20 @@ describe("the alternate-row band in the DARK palette", () => {
       inTokens,
       "the host layer and the portable layer must carry the SAME declaration text",
     ).toBe(inGlobals);
+  });
+
+  it("keeps the dark stripe value DARK in both token layers, never a light literal", () => {
+    // Identical declaration text (the case above) is not enough: both layers
+    // could carry the same light literal. A placeholder in the dark palette
+    // stays at or below the palette's own --surface-muted step.
+    for (const sheet of ["host", "portable"] as const) {
+      const tokens = SHEETS[sheet].palette.dark;
+      const stripe = relativeLuminance(colour(resolve(tokens, "--stripe-light", sheet)));
+      const surfaceMuted = relativeLuminance(colour(resolve(tokens, "--surface-muted", sheet)));
+      expect(stripe, `${sheet}: the dark --stripe-light is a light value`).toBeLessThanOrEqual(
+        surfaceMuted,
+      );
+    }
   });
 
   it("draws a DARK band: below the palette's own --surface-muted step and above the un-banded ground", () => {
@@ -492,6 +534,15 @@ describe("the reading itself", () => {
 
   it("refuses a class list with no dark band, which is the shape of the defect", () => {
     expect(() => bandUtilities(`${BAND_VARIANT}bg-stripe-light/50`)).toThrow();
+  });
+
+  it("reads the band the cascade applies: the plain carrier reaches the dark rows when no dark one exists", () => {
+    const single = `${BAND_VARIANT}bg-stripe-light/50`;
+    expect(cascadeBand(single, "dark")).toEqual({ token: "stripe-light", alpha: 50 });
+    const pair = `${BAND_VARIANT}bg-surface-muted ${DARK_PREFIX}${BAND_VARIANT}bg-surface`;
+    expect(cascadeBand(pair, "dark")).toEqual({ token: "surface", alpha: null });
+    expect(cascadeBand(pair, "light")).toEqual({ token: "surface-muted", alpha: null });
+    expect(() => cascadeBand("[&_tr:last-child]:border-0", "light")).toThrow();
   });
 
   it("refuses a band utility qualified by anything but the dark variant", () => {

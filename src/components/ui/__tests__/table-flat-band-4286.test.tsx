@@ -43,6 +43,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 import { compileAst } from "tailwindcss";
 
+import { PaginatedTable } from "@/components/ui/paginated-table";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import {
   contrastRatio,
@@ -214,10 +215,16 @@ async function compileClass(cls: string): Promise<AstNode[]> {
  *  inside the dark palette. */
 type Paint = { property: string; value: string; selector: string; dark: boolean };
 
-/** Every background declaration the body's own utilities put on `row`. */
-async function rowPaints(body: HTMLElement, row: HTMLElement): Promise<Paint[]> {
+/** Every background declaration the own utilities of `carrier` put on
+ *  `target`. `carrierSelector` matches `carrier` alone; it stands in for the
+ *  class part of each emitted selector. */
+async function paintsOn(
+  carrier: HTMLElement,
+  carrierSelector: string,
+  target: HTMLElement,
+): Promise<Paint[]> {
   const out: Paint[] = [];
-  const inDark = row.closest(".dark") !== null;
+  const inDark = target.closest(".dark") !== null;
   function visit(nodes: AstNode[], parent: string, cls: string) {
     for (const node of nodes) {
       if (node.kind === "rule") {
@@ -227,7 +234,7 @@ async function rowPaints(body: HTMLElement, row: HTMLElement): Promise<Paint[]> 
           // `@layer properties` fallback, for one) reaches no row.
           const own = `.${cssEscape(cls)}`;
           if (!node.selector.startsWith(own)) continue;
-          selector = BODY_SELECTOR + node.selector.slice(own.length);
+          selector = carrierSelector + node.selector.slice(own.length);
         } else {
           selector = node.selector.replaceAll("&", parent);
         }
@@ -239,7 +246,7 @@ async function rowPaints(body: HTMLElement, row: HTMLElement): Promise<Paint[]> 
         const dark = parent.includes(DARK_QUALIFIER);
         const selector = parent.split(DARK_QUALIFIER).join("");
         if (dark && !inDark) continue;
-        if (!row.matches(selector)) continue;
+        if (!target.matches(selector)) continue;
         out.push({ property: node.property, value: node.value, selector, dark });
       } else if ("nodes" in node && Array.isArray(node.nodes)) {
         // `@layer`, `@property` and Tailwind's context wrappers.
@@ -247,8 +254,40 @@ async function rowPaints(body: HTMLElement, row: HTMLElement): Promise<Paint[]> 
       }
     }
   }
-  for (const cls of body.classList) visit(await compileClass(cls), "", cls);
+  for (const cls of carrier.classList) visit(await compileClass(cls), "", cls);
   return out;
+}
+
+/** Every background declaration the body's own utilities put on `row`. */
+function rowPaints(body: HTMLElement, row: HTMLElement): Promise<Paint[]> {
+  return paintsOn(body, BODY_SELECTOR, row);
+}
+
+const GROUND_PROBE = "data-ground-probe";
+
+/** The ground under `el`: the token of the nearest ancestor whose own
+ *  utilities paint a background colour on that ancestor itself (inside the
+ *  dark palette a dark-qualified paint wins, as it does in the cascade), else
+ *  the page `--background` that the application shell lays. */
+async function groundOf(el: HTMLElement): Promise<{ token: string; from: string }> {
+  for (let a = el.parentElement; a !== null; a = a.parentElement) {
+    if (a.classList.length === 0) continue;
+    a.setAttribute(GROUND_PROBE, "");
+    let paints: Paint[];
+    try {
+      paints = await paintsOn(a, `[${GROUND_PROBE}]`, a);
+    } finally {
+      a.removeAttribute(GROUND_PROBE);
+    }
+    const colours = paints.filter((p) => p.property === "background-color");
+    if (colours.length === 0) continue;
+    const dark = colours.filter((p) => p.dark);
+    const winners = dark.length > 0 ? dark : colours;
+    const from = a.getAttribute("data-slot") ?? a.className;
+    expect(winners, `exactly one ground colour on ${from}`).toHaveLength(1);
+    return { token: tokenOf(winners[0]!.value), from };
+  }
+  return { token: "--background", from: "page" };
 }
 
 /** The table the product paints, mounted from the primitive itself, inside a
@@ -294,7 +333,16 @@ function tokenOf(value: string): string {
  *  adds specificity; the case below proves that shape. */
 async function band(palette: Palette): Promise<{ token: string; paints: Paint[] }> {
   const { body, rows } = renderBody(palette);
-  const paints = await rowPaints(body, rows[1]!);
+  return bandOn(body, rows[1]!, palette);
+}
+
+/** The band that wins on one even row of a rendered body. */
+async function bandOn(
+  body: HTMLElement,
+  row: HTMLElement,
+  palette: Palette,
+): Promise<{ token: string; paints: Paint[] }> {
+  const paints = await rowPaints(body, row);
   const winners = paints.filter((p) => p.dark === (palette === "dark"));
   expect(winners, `exactly one ${palette} band reaches the even row`).toHaveLength(1);
   expect(winners[0]!.property).toBe("background-color");
@@ -404,7 +452,74 @@ describe("the band's colour in each palette", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 3. THE READING ITSELF.
+// 3. THE BAND STAYS ONE STEP OFF THE GROUND IT LIES ON, ON EVERY MOUNT.
+// ---------------------------------------------------------------------------
+// The odd rows carry no ground, so they show what lies under the table. The
+// shared primitive is mounted three ways: directly on the page, directly on a
+// --surface card ("Recent sandbox activity",
+// src/app/configuration/execution/page.tsx, card `bg-surface`; the webhooks
+// table's wrapper is the same), and inside PaginatedTable, whose frame lays
+// `bg-background`. In the dark palette the band IS --surface, so on a --surface
+// card the band would vanish (1:1) unless the table itself lays the page
+// ground under its rows, as the drawing does ("band --surface on
+// --background").
+type Mount = "page" | "surface card" | "PaginatedTable";
+const MOUNTS: readonly Mount[] = ["page", "surface card", "PaginatedTable"];
+
+function renderMount(palette: Palette, mount: Mount): { body: HTMLElement; rows: HTMLElement[] } {
+  const body = (
+    <TableBody>
+      {["Outreach", "Digest", "Follow-up", "Weekly report"].map((name) => (
+        <TableRow key={name}>
+          <TableCell>{name}</TableCell>
+        </TableRow>
+      ))}
+    </TableBody>
+  );
+  const table =
+    mount === "PaginatedTable" ? (
+      <PaginatedTable>{body}</PaginatedTable>
+    ) : mount === "surface card" ? (
+      <div className="bg-surface">
+        <Table>{body}</Table>
+      </div>
+    ) : (
+      <Table>{body}</Table>
+    );
+  const { container } = render(
+    palette === "dark" ? <div className="dark">{table}</div> : <div className="cinatra">{table}</div>,
+  );
+  const tbody = container.querySelector<HTMLElement>(BODY_SELECTOR);
+  expect(tbody, "the table body renders").not.toBeNull();
+  const rows = [...tbody!.querySelectorAll<HTMLElement>('[data-slot="table-row"]')];
+  expect(rows).toHaveLength(4);
+  return { body: tbody!, rows };
+}
+
+describe("the band stays distinguishable from the ground under the table", () => {
+  for (const layer of ["host", "portable"] as const) {
+    for (const palette of ["light", "dark"] as const) {
+      for (const mount of MOUNTS) {
+        it(`${layer} ${palette}, ${mount}: the even rows sit one step off the odd rows' ground`, async () => {
+          const { body, rows } = renderMount(palette, mount);
+          const { token } = await bandOn(body, rows[1]!, palette);
+          expect(await rowPaints(body, rows[0]!)).toEqual([]);
+          const ground = await groundOf(rows[0]!);
+          const b = relativeLuminance(colour(tokenIn(layer, palette, token)));
+          const g = relativeLuminance(colour(tokenIn(layer, palette, ground.token)));
+          if (palette === "light") {
+            expect(b, `light band ${token} on ${ground.token} (${ground.from})`).toBeLessThan(g);
+          } else {
+            expect(b, `dark band ${token} on ${ground.token} (${ground.from})`).toBeGreaterThan(g);
+          }
+        });
+      }
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 4. THE READING ITSELF.
 // ---------------------------------------------------------------------------
 describe("the reading", () => {
   it("reads the shipped dark variant as a selector qualifier", () => {
@@ -450,6 +565,37 @@ describe("the reading", () => {
     const paints = await rowPaints(dark.body, dark.rows[1]!);
     expect(paints.map((p) => [p.property, p.dark])).toEqual([["background-color", true]]);
     expect(tokenOf(paints[0]!.value)).toBe("--surface");
+  });
+
+  it("reads the ground from the nearest painted ancestor, dark-qualified first", async () => {
+    const make = (dark: boolean) => {
+      const tree = (
+        <div className="bg-surface">
+          <table className="bg-surface-muted dark:bg-background">
+            <tbody data-slot="table-body">
+              <tr data-slot="table-row" />
+            </tbody>
+          </table>
+        </div>
+      );
+      const { container } = render(dark ? <div className="dark">{tree}</div> : tree);
+      return container.querySelector<HTMLElement>("tr")!;
+    };
+    expect((await groundOf(make(false))).token).toBe("--surface-muted");
+    cleanup();
+    expect((await groundOf(make(true))).token).toBe("--background");
+    cleanup();
+    const { container } = render(
+      <table>
+        <tbody data-slot="table-body">
+          <tr data-slot="table-row" />
+        </tbody>
+      </table>,
+    );
+    expect(await groundOf(container.querySelector<HTMLElement>("tr")!)).toEqual({
+      token: "--background",
+      from: "page",
+    });
   });
 
   it("reports a token a palette block leaves undeclared as the :root fallback", () => {
