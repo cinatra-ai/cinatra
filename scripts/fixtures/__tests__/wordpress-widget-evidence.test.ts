@@ -22,7 +22,7 @@ for (const existingSession of [true, false]) {
       } else if (req.url === "/widget") {
         res.end(existingSession ? active : '<div data-embed-state="signin"><button data-embed-signin onclick="window.open(\'/popup\')">Sign in</button></div>');
       } else if (req.url === "/popup") {
-        res.end(`<script>setTimeout(() => { window.opener.document.body.innerHTML = ${JSON.stringify(active)}; window.close(); }, 200);</script>`);
+        res.end(`<template id="active">${active}</template><script>setTimeout(() => { window.opener.document.body.innerHTML = document.getElementById("active").innerHTML; window.close(); }, 200);</script>`);
       } else {
         res.writeHead(404).end();
       }
