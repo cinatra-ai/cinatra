@@ -31,12 +31,12 @@ through one of the **enumerated emitters**. The set is closed
 | `object_cms_snapshot_capture` | No write path. The CMS content-snapshot capture that wrote it left the application (#3862); the emitter stays in the enumeration and in the database constraint. |
 
 An event row naming any other emitter is rejected at the contract boundary
-(`validateProducedEvent`). Adding a fourth write path means adding it to that
+(`validateProducedEvent`). Adding a write path means adding it to that
 enumeration — not inventing a private review hook.
 
 ### The produced event
 
-Each emitter writes one `artifact_produced_outbox` row **in the same transaction
+Each emitter with a write path writes one `artifact_produced_outbox` row **in the same transaction
 as the artifact/representation write**, so the event and the artifact commit or
 roll back together. The row's primary key is deterministic —
 `sha256(artifactId ␀ representationRevisionId ␀ eventKind)` — and the insert is
@@ -55,12 +55,12 @@ Three axes on the row decide everything downstream:
 - **`destination_class`** — `none`, `external_publish`, `visibility_promotion`
   or `pipeline_handoff`. The last three are the **external-effect** classes.
   `createSemanticArtifact` emits `none` (a plain durable local write has no
-  external effect at creation time); a captured CMS snapshot emits
-  `external_publish`, because it is a proposed remote apply.
+  external effect at creation time); a captured CMS snapshot emitted
+  `external_publish`, because it was a proposed remote apply.
 - **`continuation_mode`** — `async_effects_gated` (the run never pauses
   retroactively; the artifact's downstream effect is held until the decision) or
   `checkpointed` (the run evaluates policy, then parks; the park is released by
-  the decision or by its deadline). All three emitters emit
+  the decision or by its deadline). Both emitters with a write path emit
   `async_effects_gated`, which is the standard mode; `checkpointed` is the
   alternative the event and orchestration contracts carry.
 

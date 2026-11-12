@@ -205,11 +205,12 @@ function registerCmsContentSnapshotObjectType(): void {
     category: "report",
     // The identity row's data is the capture's own envelope (pointer, capturedAt,
     // scope manifest, representation binding); the reviewed BYTES live in the
-    // representation, not here. Permissive by design — the capture writer is the
-    // schema authority and a stricter shape here could only reject its own rows.
+    // representation, not here. Permissive by design — the capture writer was the
+    // schema authority (it left with cinatra#3862) and a stricter shape here could
+    // only reject the rows it wrote.
     schema: z.object({}).passthrough(),
     lifecycle: {
-      // Capture is driven by the connector staged-write adapter on an agent run.
+      // Capture was driven by the connector staged-write adapter on an agent run.
       sources: ["agent"],
       // A captured snapshot is IMMUTABLE — the review decision binds to it.
       mutableBy: [],
@@ -246,7 +247,8 @@ function registerCmsContentSnapshotObjectType(): void {
       mutability: "record",
     },
     crudPolicy: {
-      // Never auto-mapped: a snapshot is minted only by the capture transaction.
+      // Never auto-mapped: no objects write mints a snapshot. The capture
+      // transaction that minted them left the application (cinatra#3862).
       onMatch: "skip",
       onNoMatch: "hitl",
       requiredFields: [],

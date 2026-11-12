@@ -671,8 +671,8 @@ export async function readRevisionGateSatisfaction(input: {
 // THE BORDER THIS CROSSES, NAMED. The artifact-identity road is the HOST's (the
 // core/extension border: the host owns the review floor, the gates, the change
 // road and the display map). This writer is a host writer beside
-// `createSemanticArtifact` and the two CMS capture writers, in the host's own
-// `src/lib/artifacts` tree. It adds no package-name branch and knows nothing
+// `createSemanticArtifact` and the CMS preview-capture store, in the host's
+// own `src/lib/artifacts` tree. It adds no package-name branch and knows nothing
 // about which extension defines the type it appends to — it reads the type off
 // the row it appends to and writes nothing about identity at all.
 //
