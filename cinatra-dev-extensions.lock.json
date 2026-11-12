@@ -170,7 +170,7 @@
     {
       "packageName": "@cinatra-ai/drupal-artifacts",
       "repo": "cinatra-ai/drupal-artifacts",
-      "resolvedSha": "310d0f8cc3f5b42598c8506bd31771001332d4ce"
+      "resolvedSha": "dd1bbfa0e939ee176f6d01b4173056ca95f6b77a"
     },
     {
       "packageName": "@cinatra-ai/drupal-assistant-connector",
