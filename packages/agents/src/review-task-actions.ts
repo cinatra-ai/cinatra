@@ -1127,8 +1127,9 @@ export async function approveReviewTaskInternal(
       // credential of this run that is never sent (the credential set is additive
       // by design, run-token-store.ts).
       // The preparation draws the message id too: past the fence a failure counts
-      // as possibly sent, so nothing that can fail before the send may wait there
-      // to be drawn (cinatra#4245).
+      // as possibly sent (except the answered-gate record below, whose failure is
+      // known to come before any send and puts the gate back), so nothing that
+      // can fail before the send may wait there to be drawn (cinatra#4245).
       const prepared = await prepareWayflowResume(run.id, wayflowUrl);
       // THE FENCE: a stop or a lease takeover since the claim loses here, and
       // nothing is sent.
@@ -1327,7 +1328,8 @@ export type PreparedWayflowResume = {
  * The preparation of the shared WayFlow resume (cinatra#4150): the client, this leg's per-run credential (#1193: it
  * rides in the message METADATA, because the text reaches the gate's InputMessageNode verbatim) and the message id.
  * The caller runs it under its pause claim and BEFORE its fence (cinatra#4245): a failure here gives the claim back,
- * while past the fence every failure counts as possibly sent. A claimer that then loses its fence leaves one more
+ * while past the fence a failure of the send counts as possibly sent (a caller's own step between its fence and the send
+ * that is known to fail before any send, such as Continue's answered-gate record, puts the gate back instead). A claimer that then loses its fence leaves one more
  * credential of this run that is never sent (the credential set is additive by design, run-token-store.ts).
  */
 export async function prepareWayflowResume(runId: string, agentUrl: string): Promise<PreparedWayflowResume> {

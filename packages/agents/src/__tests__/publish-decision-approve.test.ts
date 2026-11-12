@@ -135,6 +135,11 @@ describe("Publish (A7)", () => {
     expect((args.text as string).length).toBeGreaterThan(0);
     expect((args.run as { id: string }).id).toBe("run-1");
     expect(args.authority.orgId).toBe("org-1");
+    // Every step of the order is called exactly once, so no entry below is an undefined that sorts last.
+    expect(claims.settlePauseSend).toHaveBeenCalledTimes(1);
+    expect(resolveLatestWayflowGateTaskId).toHaveBeenCalledTimes(1);
+    expect(prepareWayflowResume).toHaveBeenCalledTimes(1);
+    expect(storeMock.transitionRunStatus).toHaveBeenCalledTimes(1);
     const order = [
       claims.claimPause.mock.invocationCallOrder[0]!,
       resolveLatestWayflowGateTaskId.mock.invocationCallOrder[0]!,

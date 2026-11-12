@@ -327,9 +327,11 @@ const PUBLISH_RESUME_TEXT = "[Publish approved]";
  * under the claim) and ONE message sent into the held context. A run at another gate, or whose gate cannot be read,
  * gives the claim back and resumes nothing. A late answer is publish_decision_not_open with the current status. A resume
  * that fails before its fence gives the claim back; a fence lost to a stop or to another claimer sends nothing; after the
- * fence the run stays where the send left it and the send's lease is settled. Its fault is publish_resume_failed, with a
- * fixed text. When the give-back faults, the run ends failed (terminal, so no released decision waits on a run no road
- * can claim); when that write faults too, the fault surfaces as publish_decision_unavailable. A fault of a read of the authority check or of the install-scope
+ * fence the run stays where the send left it and the send's lease is settled (when that settle write fails, it is logged
+ * and the lease stays until it expires). Its fault is publish_resume_failed, with a fixed text. When the give-back faults,
+ * the run is moved pending_approval -> failed (terminal, so no released decision waits on a run no road can claim); that
+ * move lands only while the run is still pending_approval, so a stop that landed first leaves the run stopped. When that
+ * write faults too, the fault surfaces as publish_decision_unavailable. A fault of a read of the authority check or of the install-scope
  * check surfaces as publish_decision_unavailable with a fixed text, as in Do not publish; access and store refusals
  * pass, and a scope refusal is answered as before.
  */
