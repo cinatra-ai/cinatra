@@ -119,6 +119,7 @@ export default async function VendorSubmissionsPage() {
                       <SubmissionStatusPill
                         status={s.status}
                         promotionState={s.promotion_state}
+                        viewerMayDecide={false}
                         promotionError={s.promotion_error}
                       />
                     </TableCell>

@@ -28,10 +28,14 @@ import "server-only";
 // record exists the store stays the only road, and both path gates above apply
 // to the source directory exactly as they do to a store directory.
 //
+// A THIRD ROAD, again only where the store holds no record: the image's seed
+// copy of a bundled pack in the agent runtime mount (`seedCopyPackageRoot`).
+//
 // AN EXACT INSTALL (cinatra#4154): a load bound to an install id takes THAT
 // row's anchor only, never another install of the same name and version, holds
-// the same bindings, never takes the source-directory road, and reads the
-// anchor again just before the import. A load without a binding is unchanged.
+// the same bindings, never takes the source-directory road or the seed-copy
+// road (neither is bound to an install id), and reads the anchor again just
+// before the import. A load without a binding is unchanged.
 //
 // Nothing here names a package, a table, a type or a state.
 
@@ -50,17 +54,26 @@ export class ExtensionToolModuleRefusal extends Error {
   }
 }
 
+/**
+ * A package root whose REAL path the resolver has already checked: the loader
+ * binds the module to exactly this path and never resolves the root again.
+ */
+export type CheckedRealPackageRoot = { realRoot: string };
+
 /** Resolve the package root a (name, version) is materialized at, or null. */
 export type PinnedPackageRootResolver = (input: {
   packageName: string;
   packageVersion: string;
   /** The run's own organisation — the scope the trusted install row is read in. */
   orgId: string | null;
-  /** The exact install row (cinatra#4154): only its anchor counts, and no source-directory road. */
+  /**
+   * The exact install row (cinatra#4154): only its anchor counts, and neither
+   * the source-directory road nor the seed-copy road.
+   */
   installId?: string;
   /** With `installId`: the anchor digest the caller bound; another digest answers null. */
   installDigest?: string | null;
-}) => Promise<string | null>;
+}) => Promise<string | CheckedRealPackageRoot | null>;
 
 /** The anchor of one install row as the run's organisation reads it, or null. */
 export type InstallAnchorReader = (input: {
@@ -108,6 +121,9 @@ export function resolveDeclaredToolModulePath(
   return abs;
 }
 
+/** The source road read a package.json it could not read or parse: a refusal. */
+const SOURCE_READ_FAILED = Symbol("source-read-failed");
+
 /**
  * The package's own SOURCE DIRECTORY at the pinned version, as the GENERATED
  * static manifest records it — the second road, and it exists because on a
@@ -132,7 +148,7 @@ export function resolveDeclaredToolModulePath(
 const sourceDirPackageRoot = async (
   packageName: string,
   packageVersion: string,
-): Promise<string | null> => {
+): Promise<string | null | typeof SOURCE_READ_FAILED> => {
   const { isAppDevelopmentMode } = await import("@/lib/runtime-mode");
   if (!isAppDevelopmentMode()) return null;
   const { STATIC_EXTENSION_MANIFEST } = await import("@/lib/generated/extensions.server");
@@ -156,10 +172,73 @@ const sourceDirPackageRoot = async (
       version?: unknown;
     };
   } catch {
-    return null;
+    // A source package.json that cannot be read or parsed is a refusal, as on
+    // main: it never falls through to the seed copy below.
+    return SOURCE_READ_FAILED;
   }
   if (parsed.name !== packageName || parsed.version !== packageVersion) return null;
   return root;
+};
+
+/** The marker the image's seed writes into each seeded package folder. */
+const SEED_MARKER_FILENAME = ".cinatra-required-seed.json";
+/** The package-name allow-list the agent materializer applies (materialize-agent-package.ts). */
+const SEED_PACKAGE_NAME_RE = /^@([a-z0-9][a-z0-9-]*)\/([a-z0-9][a-z0-9-]*)$/;
+
+/**
+ * The image's SEED COPY of the package in the agent runtime mount
+ * (`<dataRoot>/.agent-mount/<scope>/<name>`) — the third road, and only where
+ * the store holds no record: a pack the image bundles reaches an instance as
+ * this copy and never as a store record.
+ *
+ * THE INSTALL ROW: of the package's live rows, the candidates are the image's
+ * own bundled row (platform-owned, no organisation, `bundled` source) and a
+ * row of the run's own organisation; a row of another organisation is never
+ * one. Exactly one candidate must exist, at the pinned version.
+ *
+ * THE COPY: its real path must be exactly its place in the mount (no link on
+ * the way out of it); the seed's own marker must name this scope and name;
+ * and its package.json must carry the pinned name and version. The marker the
+ * seed writes carries no version and no digest, so the version is read from
+ * the package.json beside it.
+ *
+ * CHECKED ONCE: the root is resolved to its real path once, every file is read
+ * under that real path, and the loader binds the module to that same path
+ * without resolving the root again.
+ */
+const seedCopyPackageRoot = async (
+  dataRoot: string,
+  packageName: string,
+  packageVersion: string,
+  orgId: string | null,
+): Promise<CheckedRealPackageRoot | null> => {
+  const match = SEED_PACKAGE_NAME_RE.exec(packageName);
+  if (!match) return null;
+  const [, scope, name] = match;
+  const { readInstalledExtensionsByPackageName } = await import("@cinatra-ai/extensions/canonical-store");
+  const candidates = (await readInstalledExtensionsByPackageName(packageName)).filter(
+    (row) =>
+      (row.status === "active" || row.status === "locked") &&
+      ((row.organizationId == null && row.ownerLevel === "platform" && row.source?.type === "bundled") ||
+        (orgId != null && row.organizationId === orgId)),
+  );
+  if (candidates.length !== 1 || candidates[0].version !== packageVersion) return null;
+  // AGENT_RUNTIME_MOUNT_DIRNAME (@cinatra-ai/agents/agent-runtime-mount).
+  const mount = path.join(dataRoot, ".agent-mount");
+  try {
+    const realRoot = await realpath(path.join(mount, scope, name));
+    if (realRoot !== path.join(await realpath(mount), scope, name)) return null;
+    const readJson = async (file: string) =>
+      JSON.parse(await readFile(path.join(realRoot, file), "utf8")) as Record<string, unknown> | null;
+    // The marker's shape is the one build-required-oas-seed.mjs writes.
+    const marker = await readJson(SEED_MARKER_FILENAME);
+    if (marker?.kind !== "required-oas-seed" || marker.vendor !== scope || marker.slug !== name) return null;
+    const parsed = await readJson("package.json");
+    if (parsed?.name !== packageName || parsed.version !== packageVersion) return null;
+    return { realRoot };
+  } catch {
+    return null;
+  }
 };
 
 /**
@@ -208,7 +287,12 @@ export const resolvePinnedPackageRoot: PinnedPackageRootResolver = async ({
   // no record for it at all — what a development installation always reads —
   // reaches the second road.
   if (records.length === 0) {
-    return installId !== undefined ? null : sourceDirPackageRoot(packageName, packageVersion);
+    // An install-bound load takes neither road below: the source directory and
+    // the seed copy each pick their own row, never the bound install id.
+    if (installId !== undefined) return null;
+    const source = await sourceDirPackageRoot(packageName, packageVersion);
+    if (source === SOURCE_READ_FAILED) return null;
+    return source ?? seedCopyPackageRoot(resolveExtensionDataRoot(), packageName, packageVersion, orgId);
   }
   if (!anchor) return null;
   if (installId !== undefined) {
@@ -267,23 +351,28 @@ export async function loadDeclaredToolModule(
   const resolveRoot = deps.resolvePackageRoot ?? resolvePinnedPackageRoot;
   const { install } = input;
   const where = { packageName: input.packageName, packageVersion: input.packageVersion, orgId: input.orgId };
-  let root: string | null;
+  let resolved: string | CheckedRealPackageRoot | null;
   try {
-    root = await resolveRoot(
+    resolved = await resolveRoot(
       install ? { ...where, installId: install.installId, installDigest: install.digest } : where,
     );
   } catch (e) {
     // On the exact-install road a throw is the stated refusal below, and its
     // text (a store path, an install id) never reaches the caller.
     if (install === undefined) throw e;
-    root = null;
+    resolved = null;
   }
-  if (root === null) {
+  if (resolved === null) {
     throw new ExtensionToolModuleRefusal(
       `extension_tool: the calling extension is not materialized at the pinned version, so the ` +
         `module it declares for \`${input.toolName}\` cannot be loaded`,
     );
   }
+  // A root the resolver already checked as a REAL path is used as it is and is
+  // never resolved again, so a link put in its place after the check cannot
+  // move the import: the module must then lie inside that checked path.
+  const checkedRealRoot = typeof resolved === "string" ? null : resolved.realRoot;
+  const root = checkedRealRoot ?? (resolved as string);
   const abs = resolveDeclaredToolModulePath(root, input.modulePath);
   if (abs === null) {
     throw new ExtensionToolModuleRefusal(
@@ -294,7 +383,7 @@ export async function loadDeclaredToolModule(
   let realAbs: string;
   let realRoot: string;
   try {
-    [realAbs, realRoot] = await Promise.all([realpath(abs), realpath(root)]);
+    [realAbs, realRoot] = await Promise.all([realpath(abs), checkedRealRoot ?? realpath(root)]);
   } catch {
     throw new ExtensionToolModuleRefusal(
       `extension_tool: the module declared for \`${input.toolName}\` does not exist in the ` +

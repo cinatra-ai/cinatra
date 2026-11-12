@@ -139,8 +139,9 @@ async function materialize(
     }),
   );
   if (!root.ok) return refuse("origin-unreadable");
-  const rootDir = root.value;
-  if (rootDir === null) return refuse(notMaterialized);
+  if (root.value === null) return refuse(notMaterialized);
+  // A root the resolver already checked as a real path is bound as that path.
+  const rootDir = typeof root.value === "string" ? root.value : root.value.realRoot;
   // The read and every field read of what it returns: a throw is `origin-unreadable`.
   const checked = await guarded("package-json", async (): Promise<InstallBindingOutcome<BoundInstall>> => {
     const manifest = await r.readPackageJson(rootDir);

@@ -6,36 +6,36 @@
       "id": "app",
       "file": "app.json",
       "source": "repo",
-      "manifestSha256": "32e9d03e579a238296df7319e1fa24306ac176b1404f398c98c1fea88f6d1162",
-      "specContentHash": "sha256:760599a032d86b6e7cfb2bd3a7d20f3735502ea1d05999bb9fce85beb2b9775d"
+      "manifestSha256": "51cbc2705d5fb9dbf78be1c1154379ade027afbd82f57c3009d62a481d1042ee",
+      "specContentHash": "sha256:f1bac576c8d361ea7cc5672a1576f16a1685e85fd2c0f507034e4d929750261d"
     },
     {
       "id": "app-components",
       "file": "app-components.json",
       "source": "published",
-      "manifestSha256": "9de4ae113d47599f8864a544c1835cb12aa57381a84d6899ea3b4d8a70ec05e8",
-      "specContentHash": "sha256:7aceaf73557962256eb36cc308e9f7a814bf4c5c2b7841c566ccc724b35dbc4a"
+      "manifestSha256": "c40f6f1fc2d1b1b2c22e5981e07d4ce2abc333255217252ba8f596dc7bae5d0c",
+      "specContentHash": "sha256:ecfd80f4a5cc04704fe588d6e056e5d37f94c73c3c210a959910fa3ce44fa041"
     },
     {
       "id": "app-extensions",
       "file": "app-extensions.json",
       "source": "published",
-      "manifestSha256": "b1f00ffcf9aed87793ed0d1ae7604a030d98a09e0c43db987356484e817533d0",
-      "specContentHash": "sha256:9c86b3006aa25dad2c255088c10f7e3f4d1dc387dd16a6dc40c8527e92235a1a"
+      "manifestSha256": "f0aa4b36d09ab7389826e841b3beed690af80709034aa41d1275af2c69ccb6d0",
+      "specContentHash": "sha256:e4de70d63291c5ce9586b8aa356a93446206c796eb3d8c3fda357ebe9cdaf065"
     },
     {
       "id": "app-connectors",
       "file": "app-connectors.json",
       "source": "published",
-      "manifestSha256": "2293c96c7b10363fcaf15549fd2690ad52b9b0ba4794d1679b1c8f0a150211b4",
-      "specContentHash": "sha256:be15e54fb6267260cdd6b196ff77bab8a6f8a6c76e0758a5528e920121a7b576"
+      "manifestSha256": "942646c219f80cfe363d93aef6868abe6d31c24eaf51f98cb0c9b6947c1bc496",
+      "specContentHash": "sha256:b9ded2417776b9b54986b3759818583540e934d999db4a0855a285ffef404f46"
     },
     {
       "id": "app-notifications",
       "file": "app-notifications.json",
       "source": "repo",
-      "manifestSha256": "1538d3091aa1e752730d48d2123d4d58bc1a0d90e181bd4c746c44708ed44e11",
-      "specContentHash": "sha256:e27b22817cac8b427e150739674caa0fa4d96bb9fa46a7b846ff46261cb95790"
+      "manifestSha256": "c9eb7db8840ab84cb7032fadb73d4852d7e277f857b9857be2a20506c716be5f",
+      "specContentHash": "sha256:b9bc6af1b550bbf8b292a0aa32e59ffacb79b5bffd248b2a2047f061151eb08a"
     }
   ]
 }

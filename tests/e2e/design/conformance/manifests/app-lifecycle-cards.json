@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-lifecycle-cards.html",
-  "contentHash": "sha256:48b868de1d67def632f060c694d49f36caa683e941c3d6794d88de24c4e4996e",
+  "contentHash": "sha256:234c532f2301b049026211df7b548903bc7eff7b67837a018e18c4195246574c",
   "surfaces": [
     {
       "id": "chat-thread",
@@ -391,7 +391,9 @@
           "outcome": "continued"
         }
       ],
-      "states": []
+      "states": [
+        "empty"
+      ]
     },
     {
       "id": "hitl-screen-fields",
