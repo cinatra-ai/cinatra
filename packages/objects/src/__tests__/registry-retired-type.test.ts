@@ -1,6 +1,8 @@
 // The registry's RETIRED marker (cinatra#4366): a host type whose definer moved
-// stays registered so its stored rows resolve and fail closed, and is marked
-// retired so the write paths and the classifier can refuse it.
+// stays registered so its stored rows resolve and fail closed on writes, and is
+// marked retired so the write paths and the classifier can refuse it. Its
+// projection is `none` or `artifact-safe`; an artifact-safe tombstone keeps its
+// stored rows in the artifact library, read-only, as they were before the move.
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { z } from "zod";
@@ -12,7 +14,7 @@ import {
 } from "../registry";
 import type { ObjectTypeDefinition } from "../types";
 
-function def(type: string, projection: "none" | "artifact-safe" = "none"): ObjectTypeDefinition<unknown> {
+function def(type: string, projection: "none" | "artifact-safe" | "raw" = "none"): ObjectTypeDefinition<unknown> {
   return {
     type,
     category: "content",
@@ -37,12 +39,26 @@ describe("objectTypeRegistry retired marker", () => {
     expect(resolveTypeProjectionDisposition("@acme/old:thing")).toBe("none");
   });
 
-  it("refuses a retired registration that would project (a tombstone must fail closed)", () => {
-    expect(() => objectTypeRegistry.registerRetired(def("@acme/old:leaky", "artifact-safe"))).toThrow(
-      /projection "none"/,
+  it("registerRetired accepts an artifact-safe tombstone, whose stored rows stay admitted to the artifact library", () => {
+    objectTypeRegistry.registerRetired(def("@acme/old:listed", "artifact-safe"));
+    expect(objectTypeRegistry.resolve("@acme/old:listed")).not.toBeNull();
+    expect(objectTypeRegistry.definerOf("@acme/old:listed")).toBeNull();
+    expect(objectTypeRegistry.isRetired("@acme/old:listed")).toBe(true);
+    // The admission predicate of artifactObjectTypeIds() in
+    // src/lib/artifacts/artifact-service.ts: governed AND artifact-safe.
+    expect(isDispositionGovernedType("@acme/old:listed")).toBe(true);
+    expect(resolveTypeProjectionDisposition("@acme/old:listed")).toBe("artifact-safe");
+  });
+
+  it("refuses a retired registration with any projection other than none or artifact-safe", () => {
+    expect(() => objectTypeRegistry.registerRetired(def("@acme/old:raw", "raw"))).toThrow(
+      /projection "none" or "artifact-safe"/,
     );
-    expect(objectTypeRegistry.resolve("@acme/old:leaky")).toBeNull();
-    expect(objectTypeRegistry.isRetired("@acme/old:leaky")).toBe(false);
+    expect(objectTypeRegistry.resolve("@acme/old:raw")).toBeNull();
+    expect(objectTypeRegistry.isRetired("@acme/old:raw")).toBe(false);
+    const undeclared = { ...def("@acme/old:undeclared"), dispositions: undefined } as ObjectTypeDefinition<unknown>;
+    expect(() => objectTypeRegistry.registerRetired(undeclared)).toThrow(/projection "none" or "artifact-safe"/);
+    expect(objectTypeRegistry.resolve("@acme/old:undeclared")).toBeNull();
   });
 
   it("an ordinary registration is not retired, and a later host re-register clears the marker", () => {

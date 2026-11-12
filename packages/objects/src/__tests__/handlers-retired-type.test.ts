@@ -2,8 +2,9 @@
 //
 // The Drupal pack moved its pointer type into its own namespace, so the host's
 // former id `@cinatra-ai/drupal:node` has no definer any more. Its stored rows
-// stay registered as a host tombstone (projection none), and neither content
-// write path may reach them: `objects_save` refuses the retired type exactly as
+// stay registered as a host tombstone (projection artifact-safe, as before the
+// move, so they stay listed and open read-only), and neither content write path
+// may reach them: `objects_save` refuses the retired type exactly as
 // it refuses an unregistered one, and `objects_update` refuses any change to a
 // row of it before anything is written.
 

@@ -88,9 +88,10 @@ const INVENTORY: Record<string, Record<string, TypeDispositions>> = {
 const DRUPAL_PACK_DIR = "drupal-artifacts";
 const DRUPAL_POINTER_TYPE = "@cinatra-ai/drupal-artifacts:node-pointer";
 const DRUPAL_RETIRED_HOST_TYPE = "@cinatra-ai/drupal:node";
-// The retired id's tombstone: same flags as before, but never projected.
+// The retired id's tombstone: the same flags as before the move, projection
+// artifact-safe included, so its stored rows stay in the artifact library.
 const DRUPAL_RETIRED_DISPOSITIONS: TypeDispositions = {
-  projection: "none",
+  projection: "artifact-safe",
   pinnable: false,
   snapshotPolicy: "none",
   sensitivity: "normal",
@@ -150,17 +151,19 @@ describe("type-driven disposition inventory parity (epic #1785 merge gate)", () 
     }
   });
 
-  it("the host keeps the retired Drupal id as a read-only tombstone that fails closed", () => {
+  it("the host keeps the retired Drupal id as a read-only tombstone whose stored rows stay listed", () => {
     // registerAllObjectTypes ran in beforeAll; no pack is registered here.
-    // Stored rows of the retired id must stay governed: resolvable, never
-    // projected (projection none, so the projector skips them and a rebuild
-    // counts them as excluded), and marked retired so no write reaches them.
+    // Stored rows of the retired id must stay governed: resolvable, still
+    // admitted to the artifact library as before the move (governed and
+    // artifact-safe: the predicate of artifactObjectTypeIds() in
+    // src/lib/artifacts/artifact-service.ts), and marked retired so no write
+    // reaches them.
     const def = objectTypeRegistry.resolve(DRUPAL_RETIRED_HOST_TYPE);
     expect(def, "the retired id must stay resolvable").not.toBeNull();
     expect(objectTypeRegistry.definerOf(DRUPAL_RETIRED_HOST_TYPE)).toBeNull();
     expect(objectTypeRegistry.isRetired(DRUPAL_RETIRED_HOST_TYPE)).toBe(true);
     expect(isDispositionGovernedType(DRUPAL_RETIRED_HOST_TYPE)).toBe(true);
-    expect(resolveTypeProjectionDisposition(DRUPAL_RETIRED_HOST_TYPE)).toBe("none");
+    expect(resolveTypeProjectionDisposition(DRUPAL_RETIRED_HOST_TYPE)).toBe("artifact-safe");
     expect(def!.dispositions).toEqual(DRUPAL_RETIRED_DISPOSITIONS);
     // The former contract stays on the tombstone: content category, the
     // agent/import sources and the old pointer schema.
@@ -221,7 +224,7 @@ describe("type-driven disposition inventory parity (epic #1785 merge gate)", () 
       // The pack does not touch the retired id: it stays the host tombstone.
       expect(objectTypeRegistry.definerOf(DRUPAL_RETIRED_HOST_TYPE)).toBeNull();
       expect(objectTypeRegistry.isRetired(DRUPAL_RETIRED_HOST_TYPE)).toBe(true);
-      expect(resolveTypeProjectionDisposition(DRUPAL_RETIRED_HOST_TYPE)).toBe("none");
+      expect(resolveTypeProjectionDisposition(DRUPAL_RETIRED_HOST_TYPE)).toBe("artifact-safe");
     } finally {
       objectTypeRegistry.removeByPackage(pkg.name);
       semanticRendererRegistry.removeByPackage(pkg.name);
