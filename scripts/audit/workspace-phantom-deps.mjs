@@ -212,10 +212,12 @@ export function resolveSpecifierToPackage(spec) {
  * the third-party leg that already exempts it. A synced extension cannot
  * declare it: the extension kind gate and scripts/extensions/inventory.mjs
  * admit the specifier, never its base package, so a declared
- * `@cinatra-ai/sdk-dashboard` in any bucket is an SDK-only violation. The
- * match is on the RAW specifier, before the resolver collapses a subpath, so
- * the package root and every other subpath stay findings. A `packages/*`
- * member keeps the plain rule (it can declare the workspace package). */
+ * `@cinatra-ai/sdk-dashboard` in a production bucket (dependencies,
+ * peerDependencies, optionalDependencies; devDependencies are not read by
+ * those gates) is an SDK-only violation. The match is on the RAW
+ * specifier, before the resolver collapses a subpath, so the package root
+ * and every other subpath stay findings. A `packages/*` member keeps the
+ * plain rule (it can declare the workspace package). */
 export function extractInternalImports(source, internalNames, selfName, { hostServedExempt = false } = {}) {
   const found = new Set();
   const patterns = [

@@ -86,7 +86,8 @@ test("extractInternalImports does not flag a package's own name", () => {
 
 test("extractInternalImports exempts the EXACT host-served dashboard composition for a synced extension (cinatra#3092)", () => {
   // The kind gate admits the specifier, never its base package, so a synced
-  // extension cannot declare @cinatra-ai/sdk-dashboard in any bucket: an
+  // extension cannot declare @cinatra-ai/sdk-dashboard in a production bucket
+  // (dependencies, peerDependencies, optionalDependencies): an
   // undeclared import of EXACTLY the specifier is the designed state.
   const internal = new Set(["@cinatra-ai/sdk-dashboard"]);
   const src = `import { ReadOnlyComposedDashboard } from "${HOST_DASHBOARD_COMPOSITION_MODULE}";`;
