@@ -43,6 +43,7 @@ const {
 }));
 
 vi.mock("@cinatra-ai/agents", () => ({
+  publishCallAllowed: async () => true, // cinatra#4150: no publish decision holds this run
   readAgentRunById: readAgentRunByIdMock,
   readAgentTemplateById: readAgentTemplateByIdMock,
 }));
