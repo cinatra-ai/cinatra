@@ -659,6 +659,7 @@
     { "package": "@cinatra-ai/anthropic-connector" },
     { "package": "@cinatra-ai/audio-artifact" },
     { "package": "@cinatra-ai/binary-artifact" },
+    { "package": "@cinatra-ai/dashboard-artifact" },
     { "package": "@cinatra-ai/document-artifact" },
     { "package": "@cinatra-ai/image-artifact" },
     { "package": "@cinatra-ai/json-artifact" },
