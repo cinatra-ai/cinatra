@@ -540,6 +540,25 @@ export function mapInterruptToHitlContext(
 }
 
 /**
+ * The gate the person just answered, as ONE value: its renderer and its review
+ * task are written together, so no render can read the renderer of one submit
+ * beside the review task of another (cinatra#3080).
+ */
+export type JustSubmittedGate = { xRenderer: string; reviewTaskId: string | null };
+
+const NO_ANSWERED_REVIEW_TASKS: ReadonlySet<string> = new Set();
+
+/**
+ * A review task id that one run reuses for several gates in a row: the setup
+ * loop's `setup-<runId>` (one per run, every setup field) and a WayFlow task's
+ * `wayflow-<taskId>` (one per task, every gate of it). Such an id names no
+ * single gate, so it is never read as spent.
+ */
+function isSharedGateReviewTaskId(reviewTaskId: string): boolean {
+  return reviewTaskId.startsWith("setup-") || reviewTaskId.startsWith("wayflow-");
+}
+
+/**
  * Suppress re-showing the same HITL screen after Approve/Reject while the
  * server processes the resume — prevents the "Loading recipients" flash
  * caused by the poll returning pending_approval with the stale context
@@ -547,30 +566,44 @@ export function mapInterruptToHitlContext(
  * step's gate), the suppression must be cleared (`clearSuppression`
  * signals the caller to null its ref).
  *
- * AND WHEN THE SAME RENDERER ARRIVES WITH A NEW REVIEW TASK (cinatra#3080).
- * Two context slots in a row are two gates of one renderer: the answered
- * gate's review task names the stale one, and a gate with another review
- * task is the next question. Without this the open page hid the next gate
- * until a reload. A caller that passes no review task keeps the old reading.
+ * AND THE NEXT GATE OF THE SAME RENDERER IS DRAWN (cinatra#3080). Two context
+ * slots in a row are two gates of one renderer with two review tasks. The
+ * caller passes the answered gate as one pair and the review tasks answered on
+ * this mount. A review task in that set is spent: polls are not ordered, so a
+ * late one can still carry an older answered gate, and it is never drawn
+ * again, armed pair or not. A same-renderer gate whose review task is neither
+ * the armed one nor spent is the next question: it is drawn and the caller
+ * clears the pair. An empty review task, a shared one (`setup-<runId>`,
+ * `wayflow-<taskId>`) and a caller that passes only a renderer keep the old
+ * reading: suppressed while the renderer matches.
  */
 export function applyJustSubmittedSuppression(
   raw: HitlGateContext | null,
-  justSubmittedXRenderer: string | null,
-  justSubmittedReviewTaskId: string | null = null,
+  justSubmitted: JustSubmittedGate | string | null,
+  answeredReviewTaskIds: ReadonlySet<string> = NO_ANSWERED_REVIEW_TASKS,
 ): { context: HitlGateContext | null; clearSuppression: boolean } {
-  if (
-    raw !== null &&
-    justSubmittedXRenderer !== null &&
-    raw.xRenderer === justSubmittedXRenderer
-  ) {
-    if (justSubmittedReviewTaskId !== null && raw.reviewTaskId !== justSubmittedReviewTaskId) {
-      return { context: raw, clearSuppression: true };
-    }
+  if (raw === null) return { context: null, clearSuppression: false };
+  const rawTask = typeof raw.reviewTaskId === "string" ? raw.reviewTaskId : "";
+  const rawTaskNamesOneGate = rawTask !== "" && !isSharedGateReviewTaskId(rawTask);
+  if (rawTaskNamesOneGate && answeredReviewTaskIds.has(rawTask)) {
     return { context: null, clearSuppression: false };
   }
-  if (raw !== null && justSubmittedXRenderer !== null) {
+  const armed: JustSubmittedGate | null =
+    typeof justSubmitted === "string"
+      ? { xRenderer: justSubmitted, reviewTaskId: null }
+      : justSubmitted;
+  if (armed === null) return { context: raw, clearSuppression: false };
+  if (raw.xRenderer !== armed.xRenderer) {
     // Different step arrived — the caller should clear the suppression.
     return { context: raw, clearSuppression: true };
   }
-  return { context: raw, clearSuppression: false };
+  if (
+    rawTaskNamesOneGate &&
+    typeof armed.reviewTaskId === "string" &&
+    armed.reviewTaskId !== "" &&
+    rawTask !== armed.reviewTaskId
+  ) {
+    return { context: raw, clearSuppression: true };
+  }
+  return { context: null, clearSuppression: false };
 }

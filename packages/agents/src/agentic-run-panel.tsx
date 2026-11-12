@@ -88,6 +88,7 @@ import {
 } from "./hitl-gate-submit";
 import {
   applyJustSubmittedSuppression,
+  type JustSubmittedGate,
   mapInterruptToHitlContext,
   resolveRunSurfaceStatus,
   runSurfaceKeepsPolling,
@@ -709,7 +710,18 @@ export function AgenticRunPanel({
   // After clicking Approve/Reject, suppress re-showing the same HITL screen while the
   // server processes the resume. Prevents "Loading recipients" loop caused by the poll
   // returning pending_approval with the old context before the server advances the graph.
-  const justSubmittedXRendererRef = useRef<string | null>(null);
+  // The answered gate is held as ONE pair, renderer and review task, written
+  // together in one assignment (cinatra#3080): the suppression below reads
+  // only refs, so no render can see the renderer of one submit beside the
+  // review task of another.
+  const justSubmittedGateRef = useRef<JustSubmittedGate | null>(null);
+  // AND EVERY REVIEW TASK ANSWERED ON THIS MOUNT (cinatra#3080). Polls are not
+  // ordered, so a late one can still carry a gate answered earlier; a review
+  // task in this set is never drawn again. Added at the submit beside the
+  // pair, taken out where a refused or thrown submit releases the pair, and
+  // emptied by Re-check. Shared ids (`setup-<runId>`, `wayflow-<taskId>`) are
+  // ignored by the suppression, so they read as before.
+  const answeredReviewTaskIdsRef = useRef<Set<string>>(new Set());
   // AND THE GATE THE PERSON ANSWERED, BY ITS OWN REVIEW TASK (cinatra#3739).
   // Armed and released exactly where the suppression above is, but keyed on
   // the review task rather than the renderer, because a later setup field may
@@ -1097,15 +1109,16 @@ export function AgenticRunPanel({
   // processes the resume. Prevents "Loading recipients" flash caused by the poll
   // returning pending_approval with the stale context before the graph advances.
   // Clear suppression when a different xRenderer arrives (next step's HITL),
-  // or the same renderer with another review task (cinatra#3080: two context
-  // slots in a row). `answeredReviewTaskId` is armed and released with the ref.
+  // or the same renderer with a review task that is neither the answered one
+  // nor any other answered on this mount (cinatra#3080: two context slots in a
+  // row). Only the pair is cleared; the answered set stays.
   const suppression = applyJustSubmittedSuppression(
     rawEffectiveHitlContext,
-    justSubmittedXRendererRef.current,
-    answeredReviewTaskId,
+    justSubmittedGateRef.current,
+    answeredReviewTaskIdsRef.current,
   );
   if (suppression.clearSuppression) {
-    justSubmittedXRendererRef.current = null;
+    justSubmittedGateRef.current = null;
   }
   //
   // AND A PARKED RUN'S OLD INTERRUPT IS NOT A GATE (cinatra#3046). A run parked
@@ -1182,7 +1195,8 @@ export function AgenticRunPanel({
   // path (shared pure builders in ./hitl-gate-submit). The flags preserve each
   // path's historical behavior exactly:
   //   - trackApproving: drive the isApproving spinner state
-  //   - suppressGate: arm justSubmittedXRendererRef (stale-gate re-show guard)
+  //   - suppressGate: arm justSubmittedGateRef and the answered set (stale-gate
+  //     re-show guard)
   //   - clearAttachmentsOnSuccess: consume pendingAttachmentsRef ONLY on a
   //     true success (an "already resolved" race or a throw leaves them so
   //     the user can retry without re-attaching)
@@ -1205,7 +1219,11 @@ export function AgenticRunPanel({
     }) => {
       if (args.trackApproving) setIsApproving(true);
       if (args.suppressGate) {
-        justSubmittedXRendererRef.current = args.xRenderer;
+        justSubmittedGateRef.current = {
+          xRenderer: args.xRenderer,
+          reviewTaskId: args.reviewTaskId,
+        };
+        answeredReviewTaskIdsRef.current.add(args.reviewTaskId);
         setAnsweredReviewTaskId(args.reviewTaskId);
         setAnsweredQuestionShape(
           `${args.xRenderer}::${latestHitlContextRef.current?.fieldName ?? ""}`,
@@ -1225,7 +1243,8 @@ export function AgenticRunPanel({
           // submitError line. Nothing is submitted, so the suppression is
           // released and the surface draws the blocked state instead.
           if (args.suppressGate) {
-            justSubmittedXRendererRef.current = null;
+            justSubmittedGateRef.current = null;
+            answeredReviewTaskIdsRef.current.delete(args.reviewTaskId);
             setAnsweredReviewTaskId(null);
           }
           setGateBlocked(outcome.blocked);
@@ -1236,7 +1255,8 @@ export function AgenticRunPanel({
         const msg = err instanceof Error ? err.message : "unknown";
         if (!isAlreadyResolvedError(msg)) {
           if (args.suppressGate) {
-            justSubmittedXRendererRef.current = null;
+            justSubmittedGateRef.current = null;
+            answeredReviewTaskIdsRef.current.delete(args.reviewTaskId);
             setAnsweredReviewTaskId(null);
           }
           if (args.errorMode === "rethrow") throw err;
@@ -1774,7 +1794,8 @@ export function AgenticRunPanel({
   // clear itself on the next gate in that flow.
   const handleRecheckDerivedContext = useCallback(async () => {
     setIsRechecking(true);
-    justSubmittedXRendererRef.current = null;
+    justSubmittedGateRef.current = null;
+    answeredReviewTaskIdsRef.current.clear();
     try {
       await refetchDerivedContext();
     } finally {
@@ -2296,11 +2317,11 @@ export function AgenticRunPanel({
   // the road this placeholder is for: the row carries no interrupt at all,
   // because the person answered it and the run moved past it. The other is
   // `applyJustSubmittedSuppression`, which nulls a NON-null interrupt for as
-  // long as the just-submitted renderer and review task match (a gate of the
-  // same renderer with another review task is drawn, cinatra#3080) - and a
-  // run's sequential setup fields deliberately share one renderer and one
-  // review task. So the step AFTER a submitted one can be a real, live,
-  // unanswered question wearing a null context.
+  // long as the just-submitted renderer matches and the review task is not
+  // a new one (a same-renderer gate with a new, unanswered review task is
+  // drawn, cinatra#3080) - and a run's sequential setup fields deliberately
+  // share one renderer and one review task. So the step AFTER a submitted one
+  // can be a real, live, unanswered question wearing a null context.
   //
   // Drawing the quiet placeholder over that would hide a question the run is
   // waiting on, and hide with it the Re-check that is the one control which
