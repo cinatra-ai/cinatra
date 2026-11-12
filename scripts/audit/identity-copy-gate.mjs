@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// CI gate: cinatra is the open source AI workspace.
+// CI gate: Cinatra is The Open Source Agentic Teams Workspace.
 // A handful of identity surfaces (chat self-description, MCP server description,
 // Next.js metadata, top-level placeholders) must NOT narrowly frame the whole
 // platform as a GTM/sales/marketing tool. Individual GTM agents and artifact
@@ -63,6 +63,6 @@ for (const f of findings) {
 console.error("");
 console.error("These files describe the WHOLE platform's identity (chat self-description, MCP server description,");
 console.error("Next.js metadata, top-level placeholder). Individual GTM agents/artifacts are fine — the bug is");
-console.error("narrowing the entire platform to GTM. Rewrite to reflect that cinatra is the open source");
-console.error("AI workspace where GTM is one of many use cases.");
+console.error("narrowing the entire platform to GTM. Rewrite to reflect that Cinatra is The Open Source");
+console.error("Agentic Teams Workspace where GTM is one of many use cases.");
 process.exit(1);

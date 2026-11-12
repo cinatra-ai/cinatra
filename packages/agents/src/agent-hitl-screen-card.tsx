@@ -144,6 +144,7 @@ import {
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
   isSetupGateTaskId,
+  midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
   wrapPrimitiveSetupPayload,
@@ -869,7 +870,13 @@ export function AgentHitlScreenFields({
           }
           context={context}
           mode="edit"
-          hideSubmit={hideRendererSubmit === true}
+          // A boolean field on a mid-run gate is told the same (cinatra#4310):
+          // the card's own Continue beneath this region is that gate's one
+          // control. `data-send-affordance` above is unchanged by it.
+          hideSubmit={
+            hideRendererSubmit === true ||
+            midRunBooleanFieldHidesSubmit({ isMidRun, isGroupedSetup, fieldSchema: renderSchema })
+          }
           registerFlush={registerRendererFlush}
         />
       )}
