@@ -28,9 +28,9 @@
 // the site widget. §IX's rule is the epic's structural thesis, and this file is
 // the only place §VII is composed: the registry dispatches `verification_summary`
 // here, the run screen mounts it under `host="run_card"`, and the review page's
-// `VerificationView` mounts it under `host="page_gate_region"` — keeping only
-// the ONE adjunct that is genuinely the PAGE's (the pinned visual pair)
-// composed AROUND it. The "back to the review gate" link that used to sit
+// `VerificationView` mounts it under `host="page_gate_region"` and draws
+// nothing beside it (the pinned visual pair it once composed around the card
+// went with cinatra#3862 leg 8). The "back to the review gate" link that used to sit
 // beside it is gone (plan §8.3(5), §8.4; cinatra#2789): the drawn card has no
 // link and no buttons at all, so the reader reaches the gate the way they
 // reached this reading — the run's step rail, and the browser's own back. The

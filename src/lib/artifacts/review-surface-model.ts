@@ -31,7 +31,6 @@ import type {
   ReviewDisposition,
   SubmitDecisionResult,
 } from "@/lib/artifacts/artifact-review-decision";
-import type { PinnedCapturePairView } from "@/lib/artifacts/cms-preview-capture-view";
 import type { RecordChangesRequestedResult } from "@cinatra-ai/agents/lifecycle-review-changes-requested";
 
 // ---------------------------------------------------------------------------
@@ -424,9 +423,9 @@ export function reviewDecideDisabledReason(
  * loader could not answer until the LAST of them was — and the page could not
  * open a boundary around anything, because there was nothing left to wait for.
  * It now carries the target's identity (available the moment the gate's pinned
- * set is known) beside the promise of its display and the promise of its pinned
- * capture, in the gate's order, so the page puts each one under its own
- * boundary and a prepared target paints while its siblings are still resolving.
+ * set is known) beside the promise of its display, in the gate's order, so the
+ * page puts each one under its own boundary and a prepared target paints while
+ * its siblings are still resolving.
  *
  * The promises are started by the loader, after the preflight: nothing here can
  * begin a target read before the run access, the gate state and the pinned-set
@@ -437,13 +436,6 @@ export interface ReviewTargetStream {
   target: ArtifactReviewTarget;
   /** Its never-blank display, still being prepared. */
   prepared: Promise<PreparedReviewTarget>;
-  /** S6 (#2044 L-B + L-D) — its PINNED visual before/after pair: the live page
-   *  beside the proposal composed into that page's own adapter-marked regions,
-   *  captured at gate creation and read from the store (the surface never
-   *  fetches the remote site at view time, so an old gate keeps showing its
-   *  original pictures). Null for a target that has none — every other artifact
-   *  type — which renders nothing at all: the pictures are additive context. */
-  capturePair: Promise<PinnedCapturePairView | null>;
 }
 
 export type ReviewSurfaceModel =
@@ -499,7 +491,7 @@ export type ReviewSurfaceModel =
       runId: string;
       reviewTaskId: string;
       /** The gate's pinned set in gate order, each target carrying the promise
-       * of its own display and its own pinned capture (cinatra#3334). */
+       * of its own display (cinatra#3334). */
       targets: ReviewTargetStream[];
       /** The producing agent's one-line summary (§I/II) — rendered only when
        * present; absent for a gate whose producer supplied none. */

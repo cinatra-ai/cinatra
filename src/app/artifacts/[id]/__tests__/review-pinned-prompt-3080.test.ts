@@ -32,7 +32,6 @@ describe("approved app-artifact-review §VI pinned producer words", () => {
 vi.mock("@cinatra-ai/agents/artifact-review-gate-store", () => ({ enforceReviewRunAccess: db.access, readReviewGateState: db.gate, readGatePinnedTargets: vi.fn(), readReviewGate: vi.fn(), commitReviewDecision: vi.fn() }));
 vi.mock("@cinatra-ai/agents/lifecycle-review-changes-requested", () => ({ recordReviewSurfaceChangesRequested: vi.fn() }));
 vi.mock("@cinatra-ai/agents/lifecycle-repair-store", () => ({ readRepairBySuccessorGateId: vi.fn() }));
-vi.mock("@/lib/artifacts/cms-preview-capture-store", () => ({ readPinnedPreviewCaptures: vi.fn() }));
 vi.mock("@/app/artifacts/[id]/review-target-prepare", () => ({ bindArtifactReviewPorts: () => ({ readArtifact: db.artifact, revisionMember: db.member }), prepareArtifactReviewTargets: vi.fn() }));
 import { readReviewGateRecordedPrompt } from "../review-gate-ports";
 const actorCtx = { orgId: "org", actor: { actorType: "human" as const, source: "route" as const, userId: "reader" }, roleHints: { actorOrganizationId: "org" } };

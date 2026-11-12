@@ -27,19 +27,13 @@
 //
 // WHAT THIS FILE DRIVES: the panel's fallback argument and the view it now
 // builds, through the REAL mount — the floor node and its diagnostic composer
-// are the shipped ones and are not replaced. The pinned-capture pair is
-// replaced because it is additive context with its own suite, exactly as the
-// sibling overflow file replaces it. The mount is an async server component, so
-// the tree is rendered through the streaming server renderer, which resolves it.
+// are the shipped ones and are not replaced. The mount is an async server
+// component, so the tree is rendered through the streaming server renderer,
+// which resolves it.
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { renderToReadableStream } from "react-dom/server";
 import type { ReactElement } from "react";
-
-vi.mock(
-  "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-pinned-capture",
-  () => ({ ReviewPinnedCapture: () => null }),
-);
 
 import { resolveArtifactDisplayMount } from "@/app/artifacts/[id]/renderer-resolution";
 import { ReviewTargetPanel } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-target-panel";
@@ -110,7 +104,6 @@ async function panel(prepared: Prepared): Promise<Element> {
   const tree = ReviewTargetPanel({
     prepared,
     orgId: "org-1",
-    capturePair: null,
   }) as ReactElement;
   const stream = await renderToReadableStream(tree);
   document.body.innerHTML = await new Response(stream).text();

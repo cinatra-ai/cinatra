@@ -48,10 +48,7 @@ import {
   resolveAgentInstanceMetadata,
 } from "@/lib/agent-instance-tab-title";
 
-import {
-  loadPinnedCapturePair,
-  loadReviewGateSurface,
-} from "@/app/artifacts/[id]/review-gate-ports";
+import { loadReviewGateSurface } from "@/app/artifacts/[id]/review-gate-ports";
 import { firstPartyReviewSurfaceRoads } from "@/app/artifacts/[id]/review-surface-roads";
 import type {
   ReviewDisposition,
@@ -270,29 +267,13 @@ export default async function AgentRunReviewPage({
         </ReviewShell>
       );
     }
-    // The RECORD is still read here, but only for the page-only adjunct below:
-    // the pinned visual pair needs the reviewed target and the record's own
-    // out-of-scope paths, and both are server-side store reads. §VII's READING
-    // is no longer projected here at all — the card resolves it from its ref
-    // against the live reader (cinatra#2789, epic #2784 S9e), which is also
-    // where the ADVISORY COMMENTS now travel, so this branch no longer reads
-    // them either.
+    // The RECORD is read here only for whether the gate has a reading at all:
+    // without one the page draws the blocked panel. Section VII's READING is
+    // not projected here: the card resolves it from its ref against the live
+    // reader (cinatra#2789, epic #2784 S9e), which is also where the ADVISORY
+    // COMMENTS travel. No picture pair is read either: a pinned capture pair is
+    // not drawn anywhere (lifecycle cards, section III; cinatra#3862 leg 8).
     const record = await readVerificationRecordForGate(gate.id);
-    // S6 (#2044 L-D): the field diff's VISUAL counterpart — the reviewed proposal
-    // beside the page as it actually landed, with the read-back's own
-    // out-of-scope paths outlined on the applied side. A pure store read of the
-    // captures pinned against the record's REVIEWED target; nothing is fetched
-    // from the site here either. Absent for a non-CMS target (renders nothing).
-    const visualPair = record
-      ? loadPinnedCapturePair(
-          actorCtx.orgId,
-          record.reviewedTarget,
-          "verification",
-          record.fieldDiff
-            .filter((f) => !record.scopeManifest.paths.includes(f.field))
-            .map((f) => f.field),
-        )
-      : null;
     // The audit card's ref — the SAME gate-scoped ticket the run card and a chat
     // transcript address the card with (both kinds hang off the gate, so both
     // share one codec). Minted per request here because the page reaches the
@@ -301,7 +282,7 @@ export default async function AgentRunReviewPage({
     return (
       <ReviewShell crumbs={scopeCrumbs} runCrumb={runCrumb}>
         {record ? (
-          <VerificationView cardRef={verificationCardRef} visualPair={visualPair} />
+          <VerificationView cardRef={verificationCardRef} />
         ) : (
           <ReviewGateBlocked reason="no-longer-pending" />
         )}

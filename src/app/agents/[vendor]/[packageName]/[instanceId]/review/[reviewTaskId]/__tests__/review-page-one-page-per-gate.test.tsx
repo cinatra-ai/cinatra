@@ -32,7 +32,6 @@ const mocks = vi.hoisted(() => ({
   }),
   resolveReviewActorContext: vi.fn(),
   loadReviewGateSurface: vi.fn(),
-  loadPinnedCapturePair: vi.fn(() => null),
   readAgentRunById: vi.fn(async () => null),
   readAgentTemplateById: vi.fn(async () => null),
   buildRunStepperSteps: vi.fn(() => []),
@@ -68,7 +67,6 @@ vi.mock("next/navigation", () => ({
 }));
 vi.mock("@/app/artifacts/[id]/review-gate-ports", () => ({
   loadReviewGateSurface: mocks.loadReviewGateSurface,
-  loadPinnedCapturePair: mocks.loadPinnedCapturePair,
 }));
 vi.mock("@cinatra-ai/agents/store", () => ({
   readAgentRunById: mocks.readAgentRunById,

@@ -446,8 +446,10 @@ describe("§VII — one renderer, pinned on the drawing's own anchors", () => {
     for (const anchor of VERIFICATION_CORE_ANCHORS) {
       expect(src.includes(`data-verification-${anchor}`)).toBe(false);
     }
-    // The page-only ADJUNCT survives — deleting it was never the ask.
-    expect(src).toMatch(/<\s*ReviewPinnedCapture\b/);
+    // ...and draws no picture pair beside it: section VII draws none, and a pinned
+    // capture pair is not drawn anywhere (lifecycle cards, section III;
+    // cinatra#3862 leg 8).
+    expect(src).not.toMatch(/<\s*ReviewPinnedCapture\b/);
     // …but the "Back to the review gate" link does NOT: plan §8.3(5) and §8.4
     // say it exists only because the reading lived on its own page, so it goes
     // when the card lands (cinatra#2861). Pinned here as well as in the view's
@@ -468,8 +470,8 @@ describe("§VII — one renderer, pinned on the drawing's own anchors", () => {
 
   // Named explicitly, NOT via the loop above, so this mutation check survives
   // the anchor being dropped from the list again: the revision pins are §VII
-  // core (the page's own ruling now names exactly ONE adjunct, the pinned
-  // VISUAL pair), so a second module drawing them must fail R2.
+  // core (the page draws no adjunct beside the card any more), so a second
+  // module drawing them must fail R2.
   it("a second emitter of the REVISION PINS fails R2 — they are core, not an adjunct", () => {
     const hits = scanModule(
       "src/app/agents/[vendor]/[packageName]/[instanceId]/review/revision-pins.tsx",
@@ -477,13 +479,6 @@ describe("§VII — one renderer, pinned on the drawing's own anchors", () => {
     );
     expect(hits.map((h) => h.rule)).toContain("R2");
     expect(hits.map((h) => h.detail).join(" ")).toMatch(/page-direct-verification-composition/);
-  });
-
-  it("the pinned VISUAL pair is NOT an anchor — the page may keep its one adjunct", () => {
-    // The adjunct that stayed. It is not part of §VII's drawing, so composing
-    // it around the card must not read as a second renderer.
-    const hits = scanModule(VERIFICATION_VIEW, "return <ReviewPinnedCapture pair={pair} />;");
-    expect(hits).toEqual([]);
   });
 });
 

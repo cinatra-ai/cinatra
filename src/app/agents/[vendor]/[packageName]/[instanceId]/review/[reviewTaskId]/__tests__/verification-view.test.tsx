@@ -3,15 +3,17 @@
 // The review page's VERIFICATION region (cinatra#2789, epic #2784 S9e).
 //
 // The slice's claim is that the page and the transcript now draw ONE core, and
-// that the page kept only the adjuncts that are genuinely its own. Both halves
-// are checked here against a real render:
+// that the page draws nothing beside it. Both halves are checked here against a
+// real render:
 //
 //   · the page's region draws the SAME §VII core the card suite pins — same
 //     component, same anchors, same authorized reading — rather than a second
 //     composition that happens to look alike;
 //   · it declares `page_gate_region` as its host, so the fail-closed surface
 //     gate applies to this mount exactly as it does to a turn's;
-//   · the PAGE-ONLY adjunct survives the move: the pinned visual pair;
+//   - no picture pair is drawn beside the core: section VII draws none, and a pinned
+//     capture pair is not drawn anywhere (lifecycle cards, section III;
+//     cinatra#3862 leg 8);
 //   · the "Back to the review gate" link is GONE (plan §8.3(5), §8.4 — the link
 //     exists only because the reading lived on its own page, so it goes when
 //     the card lands, and this slice is named as what resolves it);
@@ -98,11 +100,9 @@ describe("the review page reuses the ONE §VII core", () => {
     expect(drifted.dataset.diffInScope).toBe("false");
   });
 
-  it("keeps its PAGE-ONLY adjunct composed around the core, and NO back link", async () => {
+  it("draws no picture pair beside the core, and NO back link", async () => {
     mockResolve({ state: "advisory" });
-    const { container } = render(
-      <VerificationView cardRef="ref-verification-1" visualPair={null} />,
-    );
+    const { container } = render(<VerificationView cardRef="ref-verification-1" />);
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="verification-card"]')).not.toBeNull(),
     );
@@ -115,6 +115,8 @@ describe("the review page reuses the ONE §VII core", () => {
     expect(container.querySelector("[data-verification-back-to-gate]")).toBeNull();
     expect(container.querySelector("a")).toBeNull();
     expect(container.textContent).not.toContain("Back to the review gate");
+    // No "Reviewed / applied" picture pair under the core (cinatra#3862 leg 8).
+    expect(container.querySelector("[data-capture-pair]")).toBeNull();
     // The region still identifies itself as the run surface's verification view.
     const region = container.querySelector<HTMLElement>('[data-surface="verification"]')!;
     expect(region).not.toBeNull();
