@@ -117,7 +117,7 @@ function declaresAgentDependency(cinatra: Record<string, unknown>): boolean {
   return Array.isArray(deps) && deps.some((d) => isPlainObject(d) && d.kind === "agent");
 }
 
-// ---- the definition and reference graph (spec v2.2 §2.3, §8.4) ----
+// ---- the definition and reference graph ----
 
 type Indexed = { obj: Record<string, unknown>; enclosing: Record<string, unknown> | null };
 type Graph = {
