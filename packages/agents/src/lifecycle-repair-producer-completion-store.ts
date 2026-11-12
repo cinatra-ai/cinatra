@@ -72,9 +72,9 @@ import {
 /** The CMS-snapshot capture emitter, the one emitter this drain does not claim.
  * Its rows were the answers the CMS bridge's retired completer matched on a
  * resource identity; this drain claims by run id only and keeps them out of that claim,
- * so a host capture is never re-filed as a run's answer. The literal mirrors the
- * host's `CMS_SNAPSHOT_EMITTER`: an agents-package leaf must not pull the host's
- * blob-store-backed capture writer into its graph for one string. */
+ * so a host capture is never re-filed as a run's answer. The host writer that
+ * emitted it left the application (cinatra#3862); its rows stay in the outbox,
+ * and the emitter stays in the closed enumeration. */
 const CMS_SNAPSHOT_EMITTER = "object_cms_snapshot_capture";
 
 /** How many candidate rows are read per unit of pass budget — the window that
