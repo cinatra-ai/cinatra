@@ -5,9 +5,10 @@
 //
 // It reads only the fields the projection names. It never reads or calls
 // `execute`, `resolveFiles`, `onRead` or any other function of a tool, and it
-// never reads an mcp tool's `headers` or `authorization`. The route that
-// assembles the tools and returns the report is a later change; it calls this
-// module and maps a ToolManifestError to `503 { "error": <code> }`.
+// never reads an mcp tool's `headers` or `authorization`. Nothing calls it
+// yet. The intended caller is a later route that assembles the tools,
+// returns the report and maps a ToolManifestError to
+// `503 { "error": <code> }`.
 
 import { createHmac, randomBytes } from "node:crypto";
 import type { LlmTool, LlmToolReference } from "@cinatra-ai/llm";
@@ -47,11 +48,26 @@ function orNull<T>(value: T | undefined): T | null {
   return value === undefined ? null : value;
 }
 
+const KNOWN_KINDS: ReadonlySet<string> = new Set([
+  "function",
+  "mcp",
+  "shell",
+  "web_search",
+  "container_skills",
+  "sandbox_execution",
+]);
+
+/** The kind of a tool; any kind section 5.2 does not list is assembly_failed. */
 function toolKind(tool: LlmTool): string {
   const type = (tool as { type?: unknown }).type;
   if (type === undefined || type === "function") return "function";
-  if (typeof type === "string") return type;
-  throw new ToolManifestError("assembly_failed", "a tool has a non-string type");
+  if (typeof type !== "string") {
+    throw new ToolManifestError("assembly_failed", "a tool has a non-string type");
+  }
+  if (!KNOWN_KINDS.has(type)) {
+    throw new ToolManifestError("assembly_failed", `unknown tool kind ${JSON.stringify(type)}`);
+  }
+  return type;
 }
 
 function projectStagedSkills(
@@ -166,7 +182,10 @@ function keyedHash(value: unknown, key: Buffer): string {
   return HASH_PREFIX + createHmac("sha256", key).update(text, "utf8").digest("hex");
 }
 
-/** A fresh hash key for one response. Never return, log or store it. */
+/**
+ * A fresh hash key for one response. The caller passes it to
+ * buildToolManifestReport and never puts it in a response, a log or a store.
+ */
 export function createToolManifestHashKey(): Buffer {
   return randomBytes(HASH_KEY_BYTES);
 }
@@ -175,7 +194,8 @@ export function createToolManifestHashKey(): Buffer {
  * The report of one road: each tool's reference and schema hash, in the
  * order of the assembled array, and the manifest hash over
  * `{ conversationOnly, tools }`. A conversation-only provider takes no tools,
- * so its list is empty.
+ * so its list is empty; the kind of every given tool is still checked first,
+ * so an unknown kind is assembly_failed on that road too.
  */
 export function buildToolManifestReport(input: {
   conversationOnly: boolean;
@@ -185,6 +205,7 @@ export function buildToolManifestReport(input: {
   if (input.key.length !== HASH_KEY_BYTES) {
     throw new ToolManifestError("assembly_failed", "the hash key is not 32 bytes");
   }
+  for (const tool of input.tools) toolKind(tool);
   const tools: ToolManifestEntry[] = input.conversationOnly
     ? []
     : input.tools.map((tool) => ({
