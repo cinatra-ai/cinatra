@@ -5,9 +5,15 @@
 // (`getLocalMcpServerUrl`). The chat and widget OBO mints take their audience
 // from `getPublicMcpServerUrl()` when an MCP public base URL is stored. The MCP
 // transport binds a delegated token to THIS request's own origin, exactly. So on
-// a boot with a stored public base URL every scripted call answered 401 at
-// `initialize`, the dispatcher threw, and the turn started no run and drew no
-// card.
+// a boot whose stored public base URL names another origin than the local one,
+// the scripted call answered 401 at `initialize`, the dispatcher threw, and the
+// turn started no run and drew no card.
+//
+// `fetch` sends the WHATWG canonical form of the URL it is given (lowercase
+// scheme and host, no explicit default port), and the transport derives its
+// expected audience from that request. So the token must name the canonical
+// URL too: a local base URL spelt `HTTP://LOCALHOST:3060` or
+// `http://localhost:80` must not bring the 401 back.
 //
 // The stub below answers the way the transport does: it derives the expected
 // audience and issuer from its OWN origin and runs the SHIPPED verifier over
@@ -18,8 +24,9 @@
 // ---------------------------------------------------------------------------
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
+const originalSecret = process.env.BETTER_AUTH_SECRET;
 process.env.BETTER_AUTH_SECRET ??= "test-secret-for-scripted-self-mcp-audience";
 
 const PUBLIC_MCP_URL = "https://pub.example/api/mcp";
@@ -163,9 +170,61 @@ const originalAuthUrl = process.env.BETTER_AUTH_URL;
 afterEach(async () => {
   await closeStub?.();
   closeStub = null;
+  vi.unstubAllGlobals();
   if (originalAuthUrl === undefined) delete process.env.BETTER_AUTH_URL;
   else process.env.BETTER_AUTH_URL = originalAuthUrl;
 });
+
+afterAll(() => {
+  // The fallback secret is this file's own; a later suite in the same process
+  // must see the secret exactly as the process had it.
+  if (originalSecret === undefined) delete process.env.BETTER_AUTH_SECRET;
+  else process.env.BETTER_AUTH_SECRET = originalSecret;
+});
+
+/**
+ * Replace `fetch` with a transport stand-in that sees what the real `fetch`
+ * puts on the wire: the WHATWG canonical form of the URL. It derives the
+ * expected audience and issuer from that canonical origin, runs the shipped
+ * verifier and answers 401 on a refusal. No socket is opened, so a URL with an
+ * explicit default port can be exercised.
+ */
+function stubCanonicalFetch(verify: Verify, toolText: string): { fetched: string[]; statuses: number[] } {
+  const fetched: string[] = [];
+  const statuses: number[] = [];
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    fetched.push(url.href);
+    const headers = new Headers(init?.headers);
+    const body = JSON.parse(String(init?.body ?? "{}")) as { id?: number; method?: string };
+    const actor = verify({
+      authHeader: headers.get("authorization"),
+      request: new Request(url.href, { method: "POST" }),
+      expectedAudience: `${url.origin}/api/mcp`,
+      expectedIssuer: `${url.origin}/api/auth`,
+    });
+    if (!actor) {
+      statuses.push(401);
+      return new Response(null, { status: 401 });
+    }
+    statuses.push(200);
+    const json = (payload: unknown) =>
+      new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "content-type": "application/json", "mcp-session-id": "session-1" },
+      });
+    if (body.method === "initialize") {
+      return json({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: {} },
+      });
+    }
+    if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
+    return json({ jsonrpc: "2.0", id: body.id, result: { content: [{ type: "text", text: toolText }] } });
+  });
+  return { fetched, statuses };
+}
 
 /** Start the stub and point the dispatcher's local MCP URL at it. */
 async function withStub(verify: Verify, toolText: string) {
@@ -263,4 +322,42 @@ describe("the scripted self-MCP dispatch with a stored MCP public base URL", () 
     expect(claimsOf(widget).aud).toBe(PUBLIC_MCP_URL);
     expect(claimsOf(widget).iss).toBe("https://pub.example/api/auth");
   });
+  // The local base URL in a spelling that `fetch` canonicalizes. The token must
+  // name the canonical URL the request actually reaches.
+  const SPELLINGS: { label: string; authUrl: string; wire: string }[] = [
+    { label: "uppercase scheme and host", authUrl: "HTTP://LOCALHOST:3060", wire: "http://localhost:3060/api/mcp" },
+    { label: "explicit default http port", authUrl: "http://localhost:80", wire: "http://localhost/api/mcp" },
+    { label: "explicit default https port", authUrl: "https://Local.Example:443", wire: "https://local.example/api/mcp" },
+  ];
+
+  for (const { label, authUrl, wire } of SPELLINGS) {
+    it(`CHAT, ${label}: agent_run resolves and the audience is the canonical URL`, async () => {
+      const wireLog = stubCanonicalFetch(verifyChatMcpActorToken, '{"runId":"run-2"}');
+      process.env.BETTER_AUTH_URL = authUrl;
+      const dispatch = createScriptedChatSelfMcpDispatch({
+        userId: "u-chat",
+        orgId: "org-chat",
+        platformRole: "member",
+      });
+      await expect(
+        dispatch({ name: "agent_run", args: { agent: "@cinatra-ai/blog-pipeline-agent" } }),
+      ).resolves.toBe('{"runId":"run-2"}');
+      expect(wireLog.statuses).toEqual([200, 200, 200]);
+      expect(wireLog.fetched).toEqual([wire, wire, wire]);
+    });
+
+    it(`WIDGET, ${label}: the dispatch resolves and the audience is the canonical URL`, async () => {
+      const wireLog = stubCanonicalFetch(verifyWidgetMcpActorToken, '{"refs":[]}');
+      process.env.BETTER_AUTH_URL = authUrl;
+      const dispatch = createScriptedSelfMcpDispatch({
+        widgetPrincipal: WIDGET_PRINCIPAL,
+        turnRunId: TURN_RUN_ID,
+      });
+      await expect(
+        dispatch({ name: "artifact_review_gates_list", args: {} }),
+      ).resolves.toBe('{"refs":[]}');
+      expect(wireLog.statuses).toEqual([200, 200, 200]);
+      expect(wireLog.fetched).toEqual([wire, wire, wire]);
+    });
+  }
 });
