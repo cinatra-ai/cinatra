@@ -484,6 +484,12 @@ export async function POST(req: Request): Promise<Response> {
       source: "a2a",
       orgId: actorContext.organizationId,
       platformRole: actorContext.platformRole,
+      // cinatra#4313: the run owner's org role, resolved by the run-derived
+      // builder for this same org, so the resource kernel decides with the
+      // authority the originating run had. Without it an org owner's run
+      // reads as a member and cannot update an organization-owned row (the
+      // publish write-back onto its post artifact through objects_update).
+      orgRole: actorContext.orgRole,
     };
   } catch (err) {
     // cinatra#4223: a fixed sentence for every error, never the exception's
