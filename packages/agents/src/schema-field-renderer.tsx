@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowRight, LinkIcon, MailIcon } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
@@ -23,7 +23,25 @@ import {
   type RendererMode,
 } from "./field-renderer-registry";
 import { resolveFieldLabel } from "./humanize-field-name";
-import { GateContinueHoldContext } from "./gate-continue-hold-context";
+
+/**
+ * THE DECLARED-VALUE HOLD OF A GATE'S CONTINUE (cinatra#4244, design
+ * app-lifecycle-cards.html section V.1, "A declared value holds the Continue").
+ *
+ * A host that mounts a mid-run gate whose fields the schema-field fallback
+ * draws, and lets the drawn field own the gate's one Continue, provides `true`.
+ * The structured object field then draws that Continue UNAVAILABLE until every
+ * declared-required value of a kind it reads as typed (text, number, list,
+ * choice) is written - text blank once trimmed and an empty list are not
+ * written - and adds no sentence of its own for the hold. Everywhere else (a
+ * setup field, a grouped setup form, any host that provides nothing) the
+ * default `false` keeps the field exactly as it was.
+ *
+ * It lives in this module, beside the field that reads it, and not in a module
+ * of its own: a new module would add a first-party module to every locked
+ * route of the route-graph ratchet.
+ */
+export const GateContinueHoldContext = createContext<boolean>(false);
 
 type Props = {
   fieldName: string;
