@@ -265,10 +265,30 @@ function rowPaints(body: HTMLElement, row: HTMLElement): Promise<Paint[]> {
 
 const GROUND_PROBE = "data-ground-probe";
 
+/** The page ground: the token the shipped `body` rule of src/app/globals.css
+ *  paints (`background: var(--background)`). Read, never assumed: a body rule
+ *  that paints no background or no token reference fails here, and the token
+ *  it names is the ground the cases compare against. */
+function pageGround(): string {
+  let value: string | undefined;
+  for (const rule of LAYERS.host) {
+    if (!rule.selector.split(",").map((p) => p.trim()).includes("body")) continue;
+    for (const part of rule.body.replace(/\{[^{}]*\}/g, "").split(";")) {
+      const m = /^\s*background(?:-color)?\s*:\s*([\s\S]+)$/.exec(part);
+      if (m) value = m[1]!.replace(/\s+/g, " ").trim();
+    }
+  }
+  expect(value, "the body rule of globals.css paints no background").toBeDefined();
+  const m = /^var\(\s*(--[A-Za-z0-9-]+)\s*\)$/.exec(value!);
+  expect(m, `the page ground is not a token reference: ${value}`).not.toBeNull();
+  return m![1]!;
+}
+
 /** The ground under `el`: the token of the nearest ancestor whose own
  *  utilities paint a background colour on that ancestor itself (inside the
  *  dark palette a dark-qualified paint wins, as it does in the cascade), else
- *  the page `--background` that the application shell lays. */
+ *  the page ground the shipped `body` rule paints (`pageGround`). `from` names
+ *  the element that laid it (its data-slot, else its class), or "page". */
 async function groundOf(el: HTMLElement): Promise<{ token: string; from: string }> {
   for (let a = el.parentElement; a !== null; a = a.parentElement) {
     if (a.classList.length === 0) continue;
@@ -287,7 +307,7 @@ async function groundOf(el: HTMLElement): Promise<{ token: string; from: string 
     expect(winners, `exactly one ground colour on ${from}`).toHaveLength(1);
     return { token: tokenOf(winners[0]!.value), from };
   }
-  return { token: "--background", from: "page" };
+  return { token: pageGround(), from: "page" };
 }
 
 /** The table the product paints, mounted from the primitive itself, inside a
@@ -462,9 +482,16 @@ describe("the band's colour in each palette", () => {
 // `bg-background`. In the dark palette the band IS --surface, so on a --surface
 // card the band would vanish (1:1) unless the table itself lays the page
 // ground under its rows, as the drawing does ("band --surface on
-// --background").
+// --background"). Each mount also names the element that must lay the
+// ground, so a frame or table that stops painting fails instead of falling
+// through to the page.
 type Mount = "page" | "surface card" | "PaginatedTable";
 const MOUNTS: readonly Mount[] = ["page", "surface card", "PaginatedTable"];
+const GROUND_FROM: Record<Mount, Record<Palette, string>> = {
+  page: { light: "page", dark: "table" },
+  "surface card": { light: "test-surface-card", dark: "table" },
+  PaginatedTable: { light: "table-frame", dark: "table" },
+};
 
 function renderMount(palette: Palette, mount: Mount): { body: HTMLElement; rows: HTMLElement[] } {
   const body = (
@@ -480,7 +507,7 @@ function renderMount(palette: Palette, mount: Mount): { body: HTMLElement; rows:
     mount === "PaginatedTable" ? (
       <PaginatedTable>{body}</PaginatedTable>
     ) : mount === "surface card" ? (
-      <div className="bg-surface">
+      <div data-slot="test-surface-card" className="bg-surface">
         <Table>{body}</Table>
       </div>
     ) : (
@@ -505,6 +532,7 @@ describe("the band stays distinguishable from the ground under the table", () =>
           const { token } = await bandOn(body, rows[1]!, palette);
           expect(await rowPaints(body, rows[0]!)).toEqual([]);
           const ground = await groundOf(rows[0]!);
+          expect(ground.from, `the ground under the ${mount} mount`).toBe(GROUND_FROM[mount][palette]);
           const b = relativeLuminance(colour(tokenIn(layer, palette, token)));
           const g = relativeLuminance(colour(tokenIn(layer, palette, ground.token)));
           if (palette === "light") {
