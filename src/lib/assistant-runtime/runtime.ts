@@ -60,8 +60,14 @@ import {
 } from "@/lib/lifecycle/bound-card-binding";
 import type { TurnSkillDeliveryRow } from "./skill-delivery-record";
 // CONTRACT.md section 5.2 ("One source"): the turn's tool assembly, the one
-// function this turn and the tool-manifest report both call.
-import { assembleAssistantTurnTools } from "./turn-tool-assembly";
+// function this turn calls and the later tool-manifest report is to call.
+import {
+  assembleAssistantTurnTools,
+  type AssistantTurnToolAssembly,
+  type AssistantTurnToolAssemblyResume,
+  type TurnActorToken,
+  type TurnSelfMcpAdmission,
+} from "./turn-tool-assembly";
 import {
   describeLlmRuntimeUnavailability,
   stream,
@@ -755,6 +761,19 @@ async function persistTurnSkillDelivery(
   }
 }
 
+/**
+ * Mints the self-MCP actor token for the tool assembly. A throwing issuer is
+ * handed over as its error: the assembly throws it again inside the reference
+ * builder, which logs it and answers null, as when the builder minted itself.
+ */
+function mintTurnActorToken(issue: () => string): TurnActorToken {
+  try {
+    return { ok: true, token: issue() };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
+
 export async function runAssistantTurn(
   runtimeConfig: AssistantRuntimeConfig,
   args: RunChatTurnArgs,
@@ -1029,16 +1048,16 @@ export async function runAssistantTurn(
 
   // Tool array (packages/agent-ui-protocol/CONTRACT.md section 5.2, "One
   // source"). The assembly lives in ./turn-tool-assembly and only reads; this
-  // turn's write steps stay here. The dead-ingress probe and the lent-action
-  // grant run through `admitSelfMcpReference` and the token mint through the
-  // issuer ports, at the same points as before; the delivery record is
-  // committed after the call. The skill registration runs before the call (it
-  // used to run right after the injected skill set was resolved; that
-  // resolution reads only the assistant's injection ports, never the
-  // registration). Conversation-only providers (Gemini, AC#5) carry NO tools;
-  // every MCP/skill assembly + the dead-ingress reachability probe is skipped
-  // for them. Tool-capable providers (OpenAI/Anthropic) assemble the full
-  // array, byte-identical to before.
+  // turn's write steps stay here, in the loop below that drives it. The
+  // assembly stops at each point where the turn has always run a write step
+  // and yields it: the skill registration (after the injected skill set is
+  // resolved, right before the delivery), then the dead-ingress probe, the
+  // lent-action grant and the token mint (after the delivery, before the
+  // self-MCP reference). The delivery record is committed after the call.
+  // Conversation-only providers (Gemini, AC#5) carry NO tools; every MCP/skill
+  // assembly + the dead-ingress reachability probe is skipped for them.
+  // Tool-capable providers (OpenAI/Anthropic) assemble the full array,
+  // byte-identical to before.
   const assistantAgentId = args.assistantId ?? runtimeConfig.skillIdNamespace;
   const assistantSessionId = args.sessionId ?? `assistant-turn:${randomUUID()}`;
   // cinatra#2932 (lifecycle-b W5a) — declared at TURN scope because two places
@@ -1048,40 +1067,117 @@ export async function runAssistantTurn(
   // grant, and nothing said about a control it could not operate.
   let turnBoundCard: TurnBoundCard = { grant: null, systemContext: "" };
   let platformToolsUnavailable = false;
-  // Guarantee the assistant's skills resolve with an on-disk sourcePath so
-  // buildSkillTools emits the shell tool (also feeds the catalog-backed
-  // loadSystemPrompt above; the read_skill fallback is retired). Every provider
-  // has a delivery mechanism (inline, tool-mount or container), so this runs
-  // once per turn, before the assembly reads the registered skills.
-  await ensureAssistantSkillsRegistered(runtimeConfig.skillIds);
-  const assembly = await assembleAssistantTurnTools(
-    {
-      provider: adapter.provider,
-      defaultModel: adapter.defaultModel,
-      skillIds: runtimeConfig.skillIds,
-      allowedTools: runtimeConfig.allowedTools,
-      assistantAgentId,
+  const assemblyRun = assembleAssistantTurnTools({
+    provider: adapter.provider,
+    defaultModel: adapter.defaultModel,
+    skillIds: runtimeConfig.skillIds,
+    allowedTools: runtimeConfig.allowedTools,
+    assistantAgentId,
+    userId,
+    sessionId: assistantSessionId,
+    injectionPorts: buildAssistantInjectionPorts({
+      agentId: assistantAgentId,
       userId,
       sessionId: assistantSessionId,
-      injectionPorts: buildAssistantInjectionPorts({
-        agentId: assistantAgentId,
-        userId,
-        sessionId: assistantSessionId,
-        requiredSkillIds: runtimeConfig.skillIds,
-        // cinatra#2815 S3 — the assistant's per-scope assignments, resolved
-        // through the thread's IMMUTABLE snapshot. Imported dynamically so this
-        // runtime's static module graph (and the locked route graphs that reach
-        // it) is unchanged by a channel that only runs when a turn dispatches.
-        resolveAssignedSkillIdsForSession: async (sessionId) => {
-          const { resolveAssistantAssignedSkillIds } = await import(
-            "@/lib/assistant-assigned-skills-delivery"
-          );
-          return resolveAssistantAssignedSkillIds({
-            agentId: assistantAgentId,
-            sessionId,
-          });
-        },
-      }),
+      requiredSkillIds: runtimeConfig.skillIds,
+      // cinatra#2815 S3 — the assistant's per-scope assignments, resolved
+      // through the thread's IMMUTABLE snapshot. Imported dynamically so this
+      // runtime's static module graph (and the locked route graphs that reach
+      // it) is unchanged by a channel that only runs when a turn dispatches.
+      resolveAssignedSkillIdsForSession: async (sessionId) => {
+        const { resolveAssistantAssignedSkillIds } = await import(
+          "@/lib/assistant-assigned-skills-delivery"
+        );
+        return resolveAssistantAssignedSkillIds({
+          agentId: assistantAgentId,
+          sessionId,
+        });
+      },
+    }),
+  });
+  // Drives the assembly: each yielded step is this turn's write step at that
+  // point, and the assembly resumes after it. `null` means the dead-ingress
+  // probe stopped the turn (it has already said so).
+  const runAssembly = async (): Promise<AssistantTurnToolAssembly | null> => {
+    let resume: AssistantTurnToolAssemblyResume | undefined;
+    for (;;) {
+      const step = await assemblyRun.next(resume);
+      if (step.done) return step.value;
+      if (step.value.kind === "register_skills") {
+        // Guarantee the assistant's skills resolve with an on-disk sourcePath
+        // so buildSkillTools emits the shell tool (also feeds the
+        // catalog-backed loadSystemPrompt above; the read_skill fallback is
+        // retired). Every provider has a delivery mechanism (inline,
+        // tool-mount or container), and each runs this right before its
+        // delivery, after the injected skill set is resolved.
+        await ensureAssistantSkillsRegistered(runtimeConfig.skillIds);
+        resume = { kind: "skills_registered" };
+        continue;
+      }
+      // admit_self_mcp_reference.
+      //
+      // Dead-ingress guard (#1699): a configured-but-unreachable public MCP
+      // URL is WORSE than a missing one — OpenAI silently omits the hosted
+      // MCP server (200 completed, no mcp_list_tools, no 424), chat loses
+      // every Cinatra tool with no signal, and the model confabulates that
+      // the tools don't exist. Probe (cached, short timeout) and fail LOUD
+      // like the unconfigured case below instead of running a turn that lies
+      // about the platform.
+      const mcpReachability = await checkPublicMcpReachability();
+      if (mcpReachability.status === "unreachable") {
+        // The probe already retried a timeout and gave up (#3109), so this is
+        // a considered verdict, not one slow moment. The log carries WHICH
+        // outcome it was — a timeout and a refused connection are different
+        // events and have to be tellable apart afterwards — and the URL and
+        // the raw network reason stay here, where an operator reads them.
+        console.error(
+          `[assistant-runtime] public MCP URL ${mcpReachability.url} is unreachable ` +
+            `[${mcpReachability.kind}] (${mcpReachability.reason}) — refusing to run the turn ` +
+            "without Cinatra tools (#1699, #3109)",
+        );
+        // What the PERSON reads says what happened to them, in words that
+        // need no knowledge of the product's own network setup, and names
+        // the one thing worth doing next. The two outcomes ask for different
+        // next steps, so they do not read alike: a moment that did not
+        // answer is worth sending again, an address that answered "no" needs
+        // somebody to fix it.
+        send("error", {
+          message:
+            mcpReachability.kind === "timeout"
+              ? "The platform tools did not answer in time for this message, so the assistant " +
+                "stopped rather than answer as though it never had them. Send the message again - " +
+                "a slow moment usually clears on its own."
+              : "The platform tools were unavailable for this message, so the assistant stopped " +
+                "rather than answer as though it never had them. If this keeps happening, an " +
+                "administrator can open /configuration/development?tab=tunnel and run its " +
+                "connection test.",
+        });
+        return null;
+      }
+      // THE BOUND CARD, RE-CHECKED HERE (cinatra#2932, lifecycle-b W5a). The
+      // claim the composer sent is resolved under the reader's OWN live
+      // standing and the binding rule is applied to what survived; a bound
+      // card mints ONE single-use grant for ONE of its controls, which rides
+      // this turn's self-MCP reference as a header. Nothing bound and
+      // nothing minted is the ordinary case and costs the turn nothing —
+      // `systemContext` is `""` and the system string is byte-identical to a
+      // turn that never had a composer binding.
+      turnBoundCard = await issueTurnLentActionGrant({
+        claim: args.boundCard ?? null,
+        userId: widgetPrincipal ? widgetPrincipal.userId : userId,
+        orgId: widgetPrincipal ? widgetPrincipal.orgId : sessionOrgId,
+        // The turn's DURABLE identity is the grant's one-per-message key, so
+        // a retried send of the same turn cannot mint a second spendable
+        // authority.
+        messageId: args.turnIdentity.turnId,
+        // THE PERSON'S OWN WORDS (convergence round 1, finding 2). Taken from
+        // the turn's last user message, here on the server, and stored with
+        // the grant — so what lands on the card is what they typed and the
+        // model supplies no text at all. `null` when the turn carries no user
+        // message, which lands an empty comment rather than an invented one.
+        messageText:
+          [...messages].reverse().find((m) => m.role === "user")?.content ?? null,
+      });
       // SEAM (S5, cinatra#1221). The cinatra self-MCP tool carries a DIFFERENT
       // delegated actor token depending on the caller:
       //   · widget principal present → a `cinatra.widget.mcp-obo` OBO token
@@ -1096,108 +1192,64 @@ export async function runAssistantTurn(
       //   · absent → the existing chat OBO token (`delegation: "chat"`), byte-
       //     identical to before — the cookie-session `@cinatra` path is
       //     unchanged.
-      selfMcp: widgetPrincipal
-        ? {
-            kind: "widget",
-            actor: {
-              userId: widgetPrincipal.userId,
-              orgId: widgetPrincipal.orgId,
-              instanceId: widgetPrincipal.instanceId,
-              kind: widgetPrincipal.assistantHandle,
-              jti: randomUUID(),
-              // The two seals (cinatra#2687). Both are values THIS turn already
-              // holds — the principal's parent row and the harness-bound run
-              // id — so the mint invents nothing and nothing downstream can
-              // widen them.
-              parentJti: widgetPrincipal.parentTokenJti,
-              turnRunId: args.turnIdentity.runId,
-              // cinatra#2577 (S8d) — the route's own reading of the consumed
-              // `cwu_`. The runtime never re-derives it: one observation,
-              // carried.
-              lifecycleRead: widgetPrincipal.lifecycleRead,
-              // The person's real tier, resolved at the route (cinatra#2674).
-              // The widget path no longer floors it, because the site no
-              // longer holds the credential that made flooring necessary.
-              platformRole: widgetPrincipal.platformRole,
-            },
-          }
-        : {
-            kind: "chat",
-            actor: { delegation: "chat", userId, orgId: sessionOrgId, platformRole },
-          },
-    },
-    {
-      issueChatMcpActorToken,
-      issueWidgetMcpActorToken,
-      readChatMcpCatalogState: () =>
-        resolveChatMcpCatalogState({ actorContext, userId, sessionOrgId }),
-      admitSelfMcpReference: async () => {
-        // Dead-ingress guard (#1699): a configured-but-unreachable public MCP
-        // URL is WORSE than a missing one — OpenAI silently omits the hosted
-        // MCP server (200 completed, no mcp_list_tools, no 424), chat loses
-        // every Cinatra tool with no signal, and the model confabulates that
-        // the tools don't exist. Probe (cached, short timeout) and fail LOUD
-        // like the unconfigured case below instead of running a turn that lies
-        // about the platform.
-        const mcpReachability = await checkPublicMcpReachability();
-        if (mcpReachability.status === "unreachable") {
-          // The probe already retried a timeout and gave up (#3109), so this is
-          // a considered verdict, not one slow moment. The log carries WHICH
-          // outcome it was — a timeout and a refused connection are different
-          // events and have to be tellable apart afterwards — and the URL and
-          // the raw network reason stay here, where an operator reads them.
-          console.error(
-            `[assistant-runtime] public MCP URL ${mcpReachability.url} is unreachable ` +
-              `[${mcpReachability.kind}] (${mcpReachability.reason}) — refusing to run the turn ` +
-              "without Cinatra tools (#1699, #3109)",
-          );
-          // What the PERSON reads says what happened to them, in words that
-          // need no knowledge of the product's own network setup, and names
-          // the one thing worth doing next. The two outcomes ask for different
-          // next steps, so they do not read alike: a moment that did not
-          // answer is worth sending again, an address that answered "no" needs
-          // somebody to fix it.
-          send("error", {
-            message:
-              mcpReachability.kind === "timeout"
-                ? "The platform tools did not answer in time for this message, so the assistant " +
-                  "stopped rather than answer as though it never had them. Send the message again - " +
-                  "a slow moment usually clears on its own."
-                : "The platform tools were unavailable for this message, so the assistant stopped " +
-                  "rather than answer as though it never had them. If this keeps happening, an " +
-                  "administrator can open /configuration/development?tab=tunnel and run its " +
-                  "connection test.",
-          });
-          return null;
-        }
-        // THE BOUND CARD, RE-CHECKED HERE (cinatra#2932, lifecycle-b W5a). The
-        // claim the composer sent is resolved under the reader's OWN live
-        // standing and the binding rule is applied to what survived; a bound
-        // card mints ONE single-use grant for ONE of its controls, which rides
-        // this turn's self-MCP reference as a header. Nothing bound and
-        // nothing minted is the ordinary case and costs the turn nothing —
-        // `systemContext` is `""` and the system string is byte-identical to a
-        // turn that never had a composer binding.
-        turnBoundCard = await issueTurnLentActionGrant({
-          claim: args.boundCard ?? null,
-          userId: widgetPrincipal ? widgetPrincipal.userId : userId,
-          orgId: widgetPrincipal ? widgetPrincipal.orgId : sessionOrgId,
-          // The turn's DURABLE identity is the grant's one-per-message key, so
-          // a retried send of the same turn cannot mint a second spendable
-          // authority.
-          messageId: args.turnIdentity.turnId,
-          // THE PERSON'S OWN WORDS (convergence round 1, finding 2). Taken from
-          // the turn's last user message, here on the server, and stored with
-          // the grant — so what lands on the card is what they typed and the
-          // model supplies no text at all. `null` when the turn carries no user
-          // message, which lands an empty comment rather than an invented one.
-          messageText:
-            [...messages].reverse().find((m) => m.role === "user")?.content ?? null,
+      // The token is minted here and handed to the assembly as a value; a
+      // mint that throws is handed over as its error, which the reference
+      // builder logs before it answers null, as when it minted itself.
+      let admission: TurnSelfMcpAdmission;
+      if (widgetPrincipal) {
+        const widgetActor: Extract<TurnSelfMcpAdmission, { kind: "widget" }>["actor"] = {
+          userId: widgetPrincipal.userId,
+          orgId: widgetPrincipal.orgId,
+          instanceId: widgetPrincipal.instanceId,
+          kind: widgetPrincipal.assistantHandle,
+          jti: randomUUID(),
+          // The two seals (cinatra#2687). Both are values THIS turn already
+          // holds — the principal's parent row and the harness-bound run
+          // id — so the mint invents nothing and nothing downstream can
+          // widen them.
+          parentJti: widgetPrincipal.parentTokenJti,
+          turnRunId: args.turnIdentity.runId,
+          // cinatra#2577 (S8d) — the route's own reading of the consumed
+          // `cwu_`. The runtime never re-derives it: one observation,
+          // carried.
+          lifecycleRead: widgetPrincipal.lifecycleRead,
+          // The person's real tier, resolved at the route (cinatra#2674).
+          // The widget path no longer floors it, because the site no
+          // longer holds the credential that made flooring necessary.
+          platformRole: widgetPrincipal.platformRole,
+        };
+        admission = {
+          kind: "widget",
+          actor: widgetActor,
+          lentActionGrant: turnBoundCard.grant,
+          actorToken: mintTurnActorToken(() => issueWidgetMcpActorToken(widgetActor)),
+        };
+      } else {
+        const chatActor: Extract<TurnSelfMcpAdmission, { kind: "chat" }>["actor"] = {
+          delegation: "chat",
+          userId,
+          orgId: sessionOrgId,
+          platformRole,
+        };
+        const catalogState = await resolveChatMcpCatalogState({
+          actorContext,
+          userId,
+          sessionOrgId,
         });
-        return { lentActionGrant: turnBoundCard.grant };
-      },
-    },
-  );
+        admission = {
+          kind: "chat",
+          actor: chatActor,
+          catalogState,
+          lentActionGrant: turnBoundCard.grant,
+          actorToken: mintTurnActorToken(() => issueChatMcpActorToken(chatActor)),
+        };
+      }
+      resume = { kind: "self_mcp_admitted", admission };
+    }
+  };
+  const assembly = await runAssembly();
+  // The probe refused the turn and has already said so.
+  if (assembly === null) return;
   if (assembly.kind === "delivery_refused") {
     // The refusal record IS the point of #2240: it names every skill the
     // operator's assistant lost, durably, so the refusal is answerable from
@@ -1215,8 +1267,6 @@ export async function runAssistantTurn(
     });
     return;
   }
-  // The probe refused the turn and has already said so.
-  if (assembly.kind === "stopped") return;
   if (assembly.kind === "self_mcp_unavailable") {
     send("error", {
       message:

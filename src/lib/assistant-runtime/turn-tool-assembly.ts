@@ -3,30 +3,33 @@ import "server-only";
 // The tool assembly of one assistant turn (packages/agent-ui-protocol/
 // CONTRACT.md section 5.2, "One source" and "Read only").
 //
-// EXTRACTED from `runAssistantTurn` (./runtime.ts) without a change of
-// behaviour: the conversation-only check, the injected skill set, the skill
-// delivery, the self-MCP reference, the external MCP tools, the skill tools,
-// `web_search`, and then the allow-list filter `isAllowedByList`. The turn and
-// the later tool-manifest route both call this one function, so the route
-// never keeps a second list of tools.
+// EXTRACTED from `runAssistantTurn` (./runtime.ts): the conversation-only
+// check, the injected skill set, the skill delivery, the self-MCP reference,
+// the external MCP tools, the skill tools, `web_search`, and then the
+// allow-list filter `isAllowedByList`. The turn calls this one function, and
+// the later tool-manifest route is to call it too, so the route never keeps a
+// second list of tools.
 //
-// THIS MODULE WRITES NOTHING. It inserts, updates and deletes nothing, mints
-// no actor token and no lent-action grant, sends no stream event, persists no
-// delivery record and makes no network call to a model provider or to an MCP
-// endpoint. Each step of the turn that does one of these stays in
-// `runAssistantTurn`, which supplies it here as a port at the point in the
-// order where the turn has always run it:
+// THIS MODULE WRITES NOTHING AND CALLS NO WRITE STEP. It inserts, updates and
+// deletes nothing, mints no actor token and no lent-action grant, sends no
+// stream event, persists no delivery record and makes no network call to a
+// model provider or to an MCP endpoint, and it takes no callback that does.
+// The turn's write steps sit between steps of the assembly, so the function is
+// an async generator: it STOPS at each such point, yields a step, and the
+// caller runs its own write step before it resumes the assembly. The steps,
+// in the order the turn has always run them:
 //
-//   - the token issuers (`issueChatMcpActorToken`, `issueWidgetMcpActorToken`):
-//     the turn passes the real issuers, a reader passes inert ones;
-//   - `admitSelfMcpReference`: the turn's reachability probe and its
-//     lent-action grant, run after the skill delivery and before the self-MCP
-//     reference is built, exactly as before;
-//   - `readChatMcpCatalogState`: the chat surface's self-MCP catalog state.
+//   - `register_skills`: after the injected skill set is resolved and right
+//     before the skill delivery. The turn runs `ensureAssistantSkillsRegistered`
+//     here (the resolution reads the catalog, and the registration can change
+//     it, so the registration must not run before the resolution).
+//   - `admit_self_mcp_reference`: after the skill delivery, for a tool-capable
+//     provider. The turn runs its reachability probe and its lent-action grant,
+//     reads the chat catalog state, mints the actor token and resumes with them
+//     (`TurnSelfMcpAdmission`); a turn the probe stopped does not resume.
 //
-// The skill registration runs in `runAssistantTurn` before the call, and the
-// delivery record is committed there after it (the refusal record from the
-// rows this function returns).
+// The delivery record is committed in `runAssistantTurn` after the call (the
+// refusal record from the rows this function returns).
 
 import type {
   ChatMcpCatalogState,
@@ -67,15 +70,33 @@ function isNativeMcpProvider(provider: LlmProvider): provider is NativeMcpProvid
   return !isConversationOnlyProvider(provider);
 }
 
-/** Who the self-MCP reference is built for: the chat page or a widget turn. */
-export type TurnSelfMcpSubject =
+/**
+ * The actor token the caller minted for the self-MCP reference, or the error
+ * its issuer threw. A thrown mint is handed back as a value and thrown again
+ * inside the builder's issuer, so the builder logs it and returns null exactly
+ * as when it called the issuer itself.
+ */
+export type TurnActorToken = { ok: true; token: string } | { ok: false; error: unknown };
+
+/**
+ * What the caller resumes the `admit_self_mcp_reference` step with: who the
+ * self-MCP reference is built for (the chat page or a widget turn), the
+ * actor, this turn's lent-action grant (or null) and the minted actor token.
+ * A chat subject also carries the chat surface's self-MCP catalog state.
+ */
+export type TurnSelfMcpAdmission =
   | {
       kind: "chat";
       actor: Parameters<typeof buildLlmMcpServerToolForChat>[1];
+      catalogState: ChatMcpCatalogState | undefined;
+      lentActionGrant: string | null;
+      actorToken: TurnActorToken;
     }
   | {
       kind: "widget";
       actor: Parameters<typeof buildLlmMcpServerToolForWidget>[1];
+      lentActionGrant: string | null;
+      actorToken: TurnActorToken;
     };
 
 export type AssistantTurnToolAssemblyInput = {
@@ -89,23 +110,19 @@ export type AssistantTurnToolAssemblyInput = {
   userId: string;
   /** The session id of the injection intent (the turn mints one if absent). */
   sessionId: string;
+  /** The injection resolver's ports. They only read. */
   injectionPorts: InjectionResolverPorts;
-  selfMcp: TurnSelfMcpSubject;
 };
 
-export type AssistantTurnToolAssemblyPorts = {
-  issueChatMcpActorToken: Parameters<typeof buildLlmMcpServerToolForChat>[2];
-  issueWidgetMcpActorToken: Parameters<typeof buildLlmMcpServerToolForWidget>[2];
-  /** The chat surface's self-MCP catalog state; read for a chat subject only. */
-  readChatMcpCatalogState: () => Promise<ChatMcpCatalogState | undefined>;
-  /**
-   * Called once, for a tool-capable provider, after the skill delivery and
-   * before the self-MCP reference is built. Returns the lent-action grant the
-   * reference carries, or `null` when the caller stopped the turn (it has then
-   * already told the person why).
-   */
-  admitSelfMcpReference: () => Promise<{ lentActionGrant: string | null } | null>;
-};
+/** A point of the assembly where the caller runs its own write step. */
+export type AssistantTurnToolAssemblyStep =
+  | { kind: "register_skills" }
+  | { kind: "admit_self_mcp_reference" };
+
+/** What the caller resumes a step with, after its write step. */
+export type AssistantTurnToolAssemblyResume =
+  | { kind: "skills_registered" }
+  | { kind: "self_mcp_admitted"; admission: TurnSelfMcpAdmission };
 
 export type AssistantTurnToolAssembly =
   | {
@@ -126,10 +143,6 @@ export type AssistantTurnToolAssembly =
       kind: "delivery_refused";
       /** The refusal record the caller commits before it reports the error. */
       refusalRows: TurnSkillDeliveryRow[];
-    }
-  | {
-      /** `admitSelfMcpReference` stopped the turn. */
-      kind: "stopped";
     }
   | {
       /** No self-MCP reference could be built (no public MCP URL). */
@@ -157,10 +170,41 @@ function warnOnUnclassifiedVehicles(
   );
 }
 
-export async function assembleAssistantTurnTools(
+function skillsRegistered(resume: AssistantTurnToolAssemblyResume | undefined): void {
+  if (resume?.kind !== "skills_registered") {
+    throw new Error(
+      "[assistant-runtime] the tool assembly was resumed without the skill registration",
+    );
+  }
+}
+
+function selfMcpAdmission(
+  resume: AssistantTurnToolAssemblyResume | undefined,
+): TurnSelfMcpAdmission {
+  if (resume?.kind !== "self_mcp_admitted") {
+    throw new Error(
+      "[assistant-runtime] the tool assembly was resumed without the self-MCP admission",
+    );
+  }
+  return resume.admission;
+}
+
+function mintedToken(actorToken: TurnActorToken): string {
+  if (!actorToken.ok) throw actorToken.error;
+  return actorToken.token;
+}
+
+/**
+ * Drive it with `next()`: each yielded step is a write step of the caller,
+ * and `next(resume)` continues after it. The return value is the outcome.
+ */
+export async function* assembleAssistantTurnTools(
   input: AssistantTurnToolAssemblyInput,
-  ports: AssistantTurnToolAssemblyPorts,
-): Promise<AssistantTurnToolAssembly> {
+): AsyncGenerator<
+  AssistantTurnToolAssemblyStep,
+  AssistantTurnToolAssembly,
+  AssistantTurnToolAssemblyResume | undefined
+> {
   const { provider } = input;
   const conversationOnly = isConversationOnlyProvider(provider);
 
@@ -222,6 +266,9 @@ export async function assembleAssistantTurnTools(
     // references and merges them under the per-request byte budget, so a
     // conversation-only turn still receives the assistant's skills instead of
     // silently losing every one of them.
+    // The caller registers the assistant's skills here, right before the
+    // delivery reads them.
+    skillsRegistered(yield { kind: "register_skills" });
     const inline = await deliverInjectedSkillsInline({ set: injectedSkills });
     skillSystemContext = inline.systemContext;
     if (inline.dropped.length > 0) {
@@ -250,6 +297,10 @@ export async function assembleAssistantTurnTools(
     // `provider` is narrowed to "openai" | "anthropic" in this block
     // (equivalent to `!conversationOnly`), so the tool-assembly calls
     // type-check.
+    //
+    // The caller registers the assistant's skills here, right before the
+    // delivery reads them.
+    skillsRegistered(yield { kind: "register_skills" });
     //
     // SKILL DELIVERY ALWAYS RUNS (cinatra#2094 F11). There is no caller-side
     // model gate any more: the model-aware NATIVE-SHELL decision belongs to the
@@ -350,33 +401,35 @@ export async function assembleAssistantTurnTools(
     }
 
     // The caller's step between the delivery and the self-MCP reference: on a
-    // turn, the dead-ingress probe (#1699) and the lent-action grant
-    // (cinatra#2932). `null` means the caller stopped the turn.
-    const admitted = await ports.admitSelfMcpReference();
-    if (!admitted) return { kind: "stopped" };
+    // turn, the dead-ingress probe (#1699), the lent-action grant
+    // (cinatra#2932), the chat catalog state and the actor token. A turn the
+    // probe stopped does not resume.
+    const admission = selfMcpAdmission(yield { kind: "admit_self_mcp_reference" });
 
-    // The self-MCP reference carries the token the issuer port returns: the
-    // widget OBO token when a widget principal is present, the chat OBO token
-    // otherwise. A mint/build failure returns null on BOTH paths and the
-    // caller answers with the same fail-closed error.
+    // The self-MCP reference carries the token the caller minted: the widget
+    // OBO token when a widget principal is present, the chat OBO token
+    // otherwise. The builder's issuer only hands that token over (or throws
+    // the mint's error), so the builder mints nothing. A mint/build failure
+    // returns null on BOTH paths and the caller answers with the same
+    // fail-closed error.
     const chatCinatraMcpTool =
-      input.selfMcp.kind === "widget"
+      admission.kind === "widget"
         ? await buildLlmMcpServerToolForWidget(
             provider,
-            input.selfMcp.actor,
-            ports.issueWidgetMcpActorToken,
+            admission.actor,
+            () => mintedToken(admission.actorToken),
             // cinatra#2932 — the widget is on the same road; it carries the
             // grant exactly as the chat page does.
-            { lentActionGrant: admitted.lentActionGrant },
+            { lentActionGrant: admission.lentActionGrant },
           )
         : await buildLlmMcpServerToolForChat(
             provider,
-            input.selfMcp.actor,
-            ports.issueChatMcpActorToken,
+            admission.actor,
+            () => mintedToken(admission.actorToken),
             {
-              catalogState: await ports.readChatMcpCatalogState(),
+              catalogState: admission.catalogState,
               // cinatra#2932 — this turn's lent-action grant, or null.
-              lentActionGrant: admitted.lentActionGrant,
+              lentActionGrant: admission.lentActionGrant,
             },
           );
     if (!chatCinatraMcpTool) return { kind: "self_mcp_unavailable" };
@@ -399,7 +452,7 @@ export async function assembleAssistantTurnTools(
     // chat-scoped injections onto public-site widget turns.
     const externalMcpTools = await resolveChatExternalMcpTools(
       provider,
-      input.selfMcp.kind === "widget" ? { surface: "public_site_widget" } : { surface: "chat" },
+      admission.kind === "widget" ? { surface: "public_site_widget" } : { surface: "chat" },
     );
     const assembledTools: LlmTool[] = [
       chatCinatraMcpTool,
