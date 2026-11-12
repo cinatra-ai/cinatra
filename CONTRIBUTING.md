@@ -61,8 +61,26 @@ measured:
 | 64 min | 16.4 GB | 0.1 GB | 1.9 GB |
 | 77 min | 19.6 GB | 0.1 GB | 4.9 GB |
 
-Two such processes fill a 62 GB machine to the point of swapping, which slows
+Those figures are the "before" state. Two such processes fill a 62 GB machine to the point of swapping, which slows
 every page and every end-to-end step.
+
+A later measurement of the current `pnpm dev` read a much lower, flat figure when
+the server was idle. A 64 GB Linux machine ran one development server (Next.js
+16.2.10), a script sent one request, and then the server stayed idle for 90
+minutes. The script read `RssAnon` and `VmSwap` from `/proc/<pid>/status` at
+minute 10 and at minute 90 (1 GB here is 1,000,000 kB):
+
+| Idle development server | Anonymous memory, minute 10 | Anonymous memory, minute 90 | Swapped out, minute 90 |
+|---|---|---|---|
+| Default `pnpm dev` | 4.83 GB | 4.82 GB | 0 |
+| `CINATRA_DEV_SOURCE_MAPS=0` | 5.58 GB | 5.52 GB | 0 |
+| Filesystem cache off | 5.51 GB | 0.88 GB | 4.39 GB |
+| Webpack mode (`pnpm dev:webpack`) | 5.69 GB | 5.65 GB | 0 |
+
+Only the default row is the figure to expect from `pnpm dev`; the other rows were
+measured in the same way with one setting changed. These are idle figures after a
+single request. They do not show how much memory a server holds while pages are
+being compiled.
 
 - **The memory line.** Once a minute the development server writes one line to
   its log, for example
