@@ -646,6 +646,22 @@ export const CHECKBOX_CALL_SITE_READINGS: FileReading[] = [
     ],
   },
   {
+    file: "packages/agents/src/declared-hitl-screen-renderer.tsx",
+    tokens: 0,
+    sites: [
+      {
+        anchor: "<Input {...control} onChange={(e) => write(e.target.value)} />",
+        tag: "Input",
+        drawn: "no checkbox",
+        effect: "none",
+        reading:
+          "the one-line text field of a declared screen's field section: it spreads a local object that holds only id, value, placeholder and disabled and no type, so it is a text field and no checkbox",
+        tagIncludes: ["{...control}", "onChange={(e) => write(e.target.value)}"],
+        fileIncludes: ["const control = {"],
+      },
+    ],
+  },
+  {
     file: "packages/agents/src/trigger-screen-client.tsx",
     tokens: 0,
     sites: [
