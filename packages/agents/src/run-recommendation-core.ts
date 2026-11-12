@@ -9,10 +9,12 @@ import {
   readAssignmentScopeSnapshot,
   type AssignmentScopeSnapshot,
 } from "./assignment-scope-snapshot";
-import { recommendationRunHasStarted } from "./run-status";
+import {
+  recommendationRunHasStarted,
+  recommendationRunHasStartedForRow,
+} from "./run-status";
 import {
   SKIP_RECOMMENDATION_SOURCE,
-  clearRunSelectedSkillRevisionsBeforeStart,
   decidedSkillsFromEvidence,
   hasRunRecommendationSkip,
   hasRunSelectedSkillRevisions,
@@ -219,13 +221,16 @@ export type RunRecommendationHoldState =
  *                hold that is now RELEASED is still this run's hold, which is
  *                exactly the idempotent-retry case it already admits, and only a
  *                ref naming a hold the run has moved past is refused.
- *   runStarted — HAS THE RUN'S EXECUTION BEGUN? The boundary is the platform's
- *                own `PRE_EXECUTION_RUN_STATUSES` — `pending_input`,
- *                `pending_trigger`, `armed`, the statuses a run holds before it
- *                has ever run. Anything else is started, and the first status
- *                outside that set is `queued`: the dispatch CAS. One set, read
- *                by the screen, by the store's own guarded DELETE and by the
- *                suite that pins the boundary.
+ *   runStarted — HAS THE RUN'S EXECUTION BEGUN? Answered from the RUN ROW by
+ *                `recommendationRunHasStartedForRow` (cinatra#3062): the run's
+ *                own `started_at`, stamped once inside the `queued->running`
+ *                dispatch CAS, with the platform's `PRE_EXECUTION_RUN_STATUSES`
+ *                still deciding every status the stamp cannot answer alone. It
+ *                is NOT a status test on its own, because `pending_approval` is
+ *                reached both BEFORE execution (the setup interrupt this very
+ *                hold parks on) and DURING it, and it is not a local flag a
+ *                screen kept: every read, and therefore every reload, asks the
+ *                row again.
  *   canDecide  — the same presentation-only reading of this reader's standing
  *                the held branch publishes, resolved by the same function. A
  *                reader who may not shape the run is not handed a live box.
@@ -239,8 +244,9 @@ export type RunRecommendationSettledSelection = {
 // The boundary itself lives on the pure run-status leaf beside
 // `PRE_EXECUTION_RUN_STATUSES` — see `recommendationRunHasStarted` there. It is
 // read here, and by the screen, and by the suite that pins it, so there is one
-// definition rather than three.
-export { recommendationRunHasStarted };
+// definition rather than three. `recommendationRunHasStartedForRow` is that same
+// boundary asked of the run ROW, which is what this resolver holds.
+export { recommendationRunHasStarted, recommendationRunHasStartedForRow };
 
 /**
  * cinatra#2815 S3 part 4: `kept` rides EVERY variant, because the keep and the
@@ -556,7 +562,7 @@ export async function resolveRecommendationHoldStateForActor(input: {
     // three answers and why the resolver is the one that answers it.
     const settledSelection: RunRecommendationSettledSelection = {
       holdRef: encodeRecommendationHoldRef({ runId, holdId: park.id }) ?? "",
-      runStarted: recommendationRunHasStarted(run.status),
+      runStarted: recommendationRunHasStartedForRow(run),
       canDecide: await readerMayDecide(run, who),
     };
     if (selected.length > 0) {
@@ -1051,10 +1057,10 @@ export async function skipRecommendationForActor(input: {
     // ending (a COMMIT whose result was lost) leaves BOTH, which is a decision
     // fully on record that the retry converges on.
     //
-    // `writeRunRecommendationSkip` READS THE MARKER BACK and returns whether it
-    // is durably there. A write that quietly did nothing is therefore not
-    // mistaken for a decision on record: the release below is gated on the
-    // verified fact, not on the absence of an exception.
+    // `writeRunRecommendationSkip` READS THE MARKER BACK and answers a named
+    // outcome, `"recorded"` when it is durably there. A write that quietly did
+    // nothing is therefore not mistaken for a decision on record: the release
+    // below is gated on the verified fact, not on the absence of an exception.
     // AN ALL-CLEAR ROW IS A SKIP, AND IT MUST READ BACK AS ONE (cinatra#3047,
     // review point 2). With checkboxes there is no skip ACTION: clearing every
     // box and pressing Continue is what skips, and on a run whose Skills step was
@@ -1066,15 +1072,28 @@ export async function skipRecommendationForActor(input: {
     // finding 4). `rejectedRows` is derived from a scoring taken NOW, and a skill
     // that was selected earlier can be absent from it — unassigned since,
     // uninstalled, or displaced past the candidate cap. Clearing only what the
-    // new scoring returned would leave exactly that skill selected, and the
+    // new scoring returned would leave that skill selected, and the
     // reader would see an all-clear row read back as confirmed. The claimed
     // offer is the durable record of what this hold asked about, so it is what
     // the clear is bounded by; the scored ids are unioned in so a hold with no
     // readable claim still clears what it can.
     //
-    // The store's own guard is the other half: the DELETE tests the run's status
-    // in the statement, so a started run's materialized ledger is untouched
-    // whatever this call asks for.
+    // The store's own guard is the other half, and it now covers the WHOLE skip
+    // (cinatra#3062). The clear rides the skip's own transaction, and that
+    // transaction first locks the run row by id, whatever its state, and reads
+    // the store's pre-start question from the locked row. A run that is `queued`,
+    // running, paused mid-flight or settled when the row is locked gets none of
+    // the writes: no clear, no per-skill row, no marker. The skip is then refused
+    // with the run-started sentence, as a confirm is. A writer of the run row
+    // that comes after the lock waits for this transaction's COMMIT.
+    //
+    // THE WINDOW THIS CLOSES. After a first Continue the run can sit `queued`
+    // with no start stamp, and the card offers its boxes and one Continue there.
+    // A reader who clears every box and presses Continue used to be answered
+    // ok:true: the clear deleted nothing (the store keeps `queued` out of its
+    // pre-start set), a skip marker and `user_skipped` rows landed beside the
+    // earlier selection, and the run went on with that selection. A skip sent
+    // after the run started was answered the same way. Both are refused now.
     const clearedSkillIds = new Set(rejectedRows.map((r) => r.skillId));
     if (bound.holdId) {
       try {
@@ -1085,18 +1104,23 @@ export async function skipRecommendationForActor(input: {
         /* an unreadable claim costs SCOPE, never the skip — the scored ids stand */
       }
     }
-    clearRunSelectedSkillRevisionsBeforeStart({
-      runId: input.runId,
-      skillIds: [...clearedSkillIds],
-    });
 
-    const recorded = writeRunRecommendationSkip({
+    const written = writeRunRecommendationSkip({
       runId: input.runId,
       skippedBy: userId,
       candidateCount: rejectedRows.length,
       rejected: rejectedRows,
+      beforeStart: { clearSkillIds: [...clearedSkillIds] },
     });
-    if (!recorded) {
+    if (written.outcome === "run_started") {
+      return {
+        ok: false,
+        error: RECOMMENDATION_RUN_STARTED_REFUSAL,
+        code: RECOMMENDATION_RUN_STARTED_CODE,
+      };
+    }
+    // Released only on the named landing; any other answer refuses.
+    if (written.outcome !== "recorded") {
       console.error(
         "[skipRecommendationForActor] skip marker did not read back for run",
         input.runId,
