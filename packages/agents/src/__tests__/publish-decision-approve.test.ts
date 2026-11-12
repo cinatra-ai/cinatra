@@ -203,6 +203,42 @@ describe("Publish (A7)", () => {
     expect(sendWayflowResume).not.toHaveBeenCalled();
   });
 
+  it("two Publishes at once: the one that claims after the other's resume reached a later gate gives the claim back and sends nothing", async () => {
+    // The loser read the decision's own gate before its claim; the winner's resume then parked the run at a later gate
+    // (the runtime records that gate before the run is back in pending_approval), so the loser's claim succeeds.
+    decisions.readOpenDecisionForRun.mockResolvedValue(null);
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", gateTaskId: "task-1" }));
+    resolveLatestWayflowGateTaskId.mockResolvedValueOnce("task-1").mockResolvedValueOnce("task-7");
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: false });
+    expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"]]);
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+  });
+
+  it("a gate that cannot be read under the claim gives the claim back and answers the fixed text", async () => {
+    decisions.readOpenDecisionForRun.mockResolvedValue(null);
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released" }));
+    resolveLatestWayflowGateTaskId.mockResolvedValueOnce("task-1").mockRejectedValueOnce(new Error("redis down: run-1"));
+    const err = (await approvePublishDecision({ runId: "run-1", actorContext: ACTOR }).catch((e: unknown) => e)) as Error & { code?: string };
+    expect(err.code).toBe("publish_decision_unavailable");
+    expect(err.message).not.toMatch(/redis|run-1/);
+    expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"]]);
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+  });
+
+  it("a resume fault is logged by a fixed error name only, never a custom name", async () => {
+    sendWayflowResume.mockRejectedValueOnce(Object.assign(new Error("x"), { name: "Run run-1 ctx-1" }));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await expect(approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).rejects.toMatchObject({ code: "publish_resume_failed" });
+      const logged = warn.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(logged).not.toMatch(/run-1|ctx-1/);
+      expect(logged).toMatch(/: Error$/m);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("a released decision whose run's current gate cannot be read resumes nothing", async () => {
     decisions.readOpenDecisionForRun.mockResolvedValue(null);
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released" }));
@@ -315,10 +351,43 @@ describe("who may decide a publish (A11)", () => {
     it("a run with no human owner is refused to a person outside its organization, before the kernel and any write", async () => {
       storeMock.readAgentRunById.mockResolvedValue(run({ runBy: null }));
       resolveOrgRoleForUser.mockResolvedValue(undefined);
-      await expect(decideAs(ACTOR)).rejects.toMatchObject({ statusCode: 403 });
+      await expect(decideAs(ACTOR)).rejects.toMatchObject({ statusCode: 404 });
       expect(enforceRunAccess).not.toHaveBeenCalled();
       expect(decisions.decide).not.toHaveBeenCalled();
       expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    });
+
+    it("a person outside the run's organization gets the same answer as a run that is not found", async () => {
+      storeMock.readAgentRunById.mockResolvedValue(run({ runBy: null }));
+      resolveOrgRoleForUser.mockResolvedValue(undefined);
+      const foreign = (await decideAs(ACTOR).catch((e: unknown) => e)) as AuthzError;
+      storeMock.readAgentRunById.mockResolvedValue(null);
+      const missing = (await decideAs(ACTOR).catch((e: unknown) => e)) as AuthzError;
+      expect(foreign).toBeInstanceOf(AuthzError);
+      expect(missing).toBeInstanceOf(AuthzError);
+      expect([foreign.statusCode, foreign.reason, foreign.message]).toEqual([missing.statusCode, missing.reason, missing.message]);
+      expect(decisions.decide).not.toHaveBeenCalled();
+    });
+
+    it.each([["an empty string", ""], ["false", false], ["zero", 0], ["a number", 42]])(
+      "a run whose owner is %s is not taken as a run with no human owner: refused before the kernel and any write",
+      async (_label, runBy) => {
+        storeMock.readAgentRunById.mockResolvedValue(run({ runBy }));
+        await expect(decideAs(ACTOR)).rejects.toMatchObject({ statusCode: 404 });
+        expect(resolveOrgRoleForUser).not.toHaveBeenCalled();
+        expect(enforceRunAccess).not.toHaveBeenCalled();
+        expect(decisions.decide).not.toHaveBeenCalled();
+        expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+      },
+    );
+
+    it("a run with no human owner keeps its stored agent ceiling on the kernel probe", async () => {
+      const ceiling = [{ tier: "organization", id: "org-1" }];
+      storeMock.readAgentRunById.mockResolvedValue(run({ runBy: null, oboCeiling: ceiling }));
+      await expect(decideAs(ACTOR)).resolves.toMatchObject({ ok: true });
+      for (const call of enforceRunAccess.mock.calls as unknown as Array<[Record<string, unknown>]>) {
+        expect(call[0].oboCeiling).toEqual(ceiling);
+      }
     });
 
     it.each(["execute", "approveHitl"])(
@@ -340,6 +409,14 @@ describe("who may decide a publish (A11)", () => {
       ["the system", { actorType: "system", source: "system" }],
       ["an agent acting for a person", { ...ACTOR, oboCeiling: [{ tier: "organization", id: "org-1" }] }],
       ["no actor", undefined],
+      // A human label is not enough: only the UI or a session route, with no token scopes, decides.
+      ["a human built from the passthrough road's headers", { actorType: "human", source: "a2a", userId: "user-a", orgId: "org-1" }],
+      ["a human through the MCP transport", { actorType: "human", source: "mcp", userId: "user-a" }],
+      ["a human through a worker", { actorType: "human", source: "worker", userId: "user-a" }],
+      ["a human through an agent", { actorType: "human", source: "agent", userId: "user-a" }],
+      ["a human through the scheduler", { actorType: "human", source: "scheduler", userId: "user-a" }],
+      ["a token-scoped human that holds both permissions", { ...ACTOR, tokenScopes: ["run.execute", "run.approveHitl"] }],
+      ["a token-scoped human with no scopes", { ...ACTOR, tokenScopes: [] }],
     ])("%s never decides a publish, and nothing is read or written", async (_label, actor) => {
       storeMock.readAgentRunById.mockResolvedValue(run({ runBy: null }));
       await expect(decideAs(actor)).rejects.toMatchObject({ statusCode: 403 });

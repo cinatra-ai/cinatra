@@ -330,6 +330,37 @@ describe("the model bridge refuses a publish the decision does not let through",
     expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
   });
 
+  it("a call that only a context id names is refused when that run cannot be read, before the check and any provider", async () => {
+    readAgentRunByContextIdMock.mockRejectedValue(new Error("db down: ctx-run-1"));
+    const res = await POST(makeReq({ user: "hi" }, { "x-cinatra-a2a-context-id": CTX }));
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { code?: string; error?: string };
+    expect(body).toEqual({ error: "Run identity could not be verified", code: "run_mismatch" });
+    expect(publishCallAllowedMock).not.toHaveBeenCalled();
+    expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
+    expect(resolveProviderAdapterMock).not.toHaveBeenCalled();
+  });
+
+  it("a bearer call with a foreign context id gets the same answer as with none: the header is not looked up", async () => {
+    const { verifyLangGraphBridgeToken } = await import("@/lib/a2a-auth");
+    publishCallAllowedMock.mockResolvedValue(false);
+    const bearer = (headers: Record<string, string>) =>
+      new Request("http://localhost:3000/api/llm-bridge", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer client-jwt", ...headers },
+        body: JSON.stringify({ user: "hi" }),
+      });
+    vi.mocked(verifyLangGraphBridgeToken)
+      .mockResolvedValueOnce({ ok: true, subject: "client-1" } as never)
+      .mockResolvedValueOnce({ ok: true, subject: "client-1" } as never);
+    const withForeign = await POST(bearer({ "x-cinatra-a2a-context-id": "ctx-run-2" }));
+    const withNone = await POST(bearer({}));
+    expect(withForeign.status).toBe(withNone.status);
+    expect(await withForeign.text()).toBe(await withNone.text());
+    expect(readAgentRunByContextIdMock).not.toHaveBeenCalled();
+    expect(publishCallAllowedMock).not.toHaveBeenCalled();
+  });
+
   it("a call of no run is not asked about a publish", async () => {
     const res = await POST(makeReq({ user: "hi" }, {}));
     expect(res.status).toBe(200);

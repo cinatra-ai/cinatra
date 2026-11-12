@@ -20,7 +20,10 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock("server-only", () => ({}));
-vi.mock("@cinatra-ai/agents", () => ({ readAgentRunById: h.readAgentRunById }));
+vi.mock("@cinatra-ai/agents", () => ({
+  readAgentRunById: h.readAgentRunById,
+  publishCallAllowed: async () => true, // cinatra#4150: no publish decision holds this run
+}));
 vi.mock("@/lib/primitive-handlers", () => ({
   collectAllPrimitiveHandlers: async () => ({ objects_save: h.objectsSave }),
 }));

@@ -55,7 +55,10 @@ export const isPublishDecisionRequired = (err: unknown): boolean =>
 
 const isStale = (err: unknown): boolean =>
   (err as { code?: unknown } | null)?.code === "stale_from_status";
-const nameOf = (err: unknown): string => (err instanceof Error ? err.name : "error");
+/** The error's class name for a log line, from a fixed list only: a name outside it (a custom error could carry an id in
+ *  its name) is logged as "Error". */
+const LOGGED_ERROR_NAMES = new Set(["Error", "TypeError", "RangeError", "SyntaxError", "AbortError", "TimeoutError", "AuthzError"]);
+const nameOf = (err: unknown): string => (err instanceof Error ? (LOGGED_ERROR_NAMES.has(err.name) ? err.name : "Error") : "error");
 
 /** Refuses a resume when the run's newest decision exists and is not `released`. A read error propagates. Answers
  *  whether the run has a (released) decision: such a run met a publish gate, so it can meet one again. */
@@ -219,34 +222,49 @@ export type PublishDecisionAnswer =
 
 type DecideInput = { runId: string; actorContext: PrimitiveActorContext; roleHints?: ActorRoleHints };
 const forbidden = (message: string) => new AuthzError({ statusCode: 403, reason: "forbidden", message });
+/**
+ * Who counts as a person for Publish and Do not publish: a human actor that reached the product through its own UI or a
+ * session route (source "ui" or "route"), carrying no token scopes, with a user id and no delegated agent ceiling. Every
+ * other actor is refused: an A2A, MCP, worker, scheduler or agent source (the header-built human of the passthrough road
+ * included), and any token-scoped actor. Local to the publish decision; the other human-only gates keep their own rules.
+ */
+function isPublishDecider(actor: PrimitiveActorContext | null | undefined): actor is PrimitiveActorContext & { userId: string } {
+  return actor?.actorType === "human" && (actor.source === "ui" || actor.source === "route") && actor.tokenScopes === undefined
+    && typeof actor.userId === "string" && actor.userId.length > 0 && !actor.oboCeiling;
+}
+
+/** A run that is not found, and a run the person may not see (outside its organization), answer the same. */
+const hidden = () => new AuthzError({ statusCode: 404, reason: "hidden", message: "Not found." });
 
 /**
  * Who may decide a publish, for Publish and Do not publish alike. The decider is ONE principal: the person of
- * `actorContext` (a human actor with a user id and no delegated agent ceiling; a model, a peer, the system or an agent
- * acting for a person is refused before any read), and a member of the run's organization.
+ * `actorContext` (isPublishDecider: a human actor from the UI or a session route, with no token scopes, a user id and no
+ * delegated agent ceiling; every other actor is refused before any read), and a member of the run's organization.
  *   - A run with a human owner: run.execute and run.approveHitl under the run's effective policy, as every gate decision.
- *   - A run with no human owner (runBy null): the policy's owner tier would refuse everyone, so the person's role in the
- *     run's organization is resolved first and both permissions are asked of the kernel for that organization, with the
- *     token-scope and agent-ceiling checks of enforceRunAccess kept and the run policy not applied.
+ *   - A run with no human owner (runBy null, and only null): the policy's owner tier would refuse everyone, so the
+ *     person's role in the run's organization is resolved first and both permissions are asked of the kernel for that
+ *     organization, with the token-scope and agent-ceiling checks of enforceRunAccess kept (the run's stored ceiling is
+ *     on the probe) and the run policy not applied.
+ *   - A run whose owner is neither null nor a non-empty string is refused.
+ * A run that is not found, and a person outside the run's organization, answer the same 404 "Not found.".
  * Answers the run, the decider and the decider's write authority in the run's organization.
  */
 export async function enforcePublishDecisionAccess(input: DecideInput): Promise<{ run: AgentRunRecord; deciderId: string; authority: OrgWriteAuthority }> {
   const actor = input.actorContext;
-  if (actor?.actorType !== "human" || typeof actor.userId !== "string" || actor.userId.length === 0 || actor.oboCeiling) {
-    throw forbidden("Only a person can decide a publish.");
-  }
+  if (!isPublishDecider(actor)) throw forbidden("Only a person can decide a publish.");
   const deciderId = actor.userId;
   const run = await readAgentRunById(input.runId);
   const { enforceRunAccess, resolveEffectivePolicy } = await import("./auth-policy");
   const { resolveOrgRoleForUser } = await import("@/lib/auth-session");
-  const notMember = () => forbidden("Deciding a publish needs membership of the run's organization.");
+  const notMember = hidden;
   let runForCheck: Parameters<typeof enforceRunAccess>[0] = null;
   let roles = input.roleHints;
-  const headless = run !== null && !run.runBy;
+  if (run && run.runBy !== null && (typeof run.runBy !== "string" || run.runBy.length === 0)) throw hidden();
+  const headless = run !== null && run.runBy === null;
   let role = headless ? await resolveOrgRoleForUser(run.orgId, deciderId) : undefined;
   if (run && headless) {
     if (role === undefined) throw notMember();
-    runForCheck = { id: run.id, runBy: null, orgId: run.orgId, coOwnerUserIds: [] };
+    runForCheck = { id: run.id, runBy: null, orgId: run.orgId, coOwnerUserIds: [], oboCeiling: run.oboCeiling };
     roles = { ...input.roleHints, orgRole: role, actorOrganizationId: run.orgId };
   } else if (run) {
     const template = await readAgentTemplateById(run.templateId);
@@ -256,7 +274,7 @@ export async function enforcePublishDecisionAccess(input: DecideInput): Promise<
   }
   await enforceRunAccess(runForCheck, actor, "execute", roles);
   await enforceRunAccess(runForCheck, actor, "approveHitl", roles);
-  if (!run) throw new AuthzError({ statusCode: 404, reason: "hidden" });
+  if (!run) throw hidden();
   if (!headless) role = await resolveOrgRoleForUser(run.orgId, deciderId);
   if (role === undefined) throw notMember();
   return { run, deciderId, authority: sessionAuthorityFromResolvedRole(run.orgId, role) };
@@ -301,8 +319,9 @@ const PUBLISH_RESUME_TEXT = "[Publish approved]";
  * must hold a WayFlow context of an internal template. Then ONE decision write (parked -> released, with that person),
  * then the shared WayFlow resume: the run is claimed (pending_approval -> running) and ONE message is sent into its held
  * context. A decision already released while the run still waits (a resume that failed before its send) retries only
- * the resume, and only while the run's current gate visit is that decision's own gate task; a run that went on to a later
- * gate, or whose current gate cannot be read, resumes nothing ({ ok: true, resumed: false }), with no claim and no write.
+ * the resume, and only while the run's current gate visit is that decision's own gate task, read before the claim and
+ * again under it; a run that went on to a later gate, or whose current gate cannot be read, resumes nothing
+ * ({ ok: true, resumed: false }): no write, no send, and a claim taken is given back.
  * A run that another Publish already claimed resumes nothing more ({ ok: true, resumed: false }). A late
  * answer is publish_decision_not_open with the current status. A resume that fails before its send puts the run back to
  * pending_approval; after its send the run stays where the send left it. Its fault is publish_resume_failed, with a
@@ -326,6 +345,7 @@ export async function approvePublishDecision(input: DecideInput): Promise<Publis
   });
   let agentUrl: string;
   let contextId: string;
+  let retryGateTaskId: string | null = null;
   try {
     const template = await readAgentTemplateById(run.templateId);
     if (!run.a2aContextId || !template?.packageName || template.sourceType !== "internal") throw new Error("not resumable");
@@ -340,8 +360,22 @@ export async function approvePublishDecision(input: DecideInput): Promise<Publis
       // on and paused at a later gate (or whose current gate cannot be read) is not this decision's to resume.
       const { resolveLatestWayflowGateTaskId } = await import("@cinatra-ai/a2a");
       if ((await resolveLatestWayflowGateTaskId(run.id)) !== latest.gateTaskId) return { ok: true, resumed: false };
+      retryGateTaskId = latest.gateTaskId;
     }
     if (!(await moveRun(run.id, "pending_approval", "running", undefined, authority))) return { ok: true, resumed: false };
+    // Under the claim, the gate is read again: another Publish may have resumed this gate meanwhile, and the run may now
+    // wait at a later one (the runtime records a gate before it moves the run back to pending_approval). A claim on any
+    // other gate, or a gate that cannot be read, is given back before anything is sent.
+    if (retryGateTaskId !== null) {
+      let sameGate = false;
+      try {
+        const { resolveLatestWayflowGateTaskId } = await import("@cinatra-ai/a2a");
+        sameGate = (await resolveLatestWayflowGateTaskId(run.id)) === retryGateTaskId;
+      } finally {
+        if (!sameGate) await moveRun(run.id, "running", "pending_approval", undefined, authority).catch(() => false);
+      }
+      if (!sameGate) return { ok: true, resumed: false };
+    }
   } catch (err) {
     throw opaque(err);
   }

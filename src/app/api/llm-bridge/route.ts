@@ -937,7 +937,16 @@ export async function POST(req: Request): Promise<Response> {
   let runFromContextId: Awaited<ReturnType<typeof readAgentRunByContextId>> =
     null;
   let contextIdUnresolved = false;
-  if (a2aContextId) {
+  // cinatra#4150 — a context lookup that FAILED is refused below even when no token
+  // resolved a run: the context-id would have been the run the publish check asks
+  // about, so a read fault must not let the call go on as a call of no run.
+  let contextLookupFailed = false;
+  // cinatra#4150 — the context-id is read only on the bridge-token path. A bearer
+  // (JWT) caller carries no organization the run could be bound to, and its call
+  // can never act as a run (runForPorts is the token's run, read only on the
+  // bridge path), so its context header selects nothing and is not looked up: the
+  // answer cannot depend on whether another organization's run exists.
+  if (a2aContextId && isBridgeAuthorized) {
     try {
       runFromContextId = await readAgentRunByContextId(a2aContextId);
       // PRESENT-but-unresolvable is a POSITIVE conflict signal, not "no
@@ -948,6 +957,7 @@ export async function POST(req: Request): Promise<Response> {
     } catch {
       // A lookup FAILURE is likewise not evidence of agreement — fail closed.
       contextIdUnresolved = true;
+      contextLookupFailed = true;
     }
   }
 
@@ -971,11 +981,12 @@ export async function POST(req: Request): Promise<Response> {
     !!runFromToken &&
     (contextIdUnresolved ||
       (!!runFromContextId && runFromContextId.id !== runFromToken.id));
-  if (bodyRunMismatch || runTokenDivergent) {
+  if (bodyRunMismatch || runTokenDivergent || contextLookupFailed) {
     console.warn(
       `[llm-bridge-run-select] REFUSED code=run_mismatch ` +
         `claimed=${claimsRun ? String(body.agent_run_id).slice(0, 64) : "-"} ` +
-        `body-mismatch=${bodyRunMismatch} token-divergent=${runTokenDivergent}`,
+        `body-mismatch=${bodyRunMismatch} token-divergent=${runTokenDivergent} ` +
+        `context-lookup-failed=${contextLookupFailed}`,
     );
     return NextResponse.json(
       { error: "Run identity could not be verified", code: "run_mismatch" },
