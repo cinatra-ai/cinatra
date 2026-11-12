@@ -57,9 +57,11 @@ import "server-only";
 //   • actually ENQUEUES the repair run (`enqueueAgentRun`, `jobId: runId` for
 //     BullMQ-level dedup across a re-drain) so a `dispatched` repair genuinely
 //     runs, dispatched exactly like any other agent run;
-//   • projects an optional CMS-generic task/`inputParams` addition (see
-//     `./lifecycle-repair-cms-production-bridge`) when the base target is a
-//     captured CMS snapshot — a no-op for every other producer (e.g. blog);
+//   • puts the reviewer's findings into the input the producer declares for
+//     them (cinatra#4424: `cinatra.lifecycle.repairFindingsInput`, projected by
+//     `projectRepairFindingsInput`, `@/lib/lifecycle/lifecycle-policy`), for
+//     every base whatever its kind; a producer that declares nothing gets its
+//     own inputs plus the typed request;
 //   • THE SECURITY FIX: the dispatched run's ActorContext is the ORIGINATING
 //     producing run's own `runBy`, re-verified LIVE at dispatch time via
 //     `resolveOrgRoleForUser` (never trusted from whatever the producing run
@@ -93,6 +95,11 @@ import { carryDeclaredReviewDecision, markRepairDispatched } from "./lifecycle-r
 import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
 
 import type { ChangesRequestedRequest, RepairFinding } from "@/lib/lifecycle/lifecycle-repair";
+import {
+  parseLifecycleConfigText,
+  projectRepairFindingsInput,
+  type CompiledManifestLifecycle,
+} from "@/lib/lifecycle/lifecycle-policy";
 // cinatra#1940 P3 (Decision 2): the creation perimeter is now guarded — this
 // repair-delivery drain has no session, so it mints the SYSTEM
 // `agent-run-dispatch` authority (a caller the design's caller matrix did not
@@ -306,16 +313,20 @@ export async function dispatchPendingProducerRepairs(opts?: {
 
       const runId = repairRunId(row.id);
 
-      // CMS-generic task-construction (cinatra#2286 S10 PR2 — the execution
-      // bridge). Dynamically imported so a non-CMS repairing producer (e.g.
-      // the blog pipeline) never pulls this module's DB reads into the common
-      // dispatch path; it resolves to `{}` (no-op) whenever the base target is
-      // not itself a captured CMS snapshot, so dispatch stays byte-identical
-      // for every other producer.
-      const { projectCmsRepairInputParams } = await import(
-        "./lifecycle-repair-cms-production-bridge"
-      );
-      const cmsInputParams = await projectCmsRepairInputParams(request);
+      // The reviewer's findings go into the input the producer DECLARES for
+      // them (cinatra#4424): one generic text built from the findings alone,
+      // for every base, whatever its kind. A producer that declares no
+      // findings input gets its own inputs plus the typed request, byte for
+      // byte; the drain reads no base row and adds no input for it.
+      //
+      // The drain applies the declaration it reads here only to a run it
+      // creates. A run that already exists (a re-drain after a crash between creation and enqueue)
+      // is enqueued with the inputs it was created with, and any run can wait
+      // in the queue while the template is re-imported: the worker's run start
+      // (`bindRepairFindingsInputAtStart`, `./execution.ts`) re-derives the
+      // findings input from the template it executes.
+      const findingsInputParams: Record<string, unknown> =
+        projectRepairFindingsInput(producer.lifecycle, request.findings) ?? {};
 
       const [already] = await db
         .select({ id: agentRuns.id })
@@ -349,7 +360,7 @@ export async function dispatchPendingProducerRepairs(opts?: {
               orgId: row.orgId,
               inputParams: {
                 ...producer.originatingInputParams,
-                ...cmsInputParams,
+                ...findingsInputParams,
                 lifecycleRepairRequest: request,
               },
               sourceType: "lifecycle_repair",
@@ -432,6 +443,9 @@ async function resolveProducingTemplate(producerRunId: string | null, orgId: str
   originatingRunBy: string | null;
   /** Recorded producer inputs are data, never launch authority. */
   originatingInputParams: Record<string, unknown>;
+  /** The producing template's compiled lifecycle declaration
+   * (`agent_templates.lifecycle_config`), read fail-soft; null when absent. */
+  lifecycle: CompiledManifestLifecycle | null;
 } | null> {
   if (!producerRunId) return null;
   const [run] = await db
@@ -446,7 +460,11 @@ async function resolveProducingTemplate(producerRunId: string | null, orgId: str
     .limit(1);
   if (!run?.templateId) return null;
   const [tmpl] = await db
-    .select({ id: agentTemplates.id, packageName: agentTemplates.packageName })
+    .select({
+      id: agentTemplates.id,
+      packageName: agentTemplates.packageName,
+      lifecycleConfig: agentTemplates.lifecycleConfig,
+    })
     .from(agentTemplates)
     .where(eq(agentTemplates.id, run.templateId))
     .limit(1);
@@ -476,6 +494,7 @@ async function resolveProducingTemplate(producerRunId: string | null, orgId: str
     parentOboCeiling,
     originatingRunBy: run.runBy ?? null,
     originatingInputParams,
+    lifecycle: parseLifecycleConfigText(tmpl.lifecycleConfig ?? null),
   };
 }
 

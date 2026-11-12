@@ -10,12 +10,6 @@
     "@cinatra-ai/host:blog-routing": {
       "createsArtifact": false
     },
-    "@cinatra-ai/host:cms-review": {
-      "createsArtifact": true,
-      "entries": [
-        "src/lib/register-cms-review-host-seam-runtime.ts"
-      ]
-    },
     "@cinatra-ai/host:connector-config": {
       "createsArtifact": false
     },
@@ -84,12 +78,6 @@
     }
   },
   "roads": {
-    "@cinatra-ai/host:cms-review :: src/lib/artifacts/cms-content-snapshot-capture.ts": {
-      "removedBy": "cinatra#3821's follow-up"
-    },
-    "@cinatra-ai/host:cms-review :: src/lib/artifacts/cms-preview-capture-store.ts": {
-      "removedBy": "cinatra#3821's follow-up"
-    },
     "@cinatra-ai/host:email-routing :: src/lib/register-email-providers.ts": {
       "removedBy": "cinatra#3821's follow-up"
     }

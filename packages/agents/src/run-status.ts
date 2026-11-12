@@ -100,6 +100,120 @@ export function recommendationRunHasStarted(status: string | null | undefined): 
   return !PRE_EXECUTION_RUN_STATUSES.has(status);
 }
 
+/**
+ * THE ONE STATUS THAT CANNOT ANSWER THE QUESTION ON ITS OWN (cinatra#3062).
+ *
+ * `pending_approval` has TWO producers in the transition table below, and that
+ * table's own comments name them: `queued->pending_approval` is "the setup
+ * interrupt, nothing has executed", and `running->pending_approval` is "an
+ * interrupt raised mid-flight". One of those moments is BEFORE the run has
+ * executed and the other is AFTER it, and the status string is byte-identical in
+ * both. `RUN_START_AWAITING_APPROVAL_CLAUSE` below already says so in words: its
+ * sentence "does not claim the run has yet to start" precisely because the
+ * status alone cannot tell.
+ *
+ * The skills recommendation hold parks the run on the FIRST of the two, so the
+ * status-only boundary above read a run held at the very question the card is
+ * asking as "started" — and the card then drew the once-it-has-started reading
+ * over a run that had not started.
+ *
+ * The ROW settles it. `started_at` is stamped inside the `queued->running`
+ * dispatch CAS and nowhere else, so a `pending_approval` row with no stamp has
+ * not executed and one with a stamp has.
+ */
+export const START_AMBIGUOUS_RUN_STATUSES: ReadonlySet<string> = new Set<AgentRunStatus>([
+  "pending_approval",
+]);
+
+/**
+ * HAS THIS RUN STARTED RUNNING — ASKED OF THE ROW (cinatra#3062).
+ *
+ * THE AUTHORITY IS THE RUN'S OWN `started_at`, never a status string alone and
+ * never a local flag a screen kept across a reload. The stamp is written once,
+ * inside the `queued->running` dispatch CAS, so its presence is the fact "this
+ * run has executed".
+ *
+ * The status is still read, for the two things the stamp cannot answer by
+ * itself:
+ *
+ *   - a status in `START_AMBIGUOUS_RUN_STATUSES` with NO stamp has NOT started
+ *     — the case the card was getting wrong;
+ *   - `queued` with NO stamp has NOT started either (cinatra#3062, fix leg 5).
+ *     `queued` is the dispatch waiting for its worker, and the stamp is written
+ *     in the `queued->running` CAS that ends it — so until that CAS no work step
+ *     has run, which is what §V calls "before the run starts". The status-only
+ *     answer calls it started, and the card drew the read-only reading with no
+ *     Continue for as long as the row sat there right after the one Continue;
+ *   - a row that carries the in-attempt wait marker `humanWaitAttemptId`
+ *     (cinatra#1938) HAS started, whatever its stamp says. The marker is set
+ *     only on `running->pending_approval`, the interrupt raised mid-flight, so
+ *     its presence is the fact "this run executed". It tells a run dispatched
+ *     BEFORE the stamp existed (its `started_at` was left NULL) and paused
+ *     mid-flight at a gate apart from a run parked before it ever ran: both
+ *     read `pending_approval` with no stamp;
+ *   - anything else with no stamp keeps the status-only answer
+ *     `recommendationRunHasStarted` gives, so a row whose stamp is missing for
+ *     any other reason never becomes editable on that account.
+ *
+ * `recommendationRunHasStarted` is unchanged and is still the boundary for a
+ * caller holding nothing but a status. This is THE SAME BOUNDARY asked of a
+ * caller that holds the row — which is what the resolver holds, on every read
+ * and therefore on every reload.
+ */
+export function recommendationRunHasStartedForRow(
+  run:
+    | { status?: string | null; startedAt?: Date | string | null; humanWaitAttemptId?: string | null }
+    | null
+    | undefined,
+): boolean {
+  if (!run) return false;
+  if (run.startedAt !== null && run.startedAt !== undefined) return true;
+  if (run.humanWaitAttemptId !== null && run.humanWaitAttemptId !== undefined) return true;
+  const status = run.status;
+  if (typeof status === "string" && START_AMBIGUOUS_RUN_STATUSES.has(status)) return false;
+  if (status === "queued") return false;
+  return recommendationRunHasStarted(status);
+}
+
+/**
+ * THE SAME BOUNDARY, FOR A GUARD THAT LIVES IN SQL (cinatra#3062).
+ *
+ * A statement cannot call the function above, and the pre-start selection write
+ * puts its status test INSIDE the DELETE and the INSERT on purpose — so a
+ * dispatch cannot land between a status read and the write. That statement needs
+ * the boundary as a VALUE, and this is it: the statuses a run can hold while it
+ * has not executed. Paired with `started_at IS NULL` and
+ * `human_wait_attempt_id IS NULL` in the same predicate it is
+ * `recommendationRunHasStartedForRow` negated, expressed in SQL, except for
+ * `queued` (below) and for an absent status (NULL or empty), which that
+ * function reads as not started and the predicate refuses (`status = ANY(...)`
+ * is not true for it).
+ *
+ * `pending_approval` is in it because the recommendation hold's own park is
+ * BEFORE execution — see `START_AMBIGUOUS_RUN_STATUSES` — and leaving it out is
+ * what refused a returning reader's change on a run that had not started, while
+ * the screen was offering them the box to make it with.
+ *
+ * `queued` IS DELIBERATELY NOT IN IT, although an unstamped queued row reads as
+ * not started above (cinatra#3062, fix leg 5). The dispatch reads the run's
+ * selected skill revisions for its ledger snapshot while the row is still
+ * `queued`, BEFORE the `queued->running` CAS, so a selection written in that
+ * window could miss the snapshot the run is materialized from. The store stays
+ * the conservative authority there. A confirm's replace answers `false` for a
+ * row that is `queued` when its probe reads it, but the probe takes no lock: a
+ * run that moves into the set (the setup interrupt, `queued` to
+ * `pending_approval`) between the probe and the replace's DELETE and INSERT
+ * gets those writes while the answer is `false`. A skip (an all-clear Continue)
+ * locks the run row and reads the same predicate from it in its own
+ * transaction, and gets none of its writes when the locked row is not before
+ * its start. A `false` and a `run_started` are each answered with the
+ * run-started refusal, and the card draws it.
+ */
+export const PRE_START_RUN_STATUSES_WITHOUT_A_START_STAMP: ReadonlySet<string> = new Set<string>([
+  ...PRE_EXECUTION_RUN_STATUSES,
+  ...START_AMBIGUOUS_RUN_STATUSES,
+]);
+
 // Derived from exhaustive grep of existing updateAgentRunStatus* callsites
 // Transition table includes cancel/reject edges from any live state so
 // user-cancel works consistently.
@@ -1105,6 +1219,16 @@ function escapeLiteral(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** Every clause the platform mints after the start head, longest first (see below). */
+const PLATFORM_START_CLAUSES: readonly string[] = [
+  ...new Set([
+    ...Object.values(RUN_START_CLAUSES),
+    RUN_START_NOT_STARTED_CLAUSE,
+    RUN_START_PARKED_CLAUSE,
+    RUN_START_SCHEDULE_WAIT_CLAUSE,
+  ]),
+].sort((a, b) => b.length - a.length);
+
 /**
  * THE PLATFORM'S OWN SENTENCE FOR ONE RUN, as a pattern.
  *
@@ -1128,17 +1252,7 @@ function escapeLiteral(value: string): string {
  * which sentences are the platform's to rewrite.
  */
 function platformStartSentencePattern(runId: string): RegExp {
-  const clauses = [
-    ...new Set([
-      ...Object.values(RUN_START_CLAUSES),
-      RUN_START_NOT_STARTED_CLAUSE,
-      RUN_START_PARKED_CLAUSE,
-      RUN_START_SCHEDULE_WAIT_CLAUSE,
-    ]),
-  ]
-    .sort((a, b) => b.length - a.length)
-    .map(escapeLiteral)
-    .join("|");
+  const clauses = PLATFORM_START_CLAUSES.map(escapeLiteral).join("|");
   return new RegExp(
     "Dispatched\\s+`([^`\\n]+)`\\s+\\(runId:\\s*`" +
       escapeLiteral(runId) +
@@ -1150,15 +1264,96 @@ function platformStartSentencePattern(runId: string): RegExp {
 }
 
 /**
- * Rewrite the platform's own start sentence for ONE run, wherever it stands in
- * a turn's text, and leave everything else byte-identical.
- *
  * A CLAUSE-LESS SENTENCE IS ONLY THE PLATFORM'S WHEN IT STANDS ALONE. One door
  * mints the head with no clause after it, and that door writes the sentence as
  * the whole line. The same characters INSIDE prose are a quotation of the line,
- * not the line, and a corrector that rewrote a quotation would be a second
- * author of the turn -- so a clause-less match is taken only when nothing but
- * whitespace shares its line.
+ * not the line, so a clause-less match counts only when nothing but whitespace
+ * shares its line. A match that carries one of the minted clauses is the
+ * platform's wherever it stands.
+ *
+ * A line ends at LF or at CRLF: a carriage return just before the line break
+ * is part of the break, not a word that shares the line.
+ *
+ * ONE rule, read by both the renderer's question below and the corrections'
+ * rewrite, so the two take the same complete matches as the platform's sentence.
+ */
+function isThePlatformsOwnMatch(
+  text: string,
+  match: string,
+  clause: string | undefined,
+  offset: number,
+): boolean {
+  if (clause !== undefined) return true;
+  const before = text.slice(0, offset);
+  const after = text.slice(offset + match.length);
+  return /(?:^|\n)[ \t]*$/.test(before) && /^[ \t]*\r?(?:\n|$)/.test(after);
+}
+
+/**
+ * A LINE STILL ARRIVING. While the model streams the line back, the text part
+ * grows chunk by chunk, so the renderer reads states such as "Dispatched … ).
+ * The run": the head is complete and the clause is not yet. Such a state ends
+ * the text with a strict prefix of one of the minted clauses and nothing else
+ * after the head. Read as the platform's line, it keeps the line where the
+ * finished line will stand, so the line does not drop beneath the run's row
+ * and come back up inside one streamed sentence. A text that goes on past the
+ * prefix, or whose words leave every minted clause, is not this state.
+ *
+ * KNOWN LIMIT: this holds only for a line that stands alone. The state does not
+ * read what stands before the head. So a line that follows other words on its
+ * line ("Sure. Dispatched … ).") is not read while its head ends the text, and
+ * is read from the first letters of its clause on; a head quoted inside prose
+ * that ends the text in a clause prefix is read as the platform's line; and a
+ * paraphrased line is read while its words still begin a minted clause and not
+ * after they leave it. Such a line can move while it streams in; the finished
+ * text is drawn as the stands-alone rule and the clauses read it.
+ */
+function endsInAMintedClauseStillArriving(after: string): boolean {
+  const rest = after.replace(/^[ \t]+/, "");
+  if (rest.length === 0 || /[\r\n]/.test(rest)) return false;
+  return PLATFORM_START_CLAUSES.some(
+    (clause) => clause.length > rest.length && clause.startsWith(rest),
+  );
+}
+
+/**
+ * DOES THIS TEXT CARRY THE PLATFORM'S OWN START SENTENCE FOR THIS RUN?
+ * (cinatra#3062, §V: "the assistant says it dispatched the agent and that the
+ * run paused for a decision on the recommended skills — … — and that same turn
+ * carries the chip-row beneath the line".)
+ *
+ * The conversation reads downwards, so the line that says the run was
+ * dispatched stands above the run's own cards. The start's tool result reaches
+ * the turn BEFORE the model says the line back, so the turn's ordered trace
+ * carries the run's part first and the line after it; the renderer asks this to
+ * draw that one line above the run's slot. It reads the same pattern and the
+ * same stands-alone rule (`isThePlatformsOwnMatch`) as the corrections below,
+ * so a finished clause-less sentence quoted inside prose is not the platform's
+ * here either. It takes one state more than the corrections: a line still
+ * arriving (`endsInAMintedClauseStillArriving`), which the corrections leave
+ * alone, because they rewrite a finished sentence. That state does NOT apply
+ * the stands-alone rule (see its known limit). Pure: it reads, it rewrites
+ * nothing.
+ */
+export function textCarriesRunStartSentence(text: string, runId: string): boolean {
+  if (!runId) return false;
+  for (const m of text.matchAll(platformStartSentencePattern(runId))) {
+    const offset = m.index ?? 0;
+    if (isThePlatformsOwnMatch(text, m[0], m[2], offset)) return true;
+    if (m[2] === undefined && endsInAMintedClauseStillArriving(text.slice(offset + m[0].length))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Rewrite the platform's own start sentence for ONE run, wherever it stands in
+ * a turn's text, and leave everything else byte-identical.
+ *
+ * A clause-less match is taken only when it stands alone on its line
+ * (`isThePlatformsOwnMatch` above): a corrector that rewrote a quotation of the
+ * line would be a second author of the turn.
  */
 function rewritePlatformStartSentence(input: {
   text: string;
@@ -1173,12 +1368,7 @@ function rewritePlatformStartSentence(input: {
       clause: string | undefined,
       offset: number,
     ) => {
-      if (clause === undefined) {
-        const before = input.text.slice(0, offset);
-        const after = input.text.slice(offset + match.length);
-        const ownsTheLine = /(?:^|\n)[ \t]*$/.test(before) && /^[ \t]*(?:\n|$)/.test(after);
-        if (!ownsTheLine) return match;
-      }
+      if (!isThePlatformsOwnMatch(input.text, match, clause, offset)) return match;
       return input.replace(packageName);
     },
   );

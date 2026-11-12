@@ -10,6 +10,7 @@ import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { deleteChatThread, renameChatThread } from "./actions";
 import { activeThreadIdForPathname } from "./chat-client-url";
+import { CHAT_THREAD_RENAMED_EVENT } from "@/lib/chat-shell-bus";
 
 type ThreadSummary = {
   id: string;
@@ -101,6 +102,11 @@ export function ChatThreadPanel({ initialThreads = [], embedded = false }: { ini
       await renameChatThread(threadId, trimmed);
       setThreads((prev) =>
         prev.map((t) => (t.id === threadId ? { ...t, title: trimmed } : t)),
+      );
+      // The page's list and its breadcrumb take the new name at once (cinatra#4453):
+      // a rename keeps the thread's updatedAt, so the page's list poll keeps the old one.
+      window.dispatchEvent(
+        new CustomEvent(CHAT_THREAD_RENAMED_EVENT, { detail: { threadId, title: trimmed } }),
       );
     }
     setEditingId(null);

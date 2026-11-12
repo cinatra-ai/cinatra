@@ -5,8 +5,8 @@ import "server-only";
  * (cinatra#2092, epic #2086 S5).
  *
  * Two seams, both bound here rather than imported at their use sites, for the
- * route-graph ratchet (the same posture as `register-cms-review-host-seam-runtime`
- * and the `background-jobs-registry` runner slots):
+ * route-graph ratchet (the same posture as the `background-jobs-registry`
+ * runner slots):
  *
  *   1. the DRAIN runner slot — the drain core reaches the Anthropic sync/GC
  *      services and the `@cinatra-ai/llm` engine graph, which must not be

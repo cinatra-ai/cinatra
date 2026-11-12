@@ -1097,6 +1097,43 @@ re-pins `app-components` to that body and merges before this change; `app`,
 | `app-connectors` | `match` against the 0.8.2 body; `drift` once docs PR 254 merges | **hashes only** — byte-identical surface declarations (11 surfaces); `contentHash` moves back to the 0.8.1 spec hash | re-pin |
 | `app-notifications` | `match` | nothing — the served body is still the pinned artifact | none |
 
+## Reconciliation record — 2026-11-04 (app-components)
+
+Measured 2026-11-04 for the `app-components` pin, which moves to version 0.8.0
+of the components spec: its Badge / Pill section draws an archived project's
+and an archived organization's page header, each with the status roster's
+Archived pill in the header's actions. Docs PR 259 publishes that version, and
+this change follows it: it merges together with docs PR 259, right after it,
+never before, because a `published` pin is checked against the served file.
+Until docs PR 259 merges, the served file is still the 0.7.2 body
+(`9de4ae11…`), so this change's own pin-drift reading reports `drift` for
+`app-components`. The adopted body is the file on docs PR 259's head. It hashes
+to
+`sha256:4fe35b8bee4af4475f71b5ea8662fd7c6f074c3735f80d477c33c17f4628a617`,
+and the `contentHash` read back out of its own body is
+`sha256:dce332648ec4e3f8c56599d5e66eb48985593d3e15f453dd5940379a4daea7cc`; the pin
+named `9de4ae11…` and `7aceaf73…` before. The adopted body was
+compared, as parsed JSON, with the committed copy under
+`tests/e2e/design/conformance/manifests/` that it replaces: `schemaVersion`,
+`spec` and the whole `surfaces` array (the same 37 surfaces, with their
+fields, actions and states) compare equal, and the only top-level key that
+differs is `contentHash`. This is the case "Why a hash-only re-pin is refused"
+names: the spec source changed under an unchanged surface list, so no driver,
+harness mount or allowlist entry moves with the pin. The new drawing carries no
+conformance annotation. The committed artifact is now the verbatim adopted
+body, and both hashes of the entry in `conformance-pins.json` were re-derived
+from the adopted bytes, never typed. The five pins were read against their
+served files with one anonymous GET each on 2026-11-04 and matched. No other
+pin moved.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app` | `match` | nothing — the served body is still the pinned artifact | none |
+| `app-components` | `match` against the 0.7.2 body; `drift` once docs PR 259 merges | **hashes only** — byte-identical surface declarations (37 surfaces); `contentHash` moves with the Archived page-header drawing (version 0.8.0) | re-pin |
+| `app-extensions` | `match` | nothing — the served body is still the pinned artifact | none |
+| `app-connectors` | `match` | nothing — the served body is still the pinned artifact | none |
+| `app-notifications` | `match` | nothing — the served body is still the pinned artifact | none |
+
 ## Running it locally
 
 ```sh
