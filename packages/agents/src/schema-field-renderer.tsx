@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowRight, LinkIcon, MailIcon } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
@@ -23,6 +23,7 @@ import {
   type RendererMode,
 } from "./field-renderer-registry";
 import { resolveFieldLabel } from "./humanize-field-name";
+import { GateContinueHoldContext } from "./gate-continue-hold-context";
 
 type Props = {
   fieldName: string;
@@ -40,6 +41,15 @@ type Props = {
   registerFlush?: (fn: () => Promise<void>) => void;
   /** When true, skip the internal Continue button. See FieldRendererProps. */
   hideSubmit?: boolean;
+  /**
+   * The value as typed, reported on every change (cinatra#4244). Passed only by
+   * `StructuredObjectField` to its sub-fields, so it can hold the gate's
+   * Continue while a declared-required value is unwritten (design V.1). The
+   * text, number and list kinds report what their flush would hand over (a
+   * number as its raw text); a choice and a box already write through
+   * `onChange`, and an object kind reports nothing.
+   */
+  onDraftChange?: (value: unknown) => void;
   /**
    * TRUE REGISTRY-BYPASS FLOOR (cinatra#1625, codex convergence 2026-07-20). When
    * set, this renderer does NOT re-enter `fieldRendererRegistry` — it renders the
@@ -373,7 +383,7 @@ function isValidEmail(value: string): boolean {
 }
 
 export function SchemaFieldRenderer(props: Props) {
-  const { fieldName, schema, value, onChange, disabled, required, error: callerError, context, onBusyChange, saveNow, assistResponseKey, mode, registerFlush, hideSubmit, bypassRegistry } = props;
+  const { fieldName, schema, value, onChange, disabled, required, error: callerError, context, onBusyChange, saveNow, assistResponseKey, mode, registerFlush, hideSubmit, bypassRegistry, onDraftChange } = props;
 
   const title = (schema as { title?: string }).title;
   const description = (schema as { description?: string }).description;
@@ -477,6 +487,27 @@ export function SchemaFieldRenderer(props: Props) {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [registerFlush]); // stable — registerFlush is useCallback; refs always current
+
+  // cinatra#4244 — report the value as typed to a structured parent that holds
+  // its gate's Continue on it (see `onDraftChange`). Nothing is reported when
+  // no parent asked.
+  const onDraftChangeRef = useRef(onDraftChange);
+  useEffect(() => { onDraftChangeRef.current = onDraftChange; }, [onDraftChange]);
+  const draftKind = (() => {
+    const t = (schema as { type?: string }).type;
+    const enumVals = (schema as { enum?: unknown[] }).enum;
+    if (t === "object" || t === "boolean" || (Array.isArray(enumVals) && enumVals.length > 0)) return null;
+    if (t === "array") return "list";
+    if (t === "number" || t === "integer") return "number";
+    return "text";
+  })();
+  useEffect(() => {
+    const report = onDraftChangeRef.current;
+    if (!report || draftKind === null) return;
+    if (draftKind === "list") report(localValue.split("\n").map((s) => s.trim()).filter(Boolean));
+    else if (draftKind === "number") report(localValue === "" ? undefined : localValue);
+    else report(localValue);
+  }, [localValue, draftKind]);
 
   const handleSubmit = async (submitValue: unknown) => {
     setSubmitting(true);
@@ -1206,6 +1237,37 @@ function StructuredObjectField(props: ObjectFieldProps) {
     [],
   );
 
+  // cinatra#4244 — THE DECLARED-VALUE HOLD (design V.1). Where the host asks
+  // for it (`GateContinueHoldContext`) and this field draws the gate's own
+  // Continue, that Continue is UNAVAILABLE while a declared-required visible
+  // value with no default is unwritten: text blank once trimmed, an empty list,
+  // nothing chosen. The sub-fields report what is typed (`onDraftChange`), so
+  // the hold reads the live value, not the last flush; a choice writes through
+  // `setSub`. A box (a clear box is an answer, `false`) and a nested object
+  // (it reports nothing as typed) are not held here and keep the check on the
+  // press. The hold adds no message.
+  const holdOn = useContext(GateContinueHoldContext) && !hideSubmit;
+  const [typed, setTyped] = useState<Record<string, unknown>>({});
+  const reportTyped = useCallback(
+    (key: string) => (next: unknown) =>
+      setTyped((prev) =>
+        Object.prototype.hasOwnProperty.call(prev, key) && prev[key] === next
+          ? prev
+          : { ...prev, [key]: next },
+      ),
+    [],
+  );
+  const held =
+    holdOn &&
+    subRequired.some((key) => {
+      const sub = properties[key] ?? {};
+      const kind = (sub as { type?: unknown }).type;
+      if (kind === "object" || kind === "boolean") return false;
+      if (Object.prototype.hasOwnProperty.call(sub, "default")) return false;
+      const current = Object.prototype.hasOwnProperty.call(typed, key) ? typed[key] : draft[key];
+      return isBlankSubValue(current);
+    });
+
   const [missing, setMissing] = useState<string[]>([]);
   const [invalid, setInvalid] = useState<string[]>([]);
   // Sub-objects that ARE objects but whose own required keys are blank — a
@@ -1409,6 +1471,9 @@ function StructuredObjectField(props: ObjectFieldProps) {
   }, [registerFlush]); // stable — refs always read the latest draft AND schema
 
   const handleContinue = async () => {
+    // The held Continue is drawn unavailable; a press that reaches here anyway
+    // sends nothing (cinatra#4244, design V.1).
+    if (held) return;
     const assembled = await flushRef.current();
     // A declared-optional field left entirely blank submits NOTHING for itself
     // rather than being validated — see `omittableEmpty`.
@@ -1467,6 +1532,7 @@ function StructuredObjectField(props: ObjectFieldProps) {
             mode="edit"
             hideSubmit
             registerFlush={registerSubFlush(key)}
+            onDraftChange={holdOn ? reportTyped(key) : undefined}
           />
         ))}
       </div>
@@ -1491,7 +1557,7 @@ function StructuredObjectField(props: ObjectFieldProps) {
       {submitError ? <p className="text-xs text-destructive">{submitError}</p> : null}
       {!hideSubmit && (
         <GateControlFloor>
-          <Button className="gap-1.5" size="sm" disabled={disabled || submitting} onClick={() => void handleContinue()}>
+          <Button className="gap-1.5" size="sm" disabled={disabled || submitting || held} onClick={() => void handleContinue()}>
             {submitting ? "Submitting…" : "Continue"}
             <ArrowRight className="h-3.5 w-3.5" />
           </Button>

@@ -98,6 +98,7 @@ import {
 } from "./review-gate-card";
 import { ensureOrCheckRunNameAction } from "./run-name-actions";
 import { approveReviewTask } from "./hitl-actions";
+import { GateContinueHoldContext } from "./gate-continue-hold-context";
 // Wrap the legacy `userResponse` text with the WayFlow `user_envelope`
 // shape when paperclip attachments are pending. Refs persist attachments
 // captured at Suggest time; consumed at gate Continue.
@@ -108,7 +109,6 @@ import { applyAttachmentEnvelope } from "./attachment-envelope-payload";
 // agentic-run-panel so both surfaces submit byte-identical payloads.
 import {
   buildSchemaFieldGatePayload,
-  gateSchemaFieldNames,
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
@@ -118,6 +118,7 @@ import {
   setupFieldRendererValue,
   withContextSelectorEnvelope,
   wrapPrimitiveSetupPayload,
+  readSchemaFieldGate,
 } from "./hitl-gate-submit";
 // `resolveFieldLabel` joins it for cinatra#3532 fix leg 3: the answered step
 // reads back under the SAME label the field was asked under, and it comes from
@@ -1058,22 +1059,28 @@ function HitlApprovalCard({
   // fallback id with an object schema, but its schema DECLARES the fields it
   // asks for ("Pick the brand voice" declares `brandVoice`). Read as a bare
   // confirmation, its fields were never drawn: the card showed a Continue with
-  // nothing to fill in, after a Continue and after a reload alike, while the
-  // run waited for the answer. Only a schema that declares nothing to fill is
-  // the bare confirmation; a gate that declares fields is drawn by the
-  // fallback, which owns its one Continue, and submits through
-  // `submitSchemaFieldGate` below. (`gateSchemaFieldNames` reads an object
-  // schema only, so the gate below is an object gate as well.)
-  const gateFieldNames = gateSchemaFieldNames(interruptContext.schema);
+  // nothing to fill in after a Continue (by reading, after a reload too) while
+  // the run waited for the answer. `readSchemaFieldGate` tells the three
+  // apart. Only a well-formed schema that declares no visible field is the
+  // bare confirmation. A gate that declares fields is drawn by the fallback
+  // from the reading's `renderSchema`, which owns its one Continue and holds it
+  // until the declared required values are written (design V.1), and it
+  // submits through `submitSchemaFieldGate` below. A MALFORMED schema fails
+  // closed: no renderer and no Continue, only the "no renderer configured"
+  // paragraph - an approval is never sent for a gate nobody could read.
+  const gateReading = readSchemaFieldGate(interruptContext.schema);
+  const onNonSetupFallbackGate =
+    interruptContext.xRenderer === SCHEMA_FIELD_FALLBACK_RENDERER_ID &&
+    !isSetupGateTaskId(interruptContext.reviewTaskId);
   const isGenericObjectSchema =
     interruptContext.xRenderer === SCHEMA_FIELD_FALLBACK_RENDERER_ID &&
     (interruptContext.schema as { type?: string })?.type === "object" &&
     !isSetupGateTaskId(interruptContext.reviewTaskId) &&
-    gateFieldNames.length === 0;
-  const fallbackGateAsksForFields =
-    interruptContext.xRenderer === SCHEMA_FIELD_FALLBACK_RENDERER_ID &&
-    !isSetupGateTaskId(interruptContext.reviewTaskId) &&
-    gateFieldNames.length > 0;
+    gateReading.kind === "bare";
+  const fallbackGateAsksForFields = onNonSetupFallbackGate && gateReading.kind === "fields";
+  const fallbackGateIsMalformed = onNonSetupFallbackGate && gateReading.kind === "malformed";
+  const fallbackGateRenderSchema =
+    fallbackGateAsksForFields && gateReading.kind === "fields" ? gateReading.renderSchema : null;
   // Keep the outer Continue button for last-step gates whose renderer doesn't
   // own a button, including the text-envelope branch in ReviewerAgentOutputRenderer
   // and schema-field-fallback when no renderer matches. The outer Continue is
@@ -1204,19 +1211,31 @@ function HitlApprovalCard({
   // answer, and the spinner released when the send is refused or fails. A
   // failed send is told the way that card told it (a toast), because the
   // field that pressed was unmounted behind the spinner. The payload is the
-  // approval with the answer in it (`buildSchemaFieldGatePayload`).
+  // approval with every declared answer in it (`buildSchemaFieldGatePayload`).
+  // ONE SEND PER GATE AT A TIME: the field sets its own `submitting` only after
+  // its flush, so two presses in one tick both reach here; the ref (keyed by
+  // the gate, so the next gate on this mounted card is never refused) turns
+  // the second away synchronously, as the setup press guard does.
+  const schemaGateSendRef = useRef<string | null>(null);
   const submitSchemaFieldGate = async (next: unknown): Promise<void> => {
-    if (!(await checkRunName())) return;
-    onApproved?.();
+    const gateKey = interruptContext.reviewTaskId;
+    if (schemaGateSendRef.current === gateKey) return;
+    schemaGateSendRef.current = gateKey;
     try {
-      const outcome = await submitSetupFieldPayload(
-        buildSchemaFieldGatePayload({ schema: interruptContext.schema, next }),
-        undefined,
-      );
-      if (outcome === "blocked") onApproveRejected?.();
-    } catch {
-      onApproveRejected?.();
-      toast.error("Could not continue this run.");
+      if (!(await checkRunName())) return;
+      onApproved?.();
+      try {
+        const outcome = await submitSetupFieldPayload(
+          buildSchemaFieldGatePayload({ schema: interruptContext.schema, next }),
+          undefined,
+        );
+        if (outcome === "blocked") onApproveRejected?.();
+      } catch {
+        onApproveRejected?.();
+        toast.error("Could not continue this run.");
+      }
+    } finally {
+      if (schemaGateSendRef.current === gateKey) schemaGateSendRef.current = null;
     }
   };
 
@@ -1313,7 +1332,8 @@ function HitlApprovalCard({
 
   const cardBody = (
     <>
-        {RendererComponent && !isGenericObjectSchema ? (
+        {RendererComponent && !isGenericObjectSchema && !fallbackGateIsMalformed ? (
+          <GateContinueHoldContext.Provider value={fallbackGateAsksForFields}>
           <RendererComponent
             // Keyed by xRenderer AND fieldName (#810): per-field setup gates
             // share one xRenderer, and the setup loop advances fields without
@@ -1333,7 +1353,9 @@ function HitlApprovalCard({
             // through hitlRendererFieldName, which falls back to the placeholder
             // only for interrupts that genuinely carry no field name.
             fieldName={hitlRendererFieldName(interruptContext.fieldName)}
-            schema={renderSchema}
+            // A gate that declares fields is drawn from its reading's schema
+            // (cinatra#4244): no bookkeeping keys, required values folded in.
+            schema={fallbackGateRenderSchema ?? renderSchema}
             // An OBJECT-typed setup field gets its OWN value, not the whole
             // values envelope (cinatra#2484) — see setupFieldRendererValue.
             // The staged draft is this field's own reading while it waits for
@@ -1481,6 +1503,7 @@ function HitlApprovalCard({
                 : undefined
             }
           />
+          </GateContinueHoldContext.Provider>
         ) : !isGenericObjectSchema ? (
           <p className="text-sm text-muted-foreground">
             Waiting for input — no renderer configured for this step.

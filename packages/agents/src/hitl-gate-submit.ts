@@ -554,38 +554,88 @@ export function applyAttachmentEnvelopeUserResponseOnly(
 /** Keys every approval payload carries; a schema naming only these asks nothing. */
 const APPROVAL_BOOKKEEPING_KEYS: ReadonlySet<string> = new Set(["approved", "approvedAt"]);
 
+function isPlainSchemaObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 /**
- * The fields an object-typed gate schema asks the reader to fill (cinatra#4244).
+ * What an object-typed gate schema on the schema-field fallback asks for
+ * (cinatra#4244).
  *
- * A gate drawn by the schema-field fallback with an object schema is one of two
- * things. With no declared properties (or only the `approved` / `approvedAt`
- * bookkeeping keys) it is a bare step confirmation: there is nothing to fill,
- * and the surface draws a Continue alone. With declared properties it is an
- * input gate - a WayFlow InputMessageNode such as "Pick the brand voice"
- * declaring `brandVoice` - and its fields must be drawn, or the reader is
- * shown a Continue with nothing to fill in while the run waits for an answer.
- *
- * Returns the declared, visible property names other than the bookkeeping
- * keys, in declaration order. Anything that is not an object schema with a
- * `properties` map asks for nothing.
+ *  - `not-object`: the schema is not an object schema; this reading does not
+ *    apply and the gate keeps the road it had.
+ *  - `bare`: a well-formed object schema that declares no visible field other
+ *    than the `approved` / `approvedAt` bookkeeping keys. It is a step
+ *    confirmation: nothing to fill, a Continue alone.
+ *  - `fields`: a well-formed object schema that declares visible fields - a
+ *    WayFlow InputMessageNode such as "Pick the brand voice" declaring
+ *    `brandVoice`. `fields` lists them in declaration order. `renderSchema` is
+ *    the schema the fallback draws: without the bookkeeping keys (they are
+ *    never the reader's to fill) and without `x-renderer`, with `required`
+ *    holding every declared-required visible field that declares no
+ *    `default` - from the schema's `required` list and from a field's own
+ *    `x-required: true` - so the drawn form holds its Continue until those
+ *    values are written (design V.1). A value with a default is answered by it
+ *    and never held.
+ *  - `malformed`: an object schema whose declaration cannot be read safely -
+ *    `properties` present but not a map, a property that is not a schema
+ *    object, `required` present but not a list of names, or a non-boolean
+ *    `x-hidden` / `x-required`. It is refused: it is neither a bare
+ *    confirmation (that would send an approval for a gate nobody could read)
+ *    nor drawable (a property that is not a schema cannot be drawn).
  */
-export function gateSchemaFieldNames(schema: unknown): string[] {
-  if (schema === null || typeof schema !== "object" || Array.isArray(schema)) return [];
-  const { type, properties } = schema as { type?: unknown; properties?: unknown };
-  if (type !== "object") return [];
-  if (properties === null || typeof properties !== "object" || Array.isArray(properties)) {
-    return [];
+export type SchemaFieldGateReading =
+  | { kind: "not-object" }
+  | { kind: "bare" }
+  | { kind: "malformed" }
+  | { kind: "fields"; fields: string[]; renderSchema: Record<string, unknown> };
+
+export function readSchemaFieldGate(schema: unknown): SchemaFieldGateReading {
+  if (!isPlainSchemaObject(schema) || schema.type !== "object") return { kind: "not-object" };
+  const { properties, required } = schema;
+  if (properties === undefined) {
+    return required === undefined || Array.isArray(required)
+      ? { kind: "bare" }
+      : { kind: "malformed" };
   }
-  return Object.entries(properties as Record<string, unknown>)
-    .filter(([name, sub]) => {
-      if (APPROVAL_BOOKKEEPING_KEYS.has(name)) return false;
-      const hidden =
-        sub !== null &&
-        typeof sub === "object" &&
-        (sub as { "x-hidden"?: unknown })["x-hidden"] === true;
-      return !hidden;
-    })
-    .map(([name]) => name);
+  if (!isPlainSchemaObject(properties)) return { kind: "malformed" };
+  if (
+    required !== undefined &&
+    (!Array.isArray(required) || !required.every((n) => typeof n === "string"))
+  ) {
+    return { kind: "malformed" };
+  }
+  const kept: Record<string, Record<string, unknown>> = {};
+  const fields: string[] = [];
+  const xRequired: string[] = [];
+  for (const [name, sub] of Object.entries(properties)) {
+    if (!isPlainSchemaObject(sub)) return { kind: "malformed" };
+    const hidden = sub["x-hidden"];
+    const xReq = sub["x-required"];
+    if (hidden !== undefined && typeof hidden !== "boolean") return { kind: "malformed" };
+    if (xReq !== undefined && typeof xReq !== "boolean") return { kind: "malformed" };
+    if (APPROVAL_BOOKKEEPING_KEYS.has(name)) continue;
+    kept[name] = sub;
+    if (hidden === true) continue;
+    fields.push(name);
+    if (xReq === true) xRequired.push(name);
+  }
+  if (fields.length === 0) return { kind: "bare" };
+  const held = (name: string) =>
+    fields.includes(name) && !Object.prototype.hasOwnProperty.call(kept[name], "default");
+  const requiredNames: string[] = [];
+  for (const name of [...((required as string[] | undefined) ?? []), ...xRequired]) {
+    if (held(name) && !requiredNames.includes(name)) requiredNames.push(name);
+  }
+  const { "x-renderer": _xr, properties: _p, required: _r, ...rest } = schema;
+  void _xr;
+  void _p;
+  void _r;
+  return {
+    kind: "fields",
+    fields,
+    renderSchema: { ...rest, type: "object", properties: kept, required: requiredNames },
+  };
 }
 
 /**
@@ -593,41 +643,58 @@ export function gateSchemaFieldNames(schema: unknown): string[] {
  * fallback draws (cinatra#4244).
  *
  * `next` is what the drawn object field submits: the object of its declared
- * fields, or `undefined` when every field is optional and was left blank.
+ * fields (blank optional values left out), or `undefined`.
  *
- *  - The blank answer sends `{ approved, approvedAt }`, the payload the
- *    Continue-only card sent for this gate before its fields were drawn.
- *  - A filled answer sends its fields plus `approved` / `approvedAt`.
- *  - When the gate asks for exactly ONE string field and that field was
- *    filled, its text is also the WayFlow resume text (`userResponse`). The
- *    server forwards `userResponse` to the flow, and without it the flow is
- *    handed "[Approved by operator]" in place of the answer. This is the
- *    convention the idea-selection renderer follows for its one output. A
- *    `userResponse` the answer already carries is kept as it is.
+ *  - The approval is `{ ...answer, approved: true, approvedAt }`; the
+ *    bookkeeping keys are always the approval's own.
+ *  - EVERY declared answer reaches the flow. The server forwards
+ *    `userResponse` to the paused WayFlow node as its resume text, and without
+ *    it the node is handed "[Approved by operator]" in place of the answer.
+ *    When the gate asks for exactly one field, declared as a string, and the
+ *    answer is a string, that text is the resume text verbatim (the
+ *    convention the idea-selection renderer follows for its one output). Any
+ *    other answer - a list, a number, a boolean, an object, or several
+ *    fields - is sent as one JSON object of the declared fields that were
+ *    answered (a blank text or an empty list is not an answer), the
+ *    structured round-trip the server parses back into the submitted values.
+ *  - No declared field answered: no resume text, so the flow receives the
+ *    approval marker, as the Continue-only card sent for this gate.
+ *  - A `userResponse` the answer already carries is kept as it is.
+ *  - A schema that is not read as `fields` adds no resume text.
  */
 export function buildSchemaFieldGatePayload(args: {
   schema: unknown;
   next: unknown;
   now?: string;
 }): Record<string, unknown> {
-  const answer =
-    args.next !== null && typeof args.next === "object" && !Array.isArray(args.next)
-      ? (args.next as Record<string, unknown>)
-      : {};
+  const answer = isPlainSchemaObject(args.next) ? args.next : {};
   const payload: Record<string, unknown> = {
     ...answer,
     approved: true,
     approvedAt: args.now ?? new Date().toISOString(),
   };
   if (typeof answer.userResponse === "string") return payload;
-  const fields = gateSchemaFieldNames(args.schema);
-  if (fields.length !== 1) return payload;
-  const only = fields[0]!;
-  const properties = (args.schema as { properties: Record<string, unknown> }).properties;
-  const declared = properties[only] as { type?: unknown } | null | undefined;
-  const value = answer[only];
-  if (declared?.type === "string" && typeof value === "string" && value.trim() !== "") {
-    payload.userResponse = value;
+  const reading = readSchemaFieldGate(args.schema);
+  if (reading.kind !== "fields") return payload;
+  const answered: Record<string, unknown> = {};
+  for (const name of reading.fields) {
+    const value = answer[name];
+    if (value === undefined || value === null) continue;
+    if (typeof value === "string" && value.trim() === "") continue;
+    if (Array.isArray(value) && value.length === 0) continue;
+    answered[name] = value;
   }
+  const names = Object.keys(answered);
+  if (names.length === 0) return payload;
+  if (reading.fields.length === 1) {
+    const only = reading.fields[0]!;
+    const declared = (reading.renderSchema.properties as Record<string, { type?: unknown }>)[only];
+    const value = answered[only];
+    if (declared?.type === "string" && typeof value === "string") {
+      payload.userResponse = value;
+      return payload;
+    }
+  }
+  payload.userResponse = JSON.stringify(answered);
   return payload;
 }
