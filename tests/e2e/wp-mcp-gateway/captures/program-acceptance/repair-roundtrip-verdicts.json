@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "description": "cinatra#2286 S10 (deliverable 7) — repair round-trip on the pinned community-stack fixture (#2016 S1). WP-side leg driven live via the gateway execute triad against the booted pinned WordPress: produce (draft) → reviewer-requested changes applied through ewpa/update-post (the connector's content-review-keyed write the producer repair re-drives) → read-back of the repaired fields with draft status preserved → stability re-read. The cinatra-side leg (changes_requested → producer_repair route off the lock-pinned wordpress-agent manifest → dispatch → CMS completion drain → repaired capture → re-review approve → effect release → read-back binding) runs on a real Postgres in packages/agents/src/__tests__/lifecycle-repair-cms-roundtrip.integration.test.ts (the agents-integration-db CI job) and is cited as its own row below, per the S9 evidence convention (do-not-duplicate-assertions).",
+  "description": "cinatra#2286 S10 (deliverable 7) — repair round-trip on the pinned community-stack fixture (#2016 S1). WP-side leg driven live via the gateway execute triad against the booted pinned WordPress: produce (draft) → reviewer-requested changes applied through ewpa/update-post (the connector's content-review-keyed write the producer repair re-drives) → read-back of the repaired fields with draft status preserved → stability re-read. The cinatra-side leg (a dispatched producer_repair of a captured CMS base → the generic completer re-files the answer onto the base → successor gate; cinatra#3862 leg 7) runs on a real Postgres in packages/agents/src/__tests__/lifecycle-repair-cms-base-generic-completion-3862.integration.test.ts (the agents-integration-db CI job) and is cited as its own row below, per the S9 evidence convention (do-not-duplicate-assertions).",
   "exposureMode": "triad-only",
   "determinedAt": "2026-07-31T09:56:37.668Z",
   "runUrl": "https://github.com/cinatra-ai/cinatra/actions/runs/30621632168",
@@ -84,13 +84,14 @@
       }
     },
     {
-      "item": "repair-roundtrip/cinatra-lifecycle-leg (request-changes → producer_repair → completion → repaired capture → approve → release)",
+      "item": "repair-roundtrip/cinatra-lifecycle-leg (producer_repair dispatch → generic completion re-files the answer onto the CMS base → successor gate)",
       "verdict": "PENDING_GATE",
-      "evidence": "packages/agents/src/__tests__/lifecycle-repair-cms-roundtrip.integration.test.ts",
+      "evidence": "packages/agents/src/__tests__/lifecycle-repair-cms-base-generic-completion-3862.integration.test.ts",
       "detail": {
         "reason": "DB-backed leg — executes in the agents-integration-db CI job (real Postgres) of the PR that carries it; the authoring box cannot boot a database by standing rule, so this row records the executor honestly instead of fabricating a local result.",
         "runsIn": "build-image.yml → agents-integration-db (gated set)",
-        "routesOffManifest": "@cinatra-ai/wordpress-agent cinatra.lifecycle.repairCapable=true at the lock-pinned release 8528fbf04c73c83452beae6e8e718fda95484efc"
+        "routesOffManifest": "@cinatra-ai/wordpress-agent cinatra.lifecycle.repairCapable=true at the lock-pinned release 8528fbf04c73c83452beae6e8e718fda95484efc",
+        "restated": "cinatra#3862 leg 7 slice S4: this row and the description were restated in the committed file, not by a capture run. The suite it cited (lifecycle-repair-cms-roundtrip.integration.test.ts) left with slice S3, because the CMS completion drain and the repaired capture it proved no longer exist. The provenance block is the 2026-07-31 capture run's; its repairRoundtripSpecSha256 names the spec before this restatement. The next capture run rewrites the file."
       }
     }
   ],
