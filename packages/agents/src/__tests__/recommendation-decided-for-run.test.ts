@@ -69,7 +69,7 @@ vi.mock("@/lib/run-selected-skill-revisions", () => ({
   readRunSelectedSkillRevisions: () => [],
   readRunRecommendationOfferedSet: async () => null,
   writeRunRecommendationOfferedSet: async () => undefined,
-  writeRunRecommendationSkip: () => undefined,
+  writeRunRecommendationSkip: () => ({ outcome: "recorded" }),
 }));
 
 beforeEach(() => {
