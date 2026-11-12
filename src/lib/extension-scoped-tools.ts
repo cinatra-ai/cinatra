@@ -125,7 +125,7 @@ export async function dispatchExtensionScopedTool(input: {
     /* the dispatch below answers it */
   }
   if (!isTool) return dispatchScopedTool(input);
-  // ONE `extension_tool.dispatch` EVENT PER CALL (cinatra#4154, spec v2.2 2.7),
+  // ONE `extension_tool.dispatch` EVENT PER CALL (cinatra#4154),
   // allowed and refused alike, filled in as the call learns whose code runs.
   const trail: DispatchTrail = { runPackage: null, codePackage: null, codeInstallId: null, verifiedStepId: null };
   const outcome = await dispatchScopedTool(input, trail);
