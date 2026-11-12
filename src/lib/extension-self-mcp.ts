@@ -280,6 +280,13 @@ export async function callHostPrimitive(
     let decision: { allowed: boolean; shouldBlock?: boolean; reason?: string };
     try {
       const { enforceMcpBoundary } = await import("@/lib/authz/mcp-boundary");
+      // cinatra#3745: a run frame's call first proves the run's verified executing
+      // source and the step's declared tools, and the handler gets the frozen copy
+      // of its input. Prepared inside this frame, never one an await dropped.
+      if (ctx?.runId) {
+        const { prepareDeclaredRunToolArguments } = await import("@/lib/extension-host-context");
+        input = await mcpRequestContextStorage.run(ctx, () => prepareDeclaredRunToolArguments(primitiveName, input));
+      }
       decision = await enforceMcpBoundary({
         primitiveName,
         ctx,

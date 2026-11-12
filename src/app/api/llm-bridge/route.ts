@@ -1,5 +1,5 @@
 import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
-import { verifyRunExecutedSource } from "@cinatra-ai/agents/store";
+import { verifyRunExecutedSource, readRunStepToolPolicy, readTrustedStepToolDeclaration } from "@cinatra-ai/agents/store";
 import "server-only";
 
 import * as path from "node:path";
@@ -1823,13 +1823,23 @@ export async function POST(req: Request): Promise<Response> {
     // preferredProvider. When kind === "passthrough", we pass NO
     // preferredProvider / preferredModel so the orchestration helper takes
     // the backward-compatible path.
+    // cinatra#3745: a run-bound model call is offered only the tools its step
+    // declares in the run's bound source. A run-bound call without a verified
+    // executing source is offered no tool; a call with no resolved run is not
+    // restricted.
+    const stepToolPolicy = runForPorts
+      ? verifiedExecutedSource
+        ? readTrustedStepToolDeclaration((await readRunStepToolPolicy(runForPorts.id, runForPorts.orgId!)).source, verifiedExecutedSource.stepId)
+        : { kind: "declared" as const, tools: [] }
+      : undefined;
     const dispatchOverrides =
       dispatch.kind === "dispatch"
         ? {
+            ...(stepToolPolicy ? { stepToolPolicy } : {}),
             preferredProvider: dispatch.effectiveProvider,
             preferredModel: dispatch.preferredModel,
           }
-        : {};
+        : { ...(stepToolPolicy ? { stepToolPolicy } : {}) };
 
     // Telemetry only. requested_provider captures what
     // metadata.cinatra.llm.preferredProvider asked for (NULL when no

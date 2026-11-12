@@ -759,6 +759,20 @@ export function parseRunStepToolPolicy(value: unknown): RunStepToolPolicy {
     executedSourceSha256: v.executedSourceSha256, declarationSourceSha256: v.declarationSourceSha256, source: v.source });
 }
 
+export function assertRunStepToolAllowed(input: {
+  policy: unknown; contextId: string; executedSourceSha256: string; stepId: string; toolName: string;
+}, trustedReaders: ReaderAbi = invariantReaders as ReaderAbi): StepToolReading {
+  const policy = parseRunStepToolPolicy(input.policy);
+  if (policy.contextId !== input.contextId || policy.executedSourceSha256 !== input.executedSourceSha256) {
+    throw new RunStepToolPolicyRefusal("step_tool_executed_source_mismatch");
+  }
+  const reading = readTrustedStepToolDeclaration(policy.source, input.stepId, trustedReaders);
+  if (reading.kind === "declared" && !reading.tools.includes(input.toolName)) {
+    throw new RunStepToolPolicyRefusal("step_tool_not_declared");
+  }
+  return reading;
+}
+
 /** Trusted loader selection BEFORE dispatch. Credentials never leave the configured origin. */
 export async function selectWayflowRunStepToolPolicy(input: {
   agentUrl: string; contextId: string;

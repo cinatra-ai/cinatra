@@ -60,6 +60,7 @@ import {
   passthroughFailureText,
   passthroughFixedFailureText,
 } from "@/lib/passthrough-refusal";
+import { RUN_ACTION_REFUSED, runActionRefusalCode } from "@/lib/run-action-refusal";
 
 /**
  * Deterministic MCP-call passthrough for WayFlow.
@@ -563,6 +564,7 @@ export async function POST(req: Request): Promise<Response> {
 
   try {
     const { mintRunWriteAuthorityForMcp } = await import("@/lib/org-write/run-authority-mint");
+    const { prepareDeclaredRunToolArguments } = await import("@/lib/extension-host-context");
     const orgWriteAuthority = verifiedExecutedSource
       ? await mintRunWriteAuthorityForMcp({ runId: run.id, orgId: run.orgId,
           executionAttemptId: verifiedExecutedSource.executionAttemptId }) : undefined;
@@ -581,7 +583,12 @@ export async function POST(req: Request): Promise<Response> {
       ...(verifiedExecutedSource ? { verifiedExecutedSource } : {}),
       ...(orgWriteAuthority ? { orgWriteAuthority } : {}),
     }, async () => {
-    // Every deterministic branch shares the verified executing-source frame.
+    // Every deterministic branch shares the verified executing-source frame;
+    // no materializer, extension-data branch or primitive gets a legacy bypass.
+    // cinatra#3745: before any branch runs, the call must carry the run's
+    // current verified executing source and name a tool the step declares, and
+    // every branch gets the frozen copy of the input.
+    input = await prepareDeclaredRunToolArguments(tool, input) as Record<string, unknown>;
     let result: unknown;
     if (tool === "artifact_materialize") {
       // Deterministic artifact materialization (cinatra#925) — NOT an MCP
@@ -829,7 +836,10 @@ export async function POST(req: Request): Promise<Response> {
         actor: alsActorContext,
       });
       if (!outcome.ok) {
-        return NextResponse.json({ error: outcome.error }, { status: outcome.status });
+        return NextResponse.json(
+          { error: outcome.error, ...(outcome.code ? { code: outcome.code } : {}) },
+          { status: outcome.status },
+        );
       }
       result = outcome.result;
     } else {
@@ -1060,6 +1070,10 @@ export async function POST(req: Request): Promise<Response> {
     return NextResponse.json(result);
     });
   } catch (err) {
+    // cinatra#3745: a refused run tool call is answered 403 with one fixed
+    // sentence and the refusal's code, never with exception text.
+    const refusal = await runActionRefusalCode(err).catch(() => null);
+    if (refusal) return NextResponse.json({ error: RUN_ACTION_REFUSED, code: refusal }, { status: 403 });
     // cinatra#4223, cinatra#4465: an error with the zod marker answers its
     // issues, and a primitive's stated refusal without it keeps its text when
     // that text is a string. Every other throw, a marked error with no readable
