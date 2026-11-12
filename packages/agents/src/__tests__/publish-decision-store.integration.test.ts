@@ -209,4 +209,88 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     expect((await store.readDecisionForRunNode(input.runId, input.nodeId))?.id).toBe(highestId);
     expect((await store.readOpenDecisionForRun(input.runId))?.id).toBe(highestId);
   });
+
+  it("cinatra#4150 PR 3a: a resume reads the run's newest decision whatever its status", async () => {
+    const input = park();
+    expect(await store.readLatestDecisionForRun(input.runId)).toBeNull();
+    const older = (await store.insertParkedDecision(input)).decision;
+    const newer = (await store.insertParkedDecision({ ...input, gateTaskId: "task-2" })).decision;
+    await admin.query(`UPDATE ${TABLE} SET created_at = now() - interval '1 hour' WHERE id = $1`, [older.id]);
+    await store.decide(newer.id, { from: "parked", to: "declined", actor: "user-1", note: null });
+    const latest = await store.readLatestDecisionForRun(input.runId);
+    expect(latest?.id).toBe(newer.id);
+    expect(latest?.status).toBe("declined");
+    expect((await store.readOpenDecisionForRun(input.runId))?.id).toBe(older.id);
+    expect(await store.readLatestDecisionForRun(`run-${randomUUID()}`)).toBeNull();
+  });
+
+  it("cinatra#4150 PR 3a: the expiry finds every stop a decline or an expiry decided but did not make, page by page", async () => {
+    const RUNS = `"${q(TEST_SCHEMA)}"."agent_runs"`;
+    const run = async (status: string) => {
+      const id = `run-${randomUUID()}`;
+      await admin.query(`INSERT INTO ${RUNS} (id, template_id, org_id, status, input_params) VALUES ($1, $2, 'org-4150', $3, '{}')`, [id, `tpl-${randomUUID()}`, status]);
+      return id;
+    };
+    const settle = async (runId: string, to: "declined" | "expired" | "released" | "run_ended" | null) => {
+      const { decision } = await store.insertParkedDecision(park({ runId, gateTaskId: `task-${randomUUID()}` }));
+      if (to) await store.decide(decision.id, to === "declined" || to === "released" ? { from: "parked", to, actor: "user-1" } : { from: "parked", to, actor: null });
+      return decision.id;
+    };
+    const declinedWaiting = await settle(await run("pending_approval"), "declined");
+    const expiredWaiting = await settle(await run("pending_approval"), "expired");
+    const declinedRunning = await settle(await run("running"), "declined");
+    const declinedStopped = await settle(await run("stopped"), "declined");
+    const releasedWaiting = await settle(await run("pending_approval"), "released");
+    const endedWaiting = await settle(await run("pending_approval"), "run_ended");
+    const parkedWaiting = await settle(await run("pending_approval"), null);
+    const noRun = await settle(`run-${randomUUID()}`, "declined");
+    // A run whose older decision is declined but whose NEWER decision is parked is governed by the newer one.
+    const governedRun = await run("pending_approval");
+    const olderDeclined = await settle(governedRun, "declined");
+    await admin.query(`UPDATE ${TABLE} SET created_at = now() - interval '1 hour' WHERE id = $1`, [olderDeclined]);
+    await settle(governedRun, null);
+
+    const ids = (await store.listSettledWithWaitingRun(1000)).map((r) => r.id);
+    for (const id of [declinedWaiting, expiredWaiting, declinedRunning]) expect(ids).toContain(id);
+    for (const id of [declinedStopped, releasedWaiting, endedWaiting, parkedWaiting, noRun, olderDeclined]) expect(ids).not.toContain(id);
+    expect(await store.listSettledWithWaitingRun(1)).toHaveLength(1);
+    // Page by page after the last id reads the same rows, each once.
+    const paged: string[] = [];
+    for (let after: string | undefined = undefined, n = 0; n < 500; n += 1) {
+      const page = (await store.listSettledWithWaitingRun(2, after)).map((r) => r.id);
+      paged.push(...page);
+      if (page.length < 2) break;
+      after = page[page.length - 1];
+    }
+    expect(paged).toEqual(ids);
+  });
+  it("cinatra#4150 PR 3a, pre-review 3: an expiry write with newestOnly loses to a newer decision of the same run", async () => {
+    const input = park();
+    const older = (await store.insertParkedDecision(input)).decision;
+    const newer = (await store.insertParkedDecision({ ...input, gateTaskId: "task-2" })).decision;
+    await admin.query(`UPDATE ${TABLE} SET created_at = now() - interval '1 hour' WHERE id = $1`, [older.id]);
+    expect(await store.decide(older.id, { from: "parked", to: "expired", actor: null, newestOnly: true })).toEqual({
+      outcome: "lost",
+      currentStatus: "parked",
+    });
+    expect((await store.decide(newer.id, { from: "parked", to: "expired", actor: null, newestOnly: true })).outcome).toBe("won");
+    expect((await store.decide(older.id, { from: "parked", to: "run_ended", actor: null })).outcome).toBe("won");
+  });
+
+  it("cinatra#4150 PR 3a, pre-review 3: the due list is read page by page after the last row, each row once, oldest first", async () => {
+    for (const hours of [5, 6, 7]) {
+      const { decision } = await store.insertParkedDecision(park());
+      await admin.query(`UPDATE ${TABLE} SET expires_at = now() - ($2 || ' hours')::interval WHERE id = $1`, [decision.id, String(hours)]);
+    }
+    const all = (await store.listDueParked(1000)).map((r) => r.id);
+    expect(all.length).toBeGreaterThanOrEqual(3);
+    const paged: string[] = [];
+    for (let after: string | undefined = undefined, n = 0; n < 200; n += 1) {
+      const page = (await store.listDueParked(2, undefined, after)).map((r) => r.id);
+      paged.push(...page);
+      if (page.length < 2) break;
+      after = page[page.length - 1];
+    }
+    expect(paged).toEqual(all);
+  });
 });

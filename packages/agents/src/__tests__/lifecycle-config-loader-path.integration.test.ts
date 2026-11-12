@@ -76,8 +76,8 @@ const PINNED_MANIFEST_PATH = join(PINNED_AGENT_DIR, "package.json");
  * `package.json#cinatra.lifecycle` (with `repairFindingsInput` since
  * cinatra#4424). Kept as a literal so the DB-tier CI job can
  * still run the whole proof without the clone-back tree, but NEVER a
- * free-floating stub — the same two guards the merged
- * `lifecycle-repair-cms-roundtrip.integration.test.ts` applies:
+ * free-floating stub — the same two guards the CMS round-trip suite applied
+ * before cinatra#3862 leg 7 removed it:
  *   - it must PARSE through the real manifest contract
  *     (`agentLifecycleDeclarationSchema`), and
  *   - whenever the pinned tree IS on disk it is cross-checked against the REAL
