@@ -282,8 +282,10 @@ describe("GroupedSetupFormRenderer — defaultValues drift fix", () => {
   // This path depends on the grouped "Save & start run" submit button.
   it("resets form state when the upstream `value` prop changes after mount (form.reset → form state reflects new value)", async () => {
     const onChange = vi.fn(async () => undefined);
-    // Boolean field avoids SchemaFieldRenderer's local useState cache (Checkbox
-    // is fully controlled by Controller → field.value).
+    // A boolean field: the grouped form passes `hideSubmit`, and on that road
+    // the box reads `Boolean(value)` (Controller → field.value) and writes
+    // through at once. The staged answer SchemaFieldRenderer keeps for a box
+    // that draws its own Continue (cinatra#4310) is not read on this road.
     const schema = {
       type: "object",
       properties: {

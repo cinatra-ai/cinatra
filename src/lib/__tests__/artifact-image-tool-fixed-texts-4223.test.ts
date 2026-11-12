@@ -86,7 +86,10 @@ function deps(over: Partial<ArtifactImageToolDeps> = {}): ArtifactImageToolDeps 
         model: "second-model",
       }),
     }),
-    loadProducesRefs: async () => [{ extension: "@cinatra-ai/picture-artifact" }],
+    loadWriteFacts: async () => ({
+      producesRefs: [{ extension: "@cinatra-ai/picture-artifact" }],
+      reviewed: false,
+    }),
     resolveOwnership: async () => ({
       ownerLevel: "organization",
       ownerId: "org-1",
@@ -295,6 +298,37 @@ describe("cinatra#4223 — a re-drive reports the facts stored with the revision
       representationRevisionId: "rep-1",
     });
     expect(m.createSemanticArtifact).not.toHaveBeenCalled();
+  });
+
+  it("a finalized re-drive reads no writer-only field: a createdBy or data getter that throws is not reached", async () => {
+    m.claimMaterialization.mockResolvedValue({
+      kind: "finalized",
+      artifactId: "art-1",
+      representationRevisionId: "rep-1",
+      path: "materialize_tool",
+    });
+    const input = { ...call } as typeof call & { data?: Record<string, unknown> };
+    for (const key of ["createdBy", "data"] as const) {
+      Object.defineProperty(input, key, {
+        enumerable: true,
+        get() {
+          throw new Error(SECRET_DETAIL);
+        },
+      });
+    }
+    const outcome = await generateArtifactImage(input, deps());
+    expect(outcome).toEqual({
+      ok: true,
+      artifactId: "art-1",
+      representationRevisionId: "rep-1",
+      revision: 1,
+      provider: "first-provider",
+      model: "first-model",
+      mime: "image/png",
+      deduped: true,
+    });
+    expect(m.createSemanticArtifact).not.toHaveBeenCalled();
+    expect(logged).not.toHaveBeenCalled();
   });
 
   it("a re-drive whose stored facts are missing refuses with a fixed sentence and files nothing", async () => {

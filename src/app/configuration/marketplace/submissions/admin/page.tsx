@@ -43,6 +43,7 @@ import type {
 } from "@cinatra-ai/marketplace-mcp-client";
 
 import { SearchParamToast } from "@/components/search-param-toast";
+import { viewerMayDecide } from "@/lib/approvals/sources/marketplace-state";
 import { SubmissionStatusPill } from "../submission-status-pill";
 import { FetchErrorBanner, SUBMISSION_FLASH_TOASTS } from "../result-banner";
 import { ApproveButton, RejectButton, RetryPromotionButton } from "./admin-action-buttons";
@@ -174,6 +175,7 @@ export default async function AdminSubmissionsQueuePage({
                       <SubmissionStatusPill
                         status={s.status}
                         promotionState={s.promotion_state}
+                        viewerMayDecide={viewerMayDecide(s.eligibility)}
                         promotionError={s.promotion_error}
                       />
                     </TableCell>

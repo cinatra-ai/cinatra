@@ -7,6 +7,7 @@ import {
   buildInitialMessagePayloadWithRunToken,
   readAgentTemplateByPackageName,
   readLatestAgentVersionIdForTemplate,
+  setAgentRunConnectorInstanceBinding,
   transitionRunStatus,
 } from "@cinatra-ai/agents";
 // cinatra#2929 (epic #2926 W2b) — THE WORKER-BACKED ADAPTER. This dispatch used
@@ -213,6 +214,45 @@ async function assertWidgetPreCreateAuthorized(
 }
 
 /**
+ * cinatra#4220 — bind an OBO-carrier run to its connector instance through the
+ * SAME host derivation and per-instance use gate the worker dispatch runs
+ * (packages/agents/src/execution.ts): the connector kind is host-resolved from
+ * the carrier run's OWN start input `instanceId`, the run's own user and org
+ * pass the live-membership, instance-organisation and package-use checks, and
+ * the binding is recorded write-once (null-or-equal) BEFORE the run token is
+ * minted and anything is sent, so the llm-bridge signs the pin into the run's
+ * MCP actor token. No `instanceId`, or an id no connector knows: no binding,
+ * behavior unchanged. A refusal fails the still-`queued` carrier run with the
+ * gate's reason and rethrows: no A2A client is opened and nothing is sent.
+ */
+async function bindCarrierRunConnectorInstance(args: {
+  runId: string;
+  runBy: string;
+  orgId: string;
+  inputParams: Record<string, unknown>;
+}): Promise<void> {
+  const startInstanceId = args.inputParams.instanceId;
+  if (typeof startInstanceId !== "string" || startInstanceId.length === 0) return;
+  try {
+    const { deriveAgentRunConnectorInstanceBinding } = await import(
+      "@/lib/connector-instance-write-authority"
+    );
+    const binding = await deriveAgentRunConnectorInstanceBinding(args);
+    if (binding) await setAgentRunConnectorInstanceBinding(args.runId, binding);
+  } catch (err) {
+    try {
+      await transitionRunStatus(args.runId, "queued", "failed", {
+        error: err instanceof Error ? err.message : String(err),
+        completedAt: new Date(),
+      }, mintContentEditorDispatchAuthority(args.orgId));
+    } catch (txErr) {
+      console.warn(`[content-editor-dispatch] run ${args.runId} queued→failed failed:`, txErr);
+    }
+    throw err;
+  }
+}
+
+/**
  * Resolve the A2A message text. When we can establish a production OBO
  * identity + template, this also creates the carrier `agent_run` and injects
  * `cinatra_run_id` into the (object) payload. Returns the text plus the
@@ -381,6 +421,14 @@ async function prepareDispatch(
       }
       throw err;
     }
+    // cinatra#4220 — bind the carrier to its connector instance before its run
+    // token is minted and before anything is sent.
+    await bindCarrierRunConnectorInstance({
+      runId: overrideRun.id,
+      runBy: input.actorOverride.runBy,
+      orgId: input.actorOverride.orgId,
+      inputParams: payloadObject,
+    });
     // #1193 run-token spine: this is a real carrier `agent_run` that the WayFlow
     // agent calls back against (llm-bridge / context routes), so it MUST carry
     // the one run-identity credential like every other first-party dispatch.
@@ -479,6 +527,15 @@ async function prepareDispatch(
     }
     throw err;
   }
+
+  // cinatra#4220 — bind the carrier to its connector instance before its run
+  // token is minted and before anything is sent (as on the override path).
+  await bindCarrierRunConnectorInstance({
+    runId: run.id,
+    runBy: identity.runBy,
+    orgId: identity.orgId,
+    inputParams: payloadObject,
+  });
 
   // Inject cinatra_run_id AND the #1193 per-run token into the message text
   // (mirrors the worker dispatch in execution.ts). This carrier run is called

@@ -23,7 +23,7 @@
 //    state the drawing turns mustard looked identical to the two that are not.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 
 import type { LifecycleCardState } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
@@ -130,6 +130,46 @@ describe("the framed target is never blank", () => {
     expect(container.textContent).toContain("The preview did not load");
     // And the decision floor underneath is untouched by a preview that failed.
     expect(container.querySelector('[data-conformance-id="review-decision-bar"]')).not.toBeNull();
+  });
+
+  it("a DENIAL that loads while another update of the island is queued is still the denial (cinatra#4188)", async () => {
+    const { container } = renderPending();
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="review-decision-bar"]')).not.toBeNull(),
+    );
+    const frame = container.querySelector("iframe") as HTMLIFrameElement;
+    expect(frame).not.toBeNull();
+    Object.defineProperty(frame, "contentDocument", {
+      configurable: true,
+      get: () => ({
+        querySelector: (selector: string) =>
+          selector.includes(REVIEW_ISLAND_EMPTY_MARKER) ? ({} as Element) : null,
+      }),
+    });
+    expect(islandFrameServedTheDenial(frame)).toBe(true);
+
+    // The island document reports its height out of the frame and then fires
+    // `load`, in one batch, as the served denial does in a browser. The height
+    // report queues an update on this island first, so the load's own update
+    // is rendered only after the event's dispatch has ended.
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { type: "cinatra.review-island.height", height: 480 },
+          origin: window.location.origin,
+          source: frame.contentWindow,
+        }),
+      );
+      frame.dispatchEvent(new Event("load"));
+    });
+
+    await waitFor(() =>
+      expect(
+        container.querySelector('[data-conformance-id="review-target-island-timeout"]'),
+      ).not.toBeNull(),
+    );
+    expect(container.querySelector('[data-island-load-state="loaded"]')).toBeNull();
+    expect(container.querySelector('[data-island-load-state="timed-out"]')).not.toBeNull();
   });
 
   it("a frame that served a TARGET still paints, exactly as it always has", async () => {

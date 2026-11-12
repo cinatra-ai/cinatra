@@ -236,6 +236,15 @@ describe("scanOasForArtifactParityFindings — OAS-RUNTIME-011 (riskClass mislab
     expect(findings.filter((f) => f.code === "OAS-RUNTIME-011")).toHaveLength(0);
   });
 
+  it("warns on read_only + the page capture, which files an artifact (artifact_page_capture)", () => {
+    const findings = scanOasForArtifactParityFindings(
+      nodeWith("read_only", "artifact_page_capture"),
+    );
+    const eleven = findings.filter((f) => f.code === "OAS-RUNTIME-011");
+    expect(eleven).toHaveLength(1);
+    expect(eleven[0].message).toContain("artifact_page_capture");
+  });
+
   it("does NOT warn on read_only + a read tool (objects_classify)", () => {
     const findings = scanOasForArtifactParityFindings(nodeWith("read_only", "objects_classify"));
     expect(findings.filter((f) => f.code === "OAS-RUNTIME-011")).toHaveLength(0);
