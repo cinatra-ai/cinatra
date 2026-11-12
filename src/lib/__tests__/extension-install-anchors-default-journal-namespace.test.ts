@@ -273,3 +273,31 @@ describe("stock-install reboot survival — plural boot resolver reads the DEFAU
     expect(anchors).toEqual([]);
   });
 });
+
+describe("the plural resolver's injected grant read (cinatra#3319)", () => {
+  // The claim-backed upload reader asks the runtime's own resolver which rows it
+  // anchors, and at which digest, without reading a port grant: the grant
+  // decides approved ports only.
+  it("3319 T48 an injected grant read replaces the grant store and changes approved ports only; omitted, the store is read as before", async () => {
+    canonicalRows = [stockDefaultRow(), sbsRow()];
+    opsByVersion = {
+      "0.0.0": { phase: "finalized", digest: DIGEST_016 },
+      "0.3.0": { phase: "finalized", digest: DIGEST_030 },
+    };
+    const injected = await makeDefaultInstallAnchorsResolver(null, "platform-global", {
+      readGrant: async () => null,
+    });
+    const withoutGrant = await injected(PKG);
+    expect(readGrant).not.toHaveBeenCalled();
+    expect(withoutGrant.map((a) => [a.installId, a.digest, a.approvedPorts])).toEqual([
+      ["iext_stock", DIGEST_016, []],
+      ["iext_sbs", DIGEST_030, []],
+    ]);
+    const stock = await (await makeDefaultInstallAnchorsResolver())(PKG);
+    expect(readGrant).toHaveBeenCalled();
+    expect(stock.map((a) => [a.installId, a.digest, a.approvedPorts])).toEqual([
+      ["iext_stock", DIGEST_016, ["settings"]],
+      ["iext_sbs", DIGEST_030, ["settings"]],
+    ]);
+  });
+});

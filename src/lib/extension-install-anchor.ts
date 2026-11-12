@@ -627,9 +627,23 @@ export async function makeDefaultInstallAnchorResolver(
 export async function makeDefaultInstallAnchorsResolver(
   orgId: string | null = null,
   scope: InstallAnchorResolutionScope = orgId == null ? "platform-global" : "exact-org",
+  /** The port-grant read (cinatra#3319). Omitted, the grant store is read, as
+   *  boot and re-election read it. A caller that asks only which rows the gate
+   *  anchors, and at which digest, passes a read of no grant: the grant decides
+   *  `approvedPorts` only, never whether a row anchors or its digest. */
+  deps?: { readGrant?: ResolveInstallAnchorDeps["readGrant"] },
 ): Promise<(packageName: string) => Promise<InstallTrustAnchor[]>> {
   const { readInstalledExtensionsByPackageName } = await import("@cinatra-ai/extensions/canonical-store");
-  const { readGrant } = await import("@/lib/extension-host-port-grants");
+  let readGrantForAnchor: ResolveInstallAnchorDeps["readGrant"];
+  if (deps?.readGrant) {
+    readGrantForAnchor = deps.readGrant;
+  } else {
+    const { readGrant } = await import("@/lib/extension-host-port-grants");
+    readGrantForAnchor = async (pkg, oid) => {
+      const g = await readGrant({ packageName: pkg, orgId: oid });
+      return g ? { status: g.status, approvedPorts: g.approvedPorts, orgId: g.orgId } : null;
+    };
+  }
   const { readInstallOpForVersion } = await import("@/lib/extension-install-ops");
   return async (packageName: string) => {
     const rows = await readInstalledExtensionsByPackageName(packageName);
@@ -705,10 +719,7 @@ export async function makeDefaultInstallAnchorsResolver(
           widgetAuthTokenKeys: versionRow.widgetAuthTokenKeys ?? null,
           source: versionRow.source as InstallAnchorRow["source"],
         }),
-        readGrant: async (pkg, oid) => {
-          const g = await readGrant({ packageName: pkg, orgId: oid });
-          return g ? { status: g.status, approvedPorts: g.approvedPorts, orgId: g.orgId } : null;
-        },
+        readGrant: readGrantForAnchor,
         readInstallOp: (pkg, oid) =>
           isDefaultRow ? readInstallOpForVersion(pkg, oid, "0.0.0") : readInstallOpForVersion(pkg, oid, version),
       });

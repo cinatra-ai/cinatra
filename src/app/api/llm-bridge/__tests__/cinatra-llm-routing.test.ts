@@ -114,6 +114,7 @@ vi.mock("@/lib/agents-store", () => ({
 vi.mock("@cinatra-ai/agents", async () => {
   const { z } = await import("zod");
   return {
+    publishCallAllowed: async () => true, // cinatra#4150: no publish decision holds this run
     readAgentRunByContextId: vi.fn(async () => null),
     OasCinatraLlmSchema: z
       .object({

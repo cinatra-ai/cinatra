@@ -77,11 +77,16 @@ export {
 export {
   objectTypeRegistry,
   matcherManifestRegistry,
+  artifactPackSurfaceRegistry,
   DEFAULT_MATCHER_CONFIDENCE_THRESHOLD,
   resolveTypeProjectionDisposition,
   isDispositionGovernedType,
 } from "./registry";
-export type { MatcherManifestEntry } from "./registry";
+export type {
+  MatcherManifestEntry,
+  ArtifactPackRecord,
+  ArtifactPackSurfaceEntry,
+} from "./registry";
 export { canCompose, findCompositionMatches } from "./compose";
 
 // Artifact-type claims — pure policy leaf (cinatra#1425, epic #1424): the

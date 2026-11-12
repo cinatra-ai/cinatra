@@ -9,7 +9,7 @@ import type {
   ValidationResult,
 } from "@cinatra-ai/extension-types";
 import { visibleManifestPackageNames } from "@cinatra-ai/extension-types";
-import { objectTypeRegistry } from "@cinatra-ai/objects";
+import { artifactPackSurfaceRegistry, objectTypeRegistry } from "@cinatra-ai/objects";
 import {
   artifactObjectTypeClaimManifestSchema,
   validateObjectTypeClaimSchemaSources,
@@ -173,7 +173,7 @@ export function createArtifactExtensionHandler(): ExtensionTypeHandler {
   return {
     typeId: "artifact",
 
-    async install(ref: PackageRef, _actor: Actor): Promise<void> {
+    async install(ref: PackageRef): Promise<void> {
       // Descriptor (re)registration is owned by the registry bridge at
       // load/boot. The handler call is recorded for audit parity with the
       // other kinds; no bundle work and nothing to throw.
@@ -182,13 +182,13 @@ export function createArtifactExtensionHandler(): ExtensionTypeHandler {
       );
     },
 
-    async update(ref: PackageRef, _actor: Actor): Promise<void> {
+    async update(ref: PackageRef): Promise<void> {
       console.info(
         `[artifactExtensionHandler] update recorded for "${ref.packageName}" (descriptor refreshed via the object-registry bridge)`,
       );
     },
 
-    async uninstall(ref: PackageRef, _actor: Actor): Promise<void> {
+    async uninstall(ref: PackageRef): Promise<void> {
       // The handler itself does no descriptor/claim work (it has no scope). The
       // durable claim retirement + governed-row archival for `kind:"artifact"` is
       // fired by the DISPATCHER, scope-resolved from the canonical row, via the
@@ -199,7 +199,7 @@ export function createArtifactExtensionHandler(): ExtensionTypeHandler {
       );
     },
 
-    async archive(ref: PackageRef, _actor: Actor): Promise<void> {
+    async archive(ref: PackageRef): Promise<void> {
       // Same as uninstall: the durable, scope-resolved claim retirement + governed-
       // row archival is fired by the dispatcher's fail-closed claim-archival seam
       // (cinatra#1454), not by this metadata-only handler.
@@ -208,7 +208,7 @@ export function createArtifactExtensionHandler(): ExtensionTypeHandler {
       );
     },
 
-    async restore(ref: PackageRef, _actor: Actor): Promise<void> {
+    async restore(ref: PackageRef): Promise<void> {
       console.info(
         `[artifactExtensionHandler] restore recorded for "${ref.packageName}" (artifact type marked available)`,
       );
@@ -224,6 +224,15 @@ export function createArtifactExtensionHandler(): ExtensionTypeHandler {
     // (`@scope/pkg:slug` -> `@scope/pkg`); we keep only descriptors whose
     // package is BOTH lifecycle-live AND owner-visible per the shared gate, so
     // a row is never surfaced just because its package name is live elsewhere.
+    //
+    // After the object-type descriptors come the PACK descriptors
+    // (cinatra#3319), one per manifest surface the bridge registered for a
+    // lifecycle-live, owner-visible package (a pack can have a store surface
+    // and a development-tree surface): `{ packageName, artifactPack }`, the
+    // surface as the bridge recorded it (version, file accepts, matcher skill
+    // ids, and the record it read). A pack whose types the host registers has
+    // no object-type descriptor, so this is the only capability the
+    // dispatcher reports for it. Package-level, like the `listArchived` rows.
     async listActive({
       scope,
       manifests,
@@ -233,9 +242,14 @@ export function createArtifactExtensionHandler(): ExtensionTypeHandler {
       manifests: ActiveExtensionManifest[];
     }) {
       const live = visibleManifestPackageNames(manifests, scope);
-      return objectTypeRegistry
+      const typeDescriptors: unknown[] = objectTypeRegistry
         .listArtifacts()
         .filter((def) => live.has(def.type.split(":")[0]));
+      const packDescriptors = artifactPackSurfaceRegistry
+        .list()
+        .filter((surface) => live.has(surface.packageName))
+        .map((surface) => ({ packageName: surface.packageName, artifactPack: surface }));
+      return [...typeDescriptors, ...packDescriptors];
     },
 
     // Archived twin of listActive (cinatra#948). The in-memory object-type
