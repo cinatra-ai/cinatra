@@ -192,6 +192,19 @@ describe("the parent's install row", () => {
     });
   });
 
+  it("binds a root the resolver hands over as a checked real path at exactly that path", async () => {
+    const { deps, readPackageJson } = makeWorld();
+    const outcome = await bindParent({
+      ...deps,
+      resolvePackageRoot: async (input) =>
+        input.installId === PARENT_ID ? { realRoot: PARENT_ROOT } : null,
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.root).toBe(PARENT_ROOT);
+    expect(readPackageJson).toHaveBeenCalledWith(PARENT_ROOT);
+  });
+
   it("binds a locked parent install", async () => {
     const { deps } = makeWorld((w) => {
       w.rows[PARENT_ID] = parentRow({ status: "locked" });

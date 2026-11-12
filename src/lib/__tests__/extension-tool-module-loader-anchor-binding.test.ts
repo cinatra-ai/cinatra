@@ -1069,3 +1069,60 @@ describe("a root the resolver checked as a real path is not resolved again", () 
     expect(seen).toEqual([]);
   });
 });
+
+/**
+ * THE EXACT-INSTALL ROAD MEETS THE SEED-COPY ROAD (cinatra#4154 on main's seed
+ * copy). The seed copy picks its own install row (the image's bundled row or a
+ * row of the run's organisation), never the bound install id, so an
+ * install-bound load never takes it, even where the copy itself would load. A
+ * root the resolver hands over as a checked real path still passes the
+ * install's own re-read before the import.
+ */
+describe("an install-bound load and the seed copy", () => {
+  it("an install-bound load never takes the seed copy, while the same unbound load does", async () => {
+    storeRecords.length = 0;
+    await seedCopy();
+    installRows.push(bundledRow());
+    anchors.push({ installId: LIVE_INSTALL, version: PINNED, digest: LIVE_DIGEST, kind: "agent" });
+    const unbound: string[] = [];
+    await withRuntimeMode("production", () => load(recordingImport(unbound)));
+    expect(unbound).toHaveLength(1);
+    expect(unbound[0]).toContain(SEED_MODULE);
+    const bound: string[] = [];
+    await expect(
+      withRuntimeMode("production", () =>
+        loadBound({ installId: LIVE_INSTALL, digest: LIVE_DIGEST }, { importModule: recordingImport(bound) }),
+      ),
+    ).rejects.toThrow(/not materialized at the pinned version/);
+    expect(bound).toEqual([]);
+  });
+
+  it("an install-bound load whose resolver hands over a checked real root still reads the install again before the import", async () => {
+    const live = storeRecords.find((record) => record.declaredDigest === LIVE_DIGEST);
+    if (!live) throw new Error("the fixture store has no live digest directory");
+    const realRoot = await (await import("node:fs/promises")).realpath(live.storeDir);
+    const resolvePackageRoot = async () => ({ realRoot });
+    const moved: string[] = [];
+    await expect(
+      loadBound(
+        { installId: LIVE_INSTALL, digest: LIVE_DIGEST },
+        {
+          resolvePackageRoot,
+          readInstallAnchor: async () => ({ version: PINNED, digest: "cccccccccccc" }),
+          importModule: recordingImport(moved),
+        },
+      ),
+    ).rejects.toThrow(/changed before its module was loaded/);
+    expect(moved).toEqual([]);
+    const held: string[] = [];
+    await loadBound(
+      { installId: LIVE_INSTALL, digest: LIVE_DIGEST },
+      {
+        resolvePackageRoot,
+        readInstallAnchor: async () => ({ version: PINNED, digest: LIVE_DIGEST }),
+        importModule: recordingImport(held),
+      },
+    );
+    expect(held).toEqual([path.join(realRoot, "cinatra", "tools", "fixture-tool.mjs")]);
+  });
+});
