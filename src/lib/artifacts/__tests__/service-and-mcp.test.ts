@@ -379,15 +379,17 @@ describe("Media route purge gate", () => {
       // ledger finalize is tx-composed INTO the writer's own transaction).
       // Part of the canonical write path, not an alternate writer.
       "run-artifact-materializer.ts",
-      // The image tool (cinatra#3032, plan (C) item 0.28) — the SERVICE-LAYER
-      // module behind acceptance item 1, "A fixture agent makes a picture filed
-      // under its declared extension with its data". It pushes the configured
-      // image provider's bytes through createSemanticArtifact under the same
-      // idempotency ledger as the materializer above (the finalize is
-      // tx-composed INTO the writer's own transaction) and appends a
-      // regeneration through the canonical revision-append road. Part of the
-      // canonical write path, not an alternate writer.
-      "artifact-image-tool.ts",
+      // The first-write road of the image tool (cinatra#3032, plan (C) item
+      // 0.28) and the page capture tool (cinatra#4223) — the SERVICE-LAYER
+      // module both tools file through. It pushes the bytes a tool hands it (the
+      // configured image provider's picture, or one PNG of a registered page)
+      // through createSemanticArtifact under the same idempotency ledger as the
+      // materializer above (the finalize and the tool's own record, the image
+      // provenance or the page capture facts, are tx-composed INTO the writer's
+      // own transaction). The image tool appends a regeneration through the
+      // canonical revision-append road; neither tool imports the writer. Part of
+      // the canonical write path, not an alternate writer.
+      "first-artifact-filing.ts",
       // NOT an importer: the objects surface-inventory documents the writer
       // file in its raw-object-access allow-list as a string literal
       // ("src/lib/artifacts/artifact-creation.ts"). It contains no import of

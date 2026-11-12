@@ -1096,8 +1096,7 @@ export async function renderIsolatedSubprocess(input: {
 
 /**
  * Build the REAL deps. Every heavy binding resolves LAZILY at call time so
- * constructing this does no I/O and drags no store onto any route graph
- * (the `register-cms-review-host-seam-runtime` posture).
+ * constructing this does no I/O and drags no store onto any route graph.
  */
 export function createPreviewCaptureDeps(): PreviewCaptureDeps {
   return {

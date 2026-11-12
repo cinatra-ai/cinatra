@@ -11,6 +11,7 @@
  *   npx vitest run src/__tests__/passthrough-extension-tool-echo-carries-the-filed-set.test.ts
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHmac } from "node:crypto";
 
 const {
   isAuthorizedMock,
@@ -84,13 +85,33 @@ const RUN = {
 const POST_TARGET = { artifactId: "art-post-1", representationRevisionId: "rev-post-1" };
 const IMAGE_TARGET = { artifactId: "art-image-1", representationRevisionId: "rev-image-1" };
 
+// cinatra#4154: an `extension_tool` call comes from a proven step, so every call
+// here carries the runtime's signed step pair over the run's context id.
+const ATTEST_KEY = "echo-attest-key-under-test";
+const CONTEXT_ID = "ctx-echo-1";
+const STEP = "echo-step-1";
+
+function stepPair(): Record<string, string> {
+  const expiry = Math.floor(Date.now() / 1000) + 300;
+  const sig = createHmac("sha256", ATTEST_KEY)
+    .update(`s1\n${CONTEXT_ID}\n${STEP}\n${expiry}`)
+    .digest("hex");
+  return {
+    "x-cinatra-a2a-context-id": CONTEXT_ID,
+    "x-cinatra-step-node": STEP,
+    "x-cinatra-step-attestation": `s1:${expiry}:${sig}`,
+  };
+}
+
 function post(body: Record<string, unknown>): Request {
   return new Request("http://localhost/api/agents/passthrough", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...stepPair() },
     body: JSON.stringify(body),
   });
 }
+
+const ATTEST_KEY_BEFORE = process.env.CINATRA_CONTEXT_ATTEST_KEY;
 
 const TOOL_CALL = { name: "fixture_tool", input: { op: "complete" } };
 
@@ -109,9 +130,12 @@ beforeEach(() => {
   isAuthorizedMock.mockReturnValue(true);
   bindBridgeRunIdMock.mockResolvedValue({ ok: true });
   readAgentRunByIdMock.mockResolvedValue(RUN);
+  process.env.CINATRA_CONTEXT_ATTEST_KEY = ATTEST_KEY;
 });
 
 afterAll(() => {
+  if (ATTEST_KEY_BEFORE === undefined) delete process.env.CINATRA_CONTEXT_ATTEST_KEY;
+  else process.env.CINATRA_CONTEXT_ATTEST_KEY = ATTEST_KEY_BEFORE;
   vi.doUnmock("@cinatra-ai/agents");
   vi.doUnmock("@/lib/primitive-handlers");
   vi.doUnmock("@/lib/wayflow-bridge-auth");

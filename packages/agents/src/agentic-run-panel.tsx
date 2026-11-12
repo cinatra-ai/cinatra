@@ -81,6 +81,7 @@ import {
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
   isSetupGateTaskId,
+  midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
   wrapPrimitiveSetupPayload,
@@ -254,11 +255,13 @@ export type AgenticRunPanelProps = {
    * (cinatra#2790, epic #2784 S9f).
    *
    * The plan: "The agentic run progress card appears once the skills are
-   * decided; no skill inside it can be selected." So a run that came through the
-   * recommendation card draws NO skill picker inside this panel — the settled
-   * chips above it already say what was chosen, and a second, pressable list of
-   * every assigned skill reads as a live choice that disagrees with the one that
-   * was taken.
+   * decided; no skill inside it can be selected." (In a conversation turn the
+   * bound design's §V supersedes the first half: the turn stands this panel down
+   * beneath the settled row, cinatra#3062. The no-picker rule below stands.) So
+   * a run that came through the recommendation card draws NO skill picker inside
+   * this panel — the settled row already says what was chosen, and a second,
+   * pressable list of every assigned skill reads as a live choice that disagrees
+   * with the one that was taken.
    *
    * IT IS A PROP ON EVERY HOST, and it is the panel's ONLY reading of the
    * question (cinatra#3047). This panel used to mount the recommendation card
@@ -3055,8 +3058,17 @@ export function AgenticRunPanel({
                       // (the shared props contract says a renderer that draws
                       // its own Continue must skip it), and the card's Continue
                       // asks the field for its value through the same flush the
-                      // renderer's own button would have used.
-                      hideSubmit={productOwnsSetupSend}
+                      // renderer's own button would have used. A boolean field
+                      // on a mid-run gate is told the same (cinatra#4310): the
+                      // outer Continue below is that gate's one control.
+                      hideSubmit={
+                        productOwnsSetupSend ||
+                        midRunBooleanFieldHidesSubmit({
+                          isMidRun: isMidRunHitl,
+                          isGroupedSetup,
+                          fieldSchema: hitlRendererEntry.fieldSchema,
+                        })
+                      }
                       registerFlush={
                         productOwnsSetupSend
                           ? (fn: () => Promise<void>) =>

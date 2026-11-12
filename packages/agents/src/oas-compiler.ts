@@ -53,8 +53,11 @@ import {
 import {
   collectArtifactBindingsFromOasDocument,
   collectArtifactMaterializeNodesFromOasDocument,
+  readArtifactReviewTargetsInput,
+  readFlowControlTopology,
 } from "./artifact-binding";
 import type { PersistedArtifactBindingDeclaration } from "./artifact-binding";
+import { readKeyList } from "./gate-keys-not-from-run-inputs";
 
 // ---------------------------------------------------------------------------
 // OAS Flow compiler
@@ -1220,6 +1223,16 @@ export type CompiledAgentOasStep = {
   // surface instead of the legacy reviewer envelope. Absent (the default) means
   // the gate is an ordinary HITL gate and every code path stays byte-identical.
   artifactReviewTargetsInput?: string;
+  // cinatra#4457: set ONLY on an InputMessageNode gate whose
+  // `metadata.cinatra.surfaceGateInputs` is strictly `true`, and on a FlowNode
+  // step (a gateStep or the plain step) whose INLINED subflow holds such a gate
+  // (subflowSurfaceGateInputKeys). It lists the titles of the gate's declared
+  // inputs: the keys of the one JSON object the WayFlow loader writes as that
+  // gate's message (for a FlowNode step, the keys of every such gate in the
+  // subflow). At runtime a run input never fills one of these keys in the review
+  // values (gate-keys-not-from-run-inputs.ts). Absent (the default) leaves
+  // every other gate byte-identical.
+  surfaceGateInputKeys?: string[];
 };
 
 export type CompiledAgentOas = {
@@ -1308,6 +1321,50 @@ function assertHandledComponentType(
         `Update COMPONENT_TYPES_HANDLED + add a matching branch in the steppableNodeIds.map body.`,
     );
   }
+}
+
+// cinatra#4457: the keys of every value-surfacing gate inside a FlowNode's
+// wrapped subflow. A gate in a subflow reaches the root approval policy only as
+// a step of its FlowNode (a gateStep, or the plain FlowNode step), so that step
+// lists the declared input titles of every InputMessageNode in the INLINED
+// subflow whose `metadata.cinatra.surfaceGateInputs` is strictly `true` (the
+// loader's identity), with the walk of subflowFiresNonContextRuntimeGate. The
+// host cannot tell which gate of the subflow paused, so every step of the
+// FlowNode lists the keys of all of them. When the ref is absent or not
+// inlined, there are no keys and the step is as before (no list).
+function subflowSurfaceGateInputKeys(
+  subflowRef: string | undefined,
+  localRefs: Record<string, unknown>,
+): string[] {
+  if (!subflowRef) return [];
+  const subflow = localRefs[subflowRef];
+  if (!subflow || typeof subflow !== "object") return [];
+  const keys: string[] = [];
+  const visit = (o: unknown): void => {
+    if (o === null || typeof o !== "object") return;
+    if (Array.isArray(o)) {
+      for (const v of o) visit(v);
+      return;
+    }
+    const node = o as Record<string, unknown>;
+    if (node["component_type"] === "InputMessageNode") {
+      const cin =
+        ((node["metadata"] as { cinatra?: Record<string, unknown> } | undefined)?.cinatra) ??
+        {};
+      if (cin["surfaceGateInputs"] === true) {
+        const inputs = node["inputs"];
+        const titles = Array.isArray(inputs)
+          ? (inputs as unknown[]).map((i) =>
+              i !== null && typeof i === "object" ? (i as { title?: unknown }).title : undefined,
+            )
+          : [];
+        for (const k of readKeyList(titles)) if (!keys.includes(k)) keys.push(k);
+      }
+    }
+    for (const v of Object.values(node)) visit(v);
+  };
+  visit(subflow);
+  return keys;
 }
 
 // #839: does a FlowNode's wrapped subflow fire a real (non-context) runtime
@@ -1620,35 +1677,12 @@ export async function compileOasAgentJson(opts: {
   //    (do NOT rely on parsed.nodes array index).
   const nodes = parsed.nodes as Array<{ "$component_ref": string }>;
   const arrayNodeIds = nodes.map((n) => n.$component_ref);
-  const controlEdges = (parsed.control_flow_connections as Array<Record<string, unknown>>) ?? [];
-
-  const adjacency = new Map<string, string[]>();
-  for (const edge of controlEdges) {
-    const e = edge as { from_node?: { $component_ref?: string }; to_node?: { $component_ref?: string } };
-    const fromId = e.from_node?.$component_ref;
-    const toId = e.to_node?.$component_ref;
-    if (!fromId || !toId) continue;
-    if (!adjacency.has(fromId)) adjacency.set(fromId, []);
-    const neighbors = adjacency.get(fromId)!;
-    // Deduplicate: if the same (from, to) edge appears twice, do not push the
-    // target id twice — that wastes queue operations and can muddle step order
-    // under edge-duplication (the visited-set still catches it, but only after
-    // the duplicate has been drained).
-    if (!neighbors.includes(toId)) neighbors.push(toId);
-  }
-
+  // The shared reading (cinatra#3035): the same topology a run-time reader of
+  // the executed gates takes.
+  const { reachable } = readFlowControlTopology(parsed);
   const startEntryId = (parsed.start_node as { $component_ref: string }).$component_ref;
-  const nodeIds: string[] = [];
-  const visited = new Set<string>();
-  const queue: string[] = [startEntryId];
-  while (queue.length > 0) {
-    const id = queue.shift()!;
-    if (visited.has(id)) continue;
-    visited.add(id);
-    nodeIds.push(id);
-    const next = adjacency.get(id) ?? [];
-    for (const n of next) if (!visited.has(n)) queue.push(n);
-  }
+  const nodeIds: string[] = [...reachable];
+  const visited = new Set<string>(reachable);
   // Safety: append any disconnected nodes in array order (structural validator should reject).
   for (const id of arrayNodeIds) if (!visited.has(id)) nodeIds.push(id);
 
@@ -1758,8 +1792,8 @@ export async function compileOasAgentJson(opts: {
       const ime = localRefs[id] as {
         name?: string;
         outputs?: Array<{ id?: string; title?: string }>;
-        inputs?: Array<{ id?: string; schema?: Record<string, unknown> }>;
-        metadata?: { cinatra?: { description?: string; inputRenderers?: Record<string, string>; renderer?: string; inputMessageSchema?: Record<string, unknown>; artifactReview?: { targetsInput?: unknown } } };
+        inputs?: Array<{ id?: string; title?: unknown; schema?: Record<string, unknown> }>;
+        metadata?: { cinatra?: { description?: string; inputRenderers?: Record<string, string>; renderer?: string; inputMessageSchema?: Record<string, unknown>; artifactReview?: { targetsInput?: unknown }; surfaceGateInputs?: unknown } };
       };
       const out0 = ime.outputs?.[0] ?? {};
       const field = out0.title ?? out0.id ?? id;
@@ -1778,11 +1812,15 @@ export async function compileOasAgentJson(opts: {
       // interrupt hook can pin the gate + route to the generic review surface.
       // Only a NON-EMPTY string marks the gate; anything else leaves it unset so
       // the gate stays an ordinary (byte-identical) HITL gate.
-      const targetsInputRaw = ime.metadata?.cinatra?.artifactReview?.targetsInput;
-      const artifactReviewTargetsInput =
-        typeof targetsInputRaw === "string" && targetsInputRaw.length > 0
-          ? targetsInputRaw
-          : undefined;
+      const artifactReviewTargetsInput = readArtifactReviewTargetsInput(ime);
+      // cinatra#4457: the keys of a value-surfacing gate's message. The flag is
+      // read with the loader's own strict identity (`=== true`, never a truthy
+      // coercion); each declared input's title is a key of the message. An
+      // `inputs` that is not an array lists no key (the compile never throws).
+      const surfaceGateInputKeys =
+        ime.metadata?.cinatra?.surfaceGateInputs === true
+          ? readKeyList(Array.isArray(ime.inputs) ? ime.inputs.map((i) => i?.title) : [])
+          : [];
       return {
         nodeType: "input_message",
         stepNumber,
@@ -1796,6 +1834,7 @@ export async function compileOasAgentJson(opts: {
         inputMessageField: field,
         inputMessageSchema: inputSchema,
         ...(artifactReviewTargetsInput ? { artifactReviewTargetsInput } : {}),
+        ...(surfaceGateInputKeys.length > 0 ? { surfaceGateInputKeys } : {}),
       };
     }
 
@@ -1896,6 +1935,9 @@ export async function compileOasAgentJson(opts: {
       // No leaf to merge — pass undefined and let the merge function project
       // parentCinatra fields through the same 5-key surface as AgentNode.
       const effective = mergeParentLeafCinatra(parentCinatra, undefined);
+      // cinatra#4457: the keys of the value-surfacing gates in the subflow,
+      // written on the gateStep return and on the plain FlowNode return below.
+      const nestedGateKeys = subflowSurfaceGateInputKeys(node.subflow?.$component_ref, localRefs);
 
       // Build inputMapping from data_flow_connections targeting this FlowNode.
       // Same logic as the AgentNode arm.
@@ -1959,6 +2001,7 @@ export async function compileOasAgentJson(opts: {
         if (!subflowFiresNonContextRuntimeGate(node.subflow?.$component_ref, localRefs)) {
           step.firesRendererGate = false;
         }
+        if (nestedGateKeys.length > 0) step.surfaceGateInputKeys = nestedGateKeys;
         return step;
       }
 
@@ -1976,6 +2019,7 @@ export async function compileOasAgentJson(opts: {
         if (derived?.renderer) step.xRenderer = derived.renderer;
         if (derived?.riskClass && step.riskClass === undefined) step.riskClass = derived.riskClass;
       }
+      if (nestedGateKeys.length > 0) step.surfaceGateInputKeys = nestedGateKeys;
 
       return step;
     }
