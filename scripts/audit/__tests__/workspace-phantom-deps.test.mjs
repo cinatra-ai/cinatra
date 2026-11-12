@@ -25,7 +25,10 @@ import {
 // The HOST-SERVED virtual module id, imported from its ONE definition (the
 // client-bundle builder) — the same road scripts/extensions/inventory.mjs takes.
 // Never re-typed as a literal here: one id, one definition.
-import { HOST_DESIGN_PRIMITIVES_MODULE } from "../../extensions/build-client-renderer-bundle.mjs";
+import {
+  HOST_DASHBOARD_COMPOSITION_MODULE,
+  HOST_DESIGN_PRIMITIVES_MODULE,
+} from "../../extensions/build-client-renderer-bundle.mjs";
 
 const GATE_SCRIPT = fileURLToPath(new URL("../workspace-phantom-deps.mjs", import.meta.url));
 
@@ -79,6 +82,30 @@ test("extractInternalImports does not flag a package's own name", () => {
   const internal = new Set(["@cinatra-ai/self"]);
   const got = extractInternalImports(`import { x } from "@cinatra-ai/self";`, internal, "@cinatra-ai/self");
   assert.equal(got.size, 0);
+});
+
+test("extractInternalImports exempts the EXACT host-served dashboard composition for a synced extension (cinatra#3092)", () => {
+  // The kind gate admits the specifier, never its base package, so a synced
+  // extension cannot declare @cinatra-ai/sdk-dashboard in any bucket: an
+  // undeclared import of EXACTLY the specifier is the designed state.
+  const internal = new Set(["@cinatra-ai/sdk-dashboard"]);
+  const src = `import { ReadOnlyComposedDashboard } from "${HOST_DASHBOARD_COMPOSITION_MODULE}";`;
+  const got = extractInternalImports(src, internal, "@cinatra-ai/dashboard-artifact", { hostServedExempt: true });
+  assert.deepEqual([...got], []);
+});
+
+test("extractInternalImports still reports the composition's package root and other subpaths under the exemption", () => {
+  const internal = new Set(["@cinatra-ai/sdk-dashboard"]);
+  for (const spec of ["@cinatra-ai/sdk-dashboard", "@cinatra-ai/sdk-dashboard/other"]) {
+    const got = extractInternalImports(`import { x } from "${spec}";`, internal, "@cinatra-ai/self", { hostServedExempt: true });
+    assert.deepEqual([...got], ["@cinatra-ai/sdk-dashboard"], spec);
+  }
+});
+
+test("extractInternalImports keeps the plain rule without the exemption (packages/* members)", () => {
+  const internal = new Set(["@cinatra-ai/sdk-dashboard"]);
+  const src = `import { ReadOnlySinglePortlet } from "${HOST_DASHBOARD_COMPOSITION_MODULE}";`;
+  assert.deepEqual([...extractInternalImports(src, internal, "@cinatra-ai/self")], ["@cinatra-ai/sdk-dashboard"]);
 });
 
 test("diffAgainstBaseline reports only NEW (pkg, dep) pairs", () => {
@@ -494,6 +521,29 @@ test("integration: the third-party leg is scoped to synced extensions only — t
     const result = runGate(root, ["--report"]);
     assert.equal(result.status, 0);
     assert.doesNotMatch(result.stdout, /zod/, "packages/* is out of scope for the third-party leg");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("integration: a synced extension's undeclared import of EXACTLY the host-served dashboard composition is green; its package root is red (cinatra#3092)", () => {
+  const { root, connectorDir } = makeFixture();
+  try {
+    const sdkDir = join(root, "packages", "sdk-dashboard");
+    mkdirSync(join(sdkDir, "src"), { recursive: true });
+    writeFileSync(join(sdkDir, "package.json"), JSON.stringify({ name: "@cinatra-ai/sdk-dashboard", version: "0.0.0" }, null, 2));
+    writeConnectorManifest(connectorDir);
+    writeFileSync(
+      join(connectorDir, "src", "index.ts"),
+      `import { ReadOnlyComposedDashboard } from "${HOST_DASHBOARD_COMPOSITION_MODULE}";\nexport const D = ReadOnlyComposedDashboard;\n`,
+    );
+    const green = runGate(root);
+    assert.equal(green.status, 0, `the exact host-served specifier must not be a phantom dependency: ${green.stderr}`);
+
+    writeFileSync(join(connectorDir, "src", "index.ts"), `import { x } from "@cinatra-ai/sdk-dashboard";\nexport const X = x;\n`);
+    const red = runGate(root);
+    assert.equal(red.status, 1, "the package root stays a finding");
+    assert.match(red.stderr, /@cinatra-ai\/sdk-dashboard/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
