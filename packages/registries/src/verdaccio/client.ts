@@ -12,7 +12,7 @@ import { access, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import * as pacoteImpl from "pacote";
+import * as pacoteModule from "pacote";
 import * as semver from "semver";
 import { createRedactingPacote, registryScopedAuthOptions } from "./registry-auth";
 import type {
@@ -21,6 +21,12 @@ import type {
   AgentPackageSummary,
   VerdaccioConfig,
 } from "../types";
+
+// Native Node ESM exposes pacote's computed CommonJS methods only on default;
+// bundlers and existing injected test modules may expose the namespace itself.
+const pacoteImpl = "default" in pacoteModule
+  ? pacoteModule.default as typeof pacoteModule
+  : pacoteModule;
 
 /**
  * Fail-fast DI guard.
