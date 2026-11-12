@@ -315,5 +315,3 @@ projector is what makes such a finding verifiable.
 
 - [Lifecycle review policy](../governance/lifecycle-review-policy.md)
   — the bounds an organization sets, and what wins when layers disagree.
-- [The CMS review adapter contract](../contracts/cms-review-adapter-contract.md)
-  — the producer-side contract for remote CMS content.
