@@ -32,8 +32,10 @@ const PAIR_COMPONENT = `${REVIEW_DIR}/review-pinned-capture.tsx`;
 const SURFACE_MODEL = "src/lib/artifacts/review-surface-model.ts";
 
 // The capture route reads the store until the next unit removes it with the
-// store; it is the one place under src/app that may still name the store.
+// store; it is the one place under src/app that may still name the store, and
+// the store is the only retired name it may carry.
 const STAYS_FOR_NOW = "src/app/api/lifecycle-views/capture/";
+const STAYS_FOR_NOW_MODULE = "cms-preview-capture-store";
 
 const RETIRED_NAMES = [
   "ReviewPinnedCapture",
@@ -98,12 +100,13 @@ describe("cinatra#3862 leg 8 l8b: the review surfaces draw no stored capture pai
     const hits: string[] = [];
     for (const file of files) {
       const rel = path.relative(REPO_ROOT, file);
-      if (rel.startsWith(STAYS_FOR_NOW)) continue;
+      const capture = rel.startsWith(STAYS_FOR_NOW);
       const text = readFileSync(file, "utf8");
       for (const name of RETIRED_NAMES) {
         if (new RegExp(`\\b${name}\\b`).test(text)) hits.push(`${rel} :: ${name}`);
       }
       for (const mod of RETIRED_MODULES) {
+        if (capture && mod === STAYS_FOR_NOW_MODULE) continue;
         if (text.includes(mod)) hits.push(`${rel} :: ${mod}`);
       }
     }
@@ -120,7 +123,7 @@ describe("cinatra#3862 leg 8 l8b: the review surfaces draw no stored capture pai
 
   it("the verification view still mounts the one verification card", () => {
     const view = read(`${REVIEW_DIR}/verification-view.tsx`);
-    expect(view).toMatch(/<\s*VerificationSummaryCard\b/);
+    expect(view.match(/<\s*VerificationSummaryCard\b/g) ?? []).toHaveLength(1);
   });
 
   it("the capture route, the store and its view stay for the next unit", () => {
