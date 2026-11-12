@@ -17,6 +17,7 @@
 //
 // and the values the section's own Example writes out in full:
 //
+//   trigger inset     "padding: 0 10px 0 12px"
 //   trigger chevron   "width:14px;height:14px;color:var(--muted)"
 //   search row text   "font: 12.5px var(--font-sans)"
 //   option row        "padding: 7px 9px; border-radius: 5px; ... font-size: 13px"
@@ -24,7 +25,8 @@
 //
 // DEPARTURE FOUND AND FIXED. The trigger, the joined list, the flat search row,
 // the indigo check and the indigo soft-tint already met the drawing. Four
-// values in the list and on the trigger did not:
+// values in the list and on the trigger did not, and a fifth, the trigger's
+// inset, was first graded as met and was not:
 //   - the option rows took the shared Command row's 8px x 6px inset, its
 //     palette-varying `rounded-sm` (6px in one palette, 4px in the other) and
 //     14px type, where the Example draws 9px x 7px, 5px and 13px;
@@ -32,15 +34,22 @@
 //     where the Example draws a 13px check at stroke 2.4;
 //   - the search row set its text at 14px, where the Example sets 12.5px;
 //   - the trigger chevron was 16px at half opacity, where the Example draws a
-//     14px chevron in the full muted ink.
+//     14px chevron in the full muted ink;
+//   - the trigger was inset 12px on both sides (`px-3`), where the Example
+//     draws 12px on the left and 10px on the right. The Input's own inset is
+//     10px on both sides (`px-2.5`), so the trigger matched neither.
 // Each is fixed in the Combobox's own call site; the shared Command primitive
 // and every other caller keep their recipe.
 //
-// The trigger's TYPE SIZE and inset are graded against the family clause the
-// Select section states for every trigger of the select family, "Trigger
-// mirrors Input chrome": the trigger keeps the Input's `text-sm`, so a list
-// that crosses the ~8 threshold changes its behaviour without changing how the
-// row reads beside the Input next to it.
+// The trigger's TYPE SIZE is graded against the family clause the Select
+// section states for every trigger of the select family, "Trigger mirrors
+// Input chrome": the trigger keeps the Input's `text-sm`, so a list that
+// crosses the ~8 threshold changes its behaviour without changing how the row
+// reads beside the Input next to it. The trigger's INSET is graded against
+// the Combobox's own Example, which writes it out in full: the family clause
+// gives the chrome (height, radius, border, surface), the section's own
+// picture gives the one number the clause leaves open. Its right inset is the
+// Input's 10px; its left inset is the Example's 12px.
 //
 // What is graded here is the RECIPE (class names). Colours that only resolve
 // through palette tokens are re-read on the live boot in both palettes.
@@ -127,9 +136,16 @@ function openList() {
 }
 
 function rows(content: HTMLElement): HTMLElement[] {
-  return Array.from(
+  const found = Array.from(
     content.querySelectorAll<HTMLElement>('[data-slot="command-item"]'),
   )
+  // Every per-row case loops over these rows; a list that renders no row
+  // would leave such a loop green without one assertion, so the count is
+  // checked here, in every case that reads the rows.
+  expect(found, "the list renders one row per option").toHaveLength(
+    OPTIONS.length,
+  )
+  return found
 }
 
 describe('clause: "an Input-chrome trigger" / "Input trigger + chevron"', () => {
@@ -146,6 +162,24 @@ describe('clause: "an Input-chrome trigger" / "Input trigger + chevron"', () => 
         token,
       )
     }
+  })
+
+  it('insets the trigger 12px left and 10px right, as the Example draws it ("padding: 0 10px 0 12px")', () => {
+    const trigger = classes(renderTrigger())
+    expect(trigger, "the trigger is not inset 12px on the left").toContain(
+      "pl-3",
+    )
+    expect(trigger, "the trigger is not inset 10px on the right").toContain(
+      "pr-2.5",
+    )
+    expect(
+      trigger,
+      "the trigger keeps a symmetric 12px inset (px-3)",
+    ).not.toContain("px-3")
+    expect(
+      trigger,
+      "the trigger takes a symmetric inset the Example does not draw",
+    ).not.toContain("px-2.5")
   })
 
   it("keeps the Input's type size, as the family clause asks", () => {
@@ -239,6 +273,29 @@ describe('clause: "The current value carries an indigo check" / "check on select
     )
     expect(checked).toHaveLength(1)
     expect(checked[0].textContent).toContain("Gmail Connector")
+  })
+
+  it("draws one check SVG in the current value's row, reached by the row's check rules", () => {
+    // The colour and size cases below read the rules the row carries for its
+    // SVG. This case reads the SVG itself: the checked row draws exactly one,
+    // and it carries no size or colour class of its own that would take it out
+    // of reach of the row's `[&_svg:not([class*='size-'])]` size rule or win
+    // over the row's indigo ink.
+    const checked = rows(openList()).find(
+      (row) => row.getAttribute("data-checked") === "true",
+    ) as HTMLElement
+    expect(checked, "no row carries the current value").toBeDefined()
+    const svgs = checked.querySelectorAll("svg")
+    expect(svgs, "the checked row draws no check, or more than one SVG").toHaveLength(1)
+    const own = classes(svgs[0])
+    expect(
+      own.filter((t) => t.includes("size-")),
+      "the check sets its own size, so the row's 13px rule does not reach it",
+    ).toEqual([])
+    expect(
+      own.filter((t) => /^(?:[a-z-]+:)*text-/.test(t)),
+      "the check sets its own colour class",
+    ).toEqual([])
   })
 
   it("draws the check in the indigo ink", () => {
