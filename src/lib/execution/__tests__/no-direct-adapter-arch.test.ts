@@ -171,6 +171,16 @@ const ADAPTER_ACQUISITION_ALLOWLIST: ReadonlyArray<{
       "`stream()` entry point, which is where injection happens. It never " +
       "invokes the adapter it resolved.",
   },
+  {
+    file: "src/app/api/assistants/chat/tool-manifest/route.ts",
+    invokes: false,
+    reason:
+      "IDENTITY READ, no turn. The read-only tool-manifest route resolves " +
+      "the assistant's pinned (or bound-default) adapter exactly as the " +
+      "assistant runtime does, only to read `provider` / `defaultModel` so " +
+      "that it assembles the same tool set as the turn. It runs no turn and " +
+      "never invokes the adapter it resolved.",
+  },
 ];
 
 /**
