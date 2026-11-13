@@ -24,9 +24,12 @@ import { writeStepSnapshotRow, type StepSnapshotWriter } from "./step-snapshots"
 //   - FENCE. Before anything is sent, the runtime's `/.health` must list
 //     `regenerate_segment/1`; else the run fails REGENERATE_RUNTIME_UNSUPPORTED.
 //   - MESSAGE. The input params hold the note and the typed request only; the
-//     metadata `cinatra_regenerate_segment` carries {step, artifactNode,
-//     noteInput, flowSha256, snapshots: [{node, inputs_json, sha256}]}, the
-//     snapshot strings exactly as stored (never re-serialized).
+//     note travels under the flow's ORIGINAL start output that feeds (step,
+//     noteInput), read from the agent's flow document. The metadata
+//     `cinatra_regenerate_segment` carries {step, artifactNode, noteInput,
+//     noteStartOutput, flowSha256, snapshots: [{node, inputs_json, sha256}]},
+//     the snapshot strings exactly as stored (never re-serialized). A flow
+//     where no single start output feeds the note refuses.
 //   - RECEIPT. A finished segment's last message carries
 //     `cinatra_segment_receipt` {step, artifactNode, flowSha256, attestation},
 //     attestation = "g1:" + HMAC-SHA256(CINATRA_CONTEXT_ATTEST_KEY,
@@ -60,6 +63,7 @@ export const SEGMENT_RECEIPT_NODE_ID = "cinatra:segment-receipt";
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 const RECEIPT_ATTESTATION = /^g1:([0-9a-f]{64})$/;
 const LIFECYCLE_REPAIR_SOURCE_TYPE = "lifecycle_repair";
+const LIFECYCLE_REPAIR_REQUEST_INPUT = "lifecycleRepairRequest";
 /** The id prefix of a repair run; equal to REPAIR_RUN_PREFIX of
  *  ./lifecycle-repair-dispatch-store (pinned by the tests), kept here so that
  *  a run that is not a repair run is answered without loading the store. */
@@ -158,6 +162,8 @@ export type RegenerateSegmentPlan = {
   step: string;
   artifactNode: string;
   noteInput: string;
+  /** The flow's start output that feeds (step, noteInput): the note's key. */
+  noteStartOutput: string;
   flowSha256: string;
   snapshots: SegmentSnapshot[];
 };
@@ -181,7 +187,59 @@ export type RegenerateSegmentDeps = {
     runId: string;
     nodeIds: string[];
   }) => Promise<StoredStepSnapshot[]>;
+  /** The start output of the agent's flow that feeds (step, noteInput), or
+   *  null (see noteStartOutputFromOas). */
+  readNoteStartOutput: (input: {
+    packageName: string | null;
+    step: string;
+    noteInput: string;
+  }) => Promise<string | null>;
 };
+
+function componentRef(value: unknown): string | null {
+  return plainObject(value) && nonEmptyString(value.$component_ref) ? value.$component_ref : null;
+}
+
+/**
+ * The output of the flow's start node that feeds the step's note input, or
+ * null: `oas` is not a Flow, its start node is no reference, or not exactly
+ * one data edge enters (step, noteInput), or that edge does not leave the
+ * start node. The runtime checks the same name against the mounted flow.
+ */
+export function noteStartOutputFromOas(oas: unknown, step: string, noteInput: string): string | null {
+  if (!plainObject(oas) || oas.component_type !== "Flow") return null;
+  const startId = componentRef(oas.start_node);
+  if (!startId || !Array.isArray(oas.data_flow_connections)) return null;
+  const feeding = oas.data_flow_connections.filter(
+    (edge) =>
+      plainObject(edge) && componentRef(edge.destination_node) === step && edge.destination_input === noteInput,
+  ) as Array<Record<string, unknown>>;
+  if (feeding.length !== 1) return null;
+  const edge = feeding[0]!;
+  if (componentRef(edge.source_node) !== startId || !nonEmptyString(edge.source_output)) return null;
+  return edge.source_output;
+}
+
+/** The note start output read from the package's installed flow document. */
+async function readNoteStartOutputFromInstalledOas(input: {
+  packageName: string | null;
+  step: string;
+  noteInput: string;
+}): Promise<string | null> {
+  if (!nonEmptyString(input.packageName)) return null;
+  const [{ resolveInstalledOasPathForRead }, { readFile }] = await Promise.all([
+    import("./installed-oas-path"),
+    import("node:fs/promises"),
+  ]);
+  const oasPath = resolveInstalledOasPathForRead(input.packageName);
+  if (!oasPath) return null;
+  return noteStartOutputFromOas(JSON.parse(await readFile(oasPath, "utf8")), input.step, input.noteInput);
+}
+
+/** A usable note key: non-empty and never the typed request's own input. */
+function usableNoteKey(name: string | null | undefined): name is string {
+  return nonEmptyString(name) && name !== LIFECYCLE_REPAIR_REQUEST_INPUT;
+}
 
 async function defaultRegenerateSegmentDeps(): Promise<RegenerateSegmentDeps> {
   const [{ readRepair }, { readVerifiedFilingNode }, { db }, schema, orm] =
@@ -219,6 +277,7 @@ async function defaultRegenerateSegmentDeps(): Promise<RegenerateSegmentDeps> {
         })
         .from(t)
         .where(orm.and(orm.eq(t.orgId, orgId), orm.eq(t.runId, runId), orm.inArray(t.nodeId, nodeIds))),
+    readNoteStartOutput: readNoteStartOutputFromInstalledOas,
   };
 }
 
@@ -237,6 +296,8 @@ export async function resolveRegenerateSegment(
   input: {
     run: { id: string; orgId: string | null; sourceType?: string | null; templateId: string };
     lifecycleConfig: unknown;
+    /** The template's package: its installed flow names the note's start output. */
+    packageName: string | null;
   },
   deps?: RegenerateSegmentDeps,
 ): Promise<RegenerateSegmentResolution> {
@@ -268,6 +329,14 @@ export async function resolveRegenerateSegment(
     }
     const entry = readRegenerateEntry(input.lifecycleConfig, nodeId);
     if (!entry) return refused("the agent declares no Regenerate entry for the step that filed the revision");
+    const noteStartOutput = await d.readNoteStartOutput({
+      packageName: input.packageName,
+      step: entry.step,
+      noteInput: entry.noteInput,
+    });
+    if (!usableNoteKey(noteStartOutput)) {
+      return refused("no single start output of the agent's flow feeds the step's note input");
+    }
     const nodes = [...new Set([entry.step, nodeId])].sort();
     const rows = await d.readStepSnapshots({ orgId: repair.orgId, runId: provenance.runId, nodeIds: nodes });
     const snapshots: SegmentSnapshot[] = [];
@@ -295,6 +364,7 @@ export async function resolveRegenerateSegment(
         step: entry.step,
         artifactNode: nodeId,
         noteInput: entry.noteInput,
+        noteStartOutput,
         flowSha256: flowSha256!,
         snapshots,
       },
@@ -335,6 +405,7 @@ export function regenerateSegmentMetadata(plan: RegenerateSegmentPlan): Record<s
       step: plan.step,
       artifactNode: plan.artifactNode,
       noteInput: plan.noteInput,
+      noteStartOutput: plan.noteStartOutput,
       flowSha256: plan.flowSha256,
       snapshots: plan.snapshots.map((s) => ({ node: s.node, inputs_json: s.inputs_json, sha256: s.sha256 })),
     },
@@ -353,19 +424,20 @@ export type SegmentDispatchPlan =
  * What the dispatch drain writes for a repair whose `regenerate_node_id` is
  * set: the run's `parent_run_id` is the PROVENANCE run (the run that filed the
  * reviewed revision, so the context inheritance reads that run's answers), and
- * its input params hold the note, under the entry's `noteInput`, and the typed
- * request only. A provenance that cannot be proven, or another filing node,
+ * its input params hold the note, under the flow's start output that feeds
+ * the entry's `noteInput`, and the typed request only. A provenance that cannot be proven, or another filing node,
  * refuses (the drain escalates the repair; nothing is dispatched).
  */
 export async function planSegmentDispatch(
   input: {
     repair: RegenerateRepairIntent;
     templateId: string;
+    packageName: string | null;
     lifecycleConfig: unknown;
     note: string;
     request: Record<string, unknown>;
   },
-  deps?: Pick<RegenerateSegmentDeps, "readVerifiedFilingNode">,
+  deps?: Pick<RegenerateSegmentDeps, "readVerifiedFilingNode" | "readNoteStartOutput">,
 ): Promise<SegmentDispatchPlan> {
   const { repair } = input;
   const nodeId = repair.regenerateNodeId;
@@ -386,10 +458,21 @@ export async function planSegmentDispatch(
   if (!entry) {
     return { kind: "refused", reason: "Regenerate refused: the agent declares no Regenerate entry for that step" };
   }
+  const noteStartOutput = await (deps?.readNoteStartOutput ?? readNoteStartOutputFromInstalledOas)({
+    packageName: input.packageName,
+    step: entry.step,
+    noteInput: entry.noteInput,
+  });
+  if (!usableNoteKey(noteStartOutput)) {
+    return {
+      kind: "refused",
+      reason: "Regenerate refused: no single start output of the agent's flow feeds the step's note input",
+    };
+  }
   return {
     kind: "segment",
     parentRunId: provenance.runId,
-    inputParams: { [entry.noteInput]: input.note, lifecycleRepairRequest: input.request },
+    inputParams: { [noteStartOutput]: input.note, [LIFECYCLE_REPAIR_REQUEST_INPUT]: input.request },
   };
 }
 

@@ -334,10 +334,11 @@ export async function dispatchPendingProducerRepairs(opts?: {
       // reruns one step and its filing node of the run that filed the reviewed
       // revision. Its run's parent is THAT run (the provenance run, which the
       // context inheritance reads), and its inputs are the note, under the
-      // step's declared note input, and the typed request only: the other
-      // inputs come from that run's step snapshots at the run start. A
-      // provenance that cannot be proven, or another filing step, escalates the
-      // repair; nothing is dispatched. NULL intent: the ordinary repair below,
+      // flow's start output that feeds the step's note input, and the typed
+      // request only: the other inputs come from that run's step snapshots at
+      // the run start. A provenance that cannot be proven, another filing step,
+      // or no single start output feeding the note escalates the repair;
+      // nothing is dispatched. NULL intent: the ordinary repair below,
       // unchanged.
       let segmentParentRunId: string | null = null;
       let segmentInputParams: Record<string, unknown> | null = null;
@@ -351,6 +352,7 @@ export async function dispatchPendingProducerRepairs(opts?: {
             baseRepresentationRevisionId: row.baseRepresentationRevisionId,
           },
           templateId: producer.templateId,
+          packageName: producer.packageName,
           lifecycleConfig: producer.lifecycleConfigText,
           note: buildRepairFindingsText(request.findings),
           request: request as unknown as Record<string, unknown>,

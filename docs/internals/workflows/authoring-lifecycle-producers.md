@@ -290,9 +290,12 @@ of each declared node (the step snapshots). A repair whose row names
   missing or ambiguous snapshot, or two flow versions fail the run before
   dispatch with a plain reason. A repair without `regenerate_node_id` runs as an
   ordinary repair; no input of the run makes it a segment run.
-- **Inputs.** The run's inputs are the note, under the entry's `noteInput`, and
-  the typed `lifecycleRepairRequest` only. Every other input of the two nodes is
-  the value the producing run recorded. So a picture regenerated after a text
+- **Inputs.** The run's inputs are the note and the typed
+  `lifecycleRepairRequest` only. The note travels under the flow's start output
+  that feeds the step's `noteInput` (its name may differ from `noteInput`); the
+  segment request carries that name, and the runtime refuses a name that its
+  mounted start node does not output or that does not feed the note. Every
+  other input of the two nodes is the value the producing run recorded. So a picture regenerated after a text
   change reruns on the ORIGINAL post text of the producing run.
 - **Context.** The run's parent is the run that filed the reviewed revision. A
   context slot inherits that run's recorded answer; a slot whose answer cannot

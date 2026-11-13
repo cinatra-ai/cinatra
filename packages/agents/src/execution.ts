@@ -3954,6 +3954,7 @@ async function runAgentBuilderExecutionJobInner(
   const segmentResolution = await resolveRegenerateSegment({
     run: { id: runId, orgId: run.orgId, sourceType: run.sourceType, templateId: run.templateId },
     lifecycleConfig: template.lifecycleConfig ?? null,
+    packageName: template.packageName ?? null,
   });
   if (segmentResolution.kind === "refused") {
     console.error(`[agent-builder] run ${runId} rejected before dispatch: ${segmentResolution.reason}`);

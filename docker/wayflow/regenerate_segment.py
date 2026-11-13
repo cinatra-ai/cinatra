@@ -4,10 +4,13 @@ A Regenerate reruns ONE producing step of the run that produced a reviewed
 revision, and the node that files the artifact, of the SAME flow version that
 produced it. The application sends, on the run's initial message metadata,
 
-    cinatra_regenerate_segment: {step, artifactNode, noteInput, flowSha256,
+    cinatra_regenerate_segment: {step, artifactNode, noteInput, noteStartOutput,
+                                 flowSha256,
                                  snapshots: [{node, inputs_json, sha256}]}
 
-and puts the note and the typed repair request in the message inputs. The
+and puts the note, under ``noteStartOutput`` (the flow's original start
+output that feeds (step, noteInput)), and the typed repair request in the
+message inputs. The
 runtime then:
 
 1. refuses with ``REGENERATE_FLOW_CHANGED`` before any step when the mounted
@@ -26,10 +29,12 @@ runtime then:
    ``cinatra_seg_<i>``, i = its index in the sorted (node, port) list. The
    start outputs are reserved names only, so no node id or port name can
    collide with them;
-4. fills ``cinatra_seg_note`` from the message input under the ORIGINAL start
-   output that fed (step, noteInput), and ``cinatra_seg_<i>`` from that port's
-   value in the node's snapshot; a missing value refuses with
-   ``REGENERATE_SEGMENT_INVALID``;
+4. fills ``cinatra_seg_note`` from the message input under the carried
+   ``noteStartOutput``, which must be an output of the mounted flow's start
+   node AND the one that feeds (step, noteInput); and ``cinatra_seg_<i>`` from
+   that port's value in the node's snapshot. A missing or empty carried name,
+   a name that fails either check, or a missing value refuses with
+   ``REGENERATE_SEGMENT_INVALID`` before any step;
 5. after the segment finishes, puts a receipt on the last message metadata
    (``cinatra_segment_receipt``): ``{step, artifactNode, flowSha256,
    attestation}`` with ``attestation = "g1:" + hex(hmac_sha256(key,
@@ -114,7 +119,7 @@ def read_segment_request(message: Any) -> Optional[Dict[str, Any]]:
     raw = metadata[REGENERATE_SEGMENT_METADATA_KEY]
     if not isinstance(raw, dict):
         raise _invalid("the segment request is not an object")
-    for name in ("step", "artifactNode", "noteInput"):
+    for name in ("step", "artifactNode", "noteInput", "noteStartOutput"):
         if not _nonempty_str(raw.get(name)):
             raise _invalid(f"the segment request has no {name}")
     flow_sha = raw.get("flowSha256")
@@ -137,6 +142,7 @@ def read_segment_request(message: Any) -> Optional[Dict[str, Any]]:
         "step": raw["step"],
         "artifactNode": raw["artifactNode"],
         "noteInput": raw["noteInput"],
+        "noteStartOutput": raw["noteStartOutput"],
         "flowSha256": flow_sha,
         "snapshots": clean,
     }
@@ -323,6 +329,14 @@ def derive_regenerate_segment(
     if start is None or start.get("component_type") != "StartNode":
         raise _invalid("the flow has no start node")
     start_id = start["id"]
+    start_outputs = sorted(
+        {
+            d["title"]
+            for key in ("inputs", "outputs")
+            for d in (start.get(key) or [])
+            if isinstance(d, dict) and _nonempty_str(d.get("title"))
+        }
+    )
 
     for node in (step, artifact_node):
         comp = components.get(node)
@@ -458,6 +472,7 @@ def derive_regenerate_segment(
     return {
         "doc": doc,
         "note_source": note_source,
+        "start_outputs": start_outputs,
         "ports": ports,
         "platform": sorted(platform),
     }
@@ -488,16 +503,24 @@ def build_segment_inputs(
     derivation: Dict[str, Any],
     snapshots_by_node: Dict[str, Dict[str, Any]],
     message_inputs: Any,
+    note_start_output: Any,
 ) -> Dict[str, Any]:
     """The segment start's inputs: the note from the message input under the
-    original start output name, each ``cinatra_seg_<i>`` from its node's
-    snapshot, each platform key from the message. A missing value refuses."""
+    carried start output name, each ``cinatra_seg_<i>`` from its node's
+    snapshot, each platform key from the message. The carried name must be an
+    output of the mounted start node and the one that feeds the note. A
+    missing value or a name that fails either check refuses."""
+    if not _nonempty_str(note_start_output):
+        raise _invalid("the segment request names no start output for the note")
+    if note_start_output not in derivation["start_outputs"]:
+        raise _invalid(f"the flow's start node has no output {note_start_output!r}")
+    if note_start_output != derivation["note_source"]:
+        raise _invalid(f"the start output {note_start_output!r} does not feed the note")
     if not isinstance(message_inputs, dict):
         raise _invalid("the message carries no inputs")
-    note_source = derivation["note_source"]
-    note = message_inputs.get(note_source)
+    note = message_inputs.get(note_start_output)
     if not isinstance(note, str):
-        raise _invalid(f"the message carries no note under {note_source!r}")
+        raise _invalid(f"the message carries no note under {note_start_output!r}")
     inputs: Dict[str, Any] = {SEGMENT_NOTE_OUTPUT: note}
     for i, (node, port) in enumerate(derivation["ports"]):
         snap = snapshots_by_node.get(node)
@@ -527,7 +550,7 @@ def prepare_segment_run(
     derivation = derive_regenerate_segment_cached(
         request["flowSha256"], working_doc, request["step"], request["artifactNode"], request["noteInput"]
     )
-    return derivation, build_segment_inputs(derivation, snapshots, message_inputs)
+    return derivation, build_segment_inputs(derivation, snapshots, message_inputs, request.get("noteStartOutput"))
 
 
 # ---------------------------------------------------------------------------
