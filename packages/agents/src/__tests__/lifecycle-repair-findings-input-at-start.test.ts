@@ -43,6 +43,20 @@ const storeMock = vi.hoisted(() => ({
 }));
 vi.mock("../store", () => storeMock);
 
+// cinatra#4264 B1b: the run start resolves whether a repair run is a
+// Regenerate segment before the findings binding. These runs are ordinary
+// repairs (the repair names no `regenerate_node_id`); the segment cases at the
+// end set the resolution. The fence is the runtime's /.health read.
+const segmentMock = vi.hoisted(() => ({
+  resolveRegenerateSegment: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ kind: "ordinary" })),
+  fenceRegenerateRuntime: vi.fn(async (): Promise<boolean> => false),
+  isRegenerateSegmentRun: vi.fn(async (): Promise<boolean> => false),
+}));
+vi.mock("../regenerate-segment", async (orig) => ({
+  ...(await orig<typeof import("../regenerate-segment")>()),
+  ...segmentMock,
+}));
+
 vi.mock("../trigger-store", () => ({
   readRunTriggerByRunId: vi.fn(async () => null),
 }));
@@ -187,6 +201,8 @@ function arrange(run: ReturnType<typeof makeRun>, template: ReturnType<typeof ma
 beforeEach(() => {
   vi.clearAllMocks();
   storeMock.transitionRunStatus.mockImplementation(async () => {});
+  segmentMock.resolveRegenerateSegment.mockImplementation(async () => ({ kind: "ordinary" }));
+  segmentMock.fenceRegenerateRuntime.mockImplementation(async () => false);
 });
 
 describe("a repair run gets the findings in the input the template it executes declares (cinatra#4424)", () => {
@@ -355,5 +371,82 @@ describe("a repair run gets the findings in the input the template it executes d
     expect(edges()).toEqual(["queued->failed"]);
     const failure = storeMock.transitionRunStatus.mock.calls[0] as unknown as [string, string, string, { error: string }];
     expect(failure[3].error).toContain('input "instructions" is declared type "object"');
+  });
+});
+
+describe("a Regenerate segment run is resolved and fenced before anything is sent (cinatra#4264 B1b)", () => {
+  const plan = {
+    repairId: "repair-4424",
+    provenanceRunId: "run-producer",
+    step: "image_flow",
+    artifactNode: "file_image",
+    noteInput: "prompt",
+    flowSha256: "a".repeat(64),
+    snapshots: [],
+  };
+
+  it("a refused re-derivation fails the run before the findings binding, with its reason", async () => {
+    arrange(
+      makeRun({ instructions: "Old producing instructions", lifecycleRepairRequest: request() }),
+      makeTemplate(declares("instructions")),
+    );
+    segmentMock.resolveRegenerateSegment.mockResolvedValueOnce({
+      kind: "refused",
+      reason: "REGENERATE_SEGMENT_REFUSED: the reviewed revision was filed by another step",
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await runAgentBuilderExecutionJob({ runId: RUN_ID }, "job-4424");
+    } finally {
+      error.mockRestore();
+    }
+    expect(segmentMock.resolveRegenerateSegment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        run: expect.objectContaining({ id: RUN_ID, sourceType: "lifecycle_repair", templateId: "tmpl-4424" }),
+      }),
+    );
+    expect(storeMock.updateAgentRunInputParams).not.toHaveBeenCalled();
+    expect(edges()).toEqual(["queued->failed"]);
+    const failure = storeMock.transitionRunStatus.mock.calls[0] as unknown as [string, string, string, { error: string }];
+    expect(failure[3].error).toBe("REGENERATE_SEGMENT_REFUSED: the reviewed revision was filed by another step");
+  });
+
+  it("a segment run on a runtime without the capability fails REGENERATE_RUNTIME_UNSUPPORTED and sends nothing", async () => {
+    // The required `brief` is absent: a segment run skips the setup gate (its
+    // inputs are the note and the typed request only) and reaches the fence.
+    arrange(
+      makeRun({ prompt: "brighter picture", lifecycleRepairRequest: request() }),
+      makeTemplate(declares("instructions"), {}, { packageName: "repair-producer-fixture" }),
+    );
+    segmentMock.resolveRegenerateSegment.mockResolvedValueOnce({ kind: "segment", plan });
+    segmentMock.fenceRegenerateRuntime.mockResolvedValueOnce(false);
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await runAgentBuilderExecutionJob({ runId: RUN_ID }, "job-4424");
+    } finally {
+      error.mockRestore();
+    }
+    expect(segmentMock.fenceRegenerateRuntime).toHaveBeenCalledOnce();
+    expect(storeMock.updateAgentRunInputParams).not.toHaveBeenCalled();
+    expect(storeMock.updateAgentRunA2AContextId).not.toHaveBeenCalled();
+    expect(edges()).toEqual(["queued->failed"]);
+    const failure = storeMock.transitionRunStatus.mock.calls[0] as unknown as [string, string, string, { error: string }];
+    expect(failure[3].error.startsWith("REGENERATE_RUNTIME_UNSUPPORTED")).toBe(true);
+  });
+
+  it("a segment run of an external agent is refused before dispatch", async () => {
+    arrange(
+      makeRun({ prompt: "brighter picture", lifecycleRepairRequest: request() }),
+      makeTemplate(declares("instructions"), {}, { sourceType: "external", agentUrl: "https://agent.test" }),
+    );
+    segmentMock.resolveRegenerateSegment.mockResolvedValueOnce({ kind: "segment", plan });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await runAgentBuilderExecutionJob({ runId: RUN_ID }, "job-4424");
+    } finally {
+      error.mockRestore();
+    }
+    expect(segmentMock.fenceRegenerateRuntime).not.toHaveBeenCalled();
+    expect(edges()).toEqual(["queued->failed"]);
   });
 });

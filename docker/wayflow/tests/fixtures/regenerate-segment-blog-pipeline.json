@@ -1,0 +1,2710 @@
+{
+ "agentspec_version": "26.1.0",
+ "component_type": "Flow",
+ "id": "blog-pipeline-agent-flow",
+ "name": "Blog Pipeline Agent",
+ "description": "Parent orchestrator (WayFlow Flow OAS) that turns one stored blog idea into a reviewed blog post, its featured image and the LinkedIn post that announces it. Manual brief and reference material only; transcript input is not accepted. Four pauses of its own: the brand-voice pick the draft and its picture are made in, then the stored-ideas gate, the review the run parks at, and the LinkedIn post.",
+ "metadata": {
+  "cinatra": {
+   "type": "flow",
+   "packageName": "@cinatra-ai/blog-pipeline-agent",
+   "hitlScreens": [
+    "@cinatra-ai/blog-pipeline-agent:idea-selection",
+    "@cinatra-ai/context-selection-agent:context-selector"
+   ],
+   "produces": [
+    {
+     "extension": "@cinatra-ai/blog-post-artifact",
+     "objectTypeId": "@cinatra-ai/blog-post-artifact:post"
+    },
+    {
+     "extension": "@cinatra-ai/image-artifact",
+     "objectTypeId": "@cinatra-ai/image-artifact:image"
+    },
+    {
+     "extension": "@cinatra-ai/linkedin-artifacts",
+     "objectTypeId": "@cinatra-ai/linkedin:post-draft"
+    }
+   ],
+   "contextSlots": [
+    {
+     "slotId": "brandVoice",
+     "acceptedArtifactExtensions": [
+      "@cinatra-ai/brand-voice-artifact"
+     ],
+     "selectionMode": "interactive",
+     "resolutionMode": "override",
+     "minItems": 1,
+     "maxItems": 1
+    }
+   ],
+   "parentSatisfiedContextSlots": [
+    {
+     "parentSlotId": "brandVoice",
+     "childPackage": "@cinatra-ai/blog-draft-writer-agent",
+     "childSlotId": "brandVoice"
+    },
+    {
+     "parentSlotId": "brandVoice",
+     "childPackage": "@cinatra-ai/blog-image-generator-agent",
+     "childSlotId": "brandVoice"
+    }
+   ]
+  }
+ },
+ "inputs": [
+  {
+   "title": "brief",
+   "type": "string",
+   "format": "multiline"
+  },
+  {
+   "title": "audience",
+   "type": "string",
+   "default": ""
+  },
+  {
+   "title": "tone",
+   "type": "string",
+   "default": "informative"
+  },
+  {
+   "title": "length",
+   "type": "string",
+   "default": "medium"
+  },
+  {
+   "title": "referenceContent",
+   "type": "string",
+   "default": ""
+  },
+  {
+   "title": "ideaCount",
+   "type": "integer",
+   "default": 5
+  },
+  {
+   "title": "companyUrl",
+   "type": "string",
+   "default": ""
+  },
+  {
+   "title": "blogPostUrl",
+   "type": "string",
+   "default": ""
+  },
+  {
+   "title": "projectId",
+   "type": "string",
+   "default": ""
+  },
+  {
+   "title": "cinatra_run_id",
+   "type": "string",
+   "default": ""
+  },
+  {
+   "title": "note",
+   "type": "string",
+   "default": ""
+  },
+  {
+   "title": "prompt",
+   "type": "string",
+   "default": ""
+  }
+ ],
+ "outputs": [
+  {
+   "title": "linkedinPost",
+   "type": "string",
+   "default": ""
+  },
+  {
+   "title": "linkedinTitle",
+   "type": "string",
+   "default": ""
+  }
+ ],
+ "start_node": {
+  "$component_ref": "start"
+ },
+ "nodes": [
+  {
+   "$component_ref": "start"
+  },
+  {
+   "$component_ref": "read_brand_voice"
+  },
+  {
+   "$component_ref": "prepare_ideas"
+  },
+  {
+   "$component_ref": "emit_ideas_payload"
+  },
+  {
+   "$component_ref": "idea_selection_gate"
+  },
+  {
+   "$component_ref": "reserve_idea"
+  },
+  {
+   "$component_ref": "draft_flow"
+  },
+  {
+   "$component_ref": "write_draft"
+  },
+  {
+   "$component_ref": "image_flow"
+  },
+  {
+   "$component_ref": "file_image"
+  },
+  {
+   "$component_ref": "complete_relation"
+  },
+  {
+   "$component_ref": "emit_draft_payload"
+  },
+  {
+   "$component_ref": "draft_review_gate"
+  },
+  {
+   "$component_ref": "linkedin_flow"
+  },
+  {
+   "$component_ref": "write_linkedin"
+  },
+  {
+   "$component_ref": "gather_linkedin_review"
+  },
+  {
+   "$component_ref": "linkedin_review_gate"
+  },
+  {
+   "$component_ref": "end"
+  }
+ ],
+ "control_flow_connections": [
+  {
+   "component_type": "ControlFlowEdge",
+   "id": "start->read_brand_voice",
+   "name": "start->read_brand_voice",
+   "description": "",
+   "metadata": {},
+   "from_node": {
+    "$component_ref": "start"
+   },
+   "from_branch": null,
+   "to_node": {
+    "$component_ref": "read_brand_voice"
+   }
+  },
+  {
+   "component_type": "ControlFlowEdge",
+   "id": "read_brand_voice->prepare_ideas",
+   "name": "read_brand_voice->prepare_ideas",
+   "description": "",
+   "metadata": {},
+   "from_node": {
+    "$component_ref": "read_brand_voice"
+   },
+   "from_branch": null,
+   "to_node": {
+    "$component_ref": "prepare_ideas"
+   }
+  },
+  {
+   "component_type": "ControlFlowEdge",
+   "id": "prepare_ideas->emit_ideas_payload",
+   "name": "prepare_ideas->emit_ideas_payload",
+   "description": "",
+   "metadata": {},
+   "from_node": {
+    "$component_ref": "prepare_ideas"
+   },
+   "from_branch": null,
+   "to_node": {
+    "$component_ref": "emit_ideas_payload"
+   }
+  },
+  {
+   "component_type": "ControlFlowEdge",
+   "id": "emit_ideas_payload->idea_selection_gate",
+   "name": "emit_ideas_payload->idea_selection_gate",
+   "description": "",
+   "metadata": {},
+   "from_node": {
+    "$component_ref": "emit_ideas_payload"
+   },
+   "from_branch": null,
+   "to_node": {
+    "$component_ref": "idea_selection_gate"
+   }
+  },
+  {
+   "component_type": "ControlFlowEdge",
+   "id": "idea_selection_gate->reserve_idea",
+   "name": "idea_selection_gate->reserve_idea",
+   "description": "",
+   "metadata": {},
+   "from_node": {
+    "$component_ref": "idea_selection_gate"
+   },
+   "from_branch": null,
+   "to_node": {
+    "$component_ref": "reserve_idea"
+   }
+  },
+  {
+   "component_type": "ControlFlowEdge",
+   "id": "reserve_idea->draft_flow",
+   "name": "reserve_idea->draft_flow",
+   "description": "",
+   "metadata": {},
+   "from_node": {
+    "$component_ref": "reserve_idea"
+   },
+   "from_branch": null,
+   "to_node": {
+    "$component_ref": "draft_flow"
+   }
+  },
+  {
+   "component_type": "ControlFlowEdge",
+   "id": "draft_flow->write_draft",
+   "name": "draft_flow->write_draft",
+   "description": "",
+   "metadata": {},
+   "from_node": {
+    "$component_ref": "draft_flow"
+   },
+   "from_branch": null,
+   "to_node": {
+    "$component_ref": "write_draft"
+   }
+  },
+  {
+   "component_type": "ControlFlowEdge",
+   "id": "write_draft->image_flow",
+   "name": "write_draft->image_flow",
+   "description": "",
+   "metadata": {},
+   "from_node": {
+    "$component_ref": "write_draft"
+   },
+   "from_branch": null,
+   "to_node": {
+    "$component_ref": "image_flow"
+   }
+  },
+  {
+   "component_type": "ControlFlowEdge",
+   "id": "image_flow->file_image",
+   "name": "image_flow->file_image",
+   "description": "",
+   "metadata": {},
+   "from_node": {
+    "$component_ref": "image_flow"
+   },
+   "from_branch": null,
+   "to_node": {
+    "$component_ref": "file_image"
+   }
+  },
+  {
+   "component_type": "ControlFlowEdge",
+   "id": "file_image->complete_relation",
+   "name": "file_image->complete_relation",
+   "description": "",
+   "metadata": {},
+   "from_node": {
+    "$component_ref": "file_image"
+   },
+   "from_branch": null,
+   "to_node": {
+    "$component_ref": "complete_relation"
+   }
+  },
+  {
+   "component_type": "ControlFlowEdge",
+   "id": "complete_relation->emit_draft_payload",
+   "name": "complete_relation->emit_draft_payload",
+   "description": "",
+   "metadata": {},
+   "from_node": {
+    "$component_ref": "complete_relation"
+   },
+   "from_branch": null,
+   "to_node": {
+    "$component_ref": "emit_draft_payload"
+   }
+  },
+  {
+   "component_type": "ControlFlowEdge",
+   "id": "emit_draft_payload->draft_review_gate",
+   "name": "emit_draft_payload->draft_review_gate",
+   "description": "",
+   "metadata": {},
+   "from_node": {
+    "$component_ref": "emit_draft_payload"
+   },
+   "from_branch": null,
+   "to_node": {
+    "$component_ref": "draft_review_gate"
+   }
+  },
+  {
+   "component_type": "ControlFlowEdge",
+   "id": "draft_review_gate->linkedin_flow",
+   "name": "draft_review_gate->linkedin_flow",
+   "description": "",
+   "metadata": {},
+   "from_node": {
+    "$component_ref": "draft_review_gate"
+   },
+   "from_branch": null,
+   "to_node": {
+    "$component_ref": "linkedin_flow"
+   }
+  },
+  {
+   "component_type": "ControlFlowEdge",
+   "id": "linkedin_flow->write_linkedin",
+   "name": "linkedin_flow->write_linkedin",
+   "description": "",
+   "metadata": {},
+   "from_node": {
+    "$component_ref": "linkedin_flow"
+   },
+   "from_branch": null,
+   "to_node": {
+    "$component_ref": "write_linkedin"
+   }
+  },
+  {
+   "component_type": "ControlFlowEdge",
+   "id": "write_linkedin->gather_linkedin_review",
+   "name": "write_linkedin->gather_linkedin_review",
+   "description": "",
+   "metadata": {},
+   "from_node": {
+    "$component_ref": "write_linkedin"
+   },
+   "from_branch": null,
+   "to_node": {
+    "$component_ref": "gather_linkedin_review"
+   }
+  },
+  {
+   "component_type": "ControlFlowEdge",
+   "id": "gather_linkedin_review->linkedin_review_gate",
+   "name": "gather_linkedin_review->linkedin_review_gate",
+   "description": "",
+   "metadata": {},
+   "from_node": {
+    "$component_ref": "gather_linkedin_review"
+   },
+   "from_branch": null,
+   "to_node": {
+    "$component_ref": "linkedin_review_gate"
+   }
+  },
+  {
+   "component_type": "ControlFlowEdge",
+   "id": "linkedin_review_gate->end",
+   "name": "linkedin_review_gate->end",
+   "description": "",
+   "metadata": {},
+   "from_node": {
+    "$component_ref": "linkedin_review_gate"
+   },
+   "from_branch": null,
+   "to_node": {
+    "$component_ref": "end"
+   }
+  }
+ ],
+ "data_flow_connections": [
+  {
+   "component_type": "DataFlowEdge",
+   "id": "cinatra_run_id:start->read_brand_voice.cinatra_run_id",
+   "name": "cinatra_run_id:start->read_brand_voice",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "start"
+   },
+   "source_output": "cinatra_run_id",
+   "destination_node": {
+    "$component_ref": "read_brand_voice"
+   },
+   "destination_input": "cinatra_run_id"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "cinatra_run_id:start->prepare_ideas.cinatra_run_id",
+   "name": "cinatra_run_id:start->prepare_ideas",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "start"
+   },
+   "source_output": "cinatra_run_id",
+   "destination_node": {
+    "$component_ref": "prepare_ideas"
+   },
+   "destination_input": "cinatra_run_id"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "ideas:prepare_ideas->emit_ideas_payload.ideas",
+   "name": "ideas:prepare_ideas->emit_ideas_payload",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "prepare_ideas"
+   },
+   "source_output": "ideas",
+   "destination_node": {
+    "$component_ref": "emit_ideas_payload"
+   },
+   "destination_input": "ideas"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "ideas:prepare_ideas->idea_selection_gate.ideas",
+   "name": "ideas:prepare_ideas->idea_selection_gate",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "prepare_ideas"
+   },
+   "source_output": "ideas",
+   "destination_node": {
+    "$component_ref": "idea_selection_gate"
+   },
+   "destination_input": "ideas"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "reason:prepare_ideas->idea_selection_gate.reason",
+   "name": "reason:prepare_ideas->idea_selection_gate",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "prepare_ideas"
+   },
+   "source_output": "reason",
+   "destination_node": {
+    "$component_ref": "idea_selection_gate"
+   },
+   "destination_input": "reason"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "brief:start->idea_selection_gate.brief",
+   "name": "brief:start->idea_selection_gate",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "start"
+   },
+   "source_output": "brief",
+   "destination_node": {
+    "$component_ref": "idea_selection_gate"
+   },
+   "destination_input": "brief"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "ideaCount:start->idea_selection_gate.ideaCount",
+   "name": "ideaCount:start->idea_selection_gate",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "start"
+   },
+   "source_output": "ideaCount",
+   "destination_node": {
+    "$component_ref": "idea_selection_gate"
+   },
+   "destination_input": "ideaCount"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "selectedIdeaJson:idea_selection_gate->reserve_idea.selectedIdeaJson",
+   "name": "selectedIdeaJson:idea_selection_gate->reserve_idea",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "idea_selection_gate"
+   },
+   "source_output": "selectedIdeaJson",
+   "destination_node": {
+    "$component_ref": "reserve_idea"
+   },
+   "destination_input": "selectedIdeaJson"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "ideas:prepare_ideas->reserve_idea.ideas",
+   "name": "ideas:prepare_ideas->reserve_idea",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "prepare_ideas"
+   },
+   "source_output": "ideas",
+   "destination_node": {
+    "$component_ref": "reserve_idea"
+   },
+   "destination_input": "ideas"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "cinatra_run_id:start->reserve_idea.cinatra_run_id",
+   "name": "cinatra_run_id:start->reserve_idea",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "start"
+   },
+   "source_output": "cinatra_run_id",
+   "destination_node": {
+    "$component_ref": "reserve_idea"
+   },
+   "destination_input": "cinatra_run_id"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "idea:reserve_idea->draft_flow.idea",
+   "name": "idea:reserve_idea->draft_flow",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "reserve_idea"
+   },
+   "source_output": "idea",
+   "destination_node": {
+    "$component_ref": "draft_flow"
+   },
+   "destination_input": "idea"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "tone:start->draft_flow.tone",
+   "name": "tone:start->draft_flow",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "start"
+   },
+   "source_output": "tone",
+   "destination_node": {
+    "$component_ref": "draft_flow"
+   },
+   "destination_input": "tone"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "length:start->draft_flow.length",
+   "name": "length:start->draft_flow",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "start"
+   },
+   "source_output": "length",
+   "destination_node": {
+    "$component_ref": "draft_flow"
+   },
+   "destination_input": "length"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "referenceContent:start->draft_flow.referenceContent",
+   "name": "referenceContent:start->draft_flow",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "start"
+   },
+   "source_output": "referenceContent",
+   "destination_node": {
+    "$component_ref": "draft_flow"
+   },
+   "destination_input": "referenceContent"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "audience:start->draft_flow.audience",
+   "name": "audience:start->draft_flow",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "start"
+   },
+   "source_output": "audience",
+   "destination_node": {
+    "$component_ref": "draft_flow"
+   },
+   "destination_input": "audience"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "projectId:start->draft_flow.projectId",
+   "name": "projectId:start->draft_flow",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "start"
+   },
+   "source_output": "projectId",
+   "destination_node": {
+    "$component_ref": "draft_flow"
+   },
+   "destination_input": "projectId"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "cinatra_run_id:start->draft_flow.cinatra_run_id",
+   "name": "cinatra_run_id:start->draft_flow",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "start"
+   },
+   "source_output": "cinatra_run_id",
+   "destination_node": {
+    "$component_ref": "draft_flow"
+   },
+   "destination_input": "cinatra_run_id"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "title:draft_flow->write_draft.title",
+   "name": "title:draft_flow->write_draft",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "draft_flow"
+   },
+   "source_output": "title",
+   "destination_node": {
+    "$component_ref": "write_draft"
+   },
+   "destination_input": "title"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "content:draft_flow->write_draft.content",
+   "name": "content:draft_flow->write_draft",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "draft_flow"
+   },
+   "source_output": "content",
+   "destination_node": {
+    "$component_ref": "write_draft"
+   },
+   "destination_input": "content"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "cinatra_run_id:start->write_draft.cinatra_run_id",
+   "name": "cinatra_run_id:start->write_draft",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "start"
+   },
+   "source_output": "cinatra_run_id",
+   "destination_node": {
+    "$component_ref": "write_draft"
+   },
+   "destination_input": "cinatra_run_id"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "content:draft_flow->image_flow.post",
+   "name": "content:draft_flow->image_flow",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "draft_flow"
+   },
+   "source_output": "content",
+   "destination_node": {
+    "$component_ref": "image_flow"
+   },
+   "destination_input": "post"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "artifactId:write_draft->image_flow.postArtifactId",
+   "name": "artifactId:write_draft->image_flow",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "write_draft"
+   },
+   "source_output": "artifactId",
+   "destination_node": {
+    "$component_ref": "image_flow"
+   },
+   "destination_input": "postArtifactId"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "projectId:start->image_flow.projectId",
+   "name": "projectId:start->image_flow",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "start"
+   },
+   "source_output": "projectId",
+   "destination_node": {
+    "$component_ref": "image_flow"
+   },
+   "destination_input": "projectId"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "cinatra_run_id:start->image_flow.cinatra_run_id",
+   "name": "cinatra_run_id:start->image_flow",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "start"
+   },
+   "source_output": "cinatra_run_id",
+   "destination_node": {
+    "$component_ref": "image_flow"
+   },
+   "destination_input": "cinatra_run_id"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "ideaArtifactId:reserve_idea->complete_relation.ideaArtifactId",
+   "name": "ideaArtifactId:reserve_idea->complete_relation",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "reserve_idea"
+   },
+   "source_output": "ideaArtifactId",
+   "destination_node": {
+    "$component_ref": "complete_relation"
+   },
+   "destination_input": "ideaArtifactId"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "artifactId:write_draft->complete_relation.draftArtifactId",
+   "name": "artifactId:write_draft->complete_relation",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "write_draft"
+   },
+   "source_output": "artifactId",
+   "destination_node": {
+    "$component_ref": "complete_relation"
+   },
+   "destination_input": "draftArtifactId"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "representationRevisionId:write_draft->complete_relation.draftRevisionId",
+   "name": "representationRevisionId:write_draft->complete_relation",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "write_draft"
+   },
+   "source_output": "representationRevisionId",
+   "destination_node": {
+    "$component_ref": "complete_relation"
+   },
+   "destination_input": "draftRevisionId"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "cinatra_run_id:start->complete_relation.cinatra_run_id",
+   "name": "cinatra_run_id:start->complete_relation",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "start"
+   },
+   "source_output": "cinatra_run_id",
+   "destination_node": {
+    "$component_ref": "complete_relation"
+   },
+   "destination_input": "cinatra_run_id"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "image:image_flow->file_image.image",
+   "name": "image:image_flow->file_image",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "image_flow"
+   },
+   "source_output": "image",
+   "destination_node": {
+    "$component_ref": "file_image"
+   },
+   "destination_input": "image"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "title:draft_flow->file_image.title",
+   "name": "title:draft_flow->file_image",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "draft_flow"
+   },
+   "source_output": "title",
+   "destination_node": {
+    "$component_ref": "file_image"
+   },
+   "destination_input": "title"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "artifactId:write_draft->file_image.postArtifactId",
+   "name": "artifactId:write_draft->file_image",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "write_draft"
+   },
+   "source_output": "artifactId",
+   "destination_node": {
+    "$component_ref": "file_image"
+   },
+   "destination_input": "postArtifactId"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "cinatra_run_id:start->file_image.cinatra_run_id",
+   "name": "cinatra_run_id:start->file_image",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "start"
+   },
+   "source_output": "cinatra_run_id",
+   "destination_node": {
+    "$component_ref": "file_image"
+   },
+   "destination_input": "cinatra_run_id"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "artifactId:file_image->complete_relation.imageArtifactId",
+   "name": "artifactId:file_image->complete_relation",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "file_image"
+   },
+   "source_output": "artifactId",
+   "destination_node": {
+    "$component_ref": "complete_relation"
+   },
+   "destination_input": "imageArtifactId"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "representationRevisionId:file_image->complete_relation.imageRevisionId",
+   "name": "representationRevisionId:file_image->complete_relation",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "file_image"
+   },
+   "source_output": "representationRevisionId",
+   "destination_node": {
+    "$component_ref": "complete_relation"
+   },
+   "destination_input": "imageRevisionId"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "content:draft_flow->emit_draft_payload.content",
+   "name": "content:draft_flow->emit_draft_payload",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "draft_flow"
+   },
+   "source_output": "content",
+   "destination_node": {
+    "$component_ref": "emit_draft_payload"
+   },
+   "destination_input": "content"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "reviewTargets:complete_relation->draft_review_gate.reviewTargets",
+   "name": "reviewTargets:complete_relation->draft_review_gate",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "complete_relation"
+   },
+   "source_output": "reviewTargets",
+   "destination_node": {
+    "$component_ref": "draft_review_gate"
+   },
+   "destination_input": "reviewTargets"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "title:draft_flow->linkedin_flow.postTitle",
+   "name": "title:draft_flow->linkedin_flow",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "draft_flow"
+   },
+   "source_output": "title",
+   "destination_node": {
+    "$component_ref": "linkedin_flow"
+   },
+   "destination_input": "postTitle"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "excerpt:draft_flow->linkedin_flow.postExcerpt",
+   "name": "excerpt:draft_flow->linkedin_flow",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "draft_flow"
+   },
+   "source_output": "excerpt",
+   "destination_node": {
+    "$component_ref": "linkedin_flow"
+   },
+   "destination_input": "postExcerpt"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "content:draft_flow->linkedin_flow.blogPostContent",
+   "name": "content:draft_flow->linkedin_flow",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "draft_flow"
+   },
+   "source_output": "content",
+   "destination_node": {
+    "$component_ref": "linkedin_flow"
+   },
+   "destination_input": "blogPostContent"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "blogPostUrl:start->linkedin_flow.blogPostUrl",
+   "name": "blogPostUrl:start->linkedin_flow",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "start"
+   },
+   "source_output": "blogPostUrl",
+   "destination_node": {
+    "$component_ref": "linkedin_flow"
+   },
+   "destination_input": "blogPostUrl"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "companyUrl:start->linkedin_flow.companyUrl",
+   "name": "companyUrl:start->linkedin_flow",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "start"
+   },
+   "source_output": "companyUrl",
+   "destination_node": {
+    "$component_ref": "linkedin_flow"
+   },
+   "destination_input": "companyUrl"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "cinatra_run_id:start->linkedin_flow.cinatra_run_id",
+   "name": "cinatra_run_id:start->linkedin_flow",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "start"
+   },
+   "source_output": "cinatra_run_id",
+   "destination_node": {
+    "$component_ref": "linkedin_flow"
+   },
+   "destination_input": "cinatra_run_id"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "post:linkedin_flow->linkedin_review_gate.linkedinPost",
+   "name": "post:linkedin_flow->linkedin_review_gate",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "linkedin_flow"
+   },
+   "source_output": "post",
+   "destination_node": {
+    "$component_ref": "linkedin_review_gate"
+   },
+   "destination_input": "linkedinPost"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "title:linkedin_flow->linkedin_review_gate.linkedinTitle",
+   "name": "title:linkedin_flow->linkedin_review_gate",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "linkedin_flow"
+   },
+   "source_output": "title",
+   "destination_node": {
+    "$component_ref": "linkedin_review_gate"
+   },
+   "destination_input": "linkedinTitle"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "post:linkedin_flow->write_linkedin.content",
+   "name": "post:linkedin_flow->write_linkedin",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "linkedin_flow"
+   },
+   "source_output": "post",
+   "destination_node": {
+    "$component_ref": "write_linkedin"
+   },
+   "destination_input": "content"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "title:linkedin_flow->write_linkedin.title",
+   "name": "title:linkedin_flow->write_linkedin",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "linkedin_flow"
+   },
+   "source_output": "title",
+   "destination_node": {
+    "$component_ref": "write_linkedin"
+   },
+   "destination_input": "title"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "cinatra_run_id:start->write_linkedin.cinatra_run_id",
+   "name": "cinatra_run_id:start->write_linkedin",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "start"
+   },
+   "source_output": "cinatra_run_id",
+   "destination_node": {
+    "$component_ref": "write_linkedin"
+   },
+   "destination_input": "cinatra_run_id"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "artifactId:write_linkedin->gather_linkedin_review.linkedinArtifactId",
+   "name": "artifactId:write_linkedin->gather_linkedin_review",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "write_linkedin"
+   },
+   "source_output": "artifactId",
+   "destination_node": {
+    "$component_ref": "gather_linkedin_review"
+   },
+   "destination_input": "linkedinArtifactId"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "representationRevisionId:write_linkedin->gather_linkedin_review.linkedinRevisionId",
+   "name": "representationRevisionId:write_linkedin->gather_linkedin_review",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "write_linkedin"
+   },
+   "source_output": "representationRevisionId",
+   "destination_node": {
+    "$component_ref": "gather_linkedin_review"
+   },
+   "destination_input": "linkedinRevisionId"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "cinatra_run_id:start->gather_linkedin_review.cinatra_run_id",
+   "name": "cinatra_run_id:start->gather_linkedin_review",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "start"
+   },
+   "source_output": "cinatra_run_id",
+   "destination_node": {
+    "$component_ref": "gather_linkedin_review"
+   },
+   "destination_input": "cinatra_run_id"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "reviewTargets:gather_linkedin_review->linkedin_review_gate.reviewTargets",
+   "name": "reviewTargets:gather_linkedin_review->linkedin_review_gate",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "gather_linkedin_review"
+   },
+   "source_output": "reviewTargets",
+   "destination_node": {
+    "$component_ref": "linkedin_review_gate"
+   },
+   "destination_input": "reviewTargets"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "post:linkedin_flow->end.linkedinPost",
+   "name": "post:linkedin_flow->end",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "linkedin_flow"
+   },
+   "source_output": "post",
+   "destination_node": {
+    "$component_ref": "end"
+   },
+   "destination_input": "linkedinPost"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "title:linkedin_flow->end.linkedinTitle",
+   "name": "title:linkedin_flow->end",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "linkedin_flow"
+   },
+   "source_output": "title",
+   "destination_node": {
+    "$component_ref": "end"
+   },
+   "destination_input": "linkedinTitle"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "claimId:reserve_idea->complete_relation.claimId",
+   "name": "claimId:reserve_idea->complete_relation",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "reserve_idea"
+   },
+   "source_output": "claimId",
+   "destination_node": {
+    "$component_ref": "complete_relation"
+   },
+   "destination_input": "claimId"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "note:start->draft_flow.note",
+   "name": "note:start->draft_flow",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "start"
+   },
+   "source_output": "note",
+   "destination_node": {
+    "$component_ref": "draft_flow"
+   },
+   "destination_input": "note"
+  },
+  {
+   "component_type": "DataFlowEdge",
+   "id": "prompt:start->image_flow.prompt",
+   "name": "prompt:start->image_flow",
+   "description": "",
+   "metadata": {},
+   "source_node": {
+    "$component_ref": "start"
+   },
+   "source_output": "prompt",
+   "destination_node": {
+    "$component_ref": "image_flow"
+   },
+   "destination_input": "prompt"
+  }
+ ],
+ "$referenced_components": {
+  "start": {
+   "component_type": "StartNode",
+   "id": "start",
+   "name": "Pipeline inputs",
+   "metadata": {
+    "cinatra": {
+     "required": [
+      "brief",
+      "ideaCount"
+     ],
+     "hidden": [
+      "audience",
+      "tone",
+      "length",
+      "referenceContent",
+      "companyUrl",
+      "blogPostUrl",
+      "projectId",
+      "cinatra_run_id"
+     ],
+     "inputContract": "Manual brief / reference artifacts only. Transcript input is DROPPED."
+    }
+   },
+   "inputs": [
+    {
+     "title": "brief",
+     "type": "string",
+     "format": "multiline"
+    },
+    {
+     "title": "audience",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "tone",
+     "type": "string",
+     "default": "informative"
+    },
+    {
+     "title": "length",
+     "type": "string",
+     "default": "medium"
+    },
+    {
+     "title": "referenceContent",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "ideaCount",
+     "type": "integer",
+     "default": 5
+    },
+    {
+     "title": "companyUrl",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "blogPostUrl",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "projectId",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "cinatra_run_id",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "note",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "prompt",
+     "type": "string",
+     "default": ""
+    }
+   ]
+  },
+  "read_brand_voice": {
+   "component_type": "ApiNode",
+   "id": "read_brand_voice",
+   "name": "Read the picked brand voice as text",
+   "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+   "http_method": "POST",
+   "data": {
+    "tool": "extension_tool",
+    "input": {
+     "name": "brand_voice_text",
+     "input": {
+      "bindings": "{# pyagentspec-input-hint (do not remove): {{ brandVoiceContextSlotBindings }} #}{{ brandVoiceContextSlotBindings | tojson }}"
+     }
+    },
+    "agent_run_id": "{{ cinatra_run_id }}"
+   },
+   "inputs": [
+    {
+     "title": "brandVoiceContextSlotBindings",
+     "type": "array",
+     "json_schema": {
+      "items": {
+       "type": "object"
+      }
+     }
+    },
+    {
+     "title": "cinatra_run_id",
+     "type": "string",
+     "default": ""
+    }
+   ],
+   "outputs": [
+    {
+     "title": "brandVoiceText",
+     "type": "string"
+    }
+   ],
+   "metadata": {
+    "cinatra": {
+     "riskClass": "read_only",
+     "requiresApproval": false,
+     "packageName": "@cinatra-ai/blog-pipeline-agent",
+     "description": "The consumer of the run's one brand-voice pick, right after the list step the host draws for it: it reads the picked brand voice's text through the tool this pack declares, so a brand voice that cannot be read as text (a PDF) stops the run with one sentence before an idea is taken or a draft is written. The writer and the image generator read the same pick themselves."
+    }
+   }
+  },
+  "prepare_ideas": {
+   "component_type": "ApiNode",
+   "id": "prepare_ideas",
+   "name": "Read the organisation's unused blog ideas",
+   "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+   "http_method": "POST",
+   "data": {
+    "tool": "extension_tool",
+    "input": {
+     "name": "stored_ideas",
+     "input": {
+      "op": "prepare",
+      "ideaType": "@cinatra-ai/blog-idea-artifact:blog-idea"
+     }
+    },
+    "agent_run_id": "{{ cinatra_run_id }}"
+   },
+   "inputs": [
+    {
+     "title": "cinatra_run_id",
+     "type": "string",
+     "default": ""
+    }
+   ],
+   "outputs": [
+    {
+     "title": "ideas",
+     "type": "array",
+     "json_schema": {
+      "items": {
+       "type": "object"
+      }
+     },
+     "default": []
+    },
+    {
+     "title": "reason",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "ok",
+     "type": "boolean",
+     "default": false
+    }
+   ],
+   "metadata": {
+    "cinatra": {
+     "riskClass": "read_only",
+     "requiresApproval": false,
+     "packageName": "@cinatra-ai/blog-pipeline-agent",
+     "description": "The preparation step of plan (C) section 5.1: it lists every blog idea the organisation holds through the dependency this extension declares, reads each unused one, subtracts the ideas a draft already used or another run reserved, and hands the rest to the gate as the list a person chooses from. An empty list comes back with the sentence the run ends on, never with a pick."
+    }
+   }
+  },
+  "emit_ideas_payload": {
+   "component_type": "OutputMessageNode",
+   "id": "emit_ideas_payload",
+   "name": "Emit offered ideas as agent message",
+   "inputs": [
+    {
+     "title": "ideas",
+     "type": "array",
+     "json_schema": {
+      "items": {
+       "type": "object"
+      }
+     }
+    }
+   ],
+   "message": "{# pyagentspec-input-hint (do not remove): {{ ideas }} #}{\"ideas\":{{ ideas | tojson }}}"
+  },
+  "idea_selection_gate": {
+   "component_type": "InputMessageNode",
+   "id": "idea_selection_gate",
+   "name": "Select blog idea",
+   "metadata": {
+    "cinatra": {
+     "riskClass": "read_only",
+     "requiresApproval": true,
+     "surfaceGateInputs": true,
+     "renderer": "@cinatra-ai/blog-pipeline-agent:idea-selection",
+     "a2uiSurfaceId": "blog-pipeline:idea-selection",
+     "inputMessageSchema": {
+      "type": "object",
+      "x-renderer": "@cinatra-ai/blog-pipeline-agent:idea-selection",
+      "properties": {
+       "selectedIdeaJson": {
+        "type": "string",
+        "title": "Selected idea (JSON)",
+        "x-required": true
+       }
+      }
+     },
+     "description": "The stored-ideas gate of plan (C) section 5.1. The list is the organisation's own unused blog ideas, read by the preparation step in front of this gate: a person picks exactly one and nothing is picked for them. The pick commits the idea's artifact and the exact revision the list offered, as one JSON string (an InputMessageNode emits one string output), never a title and never free text. The pick is declared \"x-required\": true, so while ideas are offered the host keeps the step's Continue unavailable until a person picks one. With no idea left the list arrives empty with the reason the run ends on, and the reason is what the person reads; the step's renderer then answers the pick with the no-pick value {\"noPick\":true}, which names no idea, so a person who reads that sentence can continue and the run ends at the step after this one with a plain reason and nothing reserved, instead of parking at a pause nothing can answer. A pick that names no offered idea ends the run the same way: nothing is ever picked for them. The brief and the idea count travel with the list for the road that asks for new ideas."
+    }
+   },
+   "outputs": [
+    {
+     "title": "selectedIdeaJson",
+     "type": "string",
+     "default": ""
+    }
+   ],
+   "inputs": [
+    {
+     "title": "ideas",
+     "type": "array",
+     "json_schema": {
+      "items": {
+       "type": "object"
+      }
+     },
+     "default": []
+    },
+    {
+     "title": "reason",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "brief",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "ideaCount",
+     "type": "integer",
+     "default": 5
+    }
+   ]
+  },
+  "reserve_idea": {
+   "component_type": "ApiNode",
+   "id": "reserve_idea",
+   "name": "Take the chosen idea for this run",
+   "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+   "http_method": "POST",
+   "data": {
+    "tool": "extension_tool",
+    "input": {
+     "name": "stored_ideas",
+     "input": {
+      "op": "reserve",
+      "ideaType": "@cinatra-ai/blog-idea-artifact:blog-idea",
+      "pick": "{{ selectedIdeaJson }}",
+      "offered": "{# pyagentspec-input-hint (do not remove): {{ ideas }} #}{{ ideas | tojson }}"
+     }
+    },
+    "agent_run_id": "{{ cinatra_run_id }}"
+   },
+   "inputs": [
+    {
+     "title": "selectedIdeaJson",
+     "type": "string"
+    },
+    {
+     "title": "ideas",
+     "type": "array",
+     "json_schema": {
+      "items": {
+       "type": "object"
+      }
+     },
+     "default": []
+    },
+    {
+     "title": "cinatra_run_id",
+     "type": "string",
+     "default": ""
+    }
+   ],
+   "outputs": [
+    {
+     "title": "idea",
+     "type": "string"
+    },
+    {
+     "title": "ideaArtifactId",
+     "type": "string"
+    },
+    {
+     "title": "ideaRevisionId",
+     "type": "string"
+    },
+    {
+     "title": "ideaTitle",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "reason",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "claimId",
+     "type": "string"
+    }
+   ],
+   "metadata": {
+    "cinatra": {
+     "riskClass": "write",
+     "requiresApproval": false,
+     "packageName": "@cinatra-ai/blog-pipeline-agent",
+     "description": "The pick is the reservation (plan (C) section 5.1): the chosen artifact and revision are validated against the very list the person was shown and written as one reservation row under the rule that allows one live row per idea, so of two runs offering the same idea only one takes it and the loser is told so. The idea's own words come back as the draft writer's one input. A refused pick answers with its reason and none of the three fields below, which carry no default: the run ends there rather than drafting an idea nobody chose."
+    }
+   }
+  },
+  "draft_flow": {
+   "component_type": "FlowNode",
+   "id": "draft_flow",
+   "name": "Blog draft",
+   "subflow": {
+    "$component_ref": "blog-draft-writer-agent-subflow"
+   },
+   "metadata": {
+    "cinatra": {
+     "packageName": "@cinatra-ai/blog-draft-writer-agent",
+     "description": "Child generation FlowNode to @cinatra-ai/blog-draft-writer-agent, at the one input its own repository now takes: the chosen idea as plain text. It answers with the post's title, its excerpt and its markdown, which the step after this one writes as the run's own blog-post artifact."
+    }
+   }
+  },
+  "blog-draft-writer-agent-subflow": {
+   "component_type": "Flow",
+   "id": "blog-draft-writer-agent-subflow",
+   "name": "Blog Draft Writer Agent",
+   "description": "Stub of the subflow: its inputs and outputs only.",
+   "metadata": {},
+   "inputs": [
+    {
+     "title": "idea",
+     "type": "string",
+     "json_schema": {
+      "x-multiline": true,
+      "x-placeholder": "Paste one idea, or type what this post should be about"
+     }
+    },
+    {
+     "title": "tone",
+     "type": "string",
+     "default": "informative"
+    },
+    {
+     "title": "length",
+     "type": "string",
+     "default": "medium"
+    },
+    {
+     "title": "referenceContent",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "audience",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "voice",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "sources",
+     "type": "array",
+     "json_schema": {
+      "items": {
+       "type": "object"
+      }
+     },
+     "default": []
+    },
+    {
+     "title": "cinatra_run_id",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "draftContextParentPackageName",
+     "type": "string",
+     "default": "@cinatra-ai/blog-draft-writer-agent"
+    },
+    {
+     "title": "draftContextSlotId",
+     "type": "string",
+     "default": "draftContext"
+    },
+    {
+     "title": "projectId",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "note",
+     "type": "string",
+     "default": ""
+    }
+   ],
+   "outputs": [
+    {
+     "title": "title",
+     "type": "string"
+    },
+    {
+     "title": "excerpt",
+     "type": "string"
+    },
+    {
+     "title": "content",
+     "type": "string"
+    },
+    {
+     "title": "sourcesUsed",
+     "type": "array",
+     "json_schema": {
+      "items": {
+       "type": "string"
+      }
+     }
+    },
+    {
+     "title": "notes",
+     "type": "string"
+    }
+   ],
+   "start_node": {
+    "$component_ref": "blog-draft-writer-agent-subflow__start"
+   },
+   "nodes": [
+    {
+     "$component_ref": "blog-draft-writer-agent-subflow__start"
+    },
+    {
+     "$component_ref": "blog-draft-writer-agent-subflow__end"
+    }
+   ],
+   "control_flow_connections": [
+    {
+     "component_type": "ControlFlowEdge",
+     "id": "blog-draft-writer-agent-subflow__start->blog-draft-writer-agent-subflow__end",
+     "name": "blog-draft-writer-agent-subflow__start->blog-draft-writer-agent-subflow__end",
+     "description": "",
+     "metadata": {},
+     "from_node": {
+      "$component_ref": "blog-draft-writer-agent-subflow__start"
+     },
+     "from_branch": null,
+     "to_node": {
+      "$component_ref": "blog-draft-writer-agent-subflow__end"
+     }
+    }
+   ],
+   "data_flow_connections": [],
+   "$referenced_components": {
+    "blog-draft-writer-agent-subflow__start": {
+     "component_type": "StartNode",
+     "id": "blog-draft-writer-agent-subflow__start",
+     "name": "blog-draft-writer-agent-subflow__start",
+     "inputs": [
+      {
+       "title": "idea",
+       "type": "string",
+       "json_schema": {
+        "x-multiline": true,
+        "x-placeholder": "Paste one idea, or type what this post should be about"
+       }
+      },
+      {
+       "title": "tone",
+       "type": "string",
+       "default": "informative"
+      },
+      {
+       "title": "length",
+       "type": "string",
+       "default": "medium"
+      },
+      {
+       "title": "referenceContent",
+       "type": "string",
+       "default": ""
+      },
+      {
+       "title": "audience",
+       "type": "string",
+       "default": ""
+      },
+      {
+       "title": "voice",
+       "type": "string",
+       "default": ""
+      },
+      {
+       "title": "sources",
+       "type": "array",
+       "json_schema": {
+        "items": {
+         "type": "object"
+        }
+       },
+       "default": []
+      },
+      {
+       "title": "cinatra_run_id",
+       "type": "string",
+       "default": ""
+      },
+      {
+       "title": "draftContextParentPackageName",
+       "type": "string",
+       "default": "@cinatra-ai/blog-draft-writer-agent"
+      },
+      {
+       "title": "draftContextSlotId",
+       "type": "string",
+       "default": "draftContext"
+      },
+      {
+       "title": "projectId",
+       "type": "string",
+       "default": ""
+      },
+      {
+       "title": "note",
+       "type": "string",
+       "default": ""
+      }
+     ]
+    },
+    "blog-draft-writer-agent-subflow__end": {
+     "component_type": "EndNode",
+     "id": "blog-draft-writer-agent-subflow__end",
+     "name": "blog-draft-writer-agent-subflow__end",
+     "outputs": [
+      {
+       "title": "title",
+       "type": "string"
+      },
+      {
+       "title": "excerpt",
+       "type": "string"
+      },
+      {
+       "title": "content",
+       "type": "string"
+      },
+      {
+       "title": "sourcesUsed",
+       "type": "array",
+       "json_schema": {
+        "items": {
+         "type": "string"
+        }
+       }
+      },
+      {
+       "title": "notes",
+       "type": "string"
+      }
+     ]
+    }
+   }
+  },
+  "write_draft": {
+   "component_type": "ApiNode",
+   "id": "write_draft",
+   "name": "Write the draft as this run's blog post",
+   "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+   "http_method": "POST",
+   "data": {
+    "tool": "artifact_materialize",
+    "input": {
+     "extension": "@cinatra-ai/blog-post-artifact",
+     "objectTypeId": "@cinatra-ai/blog-post-artifact:post",
+     "declaredMime": "text/markdown",
+     "title": "{{ title }}",
+     "content": "{{ content }}",
+     "node_id": "write_draft"
+    },
+    "agent_run_id": "{{ cinatra_run_id }}"
+   },
+   "inputs": [
+    {
+     "title": "title",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "content",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "cinatra_run_id",
+     "type": "string",
+     "default": ""
+    }
+   ],
+   "outputs": [
+    {
+     "title": "artifactId",
+     "type": "string"
+    },
+    {
+     "title": "representationRevisionId",
+     "type": "string"
+    }
+   ],
+   "metadata": {
+    "cinatra": {
+     "riskClass": "write",
+     "requiresApproval": false,
+     "packageName": "@cinatra-ai/blog-pipeline-agent",
+     "description": "The mid-run write of plan (C) section 6.1 step 3: the draft becomes a blog-post artifact while the run is still going, so the review that follows opens on an immutable revision of the real post instead of on loose text. The reference it returns is what the projection hands the review step and what the picture is filed against."
+    }
+   }
+  },
+  "image_flow": {
+   "component_type": "FlowNode",
+   "id": "image_flow",
+   "name": "Featured image",
+   "subflow": {
+    "$component_ref": "blog-image-generator-agent-subflow"
+   },
+   "metadata": {
+    "cinatra": {
+     "packageName": "@cinatra-ai/blog-image-generator-agent",
+     "description": "Child FlowNode to @cinatra-ai/blog-image-generator-agent, the image maker the retired prompt writer became. It runs on the post the run just wrote and before the review, so the review sees the post with its featured image. This step settles the featured image's prompt and its alternative text; the next step files the picture through the host's image tool, and the review's target set names it after the post."
+    }
+   }
+  },
+  "blog-image-generator-agent-subflow": {
+   "component_type": "Flow",
+   "id": "blog-image-generator-agent-subflow",
+   "name": "Blog Image Generator Agent",
+   "description": "Stub of the subflow: its inputs and outputs only.",
+   "metadata": {},
+   "inputs": [
+    {
+     "title": "post",
+     "type": "string"
+    },
+    {
+     "title": "placement",
+     "type": "string",
+     "default": "featured"
+    },
+    {
+     "title": "postArtifactId",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "cinatra_run_id",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "imagePromptContextParentPackageName",
+     "type": "string",
+     "default": "@cinatra-ai/blog-image-generator-agent"
+    },
+    {
+     "title": "imagePromptContextSlotId",
+     "type": "string",
+     "default": "imagePromptContext"
+    },
+    {
+     "title": "projectId",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "prompt",
+     "type": "string",
+     "default": ""
+    }
+   ],
+   "outputs": [
+    {
+     "title": "image",
+     "type": "object",
+     "json_schema": {
+      "type": "object",
+      "properties": {
+       "placement": {
+        "type": "string",
+        "enum": [
+         "featured"
+        ]
+       },
+       "post": {
+        "type": "string"
+       },
+       "prompt": {
+        "type": "string"
+       },
+       "altText": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "placement",
+       "post",
+       "prompt",
+       "altText"
+      ]
+     }
+    },
+    {
+     "title": "notes",
+     "type": "string"
+    }
+   ],
+   "start_node": {
+    "$component_ref": "blog-image-generator-agent-subflow__start"
+   },
+   "nodes": [
+    {
+     "$component_ref": "blog-image-generator-agent-subflow__start"
+    },
+    {
+     "$component_ref": "blog-image-generator-agent-subflow__end"
+    }
+   ],
+   "control_flow_connections": [
+    {
+     "component_type": "ControlFlowEdge",
+     "id": "blog-image-generator-agent-subflow__start->blog-image-generator-agent-subflow__end",
+     "name": "blog-image-generator-agent-subflow__start->blog-image-generator-agent-subflow__end",
+     "description": "",
+     "metadata": {},
+     "from_node": {
+      "$component_ref": "blog-image-generator-agent-subflow__start"
+     },
+     "from_branch": null,
+     "to_node": {
+      "$component_ref": "blog-image-generator-agent-subflow__end"
+     }
+    }
+   ],
+   "data_flow_connections": [],
+   "$referenced_components": {
+    "blog-image-generator-agent-subflow__start": {
+     "component_type": "StartNode",
+     "id": "blog-image-generator-agent-subflow__start",
+     "name": "blog-image-generator-agent-subflow__start",
+     "inputs": [
+      {
+       "title": "post",
+       "type": "string"
+      },
+      {
+       "title": "placement",
+       "type": "string",
+       "default": "featured"
+      },
+      {
+       "title": "postArtifactId",
+       "type": "string",
+       "default": ""
+      },
+      {
+       "title": "cinatra_run_id",
+       "type": "string",
+       "default": ""
+      },
+      {
+       "title": "imagePromptContextParentPackageName",
+       "type": "string",
+       "default": "@cinatra-ai/blog-image-generator-agent"
+      },
+      {
+       "title": "imagePromptContextSlotId",
+       "type": "string",
+       "default": "imagePromptContext"
+      },
+      {
+       "title": "projectId",
+       "type": "string",
+       "default": ""
+      },
+      {
+       "title": "prompt",
+       "type": "string",
+       "default": ""
+      }
+     ]
+    },
+    "blog-image-generator-agent-subflow__end": {
+     "component_type": "EndNode",
+     "id": "blog-image-generator-agent-subflow__end",
+     "name": "blog-image-generator-agent-subflow__end",
+     "outputs": [
+      {
+       "title": "image",
+       "type": "object",
+       "json_schema": {
+        "type": "object",
+        "properties": {
+         "placement": {
+          "type": "string",
+          "enum": [
+           "featured"
+          ]
+         },
+         "post": {
+          "type": "string"
+         },
+         "prompt": {
+          "type": "string"
+         },
+         "altText": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "placement",
+         "post",
+         "prompt",
+         "altText"
+        ]
+       }
+      },
+      {
+       "title": "notes",
+       "type": "string"
+      }
+     ]
+    }
+   }
+  },
+  "file_image": {
+   "component_type": "ApiNode",
+   "id": "file_image",
+   "name": "File the featured image",
+   "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+   "http_method": "POST",
+   "data": {
+    "tool": "artifact_image_generate",
+    "input": {
+     "extension": "@cinatra-ai/image-artifact",
+     "objectTypeId": "@cinatra-ai/image-artifact:image",
+     "title": "{{ title }}",
+     "prompt": "{# pyagentspec-input-hint (do not remove): {{ image }} #}{{ image.prompt }}",
+     "dataJson": "{# pyagentspec-input-hint (do not remove): {{ image }} {{ postArtifactId }} #}{\"post\":{{ postArtifactId | tojson }},\"placement\":\"featured\",\"altText\":{{ image.altText | tojson }}}",
+     "node_id": "file_image"
+    },
+    "agent_run_id": "{{ cinatra_run_id }}"
+   },
+   "inputs": [
+    {
+     "title": "title",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "image",
+     "type": "object",
+     "json_schema": {
+      "type": "object",
+      "properties": {
+       "placement": {
+        "type": "string",
+        "enum": [
+         "featured"
+        ]
+       },
+       "post": {
+        "type": "string"
+       },
+       "prompt": {
+        "type": "string"
+       },
+       "altText": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "placement",
+       "post",
+       "prompt",
+       "altText"
+      ]
+     }
+    },
+    {
+     "title": "postArtifactId",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "cinatra_run_id",
+     "type": "string",
+     "default": ""
+    }
+   ],
+   "outputs": [
+    {
+     "title": "artifactId",
+     "type": "string"
+    },
+    {
+     "title": "representationRevisionId",
+     "type": "string"
+    }
+   ],
+   "metadata": {
+    "cinatra": {
+     "riskClass": "write",
+     "requiresApproval": false,
+     "packageName": "@cinatra-ai/blog-pipeline-agent",
+     "description": "The featured image the step before settled is filed here as an image through the host's image tool, named after the post and carrying the post it belongs to, its placement and its alternative text. The reference it returns is what the review's target set names second."
+    }
+   }
+  },
+  "complete_relation": {
+   "component_type": "ApiNode",
+   "id": "complete_relation",
+   "name": "Record this idea's draft and gather the review's targets",
+   "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+   "http_method": "POST",
+   "data": {
+    "tool": "extension_tool",
+    "input": {
+     "name": "stored_ideas",
+     "input": {
+      "op": "complete",
+      "ideaType": "@cinatra-ai/blog-idea-artifact:blog-idea",
+      "ideaArtifactId": "{{ ideaArtifactId }}",
+      "draftArtifactId": "{{ draftArtifactId }}",
+      "reviewTargets": "[{\"artifactId\": \"{{ draftArtifactId }}\", \"representationRevisionId\": \"{{ draftRevisionId }}\"}, {\"artifactId\": \"{{ imageArtifactId }}\", \"representationRevisionId\": \"{{ imageRevisionId }}\"}]",
+      "claimId": "{{ claimId }}"
+     }
+    },
+    "agent_run_id": "{{ cinatra_run_id }}",
+    "result_input_passthrough": true,
+    "result_id_field": "ok"
+   },
+   "inputs": [
+    {
+     "title": "ideaArtifactId",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "draftArtifactId",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "draftRevisionId",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "imageArtifactId",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "imageRevisionId",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "cinatra_run_id",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "claimId",
+     "type": "string",
+     "default": ""
+    }
+   ],
+   "outputs": [
+    {
+     "title": "reviewTargets",
+     "type": "string",
+     "default": "[]"
+    },
+    {
+     "title": "ok",
+     "type": "boolean",
+     "default": false
+    }
+   ],
+   "metadata": {
+    "cinatra": {
+     "riskClass": "write",
+     "requiresApproval": false,
+     "packageName": "@cinatra-ai/blog-pipeline-agent",
+     "description": "Two sentences of plan (C) section 6.1 in one call. It completes the reservation into the relation row \u2014 this idea, this draft, keyed by immutable claim, run and idea so a retry completes the same row and never a second \u2014 and it is the projection step of section 8.4: the call echoes its own input back, so the immutable reference the mid-run write returned reaches the review step as the set the marker below names. The set names the post first and its featured image second. The call answers with the completion own ok flag, so a completion that did not land is visible in the run rather than hidden behind the echo; the run does not branch on it here, and an uncompleted reservation lapses on its own."
+    }
+   }
+  },
+  "emit_draft_payload": {
+   "component_type": "OutputMessageNode",
+   "id": "emit_draft_payload",
+   "name": "Emit generated draft as agent message",
+   "inputs": [
+    {
+     "title": "content",
+     "type": "string",
+     "json_schema": {
+      "type": "string"
+     },
+     "default": ""
+    }
+   ],
+   "message": "{# pyagentspec-input-hint (do not remove): {{ content }} #}{\"draft\":{\"content\":{{ content | tojson }}}}"
+  },
+  "draft_review_gate": {
+   "component_type": "InputMessageNode",
+   "id": "draft_review_gate",
+   "name": "Review blog draft",
+   "metadata": {
+    "cinatra": {
+     "riskClass": "read_only",
+     "requiresApproval": true,
+     "surfaceGateInputs": true,
+     "a2uiSurfaceId": "blog-pipeline:draft-review",
+     "inputMessageSchema": {
+      "type": "object",
+      "properties": {
+       "reviewApproval": {
+        "type": "string",
+        "title": "Draft review note"
+       }
+      },
+      "required": [
+       "reviewApproval"
+      ]
+     },
+     "description": "The review of plan (C) section 6.1 step 4. The marker below names the input this gate carries the run's own target set in, so the review core pins exactly the revisions the run minted and opens one review per artifact while the run parks here. The decision is the lifecycle's, not this flow's: this flow owns the pause. The set names the post today and each picture as well once the host's image tool files one.",
+     "artifactReview": {
+      "targetsInput": "reviewTargets"
+     }
+    }
+   },
+   "outputs": [
+    {
+     "title": "reviewApproval",
+     "type": "string"
+    }
+   ],
+   "inputs": [
+    {
+     "title": "reviewTargets",
+     "type": "string",
+     "default": "[]"
+    }
+   ]
+  },
+  "linkedin_flow": {
+   "component_type": "FlowNode",
+   "id": "linkedin_flow",
+   "name": "LinkedIn post",
+   "subflow": {
+    "$component_ref": "blog-linkedin-writer-agent-subflow"
+   },
+   "metadata": {
+    "cinatra": {
+     "packageName": "@cinatra-ai/blog-linkedin-writer-agent",
+     "description": "Child generation FlowNode \u2192 @cinatra-ai/blog-linkedin-writer-agent."
+    }
+   }
+  },
+  "blog-linkedin-writer-agent-subflow": {
+   "component_type": "Flow",
+   "id": "blog-linkedin-writer-agent-subflow",
+   "name": "Blog LinkedIn Writer Agent",
+   "description": "Stub of the subflow: its inputs and outputs only.",
+   "metadata": {},
+   "inputs": [
+    {
+     "title": "postTitle",
+     "type": "string"
+    },
+    {
+     "title": "blogPostUrl",
+     "type": "string"
+    },
+    {
+     "title": "companyUrl",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "postExcerpt",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "blogPostContent",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "destinationType",
+     "type": "string",
+     "default": "organization"
+    },
+    {
+     "title": "destinationName",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "cinatra_run_id",
+     "type": "string",
+     "default": ""
+    }
+   ],
+   "outputs": [
+    {
+     "title": "post",
+     "type": "string"
+    },
+    {
+     "title": "title",
+     "type": "string"
+    },
+    {
+     "title": "notes",
+     "type": "string"
+    }
+   ],
+   "start_node": {
+    "$component_ref": "blog-linkedin-writer-agent-subflow__start"
+   },
+   "nodes": [
+    {
+     "$component_ref": "blog-linkedin-writer-agent-subflow__start"
+    },
+    {
+     "$component_ref": "blog-linkedin-writer-agent-subflow__end"
+    }
+   ],
+   "control_flow_connections": [
+    {
+     "component_type": "ControlFlowEdge",
+     "id": "blog-linkedin-writer-agent-subflow__start->blog-linkedin-writer-agent-subflow__end",
+     "name": "blog-linkedin-writer-agent-subflow__start->blog-linkedin-writer-agent-subflow__end",
+     "description": "",
+     "metadata": {},
+     "from_node": {
+      "$component_ref": "blog-linkedin-writer-agent-subflow__start"
+     },
+     "from_branch": null,
+     "to_node": {
+      "$component_ref": "blog-linkedin-writer-agent-subflow__end"
+     }
+    }
+   ],
+   "data_flow_connections": [],
+   "$referenced_components": {
+    "blog-linkedin-writer-agent-subflow__start": {
+     "component_type": "StartNode",
+     "id": "blog-linkedin-writer-agent-subflow__start",
+     "name": "blog-linkedin-writer-agent-subflow__start",
+     "inputs": [
+      {
+       "title": "postTitle",
+       "type": "string"
+      },
+      {
+       "title": "blogPostUrl",
+       "type": "string"
+      },
+      {
+       "title": "companyUrl",
+       "type": "string",
+       "default": ""
+      },
+      {
+       "title": "postExcerpt",
+       "type": "string",
+       "default": ""
+      },
+      {
+       "title": "blogPostContent",
+       "type": "string",
+       "default": ""
+      },
+      {
+       "title": "destinationType",
+       "type": "string",
+       "default": "organization"
+      },
+      {
+       "title": "destinationName",
+       "type": "string",
+       "default": ""
+      },
+      {
+       "title": "cinatra_run_id",
+       "type": "string",
+       "default": ""
+      }
+     ]
+    },
+    "blog-linkedin-writer-agent-subflow__end": {
+     "component_type": "EndNode",
+     "id": "blog-linkedin-writer-agent-subflow__end",
+     "name": "blog-linkedin-writer-agent-subflow__end",
+     "outputs": [
+      {
+       "title": "post",
+       "type": "string"
+      },
+      {
+       "title": "title",
+       "type": "string"
+      },
+      {
+       "title": "notes",
+       "type": "string"
+      }
+     ]
+    }
+   }
+  },
+  "write_linkedin": {
+   "component_type": "ApiNode",
+   "id": "write_linkedin",
+   "name": "Write the LinkedIn post as this run's post draft",
+   "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+   "http_method": "POST",
+   "data": {
+    "tool": "artifact_materialize",
+    "input": {
+     "extension": "@cinatra-ai/linkedin-artifacts",
+     "objectTypeId": "@cinatra-ai/linkedin:post-draft",
+     "declaredMime": "text/plain",
+     "title": "{{ title }}",
+     "content": "{{ content }}",
+     "node_id": "write_linkedin"
+    },
+    "agent_run_id": "{{ cinatra_run_id }}"
+   },
+   "inputs": [
+    {
+     "title": "title",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "content",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "cinatra_run_id",
+     "type": "string",
+     "default": ""
+    }
+   ],
+   "outputs": [
+    {
+     "title": "artifactId",
+     "type": "string"
+    },
+    {
+     "title": "representationRevisionId",
+     "type": "string"
+    }
+   ],
+   "metadata": {
+    "cinatra": {
+     "riskClass": "write",
+     "requiresApproval": false,
+     "packageName": "@cinatra-ai/blog-pipeline-agent",
+     "description": "The LinkedIn post the writer made is written here as a LinkedIn post draft while the run is still going, so the review that follows opens on an immutable revision of the real post instead of on loose text. The reference it returns is what the next step hands the review."
+    }
+   }
+  },
+  "gather_linkedin_review": {
+   "component_type": "ApiNode",
+   "id": "gather_linkedin_review",
+   "name": "Gather the LinkedIn post's review target",
+   "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+   "http_method": "POST",
+   "data": {
+    "tool": "extension_tool",
+    "input": {
+     "name": "stored_ideas",
+     "input": {
+      "op": "review",
+      "reviewTargets": "[{\"artifactId\": \"{{ linkedinArtifactId }}\", \"representationRevisionId\": \"{{ linkedinRevisionId }}\"}]"
+     }
+    },
+    "agent_run_id": "{{ cinatra_run_id }}",
+    "result_input_passthrough": true,
+    "result_id_field": "ok"
+   },
+   "inputs": [
+    {
+     "title": "linkedinArtifactId",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "linkedinRevisionId",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "cinatra_run_id",
+     "type": "string",
+     "default": ""
+    }
+   ],
+   "outputs": [
+    {
+     "title": "reviewTargets",
+     "type": "string",
+     "default": "[]"
+    },
+    {
+     "title": "ok",
+     "type": "boolean",
+     "default": false
+    }
+   ],
+   "metadata": {
+    "cinatra": {
+     "riskClass": "write",
+     "requiresApproval": false,
+     "packageName": "@cinatra-ai/blog-pipeline-agent",
+     "description": "The projection step of the LinkedIn post's review: the call files the immutable reference the write before returned, and the host answers with the set it validated, so that set reaches the review step as the input the marker below names. The set names the LinkedIn post alone; the call writes no row and answers with its own ok flag."
+    }
+   }
+  },
+  "linkedin_review_gate": {
+   "component_type": "InputMessageNode",
+   "id": "linkedin_review_gate",
+   "name": "Approve the LinkedIn post",
+   "metadata": {
+    "cinatra": {
+     "riskClass": "read_only",
+     "requiresApproval": true,
+     "surfaceGateInputs": true,
+     "a2uiSurfaceId": "blog-pipeline:linkedin-review",
+     "inputMessageSchema": {
+      "type": "object",
+      "properties": {
+       "linkedinPost": {
+        "type": "string",
+        "title": "The LinkedIn post"
+       }
+      },
+      "required": [
+       "linkedinPost"
+      ]
+     },
+     "description": "The last pause of plan (C) section 6.1 step 5: the review of the LinkedIn post the writer made from the revision the person continued with. The post is written as a LinkedIn post draft before this step, and the marker below names the input its reference travels in, so the review core pins exactly that revision and opens its review while the run parks here. The decision is the lifecycle's, not this flow's: this flow owns the pause. The publishing steps are their own agents and are not in this flow.",
+     "artifactReview": {
+      "targetsInput": "reviewTargets"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "title": "linkedinPost",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "linkedinTitle",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "reviewTargets",
+     "type": "string",
+     "default": "[]"
+    }
+   ],
+   "outputs": [
+    {
+     "title": "linkedinApproval",
+     "type": "string"
+    }
+   ]
+  },
+  "end": {
+   "component_type": "EndNode",
+   "id": "end",
+   "name": "Pipeline outputs",
+   "outputs": [
+    {
+     "title": "linkedinPost",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "title": "linkedinTitle",
+     "type": "string",
+     "default": ""
+    }
+   ]
+  }
+ }
+}

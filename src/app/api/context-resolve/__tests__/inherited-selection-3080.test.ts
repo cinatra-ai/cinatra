@@ -44,6 +44,18 @@ vi.mock("@/lib/artifacts/run-context-selections-store", () => ({
   readLatestRunContextAnswer: (...a: unknown[]) => readLatestRunContextAnswer(...a),
 }));
 
+// cinatra#4264 B1b: the route asks whether a repair run is a Regenerate
+// segment run (its repair names `regenerate_node_id`) before it opens a screen.
+// The repair row is stood in for; the 3080 cases are ordinary repairs.
+const readRepair = vi.fn();
+vi.mock("@cinatra-ai/agents/lifecycle-repair-store", () => ({
+  readRepair: (...a: unknown[]) => readRepair(...a),
+}));
+vi.mock("@cinatra-ai/agents/lifecycle-repair-dispatch-store", () => ({
+  repairIdFromRunId: (runId: string | null | undefined) =>
+    runId && runId.startsWith("lifecycle-repair-run:") ? runId.slice("lifecycle-repair-run:".length) : null,
+}));
+
 const { POST } = await import("../route");
 
 const ORG = "org-3080";
@@ -189,9 +201,11 @@ describe("/api/context-resolve — a repair inherits its producing run's answere
       planAllocationForGate,
       readRunContextSelectionsForRun,
       readLatestRunContextAnswer,
+      readRepair,
     ]) {
       m.mockReset();
     }
+    readRepair.mockResolvedValue({ id: "r-3080", regenerateNodeId: null });
     readLatestRunContextAnswer.mockReturnValue(null);
     loadTrustedSlot.mockResolvedValue(theOneSlot());
     resolveCandidates.mockResolvedValue([candidate("a"), candidate("b")]);
@@ -287,6 +301,69 @@ describe("/api/context-resolve — a repair inherits its producing run's answere
     const body = await resolve();
     expect(body.selectionMode).toBe("interactive");
     expect(ids(body.plannedRefs)).toEqual(["a", "b"]);
+  });
+});
+
+describe("/api/context-resolve — a Regenerate segment run never gets a screen (cinatra#4264 B1b T13)", () => {
+  beforeEach(() => {
+    for (const m of [
+      deriveContextRouteContext,
+      loadTrustedSlot,
+      resolveCandidates,
+      planAllocationForGate,
+      readRunContextSelectionsForRun,
+      readLatestRunContextAnswer,
+      readRepair,
+    ]) {
+      m.mockReset();
+    }
+    readLatestRunContextAnswer.mockReturnValue(null);
+    loadTrustedSlot.mockResolvedValue(theOneSlot());
+    resolveCandidates.mockResolvedValue([candidate("a"), candidate("b")]);
+    allocate([candidate("a"), candidate("b")]);
+    readRunContextSelectionsForRun.mockReturnValue([]);
+    readRepair.mockResolvedValue({ id: "r-3080", regenerateNodeId: "file_image" });
+  });
+
+  it("inherits the provenance run's recorded answer, read under the run's parent", async () => {
+    readLatestRunContextAnswer.mockReturnValue(recorded([candidate("b")]));
+    context(repairRun());
+    const body = await resolve();
+    expect(body.selectionMode).toBe("autonomous");
+    expect(ids(body.plannedRefs)).toEqual(["b"]);
+    expect(readLatestRunContextAnswer).toHaveBeenCalledWith({ orgId: ORG, parentRunId: PRODUCING_RUN, slotId: SLOT });
+    expect(readRepair).toHaveBeenCalledWith("r-3080");
+  });
+
+  it("fails the segment run (409) where an ordinary repair would open the screen", async () => {
+    // S5's shape: the producing run's rows cannot prove its whole answer.
+    readRunContextSelectionsForRun.mockReturnValue([auditRow(candidate("a"))]);
+    context(repairRun());
+    const res = await POST(resolveRequest());
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: "regenerate_context_not_inherited" });
+  });
+
+  it("a slot that requires items fails the segment run too", async () => {
+    loadTrustedSlot.mockResolvedValue(theOneSlot({ minItems: 1 }));
+    context(repairRun());
+    const res = await POST(resolveRequest());
+    expect(res.status).toBe(409);
+  });
+
+  it("a repair row that cannot be read fails closed", async () => {
+    readRepair.mockRejectedValue(new Error("db down"));
+    readRunContextSelectionsForRun.mockReturnValue([auditRow(candidate("a"))]);
+    context(repairRun());
+    const res = await POST(resolveRequest());
+    expect(res.status).toBe(409);
+  });
+
+  it("an ordinary run never reads a repair row and keeps its screen", async () => {
+    context(ordinaryRun());
+    const body = await resolve();
+    expect(body.selectionMode).toBe("interactive");
+    expect(readRepair).not.toHaveBeenCalled();
   });
 });
 
