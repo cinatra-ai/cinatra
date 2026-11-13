@@ -1,7 +1,7 @@
 import "server-only";
 import { NextResponse } from "next/server";
 
-import { readAgentRunById } from "@cinatra-ai/agents";
+import { publishCallAllowed, readAgentRunById } from "@cinatra-ai/agents";
 import { collectAllPrimitiveHandlers } from "@/lib/primitive-handlers";
 import { isAuthorizedBridgeRequest } from "@/lib/wayflow-bridge-auth";
 import { bindBridgeRunId } from "@/lib/authz/bridge-run-binding";
@@ -10,7 +10,10 @@ import {
   RUN_STEP_NODE_HEADER,
   RUN_STEP_ATTESTATION_HEADER,
 } from "@/lib/agent-run-token";
-import { buildActorContextFromRun } from "@/lib/authz/build-actor-context-from-run";
+import {
+  buildActorContextFromRun,
+  resolveRunOwnerMembershipOrgRole,
+} from "@/lib/authz/build-actor-context-from-run";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import { withActorContext } from "@cinatra-ai/llm/actor-context";
@@ -453,6 +456,14 @@ export async function POST(req: Request): Promise<Response> {
       { status: 404 },
     );
   }
+  // cinatra#4150 — no publish without a released decision, enforced at the call,
+  // before any tool runs: the run the binding proved, the verified step or none.
+  if (!(await publishCallAllowed(run, verifiedStepId))) {
+    return NextResponse.json(
+      { error: "This call waits for a publish decision.", code: "publish_not_released" },
+      { status: 403 },
+    );
+  }
   let actor: PrimitiveActorContext;
   let alsActorContext: ActorContext;
   try {
@@ -462,6 +473,17 @@ export async function POST(req: Request): Promise<Response> {
       orgId: run.orgId,
     });
     alsActorContext = actorContext;
+    // cinatra#4313: the owner's role from a real membership row only; any
+    // fault of that read stamps no role and never fails the call.
+    let membershipOrgRole: Awaited<ReturnType<typeof resolveRunOwnerMembershipOrgRole>>;
+    try {
+      membershipOrgRole =
+        actorContext.principalType === "HumanUser"
+          ? await resolveRunOwnerMembershipOrgRole({ orgId: run.orgId, runBy: run.runBy })
+          : undefined;
+    } catch {
+      membershipOrgRole = undefined;
+    }
     // Build a proper PrimitiveActorContext for
     // the handler rather than blindly casting the ActorContext. The two
     // shapes have different field names:
@@ -476,6 +498,16 @@ export async function POST(req: Request): Promise<Response> {
       source: "a2a",
       orgId: actorContext.organizationId,
       platformRole: actorContext.platformRole,
+      // cinatra#4313: the run owner's org role for the run's own org, stamped
+      // only when it was read from a real membership row (a departed owner or
+      // a lookup error stamps none), together with the run's OBO ceiling, as
+      // the MCP transport stamps both. Without a role an org owner's run
+      // carries no org role, and the kernel refuses object.update on an
+      // organization-owned row (the publish write-back onto its post
+      // artifact through objects_update). The ceiling, when the run has one,
+      // confines that role to the agent's anchored scope.
+      ...(membershipOrgRole ? { orgRole: membershipOrgRole } : {}),
+      ...(run.oboCeiling ? { oboCeiling: run.oboCeiling } : {}),
     };
   } catch (err) {
     // cinatra#4223: a fixed sentence for every error, never the exception's

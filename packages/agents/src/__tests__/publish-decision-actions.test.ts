@@ -40,6 +40,7 @@ import {
   PUBLISH_DECISION_NOT_OPEN,
   PUBLISH_DECISION_REQUIRED,
   assertNoOpenPublishDecision,
+  approvePublishDecision,
   claimRunBeforeSend,
   declinePublishDecision,
   publishHoldAnswer,
@@ -702,6 +703,30 @@ describe("Do not publish answers every fault after the person check with a fixed
     const refusal = new AuthzError({ statusCode: 403, reason: "forbidden" });
     enforceRunAccess.mockRejectedValueOnce(refusal);
     expect(await declinePublishDecision({ runId: "run-1", actorContext: ACTOR }).catch((e: unknown) => e)).toBe(refusal);
+  });
+});
+
+describe("Publish answers a fault of its authority check with a fixed text, as Do not publish does", () => {
+  it.each([
+    ["the run read", () => storeMock.readAgentRunById.mockRejectedValueOnce(new Error("select failed: run-1 user-a"))],
+    ["the template read", () => storeMock.readAgentTemplateById.mockRejectedValueOnce(new Error("select failed: tmpl-1"))],
+    ["the co-owner read", () => storeMock.readRunCoOwners.mockRejectedValueOnce(new Error("select failed: run-1"))],
+    ["the membership read", () => resolveOrgRoleForUser.mockRejectedValueOnce(new Error("select failed: org-1 user-a"))],
+    ["a fault that is not an Error", () => storeMock.readAgentRunById.mockRejectedValueOnce("run-1 user-a")],
+  ])("a fault of %s names no id, person or store error", async (_label, arrange) => {
+    arrange();
+    const err = (await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })
+      .catch((e: unknown) => e)) as Error & { code?: string };
+    expect(err.code).toBe("publish_decision_unavailable");
+    expect(err.message).not.toMatch(/failed|run-1|tmpl-1|org-1|user-a/);
+    expect("cause" in err).toBe(false);
+    expect(decisions.decide).not.toHaveBeenCalled();
+  });
+
+  it("an access refusal still passes unchanged", async () => {
+    const refusal = new AuthzError({ statusCode: 403, reason: "forbidden" });
+    enforceRunAccess.mockRejectedValueOnce(refusal);
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR }).catch((e: unknown) => e)).toBe(refusal);
   });
 });
 
