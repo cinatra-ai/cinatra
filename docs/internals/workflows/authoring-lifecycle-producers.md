@@ -87,6 +87,7 @@ JSON-as-text — the same compiled-config column shape `trigger_mode` /
 | `producedTypes` | array of strings | The artifact types the producer declares it creates. The lattice does not branch on it. |
 | `repairCapable` | boolean | Whether this producer implements the typed repair round-trip (§4). |
 | `repairFindingsInput` | object `{ "input": "<name>" }` | The input of this producer's template that a dispatched repair run gets the reviewer's findings in (§4). `input` is an identifier, and is never `lifecycleRepairRequest` or a property name of `Object.prototype`. |
+| `regenerate` | array of `{ "artifactNode", "step", "noteInput" }` | Per node that files a reviewed artifact, the producing step a Regenerate reruns and the step input the reviewer's note goes into (section 4). Declared only; no run reads it yet. |
 
 **Reading is tolerant.** Neither reader throws on a malformed value: an absent,
 empty or non-object value yields no declarations, and the producer gets pure core
@@ -218,6 +219,43 @@ nor the run start checks that the declared name is an input of the template: a
 name the template does not read adds an input that no prompt reads, and a name the
 template types as `object` fails the run at start with a message that names the
 input.
+
+### Declaring a step for Regenerate
+
+A producer whose reviewed artifacts can be made again by one step declares, per
+filing node, that step and the step input the reviewer's note goes into
+(cinatra#4264):
+
+```json
+{
+  "regenerate": [
+    { "artifactNode": "file_image", "step": "image_flow", "noteInput": "prompt" },
+    { "artifactNode": "write_draft", "step": "draft_flow", "noteInput": "note" }
+  ]
+}
+```
+
+The list holds 1 to 16 entries, unique by `artifactNode`; `noteInput` follows the
+`repairFindingsInput` name rule. The compile (`checkRegenerateDeclaration`,
+`packages/agents/src/verdaccio/package-contract.ts`) refuses the package with
+`REGENERATE_DECLARATION_INVALID` unless, for every entry:
+
+- `step` and `artifactNode` are top-level nodes of the flow; `step` is an
+  `ApiNode`, `AgentNode` or `FlowNode`, and `artifactNode` is an `ApiNode`;
+- a data edge runs from `step` to `artifactNode`, or the two are the same node;
+- the step has exactly one input `{ "title": <noteInput>, "type": "string" }`
+  (for a `FlowNode`, on the StartNode of its subflow, and on its own `inputs`
+  when it lists them);
+- exactly one edge ends at that input; it starts at the flow's StartNode on a
+  `string` output that the root `inputs` declare, and that output feeds no other
+  input.
+
+The step's other inputs may come from any node. Entries may share one `step`
+with different note inputs. A writer that keeps a stored declaration without a
+readable manifest passes it to the compile (`retainedRegenerate`), which checks
+it against the new flow. The stored text lists the entries sorted by
+`artifactNode`; `readRegenerateEntry` (`src/lib/lifecycle/lifecycle-policy.ts`)
+returns the entry of one filing node. No run reads the declaration yet.
 
 ### The round-trip a repair-capable producer must satisfy
 

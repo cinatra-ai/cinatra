@@ -166,6 +166,177 @@ const REPAIR_FINDINGS_RESERVED_INPUTS = new Set([
   ...Object.getOwnPropertyNames(Object.prototype),
 ]);
 
+/** The one name rule of a declared input that gets the reviewer's words
+ * (`repairFindingsInput.input`, `regenerate[].noteInput`): an identifier of at
+ * most 128 characters, never reserved. Mirrors `isRepairFindingsInputName`. */
+function lifecycleInputNameSchema(label: string) {
+  return z
+    .string()
+    .max(128)
+    .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, {
+      message: `${label} must name one input as an identifier`,
+    })
+    .refine((name) => !REPAIR_FINDINGS_RESERVED_INPUTS.has(name), {
+      message: `${label} names a reserved input`,
+    });
+}
+
+/** `cinatra.lifecycle.regenerate` (cinatra#4264): per artifact-filing node, the
+ * producing `step` a Regenerate reruns and the `noteInput` of that step the
+ * reviewer's note goes into. Keyed by `artifactNode` (unique). Node ids carry no
+ * length cap: graph membership, checked at compile time
+ * (`checkRegenerateDeclaration` below), is their bound. */
+export const regenerateDeclarationSchema = z
+  .array(
+    z
+      .object({
+        artifactNode: z.string().min(1),
+        step: z.string().min(1),
+        noteInput: lifecycleInputNameSchema("regenerate.noteInput"),
+      })
+      .strict(),
+  )
+  .min(1)
+  .max(16)
+  .refine((entries) => new Set(entries.map((e) => e?.artifactNode)).size === entries.length, {
+    message: "regenerate artifactNode values must be unique",
+  });
+
+export type RegenerateDeclarationEntry = z.infer<typeof regenerateDeclarationSchema>[number];
+
+// ---------------------------------------------------------------------------
+// cinatra#4264: the compile-time graph check of a `cinatra.lifecycle.regenerate`
+// declaration, run by `compileOasAgentJson` (step 10a2). It lives beside the
+// schema, in a module every compile route already loads, so the check adds no
+// module to any route graph.
+
+export const REGENERATE_DECLARATION_INVALID = "REGENERATE_DECLARATION_INVALID";
+
+export type RegenerateDeclarationCheck = { ok: true } | { ok: false; error: string };
+
+type RegenerateRec = Record<string, unknown>;
+
+const REGENERATE_STEP_KINDS = new Set(["ApiNode", "AgentNode", "FlowNode"]);
+
+function isRegenerateRec(value: unknown): value is RegenerateRec {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function regenerateRefId(value: unknown): string | null {
+  const id = isRegenerateRec(value) ? value.$component_ref : undefined;
+  return typeof id === "string" ? id : null;
+}
+
+/** Why `ports` does not carry exactly one canonical string port `name`, or null. */
+function regeneratePortProblem(ports: unknown, name: string, where: string): string | null {
+  const matching = Array.isArray(ports) ? ports.filter((p) => isRegenerateRec(p) && p.title === name) : [];
+  if (matching.length === 0) return `${where} has no port "${name}"`;
+  if (matching.length > 1) return `${where} has two ports titled "${name}"`;
+  if ((matching[0] as RegenerateRec).type !== "string") {
+    return `${where} port "${name}" is not a canonical { title, type: "string" } port`;
+  }
+  return null;
+}
+
+/**
+ * Check a regenerate declaration against the parsed OAS Flow document. Pure:
+ * reads the document and the entries, never the filesystem.
+ *
+ * A Regenerate reruns one producing `step` of the flow with the reviewer's note
+ * in the step's `noteInput` and files the result through `artifactNode`. Per
+ * entry this check refuses unless:
+ *   1. the entry passes `regenerateDeclarationSchema`;
+ *   2. `step` and `artifactNode` are top-level nodes of the flow;
+ *   3. `step` is an ApiNode, AgentNode or FlowNode, and `artifactNode` is an
+ *      ApiNode (only an ApiNode signs its own step id when it files);
+ *   4. a data edge runs from `step` to `artifactNode` (unless they are equal);
+ *   5. the step exposes exactly one canonical `{ title: noteInput, type: "string" }`
+ *      input (for a FlowNode: on its subflow's StartNode, and on its own
+ *      `inputs` when it lists them);
+ *   6. exactly one edge ends at (`step`, `noteInput`); it starts at the flow's
+ *      StartNode on a canonical string output that the root `inputs` declare,
+ *      and that output feeds nothing else.
+ */
+export function checkRegenerateDeclaration(
+  parsedOas: unknown,
+  entries: unknown,
+): RegenerateDeclarationCheck {
+  const schema = regenerateDeclarationSchema.safeParse(entries);
+  if (!schema.success) {
+    const issues = schema.error.issues.map((i) => `${i.path.join(".") || "regenerate"}: ${i.message}`);
+    return { ok: false, error: `${REGENERATE_DECLARATION_INVALID}: ${issues.join("; ")}` };
+  }
+  const oas = isRegenerateRec(parsedOas) ? parsedOas : {};
+  const refs = isRegenerateRec(oas.$referenced_components) ? oas.$referenced_components : {};
+  const topIds = new Set((Array.isArray(oas.nodes) ? oas.nodes : []).map(regenerateRefId));
+  const edges = (Array.isArray(oas.data_flow_connections) ? oas.data_flow_connections : []).filter(isRegenerateRec);
+  const startId = regenerateRefId(oas.start_node);
+  const start = startId !== null ? refs[startId] : undefined;
+
+  for (const entry of schema.data) {
+    const { artifactNode, step, noteInput } = entry;
+    const refuse = (why: string): RegenerateDeclarationCheck => ({
+      ok: false,
+      error: `${REGENERATE_DECLARATION_INVALID}: ${why} (entry ${JSON.stringify(entry)})`,
+    });
+    for (const id of [step, artifactNode]) {
+      if (!topIds.has(id) || !isRegenerateRec(refs[id])) return refuse(`"${id}" is not a top-level node of the flow`);
+    }
+    const stepNode = refs[step] as RegenerateRec;
+    if (!REGENERATE_STEP_KINDS.has(stepNode.component_type as string)) {
+      return refuse(`step must be an ApiNode, AgentNode or FlowNode, not ${String(stepNode.component_type)}`);
+    }
+    if ((refs[artifactNode] as RegenerateRec).component_type !== "ApiNode") {
+      return refuse("artifactNode must be an ApiNode");
+    }
+    const linked = edges.some(
+      (e) => regenerateRefId(e.source_node) === step && regenerateRefId(e.destination_node) === artifactNode,
+    );
+    if (artifactNode !== step && !linked) return refuse("no data edge runs from step to artifactNode");
+
+    // 5. The note port.
+    let portProblem: string | null;
+    if (stepNode.component_type === "FlowNode") {
+      const subId = regenerateRefId(stepNode.subflow);
+      const sub = subId !== null ? refs[subId] : undefined;
+      if (!isRegenerateRec(sub) || sub.component_type !== "Flow") return refuse("step's subflow is missing or not a Flow");
+      const subStartId = regenerateRefId(sub.start_node);
+      const subRefs = isRegenerateRec(sub.$referenced_components) ? sub.$referenced_components : {};
+      const subStart = subStartId !== null ? (subRefs[subStartId] ?? refs[subStartId]) : undefined;
+      if (!isRegenerateRec(subStart) || subStart.component_type !== "StartNode") {
+        return refuse("step's subflow has no StartNode");
+      }
+      portProblem = regeneratePortProblem(subStart.inputs, noteInput, "the subflow's StartNode");
+      if (!portProblem && Array.isArray(stepNode.inputs)) {
+        portProblem = regeneratePortProblem(stepNode.inputs, noteInput, "step");
+      }
+    } else {
+      portProblem = regeneratePortProblem(stepNode.inputs, noteInput, "step");
+    }
+    if (portProblem) return refuse(portProblem);
+
+    // 6. Exclusive delivery from the StartNode.
+    const incoming = edges.filter(
+      (e) => regenerateRefId(e.destination_node) === step && e.destination_input === noteInput,
+    );
+    if (incoming.length !== 1) {
+      return refuse(`exactly one edge must end at step input "${noteInput}" (found ${incoming.length})`);
+    }
+    const output = incoming[0].source_output;
+    if (regenerateRefId(incoming[0].source_node) !== startId || !isRegenerateRec(start) || typeof output !== "string") {
+      return refuse("the note edge must start at the flow's StartNode");
+    }
+    const exposed = Array.isArray(start.outputs) ? start.outputs : start.inputs;
+    const startProblem =
+      regeneratePortProblem(exposed, output, "the StartNode") ??
+      regeneratePortProblem(oas.inputs, output, "the flow's root inputs");
+    if (startProblem) return refuse(startProblem);
+    const fanOut = edges.filter((e) => regenerateRefId(e.source_node) === startId && e.source_output === output);
+    if (fanOut.length !== 1) return refuse(`the StartNode output "${output}" feeds another input too`);
+  }
+  return { ok: true };
+}
+
 // The `lifecycle` block (cinatra#2038 S0 → cinatra#2047 D-1) — the agent
 // manifest's LIFECYCLE declarations, compiled onto `agent_templates.lifecycle_config`
 // exactly as `trigger_mode` / `gated_steps` are (epic #2037's "agent-manifest
@@ -191,19 +362,11 @@ export const agentLifecycleDeclarationSchema = z
      * `src/lib/lifecycle/lifecycle-policy.ts` (pinned equal by
      * `lifecycle-repair-findings-input.test.ts`). */
     repairFindingsInput: z
-      .object({
-        input: z
-          .string()
-          .max(128)
-          .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, {
-            message: "repairFindingsInput.input must name one input as an identifier",
-          })
-          .refine((name) => !REPAIR_FINDINGS_RESERVED_INPUTS.has(name), {
-            message: "repairFindingsInput.input names a reserved input",
-          }),
-      })
+      .object({ input: lifecycleInputNameSchema("repairFindingsInput.input") })
       .strict()
       .optional(),
+    /** The step-scoped Regenerate declaration (cinatra#4264). */
+    regenerate: regenerateDeclarationSchema.optional(),
   })
   .strict();
 
