@@ -159,6 +159,43 @@ describe("discoverActiveExtensionCapabilities", () => {
   });
 });
 
+describe("discoverActiveExtensionCapabilities — a failed reader facet (cinatra#3319)", () => {
+  // Distinct typeId: extensionRegistry is module-global and registerIfAbsent
+  // keeps the first handler of a typeId.
+  const failing: ExtensionTypeHandler = {
+    typeId: "connector",
+    install: vi.fn(), update: vi.fn(), uninstall: vi.fn(), archive: vi.fn(), restore: vi.fn(),
+    async listActive() {
+      throw new Error("t47 facet failure");
+    },
+  };
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    extensionRegistry.registerIfAbsent(failing);
+  });
+  afterEach(() => vi.resetAllMocks());
+
+  it("3319 T47 a caller's onError is told of the kind whose facet threw; without one the failure stays isolated", async () => {
+    vi.mocked(listInstalledExtensions).mockResolvedValue([
+      row({ id: "c1", packageName: "@x/c1", kind: "connector", status: "active" }),
+    ] as never);
+    const seen: Array<[string, string]> = [];
+    const told = await discoverActiveExtensionCapabilities({
+      kind: "connector",
+      actor,
+      scope,
+      onError: (kind, error) => {
+        seen.push([kind, (error as Error).message]);
+      },
+    });
+    expect(told.byKind.connector).toEqual([]);
+    expect(seen).toEqual([["connector", "t47 facet failure"]]);
+    const isolated = await discoverActiveExtensionCapabilities({ kind: "connector", actor, scope });
+    expect(isolated.byKind.connector).toEqual([]);
+  });
+});
+
 describe("discoverArchivedExtensionCapabilities (cinatra#948)", () => {
   const seenScopes: unknown[] = [];
   // Distinct typeId from the active-describe's handler: extensionRegistry is

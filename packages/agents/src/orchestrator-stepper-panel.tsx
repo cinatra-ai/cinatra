@@ -2259,7 +2259,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   // the last frame left, which is the gate that was just answered.
   //
   // THE ROAD IS THE ONE `agentic-run-panel.tsx` ALREADY TAKES, mirrored here:
-  // that surface holds the answered gate (`justSubmittedXRendererRef`, armed by
+  // that surface holds the answered gate (`answeredGateLedgerRef`, armed by
   // its own gate submit) and re-reads the run on a tick (`refetchDerivedContext`
   // on its 5s pending-approval schedule), through the run's own read whose
   // `hitlContext` is the shared `HitlGateContext` shape.
