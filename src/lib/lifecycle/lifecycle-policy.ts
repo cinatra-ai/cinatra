@@ -864,12 +864,10 @@ export function serializeLifecycleConfig(
   if (lifecycle.repairFindingsInput) {
     ordered.repairFindingsInput = { input: lifecycle.repairFindingsInput.input };
   }
-  if (lifecycle.regenerate && lifecycle.regenerate.length > 0) {
-    // Sorted by artifactNode (code-unit order), members in a fixed order.
-    ordered.regenerate = [...lifecycle.regenerate]
-      .sort((a, b) => (a.artifactNode < b.artifactNode ? -1 : a.artifactNode > b.artifactNode ? 1 : 0))
-      .map(({ artifactNode, step, noteInput }) => ({ artifactNode, step, noteInput }));
-  }
+  // cinatra#4264 A1a: `regenerate` is NOT written. A later recompile (MCP
+  // recompile, ensure drift) cannot yet revalidate a stored list against a new
+  // flow or clear it when the manifest drops it, so a stored list could outlive
+  // its declaration. A1b writes it together with that revalidation.
   if (lifecycle.requestedSkips && lifecycle.requestedSkips.length > 0) {
     ordered.requestedSkips = [...lifecycle.requestedSkips];
   }

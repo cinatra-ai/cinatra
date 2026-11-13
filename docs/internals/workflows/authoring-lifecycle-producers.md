@@ -245,17 +245,20 @@ The list holds 1 to 16 entries, unique by `artifactNode`; `noteInput` follows th
 - a data edge runs from `step` to `artifactNode`, or the two are the same node;
 - the step has exactly one input `{ "title": <noteInput>, "type": "string" }`
   (for a `FlowNode`, on the StartNode of its subflow, and on its own `inputs`
-  when it lists them);
+  when it lists them); the `inputs` and `outputs` of the step and of those
+  StartNodes, when present, are lists of port objects;
 - exactly one edge ends at that input; it starts at the flow's StartNode on a
   `string` output that the root `inputs` declare, and that output feeds no other
   input.
 
 The step's other inputs may come from any node. Entries may share one `step`
 with different note inputs. A writer that keeps a stored declaration without a
-readable manifest passes it to the compile (`retainedRegenerate`), which checks
-it against the new flow. The stored text lists the entries sorted by
-`artifactNode`; `readRegenerateEntry` (`src/lib/lifecycle/lifecycle-policy.ts`)
-returns the entry of one filing node. No run reads the declaration yet.
+readable manifest can pass it to the compile (`retainedRegenerate`), which checks
+it against the new flow. For now the install and import roads check the
+declaration but do not store it on `lifecycle_config`: a stored list is written
+only once every recompile road revalidates or clears it.
+`readRegenerateEntry` (`src/lib/lifecycle/lifecycle-policy.ts`) returns the entry
+of one filing node. No run reads the declaration yet.
 
 ### The round-trip a repair-capable producer must satisfy
 

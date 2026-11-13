@@ -238,6 +238,19 @@ function regeneratePortProblem(ports: unknown, name: string, where: string): str
   return null;
 }
 
+/** Why a node's `inputs` / `outputs` is present but not a list of port objects,
+ * or null. An absent list is no problem here; the port checks refuse it where a
+ * port is needed. */
+function regenerateListProblem(node: RegenerateRec, where: string): string | null {
+  for (const key of ["inputs", "outputs"]) {
+    const list = node[key];
+    if (list !== undefined && (!Array.isArray(list) || !list.every(isRegenerateRec))) {
+      return `${where} "${key}" is not a list of ports`;
+    }
+  }
+  return null;
+}
+
 /**
  * Check a regenerate declaration against the parsed OAS Flow document. Pure:
  * reads the document and the entries, never the filesystem.
@@ -252,7 +265,8 @@ function regeneratePortProblem(ports: unknown, name: string, where: string): str
  *   4. a data edge runs from `step` to `artifactNode` (unless they are equal);
  *   5. the step exposes exactly one canonical `{ title: noteInput, type: "string" }`
  *      input (for a FlowNode: on its subflow's StartNode, and on its own
- *      `inputs` when it lists them);
+ *      `inputs` when it lists them); the step's, the subflow StartNode's and
+ *      the StartNode's `inputs` / `outputs`, when present, are lists of ports;
  *   6. exactly one edge ends at (`step`, `noteInput`); it starts at the flow's
  *      StartNode on a canonical string output that the root `inputs` declare,
  *      and that output feeds nothing else.
@@ -283,6 +297,8 @@ export function checkRegenerateDeclaration(
       if (!topIds.has(id) || !isRegenerateRec(refs[id])) return refuse(`"${id}" is not a top-level node of the flow`);
     }
     const stepNode = refs[step] as RegenerateRec;
+    const stepListProblem = regenerateListProblem(stepNode, "step");
+    if (stepListProblem) return refuse(stepListProblem);
     if (!REGENERATE_STEP_KINDS.has(stepNode.component_type as string)) {
       return refuse(`step must be an ApiNode, AgentNode or FlowNode, not ${String(stepNode.component_type)}`);
     }
@@ -306,6 +322,8 @@ export function checkRegenerateDeclaration(
       if (!isRegenerateRec(subStart) || subStart.component_type !== "StartNode") {
         return refuse("step's subflow has no StartNode");
       }
+      const subStartListProblem = regenerateListProblem(subStart, "the subflow's StartNode");
+      if (subStartListProblem) return refuse(subStartListProblem);
       portProblem = regeneratePortProblem(subStart.inputs, noteInput, "the subflow's StartNode");
       if (!portProblem && Array.isArray(stepNode.inputs)) {
         portProblem = regeneratePortProblem(stepNode.inputs, noteInput, "step");
@@ -326,6 +344,8 @@ export function checkRegenerateDeclaration(
     if (regenerateRefId(incoming[0].source_node) !== startId || !isRegenerateRec(start) || typeof output !== "string") {
       return refuse("the note edge must start at the flow's StartNode");
     }
+    const startListProblem = regenerateListProblem(start, "the StartNode");
+    if (startListProblem) return refuse(startListProblem);
     const exposed = Array.isArray(start.outputs) ? start.outputs : start.inputs;
     const startProblem =
       regeneratePortProblem(exposed, output, "the StartNode") ??
