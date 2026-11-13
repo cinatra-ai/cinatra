@@ -3,7 +3,7 @@
   "routes": {
     "/sign-in": 165,
     "/api/mcp": 1320,
-    "/chat": 1424,
+    "/chat": 1425,
     "/api/a2a": 1328,
     "/api/llm-bridge": 1338
   },
@@ -27,10 +27,10 @@
       "pr": 4370
     },
     "/chat": {
-      "from": 1422,
-      "to": 1424,
-      "reason": "Pull request 4370 (issue 3062) adds exactly two core modules to this route: packages/agents/src/run-recommendation-reading-register.ts, where the reading the skills card drew is remembered in its own module so the settled card can be drawn read-only without the decision core, and packages/chat/src/run-start-line-order.ts, the order in which the conversation draws the platform's start line above the run's slot. Measured, not argued: with the companion extension fleet cloned pinned and the merged scripts/route-graph.mjs, main at bd70333a694d070c3413d871a2df4f280690c53d reads 1422 and the merged tree reads 1424, the two added modules being those files; the growth is additive and no module leaves the route.",
-      "pr": 4370
+      "from": 1424,
+      "to": 1425,
+      "reason": "Pull request 4603 (issue 4602) adds exactly one core module to this route, packages/agents/src/answered-gate-ledger.ts: the run panel holds the answered gate as one pair in its own leaf module, so a spent card is never drawn again after the next gate arrives. The growth is additive and no module leaves the route.",
+      "pr": 4603
     },
     "/sign-in": {
       "from": 164,
