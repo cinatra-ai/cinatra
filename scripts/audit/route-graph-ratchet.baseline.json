@@ -2,35 +2,35 @@
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. The counts exclude modules under the extension tree (extensions/**): they are walked and reported per route as the excluded count, and each changed pack is read by the pin-advance host-tool check. A core module a route reaches only through a pack's modules is that pack's cost: it is reported per pack ('reached through <pack>') and excluded as well; a core module the route also reaches through core modules counts. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate and its tests validate the committed records strictly against the base (malformed/stale/orphan records fail closed, naming the route and the field; a carried-forward record may not be deleted while its raised ceiling is kept) and the gate prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
     "/sign-in": 165,
-    "/api/mcp": 1320,
-    "/chat": 1425,
-    "/api/a2a": 1328,
-    "/api/llm-bridge": 1338
+    "/api/mcp": 1321,
+    "/chat": 1426,
+    "/api/a2a": 1329,
+    "/api/llm-bridge": 1339
   },
   "absorbs": {
     "/api/a2a": {
-      "from": 1327,
-      "to": 1328,
-      "reason": "Pull request 4370 (issue 3062) adds exactly one core module to this route, packages/agents/src/run-recommendation-reading-register.ts: the reading the skills card drew is remembered in its own module so the settled card can be drawn read-only without the decision core. Measured, not argued: with the companion extension fleet cloned pinned and the merged scripts/route-graph.mjs, main at bd70333a694d070c3413d871a2df4f280690c53d reads 1327 and the merged tree reads 1328, the one added module being that file; the growth is additive and no module leaves the route.",
-      "pr": 4370
+      "from": 1328,
+      "to": 1329,
+      "reason": "Pull request 4616 (issue 3487) adds exactly one core module to this route, src/lib/assistant-runtime/turn-tool-assembly.ts: the tool assembly of the assistant turn moves out of src/lib/assistant-runtime/runtime.ts into its own read-only module, which runtime.ts imports. The new module imports only modules the route already reaches (the llm and skills packages, skill-delivery-record.ts, ports.ts, model-routing.ts). Measured by the ratchet gate of the pull request at 603d47dc2e26d9f03b6b232480ba8834ff4d1fdf: main at 9d8ebf110 reads 1328 and the merged tree reads 1329, the one added module being that file; the growth is additive and no module leaves the route. Carried by the forward onto main ff16665cc1dc, whose ceiling for this route is 1328: the same one module raises it to 1329; the ratchet gate of this pull request at the forwarded head checks that count.",
+      "pr": 4616
     },
     "/api/llm-bridge": {
-      "from": 1337,
-      "to": 1338,
-      "reason": "Pull request 4370 (issue 3062) adds exactly one core module to this route, packages/agents/src/run-recommendation-reading-register.ts: the reading the skills card drew is remembered in its own module so the settled card can be drawn read-only without the decision core. Measured, not argued: with the companion extension fleet cloned pinned and the merged scripts/route-graph.mjs, main at bd70333a694d070c3413d871a2df4f280690c53d reads 1337 and the merged tree reads 1338, the one added module being that file; the growth is additive and no module leaves the route.",
-      "pr": 4370
+      "from": 1338,
+      "to": 1339,
+      "reason": "Pull request 4616 (issue 3487) adds exactly one core module to this route, src/lib/assistant-runtime/turn-tool-assembly.ts: the tool assembly of the assistant turn moves out of src/lib/assistant-runtime/runtime.ts into its own read-only module, which runtime.ts imports. The new module imports only modules the route already reaches (the llm and skills packages, skill-delivery-record.ts, ports.ts, model-routing.ts). Measured by the ratchet gate of the pull request at 603d47dc2e26d9f03b6b232480ba8834ff4d1fdf: main at 9d8ebf110 reads 1338 and the merged tree reads 1339, the one added module being that file; the growth is additive and no module leaves the route. Carried by the forward onto main ff16665cc1dc, whose ceiling for this route is 1338: the same one module raises it to 1339; the ratchet gate of this pull request at the forwarded head checks that count.",
+      "pr": 4616
     },
     "/api/mcp": {
-      "from": 1319,
-      "to": 1320,
-      "reason": "Pull request 4370 (issue 3062) adds exactly one core module to this route, packages/agents/src/run-recommendation-reading-register.ts: the reading the skills card drew is remembered in its own module so the settled card can be drawn read-only without the decision core. Measured, not argued: with the companion extension fleet cloned pinned and the merged scripts/route-graph.mjs, main at bd70333a694d070c3413d871a2df4f280690c53d reads 1319 and the merged tree reads 1320, the one added module being that file; the growth is additive and no module leaves the route.",
-      "pr": 4370
+      "from": 1320,
+      "to": 1321,
+      "reason": "Pull request 4616 (issue 3487) adds exactly one core module to this route, src/lib/assistant-runtime/turn-tool-assembly.ts: the tool assembly of the assistant turn moves out of src/lib/assistant-runtime/runtime.ts into its own read-only module, which runtime.ts imports. The new module imports only modules the route already reaches (the llm and skills packages, skill-delivery-record.ts, ports.ts, model-routing.ts). Measured by the ratchet gate of the pull request at 603d47dc2e26d9f03b6b232480ba8834ff4d1fdf: main at 9d8ebf110 reads 1320 and the merged tree reads 1321, the one added module being that file; the growth is additive and no module leaves the route. Carried by the forward onto main ff16665cc1dc, whose ceiling for this route is 1320: the same one module raises it to 1321; the ratchet gate of this pull request at the forwarded head checks that count.",
+      "pr": 4616
     },
     "/chat": {
-      "from": 1424,
-      "to": 1425,
-      "reason": "Pull request 4603 (issue 4602) adds exactly one core module to this route, packages/agents/src/answered-gate-ledger.ts: the run panel holds the answered gate as one pair in its own leaf module, so a spent card is never drawn again after the next gate arrives. The growth is additive and no module leaves the route.",
-      "pr": 4603
+      "from": 1425,
+      "to": 1426,
+      "reason": "Pull request 4616 (issue 3487) adds exactly one core module to this route, src/lib/assistant-runtime/turn-tool-assembly.ts: the tool assembly of the assistant turn moves out of src/lib/assistant-runtime/runtime.ts into its own read-only module, which runtime.ts imports. The new module imports only modules the route already reaches (the llm and skills packages, skill-delivery-record.ts, ports.ts, model-routing.ts). Measured by the ratchet gate of the pull request at 603d47dc2e26d9f03b6b232480ba8834ff4d1fdf: main at 9d8ebf110 reads 1424 and the merged tree reads 1425, the one added module being that file; the growth is additive and no module leaves the route. Carried by the forward onto main ff16665cc1dc, whose ceiling for this route is 1425: the same one module raises it to 1426; the ratchet gate of this pull request at the forwarded head checks that count.",
+      "pr": 4616
     },
     "/sign-in": {
       "from": 164,
