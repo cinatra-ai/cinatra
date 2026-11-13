@@ -13,7 +13,10 @@
  *
  * - the truth table: a step of the parent's own flow (P) or of the embedded
  *   child flow (C), crossed with a name the parent declares, the child
- *   declares, a sibling declares, nobody declares, or both declare;
+ *   declares, a sibling declares, nobody declares, or both declare; the
+ *   sibling is a second embedded child whose own step (S) runs its tool, so
+ *   its declaration is live, and a child node bound to the sibling's name is
+ *   still refused;
  * - request positions: a package name in the body's `tool`, in `input`, in
  *   `input.name`, in `input.input`, or in an added envelope field never moves
  *   the code package;
@@ -100,15 +103,18 @@ vi.mock("@/lib/extension-tool-origin", async (importOriginal) => {
 });
 
 import { POST } from "@/app/api/agents/passthrough/route";
+import { PASSTHROUGH_UNEXPECTED_ERROR } from "@/lib/passthrough-refusal";
 
 const KEY = "step-attest-key-under-test-4154-c2";
 const CTX = "ctx-run-4154";
 const PARENT = "@fixture-scope/fixture-parent-agent";
 const CHILD = "@fixture-scope/fixture-child-agent";
-/** A second agent dependency of the parent: it alone declares `sibling_tool`. */
+/** A second agent dependency of the parent, embedded beside the child: it alone declares `sibling_tool`. */
 const SIBLING = "@fixture-scope/fixture-sibling-agent";
+const SIBLING_TOOL = "sibling_tool";
 const OWN_STEP = "own_step";
 const CHILD_STEP = "child-embed_step";
+const SIBLING_STEP = "sibling-embed_step";
 const INLINE_STEP = "inline_step";
 const CHILD_TOOL = "child_tool";
 const FAKE_INSTALL_ID = "install-fake-7f3a9c21";
@@ -128,14 +134,14 @@ const origin = (code: string) => `extension_tool: the calling step reaches no to
 
 type Doc = Record<string, unknown>;
 
-function childNodeBody(fixedName = CHILD_TOOL): Doc {
+function childNodeBody(fixedName = CHILD_TOOL, packageName = CHILD): Doc {
   return {
     component_type: "ApiNode",
     name: "Embedded step",
     url: "{{CINATRA_BASE_URL}}/api/agents/passthrough",
     http_method: "POST",
     data: { tool: "extension_tool", input: { name: fixedName, input: { ref: "{{ ref }}" } } },
-    metadata: { cinatra: { packageName: CHILD } },
+    metadata: { cinatra: { packageName } },
   };
 }
 
@@ -145,7 +151,12 @@ function parentDoc(fixedName = CHILD_TOOL): Doc {
     id: "parent-root",
     // A data payload carrying an `id` is no node: it causes no duplicate (8.4).
     inputs: [{ id: OWN_STEP }, { id: "payload-1" }],
-    nodes: [{ $component_ref: OWN_STEP }, { $component_ref: "child_flow" }, { $component_ref: "inline_flow" }],
+    nodes: [
+      { $component_ref: OWN_STEP },
+      { $component_ref: "child_flow" },
+      { $component_ref: "sibling_flow" },
+      { $component_ref: "inline_flow" },
+    ],
     $referenced_components: {
       [OWN_STEP]: { component_type: "ApiNode", id: OWN_STEP, data: { tool: "extension_tool", input: { name: "parent_tool" } } },
       child_flow: {
@@ -159,6 +170,21 @@ function parentDoc(fixedName = CHILD_TOOL): Doc {
         id: "child-subflow",
         nodes: [{ $component_ref: CHILD_STEP }],
         $referenced_components: { [CHILD_STEP]: { ...childNodeBody(fixedName), id: CHILD_STEP } },
+      },
+      // The sibling, embedded the same way; its node always names `sibling_tool`.
+      sibling_flow: {
+        component_type: "FlowNode",
+        id: "sibling_flow",
+        subflow: { $component_ref: "sibling-subflow" },
+        metadata: { cinatra: { packageName: SIBLING } },
+      },
+      "sibling-subflow": {
+        component_type: "Flow",
+        id: "sibling-subflow",
+        nodes: [{ $component_ref: SIBLING_STEP }],
+        $referenced_components: {
+          [SIBLING_STEP]: { ...childNodeBody(SIBLING_TOOL, SIBLING), id: SIBLING_STEP },
+        },
       },
       // An unlabelled FlowNode with an inline Flow: the parent's own (8.4).
       inline_flow: {
@@ -177,12 +203,12 @@ function parentDoc(fixedName = CHILD_TOOL): Doc {
   };
 }
 
-function childDoc(fixedName = CHILD_TOOL): Doc {
+function childDoc(fixedName = CHILD_TOOL, packageName = CHILD): Doc {
   return {
     component_type: "Flow",
     id: "child-root",
     nodes: [{ $component_ref: "embed_step" }],
-    $referenced_components: { embed_step: { ...childNodeBody(fixedName), id: "embed_step" } },
+    $referenced_components: { embed_step: { ...childNodeBody(fixedName, packageName), id: "embed_step" } },
   };
 }
 
@@ -201,6 +227,11 @@ const CHILD_CINATRA: Record<string, unknown> = {
   kind: "agent",
   tools: [tool(CHILD_TOOL, { embeddable: true }), tool("both_tool", { embeddable: true })],
 };
+/** The sibling declares `sibling_tool` (embeddable) and nothing the parent or the child declares. */
+const SIBLING_CINATRA: Record<string, unknown> = {
+  kind: "agent",
+  tools: [tool(SIBLING_TOOL, { embeddable: true })],
+};
 
 let ROOT = "";
 let PARENT_ROOT = "";
@@ -208,6 +239,10 @@ let CHILD_ROOT = "";
 /** A second pair whose embedded node names `both_tool`, a name the parent and the child both declare. */
 let BOTH_PARENT_ROOT = "";
 let BOTH_CHILD_ROOT = "";
+let SIBLING_ROOT = "";
+/** A pair whose embedded child node names `sibling_tool`, a name only the sibling declares. */
+let SIB_PARENT_ROOT = "";
+let SIB_CHILD_ROOT = "";
 
 function writeFlow(root: string, doc: Doc) {
   mkdirSync(path.join(root, "cinatra"), { recursive: true });
@@ -224,6 +259,12 @@ beforeAll(() => {
   BOTH_CHILD_ROOT = path.join(ROOT, "both-child");
   writeFlow(BOTH_PARENT_ROOT, parentDoc("both_tool"));
   writeFlow(BOTH_CHILD_ROOT, childDoc("both_tool"));
+  SIBLING_ROOT = path.join(ROOT, "sibling");
+  writeFlow(SIBLING_ROOT, childDoc(SIBLING_TOOL, SIBLING));
+  SIB_PARENT_ROOT = path.join(ROOT, "sib-parent");
+  SIB_CHILD_ROOT = path.join(ROOT, "sib-child");
+  writeFlow(SIB_PARENT_ROOT, parentDoc(SIBLING_TOOL));
+  writeFlow(SIB_CHILD_ROOT, childDoc(SIBLING_TOOL));
 });
 
 afterAll(() => {
@@ -250,6 +291,24 @@ function boundChild(root = CHILD_ROOT) {
       edge: { packageName: CHILD, kind: "agent", resolvedInstallId: "install-child" },
     },
   };
+}
+
+function boundSibling() {
+  return {
+    ok: true,
+    value: {
+      row: { id: "install-sibling", version: "0.3.0" },
+      root: SIBLING_ROOT,
+      digest: "digest-sibling",
+      cinatra: SIBLING_CINATRA,
+      edge: { packageName: SIBLING, kind: "agent", resolvedInstallId: "install-sibling" },
+    },
+  };
+}
+
+/** The binding the stub answers for a child package name: the sibling's, or the child's. */
+function bindByName(root = CHILD_ROOT) {
+  return async (i: { childPackageName: string }) => (i.childPackageName === SIBLING ? boundSibling() : boundChild(root));
 }
 
 function stepHeaders(node: string): Record<string, string> {
@@ -289,7 +348,7 @@ beforeEach(() => {
     extensionTool: ({ input }: { input: unknown }) => ({ ranAs: i.packageName, input }),
   }));
   h.bindParentInstall.mockReset().mockImplementation(async () => boundParent());
-  h.bindChildInstall.mockReset().mockImplementation(async () => boundChild());
+  h.bindChildInstall.mockReset().mockImplementation(bindByName());
   h.resolveOriginSpy.mockReset();
 });
 
@@ -299,17 +358,20 @@ describe("the truth table through the route", () => {
   const rows: Array<[string, string, string, number, { packageName: string; installId: string | null } | null, string?]> = [
     ["P", OWN_STEP, "parent_tool", 200, { packageName: PARENT, installId: null }],
     ["P", OWN_STEP, CHILD_TOOL, 403, null, UNDECLARED],
-    ["P", OWN_STEP, "sibling_tool", 403, null, UNDECLARED],
+    ["P", OWN_STEP, SIBLING_TOOL, 403, null, UNDECLARED],
     ["P", OWN_STEP, "nobody_tool", 403, null, UNDECLARED],
     ["P", OWN_STEP, "both_tool", 200, { packageName: PARENT, installId: null }],
     ["C", CHILD_STEP, CHILD_TOOL, 200, { packageName: CHILD, installId: "install-child" }],
     ["C", CHILD_STEP, "parent_tool", 403, null, origin("name-not-bound")],
-    ["C", CHILD_STEP, "sibling_tool", 403, null, origin("name-not-bound")],
+    ["C", CHILD_STEP, SIBLING_TOOL, 403, null, origin("name-not-bound")],
     ["C", CHILD_STEP, "nobody_tool", 403, null, origin("name-not-bound")],
     ["C", CHILD_STEP, "both_tool", 403, null, origin("name-not-bound")],
+    // The sibling's declaration is live: its own step runs it from its own installation.
+    ["S", SIBLING_STEP, SIBLING_TOOL, 200, { packageName: SIBLING, installId: "install-sibling" }],
   ];
+  const whose = (pkg: string) => (pkg === CHILD ? "the child" : pkg === SIBLING ? "the sibling" : "the parent");
   for (const [kind, step, name, status, code, error] of rows) {
-    it(`${kind} step + ${name} answers ${status}${code ? ` from ${code.packageName === CHILD ? "the child" : "the parent"}` : ""}`, async () => {
+    it(`${kind} step + ${name} answers ${status}${code ? ` from ${whose(code.packageName)}` : ""}`, async () => {
       const res = await post(step, { input: { name, input: {} } });
       expect(res.status).toBe(status);
       expect(loaded()).toEqual(code);
@@ -334,6 +396,17 @@ describe("the truth table through the route", () => {
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: origin("not-embeddable") });
     expect(loaded()).toBeNull();
+  });
+
+  it("C step whose fixed tool only the sibling declares is refused, never run from the sibling", async () => {
+    h.bindParentInstall.mockImplementation(async () => boundParent(SIB_PARENT_ROOT));
+    h.bindChildInstall.mockImplementation(bindByName(SIB_CHILD_ROOT));
+    const res = await post(CHILD_STEP, { input: { name: SIBLING_TOOL, input: {} } });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: origin("child-tool-undeclared") });
+    expect(loaded()).toBeNull();
+    const asked = h.bindChildInstall.mock.calls.map((c) => (c[0] as { childPackageName: string }).childPackageName);
+    expect(asked).toEqual([CHILD]);
   });
 
   it("C step whose fixed tool both packages declare runs the child's, from the child installation", async () => {
@@ -428,6 +501,7 @@ describe("refusal hygiene through the route", () => {
     const res = await post(OWN_STEP, { input: { name: "parent_tool", input: {} } });
     expect(res.status).toBe(500);
     const text = JSON.stringify(await res.json());
+    expect(text).toBe(JSON.stringify({ error: PASSTHROUGH_UNEXPECTED_ERROR }));
     expect(text).not.toContain(FAKE_INSTALL_ID);
     expect(text).not.toContain(ROOT);
     expect(loaded()).toBeNull();
