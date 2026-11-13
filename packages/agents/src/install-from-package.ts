@@ -592,6 +592,9 @@ async function _installAgentFromPackageImpl(
 
     let templateId: string;
     let versionId: string;
+    // cinatra#4264 A1b: the adopted row's lifecycle column before this install
+    // rewrote it, restored when a later step fails and the files roll back.
+    let lifecycleRestore: { templateId: string; prior: string | null } | null = null;
     try {
       const claimed = await claimAgentTemplateIdentity(
         { packageName: extracted.packageName, claim },
@@ -689,6 +692,9 @@ async function _installAgentFromPackageImpl(
               "not be applied — the template row moved or was removed mid-install. Retry the install.",
           );
         }
+        if (existing.lifecycleConfig !== undefined) {
+          lifecycleRestore = { templateId: existing.id, prior: existing.lifecycleConfig ?? null };
+        }
         await createAgentVersion({
           id: versionId,
           templateId: existing.id,
@@ -730,6 +736,25 @@ async function _installAgentFromPackageImpl(
       // matching template row; the .old dir (if any) is restored.
       if (materializeResult !== null) {
         await rollbackMaterialize(materializeResult);
+      }
+      // cinatra#4264 A1b (review 1): the files are back on the previous
+      // version, so the lifecycle column this install rewrote goes back too;
+      // a stored regenerate list must never outlive the flow it was checked
+      // against. Best-effort like the rollback: the original error is rethrown.
+      if (lifecycleRestore) {
+        try {
+          await updateAgentTemplate(
+            lifecycleRestore.templateId,
+            { lifecycleConfig: lifecycleRestore.prior },
+            claim,
+          );
+        } catch (restoreErr) {
+          console.warn(
+            `[installAgentFromPackage] could not restore the lifecycle declaration of ` +
+              `'${extracted.packageName}' after the rollback:`,
+            restoreErr,
+          );
+        }
       }
       throw dbErr;
     }
@@ -1019,9 +1044,11 @@ async function makeInstalledArtifactClaimLookup(
  * any stored regenerate list against the new flow, as `retainedRegenerate`). A
  * caller that passes no reading writes no lifecycle column, as before.
  *
- * Best-effort by contract: the compile itself has already succeeded and
- * written the file, so a DB failure here is warned and swallowed, never
- * surfaced as a compile error.
+ * Best-effort by contract for a caller that passes no reading: a DB failure
+ * here is warned and swallowed, never surfaced as a compile error. A caller
+ * that passes a reading gets the failure as a rejection (review 1): the MCP
+ * recompile runs this sync BEFORE it writes the source file and refuses on it,
+ * so a stale lifecycle column is never reported as a successful recompile.
  */
 export async function syncCompiledTemplateToDb(
   agentPackageName: string,
@@ -1062,5 +1089,9 @@ export async function syncCompiledTemplateToDb(
     });
   } catch (versionSyncErr) {
     console.warn(`[agent_source_compile] DB sync failed:`, versionSyncErr);
+    // cinatra#4264 A1b (review 1): a caller that passed a reading asked for
+    // the lifecycle column, which carries the regenerate guarantee, so the
+    // failure is its to refuse on, never a silent success over a stale row.
+    if (siblingLifecycle !== undefined) throw versionSyncErr;
   }
 }

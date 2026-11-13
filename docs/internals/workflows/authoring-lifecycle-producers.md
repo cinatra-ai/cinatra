@@ -269,7 +269,18 @@ The registry install seed and the archive import (and the boot loaders that go
 through it) follow this rule, and so does the MCP recompile
 (`agent_source_compile`): it passes the stored list to the compile as
 `retainedRegenerate` and writes the column from the compile's own sibling read,
-before it writes the source file. The CLI install road runs no compile, so it
+before it writes the source file. That recompile works on one snapshot: a
+`package.json` that exists but does not parse, a compile reading that differs
+from the handler's own, or a source file changed during the compile refuses, and
+a failed column write refuses too instead of reporting success.
+
+Stored text that cannot be read counts as a stored list that cannot be checked:
+every road above refuses on it. The roads that keep a row without writing it
+check the stored list too: the git-file loader before its same-version skip and
+before its unreadable-sibling skip (a watcher reloads the flow on disk after
+either), and the bundled-agent boot seeder for a row that already exists. When
+an import or a registry reinstall fails after its row write and the runtime
+files roll back, the lifecycle column is written back with them. The CLI install road runs no compile, so it
 refuses a package that declares `regenerate`; install such a package through the
 registry install road. `readRegenerateEntry`
 (`src/lib/lifecycle/lifecycle-policy.ts`) returns the entry of one filing node.

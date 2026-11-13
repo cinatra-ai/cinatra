@@ -881,20 +881,28 @@ export function serializeLifecycleConfig(
 }
 
 /** The RAW `regenerate` value of a stored `lifecycle_config` text, or undefined
- * when the text is absent, unparseable, not an object or carries no such key
- * (cinatra#4264). Raw on purpose: a writer that keeps the stored column (no
- * readable manifest) hands this value to the regenerate check against the new
- * flow, so a stored list the normalizer would drop is refused there, never
- * silently kept. */
+ * when the text is absent or carries no such key (cinatra#4264). Raw on
+ * purpose: a writer that keeps the stored column (no readable manifest) hands
+ * this value to the regenerate check against the new flow, so a stored list
+ * the normalizer would drop is refused there, never silently kept.
+ *
+ * THROWS on text it cannot read (unparseable, or not a JSON object): such text
+ * may have carried a list, so reading it as "no list" would let a writer keep
+ * it unchecked. Every writer refuses on this throw, as on a failed row read. */
 export function readStoredRegenerate(raw: string | null | undefined): unknown {
   if (!raw) return undefined;
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
-    return (parsed as Record<string, unknown>).regenerate;
-  } catch {
-    return undefined;
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `the stored lifecycle declaration cannot be read (${err instanceof Error ? err.message : String(err)})`,
+    );
   }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("the stored lifecycle declaration cannot be read (it is not a JSON object)");
+  }
+  return (parsed as Record<string, unknown>).regenerate;
 }
 
 /** Parse the persisted JSON-as-text back into the compiled declaration

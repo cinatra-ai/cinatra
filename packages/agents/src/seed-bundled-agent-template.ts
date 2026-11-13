@@ -35,7 +35,10 @@
 //
 // IDEMPOTENT: a package that already has a row is left completely alone (no
 // re-compile, no write) — this seeds what is missing, it does not reconcile what
-// is there.
+// is there. One check only (cinatra#4264 A1b): a row that stores a
+// `regenerate` list has it checked against the image's CURRENT flow, and a
+// list that flow no longer honours THROWS, so the boot reports the package
+// instead of leaving a stale list silently in place.
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -43,6 +46,7 @@ import { join } from "node:path";
 import { parsePackageId } from "@cinatra-ai/registries";
 
 import { PLATFORM_IDENTITY_CLAIM, claimAgentTemplateIdentity } from "./agent-template-identity";
+import { assertStoredRegenerateHonoured } from "./retained-regenerate";
 import { buildAgentTemplateInstallSeed } from "./build-agent-template-seed";
 import { createLocalAgentTemplateVersion } from "./import-export-actions";
 import { readAgentTemplateByPackageName } from "./store";
@@ -97,7 +101,23 @@ export async function ensureBundledAgentTemplateRecord(input: {
   seedDir: string;
 }): Promise<BundledAgentTemplateSeedOutcome> {
   const existing = await readAgentTemplateByPackageName(input.packageName);
-  if (existing) return { outcome: "exists" };
+  if (existing) {
+    // cinatra#4264 A1b (review 1): image v2 may reconcile new runtime bytes
+    // without a step the row's stored list (written from image v1) names. The
+    // row is still not rewritten here (a tenant row is never overwritten by
+    // this seeder); a stale or unreadable stored list refuses instead. Rows
+    // without a stored lifecycle text take the early return with no read.
+    if (existing.lifecycleConfig) {
+      const packageDir = bundledAgentPackageDir(input.seedDir, input.packageName);
+      const oas = packageDir === null ? null : await readJsonIfPresent(join(packageDir, "cinatra", "oas.json"));
+      assertStoredRegenerateHonoured(
+        existing.lifecycleConfig,
+        oas ?? {},
+        `[seed-bundled-agent-template] ${input.packageName} (existing row, image flow)`,
+      );
+    }
+    return { outcome: "exists" };
+  }
 
   const packageDir = bundledAgentPackageDir(input.seedDir, input.packageName);
   if (packageDir === null) {

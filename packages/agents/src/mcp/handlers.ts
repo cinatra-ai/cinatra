@@ -3910,16 +3910,41 @@ async function handleAgentBuilderGitCompileAndWrite(
   // Resolve packageName from the sibling package.json so the compiler can find it.
   let agentPackageName: string = packageSlug;
   let agentPackageVersion: string | null = null;
+  // cinatra#4264 A1b (review 1): whether a manifest was read here. The
+  // compile's own sibling read must agree with it (checked after the compile).
+  let manifestRead = false;
   // probe new canonical, then legacy via resolveAgentRootDirForRead.
   const agentRootForCompile = resolveAgentRootDirForRead(packageSlug);
   if (agentRootForCompile) {
+    // An ABSENT package.json keeps the slug fallback. One that EXISTS but
+    // cannot be read or parsed refuses (cinatra#4264 A1b, review 1): the slug
+    // would name a different row than the package's own, so the stored
+    // regenerate list of the real row would never be checked or projected.
+    // Same rule as the git-file loader's unreadable-sibling refusal.
+    let pkgRaw: string | null = null;
     try {
-      const pkgRaw = await readFile(join(agentRootForCompile, "package.json"), "utf8");
-      const pkg = JSON.parse(pkgRaw as string) as { name?: string; version?: string };
-      if (pkg.name) agentPackageName = pkg.name;
-      if (pkg.version) agentPackageVersion = pkg.version;
-    } catch {
-      /* use slug fallback */
+      pkgRaw = (await readFile(join(agentRootForCompile, "package.json"), "utf8")) as string;
+    } catch (err) {
+      if ((err as { code?: unknown })?.code !== "ENOENT") {
+        const message = err instanceof Error ? err.message : String(err);
+        return { error: `agent.json could not be compiled: the package.json beside ${resolved.relPath} could not be read (${message})` };
+      }
+    }
+    if (pkgRaw !== null) {
+      let pkg: unknown;
+      try {
+        pkg = JSON.parse(pkgRaw);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { error: `agent.json could not be compiled: the package.json beside ${resolved.relPath} is not valid JSON (${message})` };
+      }
+      if (!pkg || typeof pkg !== "object" || Array.isArray(pkg)) {
+        return { error: `agent.json could not be compiled: the package.json beside ${resolved.relPath} is not a JSON object` };
+      }
+      manifestRead = true;
+      const { name, version } = pkg as { name?: unknown; version?: unknown };
+      if (typeof name === "string" && name) agentPackageName = name;
+      if (typeof version === "string" && version) agentPackageVersion = version;
     }
   }
 
@@ -3939,6 +3964,8 @@ async function handleAgentBuilderGitCompileAndWrite(
 
   const compileResult = await compileOasAgentJson({
     packageName: agentPackageName,
+    // The file resolved and read above, never a second resolution by name.
+    oasSourcePath,
     retainedRegenerate,
     reportSiblingLifecycle: true,
   });
@@ -3946,6 +3973,32 @@ async function handleAgentBuilderGitCompileAndWrite(
     return { error: `agent.json could not be compiled: ${compileResult.error}` };
   }
   const compiled = compileResult.value;
+
+  // cinatra#4264 A1b (review 1): ONE snapshot. The row read above, the bytes
+  // the compile checked, its sibling reading and the bytes written below must
+  // all be the same package state. A compile that read a different manifest
+  // (none where this handler read one, or one naming another package), or a
+  // source file changed by another writer during the compile, refuses before
+  // the row or the file is written; the caller runs the compile again.
+  const reading = compileResult.siblingLifecycle;
+  const changedWhileCompiling =
+    "agent.json could not be compiled: the package changed while it was being compiled; run agent_source_compile again";
+  if (
+    !reading ||
+    reading.readable !== manifestRead ||
+    (manifestRead && (compiled.packageName ?? packageSlug) !== agentPackageName)
+  ) {
+    return { error: `${changedWhileCompiling} (its package.json reading differs)` };
+  }
+  let rawAfterCompile: string;
+  try {
+    rawAfterCompile = (await readFile(oasSourcePath, "utf8")) as string;
+  } catch {
+    return { error: `${changedWhileCompiling} (${resolved.relPath} could not be read again)` };
+  }
+  if (rawAfterCompile !== raw) {
+    return { error: `${changedWhileCompiling} (${resolved.relPath} was rewritten)` };
+  }
 
   // fan `metadata.cinatra.llm` out to every
   // `/api/llm-bridge` ApiNode in `agentContent` (top-level + every FlowNode-
@@ -3959,6 +4012,21 @@ async function handleAgentBuilderGitCompileAndWrite(
       | { cinatra?: { llm?: OasCinatraLlm } }
       | undefined)?.cinatra?.llm;
     injectCinatraLlmIntoApiNodes(agentContent, llmMetadata);
+  }
+
+  // cinatra#4264 A1b (review 1): re-project the compiled result onto the
+  // agent_templates row BEFORE the source write, and refuse when that fails.
+  // The lifecycle column carries the regenerate guarantee, so a failed write
+  // must never be reported as a successful recompile; and a failed source
+  // write after it leaves the row consistent, because the file still holds
+  // the flow this compile checked (the write-back only adds `cinatra_llm`).
+  // The version-pairing rule this write encodes lives with it, in
+  // ../install-from-package (cinatra#3208 ratchets: off the route graph).
+  try {
+    await syncCompiledTemplateToDb(agentPackageName, agentPackageVersion, compiled, reading);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { error: `agent.json was compiled, but the template row could not be updated (${message}); the source file was not written` };
   }
 
   // The agent.json on disk is already canonical OAS; the write-back persists
@@ -3975,16 +4043,6 @@ async function handleAgentBuilderGitCompileAndWrite(
   // Register agent skills in the skills catalog so they are discoverable via skill_ids.
   const registeredSkillIds: string[] = [];
   try {
-    // Re-project the compiled result onto the agent_templates row. The
-    // version-pairing rule this write encodes lives with it, in
-    // ../install-from-package (cinatra#3208 ratchets: off the route graph).
-    await syncCompiledTemplateToDb(
-      agentPackageName,
-      agentPackageVersion,
-      compiled,
-      compileResult.siblingLifecycle,
-    );
-
     // skills dir lives next to the agent root (handles both new
     // canonical and legacy layouts via resolveAgentRootDirForRead).
     const agentRootForSkills = resolveAgentRootDirForRead(packageSlug);
