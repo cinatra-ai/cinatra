@@ -28,8 +28,9 @@ vi.mock("pacote", () => {
   return { packument: vi.fn(notFound), tarball: vi.fn(notFound), extract: vi.fn(notFound) };
 });
 
+// cinatra#4264: the publisher refuses a failed compile, so the mock compiles.
 vi.mock("../oas-compiler", () => ({
-  compileOasAgentJson: vi.fn(async () => ({ ok: false })),
+  compileOasAgentJson: vi.fn(async () => ({ ok: true, value: {} })),
 }));
 
 import { publishAgentPackageFromGitDir } from "../verdaccio/client";
