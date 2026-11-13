@@ -1341,19 +1341,16 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
 
             # cinatra#4264: record the listed nodes' inputs in THIS leg (the
             # initial message and every resume carry the list). The root
-            # conversation is the one about to execute; a step of a subflow
-            # runs in a sub-conversation and is not recorded.
-            _snap_request = _step_snapshot.read_snapshot_request(params.get("message"))
-            _snap_flow_sha = getattr(self.assistant, "_cinatra_flow_sha256", "") or ""
-            _snap_recorder = None
-            if _snap_request is not None and _snap_flow_sha:
-                _snap_recorder = _step_snapshot.SnapshotRecorder(
-                    run_id=_snap_request["run_id"],
-                    nodes=_snap_request["nodes"],
-                    flow_sha256=_snap_flow_sha,
-                    key=os.environ.get("CINATRA_CONTEXT_ATTEST_KEY"),
-                    root_conversation=conversation,
-                )
+            # conversation is the one about to execute and the root flow is its
+            # component: only a step of that flow, running in that very
+            # conversation, is recorded; a subflow's step is not, even when it
+            # shares a root node's id.
+            _snap_recorder = _step_snapshot.snapshot_recorder_for_leg(
+                params.get("message"),
+                flow_sha256=getattr(self.assistant, "_cinatra_flow_sha256", "") or "",
+                key=os.environ.get("CINATRA_CONTEXT_ATTEST_KEY"),
+                conversation=conversation,
+            )
             _snap_token = _STEP_SNAPSHOT_RECORDER.set(_snap_recorder)
 
             a2a_input_message = params["message"]
@@ -1903,6 +1900,9 @@ _LIVE_CLASS_BINDINGS: Tuple[Tuple[str, str, Optional[str]], ...] = (
     ("wayflowcore.steps", "AgentExecutionStep", None),
     ("wayflowcore.a2a.a2aagent", "A2AAgent", "start_conversation"),
     ("wayflowcore.agentserver", "A2AServer", "serve_agent"),
+    # cinatra#4264 step snapshots: the capture wraps Step.invoke_async
+    # (`_patch_step_snapshot_capture`, which also checks its parameters).
+    ("wayflowcore", "Step", "invoke_async"),
     # #1193 token hygiene. `A2AStorage.submit_task` persists the inbound A2A
     # message into task history BEFORE the worker's pop runs, so an unpatched
     # submit_task durably stores the RAW per-run credential and echoes it in the
@@ -2176,32 +2176,21 @@ def _patch_step_snapshot_capture() -> None:
     conversation is the root conversation itself). No recorder (the message
     listed no node): nothing is read and the step runs exactly as before. A
     fault of the recorder is logged and never fails the step.
+
+    Startup-FATAL on drift: a missing ``Step.invoke_async``, or one whose
+    parameters after ``self`` no longer begin with ``(inputs, conversation)``,
+    raises RuntimeError (``install_invoke_capture``), and
+    ``_LIVE_CLASS_BINDINGS`` names the method, so a wayflowcore bump cannot
+    silently drop the capture or sign the wrong dictionary.
     """
     try:
         from wayflowcore import Step  # type: ignore[import-not-found]
     except Exception as exc:  # pragma: no cover
+        # The live-class guard (`_validate_live_class_names`) names
+        # wayflowcore.Step.invoke_async and fails the startup on this import.
         print(f"[agent_loader] WARNING: step snapshot patch import failed: {exc}")
         return
-    _original = getattr(Step, "invoke_async", None)
-    if _original is None:
-        print("[agent_loader] WARNING: Step.invoke_async missing; step snapshots unavailable")
-        return
-    if getattr(_original, "__cinatra_patched__", False):
-        return  # idempotent
-
-    async def _patched(self: Any, *args: Any, **kwargs: Any) -> Any:
-        recorder = _STEP_SNAPSHOT_RECORDER.get()
-        if recorder is not None:
-            try:
-                inputs = args[0] if len(args) > 0 else kwargs.get("inputs")
-                conversation = args[1] if len(args) > 1 else kwargs.get("conversation")
-                recorder.observe(getattr(self, "id", None), inputs, conversation)
-            except Exception as exc:
-                print(f"[agent_loader] step snapshot capture failed: {type(exc).__name__}")
-        return await _original(self, *args, **kwargs)
-
-    _patched.__cinatra_patched__ = True  # type: ignore[attr-defined]
-    Step.invoke_async = _patched  # type: ignore[assignment]
+    _step_snapshot.install_invoke_capture(Step, _STEP_SNAPSHOT_RECORDER.get)
 
 
 def _patch_parallel_flow_node_extended_order() -> None:

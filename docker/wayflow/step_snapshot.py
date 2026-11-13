@@ -28,8 +28,10 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import inspect
 import json
-from typing import Any, Dict, Iterable, List, Optional
+import re
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 SNAPSHOT_NODES_METADATA_KEY = "cinatra_snapshot_nodes"
 SNAPSHOT_RUN_METADATA_KEY = "cinatra_snapshot_run_id"
@@ -41,7 +43,10 @@ STEP_SNAPSHOT_MAX_BYTES = 512 * 1024
 #: The input keys the platform supplies to every node: never part of a snapshot.
 #: The run-token key equals CINATRA_RUN_TOKEN_MESSAGE_KEY in agent_loader.
 PLATFORM_INPUT_KEYS = frozenset({"cinatra_run_id", "agent_run_id", "__cinatra_run_token__"})
-_MAX_NODES = 64
+#: A flow version is a sha256 hex digest, as the application checks it.
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
+#: The parameters ``Step.invoke_async`` must take after ``self``, in order.
+INVOKE_ASYNC_PARAMETERS = ("inputs", "conversation")
 
 
 def canonical_json_bytes(value: Any) -> bytes:
@@ -75,7 +80,9 @@ def read_snapshot_request(message: Any) -> Optional[Dict[str, Any]]:
     run_id = metadata.get(SNAPSHOT_RUN_METADATA_KEY)
     if not isinstance(nodes, list) or not isinstance(run_id, str) or not run_id:
         return None
-    picked = [n for n in nodes if isinstance(n, str) and n][:_MAX_NODES]
+    # Every listed node, never a prefix: the application sends the complete
+    # sorted union its Regenerate entries declare.
+    picked = [n for n in nodes if isinstance(n, str) and n]
     if not picked:
         return None
     return {"run_id": run_id, "nodes": frozenset(picked)}
@@ -91,9 +98,13 @@ def capture_node_inputs(
     log: Any = print,
 ) -> Optional[Dict[str, str]]:
     """The signed snapshot of one node's FULL resolved inputs, or None when it
-    cannot be recorded (no key or flow version, not a dict, not serializable,
-    too large). Platform keys are removed; every other key stays."""
-    if not key or not key.strip() or not flow_sha256 or not run_id or not node:
+    cannot be recorded (no key, a flow version that is not 64 lowercase hex,
+    not a dict, not serializable, too large). Platform keys are removed; every
+    other key stays."""
+    if not key or not key.strip() or not run_id or not node:
+        return None
+    if not isinstance(flow_sha256, str) or not _SHA256_HEX.fullmatch(flow_sha256):
+        log(f"[step_snapshot] node={node}: the flow version is not a sha256 hex; not recorded")
         return None
     if not isinstance(inputs, dict):
         log(f"[step_snapshot] node={node}: inputs are not a dict; not recorded")
@@ -147,9 +158,10 @@ def attach_step_snapshots(
 
 class SnapshotRecorder:
     """Per-leg state: which nodes to record, for which run, in which root
-    conversation, and what was recorded. The first capture of a node in a leg
-    wins; a node executed twice in one leg keeps its first inputs (the
-    application marks a different second value from a later leg ambiguous)."""
+    conversation and root flow, and what was recorded. The first capture of a
+    node in a leg wins; a node executed twice in one leg keeps its first inputs
+    (the application marks a different second value from a later leg
+    ambiguous)."""
 
     def __init__(
         self,
@@ -159,6 +171,7 @@ class SnapshotRecorder:
         flow_sha256: str,
         key: Optional[str],
         root_conversation: Any,
+        root_steps: Iterable[Any],
         log: Any = print,
     ) -> None:
         self.run_id = run_id
@@ -166,14 +179,22 @@ class SnapshotRecorder:
         self.flow_sha256 = flow_sha256
         self.key = key
         self.root_conversation = root_conversation
+        #: The root flow's own Step objects, by identity: a step of a nested
+        #: flow is never one of them, whatever its id.
+        self._root_step_ids = frozenset(id(step) for step in root_steps)
+        self._root_steps = tuple(root_steps)  # keeps the ids above alive
         self.log = log
         self.captured: Dict[str, Dict[str, str]] = {}
 
-    def observe(self, step_id: Any, inputs: Any, conversation: Any) -> None:
-        """Called before a step runs. Records only a listed TOP-LEVEL node of
-        the root flow (its conversation is the root conversation itself)."""
+    def observe(self, step: Any, inputs: Any, conversation: Any) -> None:
+        """Called before ``step`` runs. Records only a listed TOP-LEVEL node of
+        the root flow: the step is one of the root flow's own Step objects AND
+        it runs in the root conversation itself."""
         if conversation is not self.root_conversation:
             return
+        if id(step) not in self._root_step_ids:
+            return
+        step_id = getattr(step, "id", None)
         if not isinstance(step_id, str) or step_id not in self.nodes or step_id in self.captured:
             return
         snap = capture_node_inputs(
@@ -189,3 +210,76 @@ class SnapshotRecorder:
 
     def snapshots(self) -> List[Dict[str, str]]:
         return [self.captured[n] for n in sorted(self.captured)]
+
+
+def snapshot_recorder_for_leg(
+    message: Any,
+    *,
+    flow_sha256: str,
+    key: Optional[str],
+    conversation: Any,
+    log: Any = print,
+) -> Optional[SnapshotRecorder]:
+    """The recorder of one leg, or None when the message lists no node, the
+    flow version is missing, or the conversation's component has no steps.
+    The root flow is the conversation's component (``conversation.component``,
+    whose ``steps`` maps each step name to its Step object)."""
+    request = read_snapshot_request(message)
+    if request is None or not flow_sha256:
+        return None
+    steps = getattr(getattr(conversation, "component", None), "steps", None)
+    if not isinstance(steps, dict) or not steps:
+        log("[step_snapshot] the root conversation has no flow steps; nothing recorded")
+        return None
+    return SnapshotRecorder(
+        run_id=request["run_id"],
+        nodes=request["nodes"],
+        flow_sha256=flow_sha256,
+        key=key,
+        root_conversation=conversation,
+        root_steps=list(steps.values()),
+        log=log,
+    )
+
+
+def install_invoke_capture(
+    step_cls: Any, current_recorder: Callable[[], Any], log: Any = print
+) -> None:
+    """Wrap ``step_cls.invoke_async`` so the leg's recorder (from
+    ``current_recorder()``) sees each step before it runs. Raises RuntimeError
+    when the method is missing or its parameters after ``self`` do not begin
+    with ``(inputs, conversation)``: a drifted signature must stop the runtime,
+    never record the wrong values or nothing. Idempotent. No recorder: the step
+    runs exactly as before. A recorder fault is logged and never fails the step."""
+    original = getattr(step_cls, "invoke_async", None)
+    if original is None:
+        raise RuntimeError(
+            "[step_snapshot] Step.invoke_async is missing: the step snapshot "
+            "capture cannot be installed"
+        )
+    if getattr(original, "__cinatra_patched__", False):
+        return
+    try:
+        signature = inspect.signature(original)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"[step_snapshot] Step.invoke_async signature unreadable: {exc}") from exc
+    names = [p.name for p in signature.parameters.values()]
+    if names[1 : 1 + len(INVOKE_ASYNC_PARAMETERS)] != list(INVOKE_ASYNC_PARAMETERS):
+        raise RuntimeError(
+            f"[step_snapshot] Step.invoke_async takes {tuple(names)}; the step "
+            f"snapshot capture needs (self, {', '.join(INVOKE_ASYNC_PARAMETERS)}, ...)"
+        )
+
+    async def _patched(self: Any, *args: Any, **kwargs: Any) -> Any:
+        recorder = current_recorder()
+        if recorder is not None:
+            try:
+                bound = signature.bind_partial(self, *args, **kwargs).arguments
+                recorder.observe(self, bound.get("inputs"), bound.get("conversation"))
+            except Exception as exc:
+                log(f"[step_snapshot] capture failed: {type(exc).__name__}")
+        return await original(self, *args, **kwargs)
+
+    _patched.__cinatra_patched__ = True  # type: ignore[attr-defined]
+    _patched.__wrapped__ = original  # type: ignore[attr-defined]
+    step_cls.invoke_async = _patched

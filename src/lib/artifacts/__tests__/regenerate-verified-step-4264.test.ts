@@ -52,7 +52,7 @@ describe("claimMaterialization records the verified filing step (T1)", () => {
     const { claimMaterialization } = await import("@/lib/artifacts/materialization-ledger");
     await claimMaterialization({ ...BASE, ...over } as Parameters<typeof claimMaterialization>[0]);
     const [text, values] = h.poolQuery.mock.calls[0] as [string, unknown[]];
-    expect(text).toMatch(/verified_step_id\)\s+VALUES \(.*\$13\)/s);
+    expect(text).toMatch(/verified_step_id\)\s+VALUES \([\s\S]*\$13\)/);
     expect(text).toMatch(/ON CONFLICT \(run_id, output_id, extension, content_hash\) DO NOTHING/);
     return values[12];
   }

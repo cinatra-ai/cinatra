@@ -42,8 +42,6 @@ export const CINATRA_STEP_SNAPSHOTS_METADATA_KEY = "cinatra_step_snapshots";
 export const CINATRA_STEP_SNAPSHOTS_CARRIER_PREFIX = "cinatra-step-snapshots-";
 /** The runtime drops a capture larger than this; the application refuses it too. */
 export const STEP_SNAPSHOT_MAX_BYTES = 512 * 1024;
-/** At most this many claims are read from one leg. */
-const STEP_SNAPSHOT_MAX_CLAIMS = 64;
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 const SNAPSHOT_ATTESTATION = /^n1:([0-9a-f]{64})$/;
@@ -115,10 +113,11 @@ export type SnapshotNodesDeps = {
 };
 
 async function defaultSnapshotNodesDeps(): Promise<SnapshotNodesDeps> {
-  const store = await import("./store");
+  // Named, read-only bindings: the store module's writers stay out of reach.
+  const { readAgentRunById, readAgentTemplateById } = await import("./store");
   return {
-    readRun: (runId) => store.readAgentRunById(runId),
-    readTemplate: (templateId) => store.readAgentTemplateById(templateId),
+    readRun: (runId) => readAgentRunById(runId),
+    readTemplate: (templateId) => readAgentTemplateById(templateId),
   };
 }
 
@@ -179,7 +178,8 @@ export type VerifiedStepSnapshot = {
 
 /**
  * Verify one claim for `runId` (the handler's own run). Answers the snapshot,
- * or null when the key is blank, the claim has another shape, the bytes are
+ * or null when the key is blank, the claim has another shape (sha256 and
+ * flow_sha256 are each 64 lowercase hex), the bytes are
  * over STEP_SNAPSHOT_MAX_BYTES or are not a JSON object, the sha256 does not
  * match the received bytes, or the attestation does not verify over
  * (runId, node, sha256, flow_sha256).
@@ -195,7 +195,8 @@ export function verifyStepSnapshotClaim(input: {
   const { node, inputs_json, sha256, flow_sha256, attestation } = claim;
   if (!nonEmptyString(node) || typeof inputs_json !== "string") return null;
   if (!nonEmptyString(sha256) || !SHA256_HEX.test(sha256)) return null;
-  if (!nonEmptyString(flow_sha256) || !nonEmptyString(attestation)) return null;
+  if (!nonEmptyString(flow_sha256) || !SHA256_HEX.test(flow_sha256)) return null;
+  if (!nonEmptyString(attestation)) return null;
   const bytes = Buffer.from(inputs_json, "utf8");
   if (bytes.length > STEP_SNAPSHOT_MAX_BYTES) return null;
   if (createHash("sha256").update(bytes).digest("hex") !== sha256) return null;
@@ -215,7 +216,11 @@ export function verifyStepSnapshotClaim(input: {
 
 type HistoryLike = { role?: unknown; metadata?: unknown; messageId?: unknown; message_id?: unknown };
 
-/** Every snapshot claim on the agent messages of `history`, in order (bounded). */
+/**
+ * Every snapshot claim on the agent messages of `history`, in order. None is
+ * left out: the node list is the complete union the template declares, so a
+ * leg carries one claim per recorded node and every one is verified.
+ */
 export function extractStepSnapshotClaims(history: ReadonlyArray<HistoryLike> | undefined): unknown[] {
   const out: unknown[] = [];
   for (const message of history ?? []) {
@@ -224,10 +229,7 @@ export function extractStepSnapshotClaims(history: ReadonlyArray<HistoryLike> | 
     if (!plainObject(metadata)) continue;
     const claims = metadata[CINATRA_STEP_SNAPSHOTS_METADATA_KEY];
     if (!Array.isArray(claims)) continue;
-    for (const claim of claims) {
-      if (out.length >= STEP_SNAPSHOT_MAX_CLAIMS) return out;
-      out.push(claim);
-    }
+    for (const claim of claims) out.push(claim);
   }
   return out;
 }
@@ -270,11 +272,9 @@ export type StepSnapshotWriter = (row: StepSnapshotRow) => Promise<StepSnapshotW
 
 /** The store write: insert once per (run, node); a different second value marks the row ambiguous. */
 export async function writeStepSnapshotRow(row: StepSnapshotRow): Promise<StepSnapshotWriteOutcome> {
-  const [{ db }, { agentRunStepSnapshots: t }, { and, eq }] = await Promise.all([
-    import("./db"),
-    import("./schema"),
-    import("drizzle-orm"),
-  ]);
+  const { db } = await import("./db");
+  const { agentRunStepSnapshots: t } = await import("./schema");
+  const { and, eq } = await import("drizzle-orm");
   const inserted = await db
     .insert(t)
     .values({
