@@ -21,7 +21,7 @@ function shaOf(entries: LockEntry[], packageName: string): string | undefined {
 describe("the Drupal connector pin for the development-site leg (cinatra#4226)", () => {
   it("pins drupal-mcp-connector in the dev lock to a merged commit that contains its development-site leg", () => {
     expect(shaOf(readLock("cinatra-dev-extensions.lock.json"), "@cinatra-ai/drupal-mcp-connector")).toBe(
-      "78e71e78db8f218fa17e0944d44951ad90eaf328",
+      "a5afea719dda12ca21003415db35b89b4d304965",
     );
   });
 

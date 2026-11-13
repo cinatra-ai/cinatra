@@ -1,6 +1,7 @@
-// cinatra#3924: the Drupal connector pin tracks the merged commit that hands over the node's
-// language from the live node read and binds a path-only language to the node's translations
-// (drupal-mcp-connector#104), on top of the save through the host's owner binding (#101).
+// cinatra#3924: the Drupal connector pin tracks the merged commit that reads a node through
+// the Cinatra module reader when the endpoint serves only the module tools
+// (drupal-mcp-connector#105), on top of the node language hand-over (#104) and the save
+// through the host's owner binding (#101).
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -17,10 +18,10 @@ function shaOf(entries: LockEntry[], packageName: string): string | undefined {
   return entries.find((p) => p.packageName === packageName)?.resolvedSha;
 }
 
-describe("the Drupal connector pin for the node language change (cinatra#3924)", () => {
+describe("the Drupal connector pin for the module reader fallback (cinatra#3924)", () => {
   it("pins drupal-mcp-connector in the dev lock to its merged commit", () => {
     expect(shaOf(readLock("cinatra-dev-extensions.lock.json"), "@cinatra-ai/drupal-mcp-connector")).toBe(
-      "78e71e78db8f218fa17e0944d44951ad90eaf328",
+      "a5afea719dda12ca21003415db35b89b4d304965",
     );
   });
 
