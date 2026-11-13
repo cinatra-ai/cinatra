@@ -572,23 +572,36 @@ export async function publishAgentPackageFromGitDir(
   //   1. cinatra/oas.json — canonical
   //   2. cinatra/agent.json — transitional
   //   3. agent.json — flat legacy
+  // cinatra#4264: the source is read ONCE, as bytes. The compile is handed
+  // these bytes and the tarball ships them; the path is never opened again.
   let oasSourcePath: string | null = null;
-  let raw: string | null = null;
+  let oasBytes: Buffer | null = null;
   for (const candidate of [
     path.join(input.agentDir, "cinatra", "oas.json"),
     path.join(input.agentDir, "cinatra", "agent.json"),
     path.join(input.agentDir, "agent.json"),
   ]) {
     try {
-      raw = await readFile(candidate, "utf8");
+      oasBytes = await readFile(candidate);
       oasSourcePath = candidate;
       break;
     } catch {
       // try next rung
     }
   }
-  if (!oasSourcePath || raw === null) {
+  if (!oasSourcePath || oasBytes === null) {
     throw new Error(`Cannot read oas.json or agent.json from ${input.agentDir}`);
+  }
+  let raw: string;
+  try {
+    // Fatal decode: a byte that is not valid UTF-8 refuses the publish instead
+    // of decoding to U+FFFD. The BOM is kept, as readFile(..., "utf8") keeps it.
+    raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(oasBytes);
+  } catch {
+    throw new Error(
+      `publishAgentPackageFromGitDir: ${oasSourcePath} is not valid UTF-8 ` +
+        `(${packageName}@${packageVersion}, cinatra#4264)`,
+    );
   }
   let gitAgentJson: Record<string, unknown>;
   try {
@@ -613,7 +626,7 @@ export async function publishAgentPackageFromGitDir(
   let compiledTaskSpec: string | null = null;
   let compiledAgentType: string | null = null;
   let compiledHitlScreens: string[] | null = null;
-  const compileResult = await compileOasAgentJson({ packageName, oasSourcePath }).catch((error: unknown) => {
+  const compileResult = await compileOasAgentJson({ packageName, oasSourcePath, oasSource: oasBytes }).catch((error: unknown) => {
     throw new Error(
       `publishAgentPackageFromGitDir: compile failed for ${packageName}@${packageVersion} ` +
         `(cinatra#4264): ${error instanceof Error ? error.message : String(error)}`,
@@ -625,16 +638,8 @@ export async function publishAgentPackageFromGitDir(
         `(cinatra#4264): ${compileResult.error}`,
     );
   }
-  // cinatra#4264: the compile read the file itself. Refuse when the file no
-  // longer holds the bytes read above; the tarball ships exactly those bytes.
-  const oasAfterCompile = await readFile(oasSourcePath, "utf8").catch(() => null);
-  if (oasAfterCompile !== raw) {
-    throw new Error(
-      `publishAgentPackageFromGitDir: ${oasSourcePath} changed during the compile for ` +
-        `${packageName}@${packageVersion} (cinatra#4264); publish again`,
-    );
-  }
-  const compiledOasSource = raw;
+  // cinatra#4264: the compile was handed these exact bytes; the tarball ships them.
+  const compiledOasSource: Buffer = oasBytes;
   const oasRelPath = path.relative(input.agentDir, oasSourcePath).split(path.sep).join("/");
   {
     const v = compileResult.value;
@@ -992,7 +997,7 @@ export async function publishAgentPackageFromGitDir(
       await mkdir(path.dirname(dstPath), { recursive: true });
       if (file.relPath === oasRelPath) {
         // The compiled bytes, never a second read of the source file.
-        await writeFile(dstPath, compiledOasSource, "utf8");
+        await writeFile(dstPath, compiledOasSource);
       } else if (file.isBinary) {
         // Preserve binary content verbatim (do not UTF-8-decode + re-encode).
         const bytes = await readFile(file.absPath);
