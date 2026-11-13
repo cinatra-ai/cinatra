@@ -85,6 +85,10 @@ from context_subflow_injection import (
     inject_context_subflows,
 )
 
+# cinatra#4264 — the step snapshots a Regenerate reruns from (pure module next
+# to this file in the image; see step_snapshot.py for the contract).
+import step_snapshot as _step_snapshot
+
 try:  # pragma: no cover — exercised inside the Docker image only
     from wayflowcore.agentserver import A2AServer  # type: ignore[import-not-found]
     from wayflowcore.agentspec import AgentSpecLoader  # type: ignore[import-not-found]
@@ -114,6 +118,13 @@ _WAYFLOW_CONTEXT_ID: contextvars.ContextVar[str] = contextvars.ContextVar(
 #: unique-index row) instead of a body-selected id. Reset to "" between tasks.
 _WAYFLOW_RUN_TOKEN: contextvars.ContextVar[str] = contextvars.ContextVar(
     "_WAYFLOW_RUN_TOKEN", default=""
+)
+
+#: cinatra#4264: the step-snapshot recorder of the task executing in this
+#: asyncio task (None when the message lists no node). Set per leg in the
+#: patched run_task, read by the patched Step.invoke_async, reset after.
+_STEP_SNAPSHOT_RECORDER: contextvars.ContextVar[Any] = contextvars.ContextVar(
+    "_STEP_SNAPSHOT_RECORDER", default=None
 )
 
 #: The reserved initial-message key under which the Cinatra dispatcher embeds the
@@ -1199,6 +1210,7 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
         # turns it into a real try/finally reset alongside the run token.)
         _ctx_token = None
         _rt_token = None
+        _snap_token = None
 
         try:
             task = await self.storage.load_task(params["id"])
@@ -1327,6 +1339,23 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
             from typing import cast as _cast
             conversation = _cast(object, conversation)
 
+            # cinatra#4264: record the listed nodes' inputs in THIS leg (the
+            # initial message and every resume carry the list). The root
+            # conversation is the one about to execute; a step of a subflow
+            # runs in a sub-conversation and is not recorded.
+            _snap_request = _step_snapshot.read_snapshot_request(params.get("message"))
+            _snap_flow_sha = getattr(self.assistant, "_cinatra_flow_sha256", "") or ""
+            _snap_recorder = None
+            if _snap_request is not None and _snap_flow_sha:
+                _snap_recorder = _step_snapshot.SnapshotRecorder(
+                    run_id=_snap_request["run_id"],
+                    nodes=_snap_request["nodes"],
+                    flow_sha256=_snap_flow_sha,
+                    key=os.environ.get("CINATRA_CONTEXT_ATTEST_KEY"),
+                    root_conversation=conversation,
+                )
+            _snap_token = _STEP_SNAPSHOT_RECORDER.set(_snap_recorder)
+
             a2a_input_message = params["message"]
             wayflow_input_message = _convert_a2a_messages_to_wayflow_messages(
                 [a2a_input_message]
@@ -1417,6 +1446,12 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
                 else:
                     task_state = "completed"
 
+                # cinatra#4264: the leg's step snapshots ride its last message.
+                if _snap_recorder is not None:
+                    _step_snapshot.attach_step_snapshots(
+                        new_a2a_messages, _snap_recorder.snapshots(), str(task["id"])
+                    )
+
                 await self.storage.update_task(
                     task["id"],
                     state=task_state,
@@ -1459,6 +1494,8 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
             # coroutine chain. Reset ONLY when set (load_task may raise first) —
             # this is the real try/finally reset the prior dead _ctx_token
             # capture never performed. Reset the run token first (LIFO wrt set).
+            if _snap_token is not None:
+                _STEP_SNAPSHOT_RECORDER.reset(_snap_token)
             if _rt_token is not None:
                 _WAYFLOW_RUN_TOKEN.reset(_rt_token)
             if _ctx_token is not None:
@@ -2126,6 +2163,45 @@ def _patch_pyagentspec_is_python_primitive_type_guard() -> None:
         "[agent_loader] _DeserializationContextImpl._is_python_primitive_type patched "
         "(guard against TypeError on non-class annotations)"
     )
+
+
+def _patch_step_snapshot_capture() -> None:
+    """cinatra#4264: record a listed node's FULL resolved inputs before it runs.
+
+    wayflowcore calls ``Step.invoke_async(inputs, conversation)`` with the
+    inputs the flow resolved for the step. When the leg's recorder (set by the
+    patched run_task from the message's ``cinatra_snapshot_nodes``) is present,
+    the wrapper hands it the step id, the inputs and the conversation; the
+    recorder keeps only a listed TOP-LEVEL node of the root flow (its
+    conversation is the root conversation itself). No recorder (the message
+    listed no node): nothing is read and the step runs exactly as before. A
+    fault of the recorder is logged and never fails the step.
+    """
+    try:
+        from wayflowcore import Step  # type: ignore[import-not-found]
+    except Exception as exc:  # pragma: no cover
+        print(f"[agent_loader] WARNING: step snapshot patch import failed: {exc}")
+        return
+    _original = getattr(Step, "invoke_async", None)
+    if _original is None:
+        print("[agent_loader] WARNING: Step.invoke_async missing; step snapshots unavailable")
+        return
+    if getattr(_original, "__cinatra_patched__", False):
+        return  # idempotent
+
+    async def _patched(self: Any, *args: Any, **kwargs: Any) -> Any:
+        recorder = _STEP_SNAPSHOT_RECORDER.get()
+        if recorder is not None:
+            try:
+                inputs = args[0] if len(args) > 0 else kwargs.get("inputs")
+                conversation = args[1] if len(args) > 1 else kwargs.get("conversation")
+                recorder.observe(getattr(self, "id", None), inputs, conversation)
+            except Exception as exc:
+                print(f"[agent_loader] step snapshot capture failed: {type(exc).__name__}")
+        return await _original(self, *args, **kwargs)
+
+    _patched.__cinatra_patched__ = True  # type: ignore[attr-defined]
+    Step.invoke_async = _patched  # type: ignore[assignment]
 
 
 def _patch_parallel_flow_node_extended_order() -> None:
@@ -4455,6 +4531,14 @@ def _mount_one_sync(
                 "(mount-time log above remains authoritative)"
             )
 
+    # cinatra#4264: the flow version a step snapshot is signed for (the
+    # composed document's sha256 when the loader composed one, else the source
+    # fingerprint), read by the patched run_task.
+    try:
+        setattr(agent, "_cinatra_flow_sha256", composed_sha256 or fingerprint)
+    except Exception:
+        print(f"[agent_loader] WARNING: {label}: flow sha not attached; step snapshots unavailable")
+
     server = A2AServer()
     mount_url = f"{base_url}/agents/{vendor}/{slug}/"
     server.serve_agent(agent, url=mount_url)
@@ -5036,6 +5120,7 @@ def build_parent_app(agents_dir: Path) -> Starlette:
     _patch_pyagentspec_deserialization_error_mask()  # pyagentspec error unmask
     _patch_pyagentspec_is_python_primitive_type_guard()  # non-class annotation guard
     _patch_parallel_flow_node_extended_order()       # Extended ParallelFlowNode order
+    _patch_step_snapshot_capture()             # cinatra#4264 step snapshots
     _validate_live_class_names()
 
     if A2AServer is None or AgentSpecLoader is None:

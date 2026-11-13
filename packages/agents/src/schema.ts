@@ -1115,10 +1115,33 @@ export const lifecycleRepair = cinatraSchema.table("lifecycle_repair", {
   updatedAt:                       timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   // cinatra#4245: the run's pause_generation the change request ended (core__0126).
   pausedRunGeneration:             bigint("paused_run_generation", { mode: "number" }),
+  // cinatra#4264 (core__0127): the Regenerate intent (NULL = an ordinary
+  // repair) and the source target a segment repair names.
+  regenerateNodeId:                text("regenerate_node_id"),
+  sourceArtifactId:                text("source_artifact_id"),
+  sourceRepresentationRevisionId:  text("source_representation_revision_id"),
 }, (t) => ({
   gateUniq:    uniqueIndex("lifecycle_repair_gate_uniq").on(t.gateId),
   lineageIdx:  index("lifecycle_repair_lineage_idx").on(t.lineageId),
   statusIdx:   index("lifecycle_repair_status_idx").on(t.status, t.createdAt),
+  successorIdx: index("lifecycle_repair_successor_idx").on(t.successorArtifactId, t.successorRepresentationRevisionId),
+}));
+
+/** The step snapshots of a run (cinatra#4264, core__0127): per (run, node) the
+ * node's full resolved input exactly as the flow runtime serialized it, its
+ * sha256 and the flow version's sha256. Removed with the run (ON DELETE
+ * CASCADE). `ambiguous` = a second, different snapshot of the same node came. */
+export const agentRunStepSnapshots = cinatraSchema.table("agent_run_step_snapshots", {
+  orgId:        text("org_id").notNull(),
+  runId:        text("run_id").notNull().references(() => agentRuns.id, { onDelete: "cascade" }),
+  nodeId:       text("node_id").notNull(),
+  inputsJson:   text("inputs_json").notNull(),
+  inputsSha256: text("inputs_sha256").notNull(),
+  flowSha256:   text("flow_sha256").notNull(),
+  ambiguous:    boolean("ambiguous").notNull().default(false),
+  createdAt:    timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.runId, t.nodeId] }),
 }));
 
 /** ROUTED ADDITION — the AC-6 rejected-recommendation efficacy row (S3 computed it

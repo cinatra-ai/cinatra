@@ -534,6 +534,7 @@ import {
   encodeScheduleRunRef,
 } from "@/lib/lifecycle/lifecycle-card-ref";
 import { buildWayflowInitialMessagePayload } from "./wayflow-dispatch-payload";
+import { persistStepSnapshots, snapshotNodesMetadata, stripStepSnapshotClaims } from "./step-snapshots";
 import {
   inventoryReviewTargets,
   nextUnresolvedLeg,
@@ -2233,6 +2234,16 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   const { runId, run, fromStatus, task, authority } = args;
   const taskState = task.status?.state;
 
+  // cinatra#4264 — the step snapshots this leg carries, verified against THIS
+  // handler's own runId (never an id read from the response) and stored BEFORE
+  // the resync below, so a response naming another run's task or context cannot
+  // land that run's snapshots here. Never throws; a fault is logged.
+  await persistStepSnapshots({
+    runId,
+    orgId: run.orgId,
+    history: (task as { history?: ReadonlyArray<{ role?: unknown; metadata?: unknown }> }).history,
+  });
+
   // Defensive resync (idempotent if unchanged): persist task.id / contextId
   // so the next resume's reverse-lookup by a2aTaskId still finds the run if
   // WayFlow assigned a new task ID. updateAgentRunA2ATaskId is an
@@ -3086,7 +3097,10 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   const endNodeOutputs = extractCinatraEndNodeOutputs(rawHistory);
   // The pause claims (cinatra#3745) are recorded at their interrupts; the
   // stored history keeps its messages and drops only the claims.
-  const history = stripCinatraGateNodeClaims(stripCinatraEndNodeOutputMessages(rawHistory));
+  // cinatra#4264: the step snapshots live in agent_run_step_snapshots only.
+  const history = stripStepSnapshotClaims(
+    stripCinatraGateNodeClaims(stripCinatraEndNodeOutputMessages(rawHistory)),
+  );
   // A2A spec: role is "user" | "agent". Cinatra also emits "assistant". Accept BOTH.
   const lastAgentMessage = history?.slice().reverse().find((m) => m?.role === "agent" || m?.role === "assistant");
   // Narrow parts at access time — the signature accepts `unknown[]` so all three
@@ -4986,6 +5000,14 @@ async function runAgentBuilderExecutionJobInner(
         runId: run.id,
         runToken: runToken.token,
       });
+      // cinatra#4264: the nodes whose inputs the runtime records, from the
+      // template's stored `regenerate` declaration. No declaration, or a repair
+      // run: {} and the message carries no metadata, exactly as before.
+      const snapshotMetadata = snapshotNodesMetadata({
+        runId: run.id,
+        sourceType: run.sourceType,
+        lifecycleConfig: template.lifecycleConfig ?? null,
+      });
       // #813: bind a fasta2a contextId to the run BEFORE the blocking sendTask.
       // WayFlow's flow calls back POST /api/context-resolve DURING sendTask with
       // this contextId (x-cinatra-a2a-context-id); readAgentRunByContextId must
@@ -5006,6 +5028,7 @@ async function runAgentBuilderExecutionJobInner(
           messageId: randomUUID(),
           contextId: dispatchContextId,
           parts: [{ kind: "text", text: JSON.stringify(initialMessagePayload) }],
+          ...(Object.keys(snapshotMetadata).length > 0 ? { metadata: snapshotMetadata } : {}),
         },
         configuration: { acceptedOutputModes: ["text"] },
       });

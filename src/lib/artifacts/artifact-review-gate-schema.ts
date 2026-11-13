@@ -825,6 +825,17 @@ export function lifecycleRepairSchemaQueries(schemaName: string): QueryInput[] {
     // the drain's stop can be conditioned on it. Nullable, no backfill: a repair
     // recorded before the column reads NULL. Migration twin core__0126.
     { text: `ALTER TABLE "${q}"."lifecycle_repair" ADD COLUMN IF NOT EXISTS paused_run_generation bigint` },
+    // cinatra#4264 (slice B1a; migration twin core__0127): the Regenerate
+    // intent (the filing node a Regenerate reruns; NULL = an ordinary repair)
+    // and the source target a segment repair names. Nullable, no backfill.
+    { text: `ALTER TABLE "${q}"."lifecycle_repair" ADD COLUMN IF NOT EXISTS regenerate_node_id text` },
+    { text: `ALTER TABLE "${q}"."lifecycle_repair" ADD COLUMN IF NOT EXISTS source_artifact_id text` },
+    { text: `ALTER TABLE "${q}"."lifecycle_repair" ADD COLUMN IF NOT EXISTS source_representation_revision_id text` },
+    // The provenance reader walks a refiled successor back to its base.
+    {
+      text: `CREATE INDEX IF NOT EXISTS lifecycle_repair_successor_idx
+  ON "${q}"."lifecycle_repair" (successor_artifact_id, successor_representation_revision_id)`,
+    },
 
     // -----------------------------------------------------------------------
     // ROUTED ADDITION — the AC-6 rejected-recommendation efficacy row (S3).
