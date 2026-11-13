@@ -113,6 +113,7 @@ vi.mock("@/components/data-safety/undo-toast", () => ({
 }));
 
 import { resetDrawnRecommendationReadings } from "../../../agents/src/run-recommendation-reading-register";
+import { LIFECYCLE_RECOMMENDATION_HOLD_PATH } from "@cinatra-ai/agents/lifecycle-card-runtime";
 import { installWidgetServiceStub, surfaceElement } from "./conversation-column-harness";
 
 /** The dispatch turn a chat start produces: the durable part and its line. */
@@ -187,6 +188,15 @@ const continueOf = (c: HTMLElement) =>
 
 let stub: ReturnType<typeof installWidgetServiceStub> | null = null;
 
+/** The widget's broker reads of THIS run's recommendation hold, and nothing
+ *  else: the HITL screen card posts the same `{ runId }` to its own route. */
+const holdReads = () =>
+  stub!.calls.filter(
+    (call) =>
+      call.url === LIFECYCLE_RECOMMENDATION_HOLD_PATH &&
+      String(call.init.body ?? "") === JSON.stringify({ runId: RUN_ID }),
+  ).length;
+
 beforeEach(() => {
   run.started = false;
   run.cookieReads = 0;
@@ -203,6 +213,11 @@ afterEach(() => {
   stub?.restore();
   stub = null;
 });
+
+/** The card's reads of its authority on this surface: the session action in
+ *  the chat, the broker's hold route in the widget. */
+const authorityReads = (surface: "chat" | "widget") =>
+  surface === "chat" ? run.cookieReads : holdReads();
 
 async function editableThenReadOnly(surface: "chat" | "widget") {
   let focused = 0;
@@ -225,6 +240,8 @@ async function editableThenReadOnly(surface: "chat" | "widget") {
     );
 
     // THE RUN STARTS: its row reads `running`, and the authority says so.
+    const readsBeforeStart = authorityReads(surface);
+    expect(readsBeforeStart).toBeGreaterThanOrEqual(1);
     run.started = true;
 
     // No reload, no remount, no focus event: the same turn redraws.
@@ -238,6 +255,11 @@ async function editableThenReadOnly(surface: "chat" | "widget") {
       "false",
     ]);
     expect(focused).toBe(0);
+    // The card goes read-only on the turn's row reading during render, while its
+    // re-read of the authority is asked from an effect of that same commit, so
+    // the re-read can be issued just after the redraw. Wait for a read issued
+    // AFTER the start, never assume it already ran.
+    await waitFor(() => expect(authorityReads(surface)).toBeGreaterThan(readsBeforeStart));
     return container;
   } finally {
     window.removeEventListener("focus", onFocus);
@@ -255,10 +277,7 @@ describe("the skills card settles when the run starts, without a reload", () => 
     await editableThenReadOnly("widget");
     // The widget arm never touches the cookie road; it reads through its broker.
     expect(run.cookieReads).toBe(0);
-    const holdReads = stub!.calls.filter(
-      (call) => !call.url.startsWith(RUN_SEED) && String(call.init.body ?? "").includes(RUN_ID),
-    );
-    expect(holdReads.length).toBeGreaterThanOrEqual(2);
+    expect(holdReads()).toBeGreaterThanOrEqual(2);
     for (const call of stub!.calls) expect(call.init.credentials).toBe("omit");
   }, 30_000);
 });
