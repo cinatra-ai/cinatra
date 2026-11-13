@@ -35,8 +35,15 @@ const claimAgentTemplateIdentity = vi.fn(
   ) => ({ mode: "created" as const, created: await ops.insert() }),
 );
 
+// Review 2: the existing-row quarantine write (the stale list is removed from
+// the stored column under the row's own claim).
+const updateAgentTemplate = vi.fn(
+  async (id: string, _patch: Record<string, unknown>, _claim?: unknown) => ({ id }) as unknown,
+);
 vi.mock("../store", () => ({
   readAgentTemplateByPackageName: (p: string) => readAgentTemplateByPackageName(p),
+  updateAgentTemplate: (id: string, patch: Record<string, unknown>, claim?: unknown) =>
+    updateAgentTemplate(id, patch, claim),
 }));
 vi.mock("../import-export-actions", () => ({
   createLocalAgentTemplateVersion: (input: { seed: Record<string, unknown> }) =>
@@ -44,6 +51,8 @@ vi.mock("../import-export-actions", () => ({
 }));
 vi.mock("../agent-template-identity", () => ({
   PLATFORM_IDENTITY_CLAIM: { kind: "platform" },
+  claimOfAuthorizedTemplate: (row: { orgId: string | null }) =>
+    row.orgId ? { kind: "organization", orgId: row.orgId } : { kind: "platform" },
   claimAgentTemplateIdentity: (...args: unknown[]) =>
     claimAgentTemplateIdentity(...(args as Parameters<typeof claimAgentTemplateIdentity>)),
 }));
@@ -199,17 +208,52 @@ describe("ensureBundledAgentTemplateRecord", () => {
     const KEPT = [{ artifactNode: "call_llm_bridge", step: "call_llm_bridge", noteInput: "user" }];
     const STALE = [{ artifactNode: "file_image", step: "image_flow", noteInput: "prompt" }];
 
-    it("REFUSES an existing row whose stored list the image's flow no longer honours", async () => {
+    it("QUARANTINES a stale stored list: removes ONLY the list from the column, then refuses (review 2)", async () => {
+      // Enforced, not only logged: the row keeps every other lifecycle key,
+      // but a regenerate reader finds no list naming a step the mounted flow
+      // lacks. The boot still reports the package (the throw).
       const { seedDir } = await stageSeed();
       readAgentTemplateByPackageName.mockResolvedValue({
         id: "tpl_existing",
+        orgId: null,
+        lifecycleConfig: JSON.stringify({ repairCapable: true, regenerate: STALE }),
+      });
+      await expect(
+        ensureBundledAgentTemplateRecord({ packageName: PACKAGE_NAME, packageVersion: VERSION, seedDir }),
+      ).rejects.toThrow(/REGENERATE_DECLARATION_INVALID/);
+      expect(updateAgentTemplate).toHaveBeenCalledTimes(1);
+      expect(updateAgentTemplate.mock.calls[0]).toEqual([
+        "tpl_existing",
+        { lifecycleConfig: '{"repairCapable":true}' },
+        { kind: "platform" },
+      ]);
+      expect(claimAgentTemplateIdentity).not.toHaveBeenCalled();
+      expect(createLocalAgentTemplateVersion).not.toHaveBeenCalled();
+    });
+
+    it("a tenant row is quarantined under ITS OWN claim; a list-only column becomes NULL (review 2)", async () => {
+      const { seedDir } = await stageSeed();
+      readAgentTemplateByPackageName.mockResolvedValue({
+        id: "tpl_tenant",
+        orgId: "org-9",
         lifecycleConfig: JSON.stringify({ regenerate: STALE }),
       });
       await expect(
         ensureBundledAgentTemplateRecord({ packageName: PACKAGE_NAME, packageVersion: VERSION, seedDir }),
       ).rejects.toThrow(/REGENERATE_DECLARATION_INVALID/);
-      expect(claimAgentTemplateIdentity).not.toHaveBeenCalled();
-      expect(createLocalAgentTemplateVersion).not.toHaveBeenCalled();
+      expect(updateAgentTemplate.mock.calls[0]).toEqual([
+        "tpl_tenant",
+        { lifecycleConfig: null },
+        { kind: "organization", orgId: "org-9" },
+      ]);
+    });
+
+    it("an EMPTY stored lifecycle text is unreadable too and refuses (review 2)", async () => {
+      const { seedDir } = await stageSeed();
+      readAgentTemplateByPackageName.mockResolvedValue({ id: "tpl_existing", lifecycleConfig: "" });
+      await expect(
+        ensureBundledAgentTemplateRecord({ packageName: PACKAGE_NAME, packageVersion: VERSION, seedDir }),
+      ).rejects.toThrow(/stored lifecycle declaration cannot be read/);
     });
 
     it("REFUSES an existing row whose stored lifecycle text cannot be read (review 1 finding 6)", async () => {
@@ -236,6 +280,7 @@ describe("ensureBundledAgentTemplateRecord", () => {
       });
       expect(outcome).toEqual({ outcome: "exists" });
       expect(createLocalAgentTemplateVersion).not.toHaveBeenCalled();
+      expect(updateAgentTemplate).not.toHaveBeenCalled();
     });
   });
 

@@ -99,6 +99,8 @@ vi.mock("../oas-compiler", () => ({
   compileOasAgentJson: mockCompile,
   injectCinatraLlmIntoApiNodes: vi.fn(),
   normalizeOasJsonForExport: vi.fn((x: unknown) => x),
+  // Review 2 note: the real module graph imports it (validate-agent-json.ts).
+  validateOasFlowStructural: vi.fn(() => []),
 }));
 vi.mock("@/lib/background-jobs", () => ({
   enqueueBackgroundJob: vi.fn(async () => undefined),
@@ -179,7 +181,9 @@ async function writeFixture(): Promise<void> {
   await fs.writeFile(oasPath, JSON.stringify(OAS, null, 2), "utf-8");
   await fs.writeFile(
     path.join(path.dirname(dir), "package.json"),
-    JSON.stringify({ name: PKG, version: "0.1.0" }, null, 2),
+    // Review 2: the manifest declares the lifecycle block the success readings
+    // below report, so the handler's snapshot binding sees the same manifest.
+    JSON.stringify({ name: PKG, version: "0.1.0", cinatra: { lifecycle: { repairCapable: true } } }, null, 2),
     "utf-8",
   );
 }
@@ -293,7 +297,7 @@ describe("cinatra#4264 A1b — agent_source_compile revalidates and projects the
   it("no stored row: the compile gets no retained list", async () => {
     // The fixture's package.json is readable, so the compile's own reading is
     // readable too (a manifest without a block); review 1 binds the two.
-    const siblingLifecycle = { readable: true, lifecycle: undefined };
+    const siblingLifecycle = { readable: true, lifecycle: { repairCapable: true } };
     mockCompile.mockResolvedValue({ ok: true, value: compiledValue, siblingLifecycle });
     await runCompile();
     expect((mockCompile.mock.calls[0][0] as { retainedRegenerate?: unknown }).retainedRegenerate).toBeUndefined();
@@ -390,6 +394,67 @@ describe("cinatra#4264 A1b review 1 — agent_source_compile works on one snapsh
     const result = await runCompile();
     expect(result.error).toMatch(/update failed/);
     expect((await fs.stat(oasPath)).mtimeMs).toBe(stat.mtimeMs);
+  });
+
+  it("review 2 finding 3: an ABSENT package.json reads the row the OAS names, never the bare slug", async () => {
+    await fs.rm(manifestPath());
+    mockCompile.mockResolvedValue({ ok: true, value: { ...compiledValue, packageName: null }, siblingLifecycle: { readable: false } });
+    await runCompile();
+    expect(mockReadTemplate).toHaveBeenCalledWith(PKG);
+    expect(mockReadTemplate).not.toHaveBeenCalledWith(SLUG);
+  });
+
+  it("review 2 finding 3: a package.json WITHOUT a name reads the row the OAS names, never the bare slug", async () => {
+    await fs.writeFile(manifestPath(), JSON.stringify({ version: "0.1.0" }), "utf-8");
+    mockCompile.mockResolvedValue({
+      ok: true,
+      value: { ...compiledValue, packageName: null },
+      siblingLifecycle: { readable: true, lifecycle: undefined },
+    });
+    await runCompile();
+    expect(mockReadTemplate).toHaveBeenCalledWith(PKG);
+    expect(mockReadTemplate).not.toHaveBeenCalledWith(SLUG);
+  });
+
+  it("review 2 finding 3: a package.json rewritten during the compile (same name, new version) REFUSES (no sync, no write)", async () => {
+    mockCompile.mockImplementation(async () => {
+      await fs.writeFile(
+        manifestPath(),
+        JSON.stringify({ name: PKG, version: "2.0.0", cinatra: { lifecycle: { repairCapable: true } } }, null, 2),
+        "utf-8",
+      );
+      return { ok: true, value: compiledValue, siblingLifecycle: okReading };
+    });
+    const stat = await fs.stat(oasPath);
+    const result = await runCompile();
+    expect(result.error).toMatch(/changed while/);
+    expect(mockSync).not.toHaveBeenCalled();
+    expect((await fs.stat(oasPath)).mtimeMs).toBe(stat.mtimeMs);
+  });
+
+  it("review 2 finding 3: a compile reading whose lifecycle block differs from the handler's manifest REFUSES", async () => {
+    mockCompile.mockResolvedValue({
+      ok: true,
+      value: compiledValue,
+      siblingLifecycle: { readable: true, lifecycle: { repairCapable: true, regenerate: [] } },
+    });
+    const result = await runCompile();
+    expect(result.error).toMatch(/changed while/);
+    expect(mockSync).not.toHaveBeenCalled();
+  });
+
+  it("review 2 finding 4: the source is replaced atomically (temp file + rename), so a read-only file is still replaced whole", async () => {
+    // An in-place write opens and truncates the file itself (here refused by
+    // its mode, elsewhere torn by ENOSPC/EIO after the row committed). A
+    // rename in the same directory swaps the whole file or nothing. (Run as an
+    // ordinary user: a superuser ignores the mode.)
+    mockCompile.mockResolvedValue({ ok: true, value: compiledValue, siblingLifecycle: okReading });
+    await fs.chmod(oasPath, 0o444);
+    const result = await runCompile();
+    expect(result.error).toBeUndefined();
+    expect(mockSync).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(await fs.readFile(oasPath, "utf-8"))).toEqual(OAS);
+    expect((await fs.readdir(path.dirname(oasPath))).sort()).toEqual(["oas.json"]);
   });
 
   it("finding 6: stored lifecycle text that cannot be read REFUSES before the compile", async () => {

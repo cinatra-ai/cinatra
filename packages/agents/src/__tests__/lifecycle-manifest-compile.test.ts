@@ -316,7 +316,7 @@ describe("cinatra#4264 A1: the regenerate declaration", () => {
     expect(readStoredRegenerate(JSON.stringify({ regenerate: [{ ...image, extra: 1 }] }))).toEqual([
       { ...image, extra: 1 },
     ]);
-    for (const text of [null, undefined, "", JSON.stringify({ repairCapable: true })]) {
+    for (const text of [null, undefined, JSON.stringify({ repairCapable: true })]) {
       expect(readStoredRegenerate(text)).toBeUndefined();
     }
   });
@@ -328,7 +328,9 @@ describe("cinatra#4264 A1: the regenerate declaration", () => {
     const { readStoredRegenerate } = lifecyclePolicy as unknown as {
       readStoredRegenerate: (text: string | null | undefined) => unknown;
     };
-    for (const text of ['{"regenerate":[{"artifactNode":"file_ima', "{ not json", "[]", "null", "7"]) {
+    // Review 2: the EMPTY text too. The column is JSON text or NULL; "" is not
+    // a declaration of "no list", it is text that cannot be read.
+    for (const text of ["", '{"regenerate":[{"artifactNode":"file_ima', "{ not json", "[]", "null", "7"]) {
       expect(() => readStoredRegenerate(text)).toThrow(/stored lifecycle declaration cannot be read/);
     }
   });

@@ -29,8 +29,11 @@ const AGENT_JSON_PATH = "/agents/cinatra-ai/synthetic-gemini-agent/cinatra/oas.j
 const gemini = JSON.parse(
   readFileSync(join(__dirname, "fixtures", "synthetic-gemini-agent.json"), "utf8"),
 ) as { metadata: { cinatra: Record<string, unknown> } };
+const GEMINI_NO_IDENTITY = JSON.stringify(gemini);
 gemini.metadata.cinatra = { ...gemini.metadata.cinatra, packageName: PKG };
-const OAS_CONTENT = JSON.stringify(gemini);
+const GEMINI_WITH_IDENTITY = JSON.stringify(gemini);
+/** The OAS on disk; review 2 also drives one WITHOUT metadata.cinatra.packageName. */
+let OAS_CONTENT = GEMINI_WITH_IDENTITY;
 
 // The fixture's ApiNode files its own output from the start's `user` input.
 const KEPT = [{ artifactNode: "call_llm_bridge", step: "call_llm_bridge", noteInput: "user" }];
@@ -87,7 +90,17 @@ vi.mock("../reserved-workspace-slugs", () => ({
   isReservedWorkspaceSlug: () => false,
 }));
 
-import { ensureAgentPackageFromGitFile } from "../ensure-agent-package";
+import { ensureAgentPackageFromGitFile as ensureReal } from "../ensure-agent-package";
+
+// Review 2 note: the install-record and declared-tables seams are injected, so
+// the same-version controls reach the skip branch without the real
+// install-record road (and so without any database state).
+const ensureAgentPackageFromGitFile = (opts: { oasSourcePath: string }) =>
+  ensureReal({
+    ...opts,
+    healInstallRecord: async () => ({ outcome: "already-live" }),
+    activateDeclaredTables: async () => {},
+  });
 import { serializeLifecycleConfig, normalizeLifecycle } from "@/lib/lifecycle/lifecycle-policy";
 
 /** The row the registry or an earlier import wrote: the manifest's own projection. */
@@ -98,6 +111,7 @@ const rowFor = (lifecycle: unknown, packageVersion = "1.0.0") => ({
 });
 
 beforeEach(() => {
+  OAS_CONTENT = GEMINI_WITH_IDENTITY;
   importAgentTemplateCoreMock.mockClear();
   setAgentTemplatePackageNameMock.mockClear();
   readAgentTemplateByPackageNameMock.mockReset();
@@ -153,6 +167,19 @@ describe("cinatra#4264 A1b review 1 — an unreadable sibling manifest checks th
     await expect(ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH })).rejects.toThrow(
       /stored lifecycle declaration cannot be read/,
     );
+  });
+
+  it("review 2: an OAS WITHOUT metadata.cinatra.packageName looks up the layout's scoped row and REFUSES a stale list", async () => {
+    // The supported identity-less OAS shape: the row is the one the layout
+    // names (agents/<vendor>/<slug> -> @vendor/slug), as the runtime mounts it.
+    OAS_CONTENT = GEMINI_NO_IDENTITY;
+    PKG_CONTENT = "EACCES";
+    readAgentTemplateByPackageNameMock.mockResolvedValue(rowFor({ regenerate: STALE }));
+    await expect(ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH })).rejects.toThrow(
+      /REGENERATE_DECLARATION_INVALID/,
+    );
+    expect(readAgentTemplateByPackageNameMock).toHaveBeenCalledWith(PKG);
+    expect(importAgentTemplateCoreMock).not.toHaveBeenCalled();
   });
 
   it("control: a list the flow still honours keeps the graceful skip", async () => {

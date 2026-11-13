@@ -51,15 +51,18 @@ vi.mock("@cinatra-ai/extensions/license-detection", () => ({
   LicenseAcknowledgementRequiredError: class extends Error {},
 }));
 
+// Review 2 note: the real compiler returns a package identity ONLY from a
+// readable sibling manifest. The mock reads the staged package.json the same
+// way, so a manifest-less or unparseable archive gets no invented name.
 vi.mock("../oas-compiler", () => ({
-  compileOasAgentJson: async () => ({
+  compileOasAgentJson: async (opts: { oasSourcePath?: string }) => ({
     ok: true,
     value: {
       approvalPolicy: { steps: [] },
       inputSchema: { type: "object", properties: {} },
       outputSchema: null,
       prompt: null,
-      packageName: PKG,
+      packageName: await stagedManifestName(opts.oasSourcePath),
       packageVersion: "0.1.6",
       agentDependencies: {},
       type: "leaf",
@@ -74,6 +77,21 @@ vi.mock("../oas-compiler", () => ({
     },
   }),
 }));
+
+async function stagedManifestName(oasSourcePath?: string): Promise<string | null> {
+  if (!oasSourcePath) return null;
+  const { readFile } = await import("node:fs/promises");
+  const { dirname, join } = await import("node:path");
+  for (const candidate of [join(dirname(oasSourcePath), "..", "package.json"), join(dirname(oasSourcePath), "package.json")]) {
+    try {
+      const parsed = JSON.parse(await readFile(candidate, "utf8")) as { name?: unknown };
+      return typeof parsed.name === "string" ? parsed.name : null;
+    } catch {
+      // try the next candidate, as the real sibling read does
+    }
+  }
+  return null;
+}
 
 const readTemplate = vi.fn(async (): Promise<{ id: string } | null> => null);
 const createTemplate = vi.fn(async (..._a: unknown[]) => {});
@@ -203,9 +221,16 @@ describe("cinatra#2044 GAP 2 — importAgentTemplateCore compiles cinatra.lifecy
     expect(upsertPatch()).toHaveProperty("lifecycleConfig", null);
   });
 
-  it("UPSERT: a MANIFEST-LESS ZIP leaves the column UNCHANGED (omitted, never cleared)", async () => {
+  it("UPSERT: a NON-AUTHORITATIVE manifest leaves the column UNCHANGED (omitted, never cleared)", async () => {
+    // A manifest-less ZIP carries no package identity (the honest compile mock
+    // reads none), so it never reaches an existing row; the road that keeps an
+    // identified row without a declaration is the loader's synthesis.
     readTemplate.mockResolvedValue({ id: "tpl-existing" });
-    await importZip({ pkg: false });
+    await importAgentTemplateCore(zip(), undefined, {
+      redirect: false,
+      status: "published",
+      lifecycleDeclarationAuthoritative: false,
+    });
     // package.json is an OPTIONAL member of the agent-ZIP shape. With no
     // manifest there is no declaration to project, so the patch omits the field
     // and updateAgentTemplate's `!== undefined` guard leaves the column alone —
@@ -356,16 +381,26 @@ describe("cinatra#4264 A1b — the import revalidates a retained regenerate list
   // The fixture's ApiNode files its own output from the start's `user` input.
   const KEPT = [{ artifactNode: "call_llm_bridge", step: "call_llm_bridge", noteInput: "user" }];
   const STALE = [{ artifactNode: "file_image", step: "image_flow", noteInput: "prompt" }];
+  // The none road that keeps an IDENTIFIED row: the loader's synthesized
+  // manifest (it names the package) marked non-authoritative for lifecycle.
+  const importNonAuthoritative = () =>
+    importAgentTemplateCore(zip({ oas: GEMINI }), undefined, {
+      redirect: false,
+      status: "published",
+      lifecycleDeclarationAuthoritative: false,
+    });
   const row = (regenerate: unknown) => ({
     id: "tpl-existing",
     lifecycleConfig: JSON.stringify({ repairCapable: true, regenerate }),
   });
 
-  it("none (manifest-less ZIP): a stored list the new flow no longer honours REFUSES the import before any write", async () => {
+  it("manifest-less ZIP: no package identity, so the stored row is never matched or written (a fresh row)", async () => {
+    // Review 2 note: the archive carries no name and the compile reads none,
+    // so no existing row is kept; the stored list cannot outlive anything.
     readTemplate.mockResolvedValue(row(STALE) as never);
-    await expect(importZip({ pkg: false, oas: GEMINI })).rejects.toThrow(/REGENERATE_DECLARATION_INVALID/);
+    await importZip({ pkg: false, oas: GEMINI });
     expect(updateTemplate).not.toHaveBeenCalled();
-    expect(createTemplate).not.toHaveBeenCalled();
+    expect(createTemplate).toHaveBeenCalledTimes(1);
   });
 
   it("none (non-authoritative synthesis, the ensure/version-bump road): the same stale list REFUSES", async () => {
@@ -380,25 +415,24 @@ describe("cinatra#4264 A1b — the import revalidates a retained regenerate list
     expect(updateTemplate).not.toHaveBeenCalled();
   });
 
-  it("none (unparseable manifest): the same stale list REFUSES", async () => {
+  it("unparseable manifest: no package identity either, so the stored row is never written", async () => {
     readTemplate.mockResolvedValue(row(STALE) as never);
     const files = [
       { name: "agent.json", content: GEMINI },
       { name: "manifest.json", content: JSON.stringify({ version: 1 }) },
       { name: "package.json", content: "{ not json" },
     ];
-    await expect(
-      importAgentTemplateCore(createZipBuffer(files).toString("base64"), undefined, {
-        redirect: false,
-        status: "published",
-      }),
-    ).rejects.toThrow(/REGENERATE_DECLARATION_INVALID/);
+    await importAgentTemplateCore(createZipBuffer(files).toString("base64"), undefined, {
+      redirect: false,
+      status: "published",
+    });
     expect(updateTemplate).not.toHaveBeenCalled();
+    expect(createTemplate).toHaveBeenCalledTimes(1);
   });
 
   it("none: a stored list the new flow still honours is KEPT (the column is left unchanged)", async () => {
     readTemplate.mockResolvedValue(row(KEPT) as never);
-    await importZip({ pkg: false, oas: GEMINI });
+    await importNonAuthoritative();
     expect(upsertPatch().lifecycleConfig).toBeUndefined();
   });
 
@@ -407,9 +441,7 @@ describe("cinatra#4264 A1b — the import revalidates a retained regenerate list
       id: "tpl-existing",
       lifecycleConfig: '{"regenerate":[{"artifactNode":"file_ima',
     } as never);
-    await expect(importZip({ pkg: false, oas: GEMINI })).rejects.toThrow(
-      /stored lifecycle declaration cannot be read/,
-    );
+    await expect(importNonAuthoritative()).rejects.toThrow(/stored lifecycle declaration cannot be read/);
     expect(updateTemplate).not.toHaveBeenCalled();
     expect(createTemplate).not.toHaveBeenCalled();
   });

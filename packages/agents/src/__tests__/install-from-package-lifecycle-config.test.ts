@@ -168,6 +168,7 @@ vi.mock("../materialize-agent-package", () => ({
 vi.mock("../wayflow-reload-client", () => ({ triggerWayflowReload: async () => ({ ok: true }) }));
 
 import { installAgentFromPackage, syncCompiledTemplateToDb } from "../install-from-package";
+import { writeDependencyEdgesToCanonicalRows } from "@cinatra-ai/extensions/manifest-dependencies";
 
 const install = () => installAgentFromPackage({ packageName: PKG, orgId: "org-1" });
 
@@ -244,6 +245,18 @@ describe("cinatra#2047 D-1 — installAgentFromPackage compiles cinatra.lifecycl
     expect(upsertPatch().lifecycleConfig).toBe('{"repairCapable":true}');
     expect(updateTemplate.mock.calls[1]?.[0]).toBe("tpl-existing");
     expect(updateTemplate.mock.calls[1]?.[1]).toEqual({ lifecycleConfig: prior });
+  });
+
+  it("cinatra#4264 A1b review 2: a FRESH install that fails after the row is created clears the column (the files roll back)", async () => {
+    // The fresh branch writes the row and its version in one call; a later
+    // step (the dependency-edge write) rejecting rolls the runtime files back,
+    // so the list this install wrote must not stay on the fresh row.
+    LIFECYCLE = { repairCapable: true };
+    vi.mocked(writeDependencyEdgesToCanonicalRows).mockRejectedValueOnce(new Error("edge write failed"));
+    await expect(install()).rejects.toThrow(/edge write failed/);
+    expect(updateTemplate).toHaveBeenCalledTimes(1);
+    expect(updateTemplate.mock.calls[0]?.[0]).toBe("tpl-fresh");
+    expect(updateTemplate.mock.calls[0]?.[1]).toEqual({ lifecycleConfig: null });
   });
 
   it("a MALFORMED block does not crash the install (fail-soft ⇒ no declaration)", async () => {
