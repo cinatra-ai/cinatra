@@ -4,6 +4,12 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
+// The table's own ground (specs/app-components.html, Table: the dark band is
+// "--surface on --background"). In the dark palette the band IS --surface, so
+// the table lays the page ground under its rows itself: a table mounted
+// directly on a --surface card keeps its band instead of losing it 1:1. The
+// light band --surface-muted sits one step below both the page and --surface,
+// so the light palette lays no ground and stays as it was.
 function Table({ className, ...props }: React.ComponentProps<"table">) {
   return (
     <div
@@ -12,7 +18,7 @@ function Table({ className, ...props }: React.ComponentProps<"table">) {
     >
       <table
         data-slot="table"
-        className={cn("w-full caption-bottom text-sm", className)}
+        className={cn("w-full caption-bottom text-sm dark:bg-background", className)}
         {...props}
       />
     </div>
@@ -32,15 +38,17 @@ function TableHeader({ className, ...props }: React.ComponentProps<"thead">) {
   )
 }
 
-// Seersucker zebra. Body rows alternate between the table bg and the cool
-// --stripe-light wash. The :last-child rule keeps the "no terminal border"
-// behavior.
+// Alternate-row band (specs/app-components.html, Table). Every even body row
+// lays one flat ground one step off the page: --surface-muted in the light
+// palette, --surface in the dark palette. No pattern, and odd rows carry no
+// ground. The stripe colours are for media placeholders only. The :last-child
+// rule keeps the "no terminal border" behavior.
 function TableBody({ className, ...props }: React.ComponentProps<"tbody">) {
   return (
     <tbody
       data-slot="table-body"
       className={cn(
-        "[&_tr:last-child]:border-0 [&_tr:nth-child(even)]:bg-stripe-light/50",
+        "[&_tr:last-child]:border-0 [&_tr:nth-child(even)]:bg-surface-muted dark:[&_tr:nth-child(even)]:bg-surface",
         className,
       )}
       {...props}
