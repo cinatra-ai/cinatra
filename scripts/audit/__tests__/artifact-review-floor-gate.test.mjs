@@ -29,6 +29,9 @@ import {
   baselineGrowth,
   readBaseBaseline,
 } from "../artifact-review-floor-gate.mjs";
+// Read through the namespace so a helper this file pins but the gate does not
+// export yet fails only its own tests, never the whole file at import time.
+import * as floorGate from "../artifact-review-floor-gate.mjs";
 
 const GATE = fileURLToPath(new URL("../artifact-review-floor-gate.mjs", import.meta.url));
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -329,6 +332,143 @@ test("a new floor type is `added`; a type that stopped flooring is `stale`", () 
 test("the committed baseline may only shrink against the base branch", () => {
   assert.deepEqual(baselineGrowth({ floorTypes: [{ type: "a" }, { type: "z" }] }, { floorTypes: [{ type: "a" }] }), ["z"]);
   assert.deepEqual(baselineGrowth({ floorTypes: [{ type: "a" }] }, { floorTypes: [{ type: "a" }, { type: "z" }] }), []);
+});
+
+// ---------------------------------------------------------------------------
+// A DECLARED one-for-one rename (cinatra#4366). A pack that renames a floor
+// type's id moves one entry: the old id leaves, the new id arrives. Without a
+// declaration that is one `grew` id, and the shrink-only guard refuses it. The
+// baseline's `renames` list admits exactly that move and nothing wider: the old
+// id must stand in the BASE baseline and leave the committed one, the new id
+// must inherit the old entry's floor disposition (package and form), and an
+// undeclared add is refused exactly as before.
+// ---------------------------------------------------------------------------
+
+const OLD = { type: "@acme/drupal:node", package: "@acme/drupal-artifacts", mime: "text/html" };
+const NEW = { type: "@acme/drupal-artifacts:node-pointer", package: "@acme/drupal-artifacts", mime: "text/html" };
+const KEEP = { type: "@acme/dash:board", package: "@acme/dash", mime: "application/x-dash" };
+const RENAME = { from: OLD.type, to: NEW.type, reason: "the pack moved the type into its own namespace" };
+const BASE = { floorTypes: [KEEP, OLD] };
+
+test("RED-FIRST — a DECLARED one-for-one rename does not grow the baseline", () => {
+  assert.deepEqual(baselineGrowth({ floorTypes: [KEEP, NEW], renames: [RENAME] }, BASE), []);
+});
+
+test("an UNDECLARED rename is still refused as growth", () => {
+  assert.deepEqual(baselineGrowth({ floorTypes: [KEEP, NEW] }, BASE), [NEW.type]);
+  assert.deepEqual(baselineGrowth({ floorTypes: [KEEP, NEW], renames: [] }, BASE), [NEW.type]);
+});
+
+test("an undeclared ADD beside a declared rename is still refused", () => {
+  const extra = { type: "@acme/other:thing", package: "@acme/other", mime: "text/html" };
+  assert.deepEqual(
+    baselineGrowth({ floorTypes: [KEEP, NEW, extra], renames: [RENAME] }, BASE),
+    [extra.type],
+  );
+});
+
+test("a rename whose old id is NOT on the base floor admits nothing", () => {
+  assert.deepEqual(
+    baselineGrowth({ floorTypes: [KEEP, NEW], renames: [RENAME] }, { floorTypes: [KEEP] }),
+    [NEW.type],
+  );
+});
+
+test("the new id must INHERIT the old id's floor disposition (package and form)", () => {
+  const otherPackage = { ...NEW, package: "@acme/someone-else" };
+  const otherForm = { ...NEW, mime: "application/x-other" };
+  assert.deepEqual(baselineGrowth({ floorTypes: [KEEP, otherPackage], renames: [RENAME] }, BASE), [NEW.type]);
+  assert.deepEqual(baselineGrowth({ floorTypes: [KEEP, otherForm], renames: [RENAME] }, BASE), [NEW.type]);
+});
+
+test("the LIVE floor entry of the new id must carry the inherited disposition too", () => {
+  const committed = { floorTypes: [KEEP, NEW], renames: [RENAME] };
+  assert.deepEqual(baselineGrowth(committed, BASE, [KEEP, NEW]), []);
+  assert.deepEqual(baselineGrowth(committed, BASE, [KEEP, { ...NEW, mime: "application/x-other" }]), [NEW.type]);
+  assert.deepEqual(baselineGrowth(committed, BASE, [KEEP, { ...NEW, package: "@acme/someone-else" }]), [NEW.type]);
+});
+
+test("the rename list is read FAIL-CLOSED: a malformed or non-one-for-one list is INFRA", () => {
+  const read = (renames, floorTypes = [KEEP, NEW]) => floorGate.readDeclaredRenames({ floorTypes, renames });
+  assert.deepEqual(read(undefined), []);
+  assert.deepEqual(read([RENAME]), [RENAME]);
+  assert.throws(() => read({}), InfraError);
+  assert.throws(() => read([{ from: OLD.type, to: NEW.type }]), InfraError); // no reason
+  assert.throws(() => read([{ ...RENAME, from: "" }]), InfraError);
+  assert.throws(() => read([{ ...RENAME, from: NEW.type }]), InfraError); // from === to
+  assert.throws(() => read([{ ...RENAME, extra: 1 }]), InfraError);
+  // One old id to two new ids (the count would grow) and two old ids to one.
+  const two = { type: "@acme/drupal-artifacts:node-two", package: NEW.package, mime: NEW.mime };
+  assert.throws(() => read([RENAME, { ...RENAME, to: two.type }], [KEEP, NEW, two]), InfraError);
+  assert.throws(() => read([RENAME, { ...RENAME, from: "@acme/drupal:other" }]), InfraError);
+  // The old id may not stay beside the new one, and the new id must be on the floor.
+  assert.throws(() => read([RENAME], [KEEP, OLD, NEW]), InfraError);
+  assert.throws(() => read([RENAME], [KEEP]), InfraError);
+});
+
+test("baselineGrowth refuses a malformed rename list rather than ignoring it", () => {
+  assert.throws(() => baselineGrowth({ floorTypes: [KEEP, NEW], renames: [{ from: OLD.type }] }, BASE), InfraError);
+});
+
+test("the shipped baseline's rename list is well formed", () => {
+  const shipped = JSON.parse(src(BASELINE_REL));
+  assert.doesNotThrow(() => floorGate.readDeclaredRenames(shipped));
+});
+
+/** A throwaway git repo holding the gate's canonical sources and a base baseline. */
+function renameRepo(baseBaseline) {
+  const repo = mkdtempSync(join(tmpdir(), "floor-gate-rename-"));
+  for (const rel of Object.values(CANONICAL_SOURCES)) {
+    mkdirSync(dirname(join(repo, rel)), { recursive: true });
+    writeFileSync(join(repo, rel), src(rel));
+  }
+  mkdirSync(join(repo, "scripts", "audit"), { recursive: true });
+  writeFileSync(join(repo, BASELINE_REL), JSON.stringify(baseBaseline, null, 2));
+  const git = (...args) => execFileSync("git", args, { cwd: repo, stdio: ["ignore", "pipe", "pipe"] });
+  git("init", "-q");
+  git("add", "-A");
+  git("-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q", "-m", "base");
+  return repo;
+}
+
+function runGateAgainstBase(repo, extRoot, committed) {
+  writeFileSync(join(repo, BASELINE_REL), JSON.stringify(committed, null, 2));
+  try {
+    const stdout = execFileSync(
+      process.execPath,
+      [GATE, "--repo-root", repo, "--extensions-root", extRoot, "--allow-partial-fleet"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ARTIFACT_REVIEW_FLOOR_BASE: "HEAD" } },
+    );
+    return { status: 0, stdout, stderr: "" };
+  } catch (e) {
+    return { status: e.status, stdout: e.stdout ?? "", stderr: e.stderr ?? "" };
+  }
+}
+
+test("END TO END — the renamed pack passes ONLY with the rename declared", () => {
+  const ext = fixtureTree([
+    {
+      dir: "drupal-artifacts",
+      name: "@acme/drupal-artifacts",
+      artifact: { accepts: { connectorRef: { resolvedMimeTypes: ["text/html"] } }, objectTypes: [{ type: NEW.type, claim: "dedicated" }] },
+    },
+  ]);
+  const repo = renameRepo({ floorTypes: [OLD] });
+  try {
+    const undeclared = runGateAgainstBase(repo, ext, { floorTypes: [NEW] });
+    assert.equal(undeclared.status, 1, undeclared.stderr);
+    assert.match(undeclared.stderr, /GREW vs the base branch/);
+
+    const declared = runGateAgainstBase(repo, ext, { floorTypes: [NEW], renames: [RENAME] });
+    assert.equal(declared.status, 0, declared.stderr);
+    assert.match(declared.stdout, /OK/);
+
+    const malformed = runGateAgainstBase(repo, ext, { floorTypes: [NEW], renames: [{ from: OLD.type, to: NEW.type }] });
+    assert.equal(malformed.status, 2, malformed.stderr);
+  } finally {
+    rmSync(ext, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+  }
 });
 
 test("the shrink-only guard FAILS CLOSED on a base ref it cannot read", () => {
