@@ -708,3 +708,313 @@ export function gateCarriesPresentationHint(currentValues: unknown): boolean {
     typeof (candidate as { type?: unknown }).type === "string"
   );
 }
+
+// ---------------------------------------------------------------------------
+// A schema-drawn gate that asks for fields of its own (cinatra#4244)
+// ---------------------------------------------------------------------------
+
+/** Keys every approval payload carries; a schema naming only these asks nothing. */
+const APPROVAL_BOOKKEEPING_KEYS: ReadonlySet<string> = new Set(["approved", "approvedAt"]);
+
+function isPlainSchemaObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * What an object-typed gate schema on the schema-field fallback asks for
+ * (cinatra#4244).
+ *
+ *  - `not-object`: the schema is not an object schema; this reading does not
+ *    apply and the gate keeps the road it had.
+ *  - `bare`: a well-formed object schema that declares no visible field other
+ *    than the `approved` / `approvedAt` bookkeeping keys. It is a step
+ *    confirmation: nothing to fill, a Continue alone.
+ *  - `fields`: a well-formed object schema that declares visible fields - a
+ *    WayFlow InputMessageNode such as "Pick the brand voice" declaring
+ *    `brandVoice`. `fields` lists them in declaration order. `renderSchema` is
+ *    the schema the fallback draws: without the bookkeeping keys (they are
+ *    never the reader's to fill) and without `x-renderer`, with `required`
+ *    holding every declared-required visible field that declares no
+ *    `default` - from the schema's `required` list and from a field's own
+ *    `x-required: true` - so the drawn form holds its Continue until those
+ *    values are written (design V.1). A value with a default is answered by it
+ *    and never held.
+ *  - `malformed`: an object schema whose declaration cannot be read safely,
+ *    at ANY depth (`isWellFormedFieldSchema`) - `properties` present but not
+ *    a map, a property or array `items` that is not a schema object,
+ *    `required` present but not a list of names, a non-boolean `x-hidden` /
+ *    `x-required`, nesting deeper than `MAX_SCHEMA_DEPTH` - and a gate schema
+ *    with no `properties` whose `required` list names any value (the card has
+ *    no field to write it into), or whose `required` list names anything that
+ *    is not a declared property (a nested object's `required` must name a
+ *    visible declared property). It is refused: it is neither a bare
+ *    confirmation (that would send an approval for a gate nobody could read)
+ *    nor drawable (a property that is not a schema cannot be drawn).
+ *
+ * Field names are agent-declared, so the maps built here have no prototype:
+ * a field named `__proto__` stays an own field and is never the prototype
+ * setter.
+ */
+export type SchemaFieldGateReading =
+  | { kind: "not-object" }
+  | { kind: "bare" }
+  | { kind: "malformed" }
+  | { kind: "fields"; fields: string[]; renderSchema: Record<string, unknown> };
+
+/** Deeper nesting than this is refused as malformed (fail closed, no unbounded walk). */
+const MAX_SCHEMA_DEPTH = 16;
+
+/**
+ * Whether a declared field schema can be read safely, at every depth: a plain
+ * object; `properties`, when present, a map whose members are all
+ * well-formed; `items`, when present, a well-formed schema; `required`, when
+ * present, a list of names; `x-hidden` / `x-required`, when present, booleans.
+ */
+function isWellFormedFieldSchema(sub: unknown, depth: number): boolean {
+  if (depth > MAX_SCHEMA_DEPTH || !isPlainSchemaObject(sub)) return false;
+  const hidden = sub["x-hidden"];
+  const xReq = sub["x-required"];
+  if (hidden !== undefined && typeof hidden !== "boolean") return false;
+  if (xReq !== undefined && typeof xReq !== "boolean") return false;
+  const required = sub.required;
+  if (required !== undefined && (!Array.isArray(required) || !required.every((n) => typeof n === "string"))) {
+    return false;
+  }
+  const properties = sub.properties;
+  if (properties !== undefined) {
+    if (!isPlainSchemaObject(properties)) return false;
+    for (const member of Object.values(properties)) {
+      if (!isWellFormedFieldSchema(member, depth + 1)) return false;
+    }
+    // A nested required name must name a VISIBLE declared property: the drawn
+    // object checks it on the press, and a name no field can write would hold
+    // the gate forever (cinatra#4244).
+    for (const name of (required as string[] | undefined) ?? []) {
+      if (!Object.prototype.hasOwnProperty.call(properties, name)) return false;
+      if ((properties[name] as Record<string, unknown>)["x-hidden"] === true) return false;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(sub, "items") && !isWellFormedFieldSchema(sub.items, depth + 1)) {
+    return false;
+  }
+  return true;
+}
+
+/** An own-property read: a plain `obj[key]` reads the prototype for `__proto__`. */
+function ownValue(obj: Record<string, unknown>, key: string): unknown {
+  return Object.prototype.hasOwnProperty.call(obj, key) ? obj[key] : undefined;
+}
+
+/** An own-property write: a plain `obj[key] = v` calls the prototype setter for `__proto__`. */
+function setOwn(obj: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(obj, key, { value, enumerable: true, writable: true, configurable: true });
+}
+
+/** Thrown when an answer holds a number JSON cannot carry (it would reach the flow as null). */
+export class NonFiniteAnswerError extends Error {
+  constructor(field: string) {
+    super(`The answer to "${field}" is not a finite number.`);
+    this.name = "NonFiniteAnswerError";
+  }
+}
+
+function holdsNonFiniteNumber(value: unknown, depth = 0): boolean {
+  if (typeof value === "number") return !Number.isFinite(value);
+  // Too deep to read is refused, never waved through.
+  if (depth > MAX_SCHEMA_DEPTH) return true;
+  if (Array.isArray(value)) return value.some((v) => holdsNonFiniteNumber(v, depth + 1));
+  if (isPlainSchemaObject(value)) {
+    return Object.values(value).some((v) => holdsNonFiniteNumber(v, depth + 1));
+  }
+  return false;
+}
+
+export function readSchemaFieldGate(schema: unknown): SchemaFieldGateReading {
+  if (!isPlainSchemaObject(schema) || schema.type !== "object") return { kind: "not-object" };
+  const { properties, required } = schema;
+  if (properties === undefined) {
+    if (required === undefined) return { kind: "bare" };
+    return Array.isArray(required) && required.length === 0
+      ? { kind: "bare" }
+      : { kind: "malformed" };
+  }
+  if (!isPlainSchemaObject(properties)) return { kind: "malformed" };
+  if (
+    required !== undefined &&
+    (!Array.isArray(required) || !required.every((n) => typeof n === "string"))
+  ) {
+    return { kind: "malformed" };
+  }
+  for (const name of (required as string[] | undefined) ?? []) {
+    if (!Object.prototype.hasOwnProperty.call(properties, name)) return { kind: "malformed" };
+  }
+  const kept = Object.create(null) as Record<string, Record<string, unknown>>;
+  const fields: string[] = [];
+  const xRequired: string[] = [];
+  for (const [name, sub] of Object.entries(properties)) {
+    if (!isWellFormedFieldSchema(sub, 1)) return { kind: "malformed" };
+    const member = sub as Record<string, unknown>;
+    const hidden = member["x-hidden"];
+    const xReq = member["x-required"];
+    if (APPROVAL_BOOKKEEPING_KEYS.has(name)) continue;
+    setOwn(kept, name, member);
+    if (hidden === true) continue;
+    fields.push(name);
+    if (xReq === true) xRequired.push(name);
+  }
+  if (fields.length === 0) return { kind: "bare" };
+  const held = (name: string) =>
+    fields.includes(name) &&
+    !Object.prototype.hasOwnProperty.call(ownValue(kept, name) as object, "default");
+  const requiredNames: string[] = [];
+  for (const name of [...((required as string[] | undefined) ?? []), ...xRequired]) {
+    if (held(name) && !requiredNames.includes(name)) requiredNames.push(name);
+  }
+  const { "x-renderer": _xr, properties: _p, required: _r, ...rest } = schema;
+  void _xr;
+  void _p;
+  void _r;
+  return {
+    kind: "fields",
+    fields,
+    renderSchema: { ...rest, type: "object", properties: kept, required: requiredNames },
+  };
+}
+
+/**
+ * The approval payload for a non-setup gate whose fields the schema-field
+ * fallback draws (cinatra#4244).
+ *
+ * `next` is what the drawn object field submits: the object of its declared
+ * fields (blank optional values left out), or `undefined`.
+ *
+ *  - The approval is `{ ...answer, approved: true, approvedAt }`; the
+ *    bookkeeping keys are always the approval's own.
+ *  - EVERY declared answer reaches the flow. The server forwards
+ *    `userResponse` to the paused WayFlow node as its resume text, and without
+ *    it the node is handed "[Approved by operator]" in place of the answer.
+ *    When the gate asks for exactly one field, declared as a string, and the
+ *    answer is a string, that text is the resume text verbatim (the
+ *    convention the idea-selection renderer follows for its one output), JSON-
+ *    looking or not, and `userResponseFieldName` names the field so the
+ *    server records the answer under it (`readWayflowSubmittedValues`). Any
+ *    other answer - a list, a number, a boolean, an object, or several
+ *    fields - is sent as one JSON object of the declared fields that were
+ *    answered (a blank text or an empty list is not an answer), the
+ *    structured round-trip the server parses back into the submitted values.
+ *  - A number that is not finite cannot travel as JSON (it would reach the
+ *    flow as `null`): the payload is refused with `NonFiniteAnswerError`.
+ *  - No declared field answered: no resume text, so the flow receives the
+ *    approval marker, as the Continue-only card sent for this gate.
+ *  - A `userResponse` the answer already carries is kept as it is.
+ *  - A schema that is not read as `fields` adds no resume text.
+ */
+export function buildSchemaFieldGatePayload(args: {
+  schema: unknown;
+  next: unknown;
+  now?: string;
+}): Record<string, unknown> {
+  const answer = isPlainSchemaObject(args.next) ? args.next : {};
+  const payload: Record<string, unknown> = {
+    ...answer,
+    approved: true,
+    approvedAt: args.now ?? new Date().toISOString(),
+  };
+  if (typeof answer.userResponse === "string") return payload;
+  const reading = readSchemaFieldGate(args.schema);
+  if (reading.kind !== "fields") return payload;
+  const answered = Object.create(null) as Record<string, unknown>;
+  for (const name of reading.fields) {
+    const value = ownValue(answer, name);
+    if (value === undefined || value === null) continue;
+    if (typeof value === "string" && value.trim() === "") continue;
+    if (Array.isArray(value) && value.length === 0) continue;
+    if (holdsNonFiniteNumber(value)) throw new NonFiniteAnswerError(name);
+    setOwn(answered, name, value);
+  }
+  const names = Object.keys(answered);
+  if (names.length === 0) return payload;
+  if (reading.fields.length === 1) {
+    const only = reading.fields[0]!;
+    const declared = ownValue(reading.renderSchema.properties as Record<string, unknown>, only) as
+      | { type?: unknown }
+      | undefined;
+    const value = ownValue(answered, only);
+    if (declared?.type === "string" && typeof value === "string") {
+      payload.userResponse = value;
+      payload.userResponseFieldName = only;
+      return payload;
+    }
+  }
+  payload.userResponse = JSON.stringify(answered);
+  return payload;
+}
+
+// ---------------------------------------------------------------------------
+// The values the WayFlow continue road records (cinatra#4244)
+// ---------------------------------------------------------------------------
+
+/**
+ * What the WayFlow continue road records as the submitted values of a gate
+ * answer (cinatra#4244). The resume text itself (`userResponse`) goes to the
+ * flow verbatim; this reading only decides what is recorded beside it.
+ *
+ *  1. A NAMED SINGLE TEXT ANSWER. A schema-drawn gate that asks for one text
+ *     field sends that text verbatim as `userResponse` and names its field in
+ *     `userResponseFieldName`. When the values carry that field as an own key
+ *     whose value IS the resume text, the answer is recorded under that field
+ *     alone - even when the text reads as JSON (`42`, `{"tone":"warm"}`), which
+ *     the reading below would otherwise take for the submitted values. A name
+ *     whose value is not the resume text is not believed.
+ *  2. Otherwise, as before: a `userResponse` that parses as a JSON object is the
+ *     submitted values; one that is not JSON leaves the values without
+ *     `userResponse`; no `userResponse` leaves the values themselves; nothing
+ *     left is `null`.
+ *
+ * It lives here, beside `buildSchemaFieldGatePayload` that names the field, and
+ * not in a module of its own: a new module would add a first-party module to
+ * every locked route of the route-graph ratchet. The server imports it from
+ * this pure module.
+ */
+export function readWayflowSubmittedValues(values: unknown): Record<string, unknown> | null {
+  const valuesObj =
+    values !== null && typeof values === "object" && !Array.isArray(values)
+      ? (values as Record<string, unknown>)
+      : null;
+  if (!valuesObj) return null;
+  const own = (key: string): unknown =>
+    Object.prototype.hasOwnProperty.call(valuesObj, key) ? valuesObj[key] : undefined;
+  const userResponseRaw = own("userResponse");
+  if (typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0) {
+    const fieldName = own("userResponseFieldName");
+    if (
+      typeof fieldName === "string" &&
+      fieldName !== "userResponse" &&
+      fieldName !== "userResponseFieldName" &&
+      own(fieldName) === userResponseRaw
+    ) {
+      const recorded: Record<string, unknown> = {};
+      Object.defineProperty(recorded, fieldName, {
+        value: userResponseRaw,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+      return recorded;
+    }
+    try {
+      const parsed = JSON.parse(userResponseRaw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+      return null;
+    } catch {
+      const { userResponse: _u, ...rest } = valuesObj;
+      void _u;
+      return Object.keys(rest).length > 0 ? rest : null;
+    }
+  }
+  const { userResponse: _u, ...rest } = valuesObj;
+  void _u;
+  return Object.keys(rest).length > 0 ? rest : null;
+}
