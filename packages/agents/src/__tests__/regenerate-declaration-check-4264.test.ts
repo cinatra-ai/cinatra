@@ -170,6 +170,26 @@ describe("cinatra#4264 A1: checkRegenerateDeclaration refuses", () => {
     refused(own);
   });
 
+  it("a FlowNode, subflow StartNode or StartNode whose port lists are not lists of ports", () => {
+    // pre-review 1 MUST-FIX 1: a FlowNode's own `inputs` was checked only when it
+    // was an array, so `inputs: "note"` passed.
+    const ownString = flow("FlowNode");
+    refs(ownString).step.inputs = "note";
+    expect(refused(ownString)).toMatch(/not a list of ports/);
+    const ownOutputs = flow("FlowNode");
+    refs(ownOutputs).step.outputs = { title: "content" };
+    expect(refused(ownOutputs)).toMatch(/not a list of ports/);
+    const ownItem = flow("FlowNode");
+    refs(ownItem).step.inputs = [str("idea"), str("note"), "note"];
+    expect(refused(ownItem)).toMatch(/not a list of ports/);
+    const subStart = flow("FlowNode");
+    ((refs(subStart).sub.$referenced_components as Record<string, Rec>).sub_start).outputs = "note";
+    expect(refused(subStart)).toMatch(/not a list of ports/);
+    const startOutputs = flow();
+    refs(startOutputs).start.outputs = "note";
+    expect(refused(startOutputs)).toMatch(/not a list of ports/);
+  });
+
   it("zero or two edges into the note port", () => {
     const zero = flow();
     zero.data_flow_connections = edges(zero).filter((e) => e.destination_input !== "note");

@@ -20,9 +20,11 @@ import {
   normalizeLifecycle,
   parseLifecycleConfigText,
   readManifestLifecycle,
-  readRegenerateEntry,
   serializeLifecycleConfig,
 } from "@/lib/lifecycle/lifecycle-policy";
+// cinatra#4264 A1: read through the namespace so that, on a base without the
+// reader, this file still loads and the cases below fail on their assertions.
+import * as lifecyclePolicy from "@/lib/lifecycle/lifecycle-policy";
 import { agentLifecycleDeclarationSchema } from "../verdaccio/package-contract";
 import {
   BLOG_POST_LIFECYCLE,
@@ -272,19 +274,19 @@ describe("cinatra#4264 A1: the regenerate declaration", () => {
     }
   });
 
-  it("serializes after repairFindingsInput, sorted by artifactNode, and round-trips", () => {
-    const text = serializeLifecycleConfig({
-      requestedSkips: ["review"],
-      regenerate: [draft, { noteInput: "prompt", step: "image_flow", artifactNode: "file_image" }],
-      repairFindingsInput: { input: "instructions" },
-    });
-    expect(text).toBe(
-      '{"repairFindingsInput":{"input":"instructions"},' +
-        '"regenerate":[{"artifactNode":"file_image","step":"image_flow","noteInput":"prompt"},' +
-        '{"artifactNode":"write_draft","step":"draft_flow","noteInput":"note"}],' +
-        '"requestedSkips":["review"]}',
-    );
-    expect(serializeLifecycleConfig(parseLifecycleConfigText(text))).toBe(text);
+  it("A1a stores no regenerate list: serialization omits the key until A1b revalidates the writer roads", () => {
+    // pre-review 1 MUST-FIX 2: a stored list that a later recompile cannot
+    // revalidate (MCP recompile, ensure drift) would outlive its declaration.
+    // A1a writes nothing to the column, so no stale list can exist.
+    expect(
+      serializeLifecycleConfig({
+        requestedSkips: ["review"],
+        regenerate: [draft, image],
+        repairFindingsInput: { input: "instructions" },
+      }),
+    ).toBe('{"repairFindingsInput":{"input":"instructions"},"requestedSkips":["review"]}');
+    expect(serializeLifecycleConfig({ regenerate: [image, draft] })).toBeNull();
+    expect(serializeLifecycleConfig(normalizeLifecycle({ regenerate: [image] }))).toBeNull();
   });
 
   it("a lifecycle without the key serializes to the pinned text of today", () => {
@@ -294,6 +296,8 @@ describe("cinatra#4264 A1: the regenerate declaration", () => {
   });
 
   it("readRegenerateEntry returns the entry of one filing node, else null", () => {
+    const { readRegenerateEntry } = lifecyclePolicy;
+    expect(typeof readRegenerateEntry).toBe("function");
     const lifecycle = normalizeLifecycle({ regenerate: [image, draft] });
     expect(readRegenerateEntry(lifecycle, "file_image")).toEqual({ step: "image_flow", noteInput: "prompt" });
     expect(readRegenerateEntry(lifecycle, "image_flow")).toBeNull();

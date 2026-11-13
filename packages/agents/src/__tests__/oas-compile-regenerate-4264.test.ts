@@ -2,7 +2,9 @@
  * cinatra#4264 slice A1: `compileOasAgentJson` runs the regenerate check on the
  * sibling manifest's `cinatra.lifecycle.regenerate` (and, with no readable
  * sibling, on the entries a writer retains from the stored row), and the
- * registry install seed persists a valid declaration and refuses an invalid one.
+ * registry install seed accepts a valid declaration without storing it (A1a
+ * stores no list; A1b does, with its writer-road revalidation) and refuses an
+ * invalid one.
  *
  * Run: cd packages/agents && pnpm exec vitest run src/__tests__/oas-compile-regenerate-4264.test.ts
  */
@@ -100,10 +102,8 @@ describe("cinatra#4264 A1: buildAgentTemplateInstallSeed", () => {
     });
   };
 
-  it("persists a valid list", async () => {
-    expect((await seed(VALID)).lifecycleConfig).toBe(
-      '{"regenerate":[{"artifactNode":"call_llm_bridge","step":"call_llm_bridge","noteInput":"user"}]}',
-    );
+  it("accepts a valid list but stores no regenerate key until A1b (pre-review 1 MUST-FIX 2)", async () => {
+    expect((await seed(VALID)).lifecycleConfig).toBeNull();
   });
 
   it("throws on an invalid list before a seed exists", async () => {

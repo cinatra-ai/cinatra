@@ -189,10 +189,10 @@ describe("cinatra#2044 GAP 2 — importAgentTemplateCore compiles cinatra.lifecy
     expect(Object.prototype.hasOwnProperty.call(upsertPatch(), "lifecycleConfig")).toBe(true);
   });
 
-  it("cinatra#4264 A1: a declared regenerate list lands on lifecycleConfig", async () => {
+  it("cinatra#4264 A1a: a declared regenerate list is not stored on lifecycleConfig (A1b stores it)", async () => {
     const regenerate = [{ artifactNode: "file_image", step: "image_flow", noteInput: "prompt" }];
     await importZip({ lifecycle: { regenerate } });
-    expect(createInput().lifecycleConfig).toBe(JSON.stringify({ regenerate }));
+    expect(createInput().lifecycleConfig).toBeNull();
   });
 
   it("a MALFORMED block does not crash the import (fail-soft ⇒ no declaration)", async () => {
