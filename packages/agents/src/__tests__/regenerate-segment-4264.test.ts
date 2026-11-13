@@ -313,6 +313,8 @@ describe("isRegenerateSegmentRun", () => {
     expect(
       await isRegenerateSegmentRun({ id: RUN, sourceType: "lifecycle_repair" }, read(intent({ regenerateNodeId: null }))),
     ).toBe(false);
+    // A missing repair row leaves the segment identity unknown: fail closed.
+    expect(await isRegenerateSegmentRun({ id: RUN, sourceType: "lifecycle_repair" }, read(null))).toBe(true);
     expect(await isRegenerateSegmentRun({ id: RUN, sourceType: "manual" }, read(intent()))).toBe(false);
     expect(
       await isRegenerateSegmentRun(
@@ -326,14 +328,18 @@ describe("isRegenerateSegmentRun", () => {
     ).toBe(true);
   });
 
-  it("classifies a fault as unreadable, never as ordinary", async () => {
+  it("classifies a fault and a missing repair row as unreadable, never as ordinary", async () => {
     const run = { id: RUN, sourceType: "lifecycle_repair" };
     const read = (r: RegenerateRepairIntent | null) => ({ readRepairForRun: vi.fn(async () => r) });
     expect(await classifyRegenerateSegmentRun(run, read(intent()))).toBe("segment");
     expect(await classifyRegenerateSegmentRun(run, read(intent({ regenerateNodeId: "" })))).toBe("segment");
     expect(await classifyRegenerateSegmentRun(run, read(intent({ regenerateNodeId: null })))).toBe("ordinary");
-    expect(await classifyRegenerateSegmentRun(run, read(null))).toBe("ordinary");
+    expect(await classifyRegenerateSegmentRun(run, read(null))).toBe("unreadable");
     expect(await classifyRegenerateSegmentRun({ id: RUN, sourceType: "manual" }, read(intent()))).toBe("ordinary");
+    // A run whose id is not a repair-run id is ordinary without a read.
+    const plain = read(null);
+    expect(await classifyRegenerateSegmentRun({ id: "run-plain", sourceType: "lifecycle_repair" }, plain)).toBe("ordinary");
+    expect(plain.readRepairForRun).not.toHaveBeenCalled();
     expect(
       await classifyRegenerateSegmentRun(run, {
         readRepairForRun: vi.fn(async () => {
@@ -356,7 +362,7 @@ describe("hasRegenerateIntent (a strict null check)", () => {
 describe("a segment run is never resumed", () => {
   const read = (r: RegenerateRepairIntent | null) => ({ readRepairForRun: vi.fn(async () => r) });
 
-  it("refuses a run whose repair names a node, a blank node, or whose repair cannot be read", async () => {
+  it("refuses a run whose repair names a node, a blank node, is missing, or cannot be read", async () => {
     await expect(refuseRegenerateSegmentResume(RUN, read(intent()))).rejects.toThrow(REGENERATE_SEGMENT_NOT_RESUMABLE);
     await expect(refuseRegenerateSegmentResume(RUN, read(intent({ regenerateNodeId: "" })))).rejects.toThrow(
       REGENERATE_SEGMENT_NOT_RESUMABLE,
@@ -368,11 +374,12 @@ describe("a segment run is never resumed", () => {
         }),
       }),
     ).rejects.toThrow(REGENERATE_SEGMENT_NOT_RESUMABLE);
+    // A repair run whose repair row is missing: whether it is a segment is unknown.
+    await expect(refuseRegenerateSegmentResume(RUN, read(null))).rejects.toThrow(REGENERATE_SEGMENT_NOT_RESUMABLE);
   });
 
-  it("lets an ordinary repair run and any other run resume, the latter without a read", async () => {
+  it("lets an ordinary repair run (a readable row, NULL intent) and any other run resume, the latter without a read", async () => {
     await expect(refuseRegenerateSegmentResume(RUN, read(intent({ regenerateNodeId: null })))).resolves.toBeUndefined();
-    await expect(refuseRegenerateSegmentResume(RUN, read(null))).resolves.toBeUndefined();
     const d = read(intent());
     await expect(refuseRegenerateSegmentResume("run-plain", d)).resolves.toBeUndefined();
     expect(d.readRepairForRun).not.toHaveBeenCalled();

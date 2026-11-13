@@ -558,12 +558,15 @@ def test_a_segment_that_stops_for_input_refuses():
     assert _code(excinfo) == rs.REGENERATE_SEGMENT_PAUSED
 
 
-def test_the_loader_fails_a_segment_that_did_not_finish_before_anything_is_stored():
+def test_the_loader_fails_a_segment_that_did_not_finish_before_its_outcome_is_stored():
+    # The task's submitted and working states are stored before the run; what
+    # the guard precedes is the outcome: no input-required state and no
+    # conversation of a segment is ever stored.
     body = _function_source("_patched_run_task")
     executed = body.index("status = await conversation.execute_async()")
     guard = body.index("_regenerate_segment.require_segment_finished(isinstance(status, FinishedStatus))")
     paused = body.index('task_state = "input-required"')
-    stored = body.index("await self.storage.update_task(\n                    task[\"id\"],\n                    state=task_state,")
+    stored = body.index("await _regenerate_segment.store_task_outcome(")
     assert executed < guard < paused < stored
     assert body.rfind("if _segment_request is not None:", 0, guard) > executed
 
@@ -610,3 +613,88 @@ def test_the_loader_stores_and_converses_only_the_redacted_request():
     redacted = body.index('params["message"] = _regenerate_segment.redact_segment_request(params.get("message"))')
     appended = body.index("conversation.append_message(wayflow_input_message)")
     assert started < redacted < appended
+
+
+# ------------------ pre-review fold 2: no snapshot value in the conversation
+
+
+class _RecordingStorage:
+    """Records every call the task's outcome makes on the A2A storage."""
+
+    def __init__(self):
+        self.calls = []
+
+    async def update_task(self, task_id, **kwargs):
+        self.calls.append(("update_task", task_id, kwargs))
+
+    async def update_task_conversation(self, **kwargs):
+        self.calls.append(("update_task_conversation", kwargs))
+
+
+class _Conversation:
+    """Stands in for the segment's conversation: it holds the start inputs the
+    segment was started with, as the runtime's conversation state does."""
+
+    def __init__(self, inputs):
+        self.inputs = inputs
+        self.message_list = [{"role": "user", "content": json.dumps(inputs)}]
+
+
+def _stored_form(value):
+    """Everything the storage was handed, serialized the way a store would."""
+    return json.dumps(value, default=lambda o: vars(o) if hasattr(o, "__dict__") else repr(o), sort_keys=True)
+
+
+def _segment_inputs():
+    snaps = {"produce": json.dumps({"topic": "a private draft", "note": "old"}), "file": json.dumps({"body": "x"})}
+    _derivation, inputs = rs.prepare_segment_run(
+        _request("produce", "file", "note", snaps),
+        mounted_flow_sha256=FLOW,
+        working_doc=_tiny(),
+        message_inputs={"userNote": "new", "cinatra_run_id": "run-seg"},
+    )
+    return inputs
+
+
+def test_the_segment_start_inputs_carry_the_snapshot_value():
+    # The premise of the next test: the segment's conversation is started with
+    # the snapshot value as a start input.
+    assert "a private draft" in json.dumps(_segment_inputs())
+
+
+def test_a_finished_segment_stores_its_outcome_but_never_its_conversation():
+    import asyncio
+
+    task = {"id": "task-seg", "context_id": "ctx-seg"}
+    messages = [{"kind": "message", "role": "agent", "parts": [{"kind": "text", "text": "done"}]}]
+
+    segment = _RecordingStorage()
+    asyncio.run(rs.store_task_outcome(
+        segment, task, state="completed", new_messages=messages,
+        conversation=_Conversation(_segment_inputs()), segment=True,
+    ))
+    assert [c[0] for c in segment.calls] == ["update_task"]
+    assert segment.calls[0][1] == "task-seg"
+    assert segment.calls[0][2] == {"state": "completed", "new_messages": messages}
+    assert "a private draft" not in _stored_form(segment.calls)
+
+    # An ordinary leg stores its conversation as before (and the stored form
+    # would show the value if a segment's conversation were stored).
+    ordinary = _RecordingStorage()
+    conversation = _Conversation(_segment_inputs())
+    asyncio.run(rs.store_task_outcome(
+        ordinary, task, state="input-required", new_messages=messages,
+        conversation=conversation, segment=False,
+    ))
+    assert [c[0] for c in ordinary.calls] == ["update_task", "update_task_conversation"]
+    assert ordinary.calls[1][1] == {"context_id": "ctx-seg", "task_id": "task-seg", "conv": conversation}
+    assert ordinary.calls[1][1]["conv"] is conversation
+    assert "a private draft" in _stored_form(ordinary.calls)
+
+
+def test_the_loader_stores_every_outcome_through_the_one_helper():
+    body = _function_source("_patched_run_task")
+    assert "update_task_conversation" not in body
+    call = body.index("await _regenerate_segment.store_task_outcome(")
+    assert body.index("segment=_segment_request is not None", call) > call
+    assert body.index("conversation=conversation", call) > call
