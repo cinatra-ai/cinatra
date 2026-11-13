@@ -166,7 +166,7 @@ vi.mock("../materialize-agent-package", () => ({
 }));
 vi.mock("../wayflow-reload-client", () => ({ triggerWayflowReload: async () => ({ ok: true }) }));
 
-import { installAgentFromPackage } from "../install-from-package";
+import { installAgentFromPackage, syncCompiledTemplateToDb } from "../install-from-package";
 
 const install = () => installAgentFromPackage({ packageName: PKG, orgId: "org-1" });
 
@@ -230,5 +230,85 @@ describe("cinatra#2047 D-1 — installAgentFromPackage compiles cinatra.lifecycl
     LIFECYCLE = { repairCapable: "yes", producedTypes: "not-an-array" };
     await install();
     expect(freshSeed().lifecycleConfig).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4264 A1b — the MCP recompile writes lifecycle_config per the
+// tri-state projection of the compile's OWN sibling read: `write` (readable
+// manifest with a block), `clear` (readable manifest without one), `none`
+// (no readable manifest: the column is left as it is; the compile has already
+// checked any retained regenerate list against the new flow).
+// ---------------------------------------------------------------------------
+describe("cinatra#4264 A1b — syncCompiledTemplateToDb projects the lifecycle declaration", () => {
+  const image = { artifactNode: "file_image", step: "image_flow", noteInput: "prompt" };
+  const draft = { artifactNode: "write_draft", step: "draft_flow", noteInput: "note" };
+  const compiled = {
+    approvalPolicy: { steps: [] },
+    inputSchema: { type: "object", properties: {} },
+    outputSchema: null,
+    prompt: null,
+    packageName: PKG,
+    packageVersion: "1.0.1",
+    agentDependencies: {},
+    type: "leaf",
+    compiledPlan: [],
+    hitlScreens: [],
+    llmConfig: null,
+    toolboxes: [],
+    agentSpecVersion: "26.1.0",
+    triggerMode: "full",
+    gatedSteps: [],
+    hasArtifactBindings: false,
+    artifactBindings: null,
+    publishingSteps: [],
+    cinatraConfig: null,
+  } as unknown as Parameters<typeof syncCompiledTemplateToDb>[2];
+  type Reading = { readable: false } | { readable: true; lifecycle: unknown };
+  const sync = (reading?: Reading) =>
+    (syncCompiledTemplateToDb as unknown as (...a: unknown[]) => Promise<void>)(
+      PKG,
+      "1.0.1",
+      compiled,
+      ...(reading === undefined ? [] : [reading]),
+    );
+
+  beforeEach(() => {
+    readTemplate.mockResolvedValue({ id: "tpl-existing", status: "active" });
+  });
+
+  it("write: a readable manifest that ADDS a list stores it", async () => {
+    await sync({ readable: true, lifecycle: { repairCapable: true, regenerate: [image] } });
+    expect(upsertPatch().lifecycleConfig).toBe(
+      '{"repairCapable":true,"regenerate":[{"artifactNode":"file_image","step":"image_flow","noteInput":"prompt"}]}',
+    );
+  });
+
+  it("write: a CHANGED list replaces the stored one (sorted by artifactNode)", async () => {
+    await sync({ readable: true, lifecycle: { regenerate: [draft, image] } });
+    expect(upsertPatch().lifecycleConfig).toBe(
+      '{"regenerate":[{"artifactNode":"file_image","step":"image_flow","noteInput":"prompt"},' +
+        '{"artifactNode":"write_draft","step":"draft_flow","noteInput":"note"}]}',
+    );
+  });
+
+  it("write: a block that REMOVES the list stores the rest without it", async () => {
+    await sync({ readable: true, lifecycle: { repairCapable: true } });
+    expect(upsertPatch().lifecycleConfig).toBe('{"repairCapable":true}');
+  });
+
+  it("clear: a readable manifest without a block clears the column (explicit null)", async () => {
+    await sync({ readable: true, lifecycle: undefined });
+    expect(upsertPatch()).toHaveProperty("lifecycleConfig", null);
+  });
+
+  it("none: no readable manifest leaves the column unchanged (the key is omitted)", async () => {
+    await sync({ readable: false });
+    expect(Object.prototype.hasOwnProperty.call(upsertPatch(), "lifecycleConfig")).toBe(false);
+  });
+
+  it("a caller that passes no reading writes no lifecycle column (unchanged behaviour)", async () => {
+    await sync();
+    expect(Object.prototype.hasOwnProperty.call(upsertPatch(), "lifecycleConfig")).toBe(false);
   });
 });

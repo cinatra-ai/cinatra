@@ -274,19 +274,51 @@ describe("cinatra#4264 A1: the regenerate declaration", () => {
     }
   });
 
-  it("A1a stores no regenerate list: serialization omits the key until A1b revalidates the writer roads", () => {
-    // pre-review 1 MUST-FIX 2: a stored list that a later recompile cannot
-    // revalidate (MCP recompile, ensure drift) would outlive its declaration.
-    // A1a writes nothing to the column, so no stale list can exist.
-    expect(
-      serializeLifecycleConfig({
-        requestedSkips: ["review"],
-        regenerate: [draft, image],
-        repairFindingsInput: { input: "instructions" },
-      }),
-    ).toBe('{"repairFindingsInput":{"input":"instructions"},"requestedSkips":["review"]}');
-    expect(serializeLifecycleConfig({ regenerate: [image, draft] })).toBeNull();
-    expect(serializeLifecycleConfig(normalizeLifecycle({ regenerate: [image] }))).toBeNull();
+  it("A1b stores the list: after repairFindingsInput, sorted by artifactNode, members in a fixed order", () => {
+    const text = serializeLifecycleConfig({
+      requestedSkips: ["review"],
+      regenerate: [draft, image],
+      repairFindingsInput: { input: "instructions" },
+    });
+    expect(text).toBe(
+      '{"repairFindingsInput":{"input":"instructions"},' +
+        '"regenerate":[{"artifactNode":"file_image","step":"image_flow","noteInput":"prompt"},' +
+        '{"artifactNode":"write_draft","step":"draft_flow","noteInput":"note"}],' +
+        '"requestedSkips":["review"]}',
+    );
+    // Code-unit order, not locale order: "Z" (0x5a) sorts before "a" (0x61).
+    const upper = { ...image, artifactNode: "Z_file" };
+    expect(serializeLifecycleConfig({ regenerate: [image, upper] })).toBe(
+      '{"regenerate":[{"artifactNode":"Z_file","step":"image_flow","noteInput":"prompt"},' +
+        '{"artifactNode":"file_image","step":"image_flow","noteInput":"prompt"}]}',
+    );
+    // Member order is fixed whatever order the entry was written in.
+    const shuffled = { noteInput: "prompt", step: "image_flow", artifactNode: "file_image" } as typeof image;
+    expect(serializeLifecycleConfig({ regenerate: [shuffled] })).toBe(
+      '{"regenerate":[{"artifactNode":"file_image","step":"image_flow","noteInput":"prompt"}]}',
+    );
+    // Round trip: the stored text reads back to the same declaration.
+    expect(normalizeLifecycle(JSON.parse(text as string))).toEqual(
+      normalizeLifecycle({ requestedSkips: ["review"], regenerate: [image, draft], repairFindingsInput: { input: "instructions" } }),
+    );
+    expect(serializeLifecycleConfig(normalizeLifecycle(JSON.parse(text as string)))).toBe(text);
+  });
+
+  it("readStoredRegenerate returns the raw stored list a writer retains, else undefined", () => {
+    const { readStoredRegenerate } = lifecyclePolicy as unknown as {
+      readStoredRegenerate?: (text: string | null | undefined) => unknown;
+    };
+    expect(typeof readStoredRegenerate).toBe("function");
+    if (!readStoredRegenerate) return;
+    expect(readStoredRegenerate(JSON.stringify({ repairCapable: true, regenerate: [image] }))).toEqual([image]);
+    // Raw, not normalized: a stored list the normalizer would drop is still
+    // handed to the writer's check, which then refuses it.
+    expect(readStoredRegenerate(JSON.stringify({ regenerate: [{ ...image, extra: 1 }] }))).toEqual([
+      { ...image, extra: 1 },
+    ]);
+    for (const text of [null, undefined, "", "{ not json", "[]", "null", JSON.stringify({ repairCapable: true })]) {
+      expect(readStoredRegenerate(text)).toBeUndefined();
+    }
   });
 
   it("a lifecycle without the key serializes to the pinned text of today", () => {

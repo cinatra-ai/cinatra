@@ -2,9 +2,10 @@
  * cinatra#4264 slice A1: `compileOasAgentJson` runs the regenerate check on the
  * sibling manifest's `cinatra.lifecycle.regenerate` (and, with no readable
  * sibling, on the entries a writer retains from the stored row), and the
- * registry install seed accepts a valid declaration without storing it (A1a
- * stores no list; A1b does, with its writer-road revalidation) and refuses an
- * invalid one.
+ * registry install seed stores a valid declaration (A1b) and refuses an
+ * invalid one. A1b: on request the compile also reports what its own sibling
+ * read found, so the MCP recompile writes the lifecycle column from the same
+ * manifest the check read.
  *
  * Run: cd packages/agents && pnpm exec vitest run src/__tests__/oas-compile-regenerate-4264.test.ts
  */
@@ -71,6 +72,46 @@ describe("cinatra#4264 A1: compileOasAgentJson and the regenerate declaration", 
   });
 });
 
+describe("cinatra#4264 A1b: the compile reports its own sibling read on request", () => {
+  const report = (oasPath: string, retainedRegenerate?: unknown) =>
+    compileOasAgentJson({
+      packageName: PACKAGE_NAME,
+      oasSourcePath: oasPath,
+      retainedRegenerate,
+      reportSiblingLifecycle: true,
+    } as Parameters<typeof compileOasAgentJson>[0]);
+  const reading = (result: unknown) => (result as { siblingLifecycle?: unknown }).siblingLifecycle;
+
+  it("a readable sibling with a lifecycle block: readable, with the raw block", async () => {
+    const lifecycle = { repairCapable: true, regenerate: VALID };
+    const result = await report(stage(pkg(lifecycle)).oasPath);
+    expect(result.ok).toBe(true);
+    expect(reading(result)).toEqual({ readable: true, lifecycle });
+  });
+
+  it("a readable sibling without a block: readable, lifecycle undefined (the writer clears)", async () => {
+    const result = await report(stage(pkg()).oasPath);
+    expect(result.ok).toBe(true);
+    expect(reading(result)).toEqual({ readable: true, lifecycle: undefined });
+  });
+
+  it("no sibling, or a malformed one: not readable (the writer keeps the column)", async () => {
+    expect(reading(await report(stage(null).oasPath))).toEqual({ readable: false });
+    const { dir, oasPath } = stage(null);
+    writeFileSync(join(dir, "package.json"), "{ not json");
+    expect(reading(await report(oasPath, VALID))).toEqual({ readable: false });
+    const stale = await report(oasPath, BROKEN);
+    expect(stale.ok).toBe(false);
+    expect((stale as { error: string }).error).toContain("REGENERATE_DECLARATION_INVALID");
+  });
+
+  it("without the request the result carries no reading (every other caller is unchanged)", async () => {
+    const result = await compile(stage(pkg({ regenerate: VALID })).oasPath);
+    expect(result.ok).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(result, "siblingLifecycle")).toBe(false);
+  });
+});
+
 describe("cinatra#4264 A1: buildAgentTemplateInstallSeed", () => {
   function manifest(regenerate: unknown): AgentPackageManifest {
     return {
@@ -102,8 +143,10 @@ describe("cinatra#4264 A1: buildAgentTemplateInstallSeed", () => {
     });
   };
 
-  it("accepts a valid list but stores no regenerate key until A1b (pre-review 1 MUST-FIX 2)", async () => {
-    expect((await seed(VALID)).lifecycleConfig).toBeNull();
+  it("A1b: stores a valid list on lifecycleConfig in the canonical text", async () => {
+    expect((await seed(VALID)).lifecycleConfig).toBe(
+      '{"regenerate":[{"artifactNode":"call_llm_bridge","step":"call_llm_bridge","noteInput":"user"}]}',
+    );
   });
 
   it("throws on an invalid list before a seed exists", async () => {

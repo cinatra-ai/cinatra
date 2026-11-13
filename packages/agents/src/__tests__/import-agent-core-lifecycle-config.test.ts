@@ -26,6 +26,9 @@ import { identityClaimMockFrom } from "./helpers/identity-claim-mock";
  *
  * Run: cd packages/agents && pnpm exec vitest run src/__tests__/import-agent-core-lifecycle-config.test.ts
  */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const PKG = "@cinatra-ai/wordpress-agent";
@@ -99,9 +102,9 @@ const OAS = JSON.stringify({
 
 /** Build the import ZIP the loader hands this function. `lifecycle: undefined`
  * declares no block; omitting `pkg` entirely models a manifest-less ZIP. */
-function zip(opts: { pkg?: boolean; lifecycle?: unknown } = {}): string {
+function zip(opts: { pkg?: boolean; lifecycle?: unknown; oas?: string } = {}): string {
   const files = [
-    { name: "agent.json", content: OAS },
+    { name: "agent.json", content: opts.oas ?? OAS },
     { name: "manifest.json", content: JSON.stringify({ version: 1 }) },
   ];
   if (opts.pkg !== false) {
@@ -189,10 +192,12 @@ describe("cinatra#2044 GAP 2 — importAgentTemplateCore compiles cinatra.lifecy
     expect(Object.prototype.hasOwnProperty.call(upsertPatch(), "lifecycleConfig")).toBe(true);
   });
 
-  it("cinatra#4264 A1a: a declared regenerate list is not stored on lifecycleConfig (A1b stores it)", async () => {
+  it("cinatra#4264 A1b: a declared regenerate list is stored on lifecycleConfig (write)", async () => {
     const regenerate = [{ artifactNode: "file_image", step: "image_flow", noteInput: "prompt" }];
     await importZip({ lifecycle: { regenerate } });
-    expect(createInput().lifecycleConfig).toBeNull();
+    expect(createInput().lifecycleConfig).toBe(
+      '{"regenerate":[{"artifactNode":"file_image","step":"image_flow","noteInput":"prompt"}]}',
+    );
   });
 
   it("a MALFORMED block does not crash the import (fail-soft ⇒ no declaration)", async () => {
@@ -307,5 +312,77 @@ describe("cinatra#2616 — the ZIP import records its identity claim", () => {
       status: "published",
     });
     expect(createInput().orgId).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4264 A1b — the tri-state projection of the import road.
+//
+// `write` (a manifest with a block) and `clear` (a manifest without one) are
+// decided by the manifest, whose list the compile has already checked. `none`
+// (no manifest, an unparseable one, or a non-authoritative synthesis) keeps the
+// stored column; when that column carries a `regenerate` list, the list is
+// checked against the NEW flow first and the whole import refuses before any
+// write when the flow no longer honours it.
+// ---------------------------------------------------------------------------
+describe("cinatra#4264 A1b — the import revalidates a retained regenerate list", () => {
+  const gemini = JSON.parse(
+    readFileSync(join(__dirname, "fixtures", "synthetic-gemini-agent.json"), "utf8"),
+  ) as { metadata: { cinatra: Record<string, unknown> } };
+  gemini.metadata.cinatra = { ...gemini.metadata.cinatra, packageName: PKG };
+  const GEMINI = JSON.stringify(gemini);
+  // The fixture's ApiNode files its own output from the start's `user` input.
+  const KEPT = [{ artifactNode: "call_llm_bridge", step: "call_llm_bridge", noteInput: "user" }];
+  const STALE = [{ artifactNode: "file_image", step: "image_flow", noteInput: "prompt" }];
+  const row = (regenerate: unknown) => ({
+    id: "tpl-existing",
+    lifecycleConfig: JSON.stringify({ repairCapable: true, regenerate }),
+  });
+
+  it("none (manifest-less ZIP): a stored list the new flow no longer honours REFUSES the import before any write", async () => {
+    readTemplate.mockResolvedValue(row(STALE) as never);
+    await expect(importZip({ pkg: false, oas: GEMINI })).rejects.toThrow(/REGENERATE_DECLARATION_INVALID/);
+    expect(updateTemplate).not.toHaveBeenCalled();
+    expect(createTemplate).not.toHaveBeenCalled();
+  });
+
+  it("none (non-authoritative synthesis, the ensure/version-bump road): the same stale list REFUSES", async () => {
+    readTemplate.mockResolvedValue(row(STALE) as never);
+    await expect(
+      importAgentTemplateCore(zip({ oas: GEMINI }), undefined, {
+        redirect: false,
+        status: "published",
+        lifecycleDeclarationAuthoritative: false,
+      }),
+    ).rejects.toThrow(/REGENERATE_DECLARATION_INVALID/);
+    expect(updateTemplate).not.toHaveBeenCalled();
+  });
+
+  it("none (unparseable manifest): the same stale list REFUSES", async () => {
+    readTemplate.mockResolvedValue(row(STALE) as never);
+    const files = [
+      { name: "agent.json", content: GEMINI },
+      { name: "manifest.json", content: JSON.stringify({ version: 1 }) },
+      { name: "package.json", content: "{ not json" },
+    ];
+    await expect(
+      importAgentTemplateCore(createZipBuffer(files).toString("base64"), undefined, {
+        redirect: false,
+        status: "published",
+      }),
+    ).rejects.toThrow(/REGENERATE_DECLARATION_INVALID/);
+    expect(updateTemplate).not.toHaveBeenCalled();
+  });
+
+  it("none: a stored list the new flow still honours is KEPT (the column is left unchanged)", async () => {
+    readTemplate.mockResolvedValue(row(KEPT) as never);
+    await importZip({ pkg: false, oas: GEMINI });
+    expect(upsertPatch().lifecycleConfig).toBeUndefined();
+  });
+
+  it("clear: a manifest without a block clears the column; the stale stored list is not checked", async () => {
+    readTemplate.mockResolvedValue(row(STALE) as never);
+    await importZip({ oas: GEMINI });
+    expect(upsertPatch()).toHaveProperty("lifecycleConfig", null);
   });
 });
