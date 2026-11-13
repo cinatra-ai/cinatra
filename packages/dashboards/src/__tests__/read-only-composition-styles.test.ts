@@ -16,9 +16,12 @@ import { describe, it, expect } from "vitest";
  *
  * The composition therefore loads both itself, and the theme lives beside it in
  * `@cinatra-ai/sdk-dashboard` (the SDK may not import `@cinatra-ai/dashboards`).
- * The home shell loads the drizzle-cube defaults and then the composition
- * module, so there is ONE theme file and both mounts read it after the
- * defaults, which is the order the theme's overrides need.
+ * It loads drizzle-cube's stylesheet as the generated SCOPED copy
+ * (`drizzle-cube-scoped.css`, pinned by drizzle-cube-scoped-styles.test.ts), so
+ * the library rules the upstream file carries unscoped stay inside dashboard
+ * regions. The home shell keeps loading the upstream defaults and then the
+ * composition module, so there is ONE theme file and both mounts read it after
+ * the defaults, which is the order the theme's overrides need.
  */
 
 const REPO = join(__dirname, "..", "..", "..", "..");
@@ -34,14 +37,15 @@ function sideEffectImports(file: string): string[] {
 describe("the read-only composition loads the dashboard stylesheets itself", () => {
   const composition = join(SDK_COMPONENTS, "read-only-composition.tsx");
 
-  it("imports the drizzle-cube defaults, then the Cinatra theme, in that order", () => {
+  it("imports the scoped drizzle-cube defaults, then the Cinatra theme, in that order", () => {
     expect(sideEffectImports(composition)).toEqual([
-      "drizzle-cube/client/styles.css",
+      "./drizzle-cube-scoped.css",
       "./dashboard-theme.css",
     ]);
   });
 
-  it("finds the theme beside it in the SDK package", () => {
+  it("finds the scoped defaults and the theme beside it in the SDK package", () => {
+    expect(existsSync(join(SDK_COMPONENTS, "drizzle-cube-scoped.css"))).toBe(true);
     expect(existsSync(join(SDK_COMPONENTS, "dashboard-theme.css"))).toBe(true);
   });
 });
