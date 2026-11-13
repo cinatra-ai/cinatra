@@ -6,16 +6,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mock = vi.hoisted(() => {
   process.env.BETTER_AUTH_SECRET ??= "dev-media-kinds-placeholder-not-a-credential";
-  return { resolve: vi.fn(), upload: vi.fn(), register: vi.fn() };
+  return { resolve: vi.fn(), upload: vi.fn(), register: vi.fn(), member: vi.fn() };
 });
 vi.mock("@/lib/register-all-object-types", () => ({ registerAllObjectTypes: mock.register }));
 vi.mock("@/lib/artifacts/upload-artifact-type-map", () => ({ resolveUploadArtifactType: mock.resolve }));
 vi.mock("@/lib/artifacts/artifact-service", () => ({ createUploadedArtifact: mock.upload }));
+vi.mock("@/lib/better-auth-db", () => ({ readUserIsOrgMember: mock.member }));
 
 import { MEDIA_BYTE_ROAD_KINDS, mediaByteRoadKindFor } from "@/lib/lifecycle/review-island-byte-road";
 import { sniffMime } from "@/lib/artifacts/local-disk-blob-store";
 import { crc32, mediaKindSamples } from "../../../scripts/fixtures/lib/media-kind-samples";
-import { fileMediaKindSamples } from "../../../scripts/fixtures/lib/file-media-kinds";
+import { fileMediaKindSamples, seedMediaKindReviewRun } from "../../../scripts/fixtures/lib/file-media-kinds";
 
 const sample = (kind: string) => {
   const found = mediaKindSamples().find((s) => s.kind === kind);
@@ -25,18 +26,31 @@ const sample = (kind: string) => {
 
 /** The entries of a ZIP, read from its central directory, CRC-checked. */
 function zipEntries(bytes: Buffer) {
-  const end = bytes.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
-  expect(end).toBeGreaterThan(0);
+  // The end record carries no comment, so it closes the file, and the central
+  // directory ends where the end record starts.
+  const end = bytes.length - 22;
+  expect(bytes.readUInt32LE(end)).toBe(0x06054b50);
+  expect(bytes.readUInt16LE(end + 20)).toBe(0);
   const count = bytes.readUInt16LE(end + 10);
+  expect(bytes.readUInt16LE(end + 8)).toBe(count);
   let at = bytes.readUInt32LE(end + 16);
+  expect(at + bytes.readUInt32LE(end + 12)).toBe(end);
   const entries = new Map<string, Buffer>();
   for (let i = 0; i < count; i += 1) {
     expect(bytes.readUInt32LE(at)).toBe(0x02014b50);
-    const crc = bytes.readUInt32LE(at + 16), size = bytes.readUInt32LE(at + 24);
+    const method = bytes.readUInt16LE(at + 10), crc = bytes.readUInt32LE(at + 16), size = bytes.readUInt32LE(at + 24);
+    expect(method, "stored entries only").toBe(0);
+    expect(bytes.readUInt32LE(at + 20), "stored size").toBe(size);
     const nameLength = bytes.readUInt16LE(at + 28), extra = bytes.readUInt16LE(at + 30), comment = bytes.readUInt16LE(at + 32);
     const local = bytes.readUInt32LE(at + 42);
     const name = bytes.subarray(at + 46, at + 46 + nameLength).toString("utf8");
     expect(bytes.readUInt32LE(local)).toBe(0x04034b50);
+    // The local header agrees with the central entry: method, CRC, sizes and name.
+    expect(bytes.readUInt16LE(local + 8), `${name} local method`).toBe(method);
+    expect(bytes.readUInt32LE(local + 14), `${name} local CRC`).toBe(crc);
+    expect(bytes.readUInt32LE(local + 18), `${name} local size`).toBe(size);
+    expect(bytes.readUInt32LE(local + 22), `${name} local size`).toBe(size);
+    expect(bytes.subarray(local + 30, local + 30 + bytes.readUInt16LE(local + 26)).toString("utf8")).toBe(name);
     const dataAt = local + 30 + bytes.readUInt16LE(local + 26) + bytes.readUInt16LE(local + 28);
     const data = bytes.subarray(dataAt, dataAt + size);
     expect(crc32(data), `${name} CRC`).toBe(crc);
@@ -111,6 +125,7 @@ describe("development media kind filing (#3459)", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.stubEnv("CINATRA_RUNTIME_MODE", "development");
+    mock.member.mockResolvedValue(true);
     mock.resolve.mockImplementation((mime: string) => ({ ok: true, objectTypeId: `type-for:${mime}` }));
     let n = 0;
     mock.upload.mockImplementation(async () => { n += 1; return { artifactId: `artifact-${n}`, representationRevisionId: `revision-${n}` }; });
@@ -145,10 +160,64 @@ describe("development media kind filing (#3459)", () => {
     expect(mock.upload).not.toHaveBeenCalled();
   });
 
+  it("uses the trimmed ids for the membership read and every write", async () => {
+    await fileMediaKindSamples({ orgId: " org ", userId: "\tuser " });
+    expect(mock.member).toHaveBeenCalledWith("user", "org");
+    for (const [input] of mock.upload.mock.calls) {
+      expect(input).toMatchObject({ orgId: "org", createdBy: "user", ownerId: "user" });
+    }
+  });
+
+  it("files nothing for a user who is not a member of the organization", async () => {
+    mock.member.mockResolvedValue(false);
+    await expect(fileMediaKindSamples({ orgId: "org", userId: "user" })).rejects.toThrow(/not a member of the organization.*nothing was filed/);
+    expect(mock.resolve).not.toHaveBeenCalled();
+    expect(mock.upload).not.toHaveBeenCalled();
+  });
+
+  it("files nothing for an empty organization or user", async () => {
+    await expect(fileMediaKindSamples({ orgId: "  ", userId: "user" })).rejects.toThrow(/nonempty/);
+    await expect(fileMediaKindSamples({ orgId: "org", userId: "" })).rejects.toThrow(/nonempty/);
+    expect(mock.member).not.toHaveBeenCalled();
+    expect(mock.upload).not.toHaveBeenCalled();
+  });
+
   it("refuses outside the development runtime before any write", async () => {
     vi.stubEnv("CINATRA_RUNTIME_MODE", "production");
     await expect(fileMediaKindSamples({ orgId: "org", userId: "user" })).rejects.toThrow(/CINATRA_RUNTIME_MODE=development/);
     expect(mock.resolve).not.toHaveBeenCalled();
     expect(mock.upload).not.toHaveBeenCalled();
+  });
+});
+
+describe("development media kind review run (#3459)", () => {
+  const filed = ["image", "video", "audio", "pdf", "document", "archive"].map((kind, i) => ({
+    kind, mime: `form-${i}`, objectType: `type-${i}`, artifactId: `artifact-${i}`, representationRevisionId: `revision-${i}`,
+  })) as Parameters<typeof seedMediaKindReviewRun>[0]["filed"];
+  const targets = filed.map(({ artifactId, representationRevisionId }) => ({ artifactId, representationRevisionId }));
+  const harness = (pinned: typeof targets) => ({
+    seedMarkedReviewGateRun: vi.fn(async () => "run"),
+    waitForMarkedReviewGate: vi.fn(async () => ({ gateId: "gate", runId: "run", reviewTaskId: "task", status: "pending", pinnedTargets: pinned })),
+  });
+
+  it("seeds the run with the trimmed ids and the six targets, and accepts a gate that pins exactly them", async () => {
+    const h = harness([...targets].reverse());
+    await expect(seedMediaKindReviewRun({ orgId: " org ", userId: " user ", filed }, h))
+      .resolves.toEqual({ runId: "run", reviewTaskId: "task", status: "pending", pinned: 6 });
+    expect(h.seedMarkedReviewGateRun).toHaveBeenCalledWith({ orgId: "org", userId: "user", targets });
+  });
+
+  it("fails when the gate misses a target, pins a foreign one or pins one twice", async () => {
+    const foreign = { artifactId: "artifact-x", representationRevisionId: "revision-x" };
+    for (const pinned of [targets.slice(1), [...targets.slice(1), foreign], [...targets.slice(1), targets[1]], [...targets, foreign]]) {
+      await expect(seedMediaKindReviewRun({ orgId: "org", userId: "user", filed }, harness(pinned)))
+        .rejects.toThrow(/does not pin exactly the six filed revisions/);
+    }
+  });
+
+  it("refuses to seed for anything but the six filed kinds", async () => {
+    const h = harness(targets);
+    await expect(seedMediaKindReviewRun({ orgId: "org", userId: "user", filed: filed.slice(1) }, h)).rejects.toThrow(/six filed/);
+    expect(h.seedMarkedReviewGateRun).not.toHaveBeenCalled();
   });
 });
