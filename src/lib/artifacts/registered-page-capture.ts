@@ -4,7 +4,7 @@ import {
   createPreviewCaptureDeps,
   type CaptureDegradeReason,
   type PreviewCaptureDeps,
-} from "./cms-preview-capture";
+} from "./registered-page-render";
 import { normalizeOrigin } from "./cms-preview-capture-policy";
 import { findInertnessViolations, sanitizeCapturedHtml } from "./cms-preview-inertness";
 

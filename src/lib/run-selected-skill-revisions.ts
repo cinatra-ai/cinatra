@@ -26,7 +26,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 
 import { SELECTION_SOURCES } from "@cinatra-ai/skills/recommendation";
-import { PRE_EXECUTION_RUN_STATUSES } from "@cinatra-ai/agents/run-status";
+import { PRE_START_RUN_STATUSES_WITHOUT_A_START_STAMP } from "@cinatra-ai/agents/run-status";
 
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { runPostgresQueriesAsync } from "@/lib/postgres-async";
@@ -139,14 +139,24 @@ export function readRunSelectedSkillRevisions(
  * nothing — its selection is still the reader's answer to a question, and the
  * Skills step lets them change that answer until the run starts.
  *
- * THE BOUNDARY IS IN THE STATEMENT, NOT IN THE CALLER. The status test is a
- * join inside the DELETE, against `PRE_EXECUTION_RUN_STATUSES` — the platform's
- * own set of the statuses a run holds BEFORE it has ever run (`pending_input`,
- * `pending_trigger`, `armed`). So a caller that asks to clear a started run's
- * rows deletes NOTHING, whatever it believed about the run when it asked, and
- * there is no window between a status read and the write for the run to be
- * dispatched in. The first status outside that set is `queued`, which is the
- * dispatch CAS itself.
+ * THE BOUNDARY IS IN THE STATEMENT, NOT IN THE CALLER. The test is a join
+ * inside the DELETE, against the run's OWN `started_at` — stamped once, at the
+ * `queued->running` dispatch CAS — together with
+ * `PRE_START_RUN_STATUSES_WITHOUT_A_START_STAMP`, the platform's set of the
+ * statuses a run can hold while it has not executed. So a caller that asks to
+ * clear a started run's rows deletes NOTHING, whatever it believed about the run
+ * when it asked, and there is no window between a status read and the write for
+ * the run to be dispatched in.
+ *
+ * THE STAMP, NOT THE STATUS ALONE (cinatra#3062). The test used to be the status
+ * set by itself, which left `pending_approval` out — and that is the status the
+ * skills hold's own park puts a NOT-YET-EXECUTED run into. A returning reader was
+ * therefore offered a live box on a run that had not started and had their change
+ * refused by this statement when they used it. The stamp tells the hold's park
+ * apart from an interrupt raised mid-flight, which the status cannot. A run
+ * dispatched before the stamp existed carries no stamp, so the statement also
+ * reads `human_wait_attempt_id IS NULL`: that marker (cinatra#1938) is set only
+ * on `running->pending_approval`, so a row that carries it has executed.
  *
  * SCOPED TO THE NAMED SKILLS, never to the run. The caller names the skills its
  * own decision is authoritative for — the hold's offered set — so a selection
@@ -172,8 +182,14 @@ export function clearRunSelectedSkillRevisionsBeforeStart(input: {
                WHERE s.run_id = $1
                  AND r.id = s.run_id
                  AND s.skill_id = ANY($2::text[])
+                 AND r.started_at IS NULL
+                 AND r.human_wait_attempt_id IS NULL
                  AND r.status = ANY($3::text[])`,
-        values: [input.runId, [...input.skillIds], [...PRE_EXECUTION_RUN_STATUSES]],
+        values: [
+          input.runId,
+          [...input.skillIds],
+          [...PRE_START_RUN_STATUSES_WITHOUT_A_START_STAMP],
+        ],
       },
     ],
   });
@@ -216,7 +232,7 @@ export function replaceRunSelectedSkillRevisionsBeforeStart(input: {
   const schema = postgresSchema.replaceAll('"', '""');
   const table = `"${schema}"."run_selected_skill_revisions"`;
   const runs = `"${schema}"."agent_runs"`;
-  const preStart = [...PRE_EXECUTION_RUN_STATUSES];
+  const preStart = [...PRE_START_RUN_STATUSES_WITHOUT_A_START_STAMP];
   const kept = new Set(input.selections.map((s) => s.skillId));
   const dropped = input.scopeSkillIds.filter((skillId) => !kept.has(skillId));
 
@@ -225,7 +241,7 @@ export function replaceRunSelectedSkillRevisionsBeforeStart(input: {
     //    writes, so "it applied" is the transaction's own view and not a probe
     //    taken a moment earlier.
     {
-      text: `SELECT 1 FROM ${runs} WHERE id = $1 AND status = ANY($2::text[])`,
+      text: `SELECT 1 FROM ${runs} WHERE id = $1 AND started_at IS NULL AND human_wait_attempt_id IS NULL AND status = ANY($2::text[])`,
       values: [input.runId, preStart],
     },
   ];
@@ -236,6 +252,8 @@ export function replaceRunSelectedSkillRevisionsBeforeStart(input: {
              WHERE s.run_id = $1
                AND r.id = s.run_id
                AND s.skill_id = ANY($2::text[])
+               AND r.started_at IS NULL
+               AND r.human_wait_attempt_id IS NULL
                AND r.status = ANY($3::text[])`,
       values: [input.runId, dropped, preStart],
     });
@@ -258,7 +276,10 @@ export function replaceRunSelectedSkillRevisionsBeforeStart(input: {
                AS v(id, run_id, skill_id, skill_revision_id, selection_source)
              WHERE EXISTS (
                SELECT 1 FROM ${runs} r
-               WHERE r.id = ${runIdParam} AND r.status = ANY(${statusParam}::text[])
+               WHERE r.id = ${runIdParam}
+                 AND r.started_at IS NULL
+                 AND r.human_wait_attempt_id IS NULL
+                 AND r.status = ANY(${statusParam}::text[])
              )
              ON CONFLICT (run_id, skill_id) DO NOTHING`,
       values,
@@ -318,10 +339,17 @@ export type RunRejectedRecommendationInput = {
 };
 
 /**
- * The ONE rejected-rows INSERT, as a statement rather than as a call. Shared by
- * the standalone writer below and by the transactional skip write further down,
- * so both halves of the efficacy split speak exactly the same SQL and neither
- * can drift into a different conflict rule.
+ * The rejected-rows INSERT, as a statement rather than as a call. Shared by the
+ * standalone writer below and by the UNGUARDED form of the transactional skip
+ * write further down, so both speak exactly the same SQL.
+ *
+ * The GUARDED skip write (`beforeStart`, cinatra#3062) does not use it: each of
+ * its statements must repeat the pre-start predicate, so it carries its own
+ * `INSERT ... SELECT ... FROM (VALUES ...) WHERE <pre-start>` with the same
+ * columns and the same `ON CONFLICT (run_id, skill_id) DO NOTHING`. A change to
+ * either statement must be made to both. The integration arms in
+ * skills-step-freeze-follows-the-run.integration.test.ts hold the guarded form
+ * to the same values and the same first-write-wins rule.
  */
 function buildRejectedRecommendationsInsert(
   schema: string,
@@ -413,8 +441,10 @@ export const SKIP_RECOMMENDATION_SOURCE = "user_skipped" as const;
 /**
  * Persist a skip's DURABLE EVIDENCE — the run-level marker and, optionally, the
  * per-skill `user_skipped` rows that accompany it — AND VERIFY THE MARKER
- * LANDED. Returns whether the marker is READABLE afterwards; the caller releases
- * the run's park only on `true`.
+ * LANDED. Answers whether the marker is READABLE afterwards: a boolean without
+ * `beforeStart`, and the named outcome `"recorded"` with it (see
+ * `RecommendationSkipBeforeStartResult`). The decision path passes
+ * `beforeStart` and releases the run's park only on `"recorded"`.
  *
  * ONE TRANSACTION, BECAUSE A HALF-COMMITTED SKIP SETTLES THE CARD ON A REFUSED
  * DECISION (cinatra#2794 round-8 finding 2). The two halves used to be two
@@ -432,14 +462,15 @@ export const SKIP_RECOMMENDATION_SOURCE = "user_skipped" as const;
  * that also means the statement reports success both when it inserted and when
  * it silently did nothing. "The write did not throw" is therefore NOT the same
  * fact as "the marker is on record", and the release must turn on the latter:
- * releasing a run while losing the record of its decision is exactly the
+ * releasing a run while losing the record of its decision is the
  * vanishing card this whole path exists to remove.
  *
- * WHAT `true` MEANS UNDER THE TRANSACTION, AND WHAT A REFUSAL DOES NOT MEAN.
+ * WHAT A LANDING (`true`, or `"recorded"`) MEANS UNDER THE TRANSACTION, AND
+ * WHAT A REFUSAL DOES NOT MEAN.
  * The read-back now runs INSIDE the transaction, so it sees this statement's own
  * row rather than a committed one — the durability it used to assert comes from
  * the COMMIT instead. The worker publishes its result only AFTER `COMMIT`
- * resolves, so `true` still means "the marker is durably on record".
+ * resolves, so a landing still means "the marker is durably on record".
  *
  * A refusal is the weaker direction, and the weakness is the sync bridge's, not
  * this write's. A statement error rolls the whole transaction back, so the
@@ -464,8 +495,46 @@ export const SKIP_RECOMMENDATION_SOURCE = "user_skipped" as const;
  * keeps the first attempt's number. That is the pre-existing behaviour of both
  * tables, and the count is read as "how many rows this DECISION named", not as a
  * live row count.
+ *
+ * BEFORE THE RUN STARTS, WHEN `beforeStart` IS GIVEN (cinatra#3062). The
+ * decision path passes it, and then the same transaction first locks the run row
+ * BY ID, whatever its state, with `FOR UPDATE`, and reads the store's own
+ * pre-start question as a column: `started_at IS NULL AND human_wait_attempt_id
+ * IS NULL AND status = ANY(PRE_START_RUN_STATUSES_WITHOUT_A_START_STAMP)`, the
+ * SQL form of `recommendationRunHasStartedForRow` negated except for `queued`,
+ * which the store keeps out (see that set), and for an absent status (NULL or
+ * empty), which that function reads as not started and the predicate refuses.
+ * The lock holds the row until COMMIT
+ * whatever the answer, so a writer of that row (the dispatch CAS, the worker's
+ * setup interrupt, the enqueue compensation) waits for this transaction, and a
+ * writer that committed first is read by the lock. Each of the three writes
+ * after it (the scoped clear of the run's selection rows, the per-skill rows and
+ * the marker) carries the same predicate and reads the same locked row; the
+ * marker's read-back after them does not need it. So a run that is not before
+ * its start when the row is locked (`queued`, running, paused mid-flight or
+ * settled) gets none of these writes, and the answer is
+ * `{ outcome: "run_started" }`: the caller refuses with the run-started
+ * sentence, and a retry while the run stays so will not make the write land. A
+ * run id with no row is answered the same way; with no row there is nothing to
+ * lock, and the decision path reads the run before it asks. Without
+ * `beforeStart` the write is the unguarded one, as on main, and it answers a
+ * boolean; the decision path does not call it that way.
  */
-export function writeRunRecommendationSkip(input: {
+export const RECOMMENDATION_SKIP_RUN_STARTED = "run_started" as const;
+
+/**
+ * The answer of the GUARDED skip write (`beforeStart`). A named outcome, so a
+ * caller reads `outcome` and cannot take a refusal for a landing by a truthiness
+ * test: `"recorded"` (the marker reads back), `"not_recorded"` (the run was
+ * before its start and the marker does not read back) or `"run_started"` (the
+ * run was not before its start when its row was locked, or has no row).
+ */
+export type RecommendationSkipBeforeStartResult =
+  | { readonly outcome: "recorded" }
+  | { readonly outcome: "not_recorded" }
+  | { readonly outcome: typeof RECOMMENDATION_SKIP_RUN_STARTED };
+
+type RecommendationSkipWriteInput = {
   runId: string;
   /** The principal whose decision this was — the fail-closed owner guard has
    * already proved it is the run's `runBy`. */
@@ -476,12 +545,32 @@ export function writeRunRecommendationSkip(input: {
   /** The per-skill efficacy half, committed IN THE SAME TRANSACTION as the
    * marker. Empty or absent under drift — a legitimate state, and still a skip. */
   rejected?: ReadonlyArray<RunRejectedRecommendationInput>;
-}): boolean {
+};
+
+export function writeRunRecommendationSkip(
+  input: RecommendationSkipWriteInput & {
+    /** The pre-start guard (see above) and the selection rows this decision
+     * clears in the same transaction: the hold's offered set. */
+    beforeStart: { clearSkillIds: readonly string[] };
+  },
+): RecommendationSkipBeforeStartResult;
+export function writeRunRecommendationSkip(
+  input: RecommendationSkipWriteInput & { beforeStart?: undefined },
+): boolean;
+export function writeRunRecommendationSkip(
+  input: RecommendationSkipWriteInput & { beforeStart?: { clearSkillIds: readonly string[] } },
+): boolean | RecommendationSkipBeforeStartResult {
   const connectionString = getPostgresConnectionString();
   const schema = postgresSchema;
   const table = `"${schema.replaceAll('"', '""')}"."run_recommendation_skips"`;
   const rejected = input.rejected ?? [];
-  const queries = [
+  // One transaction and ONE call either way (the sync-bridge inventory counts
+  // call sites, and this file's count does not grow): the guarded statements
+  // when `beforeStart` is given, the unguarded ones otherwise.
+  const guarded = input.beforeStart
+    ? buildGuardedRecommendationSkipQueries(input, input.beforeStart)
+    : null;
+  const queries = guarded ?? [
     ...(rejected.length > 0
       ? [buildRejectedRecommendationsInsert(schema, input.runId, rejected)]
       : []),
@@ -497,8 +586,116 @@ export function writeRunRecommendationSkip(input: {
     },
   ];
   const results = runPostgresQueriesSync({ connectionString, queries, transaction: true });
-  const verified = results[results.length - 1];
-  return (verified?.rows?.length ?? 0) > 0;
+  const markerReadsBack = (results[results.length - 1]?.rows?.length ?? 0) > 0;
+  if (!guarded) return markerReadsBack;
+  // The guarded form's first statement locked the run row by id and answered
+  // the question as `pre_start`. Anything but `true` (the run is not before its
+  // start, or there is no row) is the refusal; the writes after it asked the
+  // same locked row the same question, so they did not land.
+  if (results[0]?.rows?.[0]?.pre_start !== true) return { outcome: RECOMMENDATION_SKIP_RUN_STARTED };
+  return { outcome: markerReadsBack ? "recorded" : "not_recorded" };
+}
+
+/**
+ * The statements of the guarded skip write (cinatra#3062), run by
+ * `writeRunRecommendationSkip` in one transaction: the run row locked by id and
+ * asked first, the answer read as the column `pre_start`, and every write
+ * carrying the same pre-start predicate over the same locked row, so a refusal
+ * gets none of the writes. The last statement is the marker's read-back.
+ */
+function buildGuardedRecommendationSkipQueries(
+  input: {
+    runId: string;
+    skippedBy: string;
+    candidateCount: number;
+    rejected?: ReadonlyArray<RunRejectedRecommendationInput>;
+  },
+  guard: { clearSkillIds: readonly string[] },
+): Array<{ text: string; values: unknown[] }> {
+  const q = postgresSchema.replaceAll('"', '""');
+  const runs = `"${q}"."agent_runs"`;
+  const selected = `"${q}"."run_selected_skill_revisions"`;
+  const rejectedTable = `"${q}"."run_rejected_recommendations"`;
+  const skips = `"${q}"."run_recommendation_skips"`;
+  const preStart = [...PRE_START_RUN_STATUSES_WITHOUT_A_START_STAMP];
+  const rejected = input.rejected ?? [];
+  // The predicate every write repeats. `$1` is the run id and `$2` the
+  // pre-start status set in each statement that uses it. It reads the row that
+  // statement 1 holds locked, so it gives statement 1's answer.
+  const isPreStart = `EXISTS (
+    SELECT 1 FROM ${runs} r
+    WHERE r.id = $1
+      AND r.started_at IS NULL
+      AND r.human_wait_attempt_id IS NULL
+      AND r.status = ANY($2::text[])
+  )`;
+  const queries: Array<{ text: string; values: unknown[] }> = [
+    // 1. THE QUESTION. The row is locked BY ID, whatever its state, and held
+    // until COMMIT; the answer is a column. A WHERE that asked the question
+    // would lock only a row that passes it, and a run that moved into the set
+    // between this statement and the writes would get the writes after a
+    // refusal (`queued -> pending_approval` by the setup interrupt).
+    {
+      text: `SELECT (started_at IS NULL
+                     AND human_wait_attempt_id IS NULL
+                     AND status = ANY($2::text[])) AS pre_start
+             FROM ${runs}
+             WHERE id = $1
+             FOR UPDATE`,
+      values: [input.runId, preStart],
+    },
+  ];
+  // 2. THE SCOPED CLEAR — an all-clear Continue drops the earlier answer.
+  if (guard.clearSkillIds.length > 0) {
+    queries.push({
+      text: `DELETE FROM ${selected} s
+             WHERE s.run_id = $1
+               AND s.skill_id = ANY($3::text[])
+               AND ${isPreStart}`,
+      values: [input.runId, preStart, [...guard.clearSkillIds]],
+    });
+  }
+  // 3. THE PER-SKILL HALF.
+  if (rejected.length > 0) {
+    const rows: string[] = [];
+    const values: unknown[] = [input.runId, preStart];
+    let p = 3;
+    for (const r of rejected) {
+      rows.push(`($${p++}::text, $${p++}::text, $${p++}::text, $${p++}::text, $${p++}::integer)`);
+      values.push(
+        randomUUID(),
+        r.skillId,
+        r.skillRevisionId ?? null,
+        r.recommendationSource,
+        r.recommendedRank ?? null,
+      );
+    }
+    queries.push({
+      text: `INSERT INTO ${rejectedTable}
+               (id, run_id, skill_id, skill_revision_id, recommendation_source, recommended_rank)
+             SELECT v.id, $1, v.skill_id, v.skill_revision_id, v.recommendation_source, v.recommended_rank
+             FROM (VALUES ${rows.join(", ")})
+               AS v(id, skill_id, skill_revision_id, recommendation_source, recommended_rank)
+             WHERE ${isPreStart}
+             ON CONFLICT (run_id, skill_id) DO NOTHING`,
+      values,
+    });
+  }
+  // 4. THE MARKER, and 5. its read-back.
+  queries.push(
+    {
+      text: `INSERT INTO ${skips} (run_id, skipped_by, candidate_count)
+             SELECT $1, $3::text, $4::integer
+             WHERE ${isPreStart}
+             ON CONFLICT (run_id) DO NOTHING`,
+      values: [input.runId, preStart, input.skippedBy, input.candidateCount],
+    },
+    {
+      text: `SELECT 1 FROM ${skips} WHERE run_id = $1 LIMIT 1`,
+      values: [input.runId],
+    },
+  );
+  return queries;
 }
 
 /**

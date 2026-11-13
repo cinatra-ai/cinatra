@@ -47,6 +47,14 @@ export default defineConfig({
     // recurring ERR_MODULE_NOT_FOUND class for tsconfig-mapped subpaths.
     tsconfigPaths: true,
     alias: {
+      // Leaf subpath BEFORE the barrel (vite picks the more-specific alias
+      // first, as packages/extensions/vitest.config.ts does): without it the
+      // barrel alias prefix-matches `@cinatra-ai/registries/src/version-compare`
+      // into `index.ts/src/version-compare` (ENOTDIR).
+      "@cinatra-ai/registries/src/version-compare": path.join(
+        root,
+        "packages/registries/src/version-compare.ts",
+      ),
       "@cinatra-ai/registries": path.join(root, "packages/registries/src/index.ts"),
       // `@modelcontextprotocol/server` is the published npm package (exact
       // `2.0.0`; cinatra#2218 L1 retired the vendored copy). Its dist
