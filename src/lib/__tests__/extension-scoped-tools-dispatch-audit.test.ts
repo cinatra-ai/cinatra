@@ -44,9 +44,12 @@ vi.mock("@cinatra-ai/agents/installed-oas-path", () => ({
   probeInstalledOasPathForRead: () => ({ path: null }),
 }));
 vi.mock("@/lib/verdaccio-config", () => ({ loadVerdaccioConfigForReads: async () => ({}) }));
-vi.mock("@/lib/authz/audit", () => ({
-  logAuditEvent: (...a: unknown[]) => logAuditEvent(...a),
-}));
+// The audit module loads slowly (a fresh load per test, after resetModules), so a
+// write the dispatch starts only after its answer would be missing when the answer returns.
+vi.mock("@/lib/authz/audit", async () => {
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  return { logAuditEvent: (...a: unknown[]) => logAuditEvent(...a) };
+});
 vi.mock("@/lib/extension-tool-module-loader", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/extension-tool-module-loader")>()),
   loadDeclaredToolModule: (...args: unknown[]) => loadDeclaredToolModule(...args),
@@ -102,19 +105,14 @@ function dispatchEvents(): Event[] {
 }
 
 /**
- * The answer never waits for the dispatch event (the write is started before
- * the answer returns): wait until `n` events landed, let any further write
- * land, and return them.
+ * The dispatch event is handed to the audit sink before the answer returns
+ * (the answer never waits for the write itself): exactly `n` were handed over
+ * by the time the answer returned.
  */
 async function settledEvents(n: number): Promise<Event[]> {
-  await vi.waitFor(() => expect(dispatchEvents()).toHaveLength(n));
-  await drain();
   expect(dispatchEvents()).toHaveLength(n);
   return dispatchEvents();
 }
-
-/** Let a write the call started land, for a case that expects none. */
-const drain = () => new Promise((resolve) => setTimeout(resolve, 50));
 
 async function call(name: string, run: Record<string, unknown> = RUN) {
   const { dispatchExtensionScopedTool } = await import("@/lib/extension-scoped-tools");
@@ -246,8 +244,9 @@ describe("the extension_tool.dispatch audit event", () => {
 
   it("writes no dispatch event for the other scoped tools", async () => {
     const { dispatchExtensionScopedTool } = await import("@/lib/extension-scoped-tools");
-    await dispatchExtensionScopedTool({ tool: "artifacts_list", input: {}, run: RUN });
-    await drain();
+    for (const tool of ["extension_data", "artifacts_list", "artifacts_get", "artifact_content_read"]) {
+      await dispatchExtensionScopedTool({ tool, input: {}, run: RUN });
+    }
     expect(dispatchEvents()).toHaveLength(0);
   });
 
@@ -327,7 +326,78 @@ describe("the dispatch event and the answer", () => {
     getAgentPackage.mockResolvedValue({ manifest: { cinatra: PARENT_CINATRA } });
   });
 
-  it("answers a resolver throw whose class check throws with the fixed 500, never its text", async () => {
+  it("answers a resolver throw whose class check throws only once with the fixed 500, never its text", async () => {
+    const { ExtensionDataRefusal } = await import("@/lib/extension-data-tool");
+    const { PASSTHROUGH_UNEXPECTED_ERROR } = await import("@/lib/passthrough-refusal");
+    let checks = 0;
+    const shifty = new Proxy(
+      { message: LEAKY },
+      {
+        getPrototypeOf() {
+          checks += 1;
+          if (checks === 1) throw new Error("class check");
+          return ExtensionDataRefusal.prototype;
+        },
+      },
+    );
+    resolveExtensionToolOrigin.mockRejectedValue(shifty);
+    const outcome = await call("child_tool");
+    expect(outcome).toEqual({ ok: false, status: 500, error: PASSTHROUGH_UNEXPECTED_ERROR });
+    const events = await settledEvents(1);
+    expect(events[0]!.metadata).toMatchObject({ reason: "failed" });
+    expect(JSON.stringify(events[0])).not.toContain("/srv/fixture-store");
+  });
+
+  it("records only a fixed origin code, read from the answer, never the refusal's own code field", async () => {
+    const { ExtensionToolOriginRefusal } = await import("@/lib/extension-tool-origin");
+    const refusal = new ExtensionToolOriginRefusal("provenance-mismatch");
+    const fixed = refusal.message;
+    Object.defineProperty(refusal, "code", {
+      configurable: true,
+      get() {
+        Object.defineProperty(refusal, "message", { configurable: true, value: LEAKY });
+        return LEAKY;
+      },
+    });
+    resolveExtensionToolOrigin.mockRejectedValue(refusal);
+    const outcome = await call("child_tool");
+    expect(outcome).toEqual({ ok: false, status: 403, error: fixed });
+    const events = await settledEvents(1);
+    expect(events[0]!.metadata).toMatchObject({ reason: "refused", originCode: "provenance-mismatch" });
+    expect(JSON.stringify(events[0])).not.toContain("/srv/fixture-store");
+  });
+
+  it("hands the event to the audit sink before the answer returns", async () => {
+    resolveExtensionToolOrigin.mockResolvedValue({ kind: "parent" });
+    loadDeclaredToolModule.mockResolvedValue({ extensionTool: () => ({ ran: "parent" }) });
+    const answered = await call("parent_tool").then((outcome) => ({ outcome, handed: dispatchEvents().length }));
+    expect(answered).toEqual({ outcome: { ok: true, result: { ran: "parent" } }, handed: 1 });
+  });
+
+  it("reads the tool twice and the run five times on an allowed call of the run package's own road", async () => {
+    const { dispatchExtensionScopedTool } = await import("@/lib/extension-scoped-tools");
+    resolveExtensionToolOrigin.mockResolvedValue({ kind: "parent" });
+    loadDeclaredToolModule.mockResolvedValue({ extensionTool: () => ({ ran: "parent" }) });
+    const reads = { tool: 0, run: 0 };
+    const input = {
+      get tool(): string {
+        reads.tool += 1;
+        return "extension_tool";
+      },
+      input: { name: "parent_tool", input: {} },
+      get run(): typeof RUN {
+        reads.run += 1;
+        return RUN;
+      },
+    };
+    expect(await dispatchExtensionScopedTool(input)).toEqual({ ok: true, result: { ran: "parent" } });
+    // f4ab805f's own reads: the tool in the two branch checks; the run twice for the context, once for the
+    // resolver, once for the objects port and once for the dispatch's organisation.
+    expect(reads).toEqual({ tool: 2, run: 5 });
+    await settledEvents(1);
+  });
+
+  it("answers a resolver throw whose class check always throws with the fixed 500, never its text", async () => {
     const { ExtensionDataRefusal } = await import("@/lib/extension-data-tool");
     const { PASSTHROUGH_UNEXPECTED_ERROR } = await import("@/lib/passthrough-refusal");
     const replacement = new ExtensionDataRefusal("fixture", LEAKY);
@@ -423,11 +493,15 @@ describe("the dispatch event and the answer", () => {
     loadDeclaredToolModule.mockResolvedValue({ extensionTool: () => ({ ran: "parent" }) });
     logAuditEvent.mockImplementation(() => new Promise<void>(() => {}));
     const late = Symbol("late");
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const answer = await Promise.race([
       call("parent_tool"),
-      new Promise<symbol>((resolve) => setTimeout(() => resolve(late), 2000)),
+      new Promise<symbol>((resolve) => {
+        timer = setTimeout(() => resolve(late), 2000);
+      }),
     ]);
+    clearTimeout(timer);
     expect(answer).toEqual({ ok: true, result: { ran: "parent" } });
-    await vi.waitFor(() => expect(dispatchEvents()).toHaveLength(1));
+    expect(dispatchEvents()).toHaveLength(1);
   });
 });
