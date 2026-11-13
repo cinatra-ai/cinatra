@@ -143,6 +143,8 @@ import {
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
+  continueApprovalFlag,
+  continueHeldByRenderer,
   isSetupGateTaskId,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
@@ -893,10 +895,14 @@ export function AgentHitlScreenFields({
 function HitlContinueControl({
   submitting,
   blocked,
+  held = false,
   onPress,
 }: {
   submitting: boolean;
   blocked: boolean;
+  /** The gate's renderer holds the Continue until its answer is complete
+   *  (`FieldRendererEntry.continueReady`): drawn, disabled, no title. */
+  held?: boolean;
   onPress: () => Promise<void>;
 }): ReactElement {
   return (
@@ -905,7 +911,7 @@ function HitlContinueControl({
         size="sm"
         className="gap-1.5"
         data-action="submit-hitl-screen"
-        disabled={submitting || blocked}
+        disabled={submitting || blocked || held}
         {...(blocked
           ? {
               title:
@@ -926,11 +932,15 @@ export function AgentHitlScreenContinue({
   buffered,
   submitting,
   blocked,
+  held = false,
   onContinue,
 }: {
   gate: AgentHitlScreenGate;
   buffered: Record<string, unknown>;
   submitting: boolean;
+  /** The renderer's answer is not complete yet (a declared card with no
+   *  choice made, or a required value blank). */
+  held?: boolean;
   /** This host has NO identity to answer with — neither a cookie session nor a
    *  declared credential. The control is drawn and inert rather than firing a
    *  request the server would have to guess the caller of. */
@@ -941,10 +951,11 @@ export function AgentHitlScreenContinue({
     <HitlContinueControl
       submitting={submitting}
       blocked={blocked}
+      held={held}
       onPress={async () => {
         let payload: Record<string, unknown> = {
           ...buffered,
-          approved: true,
+          approved: continueApprovalFlag(buffered),
           approvedAt: new Date().toISOString(),
         };
         if (!isSetupGateTaskId(gate.reviewTaskId)) {
@@ -1378,6 +1389,11 @@ export function AgentHitlScreenCard({
             buffered={activeBuffered}
             submitting={submitting}
             blocked={(!cookieSession && auth === null) || withholdRenderer}
+            held={continueHeldByRenderer(
+              resolveHitlGateEntry(runId, gate),
+              gate.currentValues,
+              activeBuffered,
+            )}
             onContinue={onContinue}
           />
         ) : cardOwnsSetupSend ? (

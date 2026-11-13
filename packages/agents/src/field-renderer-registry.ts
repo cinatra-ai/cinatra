@@ -105,6 +105,19 @@ export type FieldRendererEntry = {
    * component is mounted.
    */
   drawsOwnSubmit?: boolean;
+  /**
+   * MAY THE HOST'S CONTINUE SEND YET? (cinatra#3470.)
+   *
+   * Asked by every mid-run Continue with the gate's run value and the answer
+   * staged so far. `false` holds the Continue (drawn, disabled). ABSENT MEANS
+   * NO HOLD: every entry that does not declare one continues as before. A
+   * declared HITL card sets it, so its Continue waits for an explicit choice
+   * and for every required value.
+   */
+  continueReady?: (input: {
+    runValue: Record<string, unknown>;
+    staged: Record<string, unknown>;
+  }) => boolean;
 };
 
 class FieldRendererRegistryImpl {

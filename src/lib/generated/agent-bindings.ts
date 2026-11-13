@@ -23,6 +23,7 @@ export type GeneratedFieldRendererBinding = {
   readonly midRunHitl?: true;
   readonly a2uiTranslator?: string;
   readonly params?: Readonly<Record<string, unknown>>;
+  readonly screen?: Readonly<Record<string, unknown>>;
   readonly declaredBy: string;
 };
 

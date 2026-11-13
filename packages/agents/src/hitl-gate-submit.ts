@@ -298,6 +298,37 @@ export function midRunBooleanFieldHidesSubmit(gate: {
   return !(Array.isArray(enumValues) && enumValues.length > 0);
 }
 
+/**
+ * The approval flag a mid-run Continue sends (cinatra#3470). The screen's own
+ * choices only stage an answer and the host's one Continue sends it, "a
+ * decline as a decline" (design app-artifact-review I.4 and I.5): a staged
+ * `approved: false` is kept, and every other staged answer continues as an
+ * approval, as before.
+ */
+export function continueApprovalFlag(staged: Record<string, unknown>): boolean {
+  return staged.approved !== false;
+}
+
+/**
+ * Is the mid-run Continue held by the gate's renderer (cinatra#3470)? Only an
+ * entry that declares `continueReady` can hold it, and only by answering
+ * `false`: a declared card waits for an explicit choice and every required
+ * value. Every other entry, and no entry at all, never holds it.
+ */
+export function continueHeldByRenderer(
+  entry: {
+    continueReady?: (input: {
+      runValue: Record<string, unknown>;
+      staged: Record<string, unknown>;
+    }) => boolean;
+  } | null | undefined,
+  runValue: Record<string, unknown> | null | undefined,
+  staged: Record<string, unknown>,
+): boolean {
+  if (typeof entry?.continueReady !== "function") return false;
+  return entry.continueReady({ runValue: runValue ?? {}, staged }) === false;
+}
+
 // ---------------------------------------------------------------------------
 // #817 context-selector envelope synthesis
 // ---------------------------------------------------------------------------
