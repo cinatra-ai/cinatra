@@ -51,12 +51,15 @@ import { requireRunWindowAccess } from "@/lib/lifecycle/run-window-turn";
 // reads ("One snapshot"), through the one tool assembly the turn itself uses
 // (`assembleAssistantTurnTools`, "One source").
 //
-// It writes nothing. At the assembly's write steps it resumes without the
-// write: `register_skills` resumes as registered (the route first refuses with
-// `503 skills_not_registered` unless this process has already registered every
-// skill of the config), and `admit_self_mcp_reference` resumes with an inert
-// fixed token, no lent-action grant and no reachability probe. The report
-// excludes the reference's headers, so the inert token never shows.
+// It runs none of the turn's write steps. At the assembly's write steps it
+// resumes without the write: `register_skills` resumes as registered (the
+// route first refuses with `503 skills_not_registered` unless this process has
+// already registered every skill of the config), and `admit_self_mcp_reference`
+// resumes with an inert fixed token, no lent-action grant and no reachability
+// probe. The report excludes the reference's headers, so the inert token never
+// shows. The input reads it shares with the turn's roads (the session, the
+// thread, the catalog state, the skill delivery, the external MCP tools) are
+// those roads' own functions and keep their own lazy side effects.
 // ---------------------------------------------------------------------------
 
 /** The site transport-token prefix: a broker-auth caller, never served here. */
@@ -338,34 +341,67 @@ export async function GET(request: Request): Promise<Response> {
     return errorResponse(401, "Unauthorized");
   }
 
-  const session = await getAuthSession();
+  // The parameters are checked before ANY store read, the session read
+  // included, so a 400 says nothing about whether a run or a thread exists.
+  const params = parseParams(request);
+  if (!params) return errorResponse(400, "invalid_request");
+
+  // Every failure past this point, a thrown read or a failed key creation
+  // included, is answered with the exact `{ "error": "<code>" }` body; nothing
+  // escapes to the framework.
+  let key: ReturnType<typeof createToolManifestHashKey> | undefined;
+  try {
+    key = createToolManifestHashKey();
+    return await answerManifest(params, key);
+  } catch (error) {
+    if (error instanceof ManifestRouteError) return unavailable(error.code, error);
+    if (error instanceof ToolManifestError) return unavailable(error.code, error);
+    return unavailable("assembly_failed", error);
+  } finally {
+    // The key is made for this one response and kept nowhere.
+    key?.fill(0);
+  }
+}
+
+/** Run one read of the road's inputs; a throw becomes `503 <code>`. */
+async function readInput<T>(code: ManifestErrorCode, read: () => T | Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    throw new ManifestRouteError(code, error);
+  }
+}
+
+async function answerManifest(
+  params: ManifestParams,
+  key: ReturnType<typeof createToolManifestHashKey>,
+): Promise<Response> {
+  const { threadId, runId, surface } = params;
+
+  // A session read that throws (its store is down) is the actor's read
+  // failing for this request: 503 actor_unavailable.
+  const session = await readInput("actor_unavailable", () => getAuthSession());
   const userId = session?.user?.id;
   if (!userId) return errorResponse(401, "Unauthorized");
 
-  const params = parseParams(request);
-  if (!params) return errorResponse(400, "invalid_request");
-  const { threadId, runId, surface } = params;
-
   // --- Composer inputs: the cookie branch of POST /api/assistants/chat. ---
-  let composerActorContext: ActorContext;
-  try {
-    composerActorContext = await requireActorContext();
-  } catch (error) {
-    return unavailable("actor_unavailable", error);
-  }
+  const composerActorContext = await readInput("actor_unavailable", () => requireActorContext());
   const isAdmin = isPlatformAdmin(session);
   const composerPlatformRole: "platform_admin" | "member" = isAdmin ? "platform_admin" : "member";
   const composerOrgId =
     (session?.session as { activeOrganizationId?: string | null } | undefined)
       ?.activeOrganizationId ?? null;
   // Reads only. A thread with no row is assembled as a new thread; the route
-  // never claims or writes it.
-  const threadAuthorization = authorizeThreadForTurn({
-    threadId,
-    callerId: userId,
-    isAdmin,
-    sessionOrgId: composerOrgId,
-  });
+  // never claims or writes it. A thread read that throws is the composer's
+  // input failing to read: 503 actor_unavailable, never an uncontrolled 500.
+  const threadAuthorization = await readInput("actor_unavailable", () =>
+    authorizeThreadForTurn({
+      threadId,
+      callerId: userId,
+      isAdmin,
+      sessionOrgId: composerOrgId,
+    }),
+  );
   if (!threadAuthorization.ok) {
     return errorResponse(threadAuthorization.status, threadAuthorization.error);
   }
@@ -381,15 +417,12 @@ export async function GET(request: Request): Promise<Response> {
     );
     return errorResponse(404, "not_found");
   }
-  let windowContext: Awaited<ReturnType<typeof resolveUserContextForUserId>>;
-  try {
-    windowContext = await resolveUserContextForUserId(windowActor.userId, {
+  const windowContext = await readInput("actor_unavailable", () =>
+    resolveUserContextForUserId(windowActor.userId, {
       activeOrganizationId: windowActor.orgId,
       platformRole: windowActor.platformRole,
-    });
-  } catch (error) {
-    return unavailable("actor_unavailable", error);
-  }
+    }),
+  );
 
   const runtimeConfig = buildCinatraAssistantRuntimeConfig();
 
@@ -400,53 +433,40 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   // The provider adapter, resolved once as runAssistantTurn resolves it.
-  let adapter: Awaited<ReturnType<typeof resolveProviderAdapter>>;
-  try {
+  // BoundDefaultProviderUnavailableError, or any other failure to resolve.
+  const adapter = await readInput("provider_unavailable", async () => {
     const pinnedProvider = selectAdapterProvider(runtimeConfig.modelPrefs);
-    adapter = pinnedProvider
+    return pinnedProvider
       ? await resolveProviderAdapter(pinnedProvider as Parameters<typeof resolveProviderAdapter>[0])
       : await resolveBoundDefaultAdapter();
-  } catch (error) {
-    // BoundDefaultProviderUnavailableError, or any other failure to resolve.
-    return unavailable("provider_unavailable", error);
-  }
+  });
   if (!adapter) return unavailable("provider_unavailable", "no provider adapter resolves");
 
   const snapshot = createRequestSnapshot();
-  const key = createToolManifestHashKey();
-  try {
-    const composer = await assembleRoad(snapshot, adapter, runtimeConfig, {
-      userId,
-      actorContext: composerActorContext,
-      platformRole: composerPlatformRole,
-      sessionOrgId: composerOrgId,
-      sessionId: threadId,
-    });
-    const windowRoad = await assembleRoad(snapshot, adapter, runtimeConfig, {
-      userId: windowActor.userId,
-      actorContext: windowContext.actorContext,
-      platformRole: windowContext.platformRole,
-      sessionOrgId: windowContext.sessionOrgId,
-      // runWindowTurn passes no sessionId, so the runtime mints a per-turn id
-      // with no thread scope. The report does the same.
-      sessionId: `assistant-turn:${randomUUID()}`,
-    });
-    const composerReport = buildToolManifestReport({ ...composer, key });
-    const windowReport = buildToolManifestReport({ ...windowRoad, key });
-    return Response.json(
-      {
-        manifestVersion: TOOL_MANIFEST_VERSION,
-        composer: { threadId, ...composerReport },
-        window: { runId, surface, ...windowReport },
-      },
-      { headers: { "Cache-Control": "no-store" } },
-    );
-  } catch (error) {
-    if (error instanceof ManifestRouteError) return unavailable(error.code, error);
-    if (error instanceof ToolManifestError) return unavailable(error.code, error);
-    return unavailable("assembly_failed", error);
-  } finally {
-    // The key is made for this one response and kept nowhere.
-    key.fill(0);
-  }
+  const composer = await assembleRoad(snapshot, adapter, runtimeConfig, {
+    userId,
+    actorContext: composerActorContext,
+    platformRole: composerPlatformRole,
+    sessionOrgId: composerOrgId,
+    sessionId: threadId,
+  });
+  const windowRoad = await assembleRoad(snapshot, adapter, runtimeConfig, {
+    userId: windowActor.userId,
+    actorContext: windowContext.actorContext,
+    platformRole: windowContext.platformRole,
+    sessionOrgId: windowContext.sessionOrgId,
+    // runWindowTurn passes no sessionId, so the runtime mints a per-turn id
+    // with no thread scope. The report does the same.
+    sessionId: `assistant-turn:${randomUUID()}`,
+  });
+  const composerReport = buildToolManifestReport({ ...composer, key });
+  const windowReport = buildToolManifestReport({ ...windowRoad, key });
+  return Response.json(
+    {
+      manifestVersion: TOOL_MANIFEST_VERSION,
+      composer: { threadId, ...composerReport },
+      window: { runId, surface, ...windowReport },
+    },
+    { headers: { "Cache-Control": "no-store" } },
+  );
 }

@@ -1,13 +1,19 @@
 // GET /api/assistants/chat/tool-manifest (cinatra#3487;
 // packages/agent-ui-protocol/CONTRACT.md section 5.2).
 //
-// The route is driven with its store, auth and LLM-layer boundaries replaced
-// by RECORDING fakes. The real tool assembly (`assembleAssistantTurnTools`),
-// the real injection resolver, the real report builder and the real canonical
-// JSON run, so each case sees what the route read, how often, and what it
-// answered. The write steps of a turn (skill registration, retirement, token
-// mint, lent-action grant, reachability probe, delivery record, stream events,
-// thread and run-window rows) are recording spies that must stay at zero.
+// The route's INPUT READS (session, actor, thread, run access, catalog state,
+// assigned skills, skill delivery, external MCP tools, provider adapter) are
+// RECORDING fakes. Everything between the route and the turn's write steps is
+// REAL: the real runtime module (`@/lib/assistant-runtime/runtime`, with only
+// its two input reads replaced), the real registration accessor over the
+// skills layer, the real tool assembly (`assembleAssistantTurnTools`), the real
+// injection resolver, the real report builder and the real canonical JSON.
+// The turn's write entry points themselves are recording spies at the module
+// that performs the write (skill registration and retirement, actor token
+// mints, lent-action grant, reachability probe, delivery record, stream events,
+// `stream()` and the adapter's own model calls, thread and run-window rows);
+// they must stay at zero. The fake input reads say nothing about the side
+// effects of the real readers (CONTRACT.md section 5.2, "Read only").
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -49,9 +55,10 @@ const state = vi.hoisted(() => ({
   catalogError: null as unknown,
   selfMcpNull: false,
   issuedTokens: [] as string[],
+  keyError: null as unknown,
 }));
 
-// --- writes and network: recording spies that must stay at zero ------------
+// --- the turn's write steps and model/MCP calls: spies that stay at zero ---
 const writes = vi.hoisted(() => ({
   ensureInstalledSkillsRegistered: vi.fn(),
   retireSupersededChatSkillsOnce: vi.fn(),
@@ -68,6 +75,8 @@ const writes = vi.hoisted(() => ({
   freezeAssistantThreadAssignmentScopeIfAbsent: vi.fn(),
   appendRunWindowMessage: vi.fn(),
   xaddRunEvent: vi.fn(),
+  adapterStream: vi.fn(),
+  adapterGenerate: vi.fn(),
 }));
 
 // --- reads: recording fakes --------------------------------------------------
@@ -77,7 +86,8 @@ const reads = vi.hoisted(() => ({
   resolveUserContextForUserId: vi.fn(),
   authorizeThreadForTurn: vi.fn(),
   requireRunWindowAccess: vi.fn(),
-  areAssistantSkillsRegistered: vi.fn(),
+  areInstalledSkillsRegistered: vi.fn(),
+  isSupersededChatSkillRetirementSettled: vi.fn(),
   buildAssistantInjectionPorts: vi.fn(),
   readChatMcpCatalogState: vi.fn(),
   resolveAssistantAssignedSkillIds: vi.fn(),
@@ -119,11 +129,50 @@ vi.mock("@/lib/assistant-runtime/cinatra-assistant-config", () => ({
   }),
 }));
 
-vi.mock("@/lib/assistant-runtime/runtime", () => ({
-  areAssistantSkillsRegistered: (...a: unknown[]) => reads.areAssistantSkillsRegistered(...a),
-  buildAssistantInjectionPorts: (...a: unknown[]) => reads.buildAssistantInjectionPorts(...a),
-  readChatMcpCatalogState: (...a: unknown[]) => reads.readChatMcpCatalogState(...a),
+// The REAL runtime module. Only its two input reads are replaced; the
+// registration accessor and every write the runtime owns stay real, so a route
+// that reached one of them would hit the write spies below.
+vi.mock("@/lib/assistant-runtime/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/assistant-runtime/runtime")>();
+  return {
+    ...actual,
+    buildAssistantInjectionPorts: (...a: unknown[]) => reads.buildAssistantInjectionPorts(...a),
+    readChatMcpCatalogState: (...a: unknown[]) => reads.readChatMcpCatalogState(...a),
+  };
+});
+
+// Leaf modules the real runtime imports, stubbed as the runtime's own tests
+// stub them (src/lib/assistant-runtime/__tests__/chat-turn-delivery-record.test.ts).
+vi.mock("@/lib/register-host-connector-services", () => ({}));
+vi.mock("@/app/api/chat/chat-user-context", () => ({
+  buildChatUserContextSections: vi.fn(async () => []),
 }));
+vi.mock("@/app/api/chat/extension-confirmation", () => ({
+  buildExtensionImplementationConfirmationPolicy: () => "",
+}));
+vi.mock("@cinatra-ai/skills/mcp-client", () => ({
+  createDeterministicSkillsClient: () => ({
+    installed: { get: async () => ({ body: "SYSTEM" }) },
+  }),
+}));
+vi.mock("@/lib/wizard-staging-store", () => ({ getAllStagedByType: () => [] }));
+vi.mock("@/lib/wizard-manifest-registry", () => ({ getAllManifests: vi.fn(async () => []) }));
+vi.mock("@/lib/instance-identity-store", () => ({ readInstanceIdentity: () => null }));
+vi.mock("@/lib/artifacts/attachment-resolver-ports", () => ({
+  buildAttachmentResolverPorts: vi.fn(() => ({})),
+}));
+
+// The real report builder; only the key creation can be made to throw.
+vi.mock("@/lib/assistant-runtime/tool-manifest-report", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/assistant-runtime/tool-manifest-report")>();
+  return {
+    ...actual,
+    createToolManifestHashKey: () => {
+      if (state.keyError) throw state.keyError;
+      return actual.createToolManifestHashKey();
+    },
+  };
+});
 
 vi.mock("@/lib/assistant-assigned-skills-delivery", () => ({
   resolveAssistantAssignedSkillIds: (...a: unknown[]) => reads.resolveAssistantAssignedSkillIds(...a),
@@ -142,12 +191,19 @@ vi.mock("@cinatra-ai/llm", () => {
     buildLlmMcpServerToolForWidget: vi.fn(),
     checkPublicMcpReachability: writes.checkPublicMcpReachability,
     stream: writes.stream,
+    hasConfiguredLlmRuntime: vi.fn(async () => true),
+    describeLlmRuntimeUnavailability: vi.fn(() => ""),
   };
 });
 
+// The skills layer: the registration and retirement WRITES are spies; the
+// read-only accessors the real runtime reads are recording fakes.
 vi.mock("@cinatra-ai/skills", () => ({
   ensureInstalledSkillsRegistered: writes.ensureInstalledSkillsRegistered,
   retireSupersededChatSkillsOnce: writes.retireSupersededChatSkillsOnce,
+  areInstalledSkillsRegistered: (...a: unknown[]) => reads.areInstalledSkillsRegistered(...a),
+  isSupersededChatSkillRetirementSettled: () => reads.isSupersededChatSkillRetirementSettled(),
+  resolveInstalledSkillSourcePath: vi.fn(async () => null),
 }));
 vi.mock("@/lib/chat-mcp-actor-token", () => ({
   issueChatMcpActorToken: writes.issueChatMcpActorToken,
@@ -227,7 +283,14 @@ function expectZeroWrites() {
   }
 }
 
+/** No store read at all: not even the session read. */
 function expectNoStoreRead() {
+  expect(reads.getAuthSession).not.toHaveBeenCalled();
+  expectNoStoreReadAfterSession();
+}
+
+/** No store read past the session read. */
+function expectNoStoreReadAfterSession() {
   expect(reads.requireActorContext).not.toHaveBeenCalled();
   expect(reads.authorizeThreadForTurn).not.toHaveBeenCalled();
   expect(reads.requireRunWindowAccess).not.toHaveBeenCalled();
@@ -272,6 +335,7 @@ beforeEach(() => {
   state.catalogError = null;
   state.selfMcpNull = false;
   state.issuedTokens = [];
+  state.keyError = null;
 
   reads.getAuthSession.mockImplementation(async () => state.session);
   reads.requireActorContext.mockImplementation(async () => ({ userId: "u1", road: "composer" }));
@@ -286,17 +350,23 @@ beforeEach(() => {
     run: { id: RUN_ID },
     template: null,
   }));
-  reads.areAssistantSkillsRegistered.mockImplementation(() => state.registered);
+  reads.areInstalledSkillsRegistered.mockImplementation(() => state.registered);
+  reads.isSupersededChatSkillRetirementSettled.mockImplementation(() => true);
   reads.buildAssistantInjectionPorts.mockImplementation(fakeInjectionPorts);
   reads.readChatMcpCatalogState.mockImplementation(async () => {
     if (state.catalogError) throw state.catalogError;
     return { servable: [], isHostApproved: () => true, isCapabilityAvailable: () => true };
   });
   reads.resolveAssistantAssignedSkillIds.mockImplementation(async () => []);
-  reads.resolveProviderAdapter.mockImplementation(async () => state.adapter);
+  // The adapter carries its model calls as spies: the route must call neither.
+  const withModelSpies = () =>
+    state.adapter
+      ? { ...state.adapter, stream: writes.adapterStream, generate: writes.adapterGenerate }
+      : null;
+  reads.resolveProviderAdapter.mockImplementation(async () => withModelSpies());
   reads.resolveBoundDefaultAdapter.mockImplementation(async () => {
     if (state.adapterError) throw state.adapterError;
-    return state.adapter;
+    return withModelSpies();
   });
   reads.deliver.mockImplementation(async () => {
     if (state.deliveryError) throw state.deliveryError;
@@ -334,7 +404,8 @@ describe("auth", () => {
   it("401 without a session", async () => {
     state.session = null;
     await expectError(await get(), 401, "Unauthorized");
-    expectNoStoreRead();
+    expect(reads.getAuthSession).toHaveBeenCalledTimes(1);
+    expectNoStoreReadAfterSession();
   });
 
   it("401 for a cit_ bearer even with a valid cookie session, with no session fall back", async () => {
@@ -344,7 +415,7 @@ describe("auth", () => {
   });
 });
 
-describe("400 invalid_request reads no store", () => {
+describe("400 invalid_request reads no store, the session read included", () => {
   const long = "a".repeat(201);
   it.each([
     ["missing threadId", `runId=${RUN_ID}&surface=review`],
@@ -366,6 +437,12 @@ describe("400 invalid_request reads no store", () => {
     await expectError(await get(query), 400, "invalid_request");
     expectNoStoreRead();
     expectZeroWrites();
+  });
+
+  it("400 before 401: a malformed request without a session reads no session", async () => {
+    state.session = null;
+    await expectError(await get(`threadId=${THREAD_ID}&surface=review`), 400, "invalid_request");
+    expectNoStoreRead();
   });
 
   it("accepts an id of exactly 200 printable characters", async () => {
@@ -401,6 +478,42 @@ describe("refusals", () => {
 });
 
 describe("503 codes, each body exactly { error }", () => {
+  it("actor_unavailable, not an uncontrolled error, when the session read throws", async () => {
+    reads.getAuthSession.mockRejectedValue(new Error("session store down"));
+    const res = await get();
+    await expectError(res, 503, "actor_unavailable");
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expectNoStoreReadAfterSession();
+    expectZeroWrites();
+  });
+
+  it("actor_unavailable, not an uncontrolled error, when the thread read throws", async () => {
+    reads.authorizeThreadForTurn.mockImplementation(() => {
+      throw new Error("thread store down");
+    });
+    const res = await get();
+    await expectError(res, 503, "actor_unavailable");
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect(reads.requireRunWindowAccess).not.toHaveBeenCalled();
+    expectZeroWrites();
+  });
+
+  it("assembly_failed, not an uncontrolled error, when the hash key cannot be made", async () => {
+    state.keyError = new Error("entropy source unavailable");
+    const res = await get();
+    await expectError(res, 503, "assembly_failed");
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expectZeroWrites();
+  });
+
+  it("assembly_failed, not an uncontrolled error, when the skill-registration read throws", async () => {
+    reads.areInstalledSkillsRegistered.mockImplementation(() => {
+      throw new Error("unexpected");
+    });
+    await expectError(await get(), 503, "assembly_failed");
+    expectZeroWrites();
+  });
+
   it("actor_unavailable when requireActorContext fails", async () => {
     reads.requireActorContext.mockRejectedValue(new Error("grants unreadable"));
     await expectError(await get(), 503, "actor_unavailable");
@@ -426,12 +539,19 @@ describe("503 codes, each body exactly { error }", () => {
   it("skills_not_registered when the accessor says not registered; the assembly never starts", async () => {
     state.registered = false;
     await expectError(await get(), 503, "skills_not_registered");
-    expect(reads.areAssistantSkillsRegistered).toHaveBeenCalledWith(SKILLS);
+    expect(reads.areInstalledSkillsRegistered).toHaveBeenCalledWith(SKILLS);
     expect(reads.buildAssistantInjectionPorts).not.toHaveBeenCalled();
     expect(reads.selectSkillDeliveryAdapter).not.toHaveBeenCalled();
     expect(reads.resolveChatExternalMcpTools).not.toHaveBeenCalled();
     expect(reads.readChatMcpCatalogState).not.toHaveBeenCalled();
     expect(reads.resolveBoundDefaultAdapter).not.toHaveBeenCalled();
+    expectZeroWrites();
+  });
+
+  it("skills_not_registered while the retirement has not settled (the real accessor reads both)", async () => {
+    reads.isSupersededChatSkillRetirementSettled.mockImplementation(() => false);
+    await expectError(await get(), 503, "skills_not_registered");
+    expect(reads.buildAssistantInjectionPorts).not.toHaveBeenCalled();
     expectZeroWrites();
   });
 
@@ -577,14 +697,13 @@ describe("200", () => {
   });
 });
 
-describe("read only", () => {
-  it("writes nothing, mints nothing, grants nothing, calls no provider or MCP endpoint", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
+describe("the route's read boundary (CONTRACT.md section 5.2, \"Read only\")", () => {
+  it("performs none of the turn's write steps: every write entry point spy stays at zero", async () => {
     const res = await get();
     expect(res.status).toBe(200);
+    // Registration, retirement, token mints, lent-action grant, reachability
+    // probe, delivery record, stream events, thread and run-window rows.
     expectZeroWrites();
-    expect(fetchSpy).not.toHaveBeenCalled();
-    fetchSpy.mockRestore();
     // The self-MCP reference was built with the inert issuer: one fixed value,
     // the same for both roads, and no actor-token mint.
     expect(state.issuedTokens.length).toBe(2);
@@ -594,13 +713,29 @@ describe("read only", () => {
       expect((call[3] as { lentActionGrant: unknown }).lentActionGrant).toBeNull();
     }
   });
+
+  it("calls no model and no MCP endpoint itself", async () => {
+    // The input reads are fakes here, so any fetch would be the route's own.
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    try {
+      const res = await get();
+      expect(res.status).toBe(200);
+      expect(writes.stream).not.toHaveBeenCalled();
+      expect(writes.adapterStream).not.toHaveBeenCalled();
+      expect(writes.adapterGenerate).not.toHaveBeenCalled();
+      expect(writes.checkPublicMcpReachability).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
 });
 
 describe("one snapshot", () => {
   it("equal inputs: each read happens once and both roads share it", async () => {
     const res = await get();
     expect(res.status).toBe(200);
-    expect(reads.areAssistantSkillsRegistered).toHaveBeenCalledTimes(1);
+    expect(reads.areInstalledSkillsRegistered).toHaveBeenCalledTimes(1);
     expect(reads.resolveBoundDefaultAdapter).toHaveBeenCalledTimes(1);
     expect(reads.resolveChatExternalMcpTools).toHaveBeenCalledTimes(1);
     expect(reads.resolveChatExternalMcpTools).toHaveBeenCalledWith("openai", { surface: "chat" });
