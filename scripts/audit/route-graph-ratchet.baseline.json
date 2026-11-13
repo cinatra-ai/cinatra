@@ -3,7 +3,7 @@
   "routes": {
     "/sign-in": 165,
     "/api/mcp": 1321,
-    "/chat": 1425,
+    "/chat": 1426,
     "/api/a2a": 1329,
     "/api/llm-bridge": 1339
   },
@@ -11,25 +11,25 @@
     "/api/a2a": {
       "from": 1328,
       "to": 1329,
-      "reason": "Pull request 4616 (issue 3487) adds exactly one core module to this route, src/lib/assistant-runtime/turn-tool-assembly.ts: the tool assembly of the assistant turn moves out of src/lib/assistant-runtime/runtime.ts into its own read-only module, which runtime.ts imports. The new module imports only modules the route already reaches (the llm and skills packages, skill-delivery-record.ts, ports.ts, model-routing.ts). Measured by the ratchet gate of the pull request at 603d47dc2e26d9f03b6b232480ba8834ff4d1fdf: main at 9d8ebf110 reads 1328 and the merged tree reads 1329, the one added module being that file; the growth is additive and no module leaves the route.",
+      "reason": "Pull request 4616 (issue 3487) adds exactly one core module to this route, src/lib/assistant-runtime/turn-tool-assembly.ts: the tool assembly of the assistant turn moves out of src/lib/assistant-runtime/runtime.ts into its own read-only module, which runtime.ts imports. The new module imports only modules the route already reaches (the llm and skills packages, skill-delivery-record.ts, ports.ts, model-routing.ts). Measured by the ratchet gate of the pull request at 603d47dc2e26d9f03b6b232480ba8834ff4d1fdf: main at 9d8ebf110 reads 1328 and the merged tree reads 1329, the one added module being that file; the growth is additive and no module leaves the route. Carried by the forward onto main ff16665cc1dc, whose ceiling for this route is 1328: the same one module raises it to 1329; the ratchet gate of this pull request at the forwarded head checks that count.",
       "pr": 4616
     },
     "/api/llm-bridge": {
       "from": 1338,
       "to": 1339,
-      "reason": "Pull request 4616 (issue 3487) adds exactly one core module to this route, src/lib/assistant-runtime/turn-tool-assembly.ts: the tool assembly of the assistant turn moves out of src/lib/assistant-runtime/runtime.ts into its own read-only module, which runtime.ts imports. The new module imports only modules the route already reaches (the llm and skills packages, skill-delivery-record.ts, ports.ts, model-routing.ts). Measured by the ratchet gate of the pull request at 603d47dc2e26d9f03b6b232480ba8834ff4d1fdf: main at 9d8ebf110 reads 1338 and the merged tree reads 1339, the one added module being that file; the growth is additive and no module leaves the route.",
+      "reason": "Pull request 4616 (issue 3487) adds exactly one core module to this route, src/lib/assistant-runtime/turn-tool-assembly.ts: the tool assembly of the assistant turn moves out of src/lib/assistant-runtime/runtime.ts into its own read-only module, which runtime.ts imports. The new module imports only modules the route already reaches (the llm and skills packages, skill-delivery-record.ts, ports.ts, model-routing.ts). Measured by the ratchet gate of the pull request at 603d47dc2e26d9f03b6b232480ba8834ff4d1fdf: main at 9d8ebf110 reads 1338 and the merged tree reads 1339, the one added module being that file; the growth is additive and no module leaves the route. Carried by the forward onto main ff16665cc1dc, whose ceiling for this route is 1338: the same one module raises it to 1339; the ratchet gate of this pull request at the forwarded head checks that count.",
       "pr": 4616
     },
     "/api/mcp": {
       "from": 1320,
       "to": 1321,
-      "reason": "Pull request 4616 (issue 3487) adds exactly one core module to this route, src/lib/assistant-runtime/turn-tool-assembly.ts: the tool assembly of the assistant turn moves out of src/lib/assistant-runtime/runtime.ts into its own read-only module, which runtime.ts imports. The new module imports only modules the route already reaches (the llm and skills packages, skill-delivery-record.ts, ports.ts, model-routing.ts). Measured by the ratchet gate of the pull request at 603d47dc2e26d9f03b6b232480ba8834ff4d1fdf: main at 9d8ebf110 reads 1320 and the merged tree reads 1321, the one added module being that file; the growth is additive and no module leaves the route.",
+      "reason": "Pull request 4616 (issue 3487) adds exactly one core module to this route, src/lib/assistant-runtime/turn-tool-assembly.ts: the tool assembly of the assistant turn moves out of src/lib/assistant-runtime/runtime.ts into its own read-only module, which runtime.ts imports. The new module imports only modules the route already reaches (the llm and skills packages, skill-delivery-record.ts, ports.ts, model-routing.ts). Measured by the ratchet gate of the pull request at 603d47dc2e26d9f03b6b232480ba8834ff4d1fdf: main at 9d8ebf110 reads 1320 and the merged tree reads 1321, the one added module being that file; the growth is additive and no module leaves the route. Carried by the forward onto main ff16665cc1dc, whose ceiling for this route is 1320: the same one module raises it to 1321; the ratchet gate of this pull request at the forwarded head checks that count.",
       "pr": 4616
     },
     "/chat": {
-      "from": 1424,
-      "to": 1425,
-      "reason": "Pull request 4616 (issue 3487) adds exactly one core module to this route, src/lib/assistant-runtime/turn-tool-assembly.ts: the tool assembly of the assistant turn moves out of src/lib/assistant-runtime/runtime.ts into its own read-only module, which runtime.ts imports. The new module imports only modules the route already reaches (the llm and skills packages, skill-delivery-record.ts, ports.ts, model-routing.ts). Measured by the ratchet gate of the pull request at 603d47dc2e26d9f03b6b232480ba8834ff4d1fdf: main at 9d8ebf110 reads 1424 and the merged tree reads 1425, the one added module being that file; the growth is additive and no module leaves the route.",
+      "from": 1425,
+      "to": 1426,
+      "reason": "Pull request 4616 (issue 3487) adds exactly one core module to this route, src/lib/assistant-runtime/turn-tool-assembly.ts: the tool assembly of the assistant turn moves out of src/lib/assistant-runtime/runtime.ts into its own read-only module, which runtime.ts imports. The new module imports only modules the route already reaches (the llm and skills packages, skill-delivery-record.ts, ports.ts, model-routing.ts). Measured by the ratchet gate of the pull request at 603d47dc2e26d9f03b6b232480ba8834ff4d1fdf: main at 9d8ebf110 reads 1424 and the merged tree reads 1425, the one added module being that file; the growth is additive and no module leaves the route. Carried by the forward onto main ff16665cc1dc, whose ceiling for this route is 1425: the same one module raises it to 1426; the ratchet gate of this pull request at the forwarded head checks that count.",
       "pr": 4616
     },
     "/sign-in": {
