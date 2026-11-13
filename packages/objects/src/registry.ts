@@ -84,6 +84,10 @@ class ObjectTypeRegistryImpl {
   // The type ids registered through `registerGovernedByClaim`: a type no
   // definer registered, governed by a claimant's claim until a definer does.
   private governedByClaim: Set<string> = new Set();
+  // The host type ids registered through `registerRetired`: a type whose
+  // definer moved elsewhere, kept only so its stored rows resolve and fail
+  // closed (cinatra#4366).
+  private retired: Set<string> = new Set();
 
   /**
    * Register (or idempotently replace) an object type. `packageName` records
@@ -147,6 +151,8 @@ class ObjectTypeRegistryImpl {
     // storage — callers retrieve via resolve() which returns
     // ObjectTypeDefinition<unknown>.
     this.entries.set(def.type, def as ObjectTypeDefinition<unknown>);
+    // An ordinary registration is a live definition: it is never retired.
+    this.retired.delete(def.type);
     if (packageName) {
       this.packageByType.set(def.type, packageName);
     } else {
@@ -154,6 +160,39 @@ class ObjectTypeRegistryImpl {
       // conflict guard above already rejected a host takeover of a PACKAGE type).
       this.packageByType.delete(def.type);
     }
+  }
+
+  /**
+   * Register a RETIRED host type (cinatra#4366): an id the host no longer
+   * defines because its definer moved it (for example a pack that renamed its
+   * type into its own namespace), kept registered ONLY so stored rows of it
+   * still resolve and FAIL CLOSED on writes instead of falling to the
+   * ungoverned path. The definition must declare projection `none` (its rows
+   * are never projected) or `artifact-safe` (its rows stay in the artifact
+   * library, read-only, as they were before the move); anything else throws (a
+   * host programming error, never a runtime input). It is registered host-owned
+   * (no package), so a package cannot take the id over and `removeByPackage`
+   * never reaps it. `isRetired` marks it for the write paths, which refuse it,
+   * and for the discovery surfaces, which leave it out. A later ordinary
+   * `register` of the id by the host replaces it and clears the marker.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  registerRetired<T = any>(def: ObjectTypeDefinition<T>): void {
+    const projection = def.dispositions?.projection;
+    if (projection !== "none" && projection !== "artifact-safe") {
+      throw new Error(
+        `Retired object type '${def.type}' must declare projection "none" or "artifact-safe"; a retired type is never projected raw.`,
+      );
+    }
+    this.register(def);
+    if (this.entries.get(def.type) === (def as ObjectTypeDefinition<unknown>)) {
+      this.retired.add(def.type);
+    }
+  }
+
+  /** Whether `typeId` is a retired host type (see `registerRetired`). */
+  isRetired(typeId: string): boolean {
+    return this.retired.has(typeId);
   }
 
   /**
@@ -270,6 +309,7 @@ class ObjectTypeRegistryImpl {
     this.entries.clear();
     this.packageByType.clear();
     this.governedByClaim.clear();
+    this.retired.clear();
   }
 }
 
