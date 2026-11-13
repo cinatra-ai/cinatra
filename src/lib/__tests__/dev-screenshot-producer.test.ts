@@ -12,11 +12,18 @@ vi.mock("@/lib/artifacts/resolve-bound-artifact-type", () => ({ resolveBoundArti
 vi.mock("@/lib/artifacts/artifact-extension-access", () => ({ isArtifactExtensionWriteAllowed: mock.allowed }));
 vi.mock("@/lib/artifacts/artifact-creation", () => ({ createSemanticArtifact: mock.create }));
 vi.mock("@/lib/artifacts/producer-assertions", () => ({ resolveProducerAssertionPlan: mock.assertion }));
+// The facts record names the configured schema; the reader below is handed its rows.
+vi.mock("@/lib/database", () => ({
+  getPostgresConnectionString: () => { throw new Error("no database in this suite"); },
+  ensurePostgresSchema: () => {},
+  postgresSchema: "cinatra",
+}));
 vi.mock("@/lib/artifacts/materialization-ledger", () => ({
   claimMaterialization: mock.claim, buildFinalizeMaterializationQuery: mock.finalize,
   isMaterializationFinalizeConflict: (e: Error) => e.message === "finalize-conflict", readFinalizedMaterialization: mock.winner,
 }));
 import { prepareScreenshotProducer } from "../../../scripts/fixtures/lib/file-screenshot";
+import { projectRecordedPageCaptureFacts } from "@/lib/artifacts/page-capture-facts-record";
 
 const extension = "@cinatra-ai/screenshot-artifact";
 const facts = { capturedUrl: "http://localhost:3007/artifacts/example", viewport: { width: 640, height: 480 }, capturedAt: "2026-09-19T12:00:00.000Z" };
@@ -44,9 +51,41 @@ describe("development screenshot producer", () => {
     for await (const bytes of input.stream) chunks.push(bytes);
     expect(Buffer.concat(chunks)).toEqual(capture.bytes);
     expect(input).toMatchObject({ typedData: facts, createdByRunId: "run", producerAssertionExtension: extension, declaredMime: "image/png", skipFallbackClassification: true });
-    expect(input.additionalTx2Queries({ artifactId: "artifact", representationRevisionId: "revision" })).toEqual([{ text: "finalize", values: [] }]);
+    const queries = input.additionalTx2Queries({ artifactId: "artifact", representationRevisionId: "revision" });
+    expect(queries).toHaveLength(2);
+    expect(queries[0]).toEqual({ text: "finalize", values: [] });
     expect(mock.finalize).toHaveBeenCalledWith({ ledgerId: "ledger", orgId: "org", artifactId: "artifact", representationRevisionId: "revision" });
     expect(result).toMatchObject({ artifactId: "artifact", runId: "run", deduped: false });
+  });
+  it("writes the page capture facts record with the revision, in the artifact transaction (#3459)", async () => {
+    const file = await prepareScreenshotProducer("run", "org");
+    await file(capture, "capture-light", "Screenshot");
+    const queries = mock.create.mock.calls[0][0].additionalTx2Queries({ artifactId: "artifact", representationRevisionId: "revision" });
+    const record = queries.find((q: { text: string }) => /"artifact_audit"/.test(q.text));
+    expect(record, "no page capture facts record in the filing transaction").toBeDefined();
+    expect(record.text).toMatch(/INSERT INTO "cinatra"\."artifact_audit"/);
+    expect(record.values.slice(0, 4)).toEqual(["org", "artifact", "revision", "page_capture_facts"]);
+    expect(JSON.parse(record.values[4])).toEqual({ v: 1, objectType: `${extension}:screenshot`, ...facts });
+  });
+  it("files a record the file view reads back as the revision's facts row (#3459)", async () => {
+    const file = await prepareScreenshotProducer("run", "org");
+    await file(capture, "capture-light", "Screenshot");
+    const queries = mock.create.mock.calls[0][0].additionalTx2Queries({ artifactId: "artifact", representationRevisionId: "revision" });
+    const record = queries.find((q: { text: string }) => /"artifact_audit"/.test(q.text));
+    expect(record, "no page capture facts record in the filing transaction").toBeDefined();
+    const runQuery = vi.fn(() => [{ detail: JSON.parse(record.values[4]) }]);
+    const content = projectRecordedPageCaptureFacts({
+      orgId: "org", artifactId: "artifact", representationRevisionId: "revision", objectType: `${extension}:screenshot`,
+      fileProjection: { kind: "none", channelVersion: 1, representationRevisionId: "revision", reason: "unsupported-form" },
+    }, { runQuery });
+    expect(content).toMatchObject({ kind: "object", source: "snapshot", objectType: `${extension}:screenshot`, representationRevisionId: "revision", data: facts });
+  });
+  it("refuses facts the record cannot take before the ledger claim or any write (#3459)", async () => {
+    const file = await prepareScreenshotProducer("run", "org");
+    const longUrl = `http://localhost:3007/${"a".repeat(2100)}`;
+    await expect(file({ ...capture, facts: { ...facts, capturedUrl: longUrl } }, "capture-light", "Screenshot")).rejects.toThrow(/cannot be recorded/);
+    expect(mock.claim).not.toHaveBeenCalled();
+    expect(mock.create).not.toHaveBeenCalled();
   });
   it("refuses a cross-org run before checking declarations or writing", async () => {
     await expect(prepareScreenshotProducer("run", "another-org")).rejects.toThrow(/requested organization/);

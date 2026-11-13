@@ -8,6 +8,8 @@ import { resolveBoundArtifactTarget } from "@/lib/artifacts/resolve-bound-artifa
 import { loadRunDerivationContext, resolveRunScopeOwnership } from "@/lib/artifacts/run-artifact-materializer";
 import { registerAllObjectTypes } from "@/lib/register-all-object-types";
 import { resolveProducerAssertionPlan } from "@/lib/artifacts/producer-assertions";
+import { buildPageCaptureFactsRecordOp, parsePageCaptureFacts } from "@/lib/artifacts/page-capture-facts-record";
+import { postgresSchema } from "@/lib/database";
 import {
   claimMaterialization, buildFinalizeMaterializationQuery,
   isMaterializationFinalizeConflict, readFinalizedMaterialization,
@@ -45,6 +47,11 @@ export async function prepareScreenshotProducer(runId: string, orgId: string) {
   return async (capture: CapturedScreenshot, outputId: string, title: string) => {
     assertScreenshotFixtureRuntime();
     if (!outputId.trim() || !title.trim()) throw new Error("Output identity and title must be nonempty");
+    // The file view draws a picture's facts row only from the per-revision page
+    // capture facts record, so facts that record cannot take (a URL over 2048
+    // characters or with a control character) are refused before the claim.
+    const facts = parsePageCaptureFacts(capture.facts);
+    if (!facts) throw new Error("The capture facts cannot be recorded with the revision; nothing was filed");
     const contentHash = createHash("sha256").update(capture.bytes).digest("hex");
     const claim = await claimMaterialization({
       orgId, runId, outputId, nodeId: outputId, path: "materialize_tool", extension, contentHash,
@@ -63,9 +70,14 @@ export async function prepareScreenshotProducer(runId: string, orgId: string) {
         declaredMime: "image/png", originKind: "agent_generated",
         stream: (async function* () { yield capture.bytes; })(),
         createdByRunId: runId, producerAssertionExtension: extension,
-        skipFallbackClassification: true, typedData: capture.facts,
+        skipFallbackClassification: true, typedData: { ...facts },
+        // The ledger finalization and the page capture facts record commit with
+        // the revision, as the page capture tool writes them.
         additionalTx2Queries: (ids) => [buildFinalizeMaterializationQuery({
           ledgerId: claim.ledgerId, orgId,
+          artifactId: ids.artifactId, representationRevisionId: ids.representationRevisionId,
+        }), buildPageCaptureFactsRecordOp({
+          schema: postgresSchema, orgId, objectType: resolved.target.objectTypeId, facts,
           artifactId: ids.artifactId, representationRevisionId: ids.representationRevisionId,
         })],
       }));
