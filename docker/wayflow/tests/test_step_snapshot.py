@@ -135,7 +135,7 @@ def test_only_listed_top_level_nodes_of_the_root_flow_are_recorded():
 
 
 def test_a_nested_step_sharing_a_root_id_and_the_root_conversation_is_not_recorded():
-    """Codex pre-1 MF3 break-shaped input: a nested flow's ``file_image`` runs
+    """Review 1 MF3 break-shaped input: a nested flow's ``file_image`` runs
     first, with the ROOT conversation; only the root flow's own ``file_image``
     Step object is recorded."""
     root = _Conv()
@@ -197,6 +197,54 @@ def test_a_second_run_that_cannot_be_recorded_makes_the_node_ambiguous():
     rec.observe(PRODUCE, {"n": 1}, root)
     rec.observe(PRODUCE, {"blob": "x" * (snap.STEP_SNAPSHOT_MAX_BYTES + 1)}, root)
     assert rec.snapshots() == []
+
+
+def _deeply_nested(depth):
+    value = {"leaf": 1}
+    for _ in range(depth):
+        value = {"n": value}
+    return value
+
+
+def test_inputs_nested_too_deep_to_serialize_are_not_recorded():
+    """Inputs nested about 5000 levels deep raise RecursionError while they
+    are serialized: they cannot be recorded, so no snapshot is returned."""
+    assert (
+        snap.capture_node_inputs(
+            NODE, _deeply_nested(5000), run_id=RUN, flow_sha256=FLOW, key=KEY, log=lambda *_: None
+        )
+        is None
+    )
+
+
+def test_a_second_run_too_deep_to_record_leaves_no_claim_through_the_real_wrapper():
+    """The second run of a node in one leg has inputs nested about 5000
+    levels deep. They cannot be recorded, so the node is ambiguous and the leg
+    carries no claim for it: the first run's claim must not stay in place as a
+    claim for the wrong run. The other node is unaffected."""
+    import contextvars
+
+    current = contextvars.ContextVar("rec", default=None)
+
+    class LoopStep:
+        def __init__(self, step_id):
+            self.id = step_id
+
+        async def invoke_async(self, inputs, conversation):
+            return "ok"
+
+    snap.install_invoke_capture(LoopStep, current.get, log=lambda *_: None)
+    looping, steady = LoopStep("produce"), LoopStep("file_image")
+    root = _Conv()
+    rec = _recorder(root=root, steps=(looping, steady))
+    token = current.set(rec)
+    try:
+        assert _run(looping.invoke_async({"draft": 1}, root)) == "ok"
+        assert _run(steady.invoke_async({"prompt": "a cat"}, root)) == "ok"
+        assert _run(looping.invoke_async(_deeply_nested(5000), root)) == "ok"
+    finally:
+        current.reset(token)
+    assert [s["node"] for s in rec.snapshots()] == ["file_image"]
 
 
 def test_a_self_looping_node_with_new_inputs_carries_no_claim_through_the_real_wrapper():
@@ -293,7 +341,7 @@ def test_the_filing_node_is_recorded_on_the_resumed_leg():
     assert filed["attestation"] == snap.snapshot_attestation(KEY, RUN, "file_image", filed["sha256"], FLOW)
 
 
-# ------------------------------------------------- Codex pre-1 MF1 and MF2
+# ------------------------------------------------- review 1 MF1 and MF2
 
 
 def test_every_declared_node_is_requested_none_truncated():
@@ -322,7 +370,7 @@ def test_a_flow_version_that_is_not_64_lowercase_hex_records_nothing(flow):
     assert snap.capture_node_inputs(NODE, {"a": 1}, run_id=RUN, flow_sha256=flow, key=KEY, log=lambda *_: None) is None
 
 
-# ------------------------------------------- Codex pre-1 MF3 (pure halves)
+# ------------------------------------------- review 1 MF3 (pure halves)
 
 
 def test_the_leg_recorder_reads_the_root_flow_steps_from_the_conversation():

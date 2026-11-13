@@ -1,6 +1,6 @@
 /**
  * cinatra#4264 slice B1a: the PRODUCTION store write of a step snapshot,
- * `writeStepSnapshotRow`, over a stand-in of the database (Codex pre-1 NOTE 4).
+ * `writeStepSnapshotRow`, over a stand-in of the database (review 1 NOTE 4).
  * The other snapshot tests inject an in-memory writer; this one runs the real
  * conflict rule: insert once per (run, node); an equal second value is a no-op;
  * the same bytes under ANOTHER flow version, or other bytes, mark the row

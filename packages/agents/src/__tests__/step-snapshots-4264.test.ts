@@ -198,7 +198,7 @@ describe("T6: the node list", () => {
   });
 });
 
-describe("Codex pre-1 MF1 and MF2", () => {
+describe("review 1 MF1 and MF2", () => {
   // 33 Regenerate entries with distinct steps s00..s32 and artifact nodes z00..z32: 66 nodes.
   const pad = (i: number) => String(i).padStart(2, "0");
   const ENTRIES = Array.from({ length: 33 }, (_, i) => ({ step: `s${pad(i)}`, artifactNode: `z${pad(i)}`, noteInput: "note" }));

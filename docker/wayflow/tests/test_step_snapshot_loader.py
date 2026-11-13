@@ -1,4 +1,4 @@
-"""cinatra#4264 slice B1a, T7 at the loader level (Codex pre-1 MF3).
+"""cinatra#4264 slice B1a, T7 at the loader level (review 1 MF3).
 
 The loader's REAL capture patch on ``Step.invoke_async``, installed by
 ``agent_loader._patch_step_snapshot_capture``, records the listed top-level
