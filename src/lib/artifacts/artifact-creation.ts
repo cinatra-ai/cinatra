@@ -1053,8 +1053,8 @@ VALUES ($1::text, $2::text, $3::text, $4::text, 1, 'file', $5::text, $6::text, $
         },
         // The WRITER PROVENANCE WITNESS — the append-only `artifact_audit`
         // 'create' row whose `representation_revision_id` is the representation
-        // pin above. Emitted from the shared builder so this writer and the two
-        // CMS capture writers mint the IDENTICAL row every claimed-row read gate
+        // pin above. Emitted from the shared builder so this writer and the
+        // other host writers mint the IDENTICAL row every claimed-row read gate
         // tests for (see artifact-writer-witness.ts).
         buildArtifactWriterWitnessOp(schema, {
           orgId: input.orgId,
