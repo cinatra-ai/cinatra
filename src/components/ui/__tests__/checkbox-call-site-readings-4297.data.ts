@@ -776,7 +776,7 @@ export const CHECKBOX_CALL_SITE_READINGS: FileReading[] = [
   { file: "src/lib/better-auth-org-hooks.ts", tokens: 0, sites: [], loads: { count: 1, modules: "drizzle-orm", reading: "the database query library loaded beside the auth database for its eq operator, read by name: it draws nothing" } },
   { file: "src/lib/organization-archive-guard.ts", tokens: 0, sites: [], loads: { count: 1, modules: "drizzle-orm", reading: "the database query library loaded beside the auth database for its eq operator, read by name: it draws nothing" } },
   { file: "src/lib/organization-dispatch-policy.ts", tokens: 0, sites: [], loads: { count: 3, modules: "drizzle-orm", reading: "the database query library loaded beside the auth database for its sql template tag, read by name in three queries: it draws nothing" } },
-  { file: "src/lib/generated/artifact-renderers.ts", tokens: 0, sites: [], loads: { count: 36, modules: "@cinatra-ai/[a-z0-9-]+-artifacts?/src/renderers/[a-z-]+", reading: EXTENSION_LOADS } },
+  { file: "src/lib/generated/artifact-renderers.ts", tokens: 0, sites: [], loads: { count: 37, modules: "@cinatra-ai/[a-z0-9-]+-artifacts?/src/renderers/[a-z-]+", reading: EXTENSION_LOADS } },
   { file: "src/lib/generated/chat-views.ts", tokens: 0, sites: [], loads: { count: 1, modules: "@cinatra-ai/[a-z0-9-]+-artifact/src/views/[a-z-]+", reading: EXTENSION_LOADS } },
   { file: "src/lib/generated/connector-setup-pages.ts", tokens: 0, sites: [], loads: { count: 23, modules: "@cinatra-ai/[a-z0-9-]+-connector/(?:setup|settings)-page", reading: EXTENSION_LOADS } },
   { file: "src/lib/generated/extensions.server.ts", tokens: 0, sites: [], loads: { count: 89, modules: "@cinatra-ai/[a-z0-9-]+(?:/[a-z0-9-]+)*", reading: EXTENSION_LOADS } },
