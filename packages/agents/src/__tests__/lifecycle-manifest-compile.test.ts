@@ -20,6 +20,7 @@ import {
   normalizeLifecycle,
   parseLifecycleConfigText,
   readManifestLifecycle,
+  readRegenerateEntry,
   serializeLifecycleConfig,
 } from "@/lib/lifecycle/lifecycle-policy";
 import { agentLifecycleDeclarationSchema } from "../verdaccio/package-contract";
@@ -227,5 +228,75 @@ describe("cinatra#4424 — the declared repair findings input", () => {
       repairFindingsInput: { input: "instructions" },
     });
     expect(serializeLifecycleConfig({ repairCapable: true })).toBe('{"repairCapable":true}');
+  });
+});
+
+describe("cinatra#4264 A1: the regenerate declaration", () => {
+  const image = { artifactNode: "file_image", step: "image_flow", noteInput: "prompt" };
+  const draft = { artifactNode: "write_draft", step: "draft_flow", noteInput: "note" };
+
+  it("the schema admits a two-entry list and a 129-character node id", () => {
+    expect(agentLifecycleDeclarationSchema.safeParse({ regenerate: [image, draft] }).success).toBe(true);
+    const long = { ...image, artifactNode: "n".repeat(129) };
+    expect(agentLifecycleDeclarationSchema.safeParse({ regenerate: [long] }).success).toBe(true);
+  });
+
+  it("the schema REFUSES a bare object, an empty or 17-entry list, a duplicate artifactNode, unknown members, empty ids and bad note inputs", () => {
+    const many = Array.from({ length: 17 }, (_, i) => ({ ...image, artifactNode: `f${i}` }));
+    for (const regenerate of [
+      image,
+      [],
+      many,
+      [image, { ...draft, artifactNode: "file_image" }],
+      [{ ...image, extra: 1 }],
+      [{ ...image, artifactNode: "" }],
+      [{ ...image, step: "" }],
+      ...["lifecycleRepairRequest", "__proto__", "constructor", "two words", ""].map((noteInput) => [
+        { ...image, noteInput },
+      ]),
+    ]) {
+      expect(agentLifecycleDeclarationSchema.safeParse({ regenerate }).success).toBe(false);
+    }
+  });
+
+  it("normalizeLifecycle keeps a valid list and drops the whole key on one bad entry", () => {
+    expect(normalizeLifecycle({ regenerate: [image, draft] })).toEqual({ regenerate: [image, draft] });
+    for (const regenerate of [
+      [image, { ...draft, noteInput: "__proto__" }],
+      [image, { ...draft, artifactNode: "file_image" }],
+      [image, { ...draft, extra: 1 }],
+      [],
+      image,
+    ]) {
+      expect(normalizeLifecycle({ repairCapable: true, regenerate })).toEqual({ repairCapable: true });
+    }
+  });
+
+  it("serializes after repairFindingsInput, sorted by artifactNode, and round-trips", () => {
+    const text = serializeLifecycleConfig({
+      requestedSkips: ["review"],
+      regenerate: [draft, { noteInput: "prompt", step: "image_flow", artifactNode: "file_image" }],
+      repairFindingsInput: { input: "instructions" },
+    });
+    expect(text).toBe(
+      '{"repairFindingsInput":{"input":"instructions"},' +
+        '"regenerate":[{"artifactNode":"file_image","step":"image_flow","noteInput":"prompt"},' +
+        '{"artifactNode":"write_draft","step":"draft_flow","noteInput":"note"}],' +
+        '"requestedSkips":["review"]}',
+    );
+    expect(serializeLifecycleConfig(parseLifecycleConfigText(text))).toBe(text);
+  });
+
+  it("a lifecycle without the key serializes to the pinned text of today", () => {
+    expect(
+      serializeLifecycleConfig({ producedTypes: ["t"], repairCapable: true, requestedSkips: ["review"] }),
+    ).toBe('{"producedTypes":["t"],"repairCapable":true,"requestedSkips":["review"]}');
+  });
+
+  it("readRegenerateEntry returns the entry of one filing node, else null", () => {
+    const lifecycle = normalizeLifecycle({ regenerate: [image, draft] });
+    expect(readRegenerateEntry(lifecycle, "file_image")).toEqual({ step: "image_flow", noteInput: "prompt" });
+    expect(readRegenerateEntry(lifecycle, "image_flow")).toBeNull();
+    expect(readRegenerateEntry(null, "file_image")).toBeNull();
   });
 });
