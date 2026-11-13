@@ -50,7 +50,7 @@ vi.mock("../store", () => storeMock);
 const segmentMock = vi.hoisted(() => ({
   resolveRegenerateSegment: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ kind: "ordinary" })),
   fenceRegenerateRuntime: vi.fn(async (): Promise<boolean> => false),
-  isRegenerateSegmentRun: vi.fn(async (): Promise<boolean> => false),
+  classifyRegenerateSegmentRun: vi.fn(async (): Promise<"segment" | "ordinary" | "unreadable"> => "ordinary"),
 }));
 vi.mock("../regenerate-segment", async (orig) => ({
   ...(await orig<typeof import("../regenerate-segment")>()),

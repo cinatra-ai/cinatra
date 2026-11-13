@@ -101,7 +101,7 @@ import {
   projectRepairFindingsInput,
   type CompiledManifestLifecycle,
 } from "@/lib/lifecycle/lifecycle-policy";
-import { planSegmentDispatch } from "./regenerate-segment";
+import { hasRegenerateIntent, planSegmentDispatch } from "./regenerate-segment";
 // cinatra#1940 P3 (Decision 2): the creation perimeter is now guarded — this
 // repair-delivery drain has no session, so it mints the SYSTEM
 // `agent-run-dispatch` authority (a caller the design's caller matrix did not
@@ -339,15 +339,16 @@ export async function dispatchPendingProducerRepairs(opts?: {
       // the run start. A provenance that cannot be proven, another filing step,
       // or no single start output feeding the note escalates the repair;
       // nothing is dispatched. NULL intent: the ordinary repair below,
-      // unchanged.
+      // unchanged. A strict NULL check: a blank intent is planned, refused
+      // and escalated, never dispatched as an ordinary repair.
       let segmentParentRunId: string | null = null;
       let segmentInputParams: Record<string, unknown> | null = null;
-      if (row.regenerateNodeId) {
+      if (hasRegenerateIntent(row.regenerateNodeId)) {
         const segment = await planSegmentDispatch({
           repair: {
             id: row.id,
             orgId: row.orgId,
-            regenerateNodeId: row.regenerateNodeId,
+            regenerateNodeId: row.regenerateNodeId ?? null,
             baseArtifactId: row.baseArtifactId,
             baseRepresentationRevisionId: row.baseRepresentationRevisionId,
           },

@@ -288,13 +288,16 @@ of each declared node (the step snapshots). A repair whose row names
   repair row, the verified filing node of the reviewed revision and the stored
   snapshots of the run that filed it. Another filing node, no declaration, a
   missing or ambiguous snapshot, or two flow versions fail the run before
-  dispatch with a plain reason. A repair without `regenerate_node_id` runs as an
-  ordinary repair; no input of the run makes it a segment run.
+  dispatch with a plain reason. A repair without `regenerate_node_id` (NULL)
+  runs as an ordinary repair; a blank one is refused and escalated, never run
+  as an ordinary repair; no input of the run makes it a segment run.
 - **Inputs.** The run's inputs are the note and the typed
   `lifecycleRepairRequest` only. The note travels under the flow's start output
   that feeds the step's `noteInput` (its name may differ from `noteInput`); the
   segment request carries that name, and the runtime refuses a name that its
-  mounted start node does not output or that does not feed the note. Every
+  mounted start node does not output or that does not feed the note. A name
+  the platform owns (`cinatra_run_id`, `agent_run_id`, the run-token key,
+  `lifecycleRepairRequest`) never carries the note: both sides refuse it. Every
   other input of the two nodes is the value the producing run recorded. So a picture regenerated after a text
   change reruns on the ORIGINAL post text of the producing run.
 - **Context.** The run's parent is the run that filed the reviewed revision. A
@@ -311,6 +314,15 @@ of each declared node (the step snapshots). A repair whose row names
   the named filing node, with a valid receipt; otherwise the repair stays open.
   The segment's own write is recorded on the repair in the same update as the
   successor and settles under the successor gate: it is never reviewed twice.
+  Neither the end-node bindings nor the default road run for a segment run; a
+  repair row that cannot be read at the end fails the run, and nothing is
+  written.
+- **One leg.** A segment never pauses: the runtime fails a segment that stops
+  for input (`REGENERATE_SEGMENT_PAUSED`), and every resume road refuses a
+  segment run (`REGENERATE_SEGMENT_NOT_RESUMABLE`) before anything is sent.
+  A flow whose step waits for a person cannot be regenerated.
+- **History.** The stored task history and the run's step results keep each
+  snapshot's node and sha256 only; the values stay in the step snapshots.
 
 ## 5. What a producer must not do
 

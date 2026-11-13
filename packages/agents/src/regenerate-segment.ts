@@ -1,6 +1,12 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 import { writeStepSnapshotRow, type StepSnapshotWriter } from "./step-snapshots";
+import {
+  PLATFORM_SUPPLIED_FLOW_INPUTS,
+  PLATFORM_SUPPLIED_RUN_TOKEN_KEY,
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore — dependency-free .mjs data module (allowJs)
+} from "../../../scripts/extensions/platform-supplied-flow-inputs.mjs";
 
 // ---------------------------------------------------------------------------
 // THE REGENERATE SEGMENT RUN, the application's half (cinatra#4264, slice B1b).
@@ -40,6 +46,11 @@ import { writeStepSnapshotRow, type StepSnapshotWriter } from "./step-snapshots"
 //     has exactly one non-CMS production, its ledger row in this run has
 //     `verified_step_id = regenerate_node_id`, and the receipt is valid;
 //     otherwise the repair stays open (`unresolved`).
+//   - ONE LEG. A segment run is never resumed: the runtime fails a segment
+//     that stops for input, and the one resume carrier refuses a segment run
+//     (a resumed leg would carry no segment, pass no fence, sign no receipt).
+//   - HISTORY. The stored history keeps each snapshot's node and sha256, never
+//     its value (the value stays in agent_run_step_snapshots only).
 // ---------------------------------------------------------------------------
 
 /** First-message metadata: the segment the runtime runs. */
@@ -64,6 +75,20 @@ const SHA256_HEX = /^[0-9a-f]{64}$/;
 const RECEIPT_ATTESTATION = /^g1:([0-9a-f]{64})$/;
 const LIFECYCLE_REPAIR_SOURCE_TYPE = "lifecycle_repair";
 const LIFECYCLE_REPAIR_REQUEST_INPUT = "lifecycleRepairRequest";
+/**
+ * The input names the platform owns in the start message: the run id and its
+ * loader alias, the per-run token key, and the typed repair request. The note
+ * never travels under one of them (the platform's own value would replace it,
+ * or the note would be read as a run id). The same list as the runtime's
+ * PLATFORM_OWNED_INPUT_NAMES.
+ */
+export const PLATFORM_OWNED_INPUT_NAMES: readonly string[] = Object.freeze([
+  ...(PLATFORM_SUPPLIED_FLOW_INPUTS as readonly string[]),
+  PLATFORM_SUPPLIED_RUN_TOKEN_KEY as string,
+  LIFECYCLE_REPAIR_REQUEST_INPUT,
+]);
+/** The resume carrier's refusal of a segment run. */
+export const REGENERATE_SEGMENT_NOT_RESUMABLE = "REGENERATE_SEGMENT_NOT_RESUMABLE";
 /** The id prefix of a repair run; equal to REPAIR_RUN_PREFIX of
  *  ./lifecycle-repair-dispatch-store (pinned by the tests), kept here so that
  *  a run that is not a repair run is answered without loading the store. */
@@ -236,9 +261,18 @@ async function readNoteStartOutputFromInstalledOas(input: {
   return noteStartOutputFromOas(JSON.parse(await readFile(oasPath, "utf8")), input.step, input.noteInput);
 }
 
-/** A usable note key: non-empty and never the typed request's own input. */
+/** A usable note key: non-empty and never an input the platform owns. */
 function usableNoteKey(name: string | null | undefined): name is string {
-  return nonEmptyString(name) && name !== LIFECYCLE_REPAIR_REQUEST_INPUT;
+  return nonEmptyString(name) && !PLATFORM_OWNED_INPUT_NAMES.includes(name);
+}
+
+/**
+ * Whether a repair's `regenerate_node_id` is set: a strict NULL check. A
+ * blank (non-NULL) value IS an intent, which every reader then refuses; it is
+ * never read as an ordinary repair.
+ */
+export function hasRegenerateIntent(regenerateNodeId: string | null | undefined): boolean {
+  return regenerateNodeId !== null && regenerateNodeId !== undefined;
 }
 
 async function defaultRegenerateSegmentDeps(): Promise<RegenerateSegmentDeps> {
@@ -378,23 +412,63 @@ export async function resolveRegenerateSegment(
 }
 
 /**
- * Whether `run` is a lifecycle repair run whose repair names a Regenerate
- * intent: the task handler skips the end-node binding materialization for it.
- * A read fault answers false: the materializer then runs and, finding none of
- * the template's end outputs on a segment, fails the run (fail closed).
+ * What a finished run is to the task handler: `segment` (a lifecycle repair
+ * run whose repair names a Regenerate intent, blank included: no end-node
+ * binding and no default road), `ordinary` (not a repair run, no repair row,
+ * or a NULL intent), or `unreadable` (the repair row could not be read: the
+ * handler fails the run and writes nothing). Never `ordinary` on a fault.
  */
+export async function classifyRegenerateSegmentRun(
+  run: { id: string; sourceType?: string | null },
+  deps?: Pick<RegenerateSegmentDeps, "readRepairForRun">,
+): Promise<"segment" | "ordinary" | "unreadable"> {
+  if (run.sourceType !== LIFECYCLE_REPAIR_SOURCE_TYPE) return "ordinary";
+  if (!deps && segmentRepairIdFromRunId(run.id) === null) return "ordinary";
+  try {
+    const read = deps?.readRepairForRun ?? (await defaultRegenerateSegmentDeps()).readRepairForRun;
+    const repair = await read(run.id);
+    return repair && hasRegenerateIntent(repair.regenerateNodeId) ? "segment" : "ordinary";
+  } catch (err) {
+    console.error(
+      `[regenerate-segment] run=${run.id} repair intent unreadable: ${err instanceof Error ? err.name : "error"}`,
+    );
+    return "unreadable";
+  }
+}
+
+/** Whether `run` may be a Regenerate segment run: true for a segment and for
+ *  a read fault (fail closed). */
 export async function isRegenerateSegmentRun(
   run: { id: string; sourceType?: string | null },
   deps?: Pick<RegenerateSegmentDeps, "readRepairForRun">,
 ): Promise<boolean> {
-  if (run.sourceType !== LIFECYCLE_REPAIR_SOURCE_TYPE) return false;
-  if (!deps && segmentRepairIdFromRunId(run.id) === null) return false;
+  return (await classifyRegenerateSegmentRun(run, deps)) !== "ordinary";
+}
+
+/**
+ * Throws REGENERATE_SEGMENT_NOT_RESUMABLE for a run that is, or may be, a
+ * Regenerate segment run: a repair run whose repair names an intent (blank
+ * included), or whose repair cannot be read. A segment runs in one leg; a
+ * resumed leg would carry no segment request, pass no fence and sign no
+ * receipt. A run whose id is not a repair-run id resolves without a read.
+ * Called by the one resume carrier (`mintResumeRunTokenMetadata`), so every
+ * resume road refuses before anything is sent.
+ */
+export async function refuseRegenerateSegmentResume(
+  runId: string,
+  deps?: Pick<RegenerateSegmentDeps, "readRepairForRun">,
+): Promise<void> {
+  if (segmentRepairIdFromRunId(runId) === null) return;
+  let segment: boolean;
   try {
     const read = deps?.readRepairForRun ?? (await defaultRegenerateSegmentDeps()).readRepairForRun;
-    const repair = await read(run.id);
-    return nonEmptyString(repair?.regenerateNodeId);
+    const repair = await read(runId);
+    segment = !!repair && hasRegenerateIntent(repair.regenerateNodeId);
   } catch {
-    return false;
+    segment = true;
+  }
+  if (segment) {
+    throw new Error(`${REGENERATE_SEGMENT_NOT_RESUMABLE}: a Regenerate segment run is never resumed`);
   }
 }
 
@@ -410,6 +484,28 @@ export function regenerateSegmentMetadata(plan: RegenerateSegmentPlan): Record<s
       snapshots: plan.snapshots.map((s) => ({ node: s.node, inputs_json: s.inputs_json, sha256: s.sha256 })),
     },
   };
+}
+
+/**
+ * `history` with every segment request's snapshot VALUES removed: each
+ * snapshot keeps its node and sha256. The stored history (task history,
+ * `agent_runs.step_results`) never holds a snapshot value; the values live in
+ * agent_run_step_snapshots only. The input is not changed.
+ */
+export function redactSegmentRequests<T extends HistoryLike>(
+  history: ReadonlyArray<T> | undefined,
+): ReadonlyArray<T> | undefined {
+  if (!history) return history;
+  return history.map((message) => {
+    const metadata = message?.metadata;
+    if (!plainObject(metadata) || !(REGENERATE_SEGMENT_METADATA_KEY in metadata)) return message;
+    const raw = metadata[REGENERATE_SEGMENT_METADATA_KEY];
+    const request: Record<string, unknown> = plainObject(raw) ? { ...raw } : {};
+    request.snapshots = (Array.isArray(request.snapshots) ? request.snapshots : [])
+      .filter(plainObject)
+      .map((snap) => ({ node: snap.node, sha256: snap.sha256 }));
+    return { ...message, metadata: { ...metadata, [REGENERATE_SEGMENT_METADATA_KEY]: request } };
+  });
 }
 
 // ---------------------------------------------------------------------------

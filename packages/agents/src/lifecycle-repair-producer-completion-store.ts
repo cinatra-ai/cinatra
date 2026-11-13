@@ -63,6 +63,7 @@ import { readRepair, submitRepairResponse } from "./lifecycle-repair-store";
 import { repairRunId, readDeliveredRepairRequest } from "./lifecycle-repair-dispatch-store";
 import {
   claimSegmentProduction,
+  hasRegenerateIntent,
   SEGMENT_RECEIPT_NODE_ID,
   type SegmentClaimDeps,
 } from "./regenerate-segment";
@@ -432,9 +433,19 @@ export async function completeDispatchedProducerRepairs(opts?: {
       // cinatra#4264 B1b: a Regenerate segment run answers with its filing
       // node's ONE write, proven by the ledger's verified step and the
       // runtime's signed receipt; anything else leaves the repair open. An
-      // ordinary repair keeps the LATEST rule below.
+      // ordinary repair keeps the LATEST rule below. A strict NULL check: a
+      // blank intent claims nothing and is never read as an ordinary repair.
+      const segmentIntent = hasRegenerateIntent(repair.regenerateNodeId);
       const regenerateNodeId = repair.regenerateNodeId ?? null;
-      const production = regenerateNodeId
+      if (segmentIntent && !regenerateNodeId) {
+        summary.unresolved += 1;
+        console.error(
+          `[lifecycle-repair-producer-completion-store] repair ${repair.id} names a blank Regenerate node; ` +
+            `its run's writes are not claimed.`,
+        );
+        continue;
+      }
+      const production = segmentIntent && regenerateNodeId
         ? await claimSegmentProduction(
             { orgId: repair.orgId, runId, regenerateNodeId },
             segmentClaimDeps,
@@ -571,7 +582,7 @@ export async function completeDispatchedProducerRepairs(opts?: {
         // cinatra#4264 B1b: the segment run's own write, recorded in the same
         // update as the successor, so its produced event settles under the
         // successor gate (one gate). Ordinary repairs pass none.
-        ...(regenerateNodeId ? { sourceTarget: production } : {}),
+        ...(segmentIntent ? { sourceTarget: production } : {}),
         response: {
           gateId: repair.gateId,
           baseTarget: {

@@ -541,9 +541,10 @@ import {
   stripStepSnapshotClaims,
 } from "./step-snapshots";
 import {
+  classifyRegenerateSegmentRun,
   fenceRegenerateRuntime,
-  isRegenerateSegmentRun,
   persistSegmentReceipt,
+  redactSegmentRequests,
   regenerateSegmentMetadata,
   resolveRegenerateSegment,
   stripSegmentReceipts,
@@ -3103,9 +3104,13 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   // The pause claims (cinatra#3745) are recorded at their interrupts; the
   // stored history keeps its messages and drops only the claims.
   // cinatra#4264: the step snapshots live in agent_run_step_snapshots only.
-  const history = stripSegmentReceipts(
-    stripStepSnapshotClaims(
-      stripCinatraGateNodeClaims(stripCinatraEndNodeOutputMessages(rawHistory)),
+  // cinatra#4264 B1b: a segment run's first message keeps its snapshots'
+  // nodes and sha256 only; their values live in agent_run_step_snapshots.
+  const history = redactSegmentRequests(
+    stripSegmentReceipts(
+      stripStepSnapshotClaims(
+        stripCinatraGateNodeClaims(stripCinatraEndNodeOutputMessages(rawHistory)),
+      ),
     ),
   );
   // A2A spec: role is "user" | "agent". Cinatra also emits "assistant". Accept BOTH.
@@ -3168,9 +3173,23 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   // cinatra#4264 B1b — a Regenerate segment run executes only the step and its
   // filing node: its end exposes the filing node's outputs, not the template's
   // end-node bindings, and its one write is claimed by the repair completer.
-  // The end-node binding materialization does not run for it.
-  if (await isRegenerateSegmentRun({ id: runId, sourceType: run.sourceType })) {
+  // Neither the end-node binding materialization nor the default road below
+  // runs for it. A repair row that cannot be read is never taken for an
+  // ordinary run: the run fails (the materialization-honesty gate below) and
+  // nothing is written.
+  const segmentRunClass = await classifyRegenerateSegmentRun({ id: runId, sourceType: run.sourceType });
+  if (segmentRunClass === "segment") {
     console.log(`[artifact-materializer] run=${runId} is a Regenerate segment; end-node bindings not materialized`);
+  } else if (segmentRunClass === "unreadable") {
+    artifactMaterializations = [
+      {
+        ok: false,
+        outputId: "(regenerate-segment)",
+        nodeId: null,
+        extension: null,
+        error: "the run's repair could not be read, so whether it is a Regenerate segment is unknown; nothing was materialized",
+      },
+    ];
   } else {
     try {
       const { materializeRunArtifacts } = await import(
@@ -3258,7 +3277,10 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   // default road could not file is a visible per-output outcome on the run's own
   // record. The pickup never throws.
   let defaultRoadPickups: Array<Record<string, unknown>> = [];
-  if (materializationFailures.length === 0) {
+  // cinatra#4264 B1b: a Regenerate segment run's one write is the filing
+  // node's, claimed by the repair completer; the default road never runs for
+  // it (a second production would make the claim refuse the repair).
+  if (materializationFailures.length === 0 && segmentRunClass === "ordinary") {
     try {
       // THE SLOT, not an import (route-graph ratchet): the pickup CORE reaches
       // the ladder, the artifact writer and the pooled-db graph, and this module

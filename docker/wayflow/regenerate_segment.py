@@ -33,13 +33,19 @@ runtime then:
    ``noteStartOutput``, which must be an output of the mounted flow's start
    node AND the one that feeds (step, noteInput); and ``cinatra_seg_<i>`` from
    that port's value in the node's snapshot. A missing or empty carried name,
-   a name that fails either check, or a missing value refuses with
+   a name the platform owns (``PLATFORM_OWNED_INPUT_NAMES``), a name that
+   fails either check, or a missing value refuses with
    ``REGENERATE_SEGMENT_INVALID`` before any step;
 5. after the segment finishes, puts a receipt on the last message metadata
    (``cinatra_segment_receipt``): ``{step, artifactNode, flowSha256,
    attestation}`` with ``attestation = "g1:" + hex(hmac_sha256(key,
    "g1\\n<run_id>\\n<step>\\n<artifactNode>\\n<flowSha256>"))``. The
-   application refiles the segment's write only with a valid receipt.
+   application refiles the segment's write only with a valid receipt. A
+   segment that stops for input instead fails (``REGENERATE_SEGMENT_PAUSED``):
+   it is never stored as paused, so it is never resumed;
+6. stores the request without the snapshot values (``redact_segment_request``):
+   the task history and the conversation keep each snapshot's node and
+   sha256 only.
 
 The derivation refuses (``REGENERATE_SEGMENT_INVALID``) when a node is missing
 or not top-level, an id is duplicated in the document, there is no
@@ -73,16 +79,28 @@ SEGMENT_NOTE_OUTPUT = "cinatra_seg_note"
 SEGMENT_PORT_PREFIX = "cinatra_seg_"
 #: Ports the platform feeds from the start output of the same name.
 PLATFORM_PORT_KEYS = frozenset({"cinatra_run_id", "agent_run_id"})
+#: The input names the platform owns in the start message: the run id and its
+#: loader alias, the per-run token key (popped before the inputs are read),
+#: and the typed repair request. The note never travels under one of them:
+#: the platform's own value would replace it, or it would be read as a run id.
+#: The same list as PLATFORM_OWNED_INPUT_NAMES of the application.
+PLATFORM_OWNED_INPUT_NAMES = frozenset(
+    PLATFORM_PORT_KEYS | {"__cinatra_run_token__", "lifecycleRepairRequest"}
+)
 
 REGENERATE_SEGMENT_INVALID = "REGENERATE_SEGMENT_INVALID"
 REGENERATE_FLOW_CHANGED = "REGENERATE_FLOW_CHANGED"
+#: A segment that stopped for input: it fails, it never pauses (a resumed
+#: leg would carry no segment request and no receipt).
+REGENERATE_SEGMENT_PAUSED = "REGENERATE_SEGMENT_PAUSED"
 
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
 
 class RegenerateSegmentError(ValueError):
-    """A segment run refused before any step runs. ``code`` is one of the
-    two codes above; the message never carries an input value."""
+    """A segment run refused. ``code`` is one of the codes above
+    (REGENERATE_SEGMENT_PAUSED after the segment ran, the others before any
+    step); the message never carries an input value."""
 
     def __init__(self, code: str, detail: str) -> None:
         super().__init__(f"{code}: {detail}")
@@ -122,6 +140,7 @@ def read_segment_request(message: Any) -> Optional[Dict[str, Any]]:
     for name in ("step", "artifactNode", "noteInput", "noteStartOutput"):
         if not _nonempty_str(raw.get(name)):
             raise _invalid(f"the segment request has no {name}")
+    _refuse_platform_owned_note_name(raw["noteStartOutput"])
     flow_sha = raw.get("flowSha256")
     if not isinstance(flow_sha, str) or not _SHA256_HEX.fullmatch(flow_sha):
         raise _invalid("the segment request's flowSha256 is not a sha256 hex")
@@ -146,6 +165,11 @@ def read_segment_request(message: Any) -> Optional[Dict[str, Any]]:
         "flowSha256": flow_sha,
         "snapshots": clean,
     }
+
+
+def _refuse_platform_owned_note_name(name: Any) -> None:
+    if name in PLATFORM_OWNED_INPUT_NAMES:
+        raise _invalid(f"the note cannot travel under the platform's own input {name!r}")
 
 
 def check_segment_request(request: Dict[str, Any], mounted_flow_sha256: str) -> Dict[str, Dict[str, Any]]:
@@ -512,6 +536,7 @@ def build_segment_inputs(
     missing value or a name that fails either check refuses."""
     if not _nonempty_str(note_start_output):
         raise _invalid("the segment request names no start output for the note")
+    _refuse_platform_owned_note_name(note_start_output)
     if note_start_output not in derivation["start_outputs"]:
         raise _invalid(f"the flow's start node has no output {note_start_output!r}")
     if note_start_output != derivation["note_source"]:
@@ -551,6 +576,42 @@ def prepare_segment_run(
         request["flowSha256"], working_doc, request["step"], request["artifactNode"], request["noteInput"]
     )
     return derivation, build_segment_inputs(derivation, snapshots, message_inputs, request.get("noteStartOutput"))
+
+
+def require_segment_finished(finished: bool) -> None:
+    """A segment that did not finish (it stopped for input or a tool
+    request) fails with REGENERATE_SEGMENT_PAUSED; it is never stored as
+    paused. A resume would carry no segment request, so the resumed leg
+    would sign no receipt and pass no capability check."""
+    if not finished:
+        raise RegenerateSegmentError(
+            REGENERATE_SEGMENT_PAUSED, "a Regenerate segment stopped for input; a segment never pauses"
+        )
+
+
+def redact_segment_request(message: Any) -> Any:
+    """A COPY of an A2A message whose segment request keeps each snapshot's
+    node and sha256 but not its value, for everything that is stored (the
+    task history, the conversation). The caller's message is never changed.
+    A message without a request is returned unchanged (identity-equal)."""
+    if not isinstance(message, dict):
+        return message
+    metadata = message.get("metadata")
+    if not isinstance(metadata, dict) or REGENERATE_SEGMENT_METADATA_KEY not in metadata:
+        return message
+    raw = metadata[REGENERATE_SEGMENT_METADATA_KEY]
+    request = dict(raw) if isinstance(raw, dict) else {}
+    snapshots = request.get("snapshots")
+    request["snapshots"] = [
+        {"node": snap.get("node"), "sha256": snap.get("sha256")}
+        for snap in (snapshots if isinstance(snapshots, list) else [])
+        if isinstance(snap, dict)
+    ]
+    copy_ = dict(message)
+    copy_["metadata"] = {**metadata, REGENERATE_SEGMENT_METADATA_KEY: request}
+    if isinstance(message.get("parts"), list):
+        copy_["parts"] = list(message["parts"])
+    return copy_
 
 
 # ---------------------------------------------------------------------------

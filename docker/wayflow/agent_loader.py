@@ -404,14 +404,18 @@ def _scrub_run_token_from_message_for_storage(
     if not isinstance(message, dict):
         return message
     _, scrubbed = _extract_and_scrub_run_token(message)
-    if scrubbed is message:
-        return message  # no carrier present — nothing was copied or removed
-    parts = scrubbed.get("parts")
-    if isinstance(parts, list) and parts is message.get("parts"):
-        # Only the metadata carrier was scrubbed, so the text-part pop returned
-        # the SAME list. Detach it so storage and the broker share nothing.
-        scrubbed["parts"] = list(parts)
-    return scrubbed
+    if scrubbed is not message:
+        parts = scrubbed.get("parts")
+        if isinstance(parts, list) and parts is message.get("parts"):
+            # Only the metadata carrier was scrubbed, so the text-part pop
+            # returned the SAME list. Detach it so storage and the broker
+            # share nothing.
+            scrubbed["parts"] = list(parts)
+    # cinatra#4264 B1b: a Regenerate segment request is stored with each
+    # snapshot's node and sha256 only, never the snapshot's values (a copy;
+    # the broker's message keeps the full request for the worker). No carrier
+    # and no request: the message itself comes back (identity-equal).
+    return _regenerate_segment.redact_segment_request(scrubbed)
 
 
 # Surface EndNode declared outputs as a structured A2A DataPart so the Cinatra
@@ -1284,6 +1288,9 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
                 conversation, _segment_run_id = _start_segment_conversation(
                     self.assistant, params.get("message"), _segment_request
                 )
+                # The snapshot values are read; the conversation stores the
+                # message without them.
+                params["message"] = _regenerate_segment.redact_segment_request(params.get("message"))
             elif prioritize_task:
                 conversation = await self.storage.load_task_conversation(
                     task_id=task["id"],
@@ -1401,6 +1408,12 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
                 await self.storage.update_task(task["id"], state="failed")
                 raise
             else:
+                # cinatra#4264 B1b: a segment that did not finish fails here,
+                # before anything is stored; it is never parked for a resume
+                # (a resumed leg carries no request, so it would sign no
+                # receipt and pass no capability check).
+                if _segment_request is not None:
+                    _regenerate_segment.require_segment_finished(isinstance(status, FinishedStatus))
                 if isinstance(status, UserMessageRequestStatus) or isinstance(
                     status, ToolRequestStatus
                 ):
