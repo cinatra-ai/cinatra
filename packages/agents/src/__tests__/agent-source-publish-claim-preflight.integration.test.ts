@@ -200,8 +200,10 @@ vi.mock("../agent-runtime-mount", () => ({
   resolveDevExtensionSourceRoot: vi.fn(() => sourceRoot.path),
 }));
 vi.mock("../zip-helpers", () => ({ createZipBuffer: vi.fn() }));
+// cinatra#4264: publish refuses a failed compile, so the stub resolves to a
+// successful compile that derives nothing (metadata.cinatra fallbacks apply).
 vi.mock("../oas-compiler", () => ({
-  compileOasAgentJson: vi.fn((p: unknown) => p),
+  compileOasAgentJson: vi.fn(async () => ({ ok: true, value: {} })),
   injectCinatraLlmIntoApiNodes: vi.fn(),
 }));
 vi.mock("@/lib/background-jobs", () => ({
