@@ -65,7 +65,7 @@
     {
       "packageName": "@cinatra-ai/blog-image-matcher-skill",
       "repo": "cinatra-ai/blog-image-matcher-skill",
-      "resolvedSha": "f202c230d58a0a62a6650be5dec2531918d521c3"
+      "resolvedSha": "3f7b23422450c66b5d1a7dfbe6a0e375b1f227e1"
     },
     {
       "packageName": "@cinatra-ai/blog-image-prompt-agent",
@@ -80,12 +80,12 @@
     {
       "packageName": "@cinatra-ai/blog-linkedin-writer-agent",
       "repo": "cinatra-ai/blog-linkedin-writer-agent",
-      "resolvedSha": "f271e9ba17494ebd594262b4906f3f8700b34a5c"
+      "resolvedSha": "ce519f59d9294cd00176a0119abd1940743a9eea"
     },
     {
       "packageName": "@cinatra-ai/blog-pipeline-agent",
       "repo": "cinatra-ai/blog-pipeline-agent",
-      "resolvedSha": "d8198e17d0beef51643449f06305f024cd0d1b0e"
+      "resolvedSha": "72da731e174e5f1e55642c8b89069e7898e928a9"
     },
     {
       "packageName": "@cinatra-ai/blog-post-artifact",
@@ -100,12 +100,12 @@
     {
       "packageName": "@cinatra-ai/blog-wordpress-publish-agent",
       "repo": "cinatra-ai/blog-wordpress-publish-agent",
-      "resolvedSha": "f49bd8909c36b2a4926c4bb437f11b41a29efc9b"
+      "resolvedSha": "099e802b3ecd950cd842515d8c128e7e2f98f52a"
     },
     {
       "packageName": "@cinatra-ai/blog-writing-skill",
       "repo": "cinatra-ai/blog-writing-skill",
-      "resolvedSha": "d1e12f6400ee912086d873a2b687aa36f5ed7954"
+      "resolvedSha": "22f4f573090b67cde51bf20484238d34d4cd857d"
     },
     {
       "packageName": "@cinatra-ai/brand-voice-artifact",
@@ -115,7 +115,7 @@
     {
       "packageName": "@cinatra-ai/brand-voice-matcher-skill",
       "repo": "cinatra-ai/brand-voice-matcher-skill",
-      "resolvedSha": "85cef0636e8b05ebcea2b49f46d5f650c9fc7ffe"
+      "resolvedSha": "83cdecb65a9714a69de0fbf868f2e50cf4025e3f"
     },
     {
       "packageName": "@cinatra-ai/cms-snapshot-artifact",
@@ -165,12 +165,12 @@
     {
       "packageName": "@cinatra-ai/drupal-agent",
       "repo": "cinatra-ai/drupal-agent",
-      "resolvedSha": "a008415ac2497d528de46dfb41a3ba300ea6ca5b"
+      "resolvedSha": "49bd804092915759a151ee6dfb7340c98f88a0e7"
     },
     {
       "packageName": "@cinatra-ai/drupal-artifacts",
       "repo": "cinatra-ai/drupal-artifacts",
-      "resolvedSha": "dd1bbfa0e939ee176f6d01b4173056ca95f6b77a"
+      "resolvedSha": "310d0f8cc3f5b42598c8506bd31771001332d4ce"
     },
     {
       "packageName": "@cinatra-ai/drupal-assistant-connector",
@@ -180,7 +180,7 @@
     {
       "packageName": "@cinatra-ai/drupal-mcp-connector",
       "repo": "cinatra-ai/drupal-mcp-connector",
-      "resolvedSha": "3c8d082d98afb47ff9aa7f38fe739873518d8669"
+      "resolvedSha": "78e71e78db8f218fa17e0944d44951ad90eaf328"
     },
     {
       "packageName": "@cinatra-ai/drupal-widget-chat-skill",
@@ -190,7 +190,7 @@
     {
       "packageName": "@cinatra-ai/email-artifacts",
       "repo": "cinatra-ai/email-artifacts",
-      "resolvedSha": "1f8fb36bd2fc121f982186678971acc7592c71bd"
+      "resolvedSha": "e393c78abf297ff35de5df83e22d00b893ef173e"
     },
     {
       "packageName": "@cinatra-ai/email-body-matcher-skill",
@@ -205,7 +205,7 @@
     {
       "packageName": "@cinatra-ai/email-drafting-agent",
       "repo": "cinatra-ai/email-drafting-agent",
-      "resolvedSha": "faf05c2afee7e78412978f2e646e2c3273c48837"
+      "resolvedSha": "4f94101aebfc13fd29886890a8fe66135d8b3637"
     },
     {
       "packageName": "@cinatra-ai/email-follow-up-agent",
@@ -215,7 +215,7 @@
     {
       "packageName": "@cinatra-ai/email-outreach-agent",
       "repo": "cinatra-ai/email-outreach-agent",
-      "resolvedSha": "92874fdd00de8ad63fc585c68598b08f4ea7fd85"
+      "resolvedSha": "e1a7f5d68b90854e8d1e93b60a85c58a745a9984"
     },
     {
       "packageName": "@cinatra-ai/email-recipient-selection-agent",
@@ -410,7 +410,7 @@
     {
       "packageName": "@cinatra-ai/web-research-skill",
       "repo": "cinatra-ai/web-research-skill",
-      "resolvedSha": "a725dd400f48f2b0009c3c7795788c911ed1ab22"
+      "resolvedSha": "58b073bc7a2a4ac9626b07e41ecee5e3218d87a2"
     },
     {
       "packageName": "@cinatra-ai/web-scrape-agent",
@@ -420,7 +420,7 @@
     {
       "packageName": "@cinatra-ai/wordpress-agent",
       "repo": "cinatra-ai/wordpress-agent",
-      "resolvedSha": "881883e7824311f1e4f1d5a000d251b5bad73c36"
+      "resolvedSha": "b434f0a1535620d100b1609d3426734df05a537a"
     },
     {
       "packageName": "@cinatra-ai/wordpress-assistant-connector",

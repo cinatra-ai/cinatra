@@ -11,7 +11,11 @@ for (const palette of ["cinatra", "dark"] as const) {
   test(`specs/app-components.html — Separator: "1px low-alpha hairline for rows" matches its content column in ${palette}`, async ({ page }) => {
     await page.goto("/design-fixtures", { waitUntil: "domcontentloaded" });
     await page.evaluate((theme) => window.localStorage.setItem("theme", theme), palette);
-    await page.reload({ waitUntil: "networkidle" });
+    // The load event only, not network idle: the page's last card mounts two
+    // review island frames, and with them Playwright's network idle never
+    // came in CI (cinatra#4188). The theme class, the fonts and the
+    // auto-waiting locators below are this test's readiness reading.
+    await page.reload({ waitUntil: "load" });
     await expect(page.locator("html")).toHaveClass(new RegExp(`(?:^|\\s)${palette}(?:\\s|$)`));
     await page.evaluate(() => document.fonts.ready);
 

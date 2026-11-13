@@ -85,7 +85,7 @@ describe("the run surface's drawing pin is recorded", () => {
       CONTRACT.runSurfaceDrawingPin.specCommitDeliberatelyNotMoved,
     ).toMatch(/run-recommendation-chip-row/);
     expect(parseSpecCommit(CONTRACT.specCommit)).toEqual({
-      revision: "9add1eafb964850cf8e58dda026493f1c6bc6a51",
+      revision: "9d4d53c26193dfe1064abdc521072d25278e1199",
       paths: ["specs/app-lifecycle-cards.html", "specs/app-artifact-review.html"],
     });
   });
@@ -131,5 +131,49 @@ describe("the merge-forward keeps both of the file's pins", () => {
     for (const named of why.match(/[0-9a-f]{40}/g) ?? []) {
       expect(named).toBe(recordedPin);
     }
+  });
+});
+
+/**
+ * THE FORWARD MUST NOT CARRY A READING THE BRANCH HAS ALREADY REDRAWN.
+ *
+ * The note beside the run surface's pin argued that re-ratifying the card's
+ * contract belonged to "the change that redraws the card" -- and THIS branch is
+ * that change: the Skills step now draws one pill per skill with a checkbox in
+ * front of the name and the vendor, and ONE Continue beneath the list. The
+ * per-skill Confirm / Adjust / Skip floor is gone, and this file's own anchors
+ * no longer name a single `data-skill-action`. A merge-forward that takes the
+ * base's prose verbatim leaves the note describing a card nobody ships, which
+ * is a false record in the one file that exists to hold the true one. The note
+ * must read against the anchors the file actually carries.
+ */
+describe("the pin note reads against the card the branch ships", () => {
+  const anchorText = JSON.stringify(CONTRACT.domExpectations);
+  const why = CONTRACT.runSurfaceDrawingPin.specCommitDeliberatelyNotMoved;
+
+  it("no longer anchors the retired per-skill decision controls", () => {
+    expect(anchorText).not.toMatch(/data-skill-action/);
+  });
+
+  it("does not describe the shipped card as drawing the retired floor", () => {
+    expect(why).not.toMatch(/shipped card draws the retired/i);
+    expect(why).not.toMatch(/data-skill-action/);
+  });
+
+  it("names the reading the Skills step actually draws", () => {
+    // Not merely the WORDS: the note has to carry the cardinality and the
+    // by-clause the card is graded on, or it can drift back to a half-truth
+    // while still mentioning a checkbox.
+    expect(why).toMatch(/one pill per skill/i);
+    expect(why).toMatch(/checkbox in front of the name/i);
+    expect(why).toMatch(/vendor/i);
+    expect(why).toMatch(/one Continue beneath the list/i);
+  });
+
+  it("does not claim the retired floor is still anchored", () => {
+    expect(why).toMatch(/retired/i);
+    expect(JSON.stringify(CONTRACT.domExpectations.carriage.recommendation_hold)).not.toMatch(
+      /data-skill-action/,
+    );
   });
 });

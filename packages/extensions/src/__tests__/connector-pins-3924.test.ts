@@ -1,6 +1,6 @@
-// cinatra#3924: the Drupal connector pin tracks the merged commit that saves the dev
-// instance through the host's owner binding (drupal-mcp-connector#101), so the dev
-// boot's Drupal writes are no longer denied for a missing org binding.
+// cinatra#3924: the Drupal connector pin tracks the merged commit that hands over the node's
+// language from the live node read and binds a path-only language to the node's translations
+// (drupal-mcp-connector#104), on top of the save through the host's owner binding (#101).
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -17,10 +17,10 @@ function shaOf(entries: LockEntry[], packageName: string): string | undefined {
   return entries.find((p) => p.packageName === packageName)?.resolvedSha;
 }
 
-describe("the Drupal connector pin for the owner-binding change (cinatra#3924)", () => {
+describe("the Drupal connector pin for the node language change (cinatra#3924)", () => {
   it("pins drupal-mcp-connector in the dev lock to its merged commit", () => {
     expect(shaOf(readLock("cinatra-dev-extensions.lock.json"), "@cinatra-ai/drupal-mcp-connector")).toBe(
-      "3c8d082d98afb47ff9aa7f38fe739873518d8669",
+      "78e71e78db8f218fa17e0944d44951ad90eaf328",
     );
   });
 

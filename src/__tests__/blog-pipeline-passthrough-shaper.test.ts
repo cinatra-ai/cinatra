@@ -1,111 +1,126 @@
 /**
- * Blog-pipeline-agent deterministic passthrough shapers.
+ * cinatra#3035 — the blog pipeline's two passthrough shapers are RETIRED.
  *
- * The orchestrator OAS declares `_shape: blog_pipeline_selected_idea` /
- * `blog_pipeline_draft_projection` passthrough nodes. The
- * /api/agents/passthrough route must shape them so the OAS nodes'
- * declared outputs (`selected_idea.idea`,
- * `draft_projection.{postTitle,postExcerpt,blogPostContent}`) are
- * actually produced (echoed via `result_input_passthrough` -> rawData).
+ * The passthrough once shaped two blog-pipeline `_shape` opt-ins on
+ * `objects_save`: `blog_pipeline_selected_idea` (the picked idea, reshaped and
+ * saved) and `blog_pipeline_draft_projection` (the draft, projected into three
+ * strings and saved). Both were declared `retiredBy: "cinatra#3035"`. The
+ * pipeline pin the host installs calls neither: the idea gate keeps the pick in
+ * the pack's own `idea_drafts` table, and the draft is written as an artifact
+ * mid-run. This guard pins the removal: no shaper module, no dispatch in the
+ * route, no reference anywhere in the passthrough.
  *
  *   pnpm exec vitest run src/__tests__/blog-pipeline-passthrough-shaper.test.ts
  */
-import { describe, it, expect } from "vitest";
-import { shapeBlogPipelineObjectsSave as __shapeBlogPipelineObjectsSave } from "../app/api/agents/passthrough/blog-pipeline-seam";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, relative, resolve } from "node:path";
+import { describe, expect, it } from "vitest";
 
-describe("blog-pipeline passthrough seam shapers", () => {
-  it("blog_pipeline_selected_idea: parses selectedIdeaJson and matches an offered idea", () => {
-    const ideas = [
-      { title: "A", summary: "sa", outline: ["1"] },
-      { title: "B", summary: "sb", outline: ["2"] },
-    ];
-    const out = __shapeBlogPipelineObjectsSave(
-      {
-        _shape: "blog_pipeline_selected_idea",
-        selectedIdeaJson: JSON.stringify({ title: "B", summary: "sb", outline: ["2"] }),
-        ideas,
-        cinatra_agent_run_id: "run-1",
-      },
-      "run-fallback",
+const PASSTHROUGH_DIR = resolve(__dirname, "../app/api/agents/passthrough");
+
+const RETIRED_NAMES = [
+  "blog_pipeline_selected_idea",
+  "blog_pipeline_draft_projection",
+  "blog-pipeline-selected-idea",
+  "blog-pipeline-draft-projection",
+  "blog-pipeline-seam",
+  "shapeBlogPipelineObjectsSave",
+];
+
+// Every module form, at any depth below the folder. Two kinds of folder are
+// skipped: test folders (`__tests__`), because a test may name a retired value
+// to prove that it is refused, and `node_modules`, which holds no passthrough
+// module of this repository.
+const MODULE_FILE = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
+const SKIPPED_DIRS = new Set(["__tests__", "node_modules"]);
+
+function moduleSources(root: string): Array<{ file: string; text: string }> {
+  const out: Array<{ file: string; text: string }> = [];
+  const walk = (dir: string) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, e.name);
+      if (e.isDirectory()) {
+        if (!SKIPPED_DIRS.has(e.name)) walk(full);
+      } else if (e.isFile() && MODULE_FILE.test(e.name)) {
+        out.push({ file: relative(root, full), text: readFileSync(full, "utf8") });
+      }
+    }
+  };
+  walk(root);
+  return out;
+}
+
+function retiredHits(root: string): string[] {
+  const hits: string[] = [];
+  for (const { file, text } of moduleSources(root)) {
+    for (const name of RETIRED_NAMES) {
+      if (file.includes(name) || text.includes(name)) hits.push(`${file}: ${name}`);
+    }
+  }
+  return hits;
+}
+
+describe("cinatra#3035 — the blog pipeline's passthrough shapers are retired", () => {
+  it("the blog-pipeline seam module no longer exists, in any module form or folder", () => {
+    const seams = moduleSources(PASSTHROUGH_DIR).filter((s) =>
+      /(^|\/)blog-pipeline-seam\.[a-z]+$/.test(s.file),
     );
-    expect(out).not.toBeNull();
-    expect(out!.typeHint).toBe("@dynamic/types:blog-pipeline-selected-idea");
-    expect(out!.rawData.idea).toEqual({ title: "B", summary: "sb", outline: ["2"] });
-    expect(out!.rawData.cinatra_agent_run_id).toBe("run-1");
+    expect(seams).toEqual([]);
   });
 
-  it("blog_pipeline_selected_idea: THROWS on unparseable selectedIdeaJson (fail closed, no ideas[0] default)", () => {
-    const ideas = [{ title: "Only", summary: "s", outline: [] }];
-    expect(() =>
-      __shapeBlogPipelineObjectsSave(
-        { _shape: "blog_pipeline_selected_idea", selectedIdeaJson: "not json", ideas },
-        "run-x",
-      ),
-    ).toThrow(/not a parseable BlogIdea/);
+  it("the route no longer chains a blog-pipeline shaper ahead of objects_save", () => {
+    const route = readFileSync(join(PASSTHROUGH_DIR, "route.ts"), "utf8");
+    expect(route).not.toMatch(/shapeBlogPipelineObjectsSave/);
+    expect(route).not.toMatch(/baseObjectsSaveShaper/);
+    expect(route).not.toMatch(/TOOL_INPUT_SHAPERS\.objects_save\s*=/);
   });
 
-  it("blog_pipeline_selected_idea: THROWS when the selected idea matches none of the offered ideas", () => {
-    const ideas = [{ title: "Only", summary: "s", outline: [] }];
-    expect(() =>
-      __shapeBlogPipelineObjectsSave(
-        {
-          _shape: "blog_pipeline_selected_idea",
-          selectedIdeaJson: JSON.stringify({ title: "Other", summary: "x", outline: [] }),
-          ideas,
-        },
-        "run-x",
-      ),
-    ).toThrow(/does not match any of the 1 offered ideas/);
+  it("no passthrough module names either retired shape, its type or its module", () => {
+    expect(moduleSources(PASSTHROUGH_DIR).some((s) => s.file === "route.ts")).toBe(true);
+    expect(retiredHits(PASSTHROUGH_DIR)).toEqual([]);
   });
 
-  it("blog_pipeline_selected_idea: accepts a parsed idea when no offered list arrived (unenforceable match)", () => {
-    const out = __shapeBlogPipelineObjectsSave(
-      {
-        _shape: "blog_pipeline_selected_idea",
-        selectedIdeaJson: JSON.stringify({ title: "Solo", summary: "s", outline: [] }),
-      },
-      "run-x",
-    );
-    expect(out!.rawData.idea).toEqual({ title: "Solo", summary: "s", outline: [] });
-    expect(out!.rawData.cinatra_agent_run_id).toBe("run-x");
+  it("the scan reads every module form at any depth and skips test folders and node_modules", () => {
+    const root = mkdtempSync(join(tmpdir(), "guard-3035-"));
+    try {
+      mkdirSync(join(root, "shapers"));
+      mkdirSync(join(root, "a", "b", "c"), { recursive: true });
+      mkdirSync(join(root, "__tests__"));
+      mkdirSync(join(root, "node_modules"));
+      const retired = ["blog", "pipeline", "draft", "projection"].join("_");
+      // One file per module form, so that dropping any extension from the scan turns this case red.
+      const forms = ["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"];
+      for (const ext of forms) writeFileSync(join(root, `legacy.${ext}`), `export const s = "${retired}";\n`);
+      // A module three folders deep.
+      writeFileSync(join(root, "a", "b", "c", "deep.ts"), `export const s = "${retired}";\n`);
+      writeFileSync(join(root, "shapers", "legacy.ts"), `export const s = "${retired}";\n`);
+      // Skipped: test folders and node_modules. Not a module form: a markdown file.
+      writeFileSync(join(root, "__tests__", "refusal.test.ts"), `const s = "${retired}";\n`);
+      writeFileSync(join(root, "node_modules", "legacy.cjs"), `module.exports = "${retired}";\n`);
+      writeFileSync(join(root, "notes.md"), `${retired}\n`);
+      expect(retiredHits(root).sort()).toEqual(
+        [
+          ...forms.map((ext) => `legacy.${ext}: ${retired}`),
+          `a/b/c/deep.ts: ${retired}`,
+          `shapers/legacy.ts: ${retired}`,
+        ].sort(),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
-  it("blog_pipeline_draft_projection: projects the draft object into linkedin string fields", () => {
-    const out = __shapeBlogPipelineObjectsSave(
-      {
-        _shape: "blog_pipeline_draft_projection",
-        draft: { title: "T", excerpt: "E", content: "C", sourcesUsed: ["u"] },
-        cinatra_run_id: "run-2",
-      },
-      "fb",
-    );
-    expect(out).not.toBeNull();
-    expect(out!.typeHint).toBe("@dynamic/types:blog-pipeline-draft-projection");
-    expect(out!.rawData).toEqual({
-      cinatra_agent_run_id: "run-2",
-      postTitle: "T",
-      postExcerpt: "E",
-      blogPostContent: "C",
-    });
-  });
-
-  it("blog_pipeline_draft_projection: empty/missing draft fields coerce to empty strings (never throws)", () => {
-    const out = __shapeBlogPipelineObjectsSave(
-      { _shape: "blog_pipeline_draft_projection" },
-      "fb",
-    );
-    expect(out!.rawData).toEqual({
-      cinatra_agent_run_id: "fb",
-      postTitle: "",
-      postExcerpt: "",
-      blogPostContent: "",
-    });
-  });
-
-  it("returns null for non-blog shapes (falls back to the base objects_save shaper)", () => {
-    expect(
-      __shapeBlogPipelineObjectsSave({ _shape: "email_outreach_context_setup" }, "x"),
-    ).toBeNull();
-    expect(__shapeBlogPipelineObjectsSave({}, "x")).toBeNull();
+  it("the scan finds a module by its file name alone, even when its text names nothing retired", () => {
+    const root = mkdtempSync(join(tmpdir(), "guard-3035-name-"));
+    try {
+      mkdirSync(join(root, "shapers"));
+      const retired = ["blog", "pipeline", "selected", "idea"].join("_");
+      writeFileSync(join(root, "shapers", `${retired}.ts`), "export {};\n");
+      writeFileSync(join(root, "shapers", "other.ts"), "export {};\n");
+      expect(retiredHits(root)).toEqual([`shapers/${retired}.ts: ${retired}`]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

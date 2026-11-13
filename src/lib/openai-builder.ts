@@ -1,4 +1,4 @@
-import { readLocalPackageSkillContent, stripSkillFrontmatter } from "@cinatra-ai/skills";
+import { readLocalPackageSkillContent, stripSkillFrontmatter } from "@cinatra-ai/skills/local-skill-files";
 import { generate, parseStructuredJson } from "@cinatra-ai/llm";
 
 function loadSystemPrompt(skillName: string): string {

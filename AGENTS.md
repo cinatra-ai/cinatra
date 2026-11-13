@@ -5,7 +5,7 @@ concepts, guides, and reference material, see **[docs.cinatra.ai](https://docs.c
 
 ## What Cinatra is
 
-Cinatra is an open source AI workspace for teams — a shared, persistent,
+Cinatra is The Open Source Agentic Teams Workspace — a shared, persistent,
 browser-based environment where people, AI assistants, and autonomous agents
 work together. It turns isolated prompts into durable workflows with state,
 tooling, handoffs, approvals, and real operational outputs. Agents, connectors,

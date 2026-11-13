@@ -112,6 +112,7 @@ import {
   isGroupedSetupRenderer,
   isSetupGateTaskId,
   liftRendererApprovalNote,
+  midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
   wrapPrimitiveSetupPayload,
@@ -1413,8 +1414,17 @@ function HitlApprovalCard({
             // submit is not drawn inside the field (the shared props contract
             // says a renderer that draws its own Continue must skip it), and the
             // product's Continue asks the field for its value through the same
-            // flush the renderer's own button would have used.
-            hideSubmit={productOwnsSetupSend}
+            // flush the renderer's own button would have used. A boolean field
+            // on a mid-run gate is told the same (cinatra#4310): the outer
+            // Continue below is that gate's one control.
+            hideSubmit={
+              productOwnsSetupSend ||
+              midRunBooleanFieldHidesSubmit({
+                isMidRun: isMidRunHitl,
+                isGroupedSetup,
+                fieldSchema: renderSchema,
+              })
+            }
             registerFlush={
               productOwnsSetupSend
                 ? (fn: () => Promise<void>) => registerSetupFlush(setupGateKey, fn)
@@ -2248,7 +2258,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   // the last frame left, which is the gate that was just answered.
   //
   // THE ROAD IS THE ONE `agentic-run-panel.tsx` ALREADY TAKES, mirrored here:
-  // that surface holds the answered gate (`justSubmittedXRendererRef`, armed by
+  // that surface holds the answered gate (`answeredGateLedgerRef`, armed by
   // its own gate submit) and re-reads the run on a tick (`refetchDerivedContext`
   // on its 5s pending-approval schedule), through the run's own read whose
   // `hitlContext` is the shared `HitlGateContext` shape.

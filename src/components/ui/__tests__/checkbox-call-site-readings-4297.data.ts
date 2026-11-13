@@ -393,19 +393,23 @@ export const CHECKBOX_CALL_SITE_READINGS: FileReading[] = [
     tokens: 4,
     sites: [
       {
-        anchor: "onCheckedChange={(next) => onChange(Boolean(next))}",
+        anchor: "checked={ownsContinue ? stagedChecked : Boolean(value)}",
         tag: "Checkbox",
         drawn: "checkbox",
-        effect: "immediate",
+        effect: "confirmed",
         reading:
-          "the box of a boolean question in a schema-drawn form: inside a grouped setup form or a mid-run input step the form's own submit sends it, but on the per-field setup surfaces no Continue is drawn beneath it, so the tick sends the answer at once",
-        staysBecause:
-          "it answers a yes/no question of a form, which the drawing gives as a confirmable form choice (a checkbox); its immediate send on the per-field setup surfaces is the missing Continue that cinatra#4310 adds, so the cure is the confirm, not a switch",
-        tagIncludes: ["onCheckedChange={(next) => onChange(Boolean(next))}"],
-        fileIncludes: ['if (t === "boolean"'],
+          "the box of a boolean question in a schema-drawn form: inside a grouped setup form or a structured object's sub-field (hideSubmit) the form's own submit sends it, and on the per-field setup surfaces the box only stages the answer and the Continue drawn beneath it sends it (cinatra#4310). On a mid-run step (hideSubmit) the box draws no Continue and hands its change to the step's handler, which keeps only an object answer and so drops the box's answer: the step's outer Continue sends the approval without it, as on main (cinatra#4506). No road applies the change at once",
+        tagIncludes: ["onCheckedChange={(next) => (ownsContinue ? setStagedChecked(next === true) : onChange(Boolean(next)))}"],
+        fileIncludes: ['if (type === "boolean") {', "await handleSubmit(stagedChecked);", "onClick={() => void submitBoolean()}"],
         evidence: [
           { file: "packages/agents/src/register-default-renderers.ts", text: "drawsOwnSubmit: true," },
-          { file: "packages/agents/src/agentic-run-panel.tsx", text: "hitlRendererEntry.entry.drawsOwnSubmit !== true;" },
+          { file: "packages/agents/src/grouped-setup-form-renderer.tsx", text: "hideSubmit={true}" },
+          { file: "packages/agents/src/agentic-run-panel.tsx", text: "midRunBooleanFieldHidesSubmit({" },
+          { file: "packages/agents/src/orchestrator-stepper-panel.tsx", text: "midRunBooleanFieldHidesSubmit({" },
+          { file: "packages/agents/src/agent-hitl-screen-card.tsx", text: "midRunBooleanFieldHidesSubmit({ isMidRun, isGroupedSetup, fieldSchema: renderSchema })" },
+          { file: "packages/agents/src/agentic-run-panel.tsx", text: 'if (next && typeof next === "object" && !Array.isArray(next)) {' },
+          { file: "packages/agents/src/orchestrator-stepper-panel.tsx", text: 'if (next && typeof next === "object" && !Array.isArray(next)) {' },
+          { file: "packages/agents/src/agent-hitl-screen-card.tsx", text: 'if (next && typeof next === "object" && !Array.isArray(next)) {' },
         ],
       },
     ],
@@ -749,7 +753,27 @@ export const CHECKBOX_CALL_SITE_READINGS: FileReading[] = [
   {
     file: "packages/registries/src/verdaccio/client.ts",
     tokens: 0,
-    sites: [{ anchor: "createRedactingPacote(pacoteImpl)", tag: "pacoteImpl", drawn: "no checkbox", effect: "none", reading: SERVER_MODULE, tagIncludes: [], fileIncludes: ['import * as pacoteImpl from "pacote";'] }],
+    sites: [
+      {
+        anchor: '"default" in pacoteModule',
+        tag: "pacoteModule",
+        drawn: "no checkbox",
+        effect: "none",
+        reading:
+          "a server-side library's module object (no React component in it) read only by the in operator, for whether it has a default export, to choose the object that holds its functions: it draws nothing",
+        tagIncludes: [],
+        fileIncludes: ['import * as pacoteModule from "pacote";', 'const pacoteImpl = "default" in pacoteModule'],
+      },
+      {
+        anchor: "createRedactingPacote(pacoteImpl)",
+        tag: "pacoteImpl",
+        drawn: "no checkbox",
+        effect: "none",
+        reading: SERVER_MODULE,
+        tagIncludes: [],
+        fileIncludes: ["? pacoteModule.default as typeof pacoteModule", ": pacoteModule;", "const pacote = createRedactingPacote(pacoteImpl);"],
+      },
+    ],
   },
   {
     file: "packages/cli/src/prod-extension-acquisition.mjs",

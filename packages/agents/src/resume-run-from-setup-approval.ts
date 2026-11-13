@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, type SQL } from "drizzle-orm";
+import { and, eq, sql, type SQL } from "drizzle-orm";
 import type {
   OrgWriteAuthority,
   OrgWriteDb,
@@ -80,12 +80,22 @@ export async function resumeRunFromSetupApproval(
         .set({
           ...(inputParamsMerge !== null ? { inputParams: inputParamsMerge } : {}),
           status: "queued",
+          // cinatra#4245 pause claim rule 1 (run-transition.ts): a status change
+          // clears the claim.
+          pauseClaimToken: null,
+          pauseClaimPhase: null,
+          pauseClaimExpiresAt: null,
         })
         .where(
           and(
             eq(agentRuns.id, runId),
             eq(agentRuns.status, "pending_approval"),
             eq(agentRuns.orgId, orgId),
+            // cinatra#4245: never under another holder of the pause. A live
+            // `claimed` or `sending` lease, or a change request's end mark,
+            // refuses the resume (0 rows: stale_from_status); an expired lease
+            // is free, as in claimPause.
+            sql`(${agentRuns.pauseClaimToken} IS NULL OR (${agentRuns.pauseClaimPhase} IN ('claimed', 'sending') AND ${agentRuns.pauseClaimExpiresAt} <= now()))`,
           ),
         )
         .returning({ id: agentRuns.id });
