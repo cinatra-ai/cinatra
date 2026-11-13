@@ -462,4 +462,80 @@ describe("OrchestratorStepperPanel - the next input gate after a Continue (cinat
     await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
     expect(lastPayload().userResponse).toBe("warm");
   });
+
+  // THE GATE'S OWN FORM (design V.1, app-lifecycle-cards). The card carries the
+  // screen the agent declared, its labels and its validation; the host draws
+  // the frame and the control floor. The declared fields sit in the card's own
+  // detail region. The host's object wrapper of those fields is no field of
+  // the agent's: it draws no label of its own ("Your response"), no
+  // "(optional)" mark against a declared required value, and no second
+  // bordered box inside the card.
+  const REQUIRED_BRAND_SCHEMA = {
+    type: "object",
+    properties: { brandVoice: { type: "string", title: "Brand voice", "x-required": true } },
+  };
+
+  /** The host's object wrapper of the gate's declared fields. */
+  function gateForm(): HTMLElement | null {
+    return document.querySelector<HTMLElement>('[data-testid="object-field-hitl-field"]');
+  }
+
+  /** A box drawn with the object field's bordered-container classes. */
+  function borderedBoxes(root: ParentNode): HTMLElement[] {
+    return Array.from(root.querySelectorAll<HTMLElement>("div")).filter(
+      (el) =>
+        el.classList.contains("rounded-control") &&
+        el.classList.contains("border") &&
+        el.classList.contains("border-line") &&
+        el.classList.contains("p-3"),
+    );
+  }
+
+  it("draws the declared field under its own label only: no host label, no (optional) mark (V.1)", async () => {
+    await mount(gateWith(REQUIRED_BRAND_SCHEMA));
+    await waitFor(() => expect(fieldById("brandVoice")).not.toBeNull());
+    const text = document.body.textContent ?? "";
+    expect(text).not.toMatch(/Your response/);
+    expect(text).not.toMatch(/\(optional\)/);
+    const label = document.querySelector('label[for="field-brandVoice"]');
+    expect(label?.textContent).toBe("Brand voice *");
+  });
+
+  it("draws the declared field in the card's own region, with no second bordered box (V.1)", async () => {
+    await mount(gateWith(REQUIRED_BRAND_SCHEMA));
+    await waitFor(() => expect(fieldById("brandVoice")).not.toBeNull());
+    expect(gateForm()).not.toBeNull();
+    expect(borderedBoxes(gateForm()!)).toHaveLength(0);
+    await waitFor(() => expect(continues()).toHaveLength(1));
+  });
+
+  it("keeps a declared gate title as the form's heading, without a host mark (V.1)", async () => {
+    await mount(gateWith({ ...REQUIRED_BRAND_SCHEMA, title: "Pick the brand voice" }));
+    await waitFor(() => expect(fieldById("brandVoice")).not.toBeNull());
+    const text = document.body.textContent ?? "";
+    expect(text).toMatch(/Pick the brand voice/);
+    expect(text).not.toMatch(/Your response|\(optional\)/);
+    expect(borderedBoxes(gateForm()!)).toHaveLength(0);
+  });
+
+  it("keeps a declared nested object's own label and box inside the gate's form", async () => {
+    const schema = {
+      type: "object",
+      properties: {
+        brandVoice: { type: "string", title: "Brand voice", "x-required": true },
+        config: {
+          type: "object",
+          title: "Config",
+          properties: { child: { type: "string", title: "Child" } },
+        },
+      },
+    };
+    await mount(gateWith(schema));
+    await waitFor(() => expect(fieldById("child")).not.toBeNull());
+    const nested = document.querySelector<HTMLElement>('[data-testid="object-field-config"]');
+    expect(nested).not.toBeNull();
+    expect(nested!.textContent ?? "").toMatch(/Config/);
+    expect(borderedBoxes(nested!)).toHaveLength(1);
+    expect(borderedBoxes(gateForm()!)).toHaveLength(1);
+  });
 });
