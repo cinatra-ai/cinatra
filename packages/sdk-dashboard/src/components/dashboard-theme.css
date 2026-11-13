@@ -448,27 +448,35 @@ body[data-cinatra-dashboard-modal-open="true"]
   border-top: var(--cinatra-bar-legend-clearance, 0px) solid transparent;
 }
 
-/* KPI value: the foreground token in both palettes (cinatra#4311).
+/* KPI value: the foreground token where drizzle-cube fell back (cinatra#4311).
  *
  * drizzle-cube's KPI charts (kpiNumber, kpiText) paint their value with an
- * INLINE colour: the dashboard colour palette's first colour, or, when the
- * dashboard carries no palette, the literal `#1f2937`. Neither the dashboard
- * home nor the shared read-only composition passes a palette, so the value is
- * always that literal: dark ink on the light ground, and a very dark grey on
- * the near-black ground of the dark palette. An inline literal cannot be
- * re-pointed through a `--dc-*` variable like the rest of this file, so this
- * rule repaints exactly that fallback with the application's text token. The
- * latest drizzle-cube release still carries the literal, so no upgrade
- * removes the need for it.
+ * INLINE colour from the palette the provider is given or, when that palette
+ * has no colours, with the literal `#1f2937`, which does not follow the dark
+ * palette. An inline colour cannot be re-pointed through a `--dc-*` variable
+ * like the rest of this file.
  *
- * The value element is the `dc:font-bold` hook with the literal in its inline
- * style, matched in both serialisations: server markup keeps `#1f2937`, and a
- * client-side style write serialises it as `rgb(31, 41, 55)`. A palette colour
- * a dashboard does choose is not the literal and is left alone. `!important`
- * is the only way a stylesheet wins over an inline colour. The drizzle-cube
- * internals this depends on are pinned against the installed bundle by
- * packages/dashboards/src/__tests__/kpi-value-foreground-token.test.ts. */
-:is([data-cinatra-dashboard-shell], [data-cinatra-read-only-composition])
-  .dc\:font-bold:is([style*="#1f2937" i], [style*="rgb(31, 41, 55)"]) {
+ * PROVENANCE COMES FROM THE HOST, NOT FROM THE COLOUR. A host that mounts the
+ * provider with no palette colour marks the grid with
+ * `data-cinatra-kpi-fallback="foreground"` (kpi-value-fallback.ts; the shared
+ * read-only composition and the editable home both do). Under that marker no
+ * palette exists, so a KPI value can only carry the fallback; a host that
+ * passes a palette gets no marker and its colours are never repainted,
+ * whatever their value.
+ *
+ * Under the marker the rule still matches only the two KPI value hooks
+ * (kpiNumber `dc:font-bold dc:leading-none`, kpiText `dc:font-bold
+ * dc:leading-tight dc:text-center`) whose inline style ENDS with the fallback
+ * colour declaration, in both serialisations: a client-side style write
+ * (`; color: rgb(31, 41, 55);`) and server markup (`;color:#1f2937`). An
+ * ends-with match after `;` cannot be satisfied by a longer colour, by another
+ * property that carries the same value, or by a `border-color`. `!important`
+ * is the only way a stylesheet wins over an inline colour.
+ *
+ * Behaviour pinned by packages/dashboards/src/__tests__/kpi-value-foreground-token.test.ts. */
+[data-cinatra-kpi-fallback="foreground"] .dc\:font-bold.dc\:leading-none[style$="; color: rgb(31, 41, 55);"],
+[data-cinatra-kpi-fallback="foreground"] .dc\:font-bold.dc\:leading-none[style$=";color:#1f2937"],
+[data-cinatra-kpi-fallback="foreground"] .dc\:font-bold.dc\:leading-tight.dc\:text-center[style$="; color: rgb(31, 41, 55);"],
+[data-cinatra-kpi-fallback="foreground"] .dc\:font-bold.dc\:leading-tight.dc\:text-center[style$=";color:#1f2937"] {
   color: var(--foreground) !important;
 }

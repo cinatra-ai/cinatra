@@ -45,14 +45,20 @@
 // file. The composition loads both itself, so every mount gets the home's
 // layout and palette: the dashboard home, and a display that mounts this view
 // outside the dashboards shell (the dashboard artifact's display on an artifact
-// page). Order matters: the drizzle-cube defaults first, the theme after them.
-import "drizzle-cube/client/styles.css";
+// page). It loads drizzle-cube's stylesheet as the GENERATED SCOPED COPY
+// (`drizzle-cube-scoped.css`, scripts/scope-drizzle-cube-styles.mjs): every
+// rule that styles an element is confined to the dashboard regions, so the
+// library rules the upstream file carries unscoped (`.recharts-*` and others)
+// never reach the rest of a host page. Order matters: the drizzle-cube
+// defaults first, the theme after them.
+import "./drizzle-cube-scoped.css";
 import "./dashboard-theme.css";
 
 import { useState, type ComponentProps, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CubeProvider, DashboardGridSurface, DashboardProvider } from "drizzle-cube/client";
 
+import { kpiValueFallbackAttributes } from "./kpi-value-fallback";
 import {
   narrowToSinglePortlet,
   type NarrowableDashboardConfig,
@@ -139,7 +145,10 @@ export function ReadOnlyComposedDashboard({ dataRoad, ...props }: ReadOnlyCompos
         {...(props as ComponentProps<typeof DashboardProvider>)}
         editable={false}
       >
-        <div data-cinatra-read-only-composition="dashboard">
+        <div
+          data-cinatra-read-only-composition="dashboard"
+          {...kpiValueFallbackAttributes(props.colorPalette)}
+        >
           <DashboardGridSurface />
         </div>
       </DashboardProvider>
@@ -177,7 +186,10 @@ export function ReadOnlySinglePortlet({ portletId, dataRoad, ...rest }: ReadOnly
         config={narrowed as never}
         editable={false}
       >
-        <div data-cinatra-read-only-composition="single-portlet">
+        <div
+          data-cinatra-read-only-composition="single-portlet"
+          {...kpiValueFallbackAttributes(props.colorPalette)}
+        >
           <DashboardGridSurface />
         </div>
       </DashboardProvider>
