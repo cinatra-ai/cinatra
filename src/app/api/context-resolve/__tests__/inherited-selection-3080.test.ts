@@ -332,6 +332,15 @@ describe("/api/context-resolve — a Regenerate segment run never gets a screen 
     expect(body.selectionMode).toBe("autonomous");
     expect(ids(body.plannedRefs)).toEqual(["b"]);
     expect(readLatestRunContextAnswer).toHaveBeenCalledWith({ orgId: ORG, parentRunId: PRODUCING_RUN, slotId: SLOT });
+    // A proven inherited answer serves the slot before the route asks whether
+    // the run is a segment run: the repair row is read only when it is not.
+    expect(readRepair).not.toHaveBeenCalled();
+  });
+
+  it("reads the repair row only when the answer is not inherited", async () => {
+    readRunContextSelectionsForRun.mockReturnValue([auditRow(candidate("a"))]);
+    context(repairRun());
+    await POST(resolveRequest());
     expect(readRepair).toHaveBeenCalledWith("r-3080");
   });
 

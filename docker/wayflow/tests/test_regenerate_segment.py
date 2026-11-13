@@ -502,3 +502,111 @@ def test_a_carried_name_that_does_not_feed_the_note_refuses_before_any_step(star
             message_inputs=message,
         )
     assert _code(excinfo) == rs.REGENERATE_SEGMENT_INVALID
+
+
+# ------------------------------------- pre-review fold: platform-owned names
+
+
+#: The names the platform owns in the start message: the run id and its
+#: loader alias, the per-run token key, and the typed repair request.
+PLATFORM_OWNED = ["cinatra_run_id", "agent_run_id", "__cinatra_run_token__", "lifecycleRepairRequest"]
+
+
+def _fed_by(name):
+    """_tiny with the start output ``name`` (not userNote) feeding the note."""
+    doc = _tiny()
+    start = doc["$referenced_components"]["start"]
+    if name not in [d["title"] for d in start["inputs"]]:
+        start["inputs"].append({"title": name, "type": "string"})
+        doc["inputs"].append({"title": name, "type": "string"})
+    doc["data_flow_connections"][0]["source_output"] = name
+    return doc
+
+
+@pytest.mark.parametrize("name", PLATFORM_OWNED)
+def test_a_platform_owned_start_output_never_carries_the_note(name):
+    snaps = {"produce": json.dumps({"topic": "kept", "note": "old"}), "file": json.dumps({"body": "x"})}
+    request = _request("produce", "file", "note", snaps, start=name)
+    with pytest.raises(rs.RegenerateSegmentError) as excinfo:
+        rs.read_segment_request({"metadata": {rs.REGENERATE_SEGMENT_METADATA_KEY: request}})
+    assert _code(excinfo) == rs.REGENERATE_SEGMENT_INVALID
+    with pytest.raises(rs.RegenerateSegmentError) as excinfo:
+        rs.prepare_segment_run(
+            request,
+            mounted_flow_sha256=FLOW,
+            working_doc=_fed_by(name),
+            message_inputs={name: "the note", "cinatra_run_id": "run-seg", "agent_run_id": "run-seg"},
+        )
+    assert _code(excinfo) == rs.REGENERATE_SEGMENT_INVALID
+
+
+def test_the_platform_owned_names_match_the_application():
+    assert set(rs.PLATFORM_OWNED_INPUT_NAMES) == set(PLATFORM_OWNED)
+    assert rs.PLATFORM_PORT_KEYS <= set(rs.PLATFORM_OWNED_INPUT_NAMES)
+    shared = (HERE.parents[2] / "scripts" / "extensions" / "platform-supplied-flow-inputs.mjs").read_text(encoding="utf-8")
+    for name in ("cinatra_run_id", "agent_run_id", "__cinatra_run_token__"):
+        assert f'"{name}"' in shared
+
+
+# ------------------------------------------- pre-review fold: no pause/resume
+
+
+def test_a_segment_that_stops_for_input_refuses():
+    rs.require_segment_finished(True)
+    with pytest.raises(rs.RegenerateSegmentError) as excinfo:
+        rs.require_segment_finished(False)
+    assert _code(excinfo) == rs.REGENERATE_SEGMENT_PAUSED
+
+
+def test_the_loader_fails_a_segment_that_did_not_finish_before_anything_is_stored():
+    body = _function_source("_patched_run_task")
+    executed = body.index("status = await conversation.execute_async()")
+    guard = body.index("_regenerate_segment.require_segment_finished(isinstance(status, FinishedStatus))")
+    paused = body.index('task_state = "input-required"')
+    stored = body.index("await self.storage.update_task(\n                    task[\"id\"],\n                    state=task_state,")
+    assert executed < guard < paused < stored
+    assert body.rfind("if _segment_request is not None:", 0, guard) > executed
+
+
+# ------------------------------ pre-review fold: no snapshot value in history
+
+
+def _segment_message():
+    snaps = {"produce": json.dumps({"topic": "a private draft"}), "file": json.dumps({"body": "x"})}
+    return {
+        "kind": "message",
+        "role": "user",
+        "parts": [{"kind": "text", "text": "{}"}],
+        "metadata": {
+            rs.REGENERATE_SEGMENT_METADATA_KEY: _request("produce", "file", "note", snaps),
+            "other": 1,
+        },
+    }
+
+
+def test_the_stored_message_keeps_no_snapshot_value():
+    original = _segment_message()
+    before = copy.deepcopy(original)
+    stored = rs.redact_segment_request(original)
+    assert original == before  # the worker still reads the full request
+    assert stored is not original and stored["parts"] is not original["parts"]
+    request = stored["metadata"][rs.REGENERATE_SEGMENT_METADATA_KEY]
+    assert request["snapshots"] == [
+        {"node": s["node"], "sha256": s["sha256"]} for s in before["metadata"][rs.REGENERATE_SEGMENT_METADATA_KEY]["snapshots"]
+    ]
+    assert "a private draft" not in json.dumps(stored)
+    assert request["step"] == "produce" and request["flowSha256"] == FLOW
+    assert stored["metadata"]["other"] == 1
+    plain = {"role": "user", "metadata": {"other": 1}}
+    assert rs.redact_segment_request(plain) is plain
+    assert rs.redact_segment_request(None) is None
+
+
+def test_the_loader_stores_and_converses_only_the_redacted_request():
+    scrub = _function_source("_scrub_run_token_from_message_for_storage")
+    assert "_regenerate_segment.redact_segment_request(" in scrub
+    body = _function_source("_patched_run_task")
+    started = body.index("_start_segment_conversation(")
+    redacted = body.index('params["message"] = _regenerate_segment.redact_segment_request(params.get("message"))')
+    appended = body.index("conversation.append_message(wayflow_input_message)")
+    assert started < redacted < appended

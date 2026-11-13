@@ -29,20 +29,26 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  PLATFORM_OWNED_INPUT_NAMES,
   REGENERATE_SEGMENT_CAPABILITY,
   REGENERATE_SEGMENT_METADATA_KEY,
+  REGENERATE_SEGMENT_NOT_RESUMABLE,
   REGENERATE_SEGMENT_REFUSED,
   SEGMENT_RECEIPT_METADATA_KEY,
   SEGMENT_RECEIPT_NODE_ID,
   SEGMENT_REPAIR_RUN_PREFIX,
   claimSegmentProduction,
+  classifyRegenerateSegmentRun,
   fenceRegenerateRuntime,
+  hasRegenerateIntent,
   noteStartOutputFromOas,
   isRegenerateSegmentRun,
   persistSegmentReceipt,
   planSegmentDispatch,
   readRegenerateEntry,
   readStoredSegmentReceipt,
+  redactSegmentRequests,
+  refuseRegenerateSegmentResume,
   regenerateSegmentMetadata,
   resolveRegenerateSegment,
   segmentReceiptAttestation,
@@ -301,7 +307,7 @@ describe("resolveRegenerateSegment (T11)", () => {
 });
 
 describe("isRegenerateSegmentRun", () => {
-  it("is true only for a repair run whose repair names a node; a fault is false", async () => {
+  it("is true for a repair run whose repair names a node, and for a fault (fail closed)", async () => {
     const read = (r: RegenerateRepairIntent | null) => ({ readRepairForRun: vi.fn(async () => r) });
     expect(await isRegenerateSegmentRun({ id: RUN, sourceType: "lifecycle_repair" }, read(intent()))).toBe(true);
     expect(
@@ -317,7 +323,141 @@ describe("isRegenerateSegmentRun", () => {
           }),
         },
       ),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it("classifies a fault as unreadable, never as ordinary", async () => {
+    const run = { id: RUN, sourceType: "lifecycle_repair" };
+    const read = (r: RegenerateRepairIntent | null) => ({ readRepairForRun: vi.fn(async () => r) });
+    expect(await classifyRegenerateSegmentRun(run, read(intent()))).toBe("segment");
+    expect(await classifyRegenerateSegmentRun(run, read(intent({ regenerateNodeId: "" })))).toBe("segment");
+    expect(await classifyRegenerateSegmentRun(run, read(intent({ regenerateNodeId: null })))).toBe("ordinary");
+    expect(await classifyRegenerateSegmentRun(run, read(null))).toBe("ordinary");
+    expect(await classifyRegenerateSegmentRun({ id: RUN, sourceType: "manual" }, read(intent()))).toBe("ordinary");
+    expect(
+      await classifyRegenerateSegmentRun(run, {
+        readRepairForRun: vi.fn(async () => {
+          throw new Error("db down");
+        }),
+      }),
+    ).toBe("unreadable");
+  });
+});
+
+describe("hasRegenerateIntent (a strict null check)", () => {
+  it("is false only for NULL or a missing column; a blank intent is an intent", () => {
+    expect(hasRegenerateIntent(null)).toBe(false);
+    expect(hasRegenerateIntent(undefined)).toBe(false);
+    expect(hasRegenerateIntent("")).toBe(true);
+    expect(hasRegenerateIntent("file_image")).toBe(true);
+  });
+});
+
+describe("a segment run is never resumed", () => {
+  const read = (r: RegenerateRepairIntent | null) => ({ readRepairForRun: vi.fn(async () => r) });
+
+  it("refuses a run whose repair names a node, a blank node, or whose repair cannot be read", async () => {
+    await expect(refuseRegenerateSegmentResume(RUN, read(intent()))).rejects.toThrow(REGENERATE_SEGMENT_NOT_RESUMABLE);
+    await expect(refuseRegenerateSegmentResume(RUN, read(intent({ regenerateNodeId: "" })))).rejects.toThrow(
+      REGENERATE_SEGMENT_NOT_RESUMABLE,
+    );
+    await expect(
+      refuseRegenerateSegmentResume(RUN, {
+        readRepairForRun: vi.fn(async () => {
+          throw new Error("db down");
+        }),
+      }),
+    ).rejects.toThrow(REGENERATE_SEGMENT_NOT_RESUMABLE);
+  });
+
+  it("lets an ordinary repair run and any other run resume, the latter without a read", async () => {
+    await expect(refuseRegenerateSegmentResume(RUN, read(intent({ regenerateNodeId: null })))).resolves.toBeUndefined();
+    await expect(refuseRegenerateSegmentResume(RUN, read(null))).resolves.toBeUndefined();
+    const d = read(intent());
+    await expect(refuseRegenerateSegmentResume("run-plain", d)).resolves.toBeUndefined();
+    expect(d.readRepairForRun).not.toHaveBeenCalled();
+  });
+
+  it("is checked in the one carrier every resume road calls, before a credential is minted", () => {
+    const carrier = readFileSync(path.resolve(__dirname, "../wayflow-run-token-carrier.ts"), "utf8");
+    const body = carrier.slice(carrier.indexOf("export async function mintResumeRunTokenMetadata("));
+    const refusal = body.indexOf("await refuseRegenerateSegmentResume(runId);");
+    expect(refusal).toBeGreaterThan(0);
+    expect(refusal).toBeLessThan(body.indexOf("mintRunToken()"));
+    for (const file of [
+      "../artifact-review-resume-delivery.ts",
+      "../mcp/handlers.ts",
+      "../orchestrator-actions.ts",
+      "../review-task-actions.ts",
+    ]) {
+      const source = readFileSync(path.resolve(__dirname, file), "utf8");
+      const send = source.indexOf("sendTask({");
+      const mint = source.lastIndexOf("await mintResumeRunTokenMetadata(", send);
+      expect(mint, file).toBeGreaterThan(0);
+      expect(source.slice(mint, send), file).not.toContain("sendTask(");
+    }
+  });
+});
+
+describe("no snapshot value is stored in the run's history", () => {
+  it("keeps each snapshot's node and sha256 and drops its value", () => {
+    const plan = {
+      repairId: "repair-1",
+      provenanceRunId: PROVENANCE_RUN,
+      step: "image_flow",
+      artifactNode: "file_image",
+      noteInput: "prompt",
+      noteStartOutput: "imagePrompt",
+      flowSha256: FLOW,
+      snapshots: [{ node: "image_flow", inputs_json: '{"prompt":"a private draft"}', sha256: sha('{"prompt":"a private draft"}') }],
+    };
+    const first = { role: "user", messageId: "m1", metadata: { ...regenerateSegmentMetadata(plan), other: 1 } };
+    const plain = { role: "agent", messageId: "m2", metadata: { other: 2 } };
+    const out = redactSegmentRequests([first, plain])!;
+    expect(JSON.stringify(out)).not.toContain("a private draft");
+    expect(out[0]!.metadata).toEqual({
+      [REGENERATE_SEGMENT_METADATA_KEY]: {
+        step: "image_flow",
+        artifactNode: "file_image",
+        noteInput: "prompt",
+        noteStartOutput: "imagePrompt",
+        flowSha256: FLOW,
+        snapshots: [{ node: "image_flow", sha256: sha('{"prompt":"a private draft"}') }],
+      },
+      other: 1,
+    });
+    expect(out[1]).toBe(plain);
+    expect(JSON.stringify(first)).toContain("a private draft"); // the input is not changed
+    expect(redactSegmentRequests(undefined)).toBeUndefined();
+  });
+});
+
+describe("the platform-owned input names", () => {
+  it("are the run id, its alias, the run-token key and the typed request", () => {
+    expect([...PLATFORM_OWNED_INPUT_NAMES].sort()).toEqual(
+      ["__cinatra_run_token__", "agent_run_id", "cinatra_run_id", "lifecycleRepairRequest"].sort(),
+    );
+  });
+
+  it("never carry the note: resolution and the dispatch plan refuse them", async () => {
+    for (const name of PLATFORM_OWNED_INPUT_NAMES) {
+      expectRefused(await resolve(deps({ readNoteStartOutput: vi.fn(async () => name) })));
+      const planned = await planSegmentDispatch(
+        {
+          repair: intent(),
+          templateId: "tpl-1",
+          packageName: PACKAGE,
+          lifecycleConfig: LIFECYCLE,
+          note: "n",
+          request: {},
+        },
+        {
+          readVerifiedFilingNode: vi.fn(async () => ({ runId: PROVENANCE_RUN, nodeId: "file_image" })),
+          readNoteStartOutput: vi.fn(async () => name),
+        },
+      );
+      expect(planned.kind, name).toBe("refused");
+    }
   });
 });
 
@@ -613,14 +753,28 @@ describe("where the segment is wired in the task handler (read from source)", ()
     expect(source.slice(receipt, receipt + 80)).toContain("runId,");
   });
 
-  it("keeps the receipt out of the stored history and skips the end-node materializer for a segment", () => {
-    expect(source).toMatch(/const history = stripSegmentReceipts\(/);
-    const guard = source.indexOf("if (await isRegenerateSegmentRun({ id: runId, sourceType: run.sourceType }))");
-    expect(guard).toBeGreaterThan(0);
-    const materialize = source.indexOf("materializeRunArtifacts({", guard);
-    const elseBranch = source.indexOf("} else {", guard);
-    expect(elseBranch).toBeGreaterThan(guard);
-    expect(materialize).toBeGreaterThan(elseBranch);
+  it("keeps the receipt and the snapshot values out of the stored history", () => {
+    expect(source).toMatch(/const history = redactSegmentRequests\(\s*stripSegmentReceipts\(/);
+  });
+
+  it("materializes end-node bindings only for an ordinary run; an unreadable intent fails the run", () => {
+    const classify = source.indexOf(
+      "const segmentRunClass = await classifyRegenerateSegmentRun({ id: runId, sourceType: run.sourceType });",
+    );
+    expect(classify).toBeGreaterThan(0);
+    const segmentBranch = source.indexOf('if (segmentRunClass === "segment") {', classify);
+    const unreadableBranch = source.indexOf('} else if (segmentRunClass === "unreadable") {', segmentBranch);
+    const ordinaryBranch = source.indexOf("} else {", unreadableBranch);
+    const materialize = source.indexOf("materializeRunArtifacts({", classify);
+    expect(segmentBranch).toBeGreaterThan(classify);
+    expect(unreadableBranch).toBeGreaterThan(segmentBranch);
+    expect(source.slice(unreadableBranch, ordinaryBranch)).toContain("ok: false");
+    expect(materialize).toBeGreaterThan(ordinaryBranch);
+  });
+
+  it("never takes a segment run (or an unreadable one) down the default road", () => {
+    expect(source).toContain('if (materializationFailures.length === 0 && segmentRunClass === "ordinary") {');
+    expect(source).not.toMatch(/if \(materializationFailures\.length === 0\) \{/);
   });
 
   it("resolves the segment before the findings binding and fences before queued->running", () => {
@@ -679,5 +833,45 @@ describe("noteStartOutputFromOas (the note's original start output)", () => {
     expect(noteStartOutputFromOas(tiny(), "file", "body")).toBeNull(); // fed by a step, not the start
     expect(noteStartOutputFromOas({ component_type: "Agent" }, "produce", "note")).toBeNull();
     expect(noteStartOutputFromOas(null, "produce", "note")).toBeNull();
+  });
+});
+
+describe("a blank non-NULL intent is refused, never run as an ordinary repair (read from source)", () => {
+  it("the dispatch plan refuses a blank intent (the drain escalates it, nothing is dispatched)", async () => {
+    const readVerifiedFilingNode = vi.fn(async () => ({ runId: PROVENANCE_RUN, nodeId: "file_image" }));
+    const planned = await planSegmentDispatch(
+      {
+        repair: intent({ regenerateNodeId: "" }),
+        templateId: "tpl-1",
+        packageName: PACKAGE,
+        lifecycleConfig: LIFECYCLE,
+        note: "n",
+        request: {},
+      },
+      { readVerifiedFilingNode, readNoteStartOutput: vi.fn(async () => "imagePrompt") },
+    );
+    expect(planned.kind).toBe("refused");
+    expect(readVerifiedFilingNode).not.toHaveBeenCalled();
+  });
+
+  it("the dispatch drain plans every non-NULL intent, blank included", () => {
+    const source = readFileSync(path.resolve(__dirname, "../lifecycle-repair-dispatch-store.ts"), "utf8");
+    const gate = source.indexOf("if (hasRegenerateIntent(row.regenerateNodeId)) {");
+    expect(gate).toBeGreaterThan(0);
+    expect(source.indexOf("await planSegmentDispatch(", gate)).toBeGreaterThan(gate);
+    expect(source).not.toContain("if (row.regenerateNodeId) {");
+  });
+
+  it("the completion drain never claims for a blank intent and never takes it for an ordinary repair", () => {
+    const source = readFileSync(path.resolve(__dirname, "../lifecycle-repair-producer-completion-store.ts"), "utf8");
+    const intentAt = source.indexOf("const segmentIntent = hasRegenerateIntent(repair.regenerateNodeId);");
+    const blankAt = source.indexOf("if (segmentIntent && !regenerateNodeId) {", intentAt);
+    const claimAt = source.indexOf("await claimSegmentProduction(", intentAt);
+    expect(intentAt).toBeGreaterThan(0);
+    expect(blankAt).toBeGreaterThan(intentAt);
+    expect(claimAt).toBeGreaterThan(blankAt);
+    expect(source.slice(blankAt, claimAt)).toContain("summary.unresolved += 1;");
+    expect(source).toContain("const production = segmentIntent");
+    expect(source).toContain("...(segmentIntent ? { sourceTarget: production } : {}),");
   });
 });
