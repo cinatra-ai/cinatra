@@ -293,11 +293,12 @@ def _repeated_step_doc():
     return doc
 
 
-def _request(step, node, note, snapshots, flow=FLOW):
+def _request(step, node, note, snapshots, flow=FLOW, start="userNote"):
     return {
         "step": step,
         "artifactNode": node,
         "noteInput": note,
+        "noteStartOutput": start,
         "flowSha256": flow,
         "snapshots": [
             {"node": n, "inputs_json": s, "sha256": hashlib.sha256(s.encode("utf-8")).hexdigest()}
@@ -316,7 +317,7 @@ def test_a_repeated_step_replaces_only_its_own_note_port():
         _request("produce", "file", "textNote", snaps), mounted_flow_sha256=FLOW, working_doc=doc, message_inputs=message
     )
     image = rs.prepare_segment_run(
-        _request("produce", "file2", "imageNote", snaps), mounted_flow_sha256=FLOW, working_doc=doc, message_inputs=message
+        _request("produce", "file2", "imageNote", snaps, start="imageAsk"), mounted_flow_sha256=FLOW, working_doc=doc, message_inputs=message
     )
     (_, text_inputs), (image_derivation, image_inputs) = text, image
     assert text_inputs[rs.SEGMENT_NOTE_OUTPUT] == "NEW TEXT"
@@ -382,7 +383,17 @@ def test_the_segment_inputs_of_a_good_request():
         {rs.REGENERATE_SEGMENT_METADATA_KEY: "x"},
         {rs.REGENERATE_SEGMENT_METADATA_KEY: {"step": "a", "artifactNode": "b", "noteInput": "n", "flowSha256": "zz", "snapshots": []}},
         {rs.REGENERATE_SEGMENT_METADATA_KEY: {"step": "a", "artifactNode": "b", "noteInput": "n", "flowSha256": FLOW, "snapshots": []}},
-        {rs.REGENERATE_SEGMENT_METADATA_KEY: {"step": "", "artifactNode": "b", "noteInput": "n", "flowSha256": FLOW,
+        {rs.REGENERATE_SEGMENT_METADATA_KEY: {"step": "", "artifactNode": "b", "noteInput": "n", "noteStartOutput": "n",
+                                              "flowSha256": FLOW,
+                                              "snapshots": [{"node": "a", "inputs_json": "{}", "sha256": FLOW}]}},
+        # The carried start output name of the note (App1 ruling on B1b): absent or empty refuses.
+        {rs.REGENERATE_SEGMENT_METADATA_KEY: {"step": "a", "artifactNode": "b", "noteInput": "n", "flowSha256": FLOW,
+                                              "snapshots": [{"node": "a", "inputs_json": "{}", "sha256": FLOW}]}},
+        {rs.REGENERATE_SEGMENT_METADATA_KEY: {"step": "a", "artifactNode": "b", "noteInput": "n", "noteStartOutput": "",
+                                              "flowSha256": FLOW,
+                                              "snapshots": [{"node": "a", "inputs_json": "{}", "sha256": FLOW}]}},
+        {rs.REGENERATE_SEGMENT_METADATA_KEY: {"step": "a", "artifactNode": "b", "noteInput": "n", "noteStartOutput": 3,
+                                              "flowSha256": FLOW,
                                               "snapshots": [{"node": "a", "inputs_json": "{}", "sha256": FLOW}]}},
     ],
 )
@@ -454,3 +465,40 @@ def test_the_loader_branches_before_any_conversation_and_signs_only_a_finished_s
     assert helper.index("prepare_segment_run(") < helper.index("load_json(") < helper.index("start_conversation(")
     mount = _function_source("_mount_one_sync")
     assert '"_cinatra_working_doc"' in mount and '"_cinatra_spec_loader"' in mount
+
+
+# ------------------------------------------- the carried note start output
+
+
+def test_the_request_carries_the_note_start_output():
+    request = rs.read_segment_request({"metadata": {rs.REGENERATE_SEGMENT_METADATA_KEY: _request(
+        "produce", "file", "note", {"produce": "{}"}, start="userNote")}})
+    assert request["noteStartOutput"] == "userNote"
+
+
+def test_the_note_is_read_under_the_carried_name():
+    snaps = {"produce": json.dumps({"topic": "kept", "note": "old"}), "file": json.dumps({"body": "x"})}
+    # The step's note input is "note"; the start output that feeds it is "userNote".
+    _derivation, inputs = rs.prepare_segment_run(
+        _request("produce", "file", "note", snaps, start="userNote"),
+        mounted_flow_sha256=FLOW,
+        working_doc=_tiny(),
+        message_inputs={"userNote": "new", "note": "not this", "cinatra_run_id": "run-seg"},
+    )
+    assert inputs[rs.SEGMENT_NOTE_OUTPUT] == "new"
+
+
+@pytest.mark.parametrize("start", ["nope", "note", "cinatra_run_id"])
+def test_a_carried_name_that_does_not_feed_the_note_refuses_before_any_step(start):
+    # "nope" and "note": the mounted start node has no such output.
+    # "cinatra_run_id": a start output, but not the one that feeds the note.
+    snaps = {"produce": json.dumps({"topic": "kept", "note": "old"}), "file": "{}"}
+    message = {"userNote": "new", "note": "new", "nope": "new", "cinatra_run_id": "run-seg"}
+    with pytest.raises(rs.RegenerateSegmentError) as excinfo:
+        rs.prepare_segment_run(
+            _request("produce", "file", "note", snaps, start=start),
+            mounted_flow_sha256=FLOW,
+            working_doc=_tiny(),
+            message_inputs=message,
+        )
+    assert _code(excinfo) == rs.REGENERATE_SEGMENT_INVALID

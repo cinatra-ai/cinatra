@@ -381,6 +381,7 @@ describe("a Regenerate segment run is resolved and fenced before anything is sen
     step: "image_flow",
     artifactNode: "file_image",
     noteInput: "prompt",
+    noteStartOutput: "prompt",
     flowSha256: "a".repeat(64),
     snapshots: [],
   };
@@ -403,6 +404,7 @@ describe("a Regenerate segment run is resolved and fenced before anything is sen
     expect(segmentMock.resolveRegenerateSegment).toHaveBeenCalledWith(
       expect.objectContaining({
         run: expect.objectContaining({ id: RUN_ID, sourceType: "lifecycle_repair", templateId: "tmpl-4424" }),
+        packageName: null,
       }),
     );
     expect(storeMock.updateAgentRunInputParams).not.toHaveBeenCalled();

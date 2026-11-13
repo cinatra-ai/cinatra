@@ -68,6 +68,7 @@ def _message(flow=FLOW):
                 "step": "produce",
                 "artifactNode": "file",
                 "noteInput": "note",
+                "noteStartOutput": "userNote",
                 "flowSha256": flow,
                 "snapshots": [
                     {"node": "produce", "inputs_json": produce, "sha256": hashlib.sha256(produce.encode()).hexdigest()},

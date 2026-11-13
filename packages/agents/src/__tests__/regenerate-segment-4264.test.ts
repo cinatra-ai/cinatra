@@ -14,7 +14,12 @@
  * Claim: the completer claims exactly one write by the named node, with a
  * valid stored receipt; anything else leaves the repair open.
  * Dispatch: the run's parent is the provenance run; its inputs are the note
- * under `noteInput` and the typed request only.
+ * and the typed request only.
+ * Note start output (App1 ruling on B1b): the note travels under the flow's
+ * ORIGINAL start output that feeds (step, noteInput), read from the agent's
+ * flow document; the segment metadata carries that name as
+ * `noteStartOutput`, and a flow where no single start output feeds the note
+ * refuses.
  *
  * Red at the B1a head: regenerate-segment.ts and the vectors do not exist.
  */
@@ -32,6 +37,7 @@ import {
   SEGMENT_REPAIR_RUN_PREFIX,
   claimSegmentProduction,
   fenceRegenerateRuntime,
+  noteStartOutputFromOas,
   isRegenerateSegmentRun,
   persistSegmentReceipt,
   planSegmentDispatch,
@@ -92,6 +98,7 @@ function deps(over: Partial<RegenerateSegmentDeps> = {}): RegenerateSegmentDeps 
   return {
     readRepairForRun: vi.fn(async () => intent()),
     readVerifiedFilingNode: vi.fn(async () => ({ runId: PROVENANCE_RUN, nodeId: "file_image" })),
+    readNoteStartOutput: vi.fn(async () => "imagePrompt"),
     readStepSnapshots: vi.fn(async () => [
       snapshot("image_flow", '{"prompt":"a cat","post":"kept"}'),
       snapshot("file_image", '{"title":"t"}'),
@@ -101,9 +108,10 @@ function deps(over: Partial<RegenerateSegmentDeps> = {}): RegenerateSegmentDeps 
 }
 
 const RUN_ROW = { id: RUN, orgId: "org-1", sourceType: "lifecycle_repair", templateId: "tpl-1" };
+const PACKAGE = "@cinatra-ai/blog-pipeline-agent";
 
 async function resolve(d: RegenerateSegmentDeps, run = RUN_ROW, lifecycleConfig: unknown = LIFECYCLE) {
-  return resolveRegenerateSegment({ run, lifecycleConfig }, d);
+  return resolveRegenerateSegment({ run, lifecycleConfig, packageName: PACKAGE }, d);
 }
 
 function expectRefused(result: Awaited<ReturnType<typeof resolve>>) {
@@ -146,7 +154,11 @@ describe("resolveRegenerateSegment (T11)", () => {
     expect(d.readRepairForRun).not.toHaveBeenCalled();
     // Without deps a non-repair id is answered without loading the store.
     expect(
-      await resolveRegenerateSegment({ run: { ...RUN_ROW, id: "run-plain" }, lifecycleConfig: LIFECYCLE }),
+      await resolveRegenerateSegment({
+        run: { ...RUN_ROW, id: "run-plain" },
+        lifecycleConfig: LIFECYCLE,
+        packageName: PACKAGE,
+      }),
     ).toEqual({ kind: "ordinary" });
   });
 
@@ -168,6 +180,7 @@ describe("resolveRegenerateSegment (T11)", () => {
         step: "image_flow",
         artifactNode: "file_image",
         noteInput: "prompt",
+        noteStartOutput: "imagePrompt",
         flowSha256: FLOW,
         snapshots: [
           { node: "file_image", inputs_json: '{"title":"t"}', sha256: sha('{"title":"t"}') },
@@ -190,6 +203,21 @@ describe("resolveRegenerateSegment (T11)", () => {
       runId: PROVENANCE_RUN,
       nodeIds: ["file_image", "image_flow"],
     });
+    expect(d.readNoteStartOutput).toHaveBeenCalledWith({ packageName: PACKAGE, step: "image_flow", noteInput: "prompt" });
+  });
+
+  it("refuses when no single start output of the agent's flow feeds the note, or it cannot be read", async () => {
+    expectRefused(await resolve(deps({ readNoteStartOutput: vi.fn(async () => null) })));
+    expectRefused(await resolve(deps({ readNoteStartOutput: vi.fn(async () => "") })));
+    expectRefused(
+      await resolve(
+        deps({
+          readNoteStartOutput: vi.fn(async () => {
+            throw new Error("unreadable");
+          }),
+        }),
+      ),
+    );
   });
 
   it("the run's own input params never make a segment run", async () => {
@@ -312,6 +340,7 @@ describe("regenerateSegmentMetadata", () => {
       step: "image_flow",
       artifactNode: "file_image",
       noteInput: "prompt",
+      noteStartOutput: "imagePrompt",
       flowSha256: FLOW,
       snapshots: [{ node: "image_flow", inputs_json: inputs, sha256: sha(inputs) }],
     });
@@ -320,6 +349,7 @@ describe("regenerateSegmentMetadata", () => {
         step: "image_flow",
         artifactNode: "file_image",
         noteInput: "prompt",
+        noteStartOutput: "imagePrompt",
         flowSha256: FLOW,
         snapshots: [{ node: "image_flow", inputs_json: inputs, sha256: sha(inputs) }],
       },
@@ -515,28 +545,44 @@ describe("planSegmentDispatch", () => {
   const base = {
     repair: intent(),
     templateId: "tpl-1",
+    packageName: PACKAGE,
     lifecycleConfig: LIFECYCLE,
     note: "brighter picture",
     request: { kind: "lifecycle_repair" },
   };
 
-  it("parents the run on the provenance run with the note and request only", async () => {
+  const startOutput = (name: string | null) => vi.fn(async () => name);
+
+  it("parents the run on the provenance run with the note, under its start output, and the request only", async () => {
     const read = vi.fn(async () => ({ runId: PROVENANCE_RUN, nodeId: "file_image" }));
-    expect(await planSegmentDispatch(base, { readVerifiedFilingNode: read })).toEqual({
+    const readNoteStartOutput = startOutput("imagePrompt");
+    expect(await planSegmentDispatch(base, { readVerifiedFilingNode: read, readNoteStartOutput })).toEqual({
       kind: "segment",
       parentRunId: PROVENANCE_RUN,
-      inputParams: { prompt: "brighter picture", lifecycleRepairRequest: { kind: "lifecycle_repair" } },
+      inputParams: { imagePrompt: "brighter picture", lifecycleRepairRequest: { kind: "lifecycle_repair" } },
     });
+    expect(readNoteStartOutput).toHaveBeenCalledWith({ packageName: PACKAGE, step: "image_flow", noteInput: "prompt" });
+  });
+
+  it("refuses when no single start output feeds the note, or it names the request input", async () => {
+    const read = vi.fn(async () => ({ runId: PROVENANCE_RUN, nodeId: "file_image" }));
+    for (const name of [null, "", "lifecycleRepairRequest"]) {
+      expect((await planSegmentDispatch(base, { readVerifiedFilingNode: read, readNoteStartOutput: startOutput(name) })).kind).toBe(
+        "refused",
+      );
+    }
   });
 
   it("refuses a missing provenance, another node or no entry", async () => {
     expect(
-      (await planSegmentDispatch(base, { readVerifiedFilingNode: vi.fn(async () => null) })).kind,
+      (await planSegmentDispatch(base, { readVerifiedFilingNode: vi.fn(async () => null), readNoteStartOutput: startOutput("p") }))
+        .kind,
     ).toBe("refused");
     expect(
       (
         await planSegmentDispatch(base, {
           readVerifiedFilingNode: vi.fn(async () => ({ runId: PROVENANCE_RUN, nodeId: "write_draft" })),
+          readNoteStartOutput: startOutput("p"),
         })
       ).kind,
     ).toBe("refused");
@@ -544,7 +590,10 @@ describe("planSegmentDispatch", () => {
       (
         await planSegmentDispatch(
           { ...base, lifecycleConfig: "{}" },
-          { readVerifiedFilingNode: vi.fn(async () => ({ runId: PROVENANCE_RUN, nodeId: "file_image" })) },
+          {
+            readVerifiedFilingNode: vi.fn(async () => ({ runId: PROVENANCE_RUN, nodeId: "file_image" })),
+            readNoteStartOutput: startOutput("p"),
+          },
         )
       ).kind,
     ).toBe("refused");
@@ -584,5 +633,51 @@ describe("where the segment is wired in the task handler (read from source)", ()
     const runningAt = source.indexOf('await transitionRunStatus(runId, "queued", "running", {', fenceAt);
     expect(runningAt).toBeGreaterThan(fenceAt);
     expect(source.slice(fenceAt, runningAt)).not.toContain("sendTask(");
+  });
+});
+
+describe("noteStartOutputFromOas (the note's original start output)", () => {
+  const PIPELINE = JSON.parse(
+    readFileSync(
+      path.resolve(__dirname, "../../../../docker/wayflow/tests/fixtures/regenerate-segment-blog-pipeline.json"),
+      "utf8",
+    ),
+  ) as Record<string, unknown>;
+
+  /** A flow whose start output `userNote` feeds the step's input `note`. */
+  function tiny(extraEdges: unknown[] = [], startRef: unknown = { $component_ref: "start" }) {
+    const edge = (src: string, out: string, dst: string, port: string) => ({
+      component_type: "DataFlowEdge",
+      source_node: { $component_ref: src },
+      source_output: out,
+      destination_node: { $component_ref: dst },
+      destination_input: port,
+    });
+    return {
+      component_type: "Flow",
+      start_node: startRef,
+      data_flow_connections: [edge("start", "userNote", "produce", "note"), edge("produce", "out", "file", "body"), ...extraEdges],
+      $referenced_components: { start: { component_type: "StartNode", id: "start" } },
+      _edge: edge,
+    };
+  }
+
+  it("reads the blog pipeline's own names (the runtime fixture)", () => {
+    expect(noteStartOutputFromOas(PIPELINE, "image_flow", "prompt")).toBe("prompt");
+    expect(noteStartOutputFromOas(PIPELINE, "draft_flow", "note")).toBe("note");
+  });
+
+  it("reads a start output whose name differs from the note input", () => {
+    expect(noteStartOutputFromOas(tiny(), "produce", "note")).toBe("userNote");
+  });
+
+  it("is null without exactly one start-fed edge into the note input", () => {
+    const t = tiny();
+    expect(noteStartOutputFromOas(t, "produce", "topic")).toBeNull();
+    expect(noteStartOutputFromOas(tiny([t._edge("start", "other", "produce", "note")]), "produce", "note")).toBeNull();
+    expect(noteStartOutputFromOas(tiny([], { $component_ref: "elsewhere" }), "produce", "note")).toBeNull();
+    expect(noteStartOutputFromOas(tiny(), "file", "body")).toBeNull(); // fed by a step, not the start
+    expect(noteStartOutputFromOas({ component_type: "Agent" }, "produce", "note")).toBeNull();
+    expect(noteStartOutputFromOas(null, "produce", "note")).toBeNull();
   });
 });
