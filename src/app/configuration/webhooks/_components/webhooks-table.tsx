@@ -87,7 +87,7 @@ export function WebhooksTable({
   }
 
   return (
-    <div className="rounded-card border border-line bg-surface">
+    <div className="overflow-hidden rounded-card border border-line bg-surface">
       <Table>
         <TableHeader>
           <TableRow>
