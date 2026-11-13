@@ -428,6 +428,115 @@ describe("buildChatGateSubmitPayload", () => {
     expect(envelope.attachments).toHaveLength(1);
   });
 
+  it.each([{ attachments: [] }, { attachments: [ATTACHMENT] }])("keeps a buffered refusal and typed composer text as data with attachments $attachments", ({ attachments }) => {
+    const { payload } = buildChatGateSubmitPayload({
+      reviewTaskId: "rt-decision",
+      value: "keep as draft",
+      buffered: { approved: false, draftId: "draft-kept" },
+      pendingAttachments: attachments,
+      now: NOW,
+    });
+    expect(payload.approved).toBe(false);
+    const wire = JSON.parse(payload.userResponse as string);
+    const decision = attachments.length ? JSON.parse(wire.text) : wire;
+    expect(decision).toMatchObject({ approved: false, draftId: "draft-kept", userResponse: "keep as draft" });
+    if (attachments.length) expect(wire.attachments).toEqual([ATTACHMENT]);
+  });
+
+  it("an empty composer value carries the stored refusal on the wire", () => {
+    const { payload } = buildChatGateSubmitPayload({
+      reviewTaskId: "rt-decision", value: {},
+      buffered: { approved: false, draftId: "draft-kept" },
+      pendingAttachments: [], now: NOW,
+    });
+    expect(payload.approved).toBe(false);
+    expect(JSON.parse(payload.userResponse as string)).toMatchObject({ approved: false, draftId: "draft-kept" });
+  });
+
+  it("an explicit object choice can replace the earlier refusal", () => {
+    const { payload } = buildChatGateSubmitPayload({
+      reviewTaskId: "rt-decision", value: { approved: true },
+      buffered: { approved: false, draftId: "draft-kept" },
+      pendingAttachments: [], now: NOW,
+    });
+    expect(payload.approved).toBe(true);
+    expect(payload.userResponse).toBe('{"approved":true}');
+  });
+
+  it.each([{ attachments: [] }, { attachments: [ATTACHMENT] }])("preserves meaningful renderer-authored response bytes with attachments $attachments", ({ attachments }) => {
+    const response = ' {"approved": false, "draftId": "draft-kept"} ';
+    const { payload } = buildChatGateSubmitPayload({
+      reviewTaskId: "rt-decision", value: "additional text",
+      buffered: { approved: false, userResponse: response },
+      pendingAttachments: attachments, now: NOW,
+    });
+    expect(payload.approved).toBe(false);
+    if (attachments.length) {
+      const wire = JSON.parse(payload.userResponse as string);
+      expect(wire.text).toBe(response);
+      expect(wire.attachments).toEqual([ATTACHMENT]);
+    } else expect(payload.userResponse).toBe(response);
+  });
+
+  it("an object-authored refusal overrides an earlier confirming choice", () => {
+    const { payload } = buildChatGateSubmitPayload({
+      reviewTaskId: "rt-decision", value: { approved: false, draftId: "draft-kept" },
+      buffered: { approved: true }, pendingAttachments: [], now: NOW,
+    });
+    expect(payload.approved).toBe(false);
+    expect(JSON.parse(payload.userResponse as string)).toMatchObject({ approved: false, draftId: "draft-kept" });
+  });
+
+  it.each([true, false])("a changed explicit choice supersedes an older response: approved=%s", (approved) => {
+    const { payload } = buildChatGateSubmitPayload({
+      reviewTaskId: "rt-decision", value: { approved },
+      buffered: { approved: !approved, userResponse: JSON.stringify({ approved: !approved }) },
+      pendingAttachments: [], now: NOW,
+    });
+    expect(payload.approved).toBe(approved);
+    expect(JSON.parse(payload.userResponse as string).approved).toBe(approved);
+  });
+
+  it("a changed choice keeps its own authored response rather than the old one", () => {
+    const response = ' {"approved":false,"reason":"draft"} ';
+    const { payload } = buildChatGateSubmitPayload({
+      reviewTaskId: "rt-decision", value: { approved: false, userResponse: response },
+      buffered: { approved: true, userResponse: "old response" },
+      pendingAttachments: [], now: NOW,
+    });
+    expect(payload.approved).toBe(false);
+    expect(payload.userResponse).toBe(response);
+  });
+
+  it("an unrelated partial update preserves the authored response", () => {
+    const response = '{"approved":false}';
+    const { payload } = buildChatGateSubmitPayload({
+      reviewTaskId: "rt-decision", value: { note: "keep the draft" },
+      buffered: { approved: false, userResponse: response },
+      pendingAttachments: [], now: NOW,
+    });
+    expect(payload.note).toBe("keep the draft");
+    expect(payload.userResponse).toBe(response);
+    expect(payload.approved).toBe(false);
+  });
+
+  it("setup fields called approved and userResponse stay data on a changed boolean", () => {
+    const { payload } = buildChatGateSubmitPayload({
+      reviewTaskId: "setup-run-1", value: { approved: false },
+      buffered: { approved: true, userResponse: "input data" },
+      pendingAttachments: [], now: NOW,
+    });
+    expect(payload).toEqual({ approved: false, userResponse: "input data" });
+  });
+
+  it("a setup input named approved remains field data without decision metadata", () => {
+    const { payload } = buildChatGateSubmitPayload({
+      reviewTaskId: "setup-run-1", fieldName: "approved", value: false,
+      buffered: {}, pendingAttachments: [ATTACHMENT], now: NOW,
+    });
+    expect(payload).toEqual({ approved: false });
+  });
+
   it("setup gates never wrap attachments (the setup-loop server ignores userResponse)", () => {
     const { payload } = buildChatGateSubmitPayload({
       reviewTaskId: "setup-run-1",
