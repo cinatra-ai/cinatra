@@ -1353,7 +1353,7 @@ function StructuredObjectField(props: ObjectFieldProps) {
   // gate's one Continue. The card carries the screen the agent declared, its
   // labels and its validation, and the host draws only the frame and the
   // control floor. So the wrapper draws no label the gate did not declare (the
-  // neutral "Your response"), no required or "(optional)" mark of its own
+  // neutral "Your response"), no required or optional mark of its own
   // (each declared field marks its own), and no second bordered box: the
   // declared fields sit in the card's own detail region. A title or a
   // description the gate declares stays the heading. A nested object (told
