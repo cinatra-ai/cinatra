@@ -539,6 +539,15 @@ export interface SubmitRepairResponseInput {
   reauthorized: boolean;
   /** Gate TTL for the successor gate (optional). */
   expiresAt?: Date | null;
+  /**
+   * cinatra#4264 B1b: the revision a Regenerate segment run wrote before it
+   * was re-filed onto the reviewed artifact. Written in the SAME update that
+   * sets `repaired` and the successor, so a crash leaves both or neither; the
+   * review orchestration then settles that revision's produced event under
+   * the successor gate (`successor-gated`) instead of gating it a second time.
+   * Ordinary repairs pass none.
+   */
+  sourceTarget?: { artifactId: string; representationRevisionId: string } | null;
 }
 
 export type SubmitRepairResponseResult =
@@ -757,6 +766,12 @@ export async function submitRepairResponse(
           successorGateId,
           successorArtifactId: input.response.successorTarget.artifactId,
           successorRepresentationRevisionId: input.response.successorTarget.representationRevisionId,
+          ...(input.sourceTarget
+            ? {
+                sourceArtifactId: input.sourceTarget.artifactId,
+                sourceRepresentationRevisionId: input.sourceTarget.representationRevisionId,
+              }
+            : {}),
           findingOutcomes: input.response.findingOutcomes as unknown,
           changeSummary: input.response.changeSummary,
           updatedAt: sql`now()`,
@@ -854,6 +869,12 @@ export interface RepairRow {
   successorRepresentationRevisionId: string | null;
   findingOutcomes: RepairFindingOutcome[] | null;
   changeSummary: string | null;
+  /** cinatra#4264 B1b: the Regenerate intent (NULL = an ordinary repair).
+   *  Optional in the type only, for rows built by hand; `readRepair` sets it. */
+  regenerateNodeId?: string | null;
+  /** cinatra#4264 B1b: the segment run's own write, re-filed as the successor. */
+  sourceArtifactId?: string | null;
+  sourceRepresentationRevisionId?: string | null;
 }
 
 export async function readRepair(repairId: string): Promise<RepairRow | null> {
@@ -1272,6 +1293,9 @@ function toRepairRow(r: typeof lifecycleRepair.$inferSelect): RepairRow {
     successorRepresentationRevisionId: r.successorRepresentationRevisionId,
     findingOutcomes: (r.findingOutcomes as RepairFindingOutcome[] | null) ?? null,
     changeSummary: r.changeSummary,
+    regenerateNodeId: r.regenerateNodeId ?? null,
+    sourceArtifactId: r.sourceArtifactId ?? null,
+    sourceRepresentationRevisionId: r.sourceRepresentationRevisionId ?? null,
   };
 }
 

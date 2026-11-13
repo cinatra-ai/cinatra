@@ -1,0 +1,38 @@
+{
+  "_doc": "cinatra#4264 B1b shared segment receipt vectors: the g1 attestation (regenerate_segment.segment_receipt_attestation) under a fixed TEST key. Read by docker/wayflow/tests/test_regenerate_segment.py and packages/agents/src/__tests__/regenerate-segment-4264.test.ts. Regenerate only together with both tests.",
+  "key": "segment-receipt-test-key",
+  "vectors": [
+    {
+      "name": "picture",
+      "run_id": "lifecycle-repair-run:repair-1",
+      "step": "image_flow",
+      "artifactNode": "file_image",
+      "flowSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "attestation": "g1:7a3e8f6b85c723388abf385e0940cd051a9ab2bc36cd124190996b446057b615"
+    },
+    {
+      "name": "same-node",
+      "run_id": "lifecycle-repair-run:repair-2",
+      "step": "file_image",
+      "artifactNode": "file_image",
+      "flowSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "attestation": "g1:29481e7a1c7b4d80fbbaa4867abaa5d84b4f32478f8dd171bb0957d97d36bc3b"
+    },
+    {
+      "name": "colon-ids",
+      "run_id": "lifecycle-repair-run:repair-3",
+      "step": "draft:flow",
+      "artifactNode": "write:draft",
+      "flowSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "attestation": "g1:16726d1ebcca36cd44bc37d8b803fd7dd95cfb89806985aeeacc585c00239f79"
+    },
+    {
+      "name": "non-ascii",
+      "run_id": "lifecycle-repair-run:repair-4",
+      "step": "étape",
+      "artifactNode": "dépôt",
+      "flowSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "attestation": "g1:eb2166b77bf7c13d4a398b861dbb1c01344c799bed2e2c32180706c806e4859e"
+    }
+  ]
+}

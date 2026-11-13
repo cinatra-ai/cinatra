@@ -39,6 +39,29 @@ import {
 // selection-agent OAS (BranchingNode + finalize_* DFE-bind both fields).
 // ---------------------------------------------------------------------------
 
+/**
+ * cinatra#4264 B1b: whether the run is a Regenerate segment run (a lifecycle
+ * repair run whose repair names `regenerate_node_id`). Read from the repair
+ * row, never from the run's inputs. A read fault answers true: a run that may
+ * be a segment run never gets a screen (fail closed).
+ */
+async function isRegenerateSegmentContextRun(run: {
+  id: string;
+  sourceType?: string | null;
+}): Promise<boolean> {
+  if (run.sourceType !== "lifecycle_repair") return false;
+  try {
+    const { repairIdFromRunId } = await import("@cinatra-ai/agents/lifecycle-repair-dispatch-store");
+    const repairId = repairIdFromRunId(run.id);
+    if (!repairId) return false;
+    const { readRepair } = await import("@cinatra-ai/agents/lifecycle-repair-store");
+    const repair = await readRepair(repairId);
+    return typeof repair?.regenerateNodeId === "string" && repair.regenerateNodeId.length > 0;
+  } catch {
+    return true;
+  }
+}
+
 const RequestSchema = z.object({
   parentRunId: z.string().min(1),
   parentPackageName: z.string().min(1),
@@ -139,6 +162,19 @@ export async function POST(req: Request): Promise<Response> {
       // provenance it actually had rather than asserting a person.
       declaredSelectionMode: slot.selectionMode,
     });
+    // cinatra#4264 B1b — a Regenerate segment run reruns one step with the
+    // answers of the run that produced the reviewed revision (its
+    // `parent_run_id`, written by the dispatch drain). No person stands
+    // between the press and the work, so a slot whose answer that run cannot
+    // prove is a FAILURE of the segment run, never a screen: the run fails
+    // and the repair stays open. An ordinary repair keeps the screen.
+    if (!inherited && (await isRegenerateSegmentContextRun(ctx.run))) {
+      throw new ContextRouteError(
+        409,
+        "regenerate_context_not_inherited",
+        "a Regenerate reruns one step with the answers of the run that produced the revision, and that run's answer to this slot cannot be proven",
+      );
+    }
     const selectionMode = effectiveSelectionMode(slot.selectionMode, inherited);
     const slotMeta = { ...declaredSlotMeta, selectionMode };
     const selectedRefs = inherited

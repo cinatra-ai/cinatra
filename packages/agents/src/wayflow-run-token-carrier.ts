@@ -2,6 +2,7 @@ import { mintRunToken, CINATRA_RUN_TOKEN_MESSAGE_KEY } from "@/lib/agent-run-tok
 import { setAgentRunTokenHash } from "./store";
 import { buildWayflowInitialMessagePayload } from "./wayflow-dispatch-payload";
 import { readSnapshotNodesMetadataForRun } from "./step-snapshots";
+import { refuseRegenerateSegmentResume } from "./regenerate-segment";
 
 // ---------------------------------------------------------------------------
 // WayFlow A2A RESUME run-token carrier (#1193).
@@ -81,10 +82,17 @@ export type ResumeRunTokenMetadata = { [key: string]: unknown };
  * carries the step-snapshot node list of the run's template (when its stored
  * lifecycle declares `regenerate`, never for a lifecycle repair run). Without a
  * declaration the metadata is the token alone, as before.
+ *
+ * cinatra#4264 B1b: for the same reason it refuses a Regenerate segment run
+ * (or a repair run whose intent cannot be read) BEFORE a credential is
+ * minted: a segment runs in one leg, and a resumed leg would carry no segment
+ * request, pass no capability fence and sign no receipt. The throw fails the
+ * resume on every road, as a token-store fault does.
  */
 export async function mintResumeRunTokenMetadata(
   runId: string,
 ): Promise<ResumeRunTokenMetadata> {
+  await refuseRegenerateSegmentResume(runId);
   const runToken = mintRunToken();
   await setAgentRunTokenHash(runId, runToken.tokenHash);
   const snapshotNodes = await readSnapshotNodesMetadataForRun(runId);

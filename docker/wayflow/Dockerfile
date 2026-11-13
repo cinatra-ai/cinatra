@@ -83,6 +83,7 @@ COPY agent_loader.py .
 COPY context_subflow_injection.py .
 COPY context_subflow_template.json .
 COPY step_snapshot.py .
+COPY regenerate_segment.py .
 COPY tests/ ./tests/
 
 ENV PYTHONUNBUFFERED=1
