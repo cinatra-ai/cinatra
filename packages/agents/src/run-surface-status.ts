@@ -540,27 +540,113 @@ export function mapInterruptToHitlContext(
 }
 
 /**
+ * The gate the person just answered, as ONE value: its renderer and its review
+ * task are written together, so no render can read the renderer of one submit
+ * beside the review task of another (cinatra#3080).
+ */
+export type JustSubmittedGate = {
+  xRenderer: string;
+  reviewTaskId: string | null;
+  fieldName?: string | null;
+};
+
+/**
+ * The key of ONE answered question: its review task, its renderer and its
+ * field together. A run's gates can share one review task, so a question
+ * under an answered review task with another renderer or field is a new
+ * question (cinatra#3739) and has another key.
+ */
+export function answeredGateKey(gate: {
+  reviewTaskId: string;
+  xRenderer: string;
+  fieldName?: string | null;
+}): string {
+  return JSON.stringify([gate.reviewTaskId, gate.xRenderer, gate.fieldName ?? ""]);
+}
+
+/**
+ * The questions answered on this mount, as the suppression reads them:
+ * anything that answers `has` for an `answeredGateKey` (a Set of keys, or the
+ * claims map of the answered-gate ledger, answered-gate-ledger.ts).
+ */
+export type AnsweredReviewTasks = { has(answeredGateKey: string): boolean };
+
+const NO_ANSWERED_REVIEW_TASKS: AnsweredReviewTasks = new Set<string>();
+
+/**
+ * Whether a review task id names ONE gate. A missing or non-string id, an
+ * empty one and a whitespace-only one name none. Nor does `setup-<runId>`:
+ * the setup loop mints it once per run and reuses it for every setup field of
+ * that run. A WayFlow id (`wayflow-<taskId>`) names one gate: a multi-gate
+ * WayFlow flow mints a new task id for each gate (packages/a2a event-log.ts).
+ */
+export function reviewTaskIdNamesOneGate(reviewTaskId: unknown): reviewTaskId is string {
+  return (
+    typeof reviewTaskId === "string" &&
+    reviewTaskId.trim() !== "" &&
+    !reviewTaskId.startsWith(SETUP_GATE_TASK_ID_PREFIX)
+  );
+}
+
+/**
  * Suppress re-showing the same HITL screen after Approve/Reject while the
  * server processes the resume — prevents the "Loading recipients" flash
  * caused by the poll returning pending_approval with the stale context
  * before the graph advances. When a DIFFERENT xRenderer arrives (the next
  * step's gate), the suppression must be cleared (`clearSuppression`
  * signals the caller to null its ref).
+ *
+ * AND THE NEXT GATE OF THE SAME RENDERER IS DRAWN (cinatra#3080). Two context
+ * gates in a row are two gates of one renderer with two review tasks. The
+ * caller passes the answered gate as one pair and the questions answered on
+ * this mount (`answeredGateKey`). The reading, in this order:
+ *  - a raw gate whose review task names one gate (`reviewTaskIdNamesOneGate`)
+ *    and whose review task, renderer and field are an answered question's
+ *    (`answeredGateKey`) is suppressed, whether or not a pair is armed: polls
+ *    are not ordered, so a late one can still carry an older answered gate.
+ *    A question under an answered review task with another renderer or field
+ *    is a new question (cinatra#3739) and reads on below;
+ *  - with no armed pair, the raw gate is drawn;
+ *  - a raw gate of another renderer is drawn, and the caller clears the pair;
+ *  - a raw gate of the same renderer is drawn, and the caller clears the
+ *    pair, only when its review task names one gate, the armed review task is
+ *    a non-blank string, and the two differ;
+ *  - every other raw gate of the same renderer stays suppressed. That covers
+ *    the shared `setup-<runId>` id, a blank or non-string id on either side,
+ *    and a caller that passes only a renderer: the old renderer-only reading.
  */
 export function applyJustSubmittedSuppression(
   raw: HitlGateContext | null,
-  justSubmittedXRenderer: string | null,
+  justSubmitted: JustSubmittedGate | string | null,
+  answeredGates: AnsweredReviewTasks = NO_ANSWERED_REVIEW_TASKS,
 ): { context: HitlGateContext | null; clearSuppression: boolean } {
+  if (raw === null) return { context: null, clearSuppression: false };
+  const rawTask: string | null = reviewTaskIdNamesOneGate(raw.reviewTaskId)
+    ? raw.reviewTaskId
+    : null;
   if (
-    raw !== null &&
-    justSubmittedXRenderer !== null &&
-    raw.xRenderer === justSubmittedXRenderer
+    rawTask !== null &&
+    answeredGates.has(
+      answeredGateKey({ reviewTaskId: rawTask, xRenderer: raw.xRenderer, fieldName: raw.fieldName }),
+    )
   ) {
     return { context: null, clearSuppression: false };
   }
-  if (raw !== null && justSubmittedXRenderer !== null) {
+  const armed: JustSubmittedGate | null =
+    typeof justSubmitted === "string"
+      ? { xRenderer: justSubmitted, reviewTaskId: null }
+      : justSubmitted;
+  if (armed === null) return { context: raw, clearSuppression: false };
+  if (raw.xRenderer !== armed.xRenderer) {
     // Different step arrived — the caller should clear the suppression.
     return { context: raw, clearSuppression: true };
   }
-  return { context: raw, clearSuppression: false };
+  const armedTask =
+    typeof armed.reviewTaskId === "string" && armed.reviewTaskId.trim() !== ""
+      ? armed.reviewTaskId
+      : null;
+  if (rawTask !== null && armedTask !== null && rawTask !== armedTask) {
+    return { context: raw, clearSuppression: true };
+  }
+  return { context: null, clearSuppression: false };
 }
