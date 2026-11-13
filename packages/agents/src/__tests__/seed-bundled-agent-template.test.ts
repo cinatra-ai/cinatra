@@ -190,6 +190,55 @@ describe("ensureBundledAgentTemplateRecord", () => {
     expect(createLocalAgentTemplateVersion).not.toHaveBeenCalled();
   });
 
+  // cinatra#4264 A1b review 1 finding 2: the existing-row return must not keep a
+  // stored regenerate list the image's CURRENT flow no longer honours (image v1
+  // seeded the row, image v2 reconciles new runtime bytes without that step).
+  // The row is still never rewritten here; a stale list refuses, so the boot
+  // reports the package instead of leaving it silently stale.
+  describe("cinatra#4264 A1b — an existing row's stored regenerate list is checked against the image's flow", () => {
+    const KEPT = [{ artifactNode: "call_llm_bridge", step: "call_llm_bridge", noteInput: "user" }];
+    const STALE = [{ artifactNode: "file_image", step: "image_flow", noteInput: "prompt" }];
+
+    it("REFUSES an existing row whose stored list the image's flow no longer honours", async () => {
+      const { seedDir } = await stageSeed();
+      readAgentTemplateByPackageName.mockResolvedValue({
+        id: "tpl_existing",
+        lifecycleConfig: JSON.stringify({ regenerate: STALE }),
+      });
+      await expect(
+        ensureBundledAgentTemplateRecord({ packageName: PACKAGE_NAME, packageVersion: VERSION, seedDir }),
+      ).rejects.toThrow(/REGENERATE_DECLARATION_INVALID/);
+      expect(claimAgentTemplateIdentity).not.toHaveBeenCalled();
+      expect(createLocalAgentTemplateVersion).not.toHaveBeenCalled();
+    });
+
+    it("REFUSES an existing row whose stored lifecycle text cannot be read (review 1 finding 6)", async () => {
+      const { seedDir } = await stageSeed();
+      readAgentTemplateByPackageName.mockResolvedValue({
+        id: "tpl_existing",
+        lifecycleConfig: "{ not json",
+      });
+      await expect(
+        ensureBundledAgentTemplateRecord({ packageName: PACKAGE_NAME, packageVersion: VERSION, seedDir }),
+      ).rejects.toThrow(/stored lifecycle declaration cannot be read/);
+    });
+
+    it("control: a stored list the image's flow still honours leaves the row alone (exists)", async () => {
+      const { seedDir } = await stageSeed();
+      readAgentTemplateByPackageName.mockResolvedValue({
+        id: "tpl_existing",
+        lifecycleConfig: JSON.stringify({ regenerate: KEPT }),
+      });
+      const outcome = await ensureBundledAgentTemplateRecord({
+        packageName: PACKAGE_NAME,
+        packageVersion: VERSION,
+        seedDir,
+      });
+      expect(outcome).toEqual({ outcome: "exists" });
+      expect(createLocalAgentTemplateVersion).not.toHaveBeenCalled();
+    });
+  });
+
   it("a package the seed does not carry is reported ABSENT, not thrown", async () => {
     const { seedDir } = await stageSeed();
     const outcome = await ensureBundledAgentTemplateRecord({

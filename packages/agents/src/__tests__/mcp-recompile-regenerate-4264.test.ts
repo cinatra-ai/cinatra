@@ -224,8 +224,13 @@ describe("cinatra#4264 A1b — agent_source_compile revalidates and projects the
     tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "regen-recompile-"));
     originalCwd = process.cwd();
     process.chdir(tmpRoot);
+    // mockReset drops the hoisted default too; restore one, so a case that
+    // reaches the compile unexpectedly fails on its own assertion rather than
+    // on an undefined compile result (review 1 note).
     mockCompile.mockReset();
+    mockCompile.mockResolvedValue({ ok: false, error: "unset" });
     mockSync.mockReset();
+    mockSync.mockResolvedValue(undefined);
     mockReadTemplate.mockReset();
     mockReadTemplate.mockResolvedValue(null);
     await writeFixture();
@@ -286,9 +291,115 @@ describe("cinatra#4264 A1b — agent_source_compile revalidates and projects the
   });
 
   it("no stored row: the compile gets no retained list", async () => {
-    mockCompile.mockResolvedValue({ ok: true, value: compiledValue, siblingLifecycle: { readable: false } });
+    // The fixture's package.json is readable, so the compile's own reading is
+    // readable too (a manifest without a block); review 1 binds the two.
+    const siblingLifecycle = { readable: true, lifecycle: undefined };
+    mockCompile.mockResolvedValue({ ok: true, value: compiledValue, siblingLifecycle });
     await runCompile();
     expect((mockCompile.mock.calls[0][0] as { retainedRegenerate?: unknown }).retainedRegenerate).toBeUndefined();
-    expect(mockSync.mock.calls[0][3]).toEqual({ readable: false });
+    expect(mockSync.mock.calls[0][3]).toEqual(siblingLifecycle);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4264 A1b review 1, findings 3, 4 and 6: the recompile binds the row
+// identity, the compiled bytes, the compile's sibling reading and the written
+// bytes to ONE snapshot, writes the lifecycle column before the source file
+// and refuses when that write fails, and refuses stored text it cannot read.
+// ---------------------------------------------------------------------------
+describe("cinatra#4264 A1b review 1 — agent_source_compile works on one snapshot and fails closed", () => {
+  const okReading = { readable: true, lifecycle: { repairCapable: true } };
+
+  beforeEach(async () => {
+    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "regen-recompile-"));
+    originalCwd = process.cwd();
+    process.chdir(tmpRoot);
+    mockCompile.mockReset();
+    mockCompile.mockResolvedValue({ ok: false, error: "unset" });
+    mockSync.mockReset();
+    mockSync.mockResolvedValue(undefined);
+    mockReadTemplate.mockReset();
+    mockReadTemplate.mockResolvedValue(null);
+    await writeFixture();
+  });
+
+  afterEach(async () => {
+    process.chdir(originalCwd);
+    await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+  });
+
+  const manifestPath = () => path.join(path.dirname(path.dirname(oasPath)), "package.json");
+
+  it("finding 3: a package.json that exists but does not parse REFUSES before the row read and the compile", async () => {
+    await fs.writeFile(manifestPath(), "{ not json", "utf-8");
+    const before = await fs.readFile(oasPath, "utf-8");
+    const result = await runCompile();
+    expect(result.error).toMatch(/package\.json/);
+    expect(mockReadTemplate).not.toHaveBeenCalled();
+    expect(mockCompile).not.toHaveBeenCalled();
+    expect(mockSync).not.toHaveBeenCalled();
+    expect(await fs.readFile(oasPath, "utf-8")).toBe(before);
+  });
+
+  it("finding 3: the compile reads the SAME source file the handler resolved (oasSourcePath)", async () => {
+    mockCompile.mockResolvedValue({ ok: true, value: compiledValue, siblingLifecycle: okReading });
+    await runCompile();
+    // Matched by its tail: the handler resolves the path from the working
+    // directory, which may spell the temporary root through a symbolic link.
+    expect(mockCompile.mock.calls[0][0]).toMatchObject({
+      oasSourcePath: expect.stringMatching(/cinatra-ai[\\/]regen-recompile-agent[\\/]cinatra[\\/]oas\.json$/),
+    });
+  });
+
+  it("finding 3: a compile that read no sibling manifest where the handler read one REFUSES (no write, no sync)", async () => {
+    mockCompile.mockResolvedValue({ ok: true, value: compiledValue, siblingLifecycle: { readable: false } });
+    const stat = await fs.stat(oasPath);
+    const result = await runCompile();
+    expect(result.error).toMatch(/changed while/);
+    expect(mockSync).not.toHaveBeenCalled();
+    expect((await fs.stat(oasPath)).mtimeMs).toBe(stat.mtimeMs);
+  });
+
+  it("finding 3: a compile whose manifest names another package REFUSES (no write, no sync)", async () => {
+    mockCompile.mockResolvedValue({
+      ok: true,
+      value: { ...compiledValue, packageName: "@cinatra/another-agent" },
+      siblingLifecycle: okReading,
+    });
+    const result = await runCompile();
+    expect(result.error).toMatch(/changed while/);
+    expect(mockSync).not.toHaveBeenCalled();
+  });
+
+  it("finding 3: a source file written by someone else during the compile REFUSES and is not overwritten", async () => {
+    const concurrent = JSON.stringify({ ...OAS, description: "written during the compile" }, null, 2);
+    mockCompile.mockImplementation(async () => {
+      await fs.writeFile(oasPath, concurrent, "utf-8");
+      return { ok: true, value: compiledValue, siblingLifecycle: okReading };
+    });
+    const result = await runCompile();
+    expect(result.error).toMatch(/changed while/);
+    expect(mockSync).not.toHaveBeenCalled();
+    expect(await fs.readFile(oasPath, "utf-8")).toBe(concurrent);
+  });
+
+  it("finding 4: the lifecycle sync runs BEFORE the source write; a sync failure REFUSES with the file untouched", async () => {
+    mockCompile.mockResolvedValue({ ok: true, value: compiledValue, siblingLifecycle: okReading });
+    mockSync.mockRejectedValue(new Error("update failed"));
+    const stat = await fs.stat(oasPath);
+    const result = await runCompile();
+    expect(result.error).toMatch(/update failed/);
+    expect((await fs.stat(oasPath)).mtimeMs).toBe(stat.mtimeMs);
+  });
+
+  it("finding 6: stored lifecycle text that cannot be read REFUSES before the compile", async () => {
+    mockReadTemplate.mockResolvedValue({
+      id: "tpl-1",
+      lifecycleConfig: '{"regenerate":[{"artifactNode":"file_ima',
+    });
+    const result = await runCompile();
+    expect(result.error).toMatch(/stored lifecycle declaration/);
+    expect(mockCompile).not.toHaveBeenCalled();
+    expect(mockSync).not.toHaveBeenCalled();
   });
 });

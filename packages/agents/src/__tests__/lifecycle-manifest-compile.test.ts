@@ -316,8 +316,20 @@ describe("cinatra#4264 A1: the regenerate declaration", () => {
     expect(readStoredRegenerate(JSON.stringify({ regenerate: [{ ...image, extra: 1 }] }))).toEqual([
       { ...image, extra: 1 },
     ]);
-    for (const text of [null, undefined, "", "{ not json", "[]", "null", JSON.stringify({ repairCapable: true })]) {
+    for (const text of [null, undefined, "", JSON.stringify({ repairCapable: true })]) {
       expect(readStoredRegenerate(text)).toBeUndefined();
+    }
+  });
+
+  it("readStoredRegenerate THROWS on stored text it cannot read (review 1: never 'no list')", () => {
+    // A truncated or foreign column text may have carried a list; reading it as
+    // "no list" would let a writer keep it unchecked. Every writer refuses on
+    // this throw, as on a failed row read.
+    const { readStoredRegenerate } = lifecyclePolicy as unknown as {
+      readStoredRegenerate: (text: string | null | undefined) => unknown;
+    };
+    for (const text of ['{"regenerate":[{"artifactNode":"file_ima', "{ not json", "[]", "null", "7"]) {
+      expect(() => readStoredRegenerate(text)).toThrow(/stored lifecycle declaration cannot be read/);
     }
   });
 

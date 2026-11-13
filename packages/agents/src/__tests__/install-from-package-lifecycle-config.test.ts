@@ -121,8 +121,9 @@ vi.mock("../store", () => ({
   updateAgentTemplate: async (...a: unknown[]) =>
     (await updateTemplate(...(a as []))) ?? { id: (a as [string])[0] },
   updateAgentTemplatePackageVersion: vi.fn(async () => {}),
-  createAgentVersion: vi.fn(async () => {}),
+  createAgentVersion: (...a: unknown[]) => createVersion(...(a as [])),
 }));
+const createVersion = vi.fn(async (..._a: unknown[]) => {});
 vi.mock("../agent-template-identity", async () => identityClaimMockFrom((n: string) => (readTemplate as (p?: string) => unknown)(n) as never));
 
 vi.mock("../oas-compiler", () => ({
@@ -182,6 +183,8 @@ beforeEach(() => {
   createLocal.mockImplementation(async () => ({ templateId: "tpl-fresh", versionId: "ver-fresh" }));
   readTemplate.mockReset();
   readTemplate.mockResolvedValue(null);
+  createVersion.mockReset();
+  createVersion.mockImplementation(async () => {});
   LIFECYCLE = undefined;
 });
 
@@ -224,6 +227,23 @@ describe("cinatra#2047 D-1 — installAgentFromPackage compiles cinatra.lifecycl
     expect(upsertPatch().lifecycleConfig).toBe(
       JSON.stringify({ repairCapable: true, requestedSkips: ["recommendation"] }),
     );
+  });
+
+  it("cinatra#4264 A1b review 1: UPSERT whose version creation fails writes the PRIOR column back (the files roll back too)", async () => {
+    // The materialize is rolled back to the previous version's files, so the
+    // lifecycle column this install wrote must follow it back: a regenerate
+    // list written for the new flow must not stay beside the old flow.
+    const prior = JSON.stringify({
+      regenerate: [{ artifactNode: "file_image", step: "image_flow", noteInput: "prompt" }],
+    });
+    LIFECYCLE = { repairCapable: true };
+    readTemplate.mockResolvedValue({ id: "tpl-existing", status: "active", lifecycleConfig: prior } as never);
+    createVersion.mockRejectedValue(new Error("version insert failed"));
+    await expect(install()).rejects.toThrow(/version insert failed/);
+    expect(updateTemplate).toHaveBeenCalledTimes(2);
+    expect(upsertPatch().lifecycleConfig).toBe('{"repairCapable":true}');
+    expect(updateTemplate.mock.calls[1]?.[0]).toBe("tpl-existing");
+    expect(updateTemplate.mock.calls[1]?.[1]).toEqual({ lifecycleConfig: prior });
   });
 
   it("a MALFORMED block does not crash the install (fail-soft ⇒ no declaration)", async () => {
@@ -310,5 +330,24 @@ describe("cinatra#4264 A1b — syncCompiledTemplateToDb projects the lifecycle d
   it("a caller that passes no reading writes no lifecycle column (unchanged behaviour)", async () => {
     await sync();
     expect(Object.prototype.hasOwnProperty.call(upsertPatch(), "lifecycleConfig")).toBe(false);
+  });
+
+  // Review 1 finding 4: the lifecycle column carries the regenerate guarantee,
+  // so a caller that asks for it (passes a reading) gets a DB failure as a
+  // rejection; the recompile then refuses instead of reporting success over a
+  // stale row. Without a reading the sync stays best-effort.
+  it("a DB failure REJECTS when a reading was passed (the lifecycle write is not best-effort)", async () => {
+    updateTemplate.mockRejectedValueOnce(new Error("update failed"));
+    await expect(sync({ readable: true, lifecycle: undefined })).rejects.toThrow(/update failed/);
+  });
+
+  it("a failed row read REJECTS when a reading was passed", async () => {
+    readTemplate.mockRejectedValueOnce(new Error("read failed"));
+    await expect(sync({ readable: false })).rejects.toThrow(/read failed/);
+  });
+
+  it("control: without a reading a DB failure is still warned and swallowed", async () => {
+    updateTemplate.mockRejectedValueOnce(new Error("update failed"));
+    await expect(sync()).resolves.toBeUndefined();
   });
 });

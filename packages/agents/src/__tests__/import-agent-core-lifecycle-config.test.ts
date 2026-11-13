@@ -85,8 +85,28 @@ vi.mock("../store", () => ({
   // REFUSAL, so the stub must return the row it "updated".
   updateAgentTemplate: async (...a: unknown[]) =>
     (await updateTemplate(...(a as []))) ?? { id: (a as [string])[0] },
-  createAgentVersion: vi.fn(async () => {}),
+  createAgentVersion: (...a: unknown[]) => createVersion(...(a as [])),
   updateAgentTemplateOrigin: vi.fn(async () => {}),
+}));
+// cinatra#4264 A1b review 1 finding 5: the supplied-install road's runtime
+// mount, observed so a failure after the row write can be seen to roll the
+// files back (and, with them, the lifecycle column).
+const createVersion = vi.fn(async (..._a: unknown[]) => {});
+const rollbackMaterialize = vi.fn(async (..._a: unknown[]) => {});
+vi.mock("../materialize-agent-package", () => ({
+  materializeAgentPackageToDisk: async () => ({
+    materialized: true,
+    targetDir: "/tmp/agents-fixture/pkg",
+    wasReinstall: true,
+  }),
+  commitMaterialize: async () => {},
+  rollbackMaterialize: (...a: unknown[]) => rollbackMaterialize(...(a as [])),
+}));
+vi.mock("../agent-runtime-mount", () => ({
+  resolveAgentRuntimeMountDir: () => "/tmp/agents-fixture",
+}));
+vi.mock("../wayflow-reload-client", () => ({
+  triggerWayflowReload: async () => ({ ok: false, reason: "no_base_url" }),
 }));
 vi.mock("../agent-template-identity", async () => identityClaimMockFrom((n: string) => (readTemplate as (p?: string) => unknown)(n) as never));
 
@@ -124,7 +144,7 @@ function zip(opts: { pkg?: boolean; lifecycle?: unknown; oas?: string } = {}): s
   return createZipBuffer(files).toString("base64");
 }
 
-const importZip = (opts?: { pkg?: boolean; lifecycle?: unknown }) =>
+const importZip = (opts?: { pkg?: boolean; lifecycle?: unknown; oas?: string }) =>
   importAgentTemplateCore(zip(opts), undefined, { redirect: false, status: "published" });
 
 const createInput = () => createTemplate.mock.calls[0]?.[0] as Record<string, unknown>;
@@ -132,6 +152,8 @@ const upsertPatch = () => updateTemplate.mock.calls[0]?.[1] as Record<string, un
 
 beforeEach(() => {
   vi.clearAllMocks();
+  createVersion.mockReset();
+  createVersion.mockImplementation(async () => {});
   readTemplate.mockReset();
   readTemplate.mockResolvedValue(null);
 });
@@ -380,9 +402,74 @@ describe("cinatra#4264 A1b — the import revalidates a retained regenerate list
     expect(upsertPatch().lifecycleConfig).toBeUndefined();
   });
 
+  it("none: stored lifecycle text that cannot be read REFUSES the import before any write (review 1 finding 6)", async () => {
+    readTemplate.mockResolvedValue({
+      id: "tpl-existing",
+      lifecycleConfig: '{"regenerate":[{"artifactNode":"file_ima',
+    } as never);
+    await expect(importZip({ pkg: false, oas: GEMINI })).rejects.toThrow(
+      /stored lifecycle declaration cannot be read/,
+    );
+    expect(updateTemplate).not.toHaveBeenCalled();
+    expect(createTemplate).not.toHaveBeenCalled();
+  });
+
   it("clear: a manifest without a block clears the column; the stale stored list is not checked", async () => {
     readTemplate.mockResolvedValue(row(STALE) as never);
     await importZip({ oas: GEMINI });
     expect(upsertPatch()).toHaveProperty("lifecycleConfig", null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4264 A1b review 1 finding 5 — a failure after the row write rolls the
+// runtime files back to the previous flow, so the lifecycle column the same
+// import wrote is restored too: a list written for the new flow must not stay
+// beside the old flow's files.
+// ---------------------------------------------------------------------------
+describe("cinatra#4264 A1b — a rolled-back import restores the lifecycle column", () => {
+  const PRIOR = JSON.stringify({ regenerate: [{ artifactNode: "file_image", step: "image_flow", noteInput: "prompt" }] });
+  const supplied = () =>
+    importAgentTemplateCore(zip({ lifecycle: { repairCapable: true } }), undefined, {
+      redirect: false,
+      status: "published",
+      requireRuntimeMount: true,
+    });
+
+  beforeEach(() => {
+    createVersion.mockReset();
+    createVersion.mockRejectedValue(new Error("version insert failed"));
+    rollbackMaterialize.mockClear();
+  });
+
+  it("UPSERT: version creation fails after the row write -> the files roll back AND the prior column is written back", async () => {
+    readTemplate.mockResolvedValue({ id: "tpl-existing", lifecycleConfig: PRIOR } as never);
+    await expect(supplied()).rejects.toThrow(/version insert failed/);
+    expect(rollbackMaterialize).toHaveBeenCalledTimes(1);
+    expect(updateTemplate).toHaveBeenCalledTimes(2);
+    expect(updateTemplate.mock.calls[0]?.[1]).toHaveProperty("lifecycleConfig", '{"repairCapable":true}');
+    expect(updateTemplate.mock.calls[1]?.[0]).toBe("tpl-existing");
+    expect(updateTemplate.mock.calls[1]?.[1]).toEqual({ lifecycleConfig: PRIOR });
+  });
+
+  it("CREATE: version creation fails after the fresh row -> the files roll back AND the column is cleared", async () => {
+    await expect(supplied()).rejects.toThrow(/version insert failed/);
+    expect(rollbackMaterialize).toHaveBeenCalledTimes(1);
+    const newId = createInput().id;
+    expect(updateTemplate).toHaveBeenCalledTimes(1);
+    expect(updateTemplate.mock.calls[0]?.[0]).toBe(newId);
+    expect(updateTemplate.mock.calls[0]?.[1]).toEqual({ lifecycleConfig: null });
+  });
+
+  it("control: with no runtime mount (nothing rolled back) the column the import wrote is left as written", async () => {
+    readTemplate.mockResolvedValue({ id: "tpl-existing", lifecycleConfig: PRIOR } as never);
+    await expect(
+      importAgentTemplateCore(zip({ lifecycle: { repairCapable: true } }), undefined, {
+        redirect: false,
+        status: "published",
+      }),
+    ).rejects.toThrow(/version insert failed/);
+    expect(rollbackMaterialize).not.toHaveBeenCalled();
+    expect(updateTemplate).toHaveBeenCalledTimes(1);
   });
 });
