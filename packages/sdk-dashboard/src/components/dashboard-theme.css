@@ -10,8 +10,10 @@
  * the upstream components.
  *
  * Order matters: this file must be imported AFTER `drizzle-cube/client/
- * styles.css` in `dashboards-client-shell.tsx` (alongside this file).
- * Otherwise the DC defaults win.
+ * styles.css`. `read-only-composition.tsx` (beside this file) imports both
+ * in that order, and `dashboards-client-shell.tsx` in @cinatra-ai/dashboards
+ * imports the defaults and then that composition module. Otherwise the DC
+ * defaults win.
  *
  * For non-shadcn concepts (--dc-dimension-*, --dc-measure-*,
  * --dc-time-dimension-*, --dc-filter-*) we derive readable aliases with
@@ -444,4 +446,29 @@ body[data-cinatra-dashboard-modal-open="true"]
  * with the vendored layout unchanged. */
 [data-cinatra-bar-legend-clearance] .recharts-legend-wrapper {
   border-top: var(--cinatra-bar-legend-clearance, 0px) solid transparent;
+}
+
+/* KPI value: the foreground token in both palettes (cinatra#4311).
+ *
+ * drizzle-cube's KPI charts (kpiNumber, kpiText) paint their value with an
+ * INLINE colour: the dashboard colour palette's first colour, or, when the
+ * dashboard carries no palette, the literal `#1f2937`. Neither the dashboard
+ * home nor the shared read-only composition passes a palette, so the value is
+ * always that literal: dark ink on the light ground, and a very dark grey on
+ * the near-black ground of the dark palette. An inline literal cannot be
+ * re-pointed through a `--dc-*` variable like the rest of this file, so this
+ * rule repaints exactly that fallback with the application's text token. The
+ * latest drizzle-cube release still carries the literal, so no upgrade
+ * removes the need for it.
+ *
+ * The value element is the `dc:font-bold` hook with the literal in its inline
+ * style, matched in both serialisations: server markup keeps `#1f2937`, and a
+ * client-side style write serialises it as `rgb(31, 41, 55)`. A palette colour
+ * a dashboard does choose is not the literal and is left alone. `!important`
+ * is the only way a stylesheet wins over an inline colour. The drizzle-cube
+ * internals this depends on are pinned against the installed bundle by
+ * packages/dashboards/src/__tests__/kpi-value-foreground-token.test.ts. */
+:is([data-cinatra-dashboard-shell], [data-cinatra-read-only-composition])
+  .dc\:font-bold:is([style*="#1f2937" i], [style*="rgb(31, 41, 55)"]) {
+  color: var(--foreground) !important;
 }

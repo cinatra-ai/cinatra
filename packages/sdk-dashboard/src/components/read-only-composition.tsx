@@ -38,6 +38,16 @@
 // without one. Without a road it renders exactly what it renders today. The road
 // is an ADDRESS: it carries no credential, and it adds no toolbar, filter,
 // modal, drag or save.
+//
+// THE STYLESHEETS (cinatra#4311). drizzle-cube draws the grid and every chart
+// with `dc:`-prefixed utility classes that only its own stylesheet defines, and
+// the Cinatra `--dc-*` token mapping lives in `dashboard-theme.css` beside this
+// file. The composition loads both itself, so every mount gets the home's
+// layout and palette: the dashboard home, and a display that mounts this view
+// outside the dashboards shell (the dashboard artifact's display on an artifact
+// page). Order matters: the drizzle-cube defaults first, the theme after them.
+import "drizzle-cube/client/styles.css";
+import "./dashboard-theme.css";
 
 import { useState, type ComponentProps, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
