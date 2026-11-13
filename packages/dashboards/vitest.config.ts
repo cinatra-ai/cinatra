@@ -43,6 +43,12 @@ export default defineConfig({
         find: "@cinatra-ai/dashboards/twin-writer-seam",
         replacement: path.join(__dirname, "src/twin-writer-seam.ts"),
       },
+      // cinatra#3092: the agent passthrough's run write (a ROOT-side file the
+      // run-write test drives) imports the create-only dashboards MCP entry.
+      {
+        find: /^@cinatra-ai\/dashboards\/mcp$/,
+        replacement: path.join(__dirname, "src/mcp/index.ts"),
+      },
       { find: /^@\/(.+)$/, replacement: path.join(root, "src") + "/$1" },
       // Vitest can't resolve workspace package subpath imports without explicit
       // aliases, so mirror the tsconfig paths used by the host app for the
