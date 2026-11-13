@@ -168,9 +168,10 @@ All fixture entry points require an explicit development runtime.
 The producer stores the capture facts in the row's typed data. The artifact
 page and the review target do not read that data for a picture: they hand the
 screenshot display the facts recorded with the revision, in the page capture
-facts record that the page capture tool writes in the revision's own
-transaction. This fixture does not write that record, so a screenshot it files
-draws without its facts row.
+facts record. This fixture writes that record in the revision's own
+transaction, the same record the page capture tool writes, so a screenshot it
+files draws with its facts row. Facts the record cannot take (a URL over 2048
+characters or with a control character) are refused before anything is filed.
 
 ## Validation and remaining acceptance
 
