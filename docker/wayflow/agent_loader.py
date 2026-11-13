@@ -1288,8 +1288,8 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
                 conversation, _segment_run_id = _start_segment_conversation(
                     self.assistant, params.get("message"), _segment_request
                 )
-                # The snapshot values are read; the conversation stores the
-                # message without them.
+                # The snapshot values are read; the conversation and the
+                # stored task history get the message without them.
                 params["message"] = _regenerate_segment.redact_segment_request(params.get("message"))
             elif prioritize_task:
                 conversation = await self.storage.load_task_conversation(
@@ -1409,7 +1409,9 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
                 raise
             else:
                 # cinatra#4264 B1b: a segment that did not finish fails here,
-                # before anything is stored; it is never parked for a resume
+                # before its outcome is stored (no input-required state and no
+                # conversation; the task's working state already exists); it
+                # is never parked for a resume
                 # (a resumed leg carries no request, so it would sign no
                 # receipt and pass no capability check).
                 if _segment_request is not None:
@@ -1496,15 +1498,15 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
                         new_a2a_messages, _snap_recorder.snapshots(), str(task["id"])
                     )
 
-                await self.storage.update_task(
-                    task["id"],
+                # cinatra#4264 B1b: a segment's conversation holds the
+                # snapshot values as start inputs; it is not stored.
+                await _regenerate_segment.store_task_outcome(
+                    self.storage,
+                    task,
                     state=task_state,
                     new_messages=new_a2a_messages,
-                )
-                await self.storage.update_task_conversation(
-                    context_id=task["context_id"],
-                    task_id=task["id"],
-                    conv=conversation,
+                    conversation=conversation,
+                    segment=_segment_request is not None,
                 )
         except Exception as _outer_exc:
             # CINATRA HANG FIX: a raise from BEFORE the inner try-block (e.g.

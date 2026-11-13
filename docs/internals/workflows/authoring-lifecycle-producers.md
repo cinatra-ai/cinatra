@@ -315,14 +315,17 @@ of each declared node (the step snapshots). A repair whose row names
   The segment's own write is recorded on the repair in the same update as the
   successor and settles under the successor gate: it is never reviewed twice.
   Neither the end-node bindings nor the default road run for a segment run; a
-  repair row that cannot be read at the end fails the run, and nothing is
-  written.
+  repair run whose repair row is missing or cannot be read at the end fails,
+  and nothing is written.
 - **One leg.** A segment never pauses: the runtime fails a segment that stops
   for input (`REGENERATE_SEGMENT_PAUSED`), and every resume road refuses a
-  segment run (`REGENERATE_SEGMENT_NOT_RESUMABLE`) before anything is sent.
+  segment run, and a repair run whose repair row is missing or cannot be read
+  (`REGENERATE_SEGMENT_NOT_RESUMABLE`), before anything is sent.
   A flow whose step waits for a person cannot be regenerated.
 - **History.** The stored task history and the run's step results keep each
-  snapshot's node and sha256 only; the values stay in the step snapshots.
+  snapshot's node and sha256 only; the values stay in the step snapshots. The
+  runtime stores no conversation for a segment run (a segment is never
+  resumed, so nothing reads one).
 
 ## 5. What a producer must not do
 

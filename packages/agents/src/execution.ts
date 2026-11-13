@@ -3174,9 +3174,9 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   // filing node: its end exposes the filing node's outputs, not the template's
   // end-node bindings, and its one write is claimed by the repair completer.
   // Neither the end-node binding materialization nor the default road below
-  // runs for it. A repair row that cannot be read is never taken for an
-  // ordinary run: the run fails (the materialization-honesty gate below) and
-  // nothing is written.
+  // runs for it. A repair row that is missing or cannot be read is never
+  // taken for an ordinary run: the run fails (the materialization-honesty
+  // gate below) and nothing is written.
   const segmentRunClass = await classifyRegenerateSegmentRun({ id: runId, sourceType: run.sourceType });
   if (segmentRunClass === "segment") {
     console.log(`[artifact-materializer] run=${runId} is a Regenerate segment; end-node bindings not materialized`);
@@ -3187,7 +3187,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         outputId: "(regenerate-segment)",
         nodeId: null,
         extension: null,
-        error: "the run's repair could not be read, so whether it is a Regenerate segment is unknown; nothing was materialized",
+        error: "the run's repair row is missing or could not be read, so whether it is a Regenerate segment is unknown; nothing was materialized",
       },
     ];
   } else {

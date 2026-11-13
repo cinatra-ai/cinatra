@@ -589,10 +589,39 @@ def require_segment_finished(finished: bool) -> None:
         )
 
 
+async def store_task_outcome(
+    storage: Any,
+    task: Dict[str, Any],
+    *,
+    state: str,
+    new_messages: Any,
+    conversation: Any,
+    segment: bool,
+) -> None:
+    """Store a leg's outcome: the task's state and new messages and, unless
+    the leg is a Regenerate segment, its conversation.
+
+    A segment's conversation was started with the snapshot values as start
+    inputs (``cinatra_seg_*``), so it is never stored. Nothing would read it:
+    a stored conversation is loaded only for a later message on the same task
+    or context, a segment run's context is its own, a repeated segment message
+    starts a fresh conversation, and the application refuses every resume of
+    a segment run. A segment reaches this only finished
+    (``require_segment_finished``)."""
+    await storage.update_task(task["id"], state=state, new_messages=new_messages)
+    if segment:
+        return
+    await storage.update_task_conversation(
+        context_id=task["context_id"],
+        task_id=task["id"],
+        conv=conversation,
+    )
+
+
 def redact_segment_request(message: Any) -> Any:
     """A COPY of an A2A message whose segment request keeps each snapshot's
     node and sha256 but not its value, for everything that is stored (the
-    task history, the conversation). The caller's message is never changed.
+    task history; the conversation of a segment is not stored). The caller's message is never changed.
     A message without a request is returned unchanged (identity-equal)."""
     if not isinstance(message, dict):
         return message

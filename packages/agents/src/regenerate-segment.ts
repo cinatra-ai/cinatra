@@ -414,20 +414,27 @@ export async function resolveRegenerateSegment(
 /**
  * What a finished run is to the task handler: `segment` (a lifecycle repair
  * run whose repair names a Regenerate intent, blank included: no end-node
- * binding and no default road), `ordinary` (not a repair run, no repair row,
- * or a NULL intent), or `unreadable` (the repair row could not be read: the
- * handler fails the run and writes nothing). Never `ordinary` on a fault.
+ * binding and no default road), `ordinary` (not a repair run, or a readable
+ * repair row with a NULL intent), or `unreadable` (the repair row is missing
+ * or could not be read, so whether the run is a segment is unknown: the
+ * handler fails the run and writes nothing). Never `ordinary` on a fault or
+ * a missing row. A run whose id is not a repair-run id is answered without a
+ * read.
  */
 export async function classifyRegenerateSegmentRun(
   run: { id: string; sourceType?: string | null },
   deps?: Pick<RegenerateSegmentDeps, "readRepairForRun">,
 ): Promise<"segment" | "ordinary" | "unreadable"> {
   if (run.sourceType !== LIFECYCLE_REPAIR_SOURCE_TYPE) return "ordinary";
-  if (!deps && segmentRepairIdFromRunId(run.id) === null) return "ordinary";
+  if (segmentRepairIdFromRunId(run.id) === null) return "ordinary";
   try {
     const read = deps?.readRepairForRun ?? (await defaultRegenerateSegmentDeps()).readRepairForRun;
     const repair = await read(run.id);
-    return repair && hasRegenerateIntent(repair.regenerateNodeId) ? "segment" : "ordinary";
+    if (!repair) {
+      console.error(`[regenerate-segment] run=${run.id} repair row missing; whether it is a segment is unknown`);
+      return "unreadable";
+    }
+    return hasRegenerateIntent(repair.regenerateNodeId) ? "segment" : "ordinary";
   } catch (err) {
     console.error(
       `[regenerate-segment] run=${run.id} repair intent unreadable: ${err instanceof Error ? err.name : "error"}`,
@@ -436,8 +443,8 @@ export async function classifyRegenerateSegmentRun(
   }
 }
 
-/** Whether `run` may be a Regenerate segment run: true for a segment and for
- *  a read fault (fail closed). */
+/** Whether `run` may be a Regenerate segment run: true for a segment, a
+ *  missing repair row and a read fault (fail closed). */
 export async function isRegenerateSegmentRun(
   run: { id: string; sourceType?: string | null },
   deps?: Pick<RegenerateSegmentDeps, "readRepairForRun">,
@@ -448,9 +455,10 @@ export async function isRegenerateSegmentRun(
 /**
  * Throws REGENERATE_SEGMENT_NOT_RESUMABLE for a run that is, or may be, a
  * Regenerate segment run: a repair run whose repair names an intent (blank
- * included), or whose repair cannot be read. A segment runs in one leg; a
- * resumed leg would carry no segment request, pass no fence and sign no
- * receipt. A run whose id is not a repair-run id resolves without a read.
+ * included), whose repair row is missing, or whose repair cannot be read.
+ * Only a readable repair row with a NULL intent resumes. A segment runs in
+ * one leg; a resumed leg would carry no segment request, pass no fence and
+ * sign no receipt. A run whose id is not a repair-run id resolves without a read.
  * Called by the one resume carrier (`mintResumeRunTokenMetadata`), so every
  * resume road refuses before anything is sent.
  */
@@ -463,7 +471,7 @@ export async function refuseRegenerateSegmentResume(
   try {
     const read = deps?.readRepairForRun ?? (await defaultRegenerateSegmentDeps()).readRepairForRun;
     const repair = await read(runId);
-    segment = !!repair && hasRegenerateIntent(repair.regenerateNodeId);
+    segment = !repair || hasRegenerateIntent(repair.regenerateNodeId);
   } catch {
     segment = true;
   }
