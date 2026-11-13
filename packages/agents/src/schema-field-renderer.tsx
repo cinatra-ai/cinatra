@@ -22,7 +22,7 @@ import {
   type FieldRendererProps,
   type RendererMode,
 } from "./field-renderer-registry";
-import { resolveFieldLabel } from "./humanize-field-name";
+import { isInternalPlaceholderFieldName, resolveFieldLabel } from "./humanize-field-name";
 
 /**
  * THE DECLARED-VALUE HOLD OF A GATE'S CONTINUE (cinatra#4244, design
@@ -1347,6 +1347,19 @@ function StructuredObjectField(props: ObjectFieldProps) {
     if (typeof current !== "string" || current === "") return false;
     return numberFieldError(current, kind as "number" | "integer", true) !== null;
   });
+  // cinatra#4244 - THE GATE'S OWN FORM (design V.1). On the run page's
+  // schema-drawn gate this object is the host's wrapper of the fields the gate
+  // declares: it has only the internal placeholder for a name and it draws the
+  // gate's one Continue. The card carries the screen the agent declared, its
+  // labels and its validation, and the host draws only the frame and the
+  // control floor. So the wrapper draws no label the gate did not declare (the
+  // neutral "Your response"), no required or "(optional)" mark of its own
+  // (each declared field marks its own), and no second bordered box: the
+  // declared fields sit in the card's own detail region. A title or a
+  // description the gate declares stays the heading. A nested object (told
+  // `hideSubmit`) and every other surface keep their label and box.
+  const gateForm = holdOn && isInternalPlaceholderFieldName(fieldName);
+  const drawsHeading = !gateForm || label !== resolveFieldLabel(fieldName);
   const held =
     holdOn &&
     (typedNumberInvalid ||
@@ -1592,14 +1605,16 @@ function StructuredObjectField(props: ObjectFieldProps) {
 
   return (
     <div className="flex flex-col gap-3" data-testid={`object-field-${fieldName}`}>
-      <div className="flex flex-col gap-1">
-        <Label className="text-foreground">
-          {label}
-          {required ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}
-        </Label>
-        {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
-      </div>
-      <div className="flex flex-col gap-4 rounded-control border border-line p-3">
+      {drawsHeading ? (
+        <div className="flex flex-col gap-1">
+          <Label className="text-foreground">
+            {label}
+            {gateForm ? null : required ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}
+          </Label>
+          {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
+        </div>
+      ) : null}
+      <div className={gateForm ? "flex flex-col gap-4" : "flex flex-col gap-4 rounded-control border border-line p-3"}>
         {ordered.map((key) => (
           <SchemaOnlyFloorRenderer
             key={key}
