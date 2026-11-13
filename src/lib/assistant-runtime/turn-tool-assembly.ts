@@ -128,10 +128,14 @@ export type AssistantTurnToolAssemblyReads = {
   resolveChatExternalMcpTools: typeof resolveChatExternalMcpTools;
 };
 
+// The real reads, each looked up at CALL time. Loading this module reads none
+// of the imported functions: a suite that mocks "@cinatra-ai/llm" without one
+// of them can still import the turn, and a turn reads each function only where
+// it calls it, exactly as before the `reads` seam existed.
 const DEFAULT_ASSEMBLY_READS: AssistantTurnToolAssemblyReads = {
-  selectSkillDeliveryAdapter,
-  deliverInjectedSkillsInline,
-  resolveChatExternalMcpTools,
+  selectSkillDeliveryAdapter: (...args) => selectSkillDeliveryAdapter(...args),
+  deliverInjectedSkillsInline: (...args) => deliverInjectedSkillsInline(...args),
+  resolveChatExternalMcpTools: (...args) => resolveChatExternalMcpTools(...args),
 };
 
 /** A point of the assembly where the caller runs its own write step. */
