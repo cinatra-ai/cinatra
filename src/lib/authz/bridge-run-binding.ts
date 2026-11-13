@@ -29,7 +29,14 @@ import { readAgentRunByContextId } from "@cinatra-ai/agents";
 // ---------------------------------------------------------------------------
 
 export type BridgeRunBindingResult =
-  | { ok: true; runId: string }
+  | {
+      ok: true;
+      runId: string;
+      /** The attempt of the run the context id resolved to, read when the
+       *  callback was bound (cinatra#3092). A write that needs an attempt
+       *  claim presents THIS value, never one read later. */
+      executionAttemptId: string | null;
+    }
   | { ok: false; status: 403; error: string };
 
 /**
@@ -73,5 +80,9 @@ export async function bindBridgeRunId(
         "bridge run-binding failed: agent_run_id does not match the executing run",
     };
   }
-  return { ok: true, runId: contextRun.id };
+  return {
+    ok: true,
+    runId: contextRun.id,
+    executionAttemptId: contextRun.executionAttemptId ?? null,
+  };
 }
