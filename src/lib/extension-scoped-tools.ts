@@ -37,7 +37,8 @@ import {
   type ExtensionToolPorts,
 } from "@/lib/extension-tool-dispatch";
 import { ExtensionToolModuleRefusal } from "@/lib/extension-tool-module-loader";
-import { ExtensionToolOriginRefusal, resolveExtensionToolOrigin } from "@/lib/extension-tool-origin";
+import { ExtensionToolOriginRefusal, ORIGIN_CODES, resolveExtensionToolOrigin } from "@/lib/extension-tool-origin";
+import { INSTALL_BINDING_CODES } from "@/lib/extension-tool-install-binding";
 import { createExtensionObjectsPort } from "@/lib/extension-objects-port";
 import { attributionFields, type ExtensionToolAttribution } from "@/lib/extension-tool-attribution";
 import type { AuditEventInput } from "@/lib/authz/audit";
@@ -122,8 +123,9 @@ export async function dispatchExtensionScopedTool(input: {
   // ONE `extension_tool.dispatch` EVENT PER CALL (cinatra#4154), allowed and
   // refused alike. The dispatch reads `input.tool` and `input.run` exactly as
   // often and in the same order as it does without the event; the trail keeps
-  // what those reads saw, and the event is built from that alone. The answer
-  // never waits for the write.
+  // what those reads saw, and the event is built from that alone. The event is
+  // handed to the audit sink before the answer returns; the answer never waits
+  // for the write itself.
   const trail: DispatchTrail = {
     runPackage: null,
     codePackage: null,
@@ -135,19 +137,17 @@ export async function dispatchExtensionScopedTool(input: {
     stepRead: false,
   };
   const outcome = await dispatchScopedTool(input, trail);
-  if (trail.tool === "extension_tool") void auditToolDispatch(trail, outcome);
+  if (trail.tool === "extension_tool") await auditToolDispatch(trail, outcome);
   return outcome;
 }
 
 /**
- * What the dispatch event records: the four fields, the resolver's fixed code
- * on its refusal, and what the dispatch's own reads saw: the last `tool` value
+ * What the dispatch event records: the four fields, and what the dispatch's own reads saw: the last `tool` value
  * before it chose its branch (or, on a throw before that, the value the
  * failure log read), the run object of its first `run` read, and whether the
  * step was already read.
  */
 type DispatchTrail = ExtensionToolAttribution & {
-  originCode?: string;
   tool: unknown;
   branched: boolean;
   run: unknown;
@@ -177,25 +177,31 @@ function runField(run: unknown, key: "id" | "orgId" | "runBy" | "verifiedStepId"
   }
 }
 
-/** The resolver's fixed code when `e` is its refusal; undefined otherwise or when the check throws. Never throws. */
-function originCodeOf(e: unknown): string | undefined {
-  try {
-    if (!(e instanceof ExtensionToolOriginRefusal)) return undefined;
-    const code: unknown = e.code;
-    return typeof code === "string" ? code : undefined;
-  } catch {
-    return undefined;
-  }
+/** The origin refusal's fixed sentence, as `ExtensionToolOriginRefusal` writes it. */
+const ORIGIN_SENTENCE = /^extension_tool: the calling step reaches no tool of this origin \(([a-z-]+)\)$/;
+/** Every fixed code that sentence may name: the resolver's and the install binding's. */
+const FIXED_ORIGIN_CODES: ReadonlySet<string> = new Set<string>([...ORIGIN_CODES, ...INSTALL_BINDING_CODES]);
+
+/**
+ * The fixed origin code a 403 answer names, read from the answer the
+ * dispatch's classifier already gave, never from the thrown value: undefined
+ * unless the answer is exactly the origin sentence of a code in the fixed list.
+ */
+function originCodeOfAnswer(outcome: ExtensionScopedToolOutcome): string | undefined {
+  if (outcome.ok || outcome.status !== 403) return undefined;
+  const m = ORIGIN_SENTENCE.exec(outcome.error);
+  return m !== null && FIXED_ORIGIN_CODES.has(m[1]!) ? m[1] : undefined;
 }
 
 /**
- * Write the call's dispatch event. Never throws and never rejects, and the
- * caller does not wait for it. The run's fields are read here only after the
- * answer is fixed, each on its own: a field that cannot be read is left out,
- * and the event is still written. A refusal records a fixed word for its
- * status and the resolver's fixed code, never the answer's text; it is
- * recorded every time, never folded into the denied-event cooldown, because
- * each refused call is its own event.
+ * Hand the call's dispatch event to the audit sink. Never throws and never
+ * rejects. It resolves once the sink has been called, never waiting for the
+ * write itself, whose outcome is dropped. The run's fields are read here only
+ * after the answer is fixed, each on its own: a field that cannot be read is
+ * left out, and the event is still handed over. A refusal records a fixed word
+ * for its status and, for an origin refusal, the fixed code its answer names,
+ * never other text; it is recorded every time, never folded into the
+ * denied-event cooldown, because each refused call is its own event.
  */
 async function auditToolDispatch(trail: DispatchTrail, outcome: ExtensionScopedToolOutcome): Promise<void> {
   try {
@@ -204,6 +210,7 @@ async function auditToolDispatch(trail: DispatchTrail, outcome: ExtensionScopedT
     const runBy = runField(run, "runBy");
     const runId = runField(run, "id");
     if (!trail.stepRead) trail.verifiedStepId = runField(run, "verifiedStepId") ?? null;
+    const originCode = originCodeOfAnswer(outcome);
     const reason = outcome.ok
       ? null
       : outcome.status === 403
@@ -225,11 +232,12 @@ async function auditToolDispatch(trail: DispatchTrail, outcome: ExtensionScopedT
       metadata: {
         ...attributionFields(trail),
         ...(reason === null ? {} : { reason }),
-        ...(reason !== null && trail.originCode ? { originCode: trail.originCode } : {}),
+        ...(originCode !== undefined ? { originCode } : {}),
       },
     };
     const { logAuditEvent } = await import("@/lib/authz/audit");
-    await logAuditEvent(event);
+    // Called now, before the answer returns; its promise is not awaited.
+    void Promise.resolve(logAuditEvent(event)).catch(() => {});
   } catch {
     /* an audit write never changes the answer */
   }
@@ -418,21 +426,15 @@ async function runExtensionTool(
   // of an embedded child flow, the child's, from the exact child installation.
   // The ports below are then the child's declarations, bound to this same run.
   // `input.run` is read once here, as before; the resolver is the only other
-  // reader of its step, so the step is read for the attribution after it.
+  // reader of its step, so the step is read for the attribution after it. A
+  // resolver throw is not touched here: it reaches the dispatch's classifier
+  // as it is, and the event takes its origin code from that answer.
   const run = input.run;
-  let origin: Awaited<ReturnType<typeof resolveExtensionToolOrigin>>;
-  try {
-    origin = await resolveExtensionToolOrigin({
-      run,
-      context: runContext,
-      request: isPlainObject(input.input) ? input.input : {},
-    });
-  } catch (e) {
-    // Never a throw of its own: a throw whose class cannot be read reaches the
-    // dispatch's classifier unchanged and answers the fixed 500 there.
-    trail.originCode = originCodeOf(e);
-    throw e;
-  }
+  const origin = await resolveExtensionToolOrigin({
+    run,
+    context: runContext,
+    request: isPlainObject(input.input) ? input.input : {},
+  });
   trail.verifiedStepId = runField(run, "verifiedStepId") ?? null;
   trail.stepRead = true;
   const context = origin.kind === "child" ? origin.context : runContext;
