@@ -40,6 +40,24 @@ vi.mock("../oas-compiler", () => ({
   compileOasAgentJson: compileMock,
 }));
 
+// The package walk, with a hook that runs while it walks: a source rewritten
+// after the compile must not reach the tarball (cinatra#4264).
+const { walkHook } = vi.hoisted(() => ({
+  walkHook: { current: null as null | ((rootAbs: string) => Promise<void>) },
+}));
+
+vi.mock("../scan-package-siblings", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../scan-package-siblings")>();
+  return {
+    ...actual,
+    walkPackageFiles: vi.fn(async (rootAbs: string) => {
+      const files = await actual.walkPackageFiles(rootAbs);
+      if (walkHook.current) await walkHook.current(rootAbs);
+      return files;
+    }),
+  };
+});
+
 import { publishAgentPackageFromGitDir } from "../verdaccio/client";
 
 const PACKAGE_NAME = "@cinatra-fixtures/lifecycle-agent";
@@ -68,6 +86,7 @@ beforeEach(async () => {
   puts = [];
   compileMock.mockReset();
   compileMock.mockImplementation(async () => ({ ok: true, value: {} }));
+  walkHook.current = null;
   vi.mocked(tarCreate).mockClear();
   vi.stubGlobal(
     "fetch",
@@ -88,10 +107,13 @@ afterEach(async () => {
 });
 
 const OAS_SOURCE = `${JSON.stringify({ component_type: "Flow", name: "Lifecycle agent" }, null, 2)}\n`;
+const OAS_BYTES = Buffer.from(OAS_SOURCE, "utf8");
+const OTHER_SOURCE = `${JSON.stringify({ component_type: "Flow", name: "Other" })}\n`;
 
 async function writeAgentDir(
   cinatra: Record<string, unknown>,
   oasRelPath = "cinatra/oas.json",
+  oasBytes: Buffer = OAS_BYTES,
 ): Promise<string> {
   const agentDir = path.join(tmpRoot, "agent");
   const pkg = {
@@ -102,14 +124,14 @@ async function writeAgentDir(
     type: "module",
     cinatra: { apiVersion: "cinatra.ai/v1", kind: "agent", ...cinatra },
   };
-  const files: Record<string, string> = {
-    "package.json": `${JSON.stringify(pkg, null, 2)}\n`,
-    [oasRelPath]: OAS_SOURCE,
+  const files: Record<string, Buffer> = {
+    "package.json": Buffer.from(`${JSON.stringify(pkg, null, 2)}\n`, "utf8"),
+    [oasRelPath]: oasBytes,
   };
   for (const [rel, content] of Object.entries(files)) {
     const abs = path.join(agentDir, rel);
     await fs.mkdir(path.dirname(abs), { recursive: true });
-    await fs.writeFile(abs, content, "utf8");
+    await fs.writeFile(abs, content);
   }
   return agentDir;
 }
@@ -133,6 +155,26 @@ async function publishedManifests(): Promise<Array<Record<string, unknown>>> {
     await fs.readFile(path.join(out, "package", "package.json"), "utf8"),
   ) as Record<string, unknown>;
   return [packument, tarball];
+}
+
+/** The shipped bytes of one tarball file; call after publishedManifests(). */
+async function shippedBytes(relPath: string): Promise<Buffer> {
+  return fs.readFile(path.join(tmpRoot, "extracted", "package", relPath));
+}
+
+/** The compiled task spec the tarball's synthesized agent.json carries. */
+async function shippedTaskSpec(): Promise<unknown> {
+  const payload = JSON.parse((await shippedBytes("agent.json")).toString("utf8")) as {
+    template: { taskSpec: unknown };
+  };
+  return payload.template.taskSpec;
+}
+
+/** A compile mock that compiles what it is handed and reports it as the prompt. */
+function compileHandedBytes(opts: Record<string, unknown>): Promise<Buffer> {
+  return opts.oasSource instanceof Buffer
+    ? Promise.resolve(opts.oasSource)
+    : fs.readFile(String(opts.oasSourcePath));
 }
 
 function cinatraOf(manifest: Record<string, unknown>): Record<string, unknown> {
@@ -169,8 +211,15 @@ describe("publishAgentPackageFromGitDir fails closed on the compile (cinatra#426
       oasSourcePath: path.join(agentDir, "cinatra", "oas.json"),
     });
     await publishedManifests();
-    const shipped = await fs.readFile(path.join(tmpRoot, "extracted", "package", "cinatra", "oas.json"), "utf8");
-    expect(shipped).toBe(OAS_SOURCE);
+    expect((await shippedBytes("cinatra/oas.json")).equals(OAS_BYTES)).toBe(true);
+  });
+
+  it("hands the compile the bytes it read, as a Buffer, not only the path", async () => {
+    const agentDir = await writeAgentDir({});
+    await publishAgentPackageFromGitDir({ agentDir }, CONFIG);
+    const handed = compileMock.mock.calls[0][0].oasSource;
+    expect(Buffer.isBuffer(handed)).toBe(true);
+    expect((handed as Buffer).equals(OAS_BYTES)).toBe(true);
   });
 
   it("compiles and ships the transitional cinatra/agent.json source as the same bytes", async () => {
@@ -180,8 +229,7 @@ describe("publishAgentPackageFromGitDir fails closed on the compile (cinatra#426
       oasSourcePath: path.join(agentDir, "cinatra", "agent.json"),
     });
     await publishedManifests();
-    const shipped = await fs.readFile(path.join(tmpRoot, "extracted", "package", "cinatra", "agent.json"), "utf8");
-    expect(shipped).toBe(OAS_SOURCE);
+    expect((await shippedBytes("cinatra/agent.json")).equals(OAS_BYTES)).toBe(true);
   });
 
   it("refuses a flat agent.json source, whose bytes the synthesized payload replaces, before any registry write", async () => {
@@ -191,13 +239,60 @@ describe("publishAgentPackageFromGitDir fails closed on the compile (cinatra#426
     expect(puts).toHaveLength(0);
   });
 
-  it("refuses when the OAS source changes during the compile, before any registry write", async () => {
+  it("an A->B->A swap during the compile cannot split the compiled flow from the shipped bytes", async () => {
+    const agentDir = await writeAgentDir({});
+    const oasPath = path.join(agentDir, "cinatra", "oas.json");
+    compileMock.mockImplementation(async (opts: Record<string, unknown>) => {
+      await fs.writeFile(oasPath, OTHER_SOURCE);
+      const compiled = await compileHandedBytes(opts);
+      await fs.writeFile(oasPath, OAS_BYTES);
+      return { ok: true, value: { prompt: compiled.toString("utf8") } };
+    });
+    await publishAgentPackageFromGitDir({ agentDir }, CONFIG);
+    await publishedManifests();
+    const shipped = await shippedBytes("cinatra/oas.json");
+    expect(shipped.equals(OAS_BYTES)).toBe(true);
+    expect(await shippedTaskSpec()).toBe(shipped.toString("utf8"));
+  });
+
+  it("a source rewritten during the compile ships the bytes the compile was handed", async () => {
     const agentDir = await writeAgentDir({});
     compileMock.mockImplementation(async (opts: Record<string, unknown>) => {
-      await fs.writeFile(String(opts.oasSourcePath), `${JSON.stringify({ component_type: "Flow", name: "Other" })}\n`);
-      return { ok: true, value: {} };
+      await fs.writeFile(String(opts.oasSourcePath), OTHER_SOURCE);
+      const compiled = await compileHandedBytes(opts);
+      return { ok: true, value: { prompt: compiled.toString("utf8") } };
     });
-    await expect(publishAgentPackageFromGitDir({ agentDir }, CONFIG)).rejects.toThrow(/changed during the compile/);
+    await publishAgentPackageFromGitDir({ agentDir }, CONFIG);
+    await publishedManifests();
+    const shipped = await shippedBytes("cinatra/oas.json");
+    expect(shipped.equals(OAS_BYTES)).toBe(true);
+    expect(await shippedTaskSpec()).toBe(OAS_SOURCE);
+  });
+
+  it("a source rewritten during the package walk still ships the compiled bytes, never a reread", async () => {
+    const agentDir = await writeAgentDir({});
+    compileMock.mockImplementation(async (opts: Record<string, unknown>) => {
+      const compiled = await compileHandedBytes(opts);
+      // Armed only after the compile, so the rewrite lands between the
+      // compile and the packaging of the source file.
+      walkHook.current = async (rootAbs) => {
+        await fs.writeFile(path.join(rootAbs, "cinatra", "oas.json"), OTHER_SOURCE);
+      };
+      return { ok: true, value: { prompt: compiled.toString("utf8") } };
+    });
+    await publishAgentPackageFromGitDir({ agentDir }, CONFIG);
+    await publishedManifests();
+    const shipped = await shippedBytes("cinatra/oas.json");
+    expect(shipped.equals(OAS_BYTES)).toBe(true);
+    expect(await shippedTaskSpec()).toBe(OAS_SOURCE);
+  });
+
+  it("refuses an OAS source that is not valid UTF-8 (a raw 0x80 byte) before any tarball or registry write", async () => {
+    const [head, tail] = OAS_SOURCE.split("Lifecycle agent");
+    const bytes = Buffer.concat([Buffer.from(`${head}Life`, "utf8"), Buffer.from([0x80]), Buffer.from(`cycle agent${tail}`, "utf8")]);
+    const agentDir = await writeAgentDir({}, "cinatra/oas.json", bytes);
+    await expect(publishAgentPackageFromGitDir({ agentDir }, CONFIG)).rejects.toThrow(/not valid UTF-8/);
+    expect(compileMock).not.toHaveBeenCalled();
     expect(tarCreate).not.toHaveBeenCalled();
     expect(puts).toHaveLength(0);
   });
