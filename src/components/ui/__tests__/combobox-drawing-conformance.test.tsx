@@ -244,6 +244,22 @@ describe('clause: "opens a type-to-filter list" / "cmdk-filtered list"', () => {
     expect(tokens, "the search text is still 14px").not.toContain("text-sm")
   })
 
+  it("draws the open list at its trigger's width, as the Example draws the pair", () => {
+    // The Example stacks the trigger and the list as two blocks of one
+    // `max-width: 256px` column, so the list is exactly as wide as its
+    // trigger and the pair reads as one outline. A minimum width of the
+    // list's own (`min-w-[12rem]`, 192px) widens it past a narrower trigger,
+    // and the list then overhangs the trigger with its outline open there.
+    const tokens = classes(openList())
+    expect(tokens, "the list does not take its trigger's width").toContain(
+      "w-(--radix-popover-trigger-width)",
+    )
+    expect(
+      tokens.filter((t) => /^(?:[a-z-]+:)*(?:min-w|max-w)-/.test(t)),
+      "the list takes a minimum or maximum width of its own, so it can be wider or narrower than its trigger",
+    ).toEqual([])
+  })
+
   it("keeps the Example's 5px inset around the rows", () => {
     const list = openList().querySelector(
       '[data-slot="command-list"]',
