@@ -24,6 +24,7 @@ import {
   extractStepSnapshotClaims,
   persistStepSnapshots,
   readSnapshotNodesMetadataForRun,
+  scrubWayflowHistoryCredentials,
   snapshotNodesFromLifecycleConfig,
   snapshotNodesMetadata,
   stepSnapshotAttestation,
@@ -219,5 +220,49 @@ describe("Codex pre-1 MF1 and MF2", () => {
       expect(verifyStepSnapshotClaim({ key: KEY, runId: "R1", claim: claim("R1", "produce", '{"a":1}', flow) })).toBeNull();
     }
     expect(verifyStepSnapshotClaim({ key: KEY, runId: "R1", claim: claim("R1", "produce", '{"a":1}') })).not.toBeNull();
+  });
+});
+
+describe("Review 2 MF2: snapshot inputs carry no credential member", () => {
+  // The runtime strips credential members with the repository scrubber before
+  // it hashes (docker/wayflow/step_snapshot.py capture_node_inputs), so the
+  // sha256 is over the STRIPPED object. Core recomputes the sha256 over the
+  // received bytes and refuses a claim whose object still holds a member the
+  // same scrubber removes: it never re-serializes, so the stored bytes are the
+  // signed bytes.
+  it("refuses a correctly signed claim with a top-level api_key", async () => {
+    const { rows, write } = memoryWriter();
+    const top = claim("R1", "produce", '{"api_key":"sk-top","prompt":"a cat"}');
+    expect(verifyStepSnapshotClaim({ key: KEY, runId: "R1", claim: top })).toBeNull();
+    const out = await persistStepSnapshots({ runId: "R1", orgId: "org-1", history: leg(top), key: KEY, write });
+    expect(out).toEqual({ stored: [], dropped: 1 });
+    expect(write).not.toHaveBeenCalled();
+    expect(rows.size).toBe(0);
+  });
+
+  it("refuses a correctly signed claim with a nested api_key or a token in a list", async () => {
+    const { rows, write } = memoryWriter();
+    const nested = claim("R1", "produce", '{"prompt":"a cat","settings":{"api_key":"sk-nested","size":"1024"}}');
+    const inList = claim("R1", "file_image", '{"tools":[{"name":"draw","token":"t-1"}]}');
+    for (const c of [nested, inList]) expect(verifyStepSnapshotClaim({ key: KEY, runId: "R1", claim: c })).toBeNull();
+    const out = await persistStepSnapshots({ runId: "R1", orgId: "org-1", history: leg(nested, inList), key: KEY, write });
+    expect(out).toEqual({ stored: [], dropped: 2 });
+    expect(rows.size).toBe(0);
+  });
+
+  it("stores the stripped object the runtime signs, its sha256 over those bytes", async () => {
+    const stripped = '{"prompt":"a cat","settings":{"size":"1024"},"tools":[{"name":"draw"}]}';
+    const { rows, write } = memoryWriter();
+    const out = await persistStepSnapshots({ runId: "R1", orgId: "org-1", history: leg(claim("R1", "produce", stripped)), key: KEY, write });
+    expect(out).toEqual({ stored: ["inserted"], dropped: 0 });
+    expect(rows.get("R1\nproduce")).toMatchObject({ inputsJson: stripped, inputsSha256: stepSnapshotSha256(stripped) });
+    expect(scrubWayflowHistoryCredentials(JSON.parse(stripped))).toEqual(JSON.parse(stripped));
+  });
+
+  it("is the one credential list of the history scrub: execution.ts holds no second list", () => {
+    const execution = readFileSync(path.resolve(__dirname, "../execution.ts"), "utf8");
+    expect(execution).not.toMatch(/new Set\(\[\s*"bearer_token"/);
+    expect(execution).toMatch(/import \{[^}]*\bscrubWayflowHistoryCredentials\b[^}]*\} from "\.\/step-snapshots"/);
+    expect(scrubWayflowHistoryCredentials({ a: [{ api_key: "x", b: 1 }], password: "p" })).toEqual({ a: [{ b: 1 }] });
   });
 });

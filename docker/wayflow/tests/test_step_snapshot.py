@@ -13,6 +13,10 @@ T7 target node after a resume: a run that pauses (in an injected context
 subflow) before the filing node, then resumes, records the filing node's
 snapshot on the resumed leg, because the resume message carries the list too.
 
+Review 2: a node run twice in one leg with different inputs carries no
+claim (MF1); credential members are stripped by the repository scrubber
+before hashing (MF2); an Agent-wrapped root flow is recorded (MF4).
+
 The module is pure, so these run without the runtime image.
 
 Red at main: step_snapshot.py and the fixture do not exist.
@@ -163,12 +167,67 @@ def test_full_inputs_with_the_note_port_platform_keys_excluded():
     assert json.loads(only["inputs_json"]) == {"note": "make it brighter", "prompt": "a cat", "title": "Cat"}
 
 
-def test_first_capture_in_a_leg_wins():
+def test_a_node_run_twice_in_a_leg_with_identical_inputs_stays_one_claim():
     root = _Conv()
     rec = _recorder(root=root)
     rec.observe(PRODUCE, {"n": 1}, root)
+    rec.observe(PRODUCE, {"n": 1}, root)
+    (only,) = rec.snapshots()
+    assert json.loads(only["inputs_json"]) == {"n": 1}
+
+
+def test_a_node_run_twice_in_a_leg_with_different_inputs_is_ambiguous():
+    """Review 2 MF1: the second run's inputs differ, so the node's claim is
+    ambiguous and the leg carries none for it (fail closed); a third run with
+    the first inputs does not bring it back. The other node is unaffected."""
+    root = _Conv()
+    rec = _recorder(root=root)
+    rec.observe(PRODUCE, {"n": 1}, root)
+    rec.observe(FILE_IMAGE, {"prompt": "a cat"}, root)
     rec.observe(PRODUCE, {"n": 2}, root)
-    assert json.loads(rec.snapshots()[0]["inputs_json"]) == {"n": 1}
+    rec.observe(PRODUCE, {"n": 1}, root)
+    assert [s["node"] for s in rec.snapshots()] == ["file_image"]
+
+
+def test_a_second_run_that_cannot_be_recorded_makes_the_node_ambiguous():
+    """The second run's inputs are over the cap: they cannot be compared with
+    the first, so the node carries no claim."""
+    root = _Conv()
+    rec = _recorder(root=root)
+    rec.observe(PRODUCE, {"n": 1}, root)
+    rec.observe(PRODUCE, {"blob": "x" * (snap.STEP_SNAPSHOT_MAX_BYTES + 1)}, root)
+    assert rec.snapshots() == []
+
+
+def test_a_self_looping_node_with_new_inputs_carries_no_claim_through_the_real_wrapper():
+    """Review 2 MF1, the self-loop road (a node whose control edge returns
+    to itself, cf. tests/test_publish_gate_insert.py:285): the SAME Step object
+    is invoked twice in one leg through the installed ``invoke_async`` capture,
+    first with one input dict, then with another."""
+    import contextvars
+
+    current = contextvars.ContextVar("rec", default=None)
+
+    class LoopStep:
+        def __init__(self, step_id):
+            self.id = step_id
+
+        async def invoke_async(self, inputs, conversation):
+            return "ok"
+
+    snap.install_invoke_capture(LoopStep, current.get, log=lambda *_: None)
+    looping, steady = LoopStep("produce"), LoopStep("file_image")
+    root = _Conv()
+    rec = _recorder(root=root, steps=(looping, steady))
+    token = current.set(rec)
+    try:
+        _run(looping.invoke_async({"draft": 1}, root))
+        _run(steady.invoke_async({"prompt": "a cat"}, root))
+        _run(steady.invoke_async({"prompt": "a cat"}, root))
+        _run(looping.invoke_async({"draft": 2}, root))
+    finally:
+        current.reset(token)
+    assert [s["node"] for s in rec.snapshots()] == ["file_image"]
 
 
 def test_oversize_and_non_dict_are_dropped_and_no_key_records_nothing():
@@ -363,3 +422,93 @@ def test_the_loader_guards_and_installs_the_capture_at_startup():
     assert "_patch_step_snapshot_capture" in calls_by_function["build_parent_app"]
     assert "install_invoke_capture" in calls_by_function["_patch_step_snapshot_capture"]
     assert any("snapshot_recorder_for_leg" in names for names in calls_by_function.values())
+
+
+# ---------------------------------------------- Review 2 MF2 and MF4
+
+
+def test_credential_members_are_stripped_by_the_repository_scrubber_before_hashing():
+    """MF2, runtime side: a top-level and a nested ``api_key`` (and a ``token``
+    in a list) are absent from ``inputs_json``; the sha256 and the attestation
+    are over the canonical bytes of the STRIPPED object."""
+    captured = snap.capture_node_inputs(
+        NODE,
+        {
+            "prompt": "a cat",
+            "api_key": "sk-top",
+            "settings": {"api_key": "sk-nested", "size": "1024"},
+            "tools": [{"token": "t-1", "name": "draw"}],
+        },
+        run_id=RUN,
+        flow_sha256=FLOW,
+        key=KEY,
+    )
+    assert captured is not None
+    assert "sk-top" not in captured["inputs_json"] and "sk-nested" not in captured["inputs_json"]
+    assert "api_key" not in captured["inputs_json"] and "t-1" not in captured["inputs_json"]
+    stripped = {"prompt": "a cat", "settings": {"size": "1024"}, "tools": [{"name": "draw"}]}
+    raw = snap.canonical_json_bytes(stripped)
+    assert captured["inputs_json"] == raw.decode("utf-8")
+    assert captured["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert captured["attestation"] == snap.snapshot_attestation(KEY, RUN, NODE, captured["sha256"], FLOW)
+
+
+def test_the_strip_is_the_repository_scrubber_not_a_second_list():
+    from cinatra_executors import input_message
+
+    assert snap._scrub_credentials is input_message._scrub_credentials
+
+
+def test_a_credential_member_inside_a_tuple_is_stripped_too():
+    captured = snap.capture_node_inputs(
+        NODE, {"pairs": ({"api_key": "sk-tuple", "v": 1},)}, run_id=RUN, flow_sha256=FLOW, key=KEY
+    )
+    assert captured is not None and json.loads(captured["inputs_json"]) == {"pairs": [{"v": 1}]}
+
+
+class _Agent:
+    """An Agent-wrapped root: no ``steps`` of its own, the flow under ``flow``."""
+
+    def __init__(self, flow):
+        self.flow = flow
+
+
+class _ListFlow:
+    def __init__(self, *steps):
+        self.steps = list(steps)
+
+
+def test_an_agent_wrapped_root_flow_gets_its_snapshots():
+    """MF4: the recorder resolves the root steps as agent_loader.py:1541-1549
+    does (``component.steps``, else ``component.flow.steps``)."""
+    listed = {snap.SNAPSHOT_NODES_METADATA_KEY: ["file_image"], snap.SNAPSHOT_RUN_METADATA_KEY: RUN}
+    inner = _Flow(PRODUCE, FILE_IMAGE)
+    conversation = _Conv()
+    conversation.component = _Agent(inner)
+    rec = snap.snapshot_recorder_for_leg({"metadata": listed}, flow_sha256=FLOW, key=KEY, conversation=conversation)
+    assert rec is not None
+    rec.observe(FILE_IMAGE, {"prompt": "root"}, conversation)
+    (only,) = rec.snapshots()
+    assert only["node"] == "file_image" and json.loads(only["inputs_json"]) == {"prompt": "root"}
+
+
+def test_an_agent_wrapped_root_flow_running_in_its_own_conversation_is_recorded():
+    """The wrapped flow may run in a conversation of its own whose component is
+    that very flow: its own steps are recorded there; a nested flow's
+    conversation (another component) is not."""
+    listed = {snap.SNAPSHOT_NODES_METADATA_KEY: ["file_image", "produce"], snap.SNAPSHOT_RUN_METADATA_KEY: RUN}
+    inner = _ListFlow(PRODUCE, FILE_IMAGE)
+    agent_conversation = _Conv()
+    agent_conversation.component = _Agent(inner)
+    flow_conversation = _Conv()
+    flow_conversation.component = inner
+    nested_conversation = _Conv()
+    nested_conversation.component = _Flow(_Step("other"))
+    rec = snap.snapshot_recorder_for_leg(
+        {"metadata": listed}, flow_sha256=FLOW, key=KEY, conversation=agent_conversation
+    )
+    assert rec is not None
+    rec.observe(PRODUCE, {"topic": "cats"}, nested_conversation)
+    assert rec.snapshots() == []
+    rec.observe(PRODUCE, {"topic": "cats"}, flow_conversation)
+    assert [s["node"] for s in rec.snapshots()] == ["produce"]

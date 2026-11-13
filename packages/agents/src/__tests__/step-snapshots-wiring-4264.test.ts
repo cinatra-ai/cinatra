@@ -86,7 +86,7 @@ vi.mock("@cinatra-ai/a2a", () => ({
   getOrAddWayflowRendererGateIndex: vi.fn(async () => 0),
 }));
 
-import { handleWayflowTaskState } from "../execution";
+import { formatWayflowInterruptLog, handleWayflowTaskState } from "../execution";
 import { mintResumeRunTokenMetadata } from "../wayflow-run-token-carrier";
 import { CINATRA_RUN_TOKEN_MESSAGE_KEY } from "@/lib/agent-run-token";
 import { CINATRA_SNAPSHOT_NODES_METADATA_KEY, CINATRA_SNAPSHOT_RUN_METADATA_KEY } from "../step-snapshots";
@@ -165,5 +165,58 @@ describe("T6: every resume carries the node list through mintResumeRunTokenMetad
     expect(source).toMatch(
       /\.\.\.\(Object\.keys\(snapshotMetadata\)\.length > 0 \? \{ metadata: snapshotMetadata \} : \{\}\)/,
     );
+  });
+});
+
+describe("Review 2 MF3: the input-required leg's log line carries no snapshot claim", () => {
+  it("logs history_last without the claims or their inputs", () => {
+    const task = {
+      id: "task-1",
+      metadata: { pendingApproval: { gate: "review" } },
+      history: [
+        { role: "user", parts: [{ kind: "text", text: "go" }] },
+        {
+          role: "agent",
+          parts: [{ kind: "text", text: "drafted" }],
+          metadata: {
+            keep: 1,
+            cinatra_step_snapshots: [
+              { node: "produce", inputs_json: '{"prompt":"PRIVATE-PROMPT-4264"}', sha256: "0".repeat(64), flow_sha256: "f".repeat(64), attestation: "n1:x" },
+            ],
+          },
+        },
+      ],
+    };
+    const line = formatWayflowInterruptLog("R1", task as never, { gate: "review" });
+    expect(line).toContain("[wayflow-interrupt] run=R1 task=task-1");
+    expect(line).toContain("history_last=");
+    expect(line).toContain("drafted");
+    expect(line).not.toContain("PRIVATE-PROMPT-4264");
+    expect(line).not.toContain("cinatra_step_snapshots");
+  });
+
+  it("drops a claims-only carrier message from history_last", () => {
+    const task = {
+      id: "task-2",
+      metadata: {},
+      history: [
+        { role: "agent", parts: [{ kind: "text", text: "earlier" }] },
+        {
+          role: "agent",
+          messageId: "cinatra-step-snapshots-task-2",
+          parts: [],
+          metadata: { cinatra_step_snapshots: [{ node: "produce", inputs_json: '{"p":"PRIVATE-CARRIER-4264"}' }] },
+        },
+      ],
+    };
+    const line = formatWayflowInterruptLog("R1", task as never, {});
+    expect(line).not.toContain("PRIVATE-CARRIER-4264");
+    expect(line).toContain("earlier");
+  });
+
+  it("the input-required branch logs through that function", () => {
+    const source = readFileSync(path.resolve(__dirname, "../execution.ts"), "utf8");
+    expect(source).toMatch(/console\.log\(formatWayflowInterruptLog\(runId, task, interruptPayload\)\)/);
+    expect(source).not.toMatch(/history_last=\$\{\(JSON\.stringify\(\(task as \{ history\?: unknown\[\] \}\)\.history\?\.slice\(-1\)\)/);
   });
 });
