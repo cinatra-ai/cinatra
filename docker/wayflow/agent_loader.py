@@ -89,6 +89,10 @@ from context_subflow_injection import (
 # to this file in the image; see step_snapshot.py for the contract).
 import step_snapshot as _step_snapshot
 
+# cinatra#4264 B1b — the Regenerate segment run (pure module next to this file
+# in the image; see regenerate_segment.py for the contract).
+import regenerate_segment as _regenerate_segment
+
 try:  # pragma: no cover — exercised inside the Docker image only
     from wayflowcore.agentserver import A2AServer  # type: ignore[import-not-found]
     from wayflowcore.agentspec import AgentSpecLoader  # type: ignore[import-not-found]
@@ -1263,9 +1267,24 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
                     f"slots={_ctx_inj.get('slots')}"
                 )
 
+            # cinatra#4264 B1b: a Regenerate segment run executes only the
+            # declared step and its filing node, of the flow version that
+            # produced the reviewed revision. Everything that can refuse it
+            # (the flow version first, then the snapshot bytes, the derivation
+            # and the inputs) runs HERE, before any conversation or step; a
+            # refusal raises into the outer handler, which fails the task.
+            _segment_request = _regenerate_segment.read_segment_request(
+                params.get("message")
+            )
+            _segment_run_id = None
+
             prioritize_task = params.get("metadata", {}).get("prioritize_task", False)
             tools_dict = self.assistant._referenced_tools_dict()
-            if prioritize_task:
+            if _segment_request is not None:
+                conversation, _segment_run_id = _start_segment_conversation(
+                    self.assistant, params.get("message"), _segment_request
+                )
+            elif prioritize_task:
                 conversation = await self.storage.load_task_conversation(
                     task_id=task["id"],
                     tools_dict=tools_dict,
@@ -1276,8 +1295,9 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
                     tools_dict=tools_dict,
                 )
 
-            needs_new_conv = conversation is None or not isinstance(
-                conversation.status, UserMessageRequestStatus
+            needs_new_conv = _segment_request is None and (
+                conversation is None
+                or not isinstance(conversation.status, UserMessageRequestStatus)
             )
 
             if needs_new_conv:
@@ -1444,6 +1464,19 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
                 else:
                     task_state = "completed"
 
+                # cinatra#4264 B1b: a finished segment carries its signed
+                # receipt; the application refiles the write only with it.
+                if _segment_request is not None and isinstance(status, FinishedStatus):
+                    _regenerate_segment.attach_segment_receipt(
+                        new_a2a_messages,
+                        _regenerate_segment.segment_receipt(
+                            os.environ.get("CINATRA_CONTEXT_ATTEST_KEY"),
+                            _segment_run_id,
+                            _segment_request,
+                        ),
+                        str(task["id"]),
+                    )
+
                 # cinatra#4264: the leg's step snapshots ride its last message.
                 if _snap_recorder is not None:
                     _step_snapshot.attach_step_snapshots(
@@ -1522,6 +1555,58 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
 
 
 # ---------------------------------------------------------------------------
+
+
+def _start_segment_conversation(
+    assistant: Any, message: Any, request: Dict[str, Any]
+) -> Tuple[Any, Optional[str]]:
+    """cinatra#4264 B1b: the conversation of a Regenerate segment run, and the
+    run id its receipt is signed for.
+
+    In order, before any step: the mounted flow version against the request
+    (``REGENERATE_FLOW_CHANGED``), each snapshot's sha256 over its bytes, the
+    segment derived from the mounted pre-substitution document (cached per
+    flow version and entry), the segment's start inputs. The segment document
+    is loaded by the same loader and placeholder substitution as the mount,
+    and cached on the mounted agent per (flowSha256, step, artifactNode,
+    noteInput). Every refusal raises RegenerateSegmentError.
+    """
+    message_inputs = _extract_start_inputs(message) or {}
+    derivation, inputs = _regenerate_segment.prepare_segment_run(
+        request,
+        mounted_flow_sha256=getattr(assistant, "_cinatra_flow_sha256", "") or "",
+        working_doc=getattr(assistant, "_cinatra_working_doc", None),
+        message_inputs=message_inputs,
+    )
+    key = (
+        request["flowSha256"],
+        request["step"],
+        request["artifactNode"],
+        request["noteInput"],
+    )
+    cache = getattr(assistant, "_cinatra_segment_flows", None)
+    if not isinstance(cache, dict):
+        cache = {}
+        try:
+            setattr(assistant, "_cinatra_segment_flows", cache)
+        except Exception:
+            pass
+    flow = cache.get(key)
+    if flow is None:
+        loader = getattr(assistant, "_cinatra_spec_loader", None)
+        if loader is None:
+            raise _regenerate_segment.RegenerateSegmentError(
+                _regenerate_segment.REGENERATE_SEGMENT_INVALID,
+                "the mounted agent has no loader for its segment",
+            )
+        flow = loader.load_json(_substitute_placeholders(json.dumps(derivation["doc"])))
+        cache[key] = flow
+    print(
+        f"[agent_loader] regenerate segment step={request['step']} "
+        f"artifactNode={request['artifactNode']} flow={request['flowSha256'][:12]}"
+    )
+    run_id = inputs.get("cinatra_run_id") or message_inputs.get("cinatra_run_id")
+    return flow.start_conversation(inputs=inputs), run_id if isinstance(run_id, str) else None
 
 
 def _is_apinode_only_flow(agent: Any) -> bool:
@@ -4529,6 +4614,19 @@ def _mount_one_sync(
     except Exception:
         print(f"[agent_loader] WARNING: {label}: flow sha not attached; step snapshots unavailable")
 
+    # cinatra#4264 B1b: a Regenerate segment is derived from the document this
+    # mount executes (pre-substitution, after every pass above) and loaded by
+    # the same loader. Without them a segment run is refused, never guessed.
+    try:
+        setattr(
+            agent,
+            "_cinatra_working_doc",
+            composed_oas if composed_oas is not None else parsed_doc,
+        )
+        setattr(agent, "_cinatra_spec_loader", loader)
+    except Exception:
+        print(f"[agent_loader] WARNING: {label}: segment source not attached; Regenerate segments unavailable")
+
     server = A2AServer()
     mount_url = f"{base_url}/agents/{vendor}/{slug}/"
     server.serve_agent(agent, url=mount_url)
@@ -4962,6 +5060,10 @@ class MountedAgentRegistry:
             "failed": len(failed),
             "failed_agents": failed,
             "last_reload_at": self._last_reload_at,
+            # cinatra#4264 B1b: what this runtime can run beyond a whole flow;
+            # the application dispatches a Regenerate segment only when it
+            # reads `regenerate_segment/1` here.
+            "capabilities": list(_regenerate_segment.RUNTIME_CAPABILITIES),
         }
 
     def find(self, label: str) -> Optional[MountedAgent]:

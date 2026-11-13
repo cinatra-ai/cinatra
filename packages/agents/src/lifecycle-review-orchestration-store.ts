@@ -713,6 +713,17 @@ function claimForMember(
   ) {
     return "successor-gated";
   }
+  // cinatra#4264 B1b: a Regenerate segment run's own write was re-filed onto
+  // the reviewed artifact as the successor. Its produced event is the SAME
+  // work under the successor gate, never a second review: settle it.
+  if (
+    repair.status === "repaired" &&
+    typeof repair.sourceArtifactId === "string" &&
+    repair.sourceArtifactId === row.artifactId &&
+    repair.sourceRepresentationRevisionId === row.representationRevisionId
+  ) {
+    return "successor-gated";
+  }
   return "not-claimed";
 }
 

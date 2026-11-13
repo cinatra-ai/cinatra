@@ -541,6 +541,16 @@ import {
   stripStepSnapshotClaims,
 } from "./step-snapshots";
 import {
+  fenceRegenerateRuntime,
+  isRegenerateSegmentRun,
+  persistSegmentReceipt,
+  regenerateSegmentMetadata,
+  resolveRegenerateSegment,
+  stripSegmentReceipts,
+  REGENERATE_RUNTIME_UNSUPPORTED,
+  type RegenerateSegmentPlan,
+} from "./regenerate-segment";
+import {
   inventoryReviewTargets,
   nextUnresolvedLeg,
   normalizeReviewTargets,
@@ -2230,6 +2240,14 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     orgId: run.orgId,
     history: (task as { history?: ReadonlyArray<{ role?: unknown; metadata?: unknown }> }).history,
   });
+  // cinatra#4264 B1b — a Regenerate segment's signed receipt, verified against
+  // the same runId and stored before the resync; the completer refiles the
+  // segment's write only with it. Never throws.
+  await persistSegmentReceipt({
+    runId,
+    orgId: run.orgId,
+    history: (task as { history?: ReadonlyArray<{ role?: unknown; metadata?: unknown }> }).history,
+  });
 
   // Defensive resync (idempotent if unchanged): persist task.id / contextId
   // so the next resume's reverse-lookup by a2aTaskId still finds the run if
@@ -3085,8 +3103,10 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   // The pause claims (cinatra#3745) are recorded at their interrupts; the
   // stored history keeps its messages and drops only the claims.
   // cinatra#4264: the step snapshots live in agent_run_step_snapshots only.
-  const history = stripStepSnapshotClaims(
-    stripCinatraGateNodeClaims(stripCinatraEndNodeOutputMessages(rawHistory)),
+  const history = stripSegmentReceipts(
+    stripStepSnapshotClaims(
+      stripCinatraGateNodeClaims(stripCinatraEndNodeOutputMessages(rawHistory)),
+    ),
   );
   // A2A spec: role is "user" | "agent". Cinatra also emits "assistant". Accept BOTH.
   const lastAgentMessage = history?.slice().reverse().find((m) => m?.role === "agent" || m?.role === "assistant");
@@ -3145,39 +3165,47 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   // Dynamic import keeps the host artifact stack out of this module's static
   // graph (same posture as the nango-system import below).
   let artifactMaterializations: Array<Record<string, unknown>> = [];
-  try {
-    const { materializeRunArtifacts } = await import(
-      "@/lib/artifacts/run-artifact-materializer"
-    );
-    artifactMaterializations = (await materializeRunArtifacts({
-      runId,
-      orgId: run.orgId,
-      templateId: run.templateId,
-      packageVersion: run.packageVersion,
-      createdBy: run.runBy,
-      endNodeOutputs,
-    })) as unknown as Array<Record<string, unknown>>;
-    for (const outcome of artifactMaterializations) {
-      if (outcome.ok !== true) {
-        console.warn(
-          `[artifact-materializer] run=${runId} output=${String(outcome.outputId)} extension=${String(outcome.extension ?? "?")} failed: ${String(outcome.error)}`,
-        );
+  // cinatra#4264 B1b — a Regenerate segment run executes only the step and its
+  // filing node: its end exposes the filing node's outputs, not the template's
+  // end-node bindings, and its one write is claimed by the repair completer.
+  // The end-node binding materialization does not run for it.
+  if (await isRegenerateSegmentRun({ id: runId, sourceType: run.sourceType })) {
+    console.log(`[artifact-materializer] run=${runId} is a Regenerate segment; end-node bindings not materialized`);
+  } else {
+    try {
+      const { materializeRunArtifacts } = await import(
+        "@/lib/artifacts/run-artifact-materializer"
+      );
+      artifactMaterializations = (await materializeRunArtifacts({
+        runId,
+        orgId: run.orgId,
+        templateId: run.templateId,
+        packageVersion: run.packageVersion,
+        createdBy: run.runBy,
+        endNodeOutputs,
+      })) as unknown as Array<Record<string, unknown>>;
+      for (const outcome of artifactMaterializations) {
+        if (outcome.ok !== true) {
+          console.warn(
+            `[artifact-materializer] run=${runId} output=${String(outcome.outputId)} extension=${String(outcome.extension ?? "?")} failed: ${String(outcome.error)}`,
+          );
+        }
       }
+    } catch (err) {
+      console.warn(
+        `[artifact-materializer] run=${runId} materialization pass threw (recorded in stepResults; the run fails honestly):`,
+        err instanceof Error ? err.message : err,
+      );
+      artifactMaterializations = [
+        {
+          ok: false,
+          outputId: "(materializer)",
+          nodeId: null,
+          extension: null,
+          error: `materialization pass failed: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      ];
     }
-  } catch (err) {
-    console.warn(
-      `[artifact-materializer] run=${runId} materialization pass threw (recorded in stepResults; the run fails honestly):`,
-      err instanceof Error ? err.message : err,
-    );
-    artifactMaterializations = [
-      {
-        ok: false,
-        outputId: "(materializer)",
-        nodeId: null,
-        extension: null,
-        error: `materialization pass failed: ${err instanceof Error ? err.message : String(err)}`,
-      },
-    ];
   }
 
   // cinatra#2486 — materialization-honesty gate.
@@ -3917,7 +3945,25 @@ async function runAgentBuilderExecutionJobInner(
   // scope recheck, so nothing is written for a refused or unverified run, and
   // before the headless recommendation, the version pinning, the input gates
   // and every dispatch branch read the inputs.
+  // cinatra#4264 B1b — a Regenerate segment run (a lifecycle repair whose
+  // repair names `regenerate_node_id`, re-derived from the recorded
+  // provenance and snapshots, never from the run's inputs) is resolved here,
+  // before anything reads the inputs. A disagreement fails the run before
+  // dispatch with a plain reason. A segment run skips the findings binding:
+  // its inputs are the note and the typed request only.
+  const segmentResolution = await resolveRegenerateSegment({
+    run: { id: runId, orgId: run.orgId, sourceType: run.sourceType, templateId: run.templateId },
+    lifecycleConfig: template.lifecycleConfig ?? null,
+  });
+  if (segmentResolution.kind === "refused") {
+    console.error(`[agent-builder] run ${runId} rejected before dispatch: ${segmentResolution.reason}`);
+    await transitionRunStatus(runId, "queued", "failed", { error: segmentResolution.reason }, executionAuthority);
+    return;
+  }
+  const segmentPlan: RegenerateSegmentPlan | null =
+    segmentResolution.kind === "segment" ? segmentResolution.plan : null;
   if (
+    !segmentPlan &&
     !(await bindRepairFindingsInputAtStart(runId, run, template.lifecycleConfig ?? null, executionAuthority))
   ) {
     return;
@@ -4144,25 +4190,29 @@ async function runAgentBuilderExecutionJobInner(
   // silent-failure shape the artifact-materialization honesty fix removed, just
   // relocated. Mirrors the pre-dispatch failure handling directly above.
   try {
-    assertValuesMatchDeclaredObjectTypes(
-      properties,
-      (run.inputParams ?? {}) as Record<string, unknown>,
-      "Run cannot start",
-    );
-    // cinatra#3003 — SATISFIABILITY gate, the sibling of the declared-type gate
-    // above. That one asks "is what we already hold the right shape?"; this one
-    // asks "can the inputs we do NOT hold ever arrive?". A hidden input with no
-    // `default`, absent from the required list and written by no product path,
-    // can not: the setup loop below filters hidden fields out of `pendingFields`,
-    // so the run falls straight through to dispatch and the runtime refuses it
-    // seconds after the tick, naming a field nobody was ever shown. Fail here
-    // instead, naming the agent and the input.
-    await assertUnsatisfiableHiddenInputs({
-      properties,
-      alreadySupplied: (run.inputParams ?? {}) as Record<string, unknown>,
-      packageName: template.packageName ?? "<unknown agent>",
-      packageVersion: template.packageVersion,
-    });
+    // cinatra#4264 B1b: a segment run starts the segment, not the template's
+    // start node: its inputs are the note and the typed request only.
+    if (!segmentPlan) {
+      assertValuesMatchDeclaredObjectTypes(
+        properties,
+        (run.inputParams ?? {}) as Record<string, unknown>,
+        "Run cannot start",
+      );
+      // cinatra#3003 — SATISFIABILITY gate, the sibling of the declared-type gate
+      // above. That one asks "is what we already hold the right shape?"; this one
+      // asks "can the inputs we do NOT hold ever arrive?". A hidden input with no
+      // `default`, absent from the required list and written by no product path,
+      // can not: the setup loop below filters hidden fields out of `pendingFields`,
+      // so the run falls straight through to dispatch and the runtime refuses it
+      // seconds after the tick, naming a field nobody was ever shown. Fail here
+      // instead, naming the agent and the input.
+      await assertUnsatisfiableHiddenInputs({
+        properties,
+        alreadySupplied: (run.inputParams ?? {}) as Record<string, unknown>,
+        packageName: template.packageName ?? "<unknown agent>",
+        packageVersion: template.packageVersion,
+      });
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[agent-builder] run ${runId} rejected before dispatch: ${message}`);
@@ -4189,7 +4239,7 @@ async function runAgentBuilderExecutionJobInner(
   // fields. (GROUPED_SETUP_FORM_RENDERER_ID is imported from ./agent-builder-ids
   // — the single id authority — rather than re-declared locally.)
 
-  const pendingFields = requiredFields.filter((fieldName) => {
+  const pendingFields = segmentPlan ? [] : requiredFields.filter((fieldName) => {
     const fieldSchema = properties[fieldName] ?? {};
     if ((fieldSchema as { "x-hidden"?: boolean })["x-hidden"]) return false;
     if (
@@ -4636,6 +4686,13 @@ async function runAgentBuilderExecutionJobInner(
   // active until the stream ends and the DB status is set to completed/failed.
   // AG-UI / A2UI events flow through startExternalSseProxyFromStream → Redis.
   // ---------------------------------------------------------------------------
+  // cinatra#4264 B1b: a Regenerate segment runs only on the flow runtime.
+  if (segmentPlan && template.sourceType === "external") {
+    const error = "Regenerate refused: this agent does not run on the flow runtime";
+    console.error(`[agent-builder] run ${runId} rejected before dispatch: ${error}`);
+    await transitionRunStatus(runId, "queued", "failed", { error }, executionAuthority);
+    return;
+  }
   if (template.sourceType === "external") {
     if (!template.agentUrl) {
       await transitionRunStatus(runId, "queued", "failed", {
@@ -4869,6 +4926,16 @@ async function runAgentBuilderExecutionJobInner(
       }
     }
 
+    // cinatra#4264 B1b — THE FENCE. A Regenerate segment is sent only to a
+    // runtime whose /.health lists `regenerate_segment/1`; an older runtime
+    // would run the WHOLE flow. Otherwise the run fails here, nothing sent.
+    if (segmentPlan && !(await fenceRegenerateRuntime())) {
+      const error = `${REGENERATE_RUNTIME_UNSUPPORTED}: the flow runtime cannot run one step of a flow`;
+      console.error(`[wayflow] run ${runId} rejected before dispatch: ${error}`);
+      await transitionRunStatus(runId, "queued", "failed", { error }, executionAuthority);
+      return;
+    }
+
     try {
       await transitionRunStatus(runId, "queued", "running", {
         dispatch: { attemptId: randomUUID() },
@@ -4990,11 +5057,15 @@ async function runAgentBuilderExecutionJobInner(
       // cinatra#4264: the nodes whose inputs the runtime records, from the
       // template's stored `regenerate` declaration. No declaration, or a repair
       // run: {} and the message carries no metadata, exactly as before.
-      const snapshotMetadata = snapshotNodesMetadata({
-        runId: run.id,
-        sourceType: run.sourceType,
-        lifecycleConfig: template.lifecycleConfig ?? null,
-      });
+      // cinatra#4264 B1b: a segment run carries the segment instead (a repair
+      // run never records snapshots, so the two never meet).
+      const snapshotMetadata = segmentPlan
+        ? regenerateSegmentMetadata(segmentPlan)
+        : snapshotNodesMetadata({
+            runId: run.id,
+            sourceType: run.sourceType,
+            lifecycleConfig: template.lifecycleConfig ?? null,
+          });
       // #813: bind a fasta2a contextId to the run BEFORE the blocking sendTask.
       // WayFlow's flow calls back POST /api/context-resolve DURING sendTask with
       // this contextId (x-cinatra-a2a-context-id); readAgentRunByContextId must

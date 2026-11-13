@@ -96,10 +96,12 @@ import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
 
 import type { ChangesRequestedRequest, RepairFinding } from "@/lib/lifecycle/lifecycle-repair";
 import {
+  buildRepairFindingsText,
   parseLifecycleConfigText,
   projectRepairFindingsInput,
   type CompiledManifestLifecycle,
 } from "@/lib/lifecycle/lifecycle-policy";
+import { planSegmentDispatch } from "./regenerate-segment";
 // cinatra#1940 P3 (Decision 2): the creation perimeter is now guarded — this
 // repair-delivery drain has no session, so it mints the SYSTEM
 // `agent-run-dispatch` authority (a caller the design's caller matrix did not
@@ -328,6 +330,41 @@ export async function dispatchPendingProducerRepairs(opts?: {
       const findingsInputParams: Record<string, unknown> =
         projectRepairFindingsInput(producer.lifecycle, request.findings) ?? {};
 
+      // cinatra#4264 B1b — a REGENERATE (the repair names `regenerate_node_id`)
+      // reruns one step and its filing node of the run that filed the reviewed
+      // revision. Its run's parent is THAT run (the provenance run, which the
+      // context inheritance reads), and its inputs are the note, under the
+      // step's declared note input, and the typed request only: the other
+      // inputs come from that run's step snapshots at the run start. A
+      // provenance that cannot be proven, or another filing step, escalates the
+      // repair; nothing is dispatched. NULL intent: the ordinary repair below,
+      // unchanged.
+      let segmentParentRunId: string | null = null;
+      let segmentInputParams: Record<string, unknown> | null = null;
+      if (row.regenerateNodeId) {
+        const segment = await planSegmentDispatch({
+          repair: {
+            id: row.id,
+            orgId: row.orgId,
+            regenerateNodeId: row.regenerateNodeId,
+            baseArtifactId: row.baseArtifactId,
+            baseRepresentationRevisionId: row.baseRepresentationRevisionId,
+          },
+          templateId: producer.templateId,
+          lifecycleConfig: producer.lifecycleConfigText,
+          note: buildRepairFindingsText(request.findings),
+          request: request as unknown as Record<string, unknown>,
+        });
+        if (segment.kind === "refused") {
+          const escalated = await escalateRepair(row.id, segment.reason);
+          if (escalated) summary.escalated += 1;
+          else summary.raced += 1;
+          continue;
+        }
+        segmentParentRunId = segment.parentRunId;
+        segmentInputParams = segment.inputParams;
+      }
+
       const [already] = await db
         .select({ id: agentRuns.id })
         .from(agentRuns)
@@ -358,7 +395,7 @@ export async function dispatchPendingProducerRepairs(opts?: {
               id: runId,
               templateId: producer.templateId,
               orgId: row.orgId,
-              inputParams: {
+              inputParams: segmentInputParams ?? {
                 ...producer.originatingInputParams,
                 ...findingsInputParams,
                 lifecycleRepairRequest: request,
@@ -371,7 +408,8 @@ export async function dispatchPendingProducerRepairs(opts?: {
               // CHILD DISPATCH (#1035): the repair run runs under the producing
               // run. Its own ceiling is server-derived inside the primitive; the
               // parent's PERSISTED chain is the compose operand only, never copied.
-              parentRunId: row.producerRunId ?? null,
+              // cinatra#4264 B1b: a Regenerate's parent is the provenance run.
+              parentRunId: segmentParentRunId ?? row.producerRunId ?? null,
               parentOboCeiling: producer.parentOboCeiling,
               // A re-drain re-derives the same key, so an at-least-once delivery
               // converges on the SAME repair run.
@@ -446,6 +484,8 @@ async function resolveProducingTemplate(producerRunId: string | null, orgId: str
   /** The producing template's compiled lifecycle declaration
    * (`agent_templates.lifecycle_config`), read fail-soft; null when absent. */
   lifecycle: CompiledManifestLifecycle | null;
+  /** The same column as stored (cinatra#4264 B1b reads its `regenerate` list). */
+  lifecycleConfigText: string | null;
 } | null> {
   if (!producerRunId) return null;
   const [run] = await db
@@ -495,6 +535,7 @@ async function resolveProducingTemplate(producerRunId: string | null, orgId: str
     originatingRunBy: run.runBy ?? null,
     originatingInputParams,
     lifecycle: parseLifecycleConfigText(tmpl.lifecycleConfig ?? null),
+    lifecycleConfigText: tmpl.lifecycleConfig ?? null,
   };
 }
 

@@ -274,6 +274,41 @@ The verdict judges only what it can see: a finding whose path is absent from bot
 projections is not asserted unapplied. Exposing the finding's field through the
 projector is what makes such a finding verifiable.
 
+### Regenerate: one step again, under one gate
+
+A producer that declares `regenerate` entries
+(`[{ "artifactNode": "...", "step": "...", "noteInput": "..." }]`, unique by
+`artifactNode`) lets a reviewer run ONE producing step and its filing node again,
+instead of the whole flow. The run that filed a revision records the full inputs
+of each declared node (the step snapshots). A repair whose row names
+`regenerate_node_id` is then a segment run:
+
+- **Resolution.** The run start (`resolveRegenerateSegment`,
+  `packages/agents/src/regenerate-segment.ts`) re-derives the segment from the
+  repair row, the verified filing node of the reviewed revision and the stored
+  snapshots of the run that filed it. Another filing node, no declaration, a
+  missing or ambiguous snapshot, or two flow versions fail the run before
+  dispatch with a plain reason. A repair without `regenerate_node_id` runs as an
+  ordinary repair; no input of the run makes it a segment run.
+- **Inputs.** The run's inputs are the note, under the entry's `noteInput`, and
+  the typed `lifecycleRepairRequest` only. Every other input of the two nodes is
+  the value the producing run recorded. So a picture regenerated after a text
+  change reruns on the ORIGINAL post text of the producing run.
+- **Context.** The run's parent is the run that filed the reviewed revision. A
+  context slot inherits that run's recorded answer; a slot whose answer cannot
+  be proven fails the run (no selection screen) and the repair stays open.
+- **Runtime fence.** The run is sent only to a flow runtime whose `/.health`
+  lists `regenerate_segment/1`; otherwise it fails
+  `REGENERATE_RUNTIME_UNSUPPORTED` and nothing is sent. The runtime refuses a
+  mounted flow whose version differs from the recorded one
+  (`REGENERATE_FLOW_CHANGED`) before any step runs.
+- **One write, one gate.** The runtime signs a receipt for the run, verified and
+  stored before the run's task state is synced. The completer refiles the run's
+  write onto the reviewed artifact only when the run has exactly one write, by
+  the named filing node, with a valid receipt; otherwise the repair stays open.
+  The segment's own write is recorded on the repair in the same update as the
+  successor and settles under the successor gate: it is never reviewed twice.
+
 ## 5. What a producer must not do
 
 - **No bespoke gates.** A producer does not implement its own review,

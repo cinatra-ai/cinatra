@@ -57,10 +57,15 @@ import { and, asc, desc, eq, ne, notInArray, sql } from "drizzle-orm";
 import { jsonb, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 
 import { db } from "./db";
-import { agentRuns, artifactProducedOutbox, lifecycleRepair } from "./schema";
+import { agentRunStepSnapshots, agentRuns, artifactProducedOutbox, lifecycleRepair } from "./schema";
 import { TERMINAL_RUN_STATUSES, type AgentRunStatus } from "./run-status";
 import { readRepair, submitRepairResponse } from "./lifecycle-repair-store";
 import { repairRunId, readDeliveredRepairRequest } from "./lifecycle-repair-dispatch-store";
+import {
+  claimSegmentProduction,
+  SEGMENT_RECEIPT_NODE_ID,
+  type SegmentClaimDeps,
+} from "./regenerate-segment";
 
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
 import {
@@ -102,6 +107,75 @@ const objectsLivenessRef = appSchema.table("objects", {
   data: jsonb("data"),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
 });
+
+/** A minimal read-only projection of the materialization ledger: which step
+ * the runtime verified for a write (cinatra#4264). Nothing here writes it. */
+const materializationLedgerRef = appSchema.table("artifact_materializations", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id"),
+  runId: text("run_id"),
+  artifactId: text("artifact_id"),
+  representationRevisionId: text("representation_revision_id"),
+  path: text("path"),
+  phase: text("phase"),
+  verifiedStepId: text("verified_step_id"),
+});
+
+/** The reads a Regenerate segment run's claim needs (cinatra#4264 B1b). */
+const segmentClaimDeps: SegmentClaimDeps = {
+  listProductions: (orgId, runId) =>
+    db
+      .select({
+        artifactId: artifactProducedOutbox.artifactId,
+        representationRevisionId: artifactProducedOutbox.representationRevisionId,
+      })
+      .from(artifactProducedOutbox)
+      .where(
+        and(
+          eq(artifactProducedOutbox.orgId, orgId),
+          eq(artifactProducedOutbox.producerRunId, runId),
+          ne(artifactProducedOutbox.emitter, CMS_SNAPSHOT_EMITTER),
+        ),
+      )
+      .limit(2),
+  readVerifiedSteps: async ({ orgId, runId, artifactId, representationRevisionId }) => {
+    const rows = await db
+      .select({ verifiedStepId: materializationLedgerRef.verifiedStepId })
+      .from(materializationLedgerRef)
+      .where(
+        and(
+          eq(materializationLedgerRef.orgId, orgId),
+          eq(materializationLedgerRef.runId, runId),
+          eq(materializationLedgerRef.artifactId, artifactId),
+          eq(materializationLedgerRef.representationRevisionId, representationRevisionId),
+          eq(materializationLedgerRef.path, "materialize_tool"),
+          eq(materializationLedgerRef.phase, "finalized"),
+        ),
+      )
+      .limit(2);
+    return rows.map((row) => row.verifiedStepId ?? null);
+  },
+  readReceiptRow: async (orgId, runId) => {
+    const [row] = await db
+      .select({
+        nodeId: agentRunStepSnapshots.nodeId,
+        inputsJson: agentRunStepSnapshots.inputsJson,
+        inputsSha256: agentRunStepSnapshots.inputsSha256,
+        flowSha256: agentRunStepSnapshots.flowSha256,
+        ambiguous: agentRunStepSnapshots.ambiguous,
+      })
+      .from(agentRunStepSnapshots)
+      .where(
+        and(
+          eq(agentRunStepSnapshots.orgId, orgId),
+          eq(agentRunStepSnapshots.runId, runId),
+          eq(agentRunStepSnapshots.nodeId, SEGMENT_RECEIPT_NODE_ID),
+        ),
+      )
+      .limit(1);
+    return row ?? null;
+  },
+};
 
 /**
  * WHERE THE LAST PASS STOPPED (cinatra#3862 leg 1, a review finding on the
@@ -355,7 +429,17 @@ export async function completeDispatchedProducerRepairs(opts?: {
         continue;
       }
 
-      const production = await claimProduction(repair.orgId, runId);
+      // cinatra#4264 B1b: a Regenerate segment run answers with its filing
+      // node's ONE write, proven by the ledger's verified step and the
+      // runtime's signed receipt; anything else leaves the repair open. An
+      // ordinary repair keeps the LATEST rule below.
+      const regenerateNodeId = repair.regenerateNodeId ?? null;
+      const production = regenerateNodeId
+        ? await claimSegmentProduction(
+            { orgId: repair.orgId, runId, regenerateNodeId },
+            segmentClaimDeps,
+          )
+        : await claimProduction(repair.orgId, runId);
       if (!production) {
         summary.unresolved += 1;
         continue;
@@ -484,6 +568,10 @@ export async function completeDispatchedProducerRepairs(opts?: {
         repairId: repair.id,
         currentBaseRevisionId,
         reauthorized: true,
+        // cinatra#4264 B1b: the segment run's own write, recorded in the same
+        // update as the successor, so its produced event settles under the
+        // successor gate (one gate). Ordinary repairs pass none.
+        ...(regenerateNodeId ? { sourceTarget: production } : {}),
         response: {
           gateId: repair.gateId,
           baseTarget: {
