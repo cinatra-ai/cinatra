@@ -864,15 +864,37 @@ export function serializeLifecycleConfig(
   if (lifecycle.repairFindingsInput) {
     ordered.repairFindingsInput = { input: lifecycle.repairFindingsInput.input };
   }
-  // cinatra#4264 A1a: `regenerate` is NOT written. A later recompile (MCP
-  // recompile, ensure drift) cannot yet revalidate a stored list against a new
-  // flow or clear it when the manifest drops it, so a stored list could outlive
-  // its declaration. A1b writes it together with that revalidation.
+  // cinatra#4264: the regenerate list, sorted by `artifactNode` in code-unit
+  // order, each entry's members in a fixed order. Every writer road either
+  // re-projects it from a readable manifest or, with none, revalidates the
+  // stored list against the new flow before it writes (A1b).
+  if (lifecycle.regenerate && lifecycle.regenerate.length > 0) {
+    ordered.regenerate = [...lifecycle.regenerate]
+      .sort((a, b) => (a.artifactNode < b.artifactNode ? -1 : a.artifactNode > b.artifactNode ? 1 : 0))
+      .map((e) => ({ artifactNode: e.artifactNode, step: e.step, noteInput: e.noteInput }));
+  }
   if (lifecycle.requestedSkips && lifecycle.requestedSkips.length > 0) {
     ordered.requestedSkips = [...lifecycle.requestedSkips];
   }
   if (Object.keys(ordered).length === 0) return null;
   return JSON.stringify(ordered);
+}
+
+/** The RAW `regenerate` value of a stored `lifecycle_config` text, or undefined
+ * when the text is absent, unparseable, not an object or carries no such key
+ * (cinatra#4264). Raw on purpose: a writer that keeps the stored column (no
+ * readable manifest) hands this value to the regenerate check against the new
+ * flow, so a stored list the normalizer would drop is refused there, never
+ * silently kept. */
+export function readStoredRegenerate(raw: string | null | undefined): unknown {
+  if (!raw) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+    return (parsed as Record<string, unknown>).regenerate;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Parse the persisted JSON-as-text back into the compiled declaration

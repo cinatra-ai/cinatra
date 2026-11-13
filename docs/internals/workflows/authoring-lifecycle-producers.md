@@ -87,7 +87,7 @@ JSON-as-text — the same compiled-config column shape `trigger_mode` /
 | `producedTypes` | array of strings | The artifact types the producer declares it creates. The lattice does not branch on it. |
 | `repairCapable` | boolean | Whether this producer implements the typed repair round-trip (§4). |
 | `repairFindingsInput` | object `{ "input": "<name>" }` | The input of this producer's template that a dispatched repair run gets the reviewer's findings in (§4). `input` is an identifier, and is never `lifecycleRepairRequest` or a property name of `Object.prototype`. |
-| `regenerate` | array of `{ "artifactNode", "step", "noteInput" }` | Per node that files a reviewed artifact, the producing step a Regenerate reruns and the step input the reviewer's note goes into (section 4). Declared only; no run reads it yet. |
+| `regenerate` | array of `{ "artifactNode", "step", "noteInput" }` | Per node that files a reviewed artifact, the producing step a Regenerate reruns and the step input the reviewer's note goes into (section 4). Stored; no run reads it yet. |
 
 **Reading is tolerant.** Neither reader throws on a malformed value: an absent,
 empty or non-object value yields no declarations, and the producer gets pure core
@@ -252,13 +252,28 @@ The list holds 1 to 16 entries, unique by `artifactNode`; `noteInput` follows th
   input.
 
 The step's other inputs may come from any node. Entries may share one `step`
-with different note inputs. A writer that keeps a stored declaration without a
-readable manifest can pass it to the compile (`retainedRegenerate`), which checks
-it against the new flow. For now the install and import roads check the
-declaration but do not store it on `lifecycle_config`: a stored list is written
-only once every recompile road revalidates or clears it.
-`readRegenerateEntry` (`src/lib/lifecycle/lifecycle-policy.ts`) returns the entry
-of one filing node. No run reads the declaration yet.
+with different note inputs.
+
+The list is stored on `lifecycle_config` after `repairFindingsInput`, sorted by
+`artifactNode`. Every road that writes the column applies one rule:
+
+- a readable manifest that declares a lifecycle block re-projects it (the
+  compile has already checked its list);
+- a readable manifest without a block clears the column;
+- with no readable manifest (none in the archive, an unparseable one, or the
+  git-file loader's synthesis without a sibling manifest) the column is kept,
+  but a stored list is first checked against the new flow, and the write is
+  refused when the flow no longer honours it.
+
+The registry install seed and the archive import (and the boot loaders that go
+through it) follow this rule, and so does the MCP recompile
+(`agent_source_compile`): it passes the stored list to the compile as
+`retainedRegenerate` and writes the column from the compile's own sibling read,
+before it writes the source file. The CLI install road runs no compile, so it
+refuses a package that declares `regenerate`; install such a package through the
+registry install road. `readRegenerateEntry`
+(`src/lib/lifecycle/lifecycle-policy.ts`) returns the entry of one filing node.
+No run reads the declaration yet.
 
 ### The round-trip a repair-capable producer must satisfy
 

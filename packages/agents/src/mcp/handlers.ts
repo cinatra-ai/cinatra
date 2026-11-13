@@ -143,6 +143,7 @@ import {
 } from "../scan-package-siblings";
 import { publishAgentPackage, publishAgentPackageFromGitDir } from "../verdaccio/client";
 import { installAgentFromPackage, syncCompiledTemplateToDb } from "../install-from-package";
+import { readStoredRegenerate } from "@/lib/lifecycle/lifecycle-policy";
 // WayFlow reload after a successful publish + DB sync.
 import { triggerWayflowReload, type ReloadResult } from "../wayflow-reload-client";
 import {
@@ -3922,7 +3923,25 @@ async function handleAgentBuilderGitCompileAndWrite(
     }
   }
 
-  const compileResult = await compileOasAgentJson({ packageName: agentPackageName });
+  // cinatra#4264 A1b: the stored `regenerate` list rides the compile as
+  // `retainedRegenerate`. With no readable sibling manifest the compile checks
+  // it against THIS flow and refuses before the source file below is written;
+  // a readable manifest decides on its own. A failed row read refuses too: a
+  // stored list that cannot be read cannot be checked.
+  let retainedRegenerate: unknown;
+  try {
+    const stored = await readAgentTemplateByPackageName(agentPackageName);
+    retainedRegenerate = readStoredRegenerate(stored?.lifecycleConfig);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { error: `agent.json could not be compiled: the stored lifecycle declaration could not be read (${message})` };
+  }
+
+  const compileResult = await compileOasAgentJson({
+    packageName: agentPackageName,
+    retainedRegenerate,
+    reportSiblingLifecycle: true,
+  });
   if (!compileResult.ok) {
     return { error: `agent.json could not be compiled: ${compileResult.error}` };
   }
@@ -3959,7 +3978,12 @@ async function handleAgentBuilderGitCompileAndWrite(
     // Re-project the compiled result onto the agent_templates row. The
     // version-pairing rule this write encodes lives with it, in
     // ../install-from-package (cinatra#3208 ratchets: off the route graph).
-    await syncCompiledTemplateToDb(agentPackageName, agentPackageVersion, compiled);
+    await syncCompiledTemplateToDb(
+      agentPackageName,
+      agentPackageVersion,
+      compiled,
+      compileResult.siblingLifecycle,
+    );
 
     // skills dir lives next to the agent root (handles both new
     // canonical and legacy layouts via resolveAgentRootDirForRead).

@@ -792,6 +792,9 @@ async function readSiblingPackageJson(
   /** The raw `cinatra.lifecycle.regenerate` value (cinatra#4264); `undefined`
    *  when the manifest declares none. Checked at step 10a2. */
   regenerate: unknown;
+  /** The raw `cinatra.lifecycle` block (cinatra#4264 A1b); `undefined` when the
+   *  manifest declares none. Reported to a writer on request. */
+  lifecycle: unknown;
 } | null> {
   // OAS source lives at either:
   //   agents/<slug>/cinatra/oas.json  → package.json is ../../package.json (one up from cinatra/)
@@ -859,6 +862,7 @@ async function readSiblingPackageJson(
         producesRefs,
         producesReadable,
         regenerate: parsed.cinatra?.lifecycle?.regenerate,
+        lifecycle: parsed.cinatra?.lifecycle,
       };
     } catch {
       // try next candidate
@@ -1309,9 +1313,18 @@ export type CinatraAgentConfig = {
   defaults?: { senderName?: string | null };
 };
 
+/** What the compile's own sibling `package.json` read found about
+ * `cinatra.lifecycle` (cinatra#4264 A1b), reported only on request
+ * (`reportSiblingLifecycle`). `readable: false` = no sibling, or one that does
+ * not parse: the writer keeps its stored column. `readable: true` carries the
+ * raw block (`undefined` when the manifest declares none: the writer clears). */
+export type SiblingLifecycleReading =
+  | { readable: false }
+  | { readable: true; lifecycle: unknown };
+
 // Discriminated union eliminates mixed null/throw.
 export type CompileOasResult =
-  | { ok: true; value: CompiledAgentOas }
+  | { ok: true; value: CompiledAgentOas; siblingLifecycle?: SiblingLifecycleReading }
   | { ok: false; error: string };
 
 // Exhaustive component_type list for steppable nodes. Adding a new
@@ -1585,6 +1598,12 @@ export async function compileOasAgentJson(opts: {
   // when it has no readable manifest. Checked against THIS flow only when no
   // sibling package.json is readable; a readable sibling is the one authority.
   retainedRegenerate?: unknown;
+  // cinatra#4264 A1b: report what this compile's sibling read found about
+  // `cinatra.lifecycle` (`siblingLifecycle` on the result), so a writer (the MCP
+  // recompile) projects the lifecycle column from the same manifest the
+  // regenerate check read. Off by default: every other caller's result is
+  // unchanged.
+  reportSiblingLifecycle?: boolean;
 }): Promise<CompileOasResult> {
   if (!opts.packageName) {
     return { ok: false, error: "packageName is required" };
@@ -2573,5 +2592,12 @@ export async function compileOasAgentJson(opts: {
       // sibling cinatra.json
       cinatraConfig,
     },
+    ...(opts.reportSiblingLifecycle
+      ? {
+          siblingLifecycle: sibling
+            ? { readable: true as const, lifecycle: sibling.lifecycle }
+            : { readable: false as const },
+        }
+      : {}),
   };
 }

@@ -36,7 +36,8 @@ import {
   type ApprovalPolicy,
 } from "./store";
 import { serializeArtifactBindingDeclaration } from "./artifact-binding";
-import type { CompiledAgentOas } from "./oas-compiler";
+import type { CompiledAgentOas, SiblingLifecycleReading } from "./oas-compiler";
+import { normalizeLifecycle, serializeLifecycleConfig } from "@/lib/lifecycle/lifecycle-policy";
 // cinatra#2616 — the identity claim. `claimAgentTemplateIdentity` carries the
 // WHOLE insert-only-or-owned-update operation, 23505 race classification
 // included, so this primitive and its concurrency proof run the same code.
@@ -1010,6 +1011,14 @@ async function makeInstalledArtifactClaimLookup(
  * So with no version to confirm against, ALL THREE are omitted and the columns
  * keep exactly what the last version-paired write set.
  *
+ * LIFECYCLE (cinatra#4264 A1b). `siblingLifecycle` is the compile's OWN
+ * sibling read (`reportSiblingLifecycle`), so the column follows the manifest
+ * the regenerate check read: a readable manifest with a block re-projects it
+ * (`write`), a readable manifest without one clears it (`clear`), and no
+ * readable manifest leaves it as it is (`none`; the compile has already checked
+ * any stored regenerate list against the new flow, as `retainedRegenerate`). A
+ * caller that passes no reading writes no lifecycle column, as before.
+ *
  * Best-effort by contract: the compile itself has already succeeded and
  * written the file, so a DB failure here is warned and swallowed, never
  * surfaced as a compile error.
@@ -1018,7 +1027,12 @@ export async function syncCompiledTemplateToDb(
   agentPackageName: string,
   agentPackageVersion: string | null | undefined,
   compiled: CompiledAgentOas,
+  siblingLifecycle?: SiblingLifecycleReading,
 ): Promise<void> {
+  const lifecycleConfig =
+    siblingLifecycle?.readable === true
+      ? serializeLifecycleConfig(normalizeLifecycle(siblingLifecycle.lifecycle))
+      : undefined;
   try {
     const template = await readAgentTemplateByPackageName(agentPackageName);
     if (!template) return;
@@ -1044,6 +1058,7 @@ export async function syncCompiledTemplateToDb(
           ? serializeArtifactBindingDeclaration(compiled.artifactBindings)
           : null
         : undefined,
+      ...(lifecycleConfig !== undefined ? { lifecycleConfig } : {}),
     });
   } catch (versionSyncErr) {
     console.warn(`[agent_source_compile] DB sync failed:`, versionSyncErr);

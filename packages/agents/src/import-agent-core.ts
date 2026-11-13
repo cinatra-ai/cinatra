@@ -32,10 +32,12 @@ import { resolvePublishDestination } from "@cinatra-ai/extensions/destination-re
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import {
   readManifestLifecycle,
+  readStoredRegenerate,
   serializeLifecycleConfig,
 } from "@/lib/lifecycle/lifecycle-policy";
 import { readZipFiles } from "./zip-helpers";
 import { compileOasAgentJson } from "./oas-compiler";
+import { checkRegenerateDeclaration } from "./verdaccio/package-contract";
 import { scanOasForVisibleInputContractFindings } from "./validate-oas-runtime-invariants";
 import { serializeArtifactBindingDeclaration } from "./artifact-binding";
 import {
@@ -468,6 +470,25 @@ export async function importAgentTemplateCore(
         claim,
       });
       const existing = resolved.outcome === "owned" ? resolved.row : null;
+      // cinatra#4264 A1b — `none` (no authoritative manifest: the column is
+      // kept) must not keep a `regenerate` list the NEW flow no longer
+      // honours. Checked against this archive's flow before the runtime
+      // materialize and before any row write; a failure refuses the import.
+      // `write` and `clear` need no check here: the manifest decides, and the
+      // compile above has already checked a declared list.
+      if (existing && manifestLifecycleConfig === undefined) {
+        const retained = readStoredRegenerate(existing.lifecycleConfig);
+        if (retained !== undefined) {
+          const check = checkRegenerateDeclaration(agent, retained);
+          if (!check.ok) {
+            throw new Error(
+              `[importAgentTemplateCore] '${effectivePackageName}' keeps its stored lifecycle ` +
+                `declaration (the archive carries no authoritative manifest), but the new flow ` +
+                `no longer honours its regenerate list: ${check.error}`,
+            );
+          }
+        }
+      }
       if (existing) {
         // The claim rides the WRITE — the authoritative guard, as on the
         // install path.
