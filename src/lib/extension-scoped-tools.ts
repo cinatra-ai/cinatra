@@ -40,6 +40,7 @@ import { ExtensionToolModuleRefusal } from "@/lib/extension-tool-module-loader";
 import { ExtensionToolOriginRefusal, resolveExtensionToolOrigin } from "@/lib/extension-tool-origin";
 import { createExtensionObjectsPort } from "@/lib/extension-objects-port";
 import { attributionFields, type ExtensionToolAttribution } from "@/lib/extension-tool-attribution";
+import type { AuditEventInput } from "@/lib/authz/audit";
 import {
   ArtifactAdmissionRefusal,
   resolveArtifactDependencyAdmission,
@@ -118,37 +119,91 @@ export async function dispatchExtensionScopedTool(input: {
   run: ExtensionScopedToolRun;
   actor?: ActorContext;
 }): Promise<ExtensionScopedToolOutcome> {
-  let isTool = false;
-  try {
-    isTool = input.tool === "extension_tool";
-  } catch {
-    /* the dispatch below answers it */
-  }
-  if (!isTool) return dispatchScopedTool(input);
-  // ONE `extension_tool.dispatch` EVENT PER CALL (cinatra#4154),
-  // allowed and refused alike, filled in as the call learns whose code runs.
-  const trail: DispatchTrail = { runPackage: null, codePackage: null, codeInstallId: null, verifiedStepId: null };
+  // ONE `extension_tool.dispatch` EVENT PER CALL (cinatra#4154), allowed and
+  // refused alike. The dispatch reads `input.tool` and `input.run` exactly as
+  // often and in the same order as it does without the event; the trail keeps
+  // what those reads saw, and the event is built from that alone. The answer
+  // never waits for the write.
+  const trail: DispatchTrail = {
+    runPackage: null,
+    codePackage: null,
+    codeInstallId: null,
+    verifiedStepId: null,
+    tool: undefined,
+    branched: false,
+    run: undefined,
+    stepRead: false,
+  };
   const outcome = await dispatchScopedTool(input, trail);
-  await auditToolDispatch(input, trail, outcome);
+  if (trail.tool === "extension_tool") void auditToolDispatch(trail, outcome);
   return outcome;
 }
 
-/** What the dispatch event records: the four fields, and the resolver's fixed code on its refusal. */
-type DispatchTrail = ExtensionToolAttribution & { originCode?: string };
+/**
+ * What the dispatch event records: the four fields, the resolver's fixed code
+ * on its refusal, and what the dispatch's own reads saw: the last `tool` value
+ * before it chose its branch (or, on a throw before that, the value the
+ * failure log read), the run object of its first `run` read, and whether the
+ * step was already read.
+ */
+type DispatchTrail = ExtensionToolAttribution & {
+  originCode?: string;
+  tool: unknown;
+  branched: boolean;
+  run: unknown;
+  stepRead: boolean;
+};
+
+/** Keep a value the dispatch read of `input.tool`, and give it back. */
+function seenTool(trail: DispatchTrail, value: unknown): unknown {
+  trail.tool = value;
+  return value;
+}
+
+/** Keep the first value the dispatch read of `input.run`, and give it back. */
+function seenRun<T>(trail: DispatchTrail, value: T): T {
+  if (trail.run === undefined) trail.run = value;
+  return value;
+}
+
+/** One field of a run object, or undefined when it is not a string or its read throws. Never throws. */
+function runField(run: unknown, key: "id" | "orgId" | "runBy" | "verifiedStepId"): string | undefined {
+  try {
+    if (typeof run !== "object" || run === null) return undefined;
+    const value: unknown = (run as Record<string, unknown>)[key];
+    return typeof value === "string" && value !== "" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The resolver's fixed code when `e` is its refusal; undefined otherwise or when the check throws. Never throws. */
+function originCodeOf(e: unknown): string | undefined {
+  try {
+    if (!(e instanceof ExtensionToolOriginRefusal)) return undefined;
+    const code: unknown = e.code;
+    return typeof code === "string" ? code : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
- * Write the call's dispatch event. Never throws and never changes the answer.
- * A refusal records a fixed word for its status and the resolver's fixed code,
- * never the answer's text; it is recorded every time, never folded into the
- * denied-event cooldown, because each refused call is its own event.
+ * Write the call's dispatch event. Never throws and never rejects, and the
+ * caller does not wait for it. The run's fields are read here only after the
+ * answer is fixed, each on its own: a field that cannot be read is left out,
+ * and the event is still written. A refusal records a fixed word for its
+ * status and the resolver's fixed code, never the answer's text; it is
+ * recorded every time, never folded into the denied-event cooldown, because
+ * each refused call is its own event.
  */
-async function auditToolDispatch(
-  input: { run: ExtensionScopedToolRun },
-  trail: DispatchTrail,
-  outcome: ExtensionScopedToolOutcome,
-): Promise<void> {
+async function auditToolDispatch(trail: DispatchTrail, outcome: ExtensionScopedToolOutcome): Promise<void> {
   try {
-    const run = input.run;
+    const run = trail.run;
+    const orgId = runField(run, "orgId");
+    const runBy = runField(run, "runBy");
+    const runId = runField(run, "id");
+    if (!trail.stepRead) trail.verifiedStepId = runField(run, "verifiedStepId") ?? null;
     const reason = outcome.ok
       ? null
       : outcome.status === 403
@@ -156,24 +211,25 @@ async function auditToolDispatch(
         : outcome.status === 404
           ? "not-found"
           : "failed";
-    const { logAuditEvent } = await import("@/lib/authz/audit");
-    await logAuditEvent({
-      organizationId: run.orgId,
-      actorPrincipalId: run.runBy ?? undefined,
-      actorPrincipalType: "a2a",
-      authSource: "agent",
+    const event: AuditEventInput = {
+      ...(orgId !== undefined ? { organizationId: orgId } : {}),
+      ...(runBy !== undefined ? { actorPrincipalId: runBy } : {}),
+      actorPrincipalType: "a2a" as const,
+      authSource: "agent" as const,
       resourceType: "extension_tool",
       operation: "extension_tool.dispatch",
-      runId: run.id,
+      ...(runId !== undefined ? { runId } : {}),
       ...(trail.codePackage ? { resourceId: trail.codePackage } : {}),
-      decision: reason === null ? "allowed" : "denied",
+      decision: reason === null ? ("allowed" as const) : ("denied" as const),
       ...(reason === null ? {} : { deniedCooldown: "record_every" as const }),
       metadata: {
         ...attributionFields(trail),
         ...(reason === null ? {} : { reason }),
         ...(reason !== null && trail.originCode ? { originCode: trail.originCode } : {}),
       },
-    });
+    };
+    const { logAuditEvent } = await import("@/lib/authz/audit");
+    await logAuditEvent(event);
   } catch {
     /* an audit write never changes the answer */
   }
@@ -186,15 +242,11 @@ async function dispatchScopedTool(
     run: ExtensionScopedToolRun;
     actor?: ActorContext;
   },
-  trail?: DispatchTrail,
+  trail: DispatchTrail,
 ): Promise<ExtensionScopedToolOutcome> {
   try {
-    if (trail) {
-      const step: unknown = input.run.verifiedStepId;
-      trail.verifiedStepId = typeof step === "string" && step !== "" ? step : null;
-    }
     const context = await resolveRunExtensionContext({
-      templateId: input.run.templateId,
+      templateId: seenRun(trail, input.run).templateId,
       packageVersion: input.run.packageVersion,
     });
     if (!context) {
@@ -202,19 +254,24 @@ async function dispatchScopedTool(
         ok: false,
         status: 403,
         error:
-          `${input.tool}: the run resolves to no extension package at a pinned version, so there is ` +
+          `${seenTool(trail, input.tool)}: the run resolves to no extension package at a pinned version, so there is ` +
           `no one declaration to admit this call under`,
       };
     }
-    if (input.tool === "extension_data") {
+    if (seenTool(trail, input.tool) === "extension_data") {
+      trail.branched = true;
       return { ok: true, result: await runDataTool(context, input) };
     }
-    if (input.tool === "extension_tool") {
+    if (seenTool(trail, input.tool) === "extension_tool") {
+      trail.branched = true;
       return { ok: true, result: await runExtensionTool(context, input, trail) };
     }
+    trail.branched = true;
     return { ok: true, result: await runArtifactRead(context, input) };
   } catch (e) {
     const where = { ...diagnosticFields(input), stage: "extension-scoped tool call" };
+    // A throw before the dispatch chose its branch: the failure log's own read decides the event.
+    if (!trail.branched) trail.tool = where.tool;
     const stated = statedRefusal(e);
     if (stated === UNREADABLE) {
       logFixedLine(
@@ -354,23 +411,30 @@ async function runExtensionTool(
     run: ExtensionScopedToolRun;
     actor?: ActorContext;
   },
-  trail: DispatchTrail = { runPackage: null, codePackage: null, codeInstallId: null, verifiedStepId: null },
+  trail: DispatchTrail,
 ): Promise<unknown> {
   trail.runPackage = runContext.packageName;
   // WHOSE CODE RUNS (cinatra#4154): the run package's own, or, for a proven step
   // of an embedded child flow, the child's, from the exact child installation.
   // The ports below are then the child's declarations, bound to this same run.
+  // `input.run` is read once here, as before; the resolver is the only other
+  // reader of its step, so the step is read for the attribution after it.
+  const run = input.run;
   let origin: Awaited<ReturnType<typeof resolveExtensionToolOrigin>>;
   try {
     origin = await resolveExtensionToolOrigin({
-      run: input.run,
+      run,
       context: runContext,
       request: isPlainObject(input.input) ? input.input : {},
     });
   } catch (e) {
-    if (e instanceof ExtensionToolOriginRefusal) trail.originCode = e.code;
+    // Never a throw of its own: a throw whose class cannot be read reaches the
+    // dispatch's classifier unchanged and answers the fixed 500 there.
+    trail.originCode = originCodeOf(e);
     throw e;
   }
+  trail.verifiedStepId = runField(run, "verifiedStepId") ?? null;
+  trail.stepRead = true;
   const context = origin.kind === "child" ? origin.context : runContext;
   trail.codePackage = context.packageName;
   trail.codeInstallId = origin.kind === "child" ? origin.codeInstallId : null;
