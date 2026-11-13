@@ -224,7 +224,7 @@ function Combobox({
           // the drawing draws exactly one, and it runs straight along the
           // seam the border-top is dropped to open — putting back the very
           // low-alpha line that made the list read as a separate object.
-          "w-(--radix-popover-trigger-width) min-w-[12rem] border-input p-0 ring-0",
+          "w-(--radix-popover-trigger-width) border-input p-0 ring-0",
           // The outer radius and the drop shadow the drawing declares on this
           // list in full — `border-radius: 0 0 7px 7px` and
           // `box-shadow: 0 10px 26px -10px rgba(21,33,58,0.22)`, the "slightly
