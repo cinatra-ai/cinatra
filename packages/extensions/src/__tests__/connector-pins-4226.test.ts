@@ -1,6 +1,7 @@
-// cinatra#4226: the Drupal connector pin tracks the merged commit of the connector's
-// development-site leg (drupal-mcp-connector#103), which the dev boot runs with the
-// development-site marker of docker-compose.yml.
+// cinatra#4226: the Drupal connector pin tracks a merged commit of the connector that
+// contains its development-site leg (drupal-mcp-connector#103), which the dev boot runs
+// with the development-site marker of docker-compose.yml. The pin moves forward with later
+// connector commits; connector-pins-3924.test.ts asserts the same current commit.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -18,9 +19,9 @@ function shaOf(entries: LockEntry[], packageName: string): string | undefined {
 }
 
 describe("the Drupal connector pin for the development-site leg (cinatra#4226)", () => {
-  it("pins drupal-mcp-connector in the dev lock to the merged commit of its development-site leg", () => {
+  it("pins drupal-mcp-connector in the dev lock to a merged commit that contains its development-site leg", () => {
     expect(shaOf(readLock("cinatra-dev-extensions.lock.json"), "@cinatra-ai/drupal-mcp-connector")).toBe(
-      "f0964ebee76a43ee1f9116745c0911a4925060b3",
+      "78e71e78db8f218fa17e0944d44951ad90eaf328",
     );
   });
 
