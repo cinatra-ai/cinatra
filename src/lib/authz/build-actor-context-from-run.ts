@@ -147,3 +147,26 @@ export async function buildActorContextFromRun(
     policyVersion: POLICY_VERSION,
   };
 }
+
+/**
+ * The run owner's org role, read from a real membership row only
+ * (cinatra#4313). The passthrough stamps it on the primitive actor, so the
+ * resource kernel can grant an org-gated permission to the run's owner.
+ *
+ * Unlike the `orgRole` of `buildActorContextFromRun`, which floors a missing
+ * row and a lookup error at `member`, this answers `undefined` when there is
+ * no human owner, no membership row for the run's org (a departed user), an
+ * unknown role value, or a lookup error. An `undefined` role stamps nothing,
+ * so the caller decides exactly as it did without the stamp. Never a throw.
+ */
+export async function resolveRunOwnerMembershipOrgRole(run: {
+  orgId: string;
+  runBy: string | null;
+}): Promise<"org_owner" | "org_admin" | "member" | undefined> {
+  if (!run.orgId || !run.runBy) return undefined;
+  try {
+    return await resolveOrgRoleForUser(run.orgId, run.runBy);
+  } catch {
+    return undefined;
+  }
+}
