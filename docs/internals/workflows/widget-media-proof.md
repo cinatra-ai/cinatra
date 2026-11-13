@@ -173,11 +173,41 @@ transaction, the same record the page capture tool writes, so a screenshot it
 files draws with its facts row. Facts the record cannot take (a URL over 2048
 characters or with a control character) are refused before anything is filed.
 
+## File the six media kinds
+
+The review island draws media only through the byte road, which serves six
+kinds: image, video, audio, pdf, document and archive. This development command
+files one artifact of each kind for one user, and can open a real review gate
+that pins all six:
+
+```sh
+CINATRA_RUNTIME_MODE=development node --env-file=.env.local scripts/fixtures/file-media-kinds.mjs \
+  --org ORGANIZATION_ID --user FIXTURE_ADMIN_USER_ID --review-run
+```
+
+The samples are small, well-formed files built from code
+(`scripts/fixtures/lib/media-kind-samples.ts`): a PNG, a VP8 WebM, a PCM WAV, a
+one-page PDF, a Word document and a ZIP archive. They are the same bytes on
+every run. Each one goes through the upload route's service entry: its form is
+mapped to the one installed required artifact type that accepts it, and the
+writer detects the form again before it writes. The artifacts are the user's
+private uploads. Every kind is resolved before the first write, so a missing
+type files nothing. The command prints the six artifacts and their
+`review_targets`.
+
+With `--review-run`, the command also seeds a run of the marked review gate
+fixture (`tests/fixtures/review-gate-agent`) with those targets. Stage that
+fixture under the lane's `extensions/` first, as for the screenshot fixture.
+Only run creation is seeded; WayFlow pauses the run and the run executor pins
+the six targets in a real gate. This option needs the isolated database, Redis
+and an explicit queue name. The command prints the run and its review task.
+
 ## Validation and remaining acceptance
 
 ```sh
 pnpm exec vitest run src/lib/__tests__/dev-screenshot-producer.test.ts
 pnpm exec vitest run src/lib/__tests__/dev-screenshot-fixture.test.ts
+pnpm exec vitest run src/lib/__tests__/dev-media-kinds-fixture.test.ts
 node --import tsx --test scripts/fixtures/__tests__/screenshot-capture.test.ts
 ```
 
