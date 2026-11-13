@@ -14,7 +14,8 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 //     lifecycle repair run. No declaration -> no key -> the message is
 //     byte-identical to what it was before this module.
 //   - CLAIMS. The flow runtime (docker/wayflow/step_snapshot.py) serializes a
-//     listed top-level node's FULL resolved input once, canonically, and puts
+//     listed top-level node's resolved input, minus the platform keys and every
+//     credential member, once, canonically, and puts
 //     `{node, inputs_json, sha256, flow_sha256, attestation}` on the leg's last
 //     message metadata. attestation = "n1:" + HMAC-SHA256(CINATRA_CONTEXT_ATTEST_KEY,
 //     "n1\n<runId>\n<node>\n<sha256>\n<flow_sha256>").
@@ -45,6 +46,48 @@ export const STEP_SNAPSHOT_MAX_BYTES = 512 * 1024;
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 const SNAPSHOT_ATTESTATION = /^n1:([0-9a-f]{64})$/;
+
+// ---------------------------------------------------------------------------
+// Credential keys are stripped from WayFlow task.history before persistence
+// (execution.ts), and a step snapshot's inputs must hold none of them.
+// MUST stay in lockstep with docker/wayflow/cinatra_executors/input_message.py
+// _CREDENTIAL_KEYS and approval_gate.py _CREDENTIAL_KEYS (single source of truth
+// across the TS persistence path and the Python executor strip; tested for
+// parity in docker/wayflow/tests/test_approval_gate.py).
+// ---------------------------------------------------------------------------
+export const WAYFLOW_HISTORY_CREDENTIAL_KEYS: ReadonlySet<string> = new Set([
+  "bearer_token",
+  "api_key",
+  "a2a_bearer_token",
+  "mcp_server_url",
+  "password",
+  "secret",
+  "token",
+  "access_token",
+  "refresh_token",
+]);
+
+/**
+ * Recursively scrub credential keys from any value before persisting it in
+ * stepResults. Walks plain objects and arrays; primitives pass through. Keys
+ * matched by WAYFLOW_HISTORY_CREDENTIAL_KEYS are dropped (not redacted) to
+ * mirror the Python executors' frozenset-based strip exactly — replacing with
+ * a placeholder would diverge from the executors and break future parity tests.
+ */
+export function scrubWayflowHistoryCredentials(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => scrubWayflowHistoryCredentials(item));
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (WAYFLOW_HISTORY_CREDENTIAL_KEYS.has(k)) continue;
+      out[k] = scrubWayflowHistoryCredentials(v);
+    }
+    return out;
+  }
+  return value;
+}
 
 function nonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
@@ -180,7 +223,10 @@ export type VerifiedStepSnapshot = {
  * Verify one claim for `runId` (the handler's own run). Answers the snapshot,
  * or null when the key is blank, the claim has another shape (sha256 and
  * flow_sha256 are each 64 lowercase hex), the bytes are
- * over STEP_SNAPSHOT_MAX_BYTES or are not a JSON object, the sha256 does not
+ * over STEP_SNAPSHOT_MAX_BYTES or are not a JSON object, the object still holds
+ * a credential member that scrubWayflowHistoryCredentials removes (the runtime
+ * strips them before it hashes, so the sha256 is over the stripped object; core
+ * never re-serializes, so it refuses rather than strips), the sha256 does not
  * match the received bytes, or the attestation does not verify over
  * (runId, node, sha256, flow_sha256).
  */
@@ -201,7 +247,9 @@ export function verifyStepSnapshotClaim(input: {
   if (bytes.length > STEP_SNAPSHOT_MAX_BYTES) return null;
   if (createHash("sha256").update(bytes).digest("hex") !== sha256) return null;
   try {
-    if (!plainObject(JSON.parse(inputs_json))) return null;
+    const parsed: unknown = JSON.parse(inputs_json);
+    if (!plainObject(parsed)) return null;
+    if (JSON.stringify(scrubWayflowHistoryCredentials(parsed)) !== JSON.stringify(parsed)) return null;
   } catch {
     return null;
   }

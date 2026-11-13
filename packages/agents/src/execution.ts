@@ -534,7 +534,12 @@ import {
   encodeScheduleRunRef,
 } from "@/lib/lifecycle/lifecycle-card-ref";
 import { buildWayflowInitialMessagePayload } from "./wayflow-dispatch-payload";
-import { persistStepSnapshots, snapshotNodesMetadata, stripStepSnapshotClaims } from "./step-snapshots";
+import {
+  persistStepSnapshots,
+  scrubWayflowHistoryCredentials,
+  snapshotNodesMetadata,
+  stripStepSnapshotClaims,
+} from "./step-snapshots";
 import {
   inventoryReviewTargets,
   nextUnresolvedLeg,
@@ -549,44 +554,26 @@ function enrichmentContextFor(userId: string | null) {
 }
 
 // ---------------------------------------------------------------------------
-// Credential keys are stripped from WayFlow task.history before persistence.
-// MUST stay in lockstep with docker/wayflow/cinatra_executors/input_message.py
-// _CREDENTIAL_KEYS and approval_gate.py _CREDENTIAL_KEYS (single source of truth
-// across the TS persistence path and the Python executor strip; tested for
-// parity in docker/wayflow/tests/test_approval_gate.py).
+// Credential keys are stripped from WayFlow task.history before persistence:
+// WAYFLOW_HISTORY_CREDENTIAL_KEYS and scrubWayflowHistoryCredentials live in
+// ./step-snapshots (moved there unchanged, cinatra#4264), which also checks the
+// step snapshot inputs against the same list.
 // ---------------------------------------------------------------------------
-const WAYFLOW_HISTORY_CREDENTIAL_KEYS: ReadonlySet<string> = new Set([
-  "bearer_token",
-  "api_key",
-  "a2a_bearer_token",
-  "mcp_server_url",
-  "password",
-  "secret",
-  "token",
-  "access_token",
-  "refresh_token",
-]);
 
 /**
- * Recursively scrub credential keys from any value before persisting it in
- * stepResults. Walks plain objects and arrays; primitives pass through. Keys
- * matched by WAYFLOW_HISTORY_CREDENTIAL_KEYS are dropped (not redacted) to
- * mirror the Python executors' frozenset-based strip exactly — replacing with
- * a placeholder would diverge from the executors and break future parity tests.
+ * The input-required leg's log line. `history_last` is read from the history
+ * WITHOUT the step snapshot claims (cinatra#4264): their inputs never reach a
+ * log.
  */
-function scrubWayflowHistoryCredentials(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((item) => scrubWayflowHistoryCredentials(item));
-  }
-  if (value && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      if (WAYFLOW_HISTORY_CREDENTIAL_KEYS.has(k)) continue;
-      out[k] = scrubWayflowHistoryCredentials(v);
-    }
-    return out;
-  }
-  return value;
+export function formatWayflowInterruptLog(
+  runId: string,
+  task: { id?: unknown; metadata?: unknown; history?: ReadonlyArray<unknown> },
+  interruptPayload: Record<string, unknown>,
+): string {
+  const history = stripStepSnapshotClaims(
+    task.history as ReadonlyArray<{ role?: unknown; metadata?: unknown; messageId?: unknown; message_id?: unknown }> | undefined,
+  );
+  return `[wayflow-interrupt] run=${runId} task=${String(task.id)} interruptPayload=${(JSON.stringify(interruptPayload) ?? "null").slice(0, 500)} metadata=${(JSON.stringify(task.metadata) ?? "null").slice(0, 500)} history_last=${(JSON.stringify(history?.slice(-1)) ?? "null").slice(0, 500)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -2303,7 +2290,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       ),
     );
     const interruptPayload = ((task.metadata as { pendingApproval?: unknown } | undefined)?.pendingApproval ?? {}) as Record<string, unknown>;
-    console.log(`[wayflow-interrupt] run=${runId} task=${task.id} interruptPayload=${(JSON.stringify(interruptPayload) ?? "null").slice(0, 500)} metadata=${(JSON.stringify(task.metadata) ?? "null").slice(0, 500)} history_last=${(JSON.stringify((task as { history?: unknown[] }).history?.slice(-1)) ?? "null").slice(0, 500)}`);
+    console.log(formatWayflowInterruptLog(runId, task, interruptPayload));
     // HITL renderers resolve campaignId via context.runId (passed
     // at agentic-run-panel.tsx:378) and a typed-object lookup. We no longer
     // enrich the HITL SSE payload with a precomputed campaignId.

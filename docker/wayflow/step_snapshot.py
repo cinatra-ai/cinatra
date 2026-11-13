@@ -4,8 +4,10 @@ A Regenerate reruns ONE step of the run that produced a reviewed revision, with
 every input but the note exactly as that run gave it. When the application
 lists nodes in the message metadata (``cinatra_snapshot_nodes``, with the run id
 under ``cinatra_snapshot_run_id``), the loader records, for each listed
-TOP-LEVEL node of the root flow, the node's FULL resolved input dict, minus only
-the platform keys, serialized once by ``canonical_json_bytes``:
+TOP-LEVEL node of the root flow, the node's FULL resolved input dict, minus the
+platform keys and minus every credential member at any depth (the repository's
+recursive scrubber, ``cinatra_executors.input_message._scrub_credentials``),
+serialized once by ``canonical_json_bytes``:
 
     json.dumps(v, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
                allow_nan=False).encode("utf-8")
@@ -21,8 +23,9 @@ Each snapshot is carried on the leg's last message metadata under
 attestation}`` with ``attestation = "n1:" + hex(hmac_sha256(key,
 "n1\\n<run_id>\\n<node>\\n<sha256>\\n<flow_sha256>"))``.
 
-This module is pure (standard library only) so its tests run without the
-runtime; ``agent_loader`` wires it into the run.
+This module needs only the standard library and the scrubber (whose module
+loads without wayflowcore), so its tests run without the runtime;
+``agent_loader`` wires it into the run.
 """
 from __future__ import annotations
 
@@ -31,7 +34,12 @@ import hmac
 import inspect
 import json
 import re
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
+
+# The repository's ONE recursive credential-member strip (the HITL payload
+# scrub); the application's persist check uses the same list
+# (packages/agents/src/step-snapshots.ts scrubWayflowHistoryCredentials).
+from cinatra_executors.input_message import _scrub_credentials
 
 SNAPSHOT_NODES_METADATA_KEY = "cinatra_snapshot_nodes"
 SNAPSHOT_RUN_METADATA_KEY = "cinatra_snapshot_run_id"
@@ -99,8 +107,10 @@ def capture_node_inputs(
 ) -> Optional[Dict[str, str]]:
     """The signed snapshot of one node's FULL resolved inputs, or None when it
     cannot be recorded (no key, a flow version that is not 64 lowercase hex,
-    not a dict, not serializable, too large). Platform keys are removed; every
-    other key stays."""
+    not a dict, not serializable, too large). Platform keys are removed, then
+    every credential member at any depth (``_scrub_credentials``, after one
+    JSON round trip so a tuple is a list); the sha256 and the attestation are
+    over the canonical bytes of that stripped object."""
     if not key or not key.strip() or not run_id or not node:
         return None
     if not isinstance(flow_sha256, str) or not _SHA256_HEX.fullmatch(flow_sha256):
@@ -111,7 +121,8 @@ def capture_node_inputs(
         return None
     kept = {k: v for k, v in inputs.items() if k not in PLATFORM_INPUT_KEYS}
     try:
-        raw = canonical_json_bytes(kept)
+        stripped = _scrub_credentials(json.loads(canonical_json_bytes(kept)))
+        raw = canonical_json_bytes(stripped)
     except (TypeError, ValueError) as exc:
         log(f"[step_snapshot] node={node}: inputs do not serialize ({type(exc).__name__}); not recorded")
         return None
@@ -158,10 +169,11 @@ def attach_step_snapshots(
 
 class SnapshotRecorder:
     """Per-leg state: which nodes to record, for which run, in which root
-    conversation and root flow, and what was recorded. The first capture of a
-    node in a leg wins; a node executed twice in one leg keeps its first inputs
-    (the application marks a different second value from a later leg
-    ambiguous)."""
+    conversation and root flow, and what was recorded. A node run twice in one
+    leg (a self-loop) with the same recorded inputs stays one claim; with
+    different inputs, or when one of its runs cannot be recorded, the node is
+    AMBIGUOUS in that leg and carries no claim (fail closed). A different value
+    from a later leg is marked ambiguous by the application."""
 
     def __init__(
         self,
@@ -172,6 +184,7 @@ class SnapshotRecorder:
         key: Optional[str],
         root_conversation: Any,
         root_steps: Iterable[Any],
+        root_flow: Any = None,
         log: Any = print,
     ) -> None:
         self.run_id = run_id
@@ -183,19 +196,29 @@ class SnapshotRecorder:
         #: flow is never one of them, whatever its id.
         self._root_step_ids = frozenset(id(step) for step in root_steps)
         self._root_steps = tuple(root_steps)  # keeps the ids above alive
+        #: The root flow object. For an Agent-wrapped root it may run in a
+        #: conversation of its own whose component is this very flow.
+        self.root_flow = root_flow
         self.log = log
         self.captured: Dict[str, Dict[str, str]] = {}
+        #: Every listed node seen in this leg -> its recorded sha256, or None
+        #: when that run could not be recorded.
+        self._seen: Dict[str, Optional[str]] = {}
+        self.ambiguous: Set[str] = set()
 
     def observe(self, step: Any, inputs: Any, conversation: Any) -> None:
         """Called before ``step`` runs. Records only a listed TOP-LEVEL node of
         the root flow: the step is one of the root flow's own Step objects AND
-        it runs in the root conversation itself."""
-        if conversation is not self.root_conversation:
+        it runs in the root conversation itself (or, for an Agent-wrapped root,
+        in a conversation whose component is the root flow object)."""
+        if conversation is not self.root_conversation and (
+            self.root_flow is None or getattr(conversation, "component", None) is not self.root_flow
+        ):
             return
         if id(step) not in self._root_step_ids:
             return
         step_id = getattr(step, "id", None)
-        if not isinstance(step_id, str) or step_id not in self.nodes or step_id in self.captured:
+        if not isinstance(step_id, str) or step_id not in self.nodes or step_id in self.ambiguous:
             return
         snap = capture_node_inputs(
             step_id,
@@ -205,6 +228,14 @@ class SnapshotRecorder:
             key=self.key,
             log=self.log,
         )
+        sha = snap["sha256"] if snap is not None else None
+        if step_id in self._seen:
+            if sha is None or self._seen[step_id] != sha:
+                self.ambiguous.add(step_id)
+                self.captured.pop(step_id, None)
+                self.log(f"[step_snapshot] node={step_id}: run again in this leg with other inputs; no claim")
+            return
+        self._seen[step_id] = sha
         if snap is not None:
             self.captured[step_id] = snap
 
@@ -222,24 +253,50 @@ def snapshot_recorder_for_leg(
 ) -> Optional[SnapshotRecorder]:
     """The recorder of one leg, or None when the message lists no node, the
     flow version is missing, or the conversation's component has no steps.
-    The root flow is the conversation's component (``conversation.component``,
-    whose ``steps`` maps each step name to its Step object)."""
+    The root flow is resolved as agent_loader.py:1541-1549 resolves it: the
+    conversation's component when it has ``steps`` (a Flow root), else the
+    component's ``flow`` (an Agent-wrapped root)."""
     request = read_snapshot_request(message)
     if request is None or not flow_sha256:
         return None
-    steps = getattr(getattr(conversation, "component", None), "steps", None)
-    if not isinstance(steps, dict) or not steps:
+    resolved = root_flow_steps(getattr(conversation, "component", None))
+    if resolved is None:
         log("[step_snapshot] the root conversation has no flow steps; nothing recorded")
         return None
+    flow, steps = resolved
     return SnapshotRecorder(
         run_id=request["run_id"],
         nodes=request["nodes"],
         flow_sha256=flow_sha256,
         key=key,
         root_conversation=conversation,
-        root_steps=list(steps.values()),
+        root_steps=steps,
+        root_flow=flow,
         log=log,
     )
+
+
+def root_flow_steps(component: Any) -> Optional[Tuple[Any, List[Any]]]:
+    """``(root flow, its Step objects)`` of a conversation's component, or None
+    when it has none: ``component.steps`` when present, else
+    ``component.flow.steps``; a dict gives its values, a list or tuple its
+    items (agent_loader.py:1547-1560)."""
+    flow = component
+    steps = getattr(component, "steps", None)
+    if steps is None:
+        flow = getattr(component, "flow", None)
+        if flow is None:
+            return None
+        steps = getattr(flow, "steps", None)
+    if isinstance(steps, dict):
+        items = list(steps.values())
+    elif isinstance(steps, (list, tuple)):
+        items = list(steps)
+    else:
+        return None
+    if not items:
+        return None
+    return flow, items
 
 
 def install_invoke_capture(

@@ -1342,9 +1342,10 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
             # cinatra#4264: record the listed nodes' inputs in THIS leg (the
             # initial message and every resume carry the list). The root
             # conversation is the one about to execute and the root flow is its
-            # component: only a step of that flow, running in that very
-            # conversation, is recorded; a subflow's step is not, even when it
-            # shares a root node's id.
+            # component (or the component's `flow` for an Agent-wrapped root):
+            # only a step of that flow, running in that conversation (or in one
+            # whose component is that flow), is recorded; a subflow's step is
+            # not, even when it shares a root node's id.
             _snap_recorder = _step_snapshot.snapshot_recorder_for_leg(
                 params.get("message"),
                 flow_sha256=getattr(self.assistant, "_cinatra_flow_sha256", "") or "",
