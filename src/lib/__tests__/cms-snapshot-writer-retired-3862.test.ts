@@ -63,8 +63,8 @@ describe("cinatra#3862 leg 7 S4 — the page snapshot writer is gone", () => {
 
   it("no code, test, gate list or inventory under src/, packages/, scripts/ or config/ names the writer or the repaired preview entry", () => {
     const files = SCAN_ROOTS.flatMap((root) => scannedFiles(path.join(REPO_ROOT, root)));
-    // The walk must reach the capture module and the sync inventory, or an empty scan passes.
-    expect(files).toContain(path.join(REPO_ROOT, "src/lib/artifacts/cms-preview-capture.ts"));
+    // The walk must reach the page capture module and the sync inventory, or an empty scan passes.
+    expect(files).toContain(path.join(REPO_ROOT, "src/lib/artifacts/registered-page-capture.ts"));
     expect(files).toContain(path.join(REPO_ROOT, "config/postgres-sync-inventory.json"));
     const namers = files
       .filter((file) => path.resolve(file) !== SELF)

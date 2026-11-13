@@ -5,10 +5,6 @@
       "count": 1,
       "owner": "@cinatra-ai/email-connector"
     },
-    "packages/objects/src/integration/register-types.ts :: type :: @cinatra-ai/drupal:node": {
-      "count": 1,
-      "owner": "the claiming artifact extension of each id (@cinatra-ai/email-artifacts, @cinatra-ai/linkedin-artifacts, @cinatra-ai/drupal-artifacts)"
-    },
     "packages/objects/src/integration/register-types.ts :: type :: @cinatra-ai/email:body": {
       "count": 1,
       "owner": "the claiming artifact extension of each id (@cinatra-ai/email-artifacts, @cinatra-ai/linkedin-artifacts, @cinatra-ai/drupal-artifacts)"
@@ -52,10 +48,6 @@
     "src/lib/member-post-draft-writer-provider.ts :: type :: @cinatra-ai/linkedin:post-draft": {
       "count": 1,
       "owner": "@cinatra-ai/blog-linkedin-writer-agent"
-    },
-    "src/lib/object-history/retention-policy.ts :: type :: @cinatra-ai/drupal:node": {
-      "count": 1,
-      "owner": "the claiming artifact extension of each id (declares its own retention)"
     },
     "src/lib/object-history/retention-policy.ts :: type :: @cinatra-ai/email:body": {
       "count": 1,
@@ -239,15 +231,7 @@
       "count": 1,
       "owner": "@cinatra-ai/wordpress-agent and @cinatra-ai/drupal-agent (the content-editor agents that stage the change); display by @cinatra-ai/cms-snapshot-artifact"
     },
-    "src/lib/artifacts/cms-preview-capture.ts :: name :: cms": {
-      "count": 1,
-      "owner": "@cinatra-ai/wordpress-agent and @cinatra-ai/drupal-agent (the content-editor agents that stage the change); display by @cinatra-ai/cms-snapshot-artifact"
-    },
     "src/lib/artifacts/cms-preview-inertness.ts :: name :: cms": {
-      "count": 1,
-      "owner": "@cinatra-ai/wordpress-agent and @cinatra-ai/drupal-agent (the content-editor agents that stage the change); display by @cinatra-ai/cms-snapshot-artifact"
-    },
-    "src/lib/artifacts/cms-preview-region-composition.ts :: name :: cms": {
       "count": 1,
       "owner": "@cinatra-ai/wordpress-agent and @cinatra-ai/drupal-agent (the content-editor agents that stage the change); display by @cinatra-ai/cms-snapshot-artifact"
     },
@@ -542,7 +526,7 @@
       "owner": "@cinatra-ai/google-appointment-schedules-connector"
     },
     "src/lib/artifacts/cms-preview-capture-policy.ts": {
-      "count": 8,
+      "count": 2,
       "owner": "@cinatra-ai/wordpress-agent and @cinatra-ai/drupal-agent (the content-editor agents that stage the change); display by @cinatra-ai/cms-snapshot-artifact"
     },
     "src/lib/artifacts/cms-preview-capture-store.ts": {
@@ -553,15 +537,7 @@
       "count": 9,
       "owner": "@cinatra-ai/wordpress-agent and @cinatra-ai/drupal-agent (the content-editor agents that stage the change); display by @cinatra-ai/cms-snapshot-artifact"
     },
-    "src/lib/artifacts/cms-preview-capture.ts": {
-      "count": 32,
-      "owner": "@cinatra-ai/wordpress-agent and @cinatra-ai/drupal-agent (the content-editor agents that stage the change); display by @cinatra-ai/cms-snapshot-artifact"
-    },
     "src/lib/artifacts/cms-preview-inertness.ts": {
-      "count": 8,
-      "owner": "@cinatra-ai/wordpress-agent and @cinatra-ai/drupal-agent (the content-editor agents that stage the change); display by @cinatra-ai/cms-snapshot-artifact"
-    },
-    "src/lib/artifacts/cms-preview-region-composition.ts": {
       "count": 8,
       "owner": "@cinatra-ai/wordpress-agent and @cinatra-ai/drupal-agent (the content-editor agents that stage the change); display by @cinatra-ai/cms-snapshot-artifact"
     },

@@ -3,7 +3,7 @@
   "routes": {
     "/sign-in": 165,
     "/api/mcp": 1321,
-    "/chat": 1425,
+    "/chat": 1426,
     "/api/a2a": 1329,
     "/api/llm-bridge": 1339
   },
@@ -27,9 +27,9 @@
       "pr": 4577
     },
     "/chat": {
-      "from": 1424,
-      "to": 1425,
-      "reason": "Pull request 4577 (issue 3470) adds one core module to this route. The ratchet of its CI run at head 33b48c6e, on the tree merged with main, read the ceiling plus one on each of /api/a2a, /api/llm-bridge, /api/mcp and /chat. The one new module the four routes share is scripts/extensions/agent-hitl-screen-schema.mjs, the validator of a declared HITL screen, reached through scripts/extensions/agent-binding-kinds.mjs, which packages/agents/src/field-renderer-bindings.server.ts already imports. The growth is additive and no module leaves the route.",
+      "from": 1425,
+      "to": 1426,
+      "reason": "Pull request 4577 (issue 3470) adds one core module to this route, scripts/extensions/agent-hitl-screen-schema.mjs, the validator of a declared HITL screen, reached through scripts/extensions/agent-binding-kinds.mjs, which packages/agents/src/field-renderer-bindings.server.ts already imports. The ratchet of its CI run at head 33b48c6e, on the tree merged with main, read the ceiling plus one on this route. Main has since raised this ceiling from 1424 to 1425 for packages/agents/src/answered-gate-ledger.ts (pull request 4603); the two modules are independent, so the merged tree reads main's ceiling plus this one module. The growth is additive and no module leaves the route.",
       "pr": 4577
     },
     "/sign-in": {

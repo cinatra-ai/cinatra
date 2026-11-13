@@ -59,10 +59,12 @@ const ROADS: Record<string, "resume" | "initial-dispatch" | "new-conversation"> 
 /** Where each resume road claims the run before its send. The hold is read AFTER the claim (pre-review 2 finding 3): a
  *  decision parked by another resume before the claim is then seen. The two roads that keep the run in pending_approval
  *  while they send claim through claimRunBeforeSend, which reads the hold itself after its claim. */
-const RESUME_ROAD_ANCHORS: Record<string, { from: string; claim: string }> = {
+const RESUME_ROAD_ANCHORS: Record<string, { from: string; claim: string; send?: string }> = {
+  // part 5a: the generic approve sends through the shared WayFlow resume (pinned below)
   "packages/agents/src/review-task-actions.ts": {
     from: 'if (reviewTaskId.startsWith("wayflow-"))',
     claim: "THE GATE IS DECIDED ONCE",
+    send: "await sendWayflowResume(",
   },
   "packages/agents/src/mcp/handlers.ts": {
     from: "async function handleAgentBuilderRunResume(",
@@ -85,13 +87,44 @@ describe("the road list equals the product sendTask call sites", () => {
 
   it.each(Object.keys(RESUME_ROAD_ANCHORS))("%s claims the run, then reads the hold, then sends", (file) => {
     const src = read(file);
-    const { from, claim } = RESUME_ROAD_ANCHORS[file]!;
+    const { from, claim, send: sendAnchor = ".sendTask(" } = RESUME_ROAD_ANCHORS[file]!;
     const start = at(src, from);
-    const send = at(src, ".sendTask(", start);
+    const send = at(src, sendAnchor, start);
     const claimed = at(src, claim, start);
     const hold = claim === "claimRunBeforeSend(" ? claimed : at(src, "assertNoOpenPublishDecision(", claimed);
     expect(claimed).toBeLessThan(send);
     expect(hold).toBeLessThan(send);
+  });
+
+  it("the shared WayFlow resume holds the one send of review-task-actions.ts, and only two roads call it", () => {
+    const src = read("packages/agents/src/review-task-actions.ts");
+    const helper = at(src, "export async function sendWayflowResume(");
+    expect(at(src, ".sendTask(")).toBeGreaterThan(helper);
+    expect(at(src, "await sendWayflowResume(")).toBeLessThan(helper);
+    const out = execFileSync(
+      "git",
+      ["grep", "-c", "-F", "sendWayflowResume(", "--", "src", "packages",
+        ":(exclude)**/__tests__/**", ":(exclude)**/*.test.*", ":(exclude)**/*.spec.*", ":(exclude)**/tests/**"],
+      { cwd: REPO, encoding: "utf8" },
+    );
+    expect(Object.fromEntries(out.trim().split("\n").map((l) => [l.split(":")[0], Number(l.split(":")[1])]))).toEqual({
+      // the definition and the generic approve's call
+      "packages/agents/src/review-task-actions.ts": 2,
+      // Publish
+      "packages/agents/src/publish-decision-actions.ts": 1,
+    });
+  });
+
+  it("Publish claims the run, reads its gate under the claim, then releases the decision, then sends", () => {
+    const src = read("packages/agents/src/publish-decision-actions.ts");
+    const start = at(src, "export async function approvePublishDecision(");
+    const claimed = at(src, 'moveRun(run.id, "pending_approval", "running"', start);
+    const gate = at(src, "resolveLatestWayflowGateTaskId(run.id)", start);
+    const released = at(src, 'to: "released"', start);
+    const send = at(src, "sendWayflowResume(", start);
+    expect(claimed).toBeLessThan(gate);
+    expect(gate).toBeLessThan(released);
+    expect(released).toBeLessThan(send);
   });
 
   it("the content-editor send carries no context id", () => {
