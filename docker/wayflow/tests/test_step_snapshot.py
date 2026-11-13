@@ -86,26 +86,69 @@ class _Conv:
     pass
 
 
-def _recorder(nodes=("produce", "file_image"), root=None, key=KEY):
+class _Step:
+    """A stand-in of a wayflowcore Step: the recorder reads its ``id`` only."""
+
+    def __init__(self, step_id):
+        self.id = step_id
+
+
+class _Flow:
+    def __init__(self, *steps):
+        self.steps = {s.id: s for s in steps}
+
+
+class _RootConv:
+    """A root conversation whose component is the root flow."""
+
+    def __init__(self, *steps):
+        self.component = _Flow(*steps)
+
+
+PRODUCE, FILE_IMAGE = _Step("produce"), _Step("file_image")
+
+
+def _recorder(nodes=("produce", "file_image"), root=None, key=KEY, steps=(PRODUCE, FILE_IMAGE)):
     return snap.SnapshotRecorder(
-        run_id=RUN, nodes=frozenset(nodes), flow_sha256=FLOW, key=key, root_conversation=root, log=lambda *_: None
+        run_id=RUN,
+        nodes=frozenset(nodes),
+        flow_sha256=FLOW,
+        key=key,
+        root_conversation=root,
+        root_steps=steps,
+        log=lambda *_: None,
     )
 
 
 def test_only_listed_top_level_nodes_of_the_root_flow_are_recorded():
     root, sub = _Conv(), _Conv()
-    rec = _recorder(root=root)
-    rec.observe("produce", {"topic": "cats", "note": "brighter"}, root)
-    rec.observe("not_listed", {"x": 1}, root)
-    rec.observe("file_image", {"prompt": "in a subflow"}, sub)
+    not_listed = _Step("not_listed")
+    rec = _recorder(root=root, steps=(PRODUCE, FILE_IMAGE, not_listed))
+    rec.observe(PRODUCE, {"topic": "cats", "note": "brighter"}, root)
+    rec.observe(not_listed, {"x": 1}, root)
+    rec.observe(FILE_IMAGE, {"prompt": "in a subflow"}, sub)
     assert [s["node"] for s in rec.snapshots()] == ["produce"]
+
+
+def test_a_nested_step_sharing_a_root_id_and_the_root_conversation_is_not_recorded():
+    """Codex pre-1 MF3 break-shaped input: a nested flow's ``file_image`` runs
+    first, with the ROOT conversation; only the root flow's own ``file_image``
+    Step object is recorded."""
+    root = _Conv()
+    nested_file_image = _Step("file_image")
+    rec = _recorder(root=root)
+    rec.observe(nested_file_image, {"prompt": "nested"}, root)
+    assert rec.snapshots() == []
+    rec.observe(FILE_IMAGE, {"prompt": "root"}, root)
+    (only,) = rec.snapshots()
+    assert json.loads(only["inputs_json"]) == {"prompt": "root"}
 
 
 def test_full_inputs_with_the_note_port_platform_keys_excluded():
     root = _Conv()
     rec = _recorder(root=root)
     rec.observe(
-        "file_image",
+        FILE_IMAGE,
         {
             "prompt": "a cat",
             "note": "make it brighter",
@@ -123,19 +166,19 @@ def test_full_inputs_with_the_note_port_platform_keys_excluded():
 def test_first_capture_in_a_leg_wins():
     root = _Conv()
     rec = _recorder(root=root)
-    rec.observe("produce", {"n": 1}, root)
-    rec.observe("produce", {"n": 2}, root)
+    rec.observe(PRODUCE, {"n": 1}, root)
+    rec.observe(PRODUCE, {"n": 2}, root)
     assert json.loads(rec.snapshots()[0]["inputs_json"]) == {"n": 1}
 
 
 def test_oversize_and_non_dict_are_dropped_and_no_key_records_nothing():
     root = _Conv()
     rec = _recorder(root=root)
-    rec.observe("produce", {"blob": "x" * (snap.STEP_SNAPSHOT_MAX_BYTES + 1)}, root)
-    rec.observe("file_image", ["not", "a", "dict"], root)
+    rec.observe(PRODUCE, {"blob": "x" * (snap.STEP_SNAPSHOT_MAX_BYTES + 1)}, root)
+    rec.observe(FILE_IMAGE, ["not", "a", "dict"], root)
     assert rec.snapshots() == []
     keyless = _recorder(root=root, key="  ")
-    keyless.observe("produce", {"n": 1}, root)
+    keyless.observe(PRODUCE, {"n": 1}, root)
     assert keyless.snapshots() == []
 
 
@@ -171,25 +214,152 @@ def test_the_filing_node_is_recorded_on_the_resumed_leg():
         snap.SNAPSHOT_NODES_METADATA_KEY: ["file_image", "produce"],
         snap.SNAPSHOT_RUN_METADATA_KEY: RUN,
     }
-    conversation = _Conv()  # one root conversation across both legs
+    conversation = _RootConv(PRODUCE, FILE_IMAGE)  # one root conversation across both legs
 
-    leg1 = snap.read_snapshot_request({"metadata": dict(listed)})
-    rec1 = snap.SnapshotRecorder(
-        run_id=leg1["run_id"], nodes=leg1["nodes"], flow_sha256=FLOW, key=KEY, root_conversation=conversation
+    rec1 = snap.snapshot_recorder_for_leg(
+        {"metadata": dict(listed)}, flow_sha256=FLOW, key=KEY, conversation=conversation
     )
-    rec1.observe("produce", {"topic": "cats"}, conversation)
-    rec1.observe("ctx-imageContext-resolve_context", {"slot": "imageContext"}, _Conv())
+    rec1.observe(PRODUCE, {"topic": "cats"}, conversation)
+    rec1.observe(_Step("ctx-imageContext-resolve_context"), {"slot": "imageContext"}, _Conv())
     leg1_messages = snap.attach_step_snapshots([{"role": "agent", "parts": []}], rec1.snapshots(), "task-1")
     assert [s["node"] for s in leg1_messages[-1]["metadata"][snap.STEP_SNAPSHOTS_METADATA_KEY]] == ["produce"]
 
     resume_message = {"metadata": {"__cinatra_run_token__": "t2", **listed}}
-    leg2 = snap.read_snapshot_request(resume_message)
-    assert leg2 is not None
-    rec2 = snap.SnapshotRecorder(
-        run_id=leg2["run_id"], nodes=leg2["nodes"], flow_sha256=FLOW, key=KEY, root_conversation=conversation
-    )
-    rec2.observe("file_image", {"prompt": "a cat", "note": ""}, conversation)
+    rec2 = snap.snapshot_recorder_for_leg(resume_message, flow_sha256=FLOW, key=KEY, conversation=conversation)
+    assert rec2 is not None
+    rec2.observe(FILE_IMAGE, {"prompt": "a cat", "note": ""}, conversation)
     leg2_messages = snap.attach_step_snapshots([], rec2.snapshots(), "task-2")
     (filed,) = leg2_messages[-1]["metadata"][snap.STEP_SNAPSHOTS_METADATA_KEY]
     assert filed["node"] == "file_image"
     assert filed["attestation"] == snap.snapshot_attestation(KEY, RUN, "file_image", filed["sha256"], FLOW)
+
+
+# ------------------------------------------------- Codex pre-1 MF1 and MF2
+
+
+def test_every_declared_node_is_requested_none_truncated():
+    """MF1: 33 Regenerate entries (s00..s32, z00..z32) give 66 nodes; every one
+    is recorded, z31 and z32 included."""
+    nodes = sorted([f"s{i:02d}" for i in range(33)] + [f"z{i:02d}" for i in range(33)])
+    request = snap.read_snapshot_request(
+        {"metadata": {snap.SNAPSHOT_NODES_METADATA_KEY: nodes, snap.SNAPSHOT_RUN_METADATA_KEY: RUN}}
+    )
+    assert request is not None
+    assert request["nodes"] == frozenset(nodes)
+    root = _Conv()
+    steps = [_Step(n) for n in nodes]
+    rec = snap.SnapshotRecorder(
+        run_id=RUN, nodes=request["nodes"], flow_sha256=FLOW, key=KEY, root_conversation=root,
+        root_steps=steps, log=lambda *_: None,
+    )
+    for step in steps:
+        rec.observe(step, {"n": step.id}, root)
+    assert [s["node"] for s in rec.snapshots()] == nodes
+
+
+@pytest.mark.parametrize("flow", ["x", "F" * 64, "f" * 63, ""], ids=["short", "upper", "63", "empty"])
+def test_a_flow_version_that_is_not_64_lowercase_hex_records_nothing(flow):
+    """MF2, runtime side: the flow version is a sha256 hex, as core requires."""
+    assert snap.capture_node_inputs(NODE, {"a": 1}, run_id=RUN, flow_sha256=flow, key=KEY, log=lambda *_: None) is None
+
+
+# ------------------------------------------- Codex pre-1 MF3 (pure halves)
+
+
+def test_the_leg_recorder_reads_the_root_flow_steps_from_the_conversation():
+    listed = {snap.SNAPSHOT_NODES_METADATA_KEY: ["file_image"], snap.SNAPSHOT_RUN_METADATA_KEY: RUN}
+    conversation = _RootConv(PRODUCE, FILE_IMAGE)
+    rec = snap.snapshot_recorder_for_leg({"metadata": listed}, flow_sha256=FLOW, key=KEY, conversation=conversation)
+    assert rec is not None and rec.root_conversation is conversation
+    rec.observe(_Step("file_image"), {"p": "nested"}, conversation)
+    assert rec.snapshots() == []
+    rec.observe(FILE_IMAGE, {"p": "root"}, conversation)
+    assert [s["node"] for s in rec.snapshots()] == ["file_image"]
+    # No list, no flow version, or a component with no steps: no recorder.
+    assert snap.snapshot_recorder_for_leg({}, flow_sha256=FLOW, key=KEY, conversation=conversation) is None
+    assert snap.snapshot_recorder_for_leg({"metadata": listed}, flow_sha256="", key=KEY, conversation=conversation) is None
+    assert snap.snapshot_recorder_for_leg({"metadata": listed}, flow_sha256=FLOW, key=KEY, conversation=_Conv()) is None
+
+
+def _run(coro):
+    import asyncio
+
+    return asyncio.run(coro)
+
+
+def test_the_installed_capture_records_through_a_real_call():
+    """The wrapper ``install_invoke_capture`` puts on ``Step.invoke_async``
+    hands the step, inputs and conversation to the leg's recorder, for a
+    positional and a keyword call, and runs the step either way."""
+    import contextvars
+
+    current = contextvars.ContextVar("rec", default=None)
+    ran = []
+
+    class FakeStep:
+        def __init__(self, step_id):
+            self.id = step_id
+
+        async def invoke_async(self, inputs, conversation):
+            ran.append(self.id)
+            return "ok"
+
+    snap.install_invoke_capture(FakeStep, current.get, log=lambda *_: None)
+    snap.install_invoke_capture(FakeStep, current.get, log=lambda *_: None)  # idempotent
+    a, b = FakeStep("produce"), FakeStep("file_image")
+    root = _Conv()
+    rec = _recorder(root=root, steps=(a, b))
+    token = current.set(rec)
+    try:
+        assert _run(a.invoke_async({"n": 1}, root)) == "ok"
+        assert _run(b.invoke_async(inputs={"n": 2}, conversation=root)) == "ok"
+    finally:
+        current.reset(token)
+    assert ran == ["produce", "file_image"]
+    assert [s["node"] for s in rec.snapshots()] == ["file_image", "produce"]
+    # No recorder: the step runs, nothing is read.
+    assert _run(a.invoke_async({"n": 3}, root)) == "ok"
+
+
+def test_signature_drift_of_invoke_async_fails_loudly():
+    class Drifted:
+        async def invoke_async(self, extra, inputs, conversation):
+            return None
+
+    class Missing:
+        pass
+
+    with pytest.raises(RuntimeError, match="invoke_async"):
+        snap.install_invoke_capture(Drifted, lambda: None)
+    with pytest.raises(RuntimeError, match="invoke_async"):
+        snap.install_invoke_capture(Missing, lambda: None)
+
+
+def _loader_source():
+    return (Path(__file__).resolve().parent.parent / "agent_loader.py").read_text(encoding="utf-8")
+
+
+def test_the_loader_guards_and_installs_the_capture_at_startup():
+    """The loader's startup live-binding guard names ``Step.invoke_async``,
+    ``build_parent_app`` installs the capture, the patch goes through
+    ``install_invoke_capture`` and the leg recorder through
+    ``snapshot_recorder_for_leg``. (agent_loader itself imports only inside the
+    runtime image; tests/test_step_snapshot_loader.py runs it there.)"""
+    tree = ast.parse(_loader_source())
+    bindings = None
+    calls_by_function = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", None) == "_LIVE_CLASS_BINDINGS":
+            bindings = ast.literal_eval(node.value)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            names = set()
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Call):
+                    f = inner.func
+                    names.add(f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", None))
+            calls_by_function[node.name] = names
+    assert bindings is not None
+    assert ("wayflowcore", "Step", "invoke_async") in bindings
+    assert "_patch_step_snapshot_capture" in calls_by_function["build_parent_app"]
+    assert "install_invoke_capture" in calls_by_function["_patch_step_snapshot_capture"]
+    assert any("snapshot_recorder_for_leg" in names for names in calls_by_function.values())

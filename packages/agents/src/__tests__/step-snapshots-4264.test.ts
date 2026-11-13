@@ -21,6 +21,7 @@ import {
   CINATRA_SNAPSHOT_NODES_METADATA_KEY,
   CINATRA_SNAPSHOT_RUN_METADATA_KEY,
   CINATRA_STEP_SNAPSHOTS_METADATA_KEY,
+  extractStepSnapshotClaims,
   persistStepSnapshots,
   readSnapshotNodesMetadataForRun,
   snapshotNodesFromLifecycleConfig,
@@ -193,5 +194,30 @@ describe("T6: the node list", () => {
     expect(await readSnapshotNodesMetadataForRun("R1", deps)).toEqual({});
     deps.readRun.mockRejectedValueOnce(new Error("db down"));
     expect(await readSnapshotNodesMetadataForRun("R1", deps)).toEqual({});
+  });
+});
+
+describe("Codex pre-1 MF1 and MF2", () => {
+  // 33 Regenerate entries with distinct steps s00..s32 and artifact nodes z00..z32: 66 nodes.
+  const pad = (i: number) => String(i).padStart(2, "0");
+  const ENTRIES = Array.from({ length: 33 }, (_, i) => ({ step: `s${pad(i)}`, artifactNode: `z${pad(i)}`, noteInput: "note" }));
+  const NODES = [...ENTRIES.map((e) => e.step), ...ENTRIES.map((e) => e.artifactNode)].sort();
+
+  it("MF1: every declared node is listed, and every claim of a leg is read and stored, none truncated", async () => {
+    expect(snapshotNodesFromLifecycleConfig(JSON.stringify({ regenerate: ENTRIES }))).toEqual(NODES);
+    const claims = NODES.map((n) => claim("R1", n, `{"n":"${n}"}`));
+    expect(extractStepSnapshotClaims(leg(...claims))).toHaveLength(66);
+    const { rows, write } = memoryWriter();
+    const out = await persistStepSnapshots({ runId: "R1", orgId: "org-1", history: leg(...claims), key: KEY, write });
+    expect(out).toEqual({ stored: NODES.map(() => "inserted"), dropped: 0 });
+    expect(rows.has("R1\nz31")).toBe(true);
+    expect(rows.has("R1\nz32")).toBe(true);
+  });
+
+  it("MF2: a correctly signed claim whose flow_sha256 is not 64 lowercase hex is refused", () => {
+    for (const flow of ["x", "E".repeat(64), "e".repeat(63), `${"e".repeat(64)}0`]) {
+      expect(verifyStepSnapshotClaim({ key: KEY, runId: "R1", claim: claim("R1", "produce", '{"a":1}', flow) })).toBeNull();
+    }
+    expect(verifyStepSnapshotClaim({ key: KEY, runId: "R1", claim: claim("R1", "produce", '{"a":1}') })).not.toBeNull();
   });
 });
