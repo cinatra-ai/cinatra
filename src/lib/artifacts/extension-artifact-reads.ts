@@ -37,6 +37,7 @@ import {
   type ArtifactPage,
   type ArtifactSummary,
 } from "./artifact-service";
+import { withAttribution, type ExtensionToolAttribution } from "@/lib/extension-tool-attribution";
 
 /** "the text of a representation up to a cap" — the cap. */
 export const EXTENSION_ARTIFACT_CONTENT_MAX_BYTES = 256 * 1024;
@@ -96,6 +97,8 @@ export type ExtensionArtifactReadContext = {
   actor?: ActorContext;
   actorPrincipalId?: string | null;
   audit?: AuditFn;
+  /** Whose code made the read, on the `extension_tool` road (cinatra#4154). */
+  attribution?: ExtensionToolAttribution;
 };
 
 /**
@@ -111,7 +114,7 @@ export async function extensionArtifactsList(
   ctx: ExtensionArtifactReadContext,
   request: { types?: readonly string[]; cursor?: string | null; limit?: number } = {},
 ): Promise<ArtifactPage> {
-  const audit = ctx.audit ?? defaultAudit;
+  const audit = withAttribution(ctx.audit ?? defaultAudit, ctx.attribution);
   const base = auditBase({ ...ctx, operation: "artifacts_list" });
   const admitted = admittedArtifactTypes(ctx.admission, registeredArtifactTypeIds());
   let types = admitted;
@@ -163,7 +166,7 @@ export async function extensionArtifactGet(
   ctx: ExtensionArtifactReadContext,
   request: { artifactId: string; objectType?: string },
 ): Promise<ArtifactSummary> {
-  const audit = ctx.audit ?? defaultAudit;
+  const audit = withAttribution(ctx.audit ?? defaultAudit, ctx.attribution);
   const base = auditBase({ ...ctx, operation: "artifacts_get" });
   const artifact = getArtifact({
     artifactId: request.artifactId,
@@ -251,7 +254,7 @@ export async function extensionArtifactContentRead(
     objectType?: string;
   },
 ): Promise<ExtensionArtifactContentReadResult> {
-  const audit = ctx.audit ?? defaultAudit;
+  const audit = withAttribution(ctx.audit ?? defaultAudit, ctx.attribution);
   const base = auditBase({ ...ctx, operation: "artifact_content_read" });
   // The GET's admission and organisation binding are the same ones this read
   // needs; going through it means there is ONE place a type is admitted.
