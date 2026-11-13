@@ -269,18 +269,26 @@ The registry install seed and the archive import (and the boot loaders that go
 through it) follow this rule, and so does the MCP recompile
 (`agent_source_compile`): it passes the stored list to the compile as
 `retainedRegenerate` and writes the column from the compile's own sibling read,
-before it writes the source file. That recompile works on one snapshot: a
-`package.json` that exists but does not parse, a compile reading that differs
-from the handler's own, or a source file changed during the compile refuses, and
-a failed column write refuses too instead of reporting success.
+before it writes the source file, which it then replaces atomically (a temp
+file and a rename). That recompile works on one snapshot: a `package.json` that
+exists but does not parse, a compile reading that differs from the handler's own
+(readability, name or lifecycle block), a `package.json` or source file changed
+during the compile refuses, and a failed column write refuses too instead of
+reporting success. With no manifest name it finds the row by the OAS's own
+`metadata.cinatra.packageName`, else by the name the layout gives
+(`@<vendor>/<slug>`), never by the bare slug; the git-file loader does the same.
 
 Stored text that cannot be read counts as a stored list that cannot be checked:
 every road above refuses on it. The roads that keep a row without writing it
 check the stored list too: the git-file loader before its same-version skip and
 before its unreadable-sibling skip (a watcher reloads the flow on disk after
-either), and the bundled-agent boot seeder for a row that already exists. When
-an import or a registry reinstall fails after its row write and the runtime
-files roll back, the lifecycle column is written back with them. The CLI install road runs no compile, so it
+either), and the bundled-agent boot seeder for a row that already exists. That
+seeder never re-seeds the row from the image, but it quarantines a stale list:
+it removes only the `regenerate` key from the stored column, under the row's own
+claim, and the boot reports the package. Stored text that is empty counts as
+unreadable. When an import or a registry install (fresh or reinstall) fails
+after its row write and the runtime files roll back, the lifecycle column is
+written back with them (cleared on a fresh row). The CLI install road runs no compile, so it
 refuses a package that declares `regenerate`; install such a package through the
 registry install road. `readRegenerateEntry`
 (`src/lib/lifecycle/lifecycle-policy.ts`) returns the entry of one filing node.

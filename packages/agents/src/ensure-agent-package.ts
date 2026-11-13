@@ -17,7 +17,7 @@ import {
 import { isReservedWorkspaceSlug } from "./reserved-workspace-slugs";
 import { readZipFiles, createZipBuffer } from "./zip-helpers";
 import { importAgentTemplateCore } from "./import-agent-core";
-import { assertStoredRegenerateHonoured } from "./retained-regenerate";
+import { assertStoredRegenerateHonoured, packageNameFromAgentLayout } from "./retained-regenerate";
 
 // ---------------------------------------------------------------------------
 // "already up to date" REQUIRES a live install record (cinatra#2536).
@@ -572,13 +572,16 @@ export async function ensureAgentPackageFromGitFile(opts: {
     // stored `regenerate` list on the row the OAS names is checked against
     // that flow first; a list it no longer honours (or stored text that
     // cannot be read) THROWS, so the watcher does not reload it.
-    if (cinatraPackageName) {
-      const named = await readAgentTemplateByPackageName(cinatraPackageName);
+    // An OAS without `metadata.cinatra.packageName` (a supported shape) is
+    // looked up by the row its layout names (review 2), as the runtime mounts it.
+    const namedPackage = cinatraPackageName ?? packageNameFromAgentLayout(opts.oasSourcePath);
+    if (namedPackage) {
+      const named = await readAgentTemplateByPackageName(namedPackage);
       if (named) {
         assertStoredRegenerateHonoured(
           named.lifecycleConfig,
           content,
-          `[cinatra:extensions:agent] ${cinatraPackageName} (sibling package.json unreadable)`,
+          `[cinatra:extensions:agent] ${namedPackage} (sibling package.json unreadable)`,
         );
       }
     }

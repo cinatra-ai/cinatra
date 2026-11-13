@@ -7,9 +7,30 @@
 // when it fails, or when the stored text cannot be read, so the caller refuses
 // before it writes or reloads anything.
 
+import { basename, dirname } from "node:path";
+
 import { readStoredRegenerate } from "@/lib/lifecycle/lifecycle-policy";
 
 import { checkRegenerateDeclaration } from "./verdaccio/package-contract";
+
+const LAYOUT_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
+ * The package name an agent's on-disk layout names, `@<vendor>/<slug>` for
+ * `.../<vendor>/<slug>/cinatra/oas.json` (or the flat `.../<vendor>/<slug>/agent.json`),
+ * the same rule the agent runtime mounts by (cinatra#4264 A1b, review 2). A
+ * writer with no manifest name and no OAS name uses it to find the row whose
+ * stored list it must check, instead of the bare slug, which names no
+ * scoped row. Null when the segments are not plain path segments.
+ */
+export function packageNameFromAgentLayout(oasSourcePath: string): string | null {
+  const oasDir = dirname(oasSourcePath);
+  const packageDir = basename(oasDir) === "cinatra" ? dirname(oasDir) : oasDir;
+  const slug = basename(packageDir);
+  const vendor = basename(dirname(packageDir));
+  if (!LAYOUT_SEGMENT.test(slug) || !LAYOUT_SEGMENT.test(vendor)) return null;
+  return `@${vendor}/${slug}`;
+}
 
 /**
  * Refuse a stored `regenerate` list that `parsedOas` no longer honours.

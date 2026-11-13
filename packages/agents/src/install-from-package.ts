@@ -604,6 +604,11 @@ async function _installAgentFromPackageImpl(
       if (claimed.mode === "created") {
         templateId = claimed.created.templateId;
         versionId = claimed.created.versionId;
+        // cinatra#4264 A1b (review 2): a fresh row has no prior declaration;
+        // a later failure clears the list this install wrote.
+        if (freshSeed.lifecycleConfig !== null && freshSeed.lifecycleConfig !== undefined) {
+          lifecycleRestore = { templateId, prior: null };
+        }
       } else {
         const existing = claimed.row;
         versionId = randomUUID();

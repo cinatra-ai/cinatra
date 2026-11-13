@@ -67,9 +67,9 @@ import {
   type SetTriggerForActorArgs,
 } from "../trigger-service";
 import { randomUUID, createHash } from "node:crypto";
-import { readdir, readFile, writeFile, mkdir, rm } from "node:fs/promises";
+import { readdir, readFile, writeFile, mkdir, rm, rename } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { dirname, join, relative, sep } from "node:path";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { resolveDevExtensionSourceRoot } from "../agent-runtime-mount";
 // Agent-source on-disk path resolution + vendor-segment derivation (extracted
 // from this file to stay under the file-size ratchet; cinatra#537 path-safety).
@@ -144,6 +144,7 @@ import {
 import { publishAgentPackage, publishAgentPackageFromGitDir } from "../verdaccio/client";
 import { installAgentFromPackage, syncCompiledTemplateToDb } from "../install-from-package";
 import { readStoredRegenerate } from "@/lib/lifecycle/lifecycle-policy";
+import { packageNameFromAgentLayout } from "../retained-regenerate";
 // WayFlow reload after a successful publish + DB sync.
 import { triggerWayflowReload, type ReloadResult } from "../wayflow-reload-client";
 import {
@@ -3910,18 +3911,20 @@ async function handleAgentBuilderGitCompileAndWrite(
   // Resolve packageName from the sibling package.json so the compiler can find it.
   let agentPackageName: string = packageSlug;
   let agentPackageVersion: string | null = null;
-  // cinatra#4264 A1b (review 1): whether a manifest was read here. The
-  // compile's own sibling read must agree with it (checked after the compile).
+  // cinatra#4264 A1b (reviews 1 and 2): the manifest snapshot read here. The
+  // compile's own sibling read must agree with it, and the file must still hold
+  // these exact bytes after the compile (checked below).
   let manifestRead = false;
+  let manifestName: string | null = null;
+  let manifestLifecycle: unknown = undefined;
+  let pkgRaw: string | null = null;
   // probe new canonical, then legacy via resolveAgentRootDirForRead.
   const agentRootForCompile = resolveAgentRootDirForRead(packageSlug);
   if (agentRootForCompile) {
-    // An ABSENT package.json keeps the slug fallback. One that EXISTS but
-    // cannot be read or parsed refuses (cinatra#4264 A1b, review 1): the slug
-    // would name a different row than the package's own, so the stored
-    // regenerate list of the real row would never be checked or projected.
-    // Same rule as the git-file loader's unreadable-sibling refusal.
-    let pkgRaw: string | null = null;
+    // One that EXISTS but cannot be read or parsed refuses (cinatra#4264 A1b,
+    // review 1), the same rule as the git-file loader's unreadable-sibling
+    // refusal. An ABSENT one, or one without a name, resolves the package
+    // name below (review 2), never the bare slug.
     try {
       pkgRaw = (await readFile(join(agentRootForCompile, "package.json"), "utf8")) as string;
     } catch (err) {
@@ -3942,10 +3945,26 @@ async function handleAgentBuilderGitCompileAndWrite(
         return { error: `agent.json could not be compiled: the package.json beside ${resolved.relPath} is not a JSON object` };
       }
       manifestRead = true;
-      const { name, version } = pkg as { name?: unknown; version?: unknown };
-      if (typeof name === "string" && name) agentPackageName = name;
+      const { name, version, cinatra } = pkg as { name?: unknown; version?: unknown; cinatra?: unknown };
+      if (typeof name === "string" && name) manifestName = name;
       if (typeof version === "string" && version) agentPackageVersion = version;
+      manifestLifecycle =
+        cinatra && typeof cinatra === "object" ? (cinatra as { lifecycle?: unknown }).lifecycle : undefined;
     }
+  }
+  // cinatra#4264 A1b (review 2): the package name, in the order the git-file
+  // loader uses: the manifest's name, else the OAS's own
+  // `metadata.cinatra.packageName`, else the name the on-disk layout gives
+  // (`@<vendor>/<slug>`, as the runtime mounts it). The bare slug, which
+  // names no scoped row, is the last resort only.
+  {
+    const oasName = (agentContent.metadata as { cinatra?: { packageName?: unknown } } | undefined)?.cinatra
+      ?.packageName;
+    agentPackageName =
+      manifestName ??
+      (typeof oasName === "string" && oasName ? oasName : null) ??
+      packageNameFromAgentLayout(oasSourcePath) ??
+      packageSlug;
   }
 
   // cinatra#4264 A1b: the stored `regenerate` list rides the compile as
@@ -3986,9 +4005,25 @@ async function handleAgentBuilderGitCompileAndWrite(
   if (
     !reading ||
     reading.readable !== manifestRead ||
-    (manifestRead && (compiled.packageName ?? packageSlug) !== agentPackageName)
+    (manifestRead && (compiled.packageName ?? null) !== manifestName) ||
+    (reading.readable && JSON.stringify(reading.lifecycle) !== JSON.stringify(manifestLifecycle))
   ) {
     return { error: `${changedWhileCompiling} (its package.json reading differs)` };
+  }
+  // The WHOLE manifest snapshot (version and lifecycle bytes included): the
+  // package.json must still hold the exact bytes read above.
+  if (agentRootForCompile) {
+    let pkgRawAfter: string | null = null;
+    try {
+      pkgRawAfter = (await readFile(join(agentRootForCompile, "package.json"), "utf8")) as string;
+    } catch (err) {
+      if ((err as { code?: unknown })?.code !== "ENOENT") {
+        return { error: `${changedWhileCompiling} (its package.json could not be read again)` };
+      }
+    }
+    if (pkgRawAfter !== pkgRaw) {
+      return { error: `${changedWhileCompiling} (its package.json was rewritten)` };
+    }
   }
   let rawAfterCompile: string;
   try {
@@ -4033,9 +4068,16 @@ async function handleAgentBuilderGitCompileAndWrite(
   // the  `cinatra_llm` injection above when the OAS declares the
   // policy block. Pre- OAS files round-trip byte-for-byte.
   const updatedRaw = JSON.stringify(agentContent, null, 2);
+  // cinatra#4264 A1b (review 2): written ATOMICALLY, after the row: a temp file
+  // in the same directory, then a rename over the source. A failure (ENOSPC,
+  // EIO, ...) leaves the previous file whole, which holds the flow the row now
+  // describes, never a torn or empty source beside the updated row.
+  const tmpSourcePath = join(dirname(oasSourcePath), `.${basename(oasSourcePath)}.${randomUUID()}.tmp`);
   try {
-    await writeFile(oasSourcePath, updatedRaw, "utf8");
+    await writeFile(tmpSourcePath, updatedRaw, "utf8");
+    await rename(tmpSourcePath, oasSourcePath);
   } catch (err) {
+    await rm(tmpSourcePath, { force: true }).catch(() => {});
     const message = err instanceof Error ? err.message : String(err);
     return { error: `Failed to write updated agent.json: ${message}` };
   }

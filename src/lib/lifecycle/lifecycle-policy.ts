@@ -881,16 +881,17 @@ export function serializeLifecycleConfig(
 }
 
 /** The RAW `regenerate` value of a stored `lifecycle_config` text, or undefined
- * when the text is absent or carries no such key (cinatra#4264). Raw on
+ * when the column is NULL or the text carries no such key (cinatra#4264). Raw on
  * purpose: a writer that keeps the stored column (no readable manifest) hands
  * this value to the regenerate check against the new flow, so a stored list
  * the normalizer would drop is refused there, never silently kept.
  *
- * THROWS on text it cannot read (unparseable, or not a JSON object): such text
- * may have carried a list, so reading it as "no list" would let a writer keep
- * it unchecked. Every writer refuses on this throw, as on a failed row read. */
+ * THROWS on text it cannot read (empty, unparseable, or not a JSON object):
+ * such text may have carried a list, so reading it as "no list" would let a
+ * writer keep it unchecked. Every writer refuses on this throw, as on a failed
+ * row read. The column is JSON text or NULL; an empty text is not "NULL". */
 export function readStoredRegenerate(raw: string | null | undefined): unknown {
-  if (!raw) return undefined;
+  if (raw === null || raw === undefined) return undefined;
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
