@@ -526,7 +526,7 @@
       "owner": "@cinatra-ai/google-appointment-schedules-connector"
     },
     "src/lib/artifacts/cms-preview-capture-policy.ts": {
-      "count": 8,
+      "count": 2,
       "owner": "@cinatra-ai/wordpress-agent and @cinatra-ai/drupal-agent (the content-editor agents that stage the change); display by @cinatra-ai/cms-snapshot-artifact"
     },
     "src/lib/artifacts/cms-preview-capture-store.ts": {
