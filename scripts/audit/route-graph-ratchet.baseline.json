@@ -12,25 +12,25 @@
       "from": 1328,
       "to": 1329,
       "reason": "Issue 4264 slice B1a adds exactly one core module to this route, packages/agents/src/step-snapshots.ts: the step snapshots a Regenerate reruns from (the node list on the run's messages, and the verify-and-store of the runtime's signed snapshot claims), imported by packages/agents/src/execution.ts and packages/agents/src/wayflow-run-token-carrier.ts. Measured, not argued: with the merged scripts/route-graph.mjs, main at f547bc6af reads 1328 and the branch reads 1329, the one added module being that file; the growth is additive and no module leaves the route.",
-      "pr": 0
+      "pr": 4634
     },
     "/api/llm-bridge": {
       "from": 1338,
       "to": 1339,
       "reason": "Issue 4264 slice B1a adds exactly one core module to this route, packages/agents/src/step-snapshots.ts: the step snapshots a Regenerate reruns from (the node list on the run's messages, and the verify-and-store of the runtime's signed snapshot claims), imported by packages/agents/src/execution.ts and packages/agents/src/wayflow-run-token-carrier.ts. Measured, not argued: with the merged scripts/route-graph.mjs, main at f547bc6af reads 1338 and the branch reads 1339, the one added module being that file; the growth is additive and no module leaves the route.",
-      "pr": 0
+      "pr": 4634
     },
     "/api/mcp": {
       "from": 1320,
       "to": 1321,
       "reason": "Issue 4264 slice B1a adds exactly one core module to this route, packages/agents/src/step-snapshots.ts: the step snapshots a Regenerate reruns from (the node list on the run's messages, and the verify-and-store of the runtime's signed snapshot claims), imported by packages/agents/src/execution.ts and packages/agents/src/wayflow-run-token-carrier.ts. Measured, not argued: with the merged scripts/route-graph.mjs, main at f547bc6af reads 1320 and the branch reads 1321, the one added module being that file; the growth is additive and no module leaves the route.",
-      "pr": 0
+      "pr": 4634
     },
     "/chat": {
       "from": 1425,
       "to": 1426,
       "reason": "Issue 4264 slice B1a adds exactly one core module to this route, packages/agents/src/step-snapshots.ts: the step snapshots a Regenerate reruns from (the node list on the run's messages, and the verify-and-store of the runtime's signed snapshot claims), imported by packages/agents/src/execution.ts and packages/agents/src/wayflow-run-token-carrier.ts. Measured, not argued: with the merged scripts/route-graph.mjs, main at f547bc6af reads 1425 and the branch reads 1426, the one added module being that file; the growth is additive and no module leaves the route.",
-      "pr": 0
+      "pr": 4634
     },
     "/sign-in": {
       "from": 164,
