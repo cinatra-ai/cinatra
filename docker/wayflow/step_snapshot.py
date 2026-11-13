@@ -123,7 +123,11 @@ def capture_node_inputs(
     try:
         stripped = _scrub_credentials(json.loads(canonical_json_bytes(kept)))
         raw = canonical_json_bytes(stripped)
-    except (TypeError, ValueError) as exc:
+    except Exception as exc:
+        # Any fault here (a non-JSON value, inputs nested too deep for the
+        # recursion limit, a scrubber fault) means this run cannot be
+        # recorded: the recorder then treats it as unrecordable, never as
+        # absent, so an earlier run's claim cannot stand for this one.
         log(f"[step_snapshot] node={node}: inputs do not serialize ({type(exc).__name__}); not recorded")
         return None
     if len(raw) > STEP_SNAPSHOT_MAX_BYTES:
