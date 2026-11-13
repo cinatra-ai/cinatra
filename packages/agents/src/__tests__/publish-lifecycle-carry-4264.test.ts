@@ -16,7 +16,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { x as tarExtract } from "tar";
+import { c as tarCreate, x as tarExtract } from "tar";
+
+// The real tar, with the create call observed: a refusal must come before the
+// tarball is built, not only before the registry write.
+vi.mock("tar", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("tar")>();
+  return { ...actual, c: vi.fn(actual.c) };
+});
 
 vi.mock("pacote", () => {
   const notFound = async () => {
@@ -45,7 +52,8 @@ const CONFIG = {
 } as unknown as Parameters<typeof publishAgentPackageFromGitDir>[1];
 
 const LIFECYCLE = {
-  repairCapable: true,
+  requestedSkips: ["recommendation"],
+  repairCapable: false,
   producedTypes: ["blog-post"],
   repairFindingsInput: { input: "instructions" },
 };
@@ -60,6 +68,7 @@ beforeEach(async () => {
   puts = [];
   compileMock.mockReset();
   compileMock.mockImplementation(async () => ({ ok: true, value: {} }));
+  vi.mocked(tarCreate).mockClear();
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: URL | string, init?: RequestInit) => {
@@ -78,7 +87,12 @@ afterEach(async () => {
   await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
 });
 
-async function writeAgentDir(cinatra: Record<string, unknown>): Promise<string> {
+const OAS_SOURCE = `${JSON.stringify({ component_type: "Flow", name: "Lifecycle agent" }, null, 2)}\n`;
+
+async function writeAgentDir(
+  cinatra: Record<string, unknown>,
+  oasRelPath = "cinatra/oas.json",
+): Promise<string> {
   const agentDir = path.join(tmpRoot, "agent");
   const pkg = {
     name: PACKAGE_NAME,
@@ -90,7 +104,7 @@ async function writeAgentDir(cinatra: Record<string, unknown>): Promise<string> 
   };
   const files: Record<string, string> = {
     "package.json": `${JSON.stringify(pkg, null, 2)}\n`,
-    "cinatra/oas.json": `${JSON.stringify({ component_type: "Flow", name: "Lifecycle agent" })}\n`,
+    [oasRelPath]: OAS_SOURCE,
   };
   for (const [rel, content] of Object.entries(files)) {
     const abs = path.join(agentDir, rel);
@@ -132,6 +146,7 @@ describe("publishAgentPackageFromGitDir fails closed on the compile (cinatra#426
     await expect(publishAgentPackageFromGitDir({ agentDir }, CONFIG)).rejects.toThrow(
       /OAS structural validation failed/,
     );
+    expect(tarCreate).not.toHaveBeenCalled();
     expect(puts).toHaveLength(0);
   });
 
@@ -141,6 +156,7 @@ describe("publishAgentPackageFromGitDir fails closed on the compile (cinatra#426
     });
     const agentDir = await writeAgentDir({});
     await expect(publishAgentPackageFromGitDir({ agentDir }, CONFIG)).rejects.toThrow(/compiler exploded/);
+    expect(tarCreate).not.toHaveBeenCalled();
     expect(puts).toHaveLength(0);
   });
 
@@ -152,6 +168,38 @@ describe("publishAgentPackageFromGitDir fails closed on the compile (cinatra#426
       packageName: PACKAGE_NAME,
       oasSourcePath: path.join(agentDir, "cinatra", "oas.json"),
     });
+    await publishedManifests();
+    const shipped = await fs.readFile(path.join(tmpRoot, "extracted", "package", "cinatra", "oas.json"), "utf8");
+    expect(shipped).toBe(OAS_SOURCE);
+  });
+
+  it("compiles and ships the transitional cinatra/agent.json source as the same bytes", async () => {
+    const agentDir = await writeAgentDir({}, "cinatra/agent.json");
+    await publishAgentPackageFromGitDir({ agentDir }, CONFIG);
+    expect(compileMock.mock.calls[0][0]).toMatchObject({
+      oasSourcePath: path.join(agentDir, "cinatra", "agent.json"),
+    });
+    await publishedManifests();
+    const shipped = await fs.readFile(path.join(tmpRoot, "extracted", "package", "cinatra", "agent.json"), "utf8");
+    expect(shipped).toBe(OAS_SOURCE);
+  });
+
+  it("refuses a flat agent.json source, whose bytes the synthesized payload replaces, before any registry write", async () => {
+    const agentDir = await writeAgentDir({}, "agent.json");
+    await expect(publishAgentPackageFromGitDir({ agentDir }, CONFIG)).rejects.toThrow(/does not ship in the tarball/);
+    expect(tarCreate).not.toHaveBeenCalled();
+    expect(puts).toHaveLength(0);
+  });
+
+  it("refuses when the OAS source changes during the compile, before any registry write", async () => {
+    const agentDir = await writeAgentDir({});
+    compileMock.mockImplementation(async (opts: Record<string, unknown>) => {
+      await fs.writeFile(String(opts.oasSourcePath), `${JSON.stringify({ component_type: "Flow", name: "Other" })}\n`);
+      return { ok: true, value: {} };
+    });
+    await expect(publishAgentPackageFromGitDir({ agentDir }, CONFIG)).rejects.toThrow(/changed during the compile/);
+    expect(tarCreate).not.toHaveBeenCalled();
+    expect(puts).toHaveLength(0);
   });
 });
 

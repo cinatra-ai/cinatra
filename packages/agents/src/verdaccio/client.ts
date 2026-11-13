@@ -625,6 +625,17 @@ export async function publishAgentPackageFromGitDir(
         `(cinatra#4264): ${compileResult.error}`,
     );
   }
+  // cinatra#4264: the compile read the file itself. Refuse when the file no
+  // longer holds the bytes read above; the tarball ships exactly those bytes.
+  const oasAfterCompile = await readFile(oasSourcePath, "utf8").catch(() => null);
+  if (oasAfterCompile !== raw) {
+    throw new Error(
+      `publishAgentPackageFromGitDir: ${oasSourcePath} changed during the compile for ` +
+        `${packageName}@${packageVersion} (cinatra#4264); publish again`,
+    );
+  }
+  const compiledOasSource = raw;
+  const oasRelPath = path.relative(input.agentDir, oasSourcePath).split(path.sep).join("/");
   {
     const v = compileResult.value;
     if (v.approvalPolicy) compiledApprovalPolicy = v.approvalPolicy as { steps: Array<{ requiresApproval?: boolean }> };
@@ -962,6 +973,15 @@ export async function publishAgentPackageFromGitDir(
       relPaths: publishableFiles.filter(shipsInTarball).map((f) => f.relPath),
       packageName,
     });
+    // cinatra#4264: the tarball must ship the compiled OAS source, as the exact
+    // bytes compiled. A flat `agent.json` source is replaced by the synthesized
+    // payload above, so it never ships and the publish is refused.
+    if (!publishableFiles.some((f) => f.relPath === oasRelPath && shipsInTarball(f))) {
+      throw new Error(
+        `publishAgentPackageFromGitDir: the compiled OAS source ${oasRelPath} does not ship in the ` +
+          `tarball of ${packageName}@${packageVersion} (cinatra#4264); move it to cinatra/oas.json`,
+      );
+    }
     for (const file of publishableFiles) {
       // Top-level package.json + agent.json are synthesized above (distManifest
       // + distPayload), so skip the original-on-disk versions. .env* files
@@ -970,7 +990,10 @@ export async function publishAgentPackageFromGitDir(
       if (!shipsInTarball(file)) continue;
       const dstPath = path.join(tempDir, file.relPath);
       await mkdir(path.dirname(dstPath), { recursive: true });
-      if (file.isBinary) {
+      if (file.relPath === oasRelPath) {
+        // The compiled bytes, never a second read of the source file.
+        await writeFile(dstPath, compiledOasSource, "utf8");
+      } else if (file.isBinary) {
         // Preserve binary content verbatim (do not UTF-8-decode + re-encode).
         const bytes = await readFile(file.absPath);
         await writeFile(dstPath, bytes);
