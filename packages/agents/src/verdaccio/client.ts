@@ -44,6 +44,8 @@ import {
   resolveTypedProducesContract,
   agentProducesSchema,
   artifactDepVersionQuery,
+  agentLifecycleDeclarationSchema,
+  type AgentLifecycleDeclaration,
 } from "./package-contract";
 // The AUTHORITATIVE `cinatra.consumes` parser is imported DYNAMICALLY inside
 // carryManifestConsumes (route-graph ratchet: keeps the sdk consumes module
@@ -601,25 +603,35 @@ export async function publishAgentPackageFromGitDir(
 
   // Compile the OAS flow to derive approvalPolicy, inputSchema, taskSpec, and type.
   // Flow-type agents don't store these in metadata.cinatra — they're derived from the
-  // flow graph at compile time. Fall back to metadata.cinatra values if compilation
-  // fails (e.g. leaf agents whose oasSourcePath is already fully baked).
+  // flow graph at compile time. cinatra#4264: compile the SAME file this publish
+  // packages (the resolved oasSourcePath, not a packageName lookup), and refuse
+  // the publish on a failed or thrown compile, before any tarball or registry
+  // write. A compiled value the result does not carry still falls back to
+  // metadata.cinatra below.
   let compiledApprovalPolicy: { steps: Array<{ requiresApproval?: boolean }> } | null = null;
   let compiledInputSchema: Record<string, unknown> | null = null;
   let compiledTaskSpec: string | null = null;
   let compiledAgentType: string | null = null;
   let compiledHitlScreens: string[] | null = null;
-  try {
-    const compileResult = await compileOasAgentJson({ packageName });
-    if (compileResult.ok) {
-      const v = compileResult.value;
-      if (v.approvalPolicy) compiledApprovalPolicy = v.approvalPolicy as { steps: Array<{ requiresApproval?: boolean }> };
-      if (v.inputSchema) compiledInputSchema = v.inputSchema as Record<string, unknown>;
-      if (v.prompt) compiledTaskSpec = v.prompt;
-      if (v.type) compiledAgentType = v.type;
-      if (Array.isArray(v.hitlScreens) && v.hitlScreens.length > 0) compiledHitlScreens = v.hitlScreens as string[];
-    }
-  } catch {
-    // Non-fatal — fall through to metadata.cinatra fallbacks below
+  const compileResult = await compileOasAgentJson({ packageName, oasSourcePath }).catch((error: unknown) => {
+    throw new Error(
+      `publishAgentPackageFromGitDir: compile failed for ${packageName}@${packageVersion} ` +
+        `(cinatra#4264): ${error instanceof Error ? error.message : String(error)}`,
+    );
+  });
+  if (!compileResult.ok) {
+    throw new Error(
+      `publishAgentPackageFromGitDir: compile failed for ${packageName}@${packageVersion} ` +
+        `(cinatra#4264): ${compileResult.error}`,
+    );
+  }
+  {
+    const v = compileResult.value;
+    if (v.approvalPolicy) compiledApprovalPolicy = v.approvalPolicy as { steps: Array<{ requiresApproval?: boolean }> };
+    if (v.inputSchema) compiledInputSchema = v.inputSchema as Record<string, unknown>;
+    if (v.prompt) compiledTaskSpec = v.prompt;
+    if (v.type) compiledAgentType = v.type;
+    if (Array.isArray(v.hitlScreens) && v.hitlScreens.length > 0) compiledHitlScreens = v.hitlScreens as string[];
   }
 
   const agentType = compiledAgentType ?? (cinatra.type ?? "leaf") as string;
@@ -678,6 +690,25 @@ export async function publishAgentPackageFromGitDir(
   // An explicitly-present empty array is PRESERVED (declared-nothing !=
   // undeclared); absence stays absent.
   const consumesEntries = await carryManifestConsumes(gitPkgJson, packageName);
+  // cinatra#4264: carry the source `cinatra.lifecycle` block (`repairCapable`,
+  // `repairFindingsInput`, ...) through the fresh cinatra block, after the
+  // strict parse the install path applies. A declared block that does not
+  // parse refuses the publish here, before any write; an absent block stays
+  // absent.
+  const lifecycleRaw = (gitPkgJson.cinatra as Record<string, unknown> | undefined)?.lifecycle;
+  let lifecycle: AgentLifecycleDeclaration | undefined;
+  if (lifecycleRaw !== undefined) {
+    const parsedLifecycle = agentLifecycleDeclarationSchema.safeParse(lifecycleRaw);
+    if (!parsedLifecycle.success) {
+      throw new Error(
+        `publishAgentPackageFromGitDir: invalid cinatra.lifecycle for ${packageName}@${packageVersion} ` +
+          `(cinatra#4264): ${parsedLifecycle.error.issues
+            .map((i) => `${i.path.join(".") || "<root>"} ${i.message}`)
+            .join("; ")}`,
+      );
+    }
+    lifecycle = parsedLifecycle.data;
+  }
   // cinatra#3924: the declarations a run reads from this manifest. Validated
   // here, before any write; see `carryManifestRunDeclarations`.
   const runDeclarations = await carryManifestRunDeclarations(gitPkgJson, packageName);
@@ -739,6 +770,8 @@ export async function publishAgentPackageFromGitDir(
       ...(Array.isArray(cinatraDeps) && cinatraDeps.length > 0 ? { dependencies: cinatraDeps } : {}),
       ...(producesEntries.length > 0 ? { produces: producesEntries } : {}),
       ...(consumesEntries !== undefined ? { consumes: consumesEntries } : {}),
+      // cinatra#4264: the lifecycle declarations survive the rebuild.
+      ...(lifecycle !== undefined ? { lifecycle } : {}),
       // cinatra#3924: the declared tools and tables a run reads survive the rebuild.
       ...(runDeclarations.tools !== undefined ? { tools: runDeclarations.tools } : {}),
       ...(runDeclarations.declaredTables !== undefined
