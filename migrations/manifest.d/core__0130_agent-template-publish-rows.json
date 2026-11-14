@@ -1,0 +1,9 @@
+{
+  "seq": "0130",
+  "file": "core/core__0130_agent-template-publish-rows.mjs",
+  "summary": "The publish card's rows on agent_templates (cinatra#4150). ONE additive nullable column: publish_rows text, JSON-as-text like publishing_steps: for each node the compiled OAS declares metadata.cinatra.publishes: true, the rows its metadata.cinatra.publishRows declares ({ nodeId: [{ label, input }] }), written by the install, import, seed and recompile writers from the compiler's publishRows; null = unknown. Nothing reads it to decide yet. No backfill, no default, no constraint change: every existing row reads NULL. up runs outside a transaction with lock_timeout 5 s (set first, reset last), so an ALTER queued behind a long reader fails (55P03) and replays instead of stalling the table; the add itself is catalog-only. Idempotent ADD COLUMN IF NOT EXISTS twin of the fresh-install bootstrap DDL (agentTemplateRunGateSchemaQueries in src/lib/extension-grant-schema.ts), shipped in the SAME change. down() drops the column and the stored row declarations with it; a recompile or reinstall writes them again. SEQ IS PROVISIONAL: 0127 is the highest sequence on main at authoring time and 0115, 0116, 0127, 0128 and 0129 are claimed by open changes; a rename-only renumber at merge is normal.",
+  "destructive": false,
+  "tables": [
+    "agent_templates"
+  ]
+}

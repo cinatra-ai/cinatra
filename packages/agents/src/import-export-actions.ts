@@ -121,6 +121,9 @@ export type LocalAgentTemplateSeed = {
    * threaded like artifactBindings because the writer below does not spread its
    * seed. Undefined/omitted normalizes to NULL ("unknown") at the store layer. */
   publishingSteps?: string[] | null;
+  /** The publish card's rows per declared node (cinatra#4150), threaded the
+   * same way; omitted normalizes to NULL ("unknown"). */
+  publishRows?: Record<string, Array<{ label: string; input: string }>> | null;
   // Install-time owner tier. NULL means a row whose owner tier has not been
   // normalized yet. Threaded from installRegistryPackageAtScope's target
   // through installAgentPackageWithDependencies -> installAgentFromPackage.
@@ -220,6 +223,7 @@ export async function createLocalAgentTemplateVersion(input: {
     artifactBindings: input.seed.artifactBindings ?? null,
     // cinatra#4150 — the publishing-step declaration rides the same create.
     publishingSteps: input.seed.publishingSteps ?? null,
+    publishRows: input.seed.publishRows ?? null,
     status: (input.seed.status as "draft" | "published") ?? "draft",
   });
 

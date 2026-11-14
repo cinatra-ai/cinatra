@@ -1285,6 +1285,10 @@ export type CompiledAgentOas = {
   // writers. The list is for a later consumer that is to stop the run in front
   // of each of them until a person decides; nothing reads it to stop a run yet.
   publishingSteps: string[];
+  // cinatra#4150: the publish card's rows, keyed by declared node id; a node
+  // that declares no rows has no key. Persisted to agent_templates.publish_rows
+  // by the same writers as publishingSteps.
+  publishRows: PublishRows;
   // Sibling cinatra.json metadata: per-agent limits,
   // required connection types, and authoring-time defaults. Operator-tunable
   // overrides will land on agent_install_settings DB table in a follow-up.
@@ -1558,6 +1562,86 @@ export function collectPublishingSteps(
   return { ok: true, steps };
 }
 
+// cinatra#4150: the rows the publish card shows. A declared publishing node may
+// add `metadata.cinatra.publishRows: [{ label, input }]`: one or two rows, each
+// a label in the pack's own words over the value of one of the node's own
+// inputs (the values the stop surfaces). The rows are read only; the card
+// decides whether the content goes out, never what it says. The key is valid
+// only beside `publishes: true` on a top-level node; anywhere else, and in any
+// form but the one below, it refuses the compile. Errors name the field and the
+// node id only, never a label or an input the pack wrote.
+export type PublishRowDeclaration = { label: string; input: string };
+export type PublishRows = Record<string, PublishRowDeclaration[]>;
+const PUBLISH_ROWS_MAX = 2;
+const PUBLISH_ROW_LABEL_MAX = 60;
+const hasOwn = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
+
+function declaredRowsOf(owner: unknown): { present: boolean; value?: unknown } {
+  const metadata = (owner as { metadata?: unknown } | null)?.metadata;
+  const cinatra = metadata && typeof metadata === "object" ? (metadata as { cinatra?: unknown }).cinatra : undefined;
+  if (!cinatra || typeof cinatra !== "object" || !hasOwn(cinatra, "publishRows")) return { present: false };
+  return { present: true, value: (cinatra as Record<string, unknown>).publishRows };
+}
+
+export function collectPublishRows(
+  parsed: Record<string, unknown>,
+  publishingSteps: readonly string[],
+): { ok: true; rows: PublishRows } | { ok: false; error: string } {
+  const rootRefs = (parsed.$referenced_components as Record<string, unknown> | undefined) ?? {};
+  const allowed = new Map<unknown, string>();
+  for (const step of publishingSteps) if (hasOwn(rootRefs, step)) allowed.set(rootRefs[step], step);
+  const rows: PublishRows = {};
+  const stack: unknown[] = [parsed];
+  while (stack.length > 0) {
+    const value = stack.pop();
+    if (!value || typeof value !== "object") continue;
+    if (Array.isArray(value)) {
+      stack.push(...value);
+      continue;
+    }
+    stack.push(...Object.values(value));
+    const declared = declaredRowsOf(value);
+    if (!declared.present) continue;
+    const step = allowed.get(value);
+    const id = (value as { id?: unknown }).id;
+    const who = step !== undefined ? `node ${quoteNodeId(step)}` : typeof id === "string" ? `node ${quoteNodeId(id)}` : "a component";
+    if (step === undefined) {
+      return { ok: false, error: `PUBLISH_ROWS_MISPLACED: ${who} declares metadata.cinatra.publishRows, but only a top-level node that declares publishes: true can carry it` };
+    }
+    const list = declared.value;
+    if (!Array.isArray(list) || list.length < 1 || list.length > PUBLISH_ROWS_MAX) {
+      return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${who} declares metadata.cinatra.publishRows that is not a list of 1 to ${PUBLISH_ROWS_MAX} rows` };
+    }
+    const inputs = (value as { inputs?: unknown }).inputs;
+    const titles = new Set(
+      (Array.isArray(inputs) ? inputs : [])
+        .map((p) => (p && typeof p === "object" ? (p as { title?: unknown }).title : undefined))
+        .filter((t): t is string => typeof t === "string"),
+    );
+    const out: PublishRowDeclaration[] = [];
+    for (const [index, row] of list.entries()) {
+      const where = `${who} metadata.cinatra.publishRows[${index}]`;
+      if (!row || typeof row !== "object" || Array.isArray(row) || Object.keys(row).sort().join(",") !== "input,label") {
+        return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where} must be an object with exactly the keys label and input` };
+      }
+      const { label, input } = row as { label: unknown; input: unknown };
+      if (typeof label !== "string" || label.trim() === "" || label !== label.trim() || label.length > PUBLISH_ROW_LABEL_MAX || /[\p{Cc}\u2028\u2029]/u.test(label)) {
+        return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where}.label must be one line of 1 to ${PUBLISH_ROW_LABEL_MAX} characters with no leading or trailing space` };
+      }
+      if (typeof input !== "string" || !titles.has(input)) {
+        return { ok: false, error: `PUBLISH_ROWS_UNKNOWN_INPUT: ${where}.input does not name an input of the node` };
+      }
+      if (out.some((r) => r.input === input)) {
+        return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where}.input repeats an input another row shows` };
+      }
+      out.push({ label, input });
+    }
+    // A defined own property, so a node id such as "__proto__" stays a plain key.
+    Object.defineProperty(rows, step, { value: out, enumerable: true, writable: true, configurable: true });
+  }
+  return { ok: true, rows };
+}
+
 // ---------------------------------------------------------------------------
 // Main compile entry point
 // ---------------------------------------------------------------------------
@@ -1639,6 +1723,10 @@ export async function compileOasAgentJson(opts: {
   const publishing = collectPublishingSteps(parsed);
   if (!publishing.ok) {
     return { ok: false, error: publishing.error };
+  }
+  const publishRows = collectPublishRows(parsed, publishing.steps);
+  if (!publishRows.ok) {
+    return { ok: false, error: publishRows.error };
   }
 
   // Fan out `metadata.cinatra.llm` to every
@@ -2543,6 +2631,8 @@ export async function compileOasAgentJson(opts: {
       artifactBindings,
       // cinatra#4150 — the nodes declared `publishes: true`.
       publishingSteps: publishing.steps,
+      // cinatra#4150 — the publish card's rows per declared node.
+      publishRows: publishRows.rows,
       // sibling cinatra.json
       cinatraConfig,
     },
