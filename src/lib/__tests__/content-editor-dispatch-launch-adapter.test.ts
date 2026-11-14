@@ -50,7 +50,7 @@ const readSourceRun = vi.fn(async () => {
   const launch = launchAgentRun.mock.calls.at(-1)?.[0] as
     | { create: { input: { orgId?: string } } }
     | undefined;
-  return { orgId: launch?.create.input.orgId, executionAttemptId: "attempt", a2aContextId: "dispatch-context" };
+  return { orgId: launch?.create.input.orgId, executionAttemptId: "attempt", a2aContextId: null as string | null };
 });
 const selectSourcePolicy = vi.fn(async (input: { contextId: string }) => ({
   version: 1,

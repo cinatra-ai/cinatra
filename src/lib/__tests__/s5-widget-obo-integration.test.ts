@@ -148,7 +148,7 @@ vi.mock("@cinatra-ai/agents", () => ({
 // The policy reader's own refusals are exercised by run-step-tool-policy.test.ts.
 const readSourceRun = vi.fn(async () => {
   const input = createCarrierRun.mock.calls.at(-1)?.[0] as { orgId?: string } | undefined;
-  return { orgId: input?.orgId, executionAttemptId: "attempt", a2aContextId: "dispatch-context" };
+  return { orgId: input?.orgId, executionAttemptId: "attempt", a2aContextId: null as string | null };
 });
 const selectSourcePolicy = vi.fn(async (input: { contextId: string }) => ({
   version: 1,

@@ -73,13 +73,15 @@ vi.mock("@cinatra-ai/agents", () => ({
 // The policy reader's real missing-ABI refusal is separately exercised by run-step-tool-policy.test.ts.
 const readSourceRun = vi.fn(async () => {
   const input=createCarrierRun.mock.calls.at(-1)?.[0] as {orgId?:string}|undefined;
-  return {orgId:input?.orgId,executionAttemptId:"attempt",a2aContextId:"dispatch-context"};
+  // A carrier run the dispatch just created names no context yet (cinatra#4150).
+  return {orgId:input?.orgId,executionAttemptId:"attempt",a2aContextId:null as string|null};
 });
 const selectSourcePolicy=vi.fn(async (input:{contextId:string})=>({version:1,contextId:input.contextId,source:"{}",sourceSha256:"a".repeat(64),executedSourceSha256:"b".repeat(64),declarationSourceSha256:"c".repeat(64)}));
 const bindSourcePolicy=vi.fn(async (input:unknown)=>{void input;});
+const updateRunContextId=vi.fn(async (runId:string,contextId:string)=>{void runId;void contextId;});
 vi.mock("@cinatra-ai/agents/store",()=>({
  readAgentRunById:()=>readSourceRun(),
- updateAgentRunA2AContextId:vi.fn(),
+ updateAgentRunA2AContextId:(runId:string,contextId:string)=>updateRunContextId(runId,contextId),
  selectWayflowRunStepToolPolicy:(input:{contextId:string})=>selectSourcePolicy(input),
  bindRunStepToolPolicy:(input:unknown)=>bindSourcePolicy(input),
 }));
@@ -558,12 +560,26 @@ describe("#3745 selected-source binding before content-editor effects",()=>{
  it("binds exact carrier attempt/org/context under real minted authority before sending",async()=>{
   await dispatchContentEditorViaA2A(input());
   const run=createCarrierRun.mock.calls.at(-1)![0];
-  expect(bindSourcePolicy).toHaveBeenCalledWith(expect.objectContaining({runId:run.id,orgId:"org_1",executionAttemptId:"attempt",policy:expect.objectContaining({contextId:"dispatch-context"}),authority:expect.anything()}));
+  // The dispatch mints the context id in this call and records it on the run before it binds.
+  expect(updateRunContextId).toHaveBeenCalledTimes(1);
+  const [contextRunId,minted]=updateRunContextId.mock.calls[0];
+  expect(contextRunId).toBe(run.id);
+  expect(minted).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  expect(updateRunContextId.mock.invocationCallOrder[0]).toBeLessThan(bindSourcePolicy.mock.invocationCallOrder.at(-1)!);
+  expect(bindSourcePolicy).toHaveBeenCalledWith(expect.objectContaining({runId:run.id,orgId:"org_1",executionAttemptId:"attempt",policy:expect.objectContaining({contextId:minted}),authority:expect.anything()}));
   expect(bindSourcePolicy.mock.invocationCallOrder.at(-1)!).toBeLessThan(sendTask.mock.invocationCallOrder.at(-1)!);
-  expect(sendTask.mock.calls.at(-1)?.[0]).toMatchObject({message:{contextId:"dispatch-context"}});
+  expect(sendTask.mock.calls.at(-1)?.[0]).toMatchObject({message:{contextId:minted}});
+ });
+ it("refuses a carrier run that already names a context before any bind or send (cinatra#4150)",async()=>{
+  readSourceRun.mockResolvedValueOnce({orgId:"org_1",executionAttemptId:"attempt",a2aContextId:"existing-context"});
+  await expect(dispatchContentEditorViaA2A(input())).rejects.toThrow("step_tool_dispatch_context_present");
+  expect(sendTask).toHaveBeenCalledTimes(0);
+  expect(bindSourcePolicy).not.toHaveBeenCalled();
+  expect(selectSourcePolicy).not.toHaveBeenCalled();
+  expect(updateRunContextId).not.toHaveBeenCalled();
  });
  it("refuses an absent durable attempt before any external task effect",async()=>{
-  readSourceRun.mockResolvedValueOnce({orgId:"org_1",executionAttemptId:"",a2aContextId:"dispatch-context"});
+  readSourceRun.mockResolvedValueOnce({orgId:"org_1",executionAttemptId:"",a2aContextId:null});
   await expect(dispatchContentEditorViaA2A(input())).rejects.toThrow("step_tool_dispatch_attempt_missing");
   expect(sendTask).not.toHaveBeenCalled();expect(bindSourcePolicy).not.toHaveBeenCalled();
  });

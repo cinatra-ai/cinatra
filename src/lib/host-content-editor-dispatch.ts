@@ -611,14 +611,18 @@ export async function dispatchContentEditorViaA2A(
 
   let task: Task;
   try {
-    let dispatchContextId: string | undefined;
+    let mintedContextId: string | undefined;
     if (runId) {
       if (!dispatchAuthority) throw new Error("step_tool_dispatch_authority_missing");
       const run = await readAgentRunById(runId);
       if (!run?.orgId || !run.executionAttemptId) throw new Error("step_tool_dispatch_attempt_missing");
-      dispatchContextId = run.a2aContextId ?? randomUUID();
-      if (dispatchContextId !== run.a2aContextId) await updateAgentRunA2AContextId(runId, dispatchContextId);
-      const policy = await selectWayflowRunStepToolPolicy({ agentUrl: input.agentUrl, contextId: dispatchContextId });
+      // cinatra#4150: never send into a context that already exists. The carrier run was created
+      // above and names no context; one that does is refused before any bind or send.
+      if (run.a2aContextId) throw new Error("step_tool_dispatch_context_present");
+      // The send carries only the id minted here, recorded on the run and bound in its policy first.
+      mintedContextId = randomUUID();
+      await updateAgentRunA2AContextId(runId, mintedContextId);
+      const policy = await selectWayflowRunStepToolPolicy({ agentUrl: input.agentUrl, contextId: mintedContextId });
       await bindRunStepToolPolicy({ runId, orgId: run.orgId, executionAttemptId: run.executionAttemptId,
         policy, authority: dispatchAuthority });
     }
@@ -627,7 +631,7 @@ export async function dispatchContentEditorViaA2A(
         role: "user",
         kind: "message",
         messageId: randomUUID(),
-        ...(dispatchContextId ? { contextId: dispatchContextId } : {}),
+        ...(mintedContextId ? { contextId: mintedContextId } : {}),
         parts: [{ kind: "text", text }],
       },
       configuration: { acceptedOutputModes: ["text"] },
