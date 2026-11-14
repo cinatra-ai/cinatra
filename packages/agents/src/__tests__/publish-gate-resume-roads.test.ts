@@ -76,11 +76,12 @@ const RESUME_ROAD_ANCHORS: Record<string, { from: string; claim: string; hold: s
     hold: "recheckPublishHoldUnderClaim(",
     fence: "pauseFence:",
   },
+  // cinatra#3745: the delivery's claim of the run is its pause fence, the intent's lease on the same edge
   "packages/agents/src/artifact-review-resume-delivery.ts": {
     from: "export async function deliverArtifactReviewResumeIntent(",
     claim: "claimPause(",
     hold: "recheckPublishHoldUnderClaim(",
-    fence: "fencePauseInPlace(",
+    fence: "pauseFence:",
   },
   "packages/agents/src/orchestrator-actions.ts": {
     from: "export async function resumeStoppedOrchestratorAction(",

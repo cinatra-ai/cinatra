@@ -20,8 +20,9 @@ const isScopeDenial = (err: unknown): err is { reason: string } =>
 // (the decision was already authorized at submit time, so the worker performs no
 // human authz — it is a trusted server-internal drain).
 //
-//   claimPendingResumeIntents  → LEASE a batch (pending, or delivering with an
-//                                expired lease — a crashed worker's rows recover).
+//   claimPendingResumeIntents  → LEASE one row at a time (pending, or delivering
+//                                with an expired lease — a crashed worker's rows
+//                                recover); the lease is renewed while it delivers.
 //   deliver each               → resolve the paused run from the gate's
 //                                `wayflow-<taskId>` reviewTaskId, send the typed
 //                                approve/reject payload into `run.a2aContextId`,
@@ -33,9 +34,13 @@ const isScopeDenial = (err: unknown): err is { reason: string } =>
 //
 // EXACTLY-ONCE PERSISTENCE, AT-LEAST-ONCE DELIVERY: a worker may send then crash
 // before marking done; the expired lease is re-claimed and re-delivered. The
-// resume consumer is therefore idempotent per gate: once a gate's resume lands
-// the run leaves `pending_approval`, so a re-claimed intent observes the advanced
-// run and marks itself done WITHOUT re-sending (no double-resume).
+// intent row itself records how far its delivery got (cinatra#3745): the claim
+// mark (this gate's delivery moved the run to running) and the task WayFlow
+// returned. A re-claim re-sends a claimed run with nothing recorded, replays the
+// handler from a recorded task, and closes the intent only once the run has left
+// this gate or the recorded task witnesses its delivery; a run another driver
+// holds is left for a later lease. A crash between WayFlow taking a send and its
+// record re-sends.
 //
 // REJECT ≠ APPROVE (#1807 ADR): the intent's `kind` is authoritative and its
 // `responseText` is the STRUCTURALLY-DISTINCT typed envelope the decision core
@@ -50,7 +55,7 @@ import {
   readAgentRunByTaskId,
   readAgentTemplateById,
 } from "./store";
-import { claimPause, fencePauseInPlace, PauseClaimReleaseError } from "./run-pause-claim";
+import { claimPause, PauseClaimReleaseError, releasePauseClaim } from "./run-pause-claim";
 import { failPreSendStep, givePauseBackOnHoldFault, recheckPublishHoldUnderClaim, settleSendOrDescribe } from "./run-resume-under-claim";
 import {
   WAYFLOW_A2A_TIMEOUT_MS,
@@ -60,10 +65,14 @@ import {
 import {
   claimPendingResumeIntents,
   deadLetterExhaustedResumeIntents,
+  deferResumeIntent,
   listReviewGatesForRun,
   markResumeIntentDelivered,
   withRunDecisionLock,
   type GateStoreExecutor,
+  readResumeIntentClaim,
+  recordResumeTaskResult,
+  renewResumeIntentLease,
   type ResumeIntentRow,
 } from "./artifact-review-gate-store";
 import {
@@ -83,7 +92,9 @@ export type ResumeDeliveryOutcome =
    *  marked delivered without re-sending (idempotent consumer). */
   | "already-advanced"
   /** The delivery could not be attempted this cycle (run/context not resolvable
-   *  yet); the intent is LEFT pending so the lease expiry re-claims it. */
+   *  yet, or another driver holds the run with no witness that this gate's
+   *  resume was delivered); the intent is LEFT pending so the lease expiry
+   *  re-claims it. */
   | "retryable"
   /** markResumeIntentDelivered lost its lease race (a re-claim already owns the
    *  row) — no re-send, no double-mark. */
@@ -93,6 +104,11 @@ export type ResumeDeliveryOutcome =
    *  delivered): the decision will not change on the next tick, and leaving it
    *  pending would re-attempt a refused resume forever. */
   | "refused-out-of-scope";
+
+/** The sweep's lease, and a delivery's when its caller names none. */
+const DEFAULT_LEASE_MS = 5 * 60_000;
+
+type HandlerTask = Parameters<(typeof import("./execution"))["handleWayflowTaskState"]>[0]["task"];
 
 export interface ResumeSweepSummary {
   attempted: number;
@@ -116,12 +132,19 @@ export interface ResumeSweepSummary {
  * delivered on `delivered` / `already-advanced`; leaves it pending on
  * `retryable`. A `retryable`, a `lease-lost` and a throw each leave the intent
  * for a re-claim after its lease, and each claim uses one of its attempts
- * (cinatra#4312): see `sweepArtifactReviewResumeIntents`.
+ * (cinatra#4312): see `sweepArtifactReviewResumeIntents`. A deferral
+ * (cinatra#3745) gives its attempt back.
+ *
+ * cinatra#3745: from the WayFlow branch on, the lease is renewed while the
+ * delivery runs (`opts.leaseMs`, the length the sweep claimed it for) and fenced
+ * by an awaited renewal before every send, re-send and replay. The renewal timer
+ * stops on every exit.
  */
 export async function deliverArtifactReviewResumeIntent(
   intent: ResumeIntentRow,
+  opts?: { leaseMs?: number },
 ): Promise<ResumeDeliveryOutcome> {
-  const { gateId, reviewTaskId, leaseToken, kind, responseText } = intent;
+  const { gateId, reviewTaskId, leaseToken } = intent;
 
   // S1 AUTO-created review gate (cinatra#2039, epic #2037): a `lifecycle-review:`
   // reviewTaskId names a policy-created gate whose producing run has no WayFlow
@@ -174,6 +197,20 @@ export async function deliverArtifactReviewResumeIntent(
     );
     return "retryable";
   }
+  const lease = keepResumeIntentLease(gateId, leaseToken, opts?.leaseMs ?? DEFAULT_LEASE_MS);
+  try {
+    return await deliverWayflowResume(intent, leaseToken, lease);
+  } finally {
+    lease.stop();
+  }
+}
+
+async function deliverWayflowResume(
+  intent: ResumeIntentRow,
+  leaseToken: string,
+  lease: ResumeLeaseKeeper,
+): Promise<ResumeDeliveryOutcome> {
+  const { gateId, reviewTaskId, kind, responseText } = intent;
   const taskId = baseReviewTaskId(reviewTaskId.slice("wayflow-".length));
 
   // Resolve the paused run: the per-gate a2a_task_id column first, then the
@@ -192,17 +229,52 @@ export async function deliverArtifactReviewResumeIntent(
     return "retryable";
   }
 
-  // Idempotency #1 (status): once THIS gate's resume landed, the run leaves
-  // pending_approval (single-gate reviewer flow completes; or a later gate is
-  // resolved; or the run reached terminal). The resume already took effect — mark
-  // done without re-sending.
-  if (run.status !== "pending_approval") {
-    const ok = await markResumeIntentDelivered(gateId, leaseToken);
-    console.log(
-      `[artifact-review-resume] gate=${gateId} run=${run.id} already ${run.status} (kind=${kind}) — marked ${ok ? "done" : "LEASE-LOST"}`,
-    );
-    return ok ? "already-advanced" : "lease-lost";
+  // cinatra#3745 — THE DURABLE ROW DECIDES, NEVER REDIS ALONE. The claim mark
+  // and the recorded task are read fresh, after the run: an entry into `running`
+  // by another driver clears this intent's mark (and keeps its recorded task) in
+  // the run's own transaction. The intent closes only on a durable witness: the
+  // run has left this gate, or this gate's recorded task shows its resume was
+  // delivered. A status alone is no witness: another driver's claim that fails
+  // before its dispatch puts the run back on this gate.
+  //   running, no mark, recorded       delivered; another driver moves it on  close
+  //   running, no mark, not recorded   another driver holds it          defer, no send
+  //   any other status                 terminal, or stopped             close
+  //   pending_approval, recorded       its handler moved it to a later gate  close
+  //   running, mark, recorded          sent; the handler did not finish  replay the handler
+  //   running, mark, not recorded      claimed; not sent or not recorded re-send, no claim
+  //   pending_approval                 not claimed                      claim, then send
+  // A deferral sends, closes and moves nothing, and gives the attempt back: the
+  // next lease reads the run again. A read error throws: the intent stays
+  // delivering and is re-claimed.
+  const claim = await readResumeIntentClaim(gateId, leaseToken);
+  if (!claim) return "lease-lost";
+  if (run.status === "running" && !claim.runClaimed) {
+    if (claim.result !== null) {
+      return closeIntent(gateId, leaseToken, run.id, `was delivered; another driver moves the run on (kind=${kind})`);
+    }
+    return deferIntent(gateId, leaseToken, run.id, `is held by another driver (kind=${kind})`);
   }
+  if (run.status !== "pending_approval" && run.status !== "running") {
+    return closeIntent(gateId, leaseToken, run.id, `already ${run.status} (kind=${kind})`);
+  }
+  if (run.status === "pending_approval" && claim.result !== null) {
+    return closeIntent(gateId, leaseToken, run.id, "moved on from this gate after its resume");
+  }
+  const authority = mintAgentRunExecutionAuthority(run.orgId);
+  const { transitionRunStatus } = await import("./run-transition");
+  if (run.status === "running" && claim.result !== null) {
+    // WayFlow returned this gate's task and it was recorded before the handler
+    // ran, but the handler never finished. Replay it from the record: no send.
+    // Its side effects (notifications) can repeat.
+    if (!(await lease.fence())) return "lease-lost";
+    const recorded = claim.result as HandlerTask;
+    const { handleWayflowTaskState } = await import("./execution");
+    await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task: recorded, authority });
+    return finishDelivery(gateId, leaseToken, run.id, `REPLAYED ${kind} resume (resultState=${recorded.status?.state})`);
+  }
+  // This gate's delivery already holds the run (mark set, nothing recorded): the
+  // send is repeated without a second claim.
+  const claimedByUs = run.status === "running";
   if (!run.a2aContextId) {
     // The paused run must carry the fasta2a context to resume; a missing context
     // is transient (execution persists it right after the initial send). Leave
@@ -224,10 +296,20 @@ export async function deliverArtifactReviewResumeIntent(
   // THIS one, the run advanced past this gate → the resume already landed → mark
   // done WITHOUT re-sending. A null map (7-day TTL expiry) is inconclusive, so we
   // fall through and deliver (best effort, the same posture the human resume path
-  // takes when the map has lapsed).
+  // takes when the map has lapsed). cinatra#3745: Redis is written before the
+  // handler's status CAS, so it closes only a run nobody claimed. A claimed run
+  // with nothing recorded is never closed or sent on it: whoever advances the run
+  // lands a status the rows above close on.
   const { resolveLatestWayflowGateTaskId } = await import("@cinatra-ai/a2a");
   const latestTaskId = await resolveLatestWayflowGateTaskId(run.id);
   if (latestTaskId && latestTaskId !== taskId) {
+    if (claimedByUs) {
+      console.warn(
+        `[artifact-review-resume] gate=${gateId} run=${run.id} is claimed by this gate with nothing recorded, ` +
+          `but the latest gate task is another — left for a later cycle`,
+      );
+      return "retryable";
+    }
     const ok = await markResumeIntentDelivered(gateId, leaseToken);
     console.log(
       `[artifact-review-resume] gate=${gateId} run=${run.id} advanced past this gate ` +
@@ -297,28 +379,36 @@ export async function deliverArtifactReviewResumeIntent(
         // already takes for an UNREADABLE check.
         //
         // `stale_from_status` is the ONE benign failure: the CAS lost because
-        // another writer already moved the run OFF `pending_approval`, which is
-        // exactly the "already advanced" case that needs no failure stamped —
-        // so the intent is closed as usual.
+        // another writer already moved the run off the status this delivery read.
+        // It stamps no failure and closes nothing (cinatra#3745): that writer may
+        // be a claim that puts the run back on this gate before its dispatch, so
+        // the intent is deferred and the next lease reads the run again.
         //
-        // Dynamic import mirrors this file's existing discipline (`./execution`
-        // at the delivery step below): no new STATIC route-graph weight.
-        const { transitionRunStatus } = await import("./run-transition");
+        // cinatra#3745: the failure is fenced by this intent's lease, from the
+        // status this delivery reads (`running` when it already claimed the run).
+        // A stale worker's refusal fails nothing: the live lease holder decides.
+        const refusal = {
+          error: `run refused: the agent's scope no longer authorizes this run (${err.reason})`,
+          resumeIntentLease: { gateId, leaseToken },
+        };
         try {
-          await transitionRunStatus(
-            run.id,
-            "pending_approval",
-            "failed",
-            {
-              error:
-                `run refused: the agent's scope no longer authorizes this run (${err.reason})`,
-            },
-            mintAgentRunExecutionAuthority(run.orgId),
-          );
+          if (claimedByUs) {
+            await transitionRunStatus(run.id, "running", "failed", refusal, authority);
+          } else {
+            await transitionRunStatus(
+              run.id,
+              "pending_approval",
+              "failed",
+              refusal,
+              authority,
+            );
+          }
         } catch (tErr: unknown) {
           // Branch on the CODE, not `instanceof` — the error class arrives
           // through a dynamic import, so identity is not guaranteed.
-          if ((tErr as { code?: string } | null)?.code !== "stale_from_status") {
+          const code = (tErr as { code?: string } | null)?.code;
+          if (code === "resume_intent_lease_lost") return "lease-lost";
+          if (code !== "stale_from_status") {
             console.warn(
               `[artifact-review-resume] gate=${gateId} run=${run.id} refused, but the terminal ` +
                 `transition did not land — LEAVING the intent pending so a later cycle retries ` +
@@ -327,10 +417,8 @@ export async function deliverArtifactReviewResumeIntent(
             );
             return "retryable";
           }
-          console.warn(
-            `[artifact-review-resume] gate=${gateId} run=${run.id} refused; the run had already ` +
-              `advanced off pending_approval, so no failure was stamped`,
-          );
+          return deferIntent(gateId, leaseToken, run.id,
+            "refused, but another writer moved the run first; no failure was stamped");
         }
         const ok = await markResumeIntentDelivered(gateId, leaseToken);
         return ok ? "refused-out-of-scope" : "lease-lost";
@@ -419,32 +507,48 @@ export async function deliverArtifactReviewResumeIntent(
   } catch (err) {
     return refused(err);
   }
-  // cinatra#4150 (A5): a publishing template, or a run with a decision, reads the hold again under the claim.
+
+  // cinatra#4150 (A5): a publishing template, or a run with a decision, reads the hold again before the send.
   const recheckHold = (template.publishingSteps?.length ?? 0) > 0 || decided;
 
-  // cinatra#4245: the same claim as the other resume roads, at the generation read.
-  // A pause that moved on, or that a change request ended, needs no send: the intent
-  // is done. A pause another claimer holds is tried again later.
-  const authority = mintAgentRunExecutionAuthority(run.orgId);
-  const claim = await claimPause({ runId: run.id, orgId: run.orgId, generation: run.pauseGeneration as number }, authority);
-  if (claim.kind === "refused") {
-    if (claim.reason === "held") return "retryable";
-    const ok = await markResumeIntentDelivered(gateId, leaseToken);
-    console.log(`[artifact-review-resume] gate=${gateId} run=${run.id} claim refused (${claim.reason}) — marked ${ok ? "done" : "LEASE-LOST"}`);
-    return ok ? "already-advanced" : "lease-lost";
+  // THE DELIVERY CLAIMS THE RUN BEFORE IT DISPATCHES (cinatra#3745). The resumed
+  // leg runs while the run is `running`, so the paused run moves `pending_approval
+  // -> running` (the resume edge, which keeps the attempt) before the message
+  // leaves, exactly as the human approve path does. That edge is the pause fence
+  // (cinatra#4245): the delivery first claims the pause at the generation it read,
+  // as every other resume road does, and the fence and this intent's lease ride
+  // on the one edge, so the claim sets the intent's mark in the run's
+  // transaction. A claim or a fence lost to another driver is no witness that
+  // this gate's resume was delivered (a claim can fail before its dispatch and
+  // put the run back), so the intent is deferred without a send; a pause that a
+  // change request ended needs no send, and the intent is done. Every later run
+  // edge carries this intent's lease (cinatra#3745).
+  let pause: { token: string; generation: number; expiresAt: Date } | null = null;
+  if (!claimedByUs) {
+    const claimed = await claimPause({ runId: run.id, orgId: run.orgId, generation: run.pauseGeneration as number }, authority);
+    if (claimed.kind === "refused") {
+      if (claimed.reason === "changes-requested") {
+        return closeIntent(gateId, leaseToken, run.id, `was ended by a change request; nothing was sent (kind=${kind})`);
+      }
+      return deferIntent(gateId, leaseToken, run.id, `lost the pause claim to another driver (${claimed.reason})`);
+    }
+    pause = claimed;
   }
-  const claimRef = { runId: run.id, orgId: run.orgId, token: claim.token };
+  const pauseRef = pause ? { runId: run.id, orgId: run.orgId, token: pause.token } : null;
 
-  // The steps before the fence, under the claim: a failure gives it back, and a
-  // release that fails too leaves the intent pending until the lease frees itself.
-  // Every step between the claim and the fence sits in here, the import of the
-  // client included.
-  const preSend = async () => {
+  // The steps before the wire. Under a pause claim they come before the fence
+  // (cinatra#4245): a failure there gives the claim back, a publish-hold refusal
+  // included, and the intent stays pending (a release that fails too leaves it
+  // pending until the claim's lease frees itself). On a re-send of a run this
+  // gate's delivery already holds, a failure puts the gate back under this
+  // intent's lease instead (a lost lease releases nothing: the live lease holder
+  // decides).
+  const preWire = async () => {
     // Deliver the typed decision verbatim as the WayFlow resume message. Dynamic
     // import mirrors review-task-actions.ts (circular-dep avoidance:
     // agents ← @cinatra-ai/a2a ← mcp-server ← agent-builder).
     const { createExternalA2AClient } = await import("@cinatra-ai/a2a");
-    const preSendClient = await createExternalA2AClient({
+    const preWireClient = await createExternalA2AClient({
       agentUrl: wayflowUrl,
       timeoutMs: WAYFLOW_A2A_TIMEOUT_MS,
       fetchImpl: createWayflowFetch(),
@@ -460,82 +564,213 @@ export async function deliverArtifactReviewResumeIntent(
     // executing. An overwrite-in-place rotation would 403 that live task.
     const { mintResumeRunTokenMetadata } = await import("./wayflow-run-token-carrier");
     const metadata = await mintResumeRunTokenMetadata(run.id);
-    // cinatra#4150 (A5): the hold read again under the claim and before the fence. A decision
-    // parked after the first read above refuses the send: the claim is given back and the
-    // intent stays pending.
+    // cinatra#4150 (A5): the hold read again under the claim and before the send. A
+    // decision parked after the first read above refuses the send.
     if (recheckHold) await recheckPublishHoldUnderClaim(run.id);
-    // THE FENCE, in place: the worker sends while the run stays pending_approval,
-    // so a stop during this send meets the same live `sending` lease.
-    const fence = await fencePauseInPlace({ runId: run.id, orgId: run.orgId, generation: claim.generation, token: claim.token }, authority);
-    return fence === "fenced" ? { client: preSendClient, resumeMetadata: metadata } : null;
+    return { client: preWireClient, resumeMetadata: metadata };
   };
-  let ready: Awaited<ReturnType<typeof preSend>>;
+  let ready: Awaited<ReturnType<typeof preWire>>;
   try {
-    ready = await preSend();
+    ready = await preWire();
   } catch (stepError) {
-    // cinatra#4150: a publish-hold refusal (or an unreadable hold) gives the claim back and keeps
-    // the intent pending; a release that fails too is logged with no gate, run or raw error.
-    if (await givePauseBackOnHoldFault(claimRef, authority, stepError, "[artifact-review-resume] could not give the claim back after a publish-hold refusal")) {
-      return refused(stepError);
+    if (pause && pauseRef) {
+      if (await givePauseBackOnHoldFault(pauseRef, authority, stepError, "[artifact-review-resume] could not give the claim back after a publish-hold refusal")) {
+        return refused(stepError);
+      }
+      try {
+        return await failPreSendStep({ ...pauseRef, expiresAt: pause.expiresAt }, authority, stepError);
+      } catch (surfaced) {
+        if (!(surfaced instanceof PauseClaimReleaseError)) throw surfaced;
+        console.warn(`[artifact-review-resume] gate=${gateId} run=${run.id} left pending: ${surfaced.message}`);
+        return "retryable";
+      }
     }
     try {
-      return await failPreSendStep({ ...claimRef, expiresAt: claim.expiresAt }, authority, stepError);
-    } catch (surfaced) {
-      if (!(surfaced instanceof PauseClaimReleaseError)) throw surfaced;
-      console.warn(`[artifact-review-resume] gate=${gateId} run=${run.id} left pending: ${surfaced.message}`);
-      return "retryable";
+      await transitionRunStatus(run.id, "running", "pending_approval", { resumeIntentLease: { gateId, leaseToken } }, authority);
+    } catch (releaseErr: unknown) {
+      if ((releaseErr as { code?: string } | null)?.code === "resume_intent_lease_lost") return "lease-lost";
+      console.warn(
+        `[artifact-review-resume] gate=${gateId} run=${run.id} could not release the claim before the wire (${errorLabel(releaseErr)})`,
+      );
+    }
+    if (publishHold.isPublishHoldFault(stepError)) return refused(stepError);
+    throw stepError;
+  }
+  const { client, resumeMetadata } = ready;
+
+  // THE FENCE: the claim of the run, under the live pause claim and this intent's lease.
+  if (pause && pauseRef) {
+    try {
+      await transitionRunStatus(
+        run.id,
+        "pending_approval",
+        "running",
+        { pauseFence: { token: pause.token, generation: pause.generation }, resumeIntentLease: { gateId, leaseToken } },
+        authority,
+      );
+    } catch (claimErr: unknown) {
+      const code = (claimErr as { code?: string } | null)?.code;
+      if (code === "resume_intent_lease_lost") {
+        // The lost lease rolled the edge back, so the pause is still claimed by
+        // this worker: give it back. A release that fails is logged; the claim's
+        // lease then frees itself.
+        await releasePauseClaim(pauseRef, authority).catch((releaseErr: unknown) => {
+          console.warn(`[artifact-review-resume] gate=${gateId} run=${run.id} could not give the pause claim back (${errorLabel(releaseErr)})`);
+        });
+        return "lease-lost";
+      }
+      if (code === "stale_from_status") {
+        // A stop, a status change or a claimer that took the expired claim over:
+        // the claim is no longer this worker's, so nothing is given back.
+        return deferIntent(gateId, leaseToken, run.id, "lost the fence to another driver");
+      }
+      try {
+        return await failPreSendStep({ ...pauseRef, expiresAt: pause.expiresAt }, authority, claimErr);
+      } catch (surfaced) {
+        if (!(surfaced instanceof PauseClaimReleaseError)) throw surfaced;
+        console.warn(`[artifact-review-resume] gate=${gateId} run=${run.id} left pending: ${surfaced.message}`);
+        return "retryable";
+      }
     }
   }
-  if (!ready) return "retryable";
-  const { client, resumeMetadata } = ready;
+
+  // Past the fence the send counts as possibly made. The pause lease is settled
+  // however the delivery ends; a settle that fails leaves the intent pending, and
+  // the next lease reads the claim row again.
   const fencedAt = Date.now();
-  // The lease is settled however the send ends. A settle that fails leaves the
-  // intent pending: the guards above read the moved run on the next cycle.
-  let settleFailure: string | null = null;
-  const settle = async () => {
-    settleFailure = await settleSendOrDescribe(claimRef, authority, fencedAt);
-    if (settleFailure !== null) console.error(`[artifact-review-resume] gate=${gateId} run=${run.id}: ${settleFailure}`);
+  let settled = false;
+  const settle = async (): Promise<string | null> => {
+    if (!pauseRef || settled) return null;
+    settled = true;
+    const failure = await settleSendOrDescribe(pauseRef, authority, fencedAt);
+    if (failure !== null) console.error(`[artifact-review-resume] gate=${gateId} run=${run.id}: ${failure}`);
+    return failure;
   };
-  // The send, the import of the handler and the handling sit in ONE try: whatever
-  // fails after the send (the handler's lazy import included) still settles the
-  // lease, so a delivered answer never leaves the run under a live `sending` lease.
-  let resultState: string | undefined;
   try {
-    const task = await client.sendTask({
-      message: {
-        role: "user",
-        kind: "message",
-        metadata: resumeMetadata,
-        // DETERMINISTIC per-gate messageId (not random): a gate resumes exactly
-        // once, so a stable id lets a dedup-aware receiver drop a duplicate re-send
-        // (the at-least-once redelivery of the SAME gate's intent). Harmless if the
-        // receiver does not dedup — the guards above already suppress the common
-        // redelivery cases.
-        messageId: `artifact-review-resume-${gateId}`,
-        contextId: run.a2aContextId,
-        parts: [{ kind: "text", text: responseText }],
-      },
-      configuration: { acceptedOutputModes: ["text"] },
-    });
+    // Renew the lease before the wire. A refused renewal sends, releases and closes nothing.
+    if (!(await lease.fence())) return "lease-lost";
+    let task: Awaited<ReturnType<typeof client.sendTask>>;
+    try {
+      task = await client.sendTask({
+        message: {
+          role: "user",
+          kind: "message",
+          metadata: resumeMetadata,
+          // DETERMINISTIC per-gate messageId (not random): a gate resumes exactly
+          // once, so a stable id lets a dedup-aware receiver drop a duplicate re-send
+          // (the at-least-once redelivery of the SAME gate's intent). Harmless if the
+          // receiver does not dedup — the guards above already suppress the common
+          // redelivery cases.
+          messageId: `artifact-review-resume-${gateId}`,
+          contextId: run.a2aContextId,
+          parts: [{ kind: "text", text: responseText }],
+        },
+        configuration: { acceptedOutputModes: ["text"] },
+      });
+    } catch (sendErr) {
+      // A failed send puts the gate back under the lease, which clears the mark
+      // (and, as every status change, the pause claim). A lost lease releases
+      // nothing: the live lease holder decides. Any other release error is logged
+      // and the send error rethrown; the lease lapses and the re-claim re-sends.
+      try {
+        await transitionRunStatus(run.id, "running", "pending_approval", { resumeIntentLease: { gateId, leaseToken } }, authority);
+      } catch (releaseErr: unknown) {
+        if ((releaseErr as { code?: string } | null)?.code === "resume_intent_lease_lost") return "lease-lost";
+        console.warn(
+          `[artifact-review-resume] gate=${gateId} run=${run.id} could not release the claim after a failed send (${errorLabel(releaseErr)})`,
+        );
+      }
+      throw sendErr;
+    }
+
+    // Record what WayFlow returned, under the lease and this claim, BEFORE
+    // the handler runs, without the run token. A refused record runs no handler.
+    if (!(await recordResumeTaskResult(gateId, leaseToken, withoutRunToken(task, resumeMetadata)))) return "lease-lost";
+    if (!(await lease.fence())) return "lease-lost";
+
     // Drive the returned Task through the canonical state machine (advances the
     // run past the gate — to the next gate or to terminal). fromStatus is the
-    // literal "pending_approval" (guarded above), matching the human resume path.
+    // literal "running": the claim above moved the row off `pending_approval`,
+    // matching the human resume path. Under a pause claim the handler gets its
+    // token (cinatra#4245), so the answer is applied only while the token holds
+    // the row; a re-send has no claim of its own.
     const { handleWayflowTaskState } = await import("./execution");
     // cinatra#1939 wave 2: the delivery worker advances the run with no session in
-    // scope — it grounds the transition on the system dispatch mint, scoped to the
-    // run's org (the human approval already happened when the intent row was written).
-    await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task, authority, pauseClaimToken: claim.token });
-    resultState = task.status?.state;
+    // scope — it grounds the transition on the system dispatch mint (`authority`
+    // above), scoped to the run's org (the human approval already happened when the
+    // intent row was written).
+    await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task, authority, pauseClaimToken: pauseRef?.token });
+    if ((await settle()) !== null) return "retryable";
+    return finishDelivery(gateId, leaseToken, run.id, `DELIVERED ${kind} resume (resultState=${task.status?.state})`);
   } finally {
     await settle();
   }
-  if (settleFailure !== null) return "retryable";
+}
 
+type ResumeLeaseKeeper = { fence(): Promise<boolean>; stop(): void };
+
+/**
+ * cinatra#3745: renew the lease every third of its length while the delivery
+ * runs. A refused renewal stops the timer and every later fence refuses; a
+ * renewal that throws is logged and retried on the next tick. `fence()` is an
+ * awaited renewal, called before every wire action.
+ */
+function keepResumeIntentLease(gateId: string, leaseToken: string, leaseMs: number): ResumeLeaseKeeper {
+  let lost = false;
+  const renew = async (): Promise<boolean> => {
+    if (lost) return false;
+    const ok = await renewResumeIntentLease(gateId, leaseToken, leaseMs);
+    if (!ok) lost = true;
+    return ok;
+  };
+  const timer = setInterval(() => {
+    renew().then(
+      (ok) => {
+        if (!ok) clearInterval(timer);
+      },
+      (err: unknown) => {
+        console.warn(`[artifact-review-resume] gate=${gateId} lease renewal failed (${errorLabel(err)}); retried on the next tick`);
+      },
+    );
+  }, Math.max(250, Math.floor(leaseMs / 3)));
+  (timer as { unref?: () => void }).unref?.();
+  return { fence: renew, stop: () => clearInterval(timer) };
+}
+
+/** A log label for an error: its code or name, never its message. A driver error
+ *  can carry the query's parameters (the lease token), a send error the message. */
+function errorLabel(err: unknown): string {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (typeof code === "string" && code !== "") return code;
+  return err instanceof Error ? err.name : typeof err;
+}
+
+/** The task as recorded: every key and value the resume metadata carried is
+ *  dropped, so the raw run token a task echoes in its history is never stored. */
+function withoutRunToken(task: unknown, resumeMetadata: Record<string, unknown>): unknown {
+  const keys = new Set(Object.keys(resumeMetadata));
+  const values = new Set(Object.values(resumeMetadata).filter((v): v is string => typeof v === "string"));
+  const text = JSON.stringify(task, (key, value: unknown) =>
+    keys.has(key) || (typeof value === "string" && values.has(value)) ? undefined : value);
+  return text === undefined ? null : JSON.parse(text);
+}
+
+async function closeIntent(gateId: string, leaseToken: string, runId: string, why: string): Promise<ResumeDeliveryOutcome> {
+  const ok = await markResumeIntentDelivered(gateId, leaseToken);
+  console.log(`[artifact-review-resume] gate=${gateId} run=${runId} ${why} — marked ${ok ? "done" : "LEASE-LOST"}`);
+  return ok ? "already-advanced" : "lease-lost";
+}
+
+/** cinatra#3745: no witness yet; the next lease reads the run again (the attempt is given back). */
+async function deferIntent(gateId: string, leaseToken: string, runId: string, why: string): Promise<ResumeDeliveryOutcome> {
+  const ok = await deferResumeIntent(gateId, leaseToken);
+  console.log(`[artifact-review-resume] gate=${gateId} run=${runId} ${why} — ${ok ? "left for a later lease" : "LEASE-LOST"}`);
+  return ok ? "retryable" : "lease-lost";
+}
+
+async function finishDelivery(gateId: string, leaseToken: string, runId: string, what: string): Promise<ResumeDeliveryOutcome> {
   const marked = await markResumeIntentDelivered(gateId, leaseToken);
-  console.log(
-    `[artifact-review-resume] gate=${gateId} run=${run.id} DELIVERED ${kind} resume ` +
-      `(resultState=${resultState}) — marked ${marked ? "done" : "LEASE-LOST"}`,
-  );
+  console.log(`[artifact-review-resume] gate=${gateId} run=${runId} ${what} — marked ${marked ? "done" : "LEASE-LOST"}`);
   // cinatra#4312 — no other intent of this review is closed here: no stored row
   // tells a later pause on the same base task id from this one (its replayed
   // emission writes no new gate), so a second pending intent of the review, a
@@ -663,24 +898,18 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
     refusedOutOfScope: 0,
     failed: 0,
   };
-  // The lease must comfortably EXCEED the time to process the WHOLE claimed batch
-  // so it cannot expire mid-send and let a second worker re-claim + send a
-  // concurrent duplicate (claimPendingResumeIntents only re-claims a `delivering`
-  // row whose lease has EXPIRED). A normal WayFlow resume returns in seconds; a
-  // SMALL batch (5) processed sequentially under a 5-min lease leaves large
-  // headroom, while a genuinely crashed/stuck worker's row is still recovered
-  // after the lease lapses.
+  // cinatra#3745: ONE row per claim. A row this pass has not reached stays
+  // pending and unleased, so no row waits leased behind another row's send; the
+  // delivery renews its own row's lease while it runs, so a send longer than the
+  // lease keeps it, while a crashed worker's row is still recovered after the
+  // lease lapses.
   //
-  // DELIVERY IS AT-LEAST-ONCE BY DESIGN (the #2009 outbox contract): a send whose
-  // downstream flow blocks longer than the lease (a pathological long-flow resume,
-  // not the typical case — the 24h A2A ceiling is a timeout, not the norm), or a
-  // crash after send but before the run advancement is observable, can redeliver.
-  // The consumer is idempotent per gate: the status + authoritative latest-task
-  // guards above suppress the common redelivery, and the DETERMINISTIC per-gate
-  // messageId lets a dedup-aware receiver drop the rest. Exactly-once DELIVERY is
-  // explicitly NOT a goal of this outbox — it is exactly-once PERSISTENCE with an
-  // idempotent consumer.
-  const DEFAULT_LEASE_MS = 5 * 60_000;
+  // DELIVERY IS AT-LEAST-ONCE BY DESIGN (the #2009 outbox contract): a crash after
+  // WayFlow took a send and before its result was recorded re-sends on the next
+  // lease, and repeated crashes there can re-send again. The DETERMINISTIC
+  // per-gate messageId helps only a receiver that de-duplicates on it. A crash
+  // after the record replays the handler. Exactly-once DELIVERY is explicitly NOT
+  // a goal of this outbox — it is exactly-once PERSISTENCE.
   const DEFAULT_LIMIT = 5;
   // cinatra#4312 — an intent that used its attempts (`attempts >= max_attempts`,
   // no live lease) is dead-lettered here, where ops read it, before the claim
@@ -756,14 +985,14 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
     summary.failed += 1;
     console.error("[artifact-review-resume] upgrade recovery pass failed:", err);
   }
-  const claimed = await claimPendingResumeIntents({
-    limit: opts?.limit ?? DEFAULT_LIMIT,
-    leaseMs: opts?.leaseMs ?? DEFAULT_LEASE_MS,
-  });
-  for (const intent of claimed) {
+  const limit = opts?.limit ?? DEFAULT_LIMIT;
+  const leaseMs = opts?.leaseMs ?? DEFAULT_LEASE_MS;
+  for (let n = 0; n < limit; n += 1) {
+    const [intent] = await claimPendingResumeIntents({ limit: 1, leaseMs });
+    if (!intent) break;
     summary.attempted += 1;
     try {
-      const outcome = await deliverArtifactReviewResumeIntent(intent);
+      const outcome = await deliverArtifactReviewResumeIntent(intent, { leaseMs });
       if (outcome === "delivered") summary.delivered += 1;
       else if (outcome === "already-advanced") summary.alreadyAdvanced += 1;
       else if (outcome === "refused-out-of-scope") summary.refusedOutOfScope += 1;
@@ -771,8 +1000,7 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
     } catch (err) {
       summary.failed += 1;
       console.error(
-        `[artifact-review-resume] delivery failed for gate=${intent.gateId} (kind=${intent.kind}) — left pending for re-claim:`,
-        err,
+        `[artifact-review-resume] delivery failed for gate=${intent.gateId} (kind=${intent.kind}) — left pending for re-claim (${errorLabel(err)})`,
       );
     }
   }
