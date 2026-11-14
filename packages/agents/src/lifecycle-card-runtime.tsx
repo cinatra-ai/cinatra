@@ -1789,7 +1789,10 @@ export function parseRunMomentCard(data: unknown): RunMomentCard | null {
     kind: text(row.lifecycleCard?.kind),
     ref: text(row.lifecycleCard?.ref),
     reviewRef: text(row.reviewGate?.ref),
-    reviewAwaiting: row.reviewGate?.awaiting === true,
+    // Read as the panel's slot reader reads it (`parseRunReviewSlot`): one row,
+    // one answer, or a container stands down a panel that still holds its
+    // placeholder for the review.
+    reviewAwaiting: Boolean(row.reviewGate?.awaiting),
   };
 }
 
