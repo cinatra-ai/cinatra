@@ -48,6 +48,7 @@ vi.mock("drizzle-cube/client", async (importOriginal) => {
 
 import {
   KPI_VALUE_FALLBACK_ATTRIBUTE,
+  kpiValueFallbackAttributes,
   ReadOnlyComposedDashboard,
   ReadOnlySinglePortlet,
 } from "@cinatra-ai/sdk-dashboard/components";
@@ -120,6 +121,12 @@ describe.each(HOSTS)("%s", (_name, Host, extra) => {
     expect(kpiValue().matches(KPI_SELECTOR!)).toBe(true);
   });
 
+  test("with a palette whose first colour is empty: drizzle-cube falls back, so it is marked and repainted", () => {
+    render(<Host config={CONFIG} colorPalette={palette(["", "#10b981"])} {...extra} />);
+    expect(document.querySelectorAll(`[${KPI_VALUE_FALLBACK_ATTRIBUTE}="foreground"]`)).toHaveLength(1);
+    expect(kpiValue().matches(KPI_SELECTOR!)).toBe(true);
+  });
+
   test("with a palette whose first colour is #1f2937: no marker, the chosen colour stays", () => {
     render(<Host config={CONFIG} colorPalette={palette(["#1f2937", "#10b981"])} {...extra} />);
     expect(document.querySelector(`[${KPI_VALUE_FALLBACK_ATTRIBUTE}]`)).toBeNull();
@@ -129,6 +136,35 @@ describe.each(HOSTS)("%s", (_name, Host, extra) => {
   test("with any other palette: no marker", () => {
     render(<Host config={CONFIG} colorPalette={palette(["#3b82f6"])} {...extra} />);
     expect(document.querySelector(`[${KPI_VALUE_FALLBACK_ATTRIBUTE}]`)).toBeNull();
+  });
+});
+
+// drizzle-cube picks the KPI value colour with `colors?.[0] || '#1f2937'`
+// (kpiText's helper and KpiNumber's resolveValueColor, without a
+// valueColorIndex): the first entry's TRUTHINESS, not the array's length.
+const sparseFirst = (() => {
+  const colors = new Array<string>(2);
+  colors[1] = "#3b82f6";
+  return colors;
+})();
+const MARKED = { [KPI_VALUE_FALLBACK_ATTRIBUTE]: "foreground" };
+
+describe("the marker follows drizzle-cube's first-entry fallback predicate", () => {
+  test.each([
+    ["no palette", undefined, MARKED],
+    ["a null palette", null, MARKED],
+    ["a palette with no colours field", {}, MARKED],
+    ["null colours", { colors: null }, MARKED],
+    ["no colours", { colors: [] }, MARKED],
+    ["an empty first colour", { colors: [""] }, MARKED],
+    ["an empty first colour before a real one", { colors: ["", "#3b82f6"] }, MARKED],
+    ["a sparse first entry", { colors: sparseFirst }, MARKED],
+    ["an undefined first entry", { colors: [undefined] }, MARKED],
+    ["a null first entry", { colors: [null, "#3b82f6"] }, MARKED],
+    ["a first colour that is #1f2937", { colors: ["#1f2937"] }, {}],
+    ["any other first colour", { colors: ["#3b82f6", ""] }, {}],
+  ])("%s", (_name, colorPalette, expected) => {
+    expect(kpiValueFallbackAttributes(colorPalette as never)).toEqual(expected);
   });
 });
 
