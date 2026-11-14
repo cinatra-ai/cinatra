@@ -274,11 +274,11 @@ describe("core__0126 pause claim columns (cinatra#4245)", () => {
   });
 });
 
-describe("core__0127 regenerate step provenance (cinatra#4264 B1a)", () => {
+describe("core__0128 regenerate step provenance (cinatra#4264 B1a)", () => {
   it("runs outside a transaction, only adds on up (re-up is a no-op), and its down states and does the destructive drop", async () => {
     const files = await validateCoreMigrationsDir(path.join(REPO_ROOT, CORE_MIGRATIONS_DIR));
-    expect(files.filter((name) => name.startsWith("core__0127_"))).toEqual(["core__0127_regenerate-step-provenance.mjs"]);
-    const file = path.join(REPO_ROOT, CORE_MIGRATIONS_DIR, "core__0127_regenerate-step-provenance.mjs");
+    expect(files.filter((name) => name.startsWith("core__0128_"))).toEqual(["core__0128_regenerate-step-provenance.mjs"]);
+    const file = path.join(REPO_ROOT, CORE_MIGRATIONS_DIR, "core__0128_regenerate-step-provenance.mjs");
     const mod = await import(file);
     const noTx = [];
     const record = (fn) => { const calls = []; fn({ sql: (text) => calls.push(String(text)), noTransaction: () => noTx.push(fn.name) }); return calls; };
