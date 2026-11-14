@@ -1,0 +1,52 @@
+# Run step rail panel: the agent run surface clauses (cinatra#3189)
+
+This record is the clause checklist for the `run-step-rail-panel` row of the cinatra#3189 per-panel table. The panel is
+`packages/agents/src/run-step-rail-panel.tsx`, with the rows it draws through `RailExtraEntry`
+(`run-step-rail-extra-entry.tsx`) and the frame column it is mounted in (`run-surface-rail.tsx`). Each row quotes its
+clause with its line in the drawing and reads the standing on main with file and line. This pull request fixes nothing:
+every departure is left with a named owner.
+
+| Item | Value |
+|---|---|
+| Drawing read | design main `635da007`: `specs/app-artifact-review.html`, section I "The agent run surface — steps, gates & detail" (from line 366), its rail stylesheet (lines 322-331) and its first example (lines 374-414) |
+| Pins | `tests/e2e/design/conformance-pins.json` at `faee0830` carries no `app-artifact-review` entry (it pins `app`, `app-components`, `app-extensions`, `app-connectors`, `app-notifications`). So there is no pin to drift; the grade is against current drawing content, design main `635da007` (`conformance/app-artifact-review.json` content hash `sha256:9f7552e0…`) |
+| Code read | cinatra main `faee0830` |
+| Already covered | The settled and upcoming glyph ground (line 328) and the rail separator (line 331) are cinatra#3188's rows of the per-panel table; they are cited here and not graded again |
+| Method | By reading. A row names its clause, the standing on main ("meets" or "departs") with the file and line that decide it, and, for a departure, the computed style or interaction a capture should assert. No row stands on a screenshot |
+
+## Fixed by this pull request
+
+| id | Clause (drawing) | Standing on main | Fix and test |
+|---|---|---|---|
+| - | none | - | This is a record only; no product file changes |
+
+## Settled, no change
+
+| id | Clause (drawing) | Reading |
+|---|---|---|
+| RP1 | "The surface is a **two-column** frame: a **step rail** down the left names the run's ordered steps, and the **run detail** on the right shows the selected step." (line 370), drawn as `.runframe { … grid-template-columns: minmax(0, 196px) minmax(0, 1fr); … }` (line 322) | meets for the column. The panel is `w-[196px] shrink-0` (`run-step-rail-panel.tsx:106`) inside the frame's `w-[196px]` column (`run-surface-rail.tsx:634`). The rows' own width inside it departs: RP12 |
+| RP2 | The rail's root: `<div class="rail" data-conformance-id="run-step-rail" data-action="open-run-step -> step-detail">` (line 378) | meets on structure: `data-conformance-id="run-step-rail"` and the same `data-action` (`run-step-rail-panel.tsx:93-95`), `aria-label="Agent run steps"` (`:107`). Whether the action opens a work step is RP11 |
+| RP3 | "The rail lists the run's steps in order, **merged** so that a gate is not a **page outside the run** but a **step in the run**: the ordinary work steps, and — inline at the point the run reached it — a **gate entry**" (line 371) | meets. One `StepperNav` maps the merged `entries` in their order (`run-step-rail-panel.tsx:127-128`); gate, verification and lifecycle entries draw in the same list through `RailExtraEntry` (`:142-167`) |
+| RP4 | "The step the run is **paused on** is **highlighted**; steps already passed sit above it, steps still to come below" (line 371) | meets. The active ordinal maps to the stepper's value (`run-step-rail-panel.tsx:86-89`); the item state is completed below it, active at it, inactive after it (`src/components/reui/stepper.tsx:188-193`); the active indicator takes `bg-primary text-primary-foreground` (`stepper.tsx:339`) and the active title `text-foreground` (`run-step-rail-extra-entry.tsx:163-164`) |
+| RP5 | "save **Skills** (§II) and **Schedule**, which keep their places ahead of the work steps at every reading, even while one of them is still to come" (line 371) | meets for this panel. It draws neither row: the frame draws them above it, and the panel shifts its numerals by the numbered rows above (`stepOffset`, `run-step-rail-panel.tsx:69-80,129`; `instance-screens.tsx:3456`). The Schedule row itself is graded in the schedule rail step record of cinatra#4278 |
+| RP6 | "A **resolved gate** stays on the rail as **read-only history** — its entry keeps its place and records how it was settled (continued, superseded by a regeneration, changes requested)" (line 371) | meets for continued and changes requested: a resolved gate's title is its label and its lowercased settlement (`run-step-rail-extra-entry.tsx:415`), from `reviewGateRailSettlement` (`src/lib/artifacts/review-surface-model.ts:180-192,216-234,257-262`). The superseded reading is RP15 |
+| RP7 | "a **gate** step opens the gate's own surface **in place** — a pending review renders the review gate (§III–§VII) right here in the run detail, under the same rail" and "A resolved gate opens read-only" (line 372) | meets. Inside the frame a pending gate selects the run detail (`run-step-rail-extra-entry.tsx:533`) and a resolved gate selects its own `review:<id>` page (`:571`). With no frame, the row links to the run's own review route (`:592`), which draws the same rail frame (`review-run-surface.tsx:149`) |
+| RP8 | `.rail .step { display: flex; align-items: center; gap: 8px; padding: 2px 0; font-family: var(--font-sans); font-size: 14px; font-weight: 500; line-height: 1.15; color: var(--muted); }` (line 325) and `.rail .step.active { color: var(--ink); }` (line 329) | meets. Row: `items-center gap-2 px-0 py-0.5` (`run-step-rail-extra-entry.tsx:119-120`). Title: the stepper's `text-sm font-medium` (`stepper.tsx:383`) with `leading-[1.15]` (`run-step-rail-extra-entry.tsx:158-159`), set in Archivo by the global `h3` rule (`src/app/globals.css:296-299`; the title is an `h3`). Colour: muted when inactive or completed, foreground when active (`run-step-rail-extra-entry.tsx:163-164`) |
+| RP9 | `.rail .step .glyph { flex: none; width: 24px; height: 24px; border-radius: 50%; … background: var(--blue); color: #fff; font-family: var(--font-sans); font-size: 12px; font-weight: 500; … }` (line 327), on a row that opens | meets on a row drawn as a trigger: `size-6 rounded-full text-xs` and the active `bg-primary text-primary-foreground` (`stepper.tsx:339-340`); the trigger is the Button, whose `font-display font-medium` the numeral inherits (`src/components/ui/button.tsx:12`). The inert row is RP13 |
+| RP10 | The active gate's glyph: a clipboard-check drawn at `width:12px;height:12px` with `stroke-width="2"` (line 385) | meets on the shape and stroke: `ClipboardCheck` (`run-step-rail-extra-entry.tsx:463`), lucide's default stroke of 2. Its size is RP14 |
+
+## Findings left with a named owner
+
+| id | Clause (drawing) | Standing on main | Owner |
+|---|---|---|---|
+| RP11 | "Selecting a step opens it on the right. A work step shows what it did" (line 372); "every step, and every **gate** that pauses the run, is reached by selecting its entry on the rail" (line 370) | departs. A work-step row that is not marked unopenable is drawn as a `StepperTrigger`, a button with `role="tab"` (`run-step-rail-panel.tsx:273-290`, `tabIndex={-1}` at `:276`). Its press calls the stepper's `setActiveStep`, which only calls `onValueChange` when `value` is set (`stepper.tsx:102-109`); the panel passes `value` and no `onValueChange` (`run-step-rail-panel.tsx:109-113`), and the selection type has no key for a work step (`run-surface-rail-step.ts:125-133`). So the press changes nothing in the run detail. Interaction to assert: click a passed work-step row and read the run detail change | The paused step's row: the open cinatra#4593 (cinatra#3035) makes it open the run detail. Every other work-step row: to file in project 12 |
+| RP12 | `.rail { min-width: 0; padding: 4px 20px 4px 0; }` (line 324) inside the 196px column (line 322): a row is at most 176px wide | departs. The column states `pt-1` and no right or bottom padding (`run-surface-rail.tsx:634`); the panel is 196px (`run-step-rail-panel.tsx:106`), its nav `w-full` (`:127`) and every row `w-full` (`run-step-rail-extra-entry.tsx:119-120`), so a label wraps at 196px, not 176px. Computed style to assert: the row's `width` is at most 176px in a 196px column | to file in project 12 |
+| RP13 | The glyph's `font-family: var(--font-sans); font-size: 12px; font-weight: 500` (line 327), where the drawing's `--font-sans` is Archivo ("UI chrome") | departs on the inert row only. A row marked unopenable is a plain `div` (`run-step-rail-panel.tsx:255-271`), so its numeral is not inside the Button and inherits the body face, Inter (`src/app/globals.css:288,682`), at no stated weight. Computed style to assert on an upcoming inert row's indicator: `font-family` Archivo, `font-weight` 500 | to file in project 12 |
+| RP14 | The completed glyph: a check at `width:12px;height:12px` with `stroke-width="3"` (line 379, each passed step); the gate glyph at 12px (line 385) | departs. The check is `<Check className="h-3 w-3" />` (`run-step-rail-panel.tsx:112`) and the gate glyph `h-3 w-3` (`run-step-rail-extra-entry.tsx:463`), but inside a trigger row the Button's `[&_svg:not([class*='size-'])]:size-4` (`button.tsx:12`) matches any icon whose class has no `size-` and outranks `h-3 w-3` on specificity, so the icon draws at 16px. The check keeps lucide's default stroke of 2, not 3. Computed style to assert on a completed trigger row: the indicator's `svg` is 12px by 12px with `stroke-width` 3 | to file in project 12 |
+| RP15 | The resolved gate's record of "superseded by a regeneration" (line 371) | not settled by reading. The settlement map has continued and changes requested only (`review-surface-model.ts:183-192,219-232`); any other disposition reads "resolved" (`:261`). Whether a regeneration leaves a superseded gate on the rail at all is not decidable from the code read here | a live read of a regenerated review first; to file in project 12 if it departs |
+
+## Uncovered UI
+
+| Surface | Disposition |
+|---|---|
+| The verification entry (`ScanSearch` glyph and an uppercase outcome label, `run-step-rail-extra-entry.tsx:424,461`) and the lifecycle decision entry for a skipped review (`SkipForward` glyph, decided-by label and reason, `:428-443,465`) | Section I draws neither entry. The stylesheet declares a `.rail .step .kind` label (line 330), but no example in section I uses it. Not graded here; no section is invented for them. The pair stays uncovered until a drawing covers it, under the uncovered-UI disposition the cinatra#3189 body names |
