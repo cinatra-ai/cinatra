@@ -21,9 +21,9 @@
  * ENFORCEMENT of `denied` (refusing the request outright) is covered in
  * run-context-denied-response.test.ts — this suite pins the pure decision.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 
-import { resolveRequestRunContext } from "../request-context";
+import { resolveRequestRunContext, verifyDelegatedExecutedSource, type DelegatedMcpActor } from "../request-context";
 
 const DURABLE_RESOLVED = {
   outcome: "resolved" as const,
@@ -351,7 +351,7 @@ describe("the verified executing source rides only with its own channel's run an
   // (r1)
   it("an on-behalf-of run carries its own proof with its step", () => {
     const r = resolveRequestRunContext({ delegatedRunId: "run-obo", delegatedStepId: "step-1",
-      delegatedExecutedSource: PROOF, failClosed: true });
+      delegatedExecutedSource: PROOF, delegatedSourceCurrent: true, failClosed: true });
     expect(r).toMatchObject({ runId: "run-obo", stepId: "step-1", verifiedExecutedSource: PROOF,
       servedBy: "obo", denied: false });
   });
@@ -386,5 +386,53 @@ describe("the verified executing source rides only with its own channel's run an
     expect(r.runId).toBe("run-obo");
     expect(r.verifiedExecutedSource).toBeUndefined();
     expect(r.denied).toBe(false);
+  });
+
+  // (r5)
+  it("an on-behalf-of proof that the tool server did not find current refuses the request", () => {
+    for (const delegatedSourceCurrent of [undefined, false]) {
+      const r = resolveRequestRunContext({ delegatedRunId: "run-obo", delegatedStepId: "step-1",
+        delegatedExecutedSource: PROOF, delegatedSourceCurrent, failClosed: true });
+      expect(r, String(delegatedSourceCurrent)).toEqual({ servedBy: "none", suppressed: true, denied: true });
+    }
+  });
+});
+
+describe("the tool server re-checks an on-behalf-of proof against the run store (cinatra#3745)", () => {
+  const PROOF = Object.freeze({
+    contextId: "ctx-1", stepId: "step-1", executionAttemptId: "attempt-1",
+    sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: "c".repeat(64),
+  });
+  const actor = (extra: Record<string, unknown> = {}) => ({
+    delegation: "agent_run", userId: "user-1", orgId: "org-1", runId: "run-obo",
+    platformRole: "member", oboCeiling: [], verifiedStepId: "step-1",
+    verifiedExecutedSource: PROOF, ...extra,
+  }) as unknown as DelegatedMcpActor;
+
+  // (r6)
+  it("a token without a proof needs no check", async () => {
+    const verify = vi.fn(async () => true);
+    expect(await verifyDelegatedExecutedSource(actor({ verifiedExecutedSource: undefined }), verify)).toBeUndefined();
+    expect(await verifyDelegatedExecutedSource(undefined, verify)).toBeUndefined();
+    expect(await verifyDelegatedExecutedSource({ delegation: "chat", userId: "user-1", orgId: "org-1",
+      platformRole: "member" }, verify)).toBeUndefined();
+    expect(verify).not.toHaveBeenCalled();
+  });
+
+  // (r7)
+  it("a proof is current only when the run store finds it current for the token's run and org", async () => {
+    const verify = vi.fn(async () => true);
+    expect(await verifyDelegatedExecutedSource(actor(), verify)).toBe(true);
+    expect(verify).toHaveBeenCalledWith("run-obo", "org-1", PROOF);
+  });
+
+  // (r8) A token minted under attempt A and replayed after a re-dispatch to
+  // attempt B: the run store's check answers false.
+  it.each(["false", "throw", "reject", "missing"])("a proof whose check is %s is not current", async (kind) => {
+    const verify = kind === "missing" ? undefined
+      : kind === "throw" ? vi.fn((): Promise<boolean> => { throw new Error("run store unavailable"); })
+        : kind === "reject" ? vi.fn(async (): Promise<boolean> => { throw new Error("run store unavailable"); })
+          : vi.fn(async () => false);
+    expect(await verifyDelegatedExecutedSource(actor(), verify)).toBe(false);
   });
 });

@@ -178,8 +178,8 @@ describe("present invalid durable source cannot become a runless bearer", () => 
     const get = vi.spyOn(redis, "get").mockRejectedValue(new Error("durable GET unavailable"));
     const durable = await resolveDurableRunContext(bearer, lookup, redis);
     const resolved = resolveRequestRunContext({ delegatedRunId: "run-obo",
-      delegatedStepId: source.stepId, delegatedExecutedSource: source, durable,
-      failClosed: true });
+      delegatedStepId: source.stepId, delegatedExecutedSource: source,
+      delegatedSourceCurrent: true, durable, failClosed: true });
     expect(durable).toEqual({ outcome: "invalid" });
     expect(get).toHaveBeenCalledWith(durableRunContextKey(bearer));
     expect(resolved).toMatchObject({ runId: "run-obo", stepId: source.stepId,
@@ -208,7 +208,7 @@ describe("present invalid durable source cannot become a runless bearer", () => 
   it("independently verified OBO wins over stale durable state without borrowing its proof", () => {
     const resolved = resolveRequestRunContext({ delegatedRunId: "run-obo",
       delegatedStepId: source.stepId, delegatedExecutedSource: source,
-      durable: { outcome: "invalid" }, failClosed: true });
+      delegatedSourceCurrent: true, durable: { outcome: "invalid" }, failClosed: true });
     expect(resolved).toMatchObject({ runId: "run-obo", verifiedExecutedSource: source,
       servedBy: "obo", suppressed: true, denied: false });
   });
@@ -222,5 +222,20 @@ describe("present invalid durable source cannot become a runless bearer", () => 
     expect(transport.slice(denied, refusal)).toContain("return");
     expect(refusal).toBeLessThan(transport.indexOf("const requestStore: McpRequestContext"));
     expect(refusal).toBeLessThan(transport.indexOf("mcpRequestContextStorage.run("));
+  });
+
+  // The full Next transport is not booted here: the decision is the real
+  // verifyDelegatedExecutedSource + resolveRequestRunContext (pinned in
+  // run-context-resolution.test.ts r5-r8); this pins that the transport feeds
+  // the first into the second and that the app wires the run store's check.
+  it("the real transport re-checks an on-behalf-of proof against the run store before it resolves the run", () => {
+    const transport = readFileSync(new URL("../../../packages/mcp-server/src/index.tsx", import.meta.url), "utf8");
+    const check = transport.indexOf("verifyDelegatedExecutedSource(delegatedActor, options.isRunExecutedSourceCurrent)");
+    const resolve = transport.indexOf("const runContext = resolveRequestRunContext({");
+    expect(check).toBeGreaterThan(-1);
+    expect(check).toBeLessThan(resolve);
+    expect(transport.slice(resolve, transport.indexOf("});", resolve))).toContain("delegatedSourceCurrent,");
+    const app = readFileSync(new URL("../mcp-server.ts", import.meta.url), "utf8");
+    expect(app).toMatch(/^\s+isRunExecutedSourceCurrent,$/m);
   });
 });

@@ -17,8 +17,11 @@
  *
  * Every tool the road serves runs inside the run's frame, which carries the
  * verified step and, for a source-bound call, the verified executing source
- * and the run-write authority minted for the proof's attempt. The run-scoped
- * frame a run-scoped tool gets keeps every field of that frame.
+ * and the run-write authority minted for the proof's attempt. A source-bound
+ * call whose mint is refused (the run moved to another attempt after the
+ * source check) is refused with the same fixed 403 sentence before any tool
+ * runs. The run-scoped frame a run-scoped tool gets keeps every field of that
+ * frame.
  *
  * Drives the real route and the real run binding; the run store (with its
  * source check), the handler registry, the bridge-auth check, the actor
@@ -316,17 +319,19 @@ describe("the passthrough road carries the verified executing source", () => {
     });
   });
 
-  // (t10)
-  it("a refused run-authority mint leaves the source frame without an authority, never another one", async () => {
+  // (t10) At the parent the tool ran with the stale proof and no authority.
+  it("a refused run-authority mint refuses a source-bound call before any tool runs", async () => {
     h.mintRunWriteAuthorityForMcp.mockResolvedValue(undefined);
     for (const tool of [RUN_SCOPED_TOOL, FRAMELESS_TOOL]) {
       h.observed.length = 0;
       const res = await POST(makeReq(tool, sourceHeaders()));
-      expect(res.status).toBe(200);
-      const frame = h.observed[0]!.frame as Record<string, unknown>;
-      expect(frame.verifiedExecutedSource).toEqual(VERIFIED_SOURCE);
-      expect(frame).not.toHaveProperty("orgWriteAuthority");
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual(REFUSED);
+      expect(h.observed).toHaveLength(0);
     }
+    expect(h.mintRunWriteAuthorityForMcp).toHaveBeenCalledWith({
+      runId: RUN.id, orgId: RUN.orgId, executionAttemptId: VERIFIED_SOURCE.executionAttemptId,
+    });
   });
 
   // (t11)
