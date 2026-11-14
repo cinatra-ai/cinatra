@@ -17,6 +17,7 @@ import {
 import {
   mapSubmitResultToOutcome,
   mapChangesRequestedToOutcome,
+  declaredCommentStaysANote,
   type ReviewSubmitOutcome,
 } from "@/lib/artifacts/review-surface-model";
 import { isLifecycleReviewOrchestrationActive } from "@/lib/lifecycle/lifecycle-activation";
@@ -137,22 +138,31 @@ export async function submitReviewDecisionAction(
   // on a non-lifecycle / batch / multi-target gate, or with empty feedback, the
   // Comment path falls through to the byte-identical annotation below.
   //
-  // The PICTURE's leg of a per-artifact DECLARED review (cinatra#3035 W11) takes the
-  // same road: a produced revision a declared gate pins opens no automatic gate
-  // (cinatra#4225), so until it is regenerated that leg is the picture's only review
-  // (a regenerated picture is then reviewed on its repair's successor, an automatic
-  // gate, above). The post's own leg (the step's own task id) keeps the plain
-  // annotation, exactly as before. This action does not read the gate's pin; the
-  // store reads the family witness on it, and a flow-authored gate it refuses as
-  // no lifecycle gate keeps the plain annotation.
+  // A DECLARED review gate (a `wayflow-` task id, a step the flow declares in its
+  // own template) takes the same road:
+  //   - the PICTURE's leg of a per-artifact review (`#n`, cinatra#3035 W11): a
+  //     produced revision a declared gate pins opens no automatic gate
+  //     (cinatra#4225), so that leg is the picture's only review; its change
+  //     request keeps the run paused (cinatra#4312);
+  //   - the step's OWN gate (no `#n`, cinatra#4245): its change request ends the
+  //     run's pause, and the repair drain stops the run before the repair run
+  //     starts. That is terminal for the run, so it also needs the access a
+  //     terminal decision needs (`approveHitl`); a reviewer who may only respond
+  //     keeps the plain annotation.
+  // This action does not read the gate's pin or event; the store decides. Only its
+  // not-eligible refusal (and a `#n` gate it reads as no lifecycle gate) falls back
+  // to the plain annotation below; every other answer, a pause refusal included,
+  // is mapped to its own outcome.
   const trimmedComment = comment?.trim() ?? "";
-  const declaredGate = isDeclaredReviewTaskId(reviewTaskId) && baseReviewTaskId(reviewTaskId) !== reviewTaskId;
+  const declaredGate = isDeclaredReviewTaskId(reviewTaskId);
+  const endsPause = declaredGate && baseReviewTaskId(reviewTaskId) === reviewTaskId;
   if (
     disposition === "comment" &&
     trimmedComment.length > 0 &&
     isLifecycleReviewOrchestrationActive() &&
     ((isAutoReviewTaskId(reviewTaskId) && !isBatchAutoReviewTaskId(reviewTaskId)) || declaredGate) &&
-    pinnedTargets.length === 1
+    pinnedTargets.length === 1 &&
+    (!endsPause || (await enforceReviewDecisionAccess({ runId, op: "approveHitl", actorCtx })).ok)
   ) {
     const result = await submitReviewSurfaceChangesRequested({
       runId,
@@ -161,7 +171,7 @@ export async function submitReviewDecisionAction(
       feedback: trimmedComment,
       actorCtx,
     });
-    if (!(declaredGate && !result.ok && result.code === "not-a-lifecycle-gate")) {
+    if (!(declaredGate && declaredCommentStaysANote(result))) {
       return mapChangesRequestedToOutcome(result);
     }
   }
