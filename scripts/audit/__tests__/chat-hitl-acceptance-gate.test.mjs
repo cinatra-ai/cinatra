@@ -891,10 +891,17 @@ describe("the REAL manifest", () => {
     // so its mutant is checked at the tail: the entry is the last one of the
     // note, and with the phrase removed nothing from its head to the end of the
     // note carries it.
+    // The adoption entry of 2026-11-14 is followed only by the sixth kind's entry of the same day (cinatra#4150),
+    // which records anchors that DID change and so never carries the phrase.
+    const kindHead = "RE-RATIFIED 2026-11-14 (cinatra#4150";
+    const kindEntry = noteEntry(contractNote, kindHead);
+    expect(kindEntry, kindHead).toMatch(/`publish_decision`/);
+    expect(contractNote.endsWith(kindEntry), kindHead).toBe(true);
+    expect(kindEntry, kindHead).not.toMatch(/NO RECORDED ANCHOR CHANGED/);
     {
-      const head = "RE-RATIFIED 2026-11-14 (";
+      const head = "RE-RATIFIED 2026-11-14 (the adoption";
       const entry = noteEntry(contractNote, head);
-      expect(contractNote.endsWith(entry), head).toBe(true);
+      expect(contractNote.endsWith(entry + kindEntry), head).toBe(true);
       const mutant = contractNote.replace(entry, entry.replaceAll("NO RECORDED ANCHOR CHANGED", "(phrase removed)"));
       expect(mutant, head).not.toBe(contractNote);
       expect(noteEntry(mutant, head), head).not.toMatch(/NO RECORDED ANCHOR CHANGED/);

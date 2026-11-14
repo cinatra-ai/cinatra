@@ -97,7 +97,7 @@ const BROKER_SURFACES = ["widget_content_editor_carrier_run"] as const;
 // ---------------------------------------------------------------------------
 
 describe("the surface matrix — HUMAN surfaces carry every interaction kind", () => {
-  it("declares exactly the four hosts and the five interaction kinds", () => {
+  it("declares exactly the four hosts and the six interaction kinds", () => {
     expect([...LIFECYCLE_CARD_HOSTS]).toEqual([
       "chat_thread",
       "site_widget",
@@ -112,6 +112,8 @@ describe("the surface matrix — HUMAN surfaces carry every interaction kind", (
       // cinatra#2928 (lifecycle-b W2a) — the agent pausing to ask for input.
       // Registered so a run can STATE the moment; drawn by W3 (cinatra#2930).
       "agent_hitl_screen",
+      // cinatra#4150 -- the publish card, registered with its card mounted on all four hosts.
+      "publish_decision",
     ]);
   });
 

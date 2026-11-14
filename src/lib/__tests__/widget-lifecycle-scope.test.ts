@@ -23,6 +23,7 @@ import {
   WIDGET_LIFECYCLE_DECIDE_SCOPE,
   WIDGET_LIFECYCLE_HITL_SCREEN_ROUTE_PATH,
   WIDGET_LIFECYCLE_HITL_SCREEN_SUBMIT_ROUTE_PATH,
+  WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH,
   WIDGET_CONVERSATION_READ_SCOPE,
   WIDGET_CONVERSATION_WRITE_SCOPE,
   WIDGET_TOOL_CONFIRM_SCOPE,
@@ -149,6 +150,19 @@ describe("the mint", () => {
     const entry = WIDGET_EXTENSION_SCOPES[WIDGET_LIFECYCLE_DECIDE_SCOPE];
     expect(entry.audiences).toContain(WIDGET_LIFECYCLE_HITL_SCREEN_SUBMIT_ROUTE_PATH);
     expect(entry.consentCopy).toContain("answer a question an agent has paused to ask you");
+  });
+
+  it("the PUBLISH CARD read audience joined the read grant WITH its sentence, and the decide grant has none of it", () => {
+    // cinatra#4150. The publish card's broker read is a READ: it shows the card and sends no decision, so it joins
+    // `lifecycle.read` and its consent sentence changes in the same edit, and a decide-only token cannot reach it.
+    expect(WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH).toBe("/api/lifecycle-views/publish-decision");
+    const read = WIDGET_EXTENSION_SCOPES[WIDGET_LIFECYCLE_READ_SCOPE];
+    expect(read.audiences).toContain(WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH);
+    expect(read.consentCopy).toContain("whether an agent may publish what it made");
+    const readAud = mintWidgetTokenAudience([WIDGET_LIFECYCLE_READ_SCOPE]);
+    const decideAud = mintWidgetTokenAudience([WIDGET_LIFECYCLE_DECIDE_SCOPE]);
+    expect(tokenSetHas(readAud, WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH)).toBe(true);
+    expect(tokenSetHas(decideAud, WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH)).toBe(false);
   });
 
   it("a sign-in grants the whole set this build defines — nothing more, nothing less", () => {

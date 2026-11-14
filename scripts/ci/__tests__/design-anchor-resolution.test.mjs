@@ -111,6 +111,7 @@ const PASSIVE_CAPTURE_SELECTORS = [
   '[data-lifecycle-card="agent_hitl_screen"]',
   '[data-lifecycle-card="artifact_review_gate"]',
   '[data-lifecycle-card="recommendation_hold"]',
+  '[data-lifecycle-card="publish_decision"]',
 ];
 
 describe("serialized capture assertions retain selector and observation provenance", () => {
@@ -257,7 +258,7 @@ describe("serialized capture assertions retain selector and observation provenan
 describe("passive capture markers are accounted for separately from drawn parts", () => {
   const emptyDrawing = [{ path: "specs/one.html", text: "<!doctype html><main>empty</main>" }];
 
-  it("classifies all eleven live markers without changing their capture requirements", () => {
+  it("classifies all twelve live markers without changing their capture requirements", () => {
     const captureAnchors = captureAnchorExpectations();
     const before = JSON.stringify(captureAnchors);
     const anchors = collectRecordedAnchors({ anchorContract: contract(), captureAnchors });
@@ -266,7 +267,7 @@ describe("passive capture markers are accounted for separately from drawn parts"
     expect([...new Set(report.captureHooks.map((a) => a.selector))].sort()).toEqual(
       [...PASSIVE_CAPTURE_SELECTORS].sort(),
     );
-    expect(report.results.filter((a) => a.origin === "ownerAnchors")).toHaveLength(5);
+    expect(report.results.filter((a) => a.origin === "ownerAnchors")).toHaveLength(6);
     expect(report.unresolved.some((a) => a.selector === '[data-conformance-id="agent-hitl-screen-card"]')).toBe(true);
     expect(JSON.stringify(captureAnchors)).toBe(before);
   });
@@ -594,7 +595,7 @@ describe("the report", () => {
     expect(formatReport(report)).toContain("recommendation_hold");
   });
 
-  // The count is FIVE, not eight, and the drawing at the pin is why. `recommendation_hold`
+  // The count is SIX, not nine, and the drawing at the pin is why. `recommendation_hold`
   // recorded four owner anchors — the chip row's conformance id and one per per-chip
   // action — until specs/app-lifecycle-cards.html §V redrew the row as checkbox pills:
   // "There is no heading plate above the row, and a pill carries nothing to press — no
@@ -602,12 +603,12 @@ describe("the report", () => {
   // the list … and the whole row is answered at once, every box together." The three
   // per-chip anchors are absent from the drawing at the pin, so the contract narrows this
   // kind to the one anchor its owner draws on EVERY host, which is the shape every other
-  // kind in the table already has: five kinds, one owner anchor each.
-  it("reports TODAY'S recorded owner anchors as unresolved against a drawing that draws none of them, all five named", () => {
+  // kind in the table already has: six kinds, one owner anchor each.
+  it("reports TODAY'S recorded owner anchors as unresolved against a drawing that draws none of them, all six named", () => {
     const anchors = collectRecordedAnchors({ anchorContract: contract() }).filter(
       (a) => a.origin === "ownerAnchors",
     );
-    expect(anchors).toHaveLength(5);
+    expect(anchors).toHaveLength(6);
     const report = checkAnchorResolution({
       pin: pin(),
       anchors,
@@ -616,7 +617,7 @@ describe("the report", () => {
       ],
       others: [],
     });
-    expect(report.unresolved).toHaveLength(5);
+    expect(report.unresolved).toHaveLength(6);
     const text = formatReport(report);
     for (const a of anchors) expect(text, a.selector).toContain(a.selector);
     for (const kind of [
@@ -625,6 +626,7 @@ describe("the report", () => {
       "trigger_schedule_proposal",
       "verification_summary",
       "agent_hitl_screen",
+      "publish_decision",
     ]) {
       expect(text, kind).toContain(kind);
     }

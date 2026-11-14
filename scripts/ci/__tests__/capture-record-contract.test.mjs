@@ -55,7 +55,11 @@ import {
 } from "../lib/capture-record-contract.mjs";
 // The recorder's re-export, so the suite proves the two tiers share ONE string
 // rather than two copies that happen to match today.
-import { CAPTURE_OUTPUT_ROOT as recorderCaptureOutputRoot } from "../../audit/lib/chat-hitl-capture-recorder.mjs";
+import {
+  CAPTURE_OUTPUT_ROOT as recorderCaptureOutputRoot,
+  captureRequirementsFor as recorderRequirementsFor,
+  validateCaptureRecord as validateGradedRecord,
+} from "../../audit/lib/chat-hitl-capture-recorder.mjs";
 
 /** The tree the committed index's screenshots are resolved against. */
 const REPO_ROOT = join(dirname(CAPTURE_INDEX_PATH), "..", "..");
@@ -732,6 +736,11 @@ describe("the advisory state — one kind's vocabulary, not every kind's", () =>
     ]) {
       expect(captureStatesFor(kind)).toEqual(CANONICAL_CAPTURE_STATES);
     }
+  });
+
+  it("reads the publish card's cells as its kind, which resolves the two states (cinatra#4150)", () => {
+    expect(parseCellName("P1__publish-card__chat_thread__pending")?.kind).toBe("publish_decision");
+    expect(KIND_CAPTURE_STATES.publish_decision).toEqual(CANONICAL_CAPTURE_STATES);
   });
 
   it("names EVERY card kind, so a new one cannot inherit a vocabulary silently", () => {
@@ -1894,4 +1903,86 @@ describe("a capture's image format is looked up, not guessed", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+// THE PUBLISH CARD'S PENDING READING OWES BOTH OF ITS CONTROLS (cinatra#4150).
+//
+// A pending publish card draws Decline AND Approve, disabled where the reader may
+// not decide, so a picture that shows only one of them is a picture of a card
+// that lost a control. The two were first pushed as one any-of group, which let
+// a record with only Approve (or only Decline) pass the canonical validator and
+// the default graded tier alike. Each control is now its own requirement.
+describe("the publish card owes both controls when pending (cinatra#4150)", () => {
+  const KIND = "publish_decision";
+  const DECLINE = '[data-action="decline-publish -> declined"]';
+  const APPROVE = '[data-action="approve-publish -> released"]';
+  const SHOT = "test-results/capture-fixture/publish.png";
+  const SHOT_HASH = createHash("sha256").update("publish-fixture").digest("hex");
+  const URL_FOR = {
+    chat_thread: "http://localhost:3000/chat?thread=t-1",
+    page_gate_region: "http://localhost:3000/agents/cinatra-ai/blog-draft-writer-agent/run-1/review/task-1",
+  };
+  // A record WITHOUT an `instance`: the default graded tier, where the any-of
+  // group was honoured. Every anchor the claim owes is observed honestly, minus
+  // the one `drop` names.
+  const publishRecord = (host, state, drop = null) => ({
+    cell: `P1__publish-card__${host}__${state}`,
+    declaredHost: host,
+    declaredKind: KIND,
+    declaredState: state,
+    finalUrl: URL_FOR[host],
+    build: "development",
+    screenshot: SHOT,
+    sha256: SHOT_HASH,
+    capturedAt: "2026-11-14T09:00:00.000Z",
+    recordedBy: RECORDER_ID,
+    assertions: recorderRequirementsFor(host, KIND, state)
+      .filter((r) => r.selector !== drop)
+      .map((r) => ({
+        ...r,
+        count: r.expect === "absent" ? 0 : 1,
+        visible: r.expect === "absent" ? 0 : 1,
+      })),
+  });
+  const canonical = (record) =>
+    validateCaptureRecord(record, {
+      virtualFilesystem: true,
+      fileExists: () => true,
+      hashFile: () => SHOT_HASH,
+    });
+  const graded = (record) =>
+    validateGradedRecord(record, { hashOf: () => SHOT_HASH, virtualFilesystem: true });
+
+  it("names each control as its own requirement, never an any-of group", () => {
+    const { required } = requiredAssertionsFor({ host: "chat_thread", kind: KIND, state: "pending" });
+    for (const sel of [DECLINE, APPROVE]) {
+      const req = required.find((r) => r.selector === sel && r.scope === "root");
+      expect(req, sel).toBeDefined();
+      expect(req.any, sel).toBeUndefined();
+    }
+  });
+
+  for (const host of Object.keys(URL_FOR)) {
+    it(`admits a pending ${host} record that shows both controls, drawn enabled or disabled`, () => {
+      expect(canonical(publishRecord(host, "pending"))).toEqual([]);
+      expect(graded(publishRecord(host, "pending"))).toEqual([]);
+    });
+
+    it(`admits a settled ${host} record: both controls gone, the state marker kept`, () => {
+      expect(canonical(publishRecord(host, "decided"))).toEqual([]);
+      expect(graded(publishRecord(host, "decided"))).toEqual([]);
+    });
+
+    it(`REFUSES a pending ${host} record that shows Approve only`, () => {
+      const record = publishRecord(host, "pending", DECLINE);
+      expect(codes(canonical(record))).toContain("record/anchor-never-observed");
+      expect(graded(record).join("\n")).toMatch(/decline-publish/);
+    });
+
+    it(`REFUSES a pending ${host} record that shows Decline only`, () => {
+      const record = publishRecord(host, "pending", APPROVE);
+      expect(codes(canonical(record))).toContain("record/anchor-never-observed");
+      expect(graded(record).join("\n")).toMatch(/approve-publish/);
+    });
+  }
 });

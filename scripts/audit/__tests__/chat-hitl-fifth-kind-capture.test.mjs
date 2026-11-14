@@ -14,7 +14,7 @@
 //   1. THE KIND IS IN THE VOCABULARY, with the two canonical states and with the
 //      card's own DOM token `asking` normalized to `pending` rather than
 //      admitted as a third state;
-//   2. ITS SETTLED READING IS AN ABSENCE. Alone among the five kinds, this card
+//   2. ITS SETTLED READING IS AN ABSENCE. Alone among the six kinds, this card
 //      draws NO DOM once the question is answered, so a `decided` capture owes
 //      the absence of its root and of its fields region rather than a card with
 //      an outcome on it;
