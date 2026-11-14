@@ -112,7 +112,7 @@ describe("dashboard-theme.css: the KPI fallback rule", () => {
     expect(kpiValue(hook, style).matches(KPI_SELECTOR)).toBe(true);
   });
 
-  it.each([
+  it.each<[string, Record<string, string>[]]>([
     ["the marker alone", [{ "data-cinatra-kpi-fallback": "foreground" }]],
     [
       "the marker inside the read-only composition only",
