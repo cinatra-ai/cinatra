@@ -79,7 +79,7 @@ jobs:
         cinatra-ai/extension-authoring-skill@01c040e6453a08f8de128bc40b7b9047793fde1a
         cinatra-ai/automation-authoring-skill@596afabf6a10b8f1f297521fcb7d1f78fb70213b
         cinatra-ai/company-research-skill@639fdc073b7d600a8436900843bfd3ac42778743
-        cinatra-ai/blog-content-skill@e04c1c3a9483d69b3ff0a4a2a8d9492bc23dc8f3
+        cinatra-ai/blog-content-skill@720df017eb2b1a0acde9d98d53a92986f3b49246
         cinatra-ai/hitl-prompt-drive-skill@81edce91254e677d7e68269503f3cf22fe7c9a2d
       mode: enforce
       ref: e643ec2ef8474bae81bd93fabb87de09a701c8ad # same SHA as the workflow @ref
