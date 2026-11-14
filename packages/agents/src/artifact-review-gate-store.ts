@@ -1300,6 +1300,64 @@ export async function deadLetterExhaustedResumeIntents(opts?: {
   return dead.length;
 }
 
+/** cinatra#4476 — the attempts a re-armed intent gets on top of those it used. */
+export const RECOVERY_ATTEMPTS_BUDGET = 20;
+
+/**
+ * cinatra#4476 — RE-ARM one resume intent that used its attempts, ONCE, for the
+ * upgrade recovery (`declared-review-recovery.ts`, which holds the run row
+ * `FOR NO KEY UPDATE` and the pause's once marker in the same transaction).
+ *
+ * A compare-and-set on the whole state: the row is `pending` or `delivering` (the
+ * two states a writer leaves an open intent in; a `done` row and a row in any other
+ * status are never written), it is dead-lettered or has used its attempts, and no
+ * lease is live (`pending`, or a lease that is missing or expired). So an intent a
+ * worker holds, one the claim can still take, and a closed one are never written.
+ * The write:
+ *   - `status` 'pending', `lease_token` and `lease_expires_at` cleared: the next
+ *     claim takes it like a new intent, and no earlier holder's lease token can
+ *     mark it (the mark is lease-guarded);
+ *   - `dead_lettered_at` cleared: it leaves the ops list;
+ *   - `attempts` kept, `max_attempts` = attempts + RECOVERY_ATTEMPTS_BUDGET: the
+ *     count of claims stays the record, and the bound holds again after the new
+ *     budget;
+ *   - `last_error` keeps the earlier error behind a note of the re-arm.
+ * The kind and response text are not written. Returns true when it wrote the row.
+ */
+export async function rearmExhaustedResumeIntent(
+  executor: GateStoreExecutor,
+  gateId: string,
+): Promise<boolean> {
+  const rows = await executor
+    .update(artifactReviewResumeOutbox)
+    .set({
+      status: "pending",
+      leaseToken: null,
+      leaseExpiresAt: null,
+      deadLetteredAt: null,
+      maxAttempts: sql`${artifactReviewResumeOutbox.attempts} + ${RECOVERY_ATTEMPTS_BUDGET}`,
+      lastError: sql`'re-armed once by the upgrade recovery; before: ' || coalesce(${artifactReviewResumeOutbox.lastError}, 'no error recorded')`,
+      updatedAt: sql`now()`,
+    })
+    .where(
+      and(
+        eq(artifactReviewResumeOutbox.gateId, gateId),
+        inArray(artifactReviewResumeOutbox.status, ["pending", "delivering"]),
+        or(
+          isNotNull(artifactReviewResumeOutbox.deadLetteredAt),
+          gte(artifactReviewResumeOutbox.attempts, artifactReviewResumeOutbox.maxAttempts),
+        ),
+        or(
+          eq(artifactReviewResumeOutbox.status, "pending"),
+          isNull(artifactReviewResumeOutbox.leaseExpiresAt),
+          lte(artifactReviewResumeOutbox.leaseExpiresAt, sql`now()`),
+        ),
+      ),
+    )
+    .returning({ gateId: artifactReviewResumeOutbox.gateId });
+  return rows.length === 1;
+}
+
 export interface DeadLetteredResumeRow {
   gateId: string;
   runId: string;

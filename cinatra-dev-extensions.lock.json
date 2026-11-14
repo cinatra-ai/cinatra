@@ -170,7 +170,7 @@
     {
       "packageName": "@cinatra-ai/drupal-artifacts",
       "repo": "cinatra-ai/drupal-artifacts",
-      "resolvedSha": "dd1bbfa0e939ee176f6d01b4173056ca95f6b77a"
+      "resolvedSha": "310d0f8cc3f5b42598c8506bd31771001332d4ce"
     },
     {
       "packageName": "@cinatra-ai/drupal-assistant-connector",
@@ -180,7 +180,7 @@
     {
       "packageName": "@cinatra-ai/drupal-mcp-connector",
       "repo": "cinatra-ai/drupal-mcp-connector",
-      "resolvedSha": "f0964ebee76a43ee1f9116745c0911a4925060b3"
+      "resolvedSha": "78e71e78db8f218fa17e0944d44951ad90eaf328"
     },
     {
       "packageName": "@cinatra-ai/drupal-widget-chat-skill",

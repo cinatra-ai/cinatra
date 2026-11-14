@@ -8,10 +8,17 @@
       "reason": "The dashboard. The pack declares the `dashboard` representation form and no renderer of its own, and the host resource MIME that form carries matches no representation provider and no first-party form arm. Converting it is decided outside plan (B) §5."
     },
     {
-      "type": "@cinatra-ai/drupal:node",
+      "type": "@cinatra-ai/drupal-artifacts:node-pointer",
       "package": "@cinatra-ai/drupal-artifacts",
       "mime": "text/html",
       "reason": "Content held in a third-party CMS. The pack declares a connector-reference form resolving to text/html and no renderer of its own; text/html is not a safe-transport form the host renders and no package provides a viewer for it. Converting it is decided outside plan (B) §5."
+    }
+  ],
+  "renames": [
+    {
+      "from": "@cinatra-ai/drupal:node",
+      "to": "@cinatra-ai/drupal-artifacts:node-pointer",
+      "reason": "The Drupal pack moved its pointer type from the host-registered @cinatra-ai/drupal:node into its own namespace. Same pack, same connector-reference text/html form, same floor; one entry out, one in."
     }
   ]
 }
