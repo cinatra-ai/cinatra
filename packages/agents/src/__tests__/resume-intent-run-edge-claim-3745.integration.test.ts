@@ -14,8 +14,9 @@
  *     their recorded tasks;
  *   - the lease renewal, the claim read, the task record and the deferral
  *     write only under the held lease (the token; the expiry time is not read);
- *   - a claimed intent is never dead-lettered, and the claim takes it past its
- *     attempts, while an unclaimed one that used them stays out (cinatra#4312);
+ *   - the deferral keeps the claim's attempt used, and a claimed intent is
+ *     bounded by its attempts like any other: the claim leaves it out and the
+ *     dead-letter pass takes it once they are used (cinatra#4312);
  *   - a gate claim (`resumeGate`) is bound to the gate its caller read, so an
  *     answered gate is a lost claim once the run paused at its next gate, and a
  *     release never moves a newer execution back;
@@ -359,42 +360,44 @@ describe.skipIf(!HAS_DB)("the delivery's in-flight writes need the held lease", 
     expect((await intentState(claimed)).result).toEqual({ id: "t-y" });
   });
 
-  it("deferResumeIntent gives the attempt back under the held lease and keeps the row delivering", async () => {
+  it("deferResumeIntent keeps the attempt used under the held lease and keeps the row delivering (cinatra#4312)", async () => {
     const run = await seedRun("running");
     const gateId = await seedIntent(run, { status: "delivering", leaseToken: "L1", attempts: 3 });
     expect(await gateStore.deferResumeIntent(gateId, "L1")).toBe(true);
-    expect(await intentState(gateId)).toMatchObject({ attempts: 2, status: "delivering", leaseToken: "L1" });
+    expect(await intentState(gateId)).toMatchObject({ attempts: 3, status: "delivering", leaseToken: "L1" });
     expect(await gateStore.deferResumeIntent(gateId, "other")).toBe(false);
-    expect((await intentState(gateId)).attempts).toBe(2);
-    await pool(`UPDATE ${T("artifact_review_resume_outbox")} SET attempts = 0 WHERE gate_id = $1`, [gateId]);
-    expect(await gateStore.deferResumeIntent(gateId, "L1")).toBe(true);
-    expect((await intentState(gateId)).attempts).toBe(0);
+    expect((await intentState(gateId)).attempts).toBe(3);
   });
 });
 
-describe.skipIf(!HAS_DB)("a claimed intent is never dead-lettered", () => {
-  it("a claimed intent at its final attempt is not dead-lettered; an unclaimed one is", async () => {
+describe.skipIf(!HAS_DB)("a claimed intent is bounded by its attempts like any other (cinatra#4312)", () => {
+  it("a claimed intent that used its attempts is dead-lettered once its lease lapsed, as an unclaimed one is", async () => {
     const claimedRun = await seedRun("running");
     const claimedGate = await seedIntent(claimedRun, { status: "delivering", leaseExpired: true, runClaimed: true, attempts: 20, maxAttempts: 20 });
     const freeRun = await seedRun("pending_approval");
     const freeGate = await seedIntent(freeRun, { status: "delivering", leaseExpired: true, attempts: 20, maxAttempts: 20 });
     await gateStore.deadLetterExhaustedResumeIntents();
-    expect((await intentState(claimedGate)).deadLettered).toBe(false);
+    expect((await intentState(claimedGate)).deadLettered).toBe(true);
     expect((await intentState(freeGate)).deadLettered).toBe(true);
-    // The claimed one stays claimable, so a delivery can still close it.
     const reclaimed = await gateStore.claimPendingResumeIntents({ limit: 200, leaseMs: 60_000 });
-    expect(reclaimed.map((r) => r.gateId)).toContain(claimedGate);
+    expect(reclaimed.map((r) => r.gateId)).not.toContain(claimedGate);
     expect(reclaimed.map((r) => r.gateId)).not.toContain(freeGate);
   });
 
-  it("the claim takes a claimed intent past its attempts and leaves an unclaimed one that used them (cinatra#4312)", async () => {
+  it("a claimed intent under a live lease is not dead-lettered, even when it used its attempts", async () => {
+    const gateId = await seedIntent(await seedRun("running"), { status: "delivering", runClaimed: true, attempts: 20, maxAttempts: 20 });
+    await gateStore.deadLetterExhaustedResumeIntents();
+    expect(await intentState(gateId)).toMatchObject({ deadLettered: false, leaseLive: true, claimed: true });
+  });
+
+  it("the claim leaves out a claimed intent that used its attempts, as an unclaimed one", async () => {
     const claimedGate = await seedIntent(await seedRun("running"), { status: "delivering", leaseExpired: true, runClaimed: true, attempts: 20, maxAttempts: 20 });
     const usedGate = await seedIntent(await seedRun("pending_approval"), { status: "delivering", leaseExpired: true, attempts: 20, maxAttempts: 20 });
-    // No dead-letter pass first: the claim alone leaves the unclaimed one out.
+    // No dead-letter pass first: the claim alone leaves both out.
     const reclaimed = (await gateStore.claimPendingResumeIntents({ limit: 200, leaseMs: 60_000 })).map((r) => r.gateId);
-    expect(reclaimed).toContain(claimedGate);
+    expect(reclaimed).not.toContain(claimedGate);
     expect(reclaimed).not.toContain(usedGate);
-    expect(await intentState(claimedGate)).toMatchObject({ attempts: 21, claimed: true, leaseLive: true });
+    expect(await intentState(claimedGate)).toMatchObject({ attempts: 20, claimed: true, deadLettered: false, leaseLive: false });
     expect(await intentState(usedGate)).toMatchObject({ attempts: 20, deadLettered: false, leaseLive: false });
   });
 });

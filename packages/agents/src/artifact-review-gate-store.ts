@@ -1149,13 +1149,12 @@ export async function claimPendingResumeIntents(opts?: {
           // Each claim uses an attempt (the update below), whatever the
           // delivery then returns, a `retryable` outcome included
           // (artifact-review-resume-delivery `sweepArtifactReviewResumeIntents`).
-          // cinatra#3745: except an intent whose delivery claimed the run. The
-          // dead-letter pass skips it, so it stays claimable past its attempts
-          // until its delivery closes it; else the run stays `running` with no driver.
-          or(
-            lt(artifactReviewResumeOutbox.attempts, artifactReviewResumeOutbox.maxAttempts),
-            isNotNull(artifactReviewResumeOutbox.runClaimedAt),
-          ),
+          // cinatra#3745: an intent whose delivery claimed the run is bounded
+          // the same way. The delivery's claim of the last attempt puts a
+          // claimed run with nothing recorded back on its gate instead of a
+          // re-send (artifact-review-resume-delivery), so the dead-letter pass
+          // leaves no run `running` that a release could have reached.
+          lt(artifactReviewResumeOutbox.attempts, artifactReviewResumeOutbox.maxAttempts),
           or(
             eq(artifactReviewResumeOutbox.status, "pending"),
             and(
@@ -1312,18 +1311,19 @@ export async function clearOtherResumeClaimsInRunTx(
 }
 
 /**
- * Leave a leased intent for a later lease and give its attempt back
- * (cinatra#3745). The delivery found another driver holding the run with no
- * witness that this gate's resume was delivered, so it decides nothing now: a
- * claim that fails before its dispatch puts the run back on this gate. The row
- * stays `delivering` under this lease until the lease lapses; the attempt is
- * not spent, so a long competing leg never dead-letters the intent. False when
- * the lease is no longer this worker's.
+ * Leave a leased intent for a later lease (cinatra#3745). The delivery found
+ * another driver holding the run with no witness that this gate's resume was
+ * delivered, so it decides nothing now: a claim that fails before its dispatch
+ * puts the run back on this gate. The row stays `delivering` under this lease
+ * until the lease lapses. The claim's attempt stays used, as for every outcome
+ * that leaves an intent for a re-claim (cinatra#4312): a deferral that repeats
+ * on every attempt is dead-lettered for ops like any other. False when the
+ * lease is no longer this worker's.
  */
 export async function deferResumeIntent(gateId: string, leaseToken: string): Promise<boolean> {
   const deferred = await db
     .update(artifactReviewResumeOutbox)
-    .set({ attempts: sql`GREATEST(${artifactReviewResumeOutbox.attempts} - 1, 0)`, updatedAt: sql`now()` })
+    .set({ updatedAt: sql`now()` })
     .where(heldLease(gateId, leaseToken))
     .returning({ gateId: artifactReviewResumeOutbox.gateId });
   return deferred.length === 1;
@@ -1412,10 +1412,10 @@ export async function deadLetterExhaustedResumeIntents(opts?: {
   // actively in-flight (a `delivering` row with a LIVE lease is left to finish).
   const eligibleCond = and(
     isNull(artifactReviewResumeOutbox.deadLetteredAt),
-    // cinatra#3745: an intent whose delivery claimed the run is never
-    // dead-lettered — that would strand the run `running` with no driver. It stays
-    // claimable until the delivery closes it (agent_run_stop is the operator road).
-    isNull(artifactReviewResumeOutbox.runClaimedAt),
+    // cinatra#3745: an intent whose delivery claimed the run is dead-lettered
+    // like any other once it used its attempts. A run its last claim could not
+    // put back on the gate stays `running` for ops (agent_run_stop is the
+    // operator road).
     gte(artifactReviewResumeOutbox.attempts, artifactReviewResumeOutbox.maxAttempts),
     or(
       // A pending (un-leased) exhausted row.
