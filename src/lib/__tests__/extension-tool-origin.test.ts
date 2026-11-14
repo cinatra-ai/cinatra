@@ -220,17 +220,38 @@ afterEach(() => {
 });
 
 describe("the run package's own road", () => {
-  it("reads nothing when the run package declares no agent dependency, even without a proven step", async () => {
+  // The run package's context is read by name and version, not from the run's own installation:
+  // its claim of no agent dependency proves nothing about the flow the exact parent runs.
+  const NO_DEPENDENCY = { dependencies: [], tools: [{ name: "parent_tool", module: "./cinatra/tools/p.mjs" }] };
+
+  it("re-anchors a signed child step in the exact parent flow when the run package's context declares no agent dependency", async () => {
+    // The exact parent embeds the child and declares it; the context says `dependencies: []` and declares parent_tool.
     const world = makeWorld();
-    const origin = await resolve(world, { cinatra: { tools: [] }, run: { verifiedStepId: null } });
-    expect(origin).toEqual({ kind: "parent" });
-    expect(world.deps.readInstalledExtensionById).not.toHaveBeenCalled();
-    expect(world.deps.readFlowDocument).not.toHaveBeenCalled();
+    await refusedWith(resolve(world, { cinatra: NO_DEPENDENCY, name: "parent_tool" }), "name-not-bound");
+    expect(world.deps.readFlowDocument).toHaveBeenCalledWith(PARENT_ROOT);
   });
 
-  it("refuses an unproven step once a child could be reachable", async () => {
-    await refusedWith(resolve(makeWorld(), { run: { verifiedStepId: null } }), "step-unproven");
-    await refusedWith(resolve(makeWorld(), { run: { verifiedStepId: "  " } }), "step-unproven");
+  it("reads the dependency from the exact parent root when the context declares none", async () => {
+    const world = makeWorld();
+    const origin = await resolve(world, { cinatra: NO_DEPENDENCY });
+    expect(origin.kind).toBe("child");
+    expect(world.deps.readInstalledExtensionById).toHaveBeenCalledWith(PARENT_ID);
+  });
+
+  it("places a parent step in the exact parent flow when the context declares no agent dependency", async () => {
+    const world = makeWorld();
+    expect(await resolve(world, { cinatra: NO_DEPENDENCY, run: { verifiedStepId: "own_step" }, name: "parent_tool" }))
+      .toEqual({ kind: "parent" });
+    expect(world.deps.readFlowDocument).toHaveBeenCalledWith(PARENT_ROOT);
+  });
+
+  it("refuses an unproven step whatever the context declares", async () => {
+    for (const cinatra of [parentCinatra(), NO_DEPENDENCY, { tools: [] }]) {
+      const world = makeWorld();
+      await refusedWith(resolve(world, { cinatra, run: { verifiedStepId: null } }), "step-unproven");
+      await refusedWith(resolve(world, { cinatra, run: { verifiedStepId: "  " } }), "step-unproven");
+      expect(world.deps.readInstalledExtensionById).not.toHaveBeenCalled();
+    }
   });
 
   it("keeps a step of the parent's own flow on the parent road, read from the exact parent root", async () => {
@@ -314,6 +335,57 @@ describe("the embedded child's road", () => {
       dependencyEdges: [childEdge({ resolvedInstallId: CHILD_DEFAULT_ID })] });
     expect(await origin.install.stillBound!()).toBe(false);
   });
+
+  // The parent installation that authorized the flow, read again just before the import: any change is a
+  // changed installation, which the loader refuses with its one fixed sentence (stillBound answers false).
+  const parentWithoutStep = (): Doc => {
+    const d = parentDoc();
+    subflowOf(d).nodes = [];
+    delete refsOf(subflowOf(d))[STEP];
+    return d;
+  };
+  const changes: Array<[string, (w: World) => void]> = [
+    ["the parent anchor moved to another digest whose flow drops the step, the edge unchanged", (w) => {
+      w.anchors[PARENT_ID] = { version: PARENT_VERSION, digest: "digest-parent-moved" };
+      w.flows[PARENT_ROOT] = parentWithoutStep();
+    }],
+    ["the parent anchor moved to another digest, the flow unchanged", (w) => {
+      w.anchors[PARENT_ID] = { version: PARENT_VERSION, digest: "digest-parent-moved" };
+    }],
+    ["the parent anchor is gone", (w) => {
+      w.anchors[PARENT_ID] = null;
+    }],
+    ["the parent anchor names another root", (w) => {
+      w.roots[PARENT_ID] = "/fixture-store/agent/fixture-parent-agent/digest-other";
+      w.manifests["/fixture-store/agent/fixture-parent-agent/digest-other"] = w.manifests[PARENT_ROOT]!;
+      w.flows["/fixture-store/agent/fixture-parent-agent/digest-other"] = parentDoc();
+    }],
+    ["the flow at the same anchor no longer has the step", (w) => {
+      w.flows[PARENT_ROOT] = parentWithoutStep();
+    }],
+    ["the flow at the same anchor no longer labels the step's FlowNode with the child", (w) => {
+      const d = parentDoc();
+      delete at(d, "$referenced_components", "child_flow").metadata;
+      w.flows[PARENT_ROOT] = d;
+    }],
+    ["the parent manifest at the same anchor no longer declares the child", (w) => {
+      w.manifests[PARENT_ROOT] = { name: PARENT, version: PARENT_VERSION,
+        cinatra: { dependencies: [], tools: [{ name: "parent_tool", module: "./cinatra/tools/p.mjs" }] } };
+    }],
+    ["the parent flow can no longer be read", (w) => {
+      delete w.flows[PARENT_ROOT];
+    }],
+  ];
+  for (const [label, change] of changes) {
+    it(`re-checks the parent installation just before the import: false once ${label}`, async () => {
+      const world = makeWorld();
+      const origin = await resolve(world);
+      if (origin.kind !== "child") throw new Error("expected the child road");
+      expect(await origin.install.stillBound!()).toBe(true);
+      change(world.w);
+      expect(await origin.install.stillBound!()).toBe(false);
+    });
+  }
 
   it("refuses a tool the child does not mark embeddable", async () => {
     for (const embeddable of [undefined, false]) {
