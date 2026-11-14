@@ -12,8 +12,10 @@
 //   - outside the defining module, the subpath that re-exports it and the two routes: the mint's name in the raw text (a
 //     comment too) or in any decoded name, string or template part;
 //   - a string or template part holding a module path of the mint anywhere but the module of an import or export statement,
-//     `import x = require`, a direct `import()`, a direct `require()` in a file that neither declares nor assigns `require`,
-//     or an `import()` type (so createRequire, an aliased, wrapped or local require and a path in a variable are refused);
+//     `import x = require`, a direct `import()`, a direct `require()` in a file that does not declare `require` (a variable,
+//     parameter, function, class, import or destructured binding) or assign it directly (`require = ...`, `require ||= ...`),
+//     or an `import()` type (so createRequire, an aliased or wrapped require, a require declared or directly assigned in the
+//     file, and a path in a variable are refused);
 //     one path held as data in the org-write registry is allowed, as an array element of that one file;
 //   - `export *`, `export * as`, an unawaited dynamic import, a dynamic import or require used other than as a bound name or
 //     a plain destructuring, and a handle exported by its own declaration; a whole-module handle (a namespace or default
@@ -24,9 +26,11 @@
 // NOT READ (known limits): test files; directories named dist, build or coverage at any depth; tracked symlinks; module
 // aliases declared outside JS/TS (package.json `imports`/`exports`, tsconfig `paths`); a module path assembled at run time,
 // or from a part that is not a string or template part (a regex literal's source, say); code run from a string (eval); a
-// `require` reached through the global object (globalThis.require = ...); and any other array element in the org-write
-// registry equal to the allowed data path.
-// Red at the 7a-3a tip: no module names the mint (the first real-tree case). The scanner's own cases pass there too.
+// `require` reached through the global object (globalThis.require = ...); a `require` assigned by destructuring
+// (`[require] = ...`, `({ r: require } = o)`) or as a for-in/for-of target, or redirected by `with (o) { require(...) }`;
+// and any other array element in the org-write registry equal to the allowed data path.
+// Red at the 7a-3a tip: the three real-tree cases (no module names the mint; the tree reaches no mint, because the exempt
+// modules do not spell it there; the harmless-forms case, for the same reason). The scanner's other cases pass there too.
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
@@ -93,7 +97,8 @@ const exposerOf = (spec: ts.Node | undefined): keyof Exports | null => {
 const decoded = (n: ts.Node): string | null =>
   ts.isIdentifier(n) || ts.isPrivateIdentifier(n) || ts.isStringLiteralLike(n) || ts.isTemplateLiteralToken(n) || ts.isJsxText(n)
     ? n.text : null;
-/** Declaring or assigning a binding named `require`: a call of `require` is then not the module loader. */
+/** A declaration of `require`, or a direct assignment to it (`require = ...`, `require ||= ...`): a call of `require` is
+ *  then not taken for the module loader. Destructuring and for-in/for-of assignments to it are not seen (a known limit). */
 const DECLARES: ((n: ts.Node) => boolean)[] = [ts.isVariableDeclaration, ts.isParameter, ts.isFunctionDeclaration,
   ts.isFunctionExpression, ts.isClassDeclaration, ts.isClassExpression, ts.isImportSpecifier, ts.isImportClause,
   ts.isNamespaceImport, ts.isImportEqualsDeclaration, ts.isBindingElement, ts.isEnumDeclaration, ts.isModuleDeclaration];
