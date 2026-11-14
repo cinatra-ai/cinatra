@@ -7,11 +7,12 @@
  *
  * pnpm exec playwright test -c tests/e2e/config/design.config.ts
  *   --project design-conformance-functional tests/e2e/design/conformance/calendar.spec.ts
- * The exact fixture leaf follows the existing development-only admission.
+ * The fixtures mount in the existing /design-fixtures/conformance harness
+ * (calendar-fixtures.tsx); no new route and no auth-route-guard admission.
  */
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-const harness = "/design-fixtures/conformance/calendar";
+const harness = "/design-fixtures/conformance";
 const fixture = (name: string) => `[data-calendar-fixture="${name}"]`;
 const day = (scope: Locator, key: string) => scope.locator(`[data-slot="calendar-day"][data-day="${key}"]`);
 
