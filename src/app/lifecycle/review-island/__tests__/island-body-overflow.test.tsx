@@ -109,7 +109,6 @@ beforeEach(() => {
           props: null,
           mount: { kind: "floor" as const },
         }),
-        capturePair: Promise.resolve(null),
       },
     ],
     permissions: Promise.resolve({ canDecide: true, canComment: true }),

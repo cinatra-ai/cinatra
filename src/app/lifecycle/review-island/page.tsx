@@ -10,10 +10,9 @@ import "server-only";
 // server-renders the pinned targets of ONE review gate: the immutable target
 // header, the renderer-provenance chip, and whichever tier of the ladder
 // resolves — a build-time renderer the defining extension ships, a runtime
-// renderer from an installed extension, or the sanitized metadata floor. Plus
-// the pinned capture pair where the target has one. It is the SAME
-// `ReviewTargetPanel` the review page has always rendered; there is no second
-// implementation of the ladder anywhere.
+// renderer from an installed extension, or the sanitized metadata floor. It is
+// the SAME `ReviewTargetPanel` the review page has always rendered; there is no
+// second implementation of the ladder anywhere.
 //
 // WHY IT EXISTS. §III's ladder is resolved by SERVER components, and two of the
 // three hosts that must show it (the chat thread, the run card) are
@@ -335,7 +334,6 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
   for (const stream of surface.targets) {
     if (drawn.includes(stream)) continue;
     void stream.prepared.catch(() => undefined);
-    void stream.capturePair.catch(() => undefined);
   }
   if (!selection.ok) return empty;
 
@@ -385,7 +383,6 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
         >
           <StreamedReviewTarget
             prepared={stream.prepared}
-            capturePair={stream.capturePair}
             // ONE BORDER PER TARGET (cinatra#3441). A document that draws ONE
             // target is framed by the CARD — that target's header over this
             // document inside one panel — so a border here too would be the
@@ -422,26 +419,23 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
  * first body can stream.
  *
  * It is the SAME `ReviewTargetPanel` the review page has always rendered, fed
- * the same prepared value and the same pinned pair. Nothing about the ladder,
+ * the same prepared value. Nothing about the ladder,
  * the floor or the trusted organization scope moves.
  */
 function StreamedReviewTarget({
   prepared,
-  capturePair,
   framed,
   orgId,
 }: {
   prepared: ReviewTargetStream["prepared"];
-  capturePair: ReviewTargetStream["capturePair"];
   /** Whether this panel draws its own frame (cinatra#3441) — see the caller. */
   framed: boolean;
   orgId: string;
 }) {
   const target = use(prepared);
-  const pair = use(capturePair);
   return (
     <>
-      <ReviewTargetPanel prepared={target} orgId={orgId} capturePair={pair} framed={framed} />
+      <ReviewTargetPanel prepared={target} orgId={orgId} framed={framed} />
       {/* The card's idle-progress bound restarts on this: a gate that is still
           streaming panels is never painted over with a failure plate. */}
       <IslandPanelMountedSignal />

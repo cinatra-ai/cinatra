@@ -196,23 +196,3 @@ describe("wave 3 — a capped read must not lie about the work's size", () => {
     expect(projection.truncated).toBe(false);
   });
 });
-
-describe("wave 3 — the reviewed comparison is never replaced by a per-target pair", () => {
-  it("asks the surface's own pair builder only where the pair is one target's", () => {
-    // A repair reading compares the BASE gate's current picture with the
-    // successor's repaired one. A per-target minter can only mint the
-    // successor's two, so answering there would swap the comparison the
-    // reviewer is being asked about for a different one.
-    // Since cinatra#3334 the choice is made per target inside
-    // `streamReviewTargets`, one pairing enum at a time, rather than in a loop
-    // over the whole prepared set — the SAME choice, read at its new anchor.
-    const source = repoFile("src/app/artifacts/[id]/review-gate-ports.ts");
-    const repairFirst = source.indexOf("switch (resolved.kind)");
-    expect(repairFirst).toBeGreaterThan(-1);
-    const roadsAt = source.indexOf("roads?.capturePair", repairFirst);
-    const repairAt = source.indexOf("loadPinnedRepairPair(orgId, resolved.gateId", repairFirst);
-    expect(repairAt).toBeGreaterThan(-1);
-    expect(roadsAt).toBeGreaterThan(-1);
-    expect(repairAt).toBeLessThan(roadsAt);
-  });
-});

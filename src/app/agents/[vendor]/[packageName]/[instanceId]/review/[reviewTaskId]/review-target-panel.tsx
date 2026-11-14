@@ -5,9 +5,6 @@ import type { ReactNode } from "react";
 import type { PreparedReviewTarget } from "@/lib/artifacts/artifact-review-preparation";
 import { ReviewTargetMount } from "@/app/artifacts/[id]/review-target-mount";
 import { ArtifactStructuredDataView } from "@/components/artifacts/artifact-structured-data-view";
-import type { PinnedCapturePairView } from "@/lib/artifacts/cms-preview-capture-view";
-
-import { ReviewPinnedCapture } from "./review-pinned-capture";
 import {
   reviewProvenanceConformanceId,
   reviewProvenanceLabel,
@@ -62,19 +59,12 @@ import {
 export function ReviewTargetPanel({
   prepared,
   orgId,
-  capturePair = null,
   framed = true,
 }: {
   prepared: PreparedReviewTarget;
   /** The reviewing surface's TRUSTED organization scope, from the host that
    * already authorized this reader — the form rung reads bytes under it. */
   orgId: string;
-  /** S6 (#2044 L-B + L-D): the visual before/after PAIR pinned at gate creation
-   * for this target — the live page beside the proposal composed into its chrome.
-   * `null` for every target that has no captures, which renders nothing: the
-   * pictures are additive context beneath the decided representation, never a
-   * substitute. */
-  capturePair?: PinnedCapturePairView | null;
   /** Does this panel draw its own frame (cinatra#3441)? §IV draws ONE frame per
    * target: the immutable header over the representation, inside one border.
    * Inside a gate that pins ONE target that frame is the CARD's, drawn round the
@@ -135,7 +125,9 @@ export function ReviewTargetPanel({
       ) : null}
 
       {/* The representation slot — the type renderer mounts here, or the floor.
-          S6: the PINNED before/after pair follows as non-decisional visual context. */}
+          Nothing follows it: a pinned capture pair is not drawn anywhere
+          (lifecycle cards, section III), so a target whose renderer does not
+          resolve shows the floor, the same fall on every host. */}
       {/* THE SLOT IS THE CONTAINER THAT SCROLLS. `overflow-x-auto` gives a
           representation wider than the panel its own horizontal scroll — the
           reader reaches the whole of it, and the page around it never widens.
@@ -148,7 +140,6 @@ export function ReviewTargetPanel({
           props={props}
           fallback={props ? <ArtifactStructuredDataView props={props} /> : null}
         />
-        <ReviewPinnedCapture pair={capturePair} />
       </div>
     </div>
   );

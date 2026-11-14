@@ -53,7 +53,6 @@ const mocks = vi.hoisted(() => ({
   signInRedirectTarget: vi.fn(async () => "/sign-in"),
   resolveReviewActorContext: vi.fn(),
   loadReviewGateSurface: vi.fn(),
-  loadPinnedCapturePair: vi.fn(() => null),
   readAgentRunById: vi.fn(async (): Promise<unknown> => null),
   readAgentTemplateById: vi.fn(async () => null),
   buildRunStepperSteps: vi.fn(() => []),
@@ -90,7 +89,6 @@ vi.mock("@/lib/auth-session", () => ({
 }));
 vi.mock("@/app/artifacts/[id]/review-gate-ports", () => ({
   loadReviewGateSurface: mocks.loadReviewGateSurface,
-  loadPinnedCapturePair: mocks.loadPinnedCapturePair,
 }));
 vi.mock("@cinatra-ai/agents/store", () => ({
   readAgentRunById: mocks.readAgentRunById,

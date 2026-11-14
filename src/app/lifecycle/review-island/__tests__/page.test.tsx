@@ -96,7 +96,6 @@ function target(artifactId: string) {
   return {
     target: prepared.target,
     prepared: Promise.resolve(prepared),
-    capturePair: Promise.resolve(null),
   };
 }
 
@@ -105,7 +104,6 @@ function pendingTarget(artifactId: string) {
   return {
     target: { artifactId, representationRevisionId: `${artifactId}-rev` },
     prepared: new Promise<never>(() => {}),
-    capturePair: Promise.resolve(null),
   };
 }
 
@@ -485,7 +483,6 @@ describe("the island's target selector names exactly one pinned target, or draws
     return {
       target: prepared.target,
       prepared: Promise.resolve(prepared),
-      capturePair: Promise.resolve(null),
     };
   }
   function surfaceOf(targets: Array<ReturnType<typeof pinned>>) {
@@ -856,7 +853,6 @@ describe("cinatra#4129 — a frame that names one pinned target draws that targe
       const failing = (artifactId: string) => ({
         target: { artifactId, representationRevisionId: `${artifactId}-rev` },
         prepared: Promise.reject(new Error(`prepare failed: ${artifactId}`)),
-        capturePair: Promise.reject(new Error(`capture failed: ${artifactId}`)),
       });
       loadReviewGateSurface.mockResolvedValue({
         kind: "ready",

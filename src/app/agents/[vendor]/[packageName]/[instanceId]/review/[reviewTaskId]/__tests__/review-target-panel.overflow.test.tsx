@@ -24,15 +24,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-// The mount and the pinned-capture pair are rendered, not exercised, here —
-// each carries its own suite.
+// The mount is rendered, not exercised, here - it carries its own suite.
 vi.mock("@/app/artifacts/[id]/review-target-mount", () => ({
   ReviewTargetMount: () => null,
 }));
-vi.mock(
-  "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-pinned-capture",
-  () => ({ ReviewPinnedCapture: () => null }),
-);
 
 import { ReviewTargetPanel } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-target-panel";
 
@@ -60,7 +55,7 @@ const PREPARED = {
 
 function panel(): { frame: Element; slot: Element } {
   document.body.innerHTML = renderToStaticMarkup(
-    <ReviewTargetPanel prepared={PREPARED} orgId="org-1" capturePair={null} />,
+    <ReviewTargetPanel prepared={PREPARED} orgId="org-1" />,
   );
   const frame = document.body.querySelector("[data-conformance-id='review-target']");
   if (!frame) throw new Error("no target panel");
@@ -112,7 +107,7 @@ describe("cinatra#3441 — the panel draws its frame only where it is the target
 
   it("framed by default: the border and the control radius every caller has drawn", () => {
     const frame = frameOf(
-      renderToStaticMarkup(<ReviewTargetPanel prepared={PREPARED} orgId="org-1" capturePair={null} />),
+      renderToStaticMarkup(<ReviewTargetPanel prepared={PREPARED} orgId="org-1" />),
     );
     expect(classesOf(frame)).toEqual(expect.arrayContaining(["rounded-control", "border", "border-line"]));
     // … and the surface it paints: every class of the frame is pinned.
@@ -122,7 +117,7 @@ describe("cinatra#3441 — the panel draws its frame only where it is the target
   it("unframed inside a one-target card: no border and no radius; the anchor and the scrolling slot stay", () => {
     const frame = frameOf(
       renderToStaticMarkup(
-        <ReviewTargetPanel prepared={PREPARED} orgId="org-1" capturePair={null} framed={false} />,
+        <ReviewTargetPanel prepared={PREPARED} orgId="org-1" framed={false} />,
       ),
     );
     expect(classesOf(frame)).not.toContain("border");

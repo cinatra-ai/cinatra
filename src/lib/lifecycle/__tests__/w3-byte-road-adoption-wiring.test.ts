@@ -6,16 +6,16 @@ import { describe, expect, it } from "vitest";
 // WAVE 3 OF `PLAN: Agents Lifecycle (D) — Review` (cinatra#3091, epic #3087) —
 // THE ADOPTION IS WIRED, NOT MERELY AVAILABLE.
 //
-// The plan, §3.4 wave 3: "The CMS picture pair's broker minter — built today,
-// with no caller — is wired here, so the pair loads inside a third-party
-// application as well." And §6.7: "wave 3 is the displays' adoption of them, not
-// their construction."
+// The plan, section 6.7: "wave 3 is the displays' adoption of them, not their
+// construction."
 //
 // An enabler with no caller is the exact state this wave exists to end, so the
-// bar this file holds is a COUNTED one: each of the two minters must have a real
-// caller in the product tree, and the island reader must reach both. A future
-// edit that quietly un-wires either one fails here rather than at a blank panel
-// inside somebody else's website.
+// bar this file holds is a COUNTED one: the byte minter must have a real caller
+// in the product tree, and the island reader must reach it. A future edit that
+// quietly un-wires it fails here rather than at a blank panel inside somebody
+// else's website. (The CMS picture pair's broker minter, the plan's other
+// wave 3 adoption, lost its caller with the pair itself: a pinned capture pair
+// is not drawn anywhere, cinatra#3862 leg 8.)
 
 const ROOT = process.cwd();
 
@@ -76,21 +76,6 @@ describe("wave 3 — the byte capability finally has a caller", () => {
       "utf8",
     );
     expect(island).toContain("islandReviewSurfaceRoads");
-  });
-});
-
-describe("wave 3 — the CMS picture pair's broker minter is wired", () => {
-  it("has a caller in the product tree", () => {
-    const callers = callersOf("buildBrokerCapturePair");
-    expect(callers.length).toBeGreaterThan(0);
-  });
-
-  it("is reached from the review surface loader, so the pair loads in a third-party app", () => {
-    const roads = readFileSync(
-      path.join(ROOT, "src/app/artifacts/[id]/review-surface-roads.ts"),
-      "utf8",
-    );
-    expect(roads).toContain("buildBrokerCapturePair");
   });
 });
 

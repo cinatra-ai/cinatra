@@ -37,11 +37,6 @@ import {
   recordReviewSurfaceChangesRequested,
   type RecordChangesRequestedResult,
 } from "@cinatra-ai/agents/lifecycle-review-changes-requested";
-// cinatra#2286 S10 (PR1) — the ONE new cross-package subpath this slice adds
-// (packages/agents/package.json's `exports`), precedented six times over by the
-// imports above it. Read-only: this port only CALLS the existing repair store,
-// never writes to it.
-import { readRepairBySuccessorGateId } from "@cinatra-ai/agents/lifecycle-repair-store";
 import {
   buildActorContextFromPrimitive,
   type ActorRoleHints,
@@ -61,17 +56,6 @@ import {
   type ReviewSurfaceModel,
   type ReviewTargetStream,
 } from "@/lib/artifacts/review-surface-model";
-import { readPinnedPreviewCaptures } from "@/lib/artifacts/cms-preview-capture-store";
-import {
-  buildPinnedCaptureViews,
-  buildPinnedCapturePair,
-  buildPinnedRepairPair,
-  type PinnedCaptureImageUrlMinter,
-  type PinnedCapturePairKind,
-  type PinnedCapturePairView,
-} from "@/lib/artifacts/cms-preview-capture-view";
-import { reviewTargetVersionPath } from "@cinatra-ai/agent-ui-protocol/renderable-views/lifecycle-cards";
-import { isRepairSuccessorTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
 import {
   submitReviewDecisionCore,
   type ArtifactReviewDecision,
@@ -135,8 +119,8 @@ export function bindReviewRunGatePorts(ctx: ReviewActorContext): ReviewRunGatePo
 export async function beginReviewTargets(args: {
   input: PrepareReviewInput;
   actorCtx: ReviewActorContext;
-  /** The roads this surface named (wave 3). Absent ⇒ the session byte routes,
-   *  the channel's named absence, and the first-party capture pair. */
+  /** The roads this surface named (wave 3). Absent means the session byte
+   *  routes and the channel's named absence. */
   roads?: ReviewSurfaceRoads | null;
 }): Promise<BeginReviewResult> {
   const { actorCtx } = args;
@@ -399,9 +383,8 @@ export async function loadReviewGateSurface(args: {
    * loader — that is why the card and the page cannot drift — but its reader
    * holds a broker bearer and no cookie, so every address the surface hands out
    * has to be one a subresource load can actually fetch. Naming the roads here
-   * is what switches all of it at once: the media displays' byte addresses, the
-   * CMS picture pair's, and the content the three browser fetchers stop
-   * fetching.
+   * is what switches all of it at once: the media displays' byte addresses and
+   * the content the three browser fetchers stop fetching.
    *
    * ABSENT IS THE UNCHANGED ANSWER, in every particular.
    */
@@ -471,12 +454,7 @@ export async function loadReviewGateSurface(args: {
       kind: "settled",
       // The decided reading streams exactly as the pending one does: the same
       // frozen set, one boundary per reviewed target (cinatra#3334).
-      targets: streamReviewTargets(
-        actorCtx.orgId,
-        history.targets,
-        repairPairingOnce(runId, reviewTaskId),
-        roads,
-      ),
+      targets: streamReviewTargets(history.targets),
       // As on the ready path: no gate/run column carries a producer summary in
       // this slice, so the chrome renders nothing rather than an empty summary.
       agentSummary: null,
@@ -522,15 +500,9 @@ export async function loadReviewGateSurface(args: {
     kind: "ready",
     runId,
     reviewTaskId,
-    // The ordered per-target preparation + capture promises. Each one carries
-    // the work that used to run AFTER the whole set was prepared — its pinned
-    // capture — so no target's picture holds another target's body.
-    targets: streamReviewTargets(
-      actorCtx.orgId,
-      prepared.targets,
-      repairPairingOnce(runId, reviewTaskId),
-      roads,
-    ),
+    // The ordered per-target preparations, each under its own boundary on the
+    // page, so no target's body waits for another's.
+    targets: streamReviewTargets(prepared.targets),
     // The producing agent's one-line summary (§I/II) is rendered "when present";
     // no gate/run column carries it in this slice, so it is absent (the chrome
     // renders nothing rather than an empty summary).
@@ -545,103 +517,17 @@ export async function loadReviewGateSurface(args: {
 }
 
 /**
- * WHAT A GATE'S PICTURES ARE READ AGAINST — resolved once per gate.
+ * Compose the STREAMING surface's targets (cinatra#3334): each target's
+ * identity beside its started preparation, in the gate's order.
  *
- * `ordinary` is the everyday gate (live page vs proposal). `repair` is a
- * repair-successor gate, whose pair is keyed on the gate's own ROW id rather
- * than its `reviewTaskId` string, so that id costs one extra `readReviewGate`.
- * `unresolved` is the third answer and the reason this is an enum rather than a
- * nullable id: a repair gate whose row could not be read is NOT an ordinary
- * gate, and answering it with the ordinary pair would put the wrong comparison
- * (live vs proposal) where reviewed-vs-repaired belongs. It degrades to NO
- * pair, which is the honest fallback the capture reads themselves take (#2044).
- */
-type RepairPairing =
-  | { kind: "ordinary" }
-  | { kind: "repair"; gateId: string }
-  | { kind: "unresolved" };
-
-/**
- * The gate's pairing, read AT MOST ONCE and only when a target asks for it.
- *
- * Shared by every target's capture promise (one read for the whole gate) and
- * deliberately LAZY: starting it while the surface is still being composed
- * would put a gate read back in front of the shell the preflight just freed.
- */
-function repairPairingOnce(runId: string, reviewTaskId: string): () => Promise<RepairPairing> {
-  let pending: Promise<RepairPairing> | null = null;
-  return () => {
-    pending ??= !isRepairSuccessorTaskId(reviewTaskId)
-      ? Promise.resolve<RepairPairing>({ kind: "ordinary" })
-      : readReviewGate(runId, reviewTaskId)
-          .then<RepairPairing>((gate) =>
-            gate?.id ? { kind: "repair", gateId: gate.id } : { kind: "unresolved" },
-          )
-          .catch<RepairPairing>(() => ({ kind: "unresolved" }));
-    return pending;
-  };
-}
-
-/**
- * Compose the STREAMING surface's targets (cinatra#3334): each target's started
- * preparation beside the promise of its own pinned capture pair.
- *
- * THE PAIR IS READ BEHIND THAT TARGET'S OWN PREPARATION, and that is load-
- * bearing rather than cosmetic: the pinned capture read is SYNCHRONOUS against
- * the store, and a callback chained onto an already-settled promise runs in a
- * microtask BEFORE the awaiting caller of this surface resumes — so composing
- * the pairs eagerly would run every target's store read in front of the shell
- * the preflight was moved forward to release. The panel that consumes a pair is
- * the same one that awaits `prepared`, so waiting for it costs the picture
- * nothing and keeps the surface's own answer free of target work.
+ * Nothing else rides on a target. The pinned capture pair each one used to
+ * carry is not drawn on any page of the approved design (lifecycle cards,
+ * section III), so it is not read (cinatra#3862 leg 8).
  */
 export function streamReviewTargets(
-  orgId: string,
   started: readonly ReviewTargetPreparation[],
-  pairing: () => Promise<RepairPairing>,
-  roads: ReviewSurfaceRoads | null = null,
 ): ReviewTargetStream[] {
-  return started.map(({ target, prepared }) => ({
-    target,
-    prepared,
-    capturePair: prepared
-      .then(() => pairing())
-      .then((resolved) => {
-        switch (resolved.kind) {
-          case "repair":
-            // THE REPAIR SUCCESSOR'S PAIR IS NOT THE ROAD'S TO MAKE (wave 3). A
-            // repair reading's pair is a comparison ACROSS two targets — the
-            // base gate's current picture against the successor's repaired one,
-            // with the drifted regions — and a per-target minter can only ever
-            // mint the successor's own two. Letting the road answer here would
-            // silently replace the comparison the reviewer is being asked
-            // about, and the base picture's capability would in any case be
-            // sealed to a gate that does not pin the base target. So a repair
-            // successor keeps the first-party pair, and its pictures on the
-            // session road are a named gap rather than a wrong comparison drawn
-            // confidently.
-            return loadPinnedRepairPair(orgId, resolved.gateId, target);
-          case "ordinary":
-            // WAVE 3 — the surface's own road builds the pair where it named
-            // one, so it loads inside a third-party application as well. The
-            // broker builder reads the SAME store rows and projects them
-            // through the SAME pure pair builder as the first-party arm; only
-            // the address each picture carries differs, so the two tiers cannot
-            // show different comparisons.
-            return roads?.capturePair
-              ? roads.capturePair(target)
-              : loadPinnedCapturePair(orgId, target, "review");
-          case "unresolved":
-            // A repair gate we could not key: no pair rather than the wrong one.
-            return null;
-        }
-      })
-      // Both readers already degrade to null on a store failure (#2044's
-      // honest-fallback rule); this is the same answer for the one thing they
-      // cannot catch for themselves — and for a preparation that rejected, in
-      // which case the panel never draws a picture anyway.
-      .catch(() => null),
-  }));
+  return started.map(({ target, prepared }) => ({ target, prepared }));
 }
 
 /**
@@ -670,135 +556,4 @@ function resolveDecisionPermissions(
       );
       return { canDecide: false, canComment: false };
     });
-}
-
-// ---------------------------------------------------------------------------
-// PINNED CAPTURES (cinatra#2044 S6, sub-lane L-B).
-//
-// The whole point of the capture pipeline is that the reviewer sees the page as
-// it was WHEN THE GATE WAS CREATED. This read is therefore deliberately dumb: a
-// single store lookup per pinned target and a pure projection — no fetch, no
-// resolver, no remote URL anywhere in the produced model. The only URL it emits
-// is the host's own version-pinned artifact byte route for the stored PNG, which
-// applies the same session/actor/tenant/tombstone gating as every other artifact
-// and serves under the host's sandbox CSP.
-//
-// A store failure degrades to "no capture" rather than failing the surface: a
-// reviewer must always be able to decide the DATA even when the context picture
-// is unavailable (#2044's honest-fallback rule).
-// ---------------------------------------------------------------------------
-
-/**
- * The address of a pinned capture's bytes, composed by the review target's
- * projection module: each id is ONE path segment that the version route
- * reads back as the very id that was pinned. An id the module refuses
- * (empty, `.` or `..`, which URL resolution would remove, or ill-formed
- * text) gets no address (`null`): that side shows no picture, never
- * another path.
- */
-const versionPinnedCaptureImageUrl: PinnedCaptureImageUrlMinter = ({
-  captureArtifactId,
-  representationRevisionId,
-}) => {
-  const path = reviewTargetVersionPath(captureArtifactId, representationRevisionId, "preview");
-  return path.ok ? path.value : null;
-};
-
-/**
- * Read one pinned target's captures and project ONE comparison out of them.
- * Shared by the gate surface (`review` — live page vs proposal) and the S4
- * verification view (`verification` — reviewed vs applied), so both pairs are
- * built by exactly the same store read + pure projection.
- */
-export function loadPinnedCapturePair(
-  orgId: string,
-  target: { artifactId: string; representationRevisionId: string },
-  kind: PinnedCapturePairKind,
-  driftedRegions: readonly string[] = [],
-): PinnedCapturePairView | null {
-  try {
-    const stored = readPinnedPreviewCaptures({
-      orgId,
-      boundArtifactId: target.artifactId,
-      boundSnapshotRevisionId: target.representationRevisionId,
-    });
-    if (stored.length === 0) return null;
-    return buildPinnedCapturePair(
-      buildPinnedCaptureViews(stored, versionPinnedCaptureImageUrl),
-      kind,
-      driftedRegions,
-    );
-  } catch (err) {
-    console.warn(
-      "[review-gate-ports] pinned capture lookup failed (the review is unaffected):",
-      err instanceof Error ? err.message : err,
-    );
-    return null;
-  }
-}
-
-/**
- * cinatra#2286 S10 (PR1) — the REPAIR comparison for a repair-successor gate:
- * the repair's BASE target's own `current` capture (what was reviewed) vs its
- * SUCCESSOR target's own `repaired` capture (the producer's fix).
- *
- * SECURITY SHAPE (matches the issue's acceptance criteria exactly):
- *   - The BASE target is DERIVED from the repair row keyed on the successor
- *     gate id — never supplied by the caller.
- *   - The repair row's own `orgId` is the only org this pair may ever be built
- *     for; a caller-supplied `orgId` that disagrees refuses (never trusted).
- *   - The `successorTarget` argument is checked against the SAME row's
- *     `successorArtifactId` / `successorRepresentationRevisionId` before
- *     either read runs — a hand-supplied or mismatched successor target
- *     refuses, rather than silently pairing an unrelated capture.
- *   - Two independent, single-target `readPinnedPreviewCaptures` calls (never
- *     a new/widened query shape) — mirrors `loadPinnedCapturePair`'s
- *     degrade-to-null-on-failure contract.
- */
-export async function loadPinnedRepairPair(
-  orgId: string,
-  successorGateId: string,
-  successorTarget: { artifactId: string; representationRevisionId: string },
-  driftedRegions: readonly string[] = [],
-): Promise<PinnedCapturePairView | null> {
-  try {
-    const repair = await readRepairBySuccessorGateId(successorGateId);
-    // Never trust a caller-supplied org — the repair row's own orgId is the
-    // only org this pair may ever be built for.
-    if (!repair || repair.orgId !== orgId) return null;
-    // Refuse a hand-supplied / mismatched successor target: this pair may
-    // only be built for the EXACT successor the repair row itself recorded
-    // (which is also, by construction, the same lineage as the base — both
-    // come off this one row).
-    if (
-      repair.successorArtifactId !== successorTarget.artifactId ||
-      repair.successorRepresentationRevisionId !== successorTarget.representationRevisionId
-    ) {
-      return null;
-    }
-
-    const baseCaptures = readPinnedPreviewCaptures({
-      orgId,
-      boundArtifactId: repair.baseArtifactId,
-      boundSnapshotRevisionId: repair.baseRepresentationRevisionId,
-    });
-    const successorCaptures = readPinnedPreviewCaptures({
-      orgId,
-      boundArtifactId: successorTarget.artifactId,
-      boundSnapshotRevisionId: successorTarget.representationRevisionId,
-    });
-    if (baseCaptures.length === 0 && successorCaptures.length === 0) return null;
-
-    return buildPinnedRepairPair(
-      buildPinnedCaptureViews(baseCaptures, versionPinnedCaptureImageUrl),
-      buildPinnedCaptureViews(successorCaptures, versionPinnedCaptureImageUrl),
-      driftedRegions,
-    );
-  } catch (err) {
-    console.warn(
-      "[review-gate-ports] pinned repair-pair lookup failed (the review is unaffected):",
-      err instanceof Error ? err.message : err,
-    );
-    return null;
-  }
 }

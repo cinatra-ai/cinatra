@@ -45,16 +45,12 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-// The mount and the pinned-capture pair are rendered, not exercised, here — each
-// carries its own suite. Stubbed so this suite does not drag the renderer-
-// resolution graph in behind the panel's markup.
+// The mount is rendered, not exercised, here - it carries its own suite.
+// Stubbed so this suite does not drag the renderer-resolution graph in behind
+// the panel's markup.
 vi.mock("@/app/artifacts/[id]/review-target-mount", () => ({
   ReviewTargetMount: () => null,
 }));
-vi.mock(
-  "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-pinned-capture",
-  () => ({ ReviewPinnedCapture: () => null }),
-);
 
 import { ReviewTargetPanel } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-target-panel";
 
@@ -359,7 +355,7 @@ const PREPARED = {
 } as unknown as Parameters<typeof ReviewTargetPanel>[0]["prepared"];
 
 const PANEL_MARKUP = renderToStaticMarkup(
-  <ReviewTargetPanel prepared={PREPARED} orgId="org-1" capturePair={null} />,
+  <ReviewTargetPanel prepared={PREPARED} orgId="org-1" />,
 );
 
 /**
