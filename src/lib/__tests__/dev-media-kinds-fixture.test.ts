@@ -220,4 +220,23 @@ describe("development media kind review run (#3459)", () => {
     await expect(seedMediaKindReviewRun({ orgId: "org", userId: "user", filed: filed.slice(1) }, h)).rejects.toThrow(/six filed/);
     expect(h.seedMarkedReviewGateRun).not.toHaveBeenCalled();
   });
+
+  // The executor mints a declared review as an atomic family of single-target
+  // gates, one per artifact (packages/agents/src/artifact-review-gate-store.ts
+  // emitDeclaredReviewGateFamily): legs "task", "task#2" ... "task#6". This
+  // harness serves the run's gate rows as the table holds them; a `LIMIT 1`
+  // read gets only the first of them.
+  const gateRows = (rows: { reviewTaskId: string; status: string; pinnedTargets: typeof targets }[]) => ({
+    seedMarkedReviewGateRun: vi.fn(async () => "run"),
+    waitForMarkedReviewGate: vi.fn(async () => ({ gateId: "gate-1", runId: "run", ...rows[0] })),
+    waitForMarkedReviewGates: vi.fn(async () => rows.map((row, i) => ({ gateId: `gate-${i + 1}`, runId: "run", ...row }))),
+  });
+  const family = (pins: typeof targets, base = "task") =>
+    pins.map((target, i) => ({ reviewTaskId: i === 0 ? base : `${base}#${i + 1}`, status: "pending", pinnedTargets: [target] }));
+
+  it("accepts the executor's family of six single-target gates that together pin exactly the six (#3459)", async () => {
+    const h = gateRows(family(targets));
+    await expect(seedMediaKindReviewRun({ orgId: "org", userId: "user", filed }, h))
+      .resolves.toEqual({ runId: "run", reviewTaskId: "task", status: "pending", pinned: 6 });
+  });
 });
