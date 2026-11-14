@@ -627,6 +627,29 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
     foreignHostSubtrees: RUN_CARD_SUBTREES,
     enforcer: "chat-hitl-one-card-gate",
   },
+  {
+    // cinatra#4150 -- the SIXTH kind, the publish card. An INTERRUPT like the hitl screen: the run is stopped in
+    // front of a step the agent declares as publishing until a person answers. It is registered in the same change
+    // that mounts its card, so it takes no row on either obligation list.
+    kind: "publish_decision",
+    carriage: LIFECYCLE_CARD_CARRIAGE.publish_decision.represent,
+    canonical: LIFECYCLE_CARD_CARRIAGE.publish_decision.canonical,
+    deliveries: Object.freeze(["platform_injected"] as const),
+    triggeringPart: "the publish_decision INTERRUPT the stopped run carries",
+    triggerToolName: "agent_run",
+    alsoTriggeredBy: ["agent_named_start"],
+    owner: "PublishDecisionCard",
+    // The card's own conformance id, kept apart from the ruled root declaration for the hitl screen's reason above.
+    ownerAnchors: Object.freeze([`[data-conformance-id="publish-card"]`]),
+    ruledRootAnchors: rootAnchorsFor("publish_decision"),
+    // The two controls of the drawing (XV), each named by its action and the outcome it records.
+    decisionControls: Object.freeze([
+      '[data-action="decline-publish -> declined"]',
+      '[data-action="approve-publish -> released"]',
+    ]),
+    foreignHostSubtrees: RUN_CARD_SUBTREES,
+    enforcer: "chat-hitl-one-card-gate",
+  },
 ]);
 
 /** The one row this module executes end-to-end: the held dispatch turn. */

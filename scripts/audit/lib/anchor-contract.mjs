@@ -71,6 +71,8 @@ export const ANCHOR_CONTRACT_KINDS = Object.freeze([
   // had a card and is drawn now, so the alarm covers it: its capture
   // requirements and its parity row are digest inputs like every other kind's.
   "agent_hitl_screen",
+  // THE SIXTH KIND (cinatra#4150): drawn with its kind on all four hosts, so it is covered from the start.
+  "publish_decision",
 ]);
 
 /**

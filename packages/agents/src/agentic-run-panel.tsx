@@ -40,6 +40,7 @@ import {
   hitlFieldPresentationFor,
 } from "./agent-hitl-screen-card";
 import type { AgentRunMessageBody } from "./store";
+import { PublishDecisionCard } from "./publish-decision-card-view";
 import { StatusPill } from "@/components/ui/status-pill";
 import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
 import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
@@ -3055,6 +3056,14 @@ export function AgenticRunPanel({
           draws no copy of it at any moment. The account of what stood here, and
           of what the panel still takes from that interaction, is above the
           review-screen mount. */}
+
+      {/* THE PUBLISH CARD (cinatra#4150), keyed by the run under this panel's own `run_card` declaration. It stands
+          down inside a conversation host for the hitl screen's reason, and draws nothing with no open decision. */}
+      {panelMountsHitlScreenCard ? (
+        <LifecycleCardSurfaceProvider host="run_card">
+          <PublishDecisionCard runId={runId} />
+        </LifecycleCardSurfaceProvider>
+      ) : null}
 
       {isPendingApproval &&
       effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID ? (
