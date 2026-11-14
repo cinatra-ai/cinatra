@@ -910,9 +910,12 @@ export async function readRunStepToolPolicy(runId: string, orgId: string): Promi
   return parseRunStepToolPolicy(bound?.policy);
 }
 
-/** Derive attempt from the authoritative run/policy rows, never a runtime header. */
+/** The attempt is the authoritative run row's: the signed attempt (the one the calling
+ * task's message named, cinatra#3745) must BE the run's running attempt and the one its
+ * binding sits on, so a task of an earlier attempt is refused even when the binding was
+ * carried forward unchanged. */
 export async function verifyRunExecutedSource(runId: string, orgId: string,
-  attestation: Omit<VerifiedExecutedRunSource, "executionAttemptId">,
+  attestation: VerifiedExecutedRunSource,
 ): Promise<VerifiedExecutedRunSource> {
   // Each claimed value is read once, here, into a frozen plain copy before any comparison: a getter or a proxy
   // cannot answer the checks below one value and the proof another.
@@ -923,6 +926,7 @@ export async function verifyRunExecutedSource(runId: string, orgId: string,
     .where(and(eq(agentRuns.id, runId), eq(agentRuns.orgId, orgId)));
   if (!row || row.run.status !== "running" || !row.run.executionAttemptId ||
       row.binding.orgId !== orgId || row.binding.executionAttemptId !== row.run.executionAttemptId ||
+      attestation.executionAttemptId !== row.run.executionAttemptId ||
       row.run.a2aContextId !== attestation.contextId) {
     throw new RunStepToolPolicyRefusal("step_tool_run_source_inactive");
   }
@@ -949,8 +953,7 @@ export async function isRunExecutedSourceCurrent(runId: string, orgId: string,
   const parsed = parseVerifiedExecutedRunSource(proof);
   if (!parsed) return false;
   try {
-    const { executionAttemptId, ...attestation } = parsed;
-    const current = await verifyRunExecutedSource(runId, orgId, attestation);
-    return current.executionAttemptId === executionAttemptId;
+    const current = await verifyRunExecutedSource(runId, orgId, parsed);
+    return current.executionAttemptId === parsed.executionAttemptId;
   } catch { return false; }
 }

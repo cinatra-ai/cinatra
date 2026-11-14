@@ -10,7 +10,7 @@ import { bindBridgeRunId } from "@/lib/authz/bridge-run-binding";
 import {
   verifyRunStepAttestation,
   verifySourceBoundRunStep,
-  RUN_RAW_SOURCE_HEADER, RUN_EXECUTED_SOURCE_HEADER, RUN_DECLARATION_SOURCE_HEADER,
+  RUN_RAW_SOURCE_HEADER, RUN_EXECUTED_SOURCE_HEADER, RUN_DECLARATION_SOURCE_HEADER, RUN_EXECUTION_ATTEMPT_HEADER,
   RUN_STEP_NODE_HEADER,
   RUN_STEP_ATTESTATION_HEADER,
 } from "@/lib/agent-run-token";
@@ -433,9 +433,10 @@ export async function POST(req: Request): Promise<Response> {
   // signs the executing step's id over the run's context id; it is verified
   // here with the context id the run binding above proved, and stamped on the
   // run-scoped frame below. Without source headers, an absent or unverified
-  // `s1` pair gives no step. With any source header, the `s2` pair over the
-  // step and the executing source must verify AND the run must be running
-  // under the attempt that source is bound to; otherwise the call is refused
+  // `s1` pair gives no step. With any source header (the attempt header
+  // included), the `s2` pair over the step, the attempt the calling task was
+  // sent under and the executing source must verify AND the run must be running
+  // under that attempt, the one that source is bound to; otherwise the call is refused
   // (403, a fixed sentence) before any tool runs, and the step is the proof's.
   // A blank key is no key (cinatra#4154): the runtime refuses to boot on one,
   // and a pair signed under whitespace proves nothing (for `s1` and `s2`).
@@ -450,9 +451,10 @@ export async function POST(req: Request): Promise<Response> {
 
   let verifiedExecutedSource: VerifiedExecutedRunSource | undefined;
   if (req.headers.get(RUN_RAW_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTED_SOURCE_HEADER) !== null ||
-      req.headers.get(RUN_DECLARATION_SOURCE_HEADER) !== null) {
+      req.headers.get(RUN_DECLARATION_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTION_ATTEMPT_HEADER) !== null) {
     const attestation = verifySourceBoundRunStep({ key: attestKey && attestKey.trim() !== "" ? attestKey : null,
       contextId: req.headers.get("x-cinatra-a2a-context-id"), node: req.headers.get(RUN_STEP_NODE_HEADER),
+      executionAttemptId: req.headers.get(RUN_EXECUTION_ATTEMPT_HEADER),
       attestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER), sourceSha256: req.headers.get(RUN_RAW_SOURCE_HEADER),
       executedSourceSha256: req.headers.get(RUN_EXECUTED_SOURCE_HEADER),
       declarationSourceSha256: req.headers.get(RUN_DECLARATION_SOURCE_HEADER) });

@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { readAgentRunById, updateAgentRunA2AContextId, selectWayflowRunStepToolPolicy, bindRunStepToolPolicy, CINATRA_EXPECTED_SOURCE_MESSAGE_KEY } from "@cinatra-ai/agents/store";
 import { buildA2aBearerToken } from "@cinatra-ai/llm";
 import { createExternalA2AClient, type Task } from "@cinatra-ai/a2a";
+import { CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY } from "@/lib/agent-run-token";
 import {
   buildInitialMessagePayloadWithRunToken,
   readAgentTemplateByPackageName,
@@ -622,6 +623,7 @@ export async function dispatchContentEditorViaA2A(
   let task: Task;
   try {
     let mintedContextId: string | undefined;
+    let dispatchMetadata: Record<string, string> | undefined;
     if (runId) {
       if (!dispatchAuthority) throw new Error("step_tool_dispatch_authority_missing");
       const run = await readAgentRunById(runId);
@@ -641,6 +643,8 @@ export async function dispatchContentEditorViaA2A(
         declarationSourceSha256: policy.declarationSourceSha256 } });
       await bindRunStepToolPolicy({ runId, orgId: run.orgId, executionAttemptId: run.executionAttemptId,
         policy, authority: dispatchAuthority });
+      // cinatra#3745: the task's message names the attempt just bound; the runtime signs it.
+      dispatchMetadata = { [CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY]: run.executionAttemptId };
     }
     task = await client.sendTask({
       message: {
@@ -649,6 +653,7 @@ export async function dispatchContentEditorViaA2A(
         messageId: randomUUID(),
         ...(mintedContextId ? { contextId: mintedContextId } : {}),
         parts: [{ kind: "text", text }],
+        ...(dispatchMetadata ? { metadata: dispatchMetadata } : {}),
       },
       configuration: { acceptedOutputModes: ["text"] },
     });

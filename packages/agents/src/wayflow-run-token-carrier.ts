@@ -1,4 +1,4 @@
-import { mintRunToken, CINATRA_RUN_TOKEN_MESSAGE_KEY } from "@/lib/agent-run-token";
+import { mintRunToken, CINATRA_RUN_TOKEN_MESSAGE_KEY, CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY } from "@/lib/agent-run-token";
 import { setAgentRunTokenHash } from "./store";
 import { buildWayflowInitialMessagePayload } from "./wayflow-dispatch-payload";
 import { readSnapshotNodesMetadataForRun } from "./step-snapshots";
@@ -88,7 +88,30 @@ export async function mintResumeRunTokenMetadata(
   const runToken = mintRunToken();
   await setAgentRunTokenHash(runId, runToken.tokenHash);
   const snapshotNodes = await readSnapshotNodesMetadataForRun(runId);
-  return { ...snapshotNodes, [CINATRA_RUN_TOKEN_MESSAGE_KEY]: runToken.token };
+  const attempt = await readExecutionAttemptMetadataForRun(runId);
+  return { ...snapshotNodes, ...attempt, [CINATRA_RUN_TOKEN_MESSAGE_KEY]: runToken.token };
+}
+
+/**
+ * cinatra#3745: the execution attempt the resumed leg runs under, read from the
+ * run row at the mint. On every resume road that is the attempt the leg runs
+ * under: a gate resume's `pending_approval -> running` edge keeps the run's
+ * attempt, and the stopped-orchestrator resume mints after its `queued -> running`
+ * claim minted the fresh one. The runtime signs this attempt in its `s2` pair, and the
+ * routes admit the pair only while it is the run's running attempt, so a value
+ * that went stale before the send is refused, never widened. A missing attempt or
+ * a read fault names none (logged): the leg then signs no source, and the routes'
+ * source checks give it no source-bound step.
+ */
+async function readExecutionAttemptMetadataForRun(runId: string): Promise<Record<string, string>> {
+  try {
+    const { readAgentRunById } = await import("./store");
+    const attempt = (await readAgentRunById(runId))?.executionAttemptId;
+    return typeof attempt === "string" && attempt !== "" ? { [CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY]: attempt } : {};
+  } catch (err) {
+    console.warn(`[wayflow-run-token-carrier] run=${runId} attempt unreadable on resume: ${err instanceof Error ? err.name : "error"}`);
+    return {};
+  }
 }
 
 /**

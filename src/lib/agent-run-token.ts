@@ -247,33 +247,50 @@ export function verifyGateNodeClaim(input: {
 
 // cinatra#3745: the s2 pair binds the step to the source of the assistant that
 // ACTUALLY executes it (the loader's frozen mount binding of that task), never
-// to a re-read of the active mount.
+// to a re-read of the active mount, and to the execution attempt the task's own
+// A2A message named, so a task of an earlier attempt (one still running after a
+// stop, or a replay of its headers) cannot sign for the run's current attempt.
 export const RUN_EXECUTED_SOURCE_HEADER = "x-cinatra-executed-source";
 export const RUN_DECLARATION_SOURCE_HEADER = "x-cinatra-declaration-source";
 export const RUN_RAW_SOURCE_HEADER = "x-cinatra-raw-source";
+/** The execution attempt the runtime signed (`s2`), as its task's message named it. */
+export const RUN_EXECUTION_ATTEMPT_HEADER = "x-cinatra-execution-attempt";
+/**
+ * The reserved A2A `message.metadata` key under which every dispatch and resume
+ * names the execution attempt its task runs under. The loader reads it per task
+ * and signs it in the `s2` pair. MUST equal CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY
+ * in docker/wayflow/agent_loader.py (a cross-language ABI with no shared import).
+ * Not a credential: the attempt id is only what the pair is bound to.
+ */
+export const CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY = "__cinatra_execution_attempt__";
 
 /**
  * Verify the runtime's source-bound step pair for one call. Answers the frozen
- * `{ stepId, contextId, sourceSha256, executedSourceSha256, declarationSourceSha256 }`
- * or null when the key, the context id or the node is missing, the context id or
- * the node holds a line break, a digest is not 64 lower-case hex characters, the
- * attestation is not an `s2` value with a 64-character lower-case hex signature,
- * the signature does not verify over all six values, or the expiry lies more than
- * 60 seconds in the past or more than 600 seconds ahead. It proves what the
- * runtime signed; whether the run is bound to that source is the caller's check.
+ * `{ stepId, contextId, executionAttemptId, sourceSha256, executedSourceSha256, declarationSourceSha256 }`
+ * or null when the key (a blank key is no key, cinatra#4154), the context id, the
+ * node or the attempt is missing, the context id, the node or the attempt holds a
+ * line break, the attempt is longer than 512 characters, a digest is not 64
+ * lower-case hex characters, the attestation is not an `s2` value with a
+ * 64-character lower-case hex signature, the signature does not verify over all
+ * seven values, or the expiry lies more than 60 seconds in the past or more than
+ * 600 seconds ahead. It proves what the runtime signed; whether the run is bound
+ * to that source under that attempt, its running one, is the caller's check.
  */
 export function verifySourceBoundRunStep(input: {
   key?: string | null; contextId?: string | null; node?: string | null;
+  executionAttemptId?: string | null;
   attestation?: string | null; sourceSha256?: string | null;
   executedSourceSha256?: string | null; declarationSourceSha256?: string | null; nowMs?: number;
-}): { stepId: string; contextId: string; sourceSha256: string; executedSourceSha256: string; declarationSourceSha256: string } | null {
-  const { key, contextId, node, attestation, sourceSha256, executedSourceSha256, declarationSourceSha256 } = input;
-  if (!key || !contextId || !node || /[\r\n]/.test(contextId + node) ||
+}): { stepId: string; contextId: string; executionAttemptId: string; sourceSha256: string; executedSourceSha256: string; declarationSourceSha256: string } | null {
+  const { key, contextId, node, executionAttemptId, attestation, sourceSha256, executedSourceSha256, declarationSourceSha256 } = input;
+  if (typeof key !== "string" || key.trim() === "" || !contextId || !node ||
+      typeof executionAttemptId !== "string" || !executionAttemptId || executionAttemptId.length > 512 ||
+      /[\r\n]/.test(contextId + node + executionAttemptId) ||
       ![sourceSha256, executedSourceSha256, declarationSourceSha256].every((v) => typeof v === "string" && /^[a-f0-9]{64}$/.test(v))) return null;
   const m = /^s2:([0-9]+):([a-f0-9]{64})$/.exec(attestation ?? "");
   if (!m || !Number.isSafeInteger(Number(m[1]))) return null;
   const expiry = Number(m[1]); const now = input.nowMs ?? Date.now();
   if (now > expiry * 1000 + RUN_STEP_ATTESTATION_SKEW_MS || expiry * 1000 > now + RUN_STEP_ATTESTATION_MAX_FUTURE_MS) return null;
-  if (!hexEquals(m[2]!, hmacHex(key, `s2\n${contextId}\n${node}\n${sourceSha256}\n${executedSourceSha256}\n${declarationSourceSha256}\n${expiry}`))) return null;
-  return Object.freeze({ stepId: node, contextId, sourceSha256: sourceSha256!, executedSourceSha256: executedSourceSha256!, declarationSourceSha256: declarationSourceSha256! });
+  if (!hexEquals(m[2]!, hmacHex(key, `s2\n${contextId}\n${node}\n${executionAttemptId}\n${sourceSha256}\n${executedSourceSha256}\n${declarationSourceSha256}\n${expiry}`))) return null;
+  return Object.freeze({ stepId: node, contextId, executionAttemptId, sourceSha256: sourceSha256!, executedSourceSha256: executedSourceSha256!, declarationSourceSha256: declarationSourceSha256! });
 }
