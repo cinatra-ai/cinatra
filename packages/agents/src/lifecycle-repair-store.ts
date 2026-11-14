@@ -219,17 +219,36 @@ type ReopenCandidateGate = { id: string; runId: string; orgId: string };
  *     gate either.
  * The pinned revision is not compared: a read-back verification reopens on its
  * read-back revision.
+ *
+ * cinatra#4476 — `declaredLineage: "read"` leaves out the declared-lineage check
+ * and nothing else: the lineage's root must still be bound to it (attempt 1 is one
+ * repair of the root gate, in the root gate's org; a root that cannot be read or
+ * is not bound passes for no gate in both modes). Only the chain check
+ * (`assertWellFormedLineage`) passes "read". It reads an
+ * attempt that is ALREADY WRITTEN on a named reopen gate of a declared leg's
+ * lineage. The new code never writes such an attempt: the record-time road
+ * (`deriveDecidedGateLineage`) keeps the check, so a note on that gate is refused
+ * (`lineage-unbound`). Such an attempt comes from an old writer during the deploy
+ * window (or from a hand-written row), and only the backfill statement names its
+ * gate. Without this, that lineage reads `malformed-lineage` for ever and no road
+ * resumes its run.
  */
 async function isRecordedVerificationReopen(
   gate: ReopenCandidateGate,
   repair: LineageAttemptRow,
   executor: RepairStoreExecutor = db,
+  declaredLineage: "refuse" | "read" = "refuse",
 ): Promise<boolean> {
   if (repair.status !== "repaired" || !repair.successorGateId) return false;
   if (gate.runId !== (repair.producerRunId ?? orphanRepairRunId(repair.id))) return false;
   if (gate.orgId !== repair.orgId) return false;
+  // Both modes read the lineage's bound root (`readBoundLineageRoot`: attempt 1 is
+  // one repair of the root gate, in the root gate's org), so the reopen link holds
+  // the whole chain to the root's org. Only "refuse" then refuses a declared leg's
+  // lineage.
   try {
-    if (await isDeclaredReviewLineage(repair.lineageId, executor)) return false;
+    const root = await readBoundLineageRoot(repair.lineageId, executor);
+    if (declaredLineage === "refuse" && isDeclaredRoot(root)) return false;
   } catch {
     return false;
   }
@@ -1099,7 +1118,10 @@ type LineageAttemptRow = typeof lifecycleRepair.$inferSelect;
  * repair of the attempt before it: of that attempt's successor gate, or of
  * a verification-reopen gate that the successor's verification record names
  * (`isRecordedVerificationReopen`). A lineage goes on only from those two
- * gates. Throws `malformed-lineage`. */
+ * gates. The read takes a named reopen gate on a declared leg's lineage too
+ * (cinatra#4476, `declaredLineage: "read"`, which still holds the lineage to its
+ * bound root and the root's org): no new writer can write an attempt there, so
+ * such an attempt is an old writer's. Throws `malformed-lineage`. */
 async function assertWellFormedLineage(
   lineageId: string,
   chain: readonly LineageAttemptRow[],
@@ -1131,7 +1153,7 @@ async function assertWellFormedLineage(
       .from(artifactReviewGates)
       .where(eq(artifactReviewGates.id, row.gateId))
       .limit(1);
-    if (!gate || !(await isRecordedVerificationReopen(gate, prev, executor))) {
+    if (!gate || !(await isRecordedVerificationReopen(gate, prev, executor, "read"))) {
       fail(
         `attempt ${row.attempt} repairs gate ${row.gateId}, which is neither the successor of attempt ${prev.attempt} nor its verification reopen`,
       );
@@ -1345,6 +1367,27 @@ export async function carryDeclaredReviewDecision(
     .onConflictDoNothing({ target: [artifactReviewResumeOutbox.gateId] })
     .returning({ gateId: artifactReviewResumeOutbox.gateId });
   return carried[0]?.gateId ?? null;
+}
+
+/**
+ * cinatra#4476 — the upgrade recovery's insert (`declared-review-recovery.ts`, which
+ * holds the run row `FOR NO KEY UPDATE` and the pause's once marker in the same
+ * transaction, and has read the whole family first). The same row a lineage's close
+ * inserts (`carryDeclaredReviewDecision` above): one new `pending` intent on a gate
+ * that holds none, on the root leg's review task id, with the family's newest
+ * decision's kind and response text. `ON CONFLICT (gate_id) DO NOTHING`: it never
+ * writes an existing row. Returns true when it inserted.
+ */
+export async function insertRecoveryCarrier(
+  executor: RepairStoreExecutor,
+  carrier: { gateId: string; runId: string; reviewTaskId: string; kind: string; responseText: string },
+): Promise<boolean> {
+  const inserted = await executor
+    .insert(artifactReviewResumeOutbox)
+    .values({ ...carrier, status: "pending" })
+    .onConflictDoNothing({ target: [artifactReviewResumeOutbox.gateId] })
+    .returning({ gateId: artifactReviewResumeOutbox.gateId });
+  return inserted.length === 1;
 }
 
 function toRepairRow(r: typeof lifecycleRepair.$inferSelect): RepairRow {
