@@ -9,9 +9,21 @@
  * drizzle-cube components render in the Cinatra palette without replacing
  * the upstream components.
  *
- * Order matters: this file must be imported AFTER `drizzle-cube/client/
- * styles.css` in `dashboards-client-shell.tsx` (alongside this file).
- * Otherwise the DC defaults win.
+ * Load order does NOT decide the root tokens. drizzle-cube declares its
+ * defaults, unlayered, on `:root` (light) and `.dark, html.dark` (dark) in
+ * both its raw `drizzle-cube/client/styles.css` (the dashboards shell imports
+ * it) and the generated scoped copy (the read-only composition imports it,
+ * then this file). The module graph does not fix where the raw file lands:
+ * the dashboard home reaches the composition through DashboardGridContainer
+ * before the shell's raw import, so the raw defaults can load AFTER this
+ * file. The light block below therefore also carries `:root:not(.dark)`
+ * (specificity 0,2,0), which beats drizzle-cube's `:root` (0,1,0) in any
+ * order. On a dark root only `:root` (0,1,0) matches, so drizzle-cube's
+ * `html.dark` (0,1,1) palette keeps winning the tokens it declares, as it did
+ * with the old defaults-then-theme order, and this file still supplies the
+ * tokens drizzle-cube's dark block lacks. Keep both `:root` selectors.
+ * Pinned in every load order by
+ * packages/dashboards/src/__tests__/dashboard-theme-cascade.test.ts.
  *
  * For non-shadcn concepts (--dc-dimension-*, --dc-measure-*,
  * --dc-time-dimension-*, --dc-filter-*) we derive readable aliases with
@@ -26,6 +38,7 @@
  */
 
 :root,
+:root:not(.dark),
 .light,
 html.light {
   /* Surface family */
@@ -444,4 +457,37 @@ body[data-cinatra-dashboard-modal-open="true"]
  * with the vendored layout unchanged. */
 [data-cinatra-bar-legend-clearance] .recharts-legend-wrapper {
   border-top: var(--cinatra-bar-legend-clearance, 0px) solid transparent;
+}
+
+/* KPI value: the foreground token where drizzle-cube fell back (cinatra#4311).
+ *
+ * drizzle-cube's KPI charts (kpiNumber, kpiText) paint their value with an
+ * INLINE colour from the palette the provider is given or, when that palette
+ * has no colours, with the literal `#1f2937`, which does not follow the dark
+ * palette. An inline colour cannot be re-pointed through a `--dc-*` variable
+ * like the rest of this file.
+ *
+ * PROVENANCE COMES FROM THE HOST, NOT FROM THE COLOUR. A host that mounts the
+ * provider with no palette colour marks the grid with
+ * `data-cinatra-kpi-fallback="foreground"` (kpi-value-fallback.ts; the shared
+ * read-only composition and the editable home both do). Under that marker no
+ * palette exists, so a KPI value can only carry the fallback; a host that
+ * passes a palette gets no marker and its colours are never repainted,
+ * whatever their value.
+ *
+ * Under the marker the rule still matches only the two KPI value hooks
+ * (kpiNumber `dc:font-bold dc:leading-none`, kpiText `dc:font-bold
+ * dc:leading-tight dc:text-center`) whose inline style ENDS with the fallback
+ * colour declaration, in both serialisations: a client-side style write
+ * (`; color: rgb(31, 41, 55);`) and server markup (`;color:#1f2937`). An
+ * ends-with match after `;` cannot be satisfied by a longer colour, by another
+ * property that carries the same value, or by a `border-color`. `!important`
+ * is the only way a stylesheet wins over an inline colour.
+ *
+ * Behaviour pinned by packages/dashboards/src/__tests__/kpi-value-foreground-token.test.ts. */
+[data-cinatra-kpi-fallback="foreground"] .dc\:font-bold.dc\:leading-none[style$="; color: rgb(31, 41, 55);"],
+[data-cinatra-kpi-fallback="foreground"] .dc\:font-bold.dc\:leading-none[style$=";color:#1f2937"],
+[data-cinatra-kpi-fallback="foreground"] .dc\:font-bold.dc\:leading-tight.dc\:text-center[style$="; color: rgb(31, 41, 55);"],
+[data-cinatra-kpi-fallback="foreground"] .dc\:font-bold.dc\:leading-tight.dc\:text-center[style$=";color:#1f2937"] {
+  color: var(--foreground) !important;
 }
