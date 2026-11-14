@@ -38,7 +38,7 @@ import {
   hitlFieldPresentationFor,
 } from "./agent-hitl-screen-card";
 import type { AgentRunMessageBody } from "./store";
-import { PublishDecisionCard } from "./publish-decision-card-view";
+import { PublishDecisionCard, usePublishDecisionCardState } from "./publish-decision-card-view";
 import { StatusPill } from "@/components/ui/status-pill";
 import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext } from "./field-renderer-registry";
@@ -905,6 +905,13 @@ export function AgenticRunPanel({
           !isAnsweredQuestion(streamQuestionOnFile),
       ) ||
       (hitlContext !== null && !isAnsweredQuestion(hitlContext)),
+  });
+  // THE RUN PAGE READS "Not published" (cinatra#4150): the publish card's own authorized read, asked only for a
+  // stopped run on the run page, where this header is the page's status reading.
+  const publishReading = usePublishDecisionCardState({
+    runId: panelMountsHitlScreenCard && status === "stopped" ? runId : "",
+    auth: null,
+    reloadToken: 0,
   });
   const error = resolveStreamFirst(streamEnabled, streamResult.error, pollError);
   const presentationHint = streamResult.presentationHint; // null when !streamEnabled
@@ -2894,7 +2901,7 @@ export function AgenticRunPanel({
             "pending approval", and the discriminator stays the interrupt
             itself, never the status. */}
         <StatusPill status={runStatusPillStatus(status)} glyph="dot">
-          {runStatusBadgeLabel(status, statedWaitDescriptor)}
+          {runStatusBadgeLabel(status, statedWaitDescriptor, publishReading?.state)}
         </StatusPill>
       </div>
       )}

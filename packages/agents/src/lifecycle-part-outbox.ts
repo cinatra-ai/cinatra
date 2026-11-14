@@ -161,6 +161,9 @@ export function getLifecyclePartOutbox(): LifecyclePartOutbox | null {
  * one, which is run-carried.
  */
 export function momentFeedsRunOutbox(moment: LifecycleMoment): boolean {
+  // THE PUBLISH MOMENT FEEDS NO PART YET (cinatra#4150). Its card is mounted by the run on every host, so no
+  // conversation needs a part to draw it; the part, with its widget delivery, is a later change.
+  if (moment === "publish") return false;
   const kind = LIFECYCLE_MOMENT_CARD_KIND[moment];
   return isRunCarriedLifecycleKind(kind, { scheduleConfirmed: true });
 }

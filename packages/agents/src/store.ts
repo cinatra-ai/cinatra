@@ -102,6 +102,7 @@ import {
   agentRunMessages,
   agentTemplateVersions,
   runCoOwners,
+  agentRunPublishDecisions,
 } from "./schema";
 // GatedStep type used in CreateAgentTemplateInput patches +
 // AgentTemplateRecord row deserialization. The persistence column is JSON-as-text;
@@ -3267,6 +3268,14 @@ export async function recordRunLifecycleMoment(
      * moment". Pass `undefined` to leave the moment unconstrained.
      */
     onlyWhileMoment?: string | null;
+    /**
+     * Write ONLY while this publish decision of the run is still `parked`
+     * (cinatra#4150). The publish moment's guard: a decision released, declined
+     * or expired before a delayed park write, or a run that has since parked at
+     * a newer decision, is never stated as the current moment. The check is in
+     * the same statement as the write.
+     */
+    onlyWhilePublishDecisionParked?: string;
   },
   authority: OrgWriteAuthority | undefined,
 ): Promise<void> {
@@ -3288,6 +3297,12 @@ export async function recordRunLifecycleMoment(
             ? isNull(agentRuns.lifecycleMoment)
             : eq(agentRuns.lifecycleMoment, input.onlyWhileMoment),
         );
+      }
+      if (input.onlyWhilePublishDecisionParked !== undefined) {
+        conditions.push(sql`EXISTS (
+          SELECT 1 FROM ${agentRunPublishDecisions} d
+           WHERE d.id = ${input.onlyWhilePublishDecisionParked} AND d.run_id = ${agentRuns.id} AND d.status = 'parked'
+        )`);
       }
       const where = conditions.length === 1 ? conditions[0] : and(...conditions);
       await dtx
