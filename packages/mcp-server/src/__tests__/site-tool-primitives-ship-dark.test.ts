@@ -24,6 +24,25 @@ describe("chat perimeter: governed invoker primitives are now reachable (cinatra
   });
 });
 
+// cinatra#3745: the connector splits the proxy, and every ability other than a
+// read moves to `wordpress_site_tool_write`. "write" is a denied verb token on
+// the chat perimeter and the host declares no chat class for it, so the write
+// tool stays off chat and off the widget perimeter. It reaches the in-admin
+// content editor's agent run only, where its outward declaration holds it.
+const WRITE = "wordpress_site_tool_write";
+
+describe("the write tool of the split proxy stays off every delegated perimeter (cinatra#3745)", () => {
+  it("delegated-chat perimeter denies it", () => {
+    expect(isCoreDelegatedChatAdmitted(WRITE)).toBe(false);
+  });
+
+  it("delegated-widget perimeter (both kinds) denies it", () => {
+    for (const kind of ["wordpress", "drupal"] as const) {
+      expect(isDelegatedWidgetMcpToolAllowed(kind, WRITE), kind).toBe(false);
+    }
+  });
+});
+
 describe("widget perimeter: governed invoker primitives stay ship-dark PERMANENTLY (intentionally out of S7's scope)", () => {
   it("delegated-widget perimeter (both kinds) still denies both primitives", () => {
     for (const kind of ["wordpress", "drupal"] as const) {
