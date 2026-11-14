@@ -305,8 +305,8 @@ editor-patch consumer (the refresh executor in the CMS widgets) is S5's
 
 A read-only report of the tools that the chat composer and the run window would
 hand to the model, so that a test can compare the two without reading the DOM.
-This section is the spec only. The route does not exist yet; a later product
-change adds it with its own tests.
+The route is `src/app/api/assistants/chat/tool-manifest/route.ts`, with its
+tests in `src/app/api/assistants/chat/tool-manifest/__tests__/route.test.ts`.
 
 **Route.** `GET /api/assistants/chat/tool-manifest`, beside the capability
 route `src/app/api/assistants/chat/capabilities/route.ts`. GET only; there is
@@ -380,10 +380,13 @@ then `isAllowedByList` from `src/lib/assistant-runtime/ports.ts`) into one
 function that `runAssistantTurn` and this route both call. The route never keeps
 a second list of tools.
 
-**Read only.** The extracted function only reads. It inserts, updates and
-deletes nothing, mints no actor token and no lent-action grant, sends no stream
-event, persists no delivery record, and makes no network call to a model
-provider or to an MCP endpoint. Its write steps stay in `runAssistantTurn`,
+**Read only.** The extracted function performs none of the turn's write
+steps: it registers no skill, mints no actor token and no lent-action grant,
+runs no reachability probe, sends no stream event, persists no delivery record,
+and makes no network call to a model provider or to an MCP endpoint itself. The
+input reads it calls (the skill delivery, the external MCP tools and the ports
+the caller passes) may have the side effects that the read-boundary paragraph
+below names. Its write steps stay in `runAssistantTurn`,
 before and after the call: the skill registration
 (`ensureAssistantSkillsRegistered`: `ensureInstalledSkillsRegistered` and
 `retireSupersededChatSkillsOnce` in
@@ -396,9 +399,40 @@ reads whether this process has already registered every id of
 `runtimeConfig.skillIds` (the per-process `registrationMemo`, through a new
 read-only accessor) and has settled the retirement; if not, it answers
 `503 skills_not_registered` and never a manifest that the next turn could
-change. Unit E proves this with a test that runs the route against recording
-ports and stores and asserts zero writes, zero mints and zero provider or MCP
-calls.
+change.
+
+"Read only" means exactly this: the route performs none of the turn's own write
+steps (the skill registration, the actor token mint, the lent-action grant, the
+reachability probe, the turn-delivery record and any stream event), and it
+calls no model provider and no MCP endpoint itself. It does not promise that
+its input reads have no side effects. The input reads are the roads' own reads,
+called as the roads call them, and each keeps the side effects it may have
+today:
+
+- the session read (`getAuthSession`): the per-process assistant bootstrap and
+  the first-login enrichment (initial admin, avatar, default organization
+  membership);
+- every read of the store through `ensurePostgresSchema` (the thread read, the
+  assigned-skill read, the external MCP registry read): the schema
+  initialization of a cold process;
+- the self-MCP catalog state (`buildDelegatedChatCapabilityPlan`): the core
+  migration of the delegated-chat admission snapshot;
+- the external MCP registry list: its once-per-process managed-endpoint sweep
+  and the notification of that sweep;
+- an external MCP server reached directly (no catalog allowlist): the
+  connection-use audit and the credential resolution through the connection
+  service;
+- the skill delivery: the migration of a legacy skill row that has content but
+  no source path;
+- the extension toolbox builders that `resolveChatExternalMcpTools` runs: what
+  each extension's builder does.
+
+Unit E proves the route's part with a test that runs the route against the
+real write entry points of the turn as recording spies (registration,
+retirement, token mint, grant, probe, delivery record, stream events) and
+asserts that none is called and that no model or MCP endpoint is called; the
+input reads in that test are fakes, so it proves nothing about their side
+effects.
 
 **Declared, not reachable.** The report is the pre-dispatch manifest: the tools
 that the turn would hand to `stream()` if it passed every later check. It runs
@@ -484,18 +518,23 @@ message, URL, stack or provider text. The cause is logged on the server. An
 error on either road fails the whole request; the route never returns one
 report alone or a shorter list.
 
+The route checks in this order: a `cit_` bearer (401), then the parameters
+(400), then the session (401). A malformed request therefore answers 400 even
+without a session, and reads no store, not even the session.
+
 - `401 Unauthorized` — no session, or a `cit_` bearer.
 - `400 invalid_request` — a missing, empty or repeated parameter, any other
   parameter, a `threadId` or `runId` longer than 200 characters or with a
   character outside printable ASCII (0x21-0x7E), or a `surface` that is not in
-  `RUN_WINDOW_SURFACES`. These checks read no store, so they say nothing about
-  whether a run exists.
+  `RUN_WINDOW_SURFACES`. These checks read no store (the session included),
+  so they say nothing about whether a run exists.
 - `403 Forbidden` — `authorizeThreadForTurn` refuses the thread (the status and
   error that the chat route returns for it).
 - `404 not_found` — `requireRunWindowAccess(runId, "read")` refuses: a run that
   does not exist, a run the caller may not read and a caller with no bound turn
   actor give the same answer, so the route is not an oracle for run ids.
-- `503 actor_unavailable` — `requireActorContext()` or
+- `503 actor_unavailable` — the session read or the thread read
+  (`authorizeThreadForTurn`) throws, or `requireActorContext()` or
   `resolveUserContextForUserId` fails for a valid session (for example the
   grants and teams cannot be read).
 - `503 provider_unavailable` — no provider adapter resolves, or
