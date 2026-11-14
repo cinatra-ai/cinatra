@@ -58,6 +58,12 @@ vi.mock("@cinatra-ai/agents/store", () => ({
   verifyRunExecutedSource: h.verifyRunExecutedSource,
   isRunExecutedSourceCurrent: h.isRunExecutedSourceCurrent,
   readRunStepToolPolicy: async () => h.policy,
+  // cinatra#3745: the one read that proves the source current and returns the
+  // step's bound policy; it answers as the currency check above does.
+  readCurrentRunStepToolPolicy: async (...args: unknown[]) => {
+    if (!(await h.isRunExecutedSourceCurrent(...(args as [])))) throw new Error("step_tool_run_source_inactive");
+    return h.policy;
+  },
   assertRunStepToolAllowed: h.assertRunStepToolAllowed,
 }));
 // The run-write authority the road mints for a verified source's attempt.

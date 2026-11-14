@@ -54,6 +54,12 @@ const runStore = vi.hoisted(() => ({
 vi.mock("@cinatra-ai/agents/store", () => ({
   isRunExecutedSourceCurrent: (...args: unknown[]) => runStore.current(...(args as [])),
   readRunStepToolPolicy: async () => ({ source: "bound-source-under-test" }),
+  // cinatra#3745: the one read that proves the source current and returns the
+  // step's bound policy; it answers as the currency check above does.
+  readCurrentRunStepToolPolicy: async (...args: unknown[]) => {
+    if (!(await runStore.current(...(args as [])))) throw new Error("step_tool_run_source_inactive");
+    return { source: "bound-source-under-test" };
+  },
   assertRunStepToolAllowed: (...args: unknown[]) => runStore.assert(...(args as [])),
 }));
 const executedSource = {

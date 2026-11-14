@@ -42,6 +42,7 @@ vi.mock("@/lib/mcp-server", () => ({
 vi.mock("@cinatra-ai/agents/store", () => ({
   isRunExecutedSourceCurrent: async () => true,
   readRunStepToolPolicy: async () => ({ source: "bound-source-under-test" }),
+  readCurrentRunStepToolPolicy: async () => ({ source: "bound-source-under-test" }),
   assertRunStepToolAllowed: () => ({ kind: "undeclared" }),
 }));
 

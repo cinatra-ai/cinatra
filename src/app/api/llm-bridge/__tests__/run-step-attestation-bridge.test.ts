@@ -57,7 +57,7 @@ const {
   resolveAgentRunMcpActorMock,
   issueAgentRunMcpActorTokenMock,
   verifyRunExecutedSourceMock,
-  readRunStepToolPolicyMock,
+  readCurrentRunStepToolPolicyMock,
   readTrustedStepToolDeclarationMock,
 } = vi.hoisted(() => ({
   runResolvedSkillAwareDeterministicLlmTaskMock: vi.fn<
@@ -99,7 +99,7 @@ const {
   resolveAgentRunMcpActorMock: vi.fn(),
   issueAgentRunMcpActorTokenMock: vi.fn(() => "obo-token"),
   verifyRunExecutedSourceMock: vi.fn(),
-  readRunStepToolPolicyMock: vi.fn(),
+  readCurrentRunStepToolPolicyMock: vi.fn(),
   readTrustedStepToolDeclarationMock: vi.fn(),
 }));
 
@@ -120,9 +120,12 @@ vi.mock("@cinatra-ai/llm", () => ({
 }));
 vi.mock("@cinatra-ai/agents/store", () => ({
   verifyRunExecutedSource: verifyRunExecutedSourceMock,
-  // The bound source's step-tool policy and its trusted reader (their own
-  // refusals are pinned in packages/agents).
-  readRunStepToolPolicy: readRunStepToolPolicyMock,
+  // The bound source's step-tool policy, read with the proof that the verified
+  // source is still current, and its trusted reader (their own refusals are
+  // pinned in packages/agents). The older policy reader answers from the same
+  // double, so a bridge that still read it would meet the same store.
+  readCurrentRunStepToolPolicy: readCurrentRunStepToolPolicyMock,
+  readRunStepToolPolicy: (...args: unknown[]) => readCurrentRunStepToolPolicyMock(...args),
   readTrustedStepToolDeclaration: readTrustedStepToolDeclarationMock,
 }));
 vi.mock("@/lib/agent-run-context-durable", () => ({
@@ -332,7 +335,7 @@ beforeEach(async () => {
   readAgentRunTokenHashByIdMock.mockResolvedValue(null);
   writeDurableRunContextBindingMock.mockResolvedValue("cinatra:run-ctx:v1:test-key");
   verifyRunExecutedSourceMock.mockResolvedValue(VERIFIED_SOURCE);
-  readRunStepToolPolicyMock.mockResolvedValue({ source: "bound-source-under-test" });
+  readCurrentRunStepToolPolicyMock.mockResolvedValue({ source: "bound-source-under-test" });
   readTrustedStepToolDeclarationMock.mockReturnValue({ kind: "undeclared" });
   const mod = await import("../route");
   POST = mod.POST;
@@ -654,7 +657,7 @@ describe("the model bridge offers a run-bound step only the tools it declares", 
     readTrustedStepToolDeclarationMock.mockReturnValue({ kind: "declared", tools: ["mail_send"] });
     const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...sourceHeaders() }));
     expect(res.status).toBe(200);
-    expect(readRunStepToolPolicyMock).toHaveBeenCalledWith(RUN.id, RUN.orgId);
+    expect(readCurrentRunStepToolPolicyMock).toHaveBeenCalledWith(RUN.id, RUN.orgId, VERIFIED_SOURCE);
     expect(readTrustedStepToolDeclarationMock).toHaveBeenCalledWith("bound-source-under-test", NODE);
     expect(dispatchInput().stepToolPolicy).toEqual({ kind: "declared", tools: ["mail_send"] });
   });
@@ -673,7 +676,7 @@ describe("the model bridge offers a run-bound step only the tools it declares", 
       const res = await POST(makeReq({ user: "hi" }, headers));
       expect(res.status).toBe(200);
       expect(dispatchInput().stepToolPolicy).toEqual({ kind: "declared", tools: [] });
-      expect(readRunStepToolPolicyMock).not.toHaveBeenCalled();
+      expect(readCurrentRunStepToolPolicyMock).not.toHaveBeenCalled();
     }
   });
 
@@ -682,6 +685,33 @@ describe("the model bridge offers a run-bound step only the tools it declares", 
     const res = await POST(makeReq({ user: "hi" }, { "x-cinatra-a2a-context-id": CTX }));
     expect(res.status).toBe(200);
     expect(dispatchInput()).not.toHaveProperty("stepToolPolicy");
+  });
+
+  // (b21)
+  it("a verified source that is no longer current when the policy is read is refused with the fixed 403 before any provider", async () => {
+    readCurrentRunStepToolPolicyMock.mockRejectedValue(
+      Object.assign(new Error("step_tool_run_source_inactive"), { code: "step_tool_run_source_inactive" }));
+    const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...sourceHeaders() }));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "Executing source could not be verified", code: "run_source_mismatch" });
+    expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
+  });
+
+  // (b22)
+  it("a store failure of the policy read answers the fixed 403 and never returns or logs the store's text", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      readCurrentRunStepToolPolicyMock.mockRejectedValue(new Error('relation "secret_table" does not exist'));
+      const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...sourceHeaders() }));
+      const text = await res.text();
+      expect(res.status).toBe(403);
+      expect(JSON.parse(text)).toEqual({ error: "Executing source could not be verified", code: "run_source_mismatch" });
+      expect(text).not.toContain("secret_table");
+      expect(JSON.stringify(errors.mock.calls)).not.toContain("secret_table");
+      expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
+    } finally {
+      errors.mockRestore();
+    }
   });
 });
 
