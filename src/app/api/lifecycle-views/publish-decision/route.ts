@@ -5,6 +5,7 @@ import { z } from "zod";
 import { readAgentRunById } from "@cinatra-ai/agents/store";
 import {
   PUBLISH_DECISION_CARD_NONE,
+  mintWidgetPublishDecideGrant,
   publishDecisionCardStateForRun,
 } from "@cinatra-ai/agents/publish-decision-card-core";
 
@@ -23,7 +24,8 @@ import {
 //
 // TWO GATES, IN ORDER: the credential at THIS route's audience with `lifecycle.read`, then the run read through its
 // access door and bound to this widget session. A failure of the second answers 200 `{ state: "none" }`, the same
-// silence a run with no decision produces. The route reads only; it sends no decision.
+// silence a run with no decision produces. The route reads only; it sends no decision. "May decide" (part 7a-3b) is
+// asked with the widget publish grant when the token also carries `lifecycle.decide`; without it the card is restricted.
 // ---------------------------------------------------------------------------
 
 const runIdSchema = z.string().min(1).max(256);
@@ -46,7 +48,8 @@ export async function GET(request: Request): Promise<Response> {
     return Response.json(PUBLISH_DECISION_CARD_NONE, NO_STORE);
   }
 
-  const reader = { actor: who.actor, roleHints: who.roleHints ?? {} };
+  const widgetGrant = mintWidgetPublishDecideGrant(caller.claims, run.id) ?? undefined;
+  const reader = { actor: who.actor, roleHints: who.roleHints ?? {}, ...(widgetGrant ? { widgetGrant } : {}) };
   const state = await publishDecisionCardStateForRun(run, reader).catch(() => null);
   return Response.json(state ?? PUBLISH_DECISION_CARD_NONE, NO_STORE);
 }

@@ -1169,7 +1169,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
           adapter: "mount",
           region: "transcript",
           surface: "production",
-          why: "the same column on the widget arm draws the same card for the same `agent_run` part; the host declaration selects the broker read, so the read travels on the widget's own credential",
+          why: "the same column on the widget arm draws the same card for the same `agent_run` part; the host declaration selects the broker read and the broker decide door, so both travel on the widget's own credential",
         },
       ],
       run_card: [

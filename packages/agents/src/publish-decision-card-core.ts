@@ -29,17 +29,22 @@ import {
   approvePublishDecision,
   declinePublishDecision,
   enforcePublishDecisionAccess,
+  type WidgetPublishDecideGrant,
 } from "./publish-decision-actions";
 import { readLatestDecisionForRun } from "./publish-decision-store";
 import { readAgentRunById, readAgentTemplateById, type AgentRunRecord } from "./store";
 
 export { PUBLISH_DECISION_CARD_NONE } from "./publish-decision-card";
+// The widget publish grant's ONE mint, reached by the two widget publish routes through this module's subpath.
+export { mintWidgetPublishDecideGrant } from "./publish-decision-actions";
 export type { PublishDecisionCardRow, PublishDecisionCardState } from "./publish-decision-card";
 
 /** The verified actor a server entry hands in. Never supplied by a caller. */
 export type PublishDecisionCardActor = {
   actor: PrimitiveActorContext;
   roleHints: ActorRoleHints;
+  /** The site widget's publish grant for this run (part 7a-3b), minted by a widget route only. */
+  widgetGrant?: WidgetPublishDecideGrant;
 };
 
 /** The card for a run already read through the access door. */
@@ -72,6 +77,7 @@ export async function publishDecisionCardStateForRun(
         runId: run.id,
         actorContext: who.actor,
         roleHints: who.roleHints,
+        ...(who.widgetGrant ? { widgetGrant: who.widgetGrant } : {}),
       }).then(
         () => true,
         () => false,
@@ -117,7 +123,7 @@ export async function decidePublishDecisionForActor(input: {
   const { runId, answer, who } = input;
   if (typeof runId !== "string" || runId.length === 0 || runId.length > 256) return "failed";
   if (answer !== "approve" && answer !== "decline") return "failed";
-  const base = { runId, actorContext: who.actor, roleHints: who.roleHints };
+  const base = { runId, actorContext: who.actor, roleHints: who.roleHints, ...(who.widgetGrant ? { widgetGrant: who.widgetGrant } : {}) };
   try {
     const result =
       answer === "approve"

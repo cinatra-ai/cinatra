@@ -10,16 +10,18 @@
 // site widget) reads the broker route with that credential. The read sends no decision. A read that fails keeps the
 // last authorized answer, and a card with no answer draws NO DOM, so a run with no open decision draws nothing.
 // The two controls send through the `decide` door a host passes; a host that passes none draws them disabled. The
-// session door rides the reader's cookie, so the card never sends through it on a host that declares a credential.
+// session door rides the reader's cookie, so the card never sends through it on a host that declares a credential;
+// such a host (the site widget) sends through the broker decide route on its own credential instead.
 // ---------------------------------------------------------------------------
 
-import { useEffect, useRef, useState, type ReactElement } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 
 import { Button } from "@/components/ui/button";
 import { StatusPill } from "@/components/ui/status-pill";
 import { Textarea } from "@/components/ui/textarea";
 
 import {
+  LIFECYCLE_PUBLISH_DECISION_DECIDE_PATH,
   LIFECYCLE_PUBLISH_DECISION_PATH,
   sendAcrossRenewal,
   useCookieSessionSurface,
@@ -44,10 +46,37 @@ export type PublishDecisionDecide = (input: {
 /** The SESSION decide door (part 7a-3a): Publish / Do not publish as the signed-in person of a cookie host. */
 export const decidePublishThroughSession: PublishDecisionDecide = (input) => decidePublishDecisionAction(input);
 
+/** The BROKER decide door (part 7a-3b): a POST of the answer on the host's own credential. A refusal, a failed send
+ *  and an answer the card does not know are "failed"; nothing is retried except across a credential renewal. */
+function decidePublishThroughBroker(auth: LifecycleCardAuth): PublishDecisionDecide {
+  return async ({ runId, answer, note }) => {
+    try {
+      const send = () =>
+        fetch(LIFECYCLE_PUBLISH_DECISION_DECIDE_PATH, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...auth.headers() },
+          body: JSON.stringify({ runId, answer, note }),
+          credentials: auth.credentials,
+        });
+      const response = await sendAcrossRenewal(auth, send);
+      if (response === null || !response.ok) return "failed";
+      const outcome = ((await response.json()) as { outcome?: unknown } | null)?.outcome;
+      return outcome === "decided" || outcome === "not_open" ? outcome : "failed";
+    } catch {
+      return "failed";
+    }
+  };
+}
+
 /** The decide door of the host this card is drawn on: the session door inside a well-formed cookie-session host
- *  declaration only; none yet anywhere else (the site widget), whose controls stay disabled. */
+ *  declaration; the broker door on a host that declares a credential (the site widget); none anywhere else. */
 export function usePublishDecisionDoor(): PublishDecisionDecide | undefined {
-  return useCookieSessionSurface() ? decidePublishThroughSession : undefined;
+  const cookieSession = useCookieSessionSurface();
+  const auth = useLifecycleCardAuth();
+  return useMemo(
+    () => (cookieSession ? decidePublishThroughSession : auth ? decidePublishThroughBroker(auth) : undefined),
+    [cookieSession, auth],
+  );
 }
 
 /** The BROKER read, for a host that proves itself with its own credential. A GET: it sends only the run id. */

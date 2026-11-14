@@ -234,17 +234,45 @@ export type PublishDecisionAnswer =
   | { ok: true; runStopped: boolean }
   | { ok: false; code: typeof PUBLISH_DECISION_NOT_OPEN; currentStatus: PublishDecisionStatus | null };
 
-type DecideInput = { runId: string; actorContext: PrimitiveActorContext; roleHints?: ActorRoleHints };
+/**
+ * THE WIDGET PUBLISH GRANT (cinatra#4150 part 7a-3b). The site widget's person proves itself with its own `cwu_`, which
+ * the widget routes consume at their audience; the actor they build is a human of source "a2a", the same shape the MCP
+ * frame entry builds. So the actor alone never admits a widget decider: the decision needs this grant too, which only
+ * mintWidgetPublishDecideGrant makes (a module-held set, so a plain object is no grant), for ONE run, ONE person and
+ * ONE org, and only from claims that carry the existing `lifecycle.decide` scope.
+ */
+export type WidgetPublishDecideGrant = Readonly<{ runId: string; userId: string; orgId: string }>;
+const WIDGET_PUBLISH_GRANTS = new WeakSet<WidgetPublishDecideGrant>();
+
+/** Called only by the widget publish routes, with the claims of a `cwu_` they consumed. Null without the decide scope. */
+export function mintWidgetPublishDecideGrant(
+  claims: { userId: string; orgId: string; grantedScopes: readonly string[] },
+  runId: string,
+): WidgetPublishDecideGrant | null {
+  if (!claims.userId || !claims.orgId || typeof runId !== "string" || runId.length === 0) return null;
+  if (!Array.isArray(claims.grantedScopes) || !claims.grantedScopes.includes("lifecycle.decide")) return null;
+  const grant: WidgetPublishDecideGrant = Object.freeze({ runId, userId: claims.userId, orgId: claims.orgId });
+  WIDGET_PUBLISH_GRANTS.add(grant);
+  return grant;
+}
+
+type DecideInput = { runId: string; actorContext: PrimitiveActorContext; roleHints?: ActorRoleHints; widgetGrant?: WidgetPublishDecideGrant };
 const forbidden = (message: string) => new AuthzError({ statusCode: 403, reason: "forbidden", message });
 /**
- * Who counts as a person for Publish and Do not publish: a human actor that reached the product through its own UI or a
- * session route (source "ui" or "route"), carrying no token scopes, with a user id and no delegated agent ceiling. Every
- * other actor is refused: an A2A, MCP, worker, scheduler or agent source (the header-built human of the passthrough road
- * included), and any token-scoped actor. Local to the publish decision; the other human-only gates keep their own rules.
+ * Who counts as a person for Publish and Do not publish: a human actor with no token scopes, a user id and no delegated
+ * agent ceiling, that reached the product either through its own UI or a session route (source "ui" or "route"), or
+ * through the site widget (source "a2a") WITH a widget publish grant minted for this run, this person and the actor's
+ * org. Every other actor is refused: an A2A or MCP frame actor without that grant, a worker, scheduler or agent source
+ * (the header-built human of the passthrough road included), and any token-scoped actor. Local to the publish decision.
  */
-function isPublishDecider(actor: PrimitiveActorContext | null | undefined): actor is PrimitiveActorContext & { userId: string } {
-  return actor?.actorType === "human" && (actor.source === "ui" || actor.source === "route") && actor.tokenScopes === undefined
-    && typeof actor.userId === "string" && actor.userId.length > 0 && !actor.oboCeiling;
+function isPublishDecider(input: DecideInput): boolean {
+  const actor = input.actorContext;
+  if (actor?.actorType !== "human" || actor.tokenScopes !== undefined || actor.oboCeiling) return false;
+  if (typeof actor.userId !== "string" || actor.userId.length === 0) return false;
+  if (actor.source === "ui" || actor.source === "route") return true;
+  const grant = input.widgetGrant;
+  return actor.source === "a2a" && grant !== undefined && WIDGET_PUBLISH_GRANTS.has(grant) && grant.runId === input.runId
+    && grant.userId === actor.userId && typeof actor.orgId === "string" && grant.orgId === actor.orgId;
 }
 
 /** A run that is not found, and a run the person may not see (outside its organization), answer the same. */
@@ -252,8 +280,9 @@ const hidden = () => new AuthzError({ statusCode: 404, reason: "hidden", message
 
 /**
  * Who may decide a publish, for Publish and Do not publish alike. The decider is ONE principal: the person of
- * `actorContext` (isPublishDecider: a human actor from the UI or a session route, with no token scopes, a user id and no
- * delegated agent ceiling; every other actor is refused before any read), and a member of the run's organization.
+ * `actorContext` (isPublishDecider: a human actor from the UI or a session route, or a site widget person holding a
+ * widget publish grant for this run, with no token scopes, a user id and no delegated agent ceiling; every other actor
+ * is refused before any read), and a member of the run's organization. A widget decider's run must be its own.
  *   - A run with a human owner: run.execute and run.approveHitl under the run's effective policy, as every gate decision.
  *   - A run with no human owner (runBy null, and only null): the policy's owner tier would refuse everyone, so the
  *     person's role in the run's organization is resolved first and both permissions are asked of the kernel for that
@@ -265,9 +294,11 @@ const hidden = () => new AuthzError({ statusCode: 404, reason: "hidden", message
  */
 export async function enforcePublishDecisionAccess(input: DecideInput): Promise<{ run: AgentRunRecord; deciderId: string; authority: OrgWriteAuthority }> {
   const actor = input.actorContext;
-  if (!isPublishDecider(actor)) throw forbidden("Only a person can decide a publish.");
-  const deciderId = actor.userId;
+  if (!isPublishDecider(input)) throw forbidden("Only a person can decide a publish.");
+  const deciderId = actor.userId as string;
   const run = await readAgentRunById(input.runId);
+  // A widget decider reaches only its OWN run (it started it) in the org its token is bound to, as every widget road.
+  if (input.widgetGrant && (!run || run.runBy !== deciderId || run.orgId !== input.widgetGrant.orgId)) throw hidden();
   const { enforceRunAccess, resolveEffectivePolicy } = await import("./auth-policy");
   const { resolveOrgRoleForUser } = await import("@/lib/auth-session");
   const notMember = hidden;

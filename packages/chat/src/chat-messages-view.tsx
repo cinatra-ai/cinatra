@@ -775,7 +775,7 @@ function AgentRunTurnSlot({
   );
   // THE PUBLISH CARD (cinatra#4150), an INTERRUPT like the screen above and mounted beside it, in the same placement:
   // keyed by the run alone, it self-gates, so a run with no open publish decision draws nothing here. Its door is the
-  // host's own: the session door on /chat, none yet on the widget (part 7a-3a).
+  // host's own: the session door on /chat, the broker decide route on the widget (parts 7a-3a, 7a-3b).
   const publishDoor = usePublishDecisionDoor();
   const publishCard = <PublishDecisionCard runId={runId} decide={publishDoor} />;
 
