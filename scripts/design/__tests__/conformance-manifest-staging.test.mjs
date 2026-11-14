@@ -54,12 +54,14 @@ const STAGED = {
   // (design@67ecd66d, cinatra#4388): the dashboard's artifact page draws the dashboard
   // extension's own display, so the two surfaces of the core pointer (the pointer detail
   // and its scope chips) are no longer declared.
+  // Re-copied verbatim again at version 0.14.0 (design@104eaf3c, cinatra#4476): section XI draws
+  // the Lifecycle operations page; nine surfaces are added and none is changed or removed.
   // Unpinned because only one of its surfaces is in scope for that adoption; it
   // joins the pin gate when every surface of the drawing has a driver.
   "app-artifacts.json": {
     spec: "specs/app-artifacts.html",
-    manifestSha256: "9be0560000ad449b9c75167c726ca44c51efcd5e6eea1497cdb8691b34e1f05b",
-    contentHash: "sha256:dd0eeaf1e9aaeede212214e7711e57a7c76fa3d000a501c13266da971a0e70c6",
+    manifestSha256: "37c230220c838855fcc25e17392ca42af0cb7bd6b6b65d7cf1bb4cfe7629d05b",
+    contentHash: "sha256:c4aac5f31aa873714c63891d69ecd41d3b92e387a8b5161798390d7840ddd9b3",
   },
   // The lifecycle-cards drawing, staged by cinatra#3156 (the suggestion-chip wave).
   // Re-copied verbatim at design@f77ea323 (cinatra#3978): the copy carries the

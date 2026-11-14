@@ -1,0 +1,11 @@
+{
+  "seq": "0127",
+  "file": "core/core__0127_resume-intent-recovery.mjs",
+  "summary": "The upgrade recovery of a declared review's paused run (cinatra#4476). Creates artifact_review_resume_recovery (one row per pause the recovery wrote for, primary key run_id + base_review_task_id, road 'rearm' or 'carry', the gate it wrote on: the once marker), artifact_review_resume_recovery_epoch (one row, upgraded_at, and cursor_run_id and high_water_run_id, where the recovery's next page of paused runs starts and where its cycle ends) and the non-unique partial index agent_runs_pending_approval_id_idx (agent_runs id WHERE status = 'pending_approval', the index the recovery pages through), and writes the epoch row once (a rerun keeps the first time). It writes no existing row. Its down drops the index only and keeps both tables and their rows, so a pause is recovered at most once across a rollback and a redeploy. The resume sweep's recovery acts only when the epoch row exists, once per pause, on a pause whose legs were all created before the upgrade or whose lineage carries an old writer's attempt on a reopen gate: it gives the family's newest decision a new budget on its own row, or inserts a new intent carrying it on a free gate. Fresh-install bootstrap twin in lifecycleInterceptionsSchemaQueries (the two tables and the index, no epoch row, so a fresh install recovers nothing).",
+  "destructive": false,
+  "tables": [
+    "agent_runs",
+    "artifact_review_resume_recovery",
+    "artifact_review_resume_recovery_epoch"
+  ]
+}

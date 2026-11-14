@@ -626,7 +626,7 @@ export function artifactMaterializationLedgerSchemaQueries(
   image_model                 text,
   created_at                  timestamptz NOT NULL DEFAULT now()
 )` },
-    // cinatra#4264 (core__0127): the runtime's signed id of the ApiNode that
+    // cinatra#4264 (core__0128): the runtime's signed id of the ApiNode that
     // filed the revision, written only when it equals node_id; else NULL.
     // Added here rather than in the CREATE text, so a fresh install and an
     // upgraded one take the same statement (the core__0126 precedent).
@@ -636,7 +636,7 @@ export function artifactMaterializationLedgerSchemaQueries(
     // declarative rows of one run by extension + content hash.
     { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_run_ext_hash_idx ON "${q}"."artifact_materializations" (run_id, extension, content_hash)` },
     { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_org_run_idx ON "${q}"."artifact_materializations" (org_id, run_id)` },
-    // cinatra#4264 (core__0127): "which node filed THIS revision" — the
+    // cinatra#4264 (core__0128): "which node filed THIS revision" — the
     // Regenerate provenance reader's exact lookup over materialize_tool rows.
     { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_org_artifact_rev_idx ON "${q}"."artifact_materializations" (org_id, artifact_id, representation_revision_id) WHERE path = 'materialize_tool'` },
     ...agentRunStepSnapshotSchemaQueries(schemaName),
@@ -645,7 +645,7 @@ export function artifactMaterializationLedgerSchemaQueries(
 
 /**
  * THE STEP SNAPSHOTS OF A RUN (cinatra#4264, slice B1a; migration twin
- * core__0127).
+ * core__0128).
  *
  * Per run and node, the node's FULL resolved input as the flow runtime
  * serialized it (`inputs_json`, stored verbatim and never re-serialized), the

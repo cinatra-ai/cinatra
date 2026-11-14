@@ -2,7 +2,8 @@
  * isGenericObjectSchema Continue button
  *
  * Requirement: when xRenderer === "@cinatra-ai/agent-builder:schema-field-fallback"
- * AND the interrupt schema has type === "object", the panel must:
+ * AND the interrupt schema has type === "object" AND (cinatra#4244) that schema
+ * declares no field to fill (a bare confirmation), the panel must:
  *   (a) set isGenericObjectSchema = true → showContinueButton = true
  *   (b) NOT render RendererComponent (text-input path is bypassed)
  *   (c) NOT render the "no renderer configured" fallback paragraph
@@ -93,6 +94,21 @@ describe("orchestrator-stepper-panel — isGenericObjectSchema Continue button",
     ).toBe(true);
     // …and it must be a NEGATED term: a setup gate is never "generic".
     expect(expr).toMatch(/!\s*isSetupGateTaskId/);
+  });
+
+  // cinatra#4244 - a non-setup gate whose object schema DECLARES fields of its
+  // own (a WayFlow input gate with no renderer, e.g. "Pick the brand voice") is
+  // not a bare confirmation: suppressing the renderer drew a Continue with
+  // nothing to fill in. Only a well-formed schema that declares no visible
+  // field is generic; a malformed schema is neither (it fails closed). The
+  // drawn behaviour is pinned by orchestrator-stepper-panel-next-input-gate-4244.
+  it("EXCLUDES gates that declare fields of their own, and malformed ones, from isGenericObjectSchema (cinatra#4244)", () => {
+    const match = SRC.match(/isGenericObjectSchema\s*=\s*([^;]+);/);
+    expect(match, "isGenericObjectSchema must be declared").toBeTruthy();
+    expect(match![1]).toMatch(/gateReading\.kind\s*===\s*"bare"/);
+    expect(SRC).toMatch(/gateReading\s*=\s*readSchemaFieldGate\(\s*interruptContext\.schema\s*\)/);
+    // A malformed gate draws no renderer and no Continue: the paragraph only.
+    expect(SRC).toMatch(/RendererComponent && !isGenericObjectSchema && !fallbackGateIsMalformed/);
   });
 
   it("hides HitlConversationPanel when isGenericObjectSchema is true", () => {

@@ -1,5 +1,5 @@
 /**
- * cinatra#4264 slice B1a, DB tier (T8): core__0127 and its bootstrap twins
+ * cinatra#4264 slice B1a, DB tier (T8): core__0128 and its bootstrap twins
  * applied to a real Postgres.
  *
  *   - UPGRADE: on tables that already hold rows, `up` adds the four nullable
@@ -25,7 +25,7 @@ import { Client } from "pg";
 import { artifactMaterializationLedgerSchemaQueries } from "@/lib/artifact-claim-schema";
 import { lifecycleRepairSchemaQueries } from "@/lib/artifacts/artifact-review-gate-schema";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
-import * as migration from "../../../migrations/core/core__0127_regenerate-step-provenance.mjs";
+import * as migration from "../../../migrations/core/core__0128_regenerate-step-provenance.mjs";
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 const HAS_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
@@ -105,7 +105,7 @@ async function snapshotFk(schema: string) {
   return rows.map((row: { def: string }) => row.def.replaceAll(`${qi(schema)}.`, "").replaceAll(`${schema}.`, ""));
 }
 
-describeDb("core__0127 regenerate step provenance (cinatra#4264 B1a, T8)", () => {
+describeDb("core__0128 regenerate step provenance (cinatra#4264 B1a, T8)", () => {
   beforeAll(async () => {
     client = new Client({ connectionString: DB_URL });
     await client.connect();

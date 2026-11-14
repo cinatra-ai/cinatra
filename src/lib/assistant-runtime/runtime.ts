@@ -37,7 +37,9 @@ import { connectionSubjectUserId } from "@/lib/connection-use-gate";
 import type { ChatMcpCatalogState, ServableChatPrimitive } from "@cinatra-ai/llm";
 import { createDeterministicSkillsClient } from "@cinatra-ai/skills/mcp-client";
 import {
+  areInstalledSkillsRegistered,
   ensureInstalledSkillsRegistered,
+  isSupersededChatSkillRetirementSettled,
   resolveInstalledSkillSourcePath,
   retireSupersededChatSkillsOnce,
 } from "@cinatra-ai/skills";
@@ -409,6 +411,21 @@ async function ensureAssistantSkillsRegistered(skillIds: string[]): Promise<void
   await retireSupersededChatSkillsOnce();
 }
 
+/**
+ * READ-ONLY accessor over the per-process registration state that
+ * `ensureAssistantSkillsRegistered` leaves behind: true exactly when this
+ * process has registered EVERY id of `skillIds` (the skills layer's
+ * per-process registration memo, each run settled) AND has settled the
+ * superseded chat-skill retirement. It registers nothing, retires nothing and
+ * reads no store. The tool-manifest route answers `503 skills_not_registered`
+ * while it is false (packages/agent-ui-protocol/CONTRACT.md section 5.2,
+ * "Read only"), because the next turn's registration could still change the
+ * manifest.
+ */
+export function areAssistantSkillsRegistered(skillIds: readonly string[]): boolean {
+  return areInstalledSkillsRegistered(skillIds) && isSupersededChatSkillRetirementSettled();
+}
+
 async function loadSystemPrompt(
   systemSkillId: string,
   fallbackPersona: string,
@@ -646,11 +663,16 @@ export function buildAssistantInjectionPorts(
 // the transport still decides what is callable. A narrowing hint must never be
 // the reason a turn loses its tools.
 // ---------------------------------------------------------------------------
-async function resolveChatMcpCatalogState(input: {
-  actorContext: ActorContext;
-  userId: string;
-  sessionOrgId: string | null;
-}): Promise<ChatMcpCatalogState | undefined> {
+async function resolveChatMcpCatalogState(
+  input: {
+    actorContext: ActorContext;
+    userId: string;
+    sessionOrgId: string | null;
+  },
+  // `failOpen: false` is the tool-manifest route's read (below); the turn
+  // always takes the default.
+  options: { failOpen: boolean } = { failOpen: true },
+): Promise<ChatMcpCatalogState | undefined> {
   try {
     const inventory = await buildConnectorInventory({
       ...DEFAULT_CONNECTOR_INVENTORY_DEPS,
@@ -725,10 +747,27 @@ async function resolveChatMcpCatalogState(input: {
       isHostApproved: (name) => admitted.has(name),
       isCapabilityAvailable: (key) => authorizedKeys.has(key),
     };
-  } catch {
+  } catch (error) {
+    if (!options.failOpen) throw error;
     // Unresolvable state means no hint, not a smaller turn.
     return undefined;
   }
+}
+
+/**
+ * The same chat catalog state as the turn reads, READ-ONLY, but an
+ * unreadable state is thrown instead of read as "no hint": the tool-manifest
+ * route answers it with `503 catalog_unavailable`
+ * (packages/agent-ui-protocol/CONTRACT.md section 5.2).
+ */
+export async function readChatMcpCatalogState(input: {
+  actorContext: ActorContext;
+  userId: string;
+  sessionOrgId: string | null;
+}): Promise<ChatMcpCatalogState> {
+  const state = await resolveChatMcpCatalogState(input, { failOpen: false });
+  if (state === undefined) throw new Error("the chat catalog state was not read");
+  return state;
 }
 
 /**
