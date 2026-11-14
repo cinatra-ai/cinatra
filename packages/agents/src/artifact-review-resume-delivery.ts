@@ -55,6 +55,7 @@ import {
   readAgentRunByTaskId,
   readAgentTemplateById,
 } from "./store";
+import type { AgentRunRecord } from "./agent-run-record";
 import { claimPause, PauseClaimReleaseError, releasePauseClaim } from "./run-pause-claim";
 import { failPreSendStep, givePauseBackOnHoldFault, recheckPublishHoldUnderClaim, settleSendOrDescribe } from "./run-resume-under-claim";
 import {
@@ -65,7 +66,9 @@ import {
 import {
   claimPendingResumeIntents,
   deadLetterExhaustedResumeIntents,
+  deadLetterResumeIntentUnderLease,
   deferResumeIntent,
+  leaseExhaustedResumeClaims,
   listReviewGatesForRun,
   markResumeIntentDelivered,
   withRunDecisionLock,
@@ -280,22 +283,19 @@ async function deliverWayflowResume(
   // lease (the release clears the mark) and leaves the intent, so the
   // dead-letter pass takes it like any intent that used its attempts, with its
   // run parked at the gate for ops, as before cinatra#3745. The replay above
-  // sends nothing and keeps its last attempt. A release this delivery cannot
-  // make leaves the run `running`; its intent is dead-lettered all the same.
+  // sends nothing and keeps its last attempt. The release is bound to the gate
+  // and execution attempt read above (`releaseClaimedRun`). A release this
+  // delivery cannot make leaves the mark set: the sweep's settle pass leases
+  // the intent again once this lease lapsed (`settleExhaustedResumeClaim`).
   if (claimedByUs && intent.finalAttempt === true) {
-    try {
-      await transitionRunStatus(run.id, "running", "pending_approval", { resumeIntentLease: { gateId, leaseToken } }, authority);
-    } catch (releaseErr: unknown) {
-      if ((releaseErr as { code?: string } | null)?.code === "resume_intent_lease_lost") return "lease-lost";
+    const released = await releaseClaimedRun(run, gateId, leaseToken, "at its last attempt");
+    if (released === "lease-lost") return "lease-lost";
+    if (released === "released") {
       console.warn(
-        `[artifact-review-resume] gate=${gateId} run=${run.id} could not release the claim at its last attempt (${errorLabel(releaseErr)})`,
+        `[artifact-review-resume] gate=${gateId} run=${run.id} used its last attempt while it held the run; ` +
+          `the run is back on this gate and the intent is left for the dead-letter pass`,
       );
-      return "retryable";
     }
-    console.warn(
-      `[artifact-review-resume] gate=${gateId} run=${run.id} used its last attempt while it held the run; ` +
-        `the run is back on this gate and the intent is left for the dead-letter pass`,
-    );
     return "retryable";
   }
   if (!run.a2aContextId) {
@@ -760,6 +760,105 @@ function keepResumeIntentLease(gateId: string, leaseToken: string, leaseMs: numb
   return { fence: renew, stop: () => clearInterval(timer) };
 }
 
+/** What `releaseClaimedRun` did. */
+type ClaimRelease =
+  /** The run is back on this gate; the release cleared the mark. */
+  | "released"
+  /** No row under this lease with the mark set: another driver's entry into
+   *  `running` cleared it, or the lease is another worker's. Nothing moved. */
+  | "lease-lost"
+  /** The run left the status, gate or execution attempt the caller read. Nothing moved. */
+  | "moved"
+  /** The run names no gate task, so no release can be bound to one. Nothing moved. */
+  | "unbound"
+  /** Any other error. Nothing moved. */
+  | "failed";
+
+/**
+ * cinatra#3745: put a run this gate's delivery claimed back on its gate
+ * (`running -> pending_approval`) under the intent's lease. The release is bound
+ * to the gate and execution attempt the caller read (`resumeGate`), and the
+ * lease fence needs the claim mark still set, so a delivery that read the run
+ * before it was stopped, retried or resumed by another driver moves nothing.
+ */
+async function releaseClaimedRun(
+  run: AgentRunRecord,
+  gateId: string,
+  leaseToken: string,
+  when: string,
+): Promise<ClaimRelease> {
+  if (!run.a2aTaskId) {
+    console.warn(`[artifact-review-resume] gate=${gateId} run=${run.id} names no gate task; no release ${when}`);
+    return "unbound";
+  }
+  const { transitionRunStatus } = await import("./run-transition");
+  try {
+    await transitionRunStatus(
+      run.id,
+      "running",
+      "pending_approval",
+      {
+        resumeIntentLease: { gateId, leaseToken },
+        resumeGate: { a2aTaskId: run.a2aTaskId, executionAttemptId: run.executionAttemptId ?? null },
+      },
+      mintAgentRunExecutionAuthority(run.orgId),
+    );
+    return "released";
+  } catch (releaseErr: unknown) {
+    const code = (releaseErr as { code?: string } | null)?.code;
+    if (code === "resume_intent_lease_lost") return "lease-lost";
+    if (code === "stale_from_status") return "moved";
+    console.warn(
+      `[artifact-review-resume] gate=${gateId} run=${run.id} could not release the claim ${when} (${errorLabel(releaseErr)})`,
+    );
+    return "failed";
+  }
+}
+
+/**
+ * cinatra#3745: SETTLE one claimed intent that used its attempts, under the
+ * lease `leaseExhaustedResumeClaims` took (no attempt used, nothing sent). Its
+ * last claim died before it put the run back, so no other pass takes it:
+ *   running, mark, nothing recorded   put the run back on its gate, then dead-letter
+ *   running, mark, recorded           sent; its handler did not finish: dead-letter, the run stays for ops
+ *   any other state                   nothing of this gate to put back: dead-letter
+ * A release that moved nothing because the run left the gate or attempt read
+ * here dead-letters too. Any other release error leaves the intent: the lease
+ * lapses and a later settle reads the run again.
+ */
+async function settleExhaustedResumeClaim(intent: ResumeIntentRow): Promise<"dead-lettered" | "lease-lost" | "retryable"> {
+  const { gateId, leaseToken } = intent;
+  if (!leaseToken) return "lease-lost";
+  const run = await readAgentRunById(intent.runId);
+  const claim = await readResumeIntentClaim(gateId, leaseToken);
+  if (!claim) return "lease-lost";
+  let why: string;
+  if (run && run.status === "running" && claim.runClaimed && claim.result === null) {
+    const released = await releaseClaimedRun(run, gateId, leaseToken, "to settle its exhausted intent");
+    if (released === "lease-lost") return "lease-lost";
+    if (released === "failed") return "retryable";
+    why =
+      released === "released"
+        ? "the run is back on its gate"
+        : released === "moved"
+          ? "the run left the gate or attempt this settle read"
+          : "the run names no gate task; it stays running for ops";
+  } else if (run && run.status === "running" && claim.runClaimed) {
+    why = "its resume was sent and recorded and its handler did not finish; the run stays running for ops";
+  } else {
+    why = run ? `nothing of this gate to put back (run ${run.status})` : "the run is gone";
+  }
+  const dead = await deadLetterResumeIntentUnderLease(gateId, leaseToken, `resume delivery attempts exhausted; ${why}`);
+  console.warn(
+    `[artifact-review-resume] gate=${gateId} run=${intent.runId} used its attempts while its delivery held the run: ` +
+      `${dead ? "dead-lettered" : "LEASE-LOST"}; ${why}`,
+  );
+  return dead ? "dead-lettered" : "lease-lost";
+}
+
+/** cinatra#3745: the claimed intents that used their attempts one sweep settles. */
+const SETTLE_LIMIT = 20;
+
 /** A log label for an error: its code or name, never its message. A driver error
  *  can carry the query's parameters (the lease token), a send error the message. */
 function errorLabel(err: unknown): string {
@@ -951,8 +1050,11 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
   // driver holds the run). An intent whose delivery claimed the run is bounded
   // the same way: the claim of its last attempt puts a claimed run with nothing
   // recorded back on its gate instead of a re-send, so the pass below finds
-  // its run parked there. With the default `max_attempts` of 20 and
-  // the default 5-minute lease, an intent that is never closed is
+  // its run parked there. A last claim that died before it put the run back
+  // leaves the mark set: the dead-letter pass leaves such an intent out, and
+  // the settle pass before it leases it again, puts the run back and
+  // dead-letters it (`settleExhaustedResumeClaim`). With the default
+  // `max_attempts` of 20 and the default 5-minute lease, an intent that is never closed is
   // dead-lettered no sooner than about 100 minutes after its first claim (20
   // claims, each after the lease of the claim before it expired). That is
   // intended (the #2038 ceiling, artifact-review-gate-store, above
@@ -974,6 +1076,23 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
   // `delivered`, `already-advanced` and `refused-out-of-scope` close an intent,
   // and no code puts a closed intent back to pending. A failed pass is tallied;
   // the claim still leaves exhausted intents out.
+  // cinatra#3745: the settle pass. A failed pass, and each failed settle, is
+  // tallied; the claimed intent stays out of the claim and the dead-letter
+  // pass, and a later sweep settles it.
+  try {
+    const settling = await leaseExhaustedResumeClaims({ limit: SETTLE_LIMIT, leaseMs: opts?.leaseMs ?? DEFAULT_LEASE_MS });
+    for (const intent of settling) {
+      try {
+        await settleExhaustedResumeClaim(intent);
+      } catch (err) {
+        summary.failed += 1;
+        console.error(`[artifact-review-resume] settle failed for gate=${intent.gateId}; left for a later settle (${errorLabel(err)})`);
+      }
+    }
+  } catch (err) {
+    summary.failed += 1;
+    console.error(`[artifact-review-resume] settle pass failed (${errorLabel(err)})`);
+  }
   try {
     const dead = await deadLetterExhaustedResumeIntents();
     if (dead > 0) console.warn(`[artifact-review-resume] dead-lettered ${dead} exhausted resume intent(s)`);

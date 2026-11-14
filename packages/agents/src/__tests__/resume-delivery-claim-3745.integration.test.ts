@@ -16,7 +16,10 @@
  *     closed by the next lease without a send, its last attempt included;
  *   - a claimed intent stays within its attempts (cinatra#4312): the claim of its
  *     last attempt puts the run back on its gate without a send, and the
- *     dead-letter pass then takes the intent.
+ *     dead-letter pass then takes the intent;
+ *   - a last claim that dies before its delivery is settled by the next sweep:
+ *     the run goes back on its gate, then the intent is dead-lettered; a
+ *     last-attempt release is bound to the execution attempt it read.
  *
  * The run edges' lease fence and the claim marks themselves are proven in
  * `resume-intent-run-edge-claim-3745.integration.test.ts`.
@@ -67,6 +70,8 @@ const h = vi.hoisted(() => ({
   beforeScope: null as null | (() => Promise<void>),
   /** Renewals that throw before they reach the store, counted down. */
   renewThrows: 0,
+  /** Runs once the delivery read its claim, before it acts on it: another actor's move. */
+  afterClaimRead: null as null | (() => Promise<void>),
 }));
 
 vi.mock("@cinatra-ai/a2a", () => ({
@@ -139,6 +144,13 @@ vi.mock("../artifact-review-gate-store", async (orig) => {
   const actual = await orig<typeof import("../artifact-review-gate-store")>();
   return {
   ...actual,
+  readResumeIntentClaim: async (...args: Parameters<typeof actual.readResumeIntentClaim>) => {
+    const claim = await actual.readResumeIntentClaim(...args);
+    const hook = h.afterClaimRead;
+    h.afterClaimRead = null;
+    if (hook) await hook();
+    return claim;
+  },
   renewResumeIntentLease: async (...args: Parameters<typeof actual.renewResumeIntentLease>) => {
     if (h.renewThrows > 0) {
       h.renewThrows -= 1;
@@ -358,6 +370,7 @@ beforeEach(async () => {
   h.scopeDenied = null;
   h.beforeScope = null;
   h.renewThrows = 0;
+  h.afterClaimRead = null;
 });
 
 describe.skipIf(!HAS_DB)("the delivery re-sends, replays or leaves alone; it never closes early", () => {
@@ -538,6 +551,47 @@ describe.skipIf(!HAS_DB)("the delivery re-sends, replays or leaves alone; it nev
     expect((await delivery.sweepArtifactReviewResumeIntents({ limit: 1 })).attempted).toBe(0);
     expect((await runState(run.runId)).status).toBe("pending_approval");
     await expectNoStrand(run, gateId);
+  });
+
+  it("T27 a claim that takes the last attempt and dies before its delivery: the next sweep puts the run back on its gate, then dead-letters the intent", async () => {
+    const run = await seedRun("running");
+    const gateId = await seedIntent(run, { status: "delivering", leaseExpired: true, runClaimed: true, attempts: 19, maxAttempts: 20 });
+    // The claim of the last attempt; the worker dies before the delivery runs.
+    const row = await claimOne(gateId);
+    expect(row.attempts).toBe(20);
+    await expire(gateId);
+    expect(await intentState(gateId)).toMatchObject({ status: "delivering", claimed: true, attempts: 20, deadLettered: false, leaseLive: false });
+    const summary = await delivery.sweepArtifactReviewResumeIntents({ limit: 1 });
+    expect(summary).toMatchObject({ attempted: 0, failed: 0 });
+    expect(h.sends.length).toBe(0);
+    expect(h.handled.length).toBe(0);
+    expect(await runState(run.runId)).toEqual({ status: "pending_approval", attempt: run.attempt });
+    expect(await intentState(gateId)).toMatchObject({ claimed: false, attempts: 20, deadLettered: true });
+    expect((await delivery.sweepArtifactReviewResumeIntents({ limit: 1 })).attempted).toBe(0);
+    await expectNoStrand(run, gateId);
+  });
+
+  it("T27 the dead-letter pass alone leaves a claimed intent that used its attempts to its settle", async () => {
+    const run = await seedRun("running");
+    const gateId = await seedIntent(run, { status: "delivering", leaseExpired: true, runClaimed: true, attempts: 20, maxAttempts: 20 });
+    await gateStore.deadLetterExhaustedResumeIntents();
+    expect(await intentState(gateId)).toMatchObject({ claimed: true, deadLettered: false });
+    expect((await runState(run.runId)).status).toBe("running");
+  });
+
+  it("T28 a last-attempt release whose run was dispatched again under a fresh attempt leaves the new execution untouched", async () => {
+    const run = await seedRun("running");
+    const gateId = await seedIntent(run, { status: "delivering", leaseExpired: true, runClaimed: true, attempts: 19, maxAttempts: 20 });
+    const row = await claimOne(gateId);
+    const fresh = randomUUID();
+    // After the delivery read the run (execution A) and its claim, the run was
+    // stopped and dispatched again under a fresh attempt (execution B).
+    h.afterClaimRead = async () => {
+      await pool(`UPDATE ${T("agent_runs")} SET execution_attempt_id = $2 WHERE id = $1`, [run.runId, fresh]);
+    };
+    expect(await delivery.deliverArtifactReviewResumeIntent(row)).toBe("retryable");
+    expect(await runState(run.runId)).toEqual({ status: "running", attempt: fresh });
+    expect(h.sends.length).toBe(0);
   });
 
   it("T12 RED (iii) a handler that wrote Redis and died before its CAS is replayed from the recorded result, not closed", async () => {
