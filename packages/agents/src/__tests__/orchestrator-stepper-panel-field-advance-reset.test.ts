@@ -5,7 +5,8 @@
  * (schema-field-fallback) and the setup loop emits the next INTERRUPT with no
  * RUN_STARTED/RESUME frame in between, so HitlApprovalCard never unmounts
  * between fields. Two identity keys must therefore include the interrupt's
- * `fieldName`, not just the xRenderer:
+ * `fieldName`, not just the xRenderer; both now read the gate's identity,
+ * `hitlGateIdentityKey` (cinatra#3380), which also carries the review task:
  *
  *   (a) the RendererComponent React key (the setup gate's identity, which
  *       also holds the review task, cinatra#3562) — otherwise the renderer instance
@@ -24,6 +25,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it, expect } from "vitest";
+import { hitlGateIdentityKey } from "../hitl-gate-submit";
 
 const SRC = readFileSync(
   join(__dirname, "..", "orchestrator-stepper-panel.tsx"),
@@ -44,8 +46,14 @@ describe("orchestrator-stepper-panel — per-field setup advance resets input st
     expect(SRC).toMatch(/const setupGateKey = setupGateIdentity\(interruptContext\);/);
     const identity = SRC.match(/function setupGateIdentity\([\s\S]*?\{\s*return ([^;]*);/);
     expect(identity, "setupGateIdentity must be declared").toBeTruthy();
-    // An injective encoding of the three parts (cinatra#3562), never a separator join.
-    expect(identity![1]).toBe("runGateIdentityKey(gate.reviewTaskId, gate.xRenderer, gate.fieldName)");
+    // An injective encoding of the three parts (cinatra#3562), never a separator
+    // join: the gate's identity, the one gate key of every run surface (cinatra#3380).
+    expect(identity![1]).toBe("hitlGateIdentityKey(gate)");
+    // A field→field advance under one shared xRenderer and one review task
+    // changes that key.
+    const field = (fieldName: string) =>
+      hitlGateIdentityKey({ reviewTaskId: "setup-run", xRenderer: "@pack:field", fieldName });
+    expect(field("postTitle")).not.toBe(field("blogPostUrl"));
     // No renderer key may remain xRenderer-only.
     expect(SRC).not.toMatch(/key=\{interruptContext\.xRenderer\}/);
   });
@@ -56,11 +64,16 @@ describe("orchestrator-stepper-panel — per-field setup advance resets input st
     // xRenderer stays the same.
     const bufferKeyMatch = SRC.match(/const bufferKey =([\s\S]*?);/);
     expect(bufferKeyMatch, "bufferKey must be declared").toBeTruthy();
-    expect(bufferKeyMatch![1]).toMatch(/xRenderer/);
-    expect(bufferKeyMatch![1]).toMatch(/fieldName/);
-    // …and the review task (cinatra#3562): a gate of another task with the same
-    // renderer and field starts with an empty buffer.
-    expect(bufferKeyMatch![1]).toMatch(/reviewTaskId/);
+    expect(bufferKeyMatch![1]).toMatch(/hitlGateIdentityKey\(interruptContext\)/);
+    // That key changes with the renderer, the field and the review task
+    // (cinatra#3562): a gate of another task with the same renderer and field
+    // starts with an empty buffer.
+    const key = (reviewTaskId: string, xRenderer: string, fieldName?: string) =>
+      hitlGateIdentityKey({ reviewTaskId, xRenderer, fieldName });
+    expect(key("t", "@pack:a", "f")).not.toBe(key("t", "@pack:b", "f"));
+    expect(key("t", "@pack:a", "f")).not.toBe(key("t", "@pack:a", "g"));
+    expect(key("t", "@pack:a", "f")).not.toBe(key("t2", "@pack:a", "f"));
+    expect(key("t", "@pack:list-picker")).not.toBe(key("t2", "@pack:list-picker"));
   });
 
   it("keeps the null-flicker guard on the buffer reset (non-null → non-null transitions only)", () => {
@@ -70,5 +83,13 @@ describe("orchestrator-stepper-panel — per-field setup advance resets input st
     expect(SRC).toMatch(/interruptContext != null\s*\?/);
     expect(SRC).toMatch(/if \(bufferKey !== null && bufferKey !== prevBufferKey\) \{/);
     expect(SRC).toMatch(/if \(prevBufferKey !== null && Object\.keys\(bufferedHitlValue\)\.length > 0\) \{/);
+    // One reset, in render (cinatra#3380, cinatra#3562): the clear sits inside the
+    // non-null transition, the previous key moves in one place only, and the
+    // clear is not deferred past the render.
+    expect(SRC).toMatch(
+      /if \(bufferKey !== null && bufferKey !== prevBufferKey\) \{\s*setPrevBufferKey\(bufferKey\);[\s\S]{0,200}?if \(prevBufferKey !== null && Object\.keys\(bufferedHitlValue\)\.length > 0\) \{\s*setBufferedHitlValue\(\{\}\);/,
+    );
+    expect(SRC.match(/setPrevBufferKey\(/g) ?? []).toHaveLength(1);
+    expect(SRC).not.toMatch(/queueMicrotask\(\(\) => setBufferedHitlValue/);
   });
 });

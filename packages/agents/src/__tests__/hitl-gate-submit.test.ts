@@ -818,22 +818,28 @@ describe("createGateValidityStore (cinatra#3562)", () => {
 
 // cinatra#3562, fold 3 (Codex pre-review 2, MUST-FIX 1): the gate identity is
 // injective. Reached through the module namespace, so each case fails on its
-// own assertion where a helper is missing.
-describe("runGateIdentityKey (cinatra#3562)", () => {
+// own assertion where a helper is missing. The identity is
+// `hitlGateIdentityKey` (cinatra#3380), the one gate key of every run surface.
+describe("the run gate identity, hitlGateIdentityKey (cinatra#3562)", () => {
+  const key = (reviewTaskId: string, xRenderer: string, fieldName?: string | null) =>
+    gateSubmit.hitlGateIdentityKey({ reviewTaskId, xRenderer, fieldName });
+
   it("gives two gates whose parts join to the same `::` string two identities", () => {
-    const key = gateSubmit.runGateIdentityKey;
-    expect(typeof key).toBe("function");
+    expect(typeof gateSubmit.hitlGateIdentityKey).toBe("function");
     expect(["a", "r", "b::r::c"].join("::")).toBe(["a::r::b", "r", "c"].join("::"));
     expect(key("a", "r", "b::r::c")).not.toBe(key("a::r::b", "r", "c"));
     expect(key("a", "r::x", "c")).not.toBe(key("a::r", "x", "c"));
   });
 
-  it("is one identity for one gate, and a missing field is the empty field", () => {
-    const key = gateSubmit.runGateIdentityKey;
-    expect(typeof key).toBe("function");
+  it("is one identity for one gate, and a missing field is the null field", () => {
+    expect(typeof gateSubmit.hitlGateIdentityKey).toBe("function");
     expect(key("t", "r", "f")).toBe(key("t", "r", "f"));
-    expect(key("t", "r", undefined)).toBe(key("t", "r", ""));
+    expect(key("t", "r", undefined)).toBe(key("t", "r", null));
     expect(key("t", "r", "f")).not.toBe(key("t2", "r", "f"));
+  });
+
+  it("is the only gate identity the module exports", () => {
+    expect(gateSubmit).not.toHaveProperty("runGateIdentityKey");
   });
 });
 
