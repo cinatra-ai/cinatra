@@ -211,11 +211,14 @@ async function rows() {
 
 /** THE RESUMED LEG CALLS BACK: the llm-bridge's own gate (a refusal there is the
  *  route's 403 `run_source_mismatch`), then the declared-tool currency check, and
- *  the three fields the reviewed-action run fence reads. */
-async function callback(): Promise<Callback> {
+ *  the three fields the reviewed-action run fence reads. The leg signs the attempt
+ *  its own message named: the run's attempt when it was sent (`signedAttempt`,
+ *  default the run's attempt now). */
+async function callback(signedAttempt?: string | null): Promise<Callback> {
   const state = await rows();
   try {
-    const proof = await serde.verifyRunExecutedSource(h.runId, ORG, attestation().attestation);
+    const proof = await serde.verifyRunExecutedSource(h.runId, ORG,
+      { ...attestation().attestation, executionAttemptId: signedAttempt ?? state.runAttempt ?? "" });
     const current = await serde.isRunExecutedSourceCurrent(h.runId, ORG, proof);
     return { admitted: true, current, ...state };
   } catch (err) {
@@ -403,6 +406,21 @@ describe.skipIf(!HAS_DB)("(c) the stopped-orchestrator resume", () => {
     const { resumeStoppedOrchestratorAction } = await import("../orchestrator-actions");
     await resumeStoppedOrchestratorAction(h.runId);
     expect(await serde.isRunExecutedSourceCurrent(h.runId, ORG, oldProof)).toBe(false);
+  });
+
+  // cinatra#3745 pre-1 finding 1: a task of the old attempt still running after the stop
+  // signs its old attempt; after the resume moved the run and its binding to a fresh
+  // attempt, that callback is refused, though the binding and the digests match.
+  it("refuses a callback that the task of the old attempt signs after the resume", async () => {
+    const attemptA = await seedDispatchedRun("stopped");
+    const { resumeStoppedOrchestratorAction } = await import("../orchestrator-actions");
+    expect(await resumeStoppedOrchestratorAction(h.runId)).toEqual({ ok: true });
+    const state = await rows();
+    expect(state.runAttempt).not.toBe(attemptA);
+    expect(state.boundAttempt).toBe(state.runAttempt);
+    expect(await callback(attemptA)).toMatchObject({ admitted: false, code: "run_source_mismatch",
+      cause: "step_tool_run_source_inactive" });
+    expect(await callback()).toMatchObject({ admitted: true, current: true });
   });
 
   it("never admits a callback under a binding held by a foreign attempt", async () => {

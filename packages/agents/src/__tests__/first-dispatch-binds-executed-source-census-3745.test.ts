@@ -91,6 +91,22 @@ describe("T-P1a-census: every direct first-task send to WayFlow binds the execut
     });
   }
 
+  // cinatra#3745 pre-1 finding 1: the runtime signs the attempt its task's message names,
+  // so a first task names, in its message metadata, the attempt it just bound.
+  for (const file of FIRST_TASK_SENDS) {
+    it(`${file}: names the attempt it bound in the message metadata it sends`, () => {
+      const text = read(file);
+      const [send] = sends(text);
+      const prefix = functionPrefix(text, send!);
+      const bind = prefix.lastIndexOf("await bindRunStepToolPolicy(");
+      const named = /\[CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY\]: (\w+)\.executionAttemptId/.exec(prefix.slice(bind));
+      expect(named, "the metadata names the attempt after the bind").not.toBeNull();
+      const bindCall = prefix.slice(bind, prefix.indexOf(");", bind));
+      expect(bindCall).toMatch(new RegExp(`executionAttemptId: ${named![1]}\\.executionAttemptId`));
+      expect(code(text).slice(send!, send! + 600)).toMatch(/metadata: dispatchMetadata/);
+    });
+  }
+
   for (const file of RESUME_SENDS) {
     it(`${file}: a resume binds nothing new`, () => {
       const text = read(file);

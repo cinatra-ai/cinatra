@@ -7,9 +7,10 @@
  * with the runtime's dedicated key over `s1\n<contextId>\n<nodeId>\n<expiry>`.
  * A gate claim is `{ node, attestation: "g1:<hex>" }` over
  * `g1\n<contextId>\n<taskId>\n<nodeId>`. Each verifier answers the verified
- * node id or null. A source-bound pair (`s2`) also signs the three digests of
- * the executing source, sent in their own headers; its verifier answers the
- * frozen step and digests, or null. These cases drive the real functions.
+ * node id or null. A source-bound pair (`s2`) also signs the execution attempt
+ * the task was sent under and the three digests of the executing source, sent
+ * in their own headers; its verifier answers the frozen step, attempt and
+ * digests, or null. These cases drive the real functions.
  */
 import { afterAll, describe, it, expect, vi } from "vitest";
 import { createHmac } from "node:crypto";
@@ -44,6 +45,7 @@ type SourceVerifyInput = {
   key?: string | null;
   contextId?: string | null;
   node?: string | null;
+  executionAttemptId?: string | null;
   attestation?: string | null;
   sourceSha256?: string | null;
   executedSourceSha256?: string | null;
@@ -60,6 +62,8 @@ const api = runToken as unknown as {
   RUN_RAW_SOURCE_HEADER?: string;
   RUN_EXECUTED_SOURCE_HEADER?: string;
   RUN_DECLARATION_SOURCE_HEADER?: string;
+  RUN_EXECUTION_ATTEMPT_HEADER?: string;
+  CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY?: string;
 };
 
 function hmacHex(key: string, material: string): string {
@@ -217,12 +221,14 @@ describe("source-bound step verification (s2)", () => {
   const RAW = "a".repeat(64);
   const EXECUTED = "b".repeat(64);
   const DECLARATION = "c".repeat(64);
-  function signed(opts: { key?: string; expiry?: number } = {}): string {
+  const ATTEMPT = "attempt-a";
+  function signed(opts: { key?: string; expiry?: number; attempt?: string } = {}): string {
     const expiry = opts.expiry ?? NOW_S + 300;
-    return `s2:${expiry}:${hmacHex(opts.key ?? KEY, `s2\n${CTX}\n${NODE}\n${RAW}\n${EXECUTED}\n${DECLARATION}\n${expiry}`)}`;
+    const attempt = opts.attempt ?? ATTEMPT;
+    return `s2:${expiry}:${hmacHex(opts.key ?? KEY, `s2\n${CTX}\n${NODE}\n${attempt}\n${RAW}\n${EXECUTED}\n${DECLARATION}\n${expiry}`)}`;
   }
   const input = (): SourceVerifyInput => ({
-    key: KEY, contextId: CTX, node: NODE, attestation: signed(),
+    key: KEY, contextId: CTX, node: NODE, executionAttemptId: ATTEMPT, attestation: signed(),
     sourceSha256: RAW, executedSourceSha256: EXECUTED, declarationSourceSha256: DECLARATION, nowMs: NOW_MS,
   });
   function verify(value: SourceVerifyInput) {
@@ -231,15 +237,18 @@ describe("source-bound step verification (s2)", () => {
   }
 
   // (s1)
-  it("names its three source headers", () => {
+  it("names its three source headers, its attempt header and the attempt's message key", () => {
     expect([api.RUN_RAW_SOURCE_HEADER, api.RUN_EXECUTED_SOURCE_HEADER, api.RUN_DECLARATION_SOURCE_HEADER])
       .toEqual(["x-cinatra-raw-source", "x-cinatra-executed-source", "x-cinatra-declaration-source"]);
+    expect(api.RUN_EXECUTION_ATTEMPT_HEADER).toBe("x-cinatra-execution-attempt");
+    // A cross-language ABI with docker/wayflow/agent_loader.py (no shared import).
+    expect(api.CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY).toBe("__cinatra_execution_attempt__");
   });
 
   // (s2)
-  it("a pair signed over the step and all three digests answers them, frozen", () => {
+  it("a pair signed over the step, the attempt and all three digests answers them, frozen", () => {
     const proof = verify(input());
-    expect(proof).toEqual({ stepId: NODE, contextId: CTX, sourceSha256: RAW,
+    expect(proof).toEqual({ stepId: NODE, contextId: CTX, executionAttemptId: ATTEMPT, sourceSha256: RAW,
       executedSourceSha256: EXECUTED, declarationSourceSha256: DECLARATION });
     expect(Object.isFrozen(proof)).toBe(true);
   });
@@ -252,6 +261,13 @@ describe("source-bound step verification (s2)", () => {
       { declarationSourceSha256: "f".repeat(64) },
       { contextId: "ctx-run-2" },
       { node: "step-node-2" },
+      { executionAttemptId: "attempt-b" },
+      { attestation: signed({ attempt: "attempt-b" }) },
+      { executionAttemptId: null },
+      { executionAttemptId: "" },
+      { executionAttemptId: "attempt\nother" },
+      { executionAttemptId: "attempt\rother" },
+      { executionAttemptId: "a".repeat(513) },
       { key: OTHER_KEY },
       { attestation: stepPair({}).attestation },
       { attestation: signed().replace(/:[a-f0-9]{64}$/, ":" + "A".repeat(64)) },
@@ -286,7 +302,7 @@ describe("source-bound step verification (s2)", () => {
   it("refuses a line break in the context id or the step id even when the signature covers the joined values", () => {
     const expiry = NOW_S + 300;
     const over = (contextId: string, node: string) =>
-      `s2:${expiry}:${hmacHex(KEY, `s2\n${contextId}\n${node}\n${RAW}\n${EXECUTED}\n${DECLARATION}\n${expiry}`)}`;
+      `s2:${expiry}:${hmacHex(KEY, `s2\n${contextId}\n${node}\n${ATTEMPT}\n${RAW}\n${EXECUTED}\n${DECLARATION}\n${expiry}`)}`;
     // Control: the same signing answers a pair without a line break, so a null below comes from the line-break refusal.
     expect(verify({ ...input(), contextId: "ctx-a", node: "step-b", attestation: over("ctx-a", "step-b") }))
       .not.toBeNull();
@@ -295,6 +311,20 @@ describe("source-bound step verification (s2)", () => {
     expect(over("ctx", "other\nstep")).toBe(joined);
     expect(verify({ ...input(), contextId: "ctx\nother", node: "step", attestation: joined })).toBeNull();
     expect(verify({ ...input(), contextId: "ctx", node: "other\nstep", attestation: joined })).toBeNull();
+  });
+
+  // (s7)
+  it("binds the pair to the attempt it was signed under: one signed without an attempt, or under another, is refused", () => {
+    const expiry = NOW_S + 300;
+    // The material without the attempt: a pair a task of any attempt of the run could present.
+    const noAttempt = `s2:${expiry}:${hmacHex(KEY, `s2\n${CTX}\n${NODE}\n${RAW}\n${EXECUTED}\n${DECLARATION}\n${expiry}`)}`;
+    expect(verify({ ...input(), attestation: noAttempt })).toBeNull();
+    expect(verify({ ...input(), executionAttemptId: undefined, attestation: noAttempt })).toBeNull();
+    // Attempt A's pair presented with attempt B's id, and the reverse.
+    expect(verify({ ...input(), executionAttemptId: "attempt-b", attestation: signed() })).toBeNull();
+    expect(verify({ ...input(), attestation: signed({ attempt: "attempt-b" }) })).toBeNull();
+    expect(verify({ ...input(), executionAttemptId: "attempt-b", attestation: signed({ attempt: "attempt-b" }) }))
+      .toMatchObject({ executionAttemptId: "attempt-b" });
   });
 });
 

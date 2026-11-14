@@ -9,8 +9,9 @@
  * valid `s1` pair is served exactly as before and carries no step.
  *
  * A call with any source header must carry a source-bound `s2` pair that
- * verifies over the step and the three source digests, and the run store must
- * prove the run is bound to that source under its running attempt; the step is
+ * verifies over the step, the execution attempt its task was sent under and the
+ * three source digests, and the run store must prove the run is bound to that
+ * source under that attempt, its running one; the step is
  * then the proof's. Otherwise the call is refused with a fixed 403 sentence
  * before any tool runs.
  *
@@ -103,21 +104,24 @@ const SOURCE = {
   executedSourceSha256: "c".repeat(64),
   declarationSourceSha256: "d".repeat(64),
 };
-const VERIFIED_SOURCE = Object.freeze({ contextId: CTX, stepId: NODE, executionAttemptId: "attempt-1", ...SOURCE });
+const ATTEMPT = "attempt-1";
+const VERIFIED_SOURCE = Object.freeze({ contextId: CTX, stepId: NODE, executionAttemptId: ATTEMPT, ...SOURCE });
 const REFUSED = { error: "Executing source could not be verified" };
 
-/** The source-bound pair the runtime signs over the step and the executing source. */
-function sourceHeaders(opts: { ctx?: string; node?: string; key?: string; source?: typeof SOURCE } = {}) {
+/** The source-bound pair the runtime signs over the step, its task's attempt and the executing source. */
+function sourceHeaders(opts: { ctx?: string; node?: string; key?: string; source?: typeof SOURCE; attempt?: string } = {}) {
   const ctx = opts.ctx ?? CTX;
   const node = opts.node ?? NODE;
   const key = opts.key ?? ATTEST_KEY;
+  const attempt = opts.attempt ?? ATTEMPT;
   const { sourceSha256, executedSourceSha256, declarationSourceSha256 } = opts.source ?? SOURCE;
   const expiry = Math.floor(Date.now() / 1000) + 300;
   const sig = createHmac("sha256", key)
-    .update(`s2\n${ctx}\n${node}\n${sourceSha256}\n${executedSourceSha256}\n${declarationSourceSha256}\n${expiry}`)
+    .update(`s2\n${ctx}\n${node}\n${attempt}\n${sourceSha256}\n${executedSourceSha256}\n${declarationSourceSha256}\n${expiry}`)
     .digest("hex");
   return {
     "x-cinatra-step-node": node,
+    "x-cinatra-execution-attempt": attempt,
     "x-cinatra-step-attestation": `s2:${expiry}:${sig}`,
     "x-cinatra-raw-source": sourceSha256,
     "x-cinatra-executed-source": executedSourceSha256,
@@ -214,7 +218,8 @@ describe("the passthrough road's source-bound step", () => {
     const res = await POST(makeReq(RUN_SCOPED_TOOL, sourceHeaders()));
     expect(res.status).toBe(200);
     expect(h.verifyRunExecutedSource).toHaveBeenCalledTimes(1);
-    expect(h.verifyRunExecutedSource).toHaveBeenCalledWith(RUN.id, RUN.orgId, { stepId: NODE, contextId: CTX, ...SOURCE });
+    expect(h.verifyRunExecutedSource).toHaveBeenCalledWith(RUN.id, RUN.orgId,
+      { stepId: NODE, contextId: CTX, executionAttemptId: ATTEMPT, ...SOURCE });
     expect(h.observed).toHaveLength(1);
     const frame = h.observed[0]!.frame as Record<string, unknown>;
     expect(frame).toEqual({ runId: RUN.id, verifiedRunScopeId: RUN.id, userId: RUN.runBy, orgId: RUN.orgId,
@@ -229,6 +234,10 @@ describe("the passthrough road's source-bound step", () => {
       sourceHeaders({ key: "another-key-under-test" }),
       { ...valid, "x-cinatra-step-node": "other-node" },
       { ...valid, "x-cinatra-executed-source": "e".repeat(64) },
+      // Attempt A's pair presented as attempt B's, B's pair presented as A's, and no attempt.
+      { ...valid, "x-cinatra-execution-attempt": "attempt-2" },
+      { ...sourceHeaders({ attempt: "attempt-2" }), "x-cinatra-execution-attempt": ATTEMPT },
+      (() => { const { "x-cinatra-execution-attempt": _a, ...rest } = valid; void _a; return rest; })(),
       { ...valid, "x-cinatra-step-attestation": stepHeaders()["x-cinatra-step-attestation"] },
       { ...stepHeaders(), "x-cinatra-raw-source": SOURCE.sourceSha256 },
       { "x-cinatra-declaration-source": SOURCE.declarationSourceSha256 },

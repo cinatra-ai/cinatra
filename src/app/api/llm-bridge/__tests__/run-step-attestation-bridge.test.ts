@@ -10,9 +10,10 @@
  * before and carries no step.
  *
  * A call whose run token resolved a run and that carries any source header must
- * carry a source-bound `s2` pair that verifies over the step and the three
- * source digests, with the context-id header naming that run, and the run store
- * must prove the run is bound to that source under its running attempt; the
+ * carry a source-bound `s2` pair that verifies over the step, the execution
+ * attempt its task was sent under and the three source digests, with the
+ * context-id header naming that run, and the run store must prove the run is
+ * bound to that source under that attempt, its running one; the
  * step is then the proof's. Otherwise the call is refused (403
  * `run_source_mismatch`, a fixed sentence) before any model call. A call with no
  * resolved run has no run to bind a source to and is served as before.
@@ -219,7 +220,8 @@ const SOURCE = {
   executedSourceSha256: "c".repeat(64),
   declarationSourceSha256: "d".repeat(64),
 };
-const VERIFIED_SOURCE = Object.freeze({ contextId: CTX, stepId: NODE, executionAttemptId: "attempt-1", ...SOURCE });
+const ATTEMPT = "attempt-1";
+const VERIFIED_SOURCE = Object.freeze({ contextId: CTX, stepId: NODE, executionAttemptId: ATTEMPT, ...SOURCE });
 const REFUSED = { error: "Executing source could not be verified", code: "run_source_mismatch" };
 const PROBE = { id: RUN.id, orgId: RUN.orgId, runBy: RUN.runBy };
 
@@ -246,18 +248,20 @@ function stepHeaders(opts: { ctx?: string; node?: string; key?: string; expiry?:
   };
 }
 
-/** The source-bound pair the runtime signs over the step and the executing source. */
-function sourceHeaders(opts: { ctx?: string; node?: string; key?: string } = {}) {
+/** The source-bound pair the runtime signs over the step, its task's attempt and the executing source. */
+function sourceHeaders(opts: { ctx?: string; node?: string; key?: string; attempt?: string } = {}) {
   const ctx = opts.ctx ?? CTX;
   const node = opts.node ?? NODE;
   const key = opts.key ?? ATTEST_KEY;
+  const attempt = opts.attempt ?? ATTEMPT;
   const expiry = Math.floor(Date.now() / 1000) + 300;
   const { sourceSha256, executedSourceSha256, declarationSourceSha256 } = SOURCE;
   const sig = createHmac("sha256", key)
-    .update(`s2\n${ctx}\n${node}\n${sourceSha256}\n${executedSourceSha256}\n${declarationSourceSha256}\n${expiry}`)
+    .update(`s2\n${ctx}\n${node}\n${attempt}\n${sourceSha256}\n${executedSourceSha256}\n${declarationSourceSha256}\n${expiry}`)
     .digest("hex");
   return {
     "x-cinatra-step-node": node,
+    "x-cinatra-execution-attempt": attempt,
     "x-cinatra-step-attestation": `s2:${expiry}:${sig}`,
     "x-cinatra-raw-source": sourceSha256,
     "x-cinatra-executed-source": executedSourceSha256,
@@ -428,7 +432,8 @@ describe("the model bridge verifies the executing source of a run-bound call", (
     const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...sourceHeaders() }));
     expect(res.status).toBe(200);
     expect(verifyRunExecutedSourceMock).toHaveBeenCalledTimes(1);
-    expect(verifyRunExecutedSourceMock).toHaveBeenCalledWith(RUN.id, RUN.orgId, { stepId: NODE, contextId: CTX, ...SOURCE });
+    expect(verifyRunExecutedSourceMock).toHaveBeenCalledWith(RUN.id, RUN.orgId,
+      { stepId: NODE, contextId: CTX, executionAttemptId: ATTEMPT, ...SOURCE });
     await invokeOverride();
     const actor = mintedActor();
     expect(actor.verifiedStepId).toBe(NODE);
@@ -444,6 +449,10 @@ describe("the model bridge verifies the executing source of a run-bound call", (
       { ...RUN_BOUND, ...sourceHeaders({ key: "another-key-under-test" }) },
       { ...RUN_BOUND, ...valid, "x-cinatra-step-node": "other-node" },
       { ...RUN_BOUND, ...valid, "x-cinatra-declaration-source": "e".repeat(64) },
+      // Attempt A's pair presented as attempt B's, B's pair presented as A's, and no attempt.
+      { ...RUN_BOUND, ...valid, "x-cinatra-execution-attempt": "attempt-2" },
+      { ...RUN_BOUND, ...sourceHeaders({ attempt: "attempt-2" }), "x-cinatra-execution-attempt": ATTEMPT },
+      (() => { const { "x-cinatra-execution-attempt": _a, ...rest } = valid; void _a; return { ...RUN_BOUND, ...rest }; })(),
       { ...RUN_BOUND, ...stepHeaders(), "x-cinatra-executed-source": SOURCE.executedSourceSha256 },
       { ...RUN_BOUND, "x-cinatra-raw-source": SOURCE.sourceSha256 },
       // The run token alone: no context-id header names the run the source is signed for.
@@ -479,6 +488,25 @@ describe("the model bridge verifies the executing source of a run-bound call", (
     expect(res.status).toBe(200);
     expect(runResolvedSkillAwareDeterministicLlmTaskMock).toHaveBeenCalledTimes(1);
     expect(verifyRunExecutedSourceMock).not.toHaveBeenCalled();
+  });
+
+  // (b10) cinatra#4154: a blank key is no key, on the bridge as on the passthrough road.
+  it("a pair signed under a blank or whitespace key proves nothing: the source-bound call is refused, the s1 pair gives no step", async () => {
+    for (const blank of [" ", "   ", "\t"]) {
+      vi.clearAllMocks();
+      process.env.CINATRA_CONTEXT_ATTEST_KEY = blank;
+      const refused = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...sourceHeaders({ key: blank }) }));
+      expect(refused.status, JSON.stringify(blank)).toBe(403);
+      expect(await refused.json()).toEqual(REFUSED);
+      expect(verifyRunExecutedSourceMock).not.toHaveBeenCalled();
+      expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
+
+      vi.clearAllMocks();
+      const served = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...stepHeaders({ key: blank }) }));
+      expect(served.status, JSON.stringify(blank)).toBe(200);
+      await invokeOverride();
+      expect(mintedActor(), JSON.stringify(blank)).not.toHaveProperty("verifiedStepId");
+    }
   });
 
   // (b9)

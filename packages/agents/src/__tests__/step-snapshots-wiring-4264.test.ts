@@ -88,7 +88,7 @@ vi.mock("@cinatra-ai/a2a", () => ({
 
 import { formatWayflowInterruptLog, handleWayflowTaskState } from "../execution";
 import { mintResumeRunTokenMetadata } from "../wayflow-run-token-carrier";
-import { CINATRA_RUN_TOKEN_MESSAGE_KEY } from "@/lib/agent-run-token";
+import { CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY, CINATRA_RUN_TOKEN_MESSAGE_KEY } from "@/lib/agent-run-token";
 import { CINATRA_SNAPSHOT_NODES_METADATA_KEY, CINATRA_SNAPSHOT_RUN_METADATA_KEY } from "../step-snapshots";
 
 beforeEach(() => {
@@ -167,11 +167,28 @@ describe("T6: every resume carries the node list through mintResumeRunTokenMetad
     }
   });
 
-  it("the initial dispatch adds metadata only when the list is not empty", () => {
+  it("the initial dispatch sends the list (empty when none) and the attempt it bound as the message metadata", () => {
     const source = readFileSync(path.resolve(__dirname, "../execution.ts"), "utf8");
     expect(source).toMatch(
-      /\.\.\.\(Object\.keys\(snapshotMetadata\)\.length > 0 \? \{ metadata: snapshotMetadata \} : \{\}\)/,
+      /const dispatchMetadata = \{ \.\.\.snapshotMetadata, \[CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY\]: currentDispatchRun\.executionAttemptId \};/,
     );
+    expect(source).toMatch(/\n\s+metadata: dispatchMetadata,\n/);
+  });
+
+  // cinatra#3745 pre-1 finding 1: a resumed leg signs the attempt its message names.
+  it("carries the run's execution attempt, read at the mint, and only a usable one", async () => {
+    h.readTemplate.mockResolvedValue({ lifecycleConfig: JSON.stringify({ review: {} }) });
+    h.readRun.mockResolvedValue({ id: "R1", templateId: "tmpl-1", sourceType: "agent_builder", executionAttemptId: "attempt-7" });
+    const metadata = await mintResumeRunTokenMetadata("R1");
+    expect(metadata[CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY]).toBe("attempt-7");
+    expect(typeof metadata[CINATRA_RUN_TOKEN_MESSAGE_KEY]).toBe("string");
+    for (const executionAttemptId of [null, "", 7]) {
+      h.readRun.mockResolvedValue({ id: "R1", templateId: "tmpl-1", sourceType: "agent_builder", executionAttemptId });
+      expect(Object.keys(await mintResumeRunTokenMetadata("R1"))).toEqual([CINATRA_RUN_TOKEN_MESSAGE_KEY]);
+    }
+    // A read fault names no attempt (the leg then signs no source) and still mints the token.
+    h.readRun.mockRejectedValue(new Error("db down"));
+    expect(Object.keys(await mintResumeRunTokenMetadata("R1"))).toEqual([CINATRA_RUN_TOKEN_MESSAGE_KEY]);
   });
 });
 

@@ -574,6 +574,15 @@ describe("#3745 selected-source binding before content-editor effects",()=>{
   expect(bindSourcePolicy.mock.invocationCallOrder.at(-1)!).toBeLessThan(sendTask.mock.invocationCallOrder.at(-1)!);
   expect(sendTask.mock.calls.at(-1)?.[0]).toMatchObject({message:{contextId:minted}});
  });
+ // cinatra#3745 pre-1 finding 1: the runtime signs the attempt its task's message names.
+ it("names the attempt it bound in the message metadata, and only that",async()=>{
+  await dispatchContentEditorViaA2A(input());
+  const sent=sendTask.mock.calls.at(-1)?.[0] as {message:{metadata?:Record<string,unknown>;parts:Array<{text:string}>}};
+  expect(sent.message.metadata).toEqual({__cinatra_execution_attempt__:"attempt"});
+  expect(bindSourcePolicy).toHaveBeenCalledWith(expect.objectContaining({executionAttemptId:"attempt"}));
+  // The attempt never rides the text part (the flow's input).
+  expect(sent.message.parts[0]!.text).not.toContain("__cinatra_execution_attempt__");
+ });
  it("refuses a carrier run that already names a context before any bind or send (cinatra#4150)",async()=>{
   readSourceRun.mockResolvedValueOnce({orgId:"org_1",executionAttemptId:"attempt",a2aContextId:"existing-context"});
   await expect(dispatchContentEditorViaA2A(input())).rejects.toThrow("step_tool_dispatch_context_present");

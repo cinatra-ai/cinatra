@@ -10,12 +10,14 @@ ApiCallStep patch sets:
   - `X-Cinatra-Raw-Source`, `X-Cinatra-Executed-Source` and
     `X-Cinatra-Declaration-Source`: the three digests of that binding;
   - `X-Cinatra-Step-Node`: the executing compiled step's own id (`self.id`);
+  - `X-Cinatra-Execution-Attempt`: the execution attempt the task's own A2A
+    message named (message metadata `__cinatra_execution_attempt__`);
   - `X-Cinatra-Step-Attestation`: `s2:<expiry>:<hex>`, the hex being
     HMAC-SHA256 with CINATRA_CONTEXT_ATTEST_KEY over
-    `s2\\n<contextId>\\n<nodeId>\\n<raw>\\n<executed>\\n<declaration>\\n<expiry>`.
+    `s2\\n<contextId>\\n<nodeId>\\n<attempt>\\n<raw>\\n<executed>\\n<declaration>\\n<expiry>`.
 
-Without a binding, or with a line break in the context or step id, it sets
-none of them. The application verifies the pair with the same key. The
+Without a binding or an attempt, or with a line break in the context id, the
+step id or the attempt, it sets none of them. The application verifies the pair with the same key. The
 context-resolution pair on the context routes is unchanged.
 
 These tests stub `wayflowcore.steps.ApiCallStep`, mirroring
@@ -41,6 +43,8 @@ NODE_ID = "step-node-under-test"
 INTERNAL_HOST = "http://host.docker.internal:3000"
 
 STEP_NODE = "X-Cinatra-Step-Node"
+EXECUTION_ATTEMPT = "X-Cinatra-Execution-Attempt"
+ATTEMPT_ID = "attempt-under-test"
 STEP_ATTESTATION = "X-Cinatra-Step-Attestation"
 RAW_SOURCE = "X-Cinatra-Raw-Source"
 EXECUTED_SOURCE = "X-Cinatra-Executed-Source"
@@ -51,6 +55,7 @@ SIGNED_NAMES = (
     "x-cinatra-raw-source",
     "x-cinatra-executed-source",
     "x-cinatra-declaration-source",
+    "x-cinatra-execution-attempt",
 )
 
 #: The executing mount's binding: the three digests the loader records at mount.
@@ -61,15 +66,19 @@ SOURCE = {
 }
 
 
-def _s2_material(ctx: str, node_id: str, source: Dict[str, str], expiry: int) -> bytes:
+def _s2_material(ctx: str, node_id: str, attempt: str, source: Dict[str, str], expiry: int) -> bytes:
     return (
-        f"s2\n{ctx}\n{node_id}\n{source['sourceSha256']}\n{source['executedSourceSha256']}"
+        f"s2\n{ctx}\n{node_id}\n{attempt}\n{source['sourceSha256']}\n{source['executedSourceSha256']}"
         f"\n{source['declarationSourceSha256']}\n{expiry}"
     ).encode("utf-8")
 
 
-def _expected_s2_sig(key: str, ctx: str, node_id: str, source: Dict[str, str], expiry: int) -> str:
-    return hmac.new(key.encode("utf-8"), _s2_material(ctx, node_id, source, expiry), hashlib.sha256).hexdigest()
+def _expected_s2_sig(
+    key: str, ctx: str, node_id: str, attempt: str, source: Dict[str, str], expiry: int
+) -> str:
+    return hmac.new(
+        key.encode("utf-8"), _s2_material(ctx, node_id, attempt, source, expiry), hashlib.sha256
+    ).hexdigest()
 
 
 def _parse_s2_header(value: str) -> Tuple[int, str]:
@@ -130,8 +139,13 @@ def _drive(
     ctx_id: str,
     headers: Optional[Dict[str, str]] = None,
     source: Optional[Dict[str, str]] = SOURCE,
+    attempt: str = ATTEMPT_ID,
 ) -> Dict[str, Any]:
     token = loader._WAYFLOW_CONTEXT_ID.set(ctx_id)
+    # The execution attempt the task's message named, as the patched run_task
+    # sets it. A loader without the variable signs no attempt.
+    attempt_var = getattr(loader, "_WAYFLOW_EXECUTION_ATTEMPT", None)
+    attempt_token = attempt_var.set(attempt) if attempt_var is not None else None
     # The executing task's mount binding, as the patched run_task sets it. A
     # loader without the binding variable signs no source (the test then reads
     # the headers it sent).
@@ -149,22 +163,30 @@ def _drive(
         asyncio.run(instance._execute_request(request))
         return request
     finally:
+        if attempt_token is not None:
+            attempt_var.reset(attempt_token)
         if source_token is not None:
             var.reset(source_token)
         loader._WAYFLOW_CONTEXT_ID.reset(token)
 
 
 def _assert_signed_step(
-    loader, headers: Dict[str, Any], before: int, after: int, source: Dict[str, str] = SOURCE
+    loader,
+    headers: Dict[str, Any],
+    before: int,
+    after: int,
+    source: Dict[str, str] = SOURCE,
+    attempt: str = ATTEMPT_ID,
 ) -> None:
     assert headers[STEP_NODE] == NODE_ID
+    assert headers.get(EXECUTION_ATTEMPT) == attempt
     assert headers.get(RAW_SOURCE) == source["sourceSha256"]
     assert headers.get(EXECUTED_SOURCE) == source["executedSourceSha256"]
     assert headers.get(DECLARATION_SOURCE) == source["declarationSourceSha256"]
     expiry, sig = _parse_s2_header(headers[STEP_ATTESTATION])
     ttl = loader._CONTEXT_ATTESTATION_TTL_SECONDS
     assert before + ttl <= expiry <= after + ttl
-    assert sig == _expected_s2_sig(ATTEST_KEY, CTX_ID, NODE_ID, source, expiry)
+    assert sig == _expected_s2_sig(ATTEST_KEY, CTX_ID, NODE_ID, attempt, source, expiry)
 
 
 # (py1)
@@ -204,13 +226,14 @@ def test_runtime_step_values_replace_step_headers_declared_by_the_flow(monkeypat
             RAW_SOURCE: "f" * 64,
             "x-cinatra-executed-source": "f" * 64,
             "X-CINATRA-DECLARATION-SOURCE": "f" * 64,
+            "x-cinatra-execution-attempt": "declared-attempt",
         },
     )
     after = int(time.time())
     h = req["headers"]
     signed = [k for k in h if k.lower() in SIGNED_NAMES]
     assert sorted(signed) == sorted(
-        [STEP_NODE, STEP_ATTESTATION, RAW_SOURCE, EXECUTED_SOURCE, DECLARATION_SOURCE]
+        [STEP_NODE, STEP_ATTESTATION, RAW_SOURCE, EXECUTED_SOURCE, DECLARATION_SOURCE, EXECUTION_ATTEMPT]
     )
     _assert_signed_step(loader, h, before, after)
 
@@ -282,6 +305,7 @@ def test_no_step_or_source_pair_without_the_executing_mount_binding(monkeypatch)
                 "x-cinatra-raw-source": "f" * 64,
                 "x-cinatra-executed-source": "f" * 64,
                 "x-cinatra-declaration-source": "f" * 64,
+                "x-cinatra-execution-attempt": "forged",
             },
         )
         assert _signed_names(req["headers"]) == [], url
@@ -344,3 +368,57 @@ def test_the_task_binding_is_only_the_frozen_mount_snapshot(monkeypatch, assista
     finally:
         loader._WAYFLOW_EXECUTED_SOURCE.reset(token)
     assert loader._WAYFLOW_EXECUTED_SOURCE.get() is None
+
+
+# (py11) cinatra#3745 pre-1 finding 1: a task's pair is bound to the attempt its
+# own message named, so a task of an earlier attempt cannot sign for a later one.
+def test_no_step_or_source_pair_without_the_tasks_execution_attempt(monkeypatch):
+    FakeApiCallStep, loader = _install(monkeypatch, attest_key=ATTEST_KEY, node_id=NODE_ID)
+    assert hasattr(loader, "_WAYFLOW_EXECUTION_ATTEMPT"), "the loader holds the task's attempt"
+    for attempt in ("", "attempt\nother", "attempt\rother"):
+        for url in (f"{INTERNAL_HOST}/api/llm-bridge", f"{INTERNAL_HOST}/api/agents/passthrough"):
+            req = _drive(
+                loader,
+                FakeApiCallStep,
+                url,
+                ctx_id=CTX_ID,
+                attempt=attempt,
+                headers={"x-cinatra-execution-attempt": "forged", "x-cinatra-step-node": "forged"},
+            )
+            assert _signed_names(req["headers"]) == [], (repr(attempt), url)
+
+
+# (py12)
+def test_each_task_signs_its_own_attempt(monkeypatch):
+    FakeApiCallStep, loader = _install(monkeypatch, attest_key=ATTEST_KEY, node_id=NODE_ID)
+    before = int(time.time())
+    first = _drive(loader, FakeApiCallStep, f"{INTERNAL_HOST}/api/llm-bridge", ctx_id=CTX_ID, attempt="attempt-a")
+    second = _drive(loader, FakeApiCallStep, f"{INTERNAL_HOST}/api/llm-bridge", ctx_id=CTX_ID, attempt="attempt-b")
+    after = int(time.time())
+    _assert_signed_step(loader, first["headers"], before, after, attempt="attempt-a")
+    _assert_signed_step(loader, second["headers"], before, after, attempt="attempt-b")
+    assert loader._WAYFLOW_EXECUTION_ATTEMPT.get() == ""
+
+
+# (py13)
+@pytest.mark.parametrize(
+    "message, expected",
+    [
+        ({"metadata": {"__cinatra_execution_attempt__": "attempt-a"}}, "attempt-a"),
+        ({"metadata": {"__cinatra_execution_attempt__": "attempt-a", "other": 1}}, "attempt-a"),
+        ({"metadata": {}}, ""),
+        ({"metadata": {"__cinatra_execution_attempt__": 7}}, ""),
+        ({"metadata": {"__cinatra_execution_attempt__": ""}}, ""),
+        ({"metadata": {"__cinatra_execution_attempt__": "a\nb"}}, ""),
+        ({"metadata": {"__cinatra_execution_attempt__": "a\rb"}}, ""),
+        ({"metadata": {"__cinatra_execution_attempt__": "a" * 513}}, ""),
+        ({"metadata": "not a mapping"}, ""),
+        # The text part is the flow's input: an attempt there is never read.
+        ({"parts": [{"kind": "text", "text": '{"__cinatra_execution_attempt__": "attempt-a"}'}]}, ""),
+        (None, ""),
+    ],
+)
+def test_the_tasks_attempt_is_read_only_from_its_message_metadata(monkeypatch, message, expected):
+    _, loader = _install(monkeypatch, attest_key=ATTEST_KEY, node_id=NODE_ID)
+    assert loader.CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY == "__cinatra_execution_attempt__"
+    assert loader._execution_attempt_from_message(message) == expected
