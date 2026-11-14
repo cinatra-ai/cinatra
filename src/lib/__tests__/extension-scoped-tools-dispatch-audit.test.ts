@@ -507,15 +507,17 @@ describe("the dispatch event and the answer", () => {
 });
 
 /**
- * A STALLED AUDIT SINK IS BOUNDED. A dispatch event counts as pending from its handoff until its write
- * settles. One still pending after 10 seconds is named once in the server log by a fixed line. While 64
- * are pending, a new extension_tool call is refused with a fixed 403 before its module is loaded, and that
- * refusal is named in the server log by a fixed line instead of a further write.
+ * A STALLED AUDIT SINK IS BOUNDED. An extension_tool call takes one of 64 slots, synchronously, before its
+ * origin is resolved or its module is loaded, and holds it until its dispatch event's write settles. A call
+ * that finds every slot taken is refused with a fixed 403 and named in the server log by a fixed line
+ * instead of a write. A call answered before that point hands its event over only if a slot is free.
+ * A write still pending after 10 seconds is named once in the server log by a fixed line and keeps its slot.
  */
 describe("a stalled audit sink", () => {
   const BACKLOG = "extension_tool: the audit trail is not keeping up, so the call was not run";
   const LATE_LINE = "[extension_tool] a dispatch audit write did not settle in time; it is still counted as pending";
   const BACKLOG_LINE = "[extension_tool] a call was refused while dispatch audit writes were pending; no event was handed over";
+  const FULL_LINE = "[extension_tool] dispatch audit writes were pending at the bound; the event of this call was not handed over";
   let settle: Array<() => void> = [];
 
   beforeEach(() => {
@@ -556,6 +558,57 @@ describe("a stalled audit sink", () => {
     settle[0]!();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(await call("parent_tool")).toEqual({ ok: true, result: { ran: "parent" } });
+    expect(dispatchEvents()).toHaveLength(65);
+  });
+
+  it("admits at most 64 of 65 simultaneous calls, whatever they await before the module runs", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const answers = await Promise.all(Array.from({ length: 65 }, () => call("parent_tool")));
+    expect(answers.filter((a) => a.ok)).toHaveLength(64);
+    expect(answers.filter((a) => !a.ok)).toEqual([{ ok: false, status: 403, error: BACKLOG }]);
+    expect(loadDeclaredToolModule).toHaveBeenCalledTimes(64);
+    expect(resolveExtensionToolOrigin).toHaveBeenCalledTimes(64);
+    expect(dispatchEvents()).toHaveLength(64);
+    expect(lines(error, BACKLOG_LINE)).toBe(1);
+  });
+
+  it("hands over no 65th write to a sink that never settles, also for calls answered before the slot check", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (let i = 0; i < 64; i += 1) await call("parent_tool");
+    query.mockResolvedValue({ rows: [] });
+    for (let i = 0; i < 5; i += 1) expect(await call("parent_tool")).toMatchObject({ ok: false, status: 403 });
+    query.mockRejectedValue(new Error(LEAKY));
+    expect(await call("parent_tool")).toMatchObject({ ok: false, status: 500 });
+    expect(dispatchEvents()).toHaveLength(64);
+    expect(lines(error, FULL_LINE)).toBe(6);
+    for (const c of error.mock.calls) expect(JSON.stringify(c)).not.toContain(LEAKY);
+  });
+
+  it("keeps the slot of a write that times out: a 65th call is still refused until a write settles", async () => {
+    await import("@/lib/authz/audit");
+    await import("@/lib/extension-scoped-tools");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.useFakeTimers();
+    for (let i = 0; i < 64; i += 1) await call("parent_tool");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(lines(error, LATE_LINE)).toBe(64);
+    expect(await call("parent_tool")).toEqual({ ok: false, status: 403, error: BACKLOG });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(lines(error, LATE_LINE)).toBe(64);
+    expect(dispatchEvents()).toHaveLength(64);
+    settle[0]!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await call("parent_tool")).toEqual({ ok: true, result: { ran: "parent" } });
+  });
+
+  it("frees the slot of a write that throws at once", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    logAuditEvent.mockImplementation(() => {
+      throw new Error(LEAKY);
+    });
+    for (let i = 0; i < 65; i += 1) {
+      expect(await call("parent_tool")).toEqual({ ok: true, result: { ran: "parent" } });
+    }
     expect(dispatchEvents()).toHaveLength(65);
   });
 
