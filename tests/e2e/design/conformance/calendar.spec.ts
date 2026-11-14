@@ -75,6 +75,9 @@ for (const theme of ["cinatra", "dark"] as const) {
       await day(range, "2026-05-21").click();
       await expect(day(range, "2026-05-21")).toHaveAttribute("data-range-start", "");
       await expect(range.locator("[data-range-end], [data-in-range]")).toHaveCount(0);
+      // 2026-05-21 is a range start that is NOT today (fixture today is 2026-05-15) and is unfilled,
+      // so only the range-start outline, never the today ring, can draw this box-shadow.
+      expect(await style(day(range, "2026-05-21"), "box-shadow")).toContain(await resolved(range, "color", "var(--primary)"));
       await day(range, "2026-05-19").click();
       await expect(day(range, "2026-05-19")).toHaveAttribute("data-range-start", "");
       await expect(day(range, "2026-05-21")).toHaveAttribute("data-range-end", "");
