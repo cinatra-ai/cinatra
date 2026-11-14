@@ -49,8 +49,10 @@
 // (`drizzle-cube-scoped.css`, scripts/scope-drizzle-cube-styles.mjs): every
 // rule that styles an element is confined to the dashboard regions, so the
 // library rules the upstream file carries unscoped (`.recharts-*` and others)
-// never reach the rest of a host page. Order matters: the drizzle-cube
-// defaults first, the theme after them.
+// never reach the rest of a host page. The drizzle-cube defaults load first,
+// the theme after them; the theme's root tokens do not depend on that order
+// (see dashboard-theme.css), because the home's module graph can still load
+// the shell's raw defaults after both.
 import "./drizzle-cube-scoped.css";
 import "./dashboard-theme.css";
 

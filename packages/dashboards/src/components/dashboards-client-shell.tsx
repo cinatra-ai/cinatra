@@ -12,8 +12,11 @@
 // that mounts that composition outside this shell gets the same layout and
 // palette (cinatra#4311). This shell loads that module for its side effect.
 // The upstream defaults it imports first stay unscoped on dashboard routes,
-// exactly as before (cinatra#4311 does not change that exposure). Order
-// matters: DC defaults first, override after, so shadcn-mapped vars win.
+// exactly as before (cinatra#4311 does not change that exposure). The
+// module graph does not guarantee that this raw import loads before the theme
+// (the home reaches the composition through DashboardGridContainer first), so
+// the theme's root tokens win by specificity, not by order (dashboard-theme.css,
+// pinned by dashboard-theme-cascade.test.ts).
 import "drizzle-cube/client/styles.css";
 import "@cinatra-ai/sdk-dashboard/components";
 

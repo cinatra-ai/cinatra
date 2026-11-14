@@ -9,11 +9,21 @@
  * drizzle-cube components render in the Cinatra palette without replacing
  * the upstream components.
  *
- * Order matters: this file must be imported AFTER `drizzle-cube/client/
- * styles.css`. `read-only-composition.tsx` (beside this file) imports both
- * in that order, and `dashboards-client-shell.tsx` in @cinatra-ai/dashboards
- * imports the defaults and then that composition module. Otherwise the DC
- * defaults win.
+ * Load order does NOT decide the root tokens. drizzle-cube declares its
+ * defaults, unlayered, on `:root` (light) and `.dark, html.dark` (dark) in
+ * both its raw `drizzle-cube/client/styles.css` (the dashboards shell imports
+ * it) and the generated scoped copy (the read-only composition imports it,
+ * then this file). The module graph does not fix where the raw file lands:
+ * the dashboard home reaches the composition through DashboardGridContainer
+ * before the shell's raw import, so the raw defaults can load AFTER this
+ * file. The light block below therefore also carries `:root:not(.dark)`
+ * (specificity 0,2,0), which beats drizzle-cube's `:root` (0,1,0) in any
+ * order. On a dark root only `:root` (0,1,0) matches, so drizzle-cube's
+ * `html.dark` (0,1,1) palette keeps winning the tokens it declares, as it did
+ * with the old defaults-then-theme order, and this file still supplies the
+ * tokens drizzle-cube's dark block lacks. Keep both `:root` selectors.
+ * Pinned in every load order by
+ * packages/dashboards/src/__tests__/dashboard-theme-cascade.test.ts.
  *
  * For non-shadcn concepts (--dc-dimension-*, --dc-measure-*,
  * --dc-time-dimension-*, --dc-filter-*) we derive readable aliases with
@@ -28,6 +38,7 @@
  */
 
 :root,
+:root:not(.dark),
 .light,
 html.light {
   /* Surface family */

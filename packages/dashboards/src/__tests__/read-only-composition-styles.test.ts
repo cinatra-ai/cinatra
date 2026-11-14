@@ -20,8 +20,10 @@ import { describe, it, expect } from "vitest";
  * (`drizzle-cube-scoped.css`, pinned by drizzle-cube-scoped-styles.test.ts), so
  * the library rules the upstream file carries unscoped stay inside dashboard
  * regions. The home shell keeps loading the upstream defaults and then the
- * composition module, so there is ONE theme file and both mounts read it after
- * the defaults, which is the order the theme's overrides need.
+ * composition module, so there is ONE theme file. The home's module graph can
+ * still load the shell's raw defaults after the theme (it reaches the
+ * composition through DashboardGridContainer first); the theme's root tokens
+ * do not depend on that order, which dashboard-theme-cascade.test.ts pins.
  */
 
 const REPO = join(__dirname, "..", "..", "..", "..");
