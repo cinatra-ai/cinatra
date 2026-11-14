@@ -243,6 +243,18 @@ describe.skipIf(!HAS_DB)("a resume intent's run edges are fenced by its lease, i
     expect(await intentState(gateId)).toMatchObject({ claimed: false, result: null, status: "delivering" });
   });
 
+  it("F1 a release under the held lease puts nothing back once another entry into running cleared the mark", async () => {
+    // The delivery read its claim, then another driver's entry into `running`
+    // cleared the mark in the run's own transaction: the run is no longer this
+    // gate's to put back.
+    const run = await seedRun("running");
+    const gateId = await seedIntent(run, { status: "delivering", leaseToken: "L1" });
+    await expect(transitions.transitionRunStatus(run.runId, "running", "pending_approval", lease(gateId, "L1"), AUTHORITY as never))
+      .rejects.toMatchObject({ code: "resume_intent_lease_lost" });
+    expect(await runState(run.runId)).toEqual({ status: "running", attempt: run.attempt });
+    expect(await intentState(gateId)).toMatchObject({ status: "delivering", leaseToken: "L1", claimed: false });
+  });
+
   it("a claim under a stolen lease throws resume_intent_lease_lost and rolls back the run CAS", async () => {
     const run = await seedRun("pending_approval");
     const gateId = await seedIntent(run, { status: "delivering", leaseToken: "other" });

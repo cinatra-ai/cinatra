@@ -1260,9 +1260,12 @@ export type ResumeIntentClaimMark = "claim" | "release" | "none";
 /**
  * Fence a run edge on its intent's held lease, in the run's transaction, and
  * move the claim mark with the edge: "claim" sets run_claimed_at and clears the
- * recorded task, "release" clears both, "none" only fences. False when no row is
- * `delivering` under this lease for this run; the caller then throws, so the
- * run CAS rolls back with it.
+ * recorded task, "release" clears both, "none" only fences. A release also
+ * needs the mark still set: an entry into `running` by another driver clears
+ * it, so a delivery that read the run before that entry puts nothing back.
+ * False when no row is `delivering` under this lease for this run (for a
+ * release, with the mark set); the caller then throws, so the run CAS rolls
+ * back with it.
  */
 export async function fenceResumeIntentLeaseInRunTx(
   tx: GuardedRunTx,
@@ -1284,6 +1287,7 @@ export async function fenceResumeIntentLeaseInRunTx(
         eq(artifactReviewResumeOutbox.leaseToken, input.leaseToken),
         eq(artifactReviewResumeOutbox.status, "delivering"),
         isNull(artifactReviewResumeOutbox.deadLetteredAt),
+        ...(input.claimMark === "release" ? [isNotNull(artifactReviewResumeOutbox.runClaimedAt)] : []),
       ),
     )
     .returning({ gateId: artifactReviewResumeOutbox.gateId });

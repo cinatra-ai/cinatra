@@ -66,7 +66,9 @@ import {
   claimPendingResumeIntents,
   deadLetterExhaustedResumeIntents,
   deferResumeIntent,
+  fenceResumeIntentLeaseInRunTx,
 } from "../artifact-review-gate-store";
+import { db } from "../db";
 
 const dialect = new PgDialect();
 function rendered(where: unknown): string {
@@ -116,5 +118,23 @@ describe("cinatra#3745: a claimed resume intent keeps the cinatra#4312 attempt b
   it("a deferral whose lease is gone writes nothing and reports false", async () => {
     rec.updated = [];
     expect(await deferResumeIntent("gate-1", "lease-gone")).toBe(false);
+  });
+});
+
+describe("cinatra#3745: a release under the lease needs the claim mark still set", () => {
+  const fence = (claimMark: "claim" | "release" | "none") =>
+    fenceResumeIntentLeaseInRunTx(db as never, { runId: "run-1", gateId: "gate-1", leaseToken: "lease-1", claimMark });
+
+  it("F1 the release fences on run_claimed_at being set; the claim and a fence-only edge do not", async () => {
+    rec.updated = [{ gateId: "gate-1" }];
+    expect(await fence("release")).toBe(true);
+    expect(await fence("claim")).toBe(true);
+    expect(await fence("none")).toBe(true);
+    expect(rec.wheres).toHaveLength(3);
+    const [release, claim, none] = rec.wheres.map(rendered);
+    expect(release).toMatch(/"run_claimed_at" is not null/);
+    expect(release).toMatch(/"lease_token" = \$\d+/);
+    expect(claim).not.toMatch(CLAIM_MARK);
+    expect(none).not.toMatch(CLAIM_MARK);
   });
 });
