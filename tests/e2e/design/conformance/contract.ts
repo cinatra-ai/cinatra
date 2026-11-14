@@ -805,7 +805,7 @@ export function reviewTargetHeaderDriver(
 // readings, and one family factory over one fixture list drives all nine, the
 // same shape `cardDriver` and `suggestionChipDriver` already give.
 //
-// EVERY CONTROL PRESSED HERE IS THE SHIPPED ONE. `confirm-schedule-proposal`,
+// EVERY CONTROL PRESSED HERE IS THE SHIPPED ONE. `confirm-schedule -> scheduled`,
 // `save-schedule-changes` and `cancel-trigger-schedule` are literals of
 // packages/agents/src/schedule-proposal-card.tsx and testid-contract.json
 // requires each of them in that file, so a driver naming a control the product
@@ -885,7 +885,7 @@ async function changeARow(root: Locator): Promise<void> {
  *  carrying the reader's. */
 const EDITED_ROWS = JSON.stringify({ kind: "immediate" });
 
-const CONFIRM_CONTROL = '[data-action="confirm-schedule-proposal"]';
+const CONFIRM_CONTROL = '[data-action="confirm-schedule -> scheduled"]';
 const SAVE_CONTROL = '[data-action="save-schedule-changes"]';
 
 export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): SurfaceDriver {
@@ -2444,22 +2444,13 @@ const SCHEDULING_STEP_CONFIGURED_DRIVER: SurfaceDriver = {
 // (scheduling-recurrence-driver.ts) from the readings of
 // src/app/design-fixtures/conformance/scheduling-recurrence-fixture-data.ts.
 //
-// The component they bind, the shared `RecurrenceFrequencySelectors` that the
-// in-flow scheduling step and the schedule card both draw, is NOT on the
-// default branch: it arrives with cinatra#4280. Until it does, nothing on the
-// conformance harness carries these surface ids. So, exactly as with the
-// Workspace surfaces of the application drawing (below, `awaitingMount`), each
-// driver is written in full but guarded by `awaitingMount`: it SKIPS with the
-// reason below while the harness mounts nothing, and runs unchanged the moment
-// the mount exists. scripts/design/__tests__/awaiting-mount-guard.test.mjs
-// holds the arrangement honest.
+// The component they bind is the shared `RecurrenceFrequencySelectors` that the
+// in-flow scheduling step and the schedule card both draw. The conformance
+// harness mounts it in the four readings and the two anti-alias probes
+// (src/app/design-fixtures/conformance/scheduling-recurrence-fixtures.tsx), so
+// each driver is bound directly and runs in the design suite;
+// scripts/design/__tests__/scheduling-recurrence-mount.test.mjs holds that.
 // ---------------------------------------------------------------------------
-/** Why the four recurrence drivers skip, named on every skipped test. */
-const AWAITING_RECURRENCE_SELECTORS =
-  "the shared recurrence selectors are not on the default branch yet — they " +
-  "arrive with cinatra#4280 — so the conformance harness mounts none of the " +
-  "four recurrence readings. Every assertion in this driver is written and runs " +
-  "unchanged the moment the mount exists.";
 
 // ---------------------------------------------------------------------------
 // App-shell drivers adopted with the cinatra#3057 pin reconciliation:
@@ -4827,7 +4818,7 @@ const CONNECTOR_CONFIG_TAB_DRIVER: SurfaceDriver = {
           panel.locator(`input[name="${CONNECTOR_CONFIG_TAB.fields.shellEnabled.key}"]`),
         ).toHaveValue(CONNECTOR_CONFIG_TAB.fields.shellEnabled.value);
         await expect(
-          panel.getByRole("switch", { name: CONNECTOR_CONFIG_TAB.fields.shellEnabled.label }),
+          panel.getByRole("checkbox", { name: CONNECTOR_CONFIG_TAB.fields.shellEnabled.label }),
         ).toBeChecked();
       },
     },
@@ -8059,10 +8050,10 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "approvals-marketplace-states": APPROVALS_MARKETPLACE_STATES_DRIVER,
   "scheduling-step": SCHEDULING_STEP_DRIVER,
   "scheduling-step-configured": SCHEDULING_STEP_CONFIGURED_DRIVER,
-  "scheduling-step-quarterly": awaitingMount("scheduling-step-quarterly", recurrenceSelectorsDriver("scheduling-step-quarterly"), AWAITING_RECURRENCE_SELECTORS),
-  "scheduling-step-yearly": awaitingMount("scheduling-step-yearly", recurrenceSelectorsDriver("scheduling-step-yearly"), AWAITING_RECURRENCE_SELECTORS),
-  "scheduling-step-configured-monthly": awaitingMount("scheduling-step-configured-monthly", recurrenceSelectorsDriver("scheduling-step-configured-monthly"), AWAITING_RECURRENCE_SELECTORS),
-  "scheduling-step-configured-quarterly": awaitingMount("scheduling-step-configured-quarterly", recurrenceSelectorsDriver("scheduling-step-configured-quarterly"), AWAITING_RECURRENCE_SELECTORS),
+  "scheduling-step-quarterly": recurrenceSelectorsDriver("scheduling-step-quarterly"),
+  "scheduling-step-yearly": recurrenceSelectorsDriver("scheduling-step-yearly"),
+  "scheduling-step-configured-monthly": recurrenceSelectorsDriver("scheduling-step-configured-monthly"),
+  "scheduling-step-configured-quarterly": recurrenceSelectorsDriver("scheduling-step-configured-quarterly"),
   "sidebar-assistants-entry": SIDEBAR_ASSISTANTS_ENTRY_DRIVER,
   "breadcrumb-entity-resolution": BREADCRUMB_ENTITY_RESOLUTION_DRIVER,
   "button": BUTTON_SURFACE_DRIVER, // The components drawing's shared primitives, one mount each (cinatra#3189).

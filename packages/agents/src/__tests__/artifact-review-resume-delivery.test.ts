@@ -1,6 +1,13 @@
 import { declaredReviewPlan } from "@/lib/artifacts/artifact-review-target";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// cinatra#4150: every resume road reads the run's newest publish decision before it
+// sends. This suite is about another question, so no publish decision holds its run.
+vi.mock("../publish-decision-store", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readLatestDecisionForRun: async () => null,
+}));
+
 // cinatra#1796 (epic #1620 S13) — the resume-delivery worker.
 //
 // Drains claimPendingResumeIntents → delivers the typed approve/reject payload to
@@ -98,6 +105,12 @@ const repairStoreMock = vi.hoisted(() => ({
   isRepairLineageOpen: vi.fn<(gateId: string, executor?: unknown) => Promise<boolean>>(async () => false),
 }));
 vi.mock("../lifecycle-repair-store", () => repairStoreMock);
+// cinatra#4476 — the upgrade recovery the sweep runs before its claim. Real-store
+// proofs: resume-upgrade-recovery-4476.integration.test.ts.
+const recoveryMock = vi.hoisted(() => ({
+  recoverStrandedDeclaredReviews: vi.fn<() => Promise<unknown[]>>(async () => []),
+}));
+vi.mock("../declared-review-recovery", () => recoveryMock);
 
 import {
   deliverArtifactReviewResumeIntent,
@@ -337,6 +350,45 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
     const summary = await sweepArtifactReviewResumeIntents();
     expect(summary.failed).toBe(1);
     expect(gateStoreMock.claimPendingResumeIntents).toHaveBeenCalledTimes(1);
+  });
+
+  it("cinatra#4476: the sweep runs the upgrade recovery after the dead-letter pass and before it claims", async () => {
+    gateStoreMock.claimPendingResumeIntents.mockResolvedValue([]);
+    await sweepArtifactReviewResumeIntents();
+    expect(recoveryMock.recoverStrandedDeclaredReviews).toHaveBeenCalledTimes(1);
+    const at = recoveryMock.recoverStrandedDeclaredReviews.mock.invocationCallOrder[0];
+    expect(gateStoreMock.deadLetterExhaustedResumeIntents.mock.invocationCallOrder[0]).toBeLessThan(at);
+    expect(at).toBeLessThan(gateStoreMock.claimPendingResumeIntents.mock.invocationCallOrder[0]);
+  });
+
+  it("cinatra#4476: a failed recovery pass, and each failed pause, is tallied and the claim still runs", async () => {
+    gateStoreMock.claimPendingResumeIntents.mockResolvedValue([]);
+    recoveryMock.recoverStrandedDeclaredReviews.mockRejectedValueOnce(new Error("db blip"));
+    expect((await sweepArtifactReviewResumeIntents()).failed).toBe(1);
+    recoveryMock.recoverStrandedDeclaredReviews.mockResolvedValueOnce([
+      { runId: "r1", baseTaskId: "wayflow-t1", outcome: "failed", errorName: "DrizzleQueryError", errorCode: "P0001" },
+      { runId: "r2", baseTaskId: "wayflow-t2", outcome: "ops", reason: "no-decision" },
+      { runId: "r3", baseTaskId: "wayflow-t3", outcome: "rearmed", gateId: "g3" },
+    ]);
+    expect((await sweepArtifactReviewResumeIntents()).failed).toBe(1);
+    expect(gateStoreMock.claimPendingResumeIntents).toHaveBeenCalledTimes(2);
+  });
+
+  it("cinatra#4476: a failed pause is logged by its error's name and code, never by a message", async () => {
+    gateStoreMock.claimPendingResumeIntents.mockResolvedValue([]);
+    recoveryMock.recoverStrandedDeclaredReviews.mockResolvedValueOnce([
+      { runId: "r1", baseTaskId: "wayflow-t1", outcome: "failed", errorName: "DrizzleQueryError", errorCode: "P0001" },
+      { runId: "r2", baseTaskId: "wayflow-t2", outcome: "failed", errorName: "TypeError" },
+    ]);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      expect((await sweepArtifactReviewResumeIntents()).failed).toBe(2);
+      const lines = errors.mock.calls.map((c) => c.map(String).join(" "));
+      expect(lines).toContain("[artifact-review-resume] upgrade recovery failed for run=r1 review=wayflow-t1: error=DrizzleQueryError code=P0001");
+      expect(lines).toContain("[artifact-review-resume] upgrade recovery failed for run=r2 review=wayflow-t2: error=TypeError");
+    } finally {
+      errors.mockRestore();
+    }
   });
 
   it("a per-intent throw is tallied as failed and never poisons the batch", async () => {

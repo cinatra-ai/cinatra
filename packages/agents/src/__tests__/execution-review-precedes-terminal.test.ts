@@ -524,6 +524,9 @@ describe("cinatra#3007 — the mid-run human gate's failure callback asks first"
   });
 
   async function driveHumanGate(fromStatus: "running" | "pending_approval" = "running") {
+    // cinatra#4150: the publish classification reads the template first and fails a run whose
+    // template is not found; this one lists no publishing step. Later reads answer null as before.
+    storeMock.readAgentTemplateById.mockResolvedValueOnce({ publishingSteps: [] } as never);
     await handleWayflowTaskState({
       authority: TEST_AUTHORITY,
       runId: "run-3007",

@@ -955,7 +955,8 @@ export type DeclaredTableDeclaration = {
 // THE CONTRACT IS THIS CODE AND THE TESTS BESIDE IT, never a pull request body:
 //
 //   - the list lives at `cinatra.tools`;
-//   - each entry is `{ name, module }`, and nothing else is read;
+//   - each entry is `{ name, module }` plus the optional `embeddable` flag,
+//     and nothing else is read;
 //   - `name` is the name the caller passes to the dispatch, in the same
 //     local-identifier vocabulary a declared table's name uses;
 //   - `module` is a PACKAGE-RELATIVE path INSIDE the package's own tree: it
@@ -965,7 +966,10 @@ export type DeclaredTableDeclaration = {
 //     the same no-traversal rule `resolveServerEntryPath` enforces;
 //   - the module's CALLABLE EXPORT is the named export
 //     `EXTENSION_TOOL_MODULE_EXPORT`: one function of ONE argument,
-//     `{ input, ports }`, returning the result (or a promise of it).
+//     `{ input, ports }`, returning the result (or a promise of it);
+//   - `embeddable` (cinatra#4154) is this package's own consent that an agent embedding its flow
+//     may reach the tool from a step of that flow. Only an own data `true` consents; an own `false`
+//     is kept, no consent; an inherited key is never read; any other own value refuses the list.
 //
 // ADDITIVE, like every field before it: one new key under `cinatra`, no shape
 // change, so the frozen ABI is untouched.
@@ -977,13 +981,22 @@ export type DeclaredToolDeclaration = {
   name: string;
   /** Package-relative path of the module that runs it (`./cinatra/tools/x.mjs`). */
   module: string;
+  /** An embedding agent may reach this tool from a step of this package's flow (cinatra#4154). */
+  embeddable?: boolean;
 };
 
 /** A parsed, validated declared tool. */
 export type DeclaredTool = {
   name: string;
   module: string;
+  /** Present only when declared; read it through `declaredToolIsEmbeddable`. */
+  embeddable?: boolean;
 };
+
+/** Whether a declared tool consents to an embedding agent (cinatra#4154): an own data `true` only. */
+export function declaredToolIsEmbeddable(tool: DeclaredTool): boolean {
+  return Object.getOwnPropertyDescriptor(tool, "embeddable")?.value === true;
+}
 
 /**
  * The ONE named export a declared tool module exposes. Pinned here so a pack
@@ -1067,7 +1080,17 @@ export function parseDeclaredTools(raw: unknown, packageName: string): DeclaredT
           `(got ${JSON.stringify(entry.module)})`,
       );
     }
-    out.push({ name, module: (entry.module as string).trim() });
+    // Only the entry's own data property declares: an inherited key and a getter are never read.
+    const flag = Object.getOwnPropertyDescriptor(entry, "embeddable");
+    if (flag !== undefined && typeof flag.value !== "boolean") {
+      // An own getter, an own `undefined` or any other value; the value is not repeated.
+      throw new Error(`[declared-tools] ${packageName} tool "${name}": embeddable must be true or false`);
+    }
+    out.push({
+      name,
+      module: (entry.module as string).trim(),
+      ...(flag === undefined ? {} : { embeddable: flag.value as boolean }),
+    });
   }
   return out;
 }

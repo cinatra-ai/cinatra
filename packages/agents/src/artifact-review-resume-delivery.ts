@@ -401,6 +401,23 @@ export async function deliverArtifactReviewResumeIntent(
     if (parked !== null) return parked;
   }
 
+  // cinatra#4150: a run held at a publish decision goes on only by that decision. The
+  // intent stays pending; a decline or an expiry stops the run, and the status guard
+  // above then closes it. A hold that cannot be read keeps it pending too. Neither log
+  // line names the gate, the run or the store's error.
+  const publishHold = await import("./publish-decision-actions");
+  const refused = (err: unknown): "retryable" => {
+    const why = publishHold.isPublishDecisionRequired(err) ? publishHold.PUBLISH_DECISION_REQUIRED : "the publish hold could not be checked";
+    console.warn(`[artifact-review-resume] a resume was refused: ${why}`);
+    return "retryable";
+  };
+  let decided: boolean; // the run has a decision: it met a publish gate, whatever the template lists
+  try {
+    decided = await publishHold.assertNoOpenPublishDecision(run.id);
+  } catch (err) {
+    return refused(err);
+  }
+
   // Deliver the typed decision verbatim as the WayFlow resume message. Dynamic
   // import mirrors review-task-actions.ts (circular-dep avoidance:
   // agents ← @cinatra-ai/a2a ← mcp-server ← agent-builder).
@@ -421,6 +438,20 @@ export async function deliverArtifactReviewResumeIntent(
   // executing. An overwrite-in-place rotation would 403 that live task.
   const { mintResumeRunTokenMetadata } = await import("./wayflow-run-token-carrier");
   const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
+  // cinatra#1939 wave 2: the delivery worker advances the run with no session in
+  // scope — it grounds the transition on the system dispatch mint, scoped to the
+  // run's org (the human approval already happened when the intent row was written).
+  const authority = mintAgentRunExecutionAuthority(run.orgId);
+  // cinatra#4150 (A5): on a publishing template, or for a run with a decision, the run is
+  // claimed here and the hold is read again before the send; the intent stays pending when
+  // it is refused or held.
+  let sendFrom: Awaited<ReturnType<typeof publishHold.claimRunBeforeSend>>;
+  try {
+    sendFrom = await publishHold.claimRunBeforeSend(run.id, (template.publishingSteps?.length ?? 0) > 0 || decided, authority);
+  } catch (err) {
+    return refused(err);
+  }
+  if (!sendFrom) return "retryable";
   const task = await client.sendTask({
     message: {
       role: "user",
@@ -439,14 +470,11 @@ export async function deliverArtifactReviewResumeIntent(
   });
 
   // Drive the returned Task through the canonical state machine (advances the
-  // run past the gate — to the next gate or to terminal). fromStatus is the
-  // literal "pending_approval" (guarded above), matching the human resume path.
+  // run past the gate — to the next gate or to terminal). fromStatus is
+  // "pending_approval" (guarded above), matching the human resume path, or
+  // "running" after the cinatra#4150 claim above.
   const { handleWayflowTaskState } = await import("./execution");
-  // cinatra#1939 wave 2: the delivery worker advances the run with no session in
-  // scope — it grounds the transition on the system dispatch mint, scoped to the
-  // run's org (the human approval already happened when the intent row was written).
-  const authority = mintAgentRunExecutionAuthority(run.orgId);
-  await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task, authority });
+  await handleWayflowTaskState({ runId: run.id, run, fromStatus: sendFrom, task, authority });
 
   const marked = await markResumeIntentDelivered(gateId, leaseToken);
   console.log(
@@ -627,8 +655,11 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
   // its initial send (the a2aContextId road above), the legs of a declared
   // family are inserted in one transaction (`emitDeclaredReviewGateFamily`),
   // and an outcome that repeats on 20 claims is a fault for ops. A
-  // dead-lettered intent is not claimed again and no code puts it back, so it
-  // resumes nothing; ops read it (`readDeadLetteredResumeIntents`). Only
+  // dead-lettered intent is not claimed again; ops read it
+  // (`readDeadLetteredResumeIntents`). One road puts one back: the upgrade
+  // recovery below, for the newest decision of a declared pause from before the
+  // upgrade (or with an old writer's reopen attempt), once per pause, ever
+  // (cinatra#4476, `declared-review-recovery.ts`). Only
   // `delivered`, `already-advanced` and `refused-out-of-scope` close an intent,
   // and no code puts a closed intent back to pending. A failed pass is tallied;
   // the claim still leaves exhausted intents out.
@@ -638,6 +669,37 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
   } catch (err) {
     summary.failed += 1;
     console.error("[artifact-review-resume] dead-letter pass failed:", err);
+  }
+  // cinatra#4476 — the upgrade recovery: a declared review's pause that the
+  // cinatra#4312 upgrade left with no live intent (an intent main left exhausted, or
+  // a lineage an old writer left unreadable until the chain check read it) gets its
+  // newest decision re-armed or carried, once per pause, ever, right before the
+  // claim below takes it. It acts only after core__0127 wrote its epoch row. A pause
+  // it cannot recover is logged for ops; a failed pass or pause is tallied and the
+  // claim still runs (`declared-review-recovery.ts`).
+  try {
+    const { recoverStrandedDeclaredReviews } = await import("./declared-review-recovery");
+    for (const o of await recoverStrandedDeclaredReviews()) {
+      if (o.outcome === "rearmed" || o.outcome === "carried") {
+        console.warn(`[artifact-review-resume] upgrade recovery ${o.outcome} run=${o.runId} review=${o.baseTaskId} gate=${o.gateId}`);
+      } else if (o.outcome === "ops") {
+        console.warn(
+          `[artifact-review-resume] upgrade recovery cannot resume run=${o.runId} review=${o.baseTaskId}: ${o.reason}` +
+            ("lineageId" in o ? ` lineage=${o.lineageId} code=${o.code}` : "") + " — for ops",
+        );
+      } else if (o.outcome === "failed") {
+        summary.failed += 1;
+        // The error's name and SQLSTATE code only: a query error's message carries the
+        // query's parameters, the decision's text among them.
+        console.error(
+          `[artifact-review-resume] upgrade recovery failed for run=${o.runId} review=${o.baseTaskId}: error=${o.errorName}` +
+            (o.errorCode ? ` code=${o.errorCode}` : ""),
+        );
+      }
+    }
+  } catch (err) {
+    summary.failed += 1;
+    console.error("[artifact-review-resume] upgrade recovery pass failed:", err);
   }
   const claimed = await claimPendingResumeIntents({
     limit: opts?.limit ?? DEFAULT_LIMIT,
@@ -666,4 +728,16 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
   // candidate query returns only runs that are actually releasable.
   await releaseDecidedProducedReviewParks(PRODUCED_REVIEW_RELEASE_LIMIT, summary);
   return summary;
+}
+
+/** cinatra#4150: one pass of the publish-decision expiry on this unfenced ~30-second loop, under
+ *  the loop's system dispatch authority: due decisions close and their runs stop; unmade stops finish. */
+export async function sweepExpiredPublishDecisionsOnce(): Promise<void> {
+  const { sweepExpiredPublishDecisions } = await import("./publish-decision-actions");
+  const s = await sweepExpiredPublishDecisions({ authorityFor: mintAgentRunExecutionAuthority });
+  if (s.due + s.stopped + s.failed > 0) {
+    console.log(
+      `[publish-decision-expiry] due=${s.due} expired=${s.expired} run_ended=${s.runEnded} lost=${s.lost} failed=${s.failed} stopped=${s.stopped}`,
+    );
+  }
 }

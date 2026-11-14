@@ -139,12 +139,27 @@ function issueAudience(): string {
   return getPublicMcpServerUrl() ?? getLocalMcpServerUrl(MCP_BASE_PATH);
 }
 
-function issueIssuer(): string {
+function issueIssuer(audience: string): string {
   // Bind iss to the SAME origin as aud so the verifier's exact
   // origin-derived expectedIssuer matches.
-  const origin = deriveOrigin(issueAudience());
+  const origin = deriveOrigin(audience);
   return `${origin}${AUTH_BASE_PATH}`;
 }
+
+/**
+ * Mint options.
+ *
+ * `audience` names the MCP URL the token is sent to, when the caller calls a
+ * URL other than the default one. The scripted self-MCP dispatch calls the
+ * LOCAL MCP URL; the default audience is the PUBLIC one when a public base URL
+ * is stored, and the transport binds a delegated token to the request origin
+ * exactly, so without this the dispatch gets 401. `iss` follows the same
+ * origin. The token is still checked by the same verifier against THIS
+ * request's own origin: an override cannot make a token valid anywhere other
+ * than the URL it names, and the claims that carry authority are unchanged.
+ * The real-model path passes no options and keeps the default audience.
+ */
+export type ChatMcpActorTokenOptions = { audience?: string };
 
 /**
  * The floored mint instant, in whole seconds. Exported so the byte-stability
@@ -155,11 +170,15 @@ export function chatMcpActorTokenIssuedAt(nowMs: number): number {
   return nowSeconds - (nowSeconds % TOKEN_ISSUE_BUCKET_SECONDS);
 }
 
-export function issueChatMcpActorToken(input: ChatMcpActor): string {
+export function issueChatMcpActorToken(
+  input: ChatMcpActor,
+  options: ChatMcpActorTokenOptions = {},
+): string {
   // Quantized, not raw: see TOKEN_ISSUE_BUCKET_SECONDS. Two turns inside one
   // bucket produce the same bytes, so the provider can reuse the prefix that
   // carries this header.
   const issuedAt = chatMcpActorTokenIssuedAt(Date.now());
+  const audience = options.audience ?? issueAudience();
   const header = { alg: "HS256", typ: "JWT" };
   const payload: ChatMcpActorTokenClaims = {
     t: TOKEN_TYPE,
@@ -167,8 +186,8 @@ export function issueChatMcpActorToken(input: ChatMcpActor): string {
     org: input.orgId,
     prole: input.platformRole,
     scope: TOKEN_SCOPE,
-    aud: issueAudience(),
-    iss: issueIssuer(),
+    aud: audience,
+    iss: issueIssuer(audience),
     iat: issuedAt,
     exp: issuedAt + TOKEN_TTL_SECONDS,
   };

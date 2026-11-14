@@ -28,15 +28,17 @@ through one of the **enumerated emitters**. The set is closed
 |---|---|
 | `createSemanticArtifact` | The file-form artifact writer (`src/lib/artifacts/artifact-creation.ts`). |
 | `dashboard_twin_writer` | The dashboard artifact twin's own transaction. |
-| `object_cms_snapshot_capture` | The CMS content-snapshot capture (`src/lib/artifacts/cms-content-snapshot-capture.ts`). |
+| `object_snapshot_mint` | The mint of an object-backed row's snapshot revision (`src/lib/artifacts/object-content-snapshot.ts`). |
+| `artifact_revision_append` | The same-artifact revision append (`src/lib/artifacts/artifact-revision-append.ts`). |
+| `object_cms_snapshot_capture` | No write path. The CMS content-snapshot capture that wrote it left the application (#3862); the emitter stays in the enumeration and in the database constraint. |
 
 An event row naming any other emitter is rejected at the contract boundary
-(`validateProducedEvent`). Adding a fourth write path means adding it to that
+(`validateProducedEvent`). Adding a write path means adding it to that
 enumeration — not inventing a private review hook.
 
 ### The produced event
 
-Each emitter writes one `artifact_produced_outbox` row **in the same transaction
+Each emitter with a write path writes one `artifact_produced_outbox` row **in the same transaction
 as the artifact/representation write**, so the event and the artifact commit or
 roll back together. The row's primary key is deterministic —
 `sha256(artifactId ␀ representationRevisionId ␀ eventKind)` — and the insert is
@@ -55,12 +57,12 @@ Three axes on the row decide everything downstream:
 - **`destination_class`** — `none`, `external_publish`, `visibility_promotion`
   or `pipeline_handoff`. The last three are the **external-effect** classes.
   `createSemanticArtifact` emits `none` (a plain durable local write has no
-  external effect at creation time); a captured CMS snapshot emits
-  `external_publish`, because it is a proposed remote apply.
+  external effect at creation time); a captured CMS snapshot emitted
+  `external_publish`, because it was a proposed remote apply.
 - **`continuation_mode`** — `async_effects_gated` (the run never pauses
   retroactively; the artifact's downstream effect is held until the decision) or
   `checkpointed` (the run evaluates policy, then parks; the park is released by
-  the decision or by its deadline). All three emitters emit
+  the decision or by its deadline). All four emitters with a write path emit
   `async_effects_gated`, which is the standard mode; `checkpointed` is the
   alternative the event and orchestration contracts carry.
 
@@ -84,6 +86,7 @@ JSON-as-text — the same compiled-config column shape `trigger_mode` /
 | `requestedSkips` | array of checkpoint names (`recommendation`, `review`, `verification`) | Checkpoints the producer asks to have skipped. A **request**, honoured only under the conditions in §3. |
 | `producedTypes` | array of strings | The artifact types the producer declares it creates. The lattice does not branch on it. |
 | `repairCapable` | boolean | Whether this producer implements the typed repair round-trip (§4). |
+| `repairFindingsInput` | object `{ "input": "<name>" }` | The input of this producer's template that a dispatched repair run gets the reviewer's findings in (§4). `input` is an identifier, and is never `lifecycleRepairRequest` or a property name of `Object.prototype`. |
 
 **Reading is tolerant.** Neither reader throws on a malformed value: an absent,
 empty or non-object value yields no declarations, and the producer gets pure core
@@ -165,6 +168,56 @@ total mapping over the capability flag and an optional organization repair route
 
 Nothing silently drops: every `changes_requested` lands on one of the three, and
 the capability flag is the only one of the two inputs a producer controls.
+
+### Where a repair run gets the findings
+
+A `producer_repair` repair is delivered as a new run of the producing template,
+with the producing run's own inputs plus the typed `lifecycleRepairRequest`.
+A producer whose template reads the reviewer's findings from one of its own
+inputs declares that input:
+
+```json
+{
+  "repairCapable": true,
+  "repairFindingsInput": { "input": "instructions" }
+}
+```
+
+The dispatch drain then puts a text built from the findings
+(`buildRepairFindingsText`, `src/lib/lifecycle/lifecycle-policy.ts`)
+into exactly that input, whatever the kind of the reviewed base. The text is the
+same for every producer: a lead line, then one numbered line per finding with the
+field it names (a line break inside a message or a field becomes one space, and a
+stored finding without a message text is left out).
+
+The drain reads the declaration when it creates the repair run, but the worker
+reads the template's declaration again when the run starts. A re-import in between can change
+the declaration: a crash between creation and enqueue, after which a re-drain
+enqueues the existing run as it is, or a run that waits in the queue. So the run
+start (`bindRepairFindingsInputAtStart`, `packages/agents/src/execution.ts`) reads the
+declaration of the template it loaded and, when the run does not already carry the
+text in that input, writes it there. It does this right after the fire-time scope
+recheck (a refused or unverified run gets no write) and before the headless skill
+recommendation, the version pinning and the run's input gates read the inputs.
+The run is failed at start, with a fixed message that names the input, when the
+write fails (the message keeps no text of the storage error, and the run does not
+retry) or when the template declares a findings input and the run carries no
+`lifecycleRepairRequest` object. The write merges one key over the inputs the
+run start reads, so it removes no other input: an input that an earlier
+declaration named keeps the text, also when the template now declares no findings
+input. It is not a compare-and-set: a second writer of the same run's inputs at
+the same moment, such as a duplicate delivery of the job, can overwrite it.
+
+A producer that declares nothing gets its own inputs plus the
+typed request, for every base: the drain adds no `task` or `instructions` for a
+captured CMS snapshot either, and reads no base row to decide. The Drupal and
+WordPress agents declare `instructions` at the application's dev pins
+(drupal-agent `49bd8040`, wordpress-agent `b434f0a1`); no released tag of
+either agent declares it yet. Neither the drain
+nor the run start checks that the declared name is an input of the template: a
+name the template does not read adds an input that no prompt reads, and a name the
+template types as `object` fails the run at start with a message that names the
+input.
 
 ### The round-trip a repair-capable producer must satisfy
 
@@ -264,5 +317,3 @@ projector is what makes such a finding verifiable.
 
 - [Lifecycle review policy](../governance/lifecycle-review-policy.md)
   — the bounds an organization sets, and what wins when layers disagree.
-- [The CMS review adapter contract](../contracts/cms-review-adapter-contract.md)
-  — the producer-side contract for remote CMS content.

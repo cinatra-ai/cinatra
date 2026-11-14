@@ -20,7 +20,12 @@
 import { describe, expect, it } from "vitest";
 
 import { buildBreadcrumbTrail } from "@/lib/breadcrumb-trail";
-import { scopeSurfaceCrumbEntries, type ScopeSurfaceRef } from "@/lib/scope-surfaces";
+import {
+  scopeSurfaceCrumbEntries,
+  scopeSurfaceEntityNameText,
+  type ScopeSurfaceNameInput,
+  type ScopeSurfaceRef,
+} from "@/lib/scope-surfaces";
 
 const ORG_ID = "88c63f08-4d2e-4c7a-9f1b-2a0d6e5c4b31";
 
@@ -30,12 +35,12 @@ function trail(
   pathname: string,
   scope: ScopeSurfaceRef,
   tab: Parameters<typeof scopeSurfaceCrumbEntries>[1],
-  title?: string,
+  title?: ScopeSurfaceNameInput,
 ) {
   return buildBreadcrumbTrail(pathname, {
     // The entity page's heading IS the entity — that is what made the leaf
     // crumb repeat it before this fix.
-    pageTitle: { title: title ?? "Workspace", pathname },
+    pageTitle: { title: scopeSurfaceEntityNameText(title) ?? "Workspace", pathname },
     contributions: scopeSurfaceCrumbEntries(scope, tab, title),
   }).map((c) => c.label);
 }
@@ -67,9 +72,37 @@ describe("an organization tab route", () => {
     expect(labels.join(" ")).not.toContain(ORG_ID.slice(0, 8));
   });
 
-  it("falls back to the id's first eight characters plus an ellipsis while the name is unavailable", () => {
+  it("shows the read's named answer", () => {
+    const labels = trail(`/organizations/${ORG_ID}/agents`, scope, "agents", {
+      state: "named",
+      name: "Northwind Analytics",
+    });
+    expect(labels).toEqual(["Organizations", "Northwind Analytics", "Agents"]);
+  });
+
+  // The drawing draws a different crumb for each answer of the name read
+  // (cinatra#4453). "While a name is genuinely unavailable, the crumb shows the
+  // id's first eight characters plus an ellipsis"; and "a crumb standing for the
+  // refused or the missing entity shows a fixed label ... and never any part of
+  // the id".
+  it("shows the id's first eight characters plus an ellipsis for a blank answer", () => {
+    const labels = trail(`/organizations/${ORG_ID}/agents`, scope, "agents", { state: "blank" });
+    expect(labels).toEqual(["Organizations", `${ORG_ID.slice(0, 8)}\u2026`, "Agents"]);
+    expect(labels.join(" ")).not.toContain(ORG_ID);
+  });
+
+  it("shows the scope's fixed word, with no part of the id, for an unavailable answer", () => {
+    const labels = trail(`/organizations/${ORG_ID}/agents`, scope, "agents", {
+      state: "unavailable",
+    });
+    expect(labels).toEqual(["Organizations", "Organization", "Agents"]);
+    expect(labels.join(" ")).not.toContain(ORG_ID.slice(0, 8));
+  });
+
+  it("shows the scope's fixed word, with no part of the id, when no name was read", () => {
     const labels = trail(`/organizations/${ORG_ID}/agents`, scope, "agents");
-    expect(labels).toEqual(["Organizations", `${ORG_ID.slice(0, 8)}…`, "Agents"]);
+    expect(labels).toEqual(["Organizations", "Organization", "Agents"]);
+    expect(labels.join(" ")).not.toContain(ORG_ID.slice(0, 8));
   });
 });
 
@@ -91,6 +124,18 @@ describe("a project tab route", () => {
         "Q3 Outbound",
       ),
     ).toEqual(["Projects", "Q3 Outbound", "Artifacts"]);
+  });
+
+  it("shows the id's first eight characters for a blank answer, and the fixed word for an unavailable one", () => {
+    const scope = { kind: "project", id: "p-1234-5678-9abc" } as const;
+    expect(trail("/projects/p-1234-5678-9abc/agents", scope, "agents", { state: "blank" })).toEqual([
+      "Projects",
+      "p-1234-5\u2026",
+      "Agents",
+    ]);
+    expect(
+      trail("/projects/p-1234-5678-9abc/agents", scope, "agents", { state: "unavailable" }),
+    ).toEqual(["Projects", "Project", "Agents"]);
   });
 });
 

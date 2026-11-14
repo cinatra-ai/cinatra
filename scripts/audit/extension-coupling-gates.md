@@ -356,10 +356,10 @@ with the TypeScript compiler API and refuses a new occurrence of:
    class 2 floor. Each such module carries a ceiling: its count of top-level
    value declarations (the names of top-level functions, classes and
    variables, exported or not). A count above the ceiling is refused; a count
-   below it is a stale entry. A new top-level function that stores the
-   published words of a CMS page in `src/lib/artifacts/cms-content-snapshot-capture.ts`
-   is refused; a fix inside an existing declaration adds no name, so a listed
-   module stays maintainable while its surface cannot widen.
+   below it is a stale entry. A new top-level function in
+   `src/lib/artifacts/cms-preview-capture-policy.ts` is refused; a fix inside
+   an existing declaration adds no name, so a listed module stays maintainable
+   while its surface cannot widen.
 
 `connector-artifact-road-gate.mjs` refuses a new **class 6 road**: from a
 module that faces connectors to a module that creates an artifact.
@@ -393,11 +393,7 @@ module that faces connectors to a module that creates an artifact.
   reaches its work through a `globalThis` slot, `entries` (the modules that
   bind the slot). A published id missing from it, a declared id no longer
   published, a `createsArtifact` that disagrees with the reach, and an impl
-  that reads a `globalThis` property with no `entries` each fail. The review
-  seam for staged CMS writes (`@cinatra-ai/host:cms-review`) reaches its
-  capture only through such a slot, which
-  `src/lib/register-cms-review-host-seam-runtime.ts` binds; no import edge
-  leads there from the registration, so the declaration names it.
+  that reads a `globalThis` property with no `entries` each fail.
 - When `packages/sdk-extensions/src/artifact-contract.ts` exports
   `ARTIFACT_CREATING_ROADS`, its members under the application's provider
   identity must equal the ids declared `createsArtifact: true`; while it is
