@@ -195,31 +195,7 @@ describe("development media kind review run (#3459)", () => {
     kind, mime: `form-${i}`, objectType: `type-${i}`, artifactId: `artifact-${i}`, representationRevisionId: `revision-${i}`,
   })) as Parameters<typeof seedMediaKindReviewRun>[0]["filed"];
   const targets = filed.map(({ artifactId, representationRevisionId }) => ({ artifactId, representationRevisionId }));
-  const harness = (pinned: typeof targets) => ({
-    seedMarkedReviewGateRun: vi.fn(async () => "run"),
-    waitForMarkedReviewGate: vi.fn(async () => ({ gateId: "gate", runId: "run", reviewTaskId: "task", status: "pending", pinnedTargets: pinned })),
-  });
-
-  it("seeds the run with the trimmed ids and the six targets, and accepts a gate that pins exactly them", async () => {
-    const h = harness([...targets].reverse());
-    await expect(seedMediaKindReviewRun({ orgId: " org ", userId: " user ", filed }, h))
-      .resolves.toEqual({ runId: "run", reviewTaskId: "task", status: "pending", pinned: 6 });
-    expect(h.seedMarkedReviewGateRun).toHaveBeenCalledWith({ orgId: "org", userId: "user", targets });
-  });
-
-  it("fails when the gate misses a target, pins a foreign one or pins one twice", async () => {
-    const foreign = { artifactId: "artifact-x", representationRevisionId: "revision-x" };
-    for (const pinned of [targets.slice(1), [...targets.slice(1), foreign], [...targets.slice(1), targets[1]], [...targets, foreign]]) {
-      await expect(seedMediaKindReviewRun({ orgId: "org", userId: "user", filed }, harness(pinned)))
-        .rejects.toThrow(/does not pin exactly the six filed revisions/);
-    }
-  });
-
-  it("refuses to seed for anything but the six filed kinds", async () => {
-    const h = harness(targets);
-    await expect(seedMediaKindReviewRun({ orgId: "org", userId: "user", filed: filed.slice(1) }, h)).rejects.toThrow(/six filed/);
-    expect(h.seedMarkedReviewGateRun).not.toHaveBeenCalled();
-  });
+  const foreign = { artifactId: "artifact-x", representationRevisionId: "revision-x" };
 
   // The executor mints a declared review as an atomic family of single-target
   // gates, one per artifact (packages/agents/src/artifact-review-gate-store.ts
@@ -238,5 +214,46 @@ describe("development media kind review run (#3459)", () => {
     const h = gateRows(family(targets));
     await expect(seedMediaKindReviewRun({ orgId: "org", userId: "user", filed }, h))
       .resolves.toEqual({ runId: "run", reviewTaskId: "task", status: "pending", pinned: 6 });
+  });
+
+  it("seeds the run with the trimmed ids and the six targets, and reads every gate of the run in any order", async () => {
+    const h = gateRows(family([...targets].reverse()).reverse());
+    await expect(seedMediaKindReviewRun({ orgId: " org ", userId: " user ", filed }, h))
+      .resolves.toEqual({ runId: "run", reviewTaskId: "task", status: "pending", pinned: 6 });
+    expect(h.seedMarkedReviewGateRun).toHaveBeenCalledWith({ orgId: "org", userId: "user", targets });
+    expect(h.waitForMarkedReviewGates).toHaveBeenCalledWith("run");
+    expect(h.waitForMarkedReviewGate).not.toHaveBeenCalled();
+  });
+
+  it("fails when the family misses a target, pins a foreign one or pins one twice", async () => {
+    for (const pins of [targets.slice(1), [...targets.slice(1), foreign], [...targets.slice(1), targets[1]], [...targets, foreign]]) {
+      await expect(seedMediaKindReviewRun({ orgId: "org", userId: "user", filed }, gateRows(family(pins))))
+        .rejects.toThrow(/not six single-target gates|do not pin exactly the six filed revisions/);
+    }
+    await expect(seedMediaKindReviewRun({ orgId: "org", userId: "user", filed }, gateRows(family([...targets.slice(1), foreign]))))
+      .rejects.toThrow(/do not pin exactly the six filed revisions/);
+    await expect(seedMediaKindReviewRun({ orgId: "org", userId: "user", filed }, gateRows(family([...targets.slice(1), targets[1]]))))
+      .rejects.toThrow(/do not pin exactly the six filed revisions/);
+  });
+
+  it("refuses one gate that pins all six: the executor mints no new gate with several targets", async () => {
+    const h = gateRows([{ reviewTaskId: "task", status: "pending", pinnedTargets: targets }]);
+    await expect(seedMediaKindReviewRun({ orgId: "org", userId: "user", filed }, h))
+      .rejects.toThrow(/not six single-target gates \(1 gates, 6 pins\)/);
+  });
+
+  it("refuses six single-target gates that are not one review family", async () => {
+    const split = [...family(targets.slice(0, 3)), ...family(targets.slice(3), "other")];
+    await expect(seedMediaKindReviewRun({ orgId: "org", userId: "user", filed }, gateRows(split)))
+      .rejects.toThrow(/not one review family/);
+    const noBase = family(targets).map((row, i) => ({ ...row, reviewTaskId: `task#${i + 2}` }));
+    await expect(seedMediaKindReviewRun({ orgId: "org", userId: "user", filed }, gateRows(noBase)))
+      .rejects.toThrow(/not one review family/);
+  });
+
+  it("refuses to seed for anything but the six filed kinds", async () => {
+    const h = gateRows(family(targets));
+    await expect(seedMediaKindReviewRun({ orgId: "org", userId: "user", filed: filed.slice(1) }, h)).rejects.toThrow(/six filed/);
+    expect(h.seedMarkedReviewGateRun).not.toHaveBeenCalled();
   });
 });
