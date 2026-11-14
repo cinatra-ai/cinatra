@@ -8,6 +8,13 @@
 // with exception text. Each class is matched by identity, read from the module
 // that owns it. That module is loaded only for an error that carries its class
 // name, so an ordinary error never loads it and keeps its road's generic answer.
+// An error with the zod marker, or with a marker that cannot be read, is no
+// refusal here, whatever its class: the zod marker takes precedence for every
+// marked error (cinatra#4465), so the road's caller-facing answer
+// (`@/lib/passthrough-refusal`) answers it from its issues or with its fixed
+// sentence.
+
+import { carriesZodMarker } from "@/lib/passthrough-refusal";
 
 /** The one sentence a refused run tool call is answered with. */
 export const RUN_ACTION_REFUSED = "The run's tool call was refused.";
@@ -18,9 +25,10 @@ const REFUSAL_CLASSES = new Map<string, () => Promise<unknown>>([
   ["RunStepToolPolicyRefusal", async () => (await import("@cinatra-ai/agents/store")).RunStepToolPolicyRefusal],
 ]);
 
-/** The code of a refused run tool call, or null for every other error. */
+/** The code of a refused run tool call, or null for every other error and for every error with the zod marker. */
 export async function runActionRefusalCode(err: unknown): Promise<string | null> {
   if (!(err instanceof Error)) return null;
+  if (carriesZodMarker(err)) return null;
   const readClass = REFUSAL_CLASSES.get(err.name);
   if (!readClass) return null;
   let refusalClass: unknown;

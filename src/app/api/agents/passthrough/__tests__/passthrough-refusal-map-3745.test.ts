@@ -8,7 +8,9 @@
  * too deep, too many nodes) and the step-tool policy refusal (a tool the step
  * does not declare). Each is answered 403 with one fixed sentence and the
  * refusal's code; the body carries nothing else. Every other error keeps the
- * road's generic 500 answer unchanged.
+ * road's 500 answer unchanged: the fixed failure sentence (cinatra#4223), and
+ * for an error with the zod marker, a refusal class included, the answer built
+ * from its issues (cinatra#4465).
  *
  * Drives the real route, the real run binding and the real argument
  * preparation; the run store, the handler registry, the bridge-auth check,
@@ -93,6 +95,7 @@ vi.mock("@/lib/primitive-handlers", () => {
 
 import { POST } from "@/app/api/agents/passthrough/route";
 import { ArtifactActionCheckRefusal, OutwardActionRefusal } from "@/lib/extension-host-context";
+import { PASSTHROUGH_SCHEMA_ERROR, PASSTHROUGH_UNEXPECTED_ERROR } from "@/lib/passthrough-refusal";
 
 const ATTEST_KEY = "step-attest-key-under-test";
 const CTX = "ctx-run-1";
@@ -220,14 +223,35 @@ describe("a refused run tool call is answered 403 with a fixed body", () => {
 
 describe("every other error keeps the generic answer", () => {
   // (m5)
-  it("a tool error of another class is answered 500 with its message, as before", async () => {
+  it("a tool error of another class is answered 500 with the fixed failure sentence, never its message", async () => {
     const lookalike = Object.assign(new Error("lookalike failure"), { name: "OutwardActionRefusal", code: "x" });
     for (const error of [new Error("tool failed: detail"), lookalike]) {
       h.toolError = error;
       const res = await POST(makeReq(FRAMELESS_TOOL, sourceHeaders()));
       expect(res.status).toBe(500);
-      expect(await res.json()).toEqual({ error: error.message });
+      expect(await res.json()).toEqual({ error: PASSTHROUGH_UNEXPECTED_ERROR });
     }
+  });
+
+  // (m7)
+  it("a refusal that carries the zod marker is answered from its issues, as any marked error (cinatra#4465)", async () => {
+    const marked = Object.assign(new OutwardActionRefusal("outward_effect_requires_recorded_decision"), {
+      _zod: { traits: new Set(["$ZodError"]) },
+      issues: [{ path: ["name"], code: "invalid_type", expected: "string" }],
+    });
+    h.toolError = marked;
+    const res = await POST(makeReq(FRAMELESS_TOOL, sourceHeaders()));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: `${PASSTHROUGH_SCHEMA_ERROR}: name: invalid_type, expected string` });
+  });
+
+  // (m8)
+  it("a refusal whose zod marker cannot be read is answered 500 with the fixed failure sentence", async () => {
+    // A traits value that is not a native Set: the native membership read throws.
+    h.toolError = Object.assign(new ArtifactActionCheckRefusal("action_not_covered_by_pins"), { _zod: { traits: {} } });
+    const res = await POST(makeReq(FRAMELESS_TOOL, sourceHeaders()));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: PASSTHROUGH_UNEXPECTED_ERROR });
   });
 });
 

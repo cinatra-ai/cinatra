@@ -125,6 +125,24 @@ export function isCallerFacingError(err: unknown): err is Error {
   }
 }
 
+/**
+ * True when the error carries the zod marker or a traits value the native Set
+ * membership cannot read (zodMarker), or when that read throws. Such an error
+ * is answered by passthroughFailureText, from its issues or with the fixed
+ * sentence, before any other class of the error is asked about: a road that
+ * maps a class of its own (cinatra#3745, a refused run tool call) asks only
+ * when this is false, so the marker keeps its precedence (cinatra#4465).
+ * Never a throw.
+ */
+export function carriesZodMarker(err: unknown): boolean {
+  try {
+    if (typeof err !== "object" || err === null) return false;
+    return zodMarker(err) !== "none";
+  } catch {
+    return true; // a read that throws is answered by passthroughFailureText
+  }
+}
+
 /** The issue codes zod 4 writes. Any other code reads as "invalid". */
 const ZOD_ISSUE_CODES: ReadonlySet<string> = new Set([
   "invalid_type",

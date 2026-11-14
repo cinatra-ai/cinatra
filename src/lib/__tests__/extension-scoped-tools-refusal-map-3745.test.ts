@@ -5,9 +5,10 @@
  * The outward-action refusal, the action-check refusal and the step-tool
  * policy refusal end the call with status 403, one fixed sentence and the
  * refusal's code; the outcome carries no other text. An error that only
- * borrows one of those class names, and every other error, keeps the generic
- * 500 outcome with its message, as before. The scope's own refusals keep
- * their 403 and their message.
+ * borrows one of those class names, an error with the zod marker (a refusal
+ * class included, cinatra#4465), and every other error keep the generic 500
+ * outcome with the fixed failure sentence (cinatra#4223), never their
+ * message. The scope's own refusals keep their 403 and their message.
  *
  * The run's extension context, the table operation and the three refusal
  * classes' modules are test doubles; the dispatch and its error mapping are
@@ -74,6 +75,7 @@ vi.mock("@cinatra-ai/agents/store", () => ({
 }));
 
 import { dispatchExtensionScopedTool } from "@/lib/extension-scoped-tools";
+import { PASSTHROUGH_UNEXPECTED_ERROR } from "@/lib/passthrough-refusal";
 
 const RUN = { id: "run-1", orgId: "org-1", runBy: "user-1", templateId: "tmpl-1", packageVersion: "1.2.3" };
 const SENTENCE = "The run's tool call was refused.";
@@ -103,16 +105,26 @@ describe("a refused run tool call answers the fixed 403 outcome", () => {
 });
 
 describe("every other error keeps its answer", () => {
-  it("an error that only borrows a refusal class name is a 500 with its message", async () => {
+  it("an error that only borrows a refusal class name is a 500 with the fixed failure sentence", async () => {
     h.runOperation.mockRejectedValue(
       Object.assign(new Error("lookalike failure"), { name: "OutwardActionRefusal", code: "x" }),
     );
-    expect(await call()).toEqual({ ok: false, status: 500, error: "lookalike failure" });
+    expect(await call()).toEqual({ ok: false, status: 500, error: PASSTHROUGH_UNEXPECTED_ERROR });
   });
 
-  it("an ordinary error is a 500 with its message", async () => {
+  it("an ordinary error is a 500 with the fixed failure sentence, never its message", async () => {
     h.runOperation.mockRejectedValue(new Error("table read failed: detail"));
-    expect(await call()).toEqual({ ok: false, status: 500, error: "table read failed: detail" });
+    expect(await call()).toEqual({ ok: false, status: 500, error: PASSTHROUGH_UNEXPECTED_ERROR });
+  });
+
+  it("a refusal that carries the zod marker is a 500 with the fixed failure sentence (cinatra#4465)", async () => {
+    h.runOperation.mockRejectedValue(
+      Object.assign(new h.RunStepToolPolicyRefusal("step_tool_not_declared"), {
+        _zod: { traits: new Set(["$ZodError"]) },
+        issues: [{ path: ["table"], code: "invalid_type", expected: "string" }],
+      }),
+    );
+    expect(await call()).toEqual({ ok: false, status: 500, error: PASSTHROUGH_UNEXPECTED_ERROR });
   });
 
   it("the scope's own refusal keeps its 403 and its message", async () => {
