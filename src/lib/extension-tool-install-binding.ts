@@ -6,7 +6,7 @@ import "server-only";
 // child's own package. That code must then come from the EXACT installation the
 // parent's dependency edge resolved to, at the root that installation's own
 // anchor names, never from "a package with this name and version". This module
-// states that binding over injected reads; nothing calls it yet. A row counts
+// states that binding over injected reads; extension-tool-origin.ts calls it. A row counts
 // in the run's organisation, or with an explicit null organisation only where
 // the anchor read in the run's organisation carries that exact install id. Each
 // refusal is a fixed code: no path, install id, digest or version. A read that
@@ -50,6 +50,8 @@ export type BoundInstall = {
   digest: string | null;
   /** The `cinatra` block of the package.json lying at `root`. */
   cinatra: Record<string, unknown>;
+  /** The version the row, the anchor and the package.json all carry: checked, never blank. */
+  version: string;
 };
 
 /** The child's validated installation and the parent edge that resolved to it. */
@@ -149,7 +151,7 @@ async function materialize(
     if (manifest.name !== row.packageName || manifest.version !== version) return refuse(manifestMismatch);
     const cinatra = manifest.cinatra;
     if (!isPlainObject(cinatra)) return refuse(manifestInvalid);
-    return { ok: true, value: { row, root: rootDir, digest, cinatra } };
+    return { ok: true, value: { row, root: rootDir, digest, cinatra, version } };
   });
   return checked.ok ? checked.value : refuse("origin-unreadable");
 }
