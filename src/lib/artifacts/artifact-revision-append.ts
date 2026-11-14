@@ -130,6 +130,10 @@ export async function appendArtifactRevision(input: {
   /** The calling node's id — the ledger identity, exactly as the materialize
    *  tool's create path uses it. */
   nodeId: string;
+  /** cinatra#4264: the runtime's signed step of the call, when it verified.
+   *  Recorded as the filing step only when it equals `nodeId` (the request's
+   *  node, never the composite ledger output id). */
+  verifiedStepId?: string;
   artifactId: string;
   baseRepresentationRevisionId: string;
   /**
@@ -254,6 +258,7 @@ export async function appendArtifactRevision(input: {
     path: "materialize_tool",
     extension: input.extension,
     contentHash,
+    ...(input.verifiedStepId !== undefined ? { verifiedStepId: input.verifiedStepId } : {}),
   });
   if (claim.kind === "finalized") {
     // The identity above is append-scoped, so a finalized hit is THIS append.
@@ -671,8 +676,8 @@ export async function readRevisionGateSatisfaction(input: {
 // THE BORDER THIS CROSSES, NAMED. The artifact-identity road is the HOST's (the
 // core/extension border: the host owns the review floor, the gates, the change
 // road and the display map). This writer is a host writer beside
-// `createSemanticArtifact` and the two CMS capture writers, in the host's own
-// `src/lib/artifacts` tree. It adds no package-name branch and knows nothing
+// `createSemanticArtifact` and the CMS preview-capture store, in the host's
+// own `src/lib/artifacts` tree. It adds no package-name branch and knows nothing
 // about which extension defines the type it appends to — it reads the type off
 // the row it appends to and writes nothing about identity at all.
 //
@@ -681,8 +686,8 @@ export async function readRevisionGateSatisfaction(input: {
 //   • It appends the `representation` row at MAX(revision)+1 under the
 //     per-artifact advisory lock, moves the `objects.data` pointer onto the new
 //     revision, and emits the artifact-writer provenance witness in the SAME
-//     transaction — the same rows, in the same shapes, the CMS capture writer
-//     already commits together (`buildCmsSnapshotCaptureQueries`). The bytes
+//     transaction — the same rows, in the same shapes, that a file artifact's
+//     representation write commits together. The bytes
 //     door additionally upserts the org-scoped substance-keyed `resource` and
 //     writes the `artifact_blobs` row when that resource is new.
 //

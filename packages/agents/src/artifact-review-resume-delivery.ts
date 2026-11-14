@@ -655,8 +655,11 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
   // its initial send (the a2aContextId road above), the legs of a declared
   // family are inserted in one transaction (`emitDeclaredReviewGateFamily`),
   // and an outcome that repeats on 20 claims is a fault for ops. A
-  // dead-lettered intent is not claimed again and no code puts it back, so it
-  // resumes nothing; ops read it (`readDeadLetteredResumeIntents`). Only
+  // dead-lettered intent is not claimed again; ops read it
+  // (`readDeadLetteredResumeIntents`). One road puts one back: the upgrade
+  // recovery below, for the newest decision of a declared pause from before the
+  // upgrade (or with an old writer's reopen attempt), once per pause, ever
+  // (cinatra#4476, `declared-review-recovery.ts`). Only
   // `delivered`, `already-advanced` and `refused-out-of-scope` close an intent,
   // and no code puts a closed intent back to pending. A failed pass is tallied;
   // the claim still leaves exhausted intents out.
@@ -666,6 +669,37 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
   } catch (err) {
     summary.failed += 1;
     console.error("[artifact-review-resume] dead-letter pass failed:", err);
+  }
+  // cinatra#4476 — the upgrade recovery: a declared review's pause that the
+  // cinatra#4312 upgrade left with no live intent (an intent main left exhausted, or
+  // a lineage an old writer left unreadable until the chain check read it) gets its
+  // newest decision re-armed or carried, once per pause, ever, right before the
+  // claim below takes it. It acts only after core__0127 wrote its epoch row. A pause
+  // it cannot recover is logged for ops; a failed pass or pause is tallied and the
+  // claim still runs (`declared-review-recovery.ts`).
+  try {
+    const { recoverStrandedDeclaredReviews } = await import("./declared-review-recovery");
+    for (const o of await recoverStrandedDeclaredReviews()) {
+      if (o.outcome === "rearmed" || o.outcome === "carried") {
+        console.warn(`[artifact-review-resume] upgrade recovery ${o.outcome} run=${o.runId} review=${o.baseTaskId} gate=${o.gateId}`);
+      } else if (o.outcome === "ops") {
+        console.warn(
+          `[artifact-review-resume] upgrade recovery cannot resume run=${o.runId} review=${o.baseTaskId}: ${o.reason}` +
+            ("lineageId" in o ? ` lineage=${o.lineageId} code=${o.code}` : "") + " — for ops",
+        );
+      } else if (o.outcome === "failed") {
+        summary.failed += 1;
+        // The error's name and SQLSTATE code only: a query error's message carries the
+        // query's parameters, the decision's text among them.
+        console.error(
+          `[artifact-review-resume] upgrade recovery failed for run=${o.runId} review=${o.baseTaskId}: error=${o.errorName}` +
+            (o.errorCode ? ` code=${o.errorCode}` : ""),
+        );
+      }
+    }
+  } catch (err) {
+    summary.failed += 1;
+    console.error("[artifact-review-resume] upgrade recovery pass failed:", err);
   }
   const claimed = await claimPendingResumeIntents({
     limit: opts?.limit ?? DEFAULT_LIMIT,

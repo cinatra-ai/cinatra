@@ -178,6 +178,26 @@ export const CHECKBOX_CALL_SITE_READINGS: FileReading[] = [
     ],
   },
   {
+    file: "src/components/extensions/schema-config-connector-form.tsx",
+    tokens: 3,
+    sites: [
+      {
+        anchor: "id={boxId}",
+        tag: "Checkbox",
+        drawn: "checkbox",
+        effect: "confirmed",
+        reading:
+          "an on / off row of an extension's settings form (BooleanRow): a change only sets local state and the hidden input's value, and only one of the form's own action buttons writes it, by reading the form's named inputs (collectFormInputs) and posting them to the extension's action",
+        tagIncludes: ["onCheckedChange={(next) => setChecked(next === true)}"],
+        fileIncludes: [
+          '<Input type="hidden" name={field.key} value={checked ? "true" : "false"} readOnly />',
+          "onClick={(e) => void run(e.currentTarget)}",
+          "const r = await invokeAction(installId, field.actionId, collectFormInputs(origin));",
+        ],
+      },
+    ],
+  },
+  {
     file: "src/app/configuration/development/page.tsx",
     tokens: 3,
     sites: [
@@ -733,7 +753,27 @@ export const CHECKBOX_CALL_SITE_READINGS: FileReading[] = [
   {
     file: "packages/registries/src/verdaccio/client.ts",
     tokens: 0,
-    sites: [{ anchor: "createRedactingPacote(pacoteImpl)", tag: "pacoteImpl", drawn: "no checkbox", effect: "none", reading: SERVER_MODULE, tagIncludes: [], fileIncludes: ['import * as pacoteImpl from "pacote";'] }],
+    sites: [
+      {
+        anchor: '"default" in pacoteModule',
+        tag: "pacoteModule",
+        drawn: "no checkbox",
+        effect: "none",
+        reading:
+          "a server-side library's module object (no React component in it) read only by the in operator, for whether it has a default export, to choose the object that holds its functions: it draws nothing",
+        tagIncludes: [],
+        fileIncludes: ['import * as pacoteModule from "pacote";', 'const pacoteImpl = "default" in pacoteModule'],
+      },
+      {
+        anchor: "createRedactingPacote(pacoteImpl)",
+        tag: "pacoteImpl",
+        drawn: "no checkbox",
+        effect: "none",
+        reading: SERVER_MODULE,
+        tagIncludes: [],
+        fileIncludes: ["? pacoteModule.default as typeof pacoteModule", ": pacoteModule;", "const pacote = createRedactingPacote(pacoteImpl);"],
+      },
+    ],
   },
   {
     file: "packages/cli/src/prod-extension-acquisition.mjs",

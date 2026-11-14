@@ -460,6 +460,39 @@ export function lifecycleInterceptionsSchemaQueries(schemaName: string): QueryIn
   ADD COLUMN IF NOT EXISTS reopened_gate_id text
   REFERENCES "${q}"."artifact_review_gates" (id) ON DELETE SET NULL`,
     },
+    // cinatra#4476 — the upgrade recovery's once marker per pause, the upgrade's
+    // time with the recovery's page cursor and cycle mark, and the index the recovery
+    // pages the paused runs through (core__0127). No epoch row here: only the upgrade
+    // writes it, so a fresh install recovers nothing. The two ALTERs give the columns
+    // to an epoch table an earlier shape of this change created.
+    {
+      text: `CREATE TABLE IF NOT EXISTS "${q}"."artifact_review_resume_recovery" (
+  run_id              text NOT NULL,
+  base_review_task_id text NOT NULL,
+  road                text NOT NULL CHECK (road IN ('rearm', 'carry')),
+  gate_id             text NOT NULL,
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (run_id, base_review_task_id)
+)`,
+    },
+    {
+      text: `CREATE TABLE IF NOT EXISTS "${q}"."artifact_review_resume_recovery_epoch" (
+  id                text PRIMARY KEY CHECK (id = 'cinatra-4476'),
+  upgraded_at       timestamptz NOT NULL DEFAULT now(),
+  cursor_run_id     text,
+  high_water_run_id text
+)`,
+    },
+    {
+      text: `ALTER TABLE "${q}"."artifact_review_resume_recovery_epoch" ADD COLUMN IF NOT EXISTS cursor_run_id text`,
+    },
+    {
+      text: `ALTER TABLE "${q}"."artifact_review_resume_recovery_epoch" ADD COLUMN IF NOT EXISTS high_water_run_id text`,
+    },
+    {
+      text: `CREATE INDEX IF NOT EXISTS agent_runs_pending_approval_id_idx
+  ON "${q}"."agent_runs" (id) WHERE status = 'pending_approval'`,
+    },
     {
       text: `CREATE INDEX IF NOT EXISTS artifact_review_resume_outbox_dead_idx
   ON "${q}"."artifact_review_resume_outbox" (dead_lettered_at) WHERE dead_lettered_at IS NOT NULL`,
@@ -820,6 +853,21 @@ export function lifecycleRepairSchemaQueries(schemaName: string): QueryInput[] {
     {
       text: `CREATE INDEX IF NOT EXISTS lifecycle_repair_status_idx
   ON "${q}"."lifecycle_repair" (status, created_at)`,
+    },
+    // cinatra#4245: the run's pause_generation that a change request ended, so
+    // the drain's stop can be conditioned on it. Nullable, no backfill: a repair
+    // recorded before the column reads NULL. Migration twin core__0126.
+    { text: `ALTER TABLE "${q}"."lifecycle_repair" ADD COLUMN IF NOT EXISTS paused_run_generation bigint` },
+    // cinatra#4264 (slice B1a; migration twin core__0128): the Regenerate
+    // intent (the filing node a Regenerate reruns; NULL = an ordinary repair)
+    // and the source target a segment repair names. Nullable, no backfill.
+    { text: `ALTER TABLE "${q}"."lifecycle_repair" ADD COLUMN IF NOT EXISTS regenerate_node_id text` },
+    { text: `ALTER TABLE "${q}"."lifecycle_repair" ADD COLUMN IF NOT EXISTS source_artifact_id text` },
+    { text: `ALTER TABLE "${q}"."lifecycle_repair" ADD COLUMN IF NOT EXISTS source_representation_revision_id text` },
+    // The provenance reader walks a refiled successor back to its base.
+    {
+      text: `CREATE INDEX IF NOT EXISTS lifecycle_repair_successor_idx
+  ON "${q}"."lifecycle_repair" (successor_artifact_id, successor_representation_revision_id)`,
     },
 
     // -----------------------------------------------------------------------
