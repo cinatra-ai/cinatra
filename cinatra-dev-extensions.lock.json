@@ -180,7 +180,7 @@
     {
       "packageName": "@cinatra-ai/drupal-mcp-connector",
       "repo": "cinatra-ai/drupal-mcp-connector",
-      "resolvedSha": "78e71e78db8f218fa17e0944d44951ad90eaf328"
+      "resolvedSha": "a5afea719dda12ca21003415db35b89b4d304965"
     },
     {
       "packageName": "@cinatra-ai/drupal-widget-chat-skill",
