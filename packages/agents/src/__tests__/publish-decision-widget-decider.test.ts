@@ -64,7 +64,11 @@ beforeEach(() => {
     outcome: "won",
     decision: { id, status: change.to },
   }));
+  // Reset, not only cleared: a once-value a case queued but never used (its case threw first, as every grant case does
+  // where the mint does not exist) must not answer the next case's run access check.
+  enforceRunAccess.mockReset();
   enforceRunAccess.mockResolvedValue(undefined);
+  resolveOrgRoleForUser.mockReset();
   resolveOrgRoleForUser.mockResolvedValue("member");
 });
 

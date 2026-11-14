@@ -59,6 +59,9 @@ function request(runId: string | null, headers?: Record<string, string>): Reques
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Reset, not only cleared: a once-value a case queued but never used (the read never mints where the mint does not
+  // exist) must not answer a later case. Back to its own default, no grant.
+  mintWidgetPublishDecideGrant.mockReset();
   resolveAssistantWidgetBinding.mockReturnValue({ agentSlug: "blog" });
   resolveWidgetLifecycleActorContext.mockResolvedValue({ ok: true, actorCtx: ACTOR_CTX, claims: CLAIMS });
   readAgentRunById.mockResolvedValue(OWN_RUN);
