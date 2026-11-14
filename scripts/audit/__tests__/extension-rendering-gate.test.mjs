@@ -235,7 +235,8 @@ describe("extension-rendering-gate — blocking mode", () => {
   });
 });
 
-// R3 — checklist 2 and 3: the floor holds today's deficit and only shrinks.
+// R3 — checklist 2 and 3: a floor entry that no live finding matches is stale
+// and fails; the floor only shrinks.
 describe("extension-rendering-gate — a stale floor entry", () => {
   const staleFloor = [...TODAY, entry(BETA, [`${BETA}:item`])];
 
