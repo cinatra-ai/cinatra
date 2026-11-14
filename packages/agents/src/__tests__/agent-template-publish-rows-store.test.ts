@@ -81,7 +81,6 @@ describe("cinatra#4150 — createLocalAgentTemplateVersion carries publishRows o
   it("the rows the compiler produced reach createAgentTemplate", async () => {
     const rows = compiledRows();
     await createLocalAgentTemplateVersion({ seed: seedWith(rows) });
-    expect(rowInput().publishRows).toBe(rows);
     expect(rowInput().publishRows).toEqual(ROWS);
   });
 
@@ -114,6 +113,77 @@ describe("cinatra#4150 — a client call cannot write rows the compiler did not 
       expect(createTemplate).not.toHaveBeenCalled();
     });
   }
+});
+
+// A map no compile produced: a two-line label over an input the node does not have.
+const FORGED = { publish: [{ label: "Bad\nLabel", input: "not-owned" }] };
+const writtenRows = () => createTemplate.mock.calls.map((call) => field(call[0] as object));
+
+describe("cinatra#4150 — the create reads publishRows once and writes only the value it checked", () => {
+  it("an own getter that gives null to the check and a forged map later writes no forged map", async () => {
+    let reads = 0;
+    const seed = {
+      packageName: "@cinatra-ai/publish-fixture-agent",
+      packageVersion: "1.0.0",
+      get publishRows() {
+        reads += 1;
+        return reads === 1 ? null : FORGED;
+      },
+    };
+    await createLocalAgentTemplateVersion({ seed: seed as never }).catch(() => undefined);
+    expect(writtenRows()).not.toContainEqual(FORGED);
+    expect(writtenRows().every((rows) => rows === null)).toBe(true);
+  });
+
+  it("an inherited getter that gives the compiler's map to the checks and a forged map later writes the checked rows", async () => {
+    const compiled = compiledRows();
+    let reads = 0;
+    const proto = {
+      get publishRows() {
+        reads += 1;
+        return reads <= 2 ? compiled : FORGED;
+      },
+    };
+    const seed = Object.assign(Object.create(proto) as object, {
+      packageName: "@cinatra-ai/publish-fixture-agent",
+      packageVersion: "1.0.0",
+    });
+    await createLocalAgentTemplateVersion({ seed: seed as never }).catch(() => undefined);
+    expect(writtenRows()).not.toContainEqual(FORGED);
+    expect(writtenRows()).toEqual([ROWS]);
+  });
+});
+
+describe("cinatra#4150 — the compiler's map cannot be changed after it is returned", () => {
+  it("the map, each rows list and each row are frozen", () => {
+    const rows = compiledRows();
+    expect(Object.isFrozen(rows)).toBe(true);
+    for (const list of Object.values(rows)) {
+      expect(Object.isFrozen(list)).toBe(true);
+      for (const row of list) expect(Object.isFrozen(row)).toBe(true);
+    }
+  });
+
+  for (const [label, change] of [
+    ["a row's label and input are changed", (r: Record<string, Array<{ label: string; input: string }>>) => Object.assign(r.publish![0]!, FORGED.publish[0])],
+    ["a row is added to the list", (r: Record<string, Array<{ label: string; input: string }>>) => r.publish!.push(FORGED.publish[0]!)],
+    ["the node's list is replaced", (r: Record<string, Array<{ label: string; input: string }>>) => (r.publish = FORGED.publish)],
+    ["a node is added", (r: Record<string, Array<{ label: string; input: string }>>) => (r.other = FORGED.publish)],
+  ] as const) {
+    it(`${label}: the change throws and the write carries the compiled rows`, async () => {
+      const rows = compiledRows();
+      expect(() => change(rows)).toThrow(TypeError);
+      await createLocalAgentTemplateVersion({ seed: seedWith(rows) });
+      expect(writtenRows()).toEqual([ROWS]);
+    });
+  }
+
+  it("the write carries a copy taken at the check, not the caller's object", async () => {
+    const rows = compiledRows();
+    await createLocalAgentTemplateVersion({ seed: seedWith(rows) });
+    expect(rowInput().publishRows).toEqual(ROWS);
+    expect(rowInput().publishRows).not.toBe(rows);
+  });
 });
 
 function input(publishRows: unknown): CreateAgentTemplateInput {
