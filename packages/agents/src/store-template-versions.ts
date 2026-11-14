@@ -513,6 +513,8 @@ export function serializeTemplate(input: CreateAgentTemplateInput) {
     // cinatra#4150 — the declared publishing nodes, JSON-as-text like gatedSteps.
     // null on create when the caller does not derive it from a compile.
     publishingSteps: input.publishingSteps ? JSON.stringify(input.publishingSteps) : null,
+    // cinatra#4150 — the publish card's rows, JSON-as-text; null as above.
+    publishRows: input.publishRows ? JSON.stringify(input.publishRows) : null,
     // template-level AgentAuthPolicy as JSON-as-text. null = use
     // DEFAULT_AGENT_AUTH_POLICY at read time.
     agentAuthPolicy: input.agentAuthPolicy ? JSON.stringify(input.agentAuthPolicy) : null,
@@ -532,6 +534,28 @@ function parsePublishingStepsColumn(text: string | null): string[] | null {
   }
   if (!Array.isArray(value) || !value.every((id) => typeof id === "string")) throw malformed();
   return value as string[];
+}
+
+// The same posture for the publish card's rows: null passes through, and a
+// stored value that is not { [nodeId]: [{ label, input }] } throws, naming the
+// column only.
+function parsePublishRowsColumn(text: string | null): Record<string, Array<{ label: string; input: string }>> | null {
+  if (text === null) return null;
+  const malformed = () => new Error("agent_templates.publish_rows is not a JSON map of node ids to rows");
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw malformed();
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw malformed();
+  const isRow = (row: unknown) =>
+    !!row && typeof row === "object" && !Array.isArray(row) && Object.keys(row).sort().join(",") === "input,label" &&
+    typeof (row as { label: unknown }).label === "string" && typeof (row as { input: unknown }).input === "string";
+  for (const rows of Object.values(value)) {
+    if (!Array.isArray(rows) || !rows.every(isRow)) throw malformed();
+  }
+  return value as Record<string, Array<{ label: string; input: string }>>;
 }
 
 export function deserializeTemplate(row: typeof agentTemplates.$inferSelect): AgentTemplateRecord {
@@ -610,6 +634,8 @@ export function deserializeTemplate(row: typeof agentTemplates.$inferSelect): Ag
     // cinatra#4150 — null (unknown) passes through; a stored value that is not a
     // list of node ids throws instead of being read as "publishes nothing".
     publishingSteps: parsePublishingStepsColumn(row.publishingSteps ?? null),
+    // cinatra#4150 — the publish card's rows; null (unknown) passes through.
+    publishRows: parsePublishRowsColumn(row.publishRows ?? null),
     // JSON-as-text deserialization. Returns null when column is null.
     // fix: defensive parse — see parseAuthPolicySafe definition above.
     agentAuthPolicy: parseAuthPolicySafe(row.agentAuthPolicy ?? null),
