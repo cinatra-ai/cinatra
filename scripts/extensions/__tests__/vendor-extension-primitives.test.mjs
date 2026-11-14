@@ -140,6 +140,18 @@ describe("provenance — vendored files match registry source modulo rewrite", (
     ).map((entry) => entry.extensionDir);
     expect(retired).toEqual([]);
   });
+
+  // cinatra#4150: blog-linkedin-publish-agent deleted its review screen (the
+  // application asks on its own publish card), and with it the label/textarea
+  // primitives and the utils lib it carried. Nothing is vendored into it any
+  // more, so a planned copy there would only report the deleted files as drift.
+  it("vendors nothing into blog-linkedin-publish-agent, whose screen is retired (cinatra#4150)", () => {
+    const dirs = VENDOR_MANIFEST.map((entry) => entry.extensionDir);
+    expect(dirs).not.toContain("extensions/cinatra-ai/blog-linkedin-publish-agent");
+    expect(
+      plannedFiles().filter((f) => f.target.startsWith("extensions/cinatra-ai/blog-linkedin-publish-agent/")),
+    ).toEqual([]);
+  });
 });
 
 // Every vendored file is copied byte-for-byte into ~20 extension repositories,

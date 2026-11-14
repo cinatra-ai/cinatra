@@ -72,9 +72,10 @@ const PARITY_TABLE: ReadonlyArray<
   ["@cinatra-ai/context-selection-agent:context-selector", ContextSelectorRenderer as never, 90],
   ["context-selector", ContextSelectorRenderer as never, 90],
   // MIGRATED field-renderer COMPONENTS (cinatra#1625 S8/M3): list-curator's
-  // scrape-schema-review + final-list-review (→ @cinatra-ai/list-curator-agent),
-  // blog-linkedin's draft-review (→ @cinatra-ai/blog-linkedin-publish-agent) and
-  // blog-wordpress's draft-confirm (→ @cinatra-ai/blog-wordpress-publish-agent).
+  // scrape-schema-review + final-list-review (→ @cinatra-ai/list-curator-agent).
+  // (blog-linkedin's draft-review and blog-wordpress's draft-confirm migrated the
+  // same way and were then RETIRED with the packs' own confirmation screens,
+  // cinatra#4150 — asserted in the retired-screen case below.)
   // Their ids now resolve to the ExtensionFieldRenderer wrapper (still priority
   // 90, same strict-id condition) — asserted in the dedicated migrated-binding
   // block below, not in this frozen host-component table.
@@ -172,8 +173,6 @@ describe("resolution parity with the retired hand map", () => {
   it.each([
     ["@cinatra-ai/list-curator-agent:scrape-schema-review", 90],
     ["@cinatra-ai/list-curator-agent:final-list-review", 90],
-    ["@cinatra-ai/blog-linkedin-publish-agent:draft-review", 90],
-    ["@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", 90],
     // follow-up-cadence relocated into @cinatra-ai/email-artifacts
     // (cinatra#1625): BOTH scoped ids load the same pack component, priority 90.
     ["@cinatra-ai/email-follow-up-agent:follow-up-cadence", 90],
@@ -318,6 +317,25 @@ describe("resolution parity with the retired hand map", () => {
   });
 
 
+  it("cinatra#4150: the two publish packs' own confirmation screens left the build", () => {
+    // The packs now declare their publishing step and the application asks on
+    // its own publish card, so neither pack declares a field renderer any more:
+    // no generated binding names either pack, and the two ids resolve to no
+    // custom entry and no mid-run classification.
+    const RETIRED_SCREEN_IDS = [
+      "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
+      "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm",
+    ];
+    const declarers = GENERATED_FIELD_RENDERER_BINDINGS.map((b) => b.declaredBy);
+    expect(declarers).not.toContain("@cinatra-ai/blog-linkedin-publish-agent");
+    expect(declarers).not.toContain("@cinatra-ai/blog-wordpress-publish-agent");
+    for (const id of RETIRED_SCREEN_IDS) {
+      expect(GENERATED_FIELD_RENDERER_BINDINGS.map((b) => b.id), id).not.toContain(id);
+      expect(resolveWith(id), id).toBeNull();
+      expect(hasMidRunHitlBinding(id), id).toBe(false);
+    }
+  });
+
   it("an unknown namespaced id resolves to NO custom entry (schema-fallback path)", () => {
     expect(resolveWith("@cinatra-ai/unknown-agent:whatever")).toBeNull();
   });
@@ -370,8 +388,6 @@ describe("the idea step's binding holds its Continue until a pick", () => {
 
 describe("mid-run HITL classification parity", () => {
   it.each([
-    "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
-    "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm",
     "@cinatra-ai/context-selection-agent:context-selector",
     // cinatra#1959: the pack-served re-entrant drafts / follow-ups gates carry
     // midRunHitl:true in the merged bindings (email-artifacts declares it), so the
