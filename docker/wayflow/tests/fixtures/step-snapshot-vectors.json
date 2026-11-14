@@ -1,0 +1,78 @@
+{
+  "_doc": "cinatra#4264 B1a shared step-snapshot vectors: the runtime's canonical bytes (step_snapshot.canonical_json_bytes), their sha256 and the n1 attestation under a fixed TEST key. Read by docker/wayflow/tests/test_step_snapshot.py and packages/agents/src/__tests__/step-snapshots-4264.test.ts. The 'python' member is a Python literal of the input (ast.literal_eval). Regenerate only together with both tests.",
+  "key": "step-snapshot-test-key",
+  "run_id": "run-vectors-1",
+  "node": "file_image",
+  "flow_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "vectors": [
+    {
+      "name": "weight-float",
+      "python": "{'weight': 1.0}",
+      "inputs_json": "{\"weight\":1.0}",
+      "bytes_hex": "7b22776569676874223a312e307d",
+      "sha256": "08c907ffdc660c41b3981e67377c5ec73e1ff1c9b3cba2715689635cd0b7a51e",
+      "attestation": "n1:8747420b1a6c9f32d91b5ac07991b350422a16dd57074489018de378f95ee76a"
+    },
+    {
+      "name": "negative-zero",
+      "python": "{'value': -0.0}",
+      "inputs_json": "{\"value\":-0.0}",
+      "bytes_hex": "7b2276616c7565223a2d302e307d",
+      "sha256": "c848a4efa987f46ba3bfd46242333afcb1c68c3240e0f35ae9d269b1c980648b",
+      "attestation": "n1:784678c792843253553681359dae85d8dc1acea3e926c56257a1c8454fe77fad"
+    },
+    {
+      "name": "large-float",
+      "python": "{'value': 1e300}",
+      "inputs_json": "{\"value\":1e+300}",
+      "bytes_hex": "7b2276616c7565223a31652b3330307d",
+      "sha256": "517243b5dd5d6d079cb4b7a447e2221788de8a0782b1076132ebe4558cd4a1e2",
+      "attestation": "n1:75ffcddc6d827fa73533f9a70df231e5b8dba49dbdd3ac83c921c632420c75da"
+    },
+    {
+      "name": "big-int",
+      "python": "{'value': 9223372036854775808}",
+      "inputs_json": "{\"value\":9223372036854775808}",
+      "bytes_hex": "7b2276616c7565223a393232333337323033363835343737353830387d",
+      "sha256": "a04d85bc7124c7ae48f60321bfae1e7112247d005b7faa0da2becc79e3d35469",
+      "attestation": "n1:a1b2607fcdc1fd7aa5cd7eea247fd75f3037028e71a208d589c7eef6599abb71"
+    },
+    {
+      "name": "e-acute",
+      "python": "{'title': 'caf\\u00e9'}",
+      "inputs_json": "{\"title\":\"caf\u00e9\"}",
+      "bytes_hex": "7b227469746c65223a22636166c3a9227d",
+      "sha256": "03317d05599e663eaa056650b15443eee1aedeb9c72d877e6e12540968ef3d98",
+      "attestation": "n1:cccb931a146e221c2aee595595b5e9b4ce3740bb302f411136ed049be371a4de"
+    },
+    {
+      "name": "line-separator",
+      "python": "{'text': 'a\\u2028b'}",
+      "inputs_json": "{\"text\":\"a\u2028b\"}",
+      "bytes_hex": "7b2274657874223a2261e280a862227d",
+      "sha256": "f5af203d76b9dcf362e27d91b153730ad104c6d7c1d65055d2dd6eb4b6f4a71b",
+      "attestation": "n1:16bf710cf9f15e8c9394791d433c94a513180aa36e971986246adaa362ad2e55"
+    },
+    {
+      "name": "emoji",
+      "python": "{'text': '\\U0001F600 ok'}",
+      "inputs_json": "{\"text\":\"\ud83d\ude00 ok\"}",
+      "bytes_hex": "7b2274657874223a22f09f9880206f6b227d",
+      "sha256": "b9077a8a150c0e84768fb5bc3bc3998e4e585df2c4808e8f019e29b20bb96d14",
+      "attestation": "n1:86946c649e1fddfc2cffd2a5f5ade6c3a7a76401070e0bef5a886be487cb7335"
+    },
+    {
+      "name": "unsorted-nested",
+      "python": "{'b': {'z': 1, 'a': [3, {'y': 2, 'x': 1}]}, 'a': None, 'prompt': 'draw a cat'}",
+      "inputs_json": "{\"a\":null,\"b\":{\"a\":[3,{\"x\":1,\"y\":2}],\"z\":1},\"prompt\":\"draw a cat\"}",
+      "bytes_hex": "7b2261223a6e756c6c2c2262223a7b2261223a5b332c7b2278223a312c2279223a327d5d2c227a223a317d2c2270726f6d7074223a2264726177206120636174227d",
+      "sha256": "f35b223d61621620c79f39a593a7afcfdcf292781cce26af2f512c5e12773d4c",
+      "attestation": "n1:9a1f73e0e84ed06abffcc74d8edc3b8618f376f11b982bdfc3ee0eb929c3faf5"
+    }
+  ],
+  "dropped": [
+    "nan",
+    "infinity",
+    "lone-surrogate"
+  ]
+}

@@ -529,5 +529,9 @@ export function agentTemplateRunGateSchemaQueries(schemaName: string): { text: s
     // not take the list from a compile. Operator-upgrade twin in
     // migrations/core/core__0118.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS publishing_steps text` },
+    // publish_rows (cinatra#4150): the publish card's rows per declared node,
+    // JSON-as-text. NULLABLE, no default, no backfill: null = unknown.
+    // Operator-upgrade twin in migrations/core/core__0130.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS publish_rows text` },
   ];
 }
