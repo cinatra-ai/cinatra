@@ -154,6 +154,7 @@ import {
   RUN_PAGE_RAIL_ROW_CLASS,
   RUN_PAGE_RAIL_SEP_CLASS,
   RUN_PAGE_RAIL_TITLE_COLOUR_CLASS,
+  splitRailExtrasAtSpine,
   useRunSurfaceRailFrame,
 } from "./run-step-rail-extra-entry";
 
@@ -1784,6 +1785,10 @@ function StepperColumn({
   // a second `data-run-step-rail` in the DOM — the very defect this closes.
   if (stepperSteps.length === 0 && railExtras.length === 0) return null;
 
+  // A review gate that stands in a declared step's place is drawn THERE, with
+  // its verification after it; only the rest trail the spine (cinatra#3035).
+  const { onSpine, trailing } = splitRailExtrasAtSpine(railExtras);
+
   return (
     <TooltipProvider>
       <div
@@ -1803,7 +1808,42 @@ function StepperColumn({
               const isActive = s.index === activeStep;
               const isCompleted = s.index < activeStep;
               const isLoading = isActive && (isLoadingStatus || isResuming);
-              const isLast = i === stepperSteps.length - 1 && railExtras.length === 0;
+              const isLast = i === stepperSteps.length - 1 && trailing.length === 0;
+              const inPlace = onSpine.filter((entry) => entry.onStep === s.stepNumber);
+              if (inPlace.length > 0) {
+                // ONE LIVE ROW PER STEP (cinatra#3035). Several gates may stand
+                // in one step's place (one pause opens one gate per artifact,
+                // all pending at first). Only the step's first unsettled entry
+                // takes the step's own value, so it alone can be the active row,
+                // as on the run-frame rail; every other entry takes a value of
+                // its own a fraction past the step, so no two rows share a
+                // value, and the one the run is past reads completed and the one
+                // still to come reads inactive.
+                const current = inPlace.findIndex(
+                  (entry) => entry.status !== "resolved" && entry.status !== "completed",
+                );
+                return inPlace.map((entry, j) => (
+                  <StepperItem
+                    key={entry.key}
+                    step={j === current ? s.index : s.index + (j + 1) / (inPlace.length + 1)}
+                    completed={
+                      entry.status === "resolved" ||
+                      entry.status === "completed" ||
+                      s.index < activeStep
+                    }
+                    className="items-start !flex-none"
+                  >
+                    <RailExtraEntry
+                      entry={entry}
+                      reviewHrefBase={reviewHrefBase}
+                      displayStep={s.index}
+                    />
+                    {!(isLast && j === inPlace.length - 1) && (
+                      <StepperSeparator className={RUN_PAGE_RAIL_SEP_CLASS} />
+                    )}
+                  </StepperItem>
+                ));
+              }
               const showPauseIcon = isPaused && !isCompleted && !isResuming;
               // The replay affordance this row actually carries — asserted by
               // the single-rail regression test (cinatra#2739).
@@ -1899,9 +1939,9 @@ function StepperColumn({
                 render here through the shared `RailExtraEntry`, which is why
                 retiring that second mount loses nothing. They trail the spine
                 in the exact order `buildRunStepRail` sorted them into. */}
-            {railExtras.map((entry, i) => {
+            {trailing.map((entry, i) => {
               const displayStep = stepperSteps.length + i + 1;
-              const isLast = i === railExtras.length - 1;
+              const isLast = i === trailing.length - 1;
               return (
                 <StepperItem
                   key={entry.key}
@@ -2650,13 +2690,20 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     // the trailing rows below — is the one highlighted entry, and a rail with
     // nothing pending highlights none. The display indices are the rail's own:
     // the spine takes 1..N and the trailing rows continue from N+1.
+    // A gate standing in a spine step's place (cinatra#3035) is elected as that
+    // step; only the rest are trailing rows.
+    const { onSpine, trailing } = splitRailExtrasAtSpine(railExtras);
     return electRunRailActiveStep({
       status,
       currentStepNumber,
       awaitingNextStep,
       highestStepNumber: highestStepNumberRef.current,
       spine: stepperSteps,
-      railExtras,
+      railExtras: trailing,
+      spineGates: onSpine.flatMap((entry) => {
+        const step = stepperSteps.find((s) => s.stepNumber === entry.onStep);
+        return entry.kind === "gate" && step ? [{ index: step.index, status: entry.status }] : [];
+      }),
     });
   })();
 
@@ -2884,6 +2931,29 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     railCurrentReviewTaskId: initialReviewGate?.railCurrentReviewTaskId,
     refresh: embedMode ? undefined : router.refresh,
   });
+
+  // cinatra#3035: INSIDE THE RUN FRAME THE RAIL IS SERVER-RENDERED, so a live
+  // advance to a gate this panel has not shown yet asks for one server render.
+  // The first gate a run shows here is the one the server drew, so it only
+  // seeds the set; the set is the run's own and starts again for another run.
+  // A review gate's refresh is the hook's above (#3942), which reads the
+  // server's own rail list; this asks only for the gates that hook does not
+  // read, so one advance asks for at most one render.
+  const liveGateTaskId = effectiveInterruptContext?.reviewTaskId ?? null;
+  const gatesShownRef = useRef<{ runId: string; shown: Set<string> | null }>({ runId, shown: null });
+  useEffect(() => {
+    if (gatesShownRef.current.runId !== runId) gatesShownRef.current = { runId, shown: null };
+    if (!railFrameDrawsTheRail || liveGateTaskId === null) return;
+    const seen = gatesShownRef.current;
+    if (seen.shown === null) {
+      seen.shown = new Set([liveGateTaskId]);
+      return;
+    }
+    if (seen.shown.has(liveGateTaskId)) return;
+    seen.shown.add(liveGateTaskId);
+    if (reviewTaskId != null) return;
+    router.refresh();
+  }, [railFrameDrawsTheRail, liveGateTaskId, reviewTaskId, router, runId]);
 
 
   // -------------------------------------------------------------------------

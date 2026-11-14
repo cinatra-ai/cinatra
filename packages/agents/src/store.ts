@@ -78,6 +78,7 @@ import {
   updateHitlPromptExcluded,
   readHitlPromptsForRun,
   readAllHitlPromptsForRun,
+  readReviewGateTimesForRun,
   updateHitlPromptsExcludedForRunAgent,
   readNonExcludedAgentIdsForRun,
 } from "./agent-run-hitl-prompts";
@@ -86,6 +87,7 @@ export {
   updateHitlPromptExcluded,
   readHitlPromptsForRun,
   readAllHitlPromptsForRun,
+  readReviewGateTimesForRun,
   updateHitlPromptsExcludedForRunAgent,
   readNonExcludedAgentIdsForRun,
 };
