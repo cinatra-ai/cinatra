@@ -1583,6 +1583,15 @@ function declaredRowsOf(owner: unknown): { present: boolean; value?: unknown } {
   return { present: true, value: (cinatra as Record<string, unknown>).publishRows };
 }
 
+// The row maps this compiler produced. A client-callable writer accepts publishRows only as one of these (the same
+// object), so a map a caller wrote, valid-looking or not, never bypasses the reader above.
+const COMPILED_PUBLISH_ROWS = new WeakSet<object>();
+
+/** True only for a publishRows map that collectPublishRows returned (by identity). */
+export function isCompiledPublishRows(value: unknown): boolean {
+  return typeof value === "object" && value !== null && COMPILED_PUBLISH_ROWS.has(value);
+}
+
 export function collectPublishRows(
   parsed: Record<string, unknown>,
   publishingSteps: readonly string[],
@@ -1639,6 +1648,7 @@ export function collectPublishRows(
     // A defined own property, so a node id such as "__proto__" stays a plain key.
     Object.defineProperty(rows, step, { value: out, enumerable: true, writable: true, configurable: true });
   }
+  COMPILED_PUBLISH_ROWS.add(rows);
   return { ok: true, rows };
 }
 

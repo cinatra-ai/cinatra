@@ -37,6 +37,7 @@ import {
 } from "./store";
 import type { CreateAgentTemplateInput } from "./store";
 import { importAgentTemplateCore } from "./import-agent-core";
+import { isCompiledPublishRows } from "./oas-compiler";
 import { publishAgentTemplateAndBindVersion } from "./publish-template";
 import { deriveAgentTemplateIdentityClaim } from "./agent-template-identity";
 import { logAuditEvent } from "@/lib/authz";
@@ -163,6 +164,11 @@ export async function createLocalAgentTemplateVersion(input: {
   seed: LocalAgentTemplateSeed;
   nameOverride?: string;
 }): Promise<{ templateId: string; versionId: string }> {
+  // cinatra#4150 — this module is "use server", so a client can call this export. The publish card's rows are
+  // accepted only as the compiler produced them (the same object); any other map is refused before anything is written.
+  if ((input.seed.publishRows ?? null) !== null && !isCompiledPublishRows(input.seed.publishRows)) {
+    throw new Error("publishRows must be the compiler's own output");
+  }
   const snapshotInput = isRecord(input.seed.snapshot) ? input.seed.snapshot : {};
   const sourceNlValue = snapshotInput.sourceNl ?? input.seed.sourceNl;
   const compiledPlanValue = snapshotInput.compiledPlan ?? input.seed.compiledPlan;

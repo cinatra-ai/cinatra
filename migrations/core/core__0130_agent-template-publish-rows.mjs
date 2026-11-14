@@ -32,8 +32,8 @@
 // recompile or reinstall writes the rows again from the pack; down is safe only
 // once no deployed code reads the column.
 //
-// SEQ 0130: 0127 is the highest sequence on main at authoring time; open
-// changes claim 0115, 0116, 0127, 0128 and 0129. A rename-only renumber at merge
+// SEQ 0130: 0128 is the highest sequence on main (2026-11-14); open changes
+// claim 0115, 0116 and 0129. A rename-only renumber at merge
 // is normal. Unqualified names ride the runner's search_path (the app schema).
 
 /** Idempotent DDL mirroring the bootstrap leaf — safe to run after it. */
