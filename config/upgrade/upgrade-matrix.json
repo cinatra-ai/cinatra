@@ -326,7 +326,7 @@
       "migrationMechanism": "discard-recreate",
       "appManagedSchema": false,
       "upstreamDictated": false,
-      "baselinePin": { "image": "verdaccio/verdaccio:6@sha256:fcd45478bff37ec37100eb328fcb4d034cff3e904868d4f30e10a3db14a80ab9", "major": "6", "digest": "sha256:fcd45478bff37ec37100eb328fcb4d034cff3e904868d4f30e10a3db14a80ab9" },
+      "baselinePin": { "image": "verdaccio/verdaccio:6@sha256:82f4decaf1c9eff885bf7a1227335f78581ff715288d5f38898e67e28b3bfbdd", "major": "6", "digest": "sha256:82f4decaf1c9eff885bf7a1227335f78581ff715288d5f38898e67e28b3bfbdd" },
       "notes": "Dev npm registry (package storage). Ephemeral dev cache of published extension tarballs; discard-recreate on any bump (re-publish repopulates it). 6.7.4 is the latest stable line; 7 is prerelease-only, so no major is offered.",
       "transitions": [
         { "from": "6", "to": "6", "supported": true, "mechanism": "discard-recreate", "skippedMajor": "n-a", "downgrade": false, "notes": "Baseline hold; digest-pinned. A future 7 major re-enters its own lane." }
