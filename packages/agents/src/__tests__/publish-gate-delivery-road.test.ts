@@ -2,9 +2,11 @@
 // decision. The intent stays pending ("retryable"); nothing is sent into the held
 // context and nothing is marked delivered. The harness is the one of
 // artifact-review-resume-delivery.test.ts. Since cinatra#4245 the worker takes the pause
-// claim and fences in place (the run stays pending_approval while it sends); the hold is
-// read before the claim and, on a publishing template or for a run with a decision, again
-// under the claim and before the fence.
+// claim, and since cinatra#3745 its fence is its claim of the run (`pending_approval ->
+// running`, so the run is `running` while it sends); the hold is read before the claim
+// and, on a publishing template or for a run with a decision, again under the claim and
+// before the fence. A run this gate's delivery already claimed goes back on its gate
+// before any hold read, so a refusal never leaves it `running`.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { pauseClaimFake } from "./pause-claim-test-fake";
 
@@ -164,6 +166,33 @@ describe("the resume delivery and a publish decision", () => {
     } finally {
       warn.mockRestore();
     }
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["parked", { id: "d1", runId: "run-1", status: "parked" }],
+    ["unreadable", new Error("db down: run-1")],
+  ] as const)("RED F1 a claimed run with nothing recorded whose hold is %s goes back on its gate before the refusal: never left running", async (_case, hold) => {
+    storeMock.readAgentRunByTaskId
+      .mockResolvedValueOnce({ id: "run-1", templateId: "tmpl-1", status: "running", a2aTaskId: "task-1", a2aContextId: "ctx-1", orgId: "org-1", executionAttemptId: "att-1" })
+      .mockResolvedValue({ id: "run-1", templateId: "tmpl-1", status: "pending_approval", a2aTaskId: "task-1", a2aContextId: "ctx-1", orgId: "org-1", executionAttemptId: "att-1" });
+    gateStoreMock.readResumeIntentClaim.mockResolvedValueOnce({ runClaimed: true, result: null });
+    if (hold instanceof Error) decisions.readLatestDecisionForRun.mockRejectedValue(hold);
+    else decisions.readLatestDecisionForRun.mockResolvedValue(hold);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(await deliverArtifactReviewResumeIntent(intent())).toBe("retryable");
+    } finally {
+      warn.mockRestore();
+    }
+    expect(storeMock.transitionRunStatus.mock.calls.map((c) => (c as unknown[]).slice(0, 3))).toEqual([["run-1", "running", "pending_approval"]]);
+    expect((storeMock.transitionRunStatus.mock.calls[0] as unknown[])[3]).toEqual({
+      resumeIntentLease: { gateId: "gate-1", leaseToken: "lease-abc" },
+      resumeGate: { a2aTaskId: "task-1", executionAttemptId: "att-1" },
+    });
+    expect(storeMock.transitionRunStatus.mock.invocationCallOrder[0]!).toBeLessThan(decisions.readLatestDecisionForRun.mock.invocationCallOrder[0]!);
+    expect(pauseClaimFake.claimPause).not.toHaveBeenCalled();
     expect(sendTaskSpy).not.toHaveBeenCalled();
     expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
   });

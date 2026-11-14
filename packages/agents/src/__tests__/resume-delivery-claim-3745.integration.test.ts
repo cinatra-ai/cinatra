@@ -19,7 +19,11 @@
  *     dead-letter pass then takes the intent;
  *   - a last claim that dies before its delivery is settled by the next sweep:
  *     the run goes back on its gate, then the intent is dead-lettered; a
- *     last-attempt release is bound to the execution attempt it read.
+ *     last-attempt release is bound to the execution attempt it read;
+ *   - a claimed run with nothing recorded is sent again only under a fresh pause
+ *     claim and fence: the delivery puts it back on its gate first; a run found
+ *     through the reverse map with no gate task gets this gate's task under the
+ *     pause claim, and its settle puts it back too.
  *
  * The run edges' lease fence and the claim marks themselves are proven in
  * `resume-intent-run-edge-claim-3745.integration.test.ts`.
@@ -72,6 +76,8 @@ const h = vi.hoisted(() => ({
   renewThrows: 0,
   /** Runs once the delivery read its claim, before it acts on it: another actor's move. */
   afterClaimRead: null as null | (() => Promise<void>),
+  /** The Redis reverse map (task -> run) a case names; empty: the map misses. */
+  runByTask: {} as Record<string, string>,
 }));
 
 vi.mock("@cinatra-ai/a2a", () => ({
@@ -90,7 +96,7 @@ vi.mock("@cinatra-ai/a2a", () => ({
       };
     }),
   })),
-  resolveRunIdByWayflowTaskId: vi.fn(async () => null),
+  resolveRunIdByWayflowTaskId: vi.fn(async (taskId: string) => h.runByTask[taskId] ?? null),
   resolveLatestWayflowGateTaskId: vi.fn(async (runId: string) =>
     h.latestTask === undefined ? h.taskByRun[runId] ?? null : h.latestTask),
   expireRunStream: vi.fn(async () => undefined),
@@ -205,14 +211,17 @@ async function admin<T>(fn: (c: Client) => Promise<T>): Promise<T> {
 
 type Run = { runId: string; taskId: string; contextId: string; attempt: string };
 
-async function seedRun(status: "pending_approval" | "running"): Promise<Run> {
+/** `taskColumn: false` seeds a run whose a2a_task_id column is empty (a lost best-effort
+ *  write); the reverse map then resolves it. */
+async function seedRun(status: "pending_approval" | "running", opts: { taskColumn?: boolean } = {}): Promise<Run> {
   const run = { runId: `run-${randomUUID()}`, taskId: `task-${randomUUID()}`, contextId: `ctx-${randomUUID()}`, attempt: randomUUID() };
   await pool(
     `INSERT INTO ${T("agent_runs")}
        (id, template_id, org_id, status, input_params, run_by, execution_attempt_id, a2a_context_id, a2a_task_id)
      VALUES ($1, 'tpl-3745', $2, $3, '{}', $4, $5, $6, $7)`,
-    [run.runId, ORG, status, USER, run.attempt, run.contextId, run.taskId],
+    [run.runId, ORG, status, USER, run.attempt, run.contextId, opts.taskColumn === false ? null : run.taskId],
   );
+  if (opts.taskColumn === false) h.runByTask[run.taskId] = run.runId;
   h.taskByRun[run.runId] = run.taskId;
   return run;
 }
@@ -371,6 +380,7 @@ beforeEach(async () => {
   h.beforeScope = null;
   h.renewThrows = 0;
   h.afterClaimRead = null;
+  h.runByTask = {};
 });
 
 describe.skipIf(!HAS_DB)("the delivery re-sends, replays or leaves alone; it never closes early", () => {
@@ -652,16 +662,18 @@ describe.skipIf(!HAS_DB)("the delivery re-sends, replays or leaves alone; it nev
     await expectNoStrand(runB, gateB);
   }, 20_000);
 
-  it("T15 a refused renewal stops the delivery before the send", async () => {
-    // Row 5 (claimed, nothing recorded): no claim CAS runs, so the fence is the only guard.
+  it("RED F2 T15 a lease taken before the fresh fence stops the delivery before the send: the run stays back on its gate", async () => {
+    // Row 5 (claimed, nothing recorded): the delivery puts the run back on its gate,
+    // then claims it again; the lease is taken after the release and before that fence.
     const run = await seedRun("running");
     const gateId = await seedIntent(run, { status: "delivering", leaseExpired: true, runClaimed: true });
     const [row] = await gateStore.claimPendingResumeIntents({ limit: 1, leaseMs: 60_000 });
     h.beforeScope = () => steal(gateId).then(() => undefined);
     expect(await delivery.deliverArtifactReviewResumeIntent(row!)).toBe("lease-lost");
     expect(h.sends.length).toBe(0);
-    expect((await runState(run.runId)).status).toBe("running");
-    expect(await intentState(gateId)).toMatchObject({ status: "delivering", leaseToken: "other", claimed: true });
+    expect(await runState(run.runId)).toEqual({ status: "pending_approval", attempt: run.attempt });
+    expect(await pauseClaimState(run.runId)).toEqual({ status: "pending_approval", token: null, phase: null });
+    expect(await intentState(gateId)).toMatchObject({ status: "delivering", leaseToken: "other", claimed: false });
   });
 
   it("T15 a renewal that throws is retried, not fatal", async () => {
@@ -816,6 +828,51 @@ describe.skipIf(!HAS_DB)("the delivery's claim of the run is the pause fence (ci
     expect(h.sends.length).toBe(1);
     expect((await outboxRow(gateId)).status).toBe("done");
     await expectNoStrand(run, gateId);
+  });
+
+  it("T32 RED F2 a claimed run with nothing recorded is sent again only under a fresh pause claim: during that send a stop is refused", async () => {
+    // The delivery that claimed the run lost its lease after its fence and settled its
+    // pause lease: the run is running with the mark set and nothing recorded.
+    const run = await seedRun("running");
+    const gateId = await seedIntent(run, { status: "delivering", leaseExpired: true, runClaimed: true });
+    const entered = deferred();
+    const hang = deferred<unknown>();
+    h.sendImpl = async () => {
+      entered.resolve();
+      return hang.promise;
+    };
+    const sweep = delivery.sweepArtifactReviewResumeIntents({ limit: 1 });
+    await entered.promise;
+    const during = await pauseClaimState(run.runId);
+    expect(during).toMatchObject({ status: "running", phase: "sending" });
+    expect(during.token).not.toBeNull();
+    await expect(transitions.transitionRunStatus(run.runId, "running", "stopped", undefined, AUTHORITY as never))
+      .rejects.toMatchObject({ code: "pause_resume_in_flight" });
+    hang.resolve(undefined);
+    expect((await sweep).delivered).toBe(1);
+    expect(h.sends.length).toBe(1);
+    expect(await runState(run.runId)).toEqual({ status: "running", attempt: run.attempt });
+    expect(await pauseClaimState(run.runId)).toEqual({ status: "running", token: null, phase: null });
+    expect((await outboxRow(gateId)).status).toBe("done");
+  }, 20_000);
+
+  it("T33 RED F5 a run found through the reverse map with no gate task is claimed bound to this gate's task", async () => {
+    const run = await seedRun("pending_approval", { taskColumn: false });
+    const gateId = await seedIntent(run);
+    expect(await delivery.sweepArtifactReviewResumeIntents({ limit: 1 })).toMatchObject({ attempted: 1, delivered: 1 });
+    expect(h.sends.length).toBe(1);
+    const r = await pool(`SELECT status, a2a_task_id FROM ${T("agent_runs")} WHERE id = $1`, [run.runId]);
+    expect(r.rows[0]).toEqual({ status: "running", a2a_task_id: run.taskId });
+    expect((await outboxRow(gateId)).status).toBe("done");
+  });
+
+  it("T33 RED F5 a claimed run with no gate task whose last claim died is put back on its gate by the settle, never left running", async () => {
+    const run = await seedRun("running", { taskColumn: false });
+    const gateId = await seedIntent(run, { status: "delivering", leaseExpired: true, runClaimed: true, attempts: 20, maxAttempts: 20 });
+    expect(await delivery.sweepArtifactReviewResumeIntents({ limit: 1 })).toMatchObject({ attempted: 0, failed: 0 });
+    expect(h.sends.length).toBe(0);
+    expect(await runState(run.runId)).toEqual({ status: "pending_approval", attempt: run.attempt });
+    expect(await intentState(gateId)).toMatchObject({ claimed: false, deadLettered: true });
   });
 
   it("T31 RED a fence whose intent lease was taken gives the pause claim back, moves no run and sends nothing", async () => {

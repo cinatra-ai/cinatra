@@ -5,8 +5,10 @@
  * another claimer holds, or one that moved on, leaves the intent for a later lease
  * (a lost claim is no witness that this gate's resume was delivered), D2 a change
  * request ends the intent without a send, and D3 the worker fences before it sends,
- * hands its token to the handler and settles after. A stop during a send under that
- * fence is read against the real seam in resume-delivery-claim-3745.integration.test.ts.
+ * hands its token and the claimed gate to the handler and settles after. A run this
+ * gate's delivery already claimed, with nothing recorded, goes back on its gate and is
+ * sent only under a fresh pause claim and fence. A stop during a send under that fence
+ * is read against the real seam in resume-delivery-claim-3745.integration.test.ts.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { buildReviewApproveEnvelope } from "@/lib/artifacts/artifact-review-rejection";
@@ -189,21 +191,29 @@ describe("cinatra#4245 and cinatra#3745 — the delivery worker, the pause claim
       "run-1",
       "pending_approval",
       "running",
-      { pauseFence: { token: "tok-w", generation: 5 }, resumeIntentLease: { gateId: "gate-1", leaseToken: LEASE } },
+      {
+        pauseFence: { token: "tok-w", generation: 5 },
+        resumeIntentLease: { gateId: "gate-1", leaseToken: LEASE },
+        resumeGate: { a2aTaskId: "task-1", executionAttemptId: null },
+      },
     ]);
     expect(claims.fencePauseInPlace).not.toHaveBeenCalled();
     expect(order).toEqual(["fence", "send", "handle", "settle"]);
-    expect(handle).toHaveBeenCalledWith(expect.objectContaining({ fromStatus: "running", pauseClaimToken: "tok-w" }));
+    expect(handle).toHaveBeenCalledWith(expect.objectContaining({
+      fromStatus: "running", pauseClaimToken: "tok-w", claimedGate: { a2aTaskId: "task-1", executionAttemptId: null },
+    }));
     expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-1", LEASE);
   });
 
-  it("a lost fence leaves the intent for a later lease, with no send, no settle and no release", async () => {
+  it("RED F3 a lost fence (bound to the gate too) gives the pause claim back and leaves the intent for a later lease, with no send and no settle", async () => {
+    // The release clears only this token's `claimed` lease: a no-op when a stop or another claimer has the pause.
     transition.mockRejectedValueOnce(code("stale_from_status"));
     expect(await deliver()).toBe("retryable");
     expect(gateStoreMock.deferResumeIntent).toHaveBeenCalledWith("gate-1", LEASE);
     expect(sendTask).not.toHaveBeenCalled();
     expect(claims.settlePauseSend).not.toHaveBeenCalled();
-    expect(claims.releasePauseClaim).not.toHaveBeenCalled();
+    expect(claims.releasePauseClaim).toHaveBeenCalledTimes(1);
+    expect(claims.releasePauseClaim.mock.calls[0]![0]).toEqual({ runId: "run-1", orgId: "org-1", token: "tok-w" });
   });
 
   it("a fence that finds the intent's lease gone gives the pause claim back and sends nothing", async () => {
@@ -215,26 +225,47 @@ describe("cinatra#4245 and cinatra#3745 — the delivery worker, the pause claim
     expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
   });
 
-  it("a fence that fails otherwise gives the claim back; a release that fails too is retried", async () => {
+  // A driver error's message can carry the query's parameters (the claim and lease tokens).
+  const PARAM = "lease_token=lease-param-secret";
+  const warnLines = (warn: { mock: { calls: unknown[][] } }) => warn.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+
+  it("RED F6 a fence that fails otherwise gives the claim back; a release that fails too is retried, and no raw error is logged", async () => {
     transition.mockRejectedValueOnce(new Error("db down"));
     await expect(deliver()).rejects.toThrow("db down");
     expect(claims.releasePauseClaim).toHaveBeenCalledTimes(1);
 
-    transition.mockRejectedValueOnce(new Error("db down"));
-    claims.releasePauseClaim.mockRejectedValueOnce(new Error("release down"));
-    expect(await deliver()).toBe("retryable");
+    transition.mockRejectedValueOnce(new Error(`db down: ${PARAM}`));
+    claims.releasePauseClaim.mockRejectedValueOnce(new Error(`release down: ${PARAM}`));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(await deliver()).toBe("retryable");
+      const lines = warnLines(warn);
+      expect(lines).toContain("could not be given back");
+      expect(lines).not.toContain(PARAM);
+      expect(lines).not.toMatch(/db down|release down/);
+    } finally {
+      warn.mockRestore();
+    }
     expect(sendTask).not.toHaveBeenCalled();
   });
 
-  it("a step before the fence that fails gives the claim back; a release that fails too is retried", async () => {
+  it("RED F6 a step before the fence that fails gives the claim back; a release that fails too is retried, and no raw error is logged", async () => {
     mint.mockRejectedValueOnce(new Error("no carrier"));
     await expect(deliver()).rejects.toThrow("no carrier");
     expect(claims.releasePauseClaim).toHaveBeenCalledTimes(1);
     expect(edges()).toEqual([]);
 
-    mint.mockRejectedValueOnce(new Error("no carrier"));
-    claims.releasePauseClaim.mockRejectedValueOnce(new Error("release down"));
-    expect(await deliver()).toBe("retryable");
+    mint.mockRejectedValueOnce(new Error(`no carrier: ${PARAM}`));
+    claims.releasePauseClaim.mockRejectedValueOnce(new Error(`release down: ${PARAM}`));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(await deliver()).toBe("retryable");
+      const lines = warnLines(warn);
+      expect(lines).toContain("could not be given back");
+      expect(lines).not.toContain(PARAM);
+    } finally {
+      warn.mockRestore();
+    }
     expect(sendTask).not.toHaveBeenCalled();
   });
 
@@ -267,18 +298,33 @@ describe("cinatra#4245 and cinatra#3745 — the delivery worker, the pause claim
     expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
   });
 
-  it("a re-send of a run this gate's delivery already claimed takes no second pause claim", async () => {
-    storeMock.readAgentRunByTaskId.mockResolvedValue({
-      id: "run-1", templateId: "tmpl-1", status: "running", a2aTaskId: "task-1",
-      a2aContextId: "ctx-1", orgId: "org-1", pauseGeneration: 6,
-    });
-    gateStoreMock.readResumeIntentClaim.mockResolvedValue({ runClaimed: true, result: null });
+  it("RED F1 F2 a run this gate's delivery claimed with nothing recorded goes back on its gate, then is sent only under a fresh pause claim and fence", async () => {
+    // The first read finds the run claimed; after the release the run is back on
+    // its gate one generation later, with the mark cleared.
+    storeMock.readAgentRunByTaskId
+      .mockResolvedValueOnce({
+        id: "run-1", templateId: "tmpl-1", status: "running", a2aTaskId: "task-1",
+        a2aContextId: "ctx-1", orgId: "org-1", pauseGeneration: 6, executionAttemptId: "att-1",
+      })
+      .mockResolvedValue({
+        id: "run-1", templateId: "tmpl-1", status: "pending_approval", a2aTaskId: "task-1",
+        a2aContextId: "ctx-1", orgId: "org-1", pauseGeneration: 7, executionAttemptId: "att-1",
+      });
+    gateStoreMock.readResumeIntentClaim.mockResolvedValueOnce({ runClaimed: true, result: null });
+    claims.claimPause.mockResolvedValue({ ...claimed, generation: 7 });
     expect(await deliver()).toBe("delivered");
-    expect(claims.claimPause).not.toHaveBeenCalled();
-    expect(edges()).toEqual([]);
-    expect(order).toEqual(["send", "handle"]);
-    expect(handle).toHaveBeenCalledWith(expect.objectContaining({ fromStatus: "running", pauseClaimToken: undefined }));
-    expect(claims.settlePauseSend).not.toHaveBeenCalled();
+    expect(edges()).toEqual(["running->pending_approval", "pending_approval->running"]);
+    expect(transition.mock.calls[0]![3]).toEqual({
+      resumeIntentLease: { gateId: "gate-1", leaseToken: LEASE },
+      resumeGate: { a2aTaskId: "task-1", executionAttemptId: "att-1" },
+    });
+    expect(claims.claimPause).toHaveBeenCalledTimes(1);
+    expect(claims.claimPause.mock.calls[0]![0]).toEqual({ runId: "run-1", orgId: "org-1", generation: 7 });
+    expect(transition.mock.calls[1]![3]).toMatchObject({ pauseFence: { token: "tok-w", generation: 7 } });
+    expect(order).toEqual(["fence", "send", "handle", "settle"]);
+    expect(handle).toHaveBeenCalledWith(expect.objectContaining({
+      fromStatus: "running", pauseClaimToken: "tok-w", claimedGate: { a2aTaskId: "task-1", executionAttemptId: "att-1" },
+    }));
   });
 
   // Kept LAST: it reloads the module under test with an answer handler that cannot

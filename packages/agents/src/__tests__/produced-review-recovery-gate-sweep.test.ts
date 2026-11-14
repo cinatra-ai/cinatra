@@ -51,7 +51,12 @@ vi.mock("../run-pause-claim", async (orig) => ({
 vi.mock("../store", () => storeMock);
 // cinatra#3745: the delivery's own pending_approval -> running claim before its
 // send. Kept apart from the store's transition, which carries the terminal write.
-vi.mock("../run-transition", () => ({ transitionRunStatus: vi.fn(async () => undefined) }));
+// The handler applies the answer only while the run holds the claimed gate
+// (`claimedGate`); here the run always does.
+vi.mock("../run-transition", () => ({
+  transitionRunStatus: vi.fn(async () => undefined),
+  bindResumeLegToTask: vi.fn(async () => true),
+}));
 
 const holdSpy = vi.hoisted(() =>
   vi.fn(async () => ({ held: true, reason: "hold-unpersisted" }) as {
