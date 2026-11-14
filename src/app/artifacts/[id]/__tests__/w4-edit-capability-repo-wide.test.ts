@@ -14,7 +14,12 @@
 // of EVERY workspace glob that pnpm-workspace.yaml defines (the packages and
 // the extension workspaces), read from that file rather than transcribed.
 // Test, fixture, build and dependency folders are skipped, as the repository's
-// other sweeps skip them.
+// other sweeps skip them. A skipped folder is NOT a blind spot, though: every
+// module that a swept module loads at run time through a relative or `@/`
+// specifier is swept too, followed to the end of the chain. So a fixture that
+// production code imports (src/lib/deployment-registry-config.ts loads
+// src/lib/__fixtures__/deployment-registry-config.fixture.ts) is read; a
+// fixture that only tests import is not.
 //
 // WHY NAMING ALONE IS NOT ENOUGH, and what closes it. A file that never names
 // the grant can still reach it through a second name: an alias or a re-export
@@ -26,7 +31,9 @@
 //   2. the definition names it exactly once, as the exported function's own
 //      declaration - no alias, no re-export, no default export of it;
 //   3. no production module reads the definition module whole: no namespace
-//      import, no `export *` or `export * as`, no dynamic import or require;
+//      import, no `export *` or `export * as`, no dynamic import, no `require`
+//      and no `module.require` (the call forms the repository's own import
+//      parser counts, src/lib/extension-package-store-core.ts);
 //   4. the page names it only as an un-aliased import and as a call.
 // The four rules are themselves driven against small in-memory sources below,
 // so a rule that stopped seeing its bypass would fail here too.
@@ -42,6 +49,7 @@ const THE_DEFINITION = "src/lib/artifacts/artifact-renderer-props.ts";
 const THE_DEFINITION_MODULE = THE_DEFINITION.replace(/\.ts$/, "");
 const THE_GRANT = "grantArtifactEdit";
 
+const MODULE_EXTENSIONS = ["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"] as const;
 const MODULE_FILE = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 const DECLARATION_FILE = /\.d\.(ts|mts|cts)$/;
 const TEST_FILE = /\.(test|spec)\.[a-z]+$/;
@@ -103,13 +111,15 @@ function expandGlob(pattern: string): string[] {
   return dirs;
 }
 
-/** The kind of a path, or null for a path that is gone (a dangling link). */
+/** The kind of a path, or null for a path that is not there (a dangling link,
+ *  or a path through a file, as `styles.css/index.ts` is when resolving). */
 function kindOf(rel: string): "dir" | "file" | null {
   try {
     const stat = statSync(join(REPO_ROOT, rel));
     return stat.isDirectory() ? "dir" : stat.isFile() ? "file" : null;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return null;
     throw err;
   }
 }
@@ -136,7 +146,8 @@ function productionSources(dir: string, out: string[]): void {
 const GLOBS = workspaceGlobs();
 const WORKSPACE_DIRS = [...new Set(["src", ...GLOBS.flatMap(expandGlob)])].sort();
 
-function allProductionSources(): string[] {
+/** The directory sweep: src, the root's own module files, every workspace. */
+function sweptSources(): string[] {
   const out: string[] = [];
   // The root application's own module files (next.config.ts and the like).
   for (const name of readdirSync(REPO_ROOT)) {
@@ -144,6 +155,74 @@ function allProductionSources(): string[] {
   }
   for (const dir of WORKSPACE_DIRS) productionSources(dir, out);
   return [...new Set(out)].sort();
+}
+
+/** `require(...)`, `module.require(...)` or `import(...)`: the call forms that
+ *  load a module at run time, as src/lib/extension-package-store-core.ts
+ *  (parseModuleImports) counts them. */
+function isLoaderCall(node: ts.CallExpression): boolean {
+  const callee = node.expression;
+  return (
+    callee.kind === ts.SyntaxKind.ImportKeyword ||
+    (ts.isIdentifier(callee) && callee.text === "require") ||
+    (ts.isPropertyAccessExpression(callee) &&
+      callee.name.text === "require" &&
+      ts.isIdentifier(callee.expression) &&
+      callee.expression.text === "module")
+  );
+}
+
+/** Every specifier a module loads at run time - the value edges the same
+ *  parser counts: import and re-export declarations (declaration-level
+ *  `import type` / `export type` are erased, so not edges), import-equals, and
+ *  a loader call with a literal argument. */
+function runtimeEdges(ast: ts.SourceFile): string[] {
+  const out: string[] = [];
+  eachNode(ast, (node) => {
+    if (ts.isImportDeclaration(node)) {
+      if (ts.isStringLiteralLike(node.moduleSpecifier) && !node.importClause?.isTypeOnly) {
+        out.push(node.moduleSpecifier.text);
+      }
+    } else if (ts.isExportDeclaration(node)) {
+      if (node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier) && !node.isTypeOnly) {
+        out.push(node.moduleSpecifier.text);
+      }
+    } else if (ts.isImportEqualsDeclaration(node)) {
+      if (
+        !node.isTypeOnly &&
+        ts.isExternalModuleReference(node.moduleReference) &&
+        ts.isStringLiteralLike(node.moduleReference.expression)
+      ) {
+        out.push(node.moduleReference.expression.text);
+      }
+    } else if (ts.isCallExpression(node) && isLoaderCall(node)) {
+      const [first] = node.arguments;
+      if (first && ts.isStringLiteralLike(first)) out.push(first.text);
+    }
+  });
+  return out;
+}
+
+/** The repository file a relative or `@/` specifier written in `fromRel`
+ *  loads, or null (a package, a non-module file, or nothing on disk). Tries
+ *  the path itself, the path with each module extension (a `.js` specifier
+ *  may name a `.ts` file), then the folder's index module. */
+function resolveLocalModule(fromRel: string, specifier: string, known: Set<string>): string | null {
+  let target: string;
+  if (specifier.startsWith("@/")) target = "src/" + specifier.slice(2);
+  else if (specifier.startsWith(".")) target = posix.join(posix.dirname(fromRel), specifier);
+  else return null;
+  target = posix.normalize(target);
+  if (target.startsWith("..") || target.split("/").includes("node_modules")) return null;
+  const base = target.replace(MODULE_FILE, "");
+  const candidates = [
+    target,
+    ...MODULE_EXTENSIONS.map((ext) => `${base}.${ext}`),
+    ...MODULE_EXTENSIONS.map((ext) => `${target}/index.${ext}`),
+  ].filter((c) => MODULE_FILE.test(c) && !DECLARATION_FILE.test(c));
+  const hit = candidates.find((c) => known.has(c));
+  if (hit) return hit;
+  return candidates.find((c) => kindOf(c) === "file") ?? null;
 }
 
 function parse(rel: string, text: string): ts.SourceFile {
@@ -222,19 +301,14 @@ function wholeModuleReads(rel: string, ast: ts.SourceFile): string[] {
     ) {
       at(node, "import-equals");
     }
-    if (ts.isCallExpression(node)) {
-      const callee = node.expression;
-      const dynamic =
-        callee.kind === ts.SyntaxKind.ImportKeyword ||
-        (ts.isIdentifier(callee) && callee.text === "require");
+    if (ts.isCallExpression(node) && isLoaderCall(node)) {
       const [first] = node.arguments;
       if (
-        dynamic &&
         first &&
         (ts.isStringLiteral(first) || ts.isNoSubstitutionTemplateLiteral(first)) &&
         namesTheDefinitionModule(rel, first.text)
       ) {
-        at(node, "dynamic import");
+        at(node, "dynamic import or require");
       }
     }
   });
@@ -290,10 +364,39 @@ function pageViolations(rel: string, ast: ts.SourceFile): string[] {
   return out;
 }
 
-const SOURCES = allProductionSources();
-const PARSED = new Map(
-  SOURCES.map((rel) => [rel, parse(rel, readFileSync(join(REPO_ROOT, rel), "utf8"))] as const),
-);
+const SWEPT = sweptSources();
+const PARSED = new Map<string, ts.SourceFile>();
+const parsed = (rel: string): ts.SourceFile => {
+  let ast = PARSED.get(rel);
+  if (!ast) {
+    ast = parse(rel, readFileSync(join(REPO_ROOT, rel), "utf8"));
+    PARSED.set(rel, ast);
+  }
+  return ast;
+};
+
+/** The swept modules plus every module they load at run time, to the end of
+ *  the chain: a module in a skipped folder that production code imports is
+ *  production code. */
+function withRuntimeReach(swept: string[]): string[] {
+  const seen = new Set(swept);
+  const queue = [...swept];
+  while (queue.length > 0) {
+    const rel = queue.pop()!;
+    for (const specifier of runtimeEdges(parsed(rel))) {
+      const target = resolveLocalModule(rel, specifier, seen);
+      if (target && !seen.has(target)) {
+        seen.add(target);
+        queue.push(target);
+      }
+    }
+  }
+  return [...seen].sort();
+}
+
+const SOURCES = withRuntimeReach(SWEPT);
+/** A fixture that production imports at run time (deployment-registry-config.ts:40). */
+const REACHED_FIXTURE = "src/lib/__fixtures__/deployment-registry-config.fixture.ts";
 
 describe("acceptance 7 - grantArtifactEdit is reachable from the artifact page alone, repository-wide", () => {
   it("the sweep reads every workspace pnpm-workspace.yaml defines, and every module kind", () => {
@@ -312,24 +415,36 @@ describe("acceptance 7 - grantArtifactEdit is reachable from the artifact page a
     expect(seen.has("src/app/lifecycle/review-island/page.tsx")).toBe(true);
     expect(seen.has("src/lib/artifacts/artifact-review-preparation.ts")).toBe(true);
     expect(seen.has("packages/cli/bin/cinatra.mjs")).toBe(true);
+    expect(seen.has("packages/execution-plane/runtime/egress-gateway.cjs")).toBe(true);
     expect(SOURCES.some((f) => f.startsWith("packages/"))).toBe(true);
   });
 
+  it("the sweep follows production's run-time imports into skipped folders", () => {
+    // The fixture sits in a skipped __fixtures__ folder, so the directory
+    // sweep alone does not read it; the run-time reach must.
+    expect(SWEPT).not.toContain(REACHED_FIXTURE);
+    expect(SOURCES).toContain(REACHED_FIXTURE);
+    // A fixture that only tests name stays out: the reach is not "every fixture".
+    expect(SOURCES).not.toContain(
+      "packages/dashboards/src/components/__fixtures__/dc-client-allowed.fixture.tsx",
+    );
+  });
+
   it("no production module names it, except the page and its definition", () => {
-    const named = SOURCES.filter((rel) => grantNames(PARSED.get(rel)!).length > 0);
+    const named = SOURCES.filter((rel) => grantNames(parsed(rel)).length > 0);
     expect(named).toEqual([THE_ARTIFACT_PAGE, THE_DEFINITION].sort());
   });
 
   it("the definition names it once, as the exported function, with no alias or re-export", () => {
-    expect(definitionViolations(PARSED.get(THE_DEFINITION)!)).toEqual([]);
+    expect(definitionViolations(parsed(THE_DEFINITION))).toEqual([]);
   });
 
   it("no production module reads the definition module whole", () => {
-    expect(SOURCES.flatMap((rel) => wholeModuleReads(rel, PARSED.get(rel)!))).toEqual([]);
+    expect(SOURCES.flatMap((rel) => wholeModuleReads(rel, parsed(rel)))).toEqual([]);
   });
 
   it("the page names it only as an un-aliased import and a call", () => {
-    expect(pageViolations(THE_ARTIFACT_PAGE, PARSED.get(THE_ARTIFACT_PAGE)!)).toEqual([]);
+    expect(pageViolations(THE_ARTIFACT_PAGE, parsed(THE_ARTIFACT_PAGE))).toEqual([]);
   });
 });
 
@@ -361,6 +476,8 @@ describe("acceptance 7 - each rule sees the bypass it closes", () => {
       'export * as props from "@/lib/artifacts/artifact-renderer-props.ts";',
       'const props = await import("@/lib/artifacts/artifact-renderer-props");',
       'const props = require("@/lib/artifacts/artifact-renderer-props");',
+      'const props = module.require("@/lib/artifacts/artifact-renderer-props");',
+      'const props = module.require("../artifacts/artifact-renderer-props");\nprops["grant" + "ArtifactEdit"]({});',
       'import props = require("@/lib/artifacts/artifact-renderer-props");',
     ]) {
       expect(wholeModuleReads(OTHER, parse(OTHER, source)), source).not.toEqual([]);
@@ -371,6 +488,38 @@ describe("acceptance 7 - each rule sees the bypass it closes", () => {
         parse(OTHER, 'import { absentArtifactContent } from "@/lib/artifacts/artifact-renderer-props";'),
       ),
     ).toEqual([]);
+  });
+
+  it("every run-time load form is an edge the reach follows, and a type-only one is not", () => {
+    const from = "src/lib/elsewhere/loader.ts";
+    const source = [
+      'import "./a";',
+      'import { b } from "./b";',
+      'export * from "./c";',
+      'import d = require("./d");',
+      'const e = require("./e");',
+      'const f = module.require("./f");',
+      'const g = await import("./g");',
+      'import type { H } from "./h";',
+      'export type { I } from "./i";',
+    ].join("\n");
+    expect(runtimeEdges(parse(from, source))).toEqual(["./a", "./b", "./c", "./d", "./e", "./f", "./g"]);
+    expect(
+      resolveLocalModule(
+        "src/lib/deployment-registry-config.ts",
+        "./__fixtures__/deployment-registry-config.fixture",
+        new Set(),
+      ),
+    ).toBe(REACHED_FIXTURE);
+    expect(resolveLocalModule(from, "server-only", new Set())).toBeNull();
+  });
+
+  it("every module kind the sweep selects is read as a module that can name the grant", () => {
+    for (const ext of MODULE_EXTENSIONS) {
+      const rel = `src/lib/elsewhere/leak.${ext}`;
+      expect(isProductionModule(rel), rel).toBe(true);
+      expect(grantNames(parse(rel, "grantArtifactEdit({});\n")), rel).not.toEqual([]);
+    }
   });
 
   it("an alias in the page is refused, and a comment is not a name", () => {
