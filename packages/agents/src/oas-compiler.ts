@@ -1566,6 +1566,12 @@ export async function compileOasAgentJson(opts: {
   packageName: string | null | undefined;
   registryPath?: string;
   oasSourcePath?: string;
+  // cinatra#4264: the OAS source as bytes. When given, the compile reads these
+  // bytes and never opens `oasSourcePath` for the flow itself; the path still
+  // locates the sibling package.json and cinatra.json. The direct publisher
+  // passes the exact bytes it packages, so the compiled flow and the shipped
+  // file cannot differ. Bytes that are not valid UTF-8 refuse the compile.
+  oasSource?: Buffer;
   // Runtime classification override used by deriveTriggerMode
   // when the OAS itself does not declare `metadata.cinatra.runtime`. Falls back
   // to undefined → "full" (DESIGN.md default). Callers in mcp/handlers.ts may
@@ -1579,6 +1585,9 @@ export async function compileOasAgentJson(opts: {
 
   // 1. Resolve OAS source path (with traversal guard)
   let oasSourcePath = opts.oasSourcePath ?? null;
+  if (opts.oasSource !== undefined && !oasSourcePath) {
+    return { ok: false, error: "oasSourcePath is required with oasSource" };
+  }
   if (!oasSourcePath) {
     const candidates = resolveAgentJsonPath(opts.packageName);
     if (!candidates) {
@@ -1604,15 +1613,26 @@ export async function compileOasAgentJson(opts: {
     }
   }
 
-  // 2. Load OAS source
+  // 2. Load OAS source: the handed bytes (cinatra#4264), else the file.
   let raw: string;
-  try {
-    raw = await readFile(oasSourcePath, "utf8");
-  } catch (err) {
-    return {
-      ok: false,
-      error: `OAS source at ${oasSourcePath} could not be read: ${(err as Error).message}`,
-    };
+  if (opts.oasSource !== undefined) {
+    try {
+      raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(opts.oasSource);
+    } catch {
+      return {
+        ok: false,
+        error: `OAS source at ${oasSourcePath} is not valid UTF-8`,
+      };
+    }
+  } else {
+    try {
+      raw = await readFile(oasSourcePath, "utf8");
+    } catch (err) {
+      return {
+        ok: false,
+        error: `OAS source at ${oasSourcePath} could not be read: ${(err as Error).message}`,
+      };
+    }
   }
   let parsed: Record<string, unknown>;
   try {
