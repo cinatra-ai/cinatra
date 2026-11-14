@@ -81,6 +81,7 @@
     "./run-step-rail-panel": "./src/run-step-rail-panel.tsx",
     "./lifecycle-verification-store": "./src/lifecycle-verification-store.ts",
     "./lifecycle-verification-read-store": "./src/lifecycle-verification-read-store.ts",
+    "./artifact-open-review-read": "./src/artifact-open-review-read.ts",
     "./artifact-review-gate-seam": "./src/artifact-review-gate-seam.ts",
     "./artifact-review-resume-delivery": "./src/artifact-review-resume-delivery.ts",
     "./suggestion-decision-store": "./src/suggestion-decision-store.ts",

@@ -48,6 +48,27 @@ import {
 // by type alone. It never has to reach the lifecycle tree to do it.
 export type { ArtifactByteUrlMinter };
 import { buildBrokerCapturePair } from "@/lib/lifecycle/widget-capture-egress";
+// THE DATA ROAD is named by the props contract itself, which imports nothing at
+// value level and is already on every graph that reaches this module.
+import {
+  ARTIFACT_RENDERER_SESSION_DATA_ROAD,
+  type ArtifactRendererDataRoad,
+} from "@/lib/artifacts/artifact-renderer-props";
+// THE DASHBOARD READ GATE (cinatra#4311) is named HERE, by the cookie surfaces
+// that choose it, and never by the shared preparation path: that path is on the
+// four locked routes' graphs, and this module is not.
+import { readDashboardLiveAddress } from "./artifact-type-read-gate";
+
+/**
+ * The live address of one review target, read through the dashboard's own read
+ * gate with the reader's session (cinatra#4311). It answers null for a row of
+ * another type, whose record's own address stands, and `{ liveAddress: null }`
+ * for a dashboard the reader may not open or whose gate cannot be read.
+ */
+export type DashboardLiveAddressReader = (artifact: {
+  artifactId: string;
+  objectType: string | null;
+}) => Promise<{ readonly liveAddress: string | null } | null>;
 
 /**
  * Read one pinned revision's substance and project it for a display.
@@ -97,6 +118,14 @@ export interface ReviewSurfaceRoads {
   byteMinter?: ArtifactByteUrlMinter;
   /** How this surface reads content. Absent ⇒ the channel's named absence. */
   buildContent?: ArtifactContentBuilder;
+  /** Where this surface's displays read live series (props v3, cinatra#4311).
+   *  Absent ⇒ no data road on the props, and a display draws its no-series
+   *  reading. */
+  dataRoad?: ArtifactRendererDataRoad;
+  /** How this surface reads a dashboard target's live address in the continued
+   *  reading (cinatra#4311). Absent ⇒ no target reads a dashboard gate, and
+   *  every target keeps the live address its record carries. */
+  dashboardLiveAddress?: DashboardLiveAddressReader;
   /** How this surface builds a pinned target's capture pair. Absent ⇒ the
    *  first-party pair the surface loader already builds. */
   capturePair?: (target: {
@@ -130,13 +159,46 @@ export function hostArtifactContentBuilder(): ArtifactContentBuilder {
 }
 
 /**
- * The roads for a FIRST-PARTY surface: the content channel, and nothing else.
+ * The roads for a FIRST-PARTY surface: the content channel, the session data
+ * road and the dashboard live address reader (cinatra#4311).
  *
  * The byte road stays the session routes — they work under a cookie and they
  * are the narrower grant — and the capture pair stays the first-party pair.
  */
 export function firstPartyReviewSurfaceRoads(): ReviewSurfaceRoads {
-  return { buildContent: hostArtifactContentBuilder() };
+  // THE DATA ROAD (cinatra#4311): a first-party reader carries a cookie, so the
+  // session road reaches the application's own series route. The island's
+  // CREDENTIAL road below names none: that reader holds no cookie, and its
+  // sealed road is a later leg. The island's COOKIE branch names the session
+  // data road through `cookieIslandReviewSurfaceRoads` below. The dashboard
+  // read gate runs with the same session cookie, so a first-party surface names
+  // it as well.
+  return {
+    buildContent: hostArtifactContentBuilder(),
+    dataRoad: ARTIFACT_RENDERER_SESSION_DATA_ROAD,
+    dashboardLiveAddress: readDashboardLiveAddress,
+  };
+}
+
+/**
+ * The roads for the island's COOKIE branch (cinatra#4311): the session data
+ * road and the dashboard read gate, and nothing else.
+ *
+ * The lifecycle card's cookie-session hosts (the chat thread, the run card and
+ * the page gate region) frame the island with no credential, so the island's
+ * reader there is the first-party reader of a session cookie, and the session
+ * road reaches the application's own series route with that cookie. Every
+ * other road stays the one this branch always had: the session byte addresses,
+ * the content channel's named absence and the first-party capture pair. Only
+ * the data road and the dashboard read gate are named here, and both read with
+ * the reader's session cookie, so they are the only difference from the call
+ * without roads.
+ */
+export function cookieIslandReviewSurfaceRoads(): ReviewSurfaceRoads {
+  return {
+    dataRoad: ARTIFACT_RENDERER_SESSION_DATA_ROAD,
+    dashboardLiveAddress: readDashboardLiveAddress,
+  };
 }
 
 /**

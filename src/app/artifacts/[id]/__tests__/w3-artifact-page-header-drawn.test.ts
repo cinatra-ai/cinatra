@@ -226,12 +226,41 @@ describe("the page draws the model, and nothing of the old header survives", () 
     expect(source).toContain("meta={");
   });
 
-  // Convergence finding (codex, this leg): the dashboard pointer returns before
-  // the drawn header is built, and it used to title itself with a kind word.
-  // The Breadcrumb rule is over EVERY frame, so that surface's leaf crumb is
-  // the artifact's display name too — read through the one exported rule.
-  it("titles the dashboard pointer surface with the artifact's name, not a kind word", () => {
-    expect(source).toContain("title={artifactDisplayTitle(artifact)}");
+  // cinatra#3092 (acceptance 2, "the page's pre-dispatch interception of the
+  // dashboard row is gone"): no surface of this page returns before the display
+  // dispatch any more. The page draws two headers: the drawn model's, and the
+  // dashboard pointer's, which stands only where the dispatch answered a floor
+  // for a dashboard row (cinatra#4311 deletes it with the pointer). The
+  // Breadcrumb rule is over EVERY frame, so both are titled with the artifact's
+  // display name, never a kind word: the drawn header's title is the model's,
+  // the model is built before either header, and the model titles a row of any
+  // type with the artifact's display name.
+  it("titles every row, whatever its type, with the artifact's name on both headers", () => {
+    expect(source.match(/<PageHeader\b/g) ?? []).toHaveLength(2);
+    expect(source).toMatch(/const title = header\.title;/);
+    expect(source).toMatch(/<PageHeader\s+title=\{title\}/);
+    expect(source).toMatch(/<PageHeader\s+title=\{artifactDisplayTitle\(artifact\)\}/);
+    const modelAt = source.indexOf("const header = buildArtifactDetailHeader(");
+    expect(modelAt).toBeGreaterThan(-1);
+    expect(modelAt).toBeLessThan(source.indexOf("<PageHeader"));
+    expect(source.indexOf("<PageHeader")).toBeGreaterThan(source.indexOf("resolveArtifactDisplayMount("));
     expect(source).not.toContain('title="Dashboard"');
+    for (const objectType of [
+      "@cinatra-ai/image-artifact:image",
+      "@cinatra-ai/dashboard-artifact:dashboard",
+      "@fixture/notes:note",
+    ]) {
+      const extension = objectType.slice(0, objectType.indexOf(":"));
+      for (const title of ["Quarterly revenue", null]) {
+        const artifact = row({
+          objectType,
+          title,
+          presentationIdentity: { kind: "extension", extension } as ArtifactSummary["presentationIdentity"],
+        });
+        const model = buildArtifactDetailHeader({ artifact, mime: "", revisionId: null, now: NOW });
+        expect(model.title, objectType).toBe(artifactDisplayTitle(artifact));
+        expect(model.title, objectType).toBe(title ?? "9c0dfce6…");
+      }
+    }
   });
 });
