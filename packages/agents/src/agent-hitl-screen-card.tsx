@@ -529,6 +529,14 @@ export function useAgentHitlScreenState(params: {
  * `{ [fieldName]: object }` with the field name beside it, and a card that
  * spread it into its buffer would submit top-level keys with no field name —
  * merging into the wrong inputs, or leaving the setup loop paused for ever.
+ *
+ * ONE DIFFERENCE (cinatra#3562): on a gate that is not a setup gate, the run
+ * panel also reads a `:list-picker` renderer as mid-run, as the stepper does,
+ * and its outer Continue lifts the list step's picks into the approval note.
+ * This card does not: its Continue lifts no approval note, so a list step
+ * here keeps the setup-loop path it had. Moving it belongs with the later
+ * work that holds this card's Continues, which do not read a renderer's
+ * validity report yet.
  */
 function classifyHitlGate(gate: AgentHitlScreenGate): {
   isMidRun: boolean;
@@ -893,10 +901,13 @@ export function AgentHitlScreenFields({
 function HitlContinueControl({
   submitting,
   blocked,
+  held = false,
   onPress,
 }: {
   submitting: boolean;
   blocked: boolean;
+  /** The gate's renderer reports its value unsendable: inert, with no credential title. */
+  held?: boolean;
   onPress: () => Promise<void>;
 }): ReactElement {
   return (
@@ -905,7 +916,7 @@ function HitlContinueControl({
         size="sm"
         className="gap-1.5"
         data-action="submit-hitl-screen"
-        disabled={submitting || blocked}
+        disabled={submitting || blocked || held}
         {...(blocked
           ? {
               title:
@@ -979,13 +990,17 @@ export function AgentHitlScreenContinue({
 export function AgentHitlScreenSetupContinue({
   submitting,
   blocked,
+  held,
   onContinue,
 }: {
   submitting: boolean;
   blocked: boolean;
+  held?: boolean;
   onContinue: () => Promise<void>;
 }): ReactElement {
-  return <HitlContinueControl submitting={submitting} blocked={blocked} onPress={onContinue} />;
+  return (
+    <HitlContinueControl submitting={submitting} blocked={blocked} held={held} onPress={onContinue} />
+  );
 }
 
 /**

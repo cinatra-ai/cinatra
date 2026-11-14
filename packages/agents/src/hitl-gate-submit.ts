@@ -345,11 +345,43 @@ export function withContextSelectorEnvelope(
 // ---------------------------------------------------------------------------
 
 /**
+ * THE RUN PANEL'S MID-RUN LIST STEP (cinatra#3562): a `:list-picker` gate that
+ * is not a setup gate. The run panel draws it as a mid-run gate (its picks
+ * buffer for the outer Continue) and lifts its picks into the approval note;
+ * the same reading decides both, so they cannot disagree. On a setup gate the
+ * list step stays on the setup road, where its answer is sent under the gate's
+ * field name.
+ */
+export function isMidRunListStepGate(xRenderer: string, reviewTaskId: string): boolean {
+  return xRenderer.endsWith(":list-picker") && !isSetupGateTaskId(reviewTaskId);
+}
+
+/** A list id that names a pick: a string that is not blank (whitespace only). */
+function isUsableListId(id: unknown): id is string {
+  return typeof id === "string" && id.trim().length > 0;
+}
+
+/**
+ * Whether a list step's buffer holds a pick (cinatra#3562): a usable id in
+ * `listIds`, or a usable `listId`. A buffer without one would resume the run
+ * with an empty snapshot (`listId: ""`), so the run panel's Continue sends
+ * nothing for it.
+ */
+export function hasUsableListPick(buffered: Record<string, unknown> | null | undefined): boolean {
+  if (!buffered) return false;
+  const { listIds, listId } = buffered as { listIds?: unknown; listId?: unknown };
+  return (Array.isArray(listIds) && listIds.some(isUsableListId)) || isUsableListId(listId);
+}
+
+/**
  * Lift renderer-buffered values into a structured `approvalNote` snapshot
  * for the gates whose downstream continuation re-reads exactly what was
  * approved. Returns `{ approvalNote }` to merge into the resume payload,
  * or `null` when the renderer has no lift. The client-side fields are
- * advisory, not trusted — the server re-resolves (e.g. via crm_list_get).
+ * advisory, not trusted. The cinatra server does not re-resolve them:
+ * `approveReviewTaskInternal` (review-task-actions.ts) forwards the note as
+ * the resume text. Resolving each id (e.g. via crm_list_get) is left to the
+ * later workflow step that reads the note.
  *
  * `now` is injectable for tests; defaults to the current time.
  */
@@ -359,8 +391,35 @@ export function liftRendererApprovalNote(
   now: string = new Date().toISOString(),
 ): { approvalNote: string } | null {
   if (xRenderer.endsWith(":list-picker")) {
+    // SEVERAL PICKS (cinatra#3562): a list step declared to take several picks
+    // buffers `listIds` (and `listNames`, in the same order). The snapshot then
+    // carries every ticked id in the order ticked, each once, with its name.
+    // An id that is not a string, or is blank (whitespace only), is no pick.
+    // A name is advisory: resolving each id is the later workflow step's job.
+    const ticked = (buffered as { listIds?: unknown }).listIds;
+    if (Array.isArray(ticked)) {
+      const names = (buffered as { listNames?: unknown }).listNames;
+      const listIds: string[] = [];
+      const listNames: string[] = [];
+      ticked.forEach((id, index) => {
+        if (!isUsableListId(id) || listIds.includes(id)) return;
+        listIds.push(id);
+        const name = Array.isArray(names) ? names[index] : undefined;
+        listNames.push(typeof name === "string" ? name : "");
+      });
+      if (listIds.length > 0) {
+        return {
+          approvalNote: JSON.stringify({
+            type: "list" as const,
+            listIds,
+            listNames,
+            snapshotAt: now,
+          }),
+        };
+      }
+    }
     // Snapshot the selected list at approval time so downstream stages can
-    // reference it; the server re-resolves via crm_list_get.
+    // reference it; resolving it is the later workflow step's job.
     const { listId, listName, memberCount } = buffered as {
       listId?: string;
       listName?: string;
@@ -431,6 +490,30 @@ export function liftRendererApprovalNote(
     };
   }
   return null;
+}
+
+/**
+ * Merge a renderer's lifted `approvalNote` into the resume payload
+ * (cinatra#3562). For a list step, the note is what the run receives.
+ * `approveReviewTaskInternal` (review-task-actions.ts) sends a nonblank
+ * `userResponse` as the resume text before it reads `approvalNote`. A
+ * `userResponse` in the buffer of a list step would therefore replace the
+ * snapshot of the picks, and the run would never receive the picked lists. So
+ * a lifted list-step note removes `userResponse` from the payload. The
+ * attachment envelope applied after this reads the note
+ * (`applyAttachmentEnvelope`, pickLegacyResumeText). Every other lift is
+ * merged as before. With no lift, the payload is returned unchanged.
+ */
+export function applyRendererApprovalNote(
+  xRenderer: string,
+  payload: Record<string, unknown>,
+  lift: { approvalNote: string } | null,
+): Record<string, unknown> {
+  if (!lift) return payload;
+  const merged: Record<string, unknown> = { ...payload, ...lift };
+  if (!xRenderer.endsWith(":list-picker")) return merged;
+  delete merged.userResponse;
+  return merged;
 }
 
 // ---------------------------------------------------------------------------
@@ -532,7 +615,9 @@ export function buildChatGateSubmitPayload(args: {
  * The two panels' precedence divergence is pre-existing behavior; unifying
  * it would change the WayFlow resume text for AgenticRunPanel gates whose
  * renderer buffered an approvalNote without a userResponse. Keep them
- * distinct until that alignment is decided deliberately.
+ * distinct until that alignment is decided deliberately. The one exception
+ * is the run panel's list step (cinatra#3562): its lifted note is the resume
+ * text, so its Continue wraps with `applyAttachmentEnvelope`.
  */
 export function applyAttachmentEnvelopeUserResponseOnly(
   payload: Record<string, unknown>,
@@ -545,6 +630,115 @@ export function applyAttachmentEnvelopeUserResponseOnly(
       : "[Approved by operator]";
   const wrapped = wrapUserResponseWithAttachments(existing, attachments);
   return { ...payload, userResponse: wrapped.userResponse };
+}
+
+// ---------------------------------------------------------------------------
+// The renderer's own reading of its value (cinatra#3562)
+// ---------------------------------------------------------------------------
+
+/**
+ * The identity of one gate on a run surface (cinatra#3562): its review task,
+ * its renderer and its field. A run surface keys these by it: the renderer's
+ * report, the React instance of the renderer, the staged draft and answer, the
+ * registered flush and the answered marker.
+ *
+ * The encoding is INJECTIVE. All three parts are unconstrained strings from the
+ * run's own row. A separator join is not injective: task `a`, renderer `r` and
+ * field `b::r::c` join with `::` to the same string as task `a::r::b`,
+ * renderer `r` and field `c`. One gate could then take over another gate's
+ * state and answer. A JSON array keeps the boundaries, as `hitlGateKey`
+ * (agent-hitl-screen-card.tsx) does. A missing field and an empty field are
+ * one identity, as they were before.
+ */
+export function runGateIdentityKey(
+  reviewTaskId: string,
+  xRenderer: string,
+  fieldName: string | undefined,
+): string {
+  return JSON.stringify([reviewTaskId, xRenderer, fieldName ?? ""]);
+}
+
+/**
+ * Where a run surface keeps what its field renderers reported through
+ * `onValidityChange`. Each drawn renderer reports under an owner of its own and
+ * keeps one report, its latest, made on the gate it is drawn for. While any
+ * report on the gate on screen is anything but `true`, the Continue drawn for
+ * that gate is unavailable and a press sends nothing.
+ *
+ * Only the report of an attached owner counts. Each surface attaches the owner
+ * while its renderer is on the screen and releases it when the renderer leaves
+ * or another renderer takes its place. The release drops that owner's report
+ * and no other, so a renderer that never reports blocks nothing (cinatra#3532)
+ * even where an earlier one reported `false`. A report made while the owner is
+ * not attached, before the attach or after the release, holds nothing; the
+ * owner keeps it, and it counts when the same owner is attached again (as
+ * StrictMode and a hidden subtree that is shown again do). A surface attaches a
+ * new owner for each renderer, so a report that arrives after its renderer has
+ * left the screen never holds a gate again.
+ */
+export type GateValidityStore = {
+  /** The renderer drawn under `owner` is on the screen: its report counts from now on. */
+  attach: (owner: object) => void;
+  /** The renderer drawn under `owner`, on gate `key`, reports whether its value may be sent. */
+  report: (owner: object, key: string, valid: boolean) => void;
+  /** The renderer drawn under `owner` has left the screen: its report goes, and no other. */
+  release: (owner: object) => void;
+  /** True while any report of an attached owner on `key` is anything but `true`. */
+  isHeld: (key: string | null) => boolean;
+  subscribe: (listener: () => void) => () => void;
+};
+
+type GateValidityReport = { key: string; valid: boolean };
+
+export function createGateValidityStore(): GateValidityStore {
+  /** The reports of the attached owners: only these hold a gate. */
+  const reports = new Map<object, GateValidityReport>();
+  const attached = new WeakSet<object>();
+  /** The latest report of an owner that is not attached; it holds nothing. */
+  const kept = new WeakMap<object, GateValidityReport>();
+  const listeners = new Set<() => void>();
+  const changed = () => {
+    for (const listener of listeners) listener();
+  };
+  return {
+    attach: (owner) => {
+      if (attached.has(owner)) return;
+      attached.add(owner);
+      const last = kept.get(owner);
+      if (last === undefined) return;
+      kept.delete(owner);
+      reports.set(owner, last);
+      changed();
+    },
+    report: (owner, key, valid) => {
+      const next = { key, valid: valid === true };
+      if (!attached.has(owner)) {
+        kept.set(owner, next);
+        return;
+      }
+      const last = reports.get(owner);
+      if (last !== undefined && last.key === next.key && last.valid === next.valid) return;
+      reports.set(owner, next);
+      changed();
+    },
+    release: (owner) => {
+      if (!attached.has(owner)) return;
+      attached.delete(owner);
+      const last = reports.get(owner);
+      if (last === undefined) return;
+      reports.delete(owner);
+      kept.set(owner, last);
+      changed();
+    },
+    isHeld: (key) =>
+      key !== null && [...reports.values()].some((r) => r.key === key && !r.valid),
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
