@@ -505,3 +505,73 @@ describe("the dispatch event and the answer", () => {
     expect(dispatchEvents()).toHaveLength(1);
   });
 });
+
+/**
+ * A STALLED AUDIT SINK IS BOUNDED. A dispatch event counts as pending from its handoff until its write
+ * settles. One still pending after 10 seconds is named once in the server log by a fixed line. While 64
+ * are pending, a new extension_tool call is refused with a fixed 403 before its module is loaded, and that
+ * refusal is named in the server log by a fixed line instead of a further write.
+ */
+describe("a stalled audit sink", () => {
+  const BACKLOG = "extension_tool: the audit trail is not keeping up, so the call was not run";
+  const LATE_LINE = "[extension_tool] a dispatch audit write did not settle in time; it is still counted as pending";
+  const BACKLOG_LINE = "[extension_tool] a call was refused while dispatch audit writes were pending; no event was handed over";
+  let settle: Array<() => void> = [];
+
+  beforeEach(() => {
+    query.mockReset().mockResolvedValue({ rows: [{ package_name: PARENT }] });
+    getAgentPackage.mockReset().mockResolvedValue({ manifest: { cinatra: PARENT_CINATRA } });
+    resolveExtensionToolOrigin.mockReset().mockResolvedValue({ kind: "parent" });
+    loadDeclaredToolModule.mockReset().mockResolvedValue({ extensionTool: () => ({ ran: "parent" }) });
+    settle = [];
+    logAuditEvent.mockReset().mockImplementation(() => new Promise<void>((resolve) => settle.push(resolve)));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    for (const resolve of settle) resolve();
+  });
+
+  const lines = (spy: { mock: { calls: unknown[][] } }, sentence: string) =>
+    spy.mock.calls.filter((c) => c[0] === sentence).length;
+
+  it("refuses a new call while 64 dispatch events are pending, loads nothing for it and hands over no further write", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (let i = 0; i < 64; i += 1) {
+      expect(await call("parent_tool")).toEqual({ ok: true, result: { ran: "parent" } });
+    }
+    expect(dispatchEvents()).toHaveLength(64);
+    expect(loadDeclaredToolModule).toHaveBeenCalledTimes(64);
+    expect(await call("parent_tool")).toEqual({ ok: false, status: 403, error: BACKLOG });
+    expect(loadDeclaredToolModule).toHaveBeenCalledTimes(64);
+    expect(dispatchEvents()).toHaveLength(64);
+    expect(lines(error, BACKLOG_LINE)).toBe(1);
+    for (const c of error.mock.calls) expect(JSON.stringify(c)).not.toContain(RUN.runBy);
+  });
+
+  it("admits calls again once a pending write settles", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    for (let i = 0; i < 64; i += 1) await call("parent_tool");
+    expect((await call("parent_tool")).ok).toBe(false);
+    settle[0]!();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(await call("parent_tool")).toEqual({ ok: true, result: { ran: "parent" } });
+    expect(dispatchEvents()).toHaveLength(65);
+  });
+
+  it("names a write still pending after 10 seconds once in the server log, and none that settled in time", async () => {
+    await import("@/lib/authz/audit");
+    await import("@/lib/extension-scoped-tools");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.useFakeTimers();
+    await call("parent_tool");
+    await call("parent_tool");
+    settle[1]!();
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(lines(error, LATE_LINE)).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(lines(error, LATE_LINE)).toBe(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(lines(error, LATE_LINE)).toBe(1);
+  });
+});

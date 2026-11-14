@@ -20,7 +20,8 @@
  * - request positions: a package name in the body's `tool`, in `input`, in
  *   `input.name`, in `input.input`, or in an added envelope field never moves
  *   the code package;
- * - case P compatibility: a parent with no agent dependency (no flow read), an
+ * - case P compatibility: a run package whose registry manifest declares no
+ *   agent dependency (its step still placed in the exact parent flow), an
  *   inline subflow, data payloads carrying `id`;
  * - refusal hygiene: a failing read is a fixed 403 and an unknown throw the
  *   fixed 500, neither carrying a path or an install id.
@@ -463,12 +464,24 @@ describe("request positions never move the code package", () => {
 });
 
 describe("case P compatibility through the route", () => {
-  it("a parent with no agent dependency runs its tool and reads no flow", async () => {
-    h.getAgentPackage.mockResolvedValue({ manifest: { cinatra: { kind: "agent", tools: [tool("parent_tool")] } } });
+  // The registry manifest of the run package (read by name and version) declares no agent dependency
+  // and declares parent_tool; the exact parent installation the run executes as embeds and declares the child.
+  const NO_DEPENDENCY_MANIFEST = { manifest: { cinatra: { kind: "agent", dependencies: [], tools: [tool("parent_tool")] } } };
+
+  it("a run package whose registry manifest declares no agent dependency runs a parent step's tool from the exact parent flow", async () => {
+    h.getAgentPackage.mockResolvedValue(NO_DEPENDENCY_MANIFEST);
     const res = await post(OWN_STEP, { input: { name: "parent_tool", input: {} } });
     expect(res.status).toBe(200);
-    expect(h.bindParentInstall).not.toHaveBeenCalled();
+    expect(h.bindParentInstall).toHaveBeenCalledTimes(1);
     expect(loaded()).toEqual({ packageName: PARENT, installId: null });
+  });
+
+  it("a signed child step asking for the parent's tool is refused although that manifest declares no agent dependency", async () => {
+    h.getAgentPackage.mockResolvedValue(NO_DEPENDENCY_MANIFEST);
+    const res = await post(CHILD_STEP, { input: { name: "parent_tool", input: {} } });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: origin("name-not-bound") });
+    expect(loaded()).toBeNull();
   });
 
   it("a step of an inline, unlabelled subflow runs the parent's tool", async () => {
