@@ -147,6 +147,7 @@ function compiledFixture() {
     hasArtifactBindings: false,
     artifactBindings: null,
     publishingSteps: PUBLISHING_STEPS,
+    publishRows: {},
     cinatraConfig: null,
   };
 }

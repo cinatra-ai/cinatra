@@ -218,6 +218,11 @@ export const agentTemplates = cinatraSchema.table("agent_templates", {
   // legacy template cannot declare the flag (the key is new), so a reader treats
   // null as "unknown", never as "publishes nothing".
   publishingSteps: text("publishing_steps"),
+  // publishRows (cinatra#4150): the publish card's rows per declared node,
+  // { [nodeId]: [{ label, input }] }, JSON-as-text, written beside
+  // publishingSteps by the same writers. NULLABLE, no default, no backfill:
+  // null = unknown, never "no rows".
+  publishRows: text("publish_rows"),
   // lifecycleConfig: the agent-manifest LIFECYCLE declarations (cinatra#2038,
   // epic #2037 S0) compiled onto the template trigger-style (like trigger_mode /
   // gated_steps): requestedSkips / producedTypes / repairCapable as JSON-as-text.
