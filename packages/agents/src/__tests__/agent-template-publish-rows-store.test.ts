@@ -3,7 +3,10 @@
  * its writers.
  *
  *   - createLocalAgentTemplateVersion threads an explicit field list into
- *     createAgentTemplate; the seed's publishRows must reach the row input.
+ *     createAgentTemplate; the seed's publishRows must reach the row input. Its
+ *     module is "use server", so a client can call it: it accepts only the rows
+ *     the compiler itself produced (the same object), and refuses any map a
+ *     caller wrote, valid-looking or not, before anything is written.
  *   - serializeTemplate writes the map as JSON-as-text; deserializeTemplate
  *     reads it back, passes null (unknown) through, and THROWS on a stored
  *     value that is not { [nodeId]: [{ label, input }] }, naming the column only.
@@ -46,6 +49,7 @@ vi.mock("../publish-template", () => ({
 }));
 
 import { createLocalAgentTemplateVersion } from "../import-export-actions";
+import { collectPublishRows } from "../oas-compiler";
 import { serializeTemplate, deserializeTemplate } from "../store-template-versions";
 import { _runAgentTemplateUpdate } from "../store";
 import type { CreateAgentTemplateInput } from "../store";
@@ -58,11 +62,26 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+// The rows exactly as the compiler produces them for a declared publishing node.
+function compiledRows() {
+  const node = {
+    component_type: "ApiNode",
+    id: "publish",
+    inputs: [{ title: "content" }, { title: "destination" }],
+    metadata: { cinatra: { publishes: true, publishRows: ROWS.publish } },
+  };
+  const res = collectPublishRows({ nodes: [{ $component_ref: "publish" }], $referenced_components: { publish: node } }, ["publish"]);
+  if (!res.ok) throw new Error(res.error);
+  return res.rows;
+}
+const seedWith = (publishRows: unknown) =>
+  ({ packageName: "@cinatra-ai/publish-fixture-agent", packageVersion: "1.0.0", publishRows }) as never;
+
 describe("cinatra#4150 — createLocalAgentTemplateVersion carries publishRows onto the row", () => {
-  it("the seed's rows reach createAgentTemplate", async () => {
-    await createLocalAgentTemplateVersion({
-      seed: { packageName: "@cinatra-ai/publish-fixture-agent", packageVersion: "1.0.0", publishRows: ROWS } as never,
-    });
+  it("the rows the compiler produced reach createAgentTemplate", async () => {
+    const rows = compiledRows();
+    await createLocalAgentTemplateVersion({ seed: seedWith(rows) });
+    expect(rowInput().publishRows).toBe(rows);
     expect(rowInput().publishRows).toEqual(ROWS);
   });
 
@@ -72,6 +91,29 @@ describe("cinatra#4150 — createLocalAgentTemplateVersion carries publishRows o
     });
     expect(rowInput()).toHaveProperty("publishRows", null);
   });
+
+  it("a seed with publishRows null lands null", async () => {
+    await createLocalAgentTemplateVersion({ seed: seedWith(null) });
+    expect(rowInput()).toHaveProperty("publishRows", null);
+  });
+});
+
+describe("cinatra#4150 — a client call cannot write rows the compiler did not produce", () => {
+  for (const [label, rows] of [
+    ["a valid-looking map a caller wrote", ROWS],
+    ["an invalid map (a two-line label, an input the node does not have)", { publish: [{ label: "Bad\nLabel", input: "not-owned" }] }],
+    ["an empty map a caller wrote", {}],
+    ["a copy of the compiler's rows", JSON.parse(JSON.stringify(compiledRows()))],
+    ["a list", []],
+    ["a string", "publish"],
+  ] as const) {
+    it(`${label} is refused and nothing is written`, async () => {
+      await expect(createLocalAgentTemplateVersion({ seed: seedWith(rows) })).rejects.toThrow(
+        /^publishRows must be the compiler's own output$/,
+      );
+      expect(createTemplate).not.toHaveBeenCalled();
+    });
+  }
 });
 
 function input(publishRows: unknown): CreateAgentTemplateInput {
@@ -124,12 +166,14 @@ describe("cinatra#4150 — the column round-trips through serializeTemplate / de
 
   it("the error never quotes the stored text", () => {
     const values = { ...serializeTemplate(input(undefined)), publishRows: '{"publish":"sk-live-SECRET-0123"}' };
+    let caught: unknown = null;
     try {
       deserializeTemplate(asRow(values));
-      throw new Error("expected a throw");
     } catch (error) {
-      expect(String((error as Error).message)).not.toContain("SECRET");
+      caught = error;
     }
+    expect(caught, "a malformed stored value must throw").toBeInstanceOf(Error);
+    expect(String((caught as Error).message)).not.toContain("SECRET");
   });
 });
 
