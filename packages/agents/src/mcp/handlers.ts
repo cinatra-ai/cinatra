@@ -49,6 +49,7 @@ import {
   type AgentRunRecord,
 } from "../store";
 import { claimGateForResume } from "../run-status";
+import { resumeMessageFromInput } from "./resume-message";
 // Run-scoped test-delivery send + parse primitives (#1625): the two handlers
 // live in ./test-delivery-handlers (extracted to keep this primitive hub under
 // the file-size ratchet). The send PORT, ledger store, and port types are
@@ -2160,36 +2161,8 @@ async function handleAgentBuilderRunResume(
         timeoutMs: WAYFLOW_A2A_TIMEOUT_MS,
         fetchImpl: createWayflowFetch(),
       });
-      // Precedence for the WayFlow resume message — kept identical to
-      // approveReviewTaskInternal (review-task-actions.ts) so UI and MCP paths
-      // stay in lockstep:
-      //   1. userResponse (string, non-empty after trim)  — structured-form path,
-      //      passed through UNCHANGED to preserve JSON formatting.
-      //   2. approvalNote (string, non-empty after trim) — legacy bare-approval, trimmed.
-      //   3. fallback "[Approved by operator]"           — bare click-to-approve.
-      // userResponse wins over approvalNote when both are present; renderers needing
-      // the approval note delivered to WayFlow must embed it inside the JSON payload.
-      const trimmedNote = typeof approvalNote === "string" ? approvalNote.trim() : "";
-      let resumeText: string;
-      if (typeof userResponse === "string" && userResponse.trim().length > 0) {
-        resumeText = userResponse;
-      } else if (trimmedNote.length > 0) {
-        resumeText = trimmedNote;
-      } else {
-        resumeText = "[Approved by operator]";
-      }
-      // Payload extraction. MCP handler input has no structured `valuesObj`, so on parse failure submittedValues stays null.
-      let submittedValues: Record<string, unknown> | null = null;
-      if (typeof userResponse === "string" && userResponse.trim().length > 0) {
-        try {
-          const parsed = JSON.parse(userResponse);
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            submittedValues = parsed as Record<string, unknown>;
-          }
-        } catch {
-          // No structured fallback in MCP path — leave null.
-        }
-      }
+      // The resume message and its submitted values (precedence: ./resume-message, as the UI approve).
+      const { resumeText, trimmedNote, submittedValues } = resumeMessageFromInput(userResponse, approvalNote);
 
       // #1193 resume carrier + cinatra#3745 claim: claim THIS gate (`pending_approval -> running`,
       // bound to the a2a task and attempt read above; the attempt is kept), then mint this leg's
