@@ -133,7 +133,7 @@ import {
   type AgentHitlScreenState,
 } from "./agent-hitl-screen";
 import { getAgentHitlScreenStateAction } from "./agent-hitl-screen-actions";
-import { fieldRendererRegistry, type FieldRendererContext } from "./field-renderer-registry";
+import { continueAwaitsAPick, fieldRendererRegistry, type FieldRendererContext } from "./field-renderer-registry";
 import { hasMidRunHitlBinding } from "./orchestrator-mid-run-hitl";
 import { DispatchRenderer, type PresentationHint } from "./result-renderers";
 import { approveReviewTask } from "./hitl-actions";
@@ -819,7 +819,9 @@ export function AgentHitlScreenFields({
         </p>
       ) : (
         <Renderer
-          key={`${gate.xRenderer}::${gate.fieldName ?? ""}`}
+          // cinatra#3035: keyed by the full gate identity (review task, renderer,
+          // field), as the buffer is, so a later gate remounts with no pick.
+          key={flushKey}
           fieldName={hitlRendererFieldName(gate.fieldName ?? undefined)}
           schema={renderSchema}
           value={
@@ -893,10 +895,12 @@ export function AgentHitlScreenFields({
 function HitlContinueControl({
   submitting,
   blocked,
+  awaitsPick = false,
   onPress,
 }: {
   submitting: boolean;
   blocked: boolean;
+  awaitsPick?: boolean; // cinatra#3035: the gate's kind holds its Continue until a pick, as on the run page
   onPress: () => Promise<void>;
 }): ReactElement {
   return (
@@ -905,7 +909,7 @@ function HitlContinueControl({
         size="sm"
         className="gap-1.5"
         data-action="submit-hitl-screen"
-        disabled={submitting || blocked}
+        disabled={submitting || blocked || awaitsPick}
         {...(blocked
           ? {
               title:
@@ -926,11 +930,13 @@ export function AgentHitlScreenContinue({
   buffered,
   submitting,
   blocked,
+  awaitsPick,
   onContinue,
 }: {
   gate: AgentHitlScreenGate;
   buffered: Record<string, unknown>;
   submitting: boolean;
+  awaitsPick?: boolean;
   /** This host has NO identity to answer with — neither a cookie session nor a
    *  declared credential. The control is drawn and inert rather than firing a
    *  request the server would have to guess the caller of. */
@@ -941,6 +947,7 @@ export function AgentHitlScreenContinue({
     <HitlContinueControl
       submitting={submitting}
       blocked={blocked}
+      awaitsPick={awaitsPick}
       onPress={async () => {
         let payload: Record<string, unknown> = {
           ...buffered,
@@ -1378,6 +1385,7 @@ export function AgentHitlScreenCard({
             buffered={activeBuffered}
             submitting={submitting}
             blocked={(!cookieSession && auth === null) || withholdRenderer}
+            awaitsPick={continueAwaitsAPick(resolveHitlGateEntry(runId, gate), activeBuffered)}
             onContinue={onContinue}
           />
         ) : cardOwnsSetupSend ? (

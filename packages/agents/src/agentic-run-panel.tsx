@@ -38,7 +38,7 @@ import {
 } from "./agent-hitl-screen-card";
 import type { AgentRunMessageBody } from "./store";
 import { StatusPill } from "@/components/ui/status-pill";
-import { fieldRendererRegistry } from "./field-renderer-registry";
+import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext } from "./field-renderer-registry";
 import { ArrowRight } from "lucide-react";
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
@@ -1596,11 +1596,11 @@ export function AgenticRunPanel({
   // state was already fixed by the composite React `key` (cinatra#2541/#2556);
   // this is the analogous fix for the panel-level buffer.
   //
-  // The key collapses to `${xRenderer}::` for mid-run gates (no fieldName),
-  // so those keep resetting on xRenderer change alone — unchanged from today.
+  // cinatra#3035: the review-task id leads the key, so a later mid-run gate (no
+  // fieldName) of the same renderer never inherits an earlier gate's pick.
   const bufferedHitlValueKey =
     currentXRenderer !== null
-      ? `${currentXRenderer}::${effectiveHitlContext?.fieldName ?? ""}`
+      ? `${effectiveHitlContext?.reviewTaskId ?? ""}::${currentXRenderer}::${effectiveHitlContext?.fieldName ?? ""}`
       : null;
   const [prevBufferedHitlValueKey, setPrevBufferedHitlValueKey] = useState<string | null>(null);
   if (
@@ -2036,7 +2036,8 @@ export function AgenticRunPanel({
       ) : null}
       <Button
         size="sm"
-        disabled={isApproving}
+        // cinatra#3035: a gate whose kind declares the hold keeps its Continue unavailable until a pick is made, as on the run page's card.
+        disabled={isApproving || continueAwaitsAPick(hitlRendererEntry?.entry, bufferedHitlValue)}
         className="gap-1.5"
         // THE HITL SCREEN'S ONE DECISION (cinatra#2930). Named on the row this
         // panel draws INSIDE the screen card, and deliberately not on the
@@ -2993,10 +2994,9 @@ export function AgenticRunPanel({
                       // xRenderer-only key would mutate `fieldName` on a LIVE
                       // renderer instance: field 1's typed text (SchemaFieldRenderer's
                       // localValue, which a non-string next value does not clear)
-                      // would pre-fill field 2 under field 2's label. fieldName is
-                      // undefined for mid-run gates, so those keep their existing
-                      // xRenderer-keyed identity exactly.
-                      key={`${effectiveHitlContext.xRenderer}::${effectiveHitlContext.fieldName ?? ""}`}
+                      // would pre-fill field 2 under field 2's label. The review-task
+                      // id leads it (cinatra#3035): a later gate's renderer starts with no pick.
+                      key={`${effectiveHitlContext.reviewTaskId}::${effectiveHitlContext.xRenderer}::${effectiveHitlContext.fieldName ?? ""}`}
                       // The gate's REAL field identity (cinatra#2541) — the same
                       // seam the orchestrator stepper regressed at, with the
                       // same consequence: `fieldName` is what the renderer
