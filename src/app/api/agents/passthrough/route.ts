@@ -588,6 +588,8 @@ export async function POST(req: Request): Promise<Response> {
           orgId: run.orgId,
           runId: run.id,
           nodeId: shaped.nodeId,
+          // cinatra#4264: the signed step, compared with the request node_id.
+          ...(verifiedStepId ? { verifiedStepId } : {}),
           artifactId: shaped.artifactId,
           baseRepresentationRevisionId: shaped.baseRepresentationRevisionId,
           content: shaped.content,
