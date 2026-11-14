@@ -7,7 +7,8 @@
  * is in the status the caller just won. The park's write also holds only while its decision is still parked, in the
  * same statement, so a released or superseded decision is never stated as the current moment. Both entries throw
  * their failures to the publish road, which logs them by a fixed error name; the coordinator logs neither the run id
- * nor the store's text. The publish moment feeds no conversation part yet (the widget outbox is a later part); its card is mounted by the run on every host.
+ * nor the store's text. The publish moment feeds the run outbox like the HITL screen's (part 7b): the host writer adds no
+ * part for this interrupt kind, because every host, the site widget among them, mounts the card from the run's own state.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -34,6 +35,7 @@ vi.mock("../recommendation-hold", () => ({
 
 import * as coordinator from "../lifecycle-coordinator";
 import {
+  LIFECYCLE_OUTBOX_BUDGET_MS,
   momentFeedsRunOutbox,
   setLifecyclePartOutbox,
   type LifecycleMomentOpened,
@@ -76,9 +78,51 @@ describe("the run stops at a publish gate (A4, the moment half)", () => {
     expect(answer.moment).toBe("publish");
   });
 
-  it("feeds no conversation part: the card is mounted by the run, and the widget outbox is a later part", async () => {
+  it("feeds the run outbox once with the publish card and the decision's id, AFTER the record", async () => {
+    const order: string[] = [];
+    recordRunLifecycleMoment.mockImplementationOnce(async () => {
+      order.push("record");
+      return undefined;
+    });
+    setLifecyclePartOutbox({
+      async onMomentOpened(entry) {
+        order.push("outbox");
+        opened.push(entry);
+      },
+    });
     await coordinator.onPublishGate({ run: RUN, decisionId: "dec-1", authority: AUTHORITY });
-    expect(momentFeedsRunOutbox("publish" as never)).toBe(false);
+    expect(opened).toEqual([
+      { runId: "run-1", orgId: "org-1", moment: "publish", cardKind: "publish_decision", cardRef: "dec-1" },
+    ]);
+    expect(order).toEqual(["record", "outbox"]);
+    expect(momentFeedsRunOutbox("publish")).toBe(true);
+  });
+
+  it("a writer that stalls synchronously past the budget: the park still answers publish, and the overrun is reported", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      setLifecyclePartOutbox({
+        onMomentOpened: () => {
+          vi.advanceTimersByTime(LIFECYCLE_OUTBOX_BUDGET_MS + 3_000);
+          return Promise.resolve();
+        },
+      });
+      const answer = await coordinator.onPublishGate({ run: RUN, decisionId: "dec-1", authority: AUTHORITY });
+      expect(answer.moment).toBe("publish");
+      expect(recordRunLifecycleMoment).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls.some((call) => String(call[0]).includes("[lifecycle-part-outbox]"))).toBe(true);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("a park whose record fails feeds nothing", async () => {
+    recordRunLifecycleMoment.mockRejectedValueOnce(new Error("db failure"));
+    await expect(
+      coordinator.onPublishGate({ run: RUN, decisionId: "dec-1", authority: AUTHORITY }),
+    ).rejects.toThrow("db failure");
     expect(opened).toEqual([]);
   });
 
