@@ -626,10 +626,50 @@ export function artifactMaterializationLedgerSchemaQueries(
   image_model                 text,
   created_at                  timestamptz NOT NULL DEFAULT now()
 )` },
+    // cinatra#4264 (core__0128): the runtime's signed id of the ApiNode that
+    // filed the revision, written only when it equals node_id; else NULL.
+    // Added here rather than in the CREATE text, so a fresh install and an
+    // upgraded one take the same statement (the core__0126 precedent).
+    { text: `ALTER TABLE "${q}"."artifact_materializations" ADD COLUMN IF NOT EXISTS verified_step_id text` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS artifact_materializations_identity_idx ON "${q}"."artifact_materializations" (run_id, output_id, extension, content_hash)` },
     // Advisory cross-path lookup (the WARN-phase LLM-emit dedupe): finalized
     // declarative rows of one run by extension + content hash.
     { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_run_ext_hash_idx ON "${q}"."artifact_materializations" (run_id, extension, content_hash)` },
     { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_org_run_idx ON "${q}"."artifact_materializations" (org_id, run_id)` },
+    // cinatra#4264 (core__0128): "which node filed THIS revision" — the
+    // Regenerate provenance reader's exact lookup over materialize_tool rows.
+    { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_org_artifact_rev_idx ON "${q}"."artifact_materializations" (org_id, artifact_id, representation_revision_id) WHERE path = 'materialize_tool'` },
+    ...agentRunStepSnapshotSchemaQueries(schemaName),
+  ];
+}
+
+/**
+ * THE STEP SNAPSHOTS OF A RUN (cinatra#4264, slice B1a; migration twin
+ * core__0128).
+ *
+ * Per run and node, the node's FULL resolved input as the flow runtime
+ * serialized it (`inputs_json`, stored verbatim and never re-serialized), the
+ * sha256 of those UTF-8 bytes and the sha256 of the flow version that ran. A
+ * Regenerate reruns one step from these values. `ambiguous` is set when a
+ * second, different snapshot of the same (run, node) arrives: neither is then
+ * trusted. A row lives exactly as long as its run (ON DELETE CASCADE).
+ *
+ * Spread from `artifactMaterializationLedgerSchemaQueries`, which the bootstrap
+ * runs after `agent_runs` exists (the foreign key needs it).
+ */
+export function agentRunStepSnapshotSchemaQueries(schemaName: string): { text: string }[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier
+  return [
+    { text: `CREATE TABLE IF NOT EXISTS "${q}"."agent_run_step_snapshots" (
+  org_id         text NOT NULL,
+  run_id         text NOT NULL REFERENCES "${q}"."agent_runs"(id) ON DELETE CASCADE,
+  node_id        text NOT NULL,
+  inputs_json    text NOT NULL,
+  inputs_sha256  text NOT NULL,
+  flow_sha256    text NOT NULL,
+  ambiguous      boolean NOT NULL DEFAULT false,
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (run_id, node_id)
+)` },
   ];
 }

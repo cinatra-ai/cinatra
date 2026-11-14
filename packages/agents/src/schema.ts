@@ -218,6 +218,11 @@ export const agentTemplates = cinatraSchema.table("agent_templates", {
   // legacy template cannot declare the flag (the key is new), so a reader treats
   // null as "unknown", never as "publishes nothing".
   publishingSteps: text("publishing_steps"),
+  // publishRows (cinatra#4150): the publish card's rows per declared node,
+  // { [nodeId]: [{ label, input }] }, JSON-as-text, written beside
+  // publishingSteps by the same writers. NULLABLE, no default, no backfill:
+  // null = unknown, never "no rows".
+  publishRows: text("publish_rows"),
   // lifecycleConfig: the agent-manifest LIFECYCLE declarations (cinatra#2038,
   // epic #2037 S0) compiled onto the template trigger-style (like trigger_mode /
   // gated_steps): requestedSkips / producedTypes / repairCapable as JSON-as-text.
@@ -768,6 +773,12 @@ export const artifactReviewResumeOutbox = cinatraSchema.table("artifact_review_r
   maxAttempts:    integer("max_attempts").notNull().default(20),
   deadLetteredAt: timestamp("dead_lettered_at", { withTimezone: true }),
   lastError:      text("last_error"),
+  // cinatra#3745 (core__0132): runClaimedAt — this gate's delivery moved the run
+  // pending_approval -> running (set and cleared with that edge, under the lease);
+  // resumeTaskResult — the A2A task its send returned, recorded before the handler
+  // runs (the durable "sent, not yet handled" witness; never carries a run token).
+  runClaimedAt:   timestamp("run_claimed_at", { withTimezone: true }),
+  resumeTaskResult: jsonb("resume_task_result"),
 }, (t) => ({
   statusIdx: index("artifact_review_resume_outbox_status_idx").on(t.status, t.createdAt),
   deadIdx:   index("artifact_review_resume_outbox_dead_idx").on(t.deadLetteredAt).where(sql`dead_lettered_at IS NOT NULL`),
@@ -1159,10 +1170,33 @@ export const lifecycleRepair = cinatraSchema.table("lifecycle_repair", {
   updatedAt:                       timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   // cinatra#4245: the run's pause_generation the change request ended (core__0126).
   pausedRunGeneration:             bigint("paused_run_generation", { mode: "number" }),
+  // cinatra#4264 (core__0128): the Regenerate intent (NULL = an ordinary
+  // repair) and the source target a segment repair names.
+  regenerateNodeId:                text("regenerate_node_id"),
+  sourceArtifactId:                text("source_artifact_id"),
+  sourceRepresentationRevisionId:  text("source_representation_revision_id"),
 }, (t) => ({
   gateUniq:    uniqueIndex("lifecycle_repair_gate_uniq").on(t.gateId),
   lineageIdx:  index("lifecycle_repair_lineage_idx").on(t.lineageId),
   statusIdx:   index("lifecycle_repair_status_idx").on(t.status, t.createdAt),
+  successorIdx: index("lifecycle_repair_successor_idx").on(t.successorArtifactId, t.successorRepresentationRevisionId),
+}));
+
+/** The step snapshots of a run (cinatra#4264, core__0128): per (run, node) the
+ * node's full resolved input exactly as the flow runtime serialized it, its
+ * sha256 and the flow version's sha256. Removed with the run (ON DELETE
+ * CASCADE). `ambiguous` = a second, different snapshot of the same node came. */
+export const agentRunStepSnapshots = cinatraSchema.table("agent_run_step_snapshots", {
+  orgId:        text("org_id").notNull(),
+  runId:        text("run_id").notNull().references(() => agentRuns.id, { onDelete: "cascade" }),
+  nodeId:       text("node_id").notNull(),
+  inputsJson:   text("inputs_json").notNull(),
+  inputsSha256: text("inputs_sha256").notNull(),
+  flowSha256:   text("flow_sha256").notNull(),
+  ambiguous:    boolean("ambiguous").notNull().default(false),
+  createdAt:    timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.runId, t.nodeId] }),
 }));
 
 /** ROUTED ADDITION — the AC-6 rejected-recommendation efficacy row (S3 computed it
@@ -1728,4 +1762,20 @@ export const agentRunTokens = cinatraSchema.table("agent_run_tokens", {
   tokenHash: text("token_hash").primaryKey(),
   runId:     text("run_id").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// #3745: immutable per-dispatch source identity. No mutable template fallback.
+export const agentRunOutwardActionPolicies = cinatraSchema.table("agent_run_outward_action_policies", {
+  runId: text("run_id").primaryKey(), orgId: text("org_id").notNull(),
+  executionAttemptId: text("execution_attempt_id").notNull(),
+  policy: jsonb("policy").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+// A durable burned gate is never removed by gate/run deletion. No CASCADE and
+// no stored argument/parallel approval. Remote effect failure does not refund it.
+export const artifactReviewActionConsumptions = cinatraSchema.table("artifact_review_action_consumptions", {
+  gateId: text("gate_id").primaryKey(), runId: text("run_id").notNull(), orgId: text("org_id").notNull(),
+  stepId: text("step_id").notNull(), toolIdentity: jsonb("tool_identity").notNull(),
+  executedSourceSha256: text("executed_source_sha256").notNull(),
+  consumedAt: timestamp("consumed_at", { withTimezone: true }).notNull().defaultNow(),
 });

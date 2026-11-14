@@ -409,6 +409,23 @@ describe("extension-rendering-gate — the real tree (test of record)", () => {
     },
     120_000,
   );
+
+  it.skipIf(REAL_TREE_EMPTY && !process.env.CI)(
+    "the chart extension claims no type: its report line puts it outside the gate by construction",
+    () => {
+      if (REAL_TREE_EMPTY) {
+        throw new Error("the extension tree holds no artifact extension on a CI run; materialize it before the root suite");
+      }
+      const CHART = "@cinatra-ai/chart-artifact";
+      const res = spawnSync(process.execPath, [GATE_SCRIPT], { cwd: REPO_ROOT, encoding: "utf8", env: process.env });
+      expect(res.status, res.stderr).toBe(0);
+      const lines = res.stdout.split("\n");
+      // The complete set of report lines naming the chart pack is exactly the one outside line.
+      const chartLines = lines.filter((line) => line.includes(CHART));
+      expect(chartLines).toEqual([`    outside the gate by construction: ${CHART} \u2014 declares no objectTypes`]);
+    },
+    120_000,
+  );
 });
 
 // R7 — checklist 2: an open pull request that gives a floor extension its
