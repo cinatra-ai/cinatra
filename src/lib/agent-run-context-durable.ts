@@ -233,9 +233,17 @@ export function resetDurableRunContextCountersForTest(): void {
 /**
  * Write the durable binding for one freshly-minted machine access token.
  * Returns the redis key written (for the request-scoped finally-clear) or
- * null when the write was skipped/failed — the caller proceeds either way
+ * null when the write was skipped/failed — the bridge proceeds either way
  * (binding absent ⇒ the step simply carries no run attribution; availability is
  * never worse, and an unattributed write is never a MISattributed one).
+ *
+ * cinatra#3745: the binding lives shorter than the bearer it keys (cleared at
+ * the end of the bridge request, TTL backstop), and a bearer whose binding is
+ * gone reads "absent", i.e. an ordinary caller. So a binding must never be the
+ * only carrier of an executing-source proof for a bearer that outlives it: the
+ * bridge offers no machine bearer to a source-bound step at all (it gets the
+ * on-behalf-of token, which carries the proof itself). A proof found on a
+ * stored binding is still parsed and re-checked by the reader below.
  *
  * Refuses a value whose tokenHash is not 64-hex: a malformed hash could never
  * resolve and would only manufacture "invalid" (fail-closed) reads.
@@ -345,6 +353,10 @@ export async function resolveDurableRunContext(
     return { outcome: "invalid" };
   }
   if (raw === null) {
+    // A successful read with no binding is genuine absence: an ordinary bearer.
+    // It is never a source-bound bearer that lost its binding (cinatra#3745):
+    // the bridge mints no machine bearer for a source-bound step, see the
+    // writer above.
     bump(counters().durableOutcome, "absent");
     return { outcome: "absent" };
   }

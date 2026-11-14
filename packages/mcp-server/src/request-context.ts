@@ -567,6 +567,27 @@ export type ResolvedRequestRunContext = {
   deniedChannel?: LegacyRunContextChannel;
 };
 
+/**
+ * Re-check an on-behalf-of token's executing-source proof (cinatra#3745)
+ * against the run store for this request. Returns undefined when the actor is
+ * not an agent-run delegation or carries no proof (nothing to check), true
+ * only when `verify` answers true for the token's run and org, and false when
+ * `verify` is not wired, answers false, throws or rejects. The transport passes
+ * the result to resolveRequestRunContext as `delegatedSourceCurrent`.
+ */
+export async function verifyDelegatedExecutedSource(
+  actor: DelegatedMcpActor | null | undefined,
+  verify?: (runId: string, orgId: string, source: VerifiedExecutedRunSource) => Promise<boolean>,
+): Promise<boolean | undefined> {
+  if (actor?.delegation !== "agent_run" || actor.verifiedExecutedSource === undefined) return undefined;
+  if (!verify) return false;
+  try {
+    return (await verify(actor.runId, actor.orgId, actor.verifiedExecutedSource)) === true;
+  } catch {
+    return false;
+  }
+}
+
 export function resolveRequestRunContext(input: {
   /** delegatedActor.runId when delegation === "agent_run"; else undefined. */
   delegatedRunId?: string;
@@ -574,6 +595,12 @@ export function resolveRequestRunContext(input: {
    *  undefined (cinatra#3745). Used only when the delegated run id serves. */
   delegatedStepId?: string;
   delegatedExecutedSource?: VerifiedExecutedRunSource;
+  /** The result of verifyDelegatedExecutedSource for THIS request: true only
+   *  when the run store found delegatedExecutedSource current for the token's
+   *  run and org. Anything else (false, not checked) refuses a delegated
+   *  proof: the token's own claims are fixed at mint and cannot show that the
+   *  run is still on that attempt. */
+  delegatedSourceCurrent?: boolean;
   /** The ONE per-request durable resolution (undefined when not consulted —
    *  e.g. a delegated request or no bearer). */
   durable?: DurableRunContextResolution;
@@ -666,6 +693,12 @@ export function resolveRequestRunContext(input: {
   const source = sourceCandidate === undefined ? undefined : parseVerifiedExecutedRunSource(sourceCandidate);
   // Refuse any corrupt/mixed-channel proof before dispatch; never borrow another channel's proof.
   if (sourceCandidate !== undefined && (!source || source.stepId !== stepId)) {
+    return { servedBy: "none", suppressed: true, denied: true };
+  }
+  // A delegated proof serves only when it was re-checked current on this
+  // request (a token minted under attempt A and replayed after a re-dispatch
+  // to attempt B is refused, never served with or without its proof).
+  if (source && nonEmpty(input.delegatedRunId) && input.delegatedSourceCurrent !== true) {
     return { servedBy: "none", suppressed: true, denied: true };
   }
   const servedBy: RunContextServedBy = input.delegatedRunId

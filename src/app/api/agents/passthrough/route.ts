@@ -160,9 +160,12 @@ const ALLOWED_TOOLS = new Set([
 // Tools that must execute inside an mcpRequestContextStorage frame carrying the
 // VERIFIED run id (from bindBridgeRunId), so the primitive derives its run scope
 // from the invocation context — never from the request body. The generic path
-// (objects_save, trigger_config_set, …) resolves identity from the actor alone
-// and does not need (or want) an ambient run id, so we scope this to the
-// run-scoped primitives only.
+// (objects_save, trigger_config_set, …) resolves identity from the actor alone;
+// since cinatra#3745 it runs inside the run's frame too (run id, owner, org,
+// the verified step and, for a source-bound call, the proof and the run-write
+// authority), so a generic handler that reads the frame's run id sees the
+// proven run. This set names the primitives that additionally get the
+// run-scoped frame (verifiedRunScopeId and the submission id).
 const RUN_SCOPED_CONTEXT_TOOLS = new Set<string>([
   "agent_run_hitl_prompts_list",
   "agent_run_hitl_prompts_exclude",
@@ -563,6 +566,14 @@ export async function POST(req: Request): Promise<Response> {
     const orgWriteAuthority = verifiedExecutedSource
       ? await mintRunWriteAuthorityForMcp({ runId: run.id, orgId: run.orgId,
           executionAttemptId: verifiedExecutedSource.executionAttemptId }) : undefined;
+    // cinatra#3745: the mint matches the proof's attempt against the run's
+    // CURRENT attempt. A refused mint means the run moved on after the source
+    // check above (or the authority could not be read): the proof is no longer
+    // current, so the call is refused before any tool runs, never served with
+    // the stale proof and no authority.
+    if (verifiedExecutedSource && !orgWriteAuthority) {
+      return NextResponse.json({ error: "Executing source could not be verified" }, { status: 403 });
+    }
     return await mcpRequestContextStorage.run({ runId: binding.runId,
       userId: run.runBy ?? undefined, orgId: run.orgId,
       ...(run.oboCeiling ? { oboCeiling: run.oboCeiling } : {}),

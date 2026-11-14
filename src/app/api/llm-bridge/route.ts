@@ -1950,12 +1950,23 @@ export async function POST(req: Request): Promise<Response> {
               // The binding value is the run's dispatch-minted credential HASH
               // (never a raw run id): the MCP reader resolves it back through
               // readAgentRunByTokenHash, keeping the run ROW the source of
-              // truth. A source-bound fallback requires a usable bearer,
-              // the current authoritative credential hash and a successful
-              // durable write. Missing attribution suppresses the tool so it
-              // cannot bypass the source-bound declaration/action gates.
-              // Ordinary callers retain the existing best-effort binding.
+              // truth. A run without a dispatch-minted credential hash writes
+              // nothing, and a redis failure writes nothing — post-#1195 there
+              // is no legacy channel underneath, so such a step simply carries
+              // NO run attribution (an unattributed write, never a misattributed
+              // one; a forged x-cinatra-run-id claim is refused at the MCP
+              // transport).
+              //
+              // cinatra#3745: a source-bound step NEVER gets a machine bearer.
+              // The bearer outlives its binding (cleared at the end of this
+              // request, 300s TTL), and once the binding is gone the MCP reader
+              // can only read the bearer as an ordinary caller without the
+              // proof. Such a step gets the cinatra tool only through the
+              // on-behalf-of token, which carries the proof itself; when that
+              // road is unavailable the tool is withheld (null is authoritative:
+              // nothing falls back underneath).
               const buildMachineToolWithDurableBinding = async () => {
+                if (verifiedExecutedSource) return null;
                 // Byte-equivalence with the orchestration fallback this
                 // replaces requires the EFFECTIVE provider (the gate above
                 // already keys on it): registry.ts would have minted the
@@ -1972,13 +1983,10 @@ export async function POST(req: Request): Promise<Response> {
                     authorization.startsWith("Bearer ")
                       ? authorization.slice("Bearer ".length)
                       : undefined;
-                  if (verifiedExecutedSource &&
-                      (!bearer || !/^[A-Za-z0-9\-._~+/]+=*$/.test(bearer))) return null;
                   if (bearer) {
                     const runTokenHash = await readAgentRunTokenHashById(
                       runForPorts.id,
                     );
-                    if (verifiedExecutedSource && !runTokenHash) return null;
                     if (runTokenHash) {
                       const key = await writeDurableRunContextBinding(bearer, {
                         tokenHash: runTokenHash,
@@ -1990,14 +1998,11 @@ export async function POST(req: Request): Promise<Response> {
                         // The verified step of the calling model step
                         // (cinatra#3745) — written only when verified above.
                         ...(verifiedStepId ? { stepId: verifiedStepId } : {}),
-                        ...(verifiedExecutedSource ? { verifiedExecutedSource } : {}),
                       });
                       if (key) durableBindingKeys.push(key);
-                      else if (verifiedExecutedSource) return null;
                     }
                   }
                 } catch {
-                  if (verifiedExecutedSource) return null;
                   // best-effort — binding absent ⇒ the step carries no run
                   // attribution (never a weaker, forgeable substitute).
                 }
