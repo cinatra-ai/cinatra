@@ -180,13 +180,12 @@ const RENDERER_KIND_TABLE: Record<
     bareAliases: ["gmail-sender"],
     makeCondition: makeGmailSenderCondition,
   },
-  // MIGRATED (cinatra#1625 S8/M3): the blog-linkedin draft-review component
-  // moved into @cinatra-ai/blog-linkedin-publish-agent. The KIND stays (the
-  // manifest still declares it — kind-vocabulary set-equality; conditionFor()
-  // reads its bare aliases), but the host ships no component: a bundled binding
-  // resolves map-first to the extension wrapper, and a not-in-build binding of
-  // this kind degrades to the SchemaFieldRenderer floor here (AC4 never-blank).
-  // Same shape as final-list-review / scrape-schema-review above.
+  // MIGRATED (cinatra#1625 S8/M3), then RETIRED in the pack (cinatra#4150): the
+  // blog-linkedin draft-review screen left its pack when the application's
+  // publish card took over the confirmation, so no bundled manifest declares
+  // this kind any more. The KIND stays (kind-vocabulary set-equality) so a
+  // package installed at RUNTIME at an older version still validates, and its
+  // binding degrades to the SchemaFieldRenderer floor here (AC4 never-blank).
   "linkedin-draft-review": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true },
   "list-picker": { renderer: ListPickerRenderer, bareAliases: ["list-picker"] },
   // See the final-list-review note above — the component migrated; the kind + its
@@ -225,13 +224,10 @@ const RENDERER_KIND_TABLE: Record<
   // as final-list-review above.
   "test-delivery-input": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true },
   "wayflow-setup-form": { renderer: GroupedSetupFormRenderer, drawsOwnSubmit: true },
-  // MIGRATED (cinatra#1625 S8/M3): the blog-wordpress draft-confirm component
-  // moved into @cinatra-ai/blog-wordpress-publish-agent. The KIND stays (the
-  // manifest still declares it — kind-vocabulary set-equality; conditionFor()
-  // reads its bare aliases), but the host ships no component: a bundled binding
-  // resolves map-first to the extension wrapper, and a not-in-build binding of
-  // this kind degrades to the SchemaFieldRenderer floor here (AC4 never-blank).
-  // Same shape as final-list-review / scrape-schema-review / linkedin-draft-review above.
+  // MIGRATED (cinatra#1625 S8/M3), then RETIRED in the pack (cinatra#4150): the
+  // blog-wordpress draft-confirm screen left its pack for the application's
+  // publish card. The KIND stays for a runtime-installed older version, as
+  // linkedin-draft-review above.
   "wordpress-draft-confirm": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true },
 };
 

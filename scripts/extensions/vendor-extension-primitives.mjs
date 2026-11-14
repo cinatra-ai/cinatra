@@ -56,15 +56,12 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // emptied it; that gate now refuses any copy in either kind outright. Re-adding
 // an entry of either kind fails
 // scripts/extensions/__tests__/vendor-extension-primitives.test.mjs.
-const VENDOR_MANIFEST = [
-  // AGENT claimant (cinatra#1625, epic #1620 S8 — M3): blog-linkedin-publish-agent
-  // relocated its draft-review HITL field renderer into its own repo; it imports
-  // these design-registry primitives, vendored the same kind-agnostic way.
-  {
-    extensionDir: "extensions/cinatra-ai/blog-linkedin-publish-agent",
-    uiItems: ["label", "textarea"],
-  },
-];
+//
+// EMPTY since cinatra#4150: the last claimant, blog-linkedin-publish-agent
+// (cinatra#1625 S8 — M3, label + textarea), deleted its draft-review screen and
+// the primitives it carried when the application's publish card took over the
+// confirmation. A new agent claimant still adds an entry here.
+const VENDOR_MANIFEST = [];
 
 // registryDependencies are namespaced (`@cinatra-ai/label`) so a consumer's
 // shadcn CLI resolves them in OUR registry instead of its default one; the item
