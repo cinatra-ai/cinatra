@@ -24,7 +24,9 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const PKG = "@cinatra-ai/synthetic-gemini-agent";
-const AGENT_JSON_PATH = "/agents/cinatra-ai/synthetic-gemini-agent/cinatra/oas.json";
+// The layout path the review 2 case derives the scoped row from
+// (agents/<vendor>/<slug> -> @vendor/slug), joined from its segments.
+const AGENT_JSON_PATH = join("/agents", "cinatra-ai", "synthetic-gemini-agent", "cinatra", "oas.json");
 
 const gemini = JSON.parse(
   readFileSync(join(__dirname, "fixtures", "synthetic-gemini-agent.json"), "utf8"),
