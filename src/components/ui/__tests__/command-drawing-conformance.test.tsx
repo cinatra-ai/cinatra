@@ -1,11 +1,15 @@
 // @vitest-environment jsdom
 //
-// Command menu: the graded checklist for the components drawing's "Command
-// menu" section (cinatra#3189, shared-primitives wave).
+// Command menu: the regression check for the "rows at 13px" clause of the
+// components drawing's "Command menu" section (cinatra#3189, shared-primitives
+// wave). It pins two things only: default rows are set at 13px, and a font-size
+// class a caller passes still wins. The section's other clauses (10px mono
+// section labels, the selected-row paint, the palette and picker contexts) are
+// not asserted here; the independent grade covers them.
 //
 //   pnpm exec vitest run src/components/ui/__tests__/command-drawing-conformance.test.tsx
 //
-// The section's clause, quoted verbatim:
+// The section's clause, quoted from the design section:
 //
 //   "Global cmd+K palette and inline pickers. Section labels in 10px mono;
 //    rows at 13px; the selected row uses the indigo soft-tint background, not
