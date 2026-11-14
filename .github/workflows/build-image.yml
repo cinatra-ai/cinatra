@@ -4286,8 +4286,15 @@ jobs:
           # in-build tsc (types are gated by the required Typecheck job). Only set
           # here, in CI — a local `docker build` (no build-arg) keeps the check.
           # MUST stay identical on the push step below so its cache hit is total.
+          # CINATRA_BUILD_CPUS=1: one page-data worker for the in-image
+          # `next build` (Dockerfile ARG -> experimental.cpus in next.config.ts).
+          # Uncapped, Next runs 3 workers on this 4-vCPU runner, the build's
+          # measured tree peak (~15.5 GiB) sits at the runner's memory, and this
+          # step hung until the runner stopped responding. The same cap as the
+          # hosted e2e "Build app (production)" steps; it changes no app code.
           build-args: |
             CI=true
+            CINATRA_BUILD_CPUS=1
           cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha' || format('type=local,src={0}', env.LOCAL_BUILDX_CACHE_DIR) }}
           cache-to: ${{ runner.environment == 'github-hosted' && 'type=gha,mode=max' || format('type=local,dest={0},mode=max', env.LOCAL_BUILDX_CACHE_DIR) }}
 
@@ -4502,6 +4509,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             CI=true
+            CINATRA_BUILD_CPUS=1
           cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha' || format('type=local,src={0}', env.LOCAL_BUILDX_CACHE_DIR) }}
 
   # ---------------------------------------------------------------------------
@@ -4639,6 +4647,7 @@ jobs:
           tags: cinatra-upgrade-proof:candidate
           build-args: |
             CI=true
+            CINATRA_BUILD_CPUS=1
           cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha' || format('type=local,src={0}', env.LOCAL_BUILDX_CACHE_DIR) }}
 
       - name: Upgrade proof from each previous-release base
@@ -4773,6 +4782,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             CI=true
+            CINATRA_BUILD_CPUS=1
           cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha' || format('type=local,src={0}', env.LOCAL_BUILDX_CACHE_DIR) }}
 
   # GATED prod-deploy dispatch. Release-gating (Model A): on a v* tag, after the
