@@ -180,12 +180,12 @@ const RENDERER_KIND_TABLE: Record<
     bareAliases: ["gmail-sender"],
     makeCondition: makeGmailSenderCondition,
   },
-  // MIGRATED (cinatra#1625 S8/M3), then RETIRED in the pack (cinatra#4150): the
-  // blog-linkedin draft-review screen left its pack when the application's
-  // publish card took over the confirmation, so no bundled manifest declares
-  // this kind any more. The KIND stays (kind-vocabulary set-equality) so a
-  // package installed at RUNTIME at an older version still validates, and its
-  // binding degrades to the SchemaFieldRenderer floor here (AC4 never-blank).
+  // MIGRATED (cinatra#1625 S8/M3), then the component left the pack (cinatra#4150):
+  // the application's publish card took over the confirmation. The pack keeps
+  // declaring its former screen id on this kind, midRunHitl and without a
+  // component, so a run that paused there before the upgrade resolves to the
+  // SchemaFieldRenderer floor here, which draws its own Continue (AC4
+  // never-blank). An older version installed at RUNTIME degrades the same way.
   "linkedin-draft-review": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true },
   "list-picker": { renderer: ListPickerRenderer, bareAliases: ["list-picker"] },
   // See the final-list-review note above — the component migrated; the kind + its
@@ -224,10 +224,9 @@ const RENDERER_KIND_TABLE: Record<
   // as final-list-review above.
   "test-delivery-input": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true },
   "wayflow-setup-form": { renderer: GroupedSetupFormRenderer, drawsOwnSubmit: true },
-  // MIGRATED (cinatra#1625 S8/M3), then RETIRED in the pack (cinatra#4150): the
-  // blog-wordpress draft-confirm screen left its pack for the application's
-  // publish card. The KIND stays for a runtime-installed older version, as
-  // linkedin-draft-review above.
+  // MIGRATED (cinatra#1625 S8/M3), then the component left the pack (cinatra#4150),
+  // as linkedin-draft-review above: the pack keeps its former screen id on this
+  // kind without a component, so a paused run resolves to the floor here.
   "wordpress-draft-confirm": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true },
 };
 
